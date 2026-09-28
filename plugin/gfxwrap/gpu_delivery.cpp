@@ -23,7 +23,6 @@ using ChannelResult=gpu_channel::Result;
 constexpr uint32_t bootstrap_omission=SA_BOOTSTRAP_OMISSION;
 constexpr uint32_t setup_deadline_ms=5000u; // separate from admitted-picture max_age_ms
 std::atomic<gd_diagnostic_callback> diagnostic_callback{nullptr};
-std::atomic<gd_anchor_timing> anchor_timing{nullptr};
 #ifdef GD_TEST_HOST
 std::atomic<bool> test_hold_poll{false};
 void (__cdecl *test_preparation_probe)()=nullptr;
@@ -75,7 +74,6 @@ struct Runtime {
     rb_surface mailbox{},surface{};uint32_t mailbox_epoch=0;
     uint64_t mailbox_qpc=0; // the renderer's surface handoff (gd_surface)
     gd_prepare_diagnostic prepare_steps{};
-    bool anchor_logged=false;
     // RENDERER-THREAD CAPTURE (docs/replay-gpu-runtime.md). Every GPU call runs
     // on the renderer's own thread in its own context, from its capture
     // callbacks; the delivery thread never touches GL or D3D. A second thread
@@ -173,7 +171,6 @@ struct Runtime {
         if(!callback)return; // callers hold tick_lock: one emitter at a time
         gd_diagnostic d{};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;d.kind=kind;
         d.prepare=prepare_steps;d.offer_count=request.offer_count;
-        if(kind==GD_KIND_ANCHOR){const auto timing=anchor_timing.load();if(timing)timing(&d.anchor_begin_qpc,&d.anchor_end_qpc);}
         d.epoch=epoch;d.reason=why;d.detail=detail;d.current_phase=phase;
         d.qpc_frequency=frequency;d.observed_qpc=observed?observed:qpc();d.phase_started_qpc=phase_started;
         d.healthy=healthy;d.window_started_qpc=healthy?summary_started:started;
@@ -376,8 +373,6 @@ struct Runtime {
         config.texture_names[0][0]='A';config.texture_names[1][0]='B';
         if(!gpu_channel::layout(config)){fail(GD_BAD_REQUEST,ERROR_NOT_ENOUGH_MEMORY);return false;}
         set_state(GD_PREPARING);publish_status();
-        // The renderer published its (unused) anchor at the first capture surface.
-        if(!anchor_logged){anchor_logged=true;emit_diagnostic(GD_NONE,0,false,0,GD_KIND_ANCHOR);}
 #ifdef GD_TEST_HOST
         if(test_preparation_probe)test_preparation_probe();
 #endif
@@ -762,7 +757,6 @@ extern "C" int __cdecl gd_configure3(const rs_api_v3*s,const rcl_api*c,const gd_
     return rs_valid_v3(s)?configure_delivery(&s->boundary,s,c,l):GD_INVALID;
 }
 extern "C" void __cdecl gd_set_diagnostic(gd_diagnostic_callback callback){diagnostic_callback.store(callback);}
-extern "C" void __cdecl gd_set_anchor_timing(gd_anchor_timing timing){anchor_timing.store(timing);}
 extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     auto*r=runtime.load();if(!r || !h || !r->request_valid(*h,budget))return GD_INVALID;
     if(r->exhausted.load())return GD_EXHAUSTED;

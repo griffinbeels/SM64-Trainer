@@ -5,12 +5,12 @@
  * The pointed-to snapshot is borrowed only for the callback's duration. */
 #pragma once
 #include <stdint.h>
-#define GD_DIAGNOSTIC_VERSION 6u
+#define GD_DIAGNOSTIC_VERSION 7u
 enum gd_diagnostic_kind {
     GD_KIND_WINDOW=0, /* healthy summary or failure, as before */
     GD_KIND_REQUEST,  /* a capture request was taken: prepare.request_qpc */
     GD_KIND_PREPARE,  /* the epoch reached ACTIVE: prepare.* */
-    GD_KIND_ANCHOR    /* the renderer's shared anchor, timed once per process */
+    GD_KIND_ANCHOR    /* retired: the renderer publishes no shared anchor since 2026-09-28 */
 };
 /* QPC stamps; zero means the step did not run. Every step from prepare_begin
  * on runs on the RENDERER thread (renderer-thread capture), so a step's
@@ -51,8 +51,7 @@ typedef struct {
     uint64_t refused_pictures;
     /* Version 5. Peaks are per healthy window; offer_count is the pool's size. */
     uint32_t kind,peak_pending,peak_bridges,offer_count;
-    gd_prepare_diagnostic prepare;
-    uint64_t anchor_begin_qpc,anchor_end_qpc;
+    gd_prepare_diagnostic prepare; /* version 7: the anchor stamps are gone */
 } gd_diagnostic;
 typedef void (__cdecl *gd_diagnostic_callback)(const gd_diagnostic*);
 #ifdef __cplusplus

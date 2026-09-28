@@ -203,6 +203,32 @@ def test_healthy_diagnostic_production_log_fields_cpu(tmp_path):
     print(result.stdout, end="")  # JUnit stdout is the exact parser-integration fixture.
 
 
+def test_project64_code_opens_no_second_gpu_context():
+    """NVIDIA's threaded optimization froze the renderer 150-270 ms the first
+    time any other thread in Project64 used the GPU, so every capture GPU call
+    runs in the renderer's own context (renderer-thread capture). No unit
+    compiled into the wrapper or the renderer overlay may create, share or make
+    current a GL context, or open D3D11/DXGI; the encoder helper's own 64-bit
+    process may, and does."""
+    import re
+
+    def load(name):
+        spec = importlib.util.spec_from_file_location(f"guard_{name}", ROOT / "tools" / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    units = ["gfxwrap.c", *(f"{name}.cpp" for name in load("build_plugin").RUNTIME_SOURCES),
+             *load("build_renderer").OVERLAY_MODULES]
+    forbidden = re.compile(r"\b(wglCreateContext\w*|wglShareLists|wglMakeCurrent|D3D11CreateDevice\w*|CreateDXGIFactory\w*)\b")
+    offenders = {}
+    for unit in units:
+        found = sorted(set(forbidden.findall((SOURCE / unit).read_text(encoding="utf-8"))))
+        if found:
+            offenders[unit] = found
+    assert len(units) > 20 and offenders == {}, offenders
+
+
 def test_startup_note_lines_place_each_preparation_step_cpu(tmp_path):
     """The first capture's freeze is attributed by QPC overlap: a callback_stall
     whose begin/end overlaps a step names that step. Each note must carry
@@ -220,13 +246,12 @@ def test_startup_note_lines_place_each_preparation_step_cpu(tmp_path):
     lines = result.stdout.splitlines()
     assert lines[0] == "watch 1000000"
     events = {line.split(" event=")[1].split()[0]: line for line in lines[1:]}
-    assert set(events) == {"gpu_request", "gpu_prepare", "anchor_published"}
+    assert set(events) == {"gpu_request", "gpu_prepare"}  # no shared anchor to time
     assert "epoch=3 request_qpc=1000000 frequency=10000000" in events["gpu_request"]
     prepare = events["gpu_prepare"]
     assert ("request_qpc=1000000 surface_qpc=1160000 prepare_begin_qpc=1200000 snapshots_ms=1.000 "
             "sampler_ms=2.000 luid_ms=1.000 channel_ms=5.000 reader_qpc=2500000 "
             "import_begin_qpc=2510000 import_ms=2.000 end_qpc=2540000") in prepare
-    assert "begin_qpc=1170000 end_qpc=1180000 ms=1.000" in events["anchor_published"]
 
 
 class Running:

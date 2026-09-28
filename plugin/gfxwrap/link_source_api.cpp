@@ -18,12 +18,6 @@ int surface(rb_surface *out) {
     if (!replay_gl::CandidateBindings(&identity,&bindings)) return 0;
     const auto format=replay_gl::SourceFormat();
     if (format==RB_SOURCE_UNKNOWN) return 0;
-#ifdef SM64_REPLAY_CONTEXT_LIFETIME
-    // Demand has arrived (an admitted ticket reached the original command on
-    // this thread): publish the worker's anchor now, never at ROM open. A
-    // refused anchor is reported by ContextV1 acquire/error, not hidden here.
-    replay_gl::EnsureAnchor();
-#endif
     unsigned drawable_width=0, drawable_height=0;
     if (!replay_gl::DrawableExtent(&drawable_width,&drawable_height)) return 0;
     auto &window=dwnd();
