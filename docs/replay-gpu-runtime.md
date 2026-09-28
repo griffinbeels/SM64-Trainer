@@ -486,6 +486,15 @@ load (800 and 6000 draw calls a frame) put capture's share of the renderer
 thread at 0.45-0.52 and 1.30-1.58 ms against the old 0.31-0.34 and
 1.24-1.34 ms, while the game's own draw calls kept their threaded cost.
 
+Threaded optimization stays engaged once capture runs. The same stutter host,
+drawing 6000 calls per picture (8 fresh processes per build), timed those
+calls at 0.027-0.028 ms before the first capture and 0.034-0.038 ms during
+and after it; with the optimization forced off on a scratch profile (deleted
+afterwards) they took 0.94-0.98 ms. Under that load the first capture froze
+161-206 ms on the worker-context build and ran 10.5-13.1 ms here, and the
+intro before any capture peaked at 11.7-12.9 ms: there is no warm-up left to
+cost the intro anything.
+
 Rejected: the driver warm-up (2026-09-26 to 09-27), which kept the worker's
 context and paid the same freeze once in every practice-ROM boot intro; a
 D3D11 device on the renderer thread (274-408 ms, plus 100-122 ms to make it);
