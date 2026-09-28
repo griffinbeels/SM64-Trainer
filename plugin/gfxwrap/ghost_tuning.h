@@ -24,23 +24,52 @@
  * this many frames after its last recorded dance frame (15 = 0.5 s), holding
  * that pose; its sounds fade with it and are silent once it hides. */
 #define GP_STAR_FADE_FRAMES 15u
-/* Defeat (his ask, 2026-09-23: "because you won, you get to trigger the
+/* A dance the recording cut short (his ask, 2026-09-28: "we literally know
+ * exactly how long it should last / how it works"; a pause, reset or state
+ * load right after the grab) plays on from its last recorded dance pose.
+ * Source: n64decomp/sm64 src/game/mario_actions_cutscene.c. act_star_dance
+ * and act_star_dance_water set MARIO_ANIM_STAR_DANCE (0xCD) and
+ * MARIO_ANIM_WATER_STAR_DANCE (0xB3), face the camera's yaw and hold Mario's
+ * place, and show MARIO_HAND_PEACE_SIGN (2) from actionTimer 40 and 62.
+ * general_star_dance_handler counts `++m->actionTimer` from 1 on the dance's
+ * own first frame, plays SOUND_MARIO_HERE_WE_GO (0x240C8080; captured as
+ * 0x240C8081) at 42 and at 80 either calls level_trigger_warp(WARP_OP_STAR_EXIT)
+ * (level_update.c: sDelayedWarpTimer = 32, so the last dance frame is
+ * actionTimer 111, fully faded by WARP_TRANSITION_FADE_INTO_MARIO) or, on a
+ * no-exit star (ACT_STAR_DANCE_NO_EXIT), stops time for the save dialog.
+ * His 2026-09-28 archive agrees on every dance: the animation frame is
+ * actionTimer - 1 until the animation's last frame (62, 82), the peace sign
+ * and the voice land on those timers, and a midair grab's dance (entered from
+ * act_fall_after_star_grab on landing) starts one row after the landing row. */
+#define GP_DANCE_ANIMATION 0xCD
+#define GP_WATER_DANCE_ANIMATION 0xB3
+#define GP_DANCE_PEACE_TIMER 40u
+#define GP_WATER_DANCE_PEACE_TIMER 62u
+#define GP_HAND_PEACE_SIGN 2u
+#define GP_DANCE_SOUND_TIMER 42u
+#define GP_DANCE_SOUND 0x240C8081u
+#define GP_DANCE_END_TIMER 111u
+#define GP_DANCE_NO_EXIT_END_TIMER 80u
+#define GP_DANCE_NO_EXIT_ACTION 0x00001307u
+/* Defeat (his asks, 2026-09-23: "because you won, you get to trigger the
  * death animation for all of the remaining ghosts that were slower than
- * you"). When live Mario's grab completes the attempt, each ghost still
- * short of its own completing grab plays Mario's standing death where it
- * stood: act_standing_death's MARIO_ANIM_DYING_FALL_OVER (0x32; he clutches
+ * you"; 2026-09-28: "the ghost death / real mario comparison should be based
+ * on the XCAM DANCE start"). When live Mario's x-cam dance begins on the grab
+ * that completes the attempt, each ghost whose own dance began later plays
+ * Mario's standing death where it stood: act_standing_death's
+ * MARIO_ANIM_DYING_FALL_OVER (0x32; he clutches
  * himself and falls on his face), dead eyes (MARIO_EYES_DEAD) and
  * SOUND_MARIO_DYING = SOUND_ARG_LOAD(2, 4, 0x15, 0xFF, 8). The game warps
  * away at frame 80 of that fall; the ghost holds its last frame from there
- * and fades over GP_DEFEAT_FADE_FRAMES. A ghost already past its own grab
- * keeps its dance and fade. Source: n64decomp/sm64
+ * and fades over GP_DEFEAT_FADE_FRAMES. A ghost whose dance began at or
+ * before his keeps its dance and fade. Source: n64decomp/sm64
  * src/game/mario_actions_cutscene.c (act_standing_death, common_death_handler). */
 #define GP_DEFEAT_ANIMATION 0x32
 #define GP_DEFEAT_EYES 8u
 #define GP_DEFEAT_SOUND 0x2415FF81u
 #define GP_DEFEAT_FRAMES 80u
 #define GP_DEFEAT_FADE_FRAMES 15u
-/* The furthest back from a clip's end its completing grab is looked for:
+/* The furthest back from a clip's end its completing dance is looked for:
  * the dance tail (archive DANCE_TAIL_MAX_FRAMES, 180) and its grab. */
 #define GP_DEFEAT_SCAN 512u
 /* A run of at most this many consecutive refused records, with a recorded

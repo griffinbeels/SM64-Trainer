@@ -9,10 +9,10 @@ from ghost_native_fixture import attempt, frame, producer
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.archive import (
     ARCHIVE_MAX_BYTES, ARCHIVE_MAX_RECORDS, ARCHIVE_RETENTION_S, COMMIT_ROWS, COMMIT_S,
-    DANCE_TAIL_MAX_FRAMES, SCHEMA_VERSION, PoseArchive, stored_record,
+    DANCE_ENTRY_FRAMES, DANCE_TAIL_MAX_FRAMES, SCHEMA_VERSION, PoseArchive, stored_record,
 )
 from sm64_events.ghost.recording import PoseRecording
-from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_NO_EXIT
+from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_NO_EXIT, ACT_STAR_DANCE_WATER
 from sm64_events.ghost.clip import (
     CLOSING_TRANSITION_MAX, MAX_RECORDS, RECORD_BYTES, ClipError, attempt_origin, check_manifest, read_clip,
 )
@@ -353,13 +353,40 @@ def test_the_dance_tail_is_bounded(tmp_path):
     archive.close()
 
 
-@pytest.mark.parametrize("close_action,kind,segment_id", [(IDLE, "star", None), (DANCE, "segment", 5)])
-def test_no_tail_unless_a_star_run_closes_inside_the_dance(tmp_path, close_action, kind, segment_id):
+@pytest.mark.parametrize("dance", [DANCE, ACT_STAR_DANCE_WATER])
+@pytest.mark.parametrize("late", [1, DANCE_ENTRY_FRAMES])
+def test_a_grab_straight_into_the_dance_keeps_it_when_the_close_is_a_frame_early(tmp_path, dance, late):
+    """His SSL "Shining Atop the Pyramid" PB (attempt 5386): walking at the
+    close (821), dancing from 822, and export dropped the whole dance. A
+    ground or swimming grab enters the dance with no fall first, and the
+    attempt can close up to DANCE_ENTRY_FRAMES before the first dance row."""
+    walking, swimming = 0x04000440, 0x300024D1
+    before = swimming if dance == ACT_STAR_DANCE_WATER else walking
     archive = PoseArchive(tmp_path / "poses.sqlite")
+    rows = [frame(1), frame(2), *(frame(n, action=before) for n in range(3, 3 + late)),
+            *(frame(n, action=dance) for n in range(3 + late, 8 + late)), frame(8 + late, action=IDLE)]
+    archive.ingest(producer(), tuple(rows))
+    row, path, target = attempt(), tmp_path / "direct.ghost", {"kind": "star"}
+    row.timed_at = "xcam"  # the tracker closed it at the x-cam
+    manifest = archive.export_attempt(row, path, target=target)
+    clip = check_manifest(path, manifest, attempt=row, target=target)
+    assert manifest["tail_records"] == 4 + late and clip.dance_tail
+    assert tuple(f.raw for f in clip.frames) == tuple(rows[:-1])
+    assert clip.frames[3 + late - 1].live_action == dance  # every dance row, from its first
+    archive.close()
+
+
+@pytest.mark.parametrize("close_action,kind,segment_id", [(IDLE, "star", None), (DANCE, "segment", 5)])
+def test_no_tail_unless_a_star_run_closes_at_its_dance(tmp_path, close_action, kind, segment_id):
+    """A close that no dance follows within DANCE_ENTRY_FRAMES keeps no tail,
+    and a segment never keeps one."""
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    after = 4 + DANCE_ENTRY_FRAMES  # the first dance row comes one frame too late
     archive.ingest(producer(), (frame(1), frame(2), frame(3, action=close_action),
-                                *(frame(n, action=DANCE) for n in range(4, 9))))
+                                *(frame(n, action=close_action) for n in range(4, after)),
+                                *(frame(n, action=DANCE) for n in range(after, after + 5))))
     row, path = attempt(kind=kind), tmp_path / "plain.ghost"
-    row.segment_id = segment_id
+    row.segment_id, row.timed_at = segment_id, "xcam"
     manifest = archive.export_attempt(row, path)
     assert manifest["tail_records"] == 0 and manifest["records"] == 3
     assert not check_manifest(path, manifest, attempt=row, target=None).dance_tail

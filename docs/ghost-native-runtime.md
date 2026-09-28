@@ -554,28 +554,63 @@ not use this cutoff. Drawing neither scans the clip nor allocates an index.
 
 A FOLLOW clip flagged `GCLIP_DANCE_TAIL` (his ask, 2026-09-23, reversing the
 2026-09-19 end-at-touch ruling for the ghost's own star) ends on its own
-closing grab, not its first touch: it draws through any earlier star and the
+closing dance, not its first touch: it draws through any earlier star and the
 recorded closing grab and dance, then holds the last recorded pose and fades
 it out over `GP_STAR_FADE_FRAMES` (a tuning constant, 15 frames = 0.5 s), one
 equal opacity step a frame (body and shadow), and hides exactly that many
 frames after the last record, with or without `star_ends`. Its sound fades with it (the
 placement gain carries the fade) and is set silent as it hides. Unflagged
 clips, every recording saved before the tail existed, still end at the touch.
-A ghost that grabs first dances and fades on its own timeline while he is
-still playing, and his own grab later does not cut that short.
+A ghost that dances first dances and fades on its own timeline while he is
+still playing, and his own dance later does not cut that short.
 
-**Defeat** (his ask, 2026-09-23: "because you won, you get to trigger the
-death animation for all of the remaining ghosts that were slower than you").
-When his grab completes the attempt, on the star latch (his grab action, or a
-new star generation while he is in one) or, where no latch applies (the
-100-coin star's exit star), on the tracker's suspension arriving while he is
-in a grab action, playback decides from what each ghost drew the frame before:
+**A dance the recording cut short plays on** (his ask, 2026-09-28: "we
+literally know exactly how long it should last / how it works"). He often
+pauses, resets or loads a state a second or two into the dance: on
+2026-09-28, 19 of his 20 recorded dances stopped before the game's own end.
+Past a tail's last record, playback keeps that last recorded dance pose (the
+game holds Mario's place and facing through the dance) and plays the rest by
+animation, the way `act_star_dance` / `act_star_dance_water` do in the
+[n64decomp source](https://github.com/n64decomp/sm64/blob/master/src/game/mario_actions_cutscene.c):
+the dance starts on the first row showing the dance animation (actionTimer 1;
+after a midair grab that is the row after the landing), the animation frame
+is actionTimer - 1 until the animation's last frame (62 on the ground, 82 in
+water), the hand shows the peace sign from actionTimer 40 (62 in water), "here
+we go" sounds at 42, and the dance ends at actionTimer 111, where the exit
+warp's 32-frame delay after actionTimer 80 runs out (a no-exit dance ends at
+80, where the game stops time for its save dialog). Then it fades as above.
+Its eyes blink on the area clock; particles, anything held and recorded sounds
+stay with the recording. The constants and their source lines are in
+`ghost_tuning.h` (`GP_DANCE_*`). The rule matched all 1,373 dance rows of his
+2026-09-28 archive (animation, frame, hand and place, 1,058 ground and 315
+water rows, no mismatch) and the one dance he let finish ended at actionTimer
+111. Facing settles on the second dance frame (the camera's yaw), so a
+recording cut on the dance's first frame would hold a slightly turned pose; his
+shortest recorded dance ran 13 frames. A recording cut before the landing (a
+reset during the fall) keeps its fall and fades: where Mario lands is
+physics, not animation. The [playback witness](../tests/native/ghost_playback_host.cpp)
+drives a cut ground dance, a water dance, a midair grab's landing into the
+dance and a no-exit dance, and restoring any one rule turns it red.
 
-- a ghost already past its own completing grab (a dance tail's closing grab,
-  found by walking the clip's final run of grab actions back from its end;
-  else its first recorded touch) keeps its dance and fade, moving on from
-  the frame after the one it last drew;
-- a ghost still short of it falls where it stood: Mario's standing death
+**Defeat** (his asks, 2026-09-23: "because you won, you get to trigger the
+death animation for all of the remaining ghosts that were slower than you";
+2026-09-28: "the ghost death / real mario comparison should be based on the
+XCAM DANCE start"). The request's star actions are the dances
+(`STAR_DANCE_ACTIONS`), not the midair fall before one, so his grab in the
+air does not end the race: his dance does. When his dance completes the
+attempt, on the star latch (his dance, or a new star generation while he is
+in one) or, where no latch applies (the 100-coin star's exit star), on the
+tracker's suspension arriving while he dances, playback decides from what
+each ghost drew the frame before and where it stood at his x-cam: the live
+elapsed clock his latest dance began at (`dance_entry`), so a suspension that
+arrives a poll late is still judged at his dance, not where it arrives:
+
+- a ghost whose own dance began at or before his (a dance tail's final run
+  of dance actions, walked back from its end; else its first recorded
+  dance) keeps its dance and fade, moving on from where it stands now. A
+  ghost that grabbed later but danced first wins; a tie is not slower;
+- a ghost whose dance began later, including one that grabbed first but is
+  still falling, falls where it stood: Mario's standing death
   (`act_standing_death`: `MARIO_ANIM_DYING_FALL_OVER`, 0x32, 96 frames in
   the ROM), dead eyes, torso and head straight, without what it held or its
   particles, crying `SOUND_MARIO_DYING` once from where it falls. The model
@@ -585,16 +620,20 @@ in a grab action, playback decides from what each ghost drew the frame before:
   warps) and fades over `GP_DEFEAT_FADE_FRAMES`, sound included;
 - a ghost not drawn then stays hidden.
 
-The defeat runs on the live `gGlobalTimer` (the game clock stops at his
-grab), through tuning and the suspension, and happens once per run: a state
+Targets without a star dance keep what they had: a segment (MIPS Clip, a
+castle route leg) ends at its close with no defeat, and a suspension with no
+dance (a reset) only hides. The Bowser 3 grand star (`ACT_JUMBO_STAR_CUTSCENE`)
+is not a dance and ends no race. The defeat runs on the live `gGlobalTimer`,
+through tuning and the suspension, and happens once per run: a state
 load that restores the run ends it and draws the ghosts at the loaded state,
-and a scene change or the counter running back ends it. A suspension with no
-grab (a reset) only hides, as before. Tuning lives in `ghost_tuning.h`. The
-playback witness drives him first (both fall, cry once, frame by frame,
-held, faded, hidden), the ghost first (it dances on through his grab and the
-suspension), the 100-coin exit star through the suspension, and a reset's
-suspension; breaking the winner rule, the animation, the eyes, the cry or the
-trigger each turns it red. The fade values for a dance stay (1, 14/15 ...
+and a scene change or the counter running back ends it. Tuning lives in
+`ghost_tuning.h`. The playback witness drives him first (both fall, cry once,
+frame by frame, held, faded, hidden), the ghost first (it dances on through
+his dance and the suspension), a tie, his midair grab while a ground ghost
+dances first, a ghost still falling from an earlier grab, the 100-coin exit
+star through the suspension (judged at his x-cam) and a reset's suspension;
+breaking the winner rule, the x-cam judge, the animation, the eyes, the cry or
+the trigger each turns it red. The fade values for a dance stay (1, 14/15 ...
 1/15, then hidden at 15 frames), with an older clip beside the dancer ending
 at its touch.
 
@@ -715,9 +754,24 @@ it (the exit star for the 100-coin star), so export appends the dance tail for
 any attempt that is not a segment: the rows after the closing frame while Mario stays in a star
 grab/dance action (`STAR_GRAB_ACTIONS`), the game clock advances, and timing
 continuity, star generation and scene hold, at most `DANCE_TAIL_MAX_FRAMES`
-(180, 6 s) past the close. Measured on his 2026-09-22 archive, dances run
+(180, 6 s) past the close. A grab straight into the dance (on the ground, or
+swimming) can close one frame before the first recorded dance frame: the
+star-grab detector back-computes the x-cam from Mario's action timer, which
+the dance counts from 1 on its own first frame, and a snapshot may read a
+frame stale. So when the tracker timed the attempt at the x-cam (`timed_at`),
+the dance may begin up to `DANCE_ENTRY_FRAMES` (2) rows after the close.
+Before this, export required the closing row itself to dance and dropped the
+whole dance of every such grab: his SSL "Shining Atop the Pyramid" PB 07"00
+(attempt 5386, closed on walking frame 821, dancing from 822), two more SSL
+saves, two WF "Blast Away the Wall" saves (grabbed from a ledge) and his DDD
+"The Manta Ray's Reward" PB (attempt 5551, swimming). Midair grabs kept their
+dance because their close is the landing. Re-exported from
+his 2026-09-28 archive with the fix, 5386 keeps a 100-row dance and 5551 a
+54-row water dance, the attempt rows byte-identical, and two midair saves are
+unchanged. Measured on his 2026-09-22 archive, dances run
 about 100 to 125 frames past x-cam; the exit dance ends by freezing the clock
-for the exit warp, the no-exit dance by returning to idle. Export often runs
+for the exit warp, the no-exit dance by returning to idle. A pause also
+freezes the clock and so ends the tail; playback finishes the dance (above). Export often runs
 the moment the attempt closes, so it waits for the dance to end, the recording
 to stall for a second or close, or the cap's duration plus a second. A reset
 or state load ends the tail at once. The manifest's `tail_records` counts the

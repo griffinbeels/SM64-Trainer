@@ -93,16 +93,33 @@ gp_request timeline_request{};
 gp_status report{};
 uint64_t touch_revision=0, touch[GP_GHOSTS]{};
 bool have_touch[GP_GHOSTS]{};
-// Defeat (his ask, 2026-09-23; ghost_tuning.h): when live Mario's grab
-// completes the attempt, each ghost drawn that frame still short of its own
-// completing grab dies where it stood; one already past it dances on.
-// completion: the coordinate of a clip's completing grab (a dance tail's
-// closing grab, else its first recorded touch). shown: what each ghost drew
-// on the latest frame, the evidence the defeat is decided from.
+// Defeat (his asks, 2026-09-23 and 2026-09-28; ghost_tuning.h): when live
+// Mario's x-cam dance begins on the grab that completes the attempt, each
+// ghost whose own dance began later dies where it stood; one whose dance began
+// first, or on the same frame, dances on. The request's star actions are the
+// dances (memory/addresses.py STAR_DANCE_ACTIONS), never the midair fall
+// before one: a grab that is slow to land loses to a later grab that dances
+// first. completion: the coordinate a clip's own dance began (a dance tail's
+// final run of dance actions, else its first recorded dance). shown: what each
+// ghost drew on the latest frame and the live elapsed it drew it at, the
+// evidence the defeat is decided from. dance_entry: the live elapsed his
+// latest dance began at, so a completion that reaches playback later (the
+// tracker's suspension) is still judged at his x-cam.
 uint64_t completion[GP_GHOSTS]{};
 bool have_completion[GP_GHOSTS]{};
-struct Shown {bool drawn=false;uint32_t row=0;uint64_t target=0;const Clip *clip=nullptr;};
+struct Shown {bool drawn=false;uint32_t row=0;uint64_t target=0,elapsed=0;const Clip *clip=nullptr;};
 Shown shown_last[GP_GHOSTS]{};
+struct DanceEntry {bool dancing=false,known=false;uint64_t elapsed=0,continuity=0;} dance_entry;
+// A dance the recording cut short (his ask, 2026-09-28: a pause, reset or
+// state load right after the grab): its first frame (actionTimer 1), last
+// recorded coordinate and the game's own last dance frame, all coordinates.
+// Past the recording the ghost keeps its last recorded dance pose and plays
+// the rest of the dance by animation (ghost_tuning.h GP_DANCE_*).
+struct Dance {
+    bool known=false;int16_t animation=0;uint32_t peace=0;int32_t frames=0;
+    uint64_t start=0,recorded=0,end=0;
+} dance[GP_GHOSTS];
+bool dance_voiced[GP_GHOSTS]{};
 struct Defeat {
     bool active=false,spent=false;
     uint32_t start=0,hold=GP_DEFEAT_FRAMES;int32_t frames=0; // live gGlobalTimer at the trigger
@@ -143,7 +160,7 @@ void forget_heard(Forget why) {
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         heard[i]=unheard;
         if(why==Forget::move)continue;
-        heard_clip[i]=nullptr;heard_fresh[i]=why==Forget::run;loudest_reset[i]=true;
+        heard_clip[i]=nullptr;heard_fresh[i]=why==Forget::run;loudest_reset[i]=true;dance_voiced[i]=false;
     }
 }
 void sound_control(bool playing,float volume) {
@@ -304,11 +321,12 @@ bool grab_action(const gp_request& request,uint32_t action) {
         if(request.star_actions[i] && action==request.star_actions[i])return true;
     return false;
 }
-// A dance tail ends in the grab that completed its attempt and the dance
-// after it: the final unbroken run of grab actions, walked back from the
-// clip's end (bounded; the tail is at most 180 records). Earlier grabs (the
-// 100-coin star before its exit star) are not the completing one. A clip
-// without a tail completes at its recorded touch.
+// A dance tail ends in the dance of the grab that completed its attempt: the
+// final unbroken run of star actions (the dances), walked back from the clip's
+// end (bounded; the tail is at most 180 records). Its first row is the ghost's
+// x-cam: after a midair grab that is the landing, not the grab. Earlier grabs
+// (the 100-coin star before its exit star) are not the completing one. A clip
+// without a tail completes at its recorded touch, its first recorded dance.
 bool completing_grab(const Clip& clip,const gp_request& request,bool touched,uint64_t touch_at,uint64_t& at) {
     at=0;
     if(!(clip.header.flags&GCLIP_DANCE_TAIL)) {at=touch_at;return touched;}
@@ -320,6 +338,38 @@ bool completing_grab(const Clip& clip,const gp_request& request,bool touched,uin
     }
     if(first==clip.index_count)return false;
     at=clip_coordinate(clip,first);return true;
+}
+// A dance tail whose recording stops before the game's dance ends. The dance
+// proper starts on the first row of its final run that shows a dance
+// animation (a midair grab's landing row still shows the fall), where the
+// game's actionTimer is 1 and the animation frame is actionTimer - 1; the kind
+// (the ground or water animation, exit or no-exit) sets when the hand shows the
+// peace sign and the frame the dance ends on (ghost_tuning.h GP_DANCE_*).
+bool cut_dance(const Clip& clip,const gp_request& request,Dance& out) {
+    out={};
+    if(!(clip.header.flags&GCLIP_DANCE_TAIL) || !clip.index_count)return false;
+    const auto &end=clip.frames[clip.index_count-1].sample;
+    if(!(end.valid_fields&GC_VALID_ACTION) || !grab_action(request,end.live_action))return false;
+    uint32_t first=clip.index_count;
+    while(first>0 && clip.index_count-first<GP_DEFEAT_SCAN) {
+        const auto &s=clip.frames[first-1].sample;
+        if(!(s.valid_fields&GC_VALID_ACTION) || !grab_action(request,s.live_action))break;
+        --first;
+    }
+    for(uint32_t i=first;i<clip.index_count && !out.animation;++i) {
+        const auto &p=clip.frames[i].sample.pose;
+        const uint64_t at=clip_coordinate(clip,i);
+        if(!(clip.frames[i].sample.valid_fields&GC_VALID_POSE) || p.animation_frame<0
+                || uint64_t(p.animation_frame)>at
+                || (p.animation_id!=GP_DANCE_ANIMATION && p.animation_id!=GP_WATER_DANCE_ANIMATION))continue;
+        out.animation=p.animation_id;out.start=at-uint64_t(p.animation_frame);
+    }
+    if(!out.animation)return false;
+    out.peace=out.animation==GP_WATER_DANCE_ANIMATION?GP_WATER_DANCE_PEACE_TIMER:GP_DANCE_PEACE_TIMER;
+    out.recorded=clip_coordinate(clip,clip.index_count-1);
+    out.end=out.start+(end.live_action==GP_DANCE_NO_EXIT_ACTION?GP_DANCE_NO_EXIT_END_TIMER:GP_DANCE_END_TIMER)-1;
+    out.known=out.end>out.recorded;
+    return out.known;
 }
 // A shadow rides only on a valid executed root; its texture is alpha only.
 bool valid_shadow(const gc_sample& s) {
@@ -597,7 +647,9 @@ void decide_all(uint32_t value) {
     decision(value);
 }
 void forget_shown() {for(auto &last:shown_last)last={};}
-void clear_timeline() {have_timeline=false;star_ended=false;timeline_request={};defeat={};forget_shown();}
+void clear_timeline() {
+    have_timeline=false;star_ended=false;timeline_request={};defeat={};dance_entry={};forget_shown();
+}
 void unbind() {
     for(auto &clip:bound)clip=nullptr;
     touch_revision=0;std::memset(have_touch,0,sizeof(have_touch));
@@ -768,12 +820,50 @@ const gclip_frame *bridged(const Clip& clip,uint32_t at) {
 uint32_t draw(uint32_t index,const gs_record& recorded,const gclip_frame& shown_row,
               const gc_sample& particles_from,const gc_sample& live,const ghost::WorldPass& world,
               float fade,ghost_compositor::Pose& out);
-// fade: 1 normally; after a dance tail's last record it falls by
+// The dance past its recording, at coordinate `at`: the last recorded dance
+// pose (its place, facing, shadow and root, which the game holds through the
+// dance), with the game's animation frame and hand for that frame; the eyes
+// keep blinking on the area clock. Particles, anything held and recorded
+// sounds stay with the recording.
+void play_dance(uint32_t index,uint64_t at,uint64_t recorded_end,gs_record& recorded) {
+    const auto &d=dance[index];
+    const uint64_t timer=at-d.start+1; // the game's actionTimer on this dance frame
+    auto &s=recorded.sample;auto &p=s.pose;
+    p.animation_id=d.animation;
+    p.animation_frame=int16_t(std::min<uint64_t>(timer-1,uint64_t(d.frames-1)));
+    if(timer>=d.peace)p.hand_state=GP_HAND_PEACE_SIGN;
+    s.area_update_counter=uint16_t(s.area_update_counter+(at-recorded_end));
+    s.valid_fields&=~uint32_t(GC_VALID_PARTICLES|GC_VALID_HELD|GC_VALID_SOUND);
+}
+// Whether this ghost's clip, ending at coordinate last, finishes a cut dance:
+// its animation's length comes from the model once (a ROM without it keeps
+// the recorded end).
+bool finishes_dance(uint32_t index,uint64_t last) {
+    auto &d=dance[index];
+    if(!d.known || d.recorded!=last)return false;
+    if(!d.frames && (sg_model_get_animation_frames(model.value,d.animation,&d.frames)!=SG_OK || d.frames<=0))
+        d.known=false;
+    return d.known;
+}
+// The dance's "here we go" (ghost_tuning.h GP_DANCE_SOUND) when it falls past
+// the recording: once a run, as the ghost reaches it.
+void voice_dance(uint32_t index,uint64_t played) {
+    const auto &d=dance[index];
+    const uint64_t at=d.start+GP_DANCE_SOUND_TIMER-1;
+    if(!played || !d.known || d.recorded>=at || played<at || played-at>GP_SOUND_CATCHUP || dance_voiced[index])return;
+    dance_voiced[index]=true;
+    const auto *sink=sound_sink.load(std::memory_order_acquire);
+    if(sink && sink->cue)sink->cue(index,GP_DANCE_SOUND);
+}
+// fade: 1 normally; after a dance tail's last record (or the game's last
+// dance frame, when the recording stopped mid-dance) it falls by
 // 1/GP_STAR_FADE_FRAMES a frame on the held last pose, and is 0 once hidden.
 // record is the selected row (its sounds play); posed the row whose pose is
-// shown, earlier than record across a bridged refusal.
+// shown, earlier than record across a bridged refusal. played: the dance frame
+// drawn past the recording, else 0.
 uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,const ghost::WorldPass& world,
-                ghost_compositor::Pose& out,uint32_t& record,uint32_t& posed,float& fade) {
+                ghost_compositor::Pose& out,uint32_t& record,uint32_t& posed,float& fade,uint64_t& played) {
+    played=0;
     const Clip *clip=bound[index];
     if(!clip)return GP_PREPARING;
     const auto &h=clip->header;
@@ -786,16 +876,21 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     // A clip with a dance tail ends on its own closing grab instead: it plays
     // on through any earlier star (the 100-coin star before its exit star) and
     // its closing dance, then fades out over GP_STAR_FADE_FRAMES from its last
-    // record. FIXED seek ignores it, like both end policies.
+    // record, or from the game's last dance frame when the recording stopped
+    // mid-dance. FIXED seek ignores it, like both end policies.
     const bool dances=(h.flags&GCLIP_DANCE_TAIL) && active_request.mode==GP_FOLLOW;
     if(have_touch[index] && (first>=touch[index] || (!dances && target>=touch[index])))return GP_STAR_ENDED;
     uint64_t at=target;
     if(target>last) {
         if(!dances)return GP_AFTER_END;
-        const uint64_t past=target-last;
-        if(past>=GP_STAR_FADE_FRAMES) {fade=0;return GP_STAR_ENDED;}
-        fade=float(GP_STAR_FADE_FRAMES-past)/float(GP_STAR_FADE_FRAMES);
-        at=last; // the dance's final pose, held while it fades
+        const uint64_t ends=finishes_dance(index,last)?dance[index].end:last;
+        if(target>ends) {
+            const uint64_t past=target-ends;
+            if(past>=GP_STAR_FADE_FRAMES) {fade=0;return GP_STAR_ENDED;}
+            fade=float(GP_STAR_FADE_FRAMES-past)/float(GP_STAR_FADE_FRAMES);
+        }
+        if(ends>last)played=std::min(target,ends);
+        at=last; // the dance's last recorded pose, held while it fades
     }
     uint32_t lo=0,hi=clip->index_count;
     while(lo<hi) {
@@ -817,7 +912,8 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     gs_record recorded{};recorded.bytes=sizeof(recorded);recorded.version=GS_VERSION;
     recorded.configuration=shown->configuration;recorded.sample=shown->sample;
     recorded.world.status=shown->world_status;
-    const auto result=draw(index,recorded,*shown,selected.sample,live,world,fade,out);
+    if(played)play_dance(index,played,last,recorded);
+    const auto result=draw(index,recorded,*shown,played?recorded.sample:selected.sample,live,world,fade,out);
     if(result!=GP_READY)return result;
     record=lo;posed=uint32_t(shown-clip->frames);
     return frame.below_zero || target<first?GP_BEFORE_START:GP_READY;
@@ -959,11 +1055,14 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         Clip *clip=i<next.clip_count?adopt(next.clips[i].clip_id,current_cancel):nullptr;
         if(clip)listed[clip-clips]=true;
-        if(clip!=bound[i]) {heard_clip[i]=nullptr;shown_last[i]={};} // a different recording: nothing heard or shown yet
+        if(clip!=bound[i]) { // a different recording: nothing heard or shown yet
+            heard_clip[i]=nullptr;shown_last[i]={};dance_voiced[i]=false;
+        }
         if(changed || clip!=bound[i]) {
             bound[i]=clip;have_touch[i]=false;touch[i]=0;
             if(clip)have_touch[i]=recorded_touch(*clip,next,touch[i]);
             have_completion[i]=clip && completing_grab(*clip,next,have_touch[i],touch[i],completion[i]);
+            if(!clip || !cut_dance(*clip,next,dance[i]))dance[i]={};
         }
         report.clip_decisions[i]=uint8_t(i>=next.clip_count?GP_DISABLED:clip?GP_READY:GP_PREPARING);
     }
@@ -995,9 +1094,10 @@ bool current(const gp_draw_token& token) {
     return drawing() && token.revision==active_request.revision && token.cancellation==acquired_cancel
         && context_serial.load()==token.context_serial;
 }
-// The frame his grab completes the attempt, from what each ghost drew on the
-// frame before: past its own completing grab it is a winner (its dance and
-// fade go on from there), otherwise it falls where it stood. A ghost not
+// The frame his completion reaches playback (his dance, or the tracker's
+// suspension while he dances), from what each ghost drew on the frame before:
+// a ghost whose own dance began at or before his x-cam is a winner (its dance
+// and fade go on from there), otherwise it falls where it stood. A ghost not
 // drawn then stays hidden. Only once per run; a restore revives the run.
 bool start_defeat(const gc_sample& live) {
     if(defeat.active || defeat.spent || active_request.mode!=GP_FOLLOW
@@ -1005,13 +1105,26 @@ bool start_defeat(const gc_sample& live) {
     int32_t frames=0;
     if(sg_model_get_animation_frames(model.value,GP_DEFEAT_ANIMATION,&frames)!=SG_OK)frames=0;
     defeat=Defeat{};defeat.spent=true;
+    // His x-cam on the live clock: the frame his latest dance began, else this one.
+    const bool timed=(live.clock.valid&GCC_ELAPSED_VALID)!=0;
+    const uint64_t now=live.clock.elapsed_frames;
+    const uint64_t his=timed && dance_entry.known && dance_entry.continuity==live.clock.continuity_id
+        && dance_entry.elapsed<=now ? dance_entry.elapsed : now;
     bool any=false;
     for(uint32_t i=0;i<GP_GHOSTS && i<active_request.clip_count;++i) {
         const auto &last=shown_last[i];
         if(!last.drawn || !bound[i] || last.clip!=bound[i])continue;
         defeat.clip[i]=bound[i];any=true;
-        // Its dance moves on from the frame after the one it last drew.
-        if(have_completion[i] && last.target>=completion[i]) {defeat.winner[i]=true;defeat.target[i]=last.target+1;}
+        // Where this ghost stands now and stood at his x-cam: its coordinate
+        // moves with the live clock (without one, the frame after the one it
+        // last drew).
+        uint64_t here=last.target+1,at=here;
+        if(timed && now>=last.elapsed) {
+            here=last.target+(now-last.elapsed);
+            at=his>=last.elapsed ? last.target+(his-last.elapsed) : last.target-std::min(last.target,last.elapsed-his);
+        }
+        // A winner's dance moves on from where it stands now.
+        if(have_completion[i] && completion[i]<=at) {defeat.winner[i]=true;defeat.target[i]=here;}
         else {defeat.loser[i]=true;defeat.row[i]=last.row;}
     }
     if(!any)return false;
@@ -1032,6 +1145,11 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
             || !live.dlist_serial || !(live.valid_fields&GC_VALID_CLOCK)) {decide_all(GP_NO_CLOCK);return false;}
     Coordinate frame{active_request.seek_igt,false};
     sequence_reported=false;
+    // His x-cam: the live elapsed his latest dance began at (the defeat's judge).
+    const bool dancing=(live.valid_fields&GC_VALID_ACTION) && grab_action(active_request,live.live_action);
+    if(dancing && !dance_entry.dancing && (live.clock.valid&GCC_ELAPSED_VALID))
+        dance_entry={true,true,live.clock.elapsed_frames,live.clock.continuity_id};
+    dance_entry.dancing=dancing;
     // A running defeat goes on by the live frame counter alone: the game's
     // clock stops at his grab. A load (the counter runs back), a scene change
     // or its end stops it.
@@ -1055,7 +1173,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
             // A restoration revives the run, exactly like the worker's new
             // command, and ends a defeat: he loaded back into the race.
             star_ended=false;live_recovery.restored=origin.sequence;forget_heard(Forget::restore);
-            defeat={};forget_shown();
+            defeat={};forget_shown();dance_entry={dance_entry.dancing,false,0,0};
         }
     }
     if(active_request.mode==GP_FOLLOW && !defeat.active) {
@@ -1112,11 +1230,11 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
                 if(mine.target<amount){mine.below_zero=true;mine.target=0;}else mine.target-=amount;
             } else mine.target+=uint32_t(active_request.nudge_frames);
         }
-        uint32_t result=GP_STAR_ENDED;bool falling=false;
-        if(!defeat.active)result=select(i,mine,live,world,pose,record,posed,fade);
+        uint32_t result=GP_STAR_ENDED;bool falling=false;uint64_t played=0;
+        if(!defeat.active)result=select(i,mine,live,world,pose,record,posed,fade,played);
         else if(defeat.winner[i] && bound[i]==defeat.clip[i]) {
             mine={defeat.target[i]+post,false};
-            result=select(i,mine,live,world,pose,record,posed,fade);
+            result=select(i,mine,live,world,pose,record,posed,fade,played);
         } else if(defeat.loser[i] && bound[i]==defeat.clip[i]) {
             result=fall(i,post,live,world,pose,fade);falling=true;record=posed=defeat.row[i];
         }
@@ -1128,7 +1246,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         report.clip_decisions[i]=uint8_t(result);
         if(!i)summary=result;
         shown_last[i]=defeat.active || (result!=GP_READY && result!=GP_BEFORE_START)
-            ? Shown{} : Shown{true,posed,mine.target,bound[i]};
+            ? Shown{} : Shown{true,posed,mine.target,live.clock.elapsed_frames,bound[i]};
         if(result!=GP_READY && result!=GP_BEFORE_START) { // hidden: silent
             heard[i]=unheard;
             if(fade==0)silence(i);
@@ -1141,7 +1259,10 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
             const auto *sink=sound_sink.load(std::memory_order_acquire);
             if(!defeat.cued[i] && sink && sink->cue)sink->cue(i,GP_DEFEAT_SOUND);
             defeat.cued[i]=true;
-        } else hear(i,*bound[i],record,result==GP_BEFORE_START);
+        } else {
+            hear(i,*bound[i],record,result==GP_BEFORE_START);
+            voice_dance(i,played);
+        }
         before_start=before_start && result==GP_BEFORE_START;
         if(pose.count)out[count++]=pose;
     }

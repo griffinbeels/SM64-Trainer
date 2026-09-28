@@ -8,6 +8,7 @@ import time
 import pytest
 
 from sm64_events.ghost import capture, native_channel as channel, native_protocol as P
+from sm64_events.memory.addresses import ACT_FALL_AFTER_STAR_GRAB, STAR_DANCE_ACTIONS
 from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.memory.layout import US
 
@@ -57,8 +58,10 @@ def test_channel_acquires_renews_copies_and_releases(kernel):
     try:
         request = kernel.request
         assert request.token and request.capture_enabled and request.generation == 1
-        assert request.star_action_count == len(channel.STAR_GRAB_ACTIONS)
-        assert set(request.star_actions[:request.star_action_count]) == channel.STAR_GRAB_ACTIONS
+        # The race ends at each Mario's x-cam dance, not at a midair grab's fall.
+        assert request.star_action_count == len(STAR_DANCE_ACTIONS)
+        assert set(request.star_actions[:request.star_action_count]) == STAR_DANCE_ACTIONS
+        assert ACT_FALL_AFTER_STAR_GRAB not in request.star_actions
         payload = bytes(i % 256 for i in range(P.RECORD_BYTES))
         C.memmove(kernel.address + P.RING_OFFSET, payload, len(payload))
         P.U64.from_address(kernel.address + P.Status.produced.offset).value = 1
