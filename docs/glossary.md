@@ -1366,7 +1366,7 @@ A [[ghost]] whose body touches live Mario's fades as a whole, smoothly down to
 15% of its opacity when the two stand on the same spot, so it never vanishes
 on a pole, a ledge or a plank both Marios hold. It is back to full opacity
 once the bodies stop touching, plus any extra distance set on the practice
-card.
+card. Its [[ghost sound events]] can follow it too.
 
 - **Lives** — `plugin/gfxwrap/ghost_proximity.h`; the floor is shared with the
   [[player-first fade]] in `plugin/gfxwrap/ghost_occlusion.h`
@@ -1395,10 +1395,14 @@ landings and voice as it passes that [[frame]], through SM64's own sound
 engine at its set volume. Each [[ghost]] sounds from where it stands relative
 to the live camera (panned and distanced as the game does Mario) and fades by
 the inverse square of its distance from live Mario past 400 units. Capture
-drops other objects' sounds.
+drops other objects' sounds. With the card's **Quiet its sound the same way**
+(under Overlap fading, on by default), a [[ghost]]'s sound also follows its
+[[overlap fade]], and while it fades, a sound live Mario made on the same
+[[frame]] plays only once.
 
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
-  `plugin/gfxwrap/ghost_audio.cpp` plays them
+  `plugin/gfxwrap/ghost_audio.cpp` plays them; `plugin/gfxwrap/ghost_sound_fade.h`
+  owns the overlap rule
 
 ### Ghost source
 

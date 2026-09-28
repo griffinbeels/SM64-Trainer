@@ -6,6 +6,7 @@
 #include "ghost_playback.h"
 #include "ghost_pose.h"
 #include "ghost_particle_pose.h"
+#include "ghost_sound_fade.h"
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -794,6 +795,84 @@ int main() {
             ghost_playback::set_sound_sink(nullptr);
         }
         {
+            // Sound under the overlap fade (ghost_sound_fade.h). Ghost 0 walks
+            // on live Mario, ghost 1 a body and a half beside him. With
+            // overlap_sound, ghost 0's gain is its overlap fade, moving at most
+            // STEP a frame, and while it fades a request he issued on the same
+            // frame is not handed over. Ghost 1 plays everything at full gain.
+            Clip onto=Clip::linear(50,60,UINT32_MAX,5),beside=Clip::linear(51,60,UINT32_MAX,5);
+            constexpr uint32_t yah=0x24008081u,wah=0x24018081u; // SOUND_MARIO_YAH_WAH_HOO, its second line
+            for(auto [clip,tag]:{std::pair<Clip*,uint32_t>{&onto,1000},{&beside,2000}})
+                for(uint32_t i=0;i<60;++i) {
+                    auto &s=clip->frames[i].sample;s.valid_fields|=GC_VALID_SOUND;
+                    s.sound.count=1;s.sound.bits[0]=tag+i;
+                }
+            onto.frames[6].sample.sound.bits[0]=beside.frames[6].sample.sound.bits[0]=wah;
+            check(api->prepare_clip(&onto.header,onto.frames.data())==GP_OK
+                  && api->prepare_clip(&beside.header,beside.frames.data())==GP_OK,"prepare the overlap sound clips");
+            ghost_playback::set_sound_sink(&test_sink);unplaced_cues=0;
+            revision=r.revision+1;r=request(onto,revision);r.model_id=4;r.clip_count=2;r.volume=.5f;
+            std::memcpy(r.clips[1].clip_id,beside.header.clip_id,16);r.star_ends=0;r.star_action_count=0;r.star_actions[0]=0;
+            r.proximity_enabled=1;r.proximity_distance=0;r.overlap_sound=1;
+            r.origin={GO_STAR,7,live.sequence+1,source_continuity,20000,source_generation,0,0};
+            elapsed_base=20000;live.level=9;live.live_action=1;live.area=1;
+            check(api->configure(&r)==GP_OK,"configure the overlap sound");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            // apart: how far live Mario stands from ghost 0 along x; his: what he issued this frame.
+            auto step=[&](uint64_t time,float apart,std::initializer_list<uint32_t> his,
+                          std::initializer_list<uint32_t> expected) {
+                live.igt=uint16_t(time);++live.sequence;++live.dlist_serial;world.list_serial=live.dlist_serial;
+                live.global_timer=uint32_t(20000+time);
+                live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
+                    0,0,source_generation,1,elapsed_base+time,source_continuity};
+                live.valid_fields|=GC_VALID_POSE|GC_VALID_SOUND;
+                live.pose.position[0]=float(5000+time)+apart;live.pose.position[1]=0;live.pose.position[2]=5;
+                live.sound={};for(auto bits:his)live.sound.bits[live.sound.count++]=bits;
+                sound_count=0;for(auto &p:placed)p={};
+                renderer.run([&]{check(ghost_playback::evaluate(live,world,poses,count,token),"overlap sound frame drawn");});
+                const std::vector<uint32_t> want(expected),heard(sound_log,sound_log+sound_count);
+                if(heard!=want) {
+                    std::fprintf(stderr,"overlap time %llu heard",static_cast<unsigned long long>(time));
+                    for(auto bits:heard)std::fprintf(stderr," %u",bits);
+                    std::fprintf(stderr,"\n");
+                }
+                check(heard==want,"exactly the overlap fade's sounds");
+                check(placed[0].count==1 && placed[1].count==1 && placed[1].gain==1,"the ghost beside him keeps full gain");
+                return placed[0].gain;
+            };
+            const auto near_to=[](float gain,float want){return std::fabs(gain-want)<1e-6f;};
+            constexpr float quiet=ghost_occlusion::GHOST_FLOOR,stride=ghost_sound_fade::STEP;
+            check(near_to(step(0,0,{},{1000,2000}),quiet),"a run starting on him sounds at the floor at once");
+            check(near_to(step(1,0,{1001},{2001}),quiet),"his own sound on the same frame plays once");
+            step(2,0,{},{1002,2002});
+            step(3,0,{1002},{1003,2003});               // one frame late is a timing difference
+            step(4,0,{1005},{1004,2004});step(5,0,{},{1005,2005}); // one frame early too
+            step(6,0,{yah},{wah});                     // the same jump in another voice line
+            check(sound_ghost[0]==1,"the twin still plays from the ghost beside him");
+            // An undrawn frame's record is not his frame: only the displayed one is compared.
+            step(8,0,{1007,1008},{1007,2007,2008}); // 1007 caught up plays, the displayed 1008 does not
+            float gain=step(9,200,{1009},{1009,2009}); // apart, his twin plays again
+            check(near_to(gain,quiet+stride),"walking apart lifts the sound one step a frame");
+            gain=step(10,200,{},{1010,2010});check(near_to(gain,quiet+2*stride),"second step");
+            gain=step(11,200,{},{1011,2011});check(near_to(gain,1),"whole once apart");
+            ++r.revision;r.overlap_sound=0;check(api->configure(&r)==GP_OK,"overlap sound off");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(12,0,{1012},{1012,2012})==1,"off: on him at full gain, his twin played");
+            ++r.revision;r.overlap_sound=1;check(api->configure(&r)==GP_OK,"overlap sound on again");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(near_to(step(13,0,{},{1013,2013}),1-stride),"a switch flip moves one step, never the whole fade");
+            ++r.revision;r.proximity_enabled=0;check(api->configure(&r)==GP_OK,"overlap fade off");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(near_to(step(14,0,{1014},{1014,2014}),1),"no picture fade, no sound fade");
+            check(unplaced_cues==0,"every overlap sound was placed before it was cued");
+            live.valid_fields&=~(GC_VALID_POSE|GC_VALID_SOUND);live.sound={};
+            check(api->release_clip(onto.header.clip_id)==GP_OK && api->release_clip(beside.header.clip_id)==GP_OK,
+                  "release the overlap sound clips");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(api->collect()==GP_OK,"collect the overlap sound clips");
+            ghost_playback::set_sound_sink(nullptr);
+        }
+        {
             // Star dance: a clip carrying its dance tail keeps its ghost through
             // its own touch and dance, then holds the last pose and fades it out
             // over GP_STAR_FADE_FRAMES, sound included. A clip without the tail
@@ -1004,8 +1083,8 @@ int main() {
         r.shadow_enabled=1;r.occlusion_fade=2;check(api->configure(&r)==GP_INVALID,"occlusion flag bounded");
         r.occlusion_fade=0;r.volume=1.5f;check(api->configure(&r)==GP_INVALID,"volume bounded");
         r.volume=std::numeric_limits<float>::quiet_NaN();check(api->configure(&r)==GP_INVALID,"volume NaN refused");
-        r.volume=.5f;r.reserved3=1;check(api->configure(&r)==GP_INVALID,"sound reserved word checked");
-        r.reserved3=0;
+        r.volume=.5f;r.overlap_sound=2;check(api->configure(&r)==GP_INVALID,"overlap sound flag bounded");
+        r.overlap_sound=0;
         r.suspended=2;check(api->configure(&r)==GP_INVALID,"suspension flag bounded");
         r.suspended=0;r.reserved4=1;check(api->configure(&r)==GP_INVALID,"suspension reserved word checked");
         r.reserved4=0;

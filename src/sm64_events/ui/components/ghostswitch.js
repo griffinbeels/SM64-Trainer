@@ -363,7 +363,8 @@ function GhostTuning({ opacity, tint, switches, volume, view, boxes, nudge, limi
   return html`<div class="ghost-tune">
     <${GhostVisibility} opacity=${opacity} range=${limits.opacity} queue=${queue} />
     <${GhostColour} tint=${tint} range=${limits.tint} write=${write} queue=${queue} />
-    ${view === "mario" && html`${switches.map((row) => html`<${GhostOnOff} key=${row.setting}
+    ${view === "mario" && html`${switches.filter((row) => !SWITCH_LABELS[row.setting].section)
+      .map((row) => html`<${GhostOnOff} key=${row.setting}
         setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />`)}
       <${GhostVolume} volume=${volume.value} draft=${volume.draft} range=${limits.volume}
         queue=${queue} />`}
@@ -462,6 +463,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}
     <${GhostProximity} active=${on} view=${view} value=${controls.proximity} range=${limits.proximity}
-      draft=${held.proximity} write=${write} queue=${queue} />
+      draft=${held.proximity} write=${write} queue=${queue}
+      switches=${switches.filter((row) => SWITCH_LABELS[row.setting].section === "overlap")} />
   </div>`;
 }
