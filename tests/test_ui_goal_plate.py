@@ -90,6 +90,24 @@ def _picker_open(page):
     return page.evaluate(f"!!{PLATE}.querySelector('.search-menu')")
 
 
+def _whole_plate(page):
+    """Round 13: what each part of the plate hits, and whether a click on the
+    PB half opens the picker and a second one closes it."""
+    hits = page.evaluate(_HITS)
+    _click_at(page, ".goal-plate-word.is-pb")
+    _wait(page, 800)
+    opens = _picker_open(page)
+    _click_at(page, ".goal-plate-word.is-pb")
+    _wait(page, 500)
+    return {"hits": hits, "pb_half_opens": opens, "pb_half_closes": not _picker_open(page)}
+
+
+def _pb_time_opens_picker(page):
+    _click_at(page, ".pblink")
+    _wait(page, 500)
+    return _picker_open(page)
+
+
 def _plate(page):
     return page.evaluate(f"""(() => {{ const p = {PLATE};
         return p && {{ text: p.innerText.replace(/\\n/g, ' | '), width: p.offsetWidth,
@@ -108,15 +126,7 @@ def seen():
                 page.goto(base)
                 _wait(page, 2500)
                 out["automatic"] = _plate(page)
-                # Round 13: the whole plate opens the picker, the PB time keeps
-                # its own jump, and a second click on the PB half closes it.
-                out["hits"] = page.evaluate(_HITS)
-                _click_at(page, ".goal-plate-word.is-pb")
-                _wait(page, 800)
-                out["pb_half_opens"] = _picker_open(page)
-                _click_at(page, ".goal-plate-word.is-pb")
-                _wait(page, 500)
-                out["pb_half_closes"] = not _picker_open(page)
+                out.update(_whole_plate(page))
                 out["automatic_api"] = _get(
                     base, f"/api/scorecard/entry_goals?scope=overall&keys={KEY}")["goals"][KEY]
                 # The Player tab: search, pick, and the Scorecard follows.
@@ -175,9 +185,7 @@ def seen():
                 _wait(page, 1500)
                 out["long_source"] = _plate(page)
                 # Last: its jump may move the log's scope.
-                _click_at(page, ".pblink")
-                _wait(page, 500)
-                out["pb_time_opens"] = _picker_open(page)
+                out["pb_time_opens"] = _pb_time_opens_picker(page)
     return out
 
 
