@@ -7141,8 +7141,11 @@
   .goal-plate:hover .goal-plate-forgive,
   .goal-plate-forgive:focus-visible { opacity: 1; }
   .goal-plate-forgive:hover { color: var(--gold); text-decoration: underline; }
+  /* Above everything in the plate, the PB time's own layer (z-index 1)
+     included: "when the goal animation plays, it should be ABOVE everything
+     else within that button" (round 13). */
   .goal-plate-party {
-    position: absolute; inset: -1px; border-radius: 8px; pointer-events: none;
+    position: absolute; inset: -1px; border-radius: 8px; pointer-events: none; z-index: 2;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     background: linear-gradient(135deg, #f7d154, #f0a92e 55%, #f7d154);
     color: #2a1a00; box-shadow: 0 0 18px rgba(240,189,50,.6);
