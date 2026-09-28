@@ -25,6 +25,10 @@ paths:
   qualify an existing installation, independently of a consent timestamp. Its
   folder/installation record is shared per Windows user, while gameplay readiness
   and checkout-local completion are separate. A matching install suppresses first use.
+- **One reader per process:** `setup_runtime.py` attaches one `Pj64Memory` by the
+  target's pid and keeps it while that process runs (`alive()`); an observation is
+  one header read. A fresh reader per poll re-walked Project64's memory every
+  second (38 attaches in one minute of play, 2026-09-28).
 - **One clock:** server monotonic time bounds fresh evidence to three seconds;
   the browser separately acknowledges progress for about one second. Neither
   polling frequency nor persisted completion can establish current readiness.

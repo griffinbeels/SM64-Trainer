@@ -21,8 +21,13 @@ from sm64_events.memory import addresses as A
 from sm64_events.memory.base import MemoryReadError, RdramReader
 
 log = logging.getLogger("sm64.pj64")
+# pymem sets its own logger to DEBUG at import and logs "Process N is being
+# debugged" on every open: 38 lines in one minute of the setup screen
+# (2026-09-28). Its warnings still reach the log.
+logging.getLogger("pymem").setLevel(logging.INFO)
 
 PROCESS_NAME = "Project64.exe"
+_WAIT_TIMEOUT = 0x102
 MEM_COMMIT = 0x1000
 PAGE_NOACCESS = 0x01
 PAGE_GUARD = 0x100
@@ -95,6 +100,9 @@ class Pj64Memory(RdramReader):
     _roms: dict[int, _RomSighting] = {}
     _roms_lock = threading.Lock()
     _ROMS_KEPT = 8
+    #: (pid, RDRAM base) pairs already announced at INFO: the poller, the boot
+    #: probe and the setup screen each attach, and one line per process says it.
+    _announced: dict[tuple[int, int], None] = {}
 
     def __init__(self):
         self._pm: pymem.Pymem | None = None
@@ -104,10 +112,13 @@ class Pj64Memory(RdramReader):
     def attached(self) -> bool:
         return self._pm is not None and self._rdram_base is not None
 
-    def attach(self) -> bool:
+    def attach(self, pid: int | None = None) -> bool:
+        """Open Project64 -- the process `pid`, else the first one named
+        Project64.exe -- and find its RDRAM. A known pid skips the process-list
+        snapshot, about 15 ms of the attach (2026-09-25)."""
         self._close()
         try:
-            self._pm = pymem.Pymem(PROCESS_NAME)
+            self._pm = pymem.Pymem(PROCESS_NAME if pid is None else pid)
         except pymem.exception.PymemError:
             self._pm = None
             return False
@@ -116,10 +127,28 @@ class Pj64Memory(RdramReader):
                 continue
             if self._check_signature_at(base):
                 self._rdram_base = base
-                log.info("attached: RDRAM at host base 0x%X", base)
+                self._announce(self._pm.process_id, base)
                 return True
         self._close()  # process found, ROM not loaded yet
         return False
+
+    def alive(self) -> bool:
+        """Attached, and the process has not exited since: a handle keeps an
+        exited process's pid from naming anything, so a reused pid is caught."""
+        if not self.attached:
+            return False
+        kernel32 = ctypes.windll.kernel32
+        return kernel32.WaitForSingleObject(
+            ctypes.c_void_p(self._pm.process_handle), 0) == _WAIT_TIMEOUT
+
+    @classmethod
+    def _announce(cls, pid: int, base: int) -> None:
+        with cls._roms_lock:
+            first = (pid, base) not in cls._announced
+            cls._announced[(pid, base)] = None
+            for stale in list(cls._announced)[:-cls._ROMS_KEPT]:
+                del cls._announced[stale]
+        (log.info if first else log.debug)("attached: RDRAM at host base 0x%X (pid %d)", base, pid)
 
     def rom_header(self) -> bytes | None:
         """The first 0x40 bytes of the ROM image PJ64 holds, in whatever byte
