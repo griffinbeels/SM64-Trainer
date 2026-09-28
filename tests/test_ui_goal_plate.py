@@ -60,6 +60,36 @@ def _wait(page, ms):
     page.evaluate(f"new Promise(r => setTimeout(r, {ms}))")
 
 
+# What a real pointer would hit at the middle of each part of the plate: the
+# browser's own hit test, so the button's stretched hit area counts.
+_HITS = f"""(() => {{ const p = {PLATE};
+    const owner = (hit) => !hit ? 'nothing' : hit.closest('.pblink') ? 'pb-time'
+      : hit.closest('.goal-plate-trigger') ? 'picker' : hit.closest('.goal-plate') ? 'plate' : 'outside';
+    const mid = (el) => {{ const r = el.getBoundingClientRect();
+      return owner(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }};
+    const box = p.getBoundingClientRect();
+    return {{ pb_word: mid(p.querySelector('.goal-plate-word.is-pb')),
+      pb_time: mid(p.querySelector('.pblink')),
+      clock: mid(p.querySelector('.goal-plate-clock')),
+      goal_time: mid(p.querySelector('.goal-plate-time')),
+      count_row: mid(p.querySelector('.goal-plate-count')),
+      top_left: owner(document.elementFromPoint(box.left + 3, box.top + 3)),
+      nested: [...p.querySelectorAll('.goal-plate-trigger *')]
+        .filter((el) => el.matches('a, button, input, select, textarea, [tabindex]')).length }}; }})()"""
+
+# A click where the browser's hit test lands, at the middle of `selector`.
+_CLICK_AT = """(() => {{ const r = {plate}.querySelector({selector}).getBoundingClientRect();
+    document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2).click(); }})()"""
+
+
+def _click_at(page, selector):
+    page.evaluate(_CLICK_AT.format(plate=PLATE, selector=json.dumps(selector)))
+
+
+def _picker_open(page):
+    return page.evaluate(f"!!{PLATE}.querySelector('.search-menu')")
+
+
 def _plate(page):
     return page.evaluate(f"""(() => {{ const p = {PLATE};
         return p && {{ text: p.innerText.replace(/\\n/g, ' | '), width: p.offsetWidth,
@@ -78,6 +108,15 @@ def seen():
                 page.goto(base)
                 _wait(page, 2500)
                 out["automatic"] = _plate(page)
+                # Round 13: the whole plate opens the picker, the PB time keeps
+                # its own jump, and a second click on the PB half closes it.
+                out["hits"] = page.evaluate(_HITS)
+                _click_at(page, ".goal-plate-word.is-pb")
+                _wait(page, 800)
+                out["pb_half_opens"] = _picker_open(page)
+                _click_at(page, ".goal-plate-word.is-pb")
+                _wait(page, 500)
+                out["pb_half_closes"] = not _picker_open(page)
                 out["automatic_api"] = _get(
                     base, f"/api/scorecard/entry_goals?scope=overall&keys={KEY}")["goals"][KEY]
                 # The Player tab: search, pick, and the Scorecard follows.
@@ -135,6 +174,10 @@ def seen():
                                            "count": 3, "streak": True}})
                 _wait(page, 1500)
                 out["long_source"] = _plate(page)
+                # Last: its jump may move the log's scope.
+                _click_at(page, ".pblink")
+                _wait(page, 500)
+                out["pb_time_opens"] = _picker_open(page)
     return out
 
 
@@ -142,6 +185,17 @@ def test_the_plate_draws_the_scorecards_own_goal(seen):
     api = seen["automatic_api"]
     assert api["goal_cs"] is not None, api
     assert "GOAL" in seen["automatic"]["text"] and "Auto" in seen["automatic"]["text"], seen["automatic"]
+
+
+def test_the_whole_plate_opens_the_picker_except_the_pb_time(seen):
+    """His round-13 ask: "click on the whole button (not just the bottom
+    half)". The PB time keeps its own jump to the PB's row, and no control
+    sits inside another."""
+    assert seen["hits"] == {"pb_word": "picker", "pb_time": "pb-time", "clock": "picker",
+                            "goal_time": "picker", "count_row": "picker",
+                            "top_left": "picker", "nested": 0}, seen["hits"]
+    assert seen["pb_half_opens"] and seen["pb_half_closes"], seen
+    assert not seen["pb_time_opens"], "the PB time opened the goal picker"
 
 
 def test_a_player_found_by_search_becomes_this_stars_pinned_goal(seen):

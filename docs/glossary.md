@@ -2299,10 +2299,13 @@ history.
 
 The box in a [[practice log]] card's head holding its [[personal best]] over
 its [[Goal]], and under them one dot per success when that [[Goal]] asks for
-a streak or a count. Clicking the lower line picks a [[rank]] or a [[runner]] or a typed
+a streak or a count. Clicking anywhere on it but the PB time (which jumps to
+that [[personal best]]'s row in the log) picks a [[rank]] or a [[runner]] or a typed
 time, and that pick pins the [[target]] on the [[Scorecard]] too. The plate
 keeps one size whatever it says, so a stream crop of the top card never moves,
-and its [[Celebration]] plays inside it.
+and its [[Celebration]] plays inside it. A finished [[attempt]] celebrates only
+against the [[Goal]] the plate showed when it ended; a [[Goal]] it has replaced
+never fires again.
 
 - **Lives** — the plate and its picker (`src/sm64_events/ui/components/goalplate.js`)
   → the pb track of the [[practice log]] card

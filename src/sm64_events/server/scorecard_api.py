@@ -483,7 +483,12 @@ def create_scorecard_router(service, library=None, adoptions=None,
         resolved = goals.resolve_entries(rows_spec, scope_id)
         clocks = {key: clock for key, _label, clock in rows_spec[0]["entries"]}
         resolved["progress"] = goals.entry_progress(resolved, clocks)
-        return {key: entry_goal(key, clock, resolved) for key, clock in clocks.items()}
+        # Stamped after resolving, so every attempt these goals counted ended
+        # before it: the goal plate celebrates a run only against the goal it
+        # showed when that run ended (goalplate.js::goalShownAt).
+        resolved_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        return {key: {**entry_goal(key, clock, resolved), "resolved_utc": resolved_utc}
+                for key, clock in clocks.items()}
 
     async def goal_changed(key: str, scope_id: str) -> dict:
         """The key's EntryGoal after a write, and the `goal_changed` broadcast

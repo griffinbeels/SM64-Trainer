@@ -39,6 +39,21 @@ def _ladder(client, service, key=KEY):
     return service.ranks.ladder_cs(key, _tiles(client)[key]["strat"])
 
 
+def test_every_entry_goal_says_when_the_server_resolved_it(tmp_path):
+    """The goal plate celebrates a finished run only against the goal it
+    showed when that run ended (goalplate.js::goalShownAt, round 13), by
+    comparing this stamp with the attempt's `ended_utc`: one UTC clock, the
+    server's, taken after the goal was resolved."""
+    with make_client(tmp_path) as (client, _db, _service):
+        before = datetime.now(timezone.utc)
+        stamp = _entry_goals(client, [KEY])[KEY]["resolved_utc"]
+        after = datetime.now(timezone.utc)
+        assert stamp.endswith("Z"), stamp
+        assert before <= datetime.fromisoformat(stamp) <= after
+        pinned = _pin(client, {"kind": "time", "cs": 10500})["resolved_utc"]
+        assert datetime.fromisoformat(pinned) >= datetime.fromisoformat(stamp)
+
+
 # -- the per-entry automatic floor, pure ------------------------------------
 
 LADDER = {"Mario": 1000, "Diamond": 1100, "Gold": 1200, "Bronze": 1500}
