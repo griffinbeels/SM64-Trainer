@@ -98,8 +98,16 @@ enum sg_material {
     SG_MATERIAL_TEXGEN = 0x100,
     /* The code is the low byte. A textured, non-texgen triangle also carries
      * its render tile (sg_tile) from bit SG_MATERIAL_TILE_SHIFT. */
-    SG_MATERIAL_CODE = 0xffu, SG_MATERIAL_TILE_SHIFT = 9
+    SG_MATERIAL_CODE = 0xffu, SG_MATERIAL_TILE_SHIFT = 9,
+    /* Flag above the tile: the triangle's list left G_CULL_BACK on, so the
+     * game never draws its back (counter-clockwise, seen from outside, is its
+     * front). All of Mario but his cap's wings. */
+    SG_MATERIAL_CULL_BACK = 0x40000000
 };
+/* The render tile a material word carries (0: none). */
+static inline uint32_t sg_material_tile(uint32_t word) {
+    return (word & ~(uint32_t)SG_MATERIAL_CULL_BACK) >> SG_MATERIAL_TILE_SHIFT;
+}
 
 /* A render tile as gsDPSetTile and gsDPSetTileSize set it: the texture's atlas
  * cell, and per axis (S across, T down) whether it clamps, its wrap mask and

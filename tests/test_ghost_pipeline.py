@@ -117,7 +117,8 @@ def test_connected_capture_model_gpu_pipeline(tmp_path, width, height):
     assert_scene_effects(report)  # the timing below runs with the player-first fade on
     assert_saved_ghost_plays(report["saved_gclip4"])
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
-    assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
+    # Drawn vertices: the model's front faces under the camera (the game culls the rest).
+    assert report["vertices"] > 800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
     assert report["pipeline_gpu_completed"]["samples"] == report["including_swap"]["samples"] == 180
     print(f"Connected synthetic pipeline report ({shape}): {tmp_path / 'pipeline-report.json'}")
@@ -152,10 +153,19 @@ def assert_stage_costs(stages):
 
 
 def assert_scene_effects(report):
-    """The recorded shadow, the water over a submerged ghost, his particles and the player-first fade."""
+    """The recorded shadow, the water over a submerged ghost, his particles, the player-first fade
+    and the back faces the game culls."""
     assert_recorded_shadow(report["shadow"])
     assert_submerged(report["water"], report["particles"])
     assert_player_first(report["occlusion"])
+    assert_culled(report["culling"])
+
+
+def assert_culled(culling):
+    """Drawing the culled back faces too changes nothing seen from outside him; with the camera's
+    near plane through his body it would show the inside of his far side (his Round 13 report)."""
+    print(json.dumps({"culling": culling}))
+    assert culling["outside_pixels_changed"] == 0 and culling["sliced_pixels_hidden"] > 100
 
 
 def assert_saved_ghost_plays(saved):
@@ -190,7 +200,7 @@ def assert_full_ghost_set(report):
     """Sixteen prepared clips drawn in one batch, inside the same frame budget."""
     multi = report["multi"]
     assert multi["ghosts"] == multi["visible"] == 16 and multi["outside_pixels_changed"] == 0
-    assert multi["vertices"] > 16 * 1800 and multi["silhouette_pixels"] > 2 * report["silhouette_pixels"]
+    assert multi["vertices"] > 16 * 800 and multi["silhouette_pixels"] > 2 * report["silhouette_pixels"]
     assert multi["including_swap"]["samples"] == 180
     print(json.dumps({"multi": {key: multi[key] for key in ("ghosts", "pipeline_gpu_completed", "including_swap")}}))
     assert multi["including_swap"]["over_budget"] == 0, multi["including_swap"]

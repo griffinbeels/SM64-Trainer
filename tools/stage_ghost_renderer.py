@@ -71,11 +71,12 @@ def edits(source: Path, replace_once) -> dict[str, bytes]:
             f"\t\tif (hud.active) {call} }}\n#endif")
     # Translucent world layer: the same world draw again, once per pass, into
     # the ghost's private layer (water drawn over the ghost). No N64 command
-    # runs twice; the scope restores the game's destination on every exit.
+    # runs twice; the scope restores the game's destination on every exit and
+    # closes the surface's one gateway scope (close_layer) however it ends.
     anchor = "\tghost_link::triangles((_params.elementsCount ? _params.elementsCount : _params.verticesCount) / 3);\n#endif"
     data = replace_once(data, anchor, anchor + "\n" + GUARD +
         "\t{ struct GhostLayer { bool active = false;\n"
-        "\t\t~GhostLayer() { if (active) ghost_link::end_layer(); } } layer;\n"
+        "\t\t~GhostLayer() { if (active) ghost_link::end_layer(); ghost_link::close_layer(); } } layer;\n"
         "\t\tfor (uint32_t pass = 0; (layer.active = ghost_link::begin_layer(pass)); ++pass) {\n"
         "\t\t\tm_graphicsDrawer->drawTriangles(_params);\n"
         "\t\t\tlayer.active = false; ghost_link::end_layer(); } }\n#endif")

@@ -36,6 +36,11 @@ def test_native_playback_ownership_and_selection(tmp_path):
     # Several ghosts shared one origin; each clip was prepared exactly once per copy.
     assert report["multi"] == {"ghosts": 3, "max_visible": 3, "prepares": 5}
     assert report["render_allocations"] == report["render_frees"] == 0
+    # Every evaluation ran as the renderer runs it: the list's plan first (it
+    # gates the translucent layer), matching what evaluate then drew. The
+    # witness reached drawn lists, hidden ones and pose refusals.
+    plans = report["plans"]
+    assert plans["drawn"] > 0 and plans["hidden"] > 0 and plans["refused"] > 0, plans
     # A dance-tail ghost fades from its last dance frame to hidden over the
     # tuning constant, one equal step a frame.
     print(json.dumps(report["dance"]))

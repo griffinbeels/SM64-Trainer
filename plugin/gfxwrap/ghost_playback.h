@@ -195,9 +195,20 @@ bool particles(sg_particle_view *out, uint64_t *model_id);
  * it. Drawing never subtracts elapsed values across that gap.
  * Writes visible poses into out[GP_GHOSTS] back to front (farthest root first)
  * and returns true when count > 0; clears outputs otherwise. Geometry stays
- * borrowed until the next evaluate/safe_boundary/retire call. */
+ * borrowed until the next evaluate/safe_boundary/retire call.
+ * evaluate poses the choice plan() made for this list's sample (the same
+ * epoch, sequence and list serial), once; without one it plans first. */
 bool evaluate(const gc_sample &, const ghost::WorldPass &,
               ghost_compositor::Pose *out, uint32_t &count, gp_draw_token &token);
+/* Renderer thread, at list start, from the list's own sample (its clock,
+ * scene and action; the world pass has not run): chooses what every ghost
+ * shows this list exactly as evaluate would, and returns whether any ghost
+ * is chosen. Work done for a ghost before the seal (the translucent world
+ * layer) runs only then, so a finished, faded, suspended, out-of-area or
+ * withdrawn ghost costs what no ghost costs. A chosen ghost's pose can
+ * still refuse at the seal. The list's once-a-list effects (live timing,
+ * star and defeat latches) happen here rather than at its seal. */
+bool plan(const gc_sample &);
 /* Ghost sound: the renderer hands each visible ghost's recorded sound
  * requests to the sink once, as its displayed record passes them (every
  * record since the last drawn frame, at most GP_SOUND_CATCHUP), and the
@@ -224,9 +235,9 @@ void set_sound_sink(const SoundSink *);
  * during a list must not present an older provisional candidate. */
 bool current(const gp_draw_token &);
 /* A displayed request holds clips for the prepared model on this renderer:
- * the only state in which a frame can draw a ghost. current() is this plus
- * the token; work done for a ghost before evaluate (the translucent world
- * layer) runs only while this holds. */
+ * the only state in which a frame can draw a ghost, though a finished or
+ * hidden ghost holds it too (plan() says whether this list draws one).
+ * current() is this plus the token. */
 bool drawing();
 /* Actual renderer owner before its context/thread goes away. Detaches and
  * retires storage for worker reclamation; no GL or resource destruction. */

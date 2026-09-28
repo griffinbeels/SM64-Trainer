@@ -102,7 +102,7 @@ bool begin_list() {
     { LARGE_INTEGER now{}; QueryPerformanceCounter(&now); list_start = now.QuadPart; }
     HookTime timed;
     if (!context_current || !ghost_stream::requested()) {
-        ghost_draw::begin(ghost_ipc::rom_generation(), 0);
+        ghost_draw::begin(ghost_ipc::rom_generation(), 0, nullptr);
         ghost_stream::cancel(); observing = false; return false;
     }
     renderer::Identity identity{}; snapshot::RestoreBindings ignored{};
@@ -114,7 +114,8 @@ bool begin_list() {
     // Upstream RDRAMSize is the inclusive maximum byte index, not a byte count.
     const uint32_t bytes = RDRAMSize == 0x7fffff || RDRAMSize == 0x3fffff ? RDRAMSize + 1 : 0;
     observing = context_current && ghost_stream::begin(RDRAM,bytes,context_generation,now.QuadPart);
-    ghost_draw::begin(ghost_ipc::rom_generation(), ghost_stream::api()->stats().configuration);
+    ghost_draw::begin(ghost_ipc::rom_generation(), ghost_stream::api()->stats().configuration,
+                      observing ? ghost_stream::sample() : nullptr);
     return observing;
 }
 void end_list(bool completed) {
@@ -186,6 +187,10 @@ bool begin_layer(uint32_t pass) {
         && ghost_draw::begin_layer(pass, uint32_t(buffer->m_FBO), attachments(buffer));
 }
 void end_layer() { HookTime timed; ghost_draw::end_layer(); }
+void close_layer() {
+    if (!ghost_draw::layer_open()) return;
+    HookTime timed; ghost_draw::close_layer();
+}
 void triangles(uint32_t count) {
     if (!observing || !count || !(gSP.geometryMode & G_ZBUFFER)) return;
     HookTime timed;

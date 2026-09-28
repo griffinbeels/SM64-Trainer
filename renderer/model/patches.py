@@ -263,7 +263,7 @@ void sg_traversal_reset(void) {
     edit("gfx_adapter.c", "static struct SM64MarioGeometryBuffers *s_outBuffers;",
          "static struct SM64MarioGeometryBuffers *s_outBuffers;\n"
          "static struct SM64MarioGeometryBuffers s_model_output;\n"
-         "static uint32_t s_capacity, s_errors, s_material, s_texgen;\nstatic uint32_t *s_materialPtr;")
+         "static uint32_t s_capacity, s_errors, s_material, s_texgen, s_cull;\nstatic uint32_t *s_materialPtr;")
     edit("gfx_adapter.c", "            case GFXCMD_VertexData:",
          "            case GFXCMD_Material: {\n"
          "                uint32_t first = (uint32_t)*ptr++, second = (uint32_t)*ptr++;\n"
@@ -273,6 +273,8 @@ void sg_traversal_reset(void) {
          "            case GFXCMD_GeometryMode: {\n"
          "                intptr_t set = *ptr++, word = *ptr++;\n"
          "                if (word & G_TEXTURE_GEN) s_texgen = set ? 1u : 0u;\n"
+         "                if (word & G_CULL_BACK) s_cull = set ? 1u : 0u;\n"
+         "                if (set && (word & G_CULL_FRONT)) s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;\n"
          "                break;\n            }\n"
          "            case GFXCMD_VertexData:")
     edit("gfx_adapter.c", "                UNUSED intptr_t flag0 = *ptr++;",
@@ -281,7 +283,8 @@ void sg_traversal_reset(void) {
          "                    s_errors |= SG_MESH_TOO_SMALL; break;\n                }\n"
          "                if (s_texgen && s_textureOn && (s_textureIndex != 0 || s_scaleS != 0x0F80 || s_scaleT != 0x07C0))\n"
          "                    s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;\n"
-         "                s_materialPtr[0] = s_materialPtr[1] = s_materialPtr[2] = sg_material_word();\n"
+         "                s_materialPtr[0] = s_materialPtr[1] = s_materialPtr[2] =\n"
+         "                    sg_material_word() | (s_cull ? (uint32_t)SG_MATERIAL_CULL_BACK : 0u);\n"
          "                s_materialPtr += 3;\n"
          "                if (s_ambientPtr) {\n"
          "                    for (int k = 0; k < 9; ++k) s_ambientPtr[k] = s_curAmbient[k % 3];\n"
@@ -322,6 +325,7 @@ void sg_geometry_bind(sg_mesh *mesh) {
     s_model_output.color=mesh->color; s_model_output.uv=mesh->uv;
     s_capacity=mesh->vertex_capacity; s_errors=0;
     s_materialPtr=mesh->material; s_material=SG_MATERIAL_SOLID; s_texgen=0;
+    s_cull=1; /* the game's RSP init leaves G_CULL_BACK on for every object */
     s_textureOn=0; s_textureIndex=0; s_scaleS=s_scaleT=0; s_uls=s_ult=0;
     s_texWidth=s_texHeight=64; s_curColor[0]=s_curColor[1]=s_curColor[2]=1;
     s_ambientPtr=mesh->ambient; s_curAmbient[0]=s_curAmbient[1]=s_curAmbient[2]=0;
@@ -333,7 +337,7 @@ float *sg_geometry_position(uint32_t vertex) { return s_model_output.position + 
 float *sg_geometry_normal(uint32_t vertex) { return s_model_output.normal + 3u * vertex; }
 void sg_geometry_reset(void) {
     s_outBuffers=NULL; s_trianglePtr=s_colorPtr=s_normalPtr=s_uvPtr=NULL;
-    s_materialPtr=NULL; s_material=SG_MATERIAL_SOLID; s_texgen=0; s_ambientPtr=NULL;
+    s_materialPtr=NULL; s_material=SG_MATERIAL_SOLID; s_texgen=0; s_cull=1; s_ambientPtr=NULL;
     memset(&s_model_output,0,sizeof(s_model_output)); s_capacity=s_errors=0;
 }
 """

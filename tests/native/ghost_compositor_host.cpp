@@ -504,6 +504,21 @@ int main() {
                 require(tiled[i]==s*8 && tiled[i+1]==t*8 && tiled[i+2]==255,"the texel the tile rules predict");
             }
         }
+        // Alpha-mix through a tile (his face, cap and buttons): a clear texel
+        // shows the vertex colour. Every tiled word is at or above 2^23, where
+        // the shader once decoded it as float+0.5: floats step by 1 there, so
+        // an odd word rounded up and alpha-mix read as a cut-out decal. His
+        // face and cap showed the inside of his head (Round 13, 2026-09-28).
+        std::fill(tiles.begin(),tiles.end(),uint8_t(0));
+        require(gc::prepare(compositor,32,32,60,tiles.data(),128,64)==gc::Result::ok,"clear tile atlas prepare");
+        auto face=quad(gc::with_tile(gc::Material::alpha_mix,word(true,5,true,5)));
+        for(auto& v:face){v.color[0]=1;v.color[1]=v.color[2]=0;}
+        auto face_mix=pose(face,1);face_mix.ambient=1;face_mix.diffuse=0;
+        require(gc::begin(compositor,target(scene,gc::Depth::ordinary),face_mix)==gc::Result::ok,"tiled alpha-mix begin");
+        require(gc::finalize(compositor,77)==gc::Result::ok,"tiled alpha-mix finalize");
+        const auto mixed=pixels(g,gc::display(compositor).framebuffer,32,32);
+        for(size_t i=0;i<mixed.size();i+=4)
+            require(mixed[i]==255 && mixed[i+1]==0 && mixed[i+2]==0,"a clear texel of a tiled alpha-mix shows its vertex colour");
         // An unknown mask or size, or a word without its present bit, refuses.
         const auto bad=quad(static_cast<gc::Material>(uint32_t(gc::Material::decal_rgb)|((7u<<gc::tile::s_mask)<<gc::tile::shift)));
         require(gc::begin(compositor,target(scene,gc::Depth::ordinary),pose(bad,1))==gc::Result::unsupported,"malformed tile refuses");

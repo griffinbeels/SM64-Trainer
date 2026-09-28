@@ -119,8 +119,11 @@ struct Run {
             if(!worker_after_render)worker();
             ghost::WorldPass world{};world.epoch=live.epoch;world.context_generation=1;world.list_serial=live.dlist_serial;
             bool drawn=false;ghost_compositor::Pose poses[GP_GHOSTS]{};uint32_t count=0;gp_draw_token token{};
+            // The renderer's order: the list's plan at its start, evaluate at its seal.
             renderer.run([&]{ghost_playback::safe_boundary(rom,fixture::configuration);
-                drawn=ghost_playback::evaluate(live,world,poses,count,token);});
+                const bool planned=ghost_playback::plan(live);
+                drawn=ghost_playback::evaluate(live,world,poses,count,token);
+                if(drawn && !planned)throw std::runtime_error("a drawn list was not planned");});
             if(worker_after_render)worker();
             gp_status status{};ghost_playback::api()->status(&status,sizeof(status));
             ++frames;

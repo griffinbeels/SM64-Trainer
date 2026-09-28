@@ -815,6 +815,32 @@ XYZ as `[1], [2], [0]`. Explicit per-vertex material codes come from actual N64
 combiner commands, not a UV heuristic. [Cap effects](#cap-effects-vanish-and-metal)
 describes the vanish and metal material routes.
 
+**His face showed the inside of his head** (his Round 13 report, 2026-09-28:
+"the wrong side of the face / body is being rendered"). The fragment shader
+decoded each vertex's material word as `uint(mode+0.5)`. Every tiled word
+(the face, cap, sideburns, mustache and buttons) lies at or above 2^23, where
+floats step by 1, so the sum rounded an odd word up: alpha-mix (1) read as a
+cut-out decal (2). Where the texture is clear the face was discarded and the
+inside of the far side of his head showed through, hair and cap across his
+cheek. The word is exact (flat, below 2^24), so the shader now takes
+`uint(mode)`. The [compositor witness](../tests/native/ghost_compositor_host.cpp)
+draws a tiled alpha-mix over a clear texture and needs its vertex colour on
+every pixel; with the old decode it is transparent.
+
+The game never draws the back of a triangle its list leaves `G_CULL_BACK` on:
+all of Mario, only his cap's wings two-sided (the model marks each triangle,
+`SG_MATERIAL_CULL_BACK`; the game's RSP init sets it for every object). The
+pose moves those facing away from the live camera's eye after the drawn ones
+(`Pose::culled`), judged in world space: his winding agrees with his vertex
+normals on every triangle. From outside this hides nothing the self-depth
+pass would show; the [pipeline](../tests/test_ghost_pipeline.py) draws the
+culled back faces too and requires an identical picture, then puts the
+camera's near plane through his body, where two-sided drawing would show the
+inside of his far side. The [pose witness](../tests/native/ghost_pose_host.cpp)
+culls a wall seen from behind and keeps a two-sided one; the
+[model witness](../tests/native/model_host.cpp) finds every triangle culled but
+the wings'.
+
 The camera comes from bounded lookup of the active graph camera matching the
 area camera, including persistent position/focus/roll. It is not the final
 display-list modelview matrix. Projection and viewport corrections come from
@@ -896,10 +922,42 @@ up, so a ghost frame asks as little as it can
   (`ghost_presentation::Known`), so a presented ghost frame asks nothing
   either.
 
-What still asks, and why: the capture gateway reads glGetError on each side of
-every ghost GL scope (the seal, each HUD draw, the presentation's copies),
-because that is how an error is told apart from the renderer's; without GL 4.4
-multi-bind a frame asks the active unit; a record the dispatch lost (after a GL
+What still asks, and why. The capture gateway reads glGetError, which waits for
+the driver thread like any query, only where the answer changes what happens
+([ghost_draw.cpp](../plugin/gfxwrap/ghost_draw.cpp)):
+
+- **Before the seal, once.** The batch saves and restores the state the
+  dispatch recorded, so the renderer's world pass must not have failed.
+- **When the list's ghost GL ends, once** (at list end, or when the ghost is
+  cancelled). The batch and every HUD mirror share this scope. A capture read
+  handles an error the same whoever raised it: kept for the renderer's next
+  read, the nominal state left, the image cancelled before it is ready. So
+  an error anywhere in the scope, the renderer's between HUD draws included,
+  ends exactly as a read around each HUD draw would have ended it, and a HUD
+  mirror, whose own GL is two binds between the ghost display and the target
+  the seal verified, reads nothing.
+- **Twice per mirrored translucent surface**, before its color pass and after
+  its depth pass. The layer drains its own errors without leaving the nominal
+  state, so its scope may hold no renderer GL but the mirrored draw; the depth
+  pass follows the color pass with nothing between. The seam's scope closes
+  the surface however its passes end (`ghost_link::close_layer`).
+- Around the presentation's copies at VI.
+
+A list whose plan chose no ghost reads nothing. His LLL list, about 12 water
+surfaces and 27 HUD draws: 104 reads before (2, plus 2 per HUD draw, plus 4
+per surface), 26 now; with his run finished, 48 before and none now. The
+[glue witness](../tests/test_ghost_draw.py) compiles the glue whole against
+renderer shells and counts them (`SM64_GHOST_DRAW_BASELINE=<revision>`
+prints an older glue's numbers beside), and shows where each error goes: the
+renderer's is never drained, the layer's is, and any error in the display
+scope cancels the image. GL_KHR_debug output cannot replace the reads: an
+error still sets its flag ("the GL will also generate a debug output
+message"), a context created without the debug bit may generate no messages
+at all, and messages arrive asynchronously unless synchronous output is on,
+which the spec warns "may potentially result in drastically reduced driver
+performance" ([KHR_debug](https://registry.khronos.org/OpenGL/extensions/KHR/KHR_debug.txt)).
+
+Other queries: without GL 4.4 multi-bind a frame asks the active unit; a record the dispatch lost (after a GL
 error, or before the renderer's first glViewport or glScissor) is asked for;
 with N64 depth compare on, the HUD check reads the combiner's two uniforms; and
 taking a drawn ghost back (a withdrawn or refused image, rare) reads the
@@ -936,14 +994,14 @@ list). Per list, from `gs_hook_cost` in
 |---|---|
 | hooks | Time inside the timed hooks: list begin, the per-draw hooks, the seal, list end. Its definition predates the stages, so older lines compare. It includes the renderer flush. |
 | renderer flush | GLideN64's deferred triangles and rectangles, flushed at the seal: the renderer's own work, moved earlier, not the ghost's. |
-| gateway open, close | The capture gateway's glGetError before and after the ghost's GL. Under threaded optimization the first read waits for everything the renderer queued this list. |
+| gateway open, close | The capture gateway's glGetError before the seal, and once when the list's ghost GL ends (the batch and every HUD mirror; at list end, inside hooks, or at a cancel). Under threaded optimization each waits for everything queued before it: the open for the renderer's world pass, the close for the batch and the HUD. |
 | batch | The compositor's begin_batch: validate (every pose and vertex), state (the renderer state it will restore: known values plus the residue), copy (clean color and depth), draw (shadows, uploads, bodies, particles; also the slowest single ghost), restore. |
 | finalize | Closing the ghost branch at list end. |
 | whole list | ProcessDList, begin to end, the renderer's own work included. |
-| HUD mirror | Each HUD draw mirrored into the ghost's display, its gateway and the duplicate draw included. Not part of hooks. |
-| layer passes | Translucent-layer (water) mirrors. |
+| HUD mirror | Each HUD draw mirrored into the ghost's display, the duplicate draw included; it reads no error of its own. Not part of hooks. |
+| layer passes | Translucent-layer (water) mirrors, two per surface; none on a list whose plan chose no ghost. |
 | driver queries | Every query the ghost code made in the list, and the time inside them. |
-| gateway error reads | glGetError calls around ghost GL, about one per gateway call. |
+| gateway error reads | glGetError calls around ghost GL: 2 per drawn list plus 2 per mirrored surface (was 2, plus 2 per HUD draw, plus 4 per surface). |
 
 ### Recorded shadow
 
@@ -1012,8 +1070,17 @@ error drops the layer for that list (`broken`); the ghost then draws as before.
 The layer has its own GL error scope (`replay_gl::BeginLayer`/`EndLayer`): its
 ordinary errors are drained and never leave the nominal state that replay
 capture and the ghost depend on; out of memory or a lost context still does.
-The layer runs only while playback is drawing (`ghost_playback::drawing`), so
-a retired, withdrawn or disabled playback repeats no draw and blits no depth.
+The layer runs only on a list whose plan chose a ghost (`ghost_playback::plan`,
+from the list's own sample at its start, before the world pass): a finished,
+faded, suspended, out-of-area, withdrawn or disabled ghost repeats no draw and
+copies no depth. It used to run whenever a request held its clips
+(`ghost_playback::drawing`), which a finished ghost still does: live on
+2026-09-28, his LLL and SSL lists after his 7-2 run mirrored 20 to 24 layer
+passes each, with 40 to 48 error reads, at about 880 us of hooks against
+42-90 us. The plan makes the same choice evaluate made at the seal (the
+[playback witness](../tests/test_ghost_playback.py) plans before every
+evaluation and checks the two agree); only a chosen ghost whose pose then
+refuses costs a wasted layer. After the seal the layer is spent and refused.
 N64 image depth and multisampling never open it. The layer composes several
 surfaces in draw order but keeps one nearest depth, so a ghost between two
 translucent surfaces takes both. Level fog on the ghost's own body is not
