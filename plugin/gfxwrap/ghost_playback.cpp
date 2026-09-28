@@ -765,15 +765,29 @@ const gclip_frame *bridged(const Clip& clip,uint32_t at) {
         if(clip.frames[i].sample.level!=first.level || clip.frames[i].sample.area!=first.area)return nullptr;
     return &clip.frames[before];
 }
-uint32_t draw(uint32_t index,const gs_record& recorded,const gclip_frame& shown_row,
-              const gc_sample& particles_from,const gc_sample& live,const ghost::WorldPass& world,
-              float fade,ghost_compositor::Pose& out);
+// What one ghost shows this list, chosen from the live clock and scene alone
+// (plan), before the world pass; evaluate poses it at the seal.
 // fade: 1 normally; after a dance tail's last record it falls by
 // 1/GP_STAR_FADE_FRAMES a frame on the held last pose, and is 0 once hidden.
 // record is the selected row (its sounds play); posed the row whose pose is
-// shown, earlier than record across a bridged refusal.
-uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,const ghost::WorldPass& world,
-                ghost_compositor::Pose& out,uint32_t& record,uint32_t& posed,float& fade) {
+// shown, earlier than record across a bridged refusal. target is this
+// ghost's coordinate, the defeat's evidence of where it stood.
+struct Choice {
+    uint32_t result=GP_DISABLED; // GP_READY or GP_BEFORE_START: drawn unless its pose refuses
+    uint32_t record=0,posed=0;
+    uint64_t target=0;
+    float fade=1;
+    bool falling=false;
+};
+// One list's choice for every ghost, used once by evaluate at that list's seal.
+struct Plan {
+    bool made=false,proceed=false; // proceed: the list reached its per-ghost choice
+    uint32_t epoch=0,post=0,chosen=0;
+    uint64_t sequence=0,dlist_serial=0;
+    gp_draw_token candidate{};
+    Choice ghost[GP_GHOSTS];
+} planned;
+uint32_t choose(uint32_t index,const Coordinate& frame,const gc_sample& live,Choice& choice) {
     const Clip *clip=bound[index];
     if(!clip)return GP_PREPARING;
     const auto &h=clip->header;
@@ -793,8 +807,8 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     if(target>last) {
         if(!dances)return GP_AFTER_END;
         const uint64_t past=target-last;
-        if(past>=GP_STAR_FADE_FRAMES) {fade=0;return GP_STAR_ENDED;}
-        fade=float(GP_STAR_FADE_FRAMES-past)/float(GP_STAR_FADE_FRAMES);
+        if(past>=GP_STAR_FADE_FRAMES) {choice.fade=0;return GP_STAR_ENDED;}
+        choice.fade=float(GP_STAR_FADE_FRAMES-past)/float(GP_STAR_FADE_FRAMES);
         at=last; // the dance's final pose, held while it fades
     }
     uint32_t lo=0,hi=clip->index_count;
@@ -814,12 +828,7 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     if(!(selected.sample.valid_fields&GC_VALID_POSE) && !(shown=bridged(*clip,lo))) {
         refusals.fetch_add(1);return GP_INVALID_FRAME;
     }
-    gs_record recorded{};recorded.bytes=sizeof(recorded);recorded.version=GS_VERSION;
-    recorded.configuration=shown->configuration;recorded.sample=shown->sample;
-    recorded.world.status=shown->world_status;
-    const auto result=draw(index,recorded,*shown,selected.sample,live,world,fade,out);
-    if(result!=GP_READY)return result;
-    record=lo;posed=uint32_t(shown-clip->frames);
+    choice.record=lo;choice.posed=uint32_t(shown-clip->frames);
     return frame.below_zero || target<first?GP_BEFORE_START:GP_READY;
 }
 // One ghost's pose, shadow and particles for the recorded (or defeated)
@@ -862,12 +871,17 @@ uint32_t draw(uint32_t index,const gs_record& recorded,const gclip_frame& shown_
 // the trigger (one animation frame a game frame), holding the fall's last
 // frame from GP_DEFEAT_FRAMES and fading over GP_DEFEAT_FADE_FRAMES. Its
 // place, facing, scale and shadow stay; what it held and its particles go.
-uint32_t fall(uint32_t index,uint32_t post,const gc_sample& live,const ghost::WorldPass& world,
-              ghost_compositor::Pose& out,float& fade) {
-    if(post>=defeat.hold+GP_DEFEAT_FADE_FRAMES || defeat.frames<=0) {fade=0;return GP_STAR_ENDED;}
-    fade=post<defeat.hold?1.0f:float(defeat.hold+GP_DEFEAT_FADE_FRAMES-post)/float(GP_DEFEAT_FADE_FRAMES);
+uint32_t choose_fall(uint32_t index,uint32_t post,const gc_sample& live,Choice& choice) {
+    if(post>=defeat.hold+GP_DEFEAT_FADE_FRAMES || defeat.frames<=0) {choice.fade=0;return GP_STAR_ENDED;}
+    choice.fade=post<defeat.hold?1.0f:float(defeat.hold+GP_DEFEAT_FADE_FRAMES-post)/float(GP_DEFEAT_FADE_FRAMES);
     const auto &row=defeat.clip[index]->frames[defeat.row[index]];
     if(live.level!=row.sample.level || live.area!=row.sample.area)return GP_WRONG_SCENE;
+    choice.falling=true;choice.record=choice.posed=defeat.row[index];
+    return GP_READY;
+}
+uint32_t pose_fall(uint32_t index,uint32_t post,const Choice& choice,const gc_sample& live,
+                   const ghost::WorldPass& world,ghost_compositor::Pose& out) {
+    const auto &row=defeat.clip[index]->frames[choice.posed];
     gs_record recorded{};recorded.bytes=sizeof(recorded);recorded.version=GS_VERSION;
     recorded.configuration=row.configuration;recorded.sample=row.sample;recorded.world.status=row.world_status;
     auto &p=recorded.sample.pose;
@@ -876,7 +890,18 @@ uint32_t fall(uint32_t index,uint32_t post,const gc_sample& live,const ghost::Wo
     p.eye_state=GP_DEFEAT_EYES;p.punch_state=0;p.grab_position=0;
     for(unsigned k=0;k<3;++k)p.torso_angles[k]=p.head_angles[k]=0;
     recorded.sample.valid_fields&=~uint32_t(GC_VALID_PARTICLES|GC_VALID_HELD);
-    return draw(index,recorded,row,recorded.sample,live,world,fade,out);
+    return draw(index,recorded,row,recorded.sample,live,world,choice.fade,out);
+}
+uint32_t pose_row(uint32_t index,const Choice& choice,const gc_sample& live,const ghost::WorldPass& world,
+                  ghost_compositor::Pose& out) {
+    const auto &clip=*bound[index];const auto &shown=clip.frames[choice.posed];
+    gs_record recorded{};recorded.bytes=sizeof(recorded);recorded.version=GS_VERSION;
+    recorded.configuration=shown.configuration;recorded.sample=shown.sample;
+    recorded.world.status=shown.world_status;
+    return draw(index,recorded,shown,clip.frames[choice.record].sample,live,world,choice.fade,out);
+}
+bool same_list(const Plan& list,const gc_sample& live) {
+    return list.made && list.epoch==live.epoch && list.sequence==live.sequence && list.dlist_serial==live.dlist_serial;
 }
 }
 
@@ -1019,17 +1044,17 @@ bool start_defeat(const gc_sample& live) {
     defeat.level=live.level;defeat.area=live.area;
     return true;
 }
-bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
-              ghost_compositor::Pose *out,uint32_t& count,gp_draw_token& token) {
-    count=0;token={};
-    if(!out)return false;
-    for(uint32_t i=0;i<GP_GHOSTS;++i)out[i]={};
-    if(!renderer_owner())return false;
+// The list's choice from its sample: everything evaluate decides before any
+// pose is built, including its once-a-list effects (the live timing, the star
+// and defeat latches, restart alignment). Hidden lists report why here.
+void plan_list(const gc_sample& live) {
+    auto &list=planned;list=Plan{};
+    list.made=true;list.epoch=live.epoch;list.sequence=live.sequence;list.dlist_serial=live.dlist_serial;
     next_boundary();
     gp_draw_token candidate{active_request.revision,acquired_cancel,context_serial.load()};
-    if(!current(candidate)) {decide_all(GP_WRONG_IDENTITY);return false;}
+    if(!current(candidate)) {decide_all(GP_WRONG_IDENTITY);return;}
     if(live.bytes!=sizeof(live) || live.version!=GC_VERSION || !live.epoch || !live.sequence
-            || !live.dlist_serial || !(live.valid_fields&GC_VALID_CLOCK)) {decide_all(GP_NO_CLOCK);return false;}
+            || !live.dlist_serial || !(live.valid_fields&GC_VALID_CLOCK)) {decide_all(GP_NO_CLOCK);return;}
     Coordinate frame{active_request.seek_igt,false};
     sequence_reported=false;
     // A running defeat goes on by the live frame counter alone: the game's
@@ -1050,7 +1075,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         live_recovery.timing.observe(live,active_request.star_actions,
             active_request.star_ends?active_request.star_action_count:0);
         if(!live_recovery.timing.current(origin)) {
-            if(!defeat.active) {decide_all(GP_NO_CLOCK);return false;}
+            if(!defeat.active) {decide_all(GP_NO_CLOCK);return;}
         } else if(origin.sequence!=live_recovery.restored) {
             // A restoration revives the run, exactly like the worker's new
             // command, and ends a defeat: he loaded back into the race.
@@ -1065,7 +1090,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
                 // His completing grab reaches here as the tracker's suspension
                 // when no star latch applies (the 100-coin star's exit star).
                 defeated=start_defeat(live);
-                if(!defeated) {sound_control(false,0);decide_all(GP_DISABLED);return false;}
+                if(!defeated) {sound_control(false,0);decide_all(GP_DISABLED);return;}
             } else sound_control(true,active_request.volume); // a load revived it on this frame
         }
         if(!defeated) {
@@ -1073,11 +1098,11 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
                     !=(GCC_RAW_VALID|GCC_ELAPSED_VALID) || live.epoch!=origin.epoch
                     || live.sequence<origin.sequence || live.clock.continuity_id!=origin.continuity
                     || !elapsed_coordinate(live.clock.elapsed_frames,origin.elapsed,
-                        origin.offset,frame.target)) {decide_all(GP_NO_CLOCK);return false;}
+                        origin.offset,frame.target)) {decide_all(GP_NO_CLOCK);return;}
             if(origin.kind==GO_STAR && live.clock.origin_id!=origin.star_generation)star_ended=true;
             if(active_request.star_ends)for(uint32_t i=0;i<active_request.star_action_count;++i)
                 if(live.live_action==active_request.star_actions[i])star_ended=true;
-            if(star_ended && !(defeated=start_defeat(live))) {decide_all(GP_STAR_ENDED);return false;}
+            if(star_ended && !(defeated=start_defeat(live))) {decide_all(GP_STAR_ENDED);return;}
         }
         if(!defeated) {
             // Fixed per attempt, from its scene. A restored origin continues that
@@ -1096,29 +1121,58 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         }
     }
     if(defeat.active)sound_control(true,active_request.volume);
-    report.visible=0;
-    uint32_t summary=GP_DISABLED;bool before_start=true;
-    for(uint32_t i=0;i<GP_GHOSTS;++i) {
-        if(i>=active_request.clip_count) {report.clip_decisions[i]=uint8_t(GP_DISABLED);continue;}
-        ghost_compositor::Pose pose{};uint32_t record=0,posed=0;float fade=1;
+    for(uint32_t i=0;i<GP_GHOSTS && i<active_request.clip_count;++i) {
+        auto &choice=list.ghost[i];
         // Restart alignment, then the timing nudge, on this ghost's coordinate.
         Coordinate mine=frame;
         if(active_request.mode==GP_FOLLOW) {
             const uint64_t shift=bound[i] && aligned[i]?align[i]:0;
-            if(mine.target>UINT64_MAX-shift-600) {decide_all(GP_NO_CLOCK);return false;}
+            if(mine.target>UINT64_MAX-shift-600) {decide_all(GP_NO_CLOCK);return;}
             mine.target+=shift;
             if(active_request.nudge_frames<0) {
                 const auto amount=uint32_t(-active_request.nudge_frames);
                 if(mine.target<amount){mine.below_zero=true;mine.target=0;}else mine.target-=amount;
             } else mine.target+=uint32_t(active_request.nudge_frames);
         }
-        uint32_t result=GP_STAR_ENDED;bool falling=false;
-        if(!defeat.active)result=select(i,mine,live,world,pose,record,posed,fade);
+        uint32_t result=GP_STAR_ENDED;
+        if(!defeat.active)result=choose(i,mine,live,choice);
         else if(defeat.winner[i] && bound[i]==defeat.clip[i]) {
             mine={defeat.target[i]+post,false};
-            result=select(i,mine,live,world,pose,record,posed,fade);
-        } else if(defeat.loser[i] && bound[i]==defeat.clip[i]) {
-            result=fall(i,post,live,world,pose,fade);falling=true;record=posed=defeat.row[i];
+            result=choose(i,mine,live,choice);
+        } else if(defeat.loser[i] && bound[i]==defeat.clip[i])result=choose_fall(i,post,live,choice);
+        if(!current(candidate)) {refusals.fetch_add(1);decide_all(GP_POSE_REFUSED);return;}
+        choice.result=result;choice.target=mine.target;
+        list.chosen+=result==GP_READY || result==GP_BEFORE_START;
+    }
+    list.proceed=true;list.post=post;list.candidate=candidate;
+}
+bool plan(const gc_sample& live) {
+    if(!drawing())return false;
+    plan_list(live);
+    return planned.proceed && planned.chosen;
+}
+bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
+              ghost_compositor::Pose *out,uint32_t& count,gp_draw_token& token) {
+    count=0;token={};
+    if(!out)return false;
+    for(uint32_t i=0;i<GP_GHOSTS;++i)out[i]={};
+    if(!renderer_owner())return false;
+    // The list's own plan, used once; a caller that did not plan this list plans it now.
+    if(!same_list(planned,live))plan_list(live);
+    const Plan &list=planned;planned.made=false;
+    if(!list.proceed)return false;
+    const auto candidate=list.candidate;
+    report.visible=0;
+    uint32_t summary=GP_DISABLED;bool before_start=true;
+    for(uint32_t i=0;i<GP_GHOSTS;++i) {
+        if(i>=active_request.clip_count) {report.clip_decisions[i]=uint8_t(GP_DISABLED);continue;}
+        const auto &choice=list.ghost[i];
+        ghost_compositor::Pose pose{};
+        uint32_t result=choice.result;
+        if(result==GP_READY || result==GP_BEFORE_START) {
+            const auto posed=choice.falling ? pose_fall(i,list.post,choice,live,world,pose)
+                : pose_row(i,choice,live,world,pose);
+            if(posed!=GP_READY)result=posed;
         }
         if(!current(candidate)) {
             // A revocation during any evaluation discards the whole candidate.
@@ -1128,20 +1182,20 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         report.clip_decisions[i]=uint8_t(result);
         if(!i)summary=result;
         shown_last[i]=defeat.active || (result!=GP_READY && result!=GP_BEFORE_START)
-            ? Shown{} : Shown{true,posed,mine.target,bound[i]};
+            ? Shown{} : Shown{true,choice.posed,choice.target,bound[i]};
         if(result!=GP_READY && result!=GP_BEFORE_START) { // hidden: silent
             heard[i]=unheard;
-            if(fade==0)silence(i);
+            if(choice.fade==0)silence(i);
             continue;
         }
         // A bridged refusal sounds its own cues from the pose it shows.
-        place(i,live,bound[i]->frames[posed].sample.pose.position,fade);
-        if(falling) {
+        place(i,live,bound[i]->frames[choice.posed].sample.pose.position,choice.fade);
+        if(choice.falling) {
             heard[i]=unheard; // it plays no recorded sound, only its death cry, once
             const auto *sink=sound_sink.load(std::memory_order_acquire);
             if(!defeat.cued[i] && sink && sink->cue)sink->cue(i,GP_DEFEAT_SOUND);
             defeat.cued[i]=true;
-        } else hear(i,*bound[i],record,result==GP_BEFORE_START);
+        } else hear(i,*bound[i],choice.record,result==GP_BEFORE_START);
         before_start=before_start && result==GP_BEFORE_START;
         if(pose.count)out[count++]=pose;
     }
@@ -1152,7 +1206,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         for(;j && out[j-1].view_projection[15]<value.view_projection[15];--j)out[j]=out[j-1];
         out[j]=value;
     }
-    if(defeat.active && !count && post)defeat.active=false; // every ghost has fallen, faded or finished
+    if(defeat.active && !count && list.post)defeat.active=false; // every ghost has fallen, faded or finished
     report.visible=count;
     if(count)summary=before_start?GP_BEFORE_START:GP_READY;
     decision(summary);

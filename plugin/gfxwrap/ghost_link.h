@@ -23,7 +23,9 @@ bool begin_hud();
 void end_hud();
 // Translucent world layer: after a world triangle draw, mirror it once per
 // pass (0 color, 1 depth) while begin_layer returns true; see ghost_compositor.
+// close_layer ends the surface however its passes ended (one gateway scope).
 bool begin_layer(uint32_t pass);
 void end_layer();
+void close_layer();
 void clear_target();
 }

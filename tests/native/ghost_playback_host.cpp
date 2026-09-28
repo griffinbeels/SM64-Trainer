@@ -36,6 +36,25 @@ static unsigned checks=0,multi_ghosts=0,multi_visible=0,multi_prepares=0;
 static float dance_fade[GP_STAR_FADE_FRAMES]{};static unsigned dance_hidden_after=0;
 static void check(bool ok,const char *message) {++checks;if(!ok)throw std::runtime_error(message);}
 struct RenderScope {RenderScope(){rendering=true;}~RenderScope(){rendering=false;}};
+// The renderer's order (ghost_draw): plan from the list's sample at its start,
+// which gates the translucent world layer, then evaluate at the seal. The
+// plan chooses a ghost whenever one is drawn and none when every ghost hides
+// before its pose is built (finished, faded, suspended, out of its scene...):
+// only a chosen ghost whose pose refuses at the seal is planned and not drawn.
+static unsigned plans_drawn=0,plans_hidden=0,plans_refused=0;
+static bool evaluate_planned(const gc_sample& live,const ghost::WorldPass& world,
+                             ghost_compositor::Pose *out,uint32_t& count,gp_draw_token& token) {
+    const bool planned=ghost_playback::plan(live);
+    const bool drawn=ghost_playback::evaluate(live,world,out,count,token);
+    gp_status status{};
+    bool refused=ghost_playback::api()->status(&status,sizeof(status))==GP_OK && status.decision==GP_POSE_REFUSED;
+    for(auto decision:status.clip_decisions)refused=refused || decision==GP_POSE_REFUSED;
+    if(planned!=drawn && !(planned && refused))
+        std::fprintf(stderr,"planned %d, drew %d, decision %u\n",int(planned),int(drawn),status.decision);
+    check(planned==drawn || (planned && refused),"the list's plan chooses exactly the ghosts it draws");
+    ++(drawn?plans_drawn:planned?plans_refused:plans_hidden);
+    return drawn;
+}
 class Renderer {
     std::mutex mutex;
     std::condition_variable wake,done;
@@ -272,7 +291,7 @@ int main() {
             live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
                 0,0,source_generation,1,elapsed_base+time,source_continuity};
             renderer.run([&] {
-                const bool drawn=ghost_playback::evaluate(live,world,poses,count,token);
+                const bool drawn=evaluate_planned(live,world,poses,count,token);
                 if(drawn!=expected)std::fprintf(stderr,"time %llu drew %d, expected %d\n",
                     static_cast<unsigned long long>(time),int(drawn),int(expected));
                 check(drawn==expected,"selection result");
@@ -365,11 +384,11 @@ int main() {
         check(!pose.occlusion.enabled && !pose.occlusion.has_player,"switched-off fade reaches no pose");
         perspective=false;live.pose.position[0]=live.pose.position[2]=0;
         live.valid_fields&=~GC_VALID_POSE;
-        // The translucent world layer runs only while playback is drawing.
+        // A list's plan (the translucent world layer's gate) needs a displayed request.
         renderer.run([&]{check(ghost_playback::drawing(),"a displayed request is drawing");});
         const auto displayed=token;api->withdraw();
         renderer.run([&]{check(!ghost_playback::current(displayed),"withdraw cancels candidate immediately");
-            check(!ghost_playback::drawing(),"withdrawn playback draws nothing: no layer");
+            check(!ghost_playback::drawing() && !ghost_playback::plan(live),"withdrawn playback plans nothing: no layer");
             ghost_playback::safe_boundary(7,4);});
         gp_status suspended{};check(api->status(&suspended,sizeof(suspended))==GP_OK
             && suspended.model_state==GP_MODEL_RENDER_OWNED && suspended.clips_owned==1
@@ -405,7 +424,7 @@ int main() {
         api->withdraw();
         check(api->prepare_model(2,rom.data(),uint32_t(rom.size()))==GP_DEFERRED,"withdrawn model replacement waits for retirement");
         renderer.run([&]{check(!ghost_playback::current(token),"replacement cancels displayed candidate");
-            ghost_playback::safe_boundary(7,4);check(!ghost_playback::drawing(),"retired playback draws nothing: no layer");});
+            ghost_playback::safe_boundary(7,4);check(!ghost_playback::drawing() && !ghost_playback::plan(live),"retired playback plans nothing: no layer");});
         refuse_adoption=true;check(api->collect()==GP_DEFERRED,"busy background adoption deferred");refuse_adoption=false;
         refuse_close=true;check(api->collect()==GP_DEFERRED,"busy close retains worker custody");refuse_close=false;
         check(api->collect()==GP_OK && closes==1 && last_close==worker,"worker retries actual close");
@@ -629,7 +648,7 @@ int main() {
                 live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
                     0,0,source_generation,1,elapsed_base+time,source_continuity};
                 renderer.run([&] {
-                    const bool drawn=ghost_playback::evaluate(live,world,poses,count,token);
+                    const bool drawn=evaluate_planned(live,world,poses,count,token);
                     check(drawn==(rows.size()>0) && count==rows.size(),"visible ghost count");
                     unsigned k=0;
                     for(float row:rows)check(poses[k++].view_projection[0]==row,"ghost, row and back-to-front order");
@@ -718,7 +737,7 @@ int main() {
                 live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
                     0,0,source_generation,1,elapsed_base+time,source_continuity};
                 sound_count=0;for(auto &p:placed)p={};
-                renderer.run([&]{check(ghost_playback::evaluate(live,world,poses,count,token)==shown,"sound frame drawn");});
+                renderer.run([&]{check(evaluate_planned(live,world,poses,count,token)==shown,"sound frame drawn");});
                 const std::vector<uint32_t> want(expected),heard(sound_log,sound_log+sound_count);
                 for(unsigned k=0;k<sound_count;++k)
                     check(sound_ghost[k]==(sound_log[k]/1000==2?1u:0u),"each sound comes from its own ghost");
@@ -835,7 +854,7 @@ int main() {
                     0,0,source_generation,1,elapsed_base+time,source_continuity};
                 sound_count=0;for(auto &p:placed)p={};
                 bool drawn=false;
-                renderer.run([&]{drawn=ghost_playback::evaluate(live,world,poses,count,token);});
+                renderer.run([&]{drawn=evaluate_planned(live,world,poses,count,token);});
                 gp_status status{};
                 check(api->status(&status,sizeof(status))==GP_OK && status.decision==why,"dance decision");
                 unsigned k=0;for(auto value:each)check(status.clip_decisions[k++]==value,"per-ghost dance decision");
@@ -1018,8 +1037,10 @@ int main() {
         check(allocations.load()==0 && destructions.load()==0,"render path never allocates or destroys storage");
         check(opens==closes && !fake_model,"all model lifetimes reclaimed");
         std::printf("{\"ok\":true,\"checks\":%u,\"models\":%u,\"render_allocations\":%u,\"render_frees\":%u,"
+            "\"plans\":{\"drawn\":%u,\"hidden\":%u,\"refused\":%u},"
             "\"multi\":{\"ghosts\":%u,\"max_visible\":%u,\"prepares\":%u},\"dance\":{\"hidden_after\":%u,\"fade\":[1",
-            checks,opens,allocations.load(),destructions.load(),multi_ghosts,multi_visible,multi_prepares,dance_hidden_after);
+            checks,opens,allocations.load(),destructions.load(),plans_drawn,plans_hidden,plans_refused,
+            multi_ghosts,multi_visible,multi_prepares,dance_hidden_after);
         for(uint32_t k=1;k<GP_STAR_FADE_FRAMES;++k)std::printf(",%.6f",dance_fade[k]);
         std::printf(",0]}}\n");return 0;
     } catch(const std::exception& error) {

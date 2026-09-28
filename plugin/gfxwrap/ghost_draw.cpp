@@ -27,10 +27,22 @@ uint32_t configuration = 0, clean_fbo = 0, clean_texture = 0;
 uint64_t model_id = 0, particle_model = 0, occurrence = 0;
 gp_draw_token draw_token{};
 bool provisional = false, hud = false, ready = false, layer = false;
-// This list can draw a ghost: playback is drawing on the prepared model. The
-// translucent world layer (every XLU draw again plus two depth blits) runs
-// only then, so a retired or hidden-by-request playback costs nothing.
+// This list draws a ghost: playback chose one from the list's own sample
+// (ghost_playback::plan) on the prepared model. The translucent world layer
+// (every XLU draw again plus a depth copy) runs only then, so a finished,
+// faded, suspended or out-of-area ghost costs what no ghost costs.
 bool will_draw = false;
+/* The capture gateway's scopes (docs: What a drawn ghost asks the driver).
+ * display: opened by the seal's read, it holds the batch and every HUD
+ * mirror of the list and closes with one read at finish or cancel. A HUD
+ * mirror's GL is two binds between the ghost display and the target the
+ * seal verified, so it needs no read of its own: an error anywhere in the
+ * scope, the renderer's included, cancels the image before it is ready and
+ * is kept for the renderer, exactly as either read alone would.
+ * layer: one per mirrored surface, both passes; its closing read drains the
+ * layer's own errors, so no renderer GL but the mirrored draw runs inside.
+ * layer_color: the color pass entered the layer and the depth pass has not. */
+bool display_scope = false, layer_scope = false, layer_color = false;
 using GetUniform = void (APIENTRY *)(GLuint, GLint, GLint*);
 GetUniform get_uniform = nullptr;
 // This list's drawing cost (take_cost): stage times, the glue's own driver
@@ -142,15 +154,26 @@ bool no_color_feedback() {
     }
     dispatch.ActiveTexture(previous); return valid;
 }
+// Closes the display scope: one read for this list's ghost GL (the batch and
+// every HUD mirror) and the renderer's between them.
+bool close_display() {
+    if (!display_scope) return true;
+    display_scope = false;
+    const auto stage = Clock::now();
+    const bool clean = gateway(replay_gl::EndCapture);
+    cost.close_micros += since(stage);
+    return clean;
+}
 }
 void cancel() {
     if (hud) end_hud();
     ghost_compositor::abort(compositor);
+    close_display();
     provisional = ready = false; occurrence = 0; draw_token = {};
 }
 void context_lost() {
     ghost_ipc::presented(0);
-    cancel();
+    close_layer(); cancel();
     ghost_playback::retire_on_context_loss();
     if (compositor) {
         if (reinterpret_cast<uintptr_t>(wglGetCurrentContext()) == owner.context)
@@ -161,8 +184,8 @@ void context_lost() {
     model_id = particle_model = 0; prepared_width = prepared_height = width = height = 0; will_draw = false;
     get_uniform = nullptr;
 }
-void begin(uint32_t rom, uint32_t config_id) {
-    cancel(); will_draw = false;
+void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
+    close_layer(); cancel(); will_draw = false;
     ghost_compositor::clear_layer(compositor);
     ghost_playback::safe_boundary(rom, config_id);
     configuration = config_id;
@@ -209,7 +232,7 @@ void begin(uint32_t rom, uint32_t config_id) {
                                                               particles.atlas_width, particles.atlas_height);
         if (replay_gl::EndCapture() && result == ghost_compositor::Result::ok) particle_model = model_id;
     }
-    will_draw = compositor && model_id && model_id == wanted_model && ghost_playback::drawing();
+    will_draw = compositor && model_id && model_id == wanted_model && sample && ghost_playback::plan(*sample);
 }
 void observe(const ghost::RasterTarget &target) {
     if (target.width && target.height && target.width <= 8192 && target.height <= 8192) {
@@ -217,6 +240,7 @@ void observe(const ghost::RasterTarget &target) {
     }
 }
 void seal(const gc_sample &sample, const ghost::WorldPass &world) {
+    if (display_scope) cancel(); // a list seals once; never nest its scope
     if (!compositor || !model_id || !ghost_presentation::clean_consumer()
             || world.context_generation != owner.context_generation
             || world.target.width != prepared_width || world.target.height != prepared_height) return;
@@ -247,11 +271,12 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world) {
     auto stage = Clock::now();
     const bool open = gateway(replay_gl::BeginCapture); cost.open_micros += since(stage);
     if (!open) return;
+    display_scope = true;
     stage = Clock::now();
     const auto result = ghost_compositor::begin_batch(compositor, target, poses, count, &known);
-    cost.batch_micros += since(stage); stage = Clock::now();
-    const bool clean = gateway(replay_gl::EndCapture); cost.close_micros += since(stage);
-    provisional = result == ghost_compositor::Result::ok && clean;
+    cost.batch_micros += since(stage);
+    // The batch's own errors are read when the display scope closes.
+    provisional = result == ghost_compositor::Result::ok;
     if (provisional) cost.ghosts = count;
     if (provisional) {
         occurrence = world.list_serial; clean_fbo = world.target.color;
@@ -259,7 +284,8 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world) {
     } else cancel();
 }
 void finish(const ghost::WorldPass *world) {
-    if (!provisional || !world || world->list_serial != occurrence || !ghost_playback::current(draw_token)) {
+    if (!provisional || !world || world->list_serial != occurrence || !ghost_playback::current(draw_token)
+            || !close_display()) {
         cancel(); return;
     }
     const auto stage = Clock::now();
@@ -268,29 +294,42 @@ void finish(const ghost::WorldPass *world) {
     if (!ready) cancel();
 }
 bool begin_layer(uint32_t pass, uint32_t framebuffer, uint64_t attachments) {
-    if (layer || !will_draw || !compositor || !model_id || pass > 1 || !ghost_presentation::clean_consumer()
-            || width != prepared_width || height != prepared_height) return false;
+    // After the seal the layer is spent, and the display scope is open.
+    if (layer || !will_draw || provisional || !compositor || !model_id || pass > 1 || (pass == 1) != layer_color
+            || !ghost_presentation::clean_consumer() || width != prepared_width || height != prepared_height)
+        return false;
+    // The depth pass repeats the draw the color pass mirrored, inside its
+    // scope: no renderer GL has run since that scope's read.
+    if (!pass) {
+        if (layer_scope || !gateway(replay_gl::BeginLayer)) return false;
+        layer_scope = true;
+    }
     ghost_compositor::Target target{};
     target.generation = owner.context_generation; target.framebuffer = framebuffer;
     target.width = width; target.height = height; target.samples = 1;
     target.unsupported = config.video.multisampling > 0;
     target.depth = ghost_compositor::Depth::ordinary; target.attachments = attachments;
-    if (!gateway(replay_gl::BeginLayer)) return false;
     const auto known = known_state();
     layer = ghost_compositor::begin_layer(compositor, target, ghost_compositor::LayerPass(pass), &known)
         == ghost_compositor::Result::ok;
-    if (layer) ++cost.layer_passes;
-    // A surface whose color entered the layer without its depth would tint
-    // nothing behind it consistently: drop the layer for this list instead.
-    if (!layer && (!gateway(replay_gl::EndLayer) || pass == 1)) ghost_compositor::break_layer(compositor);
+    if (layer) { ++cost.layer_passes; layer_color = !pass; }
     return layer;
 }
 void end_layer() {
     if (!layer) return;
     ghost_compositor::end_layer(compositor); layer = false;
-    // The layer's own GL error drops the layer for this list, never the source.
-    if (!gateway(replay_gl::EndLayer)) ghost_compositor::break_layer(compositor);
 }
+void close_layer() {
+    if (!layer_scope) return;
+    end_layer(); layer_scope = false;
+    // A surface whose color entered the layer without its depth would tint
+    // nothing behind it consistently, and the layer's own GL error drops it:
+    // the layer goes for this list, never the source.
+    const bool clean = gateway(replay_gl::EndLayer);
+    if (!clean || layer_color) ghost_compositor::break_layer(compositor);
+    layer_color = false;
+}
+bool layer_open() { return layer_scope; }
 void break_layer() { ghost_compositor::break_layer(compositor); }
 bool drawing() { return will_draw; }
 bool begin_hud() {
@@ -299,20 +338,19 @@ bool begin_hud() {
     auto *buffer = ghost_link::raster_buffer();
     if ((gSP.geometryMode & G_ZBUFFER) || !buffer || buffer->m_isDepthBuffer
             || uint32_t(buffer->m_FBO) != clean_fbo || !image_writes_disabled() || !no_color_feedback()) {
-        cancel(); cost.hud_micros += since(hud_start); return false;
+        cost.hud_micros += since(hud_start); cancel(); return false;
     }
-    if (!gateway(replay_gl::BeginCapture)) { cancel(); cost.hud_micros += since(hud_start); return false; }
+    // Inside the display scope the seal opened: no read of its own.
     const auto known = known_state();
     hud = ghost_compositor::begin_hud(compositor, occurrence, &known) == ghost_compositor::Result::ok;
-    if (!hud) { gateway(replay_gl::EndCapture); cancel(); cost.hud_micros += since(hud_start); }
+    if (!hud) { cost.hud_micros += since(hud_start); cancel(); }
     else ++cost.hud_draws;
     return hud;
 }
 void end_hud() {
     if (!hud) return;
     ghost_compositor::end_hud(compositor); hud = false;
-    if (!gateway(replay_gl::EndCapture)) cancel();
-    cost.hud_micros += since(hud_start); // the mirrored draw between the two included
+    cost.hud_micros += since(hud_start); // the mirrored draw included
 }
 void take_cost(gs_hook_cost &into) {
     const auto drawn = ghost_compositor::take_cost(compositor);
