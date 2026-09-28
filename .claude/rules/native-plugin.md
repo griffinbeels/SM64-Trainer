@@ -21,13 +21,15 @@ NVENC helper. Why they are built this way, and what failed on the way:
 | The input stamp paired with each picture | `stamp_adapter.*`; the value's chain is [chain-input-timeline-frame](chain-input-timeline-frame.md) |
 | The renderer overlay (SourceV2/ContextV1, GL state, snapshot, boundary) | `link_dispatch.*`, `link_source_api.*`, `renderer_boundary.*`, `context_lifetime.*`, `gl_snapshot.*`, `renderer_gl_state.h`; `tools/build_renderer.py` `OVERLAY_SOURCES` lists them. Docs: `replay-link-state.md`, `replay-renderer-boundary.md`, `replay-gl-snapshot.md` |
 | Native Mario ghost, exact attempt clocks and clean SourceV3 presentation | `ghost_capture.*`, `ghost_clock.*`, `ghost_origin.*`, `ghost_playback.*`, `ghost_draw.*`, `ghost_presentation.*`; worker transport in `ghost_ipc.*`, Python ownership in `ghost/capture.py` and `ghost/native_session.py`. [Runtime contracts](../../docs/ghost-native-runtime.md) own format versions, timing, refusal policy and live verification limits |
-| Delivery worker, GPU bridge, selection sample | `gpu_delivery*`, `gpu_bridge*`, `gpu_selection*`; doc `replay-gpu-bridge.md` |
+| Delivery worker and the renderer-thread GPU steps (selection sample, bridge copy, GL state guard) | `gpu_delivery*`, `gpu_render.*`; doc `replay-gpu-runtime.md#first-capture-freeze`. Every GPU call stays on the renderer's thread: a GL context or D3D11 device on any other Project64 thread brings back the first-capture freeze. `gpu_bridge.cpp` and `gpu_selection.*` are the retired worker-thread producer, kept only for their hardware witnesses |
 | Control page and capture lease | `control.h`, `control_worker.h`, `runtime_control.*`; Python reads the page by offset in `replay/capturecontrol.py`; doc `replay-capture-control.md` |
 | The NVENC helper | `gpu_encoder_dll.*`, `gpu_bridge_encoder*`; Python side `replay/gpuencoder*.py` and `replay/gpuprocess/`. It encodes H264 or AV1, named by `gbenc_options_v1.codec` (H264 is 0, taken from the checked-zero reserved words so old callers and old DLLs still mean H264). AV1 needs `repeatSeqHdr` for the same reason H264 needs `repeatSPSPPS`: the mux builds its sample description from the first key picture and never decodes. |
 
 - **Build ids hash the sources.** Any edit here changes the wrapper and
   encoder ids (`tools/build_plugin.py`); an overlay edit also changes the
-  renderer id (`tools/build_renderer.py`). The three DLLs are build outputs,
+  renderer id (`tools/build_renderer.py`), including a header the wrapper
+  shares, such as `gl_snapshot.h`: put wrapper-only behaviour in the `.cpp`
+  and the renderer stays byte-identical. The three DLLs are build outputs,
   never committed: `tools/build_natives.py` rebuilds whichever is out of date
   (the launcher, wrap and release run it; a shared cache makes repeats
   instant). Keep LF line endings, since the hash is over bytes. A source
@@ -48,6 +50,8 @@ NVENC helper. Why they are built this way, and what failed on the way:
   (`test_link_source_witness`, `test_renderer_source`). Round 48's `SA_NO_SWAP`
   broke the cadence witness silently for exactly this reason: its fake renderer
   never counted swaps. A fake renderer must model everything the stamp adapter
-  checks (origin, swap count, epoch).
+  checks (origin, swap count, epoch), and keep calling UpdateScreen every VI
+  between pictures: renderer-thread capture does its GPU work only inside
+  those calls.
 - **The emulation thread never waits for capture.** Refuse or omit a picture
   instead; a refusal is a counted gap, not a stall or a failed run.
