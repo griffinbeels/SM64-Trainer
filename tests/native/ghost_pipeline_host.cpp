@@ -197,6 +197,7 @@ struct Pipeline {
     std::string gpu_vendor,gpu_renderer,gl_version;
     std::vector<float> clean_depth;ghost::WorldPass world{};uint32_t configuration=0;gcc_output origin_clock{};
     float live_shift=0; // moves live Mario along world z (the camera looks down -z) for the player-first proof
+    bool two_sided=false; // draw the back faces the game culls too (the culling proof's reference)
     explicit Pipeline(Fixture& f,const gs_record& first):g(dispatch()),scene(g,W,H),raster(g),fixture(f),
         configuration(first.configuration),origin_clock(first.sample.clock){
         require(SetWindowPos(window.window,nullptr,0,0,W,H,SWP_NOACTIVATE|SWP_NOZORDER)!=0,"resize hidden drawable");
@@ -320,7 +321,9 @@ struct Pipeline {
         ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,W,H});world_state(g);
         present::begin_update(presentation,live.sequence);
         gc::Pose poses[GP_GHOSTS]{};uint32_t count=0;gp_draw_token token{};
-        if(draw){require(ghost_playback::evaluate(live,world,poses,count,token) && poses[0].count>1800,"actual playback/model geometry");
+        if(draw){require(ghost_playback::evaluate(live,world,poses,count,token) && poses[0].count>800,"actual playback/model geometry, its back faces culled");
+            // The reference: every triangle drawn, the culled ones after the rest.
+            if(two_sided)for(uint32_t i=0;i<count;++i){poses[i].count+=poses[i].culled;poses[i].culled=0;}
             vertices=0;for(uint32_t i=0;i<count;++i)vertices+=poses[i].count;visible=count;
             auto destination=target(scene,gc::Depth::ordinary);destination.occurrence=live.sequence;
             const auto known=known_before_seal(scene,raster.program,raster.vao);
@@ -443,6 +446,29 @@ int main(int argc,char** argv){
             "star drawn in the footage's flat yellow");
         for(size_t i=0;i<W*H;++i)if(!pipeline->coverage[i] && std::memcmp(&baseline[4*i],&opaque[4*i],3))++outside;
         require(outside==0,"outside independently projected triangles unchanged");});
+    // The back faces the game culls: seen from outside they are hidden anyway,
+    // so drawing them too changes no pixel. With the camera's near plane
+    // through his body a two-sided ghost shows the inside of its far side,
+    // which the game never draws (his Round 13 report).
+    unsigned cull_outside=0,cull_inside=0;
+    renderer.run([&]{
+        const auto camera=[&](float y,float z){
+            const float eye[3]={0,y,z},focus[3]={0,y,0};
+            for(unsigned i=0;i<3;++i){uint32_t bits;std::memcpy(&bits,&eye[i],4);clock_word(fixture,Fixture::camera+0x1c+4*i,bits,4);
+                std::memcpy(&bits,&focus[i],4);clock_word(fixture,Fixture::camera+0x28+4*i,bits,4);}
+        };
+        const auto differing=[](const std::vector<uint8_t>& a,const std::vector<uint8_t>& b){
+            unsigned count=0;for(size_t i=0;i<W*H;++i)count+=std::memcmp(&a[4*i],&b[4*i],3)!=0;return count;};
+        pipeline->two_sided=true;pipeline->frame(true,true);pipeline->two_sided=false;
+        cull_outside=differing(pipeline->last_visible,opaque);
+        require(cull_outside==0,"culling hides nothing seen from outside");
+        camera(30,105); // the near plane (100) cuts through his front
+        pipeline->frame(true,true);const auto culled=pipeline->last_visible;ppm(out/"sliced-culled.ppm",culled);
+        pipeline->two_sided=true;pipeline->frame(true,true);pipeline->two_sided=false;
+        ppm(out/"sliced-two-sided.ppm",pipeline->last_visible);
+        cull_inside=differing(pipeline->last_visible,culled);
+        require(cull_inside>100,"a near plane through him shows no inside");
+        camera(100,600);});
     request.opacity=.5f;++request.revision;require(api->configure(&request)==GP_OK,"opacity50 request");
     renderer.run([&]{pipeline->frame(true,true);half=pipeline->last_visible;ppm(out/"opacity50.ppm",half);
         for(size_t i=0;i<half.size();++i)if(i%4!=3 && std::abs(int(half[i])*2-int(baseline[i])-int(opaque[i]))>2)++alpha_errors;
@@ -607,6 +633,7 @@ int main(int argc,char** argv){
         water_tinted,water_dry,water_outside,water_blend_errors);
     std::printf(",\"occlusion\":{\"faded\":%u,\"outside_pixels_changed\":%u,\"behind_errors\":%u}",
         occlusion_faded,occlusion_outside,occlusion_behind_errors);
+    std::printf(",\"culling\":{\"outside_pixels_changed\":%u,\"sliced_pixels_hidden\":%u}",cull_outside,cull_inside);
     std::printf(",\"multi\":{\"ghosts\":%u,\"visible\":%u,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,",
         unsigned(GP_GHOSTS),multi_visible,multi_vertices,multi_silhouette,multi_outside);
     statistics("pipeline_gpu_completed",multi_times);std::printf(",");statistics("blocking_swap",multi_swap_times);

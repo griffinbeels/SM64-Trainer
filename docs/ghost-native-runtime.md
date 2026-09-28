@@ -761,6 +761,32 @@ XYZ as `[1], [2], [0]`. Explicit per-vertex material codes come from actual N64
 combiner commands, not a UV heuristic. [Cap effects](#cap-effects-vanish-and-metal)
 describes the vanish and metal material routes.
 
+**His face showed the inside of his head** (his Round 13 report, 2026-09-28:
+"the wrong side of the face / body is being rendered"). The fragment shader
+decoded each vertex's material word as `uint(mode+0.5)`. Every tiled word
+(the face, cap, sideburns, mustache and buttons) lies at or above 2^23, where
+floats step by 1, so the sum rounded an odd word up: alpha-mix (1) read as a
+cut-out decal (2). Where the texture is clear the face was discarded and the
+inside of the far side of his head showed through, hair and cap across his
+cheek. The word is exact (flat, below 2^24), so the shader now takes
+`uint(mode)`. The [compositor witness](../tests/native/ghost_compositor_host.cpp)
+draws a tiled alpha-mix over a clear texture and needs its vertex colour on
+every pixel; with the old decode it is transparent.
+
+The game never draws the back of a triangle its list leaves `G_CULL_BACK` on:
+all of Mario, only his cap's wings two-sided (the model marks each triangle,
+`SG_MATERIAL_CULL_BACK`; the game's RSP init sets it for every object). The
+pose moves those facing away from the live camera's eye after the drawn ones
+(`Pose::culled`), judged in world space: his winding agrees with his vertex
+normals on every triangle. From outside this hides nothing the self-depth
+pass would show; the [pipeline](../tests/test_ghost_pipeline.py) draws the
+culled back faces too and requires an identical picture, then puts the
+camera's near plane through his body, where two-sided drawing would show the
+inside of his far side. The [pose witness](../tests/native/ghost_pose_host.cpp)
+culls a wall seen from behind and keeps a two-sided one; the
+[model witness](../tests/native/model_host.cpp) finds every triangle culled but
+the wings'.
+
 The camera comes from bounded lookup of the active graph camera matching the
 area camera, including persistent position/focus/roll. It is not the final
 display-list modelview matrix. Projection and viewport corrections come from

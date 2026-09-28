@@ -18,6 +18,9 @@ struct Scratch {
     float uv[SG_MODEL_MAX_VERTICES * 2];
     uint32_t material[SG_MODEL_MAX_VERTICES];
     ghost_compositor::Vertex vertices[SG_MODEL_MAX_VERTICES];
+    /* The model's vertices for this pose, in position/material order, before
+     * the back faces the game culls leave the drawn vertices (Pose::count). */
+    uint32_t evaluated;
 };
 Result evaluate(sg_model *, const gs_record &recorded, const gc_sample &live,
                 const ghost::WorldPass &, float opacity, Scratch &,
