@@ -56,6 +56,10 @@ export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
  * - occlusion_fade: the player-first fade (2026-09-23): where Ghost Mario
  *   stands between the camera and you it goes faint over your Mario, and it
  *   fades out right at the camera.
+ * - overlap_sound (2026-09-28): the ghost's sound fades with it where it
+ *   overlaps you, and a sound you both make on the same frame plays once.
+ *   `section: "overlap"` draws it inside Overlap fading, under the fade it
+ *   follows, instead of in the tuning row.
  */
 export const SWITCH_LABELS = {
   shadow: { name: "Shadow", className: "ghost-shadow", group: "Ghost shadow",
@@ -65,6 +69,10 @@ export const SWITCH_LABELS = {
     group: "Fade the ghost in front of Mario",
     label: "Fade the ghost where it covers your Mario or the camera",
     waiting: "Waiting for the fade-in-front setting" },
+  overlap_sound: { name: "Sound", className: "ghost-overlap-sound", section: "overlap",
+    group: "Quiet the ghost's sound as it fades",
+    label: "Quiet its sound the same way",
+    waiting: "Waiting for the ghost's sound setting" },
 };
 
 // One press is one game frame: the unit the ghost actually moves in, and the

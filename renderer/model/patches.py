@@ -2,16 +2,19 @@
 from pathlib import Path
 
 
-def replace(path: Path, old: str, new: str) -> None:
+def replace(path: Path, old: str, new: str, count: int = 1) -> None:
+    """`count` is how many times the anchor must appear, all replaced: some
+    upstream code repeats a block verbatim (update_game_sound's two switches)."""
     source = path.read_text(encoding="utf-8")
-    if source.count(old) != 1:
-        raise ValueError(f"Nonunique model patch anchor in {path.name}: {old[:70]}")
+    if source.count(old) != count:
+        raise ValueError(f"Model patch anchor in {path.name} appears {source.count(old)} times, "
+                         f"not {count}: {old[:70]}")
     path.write_text(source.replace(old, new), encoding="utf-8", newline="\n")
 
 
 def _patch_audio(source: Path) -> None:
-    def edit(name, old, new):
-        replace(source / "src" / name, old, new)
+    def edit(name, old, new, count=1):
+        replace(source / "src" / name, old, new, count)
 
     # Audio engine tables: GCC alignment attributes in MSVC form.
     edit("decomp/tools/convTypes.h", "uintptr_t offset __attribute__((aligned (8)));",
@@ -28,6 +31,23 @@ def _patch_audio(source: Path) -> None:
          "    return (volumeRange * intensity * intensity + 1.0f - volumeRange) * gAudioVolume;",
          "    return (volumeRange * intensity * intensity + 1.0f - volumeRange) * gAudioVolume\n"
          "           * sa_source_gain(sSoundBanks[bank][soundIndex].x);")
+    # Every source here is a ghost, and every sound a ghost plays obeys one
+    # rule. Upstream plays the menu bank (Mario's star and cap grab
+    # SOUND_MENU_STAR_SOUND, falling into a pit, entering a pipe) and a moving
+    # sound at a constant frequency at volume 1, centred, so from a distant
+    # ghost they skipped its distance and overlap gain and its placement (his
+    # report, 2026-09-28). They take the voice bank's volume and pan instead
+    # (get_sound_volume keeps SOUND_NO_VOLUME_LOSS), with their own constant
+    # pitch. Both copies of update_game_sound's switch carry the block.
+    edit("decomp/audio/external.c",
+         "                            gSequencePlayers[SEQ_PLAYER_SFX].channels[channelIndex]->volume = 1.0f;\n"
+         "                            gSequencePlayers[SEQ_PLAYER_SFX].channels[channelIndex]->pan = 0.5f;\n",
+         "                            gSequencePlayers[SEQ_PLAYER_SFX].channels[channelIndex]->volume =\n"
+         "                                get_sound_volume(bank, soundIndex, VOLUME_RANGE_UNK1);\n"
+         "                            gSequencePlayers[SEQ_PLAYER_SFX].channels[channelIndex]->pan =\n"
+         "                                get_sound_pan(*sSoundBanks[bank][soundIndex].x,\n"
+         "                                              *sSoundBanks[bank][soundIndex].z);\n",
+         count=2)
 
 
 def _patch_metal_wings(source: Path) -> None:

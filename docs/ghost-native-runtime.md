@@ -30,8 +30,8 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Capture | GC7: layout 188 (`behaviour_base` at 184), sample 1260; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636) and the [held object](#held-objects) (44 at 1216, its released angle at 36) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS6, still exported as `SM64GhostSourceV3` (the version argument must be 6); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` and `occlusion_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC8: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 1276 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled`, `occlusion_fade` and `overlap_sound` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC8: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade`, `volume` and `overlap_sound`), ring offset 20480, 512 records of 1276 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP6: header 160, record 1276, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP5 (record 1268) still loads, read as having nothing released; GCLIP4 (record 652) also as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
@@ -1226,6 +1226,26 @@ channel (`sMaxChannelsForSoundBank`, all 1). Mario's sounds carry
 equal priority in the same bank takes the channel: two ghosts, or a far ghost
 and a near one, can still cut each other off, as Mario's own sounds do.
 
+Every class of ghost sound follows that one rule. Mario's recordings carry
+requests in the action, moving, voice, general, object, object-2 and menu
+banks (76 clips, 2026-09-28). Upstream `update_game_sound` plays the menu bank
+(Mario's star and cap grab `SOUND_MENU_STAR_SOUND`, falling into a pit,
+entering a pipe) and a moving sound at a constant frequency at volume 1,
+centred, without `get_sound_volume`. So a far ghost's star chime kept full
+level, and only the ghost volume reached it (his report, 2026-09-28). The
+staged engine ([patches.py](../renderer/model/patches.py)) gives those the
+voice bank's volume and pan from the ghost's own position and keeps their
+constant pitch. `SOUND_NO_VOLUME_LOSS` (falling into a pit) still skips the
+engine's camera falloff, as in the game, and the ghost's gain still applies.
+`SOUND_MENU_ENTER_PIPE`'s own script mixes its pan, so it sounds centred
+wherever its ghost is. No ghost sound is music: capture keeps only requests
+from Mario's object, so the cap and star music (sequences) never reach a
+ghost. The audio witness plays one sound of each class. Gain 0.25 must leave
+3 to 10% of its energy, volume 0.5 a quarter, 2000 units right at least 4x more
+in the right channel (the pipe aside) and 5000 units ahead under half (the pit
+aside). On the unpatched engine the three menu sounds and the
+constant-frequency moving sound kept 100% at gain 0.25.
+
 The IPC worker starts the engine from its verified ROM bytes and stops it
 (joining the thread) when the ROM closes. Before the engine parses anything,
 the CTL, TBL and SEQ regions must match the SHA-256 of SM64 US audio data (the
@@ -1269,6 +1289,66 @@ generations and successful presentation serial. SourceV2's front-buffer contract
 is not relabeled. No negotiated clean consumer means no native ghost display.
 Clean/failed swaps and context loss clear visible telemetry; a generated mesh
 alone never reports that the ghost reached the game window.
+
+### Ghost sound under the overlap fade
+
+His report (2026-09-28): fully overlapping a ghost for the first seconds of most
+WF stars "sounds like all of my audio is duplicated", and "If the ghost is more
+invisible, the audio should be quieter, too. However, I also don't want to lose
+the benefits of the ghost audio (that is, to clearly inform us about timing
+differences between our movements and the ghost)."
+
+The `overlap_sound` switch (the card's "Quiet its sound the same way", under
+Overlap fading; default on) applies
+[ghost_sound_fade.h](../plugin/gfxwrap/ghost_sound_fade.h) in playback. It is
+the word after `volume` in both the IPC and the playback request, formerly the
+checked-zero `reserved3`, so no size or version moved and an older DLL refuses
+1 with `GIPC_PROTOCOL`.
+
+- **Quieter.** Each ghost's placed gain is also multiplied by its overlap fade,
+  the factor its picture uses (15% floor, extra distance and the fade's own
+  switch included). It moves at most (1 - 0.15) / `GP_SOUND_FADE_FRAMES` (3) a
+  drawn frame. A ghost that appears (a new run, a restore, back from hidden)
+  takes its fade as it is, so a run that starts on him is quiet from its first
+  sound. The engine ramps each note's volume across its own mix as well
+  (`process_envelope`), so no step reaches the output.
+- **Timing kept.** While that factor is below 1, a request of the displayed
+  record that live Mario issued on the same game frame (the live sample's own
+  sound list) is not cued: it is his sound twice with no timing difference.
+  Mario's two random voice families (`SOUND_MARIO_YAH_WAH_HOO`,
+  `SOUND_MARIO_YAHOO_WAHA_YIPPEE`) count as one line each. A request one frame
+  earlier or later still plays, and records caught up after an undrawn frame
+  are not compared.
+- **Not the player-first fade.** Its in-front and camera terms fade a ghost
+  because it hides the view, and a sound hides nothing. A ghost trailing him
+  in line with the camera is faint on screen, so its sound is the timing cue
+  left, and it keeps full gain.
+
+Measured 2026-09-28 on his recordings: 16 stars with two or more native
+recordings (64 clips), each against every other as ghost and live (250 pairs),
+aligned on the star clock as playback aligns them, extra distance 0. For each
+ghost sound, the nearest same sound live Mario made:
+
+| Bodies | Ghost sounds | Same frame | Within 1 frame | Within 6 frames |
+|---|---|---|---|---|
+| Overlapping (fade below 0.5) | 3580 | 56% | 80% | 96% |
+| Half overlapping (0.5 to 1) | 3383 | 22% | 55% | 91% |
+| Apart (fade 1) | 15859 | 8% | 19% | 49% |
+
+Overlapping means in step (WF alone: 61% on the same frame), so the fade
+quiets the doubling where it happens and leaves every sound offset in place at
+full level. Dropping same-frame twins removes 56% of the overlapping sounds and
+22% of the half-overlapping ones, which still play at 50 to 100% of the gain.
+Not measured: the delay between Project64's own audio output and the ghost's
+waveOut device, which shifts every ghost sound against his by one amount (up
+to about 65 ms on the ghost side, above).
+
+The playback witness walks ghost 0 on live Mario and ghost 1 beside him:
+ghost 0 sounds at exactly the floor from a run's first frame; his same-frame
+request, and the same jump in another voice line, play once while ghost 1's
+twin still plays; one frame early or late plays; walking apart lifts the gain
+one step a frame to full; switched off it is full on him and the twin plays;
+switched back on it moves one step; with the overlap fade off it is full.
 
 ## Verification boundaries
 

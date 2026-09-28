@@ -243,6 +243,32 @@ def test_session_shaped_command_carries_the_occlusion_switch(kernel, tmp_path):
         connection.close()
 
 
+def test_session_shaped_command_carries_the_overlap_sound_switch(kernel, tmp_path):
+    """`overlap_sound`: absent is on (the sound follows the overlap fade), False turns it off."""
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    assert kernel.request.overlap_sound == 1
+    command = {"enabled": True, "model_id": 1, "owner_suspended": False,
+               "clips": [clip(tmp_path, b"a", 10)], "rom_path": "", "opacity": 0.5, "nudge": 0,
+               "proximity_enabled": True, "proximity_distance": 0.0, "tint_enabled": False,
+               "stop_at_star": True, "mode": 0, "shadow_enabled": True,
+               "origin": {"kind": 1, "configuration": 4, "epoch": 5, "global_timer": 1234,
+                          "utc": 1000.0, "session_id": 7, "arm_id": 8}}
+    try:
+        connection.poll(command)
+        assert kernel.request.overlap_sound == 1
+        connection.poll({**command, "overlap_sound": False})
+        assert kernel.request.overlap_sound == 0 and kernel.request.occlusion_fade == 1
+        before = bytes(kernel.request)
+        for value in (1, "yes", None):
+            with pytest.raises(channel.RejectedControl):
+                connection.poll({**command, "overlap_sound": value})
+            assert bytes(kernel.request) == before
+        connection.poll({**command, "overlap_sound": True})
+        assert kernel.request.overlap_sound == 1
+    finally:
+        connection.close()
+
+
 def test_session_shaped_command_carries_the_ghost_volume(kernel, tmp_path):
     """`volume`: absent is half, 0 is kept exactly, anything outside 0..1 changes nothing."""
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
@@ -257,7 +283,7 @@ def test_session_shaped_command_carries_the_ghost_volume(kernel, tmp_path):
         connection.poll(command)
         assert kernel.request.volume == 0.5
         connection.poll({**command, "volume": 0})
-        assert kernel.request.volume == 0.0 and kernel.request.reserved3 == 0
+        assert kernel.request.volume == 0.0 and kernel.request.overlap_sound == 1
         connection.poll({**command, "volume": 0.8})
         assert abs(kernel.request.volume - 0.8) < 1e-6
         before = bytes(kernel.request)

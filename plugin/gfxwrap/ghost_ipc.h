@@ -53,9 +53,11 @@ typedef struct gipc_request {
      * occlusion_fade fades ghost pixels that block live Mario or the camera
      * (ghost_occlusion.h); formerly the checked-zero reserved2, so 0 is off. */
     uint32_t shadow_enabled, occlusion_fade;
-    /* Ghost sound loudness 0..1; 0 is exact silence. */
+    /* Ghost sound loudness 0..1; 0 is exact silence. 1 in overlap_sound lets
+     * each ghost's sound follow its overlap fade (ghost_sound_fade.h);
+     * formerly the checked-zero reserved3, so 0 is off. */
     float volume;
-    uint32_t reserved3;
+    uint32_t overlap_sound;
 } gipc_request;
 typedef struct gipc_status {
     char magic[8];
