@@ -7089,6 +7089,21 @@
   }
   .goal-plate-trigger:hover .goal-plate-time,
   .goal-plate-trigger:focus-visible .goal-plate-time { text-decoration: underline; }
+  /* The WHOLE plate opens the picker (round 13: "click on the whole button
+     (not just the bottom half)"). The GOAL line's button keeps its own box
+     and stretches its hit area over the plate; what has an action of its own
+     (the PB time jumps to its row, "Undo break") sits above that layer, so
+     no control nests inside another. Hover and focus light the plate, the
+     thing that now answers the click. */
+  .goal-plate-trigger::after { content: ""; position: absolute; inset: -1px; border-radius: 8px; }
+  .goal-plate .pblink, .goal-plate-forgive { position: relative; z-index: 1; }
+  .goal-plate-trigger:focus-visible { outline: none; }
+  .log-card-head .goal-plate:has(.goal-plate-trigger:hover) {
+    background: rgba(26,45,69,.75); border-color: #496784;
+  }
+  .log-card-head .goal-plate:has(.goal-plate-trigger:focus-visible) {
+    outline: 2px solid #78b9ff; outline-offset: 2px;
+  }
   .goal-plate-word {
     flex: 0 0 2.6rem; font-size: 10px; font-weight: 800; letter-spacing: .08em; color: var(--gold);
   }
