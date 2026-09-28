@@ -1332,13 +1332,14 @@ would fall over a [[ghost]] standing behind them. The [[renderer]] repeats each
 such game draw into the layer, keeping its color, how much it lets through and
 its nearest depth; the compositor then gives every [[ghost]] pixel behind that
 depth the same blend the game gave the scene there, so a submerged [[ghost]]
-takes the water's color. The game's own picture stays untouched. It runs
-only on a frame where playback has already chosen a [[ghost]] to draw, so a
-finished or hidden [[ghost]] costs nothing.
+takes the water's color. The game's own picture stays untouched. The [[renderer]]
+builds the layer only on a [[frame]] where playback has already chosen a
+[[ghost]] to draw, so a finished or hidden [[ghost]] costs nothing.
 
 - **Lives** — `plugin/gfxwrap/ghost_compositor.cpp`; the [[renderer]]'s
-  repeat is staged by `tools/stage_ghost_renderer.py`; the frame's choice is
-  `ghost_playback::plan`
+  repeat is staged by `tools/stage_ghost_renderer.py`; which [[ghost]]s draw
+  on a [[frame]] is decided by the plan step in
+  `plugin/gfxwrap/ghost_playback.cpp`
 
 ### Recorded particles
 
