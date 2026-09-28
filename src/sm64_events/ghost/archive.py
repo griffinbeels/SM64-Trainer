@@ -38,6 +38,17 @@ DANCE_TAIL_MAX_FRAMES = 180
 # the cap's own duration plus a second, whichever comes first.
 DANCE_TAIL_WAIT_S = DANCE_TAIL_MAX_FRAMES / 30 + 1
 DANCE_TAIL_STALL_S = 1.0
+# A grab straight into the dance (on the ground, or swimming) can close its
+# attempt a frame BEFORE the first recorded dance frame: the star-grab detector
+# back-computes the entry from Mario's action timer, which the dance counts
+# from 1 on its own first frame (n64decomp general_star_dance_handler:
+# `switch (++m->actionTimer)`), and a snapshot may read a frame stale. His SSL
+# "Shining Atop the Pyramid" PB (attempt 5386, 2026-09-28) closed on walking
+# frame 821 with the dance at 822, and so did his DDD "The Manta Ray's Reward"
+# (swimming, 13957/13958): export required the closing row itself to dance and
+# dropped both dances. A close the tracker timed at the x-cam may now precede
+# the dance by this many rows.
+DANCE_ENTRY_FRAMES = 2
 # The archive's own ceiling, by bytes, not the clip format's per-clip cap: a
 # longer record (GC6's particles) must not shorten how far back a late save
 # can reach. Halving the clip cap to 100000 once cut this window to about 55
@@ -76,27 +87,32 @@ def stored_record(blob: bytes) -> bytes:
 
 def dance_tail(close: Frame, candidates) -> tuple[list[bytes], bool]:
     """Rows after the closing frame through the end of Mario's star dance,
-    and whether that end was seen. The dance ends at the first row that leaves
-    the grab/dance actions, stops the game clock (the exit warp freezes it),
-    breaks the clip's timing (reset, state load, new star), changes scene, or
-    passes DANCE_TAIL_MAX_FRAMES. A repeated occurrence of the same frame is
-    kept, as inside the attempt."""
+    and whether that end was seen. The grab or dance begins at the close or
+    within DANCE_ENTRY_FRAMES after it; a close that no dance follows has no
+    tail. The dance ends at the first row that leaves the grab/dance actions,
+    stops the game clock (the exit warp freezes it; so does a pause), breaks
+    the clip's timing (reset, state load, new star), changes scene, or passes
+    DANCE_TAIL_MAX_FRAMES. A repeated occurrence of the same frame is kept, as
+    inside the attempt."""
     tail, last = [], close
+    danced = close.live_action in STAR_GRAB_ACTIONS
     for raw in candidates:
         frame = frame_from_bytes(raw)
         repeat = (frame.global_timer, frame.clock.elapsed_frames) == (last.global_timer, last.clock.elapsed_frames)
         if (frame.global_timer > close.global_timer + DANCE_TAIL_MAX_FRAMES
-                or frame.live_action not in STAR_GRAB_ACTIONS
+                or (frame.global_timer > close.global_timer + DANCE_ENTRY_FRAMES if not danced
+                    else frame.live_action not in STAR_GRAB_ACTIONS)
                 or frame.clock.valid & (RAW_VALID | ELAPSED_VALID) != RAW_VALID | ELAPSED_VALID
                 or (frame.clock.continuity_id, frame.clock.origin_id, frame.level, frame.area)
                 != (close.clock.continuity_id, close.clock.origin_id, close.level, close.area)
                 or frame.qpc < last.qpc
                 or not (repeat or (frame.global_timer > last.global_timer
                                    and frame.clock.elapsed_frames > last.clock.elapsed_frames))):
-            return tail, True
+            return (tail if danced else []), True
         tail.append(raw)
         last = frame
-    return tail, False
+        danced = danced or frame.live_action in STAR_GRAB_ACTIONS
+    return (tail if danced else []), False
 
 
 def _utc(value: str) -> float:
@@ -302,8 +318,11 @@ class PoseArchive:
         # its exit segment and closes on the exit star's grab. Segments keep
         # ending where they close.
         star_run = getattr(attempt, "segment_id", None) is None
-        tail = (self._dance_tail(identity, last, close)
-                if star_run and close.live_action in STAR_GRAB_ACTIONS else [])
+        # The dance follows a close that already dances, or one the tracker
+        # timed at the x-cam (a grab straight into the dance can close a frame
+        # before it: DANCE_ENTRY_FRAMES).
+        dances = close.live_action in STAR_GRAB_ACTIONS or getattr(attempt, "timed_at", None) == "xcam"
+        tail = self._dance_tail(identity, last, close) if star_run and dances else []
         manifest = write_clip(destination, tuple(row[0] for row in rows) + tuple(tail),
                               SimpleNamespace(**source), clock_kind=kind, tail_records=len(tail))
         if transition:

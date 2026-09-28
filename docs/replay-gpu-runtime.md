@@ -519,6 +519,20 @@ host). A stall of 100 ms or more near the first capture that overlaps none of
 them means something else in Project64 used the GPU from another thread (an
 overlay or hook); these logs do not name it.
 
+**Confirmed: Discord's game hook.** Discord (its overlay and Clips) injects
+into Project64 once per process and, on the next present, runs
+`GLState::InitCapture` then `Using WGL_NV_DX_interop2` (a D3D11 device plus NV
+interop) inside SwapBuffers on the renderer thread: one UpdateScreen
+`callback_stall` of 25-120 ms, whenever Discord attaches (1.9 s to 33 s after
+launch). To identify it, compare the `Attach pid` and `InitCapture` lines of
+`%APPDATA%\discord\logs\discord_hook.log` (local time) with the activation
+log's `callback_stall`. Native QPC is the server's monotonic clock
+(QPC / 10^7); the `GPU recording active` line's stages carry both it and Unix
+time. Matched to the millisecond: 2026-09-24 34 ms, 09-25 65 ms, 09-28 120.8
+and 120.5 ms. The 09-25 153 ms freeze came 2 s before Discord attached; it was
+ours and renderer-thread capture removed it. Not ours to fix: turning off
+Discord's overlay and Clips for Project64 stops the injection.
+
 ## Accuracy and bounds
 
 The unchanged picture selector uses the same stride sample and source stamps.

@@ -6,6 +6,7 @@
 #include "ghost_playback.h"
 #include "ghost_pose.h"
 #include "ghost_particle_pose.h"
+#include "ghost_sound_fade.h"
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -91,7 +92,7 @@ static uint32_t selected_world=0;
 static float selected_x=0;
 // What the defeat hands the model: its animation, frame, eyes and angles.
 static int16_t selected_animation=-1,selected_frame=-1,selected_torso=0;
-static uint8_t selected_eyes=0;static uint32_t selected_fields=0;
+static uint8_t selected_eyes=0,selected_hand=0;static uint32_t selected_fields=0;static uint16_t selected_clock=0;
 static int32_t defeat_frames=60; // the fake ROM's fall is shorter than the game's 80-frame hold
 static bool refuse_shadow=false;
 static bool perspective=false; // a real look-down-minus-z projection for the occlusion region
@@ -141,7 +142,9 @@ extern "C" int32_t sg_model_get_atlas(sg_model *p,sg_atlas_view *out) {
 // The fake model has no particle frames; placement has its own witness.
 extern "C" int32_t sg_model_get_animation_frames(sg_model *p,int32_t id,int32_t *frames) {
     *frames=0;if(!p || p!=fake_model)return SG_INVALID_MODEL;
-    *frames=id==GP_DEFEAT_ANIMATION?defeat_frames:1;return SG_OK;
+    // The ROM's star dances: 63 and 83 frames, held on their last (62, 82).
+    *frames=id==GP_DEFEAT_ANIMATION?defeat_frames:id==GP_DANCE_ANIMATION?63:id==GP_WATER_DANCE_ANIMATION?83:1;
+    return SG_OK;
 }
 extern "C" int32_t sg_model_get_particles(sg_model *p,sg_particle_view *out) {
     *out={};return p==fake_model && p ? SG_OK : SG_INVALID_MODEL;
@@ -163,7 +166,8 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     selected_x=recorded.sample.pose.position[0];
     selected_animation=recorded.sample.pose.animation_id;selected_frame=recorded.sample.pose.animation_frame;
     selected_eyes=recorded.sample.pose.eye_state;selected_torso=recorded.sample.pose.torso_angles[1];
-    selected_fields=recorded.sample.valid_fields;
+    selected_fields=recorded.sample.valid_fields;selected_hand=recorded.sample.pose.hand_state;
+    selected_clock=recorded.sample.area_update_counter;
     if(revoke_evaluation)ghost_playback::api()->revoke(GP_DISABLED);
     static const ghost_compositor::Vertex triangle[3]{};
     out.vertices=triangle;out.count=recorded.sample.pose.hidden?0:3;out.opacity=opacity;
@@ -813,6 +817,84 @@ int main() {
             ghost_playback::set_sound_sink(nullptr);
         }
         {
+            // Sound under the overlap fade (ghost_sound_fade.h). Ghost 0 walks
+            // on live Mario, ghost 1 a body and a half beside him. With
+            // overlap_sound, ghost 0's gain is its overlap fade, moving at most
+            // STEP a frame, and while it fades a request he issued on the same
+            // frame is not handed over. Ghost 1 plays everything at full gain.
+            Clip onto=Clip::linear(50,60,UINT32_MAX,5),beside=Clip::linear(51,60,UINT32_MAX,5);
+            constexpr uint32_t yah=0x24008081u,wah=0x24018081u; // SOUND_MARIO_YAH_WAH_HOO, its second line
+            for(auto [clip,tag]:{std::pair<Clip*,uint32_t>{&onto,1000},{&beside,2000}})
+                for(uint32_t i=0;i<60;++i) {
+                    auto &s=clip->frames[i].sample;s.valid_fields|=GC_VALID_SOUND;
+                    s.sound.count=1;s.sound.bits[0]=tag+i;
+                }
+            onto.frames[6].sample.sound.bits[0]=beside.frames[6].sample.sound.bits[0]=wah;
+            check(api->prepare_clip(&onto.header,onto.frames.data())==GP_OK
+                  && api->prepare_clip(&beside.header,beside.frames.data())==GP_OK,"prepare the overlap sound clips");
+            ghost_playback::set_sound_sink(&test_sink);unplaced_cues=0;
+            revision=r.revision+1;r=request(onto,revision);r.model_id=4;r.clip_count=2;r.volume=.5f;
+            std::memcpy(r.clips[1].clip_id,beside.header.clip_id,16);r.star_ends=0;r.star_action_count=0;r.star_actions[0]=0;
+            r.proximity_enabled=1;r.proximity_distance=0;r.overlap_sound=1;
+            r.origin={GO_STAR,7,live.sequence+1,source_continuity,20000,source_generation,0,0};
+            elapsed_base=20000;live.level=9;live.live_action=1;live.area=1;
+            check(api->configure(&r)==GP_OK,"configure the overlap sound");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            // apart: how far live Mario stands from ghost 0 along x; his: what he issued this frame.
+            auto step=[&](uint64_t time,float apart,std::initializer_list<uint32_t> his,
+                          std::initializer_list<uint32_t> expected) {
+                live.igt=uint16_t(time);++live.sequence;++live.dlist_serial;world.list_serial=live.dlist_serial;
+                live.global_timer=uint32_t(20000+time);
+                live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
+                    0,0,source_generation,1,elapsed_base+time,source_continuity};
+                live.valid_fields|=GC_VALID_POSE|GC_VALID_SOUND;
+                live.pose.position[0]=float(5000+time)+apart;live.pose.position[1]=0;live.pose.position[2]=5;
+                live.sound={};for(auto bits:his)live.sound.bits[live.sound.count++]=bits;
+                sound_count=0;for(auto &p:placed)p={};
+                renderer.run([&]{check(evaluate_planned(live,world,poses,count,token),"overlap sound frame drawn");});
+                const std::vector<uint32_t> want(expected),heard(sound_log,sound_log+sound_count);
+                if(heard!=want) {
+                    std::fprintf(stderr,"overlap time %llu heard",static_cast<unsigned long long>(time));
+                    for(auto bits:heard)std::fprintf(stderr," %u",bits);
+                    std::fprintf(stderr,"\n");
+                }
+                check(heard==want,"exactly the overlap fade's sounds");
+                check(placed[0].count==1 && placed[1].count==1 && placed[1].gain==1,"the ghost beside him keeps full gain");
+                return placed[0].gain;
+            };
+            const auto near_to=[](float gain,float want){return std::fabs(gain-want)<1e-6f;};
+            constexpr float quiet=ghost_occlusion::GHOST_FLOOR,stride=ghost_sound_fade::STEP;
+            check(near_to(step(0,0,{},{1000,2000}),quiet),"a run starting on him sounds at the floor at once");
+            check(near_to(step(1,0,{1001},{2001}),quiet),"his own sound on the same frame plays once");
+            step(2,0,{},{1002,2002});
+            step(3,0,{1002},{1003,2003});               // one frame late is a timing difference
+            step(4,0,{1005},{1004,2004});step(5,0,{},{1005,2005}); // one frame early too
+            step(6,0,{yah},{wah});                     // the same jump in another voice line
+            check(sound_ghost[0]==1,"the twin still plays from the ghost beside him");
+            // An undrawn frame's record is not his frame: only the displayed one is compared.
+            step(8,0,{1007,1008},{1007,2007,2008}); // 1007 caught up plays, the displayed 1008 does not
+            float gain=step(9,200,{1009},{1009,2009}); // apart, his twin plays again
+            check(near_to(gain,quiet+stride),"walking apart lifts the sound one step a frame");
+            gain=step(10,200,{},{1010,2010});check(near_to(gain,quiet+2*stride),"second step");
+            gain=step(11,200,{},{1011,2011});check(near_to(gain,1),"whole once apart");
+            ++r.revision;r.overlap_sound=0;check(api->configure(&r)==GP_OK,"overlap sound off");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(12,0,{1012},{1012,2012})==1,"off: on him at full gain, his twin played");
+            ++r.revision;r.overlap_sound=1;check(api->configure(&r)==GP_OK,"overlap sound on again");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(near_to(step(13,0,{},{1013,2013}),1-stride),"a switch flip moves one step, never the whole fade");
+            ++r.revision;r.proximity_enabled=0;check(api->configure(&r)==GP_OK,"overlap fade off");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(near_to(step(14,0,{1014},{1014,2014}),1),"no picture fade, no sound fade");
+            check(unplaced_cues==0,"every overlap sound was placed before it was cued");
+            live.valid_fields&=~(GC_VALID_POSE|GC_VALID_SOUND);live.sound={};
+            check(api->release_clip(onto.header.clip_id)==GP_OK && api->release_clip(beside.header.clip_id)==GP_OK,
+                  "release the overlap sound clips");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(api->collect()==GP_OK,"collect the overlap sound clips");
+            ghost_playback::set_sound_sink(nullptr);
+        }
+        {
             // Star dance: a clip carrying its dance tail keeps its ghost through
             // its own touch and dance, then holds the last pose and fades it out
             // over GP_STAR_FADE_FRAMES, sound included. A clip without the tail
@@ -976,6 +1058,125 @@ int main() {
             ++r.revision;r.suspended=1;check(api->configure(&r)==GP_OK,"a reset suspends the run");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(!step(17,GP_DISABLED,{},{}),"no grab: no defeat, hidden");
+            // A dance the recording cut short (his Round 13 report: a pause or
+            // reset right after the grab) plays on the way the game plays it,
+            // from its last recorded dance pose: the ground dance, the water
+            // dance, a midair grab's landing into the dance and the no-exit
+            // dance. The request's star actions are the dances, as the
+            // application sends them.
+            auto dances=[](gp_request &q) {
+                q.star_action_count=3;q.star_actions[0]=0x1302;q.star_actions[1]=0x1303;q.star_actions[2]=0x1307;
+            };
+            // Rows 0..cut: a fall (0x1904, the fall animation) from fall_from,
+            // the dance action from land and its animation from from.
+            auto recorded_dance=[](uint8_t id,uint32_t cut,uint32_t action,int16_t animation,
+                                   uint32_t land,uint32_t from,uint32_t fall_from) {
+                Clip clip=Clip::linear(id,cut+1,cut+1,5);clip.header.flags=GCLIP_DANCE_TAIL;
+                const uint32_t held=animation==GP_WATER_DANCE_ANIMATION?82u:62u;
+                for(uint32_t i=0;i<=cut;++i) {
+                    auto &s=clip.frames[i].sample;s.area_update_counter=uint16_t(700+i);
+                    if(i>=fall_from && i<land) {s.live_action=0x1904;s.pose.animation_id=0x56;}
+                    if(i<land)continue;
+                    s.live_action=s.pose.action=action;
+                    s.pose.animation_id=i>=from?animation:int16_t(0x56);
+                    s.pose.animation_frame=int16_t(i>=from?std::min(i-from,held):0u);
+                }
+                return clip;
+            };
+            auto star_run=[&](Clip &clip,uint64_t elapsed) {
+                check(api->prepare_clip(&clip.header,clip.frames.data())==GP_OK,"prepare a recorded dance");
+                revision=r.revision+1;r=request(clip,revision);r.model_id=4;r.volume=1;dances(r);
+                run(elapsed);
+            };
+            auto fading=[&](uint32_t k) {
+                return poses[0].opacity==float(GP_STAR_FADE_FRAMES-k)/float(GP_STAR_FADE_FRAMES);
+            };
+            Clip ground=recorded_dance(60,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(ground,40000);
+            check(step(49,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION && selected_frame==29
+                  && selected_x==6049,"the recorded dance, to where the recording stops");
+            check(step(50,GP_READY,{GP_READY},{}) && poses[0].opacity==1 && selected_x==6049 && selected_frame==30
+                  && selected_animation==GP_DANCE_ANIMATION && selected_hand==0 && selected_clock==750,
+                  "past it: the same place, the game's next animation frame, the area clock running on");
+            check(step(58,GP_READY,{GP_READY},{}) && selected_hand==0,"fists until actionTimer 40");
+            check(step(59,GP_READY,{GP_READY},{}) && selected_hand==GP_HAND_PEACE_SIGN,"the peace sign from actionTimer 40");
+            check(step(61,GP_READY,{GP_READY},{GP_DANCE_SOUND}),"here we go at actionTimer 42");
+            check(step(62,GP_READY,{GP_READY},{}),"once");
+            check(step(82,GP_READY,{GP_READY},{}) && selected_frame==62,"to the animation's last frame");
+            check(step(130,GP_READY,{GP_READY},{}) && selected_frame==62 && poses[0].opacity==1
+                  && selected_hand==GP_HAND_PEACE_SIGN,"held there through actionTimer 111, the exit warp");
+            check(step(131,GP_READY,{GP_READY},{}) && fading(1) && selected_frame==62,"then fades on that pose");
+            check(!step(130+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED},{}),"and hides");
+            Clip water=recorded_dance(61,49,0x1303,GP_WATER_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(water,41000);
+            check(step(49,GP_READY,{GP_READY},{}) && step(61,GP_READY,{GP_READY},{GP_DANCE_SOUND}),
+                  "the water dance's voice on the same timer");
+            check(step(80,GP_READY,{GP_READY},{}) && selected_animation==GP_WATER_DANCE_ANIMATION && selected_frame==60
+                  && selected_hand==0,"the water dance plays on, fists until actionTimer 62");
+            check(step(81,GP_READY,{GP_READY},{}) && selected_hand==GP_HAND_PEACE_SIGN,"its peace sign from actionTimer 62");
+            check(step(102,GP_READY,{GP_READY},{}) && selected_frame==82,"to its own last frame");
+            check(step(130,GP_READY,{GP_READY},{}) && selected_frame==82 && poses[0].opacity==1,"to the same end");
+            check(step(131,GP_READY,{GP_READY},{}) && fading(1),"then fades");
+            Clip landing=recorded_dance(62,40,0x1302,GP_DANCE_ANIMATION,20,21,15); // grabbed at 15, landed at 20
+            star_run(landing,42000);
+            check(step(40,GP_READY,{GP_READY},{}) && selected_frame==19,"a midair grab's dance, recorded from its landing");
+            check(step(41,GP_READY,{GP_READY},{}) && selected_frame==20 && selected_x==6240,"plays on from its last row");
+            check(step(59,GP_READY,{GP_READY},{}) && selected_hand==0 && step(60,GP_READY,{GP_READY},{})
+                  && selected_hand==GP_HAND_PEACE_SIGN,"the dance proper starts a row after the landing");
+            check(step(62,GP_READY,{GP_READY},{GP_DANCE_SOUND}),"so does its voice");
+            check(step(131,GP_READY,{GP_READY},{}) && poses[0].opacity==1 && step(132,GP_READY,{GP_READY},{})
+                  && fading(1),"and its end");
+            Clip stay=recorded_dance(63,49,0x1307,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(stay,43000);
+            check(step(49,GP_READY,{GP_READY},{}) && step(61,GP_READY,{GP_READY},{GP_DANCE_SOUND})
+                  && step(99,GP_READY,{GP_READY},{}) && poses[0].opacity==1 && step(100,GP_READY,{GP_READY},{})
+                  && fading(1),"a no-exit dance ends at actionTimer 80, where the game stops time for its dialog");
+            Clip whole=recorded_dance(64,130,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(whole,44000);
+            check(step(130,GP_READY,{GP_READY},{}) && selected_x==6530 && step(131,GP_READY,{GP_READY},{})
+                  && fading(1),"a whole recorded dance ends where it did");
+            // His ruling (Round 13): the defeat is decided at his x-cam, his
+            // dance, against each ghost's own dance, never at a grab.
+            Clip rival=recorded_dance(65,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(rival,45000);
+            check(step(19,GP_READY,{GP_READY},{}),"racing");
+            live.live_action=0x1302;
+            check(step(20,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION && selected_x==6520,
+                  "a ghost dancing on the same frame as him is not slower: it dances on");
+            run(46000);
+            live.live_action=0x1904;
+            check(step(12,GP_READY,{GP_READY},{}),"his midair grab does not end the race");
+            check(step(25,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION,
+                  "the ghost grabs later, on the ground, and dances first");
+            live.live_action=0x1302;
+            check(step(30,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION && selected_x==6530,
+                  "his dance after the ghost's: it dances on, undefeated");
+            Clip faller=recorded_dance(66,49,0x1302,GP_DANCE_ANIMATION,20,21,10); // grabbed at 10, lands at 20
+            star_run(faller,47000);
+            check(step(17,GP_READY,{GP_READY},{}),"the ghost grabbed first and is still falling");
+            live.live_action=0x1302;
+            check(step(18,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION
+                  && selected_x==6617,"his dance before its landing: it falls where it stood");
+            // The tracker's suspension (the 100-coin star's exit star) arrives
+            // after his x-cam; it is judged there, not where it arrives.
+            Clip exit=recorded_dance(67,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            exit.header.clock_kind=GCLIP_SEGMENT_CLOCK;
+            check(api->prepare_clip(&exit.header,exit.frames.data())==GP_OK,"prepare an exit-segment dance");
+            revision=r.revision+1;r=request(exit,revision);r.model_id=4;r.star_ends=0;r.volume=1;dances(r);
+            r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,48000,source_generation,0,0};
+            elapsed_base=48000;timer_base+=1000;live.live_action=1;
+            check(api->configure(&r)==GP_OK,"a run on the exit segment's clock");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(17,GP_READY,{GP_READY},{}),"racing on the exit segment's clock");
+            live.live_action=0x1302;
+            check(step(18,GP_READY,{GP_READY},{}),"his exit star's dance: no latch on this clock");
+            check(step(21,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION,
+                  "the ghost dances two frames after him");
+            ++r.revision;r.suspended=1;check(api->configure(&r)==GP_OK,"his exit star suspends the run");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(22,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION
+                  && selected_x==6721,"judged at his x-cam, not the suspension: the later dancer falls");
+            live.live_action=1;
             ghost_playback::set_sound_sink(nullptr);
         }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");
@@ -1023,8 +1224,8 @@ int main() {
         r.shadow_enabled=1;r.occlusion_fade=2;check(api->configure(&r)==GP_INVALID,"occlusion flag bounded");
         r.occlusion_fade=0;r.volume=1.5f;check(api->configure(&r)==GP_INVALID,"volume bounded");
         r.volume=std::numeric_limits<float>::quiet_NaN();check(api->configure(&r)==GP_INVALID,"volume NaN refused");
-        r.volume=.5f;r.reserved3=1;check(api->configure(&r)==GP_INVALID,"sound reserved word checked");
-        r.reserved3=0;
+        r.volume=.5f;r.overlap_sound=2;check(api->configure(&r)==GP_INVALID,"overlap sound flag bounded");
+        r.overlap_sound=0;
         r.suspended=2;check(api->configure(&r)==GP_INVALID,"suspension flag bounded");
         r.suspended=0;r.reserved4=1;check(api->configure(&r)==GP_INVALID,"suspension reserved word checked");
         r.reserved4=0;
