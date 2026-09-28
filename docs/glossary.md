@@ -1297,20 +1297,28 @@ and dance of the [[star]] that completed it, kept on the end of its [[ghost]]
 recording so the [[ghost]] celebrates instead of vanishing at its touch; it
 then fades out over half a second. For the [[100-coin star]] that is the
 [[exit star]] after it, so the [[ghost]] plays on through its 100-coin grab.
+A grab straight into the dance may close its [[attempt]] a [[frame]] before
+the dance's first, and still keeps it. When the recording stops before the
+game's dance ends (a pause, [[reset]] or state load right after the grab), the
+[[ghost]] plays the rest of the dance by animation from its last recorded
+dance pose, to the [[frame]] the game's own dance ends on, then fades.
 Display only: export keeps the [[attempt]]'s origin, closing [[frame]] and
 time as they were. Recordings saved before it have none and still end at the
 touch; [[segment]]s never carry one.
 
 - **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
-  `plugin/gfxwrap/ghost_playback.cpp` draws and fades it
+  `plugin/gfxwrap/ghost_playback.cpp` draws, finishes and fades it;
+  `plugin/gfxwrap/ghost_tuning.h` holds the game's dance timings
 
 ### Ghost defeat
 
-What a [[ghost]] still racing does when live Mario's grab completes the
-[[attempt]] first: it plays Mario's own dying fall where it stood, with
-dead eyes and his dying cry, then fades out. A [[ghost]] that already made
-its own completing grab keeps its [[dance tail]] instead. Once per [[attempt]]; a
-state load back into the [[attempt]] brings the [[ghost]]s back.
+What a [[ghost]] still racing does when live Mario's [[x-cam]] dance, the dance of
+the grab that completes the [[attempt]], begins before the [[ghost]]'s own: it
+plays Mario's own dying fall where it stood, with dead eyes and his dying cry,
+then fades out. A [[ghost]] whose own dance began first, or on the same
+[[frame]], keeps its [[dance tail]] instead, even when it grabbed later. Once
+per [[attempt]]; a state load back into the [[attempt]] brings the [[ghost]]s
+back.
 
 - **Lives** — `plugin/gfxwrap/ghost_playback.cpp` decides and draws it;
   `plugin/gfxwrap/ghost_tuning.h` holds its animation, timing and sound
