@@ -6,7 +6,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define GC_CHANNEL_VERSION 1u /* the GPU channel wire; GC_VERSION is the ghost capture sample (ghost_capture.h) */
+/* The GPU channel wire; GC_VERSION is the ghost capture sample (ghost_capture.h).
+ * 2 (2026-09-27): the encoder helper creates the two bridge textures under the
+ * header's names (renderer-thread capture); a version-1 wrapper made them itself.
+ * replay/gpuchannel.py VERSION must match; test_gpu_channel compares them. */
+#define GC_CHANNEL_VERSION 2u
 #define GC_HEADER_BYTES 2048u
 #define GC_MAX_OFFERS 8u
 #define GC_BRIDGES 2u
@@ -147,6 +151,9 @@ public:
     const wchar_t *name() const { return name_; }
     HANDLE wake_event() const { return wake_; }
     HANDLE result_event() const { return result_; }
+    // Hand the single-writer role to the calling thread. The delivery calls it
+    // only under the lock that serializes its renderer and delivery threads.
+    void adopt() { worker_ = GetCurrentThreadId(); }
 #ifdef GC_TEST_HOST
     void *test_view() const { return view_; }
 #endif

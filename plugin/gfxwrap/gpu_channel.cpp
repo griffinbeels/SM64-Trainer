@@ -252,14 +252,19 @@ Result Producer::take_decision(unsigned &slot, gc_decision &out) {
     for (unsigned i = 0; i < header_.offer_count; ++i)
         if (offers_[i].token && !decided_[i] && (head == GC_MAX_OFFERS || offers_[i].occurrence < offers_[head].occurrence)) head = i;
     bool torn = false;
-    for (unsigned i = 0; i < header_.offer_count; ++i) {
+    // The client decides in offer order, but one pass may find several of its
+    // decisions (renderer-thread capture takes them once per VI): read the
+    // head's slot first, so a later offer's decision in a lower slot is not
+    // mistaken for one that skipped ahead.
+    for (unsigned k = 0; k < header_.offer_count; ++k) {
+        const unsigned i = head == GC_MAX_OFFERS ? k : k == 0 ? head : k <= head ? k - 1 : k;
         gc_decision d{};
         if (!stable_read(view_ + header_.decision_offset + i*sizeof d, &d, sizeof d)) { torn = true; continue; }
         if (d.seq == decision_seq_[i]) continue;
         if (!d.seq || !decision_valid(d, header_)) return Result::invalid;
         if (!offers_[i].token || d.token != offers_[i].token || d.occurrence != offers_[i].occurrence) return Result::stale;
         if (decided_[i]) return Result::repeated;
-        if (i != head) return Result::out_of_order;
+        if (i != head) return torn ? Result::busy : Result::out_of_order; // a torn head may hold its decision
         if (d.kind == GC_SELECTED && (d.encode_serial <= last_encode_ || (have_pts_ && d.pts <= last_pts_))) return Result::stale;
         decided_[i] = true; decisions_[i] = d; decision_seq_[i] = d.seq;
         if (d.kind == GC_SELECTED) { last_encode_ = d.encode_serial; last_pts_ = d.pts; have_pts_ = true; }
