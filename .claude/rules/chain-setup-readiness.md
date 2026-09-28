@@ -61,6 +61,16 @@ click; a declared transition or a settled screenshot alone cannot prove movement
 
 ## Failure catalogue
 
+- 2026-09-28, hop 1: his server and Project64 started together. The boot
+  refresh found no Project64, Project64 then loaded both plugins (its log:
+  21:02:58.060), and the copy was refused; the rollback rewrote DLLs it had
+  never touched, which Project64 also held, and three tracebacks reached his
+  console. A held destination is now the same "not now" as a running
+  Project64 (`plugin_installation.in_use` before copying, `DestinationInUse`
+  when the copy's own open is refused): one INFO line, the refresh loop
+  retries, and `restore_on_failure` only rewrites files the block changed.
+  `test_a_refresh_waits_quietly_while_project64_holds_the_dlls` holds the
+  files as a loaded plugin does.
 - 2026-09-23, hop 1: every plugin rebuild needed a manual Install with PJ64
   closed, and the frozen app then copied its OLDER bundle over it within two
   seconds of PJ64 closing: all trainers share one overlay, and each read "the
