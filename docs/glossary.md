@@ -71,8 +71,9 @@ A [[target]] a detection set: the front of the [[target queue]]. The trainer
 holds it until it completes, until you genuinely abandon it (an [[anchor]]
 landing inside a foreign course), or until its own staleness budget expires
 — walking back through a course to redo its start keeps the hold. A
-[[star]] grab takes the hand from a stale hooked one, never from one the
-matcher still holds armed — except a hooked [[subsection]], which yields
+[[star]] grab, or an automatic pick of a segment armed where you stand (the
+Bowser arena's fight), takes the hand from a stale hooked one, never from
+one the matcher still holds armed — except a hooked [[subsection]], which yields
 to its parent [[star]]'s grab armed or not; a PICKED one holds even
 through that grab, because explicit choices take priority.
 
