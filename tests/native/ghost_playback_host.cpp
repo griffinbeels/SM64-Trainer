@@ -486,6 +486,43 @@ int main() {
         ++r.revision;r.mode=GP_FIXED;r.origin={};r.seek_igt=UINT32_MAX;
         check(api->configure(&r)==GP_OK,"fixed coordinate retains full uint32 range");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,false,GP_AFTER_END);
+        {
+            // His Bowser 1 drop-in, 2026-09-29 (pose archive, session 30).
+            // The PB (attempt 80000006404) was recorded from a pipe arrival,
+            // whose zero the tracker saw two frames late: its first row reads
+            // 3. His live reset starts at 1. Mario's scripted fall is the same
+            // at the same counter value, so the ghost row he sees at counter t
+            // must be the recorded row at t -- it was t+2, one Mario-height
+            // ahead ("It SEEMS like they literally fall faster").
+            static const float recorded[]={1295,1283,1267,1247,1223,1195,1163,1127,1087,1043,995,943,
+                887,827,763,695,623,548,473,398,323,307};
+            const unsigned rows=sizeof(recorded)/sizeof(recorded[0]);
+            Clip drop(90,rows);drop.header.clock_kind=GCLIP_SEGMENT_CLOCK;
+            drop.header.level=30;
+            for(unsigned i=0;i<rows;++i) {
+                auto& s=drop.frames[i].sample;s.level=30;s.area=1;s.igt=uint16_t(3+i);
+                s.pose.position[0]=recorded[i];s.clock.raw_igt=s.igt;s.clock.elapsed_frames=1000u+i;
+            }
+            drop.header.origin_raw=3;
+            check(api->prepare_clip(&drop.header,drop.frames.data())==GP_OK,"arrival-recorded drop-in prepared");
+            const auto saved=r;const auto saved_level=live.level;const auto saved_base=elapsed_base;
+            const auto saved_continuity=source_continuity;
+            r=request(drop,saved.revision+1);r.model_id=4;r.star_ends=0;
+            elapsed_base=9000;live.level=30;++source_continuity; // a fresh timeline, as a reset is
+            // The worker's resolved live origin: his reset, the counter at 1.
+            r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,elapsed_base+1,source_generation,0,GO_ZERO_CLOCK};
+            check(api->configure(&r)==GP_OK,"live reset origin at the counter's first frame");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            // The recording begins at 3: the first two frames hold its first pose.
+            draw(1,true,GP_BEFORE_START,1);draw(2,true,GP_BEFORE_START,1);
+            for(unsigned t=3;t<3+rows;++t) {
+                draw(t,true,GP_READY,t-2);
+                check(selected_x==recorded[t-3],"the ghost falls with him, row for row");
+            }
+            r=saved;r.revision=saved.revision+2;live.level=saved_level;elapsed_base=saved_base;
+            source_continuity=saved_continuity;
+            check(api->configure(&r)==GP_OK,"restore the fixed-coordinate request");
+        }
         Clip closing(9);closing.frames.back().sample.clock.origin_id=8;
         check(api->prepare_clip(&closing.header,closing.frames.data())==GP_OK,"star retains final closing reset as evidence");
         ++r.revision;std::memcpy(r.clips[0].clip_id,closing.header.clip_id,16);r.seek_igt=16;
