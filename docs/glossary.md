@@ -298,9 +298,12 @@ through the load), you died, or you abandoned it by leaving the area.
 
 ### Anchor
 
-What opens an [[attempt]] — a practice [[reset]] or a [[save-state load]]. The
-[[projector]] discards an anchor you never moved after, so an idle [[reset]]
-never counts against your [[failure rate]]. The move the anchor INTERRUPTED
+What opens an [[attempt]] — a practice [[reset]] or a [[save-state load]]. A
+[[reset]] always ends the [[attempt]] before it and restarts the clock and the
+ghost, but records a row only if you played since the last one: an idle
+[[reset]], one taken during a textbox or cutscene the game opened (Bowser's
+arena speech), and the zero Usamune takes as you arrive somewhere have no row,
+so none counts against your [[failure rate]]. The move the anchor INTERRUPTED
 belongs to the [[attempt]] it ended, so the anchor holds that action back until
 you leave it. Since 2026-09-23 a [[save-state load]] opens an [[attempt]] only
 when none is open; otherwise the open one carries on through it.

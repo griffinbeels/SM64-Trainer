@@ -425,6 +425,43 @@ Recording nothing beats recording a wrong time — but it looks like a bug the
 first time it is seen, and the open question about how often a REAL entry
 misses its touch is in the detectors rule.
 
+## A reset always ends the run; only a played one records (2026-09-28)
+
+His rule, stated over the Bowser intros: *"we missed out on detecting resets
+when we should have detected it (or at least marked it as a different run,
+even if we don't show the reset in the practice log)... we just should hide
+all the bullshit resets where I clearly couldn't have done anything"*, and for
+the ghost, *"When we reset, ghost mario resets."* Two questions, answered in
+two places:
+
+- **Does the anchor end the run?** Every real anchor does, and the matcher
+  re-arms at it, which restarts the segment's clock and its ghost. Only an
+  echo (`_anchor_echo`) is invisible. The miss was echo shape 5: a reset during
+  Bowser's arena speech lands within a frame of a textbox, so it read as the
+  textbox's own zero. A reset RESPAWNS Mario and that zero never does
+  (`_respawned`). Measured over the three journals on this machine: 31
+  dialog-recent resets carried a spawn action, all followed by `spawned
+  kind=spawn`; the 47 intro zeroes the shape exists for never respawned.
+- **Does the closed attempt get a row?** Only if he played in it
+  (`SegmentEngine._unacted`; stars: `_close_by_reset`). New readings:
+  `segments.before_control` (his only act was a textbox the game opened, and
+  the reset interrupted it; the detector itself stopped counting those acts,
+  `addresses.NO_CONTROL_ACTIONS`), and the ARRIVAL's own zero (a Usamune menu
+  warp lands 1-6 frames before its counter zero, a course entry 42-59; the
+  zero's acted flag describes the level he left, so it banked "reset 00"06" on
+  opening Bowser 3).
+
+Replay-time: his history re-projects at the next start, no migration.
+Measured with `tools/measure_target_queue.py --before HEAD`: live journal 18
+rows lost and 3 gained (his Bowser 3 run 6071 -> 1516 frames, 3'22"36 ->
+0'50"53; his Bowser 2 run 1713 -> 1000; one Bowser 3 reset re-timed from its
+last intro reset; five phantom arrival resets and ten arena star resets gone);
+repo journal 1 lost (a phantom arrival); console-support 2 lost (a WF 100-coin
+engine's phantom arrival resets). A success's id moves to the reset that really
+started it, so a PB row naming the old id (his superseded 1713) points at an
+attempt that no longer exists. Pinned by `tests/test_bowser_intro.py`, each
+half mutation-proved.
+
 ## A failure only names what he chose, and winning ends everything
 
 Two rulings, 2026-08-05. Full reasoning in the two docstrings named below;
