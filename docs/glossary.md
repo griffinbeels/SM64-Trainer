@@ -1322,7 +1322,7 @@ What a [[ghost]] still racing does when live Mario's [[x-cam]] dance, the dance 
 the grab that completes the [[attempt]], begins before the [[ghost]]'s own: it
 plays Mario's own dying animation where it stood, with dead eyes and his
 dying cry, through its last [[frame]], where he lies passed out, then fades out.
-On land he falls over; a [[ghost]] swimming drowns. A [[ghost]] whose own dance began first, or on the same
+On land he falls over; a [[ghost]] swimming drowns. A pause freezes it where it stands. A [[ghost]] whose own dance began first, or on the same
 [[frame]], keeps its [[dance tail]] instead, even when it grabbed later. Once
 per [[attempt]]; a state load back into the [[attempt]] brings the [[ghost]]s
 back.

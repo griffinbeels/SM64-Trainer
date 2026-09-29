@@ -638,10 +638,19 @@ suspension, judged at his x-cam. The Bowser 3 grand star's own cutscene
 (`ACT_JUMBO_STAR_CUTSCENE`, sent with the dances as a race-ending action)
 counts as its dance. Targets without either keep what they had: a segment
 (MIPS Clip, a castle route leg) ends at its close with no defeat, and a
-suspension with no dance (a reset) only hides. The defeat runs on the live `gGlobalTimer`,
-through tuning and the suspension, and happens once per run: a state
-load that restores the run ends it and draws the ghosts at the loaded state,
-and a scene change or the counter running back ends it. Tuning lives in
+suspension with no dance (a reset) only hides. The defeat runs on the game's
+own world clock, `gAreaUpdateCounter` in the live sample, through tuning and
+the suspension. That clock stands still while the game is paused or in
+Usamune's menu, as `gGlobalTimer` does not, so a death, a cut dance and a
+winner's dance through his defeat freeze there and resume from the frame they
+stood on (his report, 2026-09-29: "if we pause during it, it should pause
+that animation, and continue if we continue"; before, the death ran out on
+`gGlobalTimer` while he paused). A ghost's own dance already froze, since
+its coordinate is the live elapsed clock. The defeat ends early only when
+every ghost has fallen, faded or finished, not when a frame (a pause menu)
+draws none. It happens once per run: a reset or a state load that restores
+the run ends it and draws the ghosts at the new state, and a scene change or
+the global timer running back ends it. Tuning lives in
 `ghost_tuning.h`. The playback witness drives him first (both fall, cry once,
 frame by frame, held, faded, hidden), the ghost first (it dances on through
 his dance and the suspension), a tie, his midair grab while a ground ghost
