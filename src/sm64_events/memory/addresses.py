@@ -47,6 +47,20 @@ MARIO_NUM_STARS_OFF = 0xAA       # s16, total star count; live-verified 2026-06-
 # prints it on every live line beside the HUD's copy. Task 0110's 100-coin
 # engine reads it off the exit grab (`star_collected.coins`).
 MARIO_NUM_COINS_OFF = 0xA8
+# s16 health -- 0x880 full (8 wedges), one wedge per 0x100. Decomp include/
+# types.h puts it at 0xAE, three bytes past the live-verified numStars, with
+# numLives (s8) at 0xAD between them. The game's own test for "dead" is
+# `health < 0x100`: interact_star_or_key refuses a star or key below it, and
+# the ground actions turn it into a death action. It cannot climb back
+# (update_mario_health skips a Mario under 0x100) until the death exit writes
+# 0x100, so dead health sits in [0xF6, 0xFF]. 0 is the struct before a file
+# has loaded -- no Mario, not a dead one. VERIFY (live gate pending):
+# tools/verify_addresses.py checks it against gHudDisplay.wedges, which the
+# game rewrites as `health >> 8` every frame (level_update.c
+# update_hud_values). detectors/death.py::mario_alive is its one reader.
+MARIO_HEALTH_OFF = 0xAE
+MARIO_HEALTH_DEAD_BELOW = 0x100
+HUD_WEDGES_OFF = 0x6         # gHudDisplay + 0x6, s16: the power meter's wedges
 # The coin count that spawns a course's 100-coin star (star 6). Holding at
 # least this many at an exit grab proves the visit was a 100-coin run even
 # when a savestate loaded AFTER the star skipped its grab edge.
@@ -328,12 +342,35 @@ DEATH_ACTIONS = {
 # sDelayedWarpOp (s16; 0 = no warp pending): `layout.pending_warp_op`.
 # Op values (decomp level_update.h): 0x12 WARP_OP_DEATH is the NORMAL death
 # warp, pended ~48 frames AFTER the death action already fired our event —
-# deliberately not consumed (would double-count every death). Levels that
+# consumed only when NO death action is running (DEATH_WARP_CAUSES below),
+# which is how a lava death stops being invisible. Levels that
 # define a warp-floor node (TotWC's cloud exit) turn 0x13 into a non-death
 # exit; falling out of those would mislabel as death — characterize at the
 # live gate before excluding by level id.
 WARP_OP_WARP_FLOOR = 0x13  # void-out: resolves to the death node (or game
                            # over at 0 lives) unless the level has node 0xF3
+WARP_OP_DEATH = 0x12
+WARP_OP_GAME_OVER = 0x14   # replaces WARP_OP_DEATH / WARP_FLOOR at 0 lives
+# A death warp is PENDING: Mario is dead whatever he does next. level_trigger_
+# warp pends a new op only while none is pending, so the pipe or star exit he
+# reaches afterwards is dropped and the death warp fires instead -- the BitFS
+# row of 2026-09-28 (lava boost at 0 health, then the pipe, then the castle).
+DEATH_WARP_OPS = frozenset({WARP_OP_DEATH, WARP_OP_WARP_FLOOR,
+                            WARP_OP_GAME_OVER})
+# The deaths that pend WARP_OP_DEATH WITHOUT entering a DEATH_ACTION -> cause.
+# Every level_trigger_warp(m, WARP_OP_DEATH) in decomp (searched 2026-09-28):
+# the death actions' own handlers, plus these three and out-of-bounds (a NULL
+# floor, mario.c update_mario_geometry_inputs, in whatever action he was in).
+# A squish death pends the warp and enters ACT_DISAPPEARED on the same frame,
+# so its cause is read off the action BEFORE the edge too (detectors/death.py).
+ACT_LAVA_BOOST = 0x010208B7
+ACT_SQUISHED = 0x00020339
+ACT_CAUGHT_IN_WHIRLPOOL = 0x300222E3
+DEATH_WARP_CAUSES = {
+    ACT_LAVA_BOOST: "lava",
+    ACT_SQUISHED: "squished",
+    ACT_CAUGHT_IN_WHIRLPOOL: "whirlpool",
+}
 # The ops a WALKED warp pends -- Mario stepped through something the level
 # placed. Values from decomp level_update.h; each one read back off the
 # anchor payloads of every journal on this machine (2026-09-04, task 0117):

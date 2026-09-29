@@ -1656,9 +1656,14 @@ just the level.
 
 ### Death
 
-Mario dying, which closes the open [[attempt]] with a losing [[outcome]].
+Mario dying, which closes the open [[attempt]] with a losing [[outcome]]. The
+game marks Mario dead three ways: health under one wedge, a dying animation,
+or a death warp already on its way. A finish he reaches while any of those
+holds — a pipe entered mid lava boost, a key grabbed during a void-out — is a
+death too ("finished_dead"), never a success.
 
-- **Lives** — the death detector (`src/sm64_events/detectors/death.py`)
+- **Lives** — the death detector and its alive check
+  (`src/sm64_events/detectors/death.py`)
 
 ### Reset
 

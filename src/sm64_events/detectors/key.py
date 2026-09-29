@@ -26,6 +26,7 @@ see every tick, so it is observed in process() whether or not a grab fires."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
+from sm64_events.detectors.death import ALIVE_KEY, mario_alive
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.memory.addresses import (ACT_JUMBO_STAR_CUTSCENE,
                                           FIGHT_END_LEVELS,
@@ -58,4 +59,5 @@ class KeyGrabDetector:
                       payload={"level": curr.curr_level, "which": which,
                                "igt_frames": igt_frames,
                                "igt": format_igt(igt_frames),
-                               "igt_source": source})]
+                               "igt_source": source,
+                               ALIVE_KEY: mario_alive(curr)})]
