@@ -8,7 +8,7 @@ import time
 import pytest
 
 from sm64_events.ghost import capture, native_channel as channel, native_protocol as P
-from sm64_events.memory.addresses import ACT_FALL_AFTER_STAR_GRAB, STAR_DANCE_ACTIONS
+from sm64_events.memory.addresses import ACT_FALL_AFTER_STAR_GRAB, ACT_JUMBO_STAR_CUTSCENE, STAR_DANCE_ACTIONS
 from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.memory.layout import US
 
@@ -58,9 +58,11 @@ def test_channel_acquires_renews_copies_and_releases(kernel):
     try:
         request = kernel.request
         assert request.token and request.capture_enabled and request.generation == 1
-        # The race ends at each Mario's x-cam dance, not at a midair grab's fall.
-        assert request.star_action_count == len(STAR_DANCE_ACTIONS)
-        assert set(request.star_actions[:request.star_action_count]) == STAR_DANCE_ACTIONS
+        # The race ends at each Mario's x-cam dance, not at a midair grab's fall;
+        # the Bowser 3 grand star's cutscene counts as its dance.
+        ending = STAR_DANCE_ACTIONS | {ACT_JUMBO_STAR_CUTSCENE}
+        assert request.star_action_count == len(ending)
+        assert set(request.star_actions[:request.star_action_count]) == ending
         assert ACT_FALL_AFTER_STAR_GRAB not in request.star_actions
         payload = bytes(i % 256 for i in range(P.RECORD_BYTES))
         C.memmove(kernel.address + P.RING_OFFSET, payload, len(payload))
@@ -246,10 +248,10 @@ def test_session_shaped_command_carries_the_occlusion_switch(kernel, tmp_path):
         connection.close()
 
 
-def test_session_shaped_command_carries_the_overlap_sound_switch(kernel, tmp_path):
-    """`overlap_sound`: absent is on (the sound follows the overlap fade), False turns it off."""
+def test_session_shaped_command_carries_the_sound_fade_switch(kernel, tmp_path):
+    """`sound_fade`: absent is on (the sound follows its picture's fade), False turns it off."""
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
-    assert kernel.request.overlap_sound == 1
+    assert kernel.request.sound_fade == 1
     command = {"enabled": True, "model_id": 1, "owner_suspended": False,
                "clips": [clip(tmp_path, b"a", 10)], "rom_path": "", "opacity": 0.5, "nudge": 0,
                "proximity_enabled": True, "proximity_distance": 0.0, "tint_enabled": False,
@@ -258,16 +260,16 @@ def test_session_shaped_command_carries_the_overlap_sound_switch(kernel, tmp_pat
                           "utc": 1000.0, "session_id": 7, "arm_id": 8}}
     try:
         connection.poll(command)
-        assert kernel.request.overlap_sound == 1
-        connection.poll({**command, "overlap_sound": False})
-        assert kernel.request.overlap_sound == 0 and kernel.request.occlusion_fade == 1
+        assert kernel.request.sound_fade == 1
+        connection.poll({**command, "sound_fade": False})
+        assert kernel.request.sound_fade == 0 and kernel.request.occlusion_fade == 1
         before = bytes(kernel.request)
         for value in (1, "yes", None):
             with pytest.raises(channel.RejectedControl):
-                connection.poll({**command, "overlap_sound": value})
+                connection.poll({**command, "sound_fade": value})
             assert bytes(kernel.request) == before
-        connection.poll({**command, "overlap_sound": True})
-        assert kernel.request.overlap_sound == 1
+        connection.poll({**command, "sound_fade": True})
+        assert kernel.request.sound_fade == 1
     finally:
         connection.close()
 
@@ -286,7 +288,7 @@ def test_session_shaped_command_carries_the_ghost_volume(kernel, tmp_path):
         connection.poll(command)
         assert kernel.request.volume == 0.5
         connection.poll({**command, "volume": 0})
-        assert kernel.request.volume == 0.0 and kernel.request.overlap_sound == 1
+        assert kernel.request.volume == 0.0 and kernel.request.sound_fade == 1
         connection.poll({**command, "volume": 0.8})
         assert abs(kernel.request.volume - 0.8) < 1e-6
         before = bytes(kernel.request)

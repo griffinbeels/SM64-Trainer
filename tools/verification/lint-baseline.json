@@ -361,9 +361,6 @@
     "0d05cd53dbc41efea5e80f66d4ea0e7f2d97f44bd41e37af8db1fdf18de560ac",
     "846eb2840987837f999cd60f8df65710917b3803748b2506401a713424cef828",
     "84a6b993af065c1dc791c56c1fdab9f4511dbc53d48f18631ccd5f3e2c7e29cb",
-    "92bf01700f9bbfea438b5179639091f1a004bce2a70b8b9017686f8b6abdd22b",
-    "73fde6040c758ba257383b3498c8ac70ccdbde127a00468d1470f8a73655af96",
-    "d81d244b6bac4a5de1a3e9a0e16429f8b13538fad642780d5170f0efa0476ee2",
     "63b2fa1b9d96ec77b36c7d9d4cff7adc78610ee58223800bde2074bba58a7142",
     "0286980457cfffb74f2b0f84c9f9fefb1cafe2581e21f56ca2aad5b14ddcb665",
     "eada169a0594d36d34db4c5e202a23c973b6017773d1f097cd4b4e2c630ff30f",
@@ -475,7 +472,9 @@
     "edaf9fbfcd19f04f66469c8879f87f73b8339bde88ae3b847f08f99abad56016",
     "562a1b10558a7cfca29820f097a37d27e538557d0fe010f712c57d002b4618ae",
     "8949fc3443494399828bb22d86879b8606203f28ad449ae8d5a479220293df73",
-    "a988e70ea11adf2480a2e70a19c391f343127c45c395098d48d814777120c692"
+    "a988e70ea11adf2480a2e70a19c391f343127c45c395098d48d814777120c692",
+    "354a9ddb240b289fbf700592184fa97f56f56ae448e16066c93db5e7f07d7b72",
+    "ab209614cf4302f1ffebcc19ac13801445cde61ed16d039b993aa4867d7ed870"
   ],
   "findings": [
     {
@@ -2610,21 +2609,15 @@
     },
     {
       "path": "tools/verify_addresses.py",
-      "line": 64,
+      "line": 96,
       "rule": "C901",
-      "message": "`main` is too complex (17 > 15)"
+      "message": "`main` is too complex (16 > 15)"
     },
     {
       "path": "tools/verify_addresses.py",
-      "line": 64,
-      "rule": "PLR0912",
-      "message": "Too many branches (19 > 18)"
-    },
-    {
-      "path": "tools/verify_addresses.py",
-      "line": 64,
+      "line": 96,
       "rule": "PLR0915",
-      "message": "Too many statements (103 > 50)"
+      "message": "Too many statements (99 > 50)"
     },
     {
       "path": "tools/verify_star_stop.py",
@@ -3511,6 +3504,30 @@
       "source_commit": "60907909325d8a22fc05e575c7a40588b04bd578",
       "source_state": "Reviewed working-tree delta from source_commit",
       "reviewer": "daily-star session self-review"
+    },
+    {
+      "findings": [
+        {
+          "path": "tools/verify_addresses.py",
+          "line": 96,
+          "rule": "C901",
+          "message": "`main` is too complex (16 > 15)",
+          "allowance": "354a9ddb240b289fbf700592184fa97f56f56ae448e16066c93db5e7f07d7b72",
+          "replaces_allowance": "92bf01700f9bbfea438b5179639091f1a004bce2a70b8b9017686f8b6abdd22b"
+        },
+        {
+          "path": "tools/verify_addresses.py",
+          "line": 96,
+          "rule": "PLR0915",
+          "message": "Too many statements (99 > 50)",
+          "allowance": "ab209614cf4302f1ffebcc19ac13801445cde61ed16d039b993aa4867d7ed870",
+          "replaces_allowance": "d81d244b6bac4a5de1a3e9a0e16429f8b13538fad642780d5170f0efa0476ee2"
+        }
+      ],
+      "reason": "The alive gate adds Mario's health to the live address gate. The existing coin-vs-HUD check moved beside the new health-vs-power-meter check into `check_hud_witnesses`, so `main` shrinks: C901 17 -> 16, statements 103 -> 99, branches 19 -> under the limit (that allowance is removed, not replaced). Previous allowances removed, so no increase is permitted. No other findings adopted.",
+      "source_commit": "74e88755aea85ad64434d4a4f9baa5339c334e49",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "alive-gate session self-review"
     }
   ]
 }

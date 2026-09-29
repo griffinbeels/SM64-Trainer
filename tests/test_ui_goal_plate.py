@@ -108,12 +108,40 @@ def _pb_time_opens_picker(page):
     return _picker_open(page)
 
 
+# While the celebration shows, what paints on top at the centre of the PB time
+# (which sits above the plate's click layer) and of the clock word: the
+# celebration must. It ignores the pointer, so it is hit-tested with pointer
+# events switched on for the probe.
+PARTY_ON_TOP = """(() => { const party = p.querySelector('.goal-plate-party');
+    if (!party) return null;
+    party.style.pointerEvents = 'auto';
+    const over = sel => { const el = p.querySelector(sel); if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return party.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); };
+    const out = { pb_time: over('.pblink'), clock: over('.goal-plate-clock') };
+    party.style.pointerEvents = '';
+    return out; })()"""
+
+
 def _plate(page):
     return page.evaluate(f"""(() => {{ const p = {PLATE};
         return p && {{ text: p.innerText.replace(/\\n/g, ' | '), width: p.offsetWidth,
           pips: p.querySelectorAll('.goal-pip').length,
           lit: p.querySelectorAll('.goal-pip.is-on').length,
-          party: !!p.querySelector('.goal-plate-party') }}; }})()""")
+          party: !!p.querySelector('.goal-plate-party'), party_on_top: {PARTY_ON_TOP} }}; }})()""")
+
+
+def _watch_celebration(page):
+    """Whether the celebration showed within 3 s, and what it painted over
+    the first time it did."""
+    party, on_top = False, None
+    for _ in range(20):
+        _wait(page, 150)
+        plate = _plate(page)
+        party = party or plate["party"]
+        if plate["party"] and on_top is None:
+            on_top = plate["party_on_top"]
+    return party, on_top
 
 
 @pytest.fixture(scope="module")
@@ -170,11 +198,7 @@ def seen():
                     _grab(service, next(frames), igt)
                     _wait(page, 1500)
                 _grab(service, next(frames), 338)             # the third in a row
-                party = False
-                for _ in range(20):
-                    _wait(page, 150)
-                    party = party or _plate(page)["party"]
-                out["celebrated"] = party
+                out["celebrated"], out["party_on_top"] = _watch_celebration(page)
                 _wait(page, 3200)
                 out["done"] = _plate(page)
                 # The longest source words the sheet can put there.
@@ -212,6 +236,13 @@ def test_a_player_found_by_search_becomes_this_stars_pinned_goal(seen):
     assert name in seen["runner_plate"]["text"], seen["runner_plate"]
     tile = seen["runner_tile"]
     assert tile["goal_pinned"] is True and tile["goal_cs"] == seen["runner"]["cs"], tile
+
+
+def test_the_celebration_paints_over_everything_in_the_plate(seen):
+    """Round 13 follow-up: "when the goal animation plays, it should be ABOVE
+    everything else within that button". The PB time sits above the plate's
+    click layer so it keeps its own jump; the celebration must still cover it."""
+    assert seen["party_on_top"] == {"pb_time": True, "clock": True}, seen["party_on_top"]
 
 
 def test_a_streak_goal_counts_breaks_and_celebrates(seen):

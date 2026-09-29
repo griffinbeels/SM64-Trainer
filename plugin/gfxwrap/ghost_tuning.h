@@ -20,11 +20,11 @@
 #define GP_SOUND_NEAR 400.0f
 /* The most records whose sounds one drawn frame hands over (3 s). */
 #define GP_SOUND_CATCHUP 90u
-/* A ghost's sound under its overlap fade (ghost_sound_fade.h) crosses the
- * whole fade, full to floor, in no fewer than this many frames (3 = 100 ms):
- * a ghost appearing, a switch flip or a jump in either Mario's place never
- * steps the level, while an ordinary walk apart (about 3 frames across one
- * body) is followed as it happens. */
+/* A ghost's sound under its picture's fade (ghost_sound_fade.h) crosses the
+ * whole fade, full to silent, in no fewer than this many frames (3 = 100 ms):
+ * a switch flip, a camera cut or a jump in either Mario's place never steps
+ * the level, while an ordinary walk apart (about 3 frames across one body) is
+ * followed as it happens. */
 #define GP_SOUND_FADE_FRAMES 3u
 /* A ghost whose clip carries its star dance (GCLIP_DANCE_TAIL) fades out over
  * this many frames after its last recorded dance frame (15 = 0.5 s), holding
@@ -60,23 +60,42 @@
 /* Defeat (his asks, 2026-09-23: "because you won, you get to trigger the
  * death animation for all of the remaining ghosts that were slower than
  * you"; 2026-09-28: "the ghost death / real mario comparison should be based
- * on the XCAM DANCE start"). When live Mario's x-cam dance begins on the grab
- * that completes the attempt, each ghost whose own dance began later plays
- * Mario's standing death where it stood: act_standing_death's
- * MARIO_ANIM_DYING_FALL_OVER (0x32; he clutches
- * himself and falls on his face), dead eyes (MARIO_EYES_DEAD) and
- * SOUND_MARIO_DYING = SOUND_ARG_LOAD(2, 4, 0x15, 0xFF, 8). The game warps
- * away at frame 80 of that fall; the ghost holds its last frame from there
- * and fades over GP_DEFEAT_FADE_FRAMES. A ghost whose dance began at or
- * before his keeps its dance and fade. Source: n64decomp/sm64
- * src/game/mario_actions_cutscene.c (act_standing_death, common_death_handler). */
+ * on the XCAM DANCE start", and "It should play through the full animation,
+ * and then fade out when mario's passed out fully dead"). When live Mario's
+ * x-cam dance begins on the grab that completes the attempt, each ghost whose
+ * own dance began later plays Mario's own death where it stood, through its
+ * last frame, then fades over GP_DEFEAT_FADE_FRAMES. A ghost whose dance
+ * began at or before his keeps its dance and fade. Source: n64decomp/sm64
+ * src/game/mario_actions_cutscene.c and mario_actions_submerged.c; lengths
+ * are the US ROM's animation table (loopEnd), read through the model. Each
+ * is ANIM_FLAG_NOLOOP and its pose last changes on its last frame, so that
+ * frame is where he lies passed out.
+ * - On land, act_standing_death: SOUND_MARIO_DYING (0x2415FF80, captured as
+ *   0x2415FF81) once, dead eyes (MARIO_EYES_DEAD) and
+ *   MARIO_ANIM_DYING_FALL_OVER (0x32, 96 frames): he clutches himself, hits
+ *   the ground at frame 77 and lies still at 95. The game calls its death
+ *   warp at frame 80 and draws him through the warp's 48-frame delay, so it
+ *   shows the whole fall. Before 2026-09-28 the ghost faded from frame 80,
+ *   while the fall still settled.
+ * - Swimming (the submerged action group), check_common_submerged_cancels
+ *   sends a Mario whose health runs out to act_drowning: SOUND_MARIO_DROWNING
+ *   (0x2423F080) once, MARIO_ANIM_DROWNING_PART1 (0xA5, 80 frames) with
+ *   half-closed eyes until is_anim_at_end, then MARIO_ANIM_DROWNING_PART2
+ *   (0xA6, 70 frames) with dead eyes.
+ * - In the air the game has no death (Mario dies once he lands), so a ghost
+ *   defeated midair plays the land death where it stood. */
 #define GP_DEFEAT_ANIMATION 0x32
 #define GP_DEFEAT_EYES 8u
 #define GP_DEFEAT_SOUND 0x2415FF81u
-#define GP_DEFEAT_FRAMES 80u
+#define GP_DROWN_ANIMATION 0xA5
+#define GP_DROWN_LIMP_ANIMATION 0xA6
+#define GP_DROWN_EYES 2u
+#define GP_DROWN_SOUND 0x2423F081u
+#define GP_ACTION_GROUP_MASK 0x1C0u
+#define GP_ACTION_GROUP_SUBMERGED 0x0C0u
 #define GP_DEFEAT_FADE_FRAMES 15u
 /* The furthest back from a clip's end its completing dance is looked for:
- * the dance tail (archive DANCE_TAIL_MAX_FRAMES, 180) and its grab. */
+ * the dance tail (archive DANCE_TAIL_MAX_FRAMES, 300) and its grab. */
 #define GP_DEFEAT_SCAN 512u
 /* A run of at most this many consecutive refused records, with a recorded
  * pose on both sides in the same scene and no missing occurrence, holds the

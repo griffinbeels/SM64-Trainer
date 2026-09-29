@@ -35,14 +35,15 @@ import time
 
 from sm64_events.core.snapshot import SnapshotReader
 from sm64_events.detectors.area import AreaChangeDetector
-from sm64_events.detectors.death import DeathDetector
+from sm64_events.detectors.death import ALIVE_KEY, DeathDetector, mario_alive
 from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.key import KeyGrabDetector
 from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
 from sm64_events.memory.addresses import (
-    HUD_COINS_OFF, KEY_GRAB_LEVELS, LEVEL_NAMES, PARTICLE_DUST, SPAWN_ACTIONS,
+    HUD_COINS_OFF, HUD_WEDGES_OFF, KEY_GRAB_LEVELS, LEVEL_NAMES, PARTICLE_DUST,
+    SPAWN_ACTIONS,
     WARP_ENTRY_ACTIONS,
 )
 from sm64_events.memory.layout import layout_for, version_from_argv
@@ -59,6 +60,37 @@ CURR_AREA = LAYOUT.curr_area          # None on a layout that has not verified i
 def check(label: str, ok: bool, detail: str) -> bool:
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}: {detail}")
     return ok
+
+
+def check_hud_witnesses(mem, s2) -> bool:
+    """Mario's own counters against the HUD's copies of them."""
+    if LAYOUT.hud_display is None:
+        print("  [SKIP] MARIO_NUM_COINS / MARIO_HEALTH vs HUD: hud_display "
+              "not in this version's layout yet (the sync loop finds it first)")
+        return True
+    # VERIFY (2026-09-01, task 0110): the coin count the 100-coin engine reads
+    # off an exit grab. Two independent witnesses must agree -- Mario's own
+    # numCoins and the HUD's copy -- and both must be the number beside the
+    # coin icon on screen. The HUD counts UP toward numCoins one per frame
+    # after a pickup, so stand still a second before reading; a gap of up to
+    # one second's animation is tolerated, a larger one is a wrong address.
+    hud_coins = mem.read_s16(LAYOUT.hud_display + HUD_COINS_OFF)
+    ok = check("MARIO_NUM_COINS matches the HUD's coin count",
+               abs(s2.coins - hud_coins) <= 30 and 0 <= s2.coins <= 999,
+               f"numCoins = {s2.coins}, gHudDisplay.coins = {hud_coins} "
+               f"(both must equal the coin counter on screen)")
+    # VERIFY (2026-09-28): Mario's health, the alive gate's one new read
+    # (detectors/death.py::mario_alive). The game rewrites the power meter's
+    # wedges as `health >> 8` every frame (update_hud_values), so the two
+    # must agree to the wedge -- read with Mario standing still, since a hit
+    # drains 0x40 a frame.
+    health = s2.mario_health
+    hud_wedges = mem.read_s16(LAYOUT.hud_display + HUD_WEDGES_OFF)
+    return ok & check("MARIO_HEALTH matches the power meter",
+                      0xF6 <= health <= 0x880 and health >> 8 == hud_wedges,
+                      f"health = {health:#05x} ({health >> 8} wedges), "
+                      f"gHudDisplay.wedges = {hud_wedges} (both must equal "
+                      "the wedges on the power meter; 8 = full)")
 
 
 def main() -> None:
@@ -80,21 +112,7 @@ def main() -> None:
                 f"delta over 1s = {delta}")
     ok &= check("MARIO_NUM_STARS plausible", 0 <= s2.num_stars <= 182,
                 f"numStars = {s2.num_stars} (compare with the in-game counter)")
-    # VERIFY (2026-09-01, task 0110): the coin count the 100-coin engine reads
-    # off an exit grab. Two independent witnesses must agree -- Mario's own
-    # numCoins and the HUD's copy -- and both must be the number beside the
-    # coin icon on screen. The HUD counts UP toward numCoins one per frame
-    # after a pickup, so stand still a second before reading; a gap of up to
-    # one second's animation is tolerated, a larger one is a wrong address.
-    if LAYOUT.hud_display is None:
-        print("  [SKIP] MARIO_NUM_COINS vs HUD: hud_display not in this "
-              "version's layout yet (the sync loop finds it first)")
-    else:
-        hud_coins = mem.read_s16(LAYOUT.hud_display + HUD_COINS_OFF)
-        ok &= check("MARIO_NUM_COINS matches the HUD's coin count",
-                    abs(s2.coins - hud_coins) <= 30 and 0 <= s2.coins <= 999,
-                    f"numCoins = {s2.coins}, gHudDisplay.coins = {hud_coins} "
-                    f"(both must equal the coin counter on screen)")
+    ok &= check_hud_witnesses(mem, s2)
     ok &= check("MARIO_ACTION nonzero", s2.mario_action != 0,
                 f"action = {s2.mario_action:#010x}")
     ok &= check("LAST_COMPLETED plausible",
@@ -179,7 +197,10 @@ def main() -> None:
     print("(frame perfect); dusty slide/landing frames show [DUST].")
     print("Segment primitives (warp_entered / key_grabbed / spawned / area_changed)")
     print("also print as they fire — use these to work the live-gate checklist above.")
-    print("PENDING_WARP_OP gate: fall into a pit (HMC) — expect a warp_op")
+    print("MARIO_HEALTH gate: take one hit and watch 'health' drop 0x100 per\n"
+          "wedge; die in lava and watch it read 0x0ff with 'DEAD', a warp_op\n"
+          "0x0012 line and '>> death: lava' BEFORE the level unloads.\n"
+          "PENDING_WARP_OP gate: fall into a pit (HMC) — expect a warp_op")
     print("0x13 line and '>> death: fall' BEFORE the level unloads; then die")
     print("normally (quicksand) and confirm exactly ONE death line. Detector")
     print("lines come from the REAL detectors — exactly what API listeners")
@@ -214,6 +235,7 @@ def main() -> None:
             print(f"  >> star_collected: {p['course_name']} / {p['star_name']}"
                   f"  igt {p['igt']} ({p['igt_frames']}f)"
                   f"  coins {p.get('coins')}"
+                  f"  alive {p.get(ALIVE_KEY)}"
                   f"  frame {ev.frame}{recon}")
         for ev in dust_det.process(prev_snap, s):
             p = ev.payload
@@ -230,11 +252,12 @@ def main() -> None:
             p = ev.payload
             print(f"  >> warp_entered: level {p['level']}  area {p['area']}"
                   f"  action {p['action']:#010x}  frame {ev.frame}"
+                  f"  alive {p.get(ALIVE_KEY)}"
                   f"  [LIVE-GATE: note action id for WARP_ENTRY_ACTIONS]")
         for ev in key_det.process(prev_snap, s):
             p = ev.payload
             print(f"  >> key_grabbed: level {p['level']}  which={p['which']}"
-                  f"  frame {ev.frame}"
+                  f"  frame {ev.frame}  alive {p.get(ALIVE_KEY)}"
                   f"  last_completed course={s.last_completed_course}"
                   f" star={s.last_completed_star}"
                   f"  [LIVE-GATE: record last_completed values for VERIFY note]")
@@ -243,13 +266,17 @@ def main() -> None:
             print(f"  >> spawned: level {p['level']}  kind={p['kind']}"
                   f"  frame {ev.frame}"
                   f"  [LIVE-GATE: confirm kind for file-select spawn on grounds]")
-        if s.mario_action != prev_action:
+        if (s.mario_action != prev_action
+                or s.mario_health >> 8 != prev_snap.mario_health >> 8
+                or mario_alive(s) != mario_alive(prev_snap)):
             dust = "  [DUST]" if s.particle_flags & PARTICLE_DUST else ""
             area_str = f"  area {s.curr_area}" if CURR_AREA is not None else ""
             print(f"frame {s.global_timer:>8}  action {s.mario_action:#010x}  "
                   f"stars {s.num_stars:>3}  igt {s.igt_overall:>6} "
                   f"result {s.igt_result:>6}"
                   f"  coins {s.coins:>3}"
+                  f"  health {s.mario_health:#05x}"
+                  f"{'' if mario_alive(s) else '  DEAD'}"
                   f"  level {s.curr_level}{area_str}{dust}")
             prev_action = s.mario_action
         prev_snap = s

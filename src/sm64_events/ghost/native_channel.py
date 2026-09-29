@@ -10,8 +10,12 @@ from contextlib import contextmanager
 from sm64_events.ghost import native_protocol as P
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 from sm64_events.ghost.settings import DEFAULT_OPACITY, DEFAULT_VOLUME, NUDGE_LIMIT_FRAMES, native_switches
-from sm64_events.memory.addresses import STAR_DANCE_ACTIONS
+from sm64_events.memory.addresses import ACT_JUMBO_STAR_CUTSCENE, STAR_DANCE_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
+
+
+# What ends a race for the native ghost: each Mario's x-cam.
+RACE_END_ACTIONS = STAR_DANCE_ACTIONS | {ACT_JUMBO_STAR_CUTSCENE}
 
 
 class RejectedControl(ValueError):
@@ -66,8 +70,10 @@ class NativeChannel:
                 # The race ends at the x-cam, the dance, never the midair fall
                 # before one (his ruling, 2026-09-28: "the ghost death / real
                 # mario comparison should be based on the XCAM DANCE start"):
-                # his latch and each ghost's end are its dance.
-                actions = sorted(STAR_DANCE_ACTIONS)
+                # his latch and each ghost's end are its dance. A Bowser key
+                # dances too; the Bowser 3 grand star's own cutscene is its
+                # dance ("The key should work the same way as a normal star").
+                actions = sorted(RACE_END_ACTIONS)
                 if len(actions) > 8:
                     raise ValueError("native ghost star action registry exceeds channel capacity")
                 request.star_action_count = len(actions)

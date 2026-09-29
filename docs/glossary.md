@@ -71,8 +71,9 @@ A [[target]] a detection set: the front of the [[target queue]]. The trainer
 holds it until it completes, until you genuinely abandon it (an [[anchor]]
 landing inside a foreign course), or until its own staleness budget expires
 — walking back through a course to redo its start keeps the hold. A
-[[star]] grab takes the hand from a stale hooked one, never from one the
-matcher still holds armed — except a hooked [[subsection]], which yields
+[[star]] grab, or an automatic pick of a [[segment]] armed where you stand (the
+Bowser arena's fight), takes the hand from a stale hooked one, never from
+one the matcher still holds armed — except a hooked [[subsection]], which yields
 to its parent [[star]]'s grab armed or not; a PICKED one holds even
 through that grab, because explicit choices take priority.
 
@@ -297,9 +298,12 @@ through the load), you died, or you abandoned it by leaving the area.
 
 ### Anchor
 
-What opens an [[attempt]] — a practice [[reset]] or a [[save-state load]]. The
-[[projector]] discards an anchor you never moved after, so an idle [[reset]]
-never counts against your [[failure rate]]. The move the anchor INTERRUPTED
+What opens an [[attempt]] — a practice [[reset]] or a [[save-state load]]. A
+[[reset]] always ends the [[attempt]] before it and restarts the clock and the
+[[ghost]], but records a row only if you played since the last one: an idle
+[[reset]], one taken during a textbox or cutscene the game opened (Bowser's
+arena speech), and the zero Usamune takes as you arrive somewhere have no row,
+so none counts against your [[failure rate]]. The move the anchor INTERRUPTED
 belongs to the [[attempt]] it ended, so the anchor holds that action back until
 you leave it. Since 2026-09-23 a [[save-state load]] opens an [[attempt]] only
 when none is open; otherwise the open one carries on through it.
@@ -1167,7 +1171,8 @@ once per adapter and driver version, before any [[encoder helper]] starts
 where the facts allow. The [[recorder]] then keeps the desktop grab for that
 Project64, its status says why, and the [[setup screen]] accepts the desktop's
 written pictures. Until 2026-09-27 such a machine retried GPU capture every
-10-60 s forever and recorded nothing.
+10-60 s forever and recorded nothing. A Project64 still running a [[capture
+layer]] from another build takes the same path until it restarts (2026-09-28).
 
 - **Lives** -- `src/sm64_events/replay/gpuadapter.py` (the facts),
   `src/sm64_events/replay/gpusettings.py` (the per-process memo),
@@ -1304,7 +1309,8 @@ game's dance ends (a pause, [[reset]] or state load right after the grab), the
 dance pose, to the [[frame]] the game's own dance ends on, then fades.
 Display only: export keeps the [[attempt]]'s origin, closing [[frame]] and
 time as they were. Recordings saved before it have none and still end at the
-touch; [[segment]]s never carry one.
+touch; [[segment]]s carry one only when a Bowser key or the grand [[star]]
+ends them (the grand [[star]]'s is its own cutscene, up to its flight).
 
 - **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
   `plugin/gfxwrap/ghost_playback.cpp` draws, finishes and fades it;
@@ -1314,8 +1320,9 @@ touch; [[segment]]s never carry one.
 
 What a [[ghost]] still racing does when live Mario's [[x-cam]] dance, the dance of
 the grab that completes the [[attempt]], begins before the [[ghost]]'s own: it
-plays Mario's own dying fall where it stood, with dead eyes and his dying cry,
-then fades out. A [[ghost]] whose own dance began first, or on the same
+plays Mario's own dying animation where it stood, with dead eyes and his
+dying cry, through its last [[frame]], where he lies passed out, then fades out.
+On land he falls over; a [[ghost]] swimming drowns. A [[ghost]] whose own dance began first, or on the same
 [[frame]], keeps its [[dance tail]] instead, even when it grabbed later. Once
 per [[attempt]]; a state load back into the [[attempt]] brings the [[ghost]]s
 back.
@@ -1364,7 +1371,7 @@ from him, untouched. Its [[recorded shadow]] and [[recorded particles]]
 follow the same rule. It
 combines with the [[overlap fade]] under one 15% floor: a [[ghost]] that overlaps
 Mario and stands in front of him still keeps 15%, not less. Only the camera
-fade may go below it. The card's **Fade in front of Mario** switch turns it off
+fade may go below it. Its [[ghost sound events]] can follow it too. The card's **Fade in front of Mario** switch turns it off
 for comparison.
 
 - **Lives** — `plugin/gfxwrap/ghost_occlusion.h` (the rule and its tuning);
@@ -1408,14 +1415,14 @@ engine at its set volume. Each [[ghost]] sounds from where it stands relative
 to the live camera (panned and distanced as the game does Mario) and fades by
 the inverse square of its distance from live Mario past 400 units, the chime
 of a [[star]] or cap grab included. Capture drops other objects' sounds, so a
-[[ghost]] plays no music. With the card's **Quiet its sound the same way**
-(under Overlap fading, on by default), a [[ghost]]'s sound also follows its
-[[overlap fade]], and while it fades, a sound live Mario made on the same
+[[ghost]] plays no music. With the card's **Fade its sound** (beside Volume,
+on by default), a [[ghost]]'s sound also follows its [[overlap fade]] and
+[[player-first fade]], and while it overlaps him, a sound live Mario made on the same
 [[frame]] plays only once.
 
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
   `plugin/gfxwrap/ghost_audio.cpp` plays them; `plugin/gfxwrap/ghost_sound_fade.h`
-  owns the overlap rule
+  owns how they fade with the picture
 
 ### Ghost source
 
@@ -1655,9 +1662,14 @@ just the level.
 
 ### Death
 
-Mario dying, which closes the open [[attempt]] with a losing [[outcome]].
+Mario dying, which closes the open [[attempt]] with a losing [[outcome]]. The
+game marks Mario dead three ways: health under one wedge, a dying animation,
+or a death warp already on its way. A finish he reaches while any of those
+holds — a pipe entered mid lava boost, a key grabbed during a void-out — is a
+death too ("finished_dead"), never a success.
 
-- **Lives** — the death detector (`src/sm64_events/detectors/death.py`)
+- **Lives** — the death detector and its alive check
+  (`src/sm64_events/detectors/death.py`)
 
 ### Reset
 
@@ -2214,7 +2226,10 @@ stand where you set it), each carrying its own [[personal best]], its
 [[caveat mark]] and its own [[attempt]]s. A [[subsection]] draws inside its
 parent's card rather than beside it, indented and folding with it, so the
 piece you just ran names the [[star]] it belongs to. It highlights the card
-for whatever you are practicing right now. A Bowser course's Reds/Pipe pair is
+for whatever you are practicing right now, and keeps one card open: the
+[[target]] you picked, or else the newest thing you played, so when the game
+moves the [[target]] for you the card you were reading stays open until the
+new [[target]] records its first [[attempt]]. A Bowser course's Reds/Pipe pair is
 the worked example: the reds [[star]] is a [[subsection]] of its paired
 pipe-entry [[segment]], so grabbing it draws its own card nested inside the
 movement's rather than beside it — never a toggle hiding either half.

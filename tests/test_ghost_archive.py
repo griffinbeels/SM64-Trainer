@@ -12,7 +12,10 @@ from sm64_events.ghost.archive import (
     DANCE_ENTRY_FRAMES, DANCE_TAIL_MAX_FRAMES, SCHEMA_VERSION, PoseArchive, stored_record,
 )
 from sm64_events.ghost.recording import PoseRecording
-from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_NO_EXIT, ACT_STAR_DANCE_WATER
+from sm64_events.ghost.native_layout import POSE_AT
+from sm64_events.memory.addresses import (
+    ACT_JUMBO_STAR_CUTSCENE, ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_NO_EXIT, ACT_STAR_DANCE_WATER,
+)
 from sm64_events.ghost.clip import (
     CLOSING_TRANSITION_MAX, MAX_RECORDS, RECORD_BYTES, ClipError, attempt_origin, check_manifest, read_clip,
 )
@@ -373,6 +376,45 @@ def test_a_grab_straight_into_the_dance_keeps_it_when_the_close_is_a_frame_early
     assert manifest["tail_records"] == 4 + late and clip.dance_tail
     assert tuple(f.raw for f in clip.frames) == tuple(rows[:-1])
     assert clip.frames[3 + late - 1].live_action == dance  # every dance row, from its first
+    archive.close()
+
+
+def test_a_bowser_key_segment_keeps_its_dance_like_a_star(tmp_path):
+    """His Bowser 1 PB (attempt 80000006404, 2026-09-28): the key segment
+    closed on idle frame 49272 and the key's exit dance began at 49273; a
+    segment kept no tail, so the ghost vanished at the key. "The key should
+    work the same way as a normal star.\""""
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    rows = [frame(1), frame(2), frame(3), *(frame(n, action=DANCE) for n in range(4, 9)), frame(9, action=IDLE)]
+    archive.ingest(producer(), tuple(rows))
+    row, path = attempt(kind="segment"), tmp_path / "key.ghost"
+    row.segment_id, row.closed_by, row.timed_at = 8, "key_grabbed", None
+    manifest = archive.export_attempt(row, path)
+    clip = check_manifest(path, manifest, attempt=row, target=None)
+    assert manifest["tail_records"] == 5 and clip.dance_tail
+    assert tuple(f.raw for f in clip.frames) == tuple(rows[:-1])
+    archive.close()
+
+
+def test_the_grand_star_keeps_its_sequence_up_to_the_flight(tmp_path):
+    """The Bowser 3 grand star closes on its touch, already in
+    ACT_JUMBO_STAR_CUTSCENE; its tail keeps the fall, landing, raise and
+    take-off and ends where the scripted flight into the credits begins."""
+    def animated(raw, animation):
+        raw = bytearray(raw)
+        raw[POSE_AT + 30:POSE_AT + 32] = animation.to_bytes(2, "little")
+        return bytes(raw)
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    rows = [frame(1), frame(2), frame(3, action=ACT_JUMBO_STAR_CUTSCENE),
+            *(animated(frame(n, action=ACT_JUMBO_STAR_CUTSCENE), 0x25) for n in range(4, 8)),
+            animated(frame(8, action=ACT_JUMBO_STAR_CUTSCENE), 0x2A)]  # MARIO_ANIM_WING_CAP_FLY
+    archive.ingest(producer(), tuple(rows))
+    row, path = attempt(kind="segment"), tmp_path / "grand.ghost"
+    row.segment_id, row.closed_by, row.timed_at = 10, "key_grabbed", None
+    manifest = archive.export_attempt(row, path)
+    clip = check_manifest(path, manifest, attempt=row, target=None)
+    assert manifest["tail_records"] == 4 and clip.dance_tail
+    assert tuple(f.raw for f in clip.frames) == tuple(rows[:-1])
     archive.close()
 
 
