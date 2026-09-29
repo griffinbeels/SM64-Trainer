@@ -131,6 +131,19 @@ def _plate(page):
           party: !!p.querySelector('.goal-plate-party'), party_on_top: {PARTY_ON_TOP} }}; }})()""")
 
 
+def _watch_celebration(page):
+    """Whether the celebration showed within 3 s, and what it painted over
+    the first time it did."""
+    party, on_top = False, None
+    for _ in range(20):
+        _wait(page, 150)
+        plate = _plate(page)
+        party = party or plate["party"]
+        if plate["party"] and on_top is None:
+            on_top = plate["party_on_top"]
+    return party, on_top
+
+
 @pytest.fixture(scope="module")
 def seen():
     """Drive one card through every approved state, recording what it drew."""
@@ -185,14 +198,7 @@ def seen():
                     _grab(service, next(frames), igt)
                     _wait(page, 1500)
                 _grab(service, next(frames), 338)             # the third in a row
-                party, on_top = False, None
-                for _ in range(20):
-                    _wait(page, 150)
-                    plate = _plate(page)
-                    party = party or plate["party"]
-                    if plate["party"] and on_top is None:
-                        on_top = plate["party_on_top"]
-                out["celebrated"], out["party_on_top"] = party, on_top
+                out["celebrated"], out["party_on_top"] = _watch_celebration(page)
                 _wait(page, 3200)
                 out["done"] = _plate(page)
                 # The longest source words the sheet can put there.
