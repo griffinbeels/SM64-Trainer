@@ -76,6 +76,30 @@ float playerFirst(vec4 clip) {
     return camera*max(occlusionOverlap.y,occlusionOverlap.x*block);
 }
 )";
+/* The same rule on the CPU for one point, from its unflipped clip position:
+ * what a fragment there keeps (the ghost's sound reads it at the body centre,
+ * ghost_sound_fade.h). enabled/has_player select the terms as occlusionMode
+ * does. Behind the camera plane the picture draws nothing: a point there takes
+ * the camera term by its distance behind the plane and no in-front term, so a
+ * ghost passing the camera stays faded until 450 units behind it. */
+inline float smooth_step(float edge0, float edge1, float x) {
+    const float t = (x - edge0) / (edge1 - edge0), c = t < 0 ? 0.0f : t > 1 ? 1.0f : t;
+    return c * c * (3.0f - 2.0f * c);
+}
+inline float point_fade(const Region &r, const float clip[4]) {
+    for (unsigned i = 0; i < 4; ++i) if (!std::isfinite(clip[i])) return 1.0f;
+    const float w = clip[3];
+    float camera = 1.0f, block = 1.0f;
+    if (r.enabled) camera = smooth_step(NEAR_HIDDEN, NEAR_FULL, std::fabs(w));
+    if (r.enabled && r.has_player && w > 0) {
+        const float x = (clip[0] / w - r.center[0]) / r.radius[0], y = (clip[1] / w - r.center[1]) / r.radius[1];
+        const float cover = 1.0f - smooth_step(REGION_INNER, REGION_OUTER, std::sqrt(x * x + y * y));
+        block = 1.0f - PLAYER_STRENGTH * cover * smooth_step(0.0f, FRONT_BAND, r.player_w - w);
+    }
+    const float kept = r.overlap * block;
+    return camera * (kept > GHOST_FLOOR ? kept : GHOST_FLOOR);
+}
+
 /* Uniform names in glsl; the compositor looks them up in this order. */
 constexpr const char* uniform_names[] = {"occlusionMode", "occluderCenter", "occluderRadius",
     "occluderW", "occlusionRegion", "occlusionFront", "nearFade", "occlusionOverlap"};

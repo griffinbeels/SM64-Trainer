@@ -154,8 +154,8 @@ const Clip *heard_clip[GP_GHOSTS]{};
 uint64_t suspend_mark=0;              // live restore the suspension began at
 bool heard_fresh[GP_GHOSTS]{};        // a new run: its first displayed record is newly passed
 bool loudest_reset[GP_GHOSTS]{};      // re-establish loudest at the next displayed record
-float overlap_gain[GP_GHOSTS]{};      // the sound's share of its overlap fade, last drawn frame
-bool overlap_gain_known[GP_GHOSTS]{}; // false: the next drawn frame takes the fade as it is
+float fade_gain[GP_GHOSTS]{};         // the sound's share of its picture's fade, last drawn frame
+bool fade_gain_known[GP_GHOSTS]{};    // false: the next drawn frame takes the fade as it is
 // run: a new attempt. restore: a state load (records ahead are newly passed
 // again). move: a nudge, seek or pause; records already heard stay silent.
 enum class Forget { run, restore, move };
@@ -164,7 +164,7 @@ void forget_heard(Forget why) {
         heard[i]=unheard;
         if(why==Forget::move)continue;
         heard_clip[i]=nullptr;heard_fresh[i]=why==Forget::run;loudest_reset[i]=true;dance_voiced[i]=false;
-        overlap_gain_known[i]=false; // a restart overlapping him starts quiet
+        fade_gain_known[i]=false; // a restart overlapping him starts quiet
     }
 }
 void sound_control(bool playing,float volume) {
@@ -557,7 +557,7 @@ bool valid_request(const gp_request& r) {
             || r.enabled>1 || r.tint_enabled>1 || r.clip_count>GP_GHOSTS || r.reserved1
             || r.reserved0 || r.proximity_enabled>1 || !std::isfinite(r.proximity_distance)
             || r.proximity_distance<0 || r.proximity_distance>GP_PROXIMITY_MAX
-            || r.shadow_enabled>1 || r.occlusion_fade>1 || r.overlap_sound>1
+            || r.shadow_enabled>1 || r.occlusion_fade>1 || r.sound_fade>1
             || !std::isfinite(r.volume) || r.volume<0 || r.volume>1
             || r.suspended>1 || r.reserved4) return false;
     const gp_clip unused{};
@@ -752,7 +752,7 @@ uint64_t restart_shift(const Clip& clip,int16_t level,int16_t area) {
 // One ghost against the shared live coordinate. Hides only this ghost.
 // Visible ghost: hand over every record passed since its last drawn one.
 // Backward moves and long jumps only re-establish where it is. twins: live
-// Mario's frame while this ghost's sound fades; the displayed record's
+// Mario's frame while this ghost overlaps him; the displayed record's
 // requests he issued on it are not handed over (ghost_sound_fade.h).
 void hear(uint32_t index,const Clip& clip,uint32_t record,bool before_start,const gc_sample *twins) {
     auto &last=heard[index];auto &high=loudest[index];
@@ -791,7 +791,7 @@ float sound_gain(const gc_sample& live,const float ghost[3]) {
 }
 // Where a visible ghost sounds from this frame; before its cues, so a new
 // sound starts at the ghost's current place. fade follows its star-dance
-// fade, and its overlap fade while overlap_sound is on.
+// fade, and its picture's fade while sound_fade is on.
 void place(uint32_t index,const gc_sample& live,const float ghost[3],float fade) {
     const auto *sink=sound_sink.load(std::memory_order_acquire);
     if(!sink || !sink->place)return;
@@ -1315,24 +1315,28 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         shown_last[i]=defeat.active || (result!=GP_READY && result!=GP_BEFORE_START)
             ? Shown{} : Shown{true,choice.posed,choice.target,live.clock.elapsed_frames,bound[i]};
         if(result!=GP_READY && result!=GP_BEFORE_START) { // hidden: silent
-            heard[i]=unheard;overlap_gain_known[i]=false;
+            heard[i]=unheard;fade_gain_known[i]=false;
             if(choice.fade==0)silence(i);
             continue;
         }
-        // Its sound follows the fade its picture has for overlapping him
+        // Its sound follows what its picture keeps at its body centre
         // (ghost_sound_fade.h), taken as it is on the frame it appears.
-        const float overlap=active_request.overlap_sound?pose.occlusion.overlap:1.0f;
-        overlap_gain[i]=overlap_gain_known[i]?ghost_sound_fade::follow(overlap_gain[i],overlap):overlap;
-        overlap_gain_known[i]=true;
         // A bridged refusal sounds its own cues from the pose it shows.
-        place(i,live,bound[i]->frames[choice.posed].sample.pose.position,choice.fade*overlap_gain[i]);
+        const auto &shown=bound[i]->frames[choice.posed].sample.pose;
+        const float faded=active_request.sound_fade
+            ? ghost_sound_fade::picture_fade(pose.view_projection,pose.occlusion,shown.position,shown.scale) : 1.0f;
+        fade_gain[i]=fade_gain_known[i]?ghost_sound_fade::follow(fade_gain[i],faded):faded;
+        fade_gain_known[i]=true;
+        place(i,live,shown.position,choice.fade*fade_gain[i]);
         if(choice.falling) {
             heard[i]=unheard; // it plays no recorded sound, only its death cry, once
             const auto *sink=sound_sink.load(std::memory_order_acquire);
             if(!defeat.cued[i] && sink && sink->cue)sink->cue(i,GP_DEFEAT_SOUND);
             defeat.cued[i]=true;
         } else {
-            hear(i,*bound[i],choice.record,result==GP_BEFORE_START,overlap<1.0f?&live:nullptr);
+            // Twins drop only where he is: while the overlap fade is below 1.
+            const bool near_him=active_request.sound_fade && pose.occlusion.overlap<1.0f;
+            hear(i,*bound[i],choice.record,result==GP_BEFORE_START,near_him?&live:nullptr);
             voice_dance(i,choice.played);
         }
         before_start=before_start && result==GP_BEFORE_START;

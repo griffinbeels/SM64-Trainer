@@ -77,11 +77,11 @@ typedef struct gp_request {
      * occlusion_fade fills each pose's player-first region (ghost_occlusion.h);
      * formerly the checked-zero reserved2, so 0 draws as before. */
     uint32_t shadow_enabled, occlusion_fade;
-    /* Ghost sound loudness, 0..1; 0 is exact silence. overlap_sound lets each
-     * ghost's sound follow its overlap fade (ghost_sound_fade.h); formerly the
+    /* Ghost sound loudness, 0..1; 0 is exact silence. sound_fade lets each
+     * ghost's sound follow its picture's fade (ghost_sound_fade.h); formerly the
      * checked-zero reserved3, so 0 sounds as before. */
     float volume;
-    uint32_t overlap_sound;
+    uint32_t sound_fade;
     /* The tracker's arm is gone (a completed star or segment): hide and stay
      * silent, unless a state load the renderer resolves after suspension
      * brings the ghost back on that frame, ahead of the owner's next command. */
@@ -217,9 +217,10 @@ bool plan(const gc_sample &);
  * Each drawn frame also places every visible ghost: its displayed root
  * relative to the live camera (SM64 pans and distances that itself) and a
  * gain of min(1, GP_SOUND_NEAR / d) -- inverse-square INTENSITY -- d its world distance from live
- * Mario (1 while live Mario's pose is unknown). With overlap_sound, that gain
- * also follows the ghost's overlap fade and a request live Mario issued on the
- * same frame is not handed over while it fades (ghost_sound_fade.h). The
+ * Mario (1 while live Mario's pose is unknown). With sound_fade, that gain
+ * also follows what the ghost's picture keeps at its body centre, and a
+ * request live Mario issued on the same frame is not handed over while the
+ * ghost overlaps him (ghost_sound_fade.h). The
  * tuning (GP_SOUND_NEAR, GP_SOUND_CATCHUP, GP_SOUND_FADE_FRAMES,
  * GP_STAR_FADE_FRAMES, GP_BRIDGE_FRAMES) is ghost_tuning.h. */
 /* Raw-IGT restarts a star clip remembers (the latest win; Usamune restarts the

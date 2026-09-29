@@ -30,8 +30,8 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Capture | GC7: layout 188 (`behaviour_base` at 184), sample 1260; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636) and the [held object](#held-objects) (44 at 1216, its released angle at 36) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS6, still exported as `SM64GhostSourceV3` (the version argument must be 6); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled`, `occlusion_fade` and `overlap_sound` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC8: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade`, `volume` and `overlap_sound`), ring offset 20480, 512 records of 1276 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled`, `occlusion_fade` and `sound_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC8: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade`, `volume` and `sound_fade`), ring offset 20480, 512 records of 1276 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP6: header 160, record 1276, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP5 (record 1268) still loads, read as having nothing released; GCLIP4 (record 652) also as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
@@ -1411,39 +1411,46 @@ is not relabeled. No negotiated clean consumer means no native ghost display.
 Clean/failed swaps and context loss clear visible telemetry; a generated mesh
 alone never reports that the ghost reached the game window.
 
-### Ghost sound under the overlap fade
+### Ghost sound follows its picture's fade
 
 His report (2026-09-28): fully overlapping a ghost for the first seconds of most
 WF stars "sounds like all of my audio is duplicated", and "If the ghost is more
 invisible, the audio should be quieter, too. However, I also don't want to lose
 the benefits of the ghost audio (that is, to clearly inform us about timing
-differences between our movements and the ghost)."
+differences between our movements and the ghost)." Offered the in-front fade
+too, he chose it: "yes, we should do this for the camera blocking case, too."
 
-The `overlap_sound` switch (the card's "Quiet its sound the same way", under
-Overlap fading; default on) applies
+The `sound_fade` switch (the card's "Fade its sound", beside Volume; default
+on) applies
 [ghost_sound_fade.h](../plugin/gfxwrap/ghost_sound_fade.h) in playback. It is
 the word after `volume` in both the IPC and the playback request, formerly the
 checked-zero `reserved3`, so no size or version moved and an older DLL refuses
 1 with `GIPC_PROTOCOL`.
 
-- **Quieter.** Each ghost's placed gain is also multiplied by its overlap fade,
-  the factor its picture uses (15% floor, extra distance and the fade's own
-  switch included). It moves at most (1 - 0.15) / `GP_SOUND_FADE_FRAMES` (3) a
-  drawn frame. A ghost that appears (a new run, a restore, back from hidden)
-  takes its fade as it is, so a run that starts on him is quiet from its first
-  sound. The engine ramps each note's volume across its own mix as well
-  (`process_envelope`), so no step reaches the output.
-- **Timing kept.** While that factor is below 1, a request of the displayed
+- **Quieter.** Each ghost's placed gain is also multiplied by what its picture
+  keeps at its body centre (half its height above the root), projected with the
+  pose's own view-projection: `point_fade` in
+  [ghost_occlusion.h](../plugin/gfxwrap/ghost_occlusion.h), the GLSL rule's CPU
+  copy. That is the overlap fade, the in-front term and the camera term, under
+  one 15% floor, each only while its own switch is on. Behind the camera plane
+  the picture draws nothing, so a point there takes the camera term by its
+  distance behind the plane and no in-front term: a ghost passing the camera
+  stays faded until 450 units behind it. The gain moves at most
+  1 / `GP_SOUND_FADE_FRAMES` (3) a drawn frame. A ghost that appears (a new
+  run, a restore, back from hidden) takes its fade as it is, so a run that
+  starts on him is quiet from its first sound. The engine ramps each note's
+  volume across its own mix as well (`process_envelope`), so no step reaches
+  the output.
+- **Timing kept.** While the overlap fade is below 1, a request of the displayed
   record that live Mario issued on the same game frame (the live sample's own
   sound list) is not cued: it is his sound twice with no timing difference.
   Mario's two random voice families (`SOUND_MARIO_YAH_WAH_HOO`,
   `SOUND_MARIO_YAHOO_WAHA_YIPPEE`) count as one line each. A request one frame
   earlier or later still plays, and records caught up after an undrawn frame
   are not compared.
-- **Not the player-first fade.** Its in-front and camera terms fade a ghost
-  because it hides the view, and a sound hides nothing. A ghost trailing him
-  in line with the camera is faint on screen, so its sound is the timing cue
-  left, and it keeps full gain.
+  The in-front and camera terms drop no twin: a ghost there is not where he
+  is. A ghost trailing him in line with the camera is now as faint to the ear
+  as on screen; that trade was offered and he chose it.
 
 Measured 2026-09-28 on his recordings: 16 stars with two or more native
 recordings (64 clips), each against every other as ghost and live (250 pairs),
@@ -1469,7 +1476,15 @@ ghost 0 sounds at exactly the floor from a run's first frame; his same-frame
 request, and the same jump in another voice line, play once while ghost 1's
 twin still plays; one frame early or late plays; walking apart lifts the gain
 one step a frame to full; switched off it is full on him and the twin plays;
-switched back on it moves one step; with the overlap fade off it is full.
+switched back on it moves one step; with the overlap fade off it is full. A
+second walk puts a ghost on the camera's axis 300 units in front of him: it
+sounds at the floor from the first frame, climbs a step a frame once he stands
+between it and the camera, is full with the in-front switch off or the sound
+switch off, drops no twin there, and keeps half 300 units from the camera, as
+its picture does. The [sound fade witness](../tests/test_ghost_sound_fade_native.py)
+compares `point_fade` with the witnesses' own statement of the rule at 47916
+points (every mode, three overlaps, eleven depths); the GPU pixels are
+checked against that same statement.
 
 ## Verification boundaries
 

@@ -20,11 +20,11 @@
 #define GP_SOUND_NEAR 400.0f
 /* The most records whose sounds one drawn frame hands over (3 s). */
 #define GP_SOUND_CATCHUP 90u
-/* A ghost's sound under its overlap fade (ghost_sound_fade.h) crosses the
- * whole fade, full to floor, in no fewer than this many frames (3 = 100 ms):
- * a ghost appearing, a switch flip or a jump in either Mario's place never
- * steps the level, while an ordinary walk apart (about 3 frames across one
- * body) is followed as it happens. */
+/* A ghost's sound under its picture's fade (ghost_sound_fade.h) crosses the
+ * whole fade, full to silent, in no fewer than this many frames (3 = 100 ms):
+ * a switch flip, a camera cut or a jump in either Mario's place never steps
+ * the level, while an ordinary walk apart (about 3 frames across one body) is
+ * followed as it happens. */
 #define GP_SOUND_FADE_FRAMES 3u
 /* A ghost whose clip carries its star dance (GCLIP_DANCE_TAIL) fades out over
  * this many frames after its last recorded dance frame (15 = 0.5 s), holding
