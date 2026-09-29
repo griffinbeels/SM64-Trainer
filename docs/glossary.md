@@ -1371,7 +1371,7 @@ from him, untouched. Its [[recorded shadow]] and [[recorded particles]]
 follow the same rule. It
 combines with the [[overlap fade]] under one 15% floor: a [[ghost]] that overlaps
 Mario and stands in front of him still keeps 15%, not less. Only the camera
-fade may go below it. The card's **Fade in front of Mario** switch turns it off
+fade may go below it. Its [[ghost sound events]] can follow it too. The card's **Fade in front of Mario** switch turns it off
 for comparison.
 
 - **Lives** — `plugin/gfxwrap/ghost_occlusion.h` (the rule and its tuning);
@@ -1415,14 +1415,14 @@ engine at its set volume. Each [[ghost]] sounds from where it stands relative
 to the live camera (panned and distanced as the game does Mario) and fades by
 the inverse square of its distance from live Mario past 400 units, the chime
 of a [[star]] or cap grab included. Capture drops other objects' sounds, so a
-[[ghost]] plays no music. With the card's **Quiet its sound the same way**
-(under Overlap fading, on by default), a [[ghost]]'s sound also follows its
-[[overlap fade]], and while it fades, a sound live Mario made on the same
+[[ghost]] plays no music. With the card's **Fade its sound** (beside Volume,
+on by default), a [[ghost]]'s sound also follows its [[overlap fade]] and
+[[player-first fade]], and while it overlaps him, a sound live Mario made on the same
 [[frame]] plays only once.
 
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
   `plugin/gfxwrap/ghost_audio.cpp` plays them; `plugin/gfxwrap/ghost_sound_fade.h`
-  owns the overlap rule
+  owns how they fade with the picture
 
 ### Ghost source
 

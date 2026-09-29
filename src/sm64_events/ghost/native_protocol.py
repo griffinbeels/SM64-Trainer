@@ -50,7 +50,7 @@ class Request(C.LittleEndianStructure):
         ("origin", Origin), ("clip_count", U32), ("reserved1", U32),
         ("clips", Clip * GHOSTS),
         ("shadow_enabled", U32), ("occlusion_fade", U32),
-        ("volume", C.c_float), ("overlap_sound", U32),
+        ("volume", C.c_float), ("sound_fade", U32),
     ]
 
 

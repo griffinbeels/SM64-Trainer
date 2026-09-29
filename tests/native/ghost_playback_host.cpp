@@ -820,7 +820,7 @@ int main() {
         {
             // Sound under the overlap fade (ghost_sound_fade.h). Ghost 0 walks
             // on live Mario, ghost 1 a body and a half beside him. With
-            // overlap_sound, ghost 0's gain is its overlap fade, moving at most
+            // sound_fade, ghost 0's gain is its overlap fade, moving at most
             // STEP a frame, and while it fades a request he issued on the same
             // frame is not handed over. Ghost 1 plays everything at full gain.
             Clip onto=Clip::linear(50,60,UINT32_MAX,5),beside=Clip::linear(51,60,UINT32_MAX,5);
@@ -836,7 +836,7 @@ int main() {
             ghost_playback::set_sound_sink(&test_sink);unplaced_cues=0;
             revision=r.revision+1;r=request(onto,revision);r.model_id=4;r.clip_count=2;r.volume=.5f;
             std::memcpy(r.clips[1].clip_id,beside.header.clip_id,16);r.star_ends=0;r.star_action_count=0;r.star_actions[0]=0;
-            r.proximity_enabled=1;r.proximity_distance=0;r.overlap_sound=1;
+            r.proximity_enabled=1;r.proximity_distance=0;r.sound_fade=1;
             r.origin={GO_STAR,7,live.sequence+1,source_continuity,20000,source_generation,0,0};
             elapsed_base=20000;live.level=9;live.live_action=1;live.area=1;
             check(api->configure(&r)==GP_OK,"configure the overlap sound");
@@ -878,10 +878,10 @@ int main() {
             check(near_to(gain,quiet+stride),"walking apart lifts the sound one step a frame");
             gain=step(10,200,{},{1010,2010});check(near_to(gain,quiet+2*stride),"second step");
             gain=step(11,200,{},{1011,2011});check(near_to(gain,1),"whole once apart");
-            ++r.revision;r.overlap_sound=0;check(api->configure(&r)==GP_OK,"overlap sound off");
+            ++r.revision;r.sound_fade=0;check(api->configure(&r)==GP_OK,"overlap sound off");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(step(12,0,{1012},{1012,2012})==1,"off: on him at full gain, his twin played");
-            ++r.revision;r.overlap_sound=1;check(api->configure(&r)==GP_OK,"overlap sound on again");
+            ++r.revision;r.sound_fade=1;check(api->configure(&r)==GP_OK,"overlap sound on again");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(near_to(step(13,0,{},{1013,2013}),1-stride),"a switch flip moves one step, never the whole fade");
             ++r.revision;r.proximity_enabled=0;check(api->configure(&r)==GP_OK,"overlap fade off");
@@ -893,6 +893,82 @@ int main() {
                   "release the overlap sound clips");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(api->collect()==GP_OK,"collect the overlap sound clips");
+            ghost_playback::set_sound_sink(nullptr);
+        }
+        {
+            // Sound under the rest of the picture's fade: the in-front and
+            // camera terms (ghost_occlusion.h), each only with its switch. The
+            // camera sits at the origin looking down -z; the ghost stands on
+            // that axis 1000 units ahead (300 from record 20), live Mario on the
+            // same axis within GP_SOUND_NEAR of it, so distance keeps gain 1.
+            Clip ahead=Clip::linear(52,40,UINT32_MAX,-1000);
+            for(uint32_t i=0;i<40;++i) {
+                auto &s=ahead.frames[i].sample;s.pose.position[0]=s.pose.position[1]=0;
+                s.pose.position[2]=i<20?-1000.0f:-300.0f;
+                s.valid_fields|=GC_VALID_SOUND;s.sound.count=1;s.sound.bits[0]=3000+i;
+            }
+            check(api->prepare_clip(&ahead.header,ahead.frames.data())==GP_OK,"prepare the in-front sound clip");
+            ghost_playback::set_sound_sink(&test_sink);unplaced_cues=0;
+            revision=r.revision+1;r=request(ahead,revision);r.model_id=4;r.volume=.5f;
+            r.star_ends=0;r.star_action_count=0;r.star_actions[0]=0;
+            r.proximity_enabled=1;r.proximity_distance=0;r.occlusion_fade=1;r.sound_fade=1;
+            r.origin={GO_STAR,7,live.sequence+1,source_continuity,21000,source_generation,0,0};
+            elapsed_base=21000;live.level=9;live.live_action=1;live.area=1;perspective=true;
+            check(api->configure(&r)==GP_OK,"configure the in-front sound");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            // him: live Mario's z on the axis; his: what he issued this frame.
+            auto step=[&](uint64_t time,float him,std::initializer_list<uint32_t> his,
+                          std::initializer_list<uint32_t> expected) {
+                live.igt=uint16_t(time);++live.sequence;++live.dlist_serial;world.list_serial=live.dlist_serial;
+                live.global_timer=uint32_t(20100+time);
+                live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
+                    0,0,source_generation,1,elapsed_base+time,source_continuity};
+                live.valid_fields|=GC_VALID_POSE|GC_VALID_SOUND;
+                live.pose.position[0]=live.pose.position[1]=0;live.pose.position[2]=him;
+                live.sound={};for(auto bits:his)live.sound.bits[live.sound.count++]=bits;
+                sound_count=0;for(auto &p:placed)p={};
+                renderer.run([&]{check(ghost_playback::evaluate(live,world,poses,count,token),"in-front sound frame drawn");});
+                const std::vector<uint32_t> want(expected),heard(sound_log,sound_log+sound_count);
+                if(heard!=want) {
+                    std::fprintf(stderr,"in-front time %llu heard",static_cast<unsigned long long>(time));
+                    for(auto bits:heard)std::fprintf(stderr," %u",bits);
+                    std::fprintf(stderr,"\n");
+                }
+                check(heard==want,"exactly the in-front ghost's sounds");
+                check(placed[0].count==1,"the ghost is placed");
+                return placed[0].gain;
+            };
+            const auto near_to=[](float gain,float want){return std::fabs(gain-want)<1e-5f;};
+            constexpr float quiet=ghost_occlusion::GHOST_FLOOR,stride=ghost_sound_fade::STEP;
+            // 300 units beyond the ghost, Mario is covered: the picture keeps the floor there.
+            check(near_to(step(0,-1300,{},{3000}),quiet),"in front of him from the camera: the floor at once");
+            float gain=step(1,-800,{},{3001});         // now he stands between the camera and the ghost
+            check(near_to(gain,quiet+stride),"behind him the sound comes back one step a frame");
+            gain=step(2,-800,{},{3002});check(near_to(gain,quiet+2*stride),"second step");
+            check(near_to(step(3,-800,{},{3003}),1),"whole behind him");
+            ++r.revision;r.occlusion_fade=0;check(api->configure(&r)==GP_OK,"fade in front of Mario off");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(4,-1300,{},{3004})==1,"no in-front fade on the picture, none on the sound");
+            ++r.revision;r.occlusion_fade=1;r.sound_fade=0;check(api->configure(&r)==GP_OK,"sound fade off");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(5,-1300,{},{3005})==1,"sound fade off: full in front of him");
+            ++r.revision;r.sound_fade=1;check(api->configure(&r)==GP_OK,"sound fade on again");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(near_to(step(6,-1300,{},{3006}),1-stride),"one step at a time");
+            step(7,-1300,{},{3007});
+            check(near_to(step(8,-1300,{},{3008}),quiet),"down to the floor");
+            step(9,-1300,{3009},{3009});               // in front of him is not where he is: his twin plays
+            // Record 20 stands 300 units from the camera, which keeps half of
+            // the picture; Mario between it and the camera covers nothing of it.
+            gain=step(20,-100,{},{3010,3011,3012,3013,3014,3015,3016,3017,3018,3019,3020});
+            check(near_to(gain,quiet+stride),"toward the camera term one step");
+            check(near_to(step(21,-100,{},{3021}),.5f),"at the camera: what its picture keeps there");
+            check(unplaced_cues==0,"every in-front sound was placed before it was cued");
+            perspective=false;live.valid_fields&=~(GC_VALID_POSE|GC_VALID_SOUND);live.sound={};
+            live.pose.position[0]=live.pose.position[1]=live.pose.position[2]=0;
+            check(api->release_clip(ahead.header.clip_id)==GP_OK,"release the in-front sound clip");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(api->collect()==GP_OK,"collect the in-front sound clip");
             ghost_playback::set_sound_sink(nullptr);
         }
         {
@@ -1311,8 +1387,8 @@ int main() {
         r.shadow_enabled=1;r.occlusion_fade=2;check(api->configure(&r)==GP_INVALID,"occlusion flag bounded");
         r.occlusion_fade=0;r.volume=1.5f;check(api->configure(&r)==GP_INVALID,"volume bounded");
         r.volume=std::numeric_limits<float>::quiet_NaN();check(api->configure(&r)==GP_INVALID,"volume NaN refused");
-        r.volume=.5f;r.overlap_sound=2;check(api->configure(&r)==GP_INVALID,"overlap sound flag bounded");
-        r.overlap_sound=0;
+        r.volume=.5f;r.sound_fade=2;check(api->configure(&r)==GP_INVALID,"overlap sound flag bounded");
+        r.sound_fade=0;
         r.suspended=2;check(api->configure(&r)==GP_INVALID,"suspension flag bounded");
         r.suspended=0;r.reserved4=1;check(api->configure(&r)==GP_INVALID,"suspension reserved word checked");
         r.reserved4=0;
