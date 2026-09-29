@@ -66,6 +66,19 @@ def selection_session(pb=PB):
     return initial
 
 
+def problems_but_own_navigation(page):
+    """Page problems, less the pause poll this test's own `goto` cancels.
+
+    Each width reloads the page, and a timed GET /api/pause still in flight
+    from the previous load comes back net::ERR_ABORTED -- under a loaded full
+    run that is often (merge checks of 2026-09-28 and 09-29). The poll simply
+    runs again on the new page, so the abort is the test's doing; any other
+    failed request still counts."""
+    return [problem for problem in page.problems()
+            if not (problem.startswith("requestfailed: ")
+                    and problem.endswith("/api/pause (net::ERR_ABORTED)"))]
+
+
 def flip_off(page, state, owner, setting, writes):
     """An Only-Mario switch that starts on: one press is one write turning it off."""
     checked = f"document.querySelector('.{owner} .ghost-switch').getAttribute('aria-checked')"
@@ -138,7 +151,7 @@ def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
                 assert settled(page, state, 8)[7] == {"ghosts": {"pb": False, "attempts": [1908, 1909]},
                                                       "target": target}
                 assert [item["checked"] for item in picks(page)["items"]] == [False, False, True, True]
-                assert page.problems() == []
+                assert problems_but_own_navigation(page) == []
 
 
 def test_no_pb_yet_keeps_the_box_ticked_for_the_next_one():
@@ -157,4 +170,4 @@ def test_no_pb_yet_keeps_the_box_ticked_for_the_next_one():
                 assert page.evaluate(
                     "document.querySelector('.ghost-pick-why').textContent").endswith("next PB appears here")
                 shoot(page, screenshots / f"no-pb-{width}.png")
-                assert page.problems() == []
+                assert problems_but_own_navigation(page) == []
