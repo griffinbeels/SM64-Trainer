@@ -163,6 +163,32 @@ fight held the hand until its budget expired); **0 attempt rows lost, gained
 or changed** across 3,812. Pinned for all three arenas in both orders by
 `tests/test_arena_fill_race.py`.
 
+**Only a game event sees a hooked head alive (2026-09-29,
+`_hold_hooked_head`).** Live report: *"the bowser stage doesn't immediately
+detect the Ghost? ... I clearly have a PB here, but I'm being told that the
+ghost overlay can't be found yet?"* The fill above now landed (journal id
+7423), and the hand emptied one event later anyway, BEFORE the arrival reset:
+an arrival from outside an area 1 (here the castle's upstairs) settles to
+area 1 two frames after the level change, which disarms the fight until the
+reset re-arms it on the same frame. Every request the app journals (a fill, a
+strategy pick, a PB save) carries frame 0, and the armed hold check counted
+it as a sighting, so the head's last alive frame read 0 and that settle
+expired it as 24,547 frames stale. Nothing re-offered: the arena row reacts
+to its own `heldStartsHere` flipping, and a 107 ms fill-then-empty never
+painted. Bowser 3 from LLL's volcano did the same on 2026-09-23 (id 2867;
+the page happened to re-offer). An armed sighting now needs a nonzero frame.
+**A request while the head is DISARMED still starts its clock at 0, on
+purpose**: an unarmed fill (the castle's lone route option) lasts until the
+next game event as it always has. Lengthening it measured 5 attempt rows lost
+in the primary journal and holds one place's lone option over the next
+one's, so it is a separate call. Measured over the three journals: 17 / 18 /
+22 differing readings (arena fights and Bowser-course fills kept through a
+settle, a strategy pick or a PB save, then held by the ordinary hooked-head
+rules), **0 attempt rows lost, gained or changed**; arena visits where the
+fight was armed after its fill and not in hand, 2 / 0 / 0 -> 0 / 0 / 0.
+Pinned by `tests/test_arena_fill_race.py` (his run event for event, and all
+three arenas) and `tests/test_target_queue.py::test_a_request_is_not_a_sighting_of_an_armed_head`.
+
 **Measured before shipping** (`tools/measure_target_queue.py` — replays
 every reachable journal under the shipped code at `2f19630` and the working
 tree, diffing every target reading and every attempt row): **0 rows lost,

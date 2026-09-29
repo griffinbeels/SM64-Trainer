@@ -378,8 +378,29 @@ the ghost. Resolution is retained for the immutable command.
 
 [ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) preloads each clip and
 selects at the renderer boundary using live elapsed minus owner-origin elapsed.
-A star adds its origin raw IGT; a segment starts at zero. The timing nudge applies
-to that coordinate, after any restart alignment.
+A star adds its origin raw IGT; a segment starts at zero. The timing nudge
+applies to that coordinate, after the ghost's alignment: a star's restart
+alignment (below), or a segment's zero alignment.
+
+### Zero alignment
+
+A segment ghost recorded from Usamune's counter zero (its origin row reads at
+most `GCLIP_ZERO_RAW`, the near-zero) and raced from a live origin at a zero
+too (`GO_ZERO_CLOCK`) is shifted by live origin raw less recorded origin raw,
+once per attempt (`zero_shift`). Both runs of a scripted start then meet on the
+counter, whichever frame the tracker noticed each zero. Any other segment
+keeps the elapsed coordinate.
+
+Why (2026-09-29, his Bowser 1 drop-in: "It SEEMS like they literally fall
+faster than real mario"): the tracker sees a level load's counter zero one or
+two frames late (the capture's counter restarts on the level-change frame, the
+anchor lands after it) and a reset's on its own frame. His PB was recorded
+from a pipe arrival, so its first row read 3 while his resets start at 1. On
+the elapsed coordinate the scripted fall ran two frames ahead, a Mario-height
+below him: the pose archive's 8 reset drop-ins that night each matched the PB
+exactly at a shift of two frames, and his one arrival at zero. 7 of the 30
+saved segment clips began at counter 2 or 3 rather than 1. A star was
+never affected: its coordinate has always been the counter.
 
 ### Restart alignment
 
@@ -638,10 +659,19 @@ suspension, judged at his x-cam. The Bowser 3 grand star's own cutscene
 (`ACT_JUMBO_STAR_CUTSCENE`, sent with the dances as a race-ending action)
 counts as its dance. Targets without either keep what they had: a segment
 (MIPS Clip, a castle route leg) ends at its close with no defeat, and a
-suspension with no dance (a reset) only hides. The defeat runs on the live `gGlobalTimer`,
-through tuning and the suspension, and happens once per run: a state
-load that restores the run ends it and draws the ghosts at the loaded state,
-and a scene change or the counter running back ends it. Tuning lives in
+suspension with no dance (a reset) only hides. The defeat runs on the game's
+own world clock, `gAreaUpdateCounter` in the live sample, through tuning and
+the suspension. That clock stands still while the game is paused or in
+Usamune's menu, as `gGlobalTimer` does not, so a death, a cut dance and a
+winner's dance through his defeat freeze there and resume from the frame they
+stood on (his report, 2026-09-29: "if we pause during it, it should pause
+that animation, and continue if we continue"; before, the death ran out on
+`gGlobalTimer` while he paused). A ghost's own dance already froze, since
+its coordinate is the live elapsed clock. The defeat ends early only when
+every ghost has fallen, faded or finished, not when a frame (a pause menu)
+draws none. It happens once per run: a reset or a state load that restores
+the run ends it and draws the ghosts at the new state, and a scene change or
+the global timer running back ends it. Tuning lives in
 `ghost_tuning.h`. The playback witness drives him first (both fall, cry once,
 frame by frame, held, faded, hidden), the ghost first (it dances on through
 his dance and the suspension), a tie, his midair grab while a ground ghost

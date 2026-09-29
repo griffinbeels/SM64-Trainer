@@ -192,6 +192,26 @@ def test_hooked_head_expires_after_its_hold_budget():
     assert p.target is None
 
 
+def test_a_request_is_not_a_sighting_of_an_armed_head():
+    """What the app journals for him (a fill, a strategy pick, a PB save)
+    carries frame 0. Counted as a sighting of an armed head, it set the
+    head's last alive frame to 0 and the next disarm expired it on the spot
+    (the Bowser 2 arena, 2026-09-29). The budget still runs from the last
+    GAME event that saw it armed."""
+    p = Projector(segments=[exit_def()])
+    p.feed(jev(1, "level_changed", 30000, {"from": 30, "to": 6}))   # hooked
+    p.feed(jev(2, "strat_set", 0, {"kind": "segment", "segment_id": 1,
+                                   "strat_tag": "Standard"}))
+    p.feed(jev(3, "pb_saved", 0, {"segment_id": 1}))
+    p.feed(jev(4, "level_changed", 30500, {"from": 6, "to": 5}))    # disarms
+    assert 1 not in p.armed_segment_ids()
+    assert p.target == ("segment", 1)
+    p.settle(30000 + MIN_BUDGET_FRAMES)
+    assert p.target == ("segment", 1)
+    p.settle(30000 + MIN_BUDGET_FRAMES + 1)
+    assert p.target is None
+
+
 def test_settle_delivers_the_expiry_on_the_clock():
     p = Projector(segments=[exit_def()])
     p.feed(jev(1, "level_changed", 1000, {"from": 30, "to": 6}))    # hooked

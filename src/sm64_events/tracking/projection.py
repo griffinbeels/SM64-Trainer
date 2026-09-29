@@ -724,8 +724,9 @@ class Projector:
         self._hook_level: int | None = None
         self._hook_area: int | None = None
         # None = not yet sighted on the frame clock (a target_set journals
-        # frame 0, so a fill's own frame would fake an instant expiry); the
-        # first hold check baselines it.
+        # frame 0, so a fill's own frame would fake an instant expiry); a game
+        # event baselines it (`_hold_hooked_head` says where a request still
+        # does).
         self._hook_alive_frame: int | None = None
         # THE STAR OWNS THE HAND (round 21, superseding round 20's
         # family-take): a SUBSECTION is selected by CLICK only. Round 20
@@ -1022,7 +1023,24 @@ class Projector:
         silence past the def's own hold budget expires it. A disarm alone is
         deliberately NOT a pop: his worked example walks back through BitDW
         — which cancels the arm — to redo the Bowser 1 fight, and the trip
-        must not cost the selection."""
+        must not cost the selection.
+
+        Only a GAME event sees the head alive. Every request he makes through
+        the app (a fill's `target_set`, a `strat_set`, a `pb_saved`) is
+        journaled at frame 0, and counting one as a sighting put the head's
+        last alive frame at 0: the next disarm measured the whole session as
+        staleness and expired it on the spot. Live, 2026-09-29: the Bowser 2
+        arena's fill landed while the fight was armed, the arena's arrival
+        area settled two frames later (3 -> 1, as every arrival from outside
+        an area 1 does), which disarms the fight until the arrival reset
+        re-arms it, and the fill expired in between. The hand stayed empty
+        for the whole fight, so the ghost had no target ("Checking whether
+        this has a run..."). Bowser 3 did the same from LLL's volcano on
+        2026-09-23. A request while the head is DISARMED still starts its
+        clock at 0, so a fill for something not yet armed lasts until the
+        next game event, as it always has: lengthening that holds the
+        castle's lone route option over the next place's, which is a
+        separate call (measured in docs/rules/tracking-storage.md)."""
         if not (self._target_hooked and self.target
                 and self.target[0] == "segment"):
             return
@@ -1041,7 +1059,8 @@ class Projector:
             return
         arm = self._segments.armed_items().get(sid)
         if arm is not None:
-            self._hook_alive_frame = ev.frame
+            if ev.frame:
+                self._hook_alive_frame = ev.frame
             if arm.level is not None:
                 self._hook_level = arm.level
             if arm.area is not None:
