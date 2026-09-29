@@ -1304,7 +1304,8 @@ game's dance ends (a pause, [[reset]] or state load right after the grab), the
 dance pose, to the [[frame]] the game's own dance ends on, then fades.
 Display only: export keeps the [[attempt]]'s origin, closing [[frame]] and
 time as they were. Recordings saved before it have none and still end at the
-touch; [[segment]]s never carry one.
+touch; [[segment]]s carry one only when a Bowser key or the grand [[star]]
+ends them (the grand [[star]]'s is its own cutscene, up to its flight).
 
 - **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
   `plugin/gfxwrap/ghost_playback.cpp` draws, finishes and fades it;
@@ -1314,8 +1315,9 @@ touch; [[segment]]s never carry one.
 
 What a [[ghost]] still racing does when live Mario's [[x-cam]] dance, the dance of
 the grab that completes the [[attempt]], begins before the [[ghost]]'s own: it
-plays Mario's own dying fall where it stood, with dead eyes and his dying cry,
-then fades out. A [[ghost]] whose own dance began first, or on the same
+plays Mario's own dying animation where it stood, with dead eyes and his
+dying cry, through its last [[frame]], where he lies passed out, then fades out.
+On land he falls over; a [[ghost]] swimming drowns. A [[ghost]] whose own dance began first, or on the same
 [[frame]], keeps its [[dance tail]] instead, even when it grabbed later. Once
 per [[attempt]]; a state load back into the [[attempt]] brings the [[ghost]]s
 back.

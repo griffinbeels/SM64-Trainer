@@ -610,20 +610,35 @@ arrives a poll late is still judged at his dance, not where it arrives:
   dance) keeps its dance and fade, moving on from where it stands now. A
   ghost that grabbed later but danced first wins; a tie is not slower;
 - a ghost whose dance began later, including one that grabbed first but is
-  still falling, falls where it stood: Mario's standing death
-  (`act_standing_death`: `MARIO_ANIM_DYING_FALL_OVER`, 0x32, 96 frames in
-  the ROM), dead eyes, torso and head straight, without what it held or its
-  particles, crying `SOUND_MARIO_DYING` once from where it falls. The model
-  plays the animation by id (`sg_model_get_animation_frames` bounds the
-  frame); the root, facing, scale and shadow are its recorded row's. It
-  holds the fall's last frame from `GP_DEFEAT_FRAMES` (80, where the game
-  warps) and fades over `GP_DEFEAT_FADE_FRAMES`, sound included;
+  still falling, dies where it stood, playing the game's whole death to its
+  last frame, where he lies passed out, and only then fades over
+  `GP_DEFEAT_FADE_FRAMES`, sound included (his ask, 2026-09-28: "play through
+  the full animation, and then fade out when mario's passed out fully
+  dead"). On land that is `act_standing_death`: `MARIO_ANIM_DYING_FALL_OVER`
+  (0x32, 96 frames; he hits the ground at frame 77 and lies still at 95),
+  dead eyes, `SOUND_MARIO_DYING` once; visible 111 frames (3.7 s) in all.
+  Swimming (the submerged action group) it drowns as `act_drowning` does:
+  `MARIO_ANIM_DROWNING_PART1` (0xA5, 80 frames, half-closed eyes), then
+  `PART2` (0xA6, 70 frames, dead eyes), `SOUND_MARIO_DROWNING` once; 165
+  frames (5.5 s). The game has no midair death (Mario dies after he lands),
+  so a ghost defeated in the air plays the land death where it stood. The
+  lengths are the ROM's (`sg_model_get_animation_frames`); each animation is
+  non-looping and its pose last changes on its last frame. Before this the
+  ghost faded from frame 80 (the game's death-warp frame), while the fall
+  was still settling. Torso and head go straight, and what it held and its
+  particles go; the root, facing, scale and shadow are its recorded row's.
+  A reset or state load back into the race still ends it at once, since the
+  ghosts race again from the start;
 - a ghost not drawn then stays hidden.
 
-Targets without a star dance keep what they had: a segment (MIPS Clip, a
-castle route leg) ends at its close with no defeat, and a suspension with no
-dance (a reset) only hides. The Bowser 3 grand star (`ACT_JUMBO_STAR_CUTSCENE`)
-is not a dance and ends no race. The defeat runs on the live `gGlobalTimer`,
+A Bowser 1/2 key ends its segment exactly like a star (his ruling,
+2026-09-28: "The key should work the same way as a normal star"): its grab
+is the same exit dance, and his key reaches playback as the tracker's
+suspension, judged at his x-cam. The Bowser 3 grand star's own cutscene
+(`ACT_JUMBO_STAR_CUTSCENE`, sent with the dances as a race-ending action)
+counts as its dance. Targets without either keep what they had: a segment
+(MIPS Clip, a castle route leg) ends at its close with no defeat, and a
+suspension with no dance (a reset) only hides. The defeat runs on the live `gGlobalTimer`,
 through tuning and the suspension, and happens once per run: a state
 load that restores the run ends it and draws the ghosts at the loaded state,
 and a scene change or the counter running back ends it. Tuning lives in
@@ -751,10 +766,22 @@ clip's last frame to `closed_frame` less that.
 
 A star run closes at x-cam, the dance's first frame of the grab that completes
 it (the exit star for the 100-coin star), so export appends the dance tail for
-any attempt that is not a segment: the rows after the closing frame while Mario stays in a star
-grab/dance action (`STAR_GRAB_ACTIONS`), the game clock advances, and timing
-continuity, star generation and scene hold, at most `DANCE_TAIL_MAX_FRAMES`
-(180, 6 s) past the close. A grab straight into the dance (on the ground, or
+any attempt that is not a segment, and for a segment closed by a Bowser key
+or the grand star (`closed_by` `key_grabbed`): the rows after the closing frame
+while Mario stays in a star grab/dance action or the grand star's cutscene
+(`TAIL_ACTIONS`), the game clock advances, and timing continuity, star
+generation and scene hold, at most `DANCE_TAIL_MAX_FRAMES` (300, 10 s) past
+the close. His Bowser 1 PB (attempt 80000006404, 2026-09-28) closed on idle
+frame 49272 with the key's exit dance from 49273, the same frame-early close
+as a ground star, and its segment kept no tail, so the ghost vanished at the
+key; so do his Bowser 2 saves. The grand star's tail keeps its fall to the
+arena's centre, the landing, the raise and the wing-cap take-off, and ends
+where the scripted flight into the credits begins (the recorded animation
+becomes `MARIO_ANIM_WING_CAP_FLY`); playback holds the last pose and fades. It
+is not finished by animation when cut: its take-off moves Mario by the
+animation's own translation. Whether Usamune's counter keeps running through
+that cutscene is unmeasured (no grand-star grab survives in a pose archive):
+a frozen counter would leave that tail empty. A grab straight into the dance (on the ground, or
 swimming) can close one frame before the first recorded dance frame: the
 star-grab detector back-computes the x-cam from Mario's action timer, which
 the dance counts from 1 on its own first frame, and a snapshot may read a
@@ -777,8 +804,9 @@ to stall for a second or close, or the cap's duration plus a second. A reset
 or state load ends the tail at once. The manifest's `tail_records` counts the
 tail; `check_manifest` binds the attempt's closing frame to the row before it.
 The [archive tests](../tests/test_ghost_archive.py) cover each way a dance
-ends, the cap, waiting for a dance still being captured, and no tail for a
-segment or a close outside the dance.
+ends, the cap, waiting for a dance still being captured, a key segment, the
+grand star up to its flight, and no tail for another segment or a close
+outside the dance.
 
 Recorded pose usability depends on the captured clock and pose components, not
 the recording's framebuffer qualification. The saved `world_status` remains
