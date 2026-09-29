@@ -270,6 +270,7 @@ from sm64_events.core.modes import platform_from_payload
 from sm64_events.detectors.anchors import FULL_RAM_LOADS
 from sm64_events.detectors.counter_epoch import (COURSE_START_AREA,
                                                  LEVEL_LOAD_TAIL_FRAMES)
+from sm64_events.detectors.death import FINISHED_DEAD, finished_dead
 from sm64_events.memory.addresses import (CASTLE_LEVELS, LEVEL_CASTLE_INSIDE,
                                           course_for_level)
 # one-way import: segments.py pulls Attempt lazily at call time, so this
@@ -279,8 +280,8 @@ from sm64_events.tracking.prune import PRUNE_EVENT
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, arms_ambiently,
-    hooks_on_arm, hundred_coin_entity, origin_course, reachable_places,
-    attributable_parent, entity_parents, segment_origin,
+    before_control, hooks_on_arm, hundred_coin_entity, origin_course,
+    reachable_places, attributable_parent, entity_parents, segment_origin,
     speaks_through_a_parent, stage_origin, time_bounds)
 
 
@@ -854,6 +855,9 @@ class Projector:
         self._active_route_id: int | None = None
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
+        # The open attempt's first mario_acted action, held beside the anchor
+        # it belongs to so a new anchor needs no clear (`before_control`).
+        self._first_act: tuple = (None, None)
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
         self._area: int | None = None    # gCurrAreaIndex per area_changed; None = unknown (legacy journals)
         self._open_castle = False        # open attempt was OPENED in a castle hub level; only meaningful while _open is set (the open site re-arms it)
@@ -1182,6 +1186,9 @@ class Projector:
             # memory or count as a grab — nothing happened in the game.
             return [self._imported_attempt(ev)]
         ev = self._corrected_event(ev)
+        if (ev.type == "mario_acted" and self._open is not None
+                and self._first_act[0] is not self._open):
+            self._first_act = (self._open, ev.payload.get("action"))
         prev_level = self._level  # _dispatch may move it (level_changed)
         self._pending_target_retire = None   # transient, one event only
         self._pending_grab_take = None       # transient, one event only
@@ -1436,7 +1443,8 @@ class Projector:
                 # caveat 15's star-side bookkeeping above), so nothing to
                 # update on the way out.
                 continue
-            a = self._stamp_segment_attempt(ev, a, hc)
+            a = self._stamp_segment_attempt(
+                self._segments.close_event_of(a.id, ev), a, hc)
             if (hc is not None and a.outcome == "success"
                     and ev.type == "star_collected"
                     and ev.payload.get("star_id") != hc[1]):
@@ -2263,10 +2271,19 @@ class Projector:
             # castle movement, not a star attempt (addendum): discard
             self._open = None
             return []
-        if self._unacted_open() or not ev.payload.get("mario_acted", True):
+        first_act = self._first_act[1] if self._first_act[0] is self._open else None
+        if (self._unacted_open() or not ev.payload.get("mario_acted", True)
+                or before_control(first_act, ev)
+                or (ev.frame and self._open is not None
+                    and ev.frame == self._open.frame)):
             # no-op reset spam: the player never acted, so the closed
             # attempt isn't a real attempt — drop it (anchor still opens
             # the next one). Old journals lack the key -> default True.
+            # Nor is one that closed on the frame it opened: no game frame
+            # ran between the two anchors (a course entry's zero read twice
+            # by one frame's two polls; his BitDW "Shig (Star)" row, repo
+            # journal id 16243, "reset" in 0 frames -- 2026-09-28, "Need
+            # to make sure that this doesn't happen for ANY stage").
             self._open = None
             return []
         igt = ev.payload.get("igt_frames_before") if ev.type == "practice_reset" else None
@@ -2274,6 +2291,11 @@ class Projector:
                            igt_frames=self._with_carried_igt(igt))
 
     def _close_by_grab(self, ev) -> list[Attempt]:
+        if finished_dead(ev.payload):
+            # Grabbed already dead: the attempt ends as the death it was. A
+            # death event journaled first has closed it, and one death is one
+            # row, so nothing open records nothing.
+            return self._close_by_death(ev) if self._open is not None else []
         grabbed = (ev.payload["course_id"], ev.payload["star_id"])
         first = self._open if self._open is not None else ev
         if grabbed[1] == 6 and grabbed in self._hundred_coin_engines:
@@ -2464,9 +2486,14 @@ class Projector:
         strat = self.strat_by_star.get(star_tgt) if star_tgt else None
         attempt = self._build(
             first=first, close=ev, outcome="death",
-            outcome_detail=ev.payload.get("cause"),
+            # A grab reached already dead (`_close_by_grab`) carries the whole
+            # star's time, so it takes no carried legs (tracking-storage rule)
+            outcome_detail=(ev.payload.get("cause") if ev.type == "death"
+                            else FINISHED_DEAD),
             course_id=course_id, star_id=star_id,
-            igt_frames=self._with_carried_igt(ev.payload.get("igt_frames")),
+            igt_frames=(self._with_carried_igt(ev.payload.get("igt_frames"))
+                        if ev.type == "death"
+                        else ev.payload.get("igt_frames")),
             strat=strat)
         self._open = None
         return [attempt]

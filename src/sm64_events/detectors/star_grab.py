@@ -147,6 +147,7 @@ from dataclasses import dataclass
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
+from sm64_events.detectors.death import ALIVE_KEY, mario_alive
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.memory.addresses import (KEY_GRAB_LEVELS, STAR_DANCE_ACTIONS,
                                           STAR_GRAB_ACTIONS, course_name,
@@ -166,6 +167,7 @@ class _PendingGrab:
     already_collected: bool
     num_stars: int
     coins: int          # held at the grab -- the 100-coin engine's proof on an exit grab
+    alive: bool         # at the grab: a dead Mario's finish is a death (death.py)
     level: int
     grab_frame: int
     grab_igt: int
@@ -363,7 +365,8 @@ class StarGrabDetector:
         return _PendingGrab(
             course_id=curr.last_completed_course, star_id=star_id,
             already_collected=curr.num_stars == prev.num_stars,
-            num_stars=curr.num_stars, coins=curr.coins, level=curr.curr_level,
+            num_stars=curr.num_stars, coins=curr.coins, alive=mario_alive(curr),
+            level=curr.curr_level,
             grab_frame=grab_frame, grab_igt=igt_frames,
             grab_igt_source=source,
         )
@@ -580,6 +583,7 @@ class StarGrabDetector:
                 "grab_frame": grab.grab_frame,
                 "num_stars": grab.num_stars,
                 "coins": grab.coins,
+                ALIVE_KEY: grab.alive,
                 "published_after": grab.published_after,
                 "result_writes": grab.writes or [],
                 "carried_igt": grab.carried_igt,

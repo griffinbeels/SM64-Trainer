@@ -425,6 +425,78 @@ Recording nothing beats recording a wrong time — but it looks like a bug the
 first time it is seen, and the open question about how often a REAL entry
 misses its touch is in the detectors rule.
 
+## A reset always ends the run; only a played one records (2026-09-28)
+
+His rule, stated over the Bowser intros: *"we missed out on detecting resets
+when we should have detected it (or at least marked it as a different run,
+even if we don't show the reset in the practice log)... we just should hide
+all the bullshit resets where I clearly couldn't have done anything"*, and for
+the ghost, *"When we reset, ghost mario resets."* Two questions, answered in
+two places:
+
+- **Does the anchor end the run?** Every real anchor does, and the matcher
+  re-arms at it, which restarts the segment's clock and its ghost. Only an
+  echo (`_anchor_echo`) is invisible. The miss was echo shape 5: a reset during
+  Bowser's arena speech lands within a frame of a textbox, so it read as the
+  textbox's own zero. A reset RESPAWNS Mario and that zero never does
+  (`_respawned`). Measured over the three journals on this machine: 31
+  dialog-recent resets carried a spawn action, all followed by `spawned
+  kind=spawn`; the 47 intro zeroes the shape exists for never respawned.
+- **Does the closed attempt get a row?** Only if he played in it
+  (`SegmentEngine._unacted`; stars: `_close_by_reset`). New readings:
+  `segments.before_control` (his only act was a textbox the game opened, and
+  the reset interrupted it; the detector itself stopped counting those acts,
+  `addresses.NO_CONTROL_ACTIONS`), and the ARRIVAL's own zero (a Usamune menu
+  warp lands 1-6 frames before its counter zero, a course entry 42-59; the
+  zero's acted flag describes the level he left, so it banked "reset 00"06" on
+  opening Bowser 3).
+
+A reset during a course NPC's textbox can land on a poll that still reads
+the textbox, Mario's respawn reaching his action byte 0-2 frames later. The
+engine HOLDS a reset that only the textbox shape called an echo and lets the
+`spawned kind=spawn` that follows confirm it (`_confirm_held_reset`,
+`RESPAWN_CONFIRM_FRAMES`); the projector stamps the rows it closes with the
+reset, not the spawn (`close_event_of`), so a reattributed 100-coin reset
+keeps no in-game time rather than the spawn's 0. Over the three journals 13
+held resets were confirmed (100-coin engines in BoB, SSL, WF, CCM; the BitFS
+and BitS pipes) and 53 textbox zeroes with no respawn after them were dropped,
+the fresh-file intros among them. No row moved: those runs never finished.
+
+**Entering a level is never a reset, on any stage** (his follow-up the same
+night: "Need to make sure that this doesn't happen for ANY stage or any
+course / star"). Two readings do it: the arrival's own zero above, and a star
+attempt that closes on the frame it opened (one frame's two polls reading the
+same zero before the 2026-08-04 action latch; repo journal id 16243, a BitDW
+"Shig (Star)" reset in 0 frames). A teleporter's fade counts as no control
+too (`addresses.NO_CONTROL_ACTIONS`): its fade-in byte lingers for 100+ frames,
+so an L reset whose reload walks the area byte 1 -> 2 -> 1 banked a 22-frame
+"reset" off it (console-support journal id 20182, WDW).
+
+`tools/measure_entry_resets.py` is the guarantee he asked for ("These resets
+are worthless. We need to fix this everywhere"). Read from the journal rather
+than through these rules, it counts, per level and per star/segment, every
+logged reset closed by a level entry's own zero, by an anchor on its own start
+frame, or within 3 s of an anchor-started attempt with no act journaled after
+its first frame (sessions since `mario_acted` carried its action; older ones
+spent their one report on a re-read byte, task 0084). In-course area edges are
+NOT entries: an L reset's own reload walks the area byte before its zero, so
+that shape is what a real reset looks like. Shipped code (`c7b3857b`) vs now:
+live 9 -> 0 (Bowser 1-3 arenas, BitDW and BitFS segments -- including his
+"8 Red Coins (Pipe)" row at live id 7019), repo 4 -> 0, console-support
+3 -> 0. The zero-length reading also drops three SSL duplicate resets from
+July's journal (ids 322, 369, 397; he had already cleared one by hand).
+
+Replay-time: his history re-projects at the next start, no migration.
+Measured with `tools/measure_target_queue.py --before HEAD`: live journal 18
+rows lost and 3 gained (his Bowser 3 run 6071 -> 1516 frames, 3'22"36 ->
+0'50"53; his Bowser 2 run 1713 -> 1000; one Bowser 3 reset re-timed from its
+last intro reset; five phantom arrival resets and ten arena star resets gone);
+repo journal 1 lost (a phantom arrival); console-support 2 lost (a WF 100-coin
+engine's phantom arrival resets). A success's id moves to the reset that really
+started it, so a PB row naming the old id (his superseded 1713) points at an
+attempt that no longer exists. Pinned by `tests/test_bowser_intro.py`, each
+half mutation-proved.
+
 ## A failure only names what he chose, and winning ends everything
 
 Two rulings, 2026-08-05. Full reasoning in the two docstrings named below;

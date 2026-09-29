@@ -20,11 +20,13 @@ class GpuCleanupError(RuntimeError):
 
 
 class GpuBackendUnsupported(RuntimeError):
-    """This producer's adapter can never open the encoder (gpuadapter.py).
+    """This Project64 process can never record through the GPU route: its
+    adapter cannot open the encoder (gpuadapter.py), or it loaded a capture
+    layer from another build (gpuchannel.LayerVersionMismatch).
 
-    A fact about the hardware, not a fault: no retry cooldown is armed, the
-    retry gate remembers it for the producer, and the recorder keeps the
-    desktop grab (sourcefactory.py)."""
+    A fact about that process, not a fault: no retry cooldown is armed, the
+    retry gate remembers it for the producer's birth, and the recorder keeps
+    the desktop grab (sourcefactory.py) until a new Project64 starts."""
 
 
 class GpuSink:
@@ -178,7 +180,7 @@ class GpuCapture:
             self.unsupported = str(exc)[:512]
             if self.retry_gate is not None:
                 self.retry_gate.unsupported(self.producer_identity, self.unsupported)
-            log.warning("GPU recording unavailable on this adapter: %s", self.unsupported)
+            log.warning("GPU recording unavailable for this Project64: %s", self.unsupported)
         except Exception as exc:
             self._failed(exc)
             log.exception("GPU recording stopped")
