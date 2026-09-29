@@ -302,8 +302,11 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
         Measured over the three journals on this machine: 31 dialog-recent
         resets carried a spawn action, every one followed by `spawned
         kind=spawn`; the 47 intro zeroes this shape was written for never
-        respawn. 13 more respawned a frame or two AFTER the anchor's poll
-        (mid-course NPC textboxes, not Bowser) and stay echoes.
+        respawn. 13 more respawned on a LATER poll -- the anchor's own still
+        read the textbox (a course NPC's; the reload reaches the action byte 0
+        to 2 frames on) -- so the engine holds such a reset and lets the
+        `spawned` that follows confirm it (`_confirm_held_reset`); the 53 held
+        textbox zeroes with no respawn after them stay invisible.
     (6) in-level teleporter echo: ev.payload["teleport"] is True -- suppressed
         unconditionally.  The CCM broken bridge, the WDW corner warps and the
         HMC toxic-maze pads relocate Mario inside the SAME area, so no
@@ -508,11 +511,34 @@ def _anchor_outcome(ev, ctx) -> str:
 
 
 def _respawned(ev) -> bool:
-    """Did this reset reload the level -- Mario already back in a spawn action
-    on the anchor's own poll? The game's textbox zero never does that; his L
-    reset does, even mid-textbox (shape 5's exception, 2026-09-28)."""
+    """Did this reset reload the level? The game's textbox zero never does
+    that; his L reset does, even mid-textbox (shape 5's exception,
+    2026-09-28). Either Mario is already in a spawn action on the anchor's
+    own poll, or the engine held the anchor and saw him respawn
+    (`_ConfirmedReset`)."""
     return (ev.type == "practice_reset"
-            and ev.payload.get("action") in SPAWN_ACTIONS)
+            and (ev.payload.get("action") in SPAWN_ACTIONS
+                 or bool(ev.payload.get(_RESPAWN_SEEN))))
+
+
+#: How late Mario's respawn may land after a reset taken during a textbox:
+#: the reload reaches his action byte on the same frame or up to two later
+#: (13 such resets over the three journals here, 2026-09-28: 12 at 0, 1 at 2).
+RESPAWN_CONFIRM_FRAMES = 3
+_RESPAWN_SEEN = "respawn_seen"   # engine-only payload key, never journaled
+
+
+class _ConfirmedReset:
+    """A reset held because it fell in a textbox, confirmed by Mario's
+    respawn: the journal row it was, read as `_respawned`."""
+    __slots__ = ("_row", "payload")
+
+    def __init__(self, row):
+        self._row = row
+        self.payload = {**row.payload, _RESPAWN_SEEN: True}
+
+    def __getattr__(self, name):
+        return getattr(self._row, name)
 
 
 def before_control(first_act: int | None, ev) -> bool:
@@ -3091,6 +3117,19 @@ class SegmentEngine:
         # (action, frame) of the first `mario_acted` since the last anchor, or
         # None. `_unacted` needs WHAT it was and WHEN it came.
         self._period_act: tuple | None = None
+        # A reset that only a textbox called an echo, waiting a few frames for
+        # Mario's respawn to say it was his (`_confirm_held_reset`), with the
+        # anchor period's first act as it stood when it landed.
+        self._held_reset: tuple | None = None
+        # This feed's confirmed reset and the attempts it closed, so the
+        # projector stamps those rows with the reset, not the spawn.
+        self._confirmed: tuple = (None, frozenset())
+
+    def close_event_of(self, attempt_id: int, default):
+        """The event an attempt this feed closed actually ended on: a held
+        reset confirmed on this event, else `default` (the event fed)."""
+        confirmed, ids = self._confirmed
+        return confirmed if attempt_id in ids else default
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
@@ -3274,6 +3313,8 @@ class SegmentEngine:
         # moved. See `_progress_notices` for why it is a diff and not an
         # append at each of the four sites that can move a cursor.
         progress_before = {sid: arm.progress for sid, arm in self._armed.items()}
+        self._confirmed = (None, frozenset())
+        closed.extend(self._confirm_held_reset(Attempt, ev, ctx, notices))
         self._prepare_position(ev, notices)
         self._prepare_capture_clock(ev)
         self._settle_area_entries(ev, notices)
@@ -3290,6 +3331,9 @@ class SegmentEngine:
         # second copy drifting out of sync; full shape taxonomy in the
         # module docstring and the method's own docstring.
         anchor_is_echo = self._anchor_echo(ev)
+        if (ev.type == "practice_reset" and anchor_is_echo
+                and not self._anchor_echo(ev, dialog=False)):
+            self._held_reset = (ev, self._period_act)
         for d in self._feed_defs(ev.type):
             closed.extend(self._feed_definition(
                 Attempt, d, ev, ctx, notices, anchor_is_echo))
@@ -3337,7 +3381,7 @@ class SegmentEngine:
         self._last_igt_zero_frame = None
         self._banked_before_zero = 0
         self._settled_node = self._pending_move = None
-        self._period_act = None
+        self._period_act = self._held_reset = None
 
     def _prepare_position(self, ev, notices) -> None:
         # Drop spent deferred destination-subarea entries (_pending): once an
@@ -3741,7 +3785,7 @@ class SegmentEngine:
                 return t
         return None
 
-    def _anchor_echo(self, ev) -> bool:
+    def _anchor_echo(self, ev, *, dialog: bool = True) -> bool:
         """True when a practice_reset/state_loaded is an INVOLUNTARY IGT-reset
         echo — a door crossing, the post-star save prompt, a textbox/cutscene
         time-stop, a paused-briefly transition co-frame, or an in-level
@@ -3787,7 +3831,7 @@ class SegmentEngine:
             # A reset that RESPAWNED Mario is his, textbox or not: he
             # pressed reset during Bowser's intro speech, the level reloaded,
             # and the run (and its ghost) must start over (2026-09-28).
-            or (ev.payload.get("frames_since_dialog") is not None
+            or (dialog and ev.payload.get("frames_since_dialog") is not None
                 and 0 <= ev.payload["frames_since_dialog"]
                 <= _DIALOG_ECHO_WINDOW
                 and not _respawned(ev))
@@ -3801,6 +3845,39 @@ class SegmentEngine:
             # `_zeroes_usamune_igt` moves the IGT basis and the segment's time
             # falls back to the rta delta rather than measuring from the warp.
             or ev.payload.get("teleport", False))
+
+    def _confirm_held_reset(self, Attempt, ev, ctx, notices) -> list:
+        """Replay a held textbox-time reset as the real one it was.
+
+        The respawn confirms it. A reset taken mid-textbox can land on a poll
+        where Mario's action byte still reads the textbox; the reload reaches
+        it on the same frame or up to two later, and `spawned` says so. His
+        rule, 2026-09-28: every reset splits the run, and "When we reset,
+        ghost mario resets" -- so the held reset closes and re-arms exactly
+        as it would have on its own poll. Anything else arriving first means
+        it was the textbox's own zero (the fresh-file intro's, which follows
+        `spawned kind=intro` instead), and it stays invisible. The reload's
+        own `mario_acted` on the same frames is waited through."""
+        if self._held_reset is None or not ev.frame:
+            return []
+        reset, act = self._held_reset
+        soon = (ev.session_id == reset.session_id
+                and 0 <= ev.frame - reset.frame <= RESPAWN_CONFIRM_FRAMES)
+        if ev.type == "mario_acted" and soon:
+            return []
+        self._held_reset = None
+        if not (soon and ev.type == "spawned"
+                and ev.payload.get("kind") == "spawn"):
+            return []
+        confirmed = _ConfirmedReset(reset)
+        current, self._period_act = self._period_act, act
+        closed = []
+        for d in self._feed_defs(confirmed.type):
+            closed.extend(self._feed_definition(
+                Attempt, d, confirmed, ctx, notices, False))
+        self._period_act = current
+        self._confirmed = (confirmed, frozenset(a.id for a in closed))
+        return closed
 
     def _unacted(self, ev, arm) -> bool:
         """Did this real anchor end an attempt he never PLAYED? Then it
