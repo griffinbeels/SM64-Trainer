@@ -160,6 +160,7 @@ from sm64_events.core.events import Event
 from sm64_events.core.landmark import EngagementWatch, landmark_at
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
+from sm64_events.detectors.death import ALIVE_KEY, mario_alive
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.memory.addresses import (ACT_BBH_ENTER_SPIN,
                                           BBH_ENTER_ACTIONS, BBH_LEVEL,
@@ -335,6 +336,10 @@ class WarpDetector:
                       "area": curr.curr_area, "action": curr.mario_action,
                       "igt_frames": igt_frames, "igt_source": source,
                       "landmark": found.payload() if found else None,
+                      # alive AT THE TOUCH: a dead Mario still fits in a
+                      # pipe (interact_warp has no health check), and the
+                      # death warp he is already riding wins (death.py)
+                      ALIVE_KEY: mario_alive(curr),
                       "wall_time_utc": curr.wall_time_utc}
         if self._destination_is_live(curr):
             return superseded + self._publish(curr.warp_dest_level,
@@ -436,6 +441,7 @@ class WarpDetector:
                                "igt_frames": held["igt_frames"],
                                "igt": format_igt(held["igt_frames"]),
                                "igt_source": held["igt_source"],
+                               ALIVE_KEY: held[ALIVE_KEY],
                                # inert telemetry, the star-grab pattern: the
                                # next latency report is answerable from the
                                # journal instead of from inference

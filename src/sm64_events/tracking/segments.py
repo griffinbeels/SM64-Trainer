@@ -362,6 +362,7 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           world_connections, world_regions)
 from sm64_events.core.landmark import same_landmark
 from sm64_events.detectors.counter_epoch import LEVEL_LOAD_TAIL_FRAMES
+from sm64_events.detectors.death import FINISHED_DEAD, finished_dead
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.detectors.moment import MOMENTS
 # The verb splice ("Open a door" -> "Open") lives with the row labeller and
@@ -4461,6 +4462,13 @@ class SegmentEngine:
 
     def _close(self, Attempt, d, arm: _Arm, ev, outcome, detail, *,
                span_known: bool = True):
+        # A finish Mario reached already dead is a death, whichever end
+        # trigger it matched (his report 2026-09-28: a BitFS lava death flew
+        # on into the pipe and banked 0'48"26). Every success path funnels
+        # through here, so this is the one gate; detectors/death.py owns
+        # what dead means.
+        if outcome == "success" and finished_dead(ev.payload):
+            outcome, detail = "death", FINISHED_DEAD
         # A close event carrying Usamune's own IGT (star/key grab, pipe touch,
         # death) is used verbatim — pause-safe, display-tick aligned, and free
         # of the arm-frame alignment error the wall-frame delta carries; see

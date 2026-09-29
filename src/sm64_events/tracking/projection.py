@@ -270,6 +270,7 @@ from sm64_events.core.modes import platform_from_payload
 from sm64_events.detectors.anchors import FULL_RAM_LOADS
 from sm64_events.detectors.counter_epoch import (COURSE_START_AREA,
                                                  LEVEL_LOAD_TAIL_FRAMES)
+from sm64_events.detectors.death import FINISHED_DEAD, finished_dead
 from sm64_events.memory.addresses import (CASTLE_LEVELS, LEVEL_CASTLE_INSIDE,
                                           course_for_level)
 # one-way import: segments.py pulls Attempt lazily at call time, so this
@@ -2282,6 +2283,11 @@ class Projector:
                            igt_frames=self._with_carried_igt(igt))
 
     def _close_by_grab(self, ev) -> list[Attempt]:
+        if finished_dead(ev.payload):
+            # Grabbed already dead: the attempt ends as the death it was. A
+            # death event journaled first has closed it, and one death is one
+            # row, so nothing open records nothing.
+            return self._close_by_death(ev) if self._open is not None else []
         grabbed = (ev.payload["course_id"], ev.payload["star_id"])
         first = self._open if self._open is not None else ev
         if grabbed[1] == 6 and grabbed in self._hundred_coin_engines:
@@ -2472,9 +2478,14 @@ class Projector:
         strat = self.strat_by_star.get(star_tgt) if star_tgt else None
         attempt = self._build(
             first=first, close=ev, outcome="death",
-            outcome_detail=ev.payload.get("cause"),
+            # A grab reached already dead (`_close_by_grab`) carries the whole
+            # star's time, so it takes no carried legs (tracking-storage rule)
+            outcome_detail=(ev.payload.get("cause") if ev.type == "death"
+                            else FINISHED_DEAD),
             course_id=course_id, star_id=star_id,
-            igt_frames=self._with_carried_igt(ev.payload.get("igt_frames")),
+            igt_frames=(self._with_carried_igt(ev.payload.get("igt_frames"))
+                        if ev.type == "death"
+                        else ev.payload.get("igt_frames")),
             strat=strat)
         self._open = None
         return [attempt]

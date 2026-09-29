@@ -71,7 +71,7 @@ A [[target]] a detection set: the front of the [[target queue]]. The trainer
 holds it until it completes, until you genuinely abandon it (an [[anchor]]
 landing inside a foreign course), or until its own staleness budget expires
 — walking back through a course to redo its start keeps the hold. A
-[[star]] grab, or an automatic pick of a segment armed where you stand (the
+[[star]] grab, or an automatic pick of a [[segment]] armed where you stand (the
 Bowser arena's fight), takes the hand from a stale hooked one, never from
 one the matcher still holds armed — except a hooked [[subsection]], which yields
 to its parent [[star]]'s grab armed or not; a PICKED one holds even
@@ -300,7 +300,7 @@ through the load), you died, or you abandoned it by leaving the area.
 
 What opens an [[attempt]] — a practice [[reset]] or a [[save-state load]]. A
 [[reset]] always ends the [[attempt]] before it and restarts the clock and the
-ghost, but records a row only if you played since the last one: an idle
+[[ghost]], but records a row only if you played since the last one: an idle
 [[reset]], one taken during a textbox or cutscene the game opened (Bowser's
 arena speech), and the zero Usamune takes as you arrive somewhere have no row,
 so none counts against your [[failure rate]]. The move the anchor INTERRUPTED
@@ -1659,9 +1659,14 @@ just the level.
 
 ### Death
 
-Mario dying, which closes the open [[attempt]] with a losing [[outcome]].
+Mario dying, which closes the open [[attempt]] with a losing [[outcome]]. The
+game marks Mario dead three ways: health under one wedge, a dying animation,
+or a death warp already on its way. A finish he reaches while any of those
+holds — a pipe entered mid lava boost, a key grabbed during a void-out — is a
+death too ("finished_dead"), never a success.
 
-- **Lives** — the death detector (`src/sm64_events/detectors/death.py`)
+- **Lives** — the death detector and its alive check
+  (`src/sm64_events/detectors/death.py`)
 
 ### Reset
 
