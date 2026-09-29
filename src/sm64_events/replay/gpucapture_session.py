@@ -39,6 +39,20 @@ log = logging.getLogger("sm64.replay")
 # Distinct from None (stop) and from a successful open tuple.
 _RETRY_OTHER_CODEC = object()
 
+# Lease supervisor reasons (gpudemand.py) that mean the Project64 process is gone.
+_PRODUCER_GONE = frozenset({"producer_closed", "producer_pid_changed", "producer_identity_changed"})
+
+
+def retirement_line(snapshot, cancelled: bool) -> str:
+    """The one INFO line for a normal end of GPU recording, by its cause."""
+    if cancelled:
+        return "GPU recording stopped (recorder stop)"
+    if snapshot.reason in _PRODUCER_GONE:
+        return "Project64 closed; recording stopped"
+    if snapshot.reason == "rom_closed":
+        return "Project64 closed the ROM; recording stopped"
+    return f"GPU capture ended with its producer ({snapshot.reason}); reconnecting"
+
 
 @lru_cache(maxsize=4)
 def _sha256(path):
@@ -315,14 +329,21 @@ class CaptureSession:
             while self._continue():
                 self.timings.measure("tick", self.tick)
                 self.owner.wait(self.settings.poll_s)
+        except gpuchannel.LayerVersionMismatch as exc:
+            # Project64 loaded a capture layer from another build (it was
+            # running when this build's refresh came). No retry can succeed
+            # until it restarts, which is when the refresh installs ours.
+            self.error = str(exc)[:512]
+            raise GpuBackendUnsupported(str(exc)) from exc
         except GpuBackendUnsupported as exc:
             self.error = str(exc)[:512]
             raise  # A verdict about the adapter; GpuCapture routes it, unwrapped.
         except Exception as exc:
             self.error = str(exc)[:512]
-            log.info("GPU capture failure before cleanup: %s", failure_snapshot(
+            # Taken before cleanup; logged only if this is not a normal end.
+            before_cleanup = failure_snapshot(
                 exc, frontier=self.frontier, adapter=self.adapter, output=self.output,
-            ))
+            )
             retired = self.demand.reconcile_lifecycle()
             snapshot = self.demand.snapshot
             cancelled = (
@@ -335,8 +356,9 @@ class CaptureSession:
                 # Explicit producer/ROM retirement or recorder cancellation
                 # avoids retry penalties; channel closure alone never does.
                 # Cleanup below must still prove its own resource disposal.
-                log.info("GPU capture retired during media operation: %s", self.error)
+                log.info(retirement_line(snapshot, cancelled and not retired))
                 return
+            log.info("GPU capture failure before cleanup: %s", before_cleanup)
             # GpuCapture logs once at the owning boundary. Preserve the lease
             # supervisor's reason as well as the media symptom; native channel
             # closure can precede that supervisor's next bounded poll.

@@ -336,6 +336,20 @@ class Poller:
     #: the tick reads the snapshot regardless, so a dead emulator detaches
     UNREADABLE_TICKS_BEFORE_READ = 125
 
+    def _log_detach(self) -> None:
+        """Project64 closing is a normal end (INFO). A live Project64 whose
+        memory stopped reading, or a reader that cannot tell, keeps the
+        warning."""
+        alive = getattr(self.memory, "alive", None)
+        try:
+            exited = alive is not None and not alive()
+        except (OSError, RuntimeError):
+            exited = False
+        if exited:
+            log.info("Project64 closed; tracking detached")
+        else:
+            log.warning("lost emulator; detaching")
+
     @measured("poller.tick", interval=True)
     async def tick(self) -> None:
         async with self._tick_lock:
@@ -357,7 +371,7 @@ class Poller:
             # counter, never from the sampler's guess before the read.
             self._snapshot_frame = curr.global_timer
         except MemoryReadError:
-            log.warning("lost emulator; detaching")
+            self._log_detach()
             self._break_input_capture()
             self.memory.detach()
             self._prev = None

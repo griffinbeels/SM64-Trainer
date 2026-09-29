@@ -1171,7 +1171,8 @@ once per adapter and driver version, before any [[encoder helper]] starts
 where the facts allow. The [[recorder]] then keeps the desktop grab for that
 Project64, its status says why, and the [[setup screen]] accepts the desktop's
 written pictures. Until 2026-09-27 such a machine retried GPU capture every
-10-60 s forever and recorded nothing.
+10-60 s forever and recorded nothing. A Project64 still running a [[capture
+layer]] from another build takes the same path until it restarts (2026-09-28).
 
 - **Lives** -- `src/sm64_events/replay/gpuadapter.py` (the facts),
   `src/sm64_events/replay/gpusettings.py` (the per-process memo),
