@@ -117,3 +117,46 @@ def test_a_zero_read_twice_on_one_frame_is_not_a_reset(corpus):
             ("mario_acted", 33246, {}),
             ("spawned", 33246, {"level": 17, "kind": "spawn"})]
     assert resets(defs, rows, target={"course_id": 16, "star_id": 0}) == []
+
+
+def test_walking_into_bitdw_for_the_reds_is_not_a_reset(corpus):
+    """Live journal ids 7015-7020, session 29: through the lobby's BitDW
+    entrance with "8 Red Coins (Pipe)" auto-selected, the zero two frames
+    after the arrival. Before: "#14 reset 00"06 in" on that card."""
+    defs, ids = corpus
+    reds = ids["seg:reds->pipe:bitdw"]
+    rows = [("mario_acted", 108705, {"action": 16779404}),
+            ("warp_entered", 109077, {"level": 6, "area": 1, "action": 4864,
+                                      "to": 17, "igt_frames": 394}),
+            ("level_changed", 109100, {"from": 6, "to": 17, "from_area": 1,
+                                       "igt_frames": 415}),
+            ("area_changed", 109100, {"level": 17, "from": 1, "to": 1,
+                                      "igt_frames": 415}),
+            ("target_set", 0, {"kind": "segment", "segment_id": reds, "auto": True}),
+            anchor(109102, 414, 6450, 4864, 2),
+            ("spawned", 109102, {"level": 17, "kind": "spawn", "area": 1,
+                                 "igt_frames": 0})]
+    assert resets(defs, rows) == []
+
+
+def test_a_resets_own_reload_through_a_teleporters_fade_is_not_a_second_reset(corpus):
+    """console-support journal ids 20178-20187: one L reset in WDW whose
+    reload walks the area byte 1 -> 2 -> 1, zeroing the counter at each step,
+    while Mario's teleporter fade-in byte still lingers. The fade-in was
+    counted as an act, so the second zero banked a 22-frame "reset" of the
+    star he had just grabbed. His only act was the game's own fade."""
+    defs, _ = corpus
+    fade_out, fade_in = 4918, 4919
+    rows = [("warp_entered", 634490, {"level": 11, "area": 1, "action": fade_out,
+                                      "to": 11, "igt_frames": 219}),
+            anchor(634532, 257, fade_in, fade_out, 2, teleport=True),
+            ("mario_acted", 634565, {"action": 67109952}),
+            ("star_collected", 634744, {"course_id": 11, "star_id": 0,
+                                        "igt_frames": 471, "igt_source": "counter"}),
+            anchor(635534, 312, 4866, 4866, 0),
+            ("mario_acted", 635534, {"action": fade_in}),
+            ("area_changed", 635556, {"level": 11, "from": 1, "to": 2}),
+            anchor(635556, 16, fade_in, fade_in, 7),
+            ("area_changed", 635603, {"level": 11, "from": 2, "to": 1}),
+            anchor(635603, 16, fade_in, fade_in, 46)]
+    assert resets(defs, rows, target={"course_id": 11, "star_id": 0}) == []
