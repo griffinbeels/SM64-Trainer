@@ -142,7 +142,11 @@ Detail: [docs/rules/ui-practice.md#the-active-entity-leads-and-a-target-only-car
 `activeHasPlayed`). The slot is resolved **inside `PracticeLog` against the
 list it renders** by `autoOpenKey(sections, activeKey, playedKeys)`, with
 frozen `playedKeys`; an empty active entity falls back to the most recently
-played card on screen. **The practice log leads the page in the DOM at every
+played card on screen. The active entity takes the slot on its own only while
+it LEADS (`nextActivation`): he picked it (`target.js::useTargetPick`, an
+accepted gesture), the page opened on it, or it became the newest thing played.
+When the game moves the target, the card he was reading stays open until the
+new target's first row (round 13; `tests/test_ui_log_auto_open_render.py`). **The practice log leads the page in the DOM at every
 width — no CSS `order` on the page's cards** (`tests/test_practice_page_order.py`).
 Detail: [docs/rules/ui-practice.md#leading-the-list-and-holding-the-open-slot-are-two-different-rules](../../docs/rules/ui-practice.md#leading-the-list-and-holding-the-open-slot-are-two-different-rules).
 

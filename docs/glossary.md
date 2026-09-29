@@ -2224,7 +2224,10 @@ stand where you set it), each carrying its own [[personal best]], its
 [[caveat mark]] and its own [[attempt]]s. A [[subsection]] draws inside its
 parent's card rather than beside it, indented and folding with it, so the
 piece you just ran names the [[star]] it belongs to. It highlights the card
-for whatever you are practicing right now. A Bowser course's Reds/Pipe pair is
+for whatever you are practicing right now, and keeps one card open: the
+[[target]] you picked, or else the newest thing you played, so when the game
+moves the [[target]] for you the card you were reading stays open until the
+new [[target]] records its first [[attempt]]. A Bowser course's Reds/Pipe pair is
 the worked example: the reds [[star]] is a [[subsection]] of its paired
 pipe-entry [[segment]], so grabbing it draws its own card nested inside the
 movement's rather than beside it — never a toggle hiding either half.
