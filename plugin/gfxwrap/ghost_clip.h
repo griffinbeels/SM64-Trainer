@@ -16,6 +16,14 @@ enum gclip_clock_kind { GCLIP_STAR_CLOCK = 1u, GCLIP_SEGMENT_CLOCK = 2u };
  * sets it; the 100-coin star's clip does too although its clock is its exit
  * segment's. */
 #define GCLIP_DANCE_TAIL 1u
+/* A segment clip whose origin row reads at most this began at Usamune's own
+ * counter zero (the capture clock's near-zero: ghost_layout.py configures it
+ * from anchors.NEAR_ZERO_IGT, and tests/test_ghost_clip.py pins the two).
+ * Raced from a live origin at a zero too, playback shifts it by the two
+ * counters' difference (ghost_playback.cpp zero_shift), so both runs meet on
+ * the counter rather than on the frame the tracker saw each zero -- which
+ * lags a level load by up to two frames. */
+#define GCLIP_ZERO_RAW 30u
 #pragma pack(push, 4)
 typedef struct gclip_header {
     char magic[8];

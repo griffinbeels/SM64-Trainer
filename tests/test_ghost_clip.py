@@ -398,3 +398,14 @@ def test_archive_rows_saved_before_particles_still_read():
     frame = frame_from_bytes(row)
     assert frame.playable and frame.particles == 0 and len(frame.raw) == RECORD_BYTES
     assert frame.raw[:16][8:] == row[8:16] and frame.raw[24:652] == row[24:652]
+
+
+def test_the_clip_zero_limit_is_the_live_clocks_near_zero():
+    """A segment ghost is timed on the counter when both its recording and his
+    live run began at Usamune's zero (ghost_playback.cpp zero_shift). The
+    renderer judges the recording by GCLIP_ZERO_RAW and the live origin by the
+    capture clock's near-zero, which memory/ghost_layout.py configures from
+    NEAR_ZERO_IGT; the two must be one number."""
+    from sm64_events.detectors.anchors import NEAR_ZERO_IGT
+    from sm64_events.ghost.native_layout import ZERO_RAW
+    assert ZERO_RAW == NEAR_ZERO_IGT

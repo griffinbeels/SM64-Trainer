@@ -378,8 +378,29 @@ the ghost. Resolution is retained for the immutable command.
 
 [ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) preloads each clip and
 selects at the renderer boundary using live elapsed minus owner-origin elapsed.
-A star adds its origin raw IGT; a segment starts at zero. The timing nudge applies
-to that coordinate, after any restart alignment.
+A star adds its origin raw IGT; a segment starts at zero. The timing nudge
+applies to that coordinate, after the ghost's alignment: a star's restart
+alignment (below), or a segment's zero alignment.
+
+### Zero alignment
+
+A segment ghost recorded from Usamune's counter zero (its origin row reads at
+most `GCLIP_ZERO_RAW`, the near-zero) and raced from a live origin at a zero
+too (`GO_ZERO_CLOCK`) is shifted by live origin raw less recorded origin raw,
+once per attempt (`zero_shift`). Both runs of a scripted start then meet on the
+counter, whichever frame the tracker noticed each zero. Any other segment
+keeps the elapsed coordinate.
+
+Why (2026-09-29, his Bowser 1 drop-in: "It SEEMS like they literally fall
+faster than real mario"): the tracker sees a level load's counter zero one or
+two frames late (the capture's counter restarts on the level-change frame, the
+anchor lands after it) and a reset's on its own frame. His PB was recorded
+from a pipe arrival, so its first row read 3 while his resets start at 1. On
+the elapsed coordinate the scripted fall ran two frames ahead, a Mario-height
+below him: the pose archive's 8 reset drop-ins that night each matched the PB
+exactly at a shift of two frames, and his one arrival at zero. 7 of the 30
+saved segment clips began at counter 2 or 3 rather than 1. A star was
+never affected: its coordinate has always been the counter.
 
 ### Restart alignment
 

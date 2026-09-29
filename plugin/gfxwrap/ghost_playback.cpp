@@ -86,7 +86,8 @@ Clip *bound[GP_GHOSTS]{};            // request order; null until adopted
 // change, a toggle or a capture restart re-adopting clips elsewhere aligns
 // each clip to the attempt's scene.
 struct Attempt {uint64_t sequence;int16_t level,area;bool known;} attempt{};
-uint64_t align[GP_GHOSTS]{}, aligned_attempt[GP_GHOSTS]{};
+int64_t align[GP_GHOSTS]{}; // restart_shift for a star, zero_shift for a segment
+uint64_t aligned_attempt[GP_GHOSTS]{};
 uint8_t aligned_id[GP_GHOSTS][16]{};
 bool aligned[GP_GHOSTS]{};
 gp_request active_request{};
@@ -750,6 +751,19 @@ uint64_t restart_shift(const Clip& clip,int16_t level,int16_t area) {
     }
     return 0;
 }
+// A segment ghost recorded from Usamune's zero (its origin row reads at most
+// GCLIP_ZERO_RAW), raced from a live origin at a zero too (GO_ZERO_CLOCK):
+// both runs of a scripted start are aligned on the counter. The tracker sees
+// a level load's zero one or two frames late and a reset's on its own frame,
+// so the elapsed coordinate matched his pipe-entry PB's third drop-in frame
+// with his reset's first, and the ghost fell two frames ahead of him
+// (2026-09-29). live_raw is the counter at the live origin; a start that is
+// not a zero on either side keeps the elapsed coordinate (shift 0).
+int64_t zero_shift(const Clip& clip,const gp_origin& origin,int64_t live_raw) {
+    if(clip.header.clock_kind!=GCLIP_SEGMENT_CLOCK || !(origin.flags&GO_ZERO_CLOCK)
+            || clip.header.origin_raw>GCLIP_ZERO_RAW || live_raw<0 || live_raw>GCLIP_ZERO_RAW)return 0;
+    return live_raw-int64_t(clip.header.origin_raw);
+}
 // One ghost against the shared live coordinate. Hides only this ghost.
 // Visible ghost: hand over every record passed since its last drawn one.
 // Backward moves and long jumps only re-establish where it is. twins: live
@@ -1269,23 +1283,32 @@ void plan_list(const gc_sample& live) {
                     continue;
                 aligned[i]=true;aligned_attempt[i]=attempt.sequence;
                 std::memcpy(aligned_id[i],bound[i]->header.clip_id,16);
-                align[i]=origin.kind==GO_STAR?restart_shift(*bound[i],attempt.level,attempt.area):0;
+                // The counter at the live origin: raw now less the coordinate
+                // run since (a restore's coordinate is the same raw-less-origin
+                // relation, ghost_origin.cpp's direct offset). A ghost first
+                // shown after the counter restarted reads it below zero and
+                // keeps the elapsed coordinate.
+                align[i]=origin.kind==GO_STAR?int64_t(restart_shift(*bound[i],attempt.level,attempt.area))
+                    :zero_shift(*bound[i],origin,int64_t(live.clock.raw_igt)-int64_t(frame.target));
             }
         }
     }
     if(defeat.active)sound_control(true,active_request.volume);
     for(uint32_t i=0;i<GP_GHOSTS && i<active_request.clip_count;++i) {
         auto &choice=list.ghost[i];
-        // Restart alignment, then the timing nudge, on this ghost's coordinate.
+        // Its alignment (restart or zero), then the timing nudge, on this
+        // ghost's coordinate: one signed move, so a shift below zero and a
+        // nudge above it still meet exactly.
         Coordinate mine=frame;
         if(active_request.mode==GP_FOLLOW) {
-            const uint64_t shift=bound[i] && aligned[i]?align[i]:0;
-            if(mine.target>UINT64_MAX-shift-600) {decide_all(GP_NO_CLOCK);return;}
-            mine.target+=shift;
-            if(active_request.nudge_frames<0) {
-                const auto amount=uint32_t(-active_request.nudge_frames);
+            const int64_t delta=(bound[i] && aligned[i]?align[i]:0)+active_request.nudge_frames;
+            if(delta>=0) {
+                if(mine.target>UINT64_MAX-uint64_t(delta)-600) {decide_all(GP_NO_CLOCK);return;}
+                mine.target+=uint64_t(delta);
+            } else {
+                const auto amount=uint64_t(-delta);
                 if(mine.target<amount){mine.below_zero=true;mine.target=0;}else mine.target-=amount;
-            } else mine.target+=uint32_t(active_request.nudge_frames);
+            }
         }
         uint32_t result=GP_STAR_ENDED;
         if(!defeat.active)result=choose(i,mine,live,choice);
