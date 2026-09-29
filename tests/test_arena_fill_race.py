@@ -136,3 +136,124 @@ def test_a_live_hooked_head_still_refuses_the_fill(corpus):
     p.feed(ev(4, "target_set", 0, {"kind": "segment", "segment_id": no_reds,
                                    "auto": True}))
     assert p.target == ("segment", reds)
+
+
+# -- the arrival area settling (2026-09-29) --------------------------------
+#
+# Live, 2026-09-29 (journal ids 7416-7434): *"the bowser stage doesn't
+# immediately detect the Ghost? ... I clearly have a PB here, but I'm being
+# told that the ghost overlay can't be found yet?"* The fill landed this time
+# (the stale head yielded, above), and the hand emptied anyway, one event
+# BEFORE the arrival reset: an arrival from outside an area 1 lands in that
+# area and settles to area 1 two frames later, which disarms the fight until
+# the reset re-arms it on the same frame. The fill had counted its own
+# journaled frame 0 as a sighting, so that disarm measured 24,547 frames of
+# staleness and expired it. The page re-offers only when it sees the hand
+# holding the fight and then not, and 107 ms was too short to paint it.
+# Every arrival above is from an area 1, which is why they never saw it.
+
+
+def arena_reset(id, frame, *, acted, paused, prev_area):
+    # The shape of journal ids 7425 and 7428, verbatim where it matters.
+    return EventRow(id=id, session_id=1, seq=id, type="practice_reset",
+                    frame=frame, wall_time_utc=W,
+                    payload={"igt_frames_before": 123, "mario_acted": acted,
+                             "paused_frames_before": paused,
+                             "acted_tracking": True, "action": 6436,
+                             "save_pending": False, "warp_op": 18,
+                             "frames_since_warp_op": 1146, "area": 1,
+                             "prev_area": prev_area, "area_load": False,
+                             "teleport": False, "loads_journaled": True})
+
+
+def test_the_bowser_2_fill_outlives_the_arrival_area_settling(corpus):
+    """His run, event for event: a BitFS pipe entry hooked by the course
+    row's fill, a lava death warp to the castle, a level select from
+    upstairs (area 3) into the Bowser 2 arena, the fill, the settle, the
+    reset, and a 33"13 key. A live clock tick between the settle and the
+    reset must not expire the fill either."""
+    defs, ids = corpus
+    pipe, fight = ids["seg:bitfs-pipe"], ids["seg:bowser-2"]
+    p = Projector(segments=defs)
+    p.feed(ev(7351, "level_changed", 18798, {"from": 6, "to": 19,
+                                             "from_area": 3}))
+    p.feed(ev(7352, "area_changed", 18798, {"level": 19, "from": 3, "to": 1,
+                                            "from_transient": True}))
+    p.feed(arena_reset(7353, 18798, acted=True, paused=99, prev_area=3))
+    p.feed(ev(7355, "target_set", 0, {"kind": "segment", "segment_id": pipe,
+                                      "auto": True}))
+    p.feed(ev(7413, "jump", 22704, {"level": 19, "kind": "triple"}))
+    assert p.target == ("segment", pipe) and p._target_hooked
+    p.feed(ev(7414, "death", 23351, {"cause": "lava", "level": 19}))
+    p.feed(ev(7415, "warp_entered", 23396, {"level": 19, "area": 1, "to": 6,
+                                            "mario_alive": False}))
+    p.feed(ev(7416, "level_changed", 23401, {"from": 19, "to": 6,
+                                             "from_area": 1}))
+    p.feed(ev(7417, "area_changed", 23401, {"level": 6, "from": 1, "to": 1,
+                                            "from_transient": True}))
+    p.feed(ev(7418, "area_changed", 23402, {"level": 6, "from": 1, "to": 3}))
+    p.feed(ev(7420, "mario_acted", 23444, {"action": 132192}))
+    assert p.target == ("segment", pipe) and pipe not in p.armed_segment_ids(), \
+        "precondition: a stale hooked head carried to the level select"
+
+    p.feed(ev(7421, "level_changed", 24545, {"from": 6, "to": 33,
+                                             "from_area": 3}))
+    p.feed(ev(7422, "area_changed", 24545, {"level": 33, "from": 3, "to": 3,
+                                            "from_transient": True}))
+    assert fight in p.armed_segment_ids()
+    p.feed(ev(7423, "target_set", 0, {"kind": "segment", "segment_id": fight,
+                                      "auto": True}))
+    assert p.target == ("segment", fight)
+    p.feed(ev(7424, "area_changed", 24547, {"level": 33, "from": 3, "to": 1}))
+    assert fight not in p.armed_segment_ids(), \
+        "precondition: the settle disarms the fight until the reset"
+    p.settle(24547)
+    assert p.target == ("segment", fight), \
+        "the settle emptied the hand: the ghost has no target for the fight"
+    p.feed(arena_reset(7425, 24547, acted=True, paused=1022, prev_area=3))
+    p.feed(ev(7426, "spawned", 24547, {"level": 33, "kind": "spawn",
+                                       "area": 1}))
+    assert fight in p.armed_segment_ids()
+    assert p.target == ("segment", fight)
+
+    p.feed(ev(7427, "moment_reached", 24592, {"kind": "textbox", "level": 33,
+                                              "area": 1}))
+    p.feed(arena_reset(7428, 25006, acted=False, paused=0, prev_area=1))
+    p.feed(ev(7431, "mario_acted", 26981, {"action": 8651858}))
+    assert p.target == ("segment", fight)
+    closed = p.feed(ev(7434, "key_grabbed", 27677, {"level": 33,
+                                                    "which": "bitfs",
+                                                    "igt_frames": 994}))
+    assert any(a.segment_id == fight and a.outcome == "success"
+               for a in closed)
+    assert p.target == ("segment", fight)
+
+
+@pytest.mark.parametrize("arena,bowser", [(30, 1), (33, 2), (34, 3)])
+@pytest.mark.parametrize("fill_first", [True, False],
+                         ids=["fill-then-settle", "settle-then-fill"])
+def test_every_arena_keeps_its_fill_through_a_settling_arrival(
+        corpus, arena, bowser, fill_first):
+    """The same arrival, empty-handed, into each arena. The fill lands
+    before the settle and the reset or after both, never between (one poll
+    carries the pair), and the fight holds the hand either way."""
+    defs, ids = corpus
+    fight = ids[f"seg:bowser-{bowser}"]
+    p = Projector(segments=defs)
+    p.feed(ev(1, "level_changed", 23401, {"from": 19, "to": LEVEL_CASTLE,
+                                          "from_area": 1}))
+    p.feed(ev(2, "area_changed", 23402, {"level": LEVEL_CASTLE, "from": 1,
+                                         "to": 3}))
+    p.feed(ev(3, "level_changed", 24545, {"from": LEVEL_CASTLE, "to": arena,
+                                          "from_area": 3}))
+    p.feed(ev(4, "area_changed", 24545, {"level": arena, "from": 3, "to": 3,
+                                         "from_transient": True}))
+    fill = [ev(5, "target_set", 0, {"kind": "segment", "segment_id": fight,
+                                    "auto": True})]
+    arrival = [ev(6, "area_changed", 24547, {"level": arena, "from": 3,
+                                             "to": 1}),
+               arena_reset(7, 24547, acted=True, paused=1022, prev_area=3)]
+    for writer in fill + arrival if fill_first else arrival + fill:
+        p.feed(writer)
+    assert fight in p.armed_segment_ids()
+    assert p.target == ("segment", fight)
