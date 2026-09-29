@@ -298,7 +298,17 @@ retry only after proved cleanup, with 10/20/40/60-second capped delays. A short
 productive prefix or capability refresh does not waive the delay. Discovery,
 storage-maintenance and audio-worker faults have their own bounded retry delays.
 New process identity and observed normal ROM lifecycle permit a fresh request.
-Native reason9 (resources exhausted) is process-lifetime sticky: the user must
+Closing the ROM or Project64 is such a normal end, and its whole log is one
+INFO line ("Project64 closed the ROM; recording stopped" or "Project64
+closed; recording stopped"). The plugin revokes GPU capability a moment before
+it marks the ROM closed (`gfxwrap.c` RomClosed), so the lease supervisor reads
+the ROM before the capability and waits up to 120 ms for the ROM or process to
+close before calling a capability loss a fault (`gpudemand.CLOSING_GRACE_S`);
+until 2026-09-28 every close raised "GPU recording stopped" with a traceback.
+A Project64 that loaded a capture layer from another build (`LayerVersionMismatch`)
+is a verdict for that process, like an unsupported adapter: one WARNING and
+the desktop grab until it restarts. `tests/test_pj64_lifecycle.py` holds one
+case per open/close order. Native reason9 (resources exhausted) is process-lifetime sticky: the user must
 fully close and reopen Project64. A ROM reload/control generation change cannot
 prove recovery, so the retry gate retains that refusal for the same process birth.
 

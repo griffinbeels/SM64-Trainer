@@ -167,6 +167,7 @@ class NativeCapture:
         self._channel = None
         self._pending_cleanup = None
         self._warn = RateLimitedWarning(log)
+        self._absent = False  # one INFO line per absence of the channel
         self._refused, self._refused_reason = 0, None
         self._hooks, self._hook_summary = HookCost(log), None
 
@@ -203,6 +204,18 @@ class NativeCapture:
             return dict(self._status)
         finally:
             self._lock.release()
+
+    def _note_absent(self, error):
+        """No channel because Project64 is closed, not rendering a ROM yet, or
+        just closed it (native_channel.py raises FileNotFoundError and
+        ProcessLookupError for exactly those). Normal, so one INFO line per
+        absence and DEBUG while it lasts, instead of a WARNING a minute."""
+        if self._absent:
+            log.debug("native ghost channel still absent: %s", error)
+            return
+        self._absent = True
+        log.info("native ghost channel absent (Project64 closed or no ROM rendering yet); "
+                 "waiting for it: %s", error)
 
     def _report(self, **status):
         with self._lock:
@@ -268,6 +281,7 @@ class NativeCapture:
                         self._refused_reason = str(error)
                         self._warn("Mario poses refused by the archive; batch dropped", str(error))
                 self._hook_summary = self._hooks.observe(status) or self._hook_summary
+                self._absent = False
                 self._report(available=True, reason=status.reason, state=status.state,
                              dropped=status.dropped, producer=producer,
                              playback_state=status.playback_state,
@@ -293,9 +307,11 @@ class NativeCapture:
                 while not self._close_channel():
                     threading.Event().wait(0.25)
             except Exception as error:  # noqa: BLE001 - this thread also records every attempt's poses
-                if not isinstance(error, (OSError, RuntimeError, ValueError)):
+                if isinstance(error, (FileNotFoundError, ProcessLookupError)):
+                    self._note_absent(error)
+                elif not isinstance(error, (OSError, RuntimeError, ValueError)):
                     log.exception("native ghost channel failed; reconnecting")
-                else:  # expected shapes (no Project64, a closed channel), but never silent
+                else:  # a channel that exists and misbehaves: never silent
                     self._warn("native ghost channel unavailable; reconnecting",
                                f"{type(error).__name__}: {error}")
                 self._report(available=False, reason=str(error))
