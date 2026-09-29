@@ -1226,6 +1226,7 @@ int main() {
             check(step(49,GP_READY,{GP_READY},{}) && selected_frame==29 && step(50,GP_READY,{GP_READY},{})
                   && selected_frame==30 && selected_x==6949 && poses[0].opacity==1,
                   "a key grab dances like a star, on past its recording");
+            check(step(61,GP_READY,{GP_READY},{GP_DANCE_SOUND}),"with its voice");
             check(step(130,GP_READY,{GP_READY},{}) && poses[0].opacity==1 && step(131,GP_READY,{GP_READY},{})
                   && fading(1),"to the same end, then fades");
             Clip rival_key=recorded_dance(70,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
