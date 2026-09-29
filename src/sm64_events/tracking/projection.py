@@ -1335,9 +1335,25 @@ class Projector:
         lone-option fill, deciding on the arrival that returned it, can
         still see one: a fill for something not even armed is refused. The
         arena row's fill, the one allowed to replace a held pick
-        (2026-08-05), offers the fight its own arrival armed."""
+        (2026-08-05), offers the fight its own arrival armed.
+
+        A STALE hooked head yields to a fill naming a segment ARMED right
+        now, as it yields to a valid star grab (`_grab_may_take_the_hand`):
+        a run in progress here beats a disarmed detection carried in. Live,
+        2026-09-28: the hand held the BitDW reds hooked from a fill, he warped
+        straight into the Bowser 1 arena, the arena's fill for the armed
+        fight was refused, and the reds head forfeited on the arena's own
+        reset two frames later -- an empty hand for the whole fight, so the
+        ghost had nothing to play ("Checking whether this has a run...")
+        until the key grab followed onto the fight. The client re-offers only
+        on a new arrival, so the order the two writers happened to land in
+        decided the attempt."""
         if self.target is not None and self._target_hooked:
-            return True
+            armed = self._segments.armed_ids()
+            stale_head = (self.target[0] == "segment"
+                          and self.target[1] not in armed)
+            return not (stale_head and ev.payload.get("kind") == "segment"
+                        and ev.payload.get("segment_id") in armed)
         return (self.target is not None and self.target == self._returned_pick
                 and self.target == self._picked_target
                 and ev.payload.get("kind") == "segment"
@@ -1998,7 +2014,9 @@ class Projector:
             # option displace a hooked head, since a place offering exactly
             # one practicable thing is a better detection than a stale one
             # carried in. That reverses a ruling and earns its own measured
-            # round rather than riding on this one.
+            # round rather than riding on this one. (2026-09-28: the arena
+            # half landed at the fill instead, measured -- a STALE hooked
+            # head yields to the arena's armed fight, `_declines_fill`.)
             #
             # ADDED rather than substituted, and the measurement is the reason.
             # `places` contains the origin, so swapping the comparison for it
@@ -2058,9 +2076,11 @@ class Projector:
             # arena, 2026-08-05) — what none of them can see is a HOOKED
             # head the server promoted between their read and their write,
             # and a detection that won its turn must not lose it to a late
-            # offer (round 19). Dropped rather than queued: the queue holds
-            # armed detections, a fill is an offer, and the client re-offers
-            # whenever the hand empties.
+            # offer (round 19) -- unless that head has gone stale and the
+            # offer names something armed here (`_declines_fill`). Dropped
+            # rather than queued: the queue holds armed detections and a fill
+            # is an offer. The arena row re-offers on its next ARRIVAL, not
+            # when the hand empties, so a refusal here lasts the attempt.
             auto = bool(ev.payload.get("auto"))
             if auto and self._declines_fill(ev):
                 return []

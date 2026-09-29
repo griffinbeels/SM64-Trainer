@@ -141,6 +141,28 @@ bouncing off stale hooks read as star→segment ×8 / star→none ×3 in his rea
 journal and would have left grind failures unattributed (prune food); after
 the fix those shapes measure ZERO.
 
+**A stale hooked head also YIELDS to a fill naming a segment armed right
+now (2026-09-28, `_declines_fill`).** Live report: *"I just got a gold for
+Bowser 1, but the ghost wasn't available to be used. Once I triggered
+another successful attempt, THEN the ghost appeared."* The hand held the
+BitDW reds movement, hooked by the Bowser row's fill; he level-selected
+straight into the arena, which cancelled it without completing it. The
+arena row's fill for the armed fight (journal id 6424) was refused because a
+hooked head held its turn, and the arena's own arrival reset two frames
+later (6425) forfeited that head — an empty hand for the whole fight, so the
+ghost had no target, and any fight reset would have been dropped as
+untargeted. When the reset landed FIRST (his previous entry), the fill found
+an empty hand and won. The client does not re-offer when the hand empties,
+only on a new arrival, so the order decided the attempt. An ARMED head still
+refuses every fill, and an unarmed fill still loses to any hooked head.
+Measured with `tools/measure_target_queue.py --before HEAD` over the three
+journals on this machine: 3 / 4 / 48 differing readings, every one a Bowser
+fight taking the hand in its own arena (the reported episode, a Bowser 3 he
+had to tap himself at id 4452, and arena-to-arena warps where the previous
+fight held the hand until its budget expired); **0 attempt rows lost, gained
+or changed** across 3,812. Pinned for all three arenas in both orders by
+`tests/test_arena_fill_race.py`.
+
 **Measured before shipping** (`tools/measure_target_queue.py` — replays
 every reachable journal under the shipped code at `2f19630` and the working
 tree, diffing every target reading and every attempt row): **0 rows lost,
