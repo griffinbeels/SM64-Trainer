@@ -124,6 +124,7 @@ bool dance_voiced[GP_GHOSTS]{};
 struct Defeat {
     bool active=false,spent=false;
     uint32_t start=0,hold=0; // live gGlobalTimer at the trigger; the longest death
+    uint16_t clock=0;        // live gAreaUpdateCounter at the trigger: the defeat's own clock
     int32_t fall=0,drown=0,limp=0; // the death animations' lengths in this ROM
     int16_t level=0,area=0;
     bool loser[GP_GHOSTS]{},winner[GP_GHOSTS]{},cued[GP_GHOSTS]{},water[GP_GHOSTS]{};
@@ -1187,7 +1188,7 @@ bool start_defeat(const gc_sample& live) {
         }
     }
     if(!any)return false;
-    defeat.active=true;defeat.start=live.global_timer;
+    defeat.active=true;defeat.start=live.global_timer;defeat.clock=live.area_update_counter;
     defeat.level=live.level;defeat.area=live.area;
     return true;
 }
@@ -1210,12 +1211,16 @@ void plan_list(const gc_sample& live) {
     if(dancing && !dance_entry.dancing && (live.clock.valid&GCC_ELAPSED_VALID))
         dance_entry={true,true,live.clock.elapsed_frames,live.clock.continuity_id};
     dance_entry.dancing=dancing;
-    // A running defeat goes on by the live frame counter alone: the game's
-    // clock stops at his grab. A load (the counter runs back), a scene change
-    // or its end stops it.
+    // A running defeat goes on by the game's own world clock
+    // (gAreaUpdateCounter), which stands still while the game is paused or in
+    // Usamune's menu; gGlobalTimer runs on there, and ran every death and a
+    // winner's dance out while he paused (his report, 2026-09-29: "if we pause
+    // during it, it should pause that animation, and continue if we continue").
+    // In his 2026-09-28 session every pause froze this counter with Usamune's.
+    // A load (the global timer runs back), a scene change or its end stops it.
     uint32_t post=0;
     if(defeat.active) {
-        post=live.global_timer-defeat.start;
+        post=uint16_t(live.area_update_counter-defeat.clock);
         if(live.global_timer<defeat.start || live.level!=defeat.level || live.area!=defeat.area
                 || post>=defeat.hold+GP_DEFEAT_FADE_FRAMES+GP_STAR_FADE_FRAMES+GP_DEFEAT_SCAN)
             defeat.active=false;
@@ -1371,7 +1376,12 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         for(;j && out[j-1].view_projection[15]<value.view_projection[15];--j)out[j]=out[j-1];
         out[j]=value;
     }
-    if(defeat.active && !count && list.post)defeat.active=false; // every ghost has fallen, faded or finished
+    // Every ghost has fallen, faded or finished, not merely gone from this
+    // frame (a pause menu may hide them all; the defeat resumes after it).
+    bool finished=true;
+    for(uint32_t i=0;i<GP_GHOSTS && i<active_request.clip_count;++i)
+        finished=finished && (report.clip_decisions[i]==GP_STAR_ENDED || report.clip_decisions[i]==GP_AFTER_END);
+    if(defeat.active && finished && list.post)defeat.active=false;
     report.visible=count;
     if(count)summary=before_start?GP_BEFORE_START:GP_READY;
     decision(summary);
