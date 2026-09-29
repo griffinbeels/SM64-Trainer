@@ -13,6 +13,7 @@ import json
 import math
 from pathlib import Path
 import sqlite3
+import struct
 import threading
 import time
 from types import SimpleNamespace
@@ -23,7 +24,8 @@ from sm64_events.ghost.clip import (
     ELAPSED_VALID, RAW_VALID, STAR_CLOCK, CLOCK_KINDS, RECORD_BYTES,
     CLOSING_TRANSITION_MAX, ClipError, Frame, attempt_origin, frame_from_bytes, producer_values, write_clip,
 )
-from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
+from sm64_events.ghost.native_layout import POSE_AT, VALID_POSE
+from sm64_events.memory.addresses import ACT_JUMBO_STAR_CUTSCENE, STAR_GRAB_ACTIONS
 
 # His ask, 2026-09-23: the ghost stays on screen through its own star grab and
 # dance, then fades. A star attempt closes at x-cam (the dance's first frame)
@@ -32,7 +34,22 @@ from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 # display only, the attempt's origin and closing frame are unchanged. Measured dances
 # run about 100-125 frames past x-cam (the exit dance, and the longer no-exit
 # one); the cap keeps a stuck or unusual tail bounded.
-DANCE_TAIL_MAX_FRAMES = 180
+#
+# A Bowser 1/2 key ends its segment with the same dance (his ruling,
+# 2026-09-28: "The key should work the same way as a normal star"; his
+# 2026-09-28 archive: every key grab entered ACT_STAR_DANCE_EXIT from idle, a
+# frame after the segment's close). The Bowser 3 grand star plays the game's
+# own sequence instead, all in ACT_JUMBO_STAR_CUTSCENE (n64decomp
+# mario_actions_cutscene.c act_jumbo_star_cutscene): he falls to the arena's
+# centre, lands (MARIO_ANIM_GENERAL_LAND, frames 9-23), raises the star
+# (MARIO_ANIM_FINAL_BOWSER_RAISE_HAND_SPIN, 100 frames) and takes off
+# (MARIO_ANIM_FINAL_BOWSER_WING_CAP_TAKE_OFF, 94 frames); then a scripted
+# spline flight (MARIO_ANIM_WING_CAP_FLY) carries him into the credits. Its
+# tail stops at the flight, so the cap covers the fall, landing, raise and
+# take-off with room to spare.
+TAIL_ACTIONS = STAR_GRAB_ACTIONS | {ACT_JUMBO_STAR_CUTSCENE}
+MARIO_ANIM_WING_CAP_FLY = 0x2A  # n64decomp include/mario_animation_ids.h
+DANCE_TAIL_MAX_FRAMES = 300
 # Export can run the moment the attempt closes, before the dance is recorded;
 # it waits for the dance to end, for the recording to stall or close, or for
 # the cap's own duration plus a second, whichever comes first.
@@ -95,13 +112,14 @@ def dance_tail(close: Frame, candidates) -> tuple[list[bytes], bool]:
     DANCE_TAIL_MAX_FRAMES. A repeated occurrence of the same frame is kept, as
     inside the attempt."""
     tail, last = [], close
-    danced = close.live_action in STAR_GRAB_ACTIONS
+    danced = close.live_action in TAIL_ACTIONS
     for raw in candidates:
         frame = frame_from_bytes(raw)
         repeat = (frame.global_timer, frame.clock.elapsed_frames) == (last.global_timer, last.clock.elapsed_frames)
         if (frame.global_timer > close.global_timer + DANCE_TAIL_MAX_FRAMES
                 or (frame.global_timer > close.global_timer + DANCE_ENTRY_FRAMES if not danced
-                    else frame.live_action not in STAR_GRAB_ACTIONS)
+                    else frame.live_action not in TAIL_ACTIONS)
+                or _grand_star_flight(frame, raw)
                 or frame.clock.valid & (RAW_VALID | ELAPSED_VALID) != RAW_VALID | ELAPSED_VALID
                 or (frame.clock.continuity_id, frame.clock.origin_id, frame.level, frame.area)
                 != (close.clock.continuity_id, close.clock.origin_id, close.level, close.area)
@@ -111,8 +129,14 @@ def dance_tail(close: Frame, candidates) -> tuple[list[bytes], bool]:
             return (tail if danced else []), True
         tail.append(raw)
         last = frame
-        danced = danced or frame.live_action in STAR_GRAB_ACTIONS
+        danced = danced or frame.live_action in TAIL_ACTIONS
     return (tail if danced else []), False
+
+
+def _grand_star_flight(frame: Frame, raw: bytes) -> bool:
+    """The grand star's scripted flight into the credits, where its tail ends."""
+    return (frame.live_action == ACT_JUMBO_STAR_CUTSCENE and frame.valid_fields & VALID_POSE
+            and struct.unpack_from("<h", raw, POSE_AT + 30)[0] == MARIO_ANIM_WING_CAP_FLY)
 
 
 def _utc(value: str) -> float:
@@ -317,11 +341,14 @@ class PoseArchive:
         # A star run, whatever owns its clock: the 100-coin star is timed by
         # its exit segment and closes on the exit star's grab. Segments keep
         # ending where they close.
-        star_run = getattr(attempt, "segment_id", None) is None
+        # A key segment (Bowser 1/2 key, Bowser 3 grand star) ends like one.
+        star_run = (getattr(attempt, "segment_id", None) is None
+                    or getattr(attempt, "closed_by", None) == "key_grabbed")
         # The dance follows a close that already dances, or one the tracker
         # timed at the x-cam (a grab straight into the dance can close a frame
         # before it: DANCE_ENTRY_FRAMES).
-        dances = close.live_action in STAR_GRAB_ACTIONS or getattr(attempt, "timed_at", None) == "xcam"
+        dances = (close.live_action in TAIL_ACTIONS or getattr(attempt, "timed_at", None) == "xcam"
+                  or getattr(attempt, "closed_by", None) == "key_grabbed")
         tail = self._dance_tail(identity, last, close) if star_run and dances else []
         manifest = write_clip(destination, tuple(row[0] for row in rows) + tuple(tail),
                               SimpleNamespace(**source), clock_kind=kind, tail_records=len(tail))
