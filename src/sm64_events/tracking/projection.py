@@ -1442,7 +1442,8 @@ class Projector:
                 # caveat 15's star-side bookkeeping above), so nothing to
                 # update on the way out.
                 continue
-            a = self._stamp_segment_attempt(ev, a, hc)
+            a = self._stamp_segment_attempt(
+                self._segments.close_event_of(a.id, ev), a, hc)
             if (hc is not None and a.outcome == "success"
                     and ev.type == "star_collected"
                     and ev.payload.get("star_id") != hc[1]):
@@ -2271,10 +2272,17 @@ class Projector:
             return []
         first_act = self._first_act[1] if self._first_act[0] is self._open else None
         if (self._unacted_open() or not ev.payload.get("mario_acted", True)
-                or before_control(first_act, ev)):
+                or before_control(first_act, ev)
+                or (ev.frame and self._open is not None
+                    and ev.frame == self._open.frame)):
             # no-op reset spam: the player never acted, so the closed
             # attempt isn't a real attempt — drop it (anchor still opens
             # the next one). Old journals lack the key -> default True.
+            # Nor is one that closed on the frame it opened: no game frame
+            # ran between the two anchors (a course entry's zero read twice
+            # by one frame's two polls; his BitDW "Shig (Star)" row, repo
+            # journal id 16243, "reset" in 0 frames -- 2026-09-28, "Need
+            # to make sure that this doesn't happen for ANY stage").
             self._open = None
             return []
         igt = ev.payload.get("igt_frames_before") if ev.type == "practice_reset" else None

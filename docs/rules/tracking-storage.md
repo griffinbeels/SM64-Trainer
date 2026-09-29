@@ -451,6 +451,29 @@ two places:
   zero's acted flag describes the level he left, so it banked "reset 00"06" on
   opening Bowser 3).
 
+A reset during a course NPC's textbox can land on a poll that still reads
+the textbox, Mario's respawn reaching his action byte 0-2 frames later. The
+engine HOLDS a reset that only the textbox shape called an echo and lets the
+`spawned kind=spawn` that follows confirm it (`_confirm_held_reset`,
+`RESPAWN_CONFIRM_FRAMES`); the projector stamps the rows it closes with the
+reset, not the spawn (`close_event_of`), so a reattributed 100-coin reset
+keeps no in-game time rather than the spawn's 0. Over the three journals 13
+held resets were confirmed (100-coin engines in BoB, SSL, WF, CCM; the BitFS
+and BitS pipes) and 53 textbox zeroes with no respawn after them were dropped,
+the fresh-file intros among them. No row moved: those runs never finished.
+
+**Entering a level is never a reset, on any stage** (his follow-up the same
+night: "Need to make sure that this doesn't happen for ANY stage or any
+course / star"). Two readings do it: the arrival's own zero above, and a star
+attempt that closes on the frame it opened (one frame's two polls reading the
+same zero before the 2026-08-04 action latch; repo journal id 16243, a BitDW
+"Shig (Star)" reset in 0 frames). `tools/measure_entry_resets.py` counts, per
+entered level, reset rows closed by an entry's own zero, read from the journal
+rather than through these rules: shipped code (`c7b3857b`) 9 / 2 / 2 in the
+live / repo / console-support journals (Bowser 1-3 arenas, BitDW, BitFS, WF),
+0 / 0 / 0 now. The zero-length reading also drops three SSL duplicate resets
+from July's journal (ids 322, 369, 397; he had already cleared one by hand).
+
 Replay-time: his history re-projects at the next start, no migration.
 Measured with `tools/measure_target_queue.py --before HEAD`: live journal 18
 rows lost and 3 gained (his Bowser 3 run 6071 -> 1516 frames, 3'22"36 ->
