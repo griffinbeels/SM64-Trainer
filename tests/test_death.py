@@ -1,10 +1,12 @@
 # tests/test_death.py
 import pytest
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.death import DeathDetector
-from sm64_events.memory.addresses import DEATH_ACTIONS
+from sm64_events.memory.addresses import (ACT_DISAPPEARED, ACT_LAVA_BOOST,
+                                          ACT_SQUISHED, DEATH_ACTIONS)
 
 ACT_IDLE = 0x0C400201
 ACT_STANDING_DEATH = 0x00021311
@@ -113,10 +115,48 @@ def test_void_warp_pending_does_not_refire():
     assert DeathDetector().process(prev, curr) == []
 
 
-def test_death_warp_op_does_not_fire():
+def test_death_warp_op_inside_a_death_action_does_not_refire():
     # normal deaths pend WARP_OP_DEATH after their death ACTION already fired
     # the event — reacting to that op would double-count every normal death
-    assert DeathDetector().process(snap(), snap(pending_warp_op=WARP_OP_DEATH)) == []
+    dying = snap(mario_action=ACT_STANDING_DEATH, mario_action_timer=80)
+    assert DeathDetector().process(
+        dying, replace(dying, pending_warp_op=WARP_OP_DEATH)) == []
+
+
+# -- deaths with NO death action: the game pends WARP_OP_DEATH directly
+# -- (decomp act_lava_boost, act_squished, act_caught_in_whirlpool, and a
+# -- NULL floor). His BitFS row of 2026-09-28 was the first: a lava boost ran
+# -- out of health, journaled nothing, and flew on into the pipe.
+
+def test_a_lava_boost_that_runs_out_of_health_is_a_lava_death():
+    boosting = snap(mario_action=ACT_LAVA_BOOST, mario_health=0x180)
+    events = DeathDetector().process(
+        boosting, replace(boosting, mario_health=0xFF, igt_overall=1407,
+                          pending_warp_op=WARP_OP_DEATH, global_timer=76972,
+                          curr_level=19))
+    assert [(e.type, e.frame) for e in events] == [("death", 76972)]
+    assert events[0].payload == {"cause": "lava", "igt_frames": 1407,
+                                 "level": 19}
+
+
+def test_a_squish_names_the_action_it_left_on_the_same_frame():
+    # act_squished pends the warp AND enters ACT_DISAPPEARED on one frame
+    events = DeathDetector().process(
+        snap(mario_action=ACT_SQUISHED),
+        snap(mario_action=ACT_DISAPPEARED, pending_warp_op=WARP_OP_DEATH))
+    assert [e.payload["cause"] for e in events] == ["squished"]
+
+
+def test_a_death_warp_in_an_ordinary_action_is_out_of_bounds():
+    events = DeathDetector().process(
+        snap(), snap(pending_warp_op=WARP_OP_DEATH))
+    assert [e.payload["cause"] for e in events] == ["out_of_bounds"]
+
+
+def test_a_pending_death_warp_fires_once():
+    pending = snap(mario_action=ACT_LAVA_BOOST, pending_warp_op=WARP_OP_DEATH)
+    assert DeathDetector().process(
+        pending, replace(pending, global_timer=1001)) == []
 
 
 @pytest.mark.parametrize("op", [0x03, 0x11, 0x14])  # warp door, star exit, game over

@@ -45,6 +45,7 @@ import { caveatOf, cardBadge } from "./marks.js";
 import { AddTime } from "./addtime.js";
 import { GhostSwitch } from "./ghostswitch.js";
 import { GoalPlate, useEntryGoals } from "./goalplate.js";
+import { useTargetPick } from "../target.js";
 
 const html = htm.bind(h);
 
@@ -296,10 +297,19 @@ export function topEntityKey(view) {
 // screenshot that opened this round. A key that names no rendered card is
 // indistinguishable from "nothing qualifies", which is why it survived a
 // rule whose own tests were all green.
+//
+// Rule 1 holds only while the active entity LEADS (`activeLeads`, from
+// `nextActivation` below): he picked it, it was active when the page opened,
+// or it has since become the newest thing played. When the GAME moved the
+// target -- he walked into Bowser 1, a segment armed -- rule 2 keeps the card
+// he was reading open even if the new target has older rows, until its first
+// new row makes it the newest (round 13, 2026-09-28: "Even if we autoselect
+// the next star/segment... it shouldn't immediately expand the practice log,
+// because we don't have an entry yet").
 export function autoOpenKey(sections, activeKey = null, playedKeys = [],
-                             nestedKeys = []) {
+                             nestedKeys = [], activeLeads = true) {
   const rendered = sections || [];
-  if (activeKey != null) {
+  if (activeKey != null && activeLeads) {
     const active = rendered.find((sec) => entityKey(sec) === activeKey);
     // A NESTED active entity does not get the same second chance a
     // top-level one does. "Only once it has recorded something" (the rule
@@ -332,6 +342,42 @@ export function autoOpenKey(sections, activeKey = null, playedKeys = [],
     if (rendered.some((sec) => entityKey(sec) === key)) return key;
   }
   return null;
+}
+
+// How long after his pick is accepted its target may take to become the
+// active card (the view refetch, a celebration hold he released) and still
+// count as his pick. Far shorter than walking out of a course and back in,
+// which returns his picked star through the GAME, not a gesture.
+export const PICK_LANDS_MS = 5000;
+
+/** Whether the active entity LEADS the open slot (`autoOpenKey`'s rule 1):
+ *  `{key, since, leads}`. `pick` is the store's `targetPick` ({key, at}),
+ *  `now` ms, `newestPlayed` the newest played card on screen (rule 2 alone).
+ *   - The first active entity this log sees leads: nothing was being read
+ *     yet, so there is nothing to keep open.
+ *   - A new active entity leads when he picked it (a pick of that key
+ *     accepted within PICK_LANDS_MS); the game moving the target does not.
+ *   - Picking the entity that is already active makes it lead too.
+ *   - One the game chose leads once it is the newest thing played on screen:
+ *     its first new row. From then on it keeps the slot like a picked one.
+ *   - Nothing active (a castle, a transition) keeps the last activation, so
+ *     a blip back to the same entity is not a new one.
+ *  Pure, so node drives it (tests/frontend/logautoopen.test.js). */
+export function nextActivation(prev, activeKey, pick, now, newestPlayed = null) {
+  if (prev != null && activeKey == null) return prev;
+  const pickedThis = pick != null && activeKey != null && pick.key === activeKey;
+  let next = prev;
+  if (prev == null) next = { key: activeKey, since: now, leads: true };
+  else if (activeKey !== prev.key) {
+    next = { key: activeKey, since: now,
+             leads: pickedThis && now - pick.at <= PICK_LANDS_MS };
+  } else if (!prev.leads && pickedThis && pick.at >= prev.since) {
+    next = { ...prev, leads: true };
+  }
+  if (!next.leads && next.key != null && newestPlayed === next.key) {
+    next = { ...next, leads: true };
+  }
+  return next;
 }
 
 // `childKeys` (round 2026-08-10, reds-as-subsection): a [[subsection]]'s own
@@ -1081,7 +1127,14 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // re-review 2026-08-10): a star whose only parent is disabled renders
   // top-level, not nested, and must not borrow the nested case's leniency.
   const nestedKeys = [...childrenOf.values()].flat().map(entityKey);
-  const topKey = autoOpenKey(openCandidates, activeKey, playedKeys, nestedKeys);
+  // Whether the active card may take the slot on its own: he picked it, or
+  // it has become the newest thing played (`nextActivation`).
+  const targetPick = useTargetPick();
+  const activation = useRef(null);
+  activation.current = nextActivation(activation.current, activeKey,
+    targetPick, Date.now(), autoOpenKey(openCandidates, null, playedKeys));
+  const topKey = autoOpenKey(openCandidates, activeKey, playedKeys, nestedKeys,
+    activation.current.leads);
   const goals = useEntryGoals(t, openCandidates.map((sec) => standardsIdentity(sec).entity));
   // ONE renderer, used for a top-level card and for a nested [[subsection]]
   // alike (round 22) -- his "These cards should work exactly the same way as

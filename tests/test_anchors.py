@@ -1127,3 +1127,54 @@ def test_a_forward_load_to_a_fresh_state_is_not_read_as_a_reset():
         snap(96, igt=400, wall=BOOT),
         snap(1763, igt=5, wall=BOOT + timedelta(seconds=7.77)))
     assert [e.type for e in events] == ["state_loaded"]
+
+
+# ---------------------------------------------------------------------------
+# A textbox the game opened is not the player acting (2026-09-28). Bowser
+# speaks the moment Mario lands in his arena, so every reset taken during the
+# speech read as acted and banked a reset row for a fight he could not yet
+# play: "technically I didn't have any inputs as a player (since it's just the
+# cutscene)... we just should hide all the bullshit resets". The shape is his
+# Bowser 3 intro, journal ids 6500-6504: respawn, land, speech, reset.
+# ---------------------------------------------------------------------------
+
+ACT_SPAWN_SPIN_AIRBORNE = 0x00001924
+ACT_READING_NPC_DIALOG = 0x20001306
+
+
+def test_a_reset_during_bowsers_intro_speech_is_not_acted():
+    events = run(AnchorDetector(), [
+        snap(61753, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1),
+        snap(61760, igt=7, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1),
+        snap(61790, igt=37, action=ACT_READING_NPC_DIALOG, level=34, area=1),
+        snap(63028, igt=67, action=ACT_READING_NPC_DIALOG, level=34, area=1),
+        snap(63029, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1)])
+    assert [e.type for e in events if e.type == "mario_acted"] == []
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["mario_acted"] is False
+
+
+def test_play_after_the_speech_still_counts_as_acting():
+    """Only the game's own hold is ignored: the first thing he does once
+    the speech ends is an act, and that is the one the journal names."""
+    events = run(AnchorDetector(), [
+        snap(61753, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1),
+        snap(61790, igt=37, action=ACT_READING_NPC_DIALOG, level=34, area=1),
+        snap(61950, igt=197, action=ACT_WALKING, level=34, area=1),
+        snap(62100, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1)])
+    [acted] = [e for e in events if e.type == "mario_acted"]
+    assert acted.payload["action"] == ACT_WALKING
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["mario_acted"] is True
+
+
+def test_every_no_control_action_in_the_registry_is_not_acting():
+    from sm64_events.memory.addresses import NO_CONTROL_ACTIONS
+    assert len(NO_CONTROL_ACTIONS) >= 4, "the textboxes and the intro"
+    for action in NO_CONTROL_ACTIONS:
+        events = run(AnchorDetector(), [
+            snap(1000, igt=40, action=ACT_IDLE),
+            snap(1001, igt=41, action=action),
+            snap(1003, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE)])
+        [anchor] = [e for e in events if e.type == "practice_reset"]
+        assert anchor.payload["mario_acted"] is False, hex(action)
