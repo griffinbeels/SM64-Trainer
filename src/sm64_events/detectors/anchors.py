@@ -271,7 +271,11 @@ mario_acted event: emitted once per anchor period at Mario's first
   journals land on one of those actions and 62 of 62 read as having acted,
   which is how a menu warp 92 seconds after a death banked a phantom 1.5 s
   reset row on the arrival ("The first time we enter a map should never be
-  considered a reset, because there's nothing to reset").
+  considered a reset, because there's nothing to reset"). Nor does a textbox
+  the game opened or the fresh-file intro (addresses.NO_CONTROL_ACTIONS,
+  2026-09-28): Bowser speaks the moment Mario lands in his arena, so every
+  reset he took during that speech read as acted and would have banked a
+  reset row for a fight he could not yet play.
 
 VERIFY (live gate): confirm with the human that a Usamune SECTION state
 load moves global_timer backward (full-RAM restore). If Usamune implements
@@ -287,6 +291,7 @@ from sm64_events.memory.addresses import (ACT_INTRO_CUTSCENE,
                                            CASTLE_LEVELS, DEATH_ACTIONS,
                                            DIALOG_ACTIONS, DOOR_ACTIONS,
                                            LEVEL_EXIT_ACTIONS,
+                                           NO_CONTROL_ACTIONS,
                                            PASSIVE_ACTIONS,
                                            SAVE_DIALOG_ACTIONS)
 
@@ -483,7 +488,8 @@ class AnchorDetector:
         if (self._anchor_action is None
                 and curr.mario_action not in PASSIVE_ACTIONS
                 and curr.mario_action not in DEATH_ACTIONS
-                and curr.mario_action not in LEVEL_EXIT_ACTIONS):
+                and curr.mario_action not in LEVEL_EXIT_ACTIONS
+                and curr.mario_action not in NO_CONTROL_ACTIONS):
             self._acted = True
             if not self._acted_reported:
                 self._acted_reported = True

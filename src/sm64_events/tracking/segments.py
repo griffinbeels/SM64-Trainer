@@ -189,8 +189,10 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   no special case.
 - failure rows only on practice_reset/state_loaded (reset), death,
   game_reset (hard_reset); AFK closures (paused >= 150 frames) discard, and
-  so do no-op closures (acted_tracking true, mario_acted false — warp/reset
-  spam where Mario never moved; mirrors the star-side discard)
+  so do no-op closures (`SegmentEngine._unacted`: warp/reset spam where Mario
+  never moved, a reset during a textbox the game opened, and the arrival's
+  own zero; mirrors the star-side discard). A discarded closure still ENDS the
+  run: the anchor re-arms, restarting the clock and the ghost
 - rta_frames = close.frame - start_frame; a would-be-negative value on a
   SUCCESS discards the attempt (end before arm is a genuine anomaly —
   self-heal, domain rule 4), but failure closures record the row with
@@ -291,6 +293,17 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
         never split timing on a textbox in any level/circumstance (user rule
         2026-06-14).  Historical events (no key): .get() -> None -> out of
         window -> conservative close behaviour preserved.
+        EXCEPT a reset that RESPAWNED Mario (`_respawned`: a spawn action on
+        the anchor's own poll), 2026-09-28. Bowser speaks the moment Mario
+        lands in his arena, and a reset taken during the speech reloads the
+        level -- his reset, not the textbox's zero. Read as an echo, it was
+        invisible: the fight ran on from his first arrival, so his Bowser 3 run
+        read 3'22"36 for Usamune's 0'50"53 and the ghost never restarted.
+        Measured over the three journals on this machine: 31 dialog-recent
+        resets carried a spawn action, every one followed by `spawned
+        kind=spawn`; the 47 intro zeroes this shape was written for never
+        respawn. 13 more respawned a frame or two AFTER the anchor's poll
+        (mid-course NPC textboxes, not Bowser) and stay echoes.
     (6) in-level teleporter echo: ev.payload["teleport"] is True -- suppressed
         unconditionally.  The CCM broken bridge, the WDW corner warps and the
         HMC toxic-maze pads relocate Mario inside the SAME area, so no
@@ -340,12 +353,15 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           course_for_level,
                                           DOOR_ACTIONS, HUNDRED_COIN_STAR_COINS,
                                           LEVEL_CASTLE_INSIDE,
-                                          LEVEL_NAMES, node_key, node_label,
+                                          LEVEL_NAMES, NO_CONTROL_ACTIONS,
+                                          node_key, node_label,
                                           node_short_label,
-                                          region_for_node, star_count,
+                                          region_for_node, SPAWN_ACTIONS,
+                                          star_count,
                                           star_name, subarea_name,
                                           world_connections, world_regions)
 from sm64_events.core.landmark import same_landmark
+from sm64_events.detectors.counter_epoch import LEVEL_LOAD_TAIL_FRAMES
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.detectors.moment import MOMENTS
 # The verb splice ("Open a door" -> "Open") lives with the row labeller and
@@ -382,9 +398,8 @@ _DIALOG_ECHO_WINDOW = 30  # frames; the intro IGT re-init lands +1 frame after
 # control is regained (live journal 2026-06-14), but the recency is measured
 # from the last in-textbox/cutscene poll, which may be a few frames earlier when
 # polls are sparse — so allow ~1 s, same as the door window and for the same
-# reason. The intro spawn is fresh-file-only; no human meaningfully L-resets
-# within a second of a textbox, so an eaten borderline reset (segment stays
-# armed) is cheaper than the false ~1-frame reset on every textbox.
+# reason. He DOES reset during a textbox -- Bowser's intro speech -- and that
+# reset respawns Mario, which the window alone cannot see (`_respawned`).
 
 # Staleness budget for a LOOSE arm (spec 2026-07-28-multi-step-segments).
 # Loose matching removes every cancel rule that used to bound an arm, so
@@ -489,6 +504,29 @@ def _anchor_outcome(ev, ctx) -> str:
     if ev.type == "state_loaded" and ctx is not None and ctx.attempt_rules >= 2:
         return "loaded"
     return "reset"
+
+
+def _respawned(ev) -> bool:
+    """Did this reset reload the level -- Mario already back in a spawn action
+    on the anchor's own poll? The game's textbox zero never does that; his L
+    reset does, even mid-textbox (shape 5's exception, 2026-09-28)."""
+    return (ev.type == "practice_reset"
+            and ev.payload.get("action") in SPAWN_ACTIONS)
+
+
+def before_control(first_act: int | None, ev) -> bool:
+    """Was the anchor taken before the player could play since the last one?
+
+    His only "act" of the period was a textbox or cutscene the game put him
+    in (the anchor period's first `mario_acted` action), and the anchor
+    interrupted one. Bowser speaks the moment Mario lands in his arena, and
+    journals before 2026-09-28 counted that speech as acting, so every reset
+    during it would bank a row: "we just should hide all the bullshit resets
+    where I clearly couldn't have done anything". The detector no longer
+    counts it (addresses.NO_CONTROL_ACTIONS); this reads the same answer out
+    of history. Shared by the star closer and the segment engine."""
+    return (first_act in NO_CONTROL_ACTIONS
+            and ev.payload.get("prev_action") in NO_CONTROL_ACTIONS)
 
 
 @dataclass(frozen=True)
@@ -3048,6 +3086,10 @@ class SegmentEngine:
         # arming class of bug. It gets the same measured staleness budget a
         # loose arm gets (budget_frames), applied to every mode for that reason.
         self._cancelled: dict[int, tuple] = {}
+        # The anchor period's first act as the detector reported it -- the
+        # (action, frame) of the first `mario_acted` since the last anchor, or
+        # None. `_unacted` needs WHAT it was and WHEN it came.
+        self._period_act: tuple | None = None
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
@@ -3224,6 +3266,8 @@ class SegmentEngine:
         if ev.type == "tracking_gap":
             self._capture_gap(ev, notices)
             return closed, notices
+        if ev.type == "mario_acted" and self._period_act is None:
+            self._period_act = (ev.payload.get("action"), ev.frame)
         # Where every armed def stood BEFORE this event, so the one place at
         # the bottom of this method can tell the browser about any step that
         # moved. See `_progress_notices` for why it is a diff and not an
@@ -3276,6 +3320,8 @@ class SegmentEngine:
         if ev.type == "key_grabbed" and ev.payload.get("which") == "grand":
             for d in [d for d in self._defs if d.id in self._armed]:
                 self._cancel_topologically(d, ev, notices)
+        if ev.type in _ANCHOR_TYPES or ev.type in ("game_reset", "session_started"):
+            self._period_act = None   # the detector starts a new period here
         self._progress_notices(progress_before, ev.frame, notices)
         return closed, notices
 
@@ -3290,6 +3336,7 @@ class SegmentEngine:
         self._last_igt_zero_frame = None
         self._banked_before_zero = 0
         self._settled_node = self._pending_move = None
+        self._period_act = None
 
     def _prepare_position(self, ev, notices) -> None:
         # Drop spent deferred destination-subarea entries (_pending): once an
@@ -3736,9 +3783,13 @@ class SegmentEngine:
             # Skip segment (live journal 2026-06-14).  frames_since_dialog
             # bridges the gap exactly as frames_since_door does (2b); we never
             # split timing on a textbox in any level (user rule 2026-06-14).
+            # A reset that RESPAWNED Mario is his, textbox or not: he
+            # pressed reset during Bowser's intro speech, the level reloaded,
+            # and the run (and its ghost) must start over (2026-09-28).
             or (ev.payload.get("frames_since_dialog") is not None
                 and 0 <= ev.payload["frames_since_dialog"]
-                <= _DIALOG_ECHO_WINDOW)
+                <= _DIALOG_ECHO_WINDOW
+                and not _respawned(ev))
             # (6) in-level teleporter echo: the CCM broken bridge and the WDW
             # corner warps relocate Mario inside the SAME area, so no
             # transition fires for shape (3) to catch, and Usamune zeroes its
@@ -3749,6 +3800,36 @@ class SegmentEngine:
             # `_zeroes_usamune_igt` moves the IGT basis and the segment's time
             # falls back to the rta delta rather than measuring from the warp.
             or ev.payload.get("teleport", False))
+
+    def _unacted(self, ev, arm) -> bool:
+        """Did this real anchor end an attempt he never PLAYED? Then it
+        records no row. It still ends the run: every caller re-arms at the
+        anchor, which restarts the clock and the ghost -- his split between
+        the two, 2026-09-28: "we don't count it as a reset (in terms of the
+        practice log...) but this SHOULD count as a reset for Ghost Mario".
+
+        Three readings of the journal, the last two new that day:
+        - the anchor's own `mario_acted` flag (no-op reset spam, 2026-06-12);
+        - `before_control`: his only act was the game's own textbox, and the
+          reset interrupted it (a Bowser intro);
+        - the ARRIVAL's own zero: a Usamune menu warp lands 1-6 frames
+          before its counter zero, a course entry 42-59 (measured over the
+          three journals on this machine, 2026-09-28), and the flag it
+          carries describes the level he LEFT -- no act reached the journal
+          since this arrival armed the segment. Opening Bowser 3 banked a
+          "reset 00"06" row that way: "I simply just opened the stage, there
+          was no reset".
+        Journals without `acted_tracking` keep every row, as before."""
+        if not ev.payload.get("acted_tracking", False):
+            return False
+        if not ev.payload.get("mario_acted", False):
+            return True
+        act = self._period_act
+        if before_control(act[0] if act else None, ev):
+            return True
+        return (arm.anchor_type in ("level_changed", "area_changed")
+                and (act is None or act[1] < arm.start_frame)
+                and 0 <= ev.frame - arm.start_frame <= LEVEL_LOAD_TAIL_FRAMES)
 
     def _arrived_by_a_real_move(self, ev) -> bool:
         """True when this anchor landed on the same frame as a LEGITIMATE
@@ -3874,9 +3955,7 @@ class SegmentEngine:
             # discard in projection._close_by_reset).
             afk = ev.payload.get("paused_frames_before", 0) \
                 >= _AFK_PAUSE_FRAMES
-            unacted = ev.payload.get("acted_tracking", False) \
-                and not ev.payload.get("mario_acted", False)
-            if not afk and not unacted:
+            if not afk and not self._unacted(ev, arm):
                 a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
                 if a:
                     closed.append(a)
@@ -4036,9 +4115,7 @@ class SegmentEngine:
                 return closed
             afk = ev.payload.get("paused_frames_before", 0) \
                 >= _AFK_PAUSE_FRAMES
-            unacted = ev.payload.get("acted_tracking", False) \
-                and not ev.payload.get("mario_acted", False)
-            if not afk and not unacted:
+            if not afk and not self._unacted(ev, arm):
                 a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
                 if a:
                     closed.append(a)

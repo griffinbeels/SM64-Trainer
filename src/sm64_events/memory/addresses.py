@@ -621,6 +621,13 @@ ACT_READING_NPC_DIALOG = 0x20001306        # talking to an NPC
 ACT_WAITING_FOR_DIALOG = 0x0000130A        # dialog about to begin
 DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
                             ACT_READING_NPC_DIALOG, ACT_WAITING_FOR_DIALOG})
+# Mario held by the game with no control given: a textbox (Bowser opens his
+# own the moment Mario lands in an arena) or the fresh-file intro. Being in
+# one is not the player ACTING (anchors.py's activity flag), so a reset taken
+# during one is a reset made before he could play (2026-09-28, the Bowser
+# intros: "technically I didn't have any inputs as a player... but I still
+# DID reset").
+NO_CONTROL_ACTIONS = DIALOG_ACTIONS | {ACT_INTRO_CUTSCENE}
 
 # The dialog actions' own SUB-STATE -- the field immediately preceding
 # MARIO_ACTION_TIMER, u16, same struct. `tools/probe_textbox.py` round 2

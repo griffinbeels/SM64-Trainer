@@ -279,8 +279,8 @@ from sm64_events.tracking.prune import PRUNE_EVENT
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, arms_ambiently,
-    hooks_on_arm, hundred_coin_entity, origin_course, reachable_places,
-    attributable_parent, entity_parents, segment_origin,
+    before_control, hooks_on_arm, hundred_coin_entity, origin_course,
+    reachable_places, attributable_parent, entity_parents, segment_origin,
     speaks_through_a_parent, stage_origin, time_bounds)
 
 
@@ -854,6 +854,9 @@ class Projector:
         self._active_route_id: int | None = None
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
+        # The open attempt's first mario_acted action, held beside the anchor
+        # it belongs to so a new anchor needs no clear (`before_control`).
+        self._first_act: tuple = (None, None)
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
         self._area: int | None = None    # gCurrAreaIndex per area_changed; None = unknown (legacy journals)
         self._open_castle = False        # open attempt was OPENED in a castle hub level; only meaningful while _open is set (the open site re-arms it)
@@ -1182,6 +1185,9 @@ class Projector:
             # memory or count as a grab — nothing happened in the game.
             return [self._imported_attempt(ev)]
         ev = self._corrected_event(ev)
+        if (ev.type == "mario_acted" and self._open is not None
+                and self._first_act[0] is not self._open):
+            self._first_act = (self._open, ev.payload.get("action"))
         prev_level = self._level  # _dispatch may move it (level_changed)
         self._pending_target_retire = None   # transient, one event only
         self._pending_grab_take = None       # transient, one event only
@@ -2263,7 +2269,9 @@ class Projector:
             # castle movement, not a star attempt (addendum): discard
             self._open = None
             return []
-        if self._unacted_open() or not ev.payload.get("mario_acted", True):
+        first_act = self._first_act[1] if self._first_act[0] is self._open else None
+        if (self._unacted_open() or not ev.payload.get("mario_acted", True)
+                or before_control(first_act, ev)):
             # no-op reset spam: the player never acted, so the closed
             # attempt isn't a real attempt — drop it (anchor still opens
             # the next one). Old journals lack the key -> default True.
