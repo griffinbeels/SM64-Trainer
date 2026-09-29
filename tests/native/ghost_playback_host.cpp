@@ -93,7 +93,7 @@ static float selected_x=0;
 // What the defeat hands the model: its animation, frame, eyes and angles.
 static int16_t selected_animation=-1,selected_frame=-1,selected_torso=0;
 static uint8_t selected_eyes=0,selected_hand=0;static uint32_t selected_fields=0;static uint16_t selected_clock=0;
-static int32_t defeat_frames=60; // the fake ROM's fall is shorter than the game's 80-frame hold
+static int32_t defeat_frames=96; // the US ROM's fall-over (loopEnd); the drowning parts are 80 and 70
 static bool refuse_shadow=false;
 static bool perspective=false; // a real look-down-minus-z projection for the occlusion region
 static unsigned shadow_calls=0;
@@ -143,7 +143,8 @@ extern "C" int32_t sg_model_get_atlas(sg_model *p,sg_atlas_view *out) {
 extern "C" int32_t sg_model_get_animation_frames(sg_model *p,int32_t id,int32_t *frames) {
     *frames=0;if(!p || p!=fake_model)return SG_INVALID_MODEL;
     // The ROM's star dances: 63 and 83 frames, held on their last (62, 82).
-    *frames=id==GP_DEFEAT_ANIMATION?defeat_frames:id==GP_DANCE_ANIMATION?63:id==GP_WATER_DANCE_ANIMATION?83:1;
+    *frames=id==GP_DEFEAT_ANIMATION?defeat_frames:id==GP_DANCE_ANIMATION?63:id==GP_WATER_DANCE_ANIMATION?83
+        :id==GP_DROWN_ANIMATION?80:id==GP_DROWN_LIMP_ANIMATION?70:1;
     return SG_OK;
 }
 extern "C" int32_t sg_model_get_particles(sg_model *p,sg_particle_view *out) {
@@ -1044,7 +1045,8 @@ int main() {
             dance_hidden_after=GP_STAR_FADE_FRAMES;
             // He grabs first (his Round 10 ask): every ghost still short of its
             // own completing grab plays Mario's standing death where it stood,
-            // crying once, holds the fall's last frame, then fades out.
+            // crying once, through the fall's last frame (his Round 13 ask:
+            // "play through the full animation"), then fades out.
             run(12000);
             check(step(10,GP_READY,{GP_READY,GP_READY},{4010,5010}),"both ghosts running");
             live.live_action=0x1302;
@@ -1057,16 +1059,19 @@ int main() {
             check(placed[0].count==1 && placed[1].count==1 && unplaced_cues==0,"each cry starts where its ghost falls");
             live.live_action=1;
             check(step(12,GP_READY,{GP_READY,GP_READY},{}) && selected_frame==1,"latched: the fall runs a frame a frame");
-            check(step(11+uint32_t(defeat_frames)-1,GP_READY,{GP_READY,GP_READY},{})
-                  && selected_frame==int16_t(defeat_frames-1),"to the fall's last frame");
-            check(step(11+GP_DEFEAT_FRAMES-1,GP_READY,{GP_READY,GP_READY},{})
-                  && selected_frame==int16_t(defeat_frames-1) && poses[0].opacity==1,"held there at full opacity");
-            check(step(11+GP_DEFEAT_FRAMES+1,GP_READY,{GP_READY,GP_READY},{})
+            const uint32_t fell=uint32_t(defeat_frames); // the fall's last frame is fell-1
+            for(uint32_t k=1;k<fell;++k)
+                check(step(11+k,GP_READY,{GP_READY,GP_READY},{}) && selected_frame==int16_t(k)
+                      && poses[0].opacity==1 && poses[1].opacity==1,
+                      "visible through the whole fall, a frame a frame, at full opacity");
+            check(step(11+fell,GP_READY,{GP_READY,GP_READY},{}) && selected_frame==int16_t(fell-1)
+                  && poses[0].opacity==1,"passed out on the fall's last frame");
+            check(step(11+fell+1,GP_READY,{GP_READY,GP_READY},{}) && selected_frame==int16_t(fell-1)
                   && poses[0].opacity==float(GP_DEFEAT_FADE_FRAMES-1)/float(GP_DEFEAT_FADE_FRAMES)
-                  && placed[0].gain==poses[0].opacity,"then fades, its sound with it");
-            check(!step(11+GP_DEFEAT_FRAMES+GP_DEFEAT_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{})
+                  && placed[0].gain==poses[0].opacity,"only then fades, its sound with it");
+            check(!step(11+fell+GP_DEFEAT_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{})
                   && placed[0].gain==0 && placed[1].gain==0,"and hides, silenced");
-            check(!step(11+GP_DEFEAT_FRAMES+GP_DEFEAT_FADE_FRAMES+1,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),
+            check(!step(11+fell+GP_DEFEAT_FADE_FRAMES+1,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),
                   "once only: the latch keeps them hidden");
             // Ghost first, then he grabs while it dances: it already won its own
             // race, so its dance and fade go on; the older clip, ended at its
@@ -1138,10 +1143,11 @@ int main() {
             // reset right after the grab) plays on the way the game plays it,
             // from its last recorded dance pose: the ground dance, the water
             // dance, a midair grab's landing into the dance and the no-exit
-            // dance. The request's star actions are the dances, as the
-            // application sends them.
+            // dance. The request's star actions are the dances and the grand
+            // star's cutscene, as the application sends them.
             auto dances=[](gp_request &q) {
-                q.star_action_count=3;q.star_actions[0]=0x1302;q.star_actions[1]=0x1303;q.star_actions[2]=0x1307;
+                q.star_action_count=4;q.star_actions[0]=0x1302;q.star_actions[1]=0x1303;q.star_actions[2]=0x1307;
+                q.star_actions[3]=0x1909;
             };
             // Rows 0..cut: a fall (0x1904, the fall animation) from fall_from,
             // the dance action from land and its animation from from.
@@ -1252,6 +1258,87 @@ int main() {
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(step(22,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION
                   && selected_x==6721,"judged at his x-cam, not the suspension: the later dancer falls");
+            live.live_action=1;
+            // A ghost swimming when he wins drowns, as the game's submerged
+            // Mario does when his health runs out: the struggle with half-closed
+            // eyes, then limp and dead-eyed, each to its last frame, then fades.
+            Clip swimmer=recorded_dance(68,49,0x1303,GP_WATER_DANCE_ANIMATION,30,30,UINT32_MAX);
+            for(uint32_t i=0;i<30;++i)swimmer.frames[i].sample.live_action=0x300024D0; // breaststroke
+            star_run(swimmer,49000);
+            check(step(19,GP_READY,{GP_READY},{}),"swimming on");
+            live.live_action=0x1302;
+            check(step(20,GP_READY,{GP_READY},{GP_DROWN_SOUND}) && selected_animation==GP_DROWN_ANIMATION
+                  && selected_frame==0 && selected_eyes==GP_DROWN_EYES && selected_x==6819,
+                  "his dance first: it drowns where it swam, crying once");
+            live.live_action=1;
+            check(step(20+79,GP_READY,{GP_READY},{}) && selected_animation==GP_DROWN_ANIMATION && selected_frame==79
+                  && selected_eyes==GP_DROWN_EYES && poses[0].opacity==1,"the struggle to its last frame");
+            check(step(20+80,GP_READY,{GP_READY},{}) && selected_animation==GP_DROWN_LIMP_ANIMATION
+                  && selected_frame==0 && selected_eyes==GP_DEFEAT_EYES,"then limp, dead-eyed");
+            check(step(20+149,GP_READY,{GP_READY},{}) && selected_animation==GP_DROWN_LIMP_ANIMATION
+                  && selected_frame==69 && poses[0].opacity==1,"to its last frame at full opacity");
+            check(step(20+151,GP_READY,{GP_READY},{}) && selected_frame==69
+                  && poses[0].opacity==float(GP_DEFEAT_FADE_FRAMES-1)/float(GP_DEFEAT_FADE_FRAMES),"then fades");
+            check(!step(20+150+GP_DEFEAT_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED},{}),"and hides");
+            // Bowser keys and the grand star (his Round 13 ruling: "The key
+            // should work the same way as a normal star"). They end segments,
+            // on a segment's clock with no star latch: his completion arrives
+            // as the tracker's suspension, judged at his x-cam.
+            auto bowser_run=[&](Clip &clip,uint64_t elapsed) {
+                clip.header.clock_kind=GCLIP_SEGMENT_CLOCK;
+                check(api->prepare_clip(&clip.header,clip.frames.data())==GP_OK,"prepare a Bowser segment");
+                revision=r.revision+1;r=request(clip,revision);r.model_id=4;r.star_ends=0;r.volume=1;dances(r);
+                r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,elapsed,source_generation,0,0};
+                elapsed_base=elapsed;timer_base+=1000;live.live_action=1;
+                check(api->configure(&r)==GP_OK,"a run on a Bowser segment's clock");
+                renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            };
+            auto suspend=[&] {
+                ++r.revision;r.suspended=1;check(api->configure(&r)==GP_OK,"his grab suspends the run");
+                renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            };
+            Clip key=recorded_dance(69,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            bowser_run(key,50000);
+            check(step(49,GP_READY,{GP_READY},{}) && selected_frame==29 && step(50,GP_READY,{GP_READY},{})
+                  && selected_frame==30 && selected_x==6949 && poses[0].opacity==1,
+                  "a key grab dances like a star, on past its recording");
+            check(step(61,GP_READY,{GP_READY},{GP_DANCE_SOUND}),"with its voice");
+            check(step(130,GP_READY,{GP_READY},{}) && poses[0].opacity==1 && step(131,GP_READY,{GP_READY},{})
+                  && fading(1),"to the same end, then fades");
+            Clip rival_key=recorded_dance(70,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            bowser_run(rival_key,51000);
+            check(step(17,GP_READY,{GP_READY},{}),"racing to the key");
+            live.live_action=0x1302;
+            check(step(18,GP_READY,{GP_READY},{}),"his key dance: no latch on a segment's clock");
+            suspend();
+            check(step(19,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION
+                  && selected_x==7018,"his key first: the slower ghost falls where it stood");
+            live.live_action=1;
+            // The grand star: its touch (row 20) is already the cutscene; the
+            // recording holds the fall (20-24), the landing (25-39) and the
+            // raise (40-60), then stops. It plays all of it, then fades.
+            Clip grand=recorded_dance(71,60,0x1909,0x25,20,40,UINT32_MAX);
+            for(uint32_t i=20;i<40;++i) {
+                auto &pose_row=grand.frames[i].sample.pose;
+                pose_row.animation_id=i<25?int16_t(0x56):int16_t(0x57);
+                pose_row.animation_frame=int16_t(i<25?0:9+(i-25));
+            }
+            bowser_run(grand,52000);
+            check(step(22,GP_READY,{GP_READY},{}) && selected_animation==0x56 && selected_x==7122,
+                  "the grand star: its fall");
+            check(step(39,GP_READY,{GP_READY},{}) && selected_animation==0x57 && selected_frame==23,"its landing");
+            check(step(60,GP_READY,{GP_READY},{}) && selected_animation==0x25 && selected_frame==20
+                  && poses[0].opacity==1,"its raise, to where the recording stops");
+            check(step(61,GP_READY,{GP_READY},{}) && fading(1) && selected_x==7160,"then fades on that pose");
+            check(!step(60+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED},{}),"and hides");
+            Clip rival_grand=recorded_dance(72,60,0x1909,0x25,20,40,UINT32_MAX);
+            bowser_run(rival_grand,53000);
+            check(step(21,GP_READY,{GP_READY},{}),"the ghost holds the grand star first");
+            live.live_action=0x1909;
+            check(step(22,GP_READY,{GP_READY},{}),"his grand star after it");
+            suspend();
+            check(step(23,GP_READY,{GP_READY},{}) && selected_animation!=GP_DEFEAT_ANIMATION && selected_x==7223,
+                  "the ghost that got there first plays on, undefeated");
             live.live_action=1;
             ghost_playback::set_sound_sink(nullptr);
         }
