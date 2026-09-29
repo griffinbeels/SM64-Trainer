@@ -467,12 +467,24 @@ night: "Need to make sure that this doesn't happen for ANY stage or any
 course / star"). Two readings do it: the arrival's own zero above, and a star
 attempt that closes on the frame it opened (one frame's two polls reading the
 same zero before the 2026-08-04 action latch; repo journal id 16243, a BitDW
-"Shig (Star)" reset in 0 frames). `tools/measure_entry_resets.py` counts, per
-entered level, reset rows closed by an entry's own zero, read from the journal
-rather than through these rules: shipped code (`c7b3857b`) 9 / 2 / 2 in the
-live / repo / console-support journals (Bowser 1-3 arenas, BitDW, BitFS, WF),
-0 / 0 / 0 now. The zero-length reading also drops three SSL duplicate resets
-from July's journal (ids 322, 369, 397; he had already cleared one by hand).
+"Shig (Star)" reset in 0 frames). A teleporter's fade counts as no control
+too (`addresses.NO_CONTROL_ACTIONS`): its fade-in byte lingers for 100+ frames,
+so an L reset whose reload walks the area byte 1 -> 2 -> 1 banked a 22-frame
+"reset" off it (console-support journal id 20182, WDW).
+
+`tools/measure_entry_resets.py` is the guarantee he asked for ("These resets
+are worthless. We need to fix this everywhere"). Read from the journal rather
+than through these rules, it counts, per level and per star/segment, every
+logged reset closed by a level entry's own zero, by an anchor on its own start
+frame, or within 3 s of an anchor-started attempt with no act journaled after
+its first frame (sessions since `mario_acted` carried its action; older ones
+spent their one report on a re-read byte, task 0084). In-course area edges are
+NOT entries: an L reset's own reload walks the area byte before its zero, so
+that shape is what a real reset looks like. Shipped code (`c7b3857b`) vs now:
+live 9 -> 0 (Bowser 1-3 arenas, BitDW and BitFS segments -- including his
+"8 Red Coins (Pipe)" row at live id 7019), repo 4 -> 0, console-support
+3 -> 0. The zero-length reading also drops three SSL duplicate resets from
+July's journal (ids 322, 369, 397; he had already cleared one by hand).
 
 Replay-time: his history re-projects at the next start, no migration.
 Measured with `tools/measure_target_queue.py --before HEAD`: live journal 18
