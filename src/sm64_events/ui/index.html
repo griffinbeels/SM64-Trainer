@@ -7113,6 +7113,9 @@
   .goal-plate-source {
     font-size: 11px; color: var(--muted, #8aa0b6); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; min-width: 0; margin-left: auto;
+    /* The plate's line-height 1 made this box 11px for 13px of glyphs, and
+       the ellipsis clip cut their tails (the layout sweep's "clipped"). */
+    line-height: 1.25;
     /* Zero width, then grow: the source fills what the plate has left and
        never widens it, so the plate (and a stream crop of it) keeps one
        width whatever the goal came from. */
