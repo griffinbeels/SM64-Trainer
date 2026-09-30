@@ -1,0 +1,157 @@
+"""The real recorder saves alternate starts from separate journal samples."""
+import asyncio
+import datetime as dt
+import json
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+from sm64_events.core.events import Event
+from sm64_events.server import api
+from sm64_events.tracking import service as service_module
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from find_uilab import find_uilab
+
+_MISSING = find_uilab()
+if _MISSING:
+    pytest.skip(_MISSING, allow_module_level=True)
+
+from uilab.driver import get_driver
+from ui_fixture import serve_ui_live
+
+
+def _seed_recording(service):
+    stamp = dt.datetime(2026, 9, 30, 12, tzinfo=dt.timezone.utc)
+
+    async def publish():
+        for kind, frame, payload in (
+            ("level_changed", 69990, {"from": 16, "to": 6}),
+            ("area_changed", 69990, {"level": 6, "from": None, "to": 1}),
+            ("practice_reset", 69992, {"igt_frames_before": 0}),
+        ):
+            await service.publish(Event(type=kind, frame=frame,
+                timestamp_utc=stamp, payload=payload))
+        # The primary sample is 52 -> 53. Both alternative starts are outside
+        # that span, so sorting all selected IDs into one run would move both ends.
+        for ordinal, frame in ((51, 70000), (52, 70030), (53, 70120), (54, 70140)):
+            await service.publish(Event(type="moment_reached", frame=frame,
+                timestamp_utc=stamp, payload={"kind": "door_open", "ordinal": ordinal,
+                    "landmark": None, "level": 6, "area": 1, "action": 0,
+                    "igt_frames": frame - 69992}))
+
+    asyncio.run(publish())
+
+
+def _pick_label(page, label):
+    page.evaluate(f"""const label = {json.dumps(label)};
+      const matches = Array.from(document.querySelectorAll('.modal .record-row'))
+        .filter(row => row.querySelector('.record-label').textContent.trim() === label);
+      if (matches.length !== 1) throw new Error(`Expected one ${{label}}, got ${{matches.length}}`);
+      matches[0].click();""")
+
+
+def _toolbar_click(page, label):
+    page.evaluate(f"""const matches = Array.from(document.querySelectorAll('.record-picks button'))
+      .filter(button => button.textContent.trim() === {json.dumps(label)});
+      if (matches.length !== 1) throw new Error('Recorder action unavailable');
+      matches[0].click();""")
+
+
+def _ready_to_save(page):
+    assert page.evaluate("""return (async () => {
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        const button = document.querySelector('.modal .builder-actions .primary-button');
+        if (button && !button.disabled && button.textContent.trim() === 'Save segment') return true;
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
+      return false;
+    })();"""), "The recorder did not finish synthesis, backtest and lint"
+
+
+def _capture_review(page, tmp_path):
+    captures = Path(os.environ.get("SM64_REPORT_DIR") or tmp_path)
+    captures.mkdir(parents=True, exist_ok=True)
+    for width in (1500, 850):
+        page.set_viewport(width, 1180)
+        page.wait_ms(250)
+        geometry = page.evaluate("""return Array.from(document.querySelectorAll(
+          '.record-picks button, .modal .builder-actions button')).map(button => {
+            const rect = button.getBoundingClientRect(); return [rect.left, rect.right];
+          });""")
+        assert geometry and all(0 <= left < right <= width for left, right in geometry)
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        shot = captures / f"recorder-alternate-starts-{width}.png"
+        shot.write_bytes(page.screenshot())
+        print(f"Alternate-start screenshot: {shot}")
+
+
+def test_alternate_starts_persist_through_the_visible_recorder(tmp_path, monkeypatch):
+    # The fixture is personal even in a maintainer checkout. This test must
+    # exercise the actual save endpoint without changing release seed inputs.
+    monkeypatch.setattr(api, "shared_defaults_root", lambda: None)
+    monkeypatch.setattr(service_module, "shared_defaults_root", lambda: None)
+    with serve_ui_live(seed=False) as (base, service):
+        _seed_recording(service)
+        with get_driver().launch() as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for('button.nav-item[title="Segments"]')
+            page.click('button.nav-item[title="Segments"]')
+            page.wait_for(".segments-page .library-search")
+            page.evaluate("""const buttons = Array.from(document.querySelectorAll('.segments-page button'));
+              buttons.find(button => button.textContent.includes('Record a segment')).click();""")
+            page.wait_for(".record-row")
+            # Observe the actual HTTP writes without replacing any response.
+            page.evaluate("""window.__recordStartRequests = [];
+              const original = window.fetch;
+              window.fetch = function(url, options = {}) {
+                if (options.body && String(url).startsWith('/api/segments'))
+                  window.__recordStartRequests.push({url: String(url),
+                    method: options.method, body: JSON.parse(options.body)});
+                return original.call(this, url, options);
+              };""")
+            timeline = page.evaluate("return fetch('/api/segments/timeline?limit=200&view=steps').then(r=>r.json())")
+            rows = {row["frame"]: row for row in timeline["rows"]
+                    if row["type"] == "moment_reached" and row["frame"] >= 70000}
+            assert set(rows) == {70000, 70030, 70120, 70140}
+            _pick_label(page, rows[70030]["label"])
+            _pick_label(page, rows[70120]["label"])
+            _ready_to_save(page)
+            name = "Recorded alternate starts through the real page"
+            page.evaluate(f"""const input = document.querySelector('.record-review .builder-name input');
+              input.value = {json.dumps(name)};
+              input.dispatchEvent(new Event('input', {{bubbles: true}}));""")
+            _toolbar_click(page, "Add another start")
+            _pick_label(page, rows[70140]["label"])
+            _pick_label(page, rows[70000]["label"])
+            _ready_to_save(page)
+            assert page.evaluate("document.querySelectorAll('.record-mark.role-start').length") == 3
+            assert page.evaluate("document.querySelectorAll('.record-mark.role-finish').length") == 1
+            assert page.evaluate("Array.from(document.querySelectorAll('.record-mark.role-start'))"
+                                 ".filter(mark=>mark.textContent.trim()==='OR').length") == 2
+            _toolbar_click(page, "Done adding starts")
+            _capture_review(page, tmp_path)
+            page.click(".modal .builder-actions .primary-button")
+            page.wait_for(".segbuilder .builder-name input")
+            saved_rows = page.evaluate("return fetch('/api/segments').then(r=>r.json())")
+            saved = next(row for row in saved_rows if row["name"] == name)
+            expected = [{"type": "moment_reached", "kind": "door_open", "level": 6,
+                         "ordinal": ordinal} for ordinal in (52, 51, 54)]
+            assert saved["start_triggers"] == expected
+            assert saved["end_triggers"] == [{"type": "moment_reached", "kind": "door_open",
+                                               "level": 6, "ordinal": 53}]
+            assert saved["waypoints"] == []
+            requests = page.evaluate("window.__recordStartRequests")
+            posted = next(request["body"] for request in requests
+                          if request["method"] == "POST" and request["url"].startswith("/api/segments?"))
+            latest_backtest = [request["body"]["definition"] for request in requests
+                               if request["url"] == "/api/segments/backtest"][-1]
+            latest_lint = [request["body"]["definition"] for request in requests
+                           if request["url"] == "/api/segments/lint"][-1]
+            assert latest_backtest == latest_lint == posted
+            assert posted["start_triggers"] == expected
+            assert page.evaluate("document.querySelector('.segbuilder .builder-name input').value") == name
+            assert page.problems() == []
