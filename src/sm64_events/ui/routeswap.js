@@ -67,7 +67,7 @@ function swapIcon(progress, exchangeAt, tune) {
  * swaps WHICH rank is drawn, the same instant a tier crossing already hides
  * its own cap swap there.
  */
-export function useRouteSwap(swapKey, current, tune) {
+export function useRouteSwap(swapKey, current, tune, { suppress = false } = {}) {
   const priorRef = useRef({ key: swapKey, display: current });
   const frameRef = useRef(null);
   const [swap, setSwap] = useState(null);
@@ -101,7 +101,7 @@ export function useRouteSwap(swapKey, current, tune) {
 
     const nothingToSwap = !changed || prior.key == null
       || !from || from.tier == null || !current || current.tier == null;
-    if (nothingToSwap || prefersReducedMotion()) {
+    if (suppress || nothingToSwap || prefersReducedMotion()) {
       setSwap(null);
       return undefined;
     }
@@ -153,7 +153,7 @@ export function useRouteSwap(swapKey, current, tune) {
       if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
     };
-  }, [swapKey, current.tier, current.division, current.fill, displayKey]);
+  }, [swapKey, current.tier, current.division, current.fill, displayKey, suppress]);
 
   return swap;
 }

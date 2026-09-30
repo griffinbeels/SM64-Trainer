@@ -1005,6 +1005,38 @@ def _section_banner(ranks, ek, strat, basis, mode, pb_untagged=False) -> dict | 
     return out
 
 
+@calibrated_view
+def classification_rank_baseline(db, service, attempt, strat_tag: str) -> dict:
+    """Destination ranks before a strategy correction earns an automatic PB.
+
+    Read before retagging or adopting rows. Reuse the section's grading path,
+    including average modes, original ROMs and a pipe segment's borrowed
+    Strategy ladder, so the browser never climbs from the old strategy's rank.
+    """
+    ranks = service.ranks
+    ek = entity_key(attempt.course_id, attempt.star_id, attempt.segment_id)
+    clock = ranks.clock_for(ek) if ranks else (
+        "rta" if attempt.segment_id is not None else "igt")
+    mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
+    if mode not in classify.RANK_MODES:
+        mode = classify.DEFAULT_RANK_MODE
+    history = sorted((row for row in db.attempts()
+                      if entity_key(row.course_id, row.star_id, row.segment_id) == ek),
+                     key=lambda row: journal_id(row.id))
+    pb = db.current_pb(attempt.course_id, attempt.star_id, clock,
+                       segment_id=attempt.segment_id, strat_tag=strat_tag)
+    basis = _ranked_basis(ranks, ek, mode, pb, history, strat_tag, clock,
+                          overall=True)
+    _, pipe_grading = reds_pipe_segments(db.segment_defs())
+    grading_ek = pipe_grading.get(attempt.segment_id, ek)
+    return {
+        "rank": _section_banner(ranks, grading_ek, strat_tag, basis, mode),
+        "entity_rank": entity_rank(ranks, ek, basis and basis["frames"],
+                                   version=basis and basis.get("version")),
+        "game_version": service.game_version(),
+    }
+
+
 def _markers_for(markers_state: dict, course_id, star_id) -> dict:
     """strat -> sorted marker list for ONE section, from the ui_state KV.
     Key shape '<course>:<star>:<strat>' for stars, 'seg:<id>:<strat>' for

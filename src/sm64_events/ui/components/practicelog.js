@@ -337,6 +337,20 @@ export function strategySwapKey(activeStrat, rankMode, hasSeparateRank) {
   return `strategy:${activeStrat}`;
 }
 
+export function classificationPb(sec, t) {
+  const event = (t.classificationPbs || {})[entityKey(sec)];
+  if (!event || event.strat_tag !== sec.last_strat
+      || event.timer_mode !== sectionClock(sec, t.clock)) return null;
+  const pb = sectionPbByStrat(sec, t.clock);
+  if (!pb || pb.attempt_id !== event.attempt_id || pb.frames !== event.frames)
+    return null;
+  const baseline = event.classification;
+  const view = t.view || {};
+  if (baseline.game_version.effective !== (view.game_version || {}).effective
+      || (baseline.rank && baseline.rank.mode !== view.rank_mode)) return null;
+  return event;
+}
+
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
@@ -494,6 +508,14 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const shownBanner = rankMode === "strategy"
     ? sec.rank : (hasSeparateRank ? sec.entity_rank : sec.rank);
   const shownIdentity = rankMode === "strategy" ? "strategy" : "entity";
+  const classifiedPb = classificationPb(sec, t);
+  const baseline = classifiedPb && classifiedPb.classification;
+  const earnedTransition = baseline && {
+    key: classifiedPb.key,
+    banner: rankMode === "strategy" ? baseline.rank
+      : (hasSeparateRank ? baseline.entity_rank : baseline.rank),
+    atFloor: !!(baseline.rank && baseline.rank.reason === "unranked"),
+  };
   // Whether this card's rank displays live in the head (today) or the body
   // (spec practice-log-entity-cards, round 3 -- Griffin: "imagine we display
   // the ranked display inside the dropdown when it's opened... If I close
@@ -513,6 +535,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           atFloor=${ranksAreAtFloor(sec)}
           identity=${rankIdentity(ek, shownIdentity, sec, t)}
           swapKey=${strategySwapKey(sec.last_strat, rankMode, hasSeparateRank)}
+          earnedTransition=${earnedTransition}
           showNext=${active} iconSize=${rankIconSize}
           nextStepMode=${nextStepMode} />
     </div>`;
@@ -619,6 +642,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
               <${StratPicker} entity=${ek} identity=${entityIdentity(sec)}
                   strategies=${sec.strategies} active=${sec.last_strat}
                   groups=${sec.strategy_groups} allowBlank=${!sec.default_strat}
+                  timerMode=${clock} onNotice=${t.setNotice}
                   onChanged=${t.refresh} /></span>`}
       </div>
       ${!inBody && ranksBlock}

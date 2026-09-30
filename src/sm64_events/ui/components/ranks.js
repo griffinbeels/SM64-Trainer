@@ -191,6 +191,13 @@ function entryRankName(entry) {
     entry.division ? ` ${divisionDigit(entry.division)}` : ""}`;
 }
 
+function gradedBanner(banner, atFloor) {
+  return banner && banner.rank ? {
+    tier: banner.rank, division: banner.division,
+    fill: banner.next_tier ? (banner.fill || 0) : 1,
+  } : atFloor ? { ...rankAt(0), fill: 0 } : null;
+}
+
 function entryBasis(entry) {
   const basis = entry && entry.banner && entry.banner.rank
     ? entry.banner.basis : null;
@@ -217,7 +224,8 @@ export function RankBanner({ label, banner, hint = null, identity = null,
                              atFloor: atFloorProp = false,
                              lane = null, order = 0,
                              layout = "row", showNext = true, iconSize = 24,
-                             nextStepMode = "classic", swapKey = null }) {
+                             nextStepMode = "classic", swapKey = null,
+                             earnedTransition = null }) {
   const ranked = !!(banner && banner.rank);
   // Called unconditionally (rules of hooks) even on the sentinel/empty path
   // below — `null` passes straight through with no animation, which is what
@@ -255,12 +263,16 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // ladder exists). The strategy banner can also answer for itself.
   const atFloor = !ranked
     && (atFloorProp || (!!banner && banner.reason === "unranked"));
-  const graded = ranked ? {
-    tier: banner.rank, division: banner.division,
-    // At the top of the ladder there is no next step to fill toward, so the
-    // bar is simply full — the same sentinel the old tween used.
-    fill: banner.next_tier ? (banner.fill || 0) : 1,
-  } : atFloor ? { ...rankAt(0), fill: 0 } : null;
+  const graded = gradedBanner(banner, atFloor);
+  const earnedKey = earnedTransition && earnedTransition.key;
+  const seenEarnedKey = useRef(earnedKey);
+  // A correction can change ladders AND earn a PB in the same update. Only
+  // that new live event takes the climb path; later switches still exchange.
+  const freshEarned = earnedKey != null && seenEarnedKey.current !== earnedKey;
+  if (freshEarned) seenEarnedKey.current = earnedKey;
+  const earnedFrom = earnedTransition && (
+    gradedBanner(earnedTransition.banner, earnedTransition.atFloor)
+      || { ...rankAt(0), fill: 0 });
   // Practice-log Strategy/Overall changes -- and, since 2026-08-23, a change
   // of the active STRATEGY itself -- are the same kind of event as a route
   // change: a different measurement nobody earned. Reuse the route exchange
@@ -282,12 +294,13 @@ export function RankBanner({ label, banner, hint = null, identity = null,
     fill: graded ? graded.fill : 0,
     banner,
     atFloor,
-  }, mareloTuning());
+  }, mareloTuning(), { suppress: freshEarned });
   // `lane`/`order` can sequence several banners in an inspector or legacy
   // caller. The practice log now passes neither because it paints one banner;
   // a lone banner and the MARELO bar start immediately.
   const climb = useRankClimb(graded, identity, {
     lane, order, exchangeKey: swapKey,
+    earnedTransition: earnedTransition && { key: earnedKey, from: earnedFrom },
   });
   // The next-step sentence currently ON SCREEN, and the one before it. A
   // fade-out has to show the sentence the reader was ALREADY reading: `banner`
@@ -364,6 +377,19 @@ export function RankBanner({ label, banner, hint = null, identity = null,
     priorRef.current = sentenceRef.current.key == null
       ? settledSentence : sentenceRef.current;
     sentenceRef.current = settledSentence;
+  }
+  if (freshEarned) {
+    // The leaving line belongs to the destination's pre-save measurement,
+    // just like the cap and bar. The old strategy's gap has no meaning here.
+    const before = earnedTransition.banner;
+    const next = before && before.rank && before.next_tier
+      ? { tier: before.next_tier, division: before.next_division }
+      : earnedTransition.atFloor ? rankAt(1) : null;
+    priorRef.current = {
+      label: stepLabel(next),
+      gap: before && before.rank && before.next_gap_cs != null
+        ? (before.next_gap_cs / 100).toFixed(2) : null,
+    };
   }
   // "rest" is the hook's word for "nothing is animating", and it is ALSO what
   // the stale state looks like on the one render between a new payload landing

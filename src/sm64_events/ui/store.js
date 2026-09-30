@@ -5,6 +5,7 @@ import { coalesce } from "./coalesce.js";
 import { pollJSON } from "./pollstate.js";
 import { noteEvent, noteFetchDone, noteFetchStart } from "./latency.js";
 import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
+import { entityKey } from "./entitysection.js";
 
 // segment_progress: an armed segment's step cursor moved. It is the ONLY
 // signal that reaches the browser for it -- a cursor move journals nothing of
@@ -49,6 +50,10 @@ export function runBlocksScopeChange(run, currentRouteId, nextRouteId) {
 
 export function useTracker() {
   const [view, setView] = useState(null);
+  // Live-earned corrections only: nothing is persisted or reconstructed on
+  // arrival. A local nonce stays unique when a reconnect resets server seq.
+  const classificationPbs = useRef({});
+  const classificationNonce = useRef(0);
   const [clock, setClock] = useState(localStorage.getItem("clock") || "igt");
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
   // Star-selector art: "course" (default) = each star's split-icon
@@ -427,6 +432,16 @@ export function useTracker() {
         if (!closed) setTimeout(connect, 2000); };
       ws.onmessage = (e) => {
         const ev = JSON.parse(e.data);
+        if (ev.type === "pb_saved" || ev.type === "pb_undone") {
+          const payload = ev.payload;
+          const key = entityKey({ ...payload,
+            kind: payload.segment_id != null ? "segment" : undefined });
+          if (ev.type === "pb_saved" && payload.classification) {
+            classificationPbs.current[key] = {
+              ...payload, key: ++classificationNonce.current,
+            };
+          } else delete classificationPbs.current[key];
+        }
         setFeed((f) => [ev, ...f].slice(0, 200));
         if (ev.type === "rank_standards_changed")
           setStandardsRev((revision) => revision + 1);
@@ -567,6 +582,7 @@ export function useTracker() {
     localStorage.setItem("sm64.showDust", on ? "1" : "0"); setShowDust(on); };
   const armedSegs = new Set(armedOrder);
   return { view, clock, pickClock, scope, pickScope, feed, connected,
+           classificationPbs: classificationPbs.current,
            starIcons, pickStarIcons, rankIcons, pickRankIcons,
            showDust, pickShowDust, courseIcons,
            segments, vocab, loadSegments,
