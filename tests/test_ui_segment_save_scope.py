@@ -30,6 +30,14 @@ def set_input(page, selector, value):
       el.dispatchEvent(new Event('input', {{bubbles: true}}));""")
 
 
+def capture_scope(page, tmp_path, can_share, width):
+    captures = Path(os.environ.get("SM64_REPORT_DIR") or tmp_path)
+    captures.mkdir(parents=True, exist_ok=True)
+    shot = captures / f"segment-save-{'shared' if can_share else 'personal'}-{width}.png"
+    shot.write_bytes(page.screenshot())
+    print(f"Save scope screenshot: {shot}")
+
+
 @pytest.mark.parametrize("can_share", [True, False])
 def test_lblj_editor_saves_to_the_visible_scope(can_share, tmp_path, monkeypatch):
     source = json.loads(bundled_defaults_seed().read_text(encoding="utf-8"))
@@ -68,11 +76,7 @@ def test_lblj_editor_saves_to_the_visible_scope(can_share, tmp_path, monkeypatch
             geometry = page.evaluate("Array.from(document.querySelectorAll('.builder-actions button'))"
                 ".map(b => {const r=b.getBoundingClientRect(); return [r.left,r.right]})")
             assert all(0 <= left < right <= width for left, right in geometry)
-            captures = Path(os.environ.get("SM64_REPORT_DIR") or tmp_path)
-            captures.mkdir(parents=True, exist_ok=True)
-            shot = captures / f"segment-save-{'shared' if can_share else 'personal'}-{width}.png"
-            shot.write_bytes(page.screenshot())
-            print(f"Save scope screenshot: {shot}")
+            capture_scope(page, tmp_path, can_share, width)
         name = "LBLJ — corrected default through the visible save button"
         set_input(page, '.segbuilder input[placeholder="e.g. Lobby to BitDW"]', name)
         page.click(primary)
