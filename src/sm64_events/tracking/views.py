@@ -61,7 +61,7 @@ from sm64_events.tracking.activestrat import (PIPE_FAMILY_SUFFIX,
                                               ActiveStrats,
                                               reds_pipe_segments)
 from sm64_events.tracking.caveats import (attempt_caveat, caveat_for,
-                                          igt_seen_in)
+                                          igt_seen_in, save_state_run)
 from sm64_events.tracking.pbaction import pb_action, pb_strat_gate
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             attributable_parent,
@@ -451,12 +451,13 @@ def _attempt_rank(a, frames, ranks, ek=None) -> dict | None:
 def valid_frames(history, strat, clock) -> list[int]:
     """Chronological times (frames) of the runs that count toward an average
     (average rank mode spec): successful, not cleared (manual purge or
-    auto-ignore), achieved WITH `strat`, with a real time on `clock` —
+    auto-ignore), no save-state use, achieved WITH `strat`, with a real time on `clock` —
     excluding the rta==0 reset-race junk rows (projection.py docstring).
     `history` is journal-id ordered, so the list is chronological."""
     out = []
     for a in history:
-        if a.outcome != "success" or a.cleared or a.strat_tag != strat:
+        if (a.outcome != "success" or a.cleared or a.strat_tag != strat
+                or save_state_run(a)):
             continue
         frames = a.igt_frames if clock == "igt" else a.rta_frames
         if frames is None or (clock == "rta" and frames == 0):
@@ -1085,7 +1086,8 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
     rank_clock = clock if rank_clock is None else rank_clock
     by_session: dict[int, list] = {}
     for a in attempts:
-        if a.outcome != "success" or a.cleared or frames_of(a) is None:
+        if (a.outcome != "success" or a.cleared or frames_of(a) is None
+                or save_state_run(a)):
             continue
         rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
         by_session.setdefault(a.session_id, []).append({

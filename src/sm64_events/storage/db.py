@@ -1514,8 +1514,14 @@ class Database:
     # against the live db). One rowid lookup per candidate row instead gives
     # current_pb back for free — 4.5 us, and it is called once per route
     # candidate per view build.
+    # These save-state facts mirror caveats.save_state_run. Retain the saved
+    # row as history, but never grade it or select it as the current ghost;
+    # the preceding clean PB becomes current on the next read.
     _VISIBLE_PB = (" NOT EXISTS (SELECT 1 FROM attempts"
-                   " WHERE attempts.id = pbs.attempt_id AND attempts.cleared=1)")
+                   " WHERE attempts.id = pbs.attempt_id AND (attempts.cleared=1"
+                   " OR attempts.anchor_type='state_loaded'"
+                   " OR attempts.state_loads>0"
+                   " OR attempts.invalid_reason='save_state'))")
 
     def insert_pb(self, course_id: int | None, star_id: int | None,
                   strat_tag: str | None, timer_mode: str, frames: int,

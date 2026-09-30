@@ -8,6 +8,8 @@ a true reset), then it should automatically save." It saves through the real
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 from sm64_events.core.events import Event
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
@@ -118,17 +120,45 @@ def test_no_strategy_selected_never_saves(tmp_path, caplog):
     assert not [r for r in caplog.records if "automatic PB" in r.getMessage()]
 
 
-def test_a_save_state_run_is_not_saved_but_can_be_by_hand(tmp_path):
+def test_a_save_state_run_is_never_saved_even_by_hand(tmp_path):
     async def manual(svc, db):
-        await svc.save_pb(db.attempts()[-1].id, "igt")
+        for clock in ("igt", "rta"):
+            with pytest.raises(ValueError, match="save_state"):
+                await svc.save_pb(db.attempts()[-1].id, clock)
 
     db, svc, _ = run(tmp_path, *enter(), load(1300), grab(1500, 480))
     a = db.attempts()[-1]
     assert (a.valid, a.invalid_reason) == (False, "save_state")
     assert pbs(db) == []
-    assert svc.pb_action(a, "igt")[0] == "save"
+    assert svc.pb_action(a, "igt") == (None, {"reason": "save_state", "strat": None})
     db2, _, _ = run(tmp_path / "manual", *enter(), load(1300), grab(1500, 480), manual)
-    assert len(pbs(db2)) == 1 and "auto" not in pb_events(db2)[-1]
+    assert pbs(db2) == [] and pb_events(db2) == []
+
+
+def test_a_bowser_fight_rearmed_by_a_load_never_saves_a_partial_pb(tmp_path):
+    made = {}
+
+    async def define(svc, db):
+        made["id"] = await svc.create_segment({
+            "name": "Bowser load regression", "match_mode": "strict",
+            "start_triggers": [{"type": "level_enter", "to": 33},
+                               {"type": "attempt_anchor", "level": 33}],
+            "end_triggers": [{"type": "key_grabbed", "level": 33}]})
+        await svc.set_strat_segment(made["id"], "Standard")
+
+    db, svc, _ = run(tmp_path, define,
+                     ev("level_changed", 19088, {"from": 19, "to": 33}),
+                     reset(20187), load(21638),
+                     ev("key_grabbed", 22173,
+                        {"level": 33, "igt_frames": 1013, "mario_alive": True}))
+    a, = [a for a in db.attempts()
+          if a.segment_id == made["id"] and a.outcome == "success"]
+    assert (a.rta_frames, a.valid, a.invalid_reason) == (535, False, "save_state")
+    assert pbs(db) == [] and pb_events(db) == []
+    # Even a stale incorrectly valid cache cannot authorize a partial PB:
+    # the opening load is independently proven by the journal.
+    from dataclasses import replace
+    assert svc._auto_pb_mode(replace(a, valid=True, invalid_reason=None, state_loads=0)) is None
 
 
 def test_a_subarea_reset_is_not_saved(tmp_path):

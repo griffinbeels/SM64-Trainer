@@ -4,11 +4,13 @@
   reset, running through every load to the finish, marked invalid.
 * A star is valid only from a full reset at the course's own start -- not a
   reset inside a subarea -- with no load before the finish.
-* A segment is valid when no load happens between its own start and finish;
-  a reset or load starts one only where that segment starts.
+* A segment is valid when no load happens at its own start or before its finish;
+  a separate segment triggered after a load remains valid.
 * History safety: a session journaled before the rules (no `attempt_rules` on
   its `session_started`) projects exactly as it always has.
 """
+from dataclasses import replace
+
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.projection import ATTEMPT_RULES, project, replay
 from sm64_events.tracking.segments import SegmentDef
@@ -245,17 +247,64 @@ def segs(attempts, sid):
     return [a for a in attempts if a.segment_id == sid]
 
 
-def test_a_segment_that_starts_on_a_reset_is_valid_from_a_load():
-    """"For SUBSEGMENTS, it might be valid to start from a save state, because
-    the subsection occurs AFTER the start of the save state" -- a definition
-    that starts on a reset or load starts where the load lands."""
+def test_a_segment_that_starts_on_a_reset_is_invalid_from_a_load():
+    """The load can restore Mario half-way through the segment's area; an
+    attempt-anchor start does not prove it restored the real starting point."""
     attempts, _ = replay([session(1), *enter(2, 1000, WF),
                           load(10, 1400), grab(11, 1900)],
                          segments=[seg(1, FROM_A_RESET)])
     run = [a for a in segs(attempts, 1) if a.outcome == "success"]
     assert len(run) == 1
     assert (run[0].anchor_type, run[0].valid, run[0].state_loads) == (
-        "state_loaded", True, 0)
+        "state_loaded", False, 1)
+    assert (run[0].invalid_reason, run[0].first_load_frame) == ("save_state", 1400)
+
+
+def test_a_subsection_started_by_a_load_is_invalid_too():
+    definition = replace(seg(1, FROM_A_RESET), parents=["star:2:1"])
+    attempts, _ = replay([session(1), *enter(2, 1000, WF),
+                          load(10, 1400), grab(11, 1900)], segments=[definition])
+    run, = [a for a in segs(attempts, 1) if a.outcome == "success"]
+    assert (run.valid, run.invalid_reason, run.state_loads) == (False, "save_state", 1)
+
+
+def test_a_separate_segment_start_after_a_load_remains_valid():
+    attempts, _ = replay([
+        session(1), *enter(2, 1000, WF), load(10, 1400),
+        jev(11, "moment_reached", 1500,
+            {"kind": "pole_grab", "level": WF, "area": 1, "ordinal": 1}),
+        grab(12, 1900)], segments=[seg(1, FROM_A_MOMENT)])
+    run, = [a for a in segs(attempts, 1) if a.outcome == "success"]
+    assert (run.valid, run.invalid_reason, run.state_loads) == (True, None, 0)
+
+
+def test_bowser_two_mid_fight_load_window_keeps_partial_time_and_marks_it():
+    """Relevant fields from ghost-overlay journal 7993-8031, 2026-09-29:
+    nine loads restore 16.03 s, then the key shows 33.76 s. The last interval
+    lasts 535 frames (17.83 s); the defect was declaring that interval valid."""
+    definition = SegmentDef(
+        id=9, name="Bowser 2", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 33},
+                        {"type": "attempt_anchor", "level": 33}],
+        end_triggers=[{"type": "key_grabbed", "level": 33}], guards=[])
+    events = [session(7641), *enter(7982, 19088, 33), reset(7993, 20187)]
+    for jid, frame, before in ((7999, 20879, 684), (8002, 20997, 584),
+                               (8005, 21108, 583), (8008, 21226, 590),
+                               (8011, 21309, 558), (8014, 21388, 555),
+                               (8017, 21464, 553), (8020, 21539, 553),
+                               (8023, 21638, 576)):
+        events.extend([
+            load(jid, frame, restored=481, igt_frames_before=before,
+                 action=912, prev_action=914),
+            jev(jid + 1, "mario_acted", frame + 10, {"action": 913})])
+    events.append(jev(8031, "key_grabbed", 22173,
+                      {"level": 33, "which": "bitfs", "igt_frames": 1013,
+                       "igt_source": "result", "mario_alive": True}))
+    attempts, _ = replay(events, segments=[definition])
+    run, = [a for a in segs(attempts, 9) if a.outcome == "success"]
+    assert (run.id, run.rta_frames, run.timed_by) == (90000008023, 535, "delta")
+    assert (run.valid, run.invalid_reason, run.state_loads, run.first_load_frame) == (
+        False, "save_state", 1, 21638)
 
 
 def test_a_segment_restarted_by_a_load_elsewhere_in_its_area_is_not_valid():

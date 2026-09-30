@@ -422,6 +422,23 @@ def test_progress_excludes_cleared_and_is_none_without_successes(tmp_path):
     assert sec["progress"] is None
 
 
+def test_a_save_state_success_is_absent_from_progress_even_with_a_saved_pb(tmp_path):
+    from dataclasses import replace
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    attempts = db.attempts()
+    clean, partial = [a for a in attempts if a.outcome == "success"]
+    partial = replace(partial, anchor_type="state_loaded")
+    db.replace_attempts([partial if a.id == partial.id else a for a in attempts])
+    db.insert_pb(partial.course_id, partial.star_id, partial.strat_tag,
+                 "igt", partial.igt_frames, partial.id, partial.ended_utc)
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    points = sec["progress"]["sessions"][0]["points"]
+    assert [p["attempt_id"] for p in points] == [clean.id]
+    assert all(not p["is_pb_igt"] for p in points)
+
+
 def test_progress_superseded_pbs_stay_gold(tmp_path):
     db, svc = make(tmp_path)
     seed(svc)
@@ -1778,6 +1795,9 @@ def test_valid_frames_filters_the_average_inputs():
         att(strat_tag=None),                # predates strat tagging
         att(igt_frames=None),               # no time on the igt clock
         att(rta_frames=0, igt_frames=0),    # rta race row; igt 0 is legal
+        att(anchor_type="state_loaded"),  # a known opening load, even if legacy
+        att(state_loads=1),                 # load during the run
+        att(invalid_reason="save_state"),  # persisted validity judgement
     ]
     assert valid_frames(history, "fast", "igt") == [343, 0]
     assert valid_frames(history, "fast", "rta") == [400, 400]

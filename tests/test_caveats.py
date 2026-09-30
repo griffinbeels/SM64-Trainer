@@ -168,14 +168,24 @@ def test_no_pb_means_no_caveat():
 # --- a VALID run (task 0144, projection caveat 21) ---------------------------
 
 @pytest.mark.parametrize("reason", VALIDITY_CAVEATS)
-def test_an_invalid_success_is_marked_and_still_saveable(reason):
-    """His ruling: invalid runs are marked "and leave it as a manual choice for
-    the user to decide". The mark is the reason drawn beside the Save button,
-    so it must never become a refusal."""
+def test_an_invalid_success_is_marked_and_only_save_states_block(reason):
+    """2026-09-29 excludes save states from PBs. The earlier manual-choice
+    ruling still applies to subarea resets and runs without a fresh reset."""
     row = replace(BASE, timed_at="xcam", valid=False, invalid_reason=reason)
     assert attempt_caveat(row) == reason
-    assert pb_blocked_by(row) is None
+    assert pb_blocked_by(row) == ("save_state" if reason == "save_state" else None)
     assert caveat_for(pb(), row) == reason
+
+
+@pytest.mark.parametrize("proof", [
+    {"anchor_type": "state_loaded"}, {"state_loads": 1},
+    {"invalid_reason": "save_state"},
+])
+def test_a_known_load_is_marked_and_blocked_even_without_a_validity_judgement(proof):
+    row = replace(BASE, timed_at="xcam", valid=None, **proof)
+    assert attempt_caveat(row) == "save_state"
+    assert caveat_for(pb(), row) == "save_state"
+    assert pb_blocked_by(row) == "save_state"
 
 
 def test_an_invalid_run_outranks_a_grab_timed_one():

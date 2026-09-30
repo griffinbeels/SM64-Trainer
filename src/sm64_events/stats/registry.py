@@ -2,19 +2,20 @@
 stat menu renders from registry_meta(); nothing else changes anywhere.
 
 Every compute() sees attempts already scoped to one star by the caller,
-ordered by attempt id (chronological). Cleared attempts are excluded here,
-in one place. fmt tells the UI how to render: time | percent | int."""
+ordered by attempt id (chronological). Cleared and save-state attempts are
+excluded here, in one place. fmt tells the UI how to render: time | percent | int."""
 import copy
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
 from sm64_events.tracking.projection import Attempt
+from sm64_events.tracking.caveats import save_state_run
 
 DEFAULT_FAILURES = ["reset", "loaded", "hard_reset", "death"]  # 'abandoned' excluded by default
 
 
 def _live(attempts: Sequence[Attempt]) -> list[Attempt]:
-    return [a for a in attempts if not a.cleared]
+    return [a for a in attempts if not a.cleared and not save_state_run(a)]
 
 
 def _times(attempts: Sequence[Attempt], clock: str) -> list[int]:

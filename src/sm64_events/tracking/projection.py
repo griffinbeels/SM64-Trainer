@@ -258,12 +258,13 @@ Caveats (hard-won — keep these current):
         tracking/caveats.py words). A STAR is valid only from a full reset
         at the course's own start -- the area its level entry landed in --
         with no load before the finish. A SEGMENT is valid when no load
-        lands between its arm and its finish (`_segment_validity`).
+        lands at its arm or before its finish (`_segment_validity`). A
+        separate segment with its own trigger AFTER a load remains valid.
     Rules-1 attempts carry `valid` None: the old detector could not see a
     load that left the frame counter alone, so nothing about them is known.
     The replay lead-in floor, `prev_anchor_utc`, is filled under both.
 """
-from bisect import bisect_left, bisect_right
+from bisect import bisect_left
 from dataclasses import dataclass, replace
 
 from sm64_events.core.modes import platform_from_payload
@@ -1579,25 +1580,18 @@ class Projector:
 
     def _segment_validity(self, ev, a, hc) -> dict:
         """Caveat 21 for an engine-closed attempt. A segment is valid when no
-        save-state load happened between its own start and its finish -- "for
-        SUBSEGMENTS, it might be valid to start from a save state, because the
-        subsection occurs AFTER the start of the save state" (task 0144) -- and
-        a reset or load starts one only where that segment starts.
-
-        The matcher already enforces WHERE: an anchor re-arms a segment only
-        at its own arm position (level and area), which is exactly "a reset
-        counts when it lands where that segment starts". What it cannot see is
-        where inside that area a LOAD put Mario, so a run the matcher restarted
-        at a load counts only for a definition that STARTS on a reset or load
-        (`attempt_anchor`) -- anywhere else the load may have landed half-way
-        through. A 100-coin attempt is a STAR and takes the star's rule: its
-        start must be a full reset at the course start."""
+        save-state load happened at its start or before its finish. A load
+        re-arming an attempt-anchor definition still used a save state -- it
+        can land half-way through the fight (Bowser 2, journal 8023-8031,
+        2026-09-29). A separate segment whose own trigger occurs AFTER that
+        load remains valid. A 100-coin attempt is a STAR and takes the star's
+        rule: its start must be a full reset at the course start."""
         arm_id = journal_id(a.id)
         before = bisect_left(self._anchor_ids, arm_id)
         out = {"prev_anchor_utc": self._anchor_utcs[before - 1] if before else None}
         if self._rules < 2:
             return out
-        lo = bisect_right(self._load_ids, arm_id)
+        lo = bisect_left(self._load_ids, arm_id)
         hi = bisect_left(self._load_ids, ev.id)
         loads = hi - lo
         out.update(state_loads=loads,
@@ -1610,12 +1604,6 @@ class Projector:
             # how the engine picks up a run mid-course -- nothing reset it.
             reason = (None if a.anchor_type == "level_changed"
                       else self._anchor_verdicts.get(arm_id, "no_reset"))
-        elif a.anchor_type == "state_loaded":
-            d = self._segments.definition(a.segment_id)
-            starts_on_anchor = d is not None and any(
-                clause.get("type") == "attempt_anchor"
-                for clause in d.start_triggers)
-            reason = None if starts_on_anchor else "save_state"
         else:
             reason = None
         out.update(valid=reason is None, invalid_reason=reason)
