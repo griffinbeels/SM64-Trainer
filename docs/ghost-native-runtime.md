@@ -670,7 +670,7 @@ that animation, and continue if we continue"; before, the death ran out on
 its coordinate is the live elapsed clock. The defeat ends early only when
 every ghost has fallen, faded or finished, not when a frame (a pause menu)
 draws none. It happens once per run: a reset or a state load that restores
-the run ends it and draws the ghosts at the new state, and a scene change or
+the run ends it and draws the ghosts at the new state, and an incompatible scene change or
 the global timer running back ends it. Tuning lives in
 `ghost_tuning.h`. The playback witness drives him first (both fall, cry once,
 frame by frame, held, faded, hidden), the ghost first (it dances on through
@@ -700,14 +700,47 @@ row; gaps, after-end, wrong scene, invalid timing and pose refusals hide playbac
 except that a refusal run of at most two records inside one scene holds the pose before it.
 Per-row scenes allow coherent cross-area clips.
 
+DDD (level 23), areas 1 and 2, has one bounded exception in
+[ghost_scene.h](../plugin/gfxwrap/ghost_scene.h). The
+[pinned level script](https://github.com/n64decomp/sm64/blob/06ec56df7f951f88da05f468cdcacecba496145a/levels/ddd/script.c)
+defines the seamless portal displacement: area 1 to 2 subtracts 8192 from x;
+area 2 to 1 adds 8192. Both areas render copies of the swimming tunnel:
+[area 1 geometry](https://github.com/n64decomp/sm64/blob/06ec56df7f951f88da05f468cdcacecba496145a/levels/ddd/areas/1/2/model.inc.c)
+and [area 2 geometry](https://github.com/n64decomp/sm64/blob/06ec56df7f951f88da05f468cdcacecba496145a/levels/ddd/areas/2/2/model.inc.c).
+Their common volume is a 13-vertex x/y tunnel profile, extruded over
+z -511..512 in area 1 coordinates; the helper records its source-derived
+vertices. It includes the upper passage, deep shafts, beveled bend and right
+duct. Its bounding box also contains empty air and an area-1-only left duct,
+so bounds alone do not admit a root. A valid recorded root inside the profile
+may draw in either area, mapped by the portal translation; a root outside it,
+an unrelated area or another level still refuses. Live Mario's pose is not
+needed to establish the recorded root's location. Terrain depth, frustum and
+camera fades continue to apply.
+
+Selection, planning, normal poses and held death poses use that same admission
+rule. Playback keeps the exact selected timeline, animation and sound cues;
+it neither waits for live Mario nor chooses a different area's frame. Rebased
+copies translate Mario's world position, recorded camera position/focus and
+the held object's HOLP, only for fields whose validity bits are set; absent
+fields keep their format's zero invariant. Recorded view-space root/shadow matrices and particle
+positions stay unchanged: removing the rebased recorded camera moves each
+world root once, including scaled-modelview Mario. Proximity and sound use the
+same displayed root. Known particles on a short bridged pose refusal use the
+admitted shown pose's recorded scene and their own current recorded camera;
+the bridge never crosses a recorded scene boundary. Saved clips stay immutable.
+
 When playback is ready but its last presentation is hidden for `GP_WRONG_SCENE`,
 the ghost card says "Ghost is in another area." Playback stays running and its
 controls stay available. A visible ghost suppresses this set-level message;
 unknown decisions and stale acknowledgements do not supply an area explanation.
 In the measured DDD pair on 2026-09-29, ghost 8313 entered area 2 at coordinate
 553 and live attempt 8322 at 560: seven mismatched frames (233 ms), with valid
-saved poses throughout 16–22 seconds. That supports scene refusal for this pair;
-it does not establish the cause of every disappearance while crossing water.
+saved poses throughout 16–22 seconds. Those roots lie in the shared connector;
+the strict area-equality guard hid a correctly timed ghost there. Native tests
+cover both lead and lag crossings, both root kinds, held objects, shadow and
+particle placement, overlap/sound positions, connector boundaries and other
+scene refusals. Compilation and native-host proof do not establish the final
+live Project64 picture; the current renderer still needs a live tunnel witness.
 
 ## Recording, preservation and ownership
 

@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "ghost_playback.h"
+#include "ghost_scene.h"
 #include "ghost_proximity.h"
 #include "ghost_sound_fade.h"
 #include "ghost_pose.h"
@@ -135,6 +136,7 @@ struct Defeat {
     const Clip *clip[GP_GHOSTS]{};
 } defeat;
 ghost_pose::Scratch scratch[GP_GHOSTS]; // one borrowed mesh per displayed ghost
+float displayed_position[GP_GHOSTS][3]{}; // the rebased root shared by picture and sound
 // The worker's recovery, repeated on the renderer from the same live samples,
 // so the frame a state loads can already draw at its restored coordinate.
 // The worker's next command confirms it (or replaces it with its own).
@@ -844,7 +846,7 @@ const gclip_frame *bridged(const Clip& clip,uint32_t at) {
         if(clip.frames[i].sample.level!=first.level || clip.frames[i].sample.area!=first.area)return nullptr;
     return &clip.frames[before];
 }
-uint32_t draw(uint32_t index,const gs_record& recorded,const gclip_frame& shown_row,
+uint32_t draw(uint32_t index,const gs_record& recorded,
               const gc_sample& particles_from,const gc_sample& live,const ghost::WorldPass& world,
               float fade,ghost_compositor::Pose& out);
 // The dance past its recording, at coordinate `at`: the last recorded dance
@@ -942,7 +944,9 @@ uint32_t choose(uint32_t index,const Coordinate& frame,const gc_sample& live,Cho
     }
     const auto &selected=clip->frames[lo];
     if(!frame.below_zero && at>=first && clip_coordinate(*clip,lo)!=at) {gaps.fetch_add(1);return GP_GAP;}
-    if(live.level!=selected.sample.level || live.area!=selected.sample.area)return GP_WRONG_SCENE;
+    float scene_translation=0;
+    if(!ghost_scene::translation(selected.sample.level,selected.sample.area,live.level,live.area,scene_translation))
+        return GP_WRONG_SCENE;
     if(!sequence_reported) {
         report.selected_sequence_lo=uint32_t(selected.sample.sequence);
         report.selected_sequence_hi=uint32_t(selected.sample.sequence>>32);
@@ -952,24 +956,27 @@ uint32_t choose(uint32_t index,const Coordinate& frame,const gc_sample& live,Cho
     if(!(selected.sample.valid_fields&GC_VALID_POSE) && !(shown=bridged(*clip,lo))) {
         refusals.fetch_add(1);return GP_INVALID_FRAME;
     }
+    if(!ghost_scene::compatible(shown->sample,live))return GP_WRONG_SCENE;
     choice.record=lo;choice.posed=uint32_t(shown-clip->frames);
     return frame.below_zero || target<first?GP_BEFORE_START:GP_READY;
 }
 // One ghost's pose, shadow and particles for the recorded (or defeated)
-// sample; shown is the row whose shadow and place it uses.
-uint32_t draw(uint32_t index,const gs_record& recorded,const gclip_frame& shown_row,
+// sample, with every world-space part mapped into the live area's coordinates.
+uint32_t draw(uint32_t index,const gs_record& recorded,
               const gc_sample& particles_from,const gc_sample& live,const ghost::WorldPass& world,
               float fade,ghost_compositor::Pose& out) {
-    const gclip_frame *shown=&shown_row;
+    gs_record mapped=recorded;
+    if(!ghost_scene::rebase(mapped.sample,live))return GP_WRONG_SCENE;
+    std::memcpy(displayed_position[index],mapped.sample.pose.position,sizeof(displayed_position[index]));
     evaluations.fetch_add(1);
     const float opacity=active_request.opacity*fade;
     // The overlap fade rides with the player-first region, not the opacity:
     // the shaders give the two ONE floor (ghost_occlusion.h).
     const float overlap=active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE)
         ? ghost_proximity::factor(live.pose.position,live.pose.scale,
-              shown->sample.pose.position,shown->sample.pose.scale,active_request.proximity_distance)
+              mapped.sample.pose.position,mapped.sample.pose.scale,active_request.proximity_distance)
         : 1.0f;
-    if(ghost_pose::evaluate(model.value,recorded,live,world,opacity,scratch[index],out)!=ghost_pose::Result::ok) {
+    if(ghost_pose::evaluate(model.value,mapped,live,world,opacity,scratch[index],out)!=ghost_pose::Result::ok) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
     out.hue_degrees=active_request.tint_enabled?float(active_request.clips[index].hue_degrees):0.0f;
@@ -978,16 +985,19 @@ uint32_t draw(uint32_t index,const gs_record& recorded,const gclip_frame& shown_
     ghost_occlusion::region(out.view_projection,active_request.occlusion_fade!=0,
         (live.valid_fields&GC_VALID_POSE)!=0,live.pose.position,live.pose.scale,out.occlusion);
     out.occlusion.overlap=overlap;
-    if(active_request.shadow_enabled && (shown->sample.valid_fields&GC_VALID_SHADOW)
-            && !ghost_pose::shadow(model.value,shown->sample,out.view_projection,shadows[index].vertices,
+    if(active_request.shadow_enabled && (mapped.sample.valid_fields&GC_VALID_SHADOW)
+            && !ghost_pose::shadow(model.value,mapped.sample,out.view_projection,shadows[index].vertices,
                                    shadows[index].texture,out.shadow)) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
     // Recorded particles never refuse their ghost; unknown frames are skipped.
     sg_particle_view particles{};
-    if((particles_from.valid_fields&GC_VALID_PARTICLES) && sg_model_get_particles(model.value,&particles)==SG_OK)
-        ghost_particle_pose::place(model.value,particles,particles_from,live.camera,out.view_projection,
-                                   particle_vertices[index],out.particles);
+    if((particles_from.valid_fields&GC_VALID_PARTICLES) && sg_model_get_particles(model.value,&particles)==SG_OK) {
+        gc_sample mapped_particles=particles_from;
+        if(ghost_scene::rebase_components(mapped_particles,recorded.sample,live))
+            ghost_particle_pose::place(model.value,particles,mapped_particles,live.camera,out.view_projection,
+                                       particle_vertices[index],out.particles);
+    }
     rendered.fetch_add(1);
     return GP_READY;
 }
@@ -1003,7 +1013,7 @@ uint32_t choose_fall(uint32_t index,uint32_t post,const gc_sample& live,Choice& 
     if(!hold || post>=hold+GP_DEFEAT_FADE_FRAMES) {choice.fade=0;return GP_STAR_ENDED;}
     choice.fade=post<hold?1.0f:float(hold+GP_DEFEAT_FADE_FRAMES-post)/float(GP_DEFEAT_FADE_FRAMES);
     const auto &row=defeat.clip[index]->frames[defeat.row[index]];
-    if(live.level!=row.sample.level || live.area!=row.sample.area)return GP_WRONG_SCENE;
+    if(!ghost_scene::compatible(row.sample,live))return GP_WRONG_SCENE;
     choice.falling=true;choice.record=choice.posed=defeat.row[index];
     return GP_READY;
 }
@@ -1024,7 +1034,7 @@ uint32_t pose_fall(uint32_t index,uint32_t post,const Choice& choice,const gc_sa
     p.punch_state=0;p.grab_position=0;
     for(unsigned k=0;k<3;++k)p.torso_angles[k]=p.head_angles[k]=0;
     recorded.sample.valid_fields&=~uint32_t(GC_VALID_PARTICLES|GC_VALID_HELD);
-    return draw(index,recorded,row,recorded.sample,live,world,choice.fade,out);
+    return draw(index,recorded,recorded.sample,live,world,choice.fade,out);
 }
 uint32_t pose_row(uint32_t index,const Choice& choice,const gc_sample& live,const ghost::WorldPass& world,
                   ghost_compositor::Pose& out) {
@@ -1033,7 +1043,7 @@ uint32_t pose_row(uint32_t index,const Choice& choice,const gc_sample& live,cons
     recorded.configuration=shown.configuration;recorded.sample=shown.sample;
     recorded.world.status=shown.world_status;
     if(choice.played)play_dance(index,choice.played,clip_coordinate(clip,clip.index_count-1),recorded);
-    return draw(index,recorded,shown,choice.played?recorded.sample:clip.frames[choice.record].sample,live,world,
+    return draw(index,recorded,choice.played?recorded.sample:clip.frames[choice.record].sample,live,world,
                 choice.fade,out);
 }
 bool same_list(const Plan& list,const gc_sample& live) {
@@ -1251,10 +1261,11 @@ void plan_list(const gc_sample& live) {
     // game counters instead. A real state load/reset can rewind or jump them;
     // ordinary play advances each by at most the observed global frames.
     bool terminal=defeat.spent && defeat.epoch;
+    float scene_translation=0;
     if(terminal) {
         const uint32_t frames=live.global_timer-defeat.last_timer;
         const bool moved=live.epoch!=defeat.epoch || live.global_timer<defeat.last_timer
-            || live.level!=defeat.level || live.area!=defeat.area
+            || !ghost_scene::translation(defeat.level,defeat.area,live.level,live.area,scene_translation)
             || live.igt<defeat.last_igt || uint32_t(live.igt-defeat.last_igt)>frames
             || uint32_t(uint16_t(live.area_update_counter-defeat.last_clock))>frames;
         if(moved) {
@@ -1267,7 +1278,8 @@ void plan_list(const gc_sample& live) {
     }
     if(defeat.active) {
         post=uint16_t(live.area_update_counter-defeat.clock);
-        if(live.global_timer<defeat.start || live.level!=defeat.level || live.area!=defeat.area
+        if(live.global_timer<defeat.start
+                || !ghost_scene::translation(defeat.level,defeat.area,live.level,live.area,scene_translation)
                 || post>=defeat.hold+GP_DEFEAT_FADE_FRAMES+GP_STAR_FADE_FRAMES+GP_DEFEAT_SCAN)
             defeat.active=false;
     }
@@ -1405,11 +1417,12 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         // (ghost_sound_fade.h), taken as it is on the frame it appears.
         // A bridged refusal sounds its own cues from the pose it shows.
         const auto &shown=bound[i]->frames[choice.posed].sample.pose;
+        const auto *position=displayed_position[i];
         const float faded=active_request.sound_fade
-            ? ghost_sound_fade::picture_fade(pose.view_projection,pose.occlusion,shown.position,shown.scale) : 1.0f;
+            ? ghost_sound_fade::picture_fade(pose.view_projection,pose.occlusion,position,shown.scale) : 1.0f;
         fade_gain[i]=fade_gain_known[i]?ghost_sound_fade::follow(fade_gain[i],faded):faded;
         fade_gain_known[i]=true;
-        place(i,live,shown.position,choice.fade*fade_gain[i]);
+        place(i,live,position,choice.fade*fade_gain[i]);
         if(choice.falling) {
             heard[i]=unheard; // it plays no recorded sound, only its death cry, once
             const auto *sink=sound_sink.load(std::memory_order_acquire);

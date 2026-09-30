@@ -91,6 +91,7 @@ static uint64_t selected_sequence=0;
 static uint32_t selected_world=0;
 static float selected_x=0;
 static float selected_position[3]{};
+static gc_sample selected_sample{},shadow_sample{},particle_sample{};
 // What the defeat hands the model: its animation, frame, eyes and angles.
 static int16_t selected_animation=-1,selected_frame=-1,selected_torso=0;
 static uint8_t selected_eyes=0,selected_hand=0;static uint32_t selected_fields=0;static uint16_t selected_clock=0;
@@ -152,8 +153,10 @@ extern "C" int32_t sg_model_get_particles(sg_model *p,sg_particle_view *out) {
     *out={};return p==fake_model && p ? SG_OK : SG_INVALID_MODEL;
 }
 namespace ghost_particle_pose {
-Placed place(sg_model*,const sg_particle_view&,const gc_sample&,const gc_camera&,const float*,
-             ghost_compositor::ParticleVertex*,ghost_compositor::Particles& result) {result={};return {};}
+Placed place(sg_model*,const sg_particle_view&,const gc_sample& sample,const gc_camera&,const float*,
+             ghost_compositor::ParticleVertex*,ghost_compositor::Particles& result) {
+    particle_sample=sample;result={};return {};
+}
 }
 namespace ghost_pose {
 Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
@@ -164,6 +167,7 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     if(world.epoch!=live.epoch || world.list_serial!=live.dlist_serial || !world.context_generation)
         return Result::wrong_occurrence;
     selected_world=recorded.world.status;
+    selected_sample=recorded.sample;
     selected_sequence=recorded.sample.sequence;
     selected_x=recorded.sample.pose.position[0];
     std::memcpy(selected_position,recorded.sample.pose.position,sizeof(selected_position));
@@ -197,6 +201,7 @@ bool shadow(sg_model *p,const gc_sample& recorded,const float view_projection[16
     out={};++shadow_calls;
     if(refuse_shadow || !p || !(recorded.valid_fields&GC_VALID_SHADOW))return false;
     shadow_sequence=recorded.sequence;
+    shadow_sample=recorded;
     for(unsigned i=0;i<24;++i)vertices[i]={{recorded.shadow.matrix[12],0,0},{0,0},1};
     texture[0]=recorded.shadow.texture[0];
     out.vertices=vertices;out.count=24;out.texture_ia8=texture;
@@ -1463,6 +1468,124 @@ int main() {
             ghost_playback::set_sound_sink(nullptr);
         }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");
+        {
+            // DDD's instant portal: the live swimmer can cross two frames before
+            // or after the ghost. Both keep the exact recorded coordinate;
+            // only the world's origin changes. The shared tunnel is rendered
+            // in either loaded area; elsewhere the other area stays refused.
+            Clip tunnel=Clip::linear(78,12,UINT32_MAX,200);
+            tunnel.header.level=23;
+            for(uint32_t i=0;i<12;++i) {
+                auto &s=tunnel.frames[i].sample;
+                s.level=23;s.area=i>=5?2:1;
+                const float offset=s.area==2?-8192.0f:0.0f;
+                s.pose.position[0]=4000.0f+25.0f*i+offset;s.pose.position[1]=-300;
+                s.valid_fields|=GC_VALID_CAMERA|GC_VALID_SHADOW|GC_VALID_PARTICLES|GC_VALID_HELD|GC_VALID_SOUND;
+                s.status=GC_OK;s.camera.position[0]=3900+offset;s.camera.focus[0]=4000+offset;
+                s.camera.position[2]=1000;s.camera.focus[2]=200;
+                s.pose.root_kind=GC_ROOT_SCALED_MODELVIEW;
+                s.pose.root_matrix[0]=s.pose.root_matrix[5]=s.pose.root_matrix[10]=.25f;
+                s.pose.root_matrix[15]=1;s.pose.root_matrix[12]=100+25.0f*i;
+                s.held.behavior=0x13003174u;s.held.holp[0]=s.pose.position[0]+50;
+                s.held.holp[1]=-250;s.held.holp[2]=200;
+                for(float &scale:s.held.scale)scale=1;
+                s.shadow.matrix[0]=s.shadow.matrix[5]=s.shadow.matrix[10]=s.shadow.matrix[15]=1;
+                s.shadow.matrix[12]=100+25.0f*i;
+                s.particles.count=1;auto &particle=s.particles.entries[0];
+                particle.display_list=0x0401DD60u;particle.translation[0]=110+25.0f*i;
+                particle.basis[0]=particle.basis[4]=particle.basis[8]=GC_PARTICLE_BASIS_ONE;
+                s.sound.count=1;s.sound.bits[0]=7800+i;
+            }
+            check(api->prepare_clip(&tunnel.header,tunnel.frames.data())==GP_OK,"prepare DDD tunnel recording");
+            revision=r.revision+1;r=request(tunnel,revision);r.model_id=4;
+            r.proximity_enabled=1;r.proximity_distance=0;r.volume=1;
+            ghost_playback::set_sound_sink(&test_sink);
+            for(uint32_t crossing:{3u,7u}) {
+                ++r.revision;
+                elapsed_base+=10000;
+                r.origin={GO_STAR,7,live.sequence+1,source_continuity,elapsed_base,source_generation,0,0};
+                live.level=23;live.live_action=1;
+                check(api->configure(&r)==GP_OK,"configure DDD lead or lag crossing");
+                renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+                for(uint32_t i=0;i<12;++i) {
+                    const int area=i>=crossing?2:1;
+                    const float offset=area==2?-8192.0f:0.0f;
+                    live.valid_fields|=GC_VALID_POSE;
+                    live.pose.position[0]=4000.0f+25.0f*i+offset;
+                    live.pose.position[1]=-300;live.pose.position[2]=200;
+                    for(float &scale:live.pose.scale)scale=1;
+                    live.camera.position[0]=3900+offset;live.camera.position[1]=0;live.camera.position[2]=1000;
+                    sound_count=0;for(auto &p:placed)p={};
+                    draw(i,true,GP_READY,i+1,area);
+                    check(selected_x==live.pose.position[0] && selected_sample.area==area,
+                          "DDD ghost advances every recorded row in live area coordinates");
+                    check(selected_sample.held.holp[0]==selected_x+50
+                          && selected_sample.camera.position[0]==live.camera.position[0]
+                          && selected_sample.camera.focus[0]==4000+offset,
+                          "DDD held object and recorded camera share the mapped root");
+                    check(shadow_sample.camera.position[0]==live.camera.position[0]
+                          && shadow_sample.shadow.matrix[12]==100+25.0f*i
+                          && particle_sample.camera.position[0]==live.camera.position[0]
+                          && particle_sample.particles.entries[0].translation[0]==110+25.0f*i,
+                          "DDD shadow and particles keep view space while their camera rebases");
+                    check(poses[0].occlusion.overlap==ghost_occlusion::GHOST_FLOOR && placed[0].count==1
+                          && placed[0].position[0]==100+25.0f*i && placed[0].position[2]==-800
+                          && placed[0].gain==1,
+                          "DDD overlap and sound use the displayed root");
+                    check(sound_count==1 && sound_log[0]==7800+i,
+                          "DDD portal changes neither cue timing nor selected timeline");
+                }
+            }
+            // A held defeat also belongs to this shared tunnel. Crossing back
+            // rebases its frozen place while its animation keeps advancing.
+            live.live_action=0x1302;live.area_update_counter=1012;
+            draw(12,true,GP_READY,12,2);
+            check(selected_animation==GP_DEFEAT_ANIMATION,"DDD ghost defeated at its displayed row");
+            live.area_update_counter=1013;live.pose.position[0]=4275;live.camera.position[0]=3900;
+            draw(13,true,GP_READY,12,1);
+            check(selected_animation==GP_DEFEAT_ANIMATION && selected_frame==1 && selected_x==4275,
+                  "DDD held defeat crosses the connector without resetting its animation");
+            live.live_action=1;
+            ++r.revision;r.mode=GP_FIXED;r.origin={};r.seek_igt=5;
+            check(api->configure(&r)==GP_OK,"fixed DDD mismatch controls");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            live.level=9;draw(20,false,GP_WRONG_SCENE,0,1);
+            live.level=23;draw(21,false,GP_WRONG_SCENE,0,3);
+            live.valid_fields&=~GC_VALID_POSE;
+            draw(22,true,GP_READY,6,1);
+            check(selected_x==4125 && placed[0].gain==1,"mapped DDD pose does not require live Mario's pose");
+            Clip outside=tunnel;outside.header.clip_id[0]=79;
+            outside.frames[5].sample.pose.position[0]=-7000;
+            check(api->prepare_clip(&outside.header,outside.frames.data())==GP_OK,"prepare DDD outside-connector control");
+            ++r.revision;std::memcpy(r.clips[0].clip_id,outside.header.clip_id,16);
+            check(api->configure(&r)==GP_OK,"select outside-connector control");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            draw(23,false,GP_WRONG_SCENE,0,1);
+            draw(24,true,GP_READY,6,2);
+            check(selected_x==-7000,"ordinary same-area playback is not limited to the connector");
+            Clip bridge=tunnel;bridge.header.clip_id[0]=80;
+            auto &refused=bridge.frames[3].sample;
+            refused.status=GC_UNSUPPORTED_ROOT;refused.valid_fields&=~uint32_t(GC_VALID_POSE|GC_VALID_SHADOW|GC_VALID_HELD);
+            refused.pose={};refused.shadow={};refused.held={};
+            check(api->prepare_clip(&bridge.header,bridge.frames.data())==GP_OK,"prepare DDD particle row with refused pose");
+            ++r.revision;r.seek_igt=3;std::memcpy(r.clips[0].clip_id,bridge.header.clip_id,16);
+            check(api->configure(&r)==GP_OK,"select cross-portal bridged pose");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            draw(25,true,GP_READY,3,2);
+            check(selected_x==4050-8192 && particle_sample.sequence==4
+                  && particle_sample.camera.position[0]==3900-8192
+                  && particle_sample.particles.entries[0].translation[0]==185,
+                  "DDD bridged root holds while known particles keep their current recorded row");
+            api->revoke(GP_DISABLED);renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(api->release_clip(tunnel.header.clip_id)==GP_OK,"release DDD tunnel clip");
+            check(api->release_clip(outside.header.clip_id)==GP_OK,"release outside-connector control");
+            check(api->release_clip(bridge.header.clip_id)==GP_OK,"release cross-portal bridged pose");
+            renderer.run([&]{ghost_playback::retire_on_context_loss();});
+            check(api->collect()==GP_OK,"collect DDD tunnel clip");
+            ghost_playback::set_sound_sink(nullptr);
+            live.level=9;live.area=1;
+            check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"restore budget test model after DDD");
+        }
         {
             Clip maximum(12,GCLIP_MAX_RECORDS);
             check(api->prepare_clip(&maximum.header,maximum.frames.data())==GP_OK,"largest supported clip");

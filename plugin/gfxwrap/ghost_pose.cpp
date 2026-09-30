@@ -1,4 +1,5 @@
 #include "ghost_pose.h"
+#include "ghost_scene.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -215,10 +216,10 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     // state. The caller supplies the separately qualified LIVE world pass.
     if (record.bytes != sizeof(record) || record.version != GS_VERSION || !record.configuration)
         return Result::missing_pose;
-    const gc_sample &recorded = record.sample;
-    if (!sample_valid(recorded, GC_VALID_CLOCK | GC_VALID_POSE)
+    if (!sample_valid(record.sample, GC_VALID_CLOCK | GC_VALID_POSE)
             || !sample_valid(live, GC_VALID_CLOCK | GC_VALID_CAMERA)) return Result::missing_pose;
-    if (recorded.level != live.level || recorded.area != live.area) return Result::wrong_scene;
+    gc_sample recorded = record.sample;
+    if (!ghost_scene::rebase(recorded, live)) return Result::wrong_scene;
     if (world.epoch != live.epoch || world.list_serial != live.dlist_serial
             || !world.context_generation) return Result::wrong_occurrence;
     const auto &p = recorded.pose;
