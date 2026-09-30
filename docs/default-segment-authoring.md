@@ -7,6 +7,11 @@ experiment personal. Switching editors and accepting the save prompt uses the
 same primary scope. Regular source launches and released apps save personally.
 Packaged apps cannot enable shared authoring, even with the maintainer flag.
 
+The recorder's **Add another start** action marks additional recorded moments
+as alternative starts. Either start follows the same steps and finish. Shared
+saves preserve the full OR list just like a manually authored definition. See
+[the recorder guide](rules/recorder.md#alternative-recorded-starts).
+
 A shared save writes the complete definition into the tracked authoring input
 `src/sm64_events/data/segments.authored.json` and regenerates
 `src/sm64_events/data/defaults.seed.json`. Existing defaults retain their stable

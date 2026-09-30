@@ -425,7 +425,6 @@
     "a262d4f1dcc495384347fe14b1df57657e17865c33a6ad087e682ffb12c57631",
     "48486be4de284edfa21b57b998cc5b62c7e14f4b2abdc4a46a1ed69e56cc031d",
     "01abd92659acb319c733c3fa629413613f46610cfd1aef9c8feb68f0683a60ca",
-    "f03dd72d8e9b047b2a74c8f31207495c22fec3e07115ef3a5d494da5c2607263",
     "5993d5de2f4da2ca839536ffdc2fd144b015c9ecf56d3c55fb09245a6d7312df",
     "b2af8eb78f846a5cfdc1264190ddd38ee8ebe0044dc83c10033f5a828841d913",
     "95d5da3760841b19f656d98d004257fff3d2c7ec4cbdcd9b6863417510aef538",
@@ -472,10 +471,11 @@
     "562a1b10558a7cfca29820f097a37d27e538557d0fe010f712c57d002b4618ae",
     "8949fc3443494399828bb22d86879b8606203f28ad449ae8d5a479220293df73",
     "a988e70ea11adf2480a2e70a19c391f343127c45c395098d48d814777120c692",
-    "4f0cd70c0efff28958aa2f74d91609ef32bd58624fb6374573331b73256b50dd",
-    "e685e3b59036bab15c996a4bcabc1d4c66d8248ae51ffa851f5a5009d9a3e04b",
     "4373102980df94ccdb09593416bd493ef8f27a7b77122bd21cac579509a94ce5",
-    "1ad6a2e29e8e81cdf257b72c730ee3dad54775ca541e3da82876eea4b6cad25e"
+    "71eaefbf6c568bf37953abef05eb78c31898b49cec23c2ed51edd9ef063072f5",
+    "448089a97fa1f09f61c5c2ba8c411a5077b9206d1f70f1b60ee9916f91df662d",
+    "4bd39b983f1b631094a16bffba4a3d5f88681d8d295cad71f6e8c51b8eb7399c",
+    "7d44610ff59e5186cf3d6323c7a4faf8e48682a1f7d9f4a6f8d179f29182d186"
   ],
   "findings": [
     {
@@ -1050,15 +1050,15 @@
     },
     {
       "path": "src/sm64_events/server/api.py",
-      "line": 392,
+      "line": 391,
       "rule": "C901",
-      "message": "`create_api_router` is too complex (159 > 15)"
+      "message": "`create_api_router` is too complex (153 > 15)"
     },
     {
       "path": "src/sm64_events/server/api.py",
-      "line": 392,
+      "line": 391,
       "rule": "PLR0915",
-      "message": "Too many statements (420 > 50)"
+      "message": "Too many statements (396 > 50)"
     },
     {
       "path": "src/sm64_events/server/api.py",
@@ -3012,15 +3012,15 @@
     },
     {
       "path": "src/sm64_events/ui/components/segmenttimeline.js",
-      "line": 276,
+      "line": 122,
       "rule": "max-lines-per-function",
-      "message": "Function 'SegmentTimeline' has too many lines (344). Maximum allowed is 100."
+      "message": "Function 'SegmentTimeline' has too many lines (308). Maximum allowed is 100."
     },
     {
       "path": "src/sm64_events/ui/components/segmenttimeline.js",
-      "line": 274,
+      "line": 122,
       "rule": "complexity",
-      "message": "Function 'SegmentTimeline' has a complexity of 66. Maximum allowed is 15."
+      "message": "Function 'SegmentTimeline' has a complexity of 62. Maximum allowed is 15."
     },
     {
       "path": "src/sm64_events/ui/components/segmenttimeline.js",
@@ -3551,6 +3551,46 @@
       "source_commit": "9589f825c6228af53a26419a619c1922063fd134",
       "source_state": "Reviewed working-tree delta from source_commit",
       "reviewer": "scope_review independent read-only agent"
+    },
+    {
+      "findings": [
+        {
+          "path": "src/sm64_events/server/api.py",
+          "line": 391,
+          "rule": "C901",
+          "message": "`create_api_router` is too complex (153 > 15)",
+          "allowance": "71eaefbf6c568bf37953abef05eb78c31898b49cec23c2ed51edd9ef063072f5",
+          "replaces_allowance": "4f0cd70c0efff28958aa2f74d91609ef32bd58624fb6374573331b73256b50dd"
+        },
+        {
+          "path": "src/sm64_events/server/api.py",
+          "line": 391,
+          "rule": "PLR0915",
+          "message": "Too many statements (396 > 50)",
+          "allowance": "448089a97fa1f09f61c5c2ba8c411a5077b9206d1f70f1b60ee9916f91df662d",
+          "replaces_allowance": "e685e3b59036bab15c996a4bcabc1d4c66d8248ae51ffa851f5a5009d9a3e04b"
+        },
+        {
+          "path": "src/sm64_events/ui/components/segmenttimeline.js",
+          "line": 122,
+          "rule": "max-lines-per-function",
+          "message": "Function 'SegmentTimeline' has too many lines (308). Maximum allowed is 100.",
+          "allowance": "4bd39b983f1b631094a16bffba4a3d5f88681d8d295cad71f6e8c51b8eb7399c",
+          "replaces_allowance": "1ad6a2e29e8e81cdf257b72c730ee3dad54775ca541e3da82876eea4b6cad25e"
+        },
+        {
+          "path": "src/sm64_events/ui/components/segmenttimeline.js",
+          "line": 122,
+          "rule": "complexity",
+          "message": "Function 'SegmentTimeline' has a complexity of 62. Maximum allowed is 15.",
+          "allowance": "7d44610ff59e5186cf3d6323c7a4faf8e48682a1f7d9f4a6f8d179f29182d186",
+          "replaces_allowance": "f03dd72d8e9b047b2a74c8f31207495c22fec3e07115ef3a5d494da5c2607263"
+        }
+      ],
+      "reason": "Recorder alternative-start roles and endpoint synthesis have cohesive owners. Independent review confirmed decreases only: router complexity159->153/statements420->396; recorder complexity66->62/lines344->308. Four old allowances replaced; no new debt adopted.",
+      "source_commit": "4bebda62",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "alternate_start_review independent read-only agent"
     }
   ]
 }

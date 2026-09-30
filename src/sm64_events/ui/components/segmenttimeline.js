@@ -34,9 +34,10 @@
 //    and there is no second labeller in the browser. A broadcast carries
 //    `seq`, never the journal `id` a row is picked by, so the client has to
 //    come back for the id regardless.
-// 5. N MOMENTS ARE THE DEFINITION. The earliest picked is the start, the
-//    latest is the end, everything between is a waypoint. The ORDER is the
-//    journal's, not the click order — see `pickedIds` below.
+// 5. PATH MOMENTS KEEP JOURNAL ORDER. The earliest is the primary start,
+//    latest is the finish, and middles are steps unless explicitly marked
+//    as alternative starts. Extra starts can come from another attempt;
+//    they never extend the representative path.
 //
 // The old modal's machinery survives unchanged where it was already right:
 // ONE `definitionFor` builder so backtest, lint and save send the identical
@@ -48,19 +49,19 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { useSegmentAuthoring, useSegmentSave,
          shippedSegmentWarning, SegmentSaveControls } from "../segmentauthoring.js";
-import { courseUnionGroups, entityKeyForOption, optionForEntityKey,
-         parseSegmentId } from "../entities.js";
-import { fmtIgtShort } from "../format.js";
+import { entityKeyForOption, optionForEntityKey } from "../entities.js";
 import { visitCards } from "../visits.js";
+import { useRecordedSelection, recordedPickSummary } from "../recordselection.js";
 import { Icon } from "./icons.js";
 import { Modal } from "./modal.js";
 import { readRecorder, useUiLog } from "../uilog.js";
 
 // Module-level, so the array identity is stable across renders.
 const RECORDER_READERS = [readRecorder];
-import { PickerDialog } from "./entitymodal.js";
 import { optionIconSrc } from "./entityicons.js";
 import { StepPicker } from "./steptrack.js";
+import { VisitCard } from "./recordrows.js";
+import { RecordParents } from "./recordparents.js";
 
 const html = htm.bind(h);
 
@@ -104,161 +105,6 @@ function recordingSummary(report, replacing = false) {
     + "from there.";
 }
 
-// What a picked row is FOR, given how many are picked and where this one
-// sits. Checked by RENDER rather than by a node test of its own -- the class
-// it produces is the only thing telling a reader which end of a newest-first
-// list is the start, so `tests/test_fixture_reaches_the_real_page.py` counts
-// `.record-mark.role-start`/`.role-finish`/`.role-stop` at two picks and at
-// three, which covers every branch including the boundary (at two, index 1 is
-// the finish and never a stop).
-function roleOf(index, count) {
-  if (index === 0) return "start";
-  if (index === count - 1) return "finish";
-  return "stop";
-}
-
-const ROLE_WORDS = { start: "Start", stop: "Stop", finish: "Finish" };
-
-// One clickable row per timeline moment. The row IS the picker -- no
-// secondary confirm step (spec: "point at what you just did") -- and it is a
-// TOGGLE, because with N selections there is no step to advance to that could
-// stand in for un-picking one.
-// The rename control. Only a NAMEABLE landmark gets one — a name typed here
-// has to land on THIS thing and nothing else. Since 2026-08-07 that is almost
-// everything: a pole or a tree carries no spawn point (the game creates them
-// scriptless) but never moves, so it is keyed by where it stands, which is his
-// own ask — "we should be able to rename ANYTHING", and the specific poles the
-// Ultimate Sheet's subsections are built on. What is still refused is an
-// object with NEITHER coordinate, whose key is shared with every other of its
-// kind in that area. The rule and its measurement: core/landmark.py.
-//
-// A pencil on its own row-wrapper rather than inside the row button, because a
-// button inside a button is invalid and the browser drops it silently.
-//
-// THE DRAFT IS THE INPUT'S OWN STATE while he types (round 9 item 2: "my text
-// suddenly gets deleted, and I find myself racing against some mysterious
-// timer"). The timer was the next game event: the live tail appends a row,
-// the recorder re-renders, and an input whose `value` is drawn from the
-// stored name gets diffed straight back to it — empty, for the unnamed row he
-// is mid-typing on. `draft` survives the repaint because it is component
-// state; the COMMITS still read `e.target.value` (the DOM's own text), so a
-// driven test that sets the value and hits Enter in one tick — before any
-// re-render lands the draft — commits what was typed, same as a human whose
-// keystrokes each get their own tick.
-function RenameControl({ row, renaming, onStart, onCommit, onCancel }) {
-  if (!row.landmark || !row.landmark_nameable) return null;
-  if (renaming) {
-    return html`<${RenameInput} key=${row.id} row=${row}
-        onCommit=${onCommit} onCancel=${onCancel} />`;
-  }
-  return html`<button type="button" class="record-rename"
-      title=${row.landmark_name
-        ? `Rename ${row.landmark_name} — every row it appears in follows`
-        : "Name this one — every row it appears in follows"}
-      onclick=${() => onStart(row)}>✎</button>`;
-}
-
-// The ✓/✕ pair is the CANCEL AFFORDANCE he asked for (round 12 item 5:
-// "we should be able to cancel the name change easily (there's no clear way
-// to do this)") — Escape already cancelled, and a key nobody can see is not
-// an affordance. `onmousedown` preventDefault keeps the input focused, so
-// clicking either button never fires the input's own blur-commit first.
-function RenameInput({ row, onCommit, onCancel }) {
-  const [draft, setDraft] = useState(row.landmark_name || "");
-  const inputRef = useRef(null);
-  const commit = () => onCommit(row, inputRef.current ? inputRef.current.value
-                                                      : draft);
-  return html`<span class="record-rename-edit"
-      onclick=${(e) => e.stopPropagation()}>
-    <input class="record-rename-input" type="text" autofocus ref=${inputRef}
-      value=${draft}
-      placeholder="name this one"
-      oninput=${(e) => setDraft(e.target.value)}
-      onblur=${(e) => onCommit(row, e.target.value)}
-      onkeydown=${(e) => {
-        if (e.key === "Enter") { e.preventDefault(); onCommit(row, e.target.value); }
-        if (e.key === "Escape") { e.preventDefault(); onCancel(); }
-      }} />
-    <button type="button" class="record-rename-ok" title="Save this name"
-      onmousedown=${(e) => e.preventDefault()}
-      onclick=${commit}>✓</button>
-    <button type="button" class="record-rename-cancel"
-      title="Keep the old name (Esc)"
-      onmousedown=${(e) => e.preventDefault()}
-      onclick=${onCancel}>✕</button>
-  </span>`;
-}
-
-function TimelineRows({ rows, order, onToggle, renamingId,
-                        onRenameStart, onRenameCommit, onRenameCancel }) {
-  return html`<div class="record-rows">
-    ${rows.map((row) => {
-      const index = order.indexOf(row.id);
-      const picked = index >= 0;
-      const role = picked ? roleOf(index, order.length) : null;
-      return html`<div key=${row.id} class="record-row-wrap">
-        <button type="button"
-          class=${`record-row${picked ? " picked" : ""}`}
-          aria-pressed=${picked ? "true" : "false"}
-          onclick=${() => onToggle(row)}>
-        <span class=${`record-mark${picked ? ` role-${role}` : ""}`}>
-          ${picked ? index + 1 : ""}
-        </span>
-        <span class="record-label">${row.label}</span>
-        ${picked && order.length > 1
-          && html`<span class="record-role">${ROLE_WORDS[role]}</span>`}
-        ${/* "what was the timer in game", his own words -- and it is the
-             thing you choose BY, so it belongs on the row rather than in the
-             review. Through fmtIgtShort, the display form every other time on
-             screen goes through; a type with no Usamune number of its own (a
-             level change) shows nothing rather than a computed stand-in. */""}
-        ${row.igt_frames != null
-          && html`<span class="record-igt">${fmtIgtShort(row.igt_frames)}</span>`}
-        </button>
-        <${RenameControl} row=${row} renaming=${renamingId === row.id}
-            onStart=${onRenameStart} onCommit=${onRenameCommit}
-            onCancel=${onRenameCancel} />
-      </div>`;
-    })}
-  </div>`;
-}
-
-// One card per visit: the place's own symbol and name, how many moments landed
-// there, and a fold. OPEN BY DEFAULT, so the state held is the COLLAPSED set —
-// an empty set is "everything open", which is what a first render must be.
-//
-// The header is the fold. A separate chevron button beside a heading gives one
-// affordance two hit targets, and this app's own rule is that a card is ONE hit
-// target (the context cards, 2026-07-25, where the mismatch read as a bug).
-function VisitCard({ card, collapsed, onToggleFold, icon, order, onToggleRow,
-                     renamingId, onRenameStart, onRenameCommit, onRenameCancel }) {
-  return html`<section class=${`record-card${collapsed ? " folded" : ""}`}>
-    <button type="button" class="record-card-head" aria-expanded=${!collapsed}
-        onclick=${onToggleFold}
-        title=${collapsed ? `Show what happened in ${card.label}`
-                          : `Hide what happened in ${card.label}`}>
-      <span class="record-card-chevron"><${Icon} name="chevron" size=${14} /></span>
-      ${icon && html`<img class="record-card-icon" src=${icon} alt="" />`}
-      <span class="record-card-name">${card.label || "Somewhere unrecorded"}</span>
-      <span class="count-badge">${card.rows.length}</span>
-    </button>
-    ${/* The body is ALWAYS rendered and folded by CSS, never removed from the
-         tree. A conditional render has nothing left to animate out, and every
-         state change on this machine animates (his standing rule, 2026-07-26).
-         `grid-template-rows: 1fr -> 0fr` is the one height transition that
-         needs no measured pixel value; `visibility` rides along so a folded
-         card's buttons cannot be reached by Tab, which zero height alone does
-         not prevent. */""}
-    <div class="record-card-body">
-      <div class="record-card-clip">
-        <${TimelineRows} rows=${card.rows} order=${order}
-            onToggle=${onToggleRow} renamingId=${renamingId}
-            onRenameStart=${onRenameStart} onRenameCommit=${onRenameCommit}
-            onRenameCancel=${onRenameCancel} />
-      </div>
-    </div>
-  </section>`;
-}
 
 // `replaces` (round 16): the /api/segments row being RE-RECORDED, or null for
 // an ordinary create. Replace beats delete-and-recreate because the segment's
@@ -288,7 +134,10 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   // backwards, and "in chronological order" is a property the events already
   // have. The server sorts too (GET /api/segments/synthesize), so the two
   // cannot disagree about which end is the start.
-  const [pickedIds, setPickedIds] = useState([]);
+  const { pickedIds, extraStartIds, addingStart, pickNotice,
+    toggleRow, resetPicks, toggleStartMode } = useRecordedSelection(derive);
+  const deriveEpoch = useRef(0);
+  const checkEpoch = useRef(0);
   // NAMING, and it applies BACKWARDS: nothing stores the name a row was drawn
   // with, so bumping `catalogue` refetches and every row that landmark ever
   // appeared in re-labels at once. His pick over a separate Entities screen
@@ -315,6 +164,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   const [folded, setFolded] = useState(new Set());
   const [synth, setSynth] = useState(null);
   const [synthErr, setSynthErr] = useState(null);
+  const [lintPending, setLintPending] = useState(false);
   // A re-record opens carrying the row's own name, PRE-MARKED as his: the
   // name field keeps HIS name (it already exists), so the auto-name may
   // never overwrite it. Emptying the field still hands it back.
@@ -349,8 +199,6 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   const [parentOptions, setParentOptions] = useState(
     replaces ? (replaces.parents || []).map(optionForEntityKey)
     : prefill ? (prefill.parents || []).map(optionForEntityKey) : []);
-  // null = closed; an index = re-picking that pill; "add" = the + button.
-  const [pickingParentAt, setPickingParentAt] = useState(null);
   const parents = parentOptions.map(entityKeyForOption);
   const [btReport, setBtReport] = useState(null);
   const [btErr, setBtErr] = useState(null);
@@ -486,6 +334,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   useEffect(() => { tail(); }, [newestSeq]);
 
   function resetDownstream() {
+    checkEpoch.current += 1;
     setSynth(null); setSynthErr(null);
     setBtReport(null); setBtErr(null);
     setLintFindings([]); setLintErr(null); clearSaveFeedback();
@@ -499,18 +348,14 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   // against a DIFFERENT match_mode than the save uses reports on a matcher
   // branch the user will never get.
   //
-  // STRICT the moment a stop is required, LOOSE when none is. That is not a
-  // preference: a declared path only means anything under the strict matcher's
-  // path cursor, and a recording with no declared stops is byte-for-byte the
-  // loose definition this tool has always produced.
-  //
   // TWO sources of waypoints and they are exclusive. `synthBody.picked` is
   // what the PERSON pointed at; `synthBody.steps` filtered by `requiredNodes`
   // is the walk we DERIVED for them, and it is offered only when exactly two
-  // moments are picked. Picking a third is how you say the derivation is not
-  // the answer -- which is what keeps the two-click case working unchanged.
+  // path moments are picked. `picked_explicit` remembers explicit middles
+  // even when every middle was marked as another start, so an empty explicit
+  // path cannot accidentally restore automatically derived steps.
   function definitionFor(synthBody, requiredNodes) {
-    const waypoints = (synthBody.picked || []).length
+    const waypoints = (synthBody.picked_explicit ?? !!(synthBody.picked || []).length)
       ? synthBody.picked.map((step) => [step.clause])
       : (synthBody.steps || [])
           .filter((step) => requiredNodes.has(step.node))
@@ -525,37 +370,46 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
     // actually START until mario is able to finally move". His default for
     // everything this tool records.
     return { name: (name.trim() || synthBody.name), enabled: true,
-      start_triggers: [synthBody.start_clause],
+      start_triggers: synthBody.start_clauses || [synthBody.start_clause],
       end_triggers: [synthBody.end_clause], guards: [], waypoints,
       parents, match_mode: "strict", clock_start: "move" };
   }
 
-  async function runBacktest(definition) {
+  async function runBacktest(definition, epoch) {
     setBtReport(null); setBtErr(null);
     try {
       // A re-record backtests AGAINST the row it replaces, so the report's
       // gained/lost compares the new recording with the old one's history.
       const report = await send("POST", "/api/segments/backtest",
         { definition, replaces: replaces ? replaces.id : null });
-      setBtReport(report);
-    } catch (err) { setBtErr(String(err)); }
+      if (!deadRef.current && epoch === checkEpoch.current) setBtReport(report);
+    } catch (err) {
+      if (!deadRef.current && epoch === checkEpoch.current) setBtErr(String(err));
+    }
   }
 
-  async function runLint(definition) {
+  async function runLint(definition, epoch) {
     setLintFindings([]); setLintErr(null);
     try {
       // `segment_id` excludes the row being replaced from the duplicate
       // rule, or an unchanged walk reports itself as its own duplicate.
       const result = await send("POST", "/api/segments/lint",
         { definition, segment_id: replaces ? replaces.id : null });
-      setLintFindings(result.warnings);
-    } catch (err) { setLintErr(String(err)); }
+      if (!deadRef.current && epoch === checkEpoch.current)
+        setLintFindings(result.warnings);
+    } catch (err) {
+      if (!deadRef.current && epoch === checkEpoch.current) setLintErr(String(err));
+    } finally {
+      if (!deadRef.current && epoch === checkEpoch.current) setLintPending(false);
+    }
   }
 
   function recheck(synthBody, requiredNodes) {
+    const epoch = ++checkEpoch.current;
+    setLintPending(true);
     const definition = definitionFor(synthBody, requiredNodes);
-    runBacktest(definition);
-    runLint(definition);
+    runBacktest(definition, epoch);
+    runLint(definition, epoch);
   }
 
   // Toggling a stop re-tests against his real history immediately. That is the
@@ -574,12 +428,15 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   // written until Save, so there is no partial state to unwind and un-picking
   // a moment costs exactly what picking one does (his standing rule that a
   // multi-step flow is abandonable with NO side effects).
-  async function derive(ids) {
+  async function derive(ids, starts = extraStartIds) {
+    const epoch = ++deriveEpoch.current;
     resetDownstream();
     if (ids.length < 2) return;
     try {
       const body = await getJSON(
-        `/api/segments/synthesize?ids=${ids.join(",")}`);
+        `/api/segments/synthesize?ids=${ids.join(",")}`
+        + (starts.length ? `&start_ids=${starts.join(",")}` : ""));
+      if (deadRef.current || epoch !== deriveEpoch.current) return;
       // Everywhere you went starts REQUIRED. You walked the route you meant to
       // practise, so the common case is that all of it counts; unticking a room
       // you were only crossing is one click, and the alternative default (none
@@ -590,19 +447,15 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
       if (!nameEditedRef.current) setName(body.name);
       setRequired(walked);
       recheck(body, walked);
-    } catch (err) { setSynthErr(String(err)); }
+    } catch (err) {
+      if (!deadRef.current && epoch === deriveEpoch.current) setSynthErr(String(err));
+    }
   }
 
-  function toggleRow(row) {
-    const next = pickedIds.includes(row.id)
-      ? pickedIds.filter((id) => id !== row.id)
-      : [...pickedIds, row.id].sort((left, right) => left - right);
-    setPickedIds(next);
-    derive(next);
-  }
 
   function clearPicks() {
-    setPickedIds([]); resetDownstream();
+    deriveEpoch.current += 1;
+    resetPicks(); resetDownstream();
     // Clear un-picks the MOMENTS; on a re-record the name is the row's own
     // and stays his, exactly as it arrived.
     setName(replaces ? replaces.name : "");
@@ -624,7 +477,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   // click must then re-use the id (a PUT, same as a re-record) rather than
   // mint a duplicate — the definition still lands if he re-picked meanwhile.
   const lintHasError = lintFindings.some((finding) => finding.severity === "error");
-  const saveDisabled = !btReport || lintHasError;
+  const saveDisabled = !btReport || lintPending || !!lintErr || lintHasError;
   const { save, saving, error: saveErr, savedScope, message: saveMessage,
     clearFeedback: clearSaveFeedback } = useSegmentSave({
     authoring, initialId: replaces?.id, t, onSaved,
@@ -636,49 +489,6 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   // server keeps the journal's own order.
   const shown = rows ? [...rows].reverse() : [];
   const cards = visitCards(shown);
-  // A castle-AREA tile opens the movements recorded there AND answers as
-  // itself from inside — `pick` marks the second half (entitymodal.js). Round
-  // 14 made the tile terminal on his ruling that an area is as high as the
-  // castle goes; that is still true of the AREA, and it also meant a piece of
-  // an Upstairs BLJ could never name the BLJ, because every castle movement
-  // sits behind an area tile ("I want to add support for defining the
-  // subsections of BLJs… but I can't select BLJs because they're in the
-  // Upstairs section", 2026-08-09). Marked HERE, not in courseUnionGroups:
-  // the target picker reads the same groups and has no second answer to give.
-  const parentGroups = (t && t.view ? courseUnionGroups(
-    t.view.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
-    (t.vocab || {}).course_by_level || {}, {},
-    (t.vocab || {}).origins || null) : []
-  ).map((group) => {
-    const region = group.key.startsWith("castle-")
-      && group.key !== "castle-segments" ? group.key.slice(7) : null;
-    return region ? { ...group, pick: `area:${region}`,
-                      sub: "the whole area" } : group;
-  });
-  const parentNameFor = (optionId) => {
-    if (optionId == null) return null;
-    for (const group of parentGroups) {
-      if (group.pick === optionId) return group.label;
-      for (const option of group.options)
-        if (option.id === optionId) return option.name;
-    }
-    return entityKeyForOption(optionId);
-  };
-  // A pill's pick REPLACES its slot; the + APPENDS; the "Nothing" placeholder
-  // on a pill REMOVES it (and on the +, changes nothing). Picking an entity
-  // already listed collapses to a no-op rather than a duplicate row.
-  const commitParentPick = (id) => {
-    setParentOptions((held) => {
-      const at = pickingParentAt;
-      const next = held.filter((_, index) => index !== at);
-      if (id == null || next.includes(id)) return next;
-      if (at === "add" || at == null || at >= held.length)
-        return [...held, id];
-      next.splice(at, 0, id);
-      return next;
-    });
-    setPickingParentAt(null);
-  };
   // Same name/shape as segments.js's Builder -- an "error" severity finding
   // disables Save there too; a "warning" one does not.
 
@@ -708,16 +518,22 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
     ${!rows && !rowsErr && html`<p class="meta">Loading your recent history…</p>`}
 
     ${rows && html`<div class="record-picks">
-      <span class="meta">${pickedIds.length === 0
-        ? "Nothing picked yet — newest is at the top."
-        : pickedIds.length === 1
-          ? "1 moment picked. Pick the one it finished on."
-          : `${pickedIds.length} moments picked.`}</span>
+      <span class="meta">${recordedPickSummary(pickedIds, extraStartIds)}</span>
+      ${pickedIds.length > 0 && html`<button type="button" class="quiet-button"
+          aria-pressed=${addingStart}
+          onclick=${toggleStartMode}>
+        ${addingStart ? "Done adding starts" : "Add another start"}
+      </button>`}
       ${pickedIds.length > 0 && html`<button class="quiet-button"
           onclick=${clearPicks}>
         <${Icon} name="close" size=${14} /> Clear
       </button>`}
     </div>`}
+    ${addingStart && html`<p class="meta record-start-instruction" role="status">
+      Pick any other recorded moment that can start this segment. Each start
+      follows the same steps and finish. Pick it again to remove it.
+    </p>`}
+    ${pickNotice && html`<p class="meta" role="status">${pickNotice}</p>`}
 
     ${/* ONE CARD PER PLACE YOU WERE IN, his ask 2026-08-05: "That way, when we
          observe the live viewer, we can easily and quickly identify which
@@ -733,7 +549,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
         onToggleFold=${() => toggleFold(card.key)}
         icon=${card.level == null ? null
                                   : optionIconSrc(t, "level", card.level)}
-        order=${pickedIds} onToggleRow=${toggleRow}
+        order=${pickedIds} starts=${extraStartIds} onToggleRow=${toggleRow}
         renamingId=${renamingId} onRenameStart=${startRename}
         onRenameCommit=${commitRename} onRenameCancel=${cancelRename} />`)}
     </div>`}
@@ -749,11 +565,15 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
           nameEditedRef.current = e.target.value.trim() !== "";
         }} />
       </label>
-      <p class="meta">Starts when: <b>${synth.start_sentence}</b></p>
+      <div class="record-start-review">
+        <p class="meta">Starts when any one happens:</p>
+        ${(synth.start_sentences || [synth.start_sentence]).map((sentence, index) =>
+          html`<p key=${index} class="meta">${index > 0 ? "OR " : ""}<b>${sentence}</b></p>`)}
+      </div>
       ${(synth.picked || []).map((step, i) => html`<p key=${i} class="meta">
         Then: <b>${step.sentence}</b></p>`)}
       <p class="meta">Ends when: <b>${synth.end_sentence}</b></p>
-      ${(synth.picked || []).length === 0
+      ${!(synth.picked_explicit ?? !!(synth.picked || []).length)
         && html`<${StepPicker} steps=${synth.steps} required=${required}
           onToggle=${toggleStep} />`}
 
@@ -763,36 +583,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
            define that?" One pill per chosen parent, and the + to the right
            appends another (round 20: the same piece can belong to several
            stars). */""}
-      <div class="record-parent">
-        <span class="field-label">What is this a piece of?</span>
-        ${parentOptions.length === 0
-          ? html`<button type="button" class="entity-trigger"
-                onclick=${() => setPickingParentAt("add")}>
-              Nothing — it stands on its own
-            </button>`
-          : parentOptions.map((optionId, index) => html`<button
-                type="button" key=${optionId} class="entity-trigger"
-                onclick=${() => setPickingParentAt(index)}>
-              ${parentNameFor(optionId)}
-            </button>`)}
-        ${parentOptions.length > 0 && html`<button type="button"
-            class="quiet-button record-parent-add"
-            title="It is a piece of another star or segment too"
-            onclick=${() => setPickingParentAt("add")}>
-          <${Icon} name="plus" size=${14} /> Add
-        </button>`}
-      </div>
-      ${pickingParentAt != null && html`<${PickerDialog} groups=${parentGroups}
-        value=${typeof pickingParentAt === "number"
-          ? parentOptions[pickingParentAt] : null}
-        title="What is this a piece of?" depth=${2}
-        placeholder=${typeof pickingParentAt === "number"
-          ? "Nothing — remove this one" : "Nothing — it stands on its own"}
-        iconFor=${(id) => optionIconSrc(t,
-          parseSegmentId(id) == null ? "star" : "segment",
-          parseSegmentId(id) == null ? id : parseSegmentId(id))}
-        onPick=${commitParentPick}
-        onClose=${() => setPickingParentAt(null)} />`}
+      <${RecordParents} t=${t} options=${parentOptions} onChange=${setParentOptions} />
 
       ${/* What a re-record COSTS, said where the save lands, before it does:
            the new recording's own defaults (clock "move" + Strict) replace
@@ -836,8 +627,10 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
       ${pickedIds.length >= 2 && html`<${SegmentSaveControls}
         authoring=${authoring} onSave=${save}
         disabled=${saveDisabled} busy=${saving}
-        disabledReason=${lintHasError ? "Fix the error above before saving" : ""}
-        waitingLabel=${!btReport && !btErr ? "Testing your history…" : null}
+        disabledReason=${lintHasError ? "Fix the error above before saving"
+          : lintErr ? "Conditions could not be checked — pick again to retry" : ""}
+        waitingLabel=${!btReport && !btErr ? "Testing your history…"
+          : lintPending ? "Checking conditions…" : null}
         personalLabel=${replaces ? "Replace segment" : "Save segment"} />`}
     </div>
     </div>

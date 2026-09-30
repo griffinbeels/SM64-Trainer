@@ -299,6 +299,8 @@ SEGMENT_TIMELINE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_event
                        / "ui" / "components" / "segmenttimeline.js")
 SEGMENT_TIMELINE_JS_SOURCE = strip_comments(
     SEGMENT_TIMELINE_JS.read_text(encoding="utf-8"))
+RECORDER_SELECTION_SOURCE = strip_comments(
+    (SEGMENT_TIMELINE_JS.parent.parent / "recordselection.js").read_text(encoding="utf-8"))
 
 
 def _fetches_the_timeline_with_the_view(source: str) -> bool:
@@ -339,7 +341,7 @@ def _asks_what_the_recording_is_a_piece_of(source: str) -> bool:
     to define that?" (2026-08-05).
     """
     stripped = strip_comments(source)
-    return ("setParentOptions(" in stripped
+    return (("setParentOptions(" in stripped or "onChange=${setParentOptions}" in stripped)
             and re.search(r"waypoints,\s+parents,", stripped) is not None)
 
 
@@ -361,7 +363,8 @@ def test_the_timeline_component_fetches_the_recent_journal():
 
 
 def test_a_row_click_toggles_that_moment_in_and_out_of_the_pick():
-    assert _a_row_click_toggles_the_pick(SEGMENT_TIMELINE_JS_SOURCE)
+    assert 'useRecordedSelection(derive)' in SEGMENT_TIMELINE_JS_SOURCE
+    assert _a_row_click_toggles_the_pick(RECORDER_SELECTION_SOURCE)
 
 
 def test_the_recorder_asks_what_the_recording_is_a_piece_of():
@@ -478,7 +481,7 @@ def _save_button_waits_for_the_backtest(source: str) -> bool:
     were unconditionally enabled and btReport were merely READ somewhere
     else on the page (e.g. rendered in the summary line)."""
     stripped = strip_comments(source)
-    return ("const saveDisabled = !btReport || lintHasError;" in stripped
+    return (re.search(r"const saveDisabled = !btReport \|\| (?:lintPending \|\| !!lintErr \|\| )?lintHasError;", stripped)
             and "disabled=${saveDisabled}" in stripped)
 
 
@@ -750,8 +753,8 @@ def _lints_alongside_the_recorder_backtest(source: str) -> bool:
     # pinned is still the pairing -- lint runs wherever the backtest runs --
     # not the argument's spelling.
     return ('"POST", "/api/segments/lint"' in stripped
-            and "runBacktest(definition);" in stripped
-            and "runLint(definition);" in stripped)
+            and re.search(r"runBacktest\(definition(?:, epoch)?\);", stripped)
+            and re.search(r"runLint\(definition(?:, epoch)?\);", stripped))
 
 
 def test_the_recorder_lints_alongside_its_backtest():
@@ -773,7 +776,7 @@ def test_the_recorder_lint_guard_can_still_fail():
 
 def _recorder_save_waits_for_lint(source: str) -> bool:
     stripped = strip_comments(source)
-    return ("const saveDisabled = !btReport || lintHasError;" in stripped
+    return (re.search(r"const saveDisabled = !btReport \|\| (?:lintPending \|\| !!lintErr \|\| )?lintHasError;", stripped)
             and "disabled=${saveDisabled}" in stripped
             and "busy=${saving}" in stripped)
 
