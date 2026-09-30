@@ -120,8 +120,12 @@ def validate_catalogue(seed: dict) -> None:
     for key, row in segments.items():
         if not isinstance(row.get("name"), str) or not row["name"].strip():
             raise ValueError(f"segment {key}: name must be a non-empty string")
+        for field in (*_REQUIRED_FIELDS[1:], "waypoints", "guards", "parents"):
+            if not isinstance(row.get(field, []), list):
+                raise ValueError(f"segment {key}: {field} must be a list")
         validate_definition(row)
         _portable_parents(row)
+        _validate_sheet_binding(key, row.get("sheet_target"))
         if not isinstance(row.get("enabled", True), bool):
             raise ValueError(f"segment {key}: enabled must be a boolean")
         if row.get("category") is not None and not isinstance(row["category"], str):
@@ -134,6 +138,15 @@ def validate_catalogue(seed: dict) -> None:
         if any(not isinstance(row.get(field), str) or not row[field].strip()
                for field in ("key", "name")):
             raise ValueError(f"landmark {key}: key and name are required")
+
+
+def _validate_sheet_binding(key: str, binding) -> None:
+    if binding is None:
+        return
+    if (not isinstance(binding, dict)
+            or any(not isinstance(binding.get(field), str) or not binding[field].strip()
+                   for field in ("section", "label"))):
+        raise ValueError(f"segment {key}: sheet_target needs section and label strings")
 
 
 def _validate_seed_route(key: str, row: dict, key_to_id: dict) -> None:
@@ -180,16 +193,21 @@ def assemble_catalogue(base: dict, authored: dict) -> dict:
     return seed
 
 
-def _full_definition(definition: dict, key: str) -> dict:
+def segment_definition_fields(definition: dict) -> dict:
+    """The complete editable definition, excluding installation/seed metadata."""
     if not isinstance(definition, dict):
         raise ValueError("segment definition must be an object")
     missing = [field for field in _REQUIRED_FIELDS if field not in definition]
     if missing:
         raise ValueError(f"shared save requires a full definition: missing {', '.join(missing)}")
-    row = {"seed_key": key, **{field: definition[field] for field in _REQUIRED_FIELDS}}
+    row = {field: definition[field] for field in _REQUIRED_FIELDS}
     row.update({field: definition.get(field, default)
                 for field, default in _OPTIONAL_FIELDS.items()})
     return copy.deepcopy(row)
+
+
+def _full_definition(definition: dict, key: str) -> dict:
+    return {"seed_key": key, **segment_definition_fields(definition)}
 
 
 def _atomic_write(path: Path, data: bytes) -> None:

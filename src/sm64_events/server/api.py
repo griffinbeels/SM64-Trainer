@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from sm64_events.core.paths import user_icons_dir
+from sm64_events.core.paths import shared_defaults_root, user_icons_dir
 from sm64_events.memory.addresses import node_label
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
@@ -371,6 +371,24 @@ def _http(e: Exception) -> HTTPException:
     return HTTPException(503, str(e))  # RuntimeError: degraded mode
 
 
+async def _save_segment(service, definition: dict, scope: str,
+                        segment_id: int | None = None) -> dict:
+    """Scope is explicit at definition-save doors; older callers stay personal."""
+    if scope == "shared" and shared_defaults_root() is None:
+        raise HTTPException(403, "Shared saves require the manual test server")
+    try:
+        if scope == "shared":
+            return await service.save_shared_segment(definition, segment_id)
+        if segment_id is None:
+            return {"ok": True, "id": await service.create_segment(definition)}
+        await service.update_segment(segment_id, definition)
+        return {"ok": True}
+    except (LookupError, ValueError, RuntimeError) as exc:
+        raise _http(exc) from exc
+    except OSError as exc:
+        raise HTTPException(503, f"Could not save segment defaults: {exc}") from exc
+
+
 def create_api_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
     # The timeline's label memo — one per router, so tests building several
@@ -468,6 +486,13 @@ def create_api_router(service) -> APIRouter:
             raise HTTPException(503, "database unavailable")
         return stamp_origins(service.db.segment_defs(),
                              service.db.get_state("origin_overrides", {}))
+
+    @router.get("/segments/authoring")
+    async def segment_authoring():
+        """Only the explicitly launched source test server can author defaults."""
+        can_share = shared_defaults_root() is not None
+        return {"can_share": can_share,
+                "default_scope": "shared" if can_share else "personal"}
 
     @router.get("/segments/vocab")
     def segments_vocab():
@@ -714,12 +739,11 @@ def create_api_router(service) -> APIRouter:
         return {"rows": rows[-limit:]}
 
     @router.post("/segments")
-    async def create_segment(body: SegmentBody):
-        try:
-            sid = await service.create_segment(body.model_dump())
-        except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return {"ok": True, "id": sid}
+    async def create_segment(
+        body: SegmentBody,
+        scope: str = Query(default="personal", pattern="^(shared|personal)$"),
+    ):
+        return await _save_segment(service, body.model_dump(), scope)
 
     @router.post("/segments/backtest")
     async def backtest_segment(body: BacktestBody):
@@ -976,18 +1000,15 @@ def create_api_router(service) -> APIRouter:
                 "warnings": lint_definition(merged, service.segment_defs)}
 
     @router.put("/segments/{segment_id}")
-    async def update_segment(segment_id: int, body: SegmentPatch):
-        try:
-            # Only the fields the client actually SENT (exclude_unset), so
-            # False/[]/null all round-trip as explicit sets. Dropping every
-            # None instead made `category: null` — "move this out of its
-            # group" — a silent no-op, since null is a meaningful value there
-            # (2026-07-24); an omitted field is still untouched either way.
-            patch = body.model_dump(exclude_unset=True)
-            await service.update_segment(segment_id, patch)
-        except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return {"ok": True}
+    async def update_segment(
+        segment_id: int, body: SegmentPatch,
+        scope: str = Query(default="personal", pattern="^(shared|personal)$"),
+    ):
+        # Only the fields the client actually SENT (exclude_unset), so
+        # False/[]/null all round-trip as explicit sets. category:null means
+        # move out of the group; an omitted field stays untouched.
+        return await _save_segment(service, body.model_dump(exclude_unset=True),
+                                   scope, segment_id)
 
     @router.delete("/segments/{segment_id}")
     async def delete_segment(segment_id: int):

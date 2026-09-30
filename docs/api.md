@@ -4,6 +4,22 @@ The live event feed, HTTP API, replay endpoints, and behavior notes. New to
 the project? Start with the [README](../README.md). Developing here? Read
 `CLAUDE.md` and `docs/architecture.md` first.
 
+## Segment save scope
+
+`GET /api/segments/authoring` returns `{can_share, default_scope}`. Shared authoring
+requires an explicit maintainer source launch; released apps always return
+`false` and `"personal"`.
+
+`POST /api/segments` and `PUT /api/segments/{id}` accept `?scope=personal|shared`.
+Omitting scope stays personal for existing callers. Bodies retain the strict
+`SegmentBody`/`SegmentPatch` allowlists. A shared save returns
+`{ok, id, scope:"shared", seed_key, message}` and saves release input before
+responding. A committed save still returns its ID if runtime refresh fails;
+`message` then reports the refresh failure. Shared scope on an unavailable
+server returns 403, invalid definitions/conflicting authored inputs return 409,
+and source-write/generation failures return 503. See the
+[authoring and distribution contract](default-segment-authoring.md).
+
 ## Admin endpoints (localhost only)
 
 Bounded profiling is separate from diagnostic log export: `GET /api/diagnostics/profile`

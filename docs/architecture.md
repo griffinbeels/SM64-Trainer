@@ -1358,6 +1358,11 @@ govern, which is why they are written here rather than left to be rediscovered.
 
 ### The movement grammar is forced, not chosen
 
+Maintainer editor/recorder fixes additionally flow through a tracked authoring
+layer before seed generation. The complete
+[shared-default authoring contract](default-segment-authoring.md) describes
+save scope, stable identities, conflict checks and personal-copy preservation.
+
 `tracking/segments.py` disarms an armed def in two ways that decide the shape
 of every movement:
 

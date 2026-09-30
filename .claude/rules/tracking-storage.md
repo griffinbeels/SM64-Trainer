@@ -57,6 +57,12 @@ Full detail, evidence and history: [docs/rules/tracking-storage.md](../../docs/r
 
 | Whether a star/segment's STRATEGY rank and its own rank are one measure or two | `tracking/views.py::ranks_share_ladder` → `sec.one_ladder`: True when the active strategy's ladder IS `scoring.best_ladder`. **Answer from the LADDERS, never from the two graded values** |
 
+Maintainer segment fixes use the tracked authoring layer in
+`tracking/shared_defaults.py` and `data/segments.authored.json`; generation
+assembles it with the base corpus and direct builds check drift. Preserve these
+source corrections when editing the corpus. Scope and distribution contracts:
+[saving default segment fixes](../../docs/default-segment-authoring.md).
+
 ## The arm-position gate
 
 A matched start trigger arms only if the segment could still be RUN from where the event left Mario (`can_run_from`), from three definition-derived rules and no world-edge table: (A) the next required step must be firable from here (`fires_from`, `_PRECONDITION_PARAM`); (B) an unpinned `level_exit` from a non-castle level must land in `CASTLE_LEVELS`; (C) the arm must not stand on every end trigger's destination. `game_reset` is exempt. Pinned by `tests/test_defaults_corpus.py::test_a_menu_warp_into_a_course_arms_no_movement` and `tests/test_segments.py`.

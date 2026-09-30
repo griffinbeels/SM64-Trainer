@@ -261,6 +261,18 @@ def test_authored_fingerprint_is_independent_of_key_order():
     assert base_fingerprint(row) == base_fingerprint(dict(reversed(list(row.items()))))
 
 
+@pytest.mark.parametrize("binding", ["wrong", {}, {"section": "Castle Movement"},
+                                    {"section": "Castle Movement", "label": ""}])
+def test_malformed_seed_binding_is_refused_before_publication(tmp_path, binding):
+    broken = base_seed()
+    broken["segments"][0]["sheet_target"] = binding
+    shared = SharedDefaultsStore(tmp_path, base_builder=lambda: broken)
+    with pytest.raises(ValueError, match="sheet_target"):
+        with shared.publish_segment(segment("Correction"), "seg:base"):
+            pytest.fail("published a malformed Sheet binding")
+    assert not shared.authored_path.exists() and not shared.seed_path.exists()
+
+
 def test_default_builder_reads_the_actual_source_corpus_even_with_legacy_console_encoding(monkeypatch):
     monkeypatch.setenv("PYTHONUTF8", "0")
     root = Path(__file__).resolve().parents[1]

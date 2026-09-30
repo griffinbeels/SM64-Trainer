@@ -25,7 +25,7 @@ from time import monotonic
 from sm64_events.core.events import Event
 from sm64_events.core.landmark import landmark_group
 from sm64_events.core.modes import ModeConfig, effective_version
-from sm64_events.core.paths import bundled_defaults_seed
+from sm64_events.core.paths import bundled_defaults_seed, shared_defaults_root
 from sm64_events.core.recording_url import validate_recording_url
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, node_label, star_name
@@ -48,6 +48,8 @@ from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
                                            validate_definition)
 from sm64_events.tracking.pbaction import pb_action
 from sm64_events.tracking import routes as route_logic
+from sm64_events.tracking.shared_defaults import (SharedDefaultsStore,
+                                                 segment_definition_fields)
 
 log = logging.getLogger("sm64.tracker")
 
@@ -1176,6 +1178,46 @@ class TrackerService:
         await self._reproject()
 
     # -- segment definitions ---------------------------------------------------
+    async def save_shared_segment(self, d: dict,
+                                  segment_id: int | None = None) -> dict:
+        """Author a shipped default and apply it to this installation in place.
+
+        The store restores its source files if the local database write fails.
+        Personal copies on other installations keep the existing dirty/deletion
+        protection; no user history or library preferences enter the catalogue.
+        """
+        root = shared_defaults_root()
+        if root is None:
+            raise RuntimeError("Shared saves require the manual test server")
+        db = self._require_db()
+        current = None
+        if segment_id is not None:
+            current = next((row for row in db.segment_defs()
+                            if row["id"] == segment_id), None)
+            if current is None:
+                raise LookupError(f"segment {segment_id} not found")
+        candidate = {**(current or {}), **d}
+        validate_definition(candidate)
+        fields = segment_definition_fields(candidate)
+        seed_key = (current or {}).get("seed_key")
+        with SharedDefaultsStore(root).publish_segment(fields, seed_key) as key:
+            if segment_id is None:
+                segment_id = db.insert_segment_def(
+                    created_utc=_iso(_now()), seed_key=key, **fields)
+            else:
+                db.update_segment_def(segment_id, seed_key=key,
+                                      seed_dirty=0, **fields)
+        message = "Saved for the next release"
+        try:
+            await self._segments_changed()
+        except Exception:
+            # The source and local row are committed. Return their identity so
+            # a failed projection/broadcast cannot turn Retry into a new default.
+            log.exception("Shared segment %s saved; runtime refresh failed", key)
+            message += ". Refresh failed; reload the page or restart the test server."
+        return {"ok": True, "id": segment_id, "scope": "shared",
+                "seed_key": key, "message": message}
+
     async def create_segment(self, d: dict) -> int:
         db = self._require_db()
         validate_definition(d)          # BEFORE insert: invalid defs never land
@@ -1263,13 +1305,8 @@ class TrackerService:
                      if s["seed_key"] == row["seed_key"]), None)
         if srow is None:
             raise LookupError(f"no seed for {row['seed_key']}")
-        db.update_segment_def(segment_id, name=srow["name"],
-            enabled=srow.get("enabled", True),
-            start_triggers=srow["start_triggers"],
-            end_triggers=srow["end_triggers"],
-            waypoints=srow.get("waypoints", []),
-            guards=srow.get("guards", []), category=srow.get("category"))
-        db.set_seed_dirty("segment_defs", segment_id, 0)
+        db.update_segment_def(segment_id, seed_dirty=0,
+                              **segment_definition_fields(srow))
         await self._segments_changed()
 
     def _insert_definition(self, db: Database, d: dict) -> int:
