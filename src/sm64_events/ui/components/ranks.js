@@ -6,7 +6,7 @@ export { RANK_NAMES, rankColor } from "./caps.js";
 import { h } from "preact";
 import { useRef } from "preact/hooks";
 import htm from "htm";
-import { useRankClimb } from "../rankclimb.js";
+import { useRankClimb, claimEarnedTransition } from "../rankclimb.js";
 import { barFill, capName, divisionDigit, rankAt, rankColor } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
 import { tightenedNextStepText } from "../nextstep.js";
@@ -191,6 +191,45 @@ function entryRankName(entry) {
     entry.division ? ` ${divisionDigit(entry.division)}` : ""}`;
 }
 
+function gradedBanner(banner, atFloor) {
+  return banner && banner.rank ? {
+    tier: banner.rank, division: banner.division,
+    fill: banner.next_tier ? (banner.fill || 0) : 1,
+  } : atFloor ? { ...rankAt(0), fill: 0 } : null;
+}
+
+function useEarnedBanner(transition) {
+  const key = transition && transition.key;
+  const owned = useRef(null);
+  const seen = useRef(null);
+  // A correction can change ladders AND earn a PB in the same update. Only
+  // its first rendered banner claims that live receipt, including a new
+  // target's first mount. Other instances and remounts cannot replay it.
+  const accepted = transition && (
+    owned.current === key || claimEarnedTransition(transition.receipt));
+  if (accepted) owned.current = key;
+  const fresh = accepted && seen.current !== key;
+  if (fresh) seen.current = key;
+  const from = transition && (
+    gradedBanner(transition.banner, transition.atFloor) || { ...rankAt(0), fill: 0 });
+  return { fresh, climb: accepted && { key, from, initial: fresh } };
+}
+
+function classificationSentence(fresh, transition, prior) {
+  if (!fresh) return prior;
+  // The leaving line belongs to the destination's pre-save measurement,
+  // just like the cap and bar. The old strategy's gap has no meaning here.
+  const before = transition.banner;
+  const next = before && before.rank && before.next_tier
+    ? { tier: before.next_tier, division: before.next_division }
+    : transition.atFloor ? rankAt(1) : null;
+  return {
+    label: next ? `${capName(next.tier)} ${divisionDigit(next.division)}` : null,
+    gap: before && before.rank && before.next_gap_cs != null
+      ? (before.next_gap_cs / 100).toFixed(2) : null,
+  };
+}
+
 function entryBasis(entry) {
   const basis = entry && entry.banner && entry.banner.rank
     ? entry.banner.basis : null;
@@ -217,7 +256,7 @@ export function RankBanner({ label, banner, hint = null, identity = null,
                              atFloor: atFloorProp = false,
                              lane = null, order = 0,
                              layout = "row", showNext = true, iconSize = 24,
-                             nextStepMode = "classic", swapKey = null }) {
+                             nextStepMode = "classic", swapKey = null, earnedTransition }) {
   const ranked = !!(banner && banner.rank);
   // Called unconditionally (rules of hooks) even on the sentinel/empty path
   // below — `null` passes straight through with no animation, which is what
@@ -261,6 +300,7 @@ export function RankBanner({ label, banner, hint = null, identity = null,
     // bar is simply full — the same sentinel the old tween used.
     fill: banner.next_tier ? (banner.fill || 0) : 1,
   } : atFloor ? { ...rankAt(0), fill: 0 } : null;
+  const earned = useEarnedBanner(earnedTransition);
   // Practice-log Strategy/Overall changes -- and, since 2026-08-23, a change
   // of the active STRATEGY itself -- are the same kind of event as a route
   // change: a different measurement nobody earned. Reuse the route exchange
@@ -280,14 +320,13 @@ export function RankBanner({ label, banner, hint = null, identity = null,
     tier: graded && graded.tier,
     division: graded && graded.division,
     fill: graded ? graded.fill : 0,
-    banner,
-    atFloor,
-  }, mareloTuning());
+    banner, atFloor,
+  }, mareloTuning(), { suppress: earned.fresh });
   // `lane`/`order` can sequence several banners in an inspector or legacy
   // caller. The practice log now passes neither because it paints one banner;
   // a lone banner and the MARELO bar start immediately.
   const climb = useRankClimb(graded, identity, {
-    lane, order, exchangeKey: swapKey,
+    lane, order, exchangeKey: swapKey, earnedTransition: earned.climb,
   });
   // The next-step sentence currently ON SCREEN, and the one before it. A
   // fade-out has to show the sentence the reader was ALREADY reading: `banner`
@@ -365,6 +404,7 @@ export function RankBanner({ label, banner, hint = null, identity = null,
       ? settledSentence : sentenceRef.current;
     sentenceRef.current = settledSentence;
   }
+  priorRef.current = classificationSentence(earned.fresh, earnedTransition, priorRef.current);
   // "rest" is the hook's word for "nothing is animating", and it is ALSO what
   // the stale state looks like on the one render between a new payload landing
   // and the effect starting the climb -- the hook's state is still the old
@@ -375,8 +415,7 @@ export function RankBanner({ label, banner, hint = null, identity = null,
     ? { label: atCeiling ? null : stepLabel(climbingNext), gap: null }
     : mode === "leaving" ? priorRef.current
     : settledSentence;
-  const nextLabel = shown.label;
-  const gap = shown.gap;
+  const { label: nextLabel, gap } = shown;
   // `climb.bar` is a DRAWN width, already anchored at the track's midpoint
   // and already carrying the closing sweep's restart from empty
   // (ui/rankclimb.js converts at the plan's boundary; caps.js::barFill owns

@@ -300,17 +300,13 @@ def test_entity_tier_matches_rank_for_on_a_ragged_ladder(tmp_path):
     # the best ladder and move the 92.5 this test pins.
     client, svc = make_client(tmp_path, bundled_library=False)
     with client:
-        asyncio.run(svc.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
-        asyncio.run(svc.publish(_ev("star_collected", 1315,
-                                    {"course_id": 8, "star_id": 2, "igt_frames": 315})))
         client.put("/api/ranks/standards/star:8:2/Standard/Mario", json={"seconds": 10.0})
         client.put("/api/ranks/standards/star:8:2/Standard/Gold", json={"seconds": 20.0})
         client.put("/api/ranks/standards/star:8:2/Standard/Silver", json={"seconds": 30.0})
         asyncio.run(svc.set_strat(8, 2, "Standard"))
-        # The attempt was journaled before the strategy existed; stamp it
-        # directly, the same way test_views_marelo.py does.
-        svc.db._conn.execute("UPDATE attempts SET strat_tag='Standard' WHERE course_id=8")
-        svc.db._conn.commit()
+        asyncio.run(svc.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
+        asyncio.run(svc.publish(_ev("star_collected", 1315,
+                                    {"course_id": 8, "star_id": 2, "igt_frames": 315})))
         # CHANGED 2026-07-28 (task 0034): pb mode grades the SAVED row now,
         # not the fastest attempt -- save it explicitly rather than relying
         # on the attempt landing.
@@ -415,15 +411,13 @@ def _grade_a_star(test_client, service, course=8, star=2):
     Without this the bare fixture grades Iron V -- the floor -- and every
     celebration path returns before it decides anything, which is how two
     tests in this file managed to pass while proving nothing."""
-    asyncio.run(service.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
-    asyncio.run(service.publish(_ev("star_collected", 1315,
-                                    {"course_id": course, "star_id": star, "igt_frames": 315})))
     for rank, seconds in (("Mario", 10.0), ("Gold", 20.0), ("Silver", 30.0)):
         test_client.put(f"/api/ranks/standards/star:{course}:{star}/Standard/{rank}",
                         json={"seconds": seconds})
     asyncio.run(service.set_strat(course, star, "Standard"))
-    service.db._conn.execute("UPDATE attempts SET strat_tag='Standard' WHERE course_id=?", (course,))
-    service.db._conn.commit()
+    asyncio.run(service.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(service.publish(_ev("star_collected", 1315,
+                                    {"course_id": course, "star_id": star, "igt_frames": 315})))
     attempt_id = next(a.id for a in service.db.attempts() if a.course_id == course)
     asyncio.run(service.save_pb(attempt_id, "igt"))
 

@@ -25,6 +25,23 @@ import { StratModal } from "./stratmodal.js";
 
 const html = htm.bind(h);
 
+function reportAutomaticReplay(result, onNotice) {
+  const replay = result?.automatic_pb?.replay_save;
+  if (replay?.status === "failed" && onNotice)
+    onNotice(`PB saved. Replay could not be saved: ${replay.message}`);
+}
+
+function strategyOptions(shown, strategies) {
+  const known = strategies || [];
+  return shown && !known.includes(shown) ? [...known, shown] : known;
+}
+
+async function submitStrategy(submit, identity, tag, timerMode) {
+  if (submit) return submit(tag);
+  return send("POST", "/api/strat",
+    { ...identity, strat_tag: tag, timer_mode: timerMode });
+}
+
 // `allowBlank=false` drops the "no strategy" sentinel entirely. Segments whose
 // DEFINITION carries a default_strat pass it: there is basically one way to do
 // a castle movement, so "no strategy" is not a state the user may choose (spec
@@ -42,7 +59,7 @@ const html = htm.bind(h);
 export function StratPicker({ entity, identity, strategies, active, onChanged,
                               submit, blankLabel = "— no strat —",
                               highlightUnset = true, allowBlank = true,
-                              groups = null }) {
+                              groups = null, timerMode = "igt", onNotice }) {
   // Bumped to force the <select> to remount and re-read `active`. A native
   // <select> change updates the DOM immediately, but if the write is dropped
   // (or cancelled) `active` stays null, so its `value` prop never changes and
@@ -71,9 +88,7 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
   // value always stays listed, same rule as segments.js's dropdowns. `shown`
   // rather than `active` so a name the modal just created is listed while
   // its write is in flight, before the server's list carries it.
-  const options = shown && !(strategies || []).includes(shown)
-    ? [...(strategies || []), shown]
-    : (strategies || []);
+  const options = strategyOptions(shown, strategies);
 
   async function setStrat(value) {
     if (value === "__new") { setShowModal(true); return; }
@@ -84,9 +99,9 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
       // component: the practice cards set the ACTIVE strategy, an attempt row
       // reclassifies one recorded attempt. One dropdown, so the modal, the
       // dropped-write recovery, and the styling can't drift apart.
-      if (submit) await submit(tag);
-      else await send("POST", "/api/strat", { ...identity, strat_tag: tag });
-    } catch (e) {
+      const result = await submitStrategy(submit, identity, tag, timerMode);
+      reportAutomaticReplay(result, onNotice);
+    } catch {
       // A dropped write (tracker reconnecting, or a second copy running) must
       // NOT silently leave a phantom selection that later reverts. Tell the
       // user and force the dropdown back to the real, still-unset value.

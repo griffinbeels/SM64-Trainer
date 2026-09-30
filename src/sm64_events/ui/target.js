@@ -49,7 +49,11 @@ export async function requestTarget(t, body, { quiet = false,
   // tests/test_single_source.py rightly rejects.
   if (!quiet) releaseCelebrationHold();
   try {
-    await send("POST", "/api/target", body);
+    const result = await send("POST", "/api/target",
+      { ...body, timer_mode: t.clock || "igt" });
+    const replay = result?.automatic_pb?.replay_save;
+    if (replay?.status === "failed")
+      t.setNotice(`PB saved. Replay could not be saved: ${replay.message}`);
     t.refresh();
     return true;
   } catch (refusal) {
