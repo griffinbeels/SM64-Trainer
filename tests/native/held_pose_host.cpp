@@ -68,6 +68,29 @@ int main(int argc, char **argv) {
                     && pose.vertices[i].color[c] <= 1;
         check(shaded, "held colours are F3D shades");
     }
+    // A legacy held Mips record said id 0 even though the game's initializer
+    // selected animation 4. It must produce the same full mesh as an explicit
+    // current record, while released id 0 retains the upright idle pose.
+    saved.held = {};saved.held.behavior = 0x130044FCu;saved.held.animation_id = 0;
+    saved.held.holp[1] = 75;
+    saved.held.scale[0] = saved.held.scale[1] = saved.held.scale[2] = 1;
+    check(ghost_pose::evaluate(model,record,live,world,1,scratch,pose) == ghost_pose::Result::ok,
+          "legacy held Mips evaluates");
+    const std::vector<float> legacy_mips(scratch.position + 3*alone,scratch.position + 3*scratch.evaluated);
+    float down = -1e9f;
+    for(uint32_t i=alone;i<scratch.evaluated;++i)down=std::fmax(down,scratch.position[3*i+1]);
+    saved.held.animation_id = 4;
+    check(ghost_pose::evaluate(model,record,live,world,1,scratch,pose) == ghost_pose::Result::ok
+          && legacy_mips.size() == 3*(scratch.evaluated-alone)
+          && !std::memcmp(legacy_mips.data(),scratch.position+3*alone,legacy_mips.size()*sizeof(float)),
+          "legacy held Mips draws the canonical ears-down mesh");
+    saved.held.released = 1;saved.held.animation_id = 0;saved.held.angles[1] = saved.pose.angles[1];
+    check(ghost_pose::evaluate(model,record,live,world,1,scratch,pose) == ghost_pose::Result::ok,
+          "released Mips idle evaluates");
+    float up = -1e9f;
+    for(uint32_t i=alone;i<scratch.evaluated;++i)up=std::fmax(up,scratch.position[3*i+1]);
+    std::fprintf(stderr,"Mips ears: held %.2f, released idle %.2f\n",down,up);
+    check(down < up,"Mips held ears sit below the upright idle ears");
     // Thrown: the same Bob-omb drawn where it flies, by its own node's
     // TRS(position, angle, scale), whatever Mario's own root is.
     const auto released = [&](uint32_t behavior, int16_t animation, uint32_t vertices, int16_t yaw,

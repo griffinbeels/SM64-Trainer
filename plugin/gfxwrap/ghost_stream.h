@@ -76,7 +76,8 @@ bool requested(); // render thread, one atomic load; no timing while idle
 void cancel(); // render thread: invalidate any provisional/finalized display candidate
 void rom(bool opened);
 // Called inside the serialized renderer DList command, before RSP processing.
-bool begin(const uint8_t *rdram, uint32_t bytes, uint32_t context_generation, int64_t qpc);
+bool begin(const uint8_t *rdram, uint32_t bytes, uint32_t context_generation, int64_t qpc,
+           const uint32_t *segments = nullptr);
 void projection(const float matrix[16]);
 void lookat(const ghost::Lookat &);
 void triangles(const ghost::RasterTarget &, uint32_t count, bool zbuffer);

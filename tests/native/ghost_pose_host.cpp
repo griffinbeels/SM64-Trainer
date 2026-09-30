@@ -183,6 +183,13 @@ int main() {
         assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
         assert((applied.fields&SG_POSE_HELD) && applied.held_kind==k.kind);
     }
+    saved.held.behavior=0x130044FCu;saved.held.animation_id=0;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(applied.held_animation_id==4); // legacy in-hand Mips: ears down
+    saved.held.released=1;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(applied.held_animation_id==0); // released Mips keeps the recorded animation
+    saved.held.released=0;saved.held.animation_id=1;
     saved.held.behavior=0x13003174u;
     // The held object is lit by its own lights, not Mario's: its blue vertex
     // shades to its ambient plus diffuse (the fake normal faces the light).

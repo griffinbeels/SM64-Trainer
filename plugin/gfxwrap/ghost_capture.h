@@ -267,6 +267,10 @@ typedef struct gc_frame {
     uint32_t rdram_bytes, epoch;
     uint64_t sequence, dlist_serial;
     int64_t qpc;
+    /* Renderer-local segment bases for this occurrence (gSP.segment), never
+     * a RAM address or part of the stored ABI. Needed when oAnimations or
+     * its entries are segmented; NULL refuses that optional object. */
+    const uint32_t *segments;
 } gc_frame;
 
 void ghost_capture_reset(gc_reader *reader);

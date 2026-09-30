@@ -253,15 +253,51 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
 // Segment 0x13 holds every behaviour script (the US map's last is below 0x6000).
 constexpr uint32_t behaviour_segment = 0x13000000u, behaviour_span = 0x10000u;
 constexpr uint32_t object_behaviour = 0x20c, object_active_flags = 0x74, object_anim_state = 0xf0, body_holp = 0x18;
+constexpr uint32_t object_animations = 0x120, object_animation_limit = 32;
 
 bool pool_object(const gc_layout &layout, uint32_t object) {
     return object >= layout.object_pool && !((object - layout.object_pool) % object_size)
         && (object - layout.object_pool) / object_size < object_count;
 }
 
+// geo_obj_init_animation updates curAnim, NOT animID. Resolve the same
+// animation-table entry through the renderer's segment bases. The table is
+// NULL-terminated; refuse missing, ambiguous or unbounded identities instead
+// of treating the object's stale numeric animID as its current animation.
+uint32_t object_pointer(const Ram &ram, const gc_frame &frame, uint32_t pointer) {
+    if (!pointer) return 0;
+    if (pointer >= kseg0) return ram.fits(pointer, 4) ? pointer : 0;
+    const uint32_t segment = pointer >> 24;
+    if (segment >= 16 || !frame.segments) return 0;
+    uint32_t base = frame.segments[segment];
+    if (base >= kseg0) base -= kseg0;
+    const uint64_t physical = uint64_t(base) + (pointer & 0x00ffffffu);
+    if (physical >= ram.size) return 0;
+    const auto address = kseg0 + uint32_t(physical);
+    return ram.fits(address, 4) ? address : 0;
+}
+bool object_animation(Ram &ram, const gc_frame &frame, uint32_t object, uint32_t animation, int16_t &index) {
+    const uint32_t table = object_pointer(ram, frame, ram.u32(object + object_animations));
+    if (!table) return false;
+    int16_t found = -1;
+    for (uint32_t i = 0; i < object_animation_limit; ++i) {
+        const uint32_t entry = ram.u32(table + 4*i);
+        if (!ram.ok) return false;
+        if (!entry) { index = found; return found >= 0; }
+        const uint32_t address = object_pointer(ram, frame, entry);
+        if (!address) return false;
+        if (address == animation) {
+            if (found >= 0) return false;
+            found = int16_t(i);
+        }
+    }
+    return false;
+}
+
 // What the in-hand and released blocks share: behaviour, this frame's
 // animation, blink frame and scale. False when any is unprovable.
-bool object_state(Ram &ram, const gc_layout &layout, uint32_t object, uint16_t area_update_counter, gc_held &h) {
+bool object_state(Ram &ram, const gc_layout &layout, const gc_frame &frame,
+                  uint32_t object, uint16_t area_update_counter, gc_held &h) {
     // Fresh this frame: its animation globals were set this frame, by the hand
     // or by its own node (culled or not). Without an animation, the in-hand
     // block is kept only beside a root Mario's executed lists proved.
@@ -270,7 +306,8 @@ bool object_state(Ram &ram, const gc_layout &layout, uint32_t object, uint16_t a
     const uint32_t behaviour = ram.u32(object + object_behaviour);
     if (behaviour < layout.behaviour_base || behaviour - layout.behaviour_base >= behaviour_span) return false;
     h.behavior = behaviour_segment + (behaviour - layout.behaviour_base);
-    h.animation_id = animation ? ram.s16(object + 0x38) : int16_t(-1);
+    h.animation_id = -1;
+    if (animation && !object_animation(ram, frame, object, animation, h.animation_id)) return false;
     h.anim_y_translation = animation ? ram.s16(object + 0x3a) : int16_t(0);
     h.animation_frame = animation ? ram.s16(object + 0x40) : int16_t(0);
     const uint32_t anim_state = ram.u32(object + object_anim_state);
@@ -289,7 +326,7 @@ bool object_state(Ram &ram, const gc_layout &layout, uint32_t object, uint16_t a
 // same slot, still active, still running the behaviour it had in his hand.
 // Anything else ends the follow for good. A frame its own node does not draw
 // (off, invisible, another area) carries nothing but keeps following.
-void capture_released(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_sample &out) {
+void capture_released(Ram &ram, const gc_layout &layout, const gc_frame &frame, gc_reader &reader, gc_sample &out) {
     const uint32_t object = reader.released_object;
     if (!object) return;
     const bool repeat = out.global_timer == reader.released_timer;
@@ -305,7 +342,7 @@ void capture_released(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_s
     if (!(out.valid_fields & GC_VALID_POSE) || !(node_flags & active) || (node_flags & (invisible | billboard))
             || ram.u32(object + 0x50) || ram.u8(object + 0x18) != out.area || !ram.u32(object + 0x14)) return;
     gc_held h{};
-    if (!object_state(ram, layout, object, out.area_update_counter, h)) return;
+    if (!object_state(ram, layout, frame, object, out.area_update_counter, h)) return;
     for (unsigned i = 0; i < 3; ++i) {
         h.holp[i] = ram.f32(object + 0x20 + 4*i);
         h.angles[i] = ram.s16(object + 0x1a + 2*i);
@@ -319,7 +356,7 @@ void capture_released(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_s
 // gMarioState->heldObj as geo_process_held_object drew it from Mario's hand
 // this frame (gc_held); once he lets go, the same object where it flies.
 // Anything unprovable leaves the block cleared.
-void capture_held(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_sample &out) {
+void capture_held(Ram &ram, const gc_layout &layout, const gc_frame &frame, gc_reader &reader, gc_sample &out) {
     if (!layout.behaviour_base) return;
     const uint32_t state = layout.mario_state, held = ram.u32(state + 0x7c), body = ram.u32(state + mario_body);
     if (held) {
@@ -333,7 +370,7 @@ void capture_held(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_sampl
         reader.released_timer = reader.held_timer; reader.released_frames = 0;
         reader.held_object = 0;
     }
-    if (!held) return capture_released(ram, layout, reader, out);
+    if (!held) return capture_released(ram, layout, frame, reader, out);
     // Rides a pose only; ghost_root_finish clears it with a refused root.
     if (!(out.valid_fields & GC_VALID_POSE) || !pool_object(layout, held) || !ram.has(body, 0x24)) return;
     // Alive, drawn only through the hand, with a model the hand can draw
@@ -346,7 +383,7 @@ void capture_held(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_sampl
     if (!(ram.u16(held + object_active_flags) & 1u) || ((node_flags & active) && !(node_flags & invisible))
             || !ram.u32(held + 0x14)) return;
     gc_held h{};
-    if (!object_state(ram, layout, held, out.area_update_counter, h)) return;
+    if (!object_state(ram, layout, frame, held, out.area_update_counter, h)) return;
     for (unsigned i = 0; i < 3; ++i) {
         h.holp[i] = ram.f32(body + body_holp + 4*i);
         if (!finite(h.holp[i])) return;
@@ -452,7 +489,7 @@ static uint32_t capture_read(gc_reader *reader, const gc_layout *layout,
         if (!out->status) out->status = pose_status;
     }
     ram.ok = true;
-    capture_held(ram, *layout, *reader, *out);
+    capture_held(ram, *layout, *frame, *reader, *out);
     ram.ok = true;
     if (probe) ghost_root_prepare(*probe, *frame, ram.u32(layout->mario_object), layout->object_pool, *out);
     return out->status;

@@ -131,7 +131,7 @@ void cancel() { active = false; current = {}; root_probe = {}; particle_probe = 
 void rom(bool opened) {
     active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset(); rom_open = opened; new_epoch();
 }
-bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc) {
+bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc, const uint32_t *segments) {
     active = false; current = {}; root_probe = {}; pass.reset();
     uint32_t revision = 0;
     if (!rom_open || !generation || !read_config(layout, revision)) return false;
@@ -141,7 +141,7 @@ bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc)
     }
     if (!rom_open || serial == std::numeric_limits<uint64_t>::max()) { disable(); return false; }
     ++serial;
-    gc_frame frame{ram,bytes,epoch.load(std::memory_order_relaxed),serial,serial,qpc};
+    gc_frame frame{ram,bytes,epoch.load(std::memory_order_relaxed),serial,serial,qpc,segments};
     ghost_capture_begin(&reader, &layout, &frame, &current, &root_probe);
     ghost_particles_prepare(particle_probe, ram, bytes, layout.mario_object, layout.object_pool);
     gcc_input timing{};

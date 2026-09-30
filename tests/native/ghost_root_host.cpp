@@ -285,6 +285,7 @@ static void held_block(Fixture &f) {
         f.put32(bomb+0x20c,f.config.behaviour_base+0x3174);
         f.put16(bomb+0x38,1);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);f.put32(bomb+0xf0,1);
         f.put32(bomb+0x3c,anim);f.put16(anim+8,24);f.put16(bomb+0x42,0x8123);
+        object_animation_table(f,bomb,anim);f.frame.segments=nullptr;
         for(unsigned i=0;i<3;++i) {
             f.putfloat(bomb+0x2c+4*i,1.0f);f.putfloat(Fixture::body+0x18+4*i,100.0f+float(i));
         }
@@ -300,6 +301,24 @@ static void held_block(Fixture &f) {
     const auto &h=f.sample.held;
     check(h.behavior==0x13003174 && h.animation_id==1 && h.animation_frame==12 && h.anim_y_translation==7
           && h.holp[0]==100 && h.holp[2]==102 && h.scale[1]==1 && h.anim_state==1,"held Bob-omb fields");
+    holding();f.put16(bomb+0x38,0);
+    check(frame(true) && h.animation_id==1,"stale object animID replaced by its current table entry");
+    holding();f.put32(bomb+0x20c,f.config.behaviour_base+0x44fc);f.put16(bomb+2,0x31);
+    object_animation_table(f,bomb,anim,4,5);f.put16(bomb+0x38,0);
+    check(frame(true) && h.animation_id==4,"Mips records the ears-down held animation despite stale id zero");
+    holding();f.put32(bomb+0x120,0);check(!frame(true),"an animated object without an animation table accepted");
+    holding();f.put32(Fixture::base+0x14804,anim+0x20);check(!frame(true),"current animation absent from its table accepted");
+    holding();f.put32(Fixture::base+0x14800,anim);check(!frame(true),"ambiguous animation identity accepted");
+    holding();for(unsigned i=0;i<32;++i)f.put32(Fixture::base+0x14800+4*i,anim+0x20);
+    check(!frame(true),"unterminated animation table accepted");
+    // The real pointer form: oAnimations and its entries both segmented,
+    // curAnim already virtual. Only this occurrence's renderer bases resolve it.
+    uint32_t segments[16]{};segments[6]=0x40000;
+    holding();f.frame.segments=segments;f.put32(bomb+0x120,0x06000400);
+    f.put32(Fixture::base+0x40400,0x06000500);f.put32(Fixture::base+0x40404,0x06000520);
+    f.put32(Fixture::base+0x40408,0);f.put32(bomb+0x3c,Fixture::base+0x40520);f.put16(Fixture::base+0x40528,24);
+    check(frame(true) && h.animation_id==1,"segmented table did not resolve the current animation");
+    f.frame.segments=nullptr;check(!frame(true),"segmented animation guessed without current bases");
     holding();check(!frame(false),"held object kept without a proven pose");
     const auto none=[&](uint32_t at,uint32_t word,const char *why){holding();f.put32(at,word);check(!frame(true),why);};
     none(bomb+0,0x00180021,"held object drawn by its own node accepted");
@@ -360,6 +379,7 @@ static void released_block(Fixture &f) {
         f.put32(bomb+0x20c,f.config.behaviour_base+0x3174);f.put32(bomb+0x50,0);f.put8(bomb+0x18,1);
         f.put16(bomb+0x38,1);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);f.put32(bomb+0xf0,1);
         f.put32(bomb+0x3c,anim);f.put16(anim+8,24);f.put16(bomb+0x42,0x8123);
+        object_animation_table(f,bomb,anim);
         for(unsigned i=0;i<3;++i) {
             f.putfloat(bomb+0x2c+4*i,1.0f);f.putfloat(Fixture::body+0x18+4*i,100.0f+float(i));
             f.putfloat(bomb+0x20+4*i,300.0f-float(i)*150);

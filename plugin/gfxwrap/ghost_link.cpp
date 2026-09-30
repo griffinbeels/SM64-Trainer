@@ -113,7 +113,7 @@ bool begin_list() {
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
     // Upstream RDRAMSize is the inclusive maximum byte index, not a byte count.
     const uint32_t bytes = RDRAMSize == 0x7fffff || RDRAMSize == 0x3fffff ? RDRAMSize + 1 : 0;
-    observing = context_current && ghost_stream::begin(RDRAM,bytes,context_generation,now.QuadPart);
+    observing = context_current && ghost_stream::begin(RDRAM,bytes,context_generation,now.QuadPart,gSP.segment);
     ghost_draw::begin(ghost_ipc::rom_generation(), ghost_stream::api()->stats().configuration,
                       observing ? ghost_stream::sample() : nullptr);
     return observing;

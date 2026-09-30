@@ -3,6 +3,15 @@
 #include <initializer_list>
 constexpr uint32_t root_dl=0x20000, alpha_dl=0x21000, root_mtx=0x22000, body_mtx=0x22100;
 constexpr uint32_t body_dl=0x04000080;
+// The object initializer selects curAnim through oAnimations; unlike
+// set_mario_animation it leaves animID untouched. Table indices are the
+// portable model contract; these synthetic headers carry no ROM assets.
+inline void object_animation_table(Fixture &f,uint32_t object,uint32_t animation,uint32_t index=1,uint32_t count=2) {
+    const uint32_t table=Fixture::base+0x14800;
+    f.put32(object+0x120,table);
+    for(uint32_t i=0;i<count;++i)f.put32(table+4*i,i==index?animation:animation+0x20u*(i+1));
+    f.put32(table+4*count,0);
+}
 const float floor_matrix[16]={.25f,0,0,0, 0,.25f,.1875f,0, 0,-.225f,.3f,0, 120,60,-450,1};
 static void fixed(Fixture &f,uint32_t at,const float *m) {
     for(unsigned i=0;i<16;++i) {

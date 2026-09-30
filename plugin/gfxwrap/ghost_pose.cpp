@@ -255,7 +255,12 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     if ((recorded.valid_fields & GC_VALID_HELD) && held_kind(held.behavior) != SG_HELD_NONE) {
         pose.fields |= SG_POSE_HELD;
         pose.held_kind = held_kind(held.behavior);
-        pose.held_animation_id = held.animation_id; pose.held_animation_frame = held.animation_frame;
+        // Older capture wrote the object's stale animID (zero for Mips).
+        // bhv_mips_held always chooses animation 4. Apply that canonical pose
+        // only while he is actually held; released Mips keeps its recorded id.
+        pose.held_animation_id = held.behavior == 0x130044FCu && !held.released && held.animation_id == 0
+            ? int16_t(4) : held.animation_id;
+        pose.held_animation_frame = held.animation_frame;
         pose.held_anim_y_translation = held.anim_y_translation; pose.held_anim_state = held.anim_state;
         std::memcpy(pose.held_position,held.holp,sizeof(pose.held_position));
         std::memcpy(pose.held_scale,held.scale,sizeof(pose.held_scale));
