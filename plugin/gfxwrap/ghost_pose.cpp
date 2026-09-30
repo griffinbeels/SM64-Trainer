@@ -33,6 +33,7 @@ constexpr HeldModel held_models[] = {
     {0x13004218u, SG_HELD_BREAKABLE_BOX}, // bhvBreakableBoxSmall (the cork box)
     {0x13001650u, SG_HELD_BREAKABLE_BOX}, // bhvJumpingBox (the crazy box, same model)
     {0x130044FCu, SG_HELD_MIPS},        // bhvMips: its fur clamps (sg_tile)
+    {0x130033ECu, SG_HELD_HOOT},        // bhvHoot: usedObj while riding, its own TRS
 };
 uint32_t held_kind(uint32_t behavior) {
     for (const auto &held : held_models) if (held.behavior == behavior) return held.kind;
@@ -264,7 +265,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         pose.held_anim_y_translation = held.anim_y_translation; pose.held_anim_state = held.anim_state;
         std::memcpy(pose.held_position,held.holp,sizeof(pose.held_position));
         std::memcpy(pose.held_scale,held.scale,sizeof(pose.held_scale));
-        // Out of his hand: where it flies, by its own node's transform.
+        // Its own node's transform: a thrown object or ridden Hoot.
         if (held.released) {
             pose.fields |= SG_POSE_HELD_RELEASED;
             std::memcpy(pose.held_angles,held.angles,sizeof(pose.held_angles));

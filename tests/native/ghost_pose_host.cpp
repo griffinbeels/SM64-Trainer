@@ -177,7 +177,7 @@ int main() {
     // The penguin, King Bob-omb, Chuckya, both boxes and Mips by their behaviours.
     const struct { uint32_t behavior, kind; } kinds[]={{0x130020E8u,SG_HELD_PENGUIN},
         {0x130001F4u,SG_HELD_KING_BOBOMB},{0x13000528u,SG_HELD_CHUCKYA},{0x13004218u,SG_HELD_BREAKABLE_BOX},
-        {0x13001650u,SG_HELD_BREAKABLE_BOX},{0x130044FCu,SG_HELD_MIPS}};
+        {0x13001650u,SG_HELD_BREAKABLE_BOX},{0x130044FCu,SG_HELD_MIPS},{0x130033ECu,SG_HELD_HOOT}};
     for(const auto &k:kinds) {
         saved.held.behavior=k.behavior;
         assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
@@ -190,6 +190,12 @@ int main() {
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(applied.held_animation_id==0); // released Mips keeps the recorded animation
     saved.held.released=0;saved.held.animation_id=1;
+    saved.held.behavior=0x130033ECu;saved.held.released=1;saved.held.angles[1]=0x4567;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(applied.held_kind==SG_HELD_HOOT && (applied.fields&SG_POSE_HELD_RELEASED)
+        && applied.held_animation_id==1 && applied.held_angles[1]==0x4567
+        && pose.opacity==0.5f); // Owl and Mario share the same tinted mesh
+    saved.held.released=0;saved.held.angles[1]=0;
     saved.held.behavior=0x13003174u;
     // The held object is lit by its own lights, not Mario's: its blue vertex
     // shades to its ambient plus diffuse (the fake normal faces the light).

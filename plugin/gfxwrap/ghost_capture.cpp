@@ -322,20 +322,10 @@ bool object_state(Ram &ram, const gc_layout &layout, const gc_frame &frame,
     return ram.ok;
 }
 
-// The object released from his hand, followed one game frame at a time: the
-// same slot, still active, still running the behaviour it had in his hand.
-// Anything else ends the follow for good. A frame its own node does not draw
-// (off, invisible, another area) carries nothing but keeps following.
-void capture_released(Ram &ram, const gc_layout &layout, const gc_frame &frame, gc_reader &reader, gc_sample &out) {
-    const uint32_t object = reader.released_object;
-    if (!object) return;
-    const bool repeat = out.global_timer == reader.released_timer;
-    if ((!repeat && (out.global_timer != reader.released_timer + 1 || reader.released_frames >= GC_RELEASED_FRAMES))
-            || !(ram.u16(object + object_active_flags) & 1u)
-            || ram.u32(object + object_behaviour) != reader.released_behaviour) {
-        reader.released_object = 0; return;
-    }
-    if (!repeat) { reader.released_timer = out.global_timer; ++reader.released_frames; }
+// Its own graph node draws the object, with a current animation and
+// TRS(gfx pos, angles, scale), independent of Mario's hand. The existing
+// RELEASED flag names that transform route; ridden Hoot uses it too.
+void capture_external(Ram &ram, const gc_layout &layout, const gc_frame &frame, uint32_t object, gc_sample &out) {
     // Rides a pose, like the in-hand block. geo_process_object composed
     // TRS(gfx pos, angle, scale): no throwMatrix, no billboard.
     const uint16_t node_flags = ram.u16(object + 2);
@@ -351,6 +341,23 @@ void capture_released(Ram &ram, const gc_layout &layout, const gc_frame &frame, 
     if (!ram.ok) return;
     h.released = 1;
     out.held = h; out.valid_fields |= GC_VALID_HELD;
+}
+
+// The object released from his hand, followed one game frame at a time: the
+// same slot, still active, still running the behaviour it had in his hand.
+// Anything else ends the follow for good. A frame its own node does not draw
+// (off, invisible, another area) carries nothing but keeps following.
+void capture_released(Ram &ram, const gc_layout &layout, const gc_frame &frame, gc_reader &reader, gc_sample &out) {
+    const uint32_t object = reader.released_object;
+    if (!object) return;
+    const bool repeat = out.global_timer == reader.released_timer;
+    if ((!repeat && (out.global_timer != reader.released_timer + 1 || reader.released_frames >= GC_RELEASED_FRAMES))
+            || !(ram.u16(object + object_active_flags) & 1u)
+            || ram.u32(object + object_behaviour) != reader.released_behaviour) {
+        reader.released_object = 0; return;
+    }
+    if (!repeat) { reader.released_timer = out.global_timer; ++reader.released_frames; }
+    capture_external(ram,layout,frame,object,out);
 }
 
 // gMarioState->heldObj as geo_process_held_object drew it from Mario's hand
@@ -370,7 +377,18 @@ void capture_held(Ram &ram, const gc_layout &layout, const gc_frame &frame, gc_r
         reader.released_timer = reader.held_timer; reader.released_frames = 0;
         reader.held_object = 0;
     }
-    if (!held) return capture_released(ram, layout, frame, reader, out);
+    if (!held) {
+        // ACT_RIDING_HOOT attaches Mario through usedObj, never heldObj.
+        // usedObj survives dismounting, so the riding action is required.
+        // Hoot draws from its own gfx transform. One companion fits the
+        // stored block: an actual hand object takes priority above; Hoot
+        // takes priority over following an earlier throw while attached.
+        const uint32_t ridden = out.pose.action == 0x000004a8u ? ram.u32(state + 0x80) : 0;
+        if (pool_object(layout,ridden) && (ram.u16(ridden + object_active_flags) & 1u)
+                && ram.u32(ridden + object_behaviour) == layout.behaviour_base + 0x33ecu)
+            return capture_external(ram,layout,frame,ridden,out);
+        return capture_released(ram, layout, frame, reader, out);
+    }
     // Rides a pose only; ghost_root_finish clears it with a refused root.
     if (!(out.valid_fields & GC_VALID_POSE) || !pool_object(layout, held) || !ram.has(body, 0x24)) return;
     // Alive, drawn only through the hand, with a model the hand can draw

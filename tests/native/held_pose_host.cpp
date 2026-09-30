@@ -49,10 +49,11 @@ int main(int argc, char **argv) {
     const struct { uint32_t behavior; int16_t animation; uint32_t vertices; const char *name; } kinds[] = {
         {0x13003174u, 1, 240, "Bob-omb"}, {0x130020E8u, 0, 402, "penguin"}, {0x130001F4u, 0, 348, "King Bob-omb"},
         {0x13000528u, 0, 132, "Chuckya"}, {0x13004218u, -1, 36, "cork box"}, {0x13001650u, -1, 36, "crazy box"},
-        {0x130044FCu, 0, 588, "Mips"}};
+        {0x130044FCu, 0, 588, "Mips"}, {0x130033ECu, 1, 594, "Hoot"}};
     for (const auto &k : kinds) {
         saved.valid_fields = GC_VALID_CLOCK | GC_VALID_POSE | GC_VALID_HELD;
         saved.held = {}; saved.held.behavior = k.behavior; saved.held.animation_id = k.animation;
+        if(k.behavior==0x130033ECu)saved.held.released=1;
         saved.held.holp[0] = 45; saved.held.holp[1] = 75; saved.held.holp[2] = 45;
         saved.held.scale[0] = saved.held.scale[1] = saved.held.scale[2] = 1;
         const auto result = ghost_pose::evaluate(model, record, live, world, 1.0f, scratch, pose);
@@ -91,6 +92,23 @@ int main(int argc, char **argv) {
     for(uint32_t i=alone;i<scratch.evaluated;++i)up=std::fmax(up,scratch.position[3*i+1]);
     std::fprintf(stderr,"Mips ears: held %.2f, released idle %.2f\n",down,up);
     check(down < up,"Mips held ears sit below the upright idle ears");
+    // Owl's own world transform is independent of Mario's heading/root,
+    // and its recorded flying animation flaps the actual model's wings.
+    saved.held = {};saved.held.behavior = 0x130033ECu;saved.held.released = 1;
+    saved.held.animation_id = 1;saved.held.holp[0] = 400;saved.held.holp[1] = 500;saved.held.holp[2] = -600;
+    saved.held.scale[0] = saved.held.scale[1] = saved.held.scale[2] = 1;
+    check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose) == ghost_pose::Result::ok
+          && scratch.evaluated == alone+594 && pose.opacity==.6f,"ridden Owl shares Mario's overlay mesh and opacity");
+    const std::vector<float> owl_pose(scratch.position+3*alone,scratch.position+3*scratch.evaluated);
+    const auto mario_position=saved.pose.position[0];const auto mario_heading=saved.pose.angles[1];
+    saved.pose.position[0]=1000;saved.pose.angles[1]=0x6000;
+    check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose) == ghost_pose::Result::ok
+          && !std::memcmp(owl_pose.data(),scratch.position+3*alone,owl_pose.size()*sizeof(float)),
+          "Owl stays at its own root when Mario's root changes");
+    saved.pose.position[0]=mario_position;saved.pose.angles[1]=mario_heading;saved.held.animation_frame=7;
+    check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose) == ghost_pose::Result::ok
+          && std::memcmp(owl_pose.data(),scratch.position+3*alone,owl_pose.size()*sizeof(float)),
+          "recorded Owl wing animation changes the mesh");
     // Thrown: the same Bob-omb drawn where it flies, by its own node's
     // TRS(position, angle, scale), whatever Mario's own root is.
     const auto released = [&](uint32_t behavior, int16_t animation, uint32_t vertices, int16_t yaw,

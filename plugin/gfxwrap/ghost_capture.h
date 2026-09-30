@@ -174,7 +174,8 @@ typedef struct gc_particles {
 /* The object Mario holds, as geo_process_held_object drew it from his right
  * hand this frame. Its own graph node never draws while held: it is off, or
  * (the Bob-omb, Mips) on but invisible, culled after geo_process_object
- * advanced its animation. A current animTimer (== area_update_counter) proves
+ * advanced its animation. curAnim matched against oAnimations identifies
+ * the current animation (object animID is stale); a current animTimer (== area_update_counter) proves
  * this frame's animation either way, and the hand's callback writes the HOLP:
  * this frame's world root. An object without
  * an animation (a box: animation_id -1, frame 0) has no timer; the hand draws
@@ -188,7 +189,10 @@ typedef struct gc_particles {
  * reader follows the slot while its behaviour is unchanged and it stays
  * active, one game frame at a time, for at most GC_RELEASED_FRAMES. A frame
  * its node is off or invisible (culled, or not yet shown) carries nothing.
- * Zero unless GC_VALID_HELD. */
+ * RIDDEN Hoot: Mario's usedObj (bhvHoot) during ACT_RIDING_HOOT occupies this
+ * same optional companion block with `released` 1: its own node's TRS, not
+ * the right-hand root. A hand object has priority over a ridden companion;
+ * dismounting does not start a release follow. Zero unless GC_VALID_HELD. */
 typedef struct gc_held {
     uint32_t behavior; /* segmented behaviour script, e.g. 0x13003174 bhvBobomb */
     int16_t animation_id, animation_frame, anim_y_translation;
@@ -196,7 +200,7 @@ typedef struct gc_held {
     float holp[3];     /* marioBodyState->heldObjLastPosition */
     float scale[3];    /* the held object's gfx scale */
     int16_t angles[3]; /* released: its gfx angle; zero in his hand */
-    uint16_t released;
+    uint16_t released; /* own-node TRS: released from his hand, or ridden Hoot */
 } gc_held;
 
 typedef struct gc_camera {

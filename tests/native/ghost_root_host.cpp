@@ -445,6 +445,56 @@ static void released_block(Fixture &f) {
     check(frame(true) && h.behavior==0x13004218 && h.animation_id==-1 && h.animation_frame==0,"thrown box not followed");
     f.put32(f.config.mario_state+0x7c,0);f.put16(bomb+0x74,0);
 }
+// Hoot is attached through usedObj and draws by its own graph node. Its
+// world TRS must never be mistaken for the hand's HOLP or Mario's root.
+static void ridden_block(Fixture &f) {
+    gc_root_probe p;
+    const uint32_t owl=f.config.object_pool+0x260,anim=Fixture::base+0x14100;
+    const auto ride=[&]{
+        scene(f);f.put16(f.config.object_pool+0x42,0x8123);
+        f.put32(f.config.mario_state+0x0c,0x000004a8);
+        f.put32(f.config.mario_state+0x7c,0);f.put32(f.config.mario_state+0x80,owl);
+        f.put32(f.config.mario_state+0x84,0);
+        f.put16(owl+0x74,1);f.put16(owl+2,0x21);f.put8(owl+0x18,1);
+        f.put32(owl+0x14,Fixture::base+0x14200);f.put32(owl+0x50,0);
+        f.put32(owl+0x20c,f.config.behaviour_base+0x33ec);f.put32(owl+0x3c,anim);
+        f.put16(owl+0x38,0);f.put16(owl+0x40,12);f.put16(owl+0x42,0x8123);f.put16(anim+8,24);
+        object_animation_table(f,owl,anim);
+        for(unsigned i=0;i<3;++i) {
+            f.putfloat(owl+0x20+4*i,800.0f+float(i)*100);
+            f.putfloat(owl+0x2c+4*i,1.0f+float(i)*.25f);
+            f.put16(owl+0x1a+2*i,uint16_t(0x1111u*(i+1)));
+        }
+    };
+    const auto frame=[&]{begin(f,p);pair(p);ghost_root_finish(p,true,f.sample);
+        check((f.sample.valid_fields&GC_VALID_HELD) || zero(f.sample.held),"ridden block bytes follow validity");
+        return (f.sample.valid_fields&GC_VALID_HELD)!=0;};
+    ride();check(frame(),"ridden Hoot not captured");
+    const auto &h=f.sample.held;
+    check(h.behavior==0x130033ec && h.released==1 && h.animation_id==1 && h.animation_frame==12
+        && h.holp[0]==800 && h.holp[1]==900 && h.holp[2]==1000 && h.angles[1]==0x2222 && h.scale[2]==1.5f,
+        "Hoot carries its own world transform and active flying animation");
+    const auto none=[&](uint32_t at,uint32_t value,const char *why){ride();f.put32(at,value);check(!frame(),why);};
+    none(owl+0,0x00180031,"invisible ridden Hoot drawn");
+    none(owl+0x74,0,"inactive ridden Hoot drawn");
+    none(owl+0x40,0x000c8122,"stale ridden Hoot animation drawn");
+    none(owl+0x50,Fixture::base+0x14900,"unproven Hoot throw matrix drawn");
+    ride();f.put8(owl+0x18,2);check(!frame(),"Hoot in another area drawn");
+    ride();frame();f.put32(f.config.mario_state+0x0c,0x0100088c);
+    check(!frame(),"dismounted Hoot kept as a released companion");
+    ride();f.put32(f.config.mario_state+0x80,0);f.put32(f.config.mario_state+0x84,owl);
+    check(!frame(),"ridden shell pointer mistaken for Hoot attachment");
+    ride();f.put32(owl+0x20c,f.config.behaviour_base+0x3174);
+    check(!frame(),"another ridden object guessed to be Hoot");
+    // The single-companion format honors an actual hand object first.
+    ride();const uint32_t box=f.config.object_pool+2*0x260;
+    f.put32(f.config.mario_state+0x7c,box);f.put16(box+0x74,1);f.put16(box+2,0);
+    f.put32(box+0x14,Fixture::base+0x14200);f.put32(box+0x20c,f.config.behaviour_base+0x4218);
+    f.put32(box+0x3c,0);for(unsigned i=0;i<3;++i)f.putfloat(box+0x2c+4*i,1);
+    check(frame() && h.behavior==0x13004218 && !h.released,"a hand object lost priority to Hoot");
+    f.put32(f.config.mario_state+0x7c,0);f.put32(f.config.mario_state+0x80,0);
+    f.put16(box+0x74,0);f.put16(owl+0x74,0);
+}
 #endif
 int main(int argc,char **argv) {
     check(argc==2,"usage: ghost_root_host config"); Fixture f(argv[1]);scene(f);
@@ -515,6 +565,7 @@ int main(int argc,char **argv) {
     materials(f);
     held_block(f);
     released_block(f);
+    ridden_block(f);
     std::puts("executed root qualification passed");
 #endif
 }
