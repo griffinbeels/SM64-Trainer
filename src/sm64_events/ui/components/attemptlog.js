@@ -38,6 +38,14 @@ export const SORT_OPTIONS = [
   ["newest", "newest first"], ["oldest", "oldest first"],
   ["fastest", "fastest first"], ["slowest", "slowest first"]];
 
+// One visibility rule for entity cards, unassigned rows and graph picks.
+// Save-state practice stays available through the existing hidden-row toggle.
+export function attemptHiddenByDefault(a) {
+  return Boolean(a.cleared || a.outcome === "abandoned"
+    || a.outcome === "loaded" || a.state_loads > 0 || a.anchor_type === "state_loaded"
+    || a.invalid_reason === "save_state");
+}
+
 // Row time on the current clock: completion time for successes, how-far-in
 // for failures. Nulls sort last in both directions.
 export function rowTime(a, clock) {

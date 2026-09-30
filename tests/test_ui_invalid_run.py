@@ -1,8 +1,5 @@
-"""The practice log draws an invalid run's reason beside its Save button, and a
-valid run that beat the PB arrives already saved (task 0144).
-
-His ruling: invalid runs are marked "and leave it as a manual choice for the
-user to decide" -- so the row keeps Save as PB, with the reason on the time.
+"""Save-state practice is hidden by default, marked when revealed, and cannot
+earn a gold. A clean run that beats the PB still arrives already saved.
 Rendered through the real app at the supported floor and at a wide width.
 Set SM64_SHOT_DIR to keep the screenshots.
 """
@@ -74,11 +71,11 @@ CARD_BOX = """(() => {
 })()"""
 
 
-def test_an_invalid_run_shows_its_reason_and_keeps_save():
+def test_save_state_practice_is_hidden_marked_and_never_gold():
     with serve_ui_live() as (base, service):
         # A save-state run (slow enough that it would never be a PB anyway)
         # and a valid run that beats the seeded PB: one arrives marked, the
-        # other arrives saved.
+        # other arrives saved. Only the clean run should be visible at first.
         _publish(service, "practice_reset", 20000, _reset(20000))
         _publish(service, "state_loaded", 20300, _load())
         _publish(service, "star_collected", 20600, _grab(900))
@@ -87,15 +84,29 @@ def test_an_invalid_run_shows_its_reason_and_keeps_save():
         for width in WIDTHS:
             with get_driver().launch(viewport=(width, 900)) as page:
                 page.goto(base + "/ui/index.html")
-                page.wait_for(".attempt-result .caveat-chip")
+                page.wait_for(".attempt-result")
                 page.wait_ms(500)
+                rows = page.evaluate(ROWS)
+                assert not any(r["title"] and r["title"].startswith("A save state")
+                               for r in rows), rows
+                assert page.evaluate("""(() => {
+                    const button = Array.from(document.querySelectorAll('.log-card button'))
+                      .find(b => b.textContent.trim() === 'show 1 hidden');
+                    if (!button) return false;
+                    button.click();
+                    return true;
+                })()""")
+                page.wait_for('.attempt-result .caveat-chip[title^="A save state"]')
                 rows = page.evaluate(ROWS)
                 marked = [r for r in rows if r["title"]
                           and r["title"].startswith("A save state")]
                 assert len(marked) == 1, rows
                 assert "Save state" in marked[0]["chip"]
-                assert "Save" in marked[0]["actions"], marked[0]
-                assert marked[0]["savesWithReason"], marked[0]
+                assert not marked[0]["savesWithReason"], marked[0]
+                assert not page.evaluate("""(() => {
+                    const chip = document.querySelector('.attempt-result .caveat-chip[title^="A save state"]');
+                    return chip.closest('tr').classList.contains('is-pb');
+                })()""")
                 assert any("Undo" in r["actions"] or "undo" in r["actions"].lower()
                            for r in rows if not r["title"]), rows
                 assert not page.problems(), page.problems()

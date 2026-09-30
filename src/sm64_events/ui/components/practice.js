@@ -11,7 +11,7 @@ import { useTargetPicker } from "./targetpicker.js";
 import { PageState } from "./states.js";
 import { entityKey, sectionClock } from "../entitysection.js";
 import { EntityAnalysis, EntityDrawer } from "./entitydetail.js";
-import { comparator, useGraphPick, SORT_OPTIONS } from "./attemptlog.js";
+import { comparator, useGraphPick, SORT_OPTIONS, attemptHiddenByDefault } from "./attemptlog.js";
 import { liveSnapshot, resolveFocus, newestJournalId } from "../focustarget.js";
 import { orderedSections, playedEntityKeys, PracticeLog } from "./practicelog.js";
 import { practiceSuccessSnapshot, usePracticeScroll } from "../practicescroll.js";
@@ -355,14 +355,14 @@ export function Practice({ t, openCompare, openLibrary }) {
   // `live.activeKey` needs no freeze of its own -- it already derives from
   // `frozen.stage`/`frozen.target`, so it cannot move mid-celebration either.
   // The rows useGraphPick checks membership against -- the same default
-  // filter every log card applies (cleared/abandoned hidden, resets per the
+  // filter every log card applies (including save-state practice, resets per the
   // shared toggle). Computed here, at page level, because the trend graph
   // (EntityAnalysis) and the card a pick reveals a row in (a LogCard, in the
   // practice log below) are separate components now; useGraphPick used to
   // live inside the one card that drew both.
   const focusedRows = focusedSec
     ? focusedSec.attempts
-        .filter((a) => !a.cleared && a.outcome !== "abandoned")
+        .filter((a) => !attemptHiddenByDefault(a))
         .filter((a) => !(ui.hideResets
           && (a.outcome === "reset" || a.outcome === "hard_reset" || a.outcome === "loaded")))
         .slice()

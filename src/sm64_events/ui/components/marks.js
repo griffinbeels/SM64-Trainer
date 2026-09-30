@@ -61,12 +61,12 @@ export const CAVEATS = {
   // The run was not a VALID run (task 0144; tracking/caveats.py
   // VALIDITY_CAVEATS). His rule: a valid run "began from a FULL RESET of the
   // level", and "if you save stated at all during any part of the attempt,
-  // the run is fundamentally invalidated". Marked, never blocked: an invalid
-  // run keeps a manual Save as PB, and this sentence is the reason beside it.
+  // the run is fundamentally invalidated". Save-state runs cannot earn a PB;
+  // the other validity marks retain their manual choice.
   save_state: {
     glyph: "⟲",
     short: "Save state",
-    sentence: "A save state was loaded during this run, so it is not a valid time",
+    sentence: "A save state was loaded for this run. Its time is practice only and cannot count as a PB",
     suppressFloor: false,
   },
   subarea_reset: {

@@ -33,7 +33,7 @@ import { StratPicker } from "./stratpicker.js";
 import { StandardsPanel } from "./standards.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
          ResetFilterToggle, StatMenuTrigger, comparator, ranksAreAtFloor,
-         showsEntityBanner, rankIdentity, PbTag, PbNews }
+         showsEntityBanner, rankIdentity, PbTag, PbNews, attemptHiddenByDefault }
   from "./attemptlog.js";
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
@@ -497,8 +497,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
       : (pb && pb.caveat === "unattributed" ? "unattributed" : null));
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
   const base = showHidden ? sec.attempts
-    : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
-  const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
+    : sec.attempts.filter((a) => !attemptHiddenByDefault(a));
+  const hidden = sec.attempts.filter(attemptHiddenByDefault);
   const rows = base
     .filter((a) => !(ui.hideResets
       && (a.outcome === "reset" || a.outcome === "hard_reset" || a.outcome === "loaded")))
@@ -888,8 +888,8 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
   const [visible, setVisible] = useState(10);
   const unassigned = v.unassigned || [];
   const visibleAttempts = showHidden ? unassigned
-    : unassigned.filter((a) => !a.cleared && a.outcome !== "abandoned");
-  const hidden = unassigned.filter((a) => a.cleared || a.outcome === "abandoned");
+    : unassigned.filter((a) => !attemptHiddenByDefault(a));
+  const hidden = unassigned.filter(attemptHiddenByDefault);
   const rows = visibleAttempts
     .filter((a) => !(ui.hideResets
       && (a.outcome === "reset" || a.outcome === "hard_reset" || a.outcome === "loaded")))

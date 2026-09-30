@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from source_scan import strip_comments
+from sm64_events.core.childproc import quiet_spawn_kwargs
 
 REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "src" / "sm64_events" / "ui"
@@ -51,6 +52,30 @@ def _extract(source: str, name: str) -> str:
 def _ordered_sections_source() -> str:
     source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
     return _extract(source, "orderedSections")
+
+
+def test_save_state_rows_share_the_default_hidden_rule():
+    source = strip_comments((UI / "components/attemptlog.js").read_text(encoding="utf-8"))
+    rows = [{"id": "clean", "outcome": "success"},
+            {"id": "partial", "outcome": "success", "state_loads": 9},
+            {"id": "load-start", "outcome": "death", "anchor_type": "state_loaded"},
+            {"id": "legacy", "outcome": "success", "invalid_reason": "save_state"},
+            {"id": "interrupted", "outcome": "loaded"},
+            {"id": "reset", "outcome": "reset"},
+            {"id": "other-invalid", "outcome": "success", "invalid_reason": "no_reset"}]
+    script = (_extract(source, "attemptHiddenByDefault") + "\n"
+              f"console.log(JSON.stringify({json.dumps(rows)}"
+              ".filter(attemptHiddenByDefault).map(a => a.id)));" )
+    result = subprocess.run(["node", "--input-type=module", "-"], input=script,
+                            capture_output=True, text=True, encoding="utf-8",
+                            timeout=30, **quiet_spawn_kwargs())
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ["partial", "load-start", "legacy", "interrupted"]
+    for filename in ("practicelog.js", "practice.js"):
+        consumer = strip_comments((UI / "components" / filename).read_text(encoding="utf-8"))
+        assert "!attemptHiddenByDefault(a)" in consumer
+    log = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    assert log.count(".filter(attemptHiddenByDefault)") == 2
 
 
 def ordered(view) -> list:
