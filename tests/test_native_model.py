@@ -93,3 +93,19 @@ def test_component_identity_covers_inputs_and_recipe(tmp_path, monkeypatch):
         assert builder.component_hash() != original, changed.name
         changed.write_bytes(before)
         assert builder.component_hash() == original
+
+
+def test_owl_texture_load_shorthand_reaches_its_atlas_cell():
+    builder = load_tool("build_model")
+    geo = "const GeoLayout hoot_geo[] = { GEO_DISPLAY_LIST(LAYER_OPAQUE, hoot_dl_05001B80), GEO_END() };"
+    lists = """ALIGNED8 static const u8 hoot_texture_05000A20[] = { 0 };
+const Gfx hoot_dl_05001B80[] = {
+    gsDPLoadTextureBlock(hoot_texture_05000A20, G_IM_FMT_RGBA, G_IM_SIZ_16b, 32, 32, 0, G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 5, 5, G_TX_NOLOD, G_TX_NOLOD),
+    gsSPEndDisplayList(),
+};"""
+    expanded = builder._expand_texture_blocks(lists)
+    assert "gsDPLoadTextureBlock(" not in expanded
+    assert builder._reached_textures(geo, "hoot_geo", expanded) == [("hoot_texture_05000A20", 32, 32)]
+    assert "G_TX_RENDERTILE, 0, G_TX_WRAP | G_TX_NOMIRROR, 5" in expanded
+    with pytest.raises(ValueError, match="Only RGBA16"):
+        builder._expand_texture_blocks(lists.replace("G_IM_FMT_RGBA", "G_IM_FMT_IA"))

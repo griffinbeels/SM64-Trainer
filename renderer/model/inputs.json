@@ -293,5 +293,35 @@
     "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mips/geo.inc.c",
     "filename": "upstream-mips-geo.c",
     "sha256": "a59c167e2b8c7c7c127e8e7f2cd0c5a605f5defb2e452fb9d3432b9b6d0d9d12"
+  },
+  "hoot_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/hoot/model.inc.c",
+    "filename": "upstream-hoot-model.c",
+    "sha256": "1c9c3d1a255af374cd8674829098a491ba759db1e219900e28e43c67cb607524"
+  },
+  "hoot_anim_050053EC": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/hoot/anims/anim_050053EC.inc.c",
+    "filename": "upstream-hoot-anim-050053EC.c",
+    "sha256": "caafd8f025271f77b8733522077dce718508c42440211996a650ea63fabc9f99"
+  },
+  "hoot_anim_05005750": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/hoot/anims/anim_05005750.inc.c",
+    "filename": "upstream-hoot-anim-05005750.c",
+    "sha256": "d922049861477c3042474bf7ce2549d0698d5d67437ae1a75bf95a14cd5b63c1"
+  },
+  "hoot_anims": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/hoot/anims/table.inc.c",
+    "filename": "upstream-hoot-anims.c",
+    "sha256": "f9617ee91deede1970dc00fa013680883b01b99364676d4b7ca90b5346a59f5f"
+  },
+  "hoot_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/hoot/geo.inc.c",
+    "filename": "upstream-hoot-geo.c",
+    "sha256": "3762dd4ccc3ffa3eac16c8d00a83c4131ecc80289b35cef9ddddb5d5141eafa5"
   }
 }

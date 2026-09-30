@@ -22,7 +22,7 @@ SOURCE_FILES = (
     "src/decomp/game/object_stuff.c", "src/decomp/game/behavior_actions.c", "src/decomp/mario/geo.inc.c",
     "src/decomp/mario/model.inc.c", "src/gfx_adapter.c",
 )
-# Objects Mario can hold, built like his own model from pinned decomp sources
+# Objects Mario can hold or ride, built like his own model from pinned decomp sources
 # (inputs.json): geo, lists and animations compile through the same libsm64
 # macros. As for Mario, the lists compile apart from the decomp headers
 # (libsm64's gfx_macros.h); geo and animations see them as extern Gfx. Each
@@ -61,6 +61,8 @@ HELD_MODELS = {
                                ("breakable_box_geo",)),
     "mips": HeldModel("mips_geo", "mips_seg6_anims_06015634", 0x1D8310, "mips_model",
                       _anims("mips", "06013248", "0601369C", "060139F8", "06014B94", "0601561C"), shift=0xF0),
+    "hoot": HeldModel("hoot_geo", "hoot_seg5_anims_05005768", 0x12A7E0, "hoot_model",
+                      _anims("hoot", "050053EC", "05005750")),
 }
 MARIO_ATLAS_CELLS = 13
 HELD_HEADER = """#include "../include/sm64.h"
@@ -204,8 +206,15 @@ def _stage_held(files: dict, source: Path) -> None:
     cell, widths, heights, textures, models, lights = MARIO_ATLAS_CELLS, [], [], [], [], []
     for name, (geo, table, segment, lists, inputs, shift) in HELD_MODELS.items():
         kind = f"SG_HELD_{name.upper()}"
-        list_text = files[lists].read_text(encoding="utf-8")
+        list_text = _expand_texture_blocks(files[lists].read_text(encoding="utf-8"))
         text = "".join(files[key].read_text(encoding="utf-8") + "\n" for key in inputs)
+        if name == "hoot":
+            # The canonical Owl has one unmatched closing node. Its original
+            # standalone graph tolerates it, but it would close our wrapper.
+            unmatched = "GEO_CLOSE_NODE(), //! more close than open nodes\n"
+            if text.count(unmatched) != 1:
+                raise ValueError("Pinned Hoot graph's unmatched close changed")
+            text = text.replace(unmatched, "", 1)
         cells = {}
         for symbol, width, height in _reached_textures(text, geo, list_text):
             cells[symbol] = cell
@@ -270,6 +279,28 @@ def _array(text: str, name: str) -> str:
     return text[start:text.index("};", start)]
 
 
+def _expand_texture_blocks(text: str) -> str:
+    """Expand the RGBA16 load shorthand that libsm64 otherwise ignores."""
+    def expand(match):
+        args = [arg.strip() for arg in match[1].split(",")]
+        if len(args) != 12:
+            raise ValueError("Malformed gsDPLoadTextureBlock")
+        image, fmt, size, width, height, palette, cms, cmt, masks, maskt, shifts, shiftt = args
+        if fmt != "G_IM_FMT_RGBA" or size != "G_IM_SIZ_16b":
+            raise ValueError("Only RGBA16 texture blocks are supported")
+        w, h = int(width, 0), int(height, 0)
+        if not (w and h and w <= 64 and h <= 64 and not w & (w - 1) and not h & (h - 1)):
+            raise ValueError("Texture block dimensions must be powers of two up to 64")
+        return (f"gsDPSetTextureImage({fmt}, {size}, 1, {image}),\n"
+                f"    gsDPSetTile({fmt}, {size}, 0, 0, G_TX_LOADTILE, 0, {cmt}, {maskt}, {shiftt}, {cms}, {masks}, {shifts}),\n"
+                "    gsDPLoadSync(),\n"
+                f"    gsDPLoadBlock(G_TX_LOADTILE, 0, 0, {w} * {h} - 1, CALC_DXT({w}, G_IM_SIZ_16b_BYTES)),\n"
+                "    gsDPPipeSync(),\n"
+                f"    gsDPSetTile({fmt}, {size}, {(w * 2 + 7) // 8}, 0, G_TX_RENDERTILE, {palette}, {cmt}, {maskt}, {shiftt}, {cms}, {masks}, {shifts}),\n"
+                f"    gsDPSetTileSize(G_TX_RENDERTILE, 0, 0, ({w} - 1) << G_TEXTURE_IMAGE_FRAC, ({h} - 1) << G_TEXTURE_IMAGE_FRAC)")
+    return re.sub(r"gsDPLoadTextureBlock\(([^)]+)\)", expand, text)
+
+
 def _reached_textures(text: str, geo: str, lists: str) -> list[tuple[str, int, int]]:
     """The RGBA16 textures the geo's display lists load, in declaration order,
     with the size each gsDPLoadBlock gives."""
@@ -286,7 +317,9 @@ def _reached_textures(text: str, geo: str, lists: str) -> list[tuple[str, int, i
     for symbol in re.findall(r"^ALIGNED8 static const u8 (\w+_texture_\w+)\[\]", lists, re.M):
         if symbol not in reached:
             continue
-        size = re.search(rf"{symbol}\),\s*gsDPLoadSync\(\),\s*gsDPLoadBlock\(G_TX_LOADTILE, 0, 0, "
+        # Hoot sets the load tile between the image and its load sync.
+        size = re.search(rf"{symbol}\),\s*(?:gsDPSetTile\([^\n]+\),\s*)?"
+                         rf"gsDPLoadSync\(\),\s*gsDPLoadBlock\(G_TX_LOADTILE, 0, 0, "
                          rf"(\d+) \* (\d+) - 1, CALC_DXT\((\d+), G_IM_SIZ_16b_BYTES\)\)", lists)
         if not size or size[1] != size[3] or int(size[1]) > 64 or int(size[2]) > 64:
             raise ValueError(f"held texture {symbol} has no RGBA16 load up to 64x64")

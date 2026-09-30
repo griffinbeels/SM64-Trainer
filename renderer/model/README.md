@@ -82,7 +82,7 @@ it lacks directional-eye variants, and unsupported states fail closed instead
 of indexing outside the atlas.
 
 Held objects (`SG_POSE_HELD`, `held.c`: the Bob-omb, the small penguin, King
-Bob-omb, Chuckya, the small breakable box and Mips) are compiled from their upstream geo, lists and
+Bob-omb, Chuckya, the small breakable box and Mips, plus the ridden Owl) are compiled from their upstream geo, lists and
 animations like Mario (`HELD_MODELS` in `tools/build_model.py`). The build
 walks each geo's display lists for the RGBA16 textures it reaches and
 generates `held_cells.h`: the kinds, each texture's atlas cell and size, and

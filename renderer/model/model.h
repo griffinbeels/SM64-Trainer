@@ -21,15 +21,16 @@ enum sg_pose_fields {
     SG_POSE_TRANSFORM = 1u, SG_POSE_ANIMATION = 2u, SG_POSE_BODY = 4u,
     SG_POSE_HEAD_ROTATION = 8u, SG_POSE_REQUIRED = 15u,
     SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u, SG_POSE_HELD = 64u,
-    /* With SG_POSE_HELD: the object has left his hand (thrown or dropped)
-     * and is drawn by its own node, TRS(held_position, held_angles). */
+    /* With SG_POSE_HELD: an object uses its own world transform (thrown,
+     * dropped, or ridden), TRS(held_position, held_angles). */
     SG_POSE_HELD_RELEASED = 128u
 };
 
-/* Objects the model can draw in Mario's hand (SG_POSE_HELD). */
+/* Objects the model can draw with Mario (SG_POSE_HELD). */
 enum sg_held_kind {
     SG_HELD_NONE = 0, SG_HELD_BOBOMB = 1, SG_HELD_PENGUIN = 2, SG_HELD_KING_BOBOMB = 3,
-    SG_HELD_CHUCKYA = 4, SG_HELD_BREAKABLE_BOX = 5, SG_HELD_MIPS = 6, SG_HELD_KINDS = 7
+    SG_HELD_CHUCKYA = 4, SG_HELD_BREAKABLE_BOX = 5, SG_HELD_MIPS = 6,
+    SG_HELD_HOOT = 7, SG_HELD_KINDS = 8
 };
 
 /* A native C value, not a packed wire format. Angles are signed SM64 turns.
@@ -130,7 +131,7 @@ enum sg_atlas_cell {
     SG_ATLAS_CELL_BOBOMB_EYES = 15, SG_ATLAS_CELL_BOBOMB_BLINK = 16,
     SG_ATLAS_CELL_PENGUIN = 17, SG_ATLAS_CELL_KING_BOBOMB = 23, SG_ATLAS_CELL_CHUCKYA = 29,
     SG_ATLAS_CELL_BREAKABLE_BOX = 33, SG_ATLAS_CELL_MIPS = 35,
-    SG_ATLAS_CELLS = 36
+    SG_ATLAS_CELL_HOOT = 36, SG_ATLAS_CELLS = 39
 };
 enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
        SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = SG_ATLAS_CELLS * 64 * 64 * 4 };
