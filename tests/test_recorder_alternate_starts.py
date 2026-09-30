@@ -176,3 +176,56 @@ def test_both_recorded_starts_require_the_same_waypoint_before_finishing(recorde
     assert report["fires"] == 2
     assert [attempt["anchor_frame"] for attempt in report["attempts"]] == [100, 500]
     assert report["unclosed"][0]["progress"] == 0
+
+
+def test_lobby_spawn_and_walked_castle_entry_share_the_recorded_path(recorder_api):
+    """Offline LBLJ-style starts; the finish is an existing textbox event.
+
+    These synthetic journal shapes prove clause roles and matching, not live
+    detection of a BLJ or the timing of a particular emulator spawn.
+    """
+    client, db, sid = recorder_api
+    door = {**moment("door_open", "6:1:bhvDoor:100,0,200"), "level": 6}
+    finish = {"kind": "textbox", "level": 6, "area": 1, "ordinal": 1}
+    append(db, sid, "level_changed", 50, {"from": 6, "to": 6})
+    append(db, sid, "area_changed", 50, {"level": 6, "from": 1, "to": 1})
+    primary = append(db, sid, "spawned", 100,
+        {"kind": "spawn", "level": 6, "area": 1, "spawn_node": 10})
+    waypoint = append(db, sid, "moment_reached", 200, door)
+    end = append(db, sid, "moment_reached", 300, finish)
+    append(db, sid, "level_changed", 400, {"from": 6, "to": 16})
+    append(db, sid, "area_changed", 400, {"level": 16, "from": 1, "to": 1})
+    walked_start = append(db, sid, "level_changed", 500, {"from": 16, "to": 6})
+    append(db, sid, "area_changed", 500, {"level": 6, "from": 1, "to": 1})
+    append(db, sid, "moment_reached", 600, door)
+    append(db, sid, "moment_reached", 700, finish)
+    response = draft(client, [primary, waypoint, end], [walked_start])
+    assert response.status_code == 200
+    body = response.json()
+    assert body["start_clauses"] == [
+        {"type": "spawned", "level": 6, "area": 1, "spawn_node": 10},
+        {"type": "level_exit", "from": 16}]
+    assert [step["id"] for step in body["picked"]] == [waypoint]
+    definition = {"name": "Recorded LBLJ path", "enabled": True,
+                  "start_triggers": body["start_clauses"],
+                  "end_triggers": [body["end_clause"]], "guards": [],
+                  "waypoints": [[body["picked"][0]["clause"]]],
+                  "match_mode": "strict", "clock_start": "move"}
+    engine = SegmentEngine([SegmentDef(id=1, **definition)])
+    closed = []
+    for row in db.events():
+        level = row.payload.get("to") if row.type == "level_changed" \
+            else row.payload.get("level")
+        attempts, _notices = engine.feed(row,
+            MatchContext(level=level, prev_level=row.payload.get("from"),
+                         num_stars=0, area=1))
+        closed.extend(attempts)
+    assert [attempt.anchor_frame for attempt in closed] == [100, 500]
+    assert all(attempt.outcome == "success" for attempt in closed)
+    assert engine.armed_ids() == set()
+    backtested = client.post("/api/segments/backtest", json={"definition": definition})
+    assert backtested.status_code == 200
+    report = backtested.json()
+    assert report["fires"] == 2
+    assert [attempt["anchor_frame"] for attempt in report["attempts"]] == [100, 500]
+    assert report["unclosed"] == []
