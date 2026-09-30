@@ -128,6 +128,8 @@ struct Defeat {
     uint16_t clock=0;        // live gAreaUpdateCounter at the trigger: the defeat's own clock
     int32_t fall=0,drown=0,limp=0; // the death animations' lengths in this ROM
     int16_t level=0,area=0;
+    uint32_t epoch=0,last_timer=0;
+    uint16_t last_clock=0,last_igt=0;
     bool loser[GP_GHOSTS]{},winner[GP_GHOSTS]{},cued[GP_GHOSTS]{},water[GP_GHOSTS]{};
     uint32_t row[GP_GHOSTS]{};uint64_t target[GP_GHOSTS]{};
     const Clip *clip[GP_GHOSTS]{};
@@ -1074,7 +1076,15 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     }
     if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.detach();}
     if(next.mode==GP_FOLLOW && (!have_timeline || !same_origin(timeline_request,next))) {
-        clear_timeline();have_timeline=true;timeline_request=next;
+        // A menu can remove action/warp evidence and restart the source's
+        // elapsed reference. The worker repairs that reference as RECOVERED;
+        // that alone is not a state load back into the race. Keep the terminal
+        // picture until the next live counters establish whether play moved.
+        const bool repair=have_timeline && defeat.spent && defeat.epoch
+            && same_owner(timeline_request,next) && (next.origin.flags&GO_RECOVERED)
+            && timeline_request.origin.kind==next.origin.kind;
+        if(!repair)clear_timeline();
+        have_timeline=true;timeline_request=next;
     }
     if(have_model && (model.id!=next.model_id || model.cancellation!=current_cancel || model.id!=desired_model.load()))
         if(!retire_model()) {decide_all(GP_PREPARING);return;}
@@ -1204,6 +1214,8 @@ bool start_defeat(const gc_sample& live) {
     if(!any)return false;
     defeat.active=true;defeat.start=live.global_timer;defeat.clock=live.area_update_counter;
     defeat.level=live.level;defeat.area=live.area;
+    defeat.epoch=live.epoch;defeat.last_timer=live.global_timer;
+    defeat.last_clock=live.area_update_counter;defeat.last_igt=live.igt;
     return true;
 }
 // The list's choice from its sample: everything evaluate decides before any
@@ -1233,6 +1245,26 @@ void plan_list(const gc_sample& live) {
     // In his 2026-09-28 session every pause froze this counter with Usamune's.
     // A load (the global timer runs back), a scene change or its end stops it.
     uint32_t post=0;
+    // Terminal poses belong to the place each ghost died, not to a recovered
+    // elapsed reference. A paused menu supplies no usable derived clock, and
+    // its first resumed occurrence may have a new continuity id. Compare the
+    // game counters instead. A real state load/reset can rewind or jump them;
+    // ordinary play advances each by at most the observed global frames.
+    bool terminal=defeat.spent && defeat.epoch;
+    if(terminal) {
+        const uint32_t frames=live.global_timer-defeat.last_timer;
+        const bool moved=live.epoch!=defeat.epoch || live.global_timer<defeat.last_timer
+            || live.level!=defeat.level || live.area!=defeat.area
+            || live.igt<defeat.last_igt || uint32_t(live.igt-defeat.last_igt)>frames
+            || uint32_t(uint16_t(live.area_update_counter-defeat.last_clock))>frames;
+        if(moved) {
+            defeat={};star_ended=false;forget_shown();terminal=false;
+            dance_entry={dance_entry.dancing,false,0,0};
+        } else {
+            defeat.last_timer=live.global_timer;defeat.last_clock=live.area_update_counter;
+            defeat.last_igt=live.igt;
+        }
+    }
     if(defeat.active) {
         post=uint16_t(live.area_update_counter-defeat.clock);
         if(live.global_timer<defeat.start || live.level!=defeat.level || live.area!=defeat.area
@@ -1240,7 +1272,7 @@ void plan_list(const gc_sample& live) {
             defeat.active=false;
     }
     auto origin=active_request.origin;
-    if(active_request.mode==GP_FOLLOW && live_recovery.bound) {
+    if(active_request.mode==GP_FOLLOW && live_recovery.bound && !terminal) {
         // Same refusals as the worker: an unresolved or ambiguous live restore
         // hides the ghost; a resolved one draws on the frame it happened. A
         // defeat keeps playing through an unresolved one.

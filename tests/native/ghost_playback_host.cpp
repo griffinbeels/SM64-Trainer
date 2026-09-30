@@ -90,6 +90,7 @@ static bool refuse_adoption=false,refuse_close=false,revoke_evaluation=false;
 static uint64_t selected_sequence=0;
 static uint32_t selected_world=0;
 static float selected_x=0;
+static float selected_position[3]{};
 // What the defeat hands the model: its animation, frame, eyes and angles.
 static int16_t selected_animation=-1,selected_frame=-1,selected_torso=0;
 static uint8_t selected_eyes=0,selected_hand=0;static uint32_t selected_fields=0;static uint16_t selected_clock=0;
@@ -165,6 +166,7 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     selected_world=recorded.world.status;
     selected_sequence=recorded.sample.sequence;
     selected_x=recorded.sample.pose.position[0];
+    std::memcpy(selected_position,recorded.sample.pose.position,sizeof(selected_position));
     selected_animation=recorded.sample.pose.animation_id;selected_frame=recorded.sample.pose.animation_frame;
     selected_eyes=recorded.sample.pose.eye_state;selected_torso=recorded.sample.pose.torso_angles[1];
     selected_fields=recorded.sample.valid_fields;selected_hand=recorded.sample.pose.hand_state;
@@ -1044,13 +1046,14 @@ int main() {
             };
             // paused: frames the game spent paused so far this run; gGlobalTimer
             // runs through them, the game's own counters (IGT, the area clock) stop.
-            uint32_t paused=0;
+            uint32_t paused=0;bool menu=false;
             auto step=[&](uint64_t time,uint32_t why,std::initializer_list<uint32_t> each,
                           std::initializer_list<uint32_t> expected_sounds) {
                 live.igt=uint16_t(time);++live.sequence;++live.dlist_serial;world.list_serial=live.dlist_serial;
                 live.global_timer=uint32_t(timer_base+time+paused);live.area_update_counter=uint16_t(time);
                 live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
                     0,0,source_generation,1,elapsed_base+time,source_continuity};
+                if(menu)live.clock={};
                 sound_count=0;for(auto &p:placed)p={};
                 bool drawn=false;
                 renderer.run([&]{drawn=evaluate_planned(live,world,poses,count,token);});
@@ -1394,13 +1397,32 @@ int main() {
             check(step(20,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION,"it falls");
             live.live_action=1;
             check(step(60,GP_READY,{GP_READY},{}) && selected_frame==40 && poses[0].opacity==1,"mid-fall");
+            const float death_position[3]={selected_position[0],selected_position[1],selected_position[2]};
+            const auto same_death=[&]{return selected_animation==GP_DEFEAT_ANIMATION && selected_frame==40
+                && poses[0].opacity==1 && !std::memcmp(selected_position,death_position,sizeof(death_position));};
             pause(60,100,"paused: the fall stands still, fully visible",
-                  [&]{return selected_animation==GP_DEFEAT_ANIMATION && selected_frame==40 && poses[0].opacity==1;});
+                  same_death);
             world.context_generation=0;++paused; // a menu frame that draws no ghost
             check(!step(60,GP_POSE_REFUSED,{GP_POSE_REFUSED},{}),"a pause-menu frame draws no ghost");
             world.context_generation=2;
             pause(60,100,"and the death is still there after it",
-                  [&]{return selected_animation==GP_DEFEAT_ANIMATION && selected_frame==40 && poses[0].opacity==1;});
+                  same_death);
+            // The actual Usamune menu occurrence: valid CLOCK|WARP (17),
+            // action 0, no pose/camera or derived clock. The source restarts
+            // continuity after this gap, and the worker sends a RECOVERED
+            // origin at a different elapsed reference. This used to discard
+            // the death and relatch it at that new coordinate.
+            const uint32_t playing_fields=live.valid_fields;
+            menu=true;live.valid_fields=GC_VALID_CLOCK|GC_VALID_WARP;live.live_action=0;
+            for(unsigned k=0;k<3;++k) {++paused;
+                check(!step(60,GP_POSE_REFUSED,{GP_POSE_REFUSED},{}),"the Usamune menu carries no drawable camera");}
+            menu=false;live.valid_fields=playing_fields;live.live_action=1;++source_continuity;
+            elapsed_base=90000;++r.revision;
+            r.origin={GO_STAR,7,live.sequence+1,source_continuity,elapsed_base+60,source_generation,13,GO_RECOVERED};
+            check(api->configure(&r)==GP_OK,"the worker repairs the menu's elapsed reference");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            ++paused;check(step(60,GP_READY,{GP_READY},{}) && same_death(),
+                  "a repaired origin keeps the exact death position and frozen animation");
             check(step(61,GP_READY,{GP_READY},{}) && selected_frame==41 && poses[0].opacity==1,
                   "unpaused: it resumes from the frame it stood on");
             check(step(20+96,GP_READY,{GP_READY},{}) && selected_frame==95 && poses[0].opacity==1
@@ -1429,6 +1451,12 @@ int main() {
             check(step(20,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION,"it falls");
             live.live_action=1;
             check(step(40,GP_READY,{GP_READY},{}) && selected_frame==20,"mid-fall");
+            ++source_continuity;elapsed_base=95000;++r.revision;
+            r.origin={GO_STAR,7,live.sequence+1,source_continuity,elapsed_base+5,source_generation,5,GO_RECOVERED};
+            check(api->configure(&r)==GP_OK,"a real state load repairs the run too");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(5,GP_READY,{GP_READY},{}) && selected_animation!=GP_DEFEAT_ANIMATION && selected_x==7605,
+                  "rewound game counters end the death and resume the saved run");
             run(58000); // a reset: the tracker arms a new run
             check(step(5,GP_READY,{GP_READY},{}) && selected_animation!=GP_DEFEAT_ANIMATION && selected_x==7605,
                   "a reset ends the death: the ghost races again from the start");
