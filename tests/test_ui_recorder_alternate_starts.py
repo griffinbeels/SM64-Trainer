@@ -134,6 +134,13 @@ def test_alternate_starts_persist_through_the_visible_recorder(tmp_path, monkeyp
                                  ".filter(mark=>mark.textContent.trim()==='OR').length") == 2
             _toolbar_click(page, "Done adding starts")
             _capture_review(page, tmp_path)
+            # Save opens the Builder, which runs its own diagnostics. Hold the
+            # recorder's final requests while this surface is still mounted.
+            recorder_requests = page.evaluate("window.__recordStartRequests")
+            latest_backtest = [request["body"]["definition"] for request in recorder_requests
+                               if request["url"] == "/api/segments/backtest"][-1]
+            latest_lint = [request["body"]["definition"] for request in recorder_requests
+                           if request["url"] == "/api/segments/lint"][-1]
             page.click(".modal .builder-actions .primary-button")
             page.wait_for(".segbuilder .builder-name input")
             saved_rows = page.evaluate("return fetch('/api/segments').then(r=>r.json())")
@@ -147,10 +154,6 @@ def test_alternate_starts_persist_through_the_visible_recorder(tmp_path, monkeyp
             requests = page.evaluate("window.__recordStartRequests")
             posted = next(request["body"] for request in requests
                           if request["method"] == "POST" and request["url"].startswith("/api/segments?"))
-            latest_backtest = [request["body"]["definition"] for request in requests
-                               if request["url"] == "/api/segments/backtest"][-1]
-            latest_lint = [request["body"]["definition"] for request in requests
-                           if request["url"] == "/api/segments/lint"][-1]
             assert latest_backtest == latest_lint == posted
             assert posted["start_triggers"] == expected
             assert page.evaluate("document.querySelector('.segbuilder .builder-name input').value") == name

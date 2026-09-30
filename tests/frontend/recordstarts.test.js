@@ -85,7 +85,11 @@ const clickRow = (view, id) => fireEvent.click(rowButton(view, id));
 const marker = (view, id) => rowButton(view, id).querySelector(".record-mark");
 const addStart = (view) => fireEvent.click(view.getByRole("button", { name: "Add another start" }));
 const finishAdding = (view) => fireEvent.click(view.getByRole("button", { name: "Done adding starts" }));
-const saveButton = (view) => view.getByRole("button", { name: "Save segment" });
+const saveButton = (view) => {
+  const button = view.container.querySelector(".builder-actions .primary-button");
+  expect(button).not.toBeNull();
+  return button;
+};
 async function pickPath(view, interior = false) {
   await view.findByRole("button", { name: /Usamune warp to Lobby/ });
   clickRow(view, 10);
@@ -93,8 +97,11 @@ async function pickPath(view, interior = false) {
   clickRow(view, 30);
 }
 async function readyToSave(view) {
-  await view.findByRole("button", { name: "Save segment" });
-  await waitFor(() => expect(saveButton(view).disabled).toBe(false));
+  await waitFor(() => {
+    const button = saveButton(view);
+    expect(button.disabled).toBe(false);
+    expect(button.textContent.trim()).toMatch(/^(Save|Replace) segment$/);
+  });
 }
 
 test("the extra-start mode appears after a path pick and cannot reclassify its boundaries", async () => {
@@ -200,6 +207,7 @@ test.each([
   addStart(view);
   clickRow(view, 1);
   await readyToSave(view);
+  expect(saveButton(view).textContent.trim()).toBe(intent.replaces ? "Replace segment" : "Save segment");
   finishAdding(view);
   fireEvent.click(saveButton(view));
   await waitFor(() => expect(f.calls.save).toHaveLength(1));
