@@ -1,7 +1,7 @@
 """A real level read must reach the special-stage selector and target.
 
-The five one-star stages need no click. PSS recalls the last completed live
-star across sessions, with that star's strategy, while an explicit pick wins.
+The five one-star stages need no click. PSS recalls the last chosen or completed
+live star across sessions, with that star's strategy, while an explicit pick wins.
 The stage payload is produced by the shipping detectors: a hand-written
 ``mode='stars'`` fixture would hide the missing-context bug this guards.
 """
@@ -48,6 +48,22 @@ class _Play:
 
     def __init__(self, service):
         self.service = service
+        self.requests = []
+        request_target = service.request_target
+
+        async def recorded_request(*args, **kwargs):
+            record = {"request": {"kind": args[0] if args else kwargs.get("kind"),
+                                   **kwargs}, "stage": service.current_stage}
+            self.requests.append(record)
+            try:
+                result = await request_target(*args, **kwargs)
+            except Exception as error:
+                record["error"] = str(error)
+                raise
+            record["accepted"] = True
+            return result
+
+        service.request_target = recorded_request
         self.level = LevelChangeDetector()
         self.stage = StageChangeDetector()
         self.snapshot = GameSnapshot(
@@ -72,14 +88,16 @@ class _Play:
             _run_coro(self.service.publish(event))
         self.snapshot = current
 
-    def complete(self, star):
-        _run_coro(self.service.request_target(
-            "star", course_id=PSS, star_id=star, strat_tag=STRATEGIES[star]))
+    def complete(self, star, *, choose=True):
+        prior = {a.id for a in self.service.db.attempts()}
+        if choose:
+            _run_coro(self.service.request_target(
+                "star", course_id=PSS, star_id=star, strat_tag=STRATEGIES[star]))
         self.publish("practice_reset", {"igt_frames_before": 0})
         self.publish("star_collected", {
             "course_id": PSS, "star_id": star, "igt_frames": 580 + star,
             "igt_timed_at": "xcam"})
-        assert any(a.course_id == PSS and a.star_id == star
+        assert any(a.id not in prior and a.course_id == PSS and a.star_id == star
                    and a.outcome == "success" for a in self.service.db.attempts())
 
 
@@ -116,6 +134,7 @@ def _target(page, base, course, star, strat=None):
             if strat is not None:
                 _wait(page, "document.querySelector('.stagebanner .active-star .strat')"
                       f"?.textContent === {json.dumps(strat)}")
+            _idle(page)
             return target
         page.wait_ms(50)
     pytest.fail(f"Expected target {course}:{star}/{strat}, got {target}")
@@ -154,10 +173,23 @@ def _open(page, base):
     page.goto(base)
     page.evaluate("""(() => {
       window.specialStagePending = 0;
+      window.specialStageTargets = [];
       const original = window.fetch;
       window.fetch = async (...args) => {
         window.specialStagePending++;
-        try { return await original(...args); }
+        const target = String(args[0]).endsWith('/api/target')
+          ? {body: JSON.parse(args[1].body),
+             heading: document.querySelector('.stagebanner .shead b')?.textContent}
+          : null;
+        if (target) window.specialStageTargets.push(target);
+        try {
+          const response = await original(...args);
+          if (target) {
+            target.status = response.status;
+            if (!response.ok) target.answer = await response.clone().text();
+          }
+          return response;
+        }
         finally { window.specialStagePending--; }
       };
     })()""")
@@ -173,9 +205,14 @@ def _reload(page, base):
     _open(page, base)
 
 
-def _clean(page):
+def _clean(page, play=None):
     problems = page.problems()
-    assert not problems, "\n".join(problems)
+    assert not problems, "\n".join(problems) + "\n" + json.dumps(
+        {"browser": page.evaluate("window.specialStageTargets"),
+         "service": play.requests if play else [],
+         "target_set": [{"id": e.id, "payload": e.payload}
+                        for e in play.service.db.events() if e.type == "target_set"]
+         if play else []})
 
 
 def _capture(page, tmp_path, name):
@@ -217,7 +254,7 @@ def test_all_five_single_star_stages_select_their_star_without_a_click(width, tm
         _target(page, base, 23, 0)
         _cells(page, 1)
         _ghost_target(service, 23, 0, None)
-        _clean(page)
+        _clean(page, play)
 
 
 @pytest.mark.parametrize(("remembered", "width"), [(0, 1500), (1, 850)])
@@ -236,7 +273,7 @@ def test_pss_recalls_either_completed_star_and_strategy_across_sessions(remember
         _target(page, base, PSS, remembered, STRATEGIES[remembered])
         _cells(page, 2)
         view = _read(base)
-        assert view["last_completed_star_by_course"][str(PSS)] == remembered
+        assert view["last_star_choice_by_course"][str(PSS)] == remembered
         assert not any(a.course_id == PSS and a.session_id == service.session_id
                        and a.outcome == "success" for a in service.db.attempts())
         active_name = page.evaluate("document.querySelector('.stagebanner .active-star .starname').textContent")
@@ -255,22 +292,27 @@ def test_pss_recalls_either_completed_star_and_strategy_across_sessions(remember
         _target(page, base, PSS, manual, STRATEGIES[manual])
         _ghost_target(service, PSS, manual, STRATEGIES[manual])
 
-        # Switching courses retires the manual target; re-entry still recalls
-        # what was completed. A new completion then updates that memory.
+        # Resetting without a success still preserves the player's explicit
+        # choice on re-entry, as the Bowser family selector does.
+        play.publish("practice_reset", {"igt_frames_before": 0})
         play.enter(28)
         _target(page, base, 20, 0)
         play.enter(PSS_LEVEL)
-        _target(page, base, PSS, remembered, STRATEGIES[remembered])
-        play.complete(manual)
+        _target(page, base, PSS, manual, STRATEGIES[manual])
+        _ghost_target(service, PSS, manual, STRATEGIES[manual])
+        # A different star actually collected later replaces the remembered
+        # choice, even without first clicking its selector cell.
+        play.complete(remembered, choose=False)
+        assert _read(base)["last_star_choice_by_course"][str(PSS)] == remembered
         # Let the browser consume the completion before sending the next
         # level edge: publish() returning is not a WebSocket/render receipt.
-        _target(page, base, PSS, manual, STRATEGIES[manual])
+        _target(page, base, PSS, remembered, STRATEGIES[remembered])
         _idle(page)
         play.enter(18)
         _target(page, base, 22, 0)
         play.enter(PSS_LEVEL)
-        _target(page, base, PSS, manual, STRATEGIES[manual])
-        _clean(page)
+        _target(page, base, PSS, remembered, STRATEGIES[remembered])
+        _clean(page, play)
 
 
 def test_pss_without_a_completed_star_offers_both_and_waits_for_a_pick(tmp_path):
@@ -293,7 +335,13 @@ def test_pss_without_a_completed_star_offers_both_and_waits_for_a_pick(tmp_path)
         _reload(page, base)
         _target(page, base, PSS, 1)
         _cells(page, 2)
-        _clean(page)
+        play.publish("practice_reset", {"igt_frames_before": 0})
+        play.enter(28)
+        _target(page, base, 20, 0)
+        play.enter(PSS_LEVEL)
+        _target(page, base, PSS, 1)
+        _cells(page, 2)
+        _clean(page, play)
 
 
 def test_pss_route_choice_and_explicit_segment_keep_priority_over_memory(tmp_path):
@@ -312,7 +360,7 @@ def test_pss_route_choice_and_explicit_segment_keep_priority_over_memory(tmp_pat
         play.enter(PSS_LEVEL)
         _target(page, base, PSS, 0, STRATEGIES[0])
         _cells(page, 1)
-        assert _read(base)["last_completed_star_by_course"][str(PSS)] == 1
+        assert _read(base)["last_star_choice_by_course"][str(PSS)] == 1
 
         _run_coro(service.select_route(None))
         segment = _run_coro(service.create_segment({
@@ -330,4 +378,4 @@ def test_pss_route_choice_and_explicit_segment_keep_priority_over_memory(tmp_pat
             target = _read(base)["target"]
             assert target["kind"] == "segment" and target["segment_id"] == segment
         _capture(page, tmp_path, "browser-pss-explicit-segment.png")
-        _clean(page)
+        _clean(page, play)
