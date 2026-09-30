@@ -43,7 +43,7 @@
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { CellRow, SurfaceExchange } from "./cellrow.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
@@ -249,9 +249,21 @@ async function pickSegmentTarget(t, s, options) {
 // both deps unchanged so the effect does not run again.
 function useLoneRouteOption(v, lone, key, commit) {
   const empty = handIsEmpty(v.target);
+  const [refusedKey, setRefusedKey] = useState(null);
   useEffect(() => {
-    if (lone && empty) commit();
+    if (!lone || !empty) {
+      setRefusedKey(null);
+      return;
+    }
+    let current = true;
+    Promise.resolve(commit()).then((accepted) => {
+      if (current && accepted === false) setRefusedKey(key);
+    });
+    return () => { current = false; };
   }, [key, empty]);
+  // A refused convenience write must leave the options available to pick.
+  // HTTP success alone does not settle selection: an expired offer is a no-op.
+  return refusedKey === key;
 }
 
 // The standard segment cell (castle/arena rows, armed extras): name, strat
@@ -358,7 +370,7 @@ function StarRow({ t, v, stage }) {
     (v.caveat_by_star || {})[`${stage.course_id}:${i}`];
 
   async function pick(i, options) {
-    await requestTarget(t, {
+    return requestTarget(t, {
       course_id: stage.course_id, star_id: i,
       strat_tag: lastStratFor(i) || null,
     }, options);
@@ -400,9 +412,15 @@ function StarRow({ t, v, stage }) {
   const rememberedSlot = stage.course_id === 19
     ? (v.last_star_choice_by_course || {})[String(stage.course_id)] : null;
   const arrivalPick = lone || shown.find(({ i }) => i === rememberedSlot);
-  useLoneRouteOption(v, arrivalPick,
-                     `star:${stage.course_id}:${arrivalPick ? arrivalPick.i : ""}`,
-                     () => pick(arrivalPick.i, { quiet: true }));
+  const autoRefused = useLoneRouteOption(v, arrivalPick,
+    `star:${stage.course_id}:${arrivalPick ? arrivalPick.i : ""}`,
+    () => pick(arrivalPick.i, { quiet: true }));
+  // Never paint the idle cards that an arrival offer is about to select.
+  // Derive this during render; an effect would hide them one frame too late.
+  // A stage broadcast can precede the view that retires the departing star,
+  // so only a held segment or a star in this course makes the row ready.
+  const ready = !arrivalPick || autoRefused || (!handIsEmpty(tgt)
+    && (tgt.kind === "segment" || tgt.course_id === stage.course_id));
 
   // A STAR'S SUBSECTIONS (task 0087, and the case Griffin named first:
   // "sometimes we want to practice only a small portion of a star") no longer
@@ -411,7 +429,8 @@ function StarRow({ t, v, stage }) {
   // with no switch here to forget.
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
-  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}"
+    aria-busy=${!ready}>
     <div class="shead"><b>${course.name}</b>
       <span class="meta">${routeStars
         ? html`showing this route's stars · tap to practice`
@@ -419,7 +438,7 @@ function StarRow({ t, v, stage }) {
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <${CellRow} class="starrow">
-      ${shown.map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
+      ${(ready ? shown : []).map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         key=${`${stage.course_id}:${i}`}
         active=${tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i}
