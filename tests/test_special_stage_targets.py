@@ -98,3 +98,21 @@ def test_auto_offer_cannot_restore_departed_star_between_level_and_stage_events(
         "course_id": 19, "level": 27, "area": 1, "mode": "stars"})))
     asyncio.run(svc.request_target("star", course_id=19, star_id=1, auto=True))
     assert svc.target == ("star", 19, 1)
+
+
+@pytest.mark.parametrize("offered", [0, 1])
+def test_late_pss_auto_offer_cannot_replace_explicit_star_or_strategy(tmp_path, offered):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 6, "to": 27})))
+    asyncio.run(svc.publish(ev("stage_changed", 1000, {
+        "course_id": 19, "level": 27, "area": 1, "mode": "stars"})))
+    asyncio.run(svc.request_target("star", course_id=19, star_id=1, strat_tag="Under 21"))
+    before = len(db.events())
+    asyncio.run(svc.request_target("star", course_id=19, star_id=offered,
+                                   strat_tag="Stale strategy", auto=True))
+    assert len(db.events()) == before
+    assert svc.target == ("star", 19, 1) and svc.strat_tag == "Under 21"
+    # Even a fill already past the API check must decline at projection.
+    asyncio.run(svc.set_target(19, offered, "Stale strategy", auto=True))
+    assert svc.target == ("star", 19, 1) and svc.strat_tag == "Under 21"
+    assert svc.last_star_choice_by_course["19"] == 1

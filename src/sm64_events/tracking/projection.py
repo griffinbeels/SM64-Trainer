@@ -1164,12 +1164,13 @@ class Projector:
                            landmark_names=(self._landmark_names()
                                            if self._landmark_names else None))
 
-    def _expired_star_fill(self, ev) -> bool:
-        # Level changes reach the journal before the banner's stage event.
-        # Recheck here so a fill passing the API on the old context cannot
-        # restore the departing star after its level has already retired it.
-        return (ev.payload.get("kind") != "segment" and self._level is not None
-                and ev.payload.get("course_id") != course_for_level(self._level))
+    def _declines_star_fill(self, ev) -> bool:
+        # An automatic star offer fills an empty hand, never a newer pick.
+        # Level changes precede the banner event, so recheck the course here.
+        return (ev.payload.get("kind") != "segment"
+                and (self.target is not None
+                     or (self._level is not None
+                         and ev.payload.get("course_id") != course_for_level(self._level))))
     def _retire_pending_target(self) -> None:
         # The origin rule's verdict, applied now that the matcher has had this
         # event (see _dispatch's level_changed branch for the whole argument).
@@ -1768,7 +1769,7 @@ class Projector:
             # armed detections, a fill is an offer, and the client re-offers
             # whenever the hand empties.
             auto = bool(ev.payload.get("auto"))
-            if auto and (self._expired_star_fill(ev)
+            if auto and (self._declines_star_fill(ev)
                          or (self.target is not None and self._target_hooked)):
                 return []
             self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
