@@ -351,6 +351,18 @@ export function classificationPb(sec, t) {
   return event;
 }
 
+function classificationTransition(sec, t, rankMode, hasSeparateRank) {
+  const event = classificationPb(sec, t);
+  if (!event) return null;
+  const baseline = event.classification;
+  return {
+    key: event.key,
+    banner: rankMode === "strategy" ? baseline.rank
+      : (hasSeparateRank ? baseline.entity_rank : baseline.rank),
+    atFloor: !!(baseline.rank && baseline.rank.reason === "unranked"),
+  };
+}
+
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
@@ -508,14 +520,6 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const shownBanner = rankMode === "strategy"
     ? sec.rank : (hasSeparateRank ? sec.entity_rank : sec.rank);
   const shownIdentity = rankMode === "strategy" ? "strategy" : "entity";
-  const classifiedPb = classificationPb(sec, t);
-  const baseline = classifiedPb && classifiedPb.classification;
-  const earnedTransition = baseline && {
-    key: classifiedPb.key,
-    banner: rankMode === "strategy" ? baseline.rank
-      : (hasSeparateRank ? baseline.entity_rank : baseline.rank),
-    atFloor: !!(baseline.rank && baseline.rank.reason === "unranked"),
-  };
   // Whether this card's rank displays live in the head (today) or the body
   // (spec practice-log-entity-cards, round 3 -- Griffin: "imagine we display
   // the ranked display inside the dropdown when it's opened... If I close
@@ -535,8 +539,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           atFloor=${ranksAreAtFloor(sec)}
           identity=${rankIdentity(ek, shownIdentity, sec, t)}
           swapKey=${strategySwapKey(sec.last_strat, rankMode, hasSeparateRank)}
-          earnedTransition=${earnedTransition}
-          showNext=${active} iconSize=${rankIconSize}
+          earnedTransition=${classificationTransition(sec, t, rankMode, hasSeparateRank)} showNext=${active} iconSize=${rankIconSize}
           nextStepMode=${nextStepMode} />
     </div>`;
   return html`<section data-feed-key=${ek}
@@ -642,8 +645,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
               <${StratPicker} entity=${ek} identity=${entityIdentity(sec)}
                   strategies=${sec.strategies} active=${sec.last_strat}
                   groups=${sec.strategy_groups} allowBlank=${!sec.default_strat}
-                  timerMode=${clock} onNotice=${t.setNotice}
-                  onChanged=${t.refresh} /></span>`}
+                  timerMode=${clock} onNotice=${t.setNotice} onChanged=${t.refresh} /></span>`}
       </div>
       ${!inBody && ranksBlock}
       ${/* The PB is a real link now (amendment A8): "if the card is closed,
