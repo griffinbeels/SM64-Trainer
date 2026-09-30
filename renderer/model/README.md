@@ -100,6 +100,13 @@ a graph whose lists hang off its root (the box) draws under. A kind without
 animations (the box) takes animation id -1. A kind whose textures failed to
 load is refused, never drawn untextured.
 
+The Owl is recorded while Mario is riding it and drawn at its own world
+transform in the same ghost mesh, so it receives Mario's ghost tint and
+opacity. Its pinned graph contains one unmatched closing node, removed before
+wrapping, and its texture-load shorthand is expanded into the commands the
+adapter consumes. Existing clips without an Owl block cannot reconstruct its
+position or wing animation; record a new attempt to capture it.
+
 Each textured triangle's material word carries its render tile above the
 combiner code (`sg_tile`, from bit `SG_MATERIAL_TILE_SHIFT`): the texture's
 atlas cell, and per axis whether it clamps, its wrap mask and its size, as

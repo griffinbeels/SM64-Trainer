@@ -506,7 +506,8 @@ int main(int argc, char** argv) {
                 {SG_HELD_KING_BOBOMB,SG_ATLAS_CELL_KING_BOBOMB,6,12,348,"King Bob-omb"},
                 {SG_HELD_CHUCKYA,SG_ATLAS_CELL_CHUCKYA,4,6,132,"Chuckya"},
                 {SG_HELD_BREAKABLE_BOX,SG_ATLAS_CELL_BREAKABLE_BOX,2,0,36,"cork box"},
-                {SG_HELD_MIPS,SG_ATLAS_CELL_MIPS,1,5,588,"Mips"}};
+                {SG_HELD_MIPS,SG_ATLAS_CELL_MIPS,1,5,588,"Mips"},
+                {SG_HELD_HOOT,SG_ATLAS_CELL_HOOT,3,2,594,"Owl"}};
             for(const auto &k:kinds) {
                 // A box has no animation: id -1, and its parts' own transforms.
                 sg_pose o=h; o.held_kind=k.kind; o.held_animation_id=k.animations?0:-1; o.held_animation_frame=0;
@@ -543,6 +544,17 @@ int main(int argc, char** argv) {
                     check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=open,"penguin blinks");
                     o.held_global_timer=50;
                     check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()==open,"penguin blink cycle");
+                }
+                if(k.kind==SG_HELD_HOOT) {
+                    const auto first=mesh.snapshot();
+                    o.fields|=SG_POSE_HELD_RELEASED;
+                    o.held_angles[1]=8192;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=first,
+                          "ridden Owl uses its own world transform");
+                    const auto perched=mesh.snapshot();
+                    o.held_animation_id=1;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=perched,
+                          "Owl flight animation changes its geometry");
                 }
                 if(!k.animations) {
                     // oAnimState picks its texture (the switch's second list).
