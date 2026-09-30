@@ -274,6 +274,8 @@ uint32_t object_animation_count(uint32_t behavior) {
         case 0x13000528u: return 6;  // Chuckya: no terminator
         case 0x130044fcu: return 5;  // Mips: then two NULLs
         case 0x130033ecu: return 2;  // Hoot: no terminator
+        case 0x13000f08u:            // Ukiki: alias of the common macro script
+        case 0x13001cb0u: return 13; // Macro Ukiki: then two NULLs
         default: return 0;          // Both boxes have no animation
     }
 }
@@ -339,7 +341,7 @@ bool object_state(Ram &ram, const gc_layout &layout, const gc_frame &frame,
 
 // Its own graph node draws the object, with a current animation and
 // TRS(gfx pos, angles, scale), independent of Mario's hand. The existing
-// RELEASED flag names that transform route; ridden Hoot uses it too.
+// RELEASED flag names that transform route; ridden Hoot and shells use it too.
 void capture_external(Ram &ram, const gc_layout &layout, const gc_frame &frame, uint32_t object, gc_sample &out) {
     // Rides a pose, like the in-hand block. geo_process_object composed
     // TRS(gfx pos, angle, scale): no throwMatrix, no billboard.
@@ -402,6 +404,16 @@ void capture_held(Ram &ram, const gc_layout &layout, const gc_frame &frame, gc_r
         if (pool_object(layout,ridden) && (ram.u16(ridden + object_active_flags) & 1u)
                 && ram.u32(ridden + object_behaviour) == layout.behaviour_base + 0x33ecu)
             return capture_external(ram,layout,frame,ridden,out);
+        // The ground, jump and fall shell actions attach through riddenObj.
+        // usedObj also names it at mounting time but may survive dismounting.
+        // The shell is a separate unanimated object: record its actual gfx
+        // TRS, not Mario's elevated/tilted root or an inferred offset.
+        const bool shell_action = out.pose.action == 0x20810446u || out.pose.action == 0x0281089au
+            || out.pose.action == 0x0081089bu;
+        const uint32_t shell = shell_action ? ram.u32(state + 0x84) : 0;
+        if (pool_object(layout,shell) && (ram.u16(shell + object_active_flags) & 1u)
+                && ram.u32(shell + object_behaviour) == layout.behaviour_base + 0x1f3cu)
+            return capture_external(ram,layout,frame,shell,out);
         return capture_released(ram, layout, frame, reader, out);
     }
     // Rides a pose only; ghost_root_finish clears it with a refused root.

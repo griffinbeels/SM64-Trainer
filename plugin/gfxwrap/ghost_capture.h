@@ -191,7 +191,9 @@ typedef struct gc_particles {
  * its node is off or invisible (culled, or not yet shown) carries nothing.
  * RIDDEN Hoot: Mario's usedObj (bhvHoot) during ACT_RIDING_HOOT occupies this
  * same optional companion block with `released` 1: its own node's TRS, not
- * the right-hand root. A hand object has priority over a ridden companion;
+ * the right-hand root. RIDDEN shell: riddenObj (bhvKoopaShell) during the
+ * ground, jump and fall shell actions follows the same own-node TRS route,
+ * with no animation (id -1, frame 0). A hand object has priority over a ridden companion;
  * dismounting does not start a release follow. Zero unless GC_VALID_HELD. */
 typedef struct gc_held {
     uint32_t behavior; /* segmented behaviour script, e.g. 0x13003174 bhvBobomb */
@@ -200,7 +202,7 @@ typedef struct gc_held {
     float holp[3];     /* marioBodyState->heldObjLastPosition */
     float scale[3];    /* the held object's gfx scale */
     int16_t angles[3]; /* released: its gfx angle; zero in his hand */
-    uint16_t released; /* own-node TRS: released from his hand, or ridden Hoot */
+    uint16_t released; /* own-node TRS: released from his hand, or ridden Hoot/shell */
 } gc_held;
 
 typedef struct gc_camera {

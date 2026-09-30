@@ -73,7 +73,7 @@ def test_component_identity_covers_inputs_and_recipe(tmp_path, monkeypatch):
     builder = load_tool("build_model")
     inputs = json.loads((ROOT / "renderer/model/inputs.json").read_text(encoding="utf-8"))
     # Every pinned input is staged, and every held model's input is pinned.
-    held = {key for model in builder.HELD_MODELS.values() for key in (model.lists, *model.inputs)}
+    held = {key for model in builder.HELD_MODELS.values() for key in (model.lists, *model.extra_lists, *model.inputs)}
     assert set(inputs) == {"libsm64", "mario_geo", "mario_model"} | held
     assert all(len(item["sha256"]) == 64 for item in inputs.values())
     copied = tmp_path / "model"
@@ -109,3 +109,28 @@ const Gfx hoot_dl_05001B80[] = {
     assert "G_TX_RENDERTILE, 0, G_TX_WRAP | G_TX_NOMIRROR, 5" in expanded
     with pytest.raises(ValueError, match="Only RGBA16"):
         builder._expand_texture_blocks(lists.replace("G_IM_FMT_RGBA", "G_IM_FMT_IA"))
+
+
+def test_selected_actor_graph_keeps_all_cases_and_only_reachable_lists():
+    builder = load_tool("build_model")
+    geo = """const GeoLayout actor_geo[] = {
+    GEO_SWITCH_CASE(2, geo_switch_anim_state),
+    GEO_DISPLAY_LIST(LAYER_OPAQUE, actor_dl_05000100),
+    GEO_BRANCH_AND_LINK(actor_case), GEO_END() };
+const GeoLayout actor_case[] = {
+    GEO_DISPLAY_LIST(LAYER_OPAQUE, actor_dl_05000200), GEO_RETURN() };
+const GeoLayout unused_geo[] = {
+    GEO_DISPLAY_LIST(LAYER_OPAQUE, unused_metal_dl_03000100), GEO_END() };"""
+    lists = """const Gfx actor_dl_05000100[] = { gsSPDisplayList(actor_dl_05000300), };
+const Gfx actor_dl_05000200[] = { gsSPBranchList(actor_dl_05000300), };
+const Gfx actor_dl_05000300[] = { gsSPEndDisplayList(), };
+const Gfx unused_metal_dl_03000100[] = { unsupported_material(), };
+"""
+    selected = builder._selected_display_lists(geo, "actor_geo", lists)
+    assert "unsupported_material" not in selected
+    assert builder._reached_display_lists(geo, "actor_geo", selected) == {
+        "actor_dl_05000100", "actor_dl_05000200", "actor_dl_05000300"}
+    # A broken reached dependency is an error, never silently dropped.
+    with pytest.raises(KeyError):
+        builder._selected_display_lists(geo, "actor_geo", lists.replace(
+            "const Gfx actor_dl_05000300[]", "const Gfx unrelated_dl_05000300[]"))
