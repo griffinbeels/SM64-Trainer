@@ -30,7 +30,7 @@ enum sg_pose_fields {
 enum sg_held_kind {
     SG_HELD_NONE = 0, SG_HELD_BOBOMB = 1, SG_HELD_PENGUIN = 2, SG_HELD_KING_BOBOMB = 3,
     SG_HELD_CHUCKYA = 4, SG_HELD_BREAKABLE_BOX = 5, SG_HELD_MIPS = 6,
-    SG_HELD_HOOT = 7, SG_HELD_KINDS = 8
+    SG_HELD_HOOT = 7, SG_HELD_KOOPA_SHELL = 8, SG_HELD_UKIKI = 9, SG_HELD_KINDS = 10
 };
 
 /* A native C value, not a packed wire format. Angles are signed SM64 turns.
@@ -131,9 +131,11 @@ enum sg_atlas_cell {
     SG_ATLAS_CELL_BOBOMB_EYES = 15, SG_ATLAS_CELL_BOBOMB_BLINK = 16,
     SG_ATLAS_CELL_PENGUIN = 17, SG_ATLAS_CELL_KING_BOBOMB = 23, SG_ATLAS_CELL_CHUCKYA = 29,
     SG_ATLAS_CELL_BREAKABLE_BOX = 33, SG_ATLAS_CELL_MIPS = 35,
-    SG_ATLAS_CELL_HOOT = 36, SG_ATLAS_CELLS = 39
+    SG_ATLAS_CELL_HOOT = 36, SG_ATLAS_CELL_KOOPA_SHELL = 39, SG_ATLAS_CELL_UKIKI = 41,
+    SG_ATLAS_CELL_UKIKI_CAP = 45, SG_ATLAS_CELLS = 46
 };
-enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
+/* Mario plus a held Ukiki with his stolen cap exceeds the old 3072 bound. */
+enum { SG_MODEL_MAX_VERTICES = 4096, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
        SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = SG_ATLAS_CELLS * 64 * 64 * 4 };
 
 /* Arrays are caller-owned, nonoverlapping: 3 floats per vertex for position,

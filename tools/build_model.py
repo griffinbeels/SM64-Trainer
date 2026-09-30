@@ -39,6 +39,8 @@ class HeldModel(NamedTuple):
     lists: str         # list input
     inputs: tuple[str, ...]  # geo and animation inputs
     shift: int = 0
+    extra_lists: tuple[str, ...] = ()  # another actor reached by this geo
+    texture_segments: tuple[tuple[int, int], ...] = ()  # segment number -> ROM block
 
 
 def _anims(actor: str, *addresses: str) -> tuple[str, ...]:
@@ -63,6 +65,12 @@ HELD_MODELS = {
                       _anims("mips", "06013248", "0601369C", "060139F8", "06014B94", "0601561C"), shift=0xF0),
     "hoot": HeldModel("hoot_geo", "hoot_seg5_anims_05005768", 0x12A7E0, "hoot_model",
                       _anims("hoot", "050053EC", "05005750")),
+    "koopa_shell": HeldModel("koopa_shell_geo", None, 0x1F2200, "koopa_shell_model", ("koopa_shell_geo",)),
+    "ukiki": HeldModel("ukiki_geo", "ukiki_seg5_anims_05015784", 0x1521D0, "ukiki_model",
+                       _anims("ukiki", "0500D658", "0500DC80", "0500DDEC", "0500EACC", "0500EEA8",
+                              "0500F530", "0500FC84", "0501006C", "050103F4", "05012ABC", "05014BE4",
+                              "050153C4", "0501576C"),
+                       extra_lists=("mario_cap_model",), texture_segments=((3, 0x201410),)),
 }
 MARIO_ATLAS_CELLS = 13
 HELD_HEADER = """#include "../include/sm64.h"
@@ -204,10 +212,19 @@ def _stage_held(files: dict, source: Path) -> None:
     destination = source / "src/decomp/held"
     destination.mkdir(exist_ok=True)
     cell, widths, heights, textures, models, lights = MARIO_ATLAS_CELLS, [], [], [], [], []
-    for name, (geo, table, segment, lists, inputs, shift) in HELD_MODELS.items():
+    for name, model in HELD_MODELS.items():
+        geo, table, segment, lists, inputs, shift = model[:6]
         kind = f"SG_HELD_{name.upper()}"
-        list_text = _expand_texture_blocks(files[lists].read_text(encoding="utf-8"))
+        list_text = _expand_texture_blocks("\n".join(
+            files[key].read_text(encoding="utf-8") for key in (lists, *model.extra_lists)))
         text = "".join(files[key].read_text(encoding="utf-8") + "\n" for key in inputs)
+        # Actor sources also define alternate geometry (for example the metal
+        # cap), whose material commands need not belong to this actor's graph.
+        # Import only this graph's display lists, including every switch case.
+        selected_geos = _reached_geo_layouts(text, geo)
+        text = re.sub(r"const GeoLayout (\w+)\[\] = \{.*?\};",
+                      lambda match: match[0] if match[1] in selected_geos else "", text, flags=re.S)
+        list_text = _selected_display_lists(text, geo, list_text)
         if name == "hoot":
             # The canonical Owl has one unmatched closing node. Its original
             # standalone graph tolerates it, but it would close our wrapper.
@@ -220,7 +237,13 @@ def _stage_held(files: dict, source: Path) -> None:
             cells[symbol] = cell
             widths.append(width)
             heights.append(height)
-            textures.append(f"{{{kind}, {cell}u, {segment:#x}u, {int(symbol[-6:], 16) + shift:#x}u}}")
+            address = int(symbol[-8:], 16)
+            texture_segment = dict(model.texture_segments).get(address >> 24, segment)
+            # Ukiki's stolen cap reaches common1 (segment 3), while his own
+            # textures reach group6 (segment 5). A model's US relocation
+            # shift applies only to its own segment, never to another actor.
+            offset = (address & 0xffffff) + (shift if texture_segment == segment else 0)
+            textures.append(f"{{{kind}, {cell}u, {texture_segment:#x}u, {offset:#x}u}}")
             cell += 1
         if not cells:
             raise ValueError(f"held model {name} reaches no texture")
@@ -301,17 +324,46 @@ def _expand_texture_blocks(text: str) -> str:
     return re.sub(r"gsDPLoadTextureBlock\(([^)]+)\)", expand, text)
 
 
-def _reached_textures(text: str, geo: str, lists: str) -> list[tuple[str, int, int]]:
-    """The RGBA16 textures the geo's display lists load, in declaration order,
-    with the size each gsDPLoadBlock gives."""
+def _reached_geo_layouts(text: str, geo: str) -> set[str]:
+    bodies = dict(re.findall(r"const GeoLayout (\w+)\[\] = \{(.*?)\};", text, re.S))
+    pending, seen = [geo], set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        pending += re.findall(r"GEO_BRANCH\([^,]+,\s*(\w+)\)", bodies[name])
+        pending += re.findall(r"GEO_BRANCH_AND_LINK\((\w+)\)", bodies[name])
+    return seen
+
+
+def _reached_display_lists(text: str, geo: str, lists: str) -> set[str]:
+    """All lists the selected geo reaches, including called and branched lists."""
     bodies = dict(re.findall(r"const Gfx (\w+)\[\] = \{(.*?)\};", lists, re.S))
-    pending, seen, reached = re.findall(r"\b(\w+_dl_[0-9A-Fa-f]+)\b", _array(text, geo)), set(), set()
+    pending, seen = [], set()
+    for layout in _reached_geo_layouts(text, geo):
+        pending += re.findall(r"\b(\w+_dl_[0-9A-Fa-f]+)\b", _array(text, layout))
     while pending:
         name = pending.pop()
         if name in seen:
             continue
         seen.add(name)
         pending += re.findall(r"gsSP(?:DisplayList|BranchList)\((\w+)\)", bodies[name])
+    return seen
+
+
+def _selected_display_lists(text: str, geo: str, lists: str) -> str:
+    reached = _reached_display_lists(text, geo, lists)
+    return re.sub(r"const Gfx (\w+)\[\] = \{.*?\};",
+                  lambda match: match[0] if match[1] in reached else "", lists, flags=re.S)
+
+
+def _reached_textures(text: str, geo: str, lists: str) -> list[tuple[str, int, int]]:
+    """The RGBA16 textures the geo's display lists load, in declaration order,
+    with the size each gsDPLoadBlock gives."""
+    bodies = dict(re.findall(r"const Gfx (\w+)\[\] = \{(.*?)\};", lists, re.S))
+    reached = set()
+    for name in _reached_display_lists(text, geo, lists):
         reached.update(re.findall(r"gsDPSetTextureImage\(G_IM_FMT_RGBA, G_IM_SIZ_16b, 1, (\w+)\)", bodies[name]))
     found = []
     for symbol in re.findall(r"^ALIGNED8 static const u8 (\w+_texture_\w+)\[\]", lists, re.M):

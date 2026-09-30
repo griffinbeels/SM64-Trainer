@@ -323,5 +323,119 @@
     "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/hoot/geo.inc.c",
     "filename": "upstream-hoot-geo.c",
     "sha256": "3762dd4ccc3ffa3eac16c8d00a83c4131ecc80289b35cef9ddddb5d5141eafa5"
+  },
+  "koopa_shell_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/koopa_shell/model.inc.c",
+    "filename": "upstream-koopa_shell-model.c",
+    "sha256": "3cab5dd489d9013131d4f6c8c3fc817e481a9227d86581c6a19d3eec9a4d9462"
+  },
+  "koopa_shell_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/koopa_shell/geo.inc.c",
+    "filename": "upstream-koopa_shell-geo.c",
+    "sha256": "f94ad81da4917d42a573216a733a05e970dd450142976e77439c4b893a9032df"
+  },
+  "ukiki_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/model.inc.c",
+    "filename": "upstream-ukiki-model.c",
+    "sha256": "0ac895bd9588367be690355b05e460a1ecdb937f29c2514cbebd4bbd334fa9f6"
+  },
+  "ukiki_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/geo.inc.c",
+    "filename": "upstream-ukiki-geo.c",
+    "sha256": "fda9e4b173b352dd0812ff12984fbbd64f61e55a3e19a1c0876be06f08f7c27e"
+  },
+  "ukiki_anim_0500D658": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_0500D658.inc.c",
+    "filename": "upstream-ukiki-anim-0500D658.c",
+    "sha256": "d0ef23b1840c0d5d6269278f906725031a8b9c0394cec37c1216c3c69ee69c5c"
+  },
+  "ukiki_anim_0500DC80": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_0500DC80.inc.c",
+    "filename": "upstream-ukiki-anim-0500DC80.c",
+    "sha256": "5f93d277d9b229349e60a13f9aef2020651a9d2dd2da5785971f21852e704e30"
+  },
+  "ukiki_anim_0500DDEC": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_0500DDEC.inc.c",
+    "filename": "upstream-ukiki-anim-0500DDEC.c",
+    "sha256": "3f4ff07bbe844467c210c20e5664fe66a6155dbf7ab7738254b558d84a02b9da"
+  },
+  "ukiki_anim_0500EACC": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_0500EACC.inc.c",
+    "filename": "upstream-ukiki-anim-0500EACC.c",
+    "sha256": "1b04e79755b15d220338cff91d5e0d05b57cf1e14f9f91a1105e2199eba9c223"
+  },
+  "ukiki_anim_0500EEA8": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_0500EEA8.inc.c",
+    "filename": "upstream-ukiki-anim-0500EEA8.c",
+    "sha256": "b082fb9b84502b17b4220fac49199565203136d6d5564b315ee43ee52b3b512f"
+  },
+  "ukiki_anim_0500F530": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_0500F530.inc.c",
+    "filename": "upstream-ukiki-anim-0500F530.c",
+    "sha256": "fe1c62788417062af4a6a9a3a22498b83df87d8debc1571cc949768acb7cbfa9"
+  },
+  "ukiki_anim_0500FC84": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_0500FC84.inc.c",
+    "filename": "upstream-ukiki-anim-0500FC84.c",
+    "sha256": "7e446cda45af9da7cfd956e93335f34eb1b7e7a380a8aca751dac0e3c1fd5ee1"
+  },
+  "ukiki_anim_0501006C": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_0501006C.inc.c",
+    "filename": "upstream-ukiki-anim-0501006C.c",
+    "sha256": "a3e09477ab692ba1b78b148a730c2bf0c00d14f45e8ad3576837c57455b6546b"
+  },
+  "ukiki_anim_050103F4": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_050103F4.inc.c",
+    "filename": "upstream-ukiki-anim-050103F4.c",
+    "sha256": "7da8415b026b02a63c593d33582207c6ffdca769a9e37efd156a31bcc308dcb5"
+  },
+  "ukiki_anim_05012ABC": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_05012ABC.inc.c",
+    "filename": "upstream-ukiki-anim-05012ABC.c",
+    "sha256": "4b6b1e62117081555c5d15ecb9b16978b64a2e6590b6b9e33067e6bfc0e5837e"
+  },
+  "ukiki_anim_05014BE4": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_05014BE4.inc.c",
+    "filename": "upstream-ukiki-anim-05014BE4.c",
+    "sha256": "4e43a1b2178d49fb3d450ed677faad783954d9104c4065594430aba082f4eadb"
+  },
+  "ukiki_anim_050153C4": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_050153C4.inc.c",
+    "filename": "upstream-ukiki-anim-050153C4.c",
+    "sha256": "ce93718d5edda633384ef52e8a4b6451911093346af50184d261284b58b12905"
+  },
+  "ukiki_anim_0501576C": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/anim_0501576C.inc.c",
+    "filename": "upstream-ukiki-anim-0501576C.c",
+    "sha256": "6c84edb900eb3be886c45afae939f417d11f3d22e6442cdf9aa22e384e90e711"
+  },
+  "ukiki_anims": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/ukiki/anims/table.inc.c",
+    "filename": "upstream-ukiki-anims.c",
+    "sha256": "620023fe31c25f6123b69b573ff6b87f9eebf1b43453159544e0e893365f168d"
+  },
+  "mario_cap_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mario_cap/model.inc.c",
+    "filename": "upstream-mario-cap-model.c",
+    "sha256": "297ef5f5d62def838cef010561e2e96657eea671499c55f1d75a11d75dbef0e4"
   }
 }

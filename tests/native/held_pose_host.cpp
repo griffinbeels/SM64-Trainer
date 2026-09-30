@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <utility>
 #include <vector>
 
 static int failures = 0;
@@ -49,11 +50,13 @@ int main(int argc, char **argv) {
     const struct { uint32_t behavior; int16_t animation; uint32_t vertices; const char *name; } kinds[] = {
         {0x13003174u, 1, 240, "Bob-omb"}, {0x130020E8u, 0, 402, "penguin"}, {0x130001F4u, 0, 348, "King Bob-omb"},
         {0x13000528u, 0, 132, "Chuckya"}, {0x13004218u, -1, 36, "cork box"}, {0x13001650u, -1, 36, "crazy box"},
-        {0x130044FCu, 0, 588, "Mips"}, {0x130033ECu, 1, 594, "Hoot"}};
+        {0x130044FCu, 0, 588, "Mips"}, {0x130033ECu, 1, 594, "Hoot"},
+        {0x13001F3Cu, -1, 186, "shell"}, {0x13000F08u, 12, 822, "Ukiki"},
+        {0x13001CB0u, 12, 822, "macro Ukiki"}};
     for (const auto &k : kinds) {
         saved.valid_fields = GC_VALID_CLOCK | GC_VALID_POSE | GC_VALID_HELD;
         saved.held = {}; saved.held.behavior = k.behavior; saved.held.animation_id = k.animation;
-        if(k.behavior==0x130033ECu)saved.held.released=1;
+        if(k.behavior==0x130033ECu || k.behavior==0x13001F3Cu)saved.held.released=1;
         saved.held.holp[0] = 45; saved.held.holp[1] = 75; saved.held.holp[2] = 45;
         saved.held.scale[0] = saved.held.scale[1] = saved.held.scale[2] = 1;
         const auto result = ghost_pose::evaluate(model, record, live, world, 1.0f, scratch, pose);
@@ -69,6 +72,43 @@ int main(int argc, char **argv) {
                     && pose.vertices[i].color[c] <= 1;
         check(shaded, "held colours are F3D shades");
     }
+    // The shell uses its own root. The hand-held Ukiki uses Mario's root
+    // orientation at the recorded HOLP, including his canonical stolen-cap
+    // switch state. All companion vertices share the overlay's opacity.
+    saved.held={};saved.held.behavior=0x13001F3Cu;saved.held.released=1;saved.held.animation_id=-1;
+    saved.held.holp[0]=400;saved.held.holp[1]=20;saved.held.holp[2]=-600;saved.held.angles[1]=0x2000;
+    saved.held.scale[0]=saved.held.scale[1]=saved.held.scale[2]=1;
+    check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose)==ghost_pose::Result::ok
+        && scratch.evaluated==alone+186 && pose.opacity==.6f,"ridden shell shares Mario mesh and opacity");
+    const std::vector<float> shell_root(scratch.position+3*alone,scratch.position+3*scratch.evaluated);
+    const auto mario_x=saved.pose.position[0];const auto mario_yaw=saved.pose.angles[1];
+    saved.pose.position[0]+=1000;saved.pose.angles[1]=0x6000;
+    check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose)==ghost_pose::Result::ok
+        && !std::memcmp(shell_root.data(),scratch.position+3*alone,shell_root.size()*sizeof(float)),
+        "shell own gfx root stays independent of Mario root");
+    saved.pose.position[0]=mario_x;saved.pose.angles[1]=mario_yaw;
+    saved.held={};saved.held.behavior=0x13000F08u;saved.held.animation_id=12;
+    saved.held.holp[0]=45;saved.held.holp[1]=75;saved.held.holp[2]=45;
+    saved.held.scale[0]=saved.held.scale[1]=saved.held.scale[2]=1;
+    for(uint16_t state=0;state<4;++state) {
+        saved.held.anim_state=state;
+        check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose)==ghost_pose::Result::ok
+            && scratch.evaluated==alone+(state<2?822:978) && pose.opacity==.6f,
+            "canonical Ukiki eyes and stolen-cap states draw through ghost lighting and opacity");
+    }
+    saved.held.anim_state=0;
+    ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose);
+    const std::vector<float> ukiki_root(scratch.position+3*alone,scratch.position+3*scratch.evaluated);
+    saved.pose.angles[1]=0x6000;
+    check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose)==ghost_pose::Result::ok
+        && std::memcmp(ukiki_root.data(),scratch.position+3*alone,ukiki_root.size()*sizeof(float)),
+        "held Ukiki follows Mario orientation at the recorded HOLP");
+    saved.pose.angles[1]=mario_yaw;saved.held.animation_frame=14;
+    check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose)==ghost_pose::Result::ok
+        && scratch.evaluated==alone,"refused Ukiki frame leaves Mario visible");
+    saved.held.behavior=0x13001F3Cu;saved.held.animation_id=0;saved.held.animation_frame=0;saved.held.released=1;
+    check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose)==ghost_pose::Result::ok
+        && scratch.evaluated==alone,"refused shell animation leaves Mario visible");
     // A legacy held Mips record said id 0 even though the game's initializer
     // selected animation 4. It must produce the same full mesh as an explicit
     // current record, while released id 0 retains the upright idle pose.
@@ -141,5 +181,20 @@ int main(int argc, char **argv) {
     check(std::fabs(turned_wx / wx - 1.41421f) < 0.02f && std::fabs(turned_wz / wz - 1.41421f) < 0.02f,
           "its own yaw turns it");
     sg_model_close(&model);
+    // The same delivered pose fallback with an optional model's ROM segment
+    // unavailable. Never hide Mario merely because a companion cannot draw.
+    for(const auto &bad : std::vector<std::pair<uint32_t,uint32_t>>{
+            {0x1F2200u,0x13001F3Cu},{0x1521D0u,0x13000F08u},{0x201410u,0x13000F08u}}) {
+        auto missing=rom;missing[bad.first]=0;
+        check(sg_model_open(missing.data(),missing.size(),&model)==SG_OK,"missing companion segment still opens Mario");
+        if(!model)continue;
+        saved.held={};saved.held.behavior=bad.second;
+        saved.held.animation_id=bad.second==0x13001F3Cu?-1:12;
+        saved.held.released=bad.second==0x13001F3Cu?1:0;
+        saved.held.holp[1]=75;saved.held.scale[0]=saved.held.scale[1]=saved.held.scale[2]=1;
+        check(ghost_pose::evaluate(model,record,live,world,.6f,scratch,pose)==ghost_pose::Result::ok
+            && scratch.evaluated==alone,"missing companion textures omit only the companion");
+        sg_model_close(&model);
+    }
     return failures ? 1 : 0;
 }

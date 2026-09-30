@@ -306,6 +306,12 @@ static void held_block(Fixture &f) {
     holding();f.put32(bomb+0x20c,f.config.behaviour_base+0x44fc);f.put16(bomb+2,0x31);
     object_animation_table(f,bomb,anim,4,5);f.put16(bomb+0x38,0);
     check(frame(true) && h.animation_id==4,"Mips records the ears-down held animation despite stale id zero");
+    for(const uint32_t behavior:{0x0f08u,0x1cb0u}) {
+        holding();f.put32(bomb+0x20c,f.config.behaviour_base+behavior);
+        object_animation_table(f,bomb,anim,12,13);f.put16(bomb+0x38,0);
+        check(frame(true) && h.animation_id==12 && !h.released && h.holp[1]==101,
+              "Ukiki records his canonical held animation and HOLP despite stale id zero");
+    }
     holding();f.put32(bomb+0x120,0);check(!frame(true),"an animated object without an animation table accepted");
     holding();f.put32(Fixture::base+0x14804,anim+0x20);check(!frame(true),"current animation absent from its table accepted");
     holding();f.put32(Fixture::base+0x14800,anim);
@@ -344,6 +350,8 @@ static void held_block(Fixture &f) {
         {0x01F4,0x20,12,"held King Bob-omb not captured"},
         {0x0528,0x20,6,"held Chuckya not captured"},
         {0x20E8,0x20,5,"held penguin not captured"},
+        {0x0F08,0x20,13,"held Ukiki not captured"},
+        {0x1CB0,0x20,13,"held macro Ukiki not captured"},
         {0x1650,0x00,0,"held crazy box not captured"},
         {0x4218,0x00,0,"held cork box not captured"}};
     for(const auto &k:kinds) {
@@ -355,13 +363,17 @@ static void held_block(Fixture &f) {
     // Exact pinned actor pointer order, including penguin's 0/4 alias.
     // Three of these have no NULL terminator. Poisoning the following word
     // and placing the table at RAM's end independently check the read bound.
-    const struct { uint32_t behavior,count,nulls,entries[12]; } canonical[]={
+    const struct { uint32_t behavior,count,nulls,entries[13]; } canonical[]={
         {0x3174,2,1,{0x080237fc,0x08023954}},
         {0x20e8,5,0,{0x05008b5c,0x050079e4,0x05007dcc,0x050087c0,0x05008b5c}},
         {0x01f4,12,0,{0x0500bdfc,0x0500c2ac,0x0500c520,0x0500c774,0x0500cfcc,0x0500d5b0,
             0x0500d978,0x0500ddd8,0x0500e10c,0x0500f078,0x0500f6c8,0x0500fe18}},
         {0x0528,6,0,{0x0800af68,0x0800b1a8,0x0800b4a8,0x0800b9f8,0x0800bbec,0x0800c058}},
         {0x44fc,5,2,{0x06014b94,0x060139f8,0x06013248,0x0601561c,0x0601369c}},
+        {0x0f08,13,2,{0x0500d658,0x0500dc80,0x0500ddec,0x0500eacc,0x0500eea8,0x0500f530,
+            0x0500fc84,0x0501006c,0x050103f4,0x05012abc,0x05014be4,0x050153c4,0x0501576c}},
+        {0x1cb0,13,2,{0x0500d658,0x0500dc80,0x0500ddec,0x0500eacc,0x0500eea8,0x0500f530,
+            0x0500fc84,0x0501006c,0x050103f4,0x05012abc,0x05014be4,0x050153c4,0x0501576c}},
     };
     uint32_t canonical_segments[16]{};
     canonical_segments[5]=canonical_segments[6]=canonical_segments[8]=0x40000;
@@ -549,6 +561,68 @@ static void ridden_block(Fixture &f) {
     f.put16(box+0x74,0);f.put16(owl+0x74,0);
     f.frame.segments=nullptr;
 }
+// A shell has no animation and uses riddenObj, not the hand or Hoot's usedObj.
+// Capture its actual gfx root for each canonical riding action and stop when
+// the attachment ends, even while stale object pointers remain in MarioState.
+static void ridden_shell_block(Fixture &f) {
+    ghost_capture_reset(&f.reader);
+    gc_root_probe p;
+    const uint32_t shell=f.config.object_pool+0x260;
+    const auto ride=[&]{
+        scene(f);f.put16(f.config.object_pool+0x42,0x8123);
+        f.put32(f.config.mario_state+0x0c,0x20810446);
+        f.put32(f.config.mario_state+0x7c,0);
+        f.put32(f.config.mario_state+0x80,shell);f.put32(f.config.mario_state+0x84,shell);
+        f.put16(shell+0x74,1);f.put16(shell+2,1);f.put8(shell+0x18,1);
+        f.put32(shell+0x14,Fixture::base+0x14200);f.put32(shell+0x50,0);
+        f.put32(shell+0x20c,f.config.behaviour_base+0x1f3c);f.put32(shell+0x3c,0);
+        f.put32(shell+0xf0,0);
+        for(unsigned i=0;i<3;++i) {
+            f.putfloat(shell+0x20+4*i,800.0f+float(i)*100);
+            f.putfloat(shell+0x2c+4*i,1.0f+float(i)*.25f);
+            f.put16(shell+0x1a+2*i,uint16_t(0x1111u*(i+1)));
+        }
+    };
+    const auto frame=[&](bool proven=true){begin(f,p);if(proven)pair(p);ghost_root_finish(p,true,f.sample);
+        check((f.sample.valid_fields&GC_VALID_HELD) || zero(f.sample.held),"shell block bytes follow validity");
+        return (f.sample.valid_fields&GC_VALID_HELD)!=0;};
+    for(const uint32_t action:{0x20810446u,0x0281089au,0x0081089bu}) {
+        ride();f.put32(f.config.mario_state+0x0c,action);
+        check(frame(),"canonical ground/jump/fall shell attachment not captured");
+        const auto &h=f.sample.held;
+        check(h.behavior==0x13001f3c && h.released==1 && h.animation_id==-1 && !h.animation_frame
+            && h.holp[0]==800 && h.holp[1]==900 && h.holp[2]==1000 && h.angles[1]==0x2222 && h.scale[2]==1.5f,
+            "shell keeps its own unanimated gfx TRS");
+    }
+    const auto none=[&](uint32_t at,uint32_t value,const char *why){ride();f.put32(at,value);check(!frame(),why);};
+    none(f.config.mario_state+0x84,0,"usedObj alone supplied a ridden shell");
+    none(f.config.mario_state+0x84,shell+4,"unaligned ridden shell accepted");
+    none(f.config.mario_state+0x84,f.config.object_pool+240*0x260,"shell outside object pool accepted");
+    none(f.config.mario_state+0x0c,0x04000440,"stale shell pointer under ordinary walking accepted");
+    none(f.config.mario_state+0x0c,0x00010001,"noncanonical action with shell flag accepted");
+    none(shell+0x20c,f.config.behaviour_base+0x33ec,"Hoot through shell attachment accepted");
+    none(shell,0x00180010,"inactive graph shell drawn");
+    none(shell,0x00180011,"invisible ridden shell drawn");
+    none(shell,0x00180005,"billboard ridden shell drawn");
+    none(shell+0x74,0,"dead ridden shell drawn");
+    none(shell+0x14,0,"shell without a model accepted");
+    none(shell+0x50,Fixture::base+0x14900,"unproven shell throw matrix accepted");
+    none(shell+0x20,0x7fc00000,"nonfinite shell position accepted");
+    none(shell+0x2c,0,"zero shell scale accepted");
+    ride();f.put8(shell+0x18,2);check(!frame(),"shell in another area drawn");
+    ride();check(!frame(false),"shell drawn beside a refused Mario root");
+    ride();check(frame(),"ridden shell before dismount");
+    f.put32(f.config.mario_state+0x0c,0x0100088c);
+    check(!frame(),"dismounted shell began release follow");
+    ride();const uint32_t box=f.config.object_pool+2*0x260;
+    f.put32(f.config.mario_state+0x7c,box);f.put16(box+0x74,1);f.put16(box+2,0);
+    f.put32(box+0x14,Fixture::base+0x14200);f.put32(box+0x20c,f.config.behaviour_base+0x4218);
+    f.put32(box+0x3c,0);for(unsigned i=0;i<3;++i)f.putfloat(box+0x2c+4*i,1);
+    check(frame() && f.sample.held.behavior==0x13004218 && !f.sample.held.released,
+          "a hand object lost priority to the ridden shell");
+    f.put32(f.config.mario_state+0x7c,0);f.put32(f.config.mario_state+0x80,0);f.put32(f.config.mario_state+0x84,0);
+    f.put16(shell+0x74,0);f.put16(box+0x74,0);
+}
 #endif
 int main(int argc,char **argv) {
     check(argc==2,"usage: ghost_root_host config"); Fixture f(argv[1]);scene(f);
@@ -620,6 +694,7 @@ int main(int argc,char **argv) {
     held_block(f);
     released_block(f);
     ridden_block(f);
+    ridden_shell_block(f);
     std::puts("executed root qualification passed");
 #endif
 }

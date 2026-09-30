@@ -237,7 +237,9 @@ struct HiddenGL {
 int main(int argc, char** argv) {
     sg_model* model=nullptr;
     try {
-        check(argc==2,"usage: model_host ROM");
+        check(argc==2 || (argc==3 && !std::strcmp(argv[2],"--cpu-only")),"usage: model_host ROM [--cpu-only]");
+        const bool cpu_only=argc==3;
+        unsigned max_held_vertices=0;
         std::ifstream input(argv[1],std::ios::binary);
         std::vector<uint8_t> rom((std::istreambuf_iterator<char>(input)),{});
         check(rom.size()==8*1024*1024,"ROM size");
@@ -507,11 +509,17 @@ int main(int argc, char** argv) {
                 {SG_HELD_CHUCKYA,SG_ATLAS_CELL_CHUCKYA,4,6,132,"Chuckya"},
                 {SG_HELD_BREAKABLE_BOX,SG_ATLAS_CELL_BREAKABLE_BOX,2,0,36,"cork box"},
                 {SG_HELD_MIPS,SG_ATLAS_CELL_MIPS,1,5,588,"Mips"},
-                {SG_HELD_HOOT,SG_ATLAS_CELL_HOOT,3,2,594,"Owl"}};
+                {SG_HELD_HOOT,SG_ATLAS_CELL_HOOT,3,2,594,"Owl"},
+                {SG_HELD_KOOPA_SHELL,SG_ATLAS_CELL_KOOPA_SHELL,2,0,186,"shell"},
+                {SG_HELD_UKIKI,SG_ATLAS_CELL_UKIKI,5,13,822,"Ukiki"}};
             for(const auto &k:kinds) {
                 // A box has no animation: id -1, and its parts' own transforms.
                 sg_pose o=h; o.held_kind=k.kind; o.held_animation_id=k.animations?0:-1; o.held_animation_frame=0;
-                check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count==alone+k.vertices,k.name);
+                const auto held_status=sg_model_evaluate(model,&o,&mesh.out);
+                if(held_status!=SG_OK || mesh.out.vertex_count!=alone+k.vertices)
+                    std::fprintf(stderr,"%s: status %d, vertices %u, expected %u\n",
+                                 k.name,int(held_status),mesh.out.vertex_count,alone+k.vertices);
+                check(held_status==SG_OK && mesh.out.vertex_count==alone+k.vertices,k.name);
                 check(lit_by_own(k.kind),"held object lit by its own lights");
                 // Its textured triangles name its own cells in their tiles.
                 bool own=false;
@@ -556,7 +564,67 @@ int main(int argc, char** argv) {
                     check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=perched,
                           "Owl flight animation changes its geometry");
                 }
-                if(!k.animations) {
+                if(k.kind==SG_HELD_KOOPA_SHELL) {
+                    o.fields|=SG_POSE_HELD_RELEASED;
+                    o.held_position[0]=600;o.held_position[1]=20;o.held_position[2]=-400;
+                    o.held_angles[1]=8192;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK,"ridden shell own root");
+                    const std::vector<float> root(mesh.out.position+3*alone,mesh.out.position+3*mesh.out.vertex_count);
+                    o.position[0]+=1000;o.angles[1]=16384;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count==alone+186
+                        && !std::memcmp(root.data(),mesh.out.position+3*alone,root.size()*sizeof(float)),
+                        "shell own TRS is independent of Mario position and heading");
+                    o.held_angles[1]=0;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK
+                        && std::memcmp(root.data(),mesh.out.position+3*alone,root.size()*sizeof(float)),
+                        "recorded shell heading turns its canonical mesh");
+                }
+                if(k.kind==SG_HELD_UKIKI) {
+                    // loopEnd values from the 13 pinned canonical animations.
+                    const int16_t ends[]={12,16,100,38,10,16,18,8,7,100,85,20,14};
+                    for(int16_t animation=0;animation<13;++animation) {
+                        o.held_animation_id=animation;
+                        for(const int16_t frame:{int16_t(0),int16_t(ends[animation]-1)}) {
+                            o.held_animation_frame=frame;
+                            check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count==alone+822,
+                                  "Ukiki canonical animation first/last frames draw every part");
+                        }
+                        o.held_animation_frame=ends[animation];
+                        check(sg_model_evaluate(model,&o,&mesh.out)==SG_INVALID_ANIMATION,
+                              "Ukiki animation endpoint is refused");
+                    }
+                    o.held_animation_id=12;o.held_animation_frame=0;
+                    for(uint16_t state=0;state<4;++state) {
+                        o.held_anim_state=state;
+                        check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK
+                            && mesh.out.vertex_count==alone+(state<2?822:978),"Ukiki canonical eye/cap switch states");
+                        check(lit_by_own(k.kind),"Ukiki and his stolen cap use their own lights");
+                        bool cap=false;
+                        for(unsigned i=alone;i<mesh.out.vertex_count;++i)
+                            cap|=sg_material_tile(mesh.out.material[i]) &&
+                                (sg_material_tile(mesh.out.material[i])&SG_TILE_CELL)==SG_ATLAS_CELL_UKIKI_CAP;
+                        check(cap==(state>=2),"Ukiki stolen cap samples its canonical common1 texture");
+                    }
+                    o.cap_state=2; // Mario's wing cap, Ukiki's stolen cap.
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count>3072
+                        && mesh.out.vertex_count<=SG_MODEL_MAX_VERTICES,
+                        "Mario wings and fully capped Ukiki fit the shared native mesh bound");
+                    max_held_vertices=mesh.out.vertex_count;
+                    o.cap_state=h.cap_state;
+                    o.held_anim_state=0;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK,"held Ukiki before root change");
+                    const std::vector<float> hand(mesh.out.position+3*alone,mesh.out.position+3*mesh.out.vertex_count);
+                    o.angles[1]=16384;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK
+                        && std::memcmp(hand.data(),mesh.out.position+3*alone,hand.size()*sizeof(float)),
+                        "held Ukiki follows Mario root orientation at the HOLP");
+                    const std::vector<float> turned(mesh.out.position+3*alone,mesh.out.position+3*mesh.out.vertex_count);
+                    o.position[0]+=1000;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK
+                        && !std::memcmp(turned.data(),mesh.out.position+3*alone,turned.size()*sizeof(float)),
+                        "held Ukiki stays at the recorded HOLP when Mario position changes");
+                }
+                if(k.kind==SG_HELD_BREAKABLE_BOX) {
                     // oAnimState picks its texture (the switch's second list).
                     const auto first=mesh.snapshot();
                     o.held_anim_state=1;
@@ -641,8 +709,10 @@ int main(int argc, char** argv) {
         check(wrong==SG_WRONG_THREAD && borrowed==model,"owner thread enforcement");
         ownership_transfer(model,a,first_mesh);
         HWND foreground=GetForegroundWindow(); unsigned covered=0;
-        { HiddenGL gl; gl.open(); covered=gl.draw(mesh.out); }
-        check(covered>1000 && covered<20000,"hidden GL Mario silhouette");
+        if(!cpu_only) {
+            HiddenGL gl;gl.open();covered=gl.draw(mesh.out);
+            check(covered>1000 && covered<20000,"hidden GL Mario silhouette");
+        }
         check(GetForegroundWindow()==foreground,"foreground unchanged");
         mesh.guard();
         check(sg_model_close(&model)==SG_OK && !model,"close clears handle");
@@ -656,7 +726,26 @@ int main(int argc, char** argv) {
             if(reclaimed==SG_OK) reclaimed=sg_model_close(&model); });
         reclaimer.join();
         check(reclaimed==SG_OK && !model,"background owner reclaims runtime");
-        std::printf("{\"ok\":true,\"checks\":%u,\"vertices\":%u,\"scratch_bytes\":%zu,\"hidden_gl_pixels\":%u}\n",checks,vertices,scratch,covered);
+        // A missing optional companion segment refuses that model, while
+        // Mario's own public mesh still evaluates normally.
+        const struct {uint32_t segment,kind;int16_t animation;} missing[]={
+            {0x1F2200u,SG_HELD_KOOPA_SHELL,-1},{0x1521D0u,SG_HELD_UKIKI,12},
+            {0x201410u,SG_HELD_UKIKI,12}};
+        for(const auto &entry:missing) {
+            auto damaged=rom;damaged[entry.segment]=0;
+            check(sg_model_open(damaged.data(),damaged.size(),&model)==SG_OK,"optional texture failure still opens Mario");
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,
+                  "missing companion textures leave Mario mesh intact");
+            sg_pose object=a;object.fields|=SG_POSE_HELD;object.held_kind=entry.kind;
+            object.held_animation_id=entry.animation;object.held_scale[0]=object.held_scale[1]=object.held_scale[2]=1;
+            float eye[3]={0,160,600},target[3]={0,80,0};sg_model_view(model,eye,target,0,object.view);
+            check(sg_model_evaluate(model,&object,&mesh.out)==SG_INVALID_GEOMETRY && !mesh.out.vertex_count
+                && (mesh.out.error_flags&SG_MESH_UNSUPPORTED_MATERIAL),
+                  "companion with unavailable texture segment is refused");
+            check(sg_model_close(&model)==SG_OK,"close missing-texture model");
+        }
+        std::printf("{\"ok\":true,\"checks\":%u,\"vertices\":%u,\"max_held_vertices\":%u,\"scratch_bytes\":%zu,\"hidden_gl_pixels\":%u,\"cpu_only\":%s}\n",
+                    checks,vertices,max_held_vertices,scratch,covered,cpu_only?"true":"false");
         return 0;
     } catch(const std::exception& e) {
         if(model) sg_model_close(&model);
