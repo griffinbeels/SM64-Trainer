@@ -61,7 +61,8 @@ def test_native_context_profile_baseline_and_opt_in(tmp_path):
     if not vcvars:
         pytest.skip("MSVC unavailable")
     target = tmp_path / "context_profile.exe"
-    build._cl(vcvars, build.COMMON_FLAGS + ["/std:c++17", "/EHsc",
+    flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
+    build._cl(vcvars, flags + ["/std:c++17", "/EHsc",
         str(ROOT / "tests/native/renderer_context_profile_host.cpp"),
         f"/I{ROOT / 'plugin/gfxwrap'}", f"/Fe:{target}", f"/Fo{tmp_path}\\"], tmp_path)
     result = subprocess.run([str(target)], capture_output=True, text=True, timeout=15,
