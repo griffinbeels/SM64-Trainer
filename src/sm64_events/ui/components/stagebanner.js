@@ -1,7 +1,7 @@
 // src/sm64_events/ui/components/stagebanner.js
 // Quick-select row, driven by t.stage (the broadcast-only stage_changed event)
 // and dispatched on its `mode`:
-//   "stars"         : a main course 1-15 -> that course's stars (name +
+//   "stars"         : a main or secret course -> that course's stars (name +
 //                     last-strategy subtext); click sets the star target.
 //                     The "100 Coins" cell is a PLAIN star cell like the
 //                     other six (spec 2026-07-28-multi-step-segments, "the
@@ -393,8 +393,16 @@ function StarRow({ t, v, stage }) {
   // course otherwise, which is exactly what the widened rule wants: seven
   // stars is not one, so a no-route course still picks nothing.
   const lone = loneOption(shown);
-  useLoneRouteOption(v, lone, `star:${stage.course_id}:${lone ? lone.i : ""}`,
-                     () => pick(lone.i, { quiet: true }));
+  // PSS offers two stars without an act-selection screen. Restore the last
+  // one actually completed, using lifetime history from the server rather
+  // than the possibly session-filtered log. A route's lone option wins;
+  // the shared empty-hand guard keeps explicit stars and segments intact.
+  const rememberedSlot = stage.course_id === 19
+    ? (v.last_completed_star_by_course || {})[String(stage.course_id)] : null;
+  const arrivalPick = lone || shown.find(({ i }) => i === rememberedSlot);
+  useLoneRouteOption(v, arrivalPick,
+                     `star:${stage.course_id}:${arrivalPick ? arrivalPick.i : ""}`,
+                     () => pick(arrivalPick.i, { quiet: true }));
 
   // A STAR'S SUBSECTIONS (task 0087, and the case Griffin named first:
   // "sometimes we want to practice only a small portion of a star") no longer

@@ -106,6 +106,10 @@ Two things worth keeping from the fix:
 
 A piece never enabled/disabled from here any more — the Segments tab's own editor checkbox and the library row's hide/show button are the two doors that were always separate from the badge, and they are untouched. A disabled piece still leaves the log entirely, exactly as before.
 
+## Secret course selection
+
+PSS's two-star arrival default uses `views.py`'s lifetime `last_completed_star_by_course`, through the shared `useLoneRouteOption` empty-hand guard. Its actual catalog still offers both stars; a route's lone option wins. The ordinary target request loads the remembered strategy and the ghost follows that target/strategy. No played history means no invented PSS default. The other five secret courses each offer one star and use the same singleton guard. Witnesses: `tests/test_special_stage_targets.py`, `tests/test_ui_special_stages.py`.
+
 ## The Bowser row's round 2
 
 Round 2 (live report 2026-07-30, five reports, then four more) added: (1) **item 2** — `justCompletedStar`/`justCompletedSegment` (the latter new in stagecontext.js, mirroring the existing segment version one level up), riding `freshIds` (practice.js's `useFreshAttemptIds`, threaded `StageBanner({t, freshIds}) → Row({..., freshIds})` for every row, though only this one reads it) to detect a FRESH success on the star, the pipe segment, or No Reds and update the remembered mode/family automatically, no click required — the star check is gated on `starActive` specifically because `projection.py` caveat 18 (tracking-storage.md) had to first stop a mid-Pipe-run waypoint grab from making the star the target at all, or this detector would relight Star mode on every Pipe run's own reds-star grab.

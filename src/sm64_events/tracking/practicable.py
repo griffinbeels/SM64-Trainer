@@ -70,7 +70,7 @@ def practicable_here(stage: dict | None, node: str | None,
 
     A stage whose `mode` is None is NOT one of those unknowns, and used to be
     (fixed 2026-07-27, second round of the same ruling): the file select, the
-    castle grounds, the courtyard and the cap courses all resolve to mode
+    castle grounds and the courtyard all resolve to mode
     None, so that clause permitted every pick from exactly the places you
     cannot practice anything in — including setting a Whomp's Fortress target
     while standing on the grounds, the move this rule exists to stop. A level
