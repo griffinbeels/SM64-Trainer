@@ -48,6 +48,16 @@ int main() {
     p.triangles(moved,1,true); assert(p.status()==PassStatus::ViewportChanged);
     world(p); moved=target(); moved.depth=9;
     p.triangles(moved,1,true); assert(p.status()==PassStatus::TargetChanged);
+    world(p); moved=target(); moved.noise_scale=2.5f;
+    p.triangles(moved,1,true); assert(p.status()==PassStatus::ViewportChanged);
+    const float invalid_scales[]={0.f,-1.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()};
+    for(float scale : invalid_scales) {
+        p.begin(2,3,42,true);p.projection(projection);moved=target();moved.noise_scale=scale;
+        p.triangles(moved,1,true);assert(p.status()==PassStatus::InvalidIdentity && !p.candidate());
+    }
+    p.begin(2,3,42,true);p.projection(projection);moved=target();moved.noise_scale=2.5f;
+    p.triangles(moved,1,true);assert(p.geometry(true,false) && p.end(true));
+    assert(p.candidate()->target.noise_scale==2.5f);
     world(p); moved=target(); moved.depth_mode=2;
     p.triangles(moved,1,true); assert(p.status()==PassStatus::UnsupportedDepth);
     p.begin(2,3,43,true); p.projection(projection); moved=target(); moved.depth_mode=1;

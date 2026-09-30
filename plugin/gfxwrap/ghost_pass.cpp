@@ -26,14 +26,14 @@ bool target_valid(const RasterTarget &t) {
         && t.viewport[2] <= 32768 && t.viewport[3] <= 32768
         && finite(t.depth_scale, 2) && t.depth_scale[0] > 0.0f
         && finite(t.screen_scale, 2) && t.screen_scale[0] != 0.0f
-        && t.screen_scale[1] != 0.0f;
+        && t.screen_scale[1] != 0.0f && std::isfinite(t.noise_scale) && t.noise_scale > 0.0f;
 }
 bool same_mapping(const RasterTarget &a, const RasterTarget &b) {
     for (unsigned i = 0; i < 4; ++i) if (a.viewport[i] != b.viewport[i]) return false;
     for (unsigned i = 0; i < 2; ++i)
         if (a.depth_scale[i] != b.depth_scale[i] || a.screen_scale[i] != b.screen_scale[i])
             return false;
-    return true;
+    return a.noise_scale == b.noise_scale;
 }
 }
 void Pass::reset() { *this = Pass{}; }

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <vector>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 
 namespace gc=ghost_compositor;
@@ -262,6 +263,128 @@ static void hud_rect(const gc::Dispatch& g,const Bindings& bindings,float alpha)
     g.BlendFuncSeparatei(0,GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ZERO,GL_ONE);
     g.Uniform1f(g.GetUniformLocation(bindings.hud_program,"alpha"),alpha);g.DrawArrays(GL_TRIANGLES,0,6);
 }
+static void vanish_witness(const gc::Dispatch& g) {
+    Scene low(g,32,32);
+    auto* compositor=gc::create(g,1);require(compositor!=nullptr,"vanish compositor create");
+    const uint8_t white[4]={255,255,255,255};
+    require(gc::prepare(compositor,32,32,60,white,1,1)==gc::Result::ok,"vanish prepare");
+    require(gc::prepare_particles(compositor,white,1,1)==gc::Result::ok,"vanish particle prepare");
+    auto vertices=mesh();
+    for(unsigned i=0;i<vertices.size();++i)vertices[i].position[2]=i<6 ? .25f : i<12 ? -.75f : -.5f;
+    // A nearer red wall, a blue far wall and a duplicate red wall exercise
+    // self-depth: a rejected body pixel must not be filled by another wall.
+    const float marker[6][2]={{.5f,-.25f},{.75f,-.25f},{.5f,.25f},{.5f,.25f},{.75f,-.25f},{.75f,.25f}};
+    for(const auto& point:marker) {
+        gc::Vertex v{};v.position[0]=point[0];v.position[1]=point[1];v.position[2]=-.75f;
+        v.normal[2]=1;v.color[1]=1;v.uv[0]=v.uv[1]=1;vertices.push_back(v);
+    }
+    uint8_t ia8[256];for(auto& texel:ia8)texel=0x0f;
+    gc::ShadowVertex shadow[6]{};gc::ParticleVertex particle[6]{};
+    const float quad[6][2]={{-.75f,0},{.75f,0},{-.75f,1},{-.75f,1},{.75f,0},{.75f,1}};
+    for(unsigned i=0;i<6;++i) {
+        shadow[i]={{quad[i][0],-.875f+quad[i][1]*.25f,-.75f},{.5f,.5f},.5f};
+        particle[i].position[0]=quad[i][0];particle[i].position[1]=.625f+quad[i][1]*.25f;
+        particle[i].position[2]=-.75f;particle[i].uv[0]=particle[i].uv[1]=.5f;
+        particle[i].rect[2]=particle[i].rect[3]=1;particle[i].rgba[2]=particle[i].rgba[3]=1;
+        particle[i].cutout=2;
+    }
+    auto normal=pose(vertices,1);normal.body_count=18;
+    normal.shadow.vertices=shadow;normal.shadow.count=6;normal.shadow.texture_ia8=ia8;
+    normal.particles.vertices=particle;normal.particles.count=normal.particles.opaque_count=6;
+    std::memcpy(normal.shadow.view_projection,normal.view_projection,sizeof(normal.view_projection));
+    std::memcpy(normal.particles.view_projection,normal.view_projection,sizeof(normal.view_projection));
+    auto cap=normal;cap.body_alpha=128.f/255.f;cap.noise_alpha=true;cap.noise_seed=12345;
+    auto invalid=cap;invalid.body_count=17;
+    require(gc::begin(compositor,target(low,gc::Depth::ordinary),invalid)==gc::Result::invalid,"cap range ends on a triangle");
+    invalid=cap;invalid.body_count=uint32_t(vertices.size())+3;
+    require(gc::begin(compositor,target(low,gc::Depth::ordinary),invalid)==gc::Result::invalid,"cap range stays within the pose");
+    invalid=cap;invalid.body_alpha=std::numeric_limits<float>::quiet_NaN();
+    require(gc::begin(compositor,target(low,gc::Depth::ordinary),invalid)==gc::Result::invalid,"cap alpha must be finite");
+    invalid=cap;invalid.noise_scale=0;
+    require(gc::begin(compositor,target(low,gc::Depth::ordinary),invalid)==gc::Result::invalid,"noise scale must be positive");
+    auto render=[&](const Scene& scene,const gc::Pose& p,gc::Depth mode) {
+        ordinary_state(g,scene);
+        require(gc::begin(compositor,target(scene,mode),p)==gc::Result::ok,"vanish begin");
+        require(gc::finalize(compositor,77)==gc::Result::ok,"vanish finalize");
+        return pixels(g,gc::display(compositor).framebuffer,scene.width,scene.height);
+    };
+    auto changed=[](const std::vector<uint8_t>& a,const std::vector<uint8_t>& b,size_t at) {
+        return std::memcmp(&a[at],&b[at],3)!=0;
+    };
+    const auto clean=pixels(g,low.fbo,32,32);
+    std::vector<uint8_t> reference;
+    for(auto mode:{gc::Depth::ordinary,gc::Depth::n64_image}) {
+        const auto opaque=render(low,normal,mode),noisy=render(low,cap,mode);
+        auto half=cap;half.opacity=.5f;const auto half_pixels=render(low,half,mode);
+        auto hue=cap;hue.hue_degrees=180;const auto hue_pixels=render(low,hue,mode);
+        auto next=cap;++next.noise_seed;const auto next_pixels=render(low,next,mode);
+        auto less=cap;less.body_alpha=64.f/255.f;const auto less_pixels=render(low,less,mode);
+        auto overlap=cap;overlap.occlusion.overlap=0;const auto overlap_pixels=render(low,overlap,mode);
+        unsigned survived=0,holes=0,seed_changes=0,less_survived=0;
+        for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
+            const size_t at=(y*32+x)*4;const bool body=x>=8 && x<24 && y>=8 && y<24;
+            if(!body) {
+                require(!changed(noisy,opaque,at),"cap leaves held object shadow and particles unchanged");
+                continue;
+            }
+            require(changed(opaque,clean,at),"vanish fixture reaches the complete solid body");
+            const bool kept=changed(noisy,clean,at);
+            survived+=kept;holes+=!kept;seed_changes+=kept!=changed(next_pixels,clean,at);
+            require(kept==changed(half_pixels,clean,at) && kept==changed(hue_pixels,clean,at)
+                && kept==changed(overlap_pixels,clean,at),"vanish mask independent of opacity tint and overlap");
+            if(changed(less_pixels,clean,at)){++less_survived;require(kept,"lower env alpha keeps a subset of noise pixels");}
+            for(unsigned c=0;c<3;++c) {
+                const float background=float(clean[at+c]),body_color=c==0 ? 255.f : 0.f;
+                const float alpha=kept ? cap.body_alpha : 0.f;
+                require(std::abs(float(noisy[at+c])-(background*(1-alpha)+body_color*alpha))<=1.f,
+                    "vanish surviving pixels retain environment alpha once");
+                require(std::abs(float(half_pixels[at+c])-(background*(1-alpha*.5f)+body_color*alpha*.5f))<=1.f,
+                    "vanish user opacity scales surviving pixels once");
+            }
+        }
+        // Fixed 256-cell fixture: no discard gives 256, unrelated prepass
+        // and color masks give about 64. Both must fail this density bound.
+        require(survived>=96 && survived<=160 && holes>0,"vanish has holes and surviving body pixels in both passes");
+        require(seed_changes>64 && less_survived>24 && less_survived<survived,"recorded pose seed and env alpha change noise coverage");
+        require(changed(opaque,clean,(16*32+26)*4),"held marker is visible in the cap fixture");
+        require(changed(opaque,clean,(28*32+16)*4),"particle is visible in the cap fixture");
+        if(mode==gc::Depth::ordinary)require(changed(opaque,clean,(4*32+16)*4),"shadow is visible in the cap fixture");
+        auto legacy=cap;legacy.body_count=0;
+        require(render(low,legacy,mode)==opaque,"legacy poses leave every vertex unaffected by cap fields");
+        auto full=cap;full.body_alpha=1;
+        require(render(low,full,mode)==opaque,"full env alpha has no noise holes");
+        auto invisible_body=cap;invisible_body.body_alpha=0;
+        const auto zero_alpha=render(low,invisible_body,mode);
+        for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
+            const size_t at=(y*32+x)*4;const bool body=x>=8 && x<24 && y>=8 && y<24;
+            require(!changed(zero_alpha,body ? clean : opaque,at),"zero env alpha hides only Mario");
+        }
+        auto zero=cap;zero.opacity=0;
+        require(render(low,zero,mode)==clean,"zero ghost opacity hides body and neighbors");
+        auto offscreen=normal;offscreen.count=6;offscreen.body_count=0;offscreen.shadow={};offscreen.particles={};
+        offscreen.view_projection[12]=3;const gc::Pose batch[]={offscreen,cap};
+        ordinary_state(g,low);
+        require(gc::begin_batch(compositor,target(low,mode),batch,2)==gc::Result::ok
+            && gc::finalize(compositor,77)==gc::Result::ok,"vanish second batch range draws");
+        require(pixels(g,gc::display(compositor).framebuffer,32,32)==noisy,"Mario range includes the batch vertex offset");
+        reference=noisy;
+    }
+    // 32 -> 80 is the same noninteger scale as 640 -> 1600. Every output
+    // fragment must inherit its source N64 pixel's hole, including 2/3px cells.
+    Scene high(g,80,80);
+    require(gc::prepare(compositor,80,80,60,white,1,1)==gc::Result::ok,"vanish scaled prepare");
+    auto scaled=cap;scaled.noise_scale=2.5f;
+    const auto high_clean=pixels(g,high.fbo,80,80);
+    for(auto mode:{gc::Depth::ordinary,gc::Depth::n64_image}) {
+        const auto high_pixels=render(high,scaled,mode);
+        for(uint32_t y=20;y<60;++y)for(uint32_t x=20;x<60;++x) {
+            const uint32_t source_x=uint32_t((float(x)+.5f)/2.5f),source_y=uint32_t((float(y)+.5f)/2.5f);
+            require(changed(high_pixels,high_clean,(y*80+x)*4)==changed(reference,clean,(source_y*32+source_x)*4),
+                "vanish noise remains at N64 pixel granularity when scaled");
+        }
+    }
+    gc::destroy(compositor);no_error("vanish witness cleanup");
+}
 int main() {
     const auto foreground=GetForegroundWindow();
     Window window;auto g=dispatch();Scene scene(g,32,32);Bindings bindings(g);auto vertices=mesh();
@@ -285,6 +408,7 @@ int main() {
         require(pixels(g,scene.fbo,32,32)==clean,"clean scene unchanged");require(depth(g,scene)==original_depth,"game depth unchanged");
         require(image_depth(g,scene)==original_image_depth,"N64 image depth unchanged");
     }
+    vanish_witness(g);
     // Independent translucent bodies share one clean copy. A second begin()
     // would erase blue, and one shared stencil pass would suppress red.
     auto blue=vertices;
@@ -618,6 +742,6 @@ int main() {
     }
     require(wglMakeCurrent(window.dc,window.context)!=0,"restore test context");
     require(GetForegroundWindow()==foreground,"foreground preserved");
-    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2 known=nothing_asked");
+    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2 known=nothing_asked vanish=noise_body_only");
     return 0;
 }

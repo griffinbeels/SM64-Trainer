@@ -18,11 +18,13 @@ uniform mat4 viewProjection;
 uniform int flipY;
 uniform vec3 lightDirection;
 uniform vec2 lighting;
+uniform int bodyEnd;
 out vec3 vertexColor;
 out vec2 texCoord;
 out float illumination;
 out vec4 occlusionClip;
 flat out float mode;
+flat out int marioBody;
 void main() {
     gl_Position=viewProjection*vec4(position,1.0);
     occlusionClip=gl_Position;
@@ -33,6 +35,7 @@ void main() {
     illumination=lit;
     texCoord=uv;
     mode=materialMode;
+    marioBody=gl_VertexID<bodyEnd ? 1 : 0;
 })";
 constexpr const char* fragment_shader=R"(
 layout(location=0) out vec4 outputColor;
@@ -44,11 +47,25 @@ uniform float hueDegrees;
 uniform sampler2D layerColor;
 uniform sampler2D layerDepth;
 uniform int layerEnabled;
+uniform float bodyAlpha;
+uniform int noiseSeed;
+uniform int noiseAlpha;
+uniform float noiseScale;
 in vec3 vertexColor;
 in vec2 texCoord;
 in float illumination;
 in vec4 occlusionClip;
 flat in float mode;
+flat in int marioBody;
+// G_AC_DITHER compares the combiner alpha to noise at N64 pixel scale. The
+// live renderer's RNG is not recorded; this byte hash gives the same noise
+// coverage class, stable for a pose and identical in both depth/color passes.
+float bodyNoise() {
+    ivec2 pixel=ivec2(floor(gl_FragCoord.xy/noiseScale));
+    uint h=uint(pixel.x)*0x8da6b343u ^ uint(pixel.y)*0xd8163841u ^ uint(noiseSeed);
+    h^=h>>16;h*=0x7feb352du;h^=h>>15;h*=0x846ca68bu;h^=h>>16;
+    return float(h&255u)/255.0;
+}
 // The RDP's tile rule on one axis: clamp to the tile's size, then wrap by its
 // mask (a power-of-two AND, which also wraps negative texels), inside the cell.
 int tileAxis(float coordinate,uint clamped,uint mask,uint size) {
@@ -87,6 +104,10 @@ void main() {
             if (textureColor.a==0.0) discard;
             material*=textureColor;
         }
+    }
+    if(marioBody!=0) {
+        material.a*=bodyAlpha;
+        if(noiseAlpha!=0 && material.a<bodyNoise()) discard;
     }
     vec3 rgb=material.rgb;
     if(hueDegrees!=0.0) {
@@ -165,7 +186,7 @@ struct Instance {
     uint32_t textures[5]={}; // display color, copied ordinary depth, atlas, layer color, layer depth
     uint32_t fbos[4]={}; // display/self depth; copied terrain depth; layer color; layer depth
     uint32_t self_depth=0,vao=0,vbo=0,shader_program=0;
-    int32_t uniforms[12]={};
+    int32_t uniforms[17]={};
     OcclusionUniforms occlusion;
     shadow::Storage shadow;
     particle::Storage particles;
@@ -269,8 +290,8 @@ Result allocate(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
     if(!p->shader_program) {
         p->shader_program=program(g);if(!p->shader_program)return Result::resources;
         constexpr const char* names[] = {"viewProjection","flipY","lightDirection","lighting","depthMapping","opacity","atlas","terrain","hueDegrees",
-            "layerColor","layerDepth","layerEnabled"};
-        for(size_t i=0;i<12;++i) {p->uniforms[i]=g.GetUniformLocation(p->shader_program,names[i]);if(p->uniforms[i]<0)return Result::resources;}
+            "layerColor","layerDepth","layerEnabled","bodyEnd","bodyAlpha","noiseSeed","noiseAlpha","noiseScale"};
+        for(size_t i=0;i<std::size(names);++i) {p->uniforms[i]=g.GetUniformLocation(p->shader_program,names[i]);if(p->uniforms[i]<0)return Result::resources;}
         if(!p->occlusion.find(g,p->shader_program))return Result::resources;
         g.GenTextures(5,p->textures);g.GenFramebuffers(4,p->fbos);
         g.GenRenderbuffers(1,&p->self_depth);g.GenVertexArrays(1,&p->vao);g.GenBuffers(1,&p->vbo);
@@ -377,7 +398,9 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,
        !std::isfinite(pose.ambient) || !std::isfinite(pose.diffuse) || !std::isfinite(pose.opacity) ||
        pose.opacity<0 || pose.opacity>1 || pose.flip_y>1 || !std::isfinite(pose.hue_degrees) ||
        pose.hue_degrees<0 || pose.hue_degrees>359 || !shadow::valid(pose.shadow) ||
-       !particle::valid(pose.particles))return Result::invalid;
+       !particle::valid(pose.particles) || pose.body_count>pose.count || pose.body_count%3 ||
+       !std::isfinite(pose.body_alpha) || pose.body_alpha<0 || pose.body_alpha>1 ||
+       !std::isfinite(pose.noise_scale) || pose.noise_scale<=0)return Result::invalid;
     }
     if(t.samples!=1 || t.unsupported || (t.depth!=Depth::ordinary && t.depth!=Depth::n64_image))return Result::unsupported;
     if(t.depth==Depth::n64_image && (!t.n64_depth_texture || t.n64_depth_texture==p->textures[0] ||
@@ -489,6 +512,10 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,
         g.Uniform3fv(p->uniforms[2],1,pose.light_direction);g.Uniform2f(p->uniforms[3],pose.ambient,pose.diffuse);
         g.Uniform2f(p->uniforms[4],t.depth_scale,t.depth_translate);g.Uniform1f(p->uniforms[5],pose.opacity);
         g.Uniform1f(p->uniforms[8],pose.hue_degrees);g.Uniform1i(p->uniforms[11],layered ? 1 : 0);
+        g.Uniform1i(p->uniforms[12],int32_t(first+pose.body_count));g.Uniform1f(p->uniforms[13],pose.body_alpha);
+        int32_t seed=0;std::memcpy(&seed,&pose.noise_seed,sizeof(seed));
+        g.Uniform1i(p->uniforms[14],seed);g.Uniform1i(p->uniforms[15],pose.noise_alpha ? 1 : 0);
+        g.Uniform1f(p->uniforms[16],pose.noise_scale);
         p->occlusion.set(g,pose.occlusion);
         const uint32_t units[unit_count]={p->textures[2],t.depth==Depth::ordinary ? p->textures[1] : t.n64_depth_texture,
             p->textures[3],p->textures[4]};
