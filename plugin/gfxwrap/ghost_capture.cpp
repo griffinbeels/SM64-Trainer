@@ -253,7 +253,7 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
 // Segment 0x13 holds every behaviour script (the US map's last is below 0x6000).
 constexpr uint32_t behaviour_segment = 0x13000000u, behaviour_span = 0x10000u;
 constexpr uint32_t object_behaviour = 0x20c, object_active_flags = 0x74, object_anim_state = 0xf0, body_holp = 0x18;
-constexpr uint32_t object_animations = 0x120, object_animation_limit = 32;
+constexpr uint32_t object_animations = 0x120;
 
 bool pool_object(const gc_layout &layout, uint32_t object) {
     return object >= layout.object_pool && !((object - layout.object_pool) % object_size)
@@ -261,9 +261,23 @@ bool pool_object(const gc_layout &layout, uint32_t object) {
 }
 
 // geo_obj_init_animation updates curAnim, NOT animID. Resolve the same
-// animation-table entry through the renderer's segment bases. The table is
-// NULL-terminated; refuse missing, ambiguous or unbounded identities instead
-// of treating the object's stale numeric animID as its current animation.
+// animation-table entry through the renderer's segment bases. Object tables
+// are not uniformly terminated (penguin also aliases one animation twice).
+// These are the non-NULL entry counts in the pinned n64decomp/sm64 actor
+// tables at 06ec56df7f951f88da05f468cdcacecba496145a, matching our model inputs.
+// Unknown behaviours have no proven bound and cannot supply an animation ID.
+uint32_t object_animation_count(uint32_t behavior) {
+    switch (behavior) {
+        case 0x13003174u: return 2;  // Bob-omb: then NULL
+        case 0x130020e8u: return 5;  // penguin: no terminator; entries 0 and 4 alias
+        case 0x130001f4u: return 12; // King Bob-omb: no terminator
+        case 0x13000528u: return 6;  // Chuckya: no terminator
+        case 0x130044fcu: return 5;  // Mips: then two NULLs
+        case 0x130033ecu: return 2;  // Hoot: no terminator
+        default: return 0;          // Both boxes have no animation
+    }
+}
+
 uint32_t object_pointer(const Ram &ram, const gc_frame &frame, uint32_t pointer) {
     if (!pointer) return 0;
     if (pointer >= kseg0) return ram.fits(pointer, 4) ? pointer : 0;
@@ -276,19 +290,20 @@ uint32_t object_pointer(const Ram &ram, const gc_frame &frame, uint32_t pointer)
     const auto address = kseg0 + uint32_t(physical);
     return ram.fits(address, 4) ? address : 0;
 }
-bool object_animation(Ram &ram, const gc_frame &frame, uint32_t object, uint32_t animation, int16_t &index) {
+bool object_animation(Ram &ram, const gc_frame &frame, uint32_t object,
+                      uint32_t behavior, uint32_t animation, int16_t &index) {
+    const uint32_t count = object_animation_count(behavior);
+    if (!count) return false;
     const uint32_t table = object_pointer(ram, frame, ram.u32(object + object_animations));
-    if (!table) return false;
-    int16_t found = -1;
-    for (uint32_t i = 0; i < object_animation_limit; ++i) {
+    if (!table || !ram.has(table, 4*count)) return false;
+    for (uint32_t i = 0; i < count; ++i) {
         const uint32_t entry = ram.u32(table + 4*i);
         if (!ram.ok) return false;
-        if (!entry) { index = found; return found >= 0; }
         const uint32_t address = object_pointer(ram, frame, entry);
-        if (!address) return false;
         if (address == animation) {
-            if (found >= 0) return false;
-            found = int16_t(i);
+            // Equivalent pointers evaluate the same canonical animation.
+            // Choosing the first makes penguin's 0/4 alias deterministic.
+            index = int16_t(i); return true;
         }
     }
     return false;
@@ -307,7 +322,7 @@ bool object_state(Ram &ram, const gc_layout &layout, const gc_frame &frame,
     if (behaviour < layout.behaviour_base || behaviour - layout.behaviour_base >= behaviour_span) return false;
     h.behavior = behaviour_segment + (behaviour - layout.behaviour_base);
     h.animation_id = -1;
-    if (animation && !object_animation(ram, frame, object, animation, h.animation_id)) return false;
+    if (animation && !object_animation(ram, frame, object, h.behavior, animation, h.animation_id)) return false;
     h.anim_y_translation = animation ? ram.s16(object + 0x3a) : int16_t(0);
     h.animation_frame = animation ? ram.s16(object + 0x40) : int16_t(0);
     const uint32_t anim_state = ram.u32(object + object_anim_state);

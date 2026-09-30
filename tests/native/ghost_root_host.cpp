@@ -308,9 +308,14 @@ static void held_block(Fixture &f) {
     check(frame(true) && h.animation_id==4,"Mips records the ears-down held animation despite stale id zero");
     holding();f.put32(bomb+0x120,0);check(!frame(true),"an animated object without an animation table accepted");
     holding();f.put32(Fixture::base+0x14804,anim+0x20);check(!frame(true),"current animation absent from its table accepted");
-    holding();f.put32(Fixture::base+0x14800,anim);check(!frame(true),"ambiguous animation identity accepted");
-    holding();for(unsigned i=0;i<32;++i)f.put32(Fixture::base+0x14800+4*i,anim+0x20);
-    check(!frame(true),"unterminated animation table accepted");
+    holding();f.put32(Fixture::base+0x14800,anim);
+    check(frame(true) && h.animation_id==0,"equivalent animation pointers do not choose the first index");
+    holding();f.put32(Fixture::base+0x14808,0xfffffffcu);
+    check(frame(true) && h.animation_id==1,"known animation table reads its non-table neighbor");
+    holding();f.put32(Fixture::base+0x14808,anim);f.put32(Fixture::base+0x14804,anim+0x20);
+    check(!frame(true),"current animation outside the known table accepted");
+    holding();f.put32(bomb+0x20c,f.config.behaviour_base+0x1234);
+    check(!frame(true),"animated unknown behavior guessed a table length");
     // The real pointer form: oAnimations and its entries both segmented,
     // curAnim already virtual. Only this occurrence's renderer bases resolve it.
     uint32_t segments[16]{};segments[6]=0x40000;
@@ -333,19 +338,56 @@ static void held_block(Fixture &f) {
     // bobomb_held_loop and bhv_mips_held set only GRAPH_RENDER_INVISIBLE
     // (0x10), ACTIVE (0x01) staying set; the others clear ACTIVE; the cork box
     // through cur_obj_disable_rendering. HAS_ANIMATION is 0x20.
-    const struct { uint32_t behaviour; uint16_t flags; bool animated; const char *name; } kinds[]={
-        {0x3174,0x31,true,"held Bob-omb (active, invisible) not captured"},
-        {0x44FC,0x31,true,"held Mips (active, invisible) not captured"},
-        {0x01F4,0x20,true,"held King Bob-omb not captured"},
-        {0x0528,0x20,true,"held Chuckya not captured"},
-        {0x20E8,0x20,true,"held penguin not captured"},
-        {0x1650,0x00,false,"held crazy box not captured"},
-        {0x4218,0x00,false,"held cork box not captured"}};
+    const struct { uint32_t behaviour; uint16_t flags; uint32_t animations; const char *name; } kinds[]={
+        {0x3174,0x31,2,"held Bob-omb (active, invisible) not captured"},
+        {0x44FC,0x31,5,"held Mips (active, invisible) not captured"},
+        {0x01F4,0x20,12,"held King Bob-omb not captured"},
+        {0x0528,0x20,6,"held Chuckya not captured"},
+        {0x20E8,0x20,5,"held penguin not captured"},
+        {0x1650,0x00,0,"held crazy box not captured"},
+        {0x4218,0x00,0,"held cork box not captured"}};
     for(const auto &k:kinds) {
         holding();f.put32(bomb+0x20c,f.config.behaviour_base+k.behaviour);f.put16(bomb+2,k.flags);
-        if(!k.animated)f.put32(bomb+0x3c,0);
+        if(k.animations)object_animation_table(f,bomb,anim,1,k.animations);
+        else f.put32(bomb+0x3c,0);
         check(frame(true) && f.sample.held.behavior==0x13000000u+k.behaviour,k.name);
     }
+    // Exact pinned actor pointer order, including penguin's 0/4 alias.
+    // Three of these have no NULL terminator. Poisoning the following word
+    // and placing the table at RAM's end independently check the read bound.
+    const struct { uint32_t behavior,count,nulls,entries[12]; } canonical[]={
+        {0x3174,2,1,{0x080237fc,0x08023954}},
+        {0x20e8,5,0,{0x05008b5c,0x050079e4,0x05007dcc,0x050087c0,0x05008b5c}},
+        {0x01f4,12,0,{0x0500bdfc,0x0500c2ac,0x0500c520,0x0500c774,0x0500cfcc,0x0500d5b0,
+            0x0500d978,0x0500ddd8,0x0500e10c,0x0500f078,0x0500f6c8,0x0500fe18}},
+        {0x0528,6,0,{0x0800af68,0x0800b1a8,0x0800b4a8,0x0800b9f8,0x0800bbec,0x0800c058}},
+        {0x44fc,5,2,{0x06014b94,0x060139f8,0x06013248,0x0601561c,0x0601369c}},
+    };
+    uint32_t canonical_segments[16]{};
+    canonical_segments[5]=canonical_segments[6]=canonical_segments[8]=0x40000;
+    for(const auto &table:canonical) {
+        const auto configure=[&](uint32_t address,uint32_t index){
+            holding();f.frame.segments=canonical_segments;
+            f.put32(bomb+0x20c,f.config.behaviour_base+table.behavior);
+            f.put32(bomb+0x120,address);
+            for(uint32_t i=0;i<table.count;++i)f.put32(address+4*i,table.entries[i]);
+            const auto current=Fixture::base+0x40000+(table.entries[index]&0xffffff);
+            f.put32(bomb+0x3c,current);f.put16(current+8,24);
+        };
+        for(uint32_t i=0;i<table.count;++i) {
+            configure(Fixture::base+0x14800,i);
+            for(uint32_t j=0;j<table.nulls;++j)f.put32(Fixture::base+0x14800+4*(table.count+j),0);
+            f.put32(Fixture::base+0x14800+4*(table.count+table.nulls),0xfffffffcu);
+            const auto expected=int16_t(table.behavior==0x20e8 && i==4 ? 0 : i);
+            check(frame(true) && h.animation_id==expected,"canonical nonterminated or aliased table was refused");
+        }
+        const auto end=Fixture::base+f.config.rdram_bytes-4*table.count;
+        configure(end,table.count-1);
+        check(frame(true),"bounded canonical table at RAM end reads past its entries");
+        f.put32(bomb+0x120,end+4);
+        check(!frame(true),"incomplete canonical table span accepted");
+    }
+    f.frame.segments=nullptr;
     // A box has no animation (id -1, frame 0): the hand drew it only if
     // Mario's body was drawn, so it rides a root proven by this frame's lists
     // and never a carried one. An animated object's own timer proves itself.
@@ -449,9 +491,11 @@ static void released_block(Fixture &f) {
 // world TRS must never be mistaken for the hand's HOLP or Mario's root.
 static void ridden_block(Fixture &f) {
     gc_root_probe p;
-    const uint32_t owl=f.config.object_pool+0x260,anim=Fixture::base+0x14100;
+    const uint32_t owl=f.config.object_pool+0x260,anim=Fixture::base+0x45750;
+    uint32_t segments[16]{};segments[5]=0x40000;
     const auto ride=[&]{
         scene(f);f.put16(f.config.object_pool+0x42,0x8123);
+        f.frame.segments=segments;
         f.put32(f.config.mario_state+0x0c,0x000004a8);
         f.put32(f.config.mario_state+0x7c,0);f.put32(f.config.mario_state+0x80,owl);
         f.put32(f.config.mario_state+0x84,0);
@@ -459,7 +503,10 @@ static void ridden_block(Fixture &f) {
         f.put32(owl+0x14,Fixture::base+0x14200);f.put32(owl+0x50,0);
         f.put32(owl+0x20c,f.config.behaviour_base+0x33ec);f.put32(owl+0x3c,anim);
         f.put16(owl+0x38,0);f.put16(owl+0x40,12);f.put16(owl+0x42,0x8123);f.put16(anim+8,24);
-        object_animation_table(f,owl,anim);
+        // Pinned Hoot table: two segmented entries and no NULL terminator.
+        f.put32(owl+0x120,Fixture::base+0x14800);
+        f.put32(Fixture::base+0x14800,0x050053ec);f.put32(Fixture::base+0x14804,0x05005750);
+        f.put32(Fixture::base+0x14808,0xfffffffcu); // the next word is not a table entry
         for(unsigned i=0;i<3;++i) {
             f.putfloat(owl+0x20+4*i,800.0f+float(i)*100);
             f.putfloat(owl+0x2c+4*i,1.0f+float(i)*.25f);
@@ -474,6 +521,12 @@ static void ridden_block(Fixture &f) {
     check(h.behavior==0x130033ec && h.released==1 && h.animation_id==1 && h.animation_frame==12
         && h.holp[0]==800 && h.holp[1]==900 && h.holp[2]==1000 && h.angles[1]==0x2222 && h.scale[2]==1.5f,
         "Hoot carries its own world transform and active flying animation");
+    ride();f.put32(owl+0x3c,Fixture::base+0x453ec);f.put16(Fixture::base+0x453f4,24);
+    check(frame() && h.animation_id==0,"Hoot's first canonical animation not captured");
+    ride();const uint32_t table_end=Fixture::base+f.config.rdram_bytes-8;
+    f.put32(table_end,0x050053ec);f.put32(table_end+4,0x05005750);f.put32(owl+0x120,table_end);
+    check(frame() && h.animation_id==1,"Hoot table reads beyond its two canonical entries");
+    f.put32(owl+0x120,table_end+4);check(!frame(),"incomplete Hoot table span accepted");
     const auto none=[&](uint32_t at,uint32_t value,const char *why){ride();f.put32(at,value);check(!frame(),why);};
     none(owl+0,0x00180031,"invisible ridden Hoot drawn");
     none(owl+0x74,0,"inactive ridden Hoot drawn");
@@ -494,6 +547,7 @@ static void ridden_block(Fixture &f) {
     check(frame() && h.behavior==0x13004218 && !h.released,"a hand object lost priority to Hoot");
     f.put32(f.config.mario_state+0x7c,0);f.put32(f.config.mario_state+0x80,0);
     f.put16(box+0x74,0);f.put16(owl+0x74,0);
+    f.frame.segments=nullptr;
 }
 #endif
 int main(int argc,char **argv) {
