@@ -22,6 +22,8 @@ import { courseOptions, levelOptions, parseStarId, segmentOptions, starId,
 import { entityIconSrc, optionIconSrc } from "./entityicons.js";
 import { SegmentTimeline } from "./segmenttimeline.js";
 import { SearchSelect } from "./searchselect.js";
+import { useSegmentAuthoring, useSegmentSave,
+         shippedSegmentWarning, SegmentSaveControls } from "../segmentauthoring.js";
 
 const html = htm.bind(h);
 
@@ -348,8 +350,9 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
   const [d, setD] = useState(initial || blank);
   const [resetting, setResetting] = useState(false);
   const [resetErr, setResetErr] = useState(null);
+  const authoring = useSegmentAuthoring();
 
-  // Editing a SHIPPED movement opts it out of every future corpus refresh --
+  // A PERSONAL edit of a shipped movement opts it out of corpus refresh --
   // `seed_dirty` blocks reconcile's update branch unconditionally, which is
   // how six rows sat frozen against their own seed until migration v17 went
   // looking for them. The cost was invisible from in here, and the undo was
@@ -452,14 +455,6 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
       if (t) t.refresh();
     } catch (e) { setErr(String(e)); }
   }
-  // "I need visual confirmation that we saved" (round 18 item 2): a check
-  // mark + "Saved" for ~2 s, set only AFTER the write resolves. Held here
-  // rather than on the page because an EDIT save never remounts this
-  // Builder (same id, same key); a CREATE does remount, and there the
-  // editor swapping to the saved row is its own confirmation.
-  const [savedFlash, setSavedFlash] = useState(false);
-  const savedTimer = useRef(null);
-  useEffect(() => () => clearTimeout(savedTimer.current), []);
   // Backtest preview state -- reset for free on every open/switch because
   // Builder remounts (Segments keys it by editing.id/"new"), so a stale
   // report from a different segment can never bleed through.
@@ -524,45 +519,18 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
     setSteps(next);
   };
 
-  async function save() {
-    try {
-      setErr(null);
-      // ALLOWLIST of what this editor edits — never spread the GET row back:
-      // rows are raw db rows and grow server-only columns over time
-      // (id, created_utc, then seed_key/seed_dirty in migration v11), which
-      // the strict SegmentPatch (extra="forbid") rejects — a denylist here
-      // 422'd every save of a seeded segment (regression 2026-07-24, pinned
-      // by tests/test_segments_editor_ui.py). waypoints/category are
-      // deliberately absent: this editor doesn't author them, and an
-      // omitted PATCH field stays untouched server-side.
-      const body = Object.fromEntries(
-        SAVE_FIELDS.map((field) => [field, d[field]]));
-      // Report WHICH segment was saved, so the parent can keep it open rather
-      // than dropping the user back to "Choose a segment to edit" (live audit
-      // 2026-07-25). A create only learns its id from the response.
-      let savedId;
-      if (initial && initial.id != null) {
-        await send("PUT", `/api/segments/${initial.id}`, body);
-        savedId = initial.id;
-      } else {
-        savedId = (await send("POST", "/api/segments", body)).id;
-        // Round 8: a link picked BEFORE the segment existed applies the
-        // moment Save mints the id. The segment itself is saved either way
-        // -- a failed link reports beside Save rather than unsaving it.
-        if (pendingLink !== "") {
-          try { await applyLink(savedId, pendingLink, null); }
-          catch (e) {
-            setErr(`Segment saved, but the library link failed: ${e}`);
-          }
-        }
-      }
-      onSaved(savedId);
-      setSavedFlash(true);
-      clearTimeout(savedTimer.current);
-      savedTimer.current = setTimeout(() => setSavedFlash(false), 2000);
-      return true;
-    } catch (e) { setErr(String(e)); return false; }
-  }
+  // The allowlist retains the full waypoint list without sending db-only
+  // seed metadata back through the server's strict patch model.
+  const { save, saving, error: saveErr, savedScope, message: saveMessage,
+    savedFlash } = useSegmentSave({ authoring, initialId: initial?.id,
+    disabled: lintHasError, t, onSaved,
+    definition: () => Object.fromEntries(
+      SAVE_FIELDS.map((field) => [field, d[field]])),
+    onCreated: async (savedId) => {
+      if (pendingLink === "") return;
+      try { await applyLink(savedId, pendingLink, null); }
+      catch (e) { setErr(`Segment saved, but the library link failed: ${e}`); }
+    } });
 
   // "Try it against my history" -- the whole point is finding out BEFORE
   // Save, so this sends whatever is CURRENTLY in the form, unsaved
@@ -785,9 +753,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
       <span class="field-label"><${Icon} name="shield" size=${15} />${" "}
         ${initial.seed_dirty ? "Edited copy of a shipped movement"
           : "Shipped with the app"}</span>
-      <p class="meta">${initial.seed_dirty
-        ? "This one is yours now — it stops updating when a new version of the app ships a better version of this movement."
-        : "Saving an edit here stops this movement updating when a new version of the app ships a better version of it. Reset puts it back."}</p>
+      <p class="meta">${shippedSegmentWarning(initial, authoring, savedScope)}</p>
       ${resetErr && html`<div class="badx">${resetErr}</div>`}
       <button onclick=${resetToDefault} disabled=${resetting}>
         <${Icon} name="restart" size=${15} />${" "}${resetting
@@ -950,6 +916,8 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
       </div>`)}
     </div>`}
     ${err && html`<div class="badx">${err}</div>`}
+    ${saveErr && html`<div class="badx">${saveErr}</div>`}
+    ${saveMessage && html`<p class="meta" role="status">${saveMessage}</p>`}
     <div class="builder-actions">
       <span class="meta">Saving automatically recalculates this segment's history.</span>
       <button onclick=${runBacktest} disabled=${btBusy}>
@@ -957,10 +925,10 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
           ? "Testing…" : "Try it against my history"}
       </button>
       <button onclick=${onCancel}>Cancel</button>
-      <button class="primary-button" onclick=${save} disabled=${lintHasError}
-          title=${lintHasError ? "Fix the error above before saving" : ""}>
-        <${Icon} name=${savedFlash ? "check" : "save"} size=${16} />${" "}${savedFlash ? "Saved" : "Save segment"}
-      </button>
+      <${SegmentSaveControls} authoring=${authoring} onSave=${save}
+        disabled=${lintHasError} busy=${saving}
+        disabledReason=${lintHasError ? "Fix the error above before saving" : ""}
+        savedScope=${savedScope} savedFlash=${savedFlash} />
     </div>
     ${btErr && html`<div class="badx backtest-panel">${btErr}</div>`}
     ${btReport && html`<div class="backtest-panel">
@@ -988,6 +956,8 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
     </div>`}
   </div>`;
 }
+
+export { Builder };
 
 // Grouping POLICY for the segment library: castle region -> place, both read
 // off the server's `origin` stamp (GET /api/segments). The JS never derives

@@ -46,6 +46,8 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { useSegmentAuthoring, useSegmentSave,
+         shippedSegmentWarning, SegmentSaveControls } from "../segmentauthoring.js";
 import { courseUnionGroups, entityKeyForOption, optionForEntityKey,
          parseSegmentId } from "../entities.js";
 import { fmtIgtShort } from "../format.js";
@@ -359,14 +361,13 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   // create (runLint below).
   const [lintFindings, setLintFindings] = useState([]);
   const [lintErr, setLintErr] = useState(null);
-  const [saveErr, setSaveErr] = useState(null);
   // Node keys of the walked stops this definition REQUIRES. A Set, not a
   // list of clauses: the walk is ground truth and the only open question is
   // which of its stops count, so an invalid step is unreachable rather than
   // validated away. Only consulted when exactly TWO moments are picked --
   // picking a third says the walk is not the answer.
   const [required, setRequired] = useState(new Set());
-  const [saving, setSaving] = useState(false);
+  const authoring = useSegmentAuthoring();
   // WHAT THIS SURFACE ACTUALLY SHOWED, and when. Its own call rather than the
   // practice page's, because that page is unmounted while this tab is open.
   // Every latency report about the recorder so far has been unanswerable for
@@ -487,7 +488,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   function resetDownstream() {
     setSynth(null); setSynthErr(null);
     setBtReport(null); setBtErr(null);
-    setLintFindings([]); setLintErr(null); setSaveErr(null);
+    setLintFindings([]); setLintErr(null); clearSaveFeedback();
     setRequired(new Set());
   }
 
@@ -622,32 +623,14 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   // the click landed), so a Save can fail AFTER the segment exists. A second
   // click must then re-use the id (a PUT, same as a re-record) rather than
   // mint a duplicate — the definition still lands if he re-picked meanwhile.
-  const savedIdRef = useRef(null);
-  async function save() {
-    if (!synth || !btReport) return;   // see Save's disabled= below
-    setSaving(true); setSaveErr(null);
-    try {
-      if (replaces) {
-        // Replace, never delete-and-recreate: a PUT to the existing id is
-        // what keeps routes, PBs, attempts, strategies and ladders attached.
-        // `category` is absent from the definition, so the library filing
-        // survives untouched (SegmentPatch's exclude_unset).
-        await send("PUT", `/api/segments/${replaces.id}`,
-                   definitionFor(synth, required));
-        await onSaved(replaces.id);
-      } else if (savedIdRef.current != null) {
-        await send("PUT", `/api/segments/${savedIdRef.current}`,
-                   definitionFor(synth, required));
-        await onSaved(savedIdRef.current);
-      } else {
-        const body = await send("POST", "/api/segments",
-                                definitionFor(synth, required));
-        savedIdRef.current = body.id;
-        await onSaved(body.id);
-      }
-    } catch (err) { setSaveErr(String(err)); }
-    finally { setSaving(false); }
-  }
+  const lintHasError = lintFindings.some((finding) => finding.severity === "error");
+  const saveDisabled = !btReport || lintHasError;
+  const { save, saving, error: saveErr, savedScope, message: saveMessage,
+    clearFeedback: clearSaveFeedback } = useSegmentSave({
+    authoring, initialId: replaces?.id, t, onSaved,
+    disabled: saveDisabled,
+    definition: () => definitionFor(synth, required),
+  });
 
   // NEWEST FIRST is a display choice, made once, here. Every id handed to the
   // server keeps the journal's own order.
@@ -698,7 +681,6 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   };
   // Same name/shape as segments.js's Builder -- an "error" severity finding
   // disables Save there too; a "warning" one does not.
-  const lintHasError = lintFindings.some((finding) => finding.severity === "error");
 
   return html`<${Modal} title=${replaces ? `Re-record ${replaces.name}`
                                          : "Record a segment"}
@@ -814,14 +796,13 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
 
       ${/* What a re-record COSTS, said where the save lands, before it does:
            the new recording's own defaults (clock "move" + Strict) replace
-           the row's stored modes, and re-recording a shipped movement makes
-           it his (same consequence the editor's seeded panel states; Reset
-           there still puts it back). */""}
+           the row's stored modes. A shipped movement's update behavior follows
+           the selected save scope, as in the editor's seeded panel. */""}
       ${replaces && html`<p class="meta record-replace-note">
         Saving replaces <b>${replaces.name}</b> — new recording, same segment.
         It times from the move and voids when you deviate (Strict).${" "}
-        ${replaces.seed_key && !replaces.seed_dirty
-          ? "It is a shipped movement, so re-recording makes it yours; the editor's Reset puts it back."
+        ${replaces.seed_key
+          ? shippedSegmentWarning(replaces, authoring, savedScope)
           : ""}
       </p>`}
       ${btErr && html`<p class="badx">${btErr}</p>`}
@@ -839,6 +820,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
     </div>`}
 
     ${saveErr && html`<p class="badx">${saveErr}</p>`}
+    ${saveMessage && html`<p class="meta" role="status">${saveMessage}</p>`}
     <div class="builder-actions">
       <button onclick=${onCancel}>Cancel</button>
       ${/* Save is simply ABSENT below two picks rather than present and
@@ -851,12 +833,12 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
            the click lands, or do not disable it). A click during that window
            does nothing silently, which is exactly how a re-record can be
            believed saved when it never was (round 17 item 1). */""}
-      ${pickedIds.length >= 2 && html`<button class="primary-button"
-          disabled=${!btReport || saving || lintHasError} onclick=${save}>
-        <${Icon} name="save" size=${16} />${" "}${saving ? "Saving…"
-          : !btReport && !btErr ? "Testing your history…"
-          : replaces ? "Replace segment" : "Save segment"}
-      </button>`}
+      ${pickedIds.length >= 2 && html`<${SegmentSaveControls}
+        authoring=${authoring} onSave=${save}
+        disabled=${saveDisabled} busy=${saving}
+        disabledReason=${lintHasError ? "Fix the error above before saving" : ""}
+        waitingLabel=${!btReport && !btErr ? "Testing your history…" : null}
+        personalLabel=${replaces ? "Replace segment" : "Save segment"} />`}
     </div>
     </div>
   <//>`;
