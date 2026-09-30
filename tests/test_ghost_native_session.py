@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from sm64_events.ghost.native_session import NATIVE_BUDGET_REASON, NativeGhost, budget_reason
+from sm64_events.ghost.native_layout import GP_WRONG_SCENE
 from tests.test_ghost_session import a_session, mark
 from tests.test_ui_ghost_session import controls, run_node
 
@@ -143,6 +144,75 @@ def test_pose_ready_is_not_display_evidence(tmp_path):
         assert session._native.state()["visible"]
         source.displayed = False
         assert not session._native.state()["visible"]
+        await session.stop()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("displayed,playback_reason,reason", [
+    (False, GP_WRONG_SCENE, "Ghost is in another area."),
+    (True, GP_WRONG_SCENE, None),  # Another selected ghost may still be visible.
+    (False, 2, None),
+    (False, 1, None),  # A new command has not received its own acknowledgement.
+    (False, 999, None),
+    (False, None, None),
+])
+def test_area_mismatch_is_explained_only_when_ready_and_hidden(tmp_path, displayed, playback_reason, reason):
+    session, source, _, _ = native_session(tmp_path)
+    served = source.snapshot_status
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        session._native.note()
+        source.snapshot_status = lambda **_: {**served(), "displayed": displayed,
+                                               "playback_reason": playback_reason}
+        body = session.payload()
+        assert body["window"] == {"running": True, "visible": displayed,
+                                  "backend": "native", "reason": reason}
+        assert body["source"]["blinks"] == 0
+        key = run_node("ghostTargetKey", f"ghostTargetKey({json.dumps(body['target'])})")
+        answer = controls(body, key)
+        assert answer["canToggle"] and answer["reasonText"] == reason
+        await session.stop()
+
+    asyncio.run(check())
+
+
+def test_area_reason_does_not_replace_waiting_for_an_attempt(tmp_path):
+    session, source, _, _ = native_session(tmp_path)
+    served = source.snapshot_status
+    source.snapshot_status = lambda **_: {**served(), "playback_reason": GP_WRONG_SCENE}
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        assert session._native.state()["reason"] == "Waiting for the next attempt."
+        session._native.note()
+        assert session._native.state()["reason"] == "Ghost is in another area."
+        session._native._origin_of = lambda *_: None
+        session._native.note()
+        assert session._native.state() == {
+            "running": False, "visible": False, "backend": "native",
+            "reason": "Waiting for the next attempt or a saved state."}
+        await session.stop()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("status,reason", [
+    ({"available": True, "state": 3}, "Preparing Mario..."),
+    ({"available": False, "state": 4}, "Start the game with the trainer's GLideN64 renderer."),
+])
+def test_unready_renderer_does_not_publish_a_stale_area_reason(tmp_path, status, reason):
+    session, source, _, _ = native_session(tmp_path)
+    served = source.snapshot_status
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        session._native.note()
+        source.snapshot_status = lambda **_: {**served(), **status,
+                                               "playback_reason": GP_WRONG_SCENE}
+        assert session._native.state() == {
+            "running": False, "visible": False, "backend": "native", "reason": reason}
         await session.stop()
 
     asyncio.run(check())

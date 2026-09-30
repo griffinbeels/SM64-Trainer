@@ -4,6 +4,7 @@
 #include "ghost_ipc.h"
 #include "ghost_clip_upgrade.h"
 #include "ghost_tuning.h"
+#include "ghost_playback.h"
 #include <cstdio>
 
 static bool first = true;
@@ -23,6 +24,7 @@ int main() {
     text("CLIP_MAGIC", GCLIP_MAGIC); number("CLIP_VERSION", GCLIP_VERSION);
     number("SAMPLE_VERSION", GC_VERSION);
     text("IPC_MAGIC", GIPC_MAGIC); number("IPC_VERSION", GIPC_VERSION); wide("IPC_PREFIX", GIPC_PREFIX);
+    number("GP_WRONG_SCENE", GP_WRONG_SCENE);
 
     number("HEADER_BYTES", sizeof(gclip_header)); number("RECORD_BYTES", sizeof(gclip_frame));
     number("SAMPLE_BYTES", sizeof(gc_sample)); number("RECORD_PREFIX_BYTES", offsetof(gclip_frame, sample));

@@ -700,6 +700,15 @@ row; gaps, after-end, wrong scene, invalid timing and pose refusals hide playbac
 except that a refusal run of at most two records inside one scene holds the pose before it.
 Per-row scenes allow coherent cross-area clips.
 
+When playback is ready but its last presentation is hidden for `GP_WRONG_SCENE`,
+the ghost card says "Ghost is in another area." Playback stays running and its
+controls stay available. A visible ghost suppresses this set-level message;
+unknown decisions and stale acknowledgements do not supply an area explanation.
+In the measured DDD pair on 2026-09-29, ghost 8313 entered area 2 at coordinate
+553 and live attempt 8322 at 560: seven mismatched frames (233 ms), with valid
+saved poses throughout 16–22 seconds. That supports scene refusal for this pair;
+it does not establish the cause of every disappearance while crossing water.
+
 ## Recording, preservation and ownership
 
 [NativeCapture](../src/sm64_events/ghost/capture.py) owns a separate leased channel

@@ -1,11 +1,11 @@
-"""Byte layout and limits of the native ghost formats, in one place.
+"""Byte layout, limits and status codes of the native ghost formats, in one place.
 
 The C headers own these values (plugin/gfxwrap/ghost_capture.h, ghost_clip.h,
-ghost_ipc.h, ghost_tuning.h). This module restates each ONCE for Python;
-clip.py, native_protocol.py and the byte fixtures import it instead of writing
+ghost_ipc.h, ghost_tuning.h, ghost_playback.h). This module restates each ONCE
+for Python; clip.py, native_protocol.py and the byte fixtures import it instead of writing
 numbers of their own. tests/test_ghost_layout.py compiles
 tests/native/ghost_layout_host.cpp, which prints every name below from
-sizeof/offsetof and the C macros, and fails on any difference or on a name
+sizeof/offsetof and the header constants, and fails on any difference or on a name
 here the host does not print.
 
 Offsets ending in _AT are from the start of a portable record (gclip_frame),
@@ -18,6 +18,9 @@ CLIP_MAGIC, CLIP_VERSION = b"SM64GHO6", 6
 SAMPLE_VERSION = 7  # GC_VERSION: gc_sample, and the gc_layout it is read with
 IPC_MAGIC, IPC_VERSION = b"SM64GIP8", 8
 IPC_PREFIX = "Local\\sm64_trainer_ghost_v8_"
+
+# Renderer playback decisions consumed by the session status.
+GP_WRONG_SCENE = 5
 
 # Sizes
 HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 1276, 1260

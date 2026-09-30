@@ -8,6 +8,7 @@ import time
 import pytest
 
 from sm64_events.ghost import capture, native_channel as channel, native_protocol as P
+from sm64_events.ghost.native_layout import GP_WRONG_SCENE
 from sm64_events.memory.addresses import ACT_FALL_AFTER_STAR_GRAB, ACT_JUMBO_STAR_CUTSCENE, STAR_DANCE_ACTIONS
 from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.memory.layout import US
@@ -109,18 +110,21 @@ def test_invalid_control_does_not_partly_publish(kernel):
         connection.close()
 
 
-def test_new_command_cannot_borrow_old_display_acknowledgement(kernel):
+@pytest.mark.parametrize("playback_reason,displayed", [(2, 1), (GP_WRONG_SCENE, 0)])
+def test_new_command_cannot_borrow_old_display_acknowledgement(kernel, playback_reason, displayed):
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
     try:
         reply = status()
         reply.ack_token, reply.ack_revision = kernel.request.token, kernel.request.revision
-        reply.state, reply.playback_reason, reply.displayed = 4, 2, 1
+        reply.state, reply.playback_reason, reply.displayed = 4, playback_reason, displayed
         C.memmove(kernel.address, bytes(reply), 256)
-        assert connection.poll()[0].displayed == 1
+        acknowledged, _ = connection.poll()
+        assert acknowledged.displayed == displayed and acknowledged.playback_reason == playback_reason
         current, _ = connection.poll({"enabled": False})
         assert current.displayed == 0 and current.playback_reason == 1
         # Mask the local telemetry copy, never overwrite producer-owned status.
-        assert P.Status.from_address(kernel.address).displayed == 1
+        producer = P.Status.from_address(kernel.address)
+        assert producer.displayed == displayed and producer.playback_reason == playback_reason
     finally:
         connection.close()
 
