@@ -29,10 +29,13 @@ import corpus_toad          # noqa: E402
 import corpus_vocab          # noqa: E402
 from corpus_vocab import (CASTLE_MOVEMENT, DEFAULT_MOVEMENT_MATCH_MODE,  # noqa: E402
                           ROUTE_SCOPED, STANDARD_STRAT)
+from sm64_events.tracking.shared_defaults import (  # noqa: E402
+    AUTHORED_NAME, assemble_catalogue, read_authored)
 
 SEED_VERSION = 2
 OUT = (Path(__file__).resolve().parent.parent
        / "src" / "sm64_events" / "data" / "defaults.seed.json")
+AUTHORED = OUT.with_name(AUTHORED_NAME)
 
 
 def _movement_row(row: dict) -> dict:
@@ -59,9 +62,8 @@ def _movement_row(row: dict) -> dict:
             "clock_start": "move"}
 
 
-def build() -> dict:
-    """The whole seed, segments before routes (reconcile resolves route
-    candidates' seed_key -> local segment_id in that order)."""
+def base() -> dict:
+    """The corpus before maintainer-authored full definitions are applied."""
     segments = list(corpus_legacy.SEGMENTS)
     segments += [_movement_row(row) for row in corpus_movements.MOVEMENTS]
     # THE authoring gate for task 0081: no shipped definition may end on a
@@ -82,11 +84,19 @@ def build() -> dict:
             "landmarks": list(corpus_landmarks.LANDMARKS)}
 
 
+def build() -> dict:
+    """Final validated seed: base corpus plus tracked maintainer definitions."""
+    return assemble_catalogue(base(), read_authored(AUTHORED))
+
+
 def render(seed: dict) -> str:
     return json.dumps(seed, indent=2, ensure_ascii=False) + "\n"
 
 
 def main(argv) -> int:
+    if "--base" in argv:
+        print(render(base()), end="")
+        return 0
     seed = build()
     text = render(seed)
     if "--check" in argv:
