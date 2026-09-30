@@ -6,7 +6,7 @@ export { RANK_NAMES, rankColor } from "./caps.js";
 import { h } from "preact";
 import { useRef } from "preact/hooks";
 import htm from "htm";
-import { useRankClimb } from "../rankclimb.js";
+import { useRankClimb, claimEarnedTransition } from "../rankclimb.js";
 import { barFill, capName, divisionDigit, rankAt, rankColor } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
 import { tightenedNextStepText } from "../nextstep.js";
@@ -200,14 +200,19 @@ function gradedBanner(banner, atFloor) {
 
 function useEarnedBanner(transition) {
   const key = transition && transition.key;
-  const seen = useRef(key);
+  const owned = useRef(null);
+  const seen = useRef(null);
   // A correction can change ladders AND earn a PB in the same update. Only
-  // that new live event takes the climb path; later switches still exchange.
-  const fresh = key != null && seen.current !== key;
+  // its first rendered banner claims that live receipt, including a new
+  // target's first mount. Other instances and remounts cannot replay it.
+  const accepted = transition && (
+    owned.current === key || claimEarnedTransition(transition.receipt));
+  if (accepted) owned.current = key;
+  const fresh = accepted && seen.current !== key;
   if (fresh) seen.current = key;
   const from = transition && (
     gradedBanner(transition.banner, transition.atFloor) || { ...rankAt(0), fill: 0 });
-  return { fresh, climb: transition && { key, from } };
+  return { fresh, climb: accepted && { key, from, initial: fresh } };
 }
 
 function classificationSentence(fresh, transition, prior) {

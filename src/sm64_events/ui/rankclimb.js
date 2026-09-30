@@ -243,13 +243,21 @@ function rankSnapshot(rank) {
   return { level, bar: level == null ? 0 : barFill(rank.tier, rank.division, rank.fill) };
 }
 
+/** Consume one live receipt across surfaces and remounts; never persisted. */
+export function claimEarnedTransition(receipt) {
+  if (!receipt || receipt.claimed) return false;
+  receipt.claimed = true;
+  return true;
+}
+
 function useEarnedClimb(transition) {
   const key = transition && transition.key;
   const baseline = rankSnapshot(transition && transition.from);
-  const seen = useRef(key);
+  const seen = useRef(transition && transition.initial ? null : key);
   const pending = () => key != null && seen.current !== key;
-  // New mounts consume their arrival key silently. A live correction instead
-  // substitutes its destination baseline for the previous strategy's frame.
+  // A claimed live receipt may climb on its first mount. Every other new
+  // mount consumes its arrival key silently, while an existing banner uses
+  // a live correction's destination baseline instead of the old strategy.
   return {
     key, level: baseline.level ?? 0, bar: baseline.bar, active: false,
     identityChanged(prior, current) {

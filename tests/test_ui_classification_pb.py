@@ -4,6 +4,7 @@ The pure selector is extracted from the real LogCard module, whose browser
 import map cannot be resolved by node. Rendered climbs have their own live gate.
 """
 import json
+import re
 import shutil
 import subprocess
 from copy import deepcopy
@@ -75,3 +76,67 @@ def test_an_ordinary_snapshot_has_no_live_reward(news):
     sec, tracker, _ = news
     tracker.pop("classificationPbs")
     assert select(sec, tracker) is None
+
+
+def declaration(filename, name):
+    source = strip_comments((UI / filename).read_text(encoding="utf-8"))
+    found = re.search(rf"^(?:export )?function {name}\(.*?^\}}", source, re.S | re.M)
+    assert found, f"real {name} declaration not found"
+    return found.group(0)
+
+
+def test_the_first_live_banner_mount_claims_once_and_a_remount_cannot_replay(news):
+    """Real claim/selector/hook bookkeeping, with only useRef's slot storage
+    supplied here. The parent live-browser gate proves the painted climb."""
+    sec, tracker, _ = news
+    functions = [("components/practicelog.js", "classificationPb"),
+                 ("components/practicelog.js", "classificationTransition"),
+                 ("components/ranks.js", "gradedBanner"),
+                 ("components/ranks.js", "useEarnedBanner"),
+                 ("rankclimb.js", "rankSnapshot"),
+                 ("rankclimb.js", "claimEarnedTransition"),
+                 ("rankclimb.js", "useEarnedClimb")]
+    script = (
+        f"import {{ entityKey, sectionClock, sectionPbByStrat }} from {(UI / 'entitysection.js').as_uri()!r};\n"
+        f"import {{ rankAt, rankPosition, barFill }} from {(UI / 'components/caps.js').as_uri()!r};\n"
+        + "\n".join(declaration(file, name) for file, name in functions)
+        + f"\nconst sec = {json.dumps(sec)}, tracker = {json.dumps(tracker)};\n"
+        + """
+const instances = new Map();
+let slots, index;
+function useRef(initial) {
+  if (index >= slots.length) slots.push({current: initial});
+  return slots[index++];
+}
+function renderHook(id, hook, input) {
+  slots = instances.get(id) || [];
+  instances.set(id, slots);
+  index = 0;
+  return hook(input);
+}
+const receipt = tracker.classificationPbs['star:2:4'];
+receipt.classification.rank = {reason: 'unranked', mode: 'pb'};
+const transition = classificationTransition(sec, tracker, 'strategy', true);
+const first = renderHook('banner', useEarnedBanner, transition);
+const climb = renderHook('climb', useEarnedClimb, first.climb);
+climb.identityChanged('destination', 'destination');
+const nextRender = renderHook('banner', useEarnedBanner, transition);
+instances.delete('banner');
+const remount = renderHook('banner', useEarnedBanner, transition);
+const secondSurface = renderHook('other-banner', useEarnedBanner, transition);
+const reload = renderHook('reload', useEarnedBanner, null);
+console.log(JSON.stringify({first, active: climb.active, nextRender, remount,
+  secondSurface, reload, sameReceipt: transition.receipt === receipt}));
+"""
+    )
+    done = subprocess.run(["node", "--input-type=module", "-"], input=script,
+                          capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr
+    result = json.loads(done.stdout)
+    assert result["sameReceipt"] and result["active"]
+    assert result["first"]["fresh"] and result["first"]["climb"]["initial"]
+    assert result["first"]["climb"]["from"]["fill"] == 0
+    assert not result["nextRender"]["fresh"]
+    assert result["nextRender"]["climb"]["key"] == result["first"]["climb"]["key"]
+    for mount in ("remount", "secondSurface", "reload"):
+        assert not result[mount]["fresh"] and not result[mount]["climb"]

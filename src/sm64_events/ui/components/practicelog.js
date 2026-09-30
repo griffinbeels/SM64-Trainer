@@ -356,7 +356,7 @@ function classificationTransition(sec, t, rankMode, hasSeparateRank) {
   if (!event) return null;
   const baseline = event.classification;
   return {
-    key: event.key,
+    key: event.key, receipt: event,
     banner: rankMode === "strategy" ? baseline.rank
       : (hasSeparateRank ? baseline.entity_rank : baseline.rank),
     atFloor: !!(baseline.rank && baseline.rank.reason === "unranked"),
