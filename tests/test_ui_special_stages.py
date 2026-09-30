@@ -6,6 +6,7 @@ The stage payload is produced by the shipping detectors: a hand-written
 ``mode='stars'`` fixture would hide the missing-context bug this guards.
 """
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -105,8 +106,11 @@ def _target(page, base, course, star, strat=None):
         if (target and target.get("course_id") == course
                 and target.get("star_id") == star
                 and (strat is None or target.get("strat_tag") == strat)):
-            name = next(c["stars"][star] for c in _read(base)["catalog"]["courses"]
-                        if c["id"] == course)
+            catalog_course = next(c for c in _read(base)["catalog"]["courses"]
+                                  if c["id"] == course)
+            name = catalog_course["stars"][star]
+            _wait(page, "document.querySelector('.stagebanner .shead b')"
+                  f"?.textContent === {json.dumps(catalog_course['name'])}")
             _wait(page, "document.querySelector('.stagebanner .active-star .starname')"
                   f"?.textContent === {json.dumps(name)}")
             if strat is not None:
@@ -131,20 +135,53 @@ def _pick(page, index):
 def _control(page, base, play):
     """A known good click proves the browser writes through the real target API."""
     play.enter(9)
-    page.goto(base)
+    _open(page, base)
     _cells(page, 7)
     _pick(page, 0)
     _target(page, base, 1, 0)
 
 
-def _clean(page, base):
+def _idle(page):
+    """A forced reload must not cancel the fetches the preceding pick started."""
+    expression = ("window.specialStagePending === 0 && "
+                  "[...document.images].every(image => image.complete)")
+    for _ in range(2):
+        _wait(page, expression)
+        page.wait_ms(100)
+
+
+def _open(page, base):
+    page.goto(base)
+    page.evaluate("""(() => {
+      window.specialStagePending = 0;
+      const original = window.fetch;
+      window.fetch = async (...args) => {
+        window.specialStagePending++;
+        try { return await original(...args); }
+        finally { window.specialStagePending--; }
+      };
+    })()""")
+    # The initial MARELO request can precede instrumentation. Its completed
+    # resource entry proves it returned before any later reload is allowed.
+    _wait(page, "performance.getEntriesByType('resource').some(entry => "
+          "new URL(entry.name).pathname === '/api/marelo')")
+
+
+def _reload(page, base):
+    _idle(page)
+    _clean(page)
+    _open(page, base)
+
+
+def _clean(page):
     problems = page.problems()
-    # The offline fixture has no auto-update controller; account for its exact
-    # absent endpoint and the matching Chromium resource message only.
-    omitted = {f"HTTP 404 {base}/api/update/status"}
-    resource = "console.error: Failed to load resource: the server responded with a status of 404 (Not Found)"
-    assert all(p in omitted or p == resource for p in problems), "\n".join(problems)
-    assert len(problems) == 2 * sum(p in omitted for p in problems), "\n".join(problems)
+    assert not problems, "\n".join(problems)
+
+
+def _capture(page, tmp_path, name):
+    folder = Path(os.environ.get("SM64_SPECIAL_STAGE_EVIDENCE", str(tmp_path)))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_bytes(page.screenshot())
 
 
 def _ghost_target(service, course, star, strat):
@@ -175,12 +212,12 @@ def test_all_five_single_star_stages_select_their_star_without_a_click(width, tm
             target_sets = [e for e in service.db.events() if e.type == "target_set"
                            and e.payload.get("course_id") == course]
             assert target_sets and target_sets[-1].payload.get("auto") is True
-            (tmp_path / f"special-{course}-{width}.png").write_bytes(page.screenshot())
-        page.goto(base)
+            _capture(page, tmp_path, f"browser-special-{course}-{width}.png")
+        _reload(page, base)
         _target(page, base, 23, 0)
         _cells(page, 1)
         _ghost_target(service, 23, 0, None)
-        _clean(page, base)
+        _clean(page)
 
 
 @pytest.mark.parametrize(("remembered", "width"), [(0, 1500), (1, 850)])
@@ -205,7 +242,7 @@ def test_pss_recalls_either_completed_star_and_strategy_across_sessions(remember
         active_name = page.evaluate("document.querySelector('.stagebanner .active-star .starname').textContent")
         assert active_name == next(c["stars"][remembered] for c in view["catalog"]["courses"] if c["id"] == PSS)
         assert page.evaluate("document.querySelector('.stagebanner .active-star .strat').textContent") == STRATEGIES[remembered]
-        (tmp_path / f"pss-recalled-{remembered}-{width}.png").write_bytes(page.screenshot())
+        _capture(page, tmp_path, f"browser-pss-recalled-{remembered}-{width}.png")
         _ghost_target(service, PSS, remembered, STRATEGIES[remembered])
 
         # A manual choice has priority over completion memory, including after
@@ -214,7 +251,7 @@ def test_pss_recalls_either_completed_star_and_strategy_across_sessions(remember
         _pick(page, manual)
         _target(page, base, PSS, manual, STRATEGIES[manual])
         play.publish("attempts_invalidated", {})
-        page.goto(base)
+        _reload(page, base)
         _target(page, base, PSS, manual, STRATEGIES[manual])
         _ghost_target(service, PSS, manual, STRATEGIES[manual])
 
@@ -225,11 +262,15 @@ def test_pss_recalls_either_completed_star_and_strategy_across_sessions(remember
         play.enter(PSS_LEVEL)
         _target(page, base, PSS, remembered, STRATEGIES[remembered])
         play.complete(manual)
+        # Let the browser consume the completion before sending the next
+        # level edge: publish() returning is not a WebSocket/render receipt.
+        _target(page, base, PSS, manual, STRATEGIES[manual])
+        _idle(page)
         play.enter(18)
         _target(page, base, 22, 0)
         play.enter(PSS_LEVEL)
         _target(page, base, PSS, manual, STRATEGIES[manual])
-        _clean(page, base)
+        _clean(page)
 
 
 def test_pss_without_a_completed_star_offers_both_and_waits_for_a_pick(tmp_path):
@@ -246,13 +287,13 @@ def test_pss_without_a_completed_star_offers_both_and_waits_for_a_pick(tmp_path)
             target = _read(base)["target"] or {}
             assert all(target.get(k) is None for k in
                        ("course_id", "star_id", "segment_id"))
-        (tmp_path / "pss-no-history-850.png").write_bytes(page.screenshot())
+        _capture(page, tmp_path, "browser-pss-no-history-850.png")
         _pick(page, 1)
         _target(page, base, PSS, 1)
-        page.goto(base)
+        _reload(page, base)
         _target(page, base, PSS, 1)
         _cells(page, 2)
-        _clean(page, base)
+        _clean(page)
 
 
 def test_pss_route_choice_and_explicit_segment_keep_priority_over_memory(tmp_path):
@@ -281,12 +322,12 @@ def test_pss_route_choice_and_explicit_segment_keep_priority_over_memory(tmp_pat
             "guards": []}))
         _run_coro(service.request_target("segment", segment_id=segment))
         play.publish("attempts_invalidated", {})
-        page.goto(base)
+        _reload(page, base)
         _wait(page, "document.querySelector('.stagebanner .active-star .starname')"
               "?.textContent === 'Slide movement'")
         for _ in range(2):
             page.wait_ms(150)
             target = _read(base)["target"]
             assert target["kind"] == "segment" and target["segment_id"] == segment
-        (tmp_path / "pss-explicit-segment.png").write_bytes(page.screenshot())
-        _clean(page, base)
+        _capture(page, tmp_path, "browser-pss-explicit-segment.png")
+        _clean(page)
