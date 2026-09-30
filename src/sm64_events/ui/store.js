@@ -48,6 +48,38 @@ export function runBlocksScopeChange(run, currentRouteId, nextRouteId) {
   return nextRouteId !== currentRouteId;
 }
 
+function retirePendingClassifications(receipts, changed) {
+  // A closed body banner may reveal later, but context changes end that reward.
+  // Claimed receipts already belong to a mounted climb; leave its bookkeeping intact.
+  for (const [key, receipt] of Object.entries(receipts)) {
+    if (!receipt.claimed && changed(receipt)) delete receipts[key];
+  }
+}
+
+function classificationContextChanged(receipt, ev) {
+  const payload = ev.payload;
+  if (["strat_set", "target_set", "target_changed"].includes(ev.type)) {
+    const key = entityKey({ ...payload,
+      kind: payload.segment_id != null ? "segment" : undefined });
+    return Object.hasOwn(payload, "strat_tag")
+      && key === entityKey({ ...receipt,
+        kind: receipt.segment_id != null ? "segment" : undefined })
+      && payload.strat_tag !== receipt.strat_tag;
+  }
+  if (ev.type === "rank_mode_changed") return payload.mode !== receipt.classification.rank?.mode;
+  if (ev.type === "game_version_changed") {
+    return payload.effective !== receipt.classification.game_version.effective;
+  }
+  return ev.type === "rank_standards_changed";
+}
+
+function selectClassificationClock(clock, setClock, receipts) {
+  retirePendingClassifications(receipts, (receipt) =>
+    receipt.segment_id == null && receipt.timer_mode !== clock);
+  localStorage.setItem("clock", clock);
+  setClock(clock);
+}
+
 function useEventFeed() {
   const [feed, setFeed] = useState([]);
   // Live-earned corrections only: nothing is persisted or reconstructed on
@@ -64,7 +96,8 @@ function useEventFeed() {
           ...payload, key: ++classificationNonce.current,
         };
       } else delete classificationPbs.current[key];
-    }
+    } else retirePendingClassifications(classificationPbs.current,
+      (receipt) => classificationContextChanged(receipt, ev));
     setFeed((f) => [ev, ...f].slice(0, 200));
   };
   return [feed, setFeed, classificationPbs.current, recordFeed];
@@ -580,7 +613,7 @@ export function useTracker() {
     setUpdateForced(false);
   }, []);
 
-  const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
+  const pickClock = (c) => selectClassificationClock(c, setClock, classificationPbs);
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
   const pickStarIcons = (mode) => {
     localStorage.setItem("sm64.starIcons", mode); setStarIcons(mode); };

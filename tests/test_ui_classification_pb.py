@@ -85,6 +85,93 @@ def declaration(filename, name):
     return found.group(0)
 
 
+def event_feed(payload, actions, *, claimed=False):
+    """Drive the real feed hook and clock writer with only hook storage supplied."""
+    functions = ["retirePendingClassifications", "classificationContextChanged",
+                 "selectClassificationClock", "useEventFeed"]
+    script = (
+        f"import {{ entityKey }} from {(UI / 'entitysection.js').as_uri()!r};\n"
+        + "\n".join(declaration("store.js", name) for name in functions)
+        + "\nconst useRef = current => ({current});\n"
+        + "const useState = value => [value, () => {}];\n"
+        + "const localStorage = {setItem: () => {}};\n"
+        + "const [, , receipts, record] = useEventFeed();\n"
+        + f"record({json.dumps({'type': 'pb_saved', 'payload': payload})});\n"
+        + ("Object.values(receipts)[0].claimed = true;\n" if claimed else "")
+        + f"for (const action of {json.dumps(actions)}) {{\n"
+        + "  if (action.type === 'clock') selectClassificationClock(action.clock, () => {}, receipts);\n"
+        + "  else record(action);\n"
+        + "}\nconsole.log(JSON.stringify(receipts));"
+    )
+    done = subprocess.run(["node", "--input-type=module", "-"], input=script,
+                          capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+@pytest.mark.parametrize("event_type", ["strat_set", "target_set", "target_changed"])
+@pytest.mark.parametrize("segment", [False, True])
+def test_pending_receipts_retire_on_strategy_round_trips(news, event_type, segment):
+    _, _, payload = news
+    identity = {"course_id": 2, "star_id": 4}
+    if segment:
+        identity = {"kind": "segment", "segment_id": 91}
+        payload.update(segment_id=91, timer_mode="rta")
+    actions = [{"type": event_type, "payload": {**identity, "strat_tag": strategy}}
+               for strategy in ("Other", "Destination")]
+    assert not event_feed(payload, actions)
+
+
+@pytest.mark.parametrize("actions", [
+    [{"type": "clock", "clock": clock} for clock in ("rta", "igt")],
+    [{"type": "rank_mode_changed", "payload": {"mode": mode}} for mode in ("avg10", "pb")],
+    [{"type": "game_version_changed", "payload": {"effective": version}} for version in ("jp", "us")],
+    [{"type": "rank_standards_changed", "payload": {}}],
+])
+def test_pending_receipts_retire_on_measurement_changes(news, actions):
+    assert not event_feed(news[2], actions)
+
+
+def test_same_context_preserves_the_first_delayed_reveal(news):
+    payload = news[2]
+    identity = {"course_id": 2, "star_id": 4}
+    actions = [{"type": "strat_set", "payload": {**identity, "strat_tag": "Destination"}},
+               {"type": "target_set", "payload": identity},
+               {"type": "target_changed", "payload": {**identity, "strat_tag": "Destination"}},
+               {"type": "strat_set", "payload": {"course_id": 1, "star_id": 1, "strat_tag": "Other"}},
+               {"type": "rank_mode_changed", "payload": {"mode": "pb"}},
+               {"type": "game_version_changed", "payload": {"setting": "auto", "effective": "us"}},
+               {"type": "clock", "clock": "igt"},
+               {"type": "attempt_completed", "payload": {}}]
+    assert event_feed(payload, actions)["star:2:4"] == payload
+
+
+def test_segment_receipt_keeps_its_rta_measurement_during_a_star_clock_round_trip(news):
+    payload = news[2]
+    payload.update(segment_id=91, timer_mode="rta")
+    actions = [{"type": "clock", "clock": clock} for clock in ("rta", "igt")]
+    assert event_feed(payload, actions)["segment:91"] == payload
+
+
+def test_a_new_reward_after_strat_set_survives_its_same_strategy_target_notice(news):
+    payload = news[2]
+    identity = {"course_id": 2, "star_id": 4, "strat_tag": "Other"}
+    corrected = {**payload, **identity, "attempt_id": 8, "frames": 290}
+    actions = [{"type": "strat_set", "payload": identity},
+               {"type": "pb_saved", "payload": corrected},
+               {"type": "target_changed", "payload": identity}]
+    assert event_feed(payload, actions)["star:2:4"] == {**corrected, "key": 2}
+
+
+def test_claimed_receipts_keep_the_mounted_climbs_bookkeeping(news):
+    actions = [{"type": "strat_set", "payload": {"course_id": 2, "star_id": 4, "strat_tag": "Other"}},
+               {"type": "rank_mode_changed", "payload": {"mode": "avg10"}},
+               {"type": "game_version_changed", "payload": {"effective": "jp"}},
+               {"type": "clock", "clock": "rta"},
+               {"type": "rank_standards_changed", "payload": {}}]
+    assert event_feed(news[2], actions, claimed=True)["star:2:4"]["claimed"]
+
+
 def test_the_first_live_banner_mount_claims_once_and_a_remount_cannot_replay(news):
     """Real claim/selector/hook bookkeeping, with only useRef's slot storage
     supplied here. The parent live-browser gate proves the painted climb."""

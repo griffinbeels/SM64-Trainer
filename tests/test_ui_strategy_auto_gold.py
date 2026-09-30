@@ -64,6 +64,21 @@ def choose_strategy_and_reveal_banner(page):
     reveal_banner(page)
 
 
+def change_pending_context_and_back(page, context):
+    if context == "strategy":
+        for strategy in ("Sideflip", "TJ Owlless"):
+            pick(page, HEADER_PICK, strategy)
+            page.wait_for(f'{HEADER_PICK}:has(option[value="{strategy}"]:checked)')
+        return
+    page.click('.app-sidebar .settings-link')
+    clock_picker = '.settings-drawer .settings-field select:has(option[value="rta"])'
+    page.wait_for(clock_picker)
+    for clock in ("rta", "igt"):
+        pick(page, clock_picker, clock)
+        page.wait_for(f'{clock_picker}:has(option[value="{clock}"]:checked)')
+    page.click('button[aria-label="Close settings"]')
+
+
 def test_target_picker_celebrates_adopted_history_from_an_earlier_session(tmp_path):
     with serve_ui_live(seed=False, bundled_library=False) as (base, svc):
         _run_coro(svc.set_target(2, 4))
@@ -99,6 +114,40 @@ def test_target_picker_celebrates_adopted_history_from_an_earlier_session(tmp_pa
             arrival = trace.record(page, watch={"climb": f"{BANNER}.is-climbing"},
                                    trigger=reveal_banner, ms=1500)
             assert not climbs(arrival) and not page.problems()
+
+
+@pytest.mark.parametrize("context", ["strategy", "clock"])
+def test_an_unrevealed_gold_cannot_replay_after_a_context_round_trip(tmp_path, context):
+    with serve_ui_live(seed=False, bundled_library=False) as (base, svc):
+        _run_coro(svc.set_target(2, 4))
+        best = attempt(svc, 1000, 343)
+        _run_coro(svc.new_session())
+        _run_coro(svc.publish(ev("stage_changed", 2000,
+                  {"course_id": 2, "level": 24, "area": 1, "mode": "stars"})))
+        _run_coro(svc.publish(ev("area_changed", 2000, {"level": 24, "from": None, "to": 1})))
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(base)
+            page.wait_for('button[title="Pick a star or segment to practice manually"]')
+            page.click('button[title="Pick a star or segment to practice manually"]')
+            course = ".entity-grid button[title=\"Whomp's Fortress\"]"
+            page.wait_for(course)
+            page.click(course)
+            star = '.entity-grid button[title="Fall onto the Caged Island"]'
+            page.wait_for(star)
+            page.click(star)
+            page.wait_for('.strat-card .strat-name')
+            choose_strategy_card(page)
+            page.wait_for(f'{HEADER_PICK}:has(option[value="TJ Owlless"]:checked)')
+            assert svc.db.current_pb(2, 4, "igt", strat_tag="TJ Owlless")["attempt_id"] == best
+            assert not page.count(BANNER), "the earned receipt must still be waiting for its first reveal"
+            change_pending_context_and_back(page, context)
+            assert not page.count(BANNER), "context changes must not reveal the body banner"
+            result = trace.record(page, watch={"climb": f"{BANNER}.is-climbing"},
+                                  trigger=reveal_banner, ms=3000)
+            (tmp_path / f"gold-pending-{context}-round-trip.png").write_bytes(page.screenshot())
+            assert page.count(BANNER), "the banner must actually mount before checking for a stale climb"
+            assert not climbs(result), f"an ordinary {context} round trip replayed an earlier GOLD"
+            assert not page.problems()
 
 
 @pytest.mark.parametrize("width", [1500, 850])
