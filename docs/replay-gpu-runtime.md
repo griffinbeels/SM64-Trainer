@@ -526,11 +526,11 @@ in the 15 s after a request. `gpu_prepare` now reads `prepare_begin_qpc`,
 `import_begin_qpc`, `import_ms` and `end_qpc`, all renderer-thread steps, so a
 stall overlapping them is our own cost on his renderer (a few ms in the
 host). A stall of 100 ms or more near the first capture that overlaps none of
-them means something else in Project64 used the GPU from another thread (an
-overlay or hook); these logs do not name it.
+them remains unattributed by this readout. Correlate other graphics activity;
+absence of a preparation overlap alone cannot name a component or thread.
 
-**Confirmed: Discord's game hook.** Discord (its overlay and Clips) injects
-into Project64 once per process and, on the next present, runs
+**Measured: Discord's graphics capture hook.** Discord injects
+into Project64 and, on the next present, runs
 `GLState::InitCapture` then `Using WGL_NV_DX_interop2` (a D3D11 device plus NV
 interop) inside SwapBuffers on the renderer thread: one UpdateScreen
 `callback_stall` of 25-120 ms, whenever Discord attaches (1.9 s to 33 s after
@@ -539,9 +539,34 @@ launch). To identify it, compare the `Attach pid` and `InitCapture` lines of
 log's `callback_stall`. Native QPC is the server's monotonic clock
 (QPC / 10^7); the `GPU recording active` line's stages carry both it and Unix
 time. Matched to the millisecond: 2026-09-24 34 ms, 09-25 65 ms, 09-28 120.8
-and 120.5 ms. The 09-25 153 ms freeze came 2 s before Discord attached; it was
-ours and renderer-thread capture removed it. Not ours to fix: turning off
-Discord's overlay and Clips for Project64 stops the injection.
+and 120.5 ms. On 09-29, its 111 ms initialization interval ended in the same
+millisecond as a 114.251 ms UpdateScreen stall; trainer GPU preparation had
+finished 31 seconds earlier. The 09-25 153 ms freeze came 2 s before Discord
+attached; it was ours and renderer-thread capture removed it. The hook logs
+identify capture initialization, but do not establish which Discord feature
+requested it. Discord's [revamped Overlay](https://discord.com/blog/player-release-q12025)
+operates independently of direct game hooking; the visible Overlay, Clips and
+screensharing must be distinguished before changing settings or claiming a fix.
+
+**Opt-in compatibility experiment.** Before launching Project64, set
+`SM64_TRAINER_GL_PROFILE=compatibility` in its launching environment to request
+the compatibility profile on supported practice ROMs. The unset/default value,
+unknown values and every non-practice ROM retain LINK's core-profile request.
+This preserves the GL version and existing context creation, renderer thread
+and capture bridge. The renderer must include the current
+`renderer_context_profile.h`; it participates in the renderer build identity.
+Changing this environment value after context creation has no effect on that
+context. Clear it before launching the baseline comparison.
+
+This tests whether the core profile contributes to Discord's
+`Binding shared texture failed 500` report. A legacy-state/core mismatch is a
+hypothesis, since Discord's final error check could observe an earlier error.
+Successful shared-texture binding does not prove cold capture initialization
+is fast. Compare fresh PIDs with Overlay enabled, preserving the actual
+Clips/screensharing conditions, and correlate both logs as above. The candidate
+needs native compilation, recording/ghost GPU witnesses and human live
+verification before it can be called compatible or a stutter fix. Do not add a
+warmup context or worker-thread GPU work to hide an external hook's startup.
 
 ## Accuracy and bounds
 

@@ -36,6 +36,18 @@ def replace_once(data: bytes, before: str, after: str) -> bytes:
     return data.replace(needle, after.encode(), 1)
 
 
+def context_profile_overlay(data: bytes) -> bytes:
+    """Preserve LINK's context/version; expose the opt-in practice-ROM A/B variant."""
+    data = replace_once(data, "#include <DisplayWindow.h>", "#include <DisplayWindow.h>\n" + GUARD +
+        '#include "../renderer_context_profile.h"\n#endif')
+    return replace_once(data,
+        "\t\t\t\tWGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,",
+        "\t\t\t\tWGL_CONTEXT_PROFILE_MASK_ARB,\n" + GUARD +
+        "\t\t\t\trenderer_context_profile::requested(HEADER, WGL_CONTEXT_CORE_PROFILE_BIT_ARB, "
+        "WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB),\n#else\n"
+        "\t\t\t\tWGL_CONTEXT_CORE_PROFILE_BIT_ARB,\n#endif")
+
+
 def boundary_overlay(source: Path) -> dict[str, bytes]:
     edited = {}
     api_header = "src/PluginAPI.h"
@@ -151,7 +163,7 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
         "\tGL_GET_PROC_ADR(PFNGLEGLIMAGETARGETTEXTURE2DOESPROC, glEGLImageTargetTexture2DOES);\n"
         + GUARD + "\treplay_gl::InstallDispatch();\n#endif")
     key = GL + "windows/windows_DisplayWindow.cpp"
-    data = (source / key).read_bytes()
+    data = context_profile_overlay((source / key).read_bytes())
     for anchor in ["bool DisplayWindowWindows::_start()\n{", "void DisplayWindowWindows::_stop()\n{"]:
         data = replace_once(data, anchor, anchor + "\n" + GUARD + "\treplay_gl::ContextLost();\n#endif")
     data = replace_once(data, "\treturn _resizeWindow();", GUARD +
@@ -180,7 +192,7 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
     for relative, data in edited.items():
         (output / relative).write_bytes(data)
     for name in ["link_dispatch.h", "link_dispatch.cpp", "renderer_gl_state.h", "gl_snapshot.h", "source_format.h",
-                 "practice_rom.h"]:
+                 "practice_rom.h", "renderer_context_profile.h"]:
         shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
     if context_lifetime:
         for name in ["context_lifetime.h", "context_lifetime.cpp"]:
