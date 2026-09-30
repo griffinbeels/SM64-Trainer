@@ -857,6 +857,11 @@ class TrackerService:
                    and segment_id in self._projector.armed_segment_ids())
         if not already and not practicable.practicable_here(self._current_stage,
                                                             node, running):
+            # The departing selector can still paint while a new stage has
+            # retired its target. A late convenience offer simply expires;
+            # it must neither retarget that stage nor report a click error.
+            if auto:
+                return {}
             raise ValueError(
                 "you can only practice what you are standing in — "
                 f"that one is in {node_label(node)}")
