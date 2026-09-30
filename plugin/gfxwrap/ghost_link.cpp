@@ -207,6 +207,7 @@ void triangles(uint32_t count) {
             : static_cast<uint32_t>(depth->m_depthRenderbuffer);
         target.width = buffer->m_pTexture->realWidth;
         target.height = buffer->m_pTexture->realHeight;
+        target.noise_scale = buffer->m_scale;
         target.samples = config.video.multisampling > 0 ? config.video.multisampling : 1;
         if (config.frameBufferEmulation.N64DepthCompare) {
             target.depth_mode = 2; // explicitly unimplemented framebuffer-fetch/MRT route

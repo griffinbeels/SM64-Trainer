@@ -181,6 +181,13 @@ struct Pose {
     ghost_occlusion::Region occlusion{};
     // The back faces the game culls (ghost_pose), kept after count and never drawn.
     uint32_t culled = 0;
+    // Only these first retained vertices are Mario. Held/ridden objects keep
+    // their own material alpha and share the user's opacity, never his cap's.
+    uint32_t body_count = 0;
+    float body_alpha = 1.0f;
+    uint32_t noise_seed = 0;
+    bool noise_alpha = false;
+    float noise_scale = 1.0f; // framebuffer pixels per N64 pixel, not aspect correction
 };
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };
 struct Instance;

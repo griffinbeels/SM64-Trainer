@@ -17,6 +17,7 @@ struct RasterTarget {
     int32_t viewport[4];
     float depth_scale[2]; // the renderer's uDepthScale
     float screen_scale[2]; // renderer coordinate/aspect correction
+    float noise_scale = 1.0f; // live framebuffer's m_scale, as its noise shader uses
 };
 /* The renderer's texture-generation lookat when the world was drawn
  * (GLideN64 gSP.lookat, eye space). It persists from ROM open (RSP_Init:
