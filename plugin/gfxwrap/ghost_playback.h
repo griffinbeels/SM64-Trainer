@@ -240,6 +240,11 @@ bool current(const gp_draw_token &);
  * hidden ghost holds it too (plan() says whether this list draws one).
  * current() is this plus the token. */
 bool drawing();
+/* Worker-only hint for retaining the currently applied command while a PB
+ * replacement loads alongside completion suspension. Caller must also prove
+ * identical owner/ROM/model/origin/controls. Revocation clears it immediately.
+ * Internal C++ interface, no capture/IPC/clip layout change. */
+bool terminal();
 /* Actual renderer owner before its context/thread goes away. Detaches and
  * retires storage for worker reclamation; no GL or resource destruction. */
 void retire_on_context_loss();

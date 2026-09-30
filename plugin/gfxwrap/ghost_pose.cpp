@@ -35,6 +35,9 @@ constexpr HeldModel held_models[] = {
     {0x13001650u, SG_HELD_BREAKABLE_BOX}, // bhvJumpingBox (the crazy box, same model)
     {0x130044FCu, SG_HELD_MIPS},        // bhvMips: its fur clamps (sg_tile)
     {0x130033ECu, SG_HELD_HOOT},        // bhvHoot: usedObj while riding, its own TRS
+    {0x13001F3Cu, SG_HELD_KOOPA_SHELL}, // bhvKoopaShell: riddenObj, its own TRS
+    {0x13000F08u, SG_HELD_UKIKI},       // bhvUkiki
+    {0x13001CB0u, SG_HELD_UKIKI},       // bhvMacroUkiki: same animation table and geo
 };
 uint32_t held_kind(uint32_t behavior) {
     for (const auto &held : held_models) if (held.behavior == behavior) return held.kind;
@@ -225,10 +228,10 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     const auto &p = recorded.pose;
     if (!std::isfinite(opacity) || opacity < 0 || opacity > 1)
         return Result::unsupported_pose;
-    // Vanish cap (and a warp fade): modelState 0x100 | alpha, the executed
-    // envcolor alpha. The ghost shows it on top of the user's opacity; the
-    // game's dither becomes an even blend. Metal (0x200) is its own variant.
-    if (p.model_state & 0x100u) opacity *= float(p.model_state & 0xffu) / 255.0f;
+    // Mario's recorded environment alpha/noise belongs to his body lists.
+    // Keep it separate from the shared ghost opacity so a held/ridden object,
+    // shadow or particle does not inherit Mario's vanish/warp effect. Rendered
+    // model_state also respects cap-expiry flicker, unlike the raw cap flags.
     sg_pose pose{};
     pose.fields = SG_POSE_REQUIRED | (p.hidden ? SG_POSE_HIDDEN : 0);
     pose.action = p.action; pose.body_action = p.body_action;
@@ -266,7 +269,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         pose.held_anim_y_translation = held.anim_y_translation; pose.held_anim_state = held.anim_state;
         std::memcpy(pose.held_position,held.holp,sizeof(pose.held_position));
         std::memcpy(pose.held_scale,held.scale,sizeof(pose.held_scale));
-        // Its own node's transform: a thrown object or ridden Hoot.
+        // Its own node's transform: a thrown object, ridden Hoot or shell.
         if (held.released) {
             pose.fields |= SG_POSE_HELD_RELEASED;
             std::memcpy(pose.held_angles,held.angles,sizeof(pose.held_angles));
@@ -284,7 +287,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     // does not have, no room left in the mesh) is left out rather than
     // losing Mario.
     if ((status != SG_OK || mesh.error_flags) && (pose.fields & SG_POSE_HELD)) {
-        pose.fields &= ~uint32_t(SG_POSE_HELD);
+        pose.fields &= ~uint32_t(SG_POSE_HELD | SG_POSE_HELD_RELEASED);
         mesh = {scratch.position,scratch.normal,scratch.color,scratch.uv,scratch.material,
             SG_MODEL_MAX_VERTICES,0,0,0,scratch.ambient};
         status = sg_model_evaluate(model,&pose,&mesh);
@@ -350,6 +353,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
                 && !faces_eye(live.camera.position,&scratch.vertices[i])) continue;
         if (kept != i)
             for (unsigned n = 0; n < 3; ++n) std::swap(scratch.vertices[kept + n],scratch.vertices[i + n]);
+        if (i < held_first) built.body_count += 3;
         kept += 3;
     }
     built.vertices = scratch.vertices; built.count = kept; built.culled = mesh.vertex_count - kept;
@@ -357,6 +361,10 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     // compositor's own light is switched to a flat 1.
     built.light_direction[2] = 1;
     built.ambient = 1; built.diffuse = 0; built.opacity = opacity;
+    built.body_alpha = p.model_state & 0x100u ? float(p.model_state & 0xffu) / 255.0f : 1.0f;
+    built.noise_alpha = (p.model_state & 0x100u) && (p.model_state & 0xffu) < 255u;
+    built.noise_seed = recorded.global_timer;
+    built.noise_scale = world.target.noise_scale;
     out = built;
     return Result::ok;
 }

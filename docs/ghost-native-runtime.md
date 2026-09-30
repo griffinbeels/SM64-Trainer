@@ -157,7 +157,7 @@ records none.
 
 The ghost draws the held objects the model knows (`held_models` in
 [ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp): the Bob-omb, the small
-penguin, King Bob-omb, Chuckya, the cork and crazy boxes, and Mips), as part
+penguin, King Bob-omb, Chuckya, the cork and crazy boxes, Mips and Ukiki), as part
 of Mario's mesh, their textures clamped and wrapped per render tile
 ([model README](../renderer/model/README.md)), and lit like Mario but by the
 lights their own lists load (`sg_model_get_held_lights`; a vertex names its
@@ -171,6 +171,24 @@ recorded or drawn in the hand; Bowser himself is a world object, and the
 ghost shows Mario swinging with empty hands. An object the model does not
 know, or refuses (no textures, an animation it lacks, no room in the mesh),
 is left out and Mario still draws.
+
+Ukiki's normal and macro behaviours share the canonical thirteen-animation
+table; capture resolves the current animation pointer against that table,
+including the held animation at index 12. Its geo keeps all four eye/cap
+states, including Mario's stolen cap and its common1 texture. The full held
+graph requires 3,258 vertices beside wing-cap Mario, so the shared model and
+compositor budgets use `SG_MODEL_MAX_VERTICES` (4,096). A refused held or ridden
+object clears both `SG_POSE_HELD` and `SG_POSE_HELD_RELEASED` before Mario's
+fallback evaluation; an unavailable companion must not hide Mario.
+
+**Ridden companions.** Hoot is captured from `usedObj` while riding the Owl;
+a Koopa shell is captured from `riddenObj` during the exact ground, jump and
+fall shell actions. Both use the existing optional held block with `released` 1:
+their own recorded gfx position, angles and scale, independent of Mario's root
+and HOLP. The shell is unanimated (id -1, frame 0). Their canonical geo and
+textures draw in the same ghost mesh with the same tint and user opacity.
+Existing clips that lack these companion blocks cannot reconstruct them;
+record a new attempt for a shell, Owl or previously uncaptured Ukiki.
 
 **Released (thrown or dropped).** Once `heldObj` clears, the reader
 (`gc_reader`) follows the slot Mario last held, one game frame at a time,
@@ -206,9 +224,17 @@ implies, alpha included ([ghost_root.cpp](../plugin/gfxwrap/ghost_root.cpp)).
 A mismatch is not Mario's alpha. No capture field changed: `model_state`
 already carries both effects.
 
-Playback ([ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp)) multiplies the
-user's opacity by the recorded alpha (0x80 for the vanish cap, about half).
-The game's dithered transparency becomes an even blend. The model draws the
+Playback ([ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp)) applies recorded
+environment alpha only to Mario's body triangles. Below 255 it uses alpha-noise
+comparison in both self-depth and colour passes: the same pixel is rejected
+in both, and surviving pixels retain their environment alpha as the live
+transparent layer does. The integer mask follows the captured global timer and
+the framebuffer's N64 scale, independent of ghost tint and user opacity.
+Recorded `model_state`, including cap-expiry flicker, controls this effect;
+raw cap flags do not. Held/ridden objects, shadows and particles retain the
+shared ghost opacity. Old clips already include `model_state` and need no
+recapture for the vanish effect. The pattern is deterministic ghost noise;
+the live RDP random sequence was not recorded. The model draws the
 metal body from the ROM's own metal lists. Those lists switch on
 `G_TEXTURE_GEN`, which the model now reports per triangle
 (`SG_MATERIAL_TEXGEN`; [patches.py](../renderer/model/patches.py)). Playback
@@ -221,7 +247,7 @@ metal texture, under the live view. The metal body is fully environment
 mapped (2256 of 2256 vertices on the US ROM). Metal with the wing cap draws
 `mario_metal_cap_wings` from the ROM's metal wing textures (segment 4
 0x0400A090 and 0x0400B090). Upstream libsm64 leaves them out, so the model
-adds them as atlas cells 11 and 12 (`SG_ATLAS_CELLS` 13).
+adds them as atlas cells 11 and 12, the last two of Mario's thirteen atlas cells.
 
 The lookat is live state, not an assumption. In the pinned LINK d0d10105,
 `RSP_SetDefaultState` runs only from `RSP_Init` (ROM open): lookat enabled,
@@ -232,7 +258,7 @@ in force, and a savestate does not restore it. [ghost_link.cpp](../plugin/gfxwra
 reads `gSP.lookat` and `lookatEnable` with each world triangle submission.
 The world pass keeps the value from the world's first triangles
 (`WorldPass::lookat`), and ghost_pose maps the ghost's metal with it. The one
-remaining approximation is the dither pattern.
+remaining approximation is the unrecorded live dither pattern.
 
 ### Pose refusals and the gaps they closed
 
@@ -681,6 +707,28 @@ breaking the winner rule, the x-cam judge, the animation, the eyes, the cry or
 the trigger each turns it red. The fade values for a dance stay (1, 14/15 ...
 1/15, then hidden at 15 frames), with an older clip beside the dancer ending
 at its touch.
+
+An automatic PB update can replace the selected recording during death, or
+even before the renderer's first completing-dance list. IPC retains the
+identical FOLLOW command during completion suspension and asset loading,
+publishes completion with the old descriptors before releasing that set, and the renderer
+holds the raced clips, order and hues while it judges or plays that terminal
+sequence. The worker cannot reclaim those frame arrays until the terminal
+sequence ends; preparation retries can then fit a replacement that would exceed
+the budget alongside the old recording. A suspension without
+a completing action still hides the ordinary run. A new origin, a genuine
+restore, owner/ROM/model/mode departure or explicit revocation clears the held
+sequence; the next race binds the latest PB set on its first list. A paused
+terminal keeps its game-clock phase and root even through origin repair.
+
+Camera and overlap fading retain `GHOST_FLOOR` of a dying ghost's shared
+opacity, so proximity cannot reduce the death to zero visibility. Its own
+final fade still runs after the animation, and freezes with the game clock.
+World depth, camera clipping and source/scene validity remain authoritative.
+The CPU playback/IPC witnesses cover both PB delivery orders, both paused-clock
+patterns, storage reclamation, tint/order retention and restore/mode negatives.
+The compositor witness checks the terminal floor and body-only vanish mask on
+both depth routes; rendered/live acceptance is separate from these CPU checks.
 
 The 100-coin star (his report, 2026-09-23: the ghost vanished at the 100-coin
 star when the run goes on to an exit star) is timed by its exit segment: its

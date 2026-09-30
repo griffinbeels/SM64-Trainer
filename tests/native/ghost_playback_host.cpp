@@ -1395,8 +1395,40 @@ int main() {
             auto pause=[&](uint64_t time,uint32_t frames,const char *why,const std::function<bool()> &same) {
                 for(uint32_t k=0;k<frames;++k) {++paused;check(step(time,GP_READY,{GP_READY},{}) && same(),why);}
             };
+            // The worker's completed PB can precede the renderer's FIRST
+            // completing-dance list, not just replace an already dying ghost.
+            Clip early_loser=recorded_dance(203,49,0x1302,GP_DANCE_ANIMATION,30,30,UINT32_MAX);
+            star_run(early_loser,53500);
+            ++r.revision;r.tint_enabled=1;r.clips[0].hue_degrees=37;
+            check(api->configure(&r)==GP_OK,"color the raced ghost before completion");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(19,GP_READY,{GP_READY},{}),"last race pose before completing list");
+            Clip early_pb=Clip::linear(204,50,UINT32_MAX,5);
+            check(api->prepare_clip(&early_pb.header,early_pb.frames.data())==GP_OK,"prepare first-list PB replacement");
+            ++r.revision;r.suspended=1;std::memcpy(r.clips[0].clip_id,early_pb.header.clip_id,16);
+            r.clips[0].hue_degrees=281;
+            check(api->configure(&r)==GP_OK && api->release_clip(early_loser.header.clip_id)==GP_OK,
+                  "publish and release the old selection before any death latch");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(api->collect()==GP_OK,"worker collection before the completing list");
+            // A source occurrence can still precede the dance; suspension
+            // hides the ordinary run without forgetting its last raced pose.
+            check(!step(19,GP_DISABLED,{},{}),"pending completion without a dance stays hidden");
+            live.live_action=0x1302;
+            check(step(20,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION
+                  && selected_frame==0 && selected_x==20319 && poses[0].hue_degrees==37,
+                  "first death list uses the old raced position and tint despite PB replacement");
+            live.live_action=1;
+            pause(20,100,"completion-before-render death stays visible in either menu",[&] {
+                return selected_animation==GP_DEFEAT_ANIMATION && selected_frame==0 && selected_x==20319
+                    && poses[0].hue_degrees==37 && poses[0].opacity==1;
+            });
+            check(api->release_clip(early_pb.header.clip_id)==GP_OK,"release pending replacement fixture");
             Clip paused_loser=recorded_dance(73,49,0x1302,GP_DANCE_ANIMATION,30,30,UINT32_MAX);
             star_run(paused_loser,54000);
+            ++r.revision;r.tint_enabled=1;r.clips[0].hue_degrees=19;
+            check(api->configure(&r)==GP_OK,"color the original terminal ghost");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(step(19,GP_READY,{GP_READY},{}),"racing");
             live.live_action=0x1302;
             check(step(20,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION,"it falls");
@@ -1404,23 +1436,49 @@ int main() {
             check(step(60,GP_READY,{GP_READY},{}) && selected_frame==40 && poses[0].opacity==1,"mid-fall");
             const float death_position[3]={selected_position[0],selected_position[1],selected_position[2]};
             const auto same_death=[&]{return selected_animation==GP_DEFEAT_ANIMATION && selected_frame==40
-                && poses[0].opacity==1 && !std::memcmp(selected_position,death_position,sizeof(death_position));};
+                && poses[0].opacity==1 && poses[0].occlusion.minimum==ghost_occlusion::GHOST_FLOOR
+                && poses[0].hue_degrees==19
+                && !std::memcmp(selected_position,death_position,sizeof(death_position));};
+            auto near_death=poses[0].occlusion;near_death.enabled=1;near_death.has_player=0;
+            const float camera_near[4]={0,0,0,10};
+            check(ghost_occlusion::point_fade(near_death,camera_near)==ghost_occlusion::GHOST_FLOOR,
+                  "dying ghost remains visible even inside the camera-fade band");
+            near_death.minimum=0;
+            check(ghost_occlusion::point_fade(near_death,camera_near)==0,
+                  "ordinary ghost still honors camera hiding");
             pause(60,100,"paused: the fall stands still, fully visible",
                   same_death);
-            world.context_generation=0;++paused; // a menu frame that draws no ghost
-            check(!step(60,GP_POSE_REFUSED,{GP_POSE_REFUSED},{}),"a pause-menu frame draws no ghost");
+            // PB saving refreshes selection while the result is still on
+            // screen. IPC releases the old id BEFORE configuring its new set.
+            Clip replacement_pb=recorded_dance(201,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            Clip replacement_extra=recorded_dance(202,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            check(api->prepare_clip(&replacement_pb.header,replacement_pb.frames.data())==GP_OK,"prepare improved PB");
+            check(api->prepare_clip(&replacement_extra.header,replacement_extra.frames.data())==GP_OK,"prepare added ghost");
+            check(api->release_clip(paused_loser.header.clip_id)==GP_OK,"PB refresh releases old selection");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            ++paused;check(step(60,GP_READY,{GP_READY},{}) && same_death(),"released selection still owns the paused death");
+            ++r.revision;std::memcpy(r.clips[0].clip_id,replacement_pb.header.clip_id,16);
+            r.clips[0].hue_degrees=281;
+            r.clip_count=2;std::memcpy(r.clips[1].clip_id,replacement_extra.header.clip_id,16);
+            check(api->configure(&r)==GP_OK,"improved PB replaces selected recording");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(api->collect()==GP_OK,"worker collects retired clips while terminal set is held");
+            pause(60,100,"PB refresh during either menu keeps the same visible death",same_death);
+            check(api->prepare_clip(&paused_loser.header,paused_loser.frames.data())==GP_DEFERRED,
+                  "released terminal storage remains owned while paused");
+            world.context_generation=0;++paused; // context loss, not a drawable pause menu
+            check(!step(60,GP_POSE_REFUSED,{GP_POSE_REFUSED},{}),"lost context refuses presentation");
             world.context_generation=2;
             pause(60,100,"and the death is still there after it",
                   same_death);
-            // The actual Usamune menu occurrence: valid CLOCK|WARP (17),
-            // action 0, no pose/camera or derived clock. The source restarts
-            // continuity after this gap, and the worker sends a RECOVERED
-            // origin at a different elapsed reference. This used to discard
-            // the death and relatch it at that new coordinate.
+            // Unloaded-area negative: CLOCK|WARP (17) alone is NOT a drawable
+            // menu. Actual paused world samples retain camera/pose and freeze
+            // IGT and area counter (session32, 2026-09-30). Missing camera
+            // refuses; recovered timing must not relatch the terminal pose.
             const uint32_t playing_fields=live.valid_fields;
             menu=true;live.valid_fields=GC_VALID_CLOCK|GC_VALID_WARP;live.live_action=0;
             for(unsigned k=0;k<3;++k) {++paused;
-                check(!step(60,GP_POSE_REFUSED,{GP_POSE_REFUSED},{}),"the Usamune menu carries no drawable camera");}
+                check(!step(60,GP_POSE_REFUSED,{GP_POSE_REFUSED},{}),"an unloaded area carries no drawable camera");}
             menu=false;live.valid_fields=playing_fields;live.live_action=1;++source_continuity;
             elapsed_base=90000;++r.revision;
             r.origin={GO_STAR,7,live.sequence+1,source_continuity,elapsed_base+60,source_generation,13,GO_RECOVERED};
@@ -1432,6 +1490,45 @@ int main() {
                   "unpaused: it resumes from the frame it stood on");
             check(step(20+96,GP_READY,{GP_READY},{}) && selected_frame==95 && poses[0].opacity==1
                   && step(20+97,GP_READY,{GP_READY},{}) && fading(1),"and ends as it would have");
+            check(!step(20+96+GP_DEFEAT_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED},{}),"terminal finishes on its own clock");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            gp_status after_terminal{};
+            check(api->status(&after_terminal,sizeof(after_terminal))==GP_OK
+                  && after_terminal.clip_count==2 && after_terminal.clips_active==2,
+                  "latest requested set binds after natural terminal end");
+            check(api->collect()==GP_OK && api->prepare_clip(&paused_loser.header,paused_loser.frames.data())==GP_OK,
+                  "released terminal clip was reclaimed and can be prepared anew");
+            check(api->release_clip(paused_loser.header.clip_id)==GP_OK,"release reclamation probe");
+            run(91000);
+            check(step(5,GP_READY,{GP_READY,GP_READY},{}) && count==2 && selected_x==20205,
+                  "next race uses the new selected set");
+            live.live_action=0x1302;
+            check(step(10,GP_READY,{GP_READY,GP_READY},{GP_DEFEAT_SOUND,GP_DEFEAT_SOUND}),"both replacement ghosts fall");
+            live.live_action=1;
+            check(step(11,GP_READY,{GP_READY,GP_READY},{}) && selected_animation==GP_DEFEAT_ANIMATION,
+                  "replacement terminal holds before fixed seek");
+            ++r.revision;r.mode=GP_FIXED;r.origin={};r.seek_igt=5;
+            check(api->configure(&r)==GP_OK,"fixed seek departs from active terminal");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(11,GP_READY,{GP_READY,GP_READY},{}) && selected_x==20205
+                  && selected_animation!=GP_DEFEAT_ANIMATION,"same-scene paused fixed seek selects its requested row");
+            r.mode=GP_FOLLOW;run(92000);
+            check(step(5,GP_READY,{GP_READY,GP_READY},{}),"new followed race after seek");
+            live.live_action=0x1302;
+            check(step(10,GP_READY,{GP_READY,GP_READY},{GP_DEFEAT_SOUND,GP_DEFEAT_SOUND}),"terminal before restore-set change");
+            live.live_action=1;check(step(11,GP_READY,{GP_READY,GP_READY},{}),"held before restore");
+            check(api->prepare_clip(&paused_loser.header,paused_loser.frames.data())==GP_OK,"prepare next selected run");
+            check(api->release_clip(replacement_pb.header.clip_id)==GP_OK
+                  && api->release_clip(replacement_extra.header.clip_id)==GP_OK,"release old terminal set");
+            ++r.revision;r.clip_count=1;std::memcpy(r.clips[0].clip_id,paused_loser.header.clip_id,16);r.clips[1]={};
+            check(api->configure(&r)==GP_OK,"set contracts while terminal remains held");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            ++source_continuity;elapsed_base=93000;++r.revision;
+            r.origin={GO_STAR,7,live.sequence+1,source_continuity,elapsed_base+5,source_generation,5,GO_RECOVERED};
+            check(api->configure(&r)==GP_OK,"restore confirms changed selection");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(5,GP_READY,{GP_READY},{}) && count==1 && selected_x==7305
+                  && selected_animation!=GP_DEFEAT_ANIMATION,"restore's first list binds latest selection");
             Clip paused_dancer=recorded_dance(74,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
             star_run(paused_dancer,55000);
             check(step(49,GP_READY,{GP_READY},{}) && step(61,GP_READY,{GP_READY},{GP_DANCE_SOUND})

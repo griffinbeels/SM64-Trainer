@@ -399,6 +399,7 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,
        pose.opacity<0 || pose.opacity>1 || pose.flip_y>1 || !std::isfinite(pose.hue_degrees) ||
        pose.hue_degrees<0 || pose.hue_degrees>359 || !shadow::valid(pose.shadow) ||
        !particle::valid(pose.particles) || pose.body_count>pose.count || pose.body_count%3 ||
+       !std::isfinite(pose.occlusion.minimum) || pose.occlusion.minimum<0 || pose.occlusion.minimum>1 ||
        !std::isfinite(pose.body_alpha) || pose.body_alpha<0 || pose.body_alpha>1 ||
        !std::isfinite(pose.noise_scale) || pose.noise_scale<=0)return Result::invalid;
     }

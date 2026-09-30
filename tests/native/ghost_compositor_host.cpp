@@ -408,6 +408,16 @@ int main() {
         require(pixels(g,scene.fbo,32,32)==clean,"clean scene unchanged");require(depth(g,scene)==original_depth,"game depth unchanged");
         require(image_depth(g,scene)==original_image_depth,"N64 image depth unchanged");
     }
+    // Independent pixel oracle: identity projection has w=1, entirely inside
+    // the camera-hide band. Ordinary ghosts vanish; a dying ghost keeps its
+    // explicit floor in both world-depth routes. Its own opacity still fades.
+    for(auto mode:{gc::Depth::ordinary,gc::Depth::n64_image})for(float floor:{0.f,.15f})for(float alpha:{.5f,1.f}) {
+        auto p=pose(vertices,alpha);p.occlusion.enabled=1;p.occlusion.minimum=floor;
+        ordinary_state(g,scene);
+        require(gc::begin(compositor,target(scene,mode),p)==gc::Result::ok,"terminal visibility begin");
+        require(gc::finalize(compositor,77)==gc::Result::ok,"terminal visibility finalize");
+        check_image(pixels(g,gc::display(compositor).framebuffer,32,32),32,32,alpha*floor);
+    }
     vanish_witness(g);
     // Independent translucent bodies share one clean copy. A second begin()
     // would erase blue, and one shared stencil pass would suppress red.

@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <initializer_list>
 static sg_pose applied{};
 static float camera_x=0;
 static float fake_normal[3]={0,1,0};static uint32_t fake_flags=0;static bool refuse_held=false;
@@ -114,14 +115,27 @@ int main() {
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(!pose.count && !applied.fields && pose.opacity==0.5f);
     saved.pose.hidden=0;saved.pose.animation_frame=0;
-    // Vanish cap: the recorded envcolor alpha (modelState 0x100 | alpha)
-    // multiplies the user's opacity; metal alone does not.
+    // Vanish alpha/noise stays on Mario's retained body vertices. Ordinary
+    // metal and expiry flicker have no noise despite raw cap flags.
     saved.pose.model_state=0x180;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
-    assert(pose.count==3 && std::fabs(pose.opacity-0.5f*128.0f/255.0f)<1e-6f && applied.model_state==0x180);
+    assert(pose.count==3 && pose.body_count==3 && pose.opacity==0.5f
+        && std::fabs(pose.body_alpha-128.0f/255.0f)<1e-6f && pose.noise_alpha
+        && pose.noise_seed==777 && pose.noise_scale==1 && applied.model_state==0x180);
     saved.pose.model_state=0x200;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
-    assert(pose.opacity==0.5f && applied.model_state==0x200);
+    assert(pose.opacity==0.5f && pose.body_alpha==1 && !pose.noise_alpha && applied.model_state==0x200);
+    saved.pose.mario_flags=0x2; // raw vanish bit can outlive the rendered effect
+    for(uint16_t state : {uint16_t(0), uint16_t(0x1ff), uint16_t(0x200)}) {
+        saved.pose.model_state=state;
+        assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+        assert(pose.body_alpha==1 && !pose.noise_alpha && pose.opacity==0.5f);
+    }
+    saved.pose.model_state=0x340;world.target.noise_scale=2.5f;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.noise_alpha && std::fabs(pose.body_alpha-64.0f/255.0f)<1e-6f
+        && pose.opacity==0.5f && pose.noise_scale==2.5f);
+    saved.pose.model_state=0x200;world.target.noise_scale=1;
     // Metal: texture-generated coordinates follow the LIVE view's eye-space
     // normal exactly as GLideN64 does for G_TEXTURE_GEN on the 64x32 metal
     // texture (atlas cell 0 of 11); the model's own uv is replaced.
@@ -154,14 +168,14 @@ int main() {
     // counted apart.
     live.camera.position[0]=0;two_faced=true;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
-    assert(pose.count==3 && pose.culled==3 && pose.vertices[0].position[2]==-5 && pose.vertices[2].position[1]==1);
+    assert(pose.count==3 && pose.body_count==3 && pose.culled==3 && pose.vertices[0].position[2]==-5 && pose.vertices[2].position[1]==1);
     assert(pose.vertices[3].position[2]==-6 && scratch.evaluated==6);
     cull[1]=false;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(pose.count==6 && !pose.culled && pose.vertices[3].position[2]==-6);
     cull[1]=true;a_z=1;b_z=-1; // the camera between the walls, inside the shell
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
-    assert(pose.count==0 && pose.culled==6);
+    assert(pose.count==0 && pose.body_count==0 && pose.culled==6);
     two_faced=false;a_z=-5;b_z=-6;live.camera.position[0]=42;
     // A held Bob-omb (bhvBobomb) reaches the model with its animation, HOLP,
     // scale and blink, and the live view and roll its billboard faces.
@@ -177,12 +191,18 @@ int main() {
     // The penguin, King Bob-omb, Chuckya, both boxes and Mips by their behaviours.
     const struct { uint32_t behavior, kind; } kinds[]={{0x130020E8u,SG_HELD_PENGUIN},
         {0x130001F4u,SG_HELD_KING_BOBOMB},{0x13000528u,SG_HELD_CHUCKYA},{0x13004218u,SG_HELD_BREAKABLE_BOX},
-        {0x13001650u,SG_HELD_BREAKABLE_BOX},{0x130044FCu,SG_HELD_MIPS},{0x130033ECu,SG_HELD_HOOT}};
+        {0x13001650u,SG_HELD_BREAKABLE_BOX},{0x130044FCu,SG_HELD_MIPS},{0x130033ECu,SG_HELD_HOOT},
+        {0x13001F3Cu,SG_HELD_KOOPA_SHELL},{0x13000F08u,SG_HELD_UKIKI},{0x13001CB0u,SG_HELD_UKIKI}};
     for(const auto &k:kinds) {
         saved.held.behavior=k.behavior;
         assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
         assert((applied.fields&SG_POSE_HELD) && applied.held_kind==k.kind);
     }
+    saved.pose.model_state=0x180;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.count==6 && pose.body_count==3 && pose.opacity==0.5f && pose.noise_alpha
+        && std::fabs(pose.body_alpha-128.0f/255.0f)<1e-6f);
+    saved.pose.model_state=0x200;
     saved.held.behavior=0x130044FCu;saved.held.animation_id=0;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(applied.held_animation_id==4); // legacy in-hand Mips: ears down

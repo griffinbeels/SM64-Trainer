@@ -63,6 +63,7 @@ DWORD worker_thread=0; // protected by worker_gate
 std::atomic<uint32_t> cancellation{1}, context_serial{1};
 std::atomic<bool> exhausted{false};
 std::atomic<uint64_t> desired_model{0}, enabled_revision{0}, resident_bytes{0};
+std::atomic<uint64_t> terminal_revision{0}; // renderer publishes; worker checks same applied lease
 static_assert(GP_GHOSTS==ghost_compositor::max_poses,"one batch draws every displayed ghost");
 static_assert(uint64_t(GP_CLIP_SLOTS)*GP_LONG_GHOST_FRAMES*(sizeof(gclip_frame)+sizeof(uint32_t))
               <=GP_CLIP_BUDGET,"a full set of long ghosts and its replacement fit the clip budget");
@@ -77,6 +78,7 @@ uint64_t last_revision=0;
 DWORD render_thread=0;
 uint32_t live_rom=0, live_configuration=0, acquired_cancel=0;
 bool have_model=false, have_request=false, have_timeline=false, star_ended=false;
+bool terminal_pending=false; // completion command can precede its first render list
 bool sequence_reported=false;
 bool held[GP_CLIP_SLOTS]{};          // this renderer owns the slot (Owned or Unwanted)
 Clip *bound[GP_GHOSTS]{};            // request order; null until adopted
@@ -648,6 +650,7 @@ const gp_api api_v2={sizeof(gp_api),GP_VERSION,{0,0},prepare_model,prepare_clip,
 
 void decision(uint32_t value) {
     report.bytes=sizeof(report);report.version=GP_VERSION;report.decision=value;
+    terminal_revision.store(defeat.active ? active_request.revision : 0,std::memory_order_release);
     if(!reports.put(report)) {exhausted.store(true);revoke(GP_EXHAUSTED);}
 }
 void decide_all(uint32_t value) {
@@ -659,7 +662,7 @@ void decide_all(uint32_t value) {
 }
 void forget_shown() {for(auto &last:shown_last)last={};}
 void clear_timeline() {
-    have_timeline=false;star_ended=false;timeline_request={};defeat={};dance_entry={};forget_shown();
+    have_timeline=false;star_ended=false;timeline_request={};defeat={};terminal_pending=false;dance_entry={};forget_shown();
 }
 void unbind() {
     for(auto &clip:bound)clip=nullptr;
@@ -670,9 +673,17 @@ void retire_clips() {
         if(held[i]) {clips[i].state.store(Retired,std::memory_order_release);held[i]=false;}
     unbind();
 }
-// The worker released these ids; stop drawing them before this list starts.
+// An automatic PB/set refresh can release a recording whose terminal pose
+// is still on screen. Keep ownership until its death/dance ends; a new run,
+// switch-off, owner or context change still clears the terminal set.
 void retire_unwanted() {
     for(uint32_t i=0;i<GP_CLIP_SLOTS;++i) {
+        bool terminal=false;
+        for(uint32_t k=0;defeat.active && k<GP_GHOSTS;++k)
+            terminal=terminal || defeat.clip[k]==&clips[i];
+        for(uint32_t k=0;terminal_pending && k<GP_GHOSTS;++k)
+            terminal=terminal || bound[k]==&clips[i];
+        if(terminal)continue;
         uint32_t expected=Unwanted;
         if(!held[i] || !clips[i].state.compare_exchange_strong(expected,Retired))continue;
         held[i]=false;
@@ -1034,7 +1045,11 @@ uint32_t pose_fall(uint32_t index,uint32_t post,const Choice& choice,const gc_sa
     p.punch_state=0;p.grab_position=0;
     for(unsigned k=0;k<3;++k)p.torso_angles[k]=p.head_angles[k]=0;
     recorded.sample.valid_fields&=~uint32_t(GC_VALID_PARTICLES|GC_VALID_HELD);
-    return draw(index,recorded,recorded.sample,live,world,choice.fade,out);
+    const auto result=draw(index,recorded,recorded.sample,live,world,choice.fade,out);
+    // Camera/overlap fading cannot end an otherwise visible death, including
+    // a paused one. Its own end fade still follows the frozen game clock.
+    if(result==GP_READY)out.occlusion.minimum=ghost_occlusion::GHOST_FLOOR;
+    return result;
 }
 uint32_t pose_row(uint32_t index,const Choice& choice,const gc_sample& live,const ghost::WorldPass& world,
                   ghost_compositor::Pose& out) {
@@ -1068,7 +1083,6 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return;}
     render_thread=thread;live_rom=rom;live_configuration=configuration;
     next_boundary();
-    retire_unwanted();
     PublishedRequest published{};const bool received=requests.get(published);
     const auto &next=published.value; const auto current_cancel=cancellation.load();
     const bool wanted=!exhausted.load() && rom && configuration && received && next.enabled
@@ -1085,6 +1099,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
     if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.detach();}
+    if(have_request && (next.mode!=active_request.mode || next.model_id!=active_request.model_id))clear_timeline();
     if(next.mode==GP_FOLLOW && (!have_timeline || !same_origin(timeline_request,next))) {
         // A menu can remove action/warp evidence and restart the source's
         // elapsed reference. The worker repairs that reference as RECOVERED;
@@ -1102,6 +1117,20 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     const bool first=!have_request;
     const gp_request previous=active_request;
     active_request=next;have_request=true;acquired_cancel=current_cancel;
+    if(!next.suspended)terminal_pending=false;
+    bool shown=false;for(const auto &last:shown_last)shown=shown || last.drawn;
+    if(!first && !defeat.spent && shown && next.mode==GP_FOLLOW && previous.mode==GP_FOLLOW
+            && next.suspended && !previous.suspended && same_origin(previous,next)
+            && previous.model_id==next.model_id)terminal_pending=true;
+    // The terminal set raced THIS attempt. A PB refresh selects the next
+    // recording while the old ghost is still dying. Shared controls update,
+    // but replacing/reordering that set cannot erase its terminal sequence.
+    if((defeat.active || terminal_pending) && !first && next.mode==GP_FOLLOW && previous.mode==GP_FOLLOW
+            && same_owner(previous,next) && previous.model_id==next.model_id) {
+        active_request.clip_count=previous.clip_count;
+        std::memcpy(active_request.clips,previous.clips,sizeof(active_request.clips));
+    }
+    retire_unwanted();
     // Every new timeline re-bases what each ghost has heard: a new run sounds
     // its first record; a restore or the worker's re-bind (a reset re-arms
     // the same ghost that way) sounds what it passes from where it stands.
@@ -1132,11 +1161,11 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
             }
         }
     }
-    // Bind request order to held storage, then retire held clips the new
-    // command no longer lists: the renderer holds exactly the displayed set.
+    // Bind the displayed set (including a held terminal set), then retire
+    // storage no longer needed by it. No frame references reclaimed clips.
     bool listed[GP_CLIP_SLOTS]{};
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
-        Clip *clip=i<next.clip_count?adopt(next.clips[i].clip_id,current_cancel):nullptr;
+        Clip *clip=i<active_request.clip_count?adopt(active_request.clips[i].clip_id,current_cancel):nullptr;
         if(clip)listed[clip-clips]=true;
         if(clip!=bound[i]) { // a different recording: nothing heard or shown yet
             heard_clip[i]=nullptr;shown_last[i]={};dance_voiced[i]=false;
@@ -1147,13 +1176,14 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
             have_completion[i]=clip && completing_grab(*clip,next,have_touch[i],touch[i],completion[i]);
             if(!clip || !cut_dance(*clip,next,dance[i]))dance[i]={};
         }
-        report.clip_decisions[i]=uint8_t(i>=next.clip_count?GP_DISABLED:clip?GP_READY:GP_PREPARING);
+        report.clip_decisions[i]=uint8_t(i>=active_request.clip_count?GP_DISABLED:clip?GP_READY:GP_PREPARING);
     }
     for(uint32_t i=0;i<GP_CLIP_SLOTS;++i)
         if(held[i] && !listed[i]) {clips[i].state.store(Retired,std::memory_order_release);held[i]=false;}
     touch_revision=next.revision;
+    report.clip_count=active_request.clip_count;
     report.clips_active=active_count();
-    decision(have_model && report.clips_active==next.clip_count?GP_READY:GP_PREPARING);
+    decision(have_model && report.clips_active==active_request.clip_count?GP_READY:GP_PREPARING);
 }
 bool atlas(sg_atlas_view *out,uint64_t *id) {
     if(out)*out={};if(id)*id=0;
@@ -1172,6 +1202,10 @@ bool drawing() {
         && active_request.revision && enabled_revision.load()==active_request.revision
         && cancellation.load()==acquired_cancel && model.id==desired_model.load()
         && active_request.rom_generation==live_rom && active_request.configuration==live_configuration;
+}
+bool terminal() {
+    const auto revision=terminal_revision.load(std::memory_order_acquire);
+    return revision && revision==enabled_revision.load(std::memory_order_acquire);
 }
 bool current(const gp_draw_token& token) {
     return drawing() && token.revision==active_request.revision && token.cancellation==acquired_cancel
@@ -1222,7 +1256,7 @@ bool start_defeat(const gc_sample& live) {
         }
     }
     if(!any)return false;
-    defeat.active=true;defeat.start=live.global_timer;defeat.clock=live.area_update_counter;
+    defeat.active=true;terminal_pending=false;defeat.start=live.global_timer;defeat.clock=live.area_update_counter;
     defeat.level=live.level;defeat.area=live.area;
     defeat.epoch=live.epoch;defeat.last_timer=live.global_timer;
     defeat.last_clock=live.area_update_counter;defeat.last_igt=live.igt;
@@ -1271,6 +1305,11 @@ void plan_list(const gc_sample& live) {
         if(moved) {
             defeat={};star_ended=false;forget_shown();terminal=false;
             dance_entry={dance_entry.dancing,false,0,0};
+            // A pending PB set held behind the terminal sequence belongs to
+            // the restored/new race from its first list. Rebind before making
+            // that list's choice, rather than racing the released old clip.
+            safe_boundary(live_rom,live_configuration);
+            plan_list(live);return;
         } else {
             defeat.last_timer=live.global_timer;defeat.last_clock=live.area_update_counter;
             defeat.last_igt=live.igt;
@@ -1296,7 +1335,9 @@ void plan_list(const gc_sample& live) {
             // A restoration revives the run, exactly like the worker's new
             // command, and ends a defeat: he loaded back into the race.
             star_ended=false;live_recovery.restored=origin.sequence;forget_heard(Forget::restore);
-            defeat={};forget_shown();dance_entry={dance_entry.dancing,false,0,0};
+            defeat={};terminal_pending=false;forget_shown();dance_entry={dance_entry.dancing,false,0,0};
+            safe_boundary(live_rom,live_configuration);
+            plan_list(live);return;
         }
     }
     if(active_request.mode==GP_FOLLOW && !defeat.active) {

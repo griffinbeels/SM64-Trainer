@@ -3,7 +3,7 @@
  * rule to every ghost body, shadow and particle pixel; playback fills the region once
  * per frame from live Mario and the live view-projection.
  *
- *   fade = near(w) * max(GHOST_FLOOR, overlap * block)
+ *   fade = max(minimum, near(w) * max(GHOST_FLOOR, overlap * block))
  *   block = 1 - PLAYER_STRENGTH * cover(ndc) * front(w)
  *   near  = smoothstep(NEAR_HIDDEN, NEAR_FULL, w)
  *   cover = 1 - smoothstep(REGION_INNER, REGION_OUTER, |(ndc - center) / radius|)
@@ -18,7 +18,10 @@
  * applied here rather than in the pose's opacity so the two fades share ONE
  * floor: multiplied separately, each at its own 0.15 floor, a ghost holding a
  * pole with Mario (overlapping AND in front of him) fell to about 5%. Only the
- * camera term (and the pose's own opacity) may take a ghost below the floor. Prior art, rejected alternatives and witnesses:
+ * camera term (and the pose's own opacity) may take an ordinary ghost below
+ * the floor. Terminal deaths set minimum=GHOST_FLOOR so the camera cannot
+ * end their visible animation; their own final opacity still fades.
+ * Prior art, rejected alternatives and witnesses:
  * docs/ghost-native-runtime.md, "Player-first fade".
  */
 #pragma once
@@ -50,6 +53,7 @@ struct Region {
     float center[2], radius[2]; // his body box on screen, NDC before the renderer's y flip
     float player_w;      // his body centre's clip w
     float overlap = 1.0f; // the overlap fade's factor (ghost_proximity.h); 1 without it
+    float minimum = 0.0f; // terminal death keeps this fraction even near the camera
 };
 
 /* The GLSL rule, shared verbatim by the body, shadow and particle shaders (a middle
@@ -64,6 +68,7 @@ uniform vec2 occlusionRegion; // REGION_INNER, REGION_OUTER
 uniform vec2 occlusionFront;  // FRONT_BAND, PLAYER_STRENGTH
 uniform vec2 nearFade;        // NEAR_HIDDEN, NEAR_FULL
 uniform vec2 occlusionOverlap; // the overlap fade's factor, GHOST_FLOOR
+uniform float occlusionMinimum; // zero normally; death remains visibly present
 float playerFirst(vec4 clip) {
     float camera=1.0,block=1.0;
     if (occlusionMode!=0) camera=smoothstep(nearFade.x,nearFade.y,clip.w);
@@ -73,7 +78,7 @@ float playerFirst(vec4 clip) {
         float front=smoothstep(0.0,occlusionFront.x,occluderW-clip.w);
         block=1.0-occlusionFront.y*cover*front;
     }
-    return camera*max(occlusionOverlap.y,occlusionOverlap.x*block);
+    return max(occlusionMinimum,camera*max(occlusionOverlap.y,occlusionOverlap.x*block));
 }
 )";
 /* The same rule on the CPU for one point, from its unflipped clip position:
@@ -97,12 +102,13 @@ inline float point_fade(const Region &r, const float clip[4]) {
         block = 1.0f - PLAYER_STRENGTH * cover * smooth_step(0.0f, FRONT_BAND, r.player_w - w);
     }
     const float kept = r.overlap * block;
-    return camera * (kept > GHOST_FLOOR ? kept : GHOST_FLOOR);
+    const float visible = camera * (kept > GHOST_FLOOR ? kept : GHOST_FLOOR);
+    return visible > r.minimum ? visible : r.minimum;
 }
 
 /* Uniform names in glsl; the compositor looks them up in this order. */
 constexpr const char* uniform_names[] = {"occlusionMode", "occluderCenter", "occluderRadius",
-    "occluderW", "occlusionRegion", "occlusionFront", "nearFade", "occlusionOverlap"};
+    "occluderW", "occlusionRegion", "occlusionFront", "nearFade", "occlusionOverlap", "occlusionMinimum"};
 constexpr unsigned uniform_count = sizeof(uniform_names) / sizeof(uniform_names[0]);
 
 /* Live Mario's body box (feet at position, scaled by his gfx scale) under the

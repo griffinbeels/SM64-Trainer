@@ -148,6 +148,7 @@ struct Session {
     };
     std::vector<Asset> assets;
     gipc_request applied_request{};
+    gp_request applied_command{};
     ghost_origin::Ledger origins;
     go_marker resolved_marker{};
     go_origin resolved_origin{};
@@ -231,6 +232,33 @@ struct Session {
         }
     }
     void withdraw() { play->withdraw(); applied = 0; }
+    bool suspend_applied(const gipc_request &r) {
+        if(!applied || r.mode!=GP_FOLLOW || !r.owner_suspended || applied_request.owner_suspended)return true;
+        auto next=r,prior=applied_request;
+        next.owner_suspended=prior.owner_suspended=0;
+        if(!same_controls(next,prior))return true;
+        if(playback_revision==UINT64_MAX)return false;
+        auto command=applied_command;command.revision=++playback_revision;command.suspended=1;
+        if(play->configure(&command)!=GP_OK)return false;
+        // The completion control precedes release/preparation of the new set.
+        // Its old descriptors let the renderer latch pending defeat even if
+        // the replacement cannot coexist within the clip-memory budget.
+        applied_command=command;applied_request.owner_suspended=1;
+        return true;
+    }
+    bool keep_applied(const gipc_request &r) const {
+        if(!applied)return false;
+        if(same_controls(r,applied_request))return true;
+        // Completion and the resulting PB refresh can reach the worker in
+        // one tick, even before the renderer's first completing-dance list.
+        // Starting FOLLOW suspension or retaining its terminal picture cannot
+        // withdraw it during asset I/O. All other owner, origin,
+        // ROM/model and controls must still be identical.
+        auto next=r,prior=applied_request;
+        next.owner_suspended=prior.owner_suspended=0;
+        return same_controls(next,prior) && (ghost_playback::terminal()
+            || (r.mode==GP_FOLLOW && r.owner_suspended && !applied_request.owner_suspended));
+    }
 
     bool audio_running = false; // the sound engine holds a copy of rom_bytes
     void clear_rom() {
@@ -357,11 +385,14 @@ struct Session {
         if (awaiting_configuration && stats.configuration != prior_configuration) {
             awaiting_configuration = false; configuration = stats.configuration;
         }
-        if (r.play_enabled) release_unlisted(r);
+        if(r.play_enabled) {
+            if(!suspend_applied(r)) {withdraw();state=GIPC_REFUSED;reason=GIPC_PROTOCOL;previous=r;return false;}
+            release_unlisted(r);
+        }
         if (r.play_enabled && needs_load(r) && (attempted != r.revision || changed)) {
             // Only a new clip is read. Unchanged clips keep drawing under an
             // applied command with the same controls; a new ROM rebuilds all.
-            if (!(applied && same_controls(r, applied_request))) withdraw();
+            if (!keep_applied(r)) withdraw();
             if (!same_rom(r, loaded)) {
                 if (rom_ready) { play->revoke(GP_PREPARING); applied = 0; forget_prepared(); rom_ready = false; }
                 recovery.clear(); have_origin = false;
@@ -402,7 +433,7 @@ struct Session {
             }
             // The old command may keep drawing only while it means the same thing.
             if ((model != GP_OK || clip != GP_OK) && applied != r.revision
-                    && !(applied && same_controls(r, applied_request))) withdraw();
+                    && !keep_applied(r)) withdraw();
             if (model == GP_OK && clip == GP_OK) {
                 if (applied != r.revision) {
                     gp_request command{};
@@ -449,7 +480,9 @@ struct Session {
                     command.suspended = r.owner_suspended;
                     if (play->configure(&command) != GP_OK) {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
-                    } else { applied = r.revision; applied_request = r; state = GIPC_READY; }
+                    } else {
+                        applied = r.revision; applied_request = r; applied_command=command;state = GIPC_READY;
+                    }
                 } else state = GIPC_READY;
             } else {
                 state = GIPC_PREPARING;

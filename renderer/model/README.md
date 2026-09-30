@@ -82,7 +82,8 @@ it lacks directional-eye variants, and unsupported states fail closed instead
 of indexing outside the atlas.
 
 Held objects (`SG_POSE_HELD`, `held.c`: the Bob-omb, the small penguin, King
-Bob-omb, Chuckya, the small breakable box and Mips, plus the ridden Owl) are compiled from their upstream geo, lists and
+Bob-omb, Chuckya, the small breakable box, Mips and Ukiki, plus the ridden Owl
+and Koopa shell) are compiled from their upstream geo, lists and
 animations like Mario (`HELD_MODELS` in `tools/build_model.py`). The build
 walks each geo's display lists for the RGBA16 textures it reaches and
 generates `held_cells.h`: the kinds, each texture's atlas cell and size, and
@@ -106,6 +107,16 @@ opacity. Its pinned graph contains one unmatched closing node, removed before
 wrapping, and its texture-load shorthand is expanded into the commands the
 adapter consumes. Existing clips without an Owl block cannot reconstruct its
 position or wing animation; record a new attempt to capture it.
+
+The shell uses its recorded own-node TRS for all three riding actions and
+animation id -1. Ukiki uses the real thirteen-animation table (held index 12),
+both behaviour aliases and all four eye/cap states. Its stolen cap reaches
+Mario's common1 display list and texture, imported through pinned extra lists
+and a segment override. The importer follows every selected geo switch and
+recursive display-list dependency, and excludes unreachable alternate models.
+Stock US and Usamune share the verified group6/common0/common1 ROM blocks.
+Mario with wings plus capped Ukiki needs 3,258 vertices; the caller-owned bound
+is 4,096. Missing companion blocks in old clips require a new recording.
 
 Each textured triangle's material word carries its render tile above the
 combiner code (`sg_tile`, from bit `SG_MATERIAL_TILE_SHIFT`): the texture's

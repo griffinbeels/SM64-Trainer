@@ -54,6 +54,9 @@ std::atomic<uint32_t> configuration{0},model_state{GP_MODEL_EMPTY};
 std::atomic<uint32_t> pending_record{0},sample_sequence{0};
 std::atomic<uint32_t> burst_records{0};
 std::atomic<bool> capture_enabled{false},retirement_allowed{true},fail_model{false},fail_budget{false};
+std::atomic<bool> terminal_active{false};
+std::atomic<unsigned> budget_waits_for_release{0};
+std::atomic<bool> completion_published_before_release{false};
 std::atomic<bool> intercept_expiry{false},intercept_wait{false},barrier_failed{false};
 // The worker pins this DLL until retirement, including a failed witness. Keep
 // barriers alive for that whole lifetime rather than closing a pending wait.
@@ -108,14 +111,21 @@ int32_t __cdecl prepare_model(uint64_t id,const uint8_t* bytes,uint32_t size) {
 }
 int32_t __cdecl prepare_clip(const gclip_header* h,const gclip_frame* frame) {
     if(!enter_worker())return GP_WRONG_THREAD;
-    if(fail_budget.load())return GP_BUDGET; // the set does not fit; nothing prepared
+    if(fail_budget.load() || budget_waits_for_release.load())return GP_BUDGET;
     if(h)++prepared_ids[h->clip_id[0]];
     return h && frame && h->record_count==1 && frame->bytes==sizeof(*frame)?GP_OK:GP_INVALID;
 }
 int32_t __cdecl release_clip(const uint8_t* id) {
     if(!enter_worker())return GP_WRONG_THREAD;
     if(!id)return GP_INVALID;
-    ++released_ids[id[0]];return GP_OK;
+    ++released_ids[id[0]];
+    if(budget_waits_for_release.load()==id[0]) {
+        std::lock_guard<std::mutex> lock(command_mutex);
+        bool listed=false;for(uint32_t i=0;i<command.clip_count;++i)listed=listed || command.clips[i].clip_id[0]==id[0];
+        completion_published_before_release=command.suspended && listed;
+    }
+    unsigned awaited=id[0];budget_waits_for_release.compare_exchange_strong(awaited,0);
+    return GP_OK;
 }
 int32_t __cdecl configure(const gp_request* value) {
     if(!enter_worker())return GP_WRONG_THREAD;
@@ -258,7 +268,10 @@ void refused(Page& page,gipc_request& r,uint32_t reason) {
 }
 }
 namespace ghost_stream {const gs_api* api(){return &capture_api;}}
-namespace ghost_playback {const gp_api* api(){return &playback_api;}}
+namespace ghost_playback {
+const gp_api* api(){return &playback_api;}
+bool terminal(){return terminal_active.load();}
+}
 // This IPC witness isolates the real worker from the model; test_native_model
 // exercises the actual asset validator, including while a model is render-owned.
 extern "C" int32_t sg_model_validate_rom(const uint8_t* bytes,size_t count) {
@@ -417,6 +430,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         // the applied set keeps drawing (no withdrawal) and the ROM stays cached.
         const unsigned prepared_one=prepared_ids[1].load(),validations=rom_validations.load();
         const unsigned shown=withdrawals.load(),released_one=released_ids[1].load();
+        terminal_active=true;r.owner_suspended=1;
         r.revision=10;r.clip_count=2;set_clip(r.clips[1],2,argv[4],argv[5],40);ready(page,r);
         auto set=last_command();
         check(set.clip_count==2 && set.clips[0].clip_id[0]==1 && set.clips[1].clip_id[0]==2
@@ -424,17 +438,21 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(prepared_ids[1]==prepared_one && prepared_ids[2]==1,"adding a clip prepares only the new clip");
         check(rom_validations==validations,"adding a clip never re-reads the cartridge");
         check(withdrawals==shown,"applied ghosts keep drawing while a new clip loads");
+        terminal_active=false;
         auto readiness=page.status();
         check(readiness.clips_requested==2 && readiness.clips_prepared==2,"set readiness published");
         // A set that does not fit says so apart from a bad clip, and shows once it fits.
         fail_budget=true;r.revision=11;r.clip_count=3;set_clip(r.clips[2],3,argv[6],argv[7],300);
+        r.owner_suspended=0; // No active terminal: the old control must withdraw.
         refused(page,r,GIPC_BUDGET);fail_budget=false;ready(page,r);
+        check(withdrawals>shown,"suspension change without terminal still withdraws during replacement load");
+        const unsigned after_suspension=withdrawals.load();
         check(prepared_ids[1]==prepared_one && prepared_ids[2]==1 && prepared_ids[3]==1,"third clip alone prepared");
         r.revision=12;r.clips[0]=r.clips[1];r.clips[1]=r.clips[2];r.clips[2]={};r.clip_count=2;ready(page,r);
         set=last_command();
         check(released_ids[1]==released_one+1 && !released_ids[2] && !released_ids[3]
             && set.clip_count==2 && set.clips[0].clip_id[0]==2 && set.clips[1].clip_id[0]==3,"removed ghost released");
-        check(prepared_ids[2]==1 && prepared_ids[3]==1 && withdrawals==shown,"remaining ghosts retained and shown");
+        check(prepared_ids[2]==1 && prepared_ids[3]==1 && withdrawals==after_suspension,"remaining ghosts retained and shown");
         const unsigned added_prepares=prepared_ids[2]+prepared_ids[3],reprepares=prepared_ids[1]-prepared_one;
         const unsigned removed=released_ids[1]-released_one;
         // Set protocol refusals, each at a fresh revision.
@@ -512,6 +530,22 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
             r.revision=3;ready(page,r);
             check(rom_validations.load()>discoveries && models.load()>built,"the model is rebuilt from a fresh cartridge read");
         }
+        // Real FOLLOW ownership: the PB plus completion suspension can reach
+        // IPC before any renderer terminal hint. Only the new clip is loaded,
+        // and the identical applied race remains until its completing list.
+        const auto anchor=page.status();LARGE_INTEGER completing_now{};QueryPerformanceCounter(&completing_now);
+        r.revision=4;r.mode=GP_FOLLOW;r.owner_suspended=0;
+        r.origin={GO_STAR,anchor.configuration,1,100,
+            anchor.utc_anchor+double(completing_now.QuadPart-anchor.qpc_anchor)/double(anchor.qpc_frequency),1,10};
+        burst_records=1;page.wait([](const gipc_status&){return burst_records.load()==0;},"fresh completion origin sample");
+        ready(page,r);const unsigned before_completion=withdrawals.load();
+        terminal_active=false;budget_waits_for_release=2;
+        r.revision=5;r.owner_suspended=1;r.clip_count=2;
+        set_clip(r.clips[0],1,argv[1],argv[2],40);ready(page,r);
+        check(withdrawals==before_completion && last_command().suspended,
+              "completion-before-render keeps FOLLOW ownership during PB asset I/O");
+        check(!budget_waits_for_release,"obsolete storage releases before replacement preparation: no budget deadlock");
+        check(completion_published_before_release,"old raced set receives suspension before its storage releases");
         ghost_ipc::rom(false);page.stopped();
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");
         check(audio_starts.load()>=1 && audio_stops.load()==audio_starts.load(),"every sound engine stopped with its ROM");
