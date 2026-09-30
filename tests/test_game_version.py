@@ -203,16 +203,14 @@ def _saved_pb_on_a_versioned_ladder(client, svc):
     """star:8:2 / Mine: US Silver 30 / Gold 20 / Mario 10, JP more lenient
     (Silver 40 / Gold 30 / Mario 20); a saved 25 s PB is Silver on US and
     Gold on JP, so a flip to JP RAISES the rank without a run."""
-    asyncio.run(svc.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
-    asyncio.run(svc.publish(_ev("star_collected", 1750,
-                                {"course_id": 8, "star_id": 2, "igt_frames": 750})))
     for rank, us, jp in (("Mario", 10, 20), ("Gold", 20, 30), ("Silver", 30, 40)):
         client.put(f"/api/ranks/standards/star:8:2/Mine/{rank}", json={"seconds": us})
         client.put(f"/api/ranks/standards/star:8:2/Mine/{rank}",
                    params={"version": "jp"}, json={"seconds": jp})
     asyncio.run(svc.set_strat(8, 2, "Mine"))
-    svc.db._conn.execute("UPDATE attempts SET strat_tag='Mine' WHERE course_id=8")
-    svc.db._conn.commit()
+    asyncio.run(svc.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(_ev("star_collected", 1750,
+                                {"course_id": 8, "star_id": 2, "igt_frames": 750})))
     aid = next(a.id for a in svc.db.attempts() if a.course_id == 8)
     asyncio.run(svc.save_pb(aid, "igt"))
 

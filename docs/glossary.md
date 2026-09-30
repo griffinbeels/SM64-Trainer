@@ -315,10 +315,10 @@ erases one, and it saves one only under the [[strategy]] you are practicing —
 so every [[strategy]] holds its own, and the [[practice log]] shows whichever
 [[strategy]] you have selected.
 
-Choosing a strategy for unclassified practice history automatically saves its
-fastest eligible success as GOLD. Correcting the newest attempt's strategy
-also saves it when it improves that strategy's PB. Stars use the displayed
-clock; segments use RTA. Ties preserve the existing PB.
+Choosing a [[strategy]] for unclassified practice history automatically saves
+its fastest eligible success as GOLD. Correcting the newest [[attempt]]'s
+[[strategy]] also saves it when it improves that [[strategy]]'s PB. [[Star]]s
+use the displayed clock; [[segment]]s use RTA. Ties preserve the existing PB.
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]]

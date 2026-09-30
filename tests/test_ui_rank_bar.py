@@ -245,12 +245,36 @@ def test_the_rank_tab_ladder_is_never_anchored():
                 "anchoring it makes it lie about where you actually stand.")
 
 
-def test_the_climb_anchors_the_bar_it_hands_out():
-    """`climb.bar` is only safe to paint unconverted because the hook feeds
-    the plan DRAWN widths. Both endpoints, because the closing sweep's
-    "always ends past the middle" comes from `toFill` and the approach's
-    "continues from where it was" comes from `fromFill`."""
-    source = code_only(UI / "rankclimb.js")
+def assert_climb_bars_are_drawn(source):
+    snapshot = re.search(r"function rankSnapshot\(rank\) \{(.*?)^\}", source, re.S | re.M)
+    assert snapshot, "the canonical rank snapshot moved; trace its bar conversion"
+    drawn = re.search(r"\bbar:\s*([^}]+)\}", snapshot.group(1))
+    assert drawn and reaches_bar_fill(drawn.group(1), source), "rankSnapshot.bar must reach barFill"
+    compact = re.sub(r"\s+", "", source)
+    earned = re.search(r"function useEarnedClimb\(transition\) \{(.*?)^\}", source, re.S | re.M)
+    assert earned, "the earned start moved; trace both start branches"
+    earned_compact = re.sub(r"\s+", "", earned.group(1))
+    for binding in ("constbaseline=rankSnapshot(transition&&transition.from);",
+                    "bar:baseline.bar,active:false,",
+                    "conststart={level:this.level,bar:this.bar};",
+                    "shownRef.current=start;", "returnstart;"):
+        assert binding in earned_compact, f"earned start lost its drawn snapshot: {binding}"
+    assert "if(!this.active)returnshownRef.current;" in earned_compact, (
+        "an ordinary start must resume the previous drawn state")
+    assert "constearned=useEarnedClimb(earnedTransition);" in compact
+    assert "conststartBar=earnedFirstRank?0:(from?from.bar:0);" in compact
+    writes = re.findall(r"shownRef\.current=([^;]+);", compact)
+    assert set(writes) == {"start", "null", "{level:targetLevel,bar:targetBar}", "{level,bar}"}, (
+        f"previous-frame storage gained an untraced bar producer: {writes}")
+    # The resolver follows scalar bindings. Expand only these verified object
+    # bar paths, so earned baselines and ordinary drawn frames remain checked.
+    source, targets = re.subn(
+        r"const\s+\{\s*level:\s*targetLevel,\s*bar:\s*targetBar\s*\}\s*=\s*rankSnapshot\(rank\);",
+        f"const targetBar = {drawn.group(1)};", source)
+    source, starts = re.subn(
+        r"const\s+from\s*=\s*earned\.start\(shownRef,\s*setState,\s*tune\);",
+        f"const from = {drawn.group(1)};", source)
+    assert targets == starts == 1, "trace each canonical target/start bar binding exactly once"
     args = PLAN_FILL_ARG.findall(source)
     assert len(args) == 2, f"expected one from/to pair into the plan, got {args}"
     for arg in args:
@@ -258,6 +282,27 @@ def test_the_climb_anchors_the_bar_it_hands_out():
             f"ui/rankclimb.js hands the climb plan `{arg.strip()}`, which is "
             "not a drawn width -- the closing sweep will start half full "
             "again and every surface reading `climb.bar` inherits it.")
+
+
+def test_the_climb_anchors_the_bar_it_hands_out():
+    """`climb.bar` is safe only because both plan endpoints are DRAWN widths:
+    the target snapshot, earned baseline, and ordinary previous frame."""
+    assert_climb_bars_are_drawn(code_only(UI / "rankclimb.js"))
+
+
+@pytest.mark.parametrize("old,new", [
+    ("fromFill: startBar", "fromFill: rank.fill"),
+    ("toFill: targetBar", "toFill: rank.fill"),
+    ("bar: baseline.bar", "bar: transition.from.fill"),
+    ("return shownRef.current;", "return { level: 0, bar: rank.fill };"),
+    ("barFill(rank.tier, rank.division, rank.fill)", "rank.fill"),
+])
+def test_the_climb_bar_guard_rejects_each_wrong_endpoint(old, new):
+    source = code_only(UI / "rankclimb.js")
+    assert old in source, "the mutation must change the real shipped source"
+    assert_climb_bars_are_drawn(source)
+    with pytest.raises(AssertionError):
+        assert_climb_bars_are_drawn(source.replace(old, new))
 
 
 def ui_js():

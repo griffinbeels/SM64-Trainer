@@ -346,6 +346,9 @@ def test_wipe_survives_restart(tmp_path):
 
 def test_wipe_all_session_scope(tmp_path):
     db, svc = make(tmp_path)
+    # Choose before either session: only the explicitly saved session-2 run
+    # should own a PB, rather than adopting session-1 history during its save.
+    asyncio.run(svc.set_strat(2, 2, "Standard"))
     success(svc, 1000)                            # session 1
     asyncio.run(svc.new_session())
     asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
