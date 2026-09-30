@@ -10,6 +10,7 @@ import dataclasses
 import re
 import threading
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -50,6 +51,7 @@ class TargetBody(BaseModel):
     # projector holds the two by different rules (round 19: a fill is
     # detection-flavored; a click is sovereign and clears the queue).
     auto: bool = False
+    timer_mode: Literal["igt", "rta"] = "igt"
 
 
 class ClearBody(BaseModel):
@@ -90,11 +92,13 @@ class StratBody(BaseModel):
     star_id: int | None = Field(default=None, ge=0)
     segment_id: int | None = None
     strat_tag: str | None = None
+    timer_mode: Literal["igt", "rta"] = "igt"
 
 
 class AttemptStratBody(BaseModel):
     # null is meaningful, not missing: it unlabels the attempt
     strat_tag: str | None = None
+    timer_mode: Literal["igt", "rta"] = "igt"
 
 
 class IconBody(BaseModel):
@@ -1259,7 +1263,7 @@ def create_api_router(service) -> APIRouter:
             result = await service.request_target(
                 body.kind, course_id=body.course_id, star_id=body.star_id,
                 segment_id=body.segment_id, strat_tag=body.strat_tag,
-                clear_strat=clear_strat, auto=body.auto)
+                clear_strat=clear_strat, auto=body.auto, timer_mode=body.timer_mode)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True, **result}
@@ -1275,15 +1279,15 @@ def create_api_router(service) -> APIRouter:
             if body.kind == "segment":
                 if body.segment_id is None:
                     raise ValueError("segment strat needs segment_id")
-                await service.set_strat_segment(body.segment_id, body.strat_tag)
+                saved = await service.set_strat_segment(body.segment_id, body.strat_tag)
             else:
                 if body.course_id is None or body.star_id is None:
                     raise ValueError("star strat needs course_id and star_id")
-                await service.set_strat(body.course_id, body.star_id,
-                                        body.strat_tag)
+                saved = await service.set_strat(body.course_id, body.star_id,
+                                                body.strat_tag, timer_mode=body.timer_mode)
         except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return {"ok": True}
+            raise _http(e) from e
+        return {"ok": True, **({"automatic_pb": saved} if saved else {})}
 
     @router.get("/icons")
     async def icons():
@@ -1382,10 +1386,11 @@ def create_api_router(service) -> APIRouter:
         Distinct from POST /strat, which sets what to practice NEXT — this
         one edits history and triggers a re-projection."""
         try:
-            await service.set_attempt_strat(attempt_id, body.strat_tag)
+            saved = await service.set_attempt_strat(attempt_id, body.strat_tag,
+                                                    timer_mode=body.timer_mode)
         except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return {"ok": True}
+            raise _http(e) from e
+        return {"ok": True, **({"automatic_pb": saved} if saved else {})}
 
     @router.get("/landmarks")
     def landmarks():

@@ -151,7 +151,7 @@ Other event types, same envelope:
 | `attempt_cleared` | `attempt_id, reason` | Attempt tombstoned; `reason` is always present, may be null (triggers full re-projection; `attempts_invalidated` follows) |
 | `attempt_restored` | `attempt_id` | Tombstone undone (triggers full re-projection; `attempts_invalidated` follows) |
 | `attempt_strat_set` | `attempt_id` or `attempt_ids`, `strat_tag` | One attempt reclassified onto another strategy (`strat_tag` null = no strategy); last write wins, so re-picking the previous one is the undo (triggers full re-projection; `attempts_invalidated` follows). When the attempt is its entity's newest non-cleared row and the tag is non-null, a `strat_set` follows — the active strategy tracks the newest attempt. A strategy pick (`strat_set`, or `target_set` with a tag) is preceded by one batch `attempt_ids` event adopting every row of that star or segment with no strategy, except rows explicitly set to none |
-| `pb_saved` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id` | Personal best recorded. Segment PBs: `course_id`/`star_id` null, `segment_id` set, `timer_mode` always `"rta"`. |
+| `pb_saved` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id, classification?` | Personal best recorded. Segment PBs: `course_id`/`star_id` null, `segment_id` set, `timer_mode` always `"rta"`. Automatic saves after strategy classification carry `classification`: the destination's pre-change rank banners and game version, for a live earned celebration. It is not replayed on page arrival. |
 | `pb_undone` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id, restored_frames, restored_attempt_id` | The current PB save was deleted; the previous save (if any) is current again — `restored_*` null when none remains |
 | `time_imported` | `source, course_id, star_id, segment_id, strat_tag, timer_mode, frames, game_version` | A time the player brought rather than played — one row per time an import landed. The projector turns it into a finished attempt (`success`, no anchor, started = ended = this row's wall time, `timed_by: "imported"`), so it is a real practice-log row with every row affordance and no replay; `attempt_completed` follows as for any closure. Its PB row links to this journal id. Erasing the import deletes these rows (`DELETE /api/import/{source}`) |
 | `data_wiped` | `kind, course_id, star_id, segment_id, session_id` | History wiped: `kind` `"star"`/`"segment"`/`"all"`, `session_id` null = every session. Applied retroactively on replay; attempts after the wipe accumulate fresh (`attempts_invalidated` follows) |
@@ -225,6 +225,16 @@ aborted. `ui/components/marks.js` owns the wording and the badge;
 **Progress graph:** Each star section also plots completion time over time (gold = explicitly saved PBs). Nodes are clickable: clicking one reveals that attempt's row in the list below (expanding past the pagination fold if needed), scrolls to it with a brief highlight, and — when the attempt has a saved replay file on disk (`HEAD /api/replay/saved/{id}` succeeds) — auto-opens its replay player as if ▶ had been pressed.
 
 ## HTTP API
+
+Strategy writes (`POST /api/target`, `/api/strat`, and `/api/attempts/{id}/strat`)
+accept optional `timer_mode: "igt" | "rta"`, defaulting to IGT for stars;
+segments always use RTA. Adopting unclassified history saves its fastest
+positive, eligible success when it beats the destination PB. Reclassifying
+the newest non-cleared attempt performs the same comparison; older-row edits
+retain their scope. Ties and slower times do not create an automatic save;
+rows explicitly set to no strategy remain excluded from batch adoption.
+A successful automatic save adds `automatic_pb` to
+the response, including the same `replay_save` outcome as a manual PB save.
 
 Segment definitions with both `start_triggers: []` and `end_triggers: []`
 are manual entries: they support imported times and standards but never arm
