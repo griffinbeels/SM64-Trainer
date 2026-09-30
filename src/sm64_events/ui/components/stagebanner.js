@@ -394,11 +394,11 @@ function StarRow({ t, v, stage }) {
   // stars is not one, so a no-route course still picks nothing.
   const lone = loneOption(shown);
   // PSS offers two stars without an act-selection screen. Restore the last
-  // one actually completed, using lifetime history from the server rather
+  // one explicitly chosen or completed, using journal memory from the server rather
   // than the possibly session-filtered log. A route's lone option wins;
   // the shared empty-hand guard keeps explicit stars and segments intact.
   const rememberedSlot = stage.course_id === 19
-    ? (v.last_completed_star_by_course || {})[String(stage.course_id)] : null;
+    ? (v.last_star_choice_by_course || {})[String(stage.course_id)] : null;
   const arrivalPick = lone || shown.find(({ i }) => i === rememberedSlot);
   useLoneRouteOption(v, arrivalPick,
                      `star:${stage.course_id}:${arrivalPick ? arrivalPick.i : ""}`,

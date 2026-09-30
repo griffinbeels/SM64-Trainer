@@ -108,7 +108,7 @@ A piece never enabled/disabled from here any more — the Segments tab's own edi
 
 ## Secret course selection
 
-PSS's two-star arrival default uses `views.py`'s lifetime `last_completed_star_by_course`, through the shared `useLoneRouteOption` empty-hand guard. Its actual catalog still offers both stars; a route's lone option wins. The ordinary target request loads the remembered strategy and the ghost follows that target/strategy. No played history means no invented PSS default. The other five secret courses each offer one star and use the same singleton guard. Witnesses: `tests/test_special_stage_targets.py`, `tests/test_ui_special_stages.py`.
+PSS's two-star arrival default uses `views.py`'s lifetime `last_star_choice_by_course`, through the shared `useLoneRouteOption` empty-hand guard. The projector remembers the latest explicit star pick or successful completion in journal order; automatic fills and imported times cannot overwrite it. Its actual catalog still offers both stars; a route's lone option wins. The ordinary target request loads the remembered strategy and the ghost follows that target/strategy. No choice or played history means no invented PSS default. The other five secret courses each offer one star and use the same singleton guard. Witnesses: `tests/test_special_stage_targets.py`, `tests/test_ui_special_stages.py`.
 
 ## The Bowser row's round 2
 

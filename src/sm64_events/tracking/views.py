@@ -1284,19 +1284,6 @@ def _armed_detail_for(d, seg_id: int, armed_arms: dict) -> dict | None:
             "steps": card_step_labels(d)}
 
 
-def _last_completed_stars(all_attempts) -> dict[str, int]:
-    """Arrival defaults from lifetime play, independent of the log's scope.
-
-    db.attempts() is journal-ordered, so the last write per course wins.
-    Imported or cleared times cannot invent a performed choice for PSS,
-    which has no act-selection screen.
-    """
-    return {str(a.course_id): a.star_id for a in all_attempts
-            if a.segment_id is None and a.course_id is not None
-            and a.star_id is not None and a.outcome == "success"
-            and not a.cleared and a.timed_by != "imported"}
-
-
 @calibrated_view
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
@@ -1968,7 +1955,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "active_route": service.active_route(),
         "unassigned": unassigned,
         "strategies": registered,
-        "last_completed_star_by_course": _last_completed_stars(all_attempts),
+        "last_star_choice_by_course": service.last_star_choice_by_course,
         "last_strat_by_star": {
             f"{c}:{s}": active.for_star(c, s)
             for (c, s) in service.strat_by_star},

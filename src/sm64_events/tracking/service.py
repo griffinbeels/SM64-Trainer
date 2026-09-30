@@ -686,6 +686,11 @@ class TrackerService:
         return self._projector.strat_by_star
 
     @property
+    def last_star_choice_by_course(self) -> dict[str, int]:
+        """Latest explicit pick or successful play, replayed across sessions."""
+        return {str(c): s for c, s in self._projector.last_star_choice_by_course.items()}
+
+    @property
     def strat_by_segment(self) -> dict:
         return self._projector.strat_by_segment
 
