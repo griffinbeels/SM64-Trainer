@@ -210,6 +210,22 @@ and `tests/native/held_pose_host.cpp` (a released Bob-omb at its own position;
 the box turned by its own yaw). Live, in his Behind Chain Chomp's Gate runs, is
 unwitnessed.
 
+### Recorded hat state
+
+The post-callback `gc_pose.cap_state` is captured on each occurrence and retained
+in the clip, then supplied unchanged to the model. The canonical
+`geo_switch_mario_cap_on_off` uses bit0 to select the capped head (0) or capless
+head with full hair (1); bit1 controls cap wings independently. Losing a hat,
+recovering it and beginning a recording hatless therefore follow the recorded
+frame. Live Mario's hat and raw cap flags do not override this visual state.
+The usual zero value selects Mario's ordinary capped head.
+
+The capture, clip and pose witnesses cover both transitions and a capless first
+frame. The real-ROM model witness checks the capped head's M-logo texture is
+absent from the capless head, keeps both meshes deterministic across transitions
+and covers capless vanish/metal bodies. This field already existed in stored
+poses; compatible older clips retain their recorded hat state without rerecording.
+
 ### Cap effects (vanish and metal)
 
 `geo_switch_mario_cap_effect` picks Mario's body from `modelState >> 8`: 0

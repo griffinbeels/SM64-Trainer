@@ -383,6 +383,51 @@ int main(int argc, char** argv) {
         sg_pose b=a; b.animation_id=1;
         check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.snapshot()!=first_mesh,"animation changes mesh");
         check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"A/B/A independence");
+        {
+            // Canonical capped heads load mario_texture_m_logo (atlas cell2);
+            // cap-off heads draw full brown hair and never load that texture.
+            // Keep hands empty: the cap-in-hand animation can use the logo too.
+            // Pinned DL counts: capped head190 triangles, capless201 (hair86).
+            // The +33 vertices proves the cap-off head is present, not omitted.
+            const auto logo_vertices=[&]{
+                unsigned count=0;
+                for(unsigned i=0;i<mesh.out.vertex_count;++i) {
+                    const uint32_t tile=sg_material_tile(mesh.out.material[i]);
+                    count+=(tile&SG_TILE_PRESENT) && (tile&SG_TILE_CELL)==2;
+                }
+                return count;
+            };
+            for(uint8_t eye : {uint8_t(1),uint8_t(2),uint8_t(3),uint8_t(8)}) {
+                sg_pose capped=a;capped.eye_state=eye;
+                check(sg_model_evaluate(model,&capped,&mesh.out)==SG_OK && logo_vertices()>0,
+                      "capped head has its M logo");
+                const unsigned cap_count=mesh.out.vertex_count;
+                const auto cap_mesh=mesh.snapshot();
+                sg_pose capless=capped;capless.cap_state=1;
+                check(sg_model_evaluate(model,&capless,&mesh.out)==SG_OK && logo_vertices()==0,
+                      "lost hat removes the M logo");
+                const auto hair_mesh=mesh.snapshot();
+                check(hair_mesh!=cap_mesh && mesh.out.vertex_count==cap_count+33,
+                      "hatless head retains canonical full hair geometry");
+                check(sg_model_evaluate(model,&capped,&mesh.out)==SG_OK && mesh.snapshot()==cap_mesh,
+                      "recovered hat restores the capped mesh");
+                check(sg_model_evaluate(model,&capless,&mesh.out)==SG_OK && mesh.snapshot()==hair_mesh,
+                      "another ghost can begin hatless without cached head state");
+                for(uint16_t effect : {uint16_t(0x180),uint16_t(0x200),uint16_t(0x340)}) {
+                    capped.model_state=effect;
+                    check(sg_model_evaluate(model,&capped,&mesh.out)==SG_OK,"capped effect reference");
+                    const unsigned effect_count=mesh.out.vertex_count;
+                    const auto effect_cap=mesh.snapshot();
+                    capless.model_state=effect;
+                    check(sg_model_evaluate(model,&capless,&mesh.out)==SG_OK && mesh.out.vertex_count==effect_count+33
+                        && mesh.snapshot()!=effect_cap,
+                          "capless head supports vanish and metal bodies");
+                    if(effect==0x180)check(logo_vertices()==0,"vanish does not restore a missing hat");
+                }
+            }
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,
+                  "hat transitions leave ordinary capped Mario unchanged");
+        }
         // The game culls the back of every triangle its list leaves
         // G_CULL_BACK on: all of Mario; only his cap's wings are two-sided.
         const auto double_sided=[&]{
@@ -605,11 +650,28 @@ int main(int argc, char** argv) {
                                 (sg_material_tile(mesh.out.material[i])&SG_TILE_CELL)==SG_ATLAS_CELL_UKIKI_CAP;
                         check(cap==(state>=2),"Ukiki stolen cap samples its canonical common1 texture");
                     }
+                    // Ukiki's stolen cap belongs to its own graph; Mario's
+                    // capless head must not remove or borrow that cap.
+                    sg_pose bare=h;bare.cap_state=1;bare.fields&=~(SG_POSE_HELD|SG_POSE_HELD_RELEASED);
+                    check(sg_model_evaluate(model,&bare,&mesh.out)==SG_OK,"capless Mario before held Ukiki");
+                    const unsigned bare_count=mesh.out.vertex_count;
+                    o.cap_state=1;o.held_anim_state=2;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK
+                        && mesh.out.held_first_vertex==bare_count && mesh.out.vertex_count==bare_count+978,
+                        "hatless Mario holds Ukiki wearing the stolen cap");
+                    max_held_vertices=std::max(max_held_vertices,mesh.out.vertex_count);
+                    bool mario_logo=false,ukiki_cap=false;
+                    for(unsigned i=0;i<mesh.out.vertex_count;++i) {
+                        const uint32_t tile=sg_material_tile(mesh.out.material[i]);
+                        if(i<bare_count)mario_logo|=(tile&SG_TILE_PRESENT) && (tile&SG_TILE_CELL)==2;
+                        else ukiki_cap|=(tile&SG_TILE_PRESENT) && (tile&SG_TILE_CELL)==SG_ATLAS_CELL_UKIKI_CAP;
+                    }
+                    check(!mario_logo && ukiki_cap,"Mario and Ukiki have independent recorded hats");
                     o.cap_state=2; // Mario's wing cap, Ukiki's stolen cap.
                     check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count>3072
                         && mesh.out.vertex_count<=SG_MODEL_MAX_VERTICES,
                         "Mario wings and fully capped Ukiki fit the shared native mesh bound");
-                    max_held_vertices=mesh.out.vertex_count;
+                    max_held_vertices=std::max(max_held_vertices,mesh.out.vertex_count);
                     o.cap_state=h.cap_state;
                     o.held_anim_state=0;
                     check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK,"held Ukiki before root change");
@@ -719,6 +781,9 @@ int main(int argc, char** argv) {
         check(sg_model_close(&model)==SG_OK,"idempotent close");
         check(sg_model_get_atlas(borrowed,&atlas)==SG_INVALID_MODEL,"closed handle rejected");
         check(sg_model_open(rom.data(),rom.size(),&model)==SG_OK,"reopen");
+        sg_pose capless_start=a;capless_start.cap_state=1;
+        check(sg_model_evaluate(model,&capless_start,&mesh.out)==SG_OK && mesh.snapshot()!=first_mesh,
+              "fresh model starts hatless on its first recorded frame");
         check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"reopen deterministic");
         check(sg_model_detach(model)==SG_OK,"detach before background reclamation");
         int reclaimed=SG_INVALID_MODEL;

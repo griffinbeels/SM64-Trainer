@@ -96,6 +96,13 @@ int main() {
     assert(pose.view_projection[0]==1 && pose.view_projection[5]==-3);
     assert(pose.vertices[2].position[0]==3 && pose.vertices[2].uv[0]==0.25f);
     assert(pose.vertices[2].material==ghost_compositor::Material::alpha_mix);
+    // A recorded ghost keeps its own cap state even when live Mario has the
+    // opposite state. Start capless, recover, lose, recover; no latched default.
+    for (uint8_t cap : {uint8_t(1), uint8_t(0), uint8_t(1), uint8_t(0), uint8_t(2), uint8_t(3), uint8_t(0)}) {
+        saved.pose.cap_state=cap; live.pose.cap_state=cap^1;
+        assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+        assert(applied.cap_state==cap);
+    }
     live.area=2;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::wrong_scene);
     assert(!pose.vertices && !pose.count);

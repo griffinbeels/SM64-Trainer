@@ -32,6 +32,21 @@ def matrix_frame():
     return bytes(raw)
 
 
+def test_hat_loss_and_return_survive_clip_storage_starting_hatless():
+    # gc_pose.cap_state is the existing byte at record offset146. It is visual
+    # state, not a clip-wide preference or a value reconstructed from flags.
+    states = (1, 0, 1, 0, 2, 3, 0)
+    rows = []
+    for index, cap in enumerate(states, 1):
+        raw = bytearray(frame(index))
+        raw[146] = cap
+        rows.append(bytes(raw))
+    clip = decode_clip(encoded(rows))
+    assert tuple(item.raw for item in clip.frames) == tuple(rows)
+    assert tuple(item.raw[146] for item in clip.frames) == states
+    assert all(item.playable for item in clip.frames)
+
+
 def test_effective_root_preserves_matrix_and_requires_its_recorded_camera():
     raw = matrix_frame()
     assert decode_clip(encoded((raw,))).frames[0].raw == raw

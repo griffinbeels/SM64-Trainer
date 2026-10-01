@@ -144,6 +144,17 @@ int main(int argc, char **argv) {
               && s.camera.roll_screen == 777 && s.camera.fov == 45, "graph camera offsets");
         const auto first_pose = s.pose;
         check(f.run() == GC_OK && std::memcmp(&first_pose, &f.sample.pose, sizeof(first_pose)) == 0, "repeat changed");
+        // Post-callback capState is per occurrence, including a hatless first
+        // frame, Ukiki stealing it and Mario recovering it. Raw flags stay
+        // unchanged here; they must not supply a default over the drawn state.
+        Fixture hatless(argv[1]);hatless.put8(Fixture::body+4, 1);
+        check(hatless.run() == GC_OK && hatless.sample.pose.cap_state == 1,
+              "hatless recording first frame used a capped default");
+        for (uint8_t cap : {uint8_t(1), uint8_t(0), uint8_t(1), uint8_t(0), uint8_t(2)}) {
+            f.put8(Fixture::body+4, cap);
+            check(f.run() == GC_OK && f.sample.pose.cap_state == cap,
+                  "hat loss/return reused an earlier cap state");
+        }
         f.putfloat(Fixture::camera+0x1c, 6000); // final graph pause-zoom, no Lakitu dependency
         check(f.run() == GC_OK && f.sample.camera.position[0] == 6000, "camera cache was stale");
     } else if (mode == "swizzle") {
