@@ -152,6 +152,8 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
         return await session.refresh(resolve=False)
 
     _mount_saved_ghosts(router, session, _session)
+    from sm64_events.server.ghost_sharing_api import mount_collection_routes
+    mount_collection_routes(router, _session)
 
     @router.put("/ghost")
     async def set_ghost(body: dict):

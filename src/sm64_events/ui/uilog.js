@@ -29,6 +29,21 @@ import { takeMarks } from "./latency.js";
 
 const text = (el) => (el ? (el.textContent || "").trim() : "");
 
+export function readGhostLibrary(root) {
+  const list = root.querySelector(".ghost-library-list");
+  if (!list) return null;
+  return {surface: "ghost_library",
+    filters: [...root.querySelectorAll(".ghost-library-filters select")].map(el => el.value),
+    query: root.querySelector('input[type="search"]')?.value || "",
+    selection: text(root.querySelector(".ghost-library-selection .meta")),
+    rows: [...list.querySelectorAll(".ghost-library-row")].map(row => ({
+      name: text(row.querySelector(".ghost-library-description strong")),
+      strategy: text(row.querySelector(".ghost-library-description .meta")),
+      creator: text(row.querySelector(".ghost-library-creator")),
+      time: text(row.querySelector(".ghost-library-time")),
+      selected: Boolean(row.querySelector('input[type="checkbox"]')?.checked)}))};
+}
+
 // A cell's identity as the human sees it: the name under the art, plus
 // whether it is the highlighted one. `.starcell` / `.starname` /
 // `.active-star` are PracticeCell's own classes -- every cell in the
