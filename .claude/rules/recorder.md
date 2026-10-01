@@ -17,8 +17,10 @@ Full detail, evidence and history: [docs/rules/recorder.md](../../docs/rules/rec
 
 Alternative recorded starts use `ui/recordselection.js` for roles,
 `components/recordrows.js` for markers and `server/segment_synthesis.py` for
-journal-to-clause assembly. `ids` keeps one chronological path; `start_ids`
-supplies independent OR starts. Promoted middles cease to be steps;
+journal-to-clause assembly. `ids` supplies path picks; `start_ids` supplies
+independent OR starts. Paired `primary_start_id`/`finish_id` preserve pinned
+roles after adding starts; legacy callers retain chronology. Backward samples
+and primary promotion infer no intermediate walk. Promoted middles cease to be steps;
 `picked_explicit` prevents an empty explicit path falling back to the walked
 path. See [the recorded-start contract](../../docs/rules/recorder.md#alternative-recorded-starts).
 

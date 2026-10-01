@@ -21,11 +21,22 @@ attempt, before or after the chosen path. Each marked start is an alternative:
 the review joins them with **OR**, followed by the shared steps and finish.
 Choose **Done adding starts** to return to ordinary path picking. In start mode,
 picking an alternative again removes that role; the primary start and finish
-keep their roles. **Clear** removes all picks and returns to path picking.
+keep their roles. Entering this mode pins those roles until **Clear**, including
+after Done adding starts. If no finish exists yet, the next ordinary pick fills
+Finish even when that sample is older. Removing Finish reopens that role;
+selected steps cannot become Finish. **Clear** removes all picks and returns to
+ordinary chronological picking.
 
 `ui/recordselection.js` owns these roles; `components/recordrows.js` paints them.
 The synthesis API keeps `ids` as the representative path and accepts `start_ids`
-as extra start samples. `server/segment_synthesis.py` synthesizes every start
+as extra start samples. Optional paired `primary_start_id` and `finish_id` pin
+the endpoints; callers omitting them retain earliest/latest behavior. Only
+selected middles are sorted. A finish recorded before its primary start supplies
+valid trigger samples but demonstrates no walk: `steps` stays empty and
+`path_notice` explains how to choose required steps explicitly. Promoting an OR
+sample after removing the primary also disables automatic walk inference
+(`infer_walk=false`), keeping unrelated attempts out of the route.
+`server/segment_synthesis.py` synthesizes every start
 with the start role, keeping the primary first and deduplicating clauses. It
 does not enlarge the walked-path span to include another attempt. A selected
 interior moment marked as a start leaves the required-step list. The response's

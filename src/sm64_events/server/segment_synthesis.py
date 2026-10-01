@@ -1,9 +1,7 @@
 """Assemble a recorder draft from its path and independent start samples.
 
-The representative path keeps the recorder's chronological contract: first
-starts, last finishes, selected middles are ordered waypoints. Extra start
-samples may come from another attempt anywhere in the journal. They change
-only the OR start clauses, never the demonstrated walk or suggested name.
+Legacy picks use chronology. Explicit endpoints preserve roles when assembling
+alternative starts from different attempts; only middles stay chronological.
 """
 from collections.abc import Iterable
 
@@ -51,15 +49,31 @@ def _start_clauses(rows: list[EventRow]) -> list[dict]:
     return clauses
 
 
+def _path_ids(ids: list[int], primary: int | None,
+              finish: int | None) -> list[int]:
+    if primary is None and finish is None:
+        return ids
+    if primary is None or finish is None:
+        raise HTTPException(422, "primary_start_id and finish_id must be supplied together")
+    if primary == finish:
+        raise HTTPException(422, "the start and finish must be different moments")
+    if primary not in ids or finish not in ids:
+        raise HTTPException(422, "the explicit start and finish must be selected in ids")
+    return [primary, *(row_id for row_id in ids if row_id not in (primary, finish)), finish]
+
+
 def synthesize_recording(rows: Iterable[EventRow], ids: str,
-                         start_ids: str | None, names: dict) -> dict:
+                         start_ids: str | None, names: dict,
+                         primary_start_id: int | None = None,
+                         finish_id: int | None = None,
+                         infer_walk: bool = True) -> dict:
     """Read-only draft; retain singular fields for existing recorder clients.
 
     ``picked_explicit`` remembers whether the representative selection had
     any middles, even if every middle was promoted to an alternative start.
     An empty filtered ``picked`` must not revive automatically walked steps.
     """
-    picked_ids = _parse_ids(ids, "ids")
+    picked_ids = _path_ids(_parse_ids(ids, "ids"), primary_start_id, finish_id)
     if len(picked_ids) < 2:
         raise HTTPException(422, "pick at least two moments — one to start "
                                  "on and one to finish on")
@@ -76,8 +90,9 @@ def synthesize_recording(rows: Iterable[EventRow], ids: str,
     starts = _start_clauses(start_rows)
     end_clause = _clause(end_row, "end")
     start_sentences = [clause_sentence(clause, names) for clause in starts]
+    has_walk = infer_walk and start_row.id < end_row.id
     steps = [{**step, "sentence": clause_sentence(step["clause"], names)}
-             for step in walked_steps(rows_by_id.values(), start_row, end_row)]
+             for step in walked_steps(rows_by_id.values(), start_row, end_row)] if has_walk else []
     middle_rows = picked_rows[1:-1]
     extra_set = set(extra_ids)
     picked = []
@@ -93,4 +108,8 @@ def synthesize_recording(rows: Iterable[EventRow], ids: str,
             "end_sentence": clause_sentence(end_clause, names),
             "steps": steps, "picked": picked,
             "picked_explicit": bool(middle_rows),
+            "path_notice": None if has_walk else
+                "These samples do not show a continuous run from the primary start "
+                "to the finish. No intermediate rooms were inferred; pick any "
+                "required steps explicitly.",
             "name": suggest_name(starts[0], end_clause, names)}

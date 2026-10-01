@@ -326,8 +326,12 @@ def _a_row_click_toggles_the_pick(source: str) -> bool:
     empty, which is a dead end reached by using the feature correctly.
     """
     stripped = strip_comments(source)
-    return ("pickedIds.filter((id) => id !== row.id)" in stripped
-            and "[...pickedIds, row.id].sort(" in stripped)
+    legacy = ("pickedIds.filter((id) => id !== row.id)" in stripped
+              and "[...pickedIds, row.id].sort(" in stripped)
+    owned = ("selection.ids.includes(id)" in stripped
+             and "selection.ids.filter((item) => item !== id)" in stripped
+             and "chronological([...selection.ids, id])" in stripped)
+    return legacy or owned
 
 
 def _asks_what_the_recording_is_a_piece_of(source: str) -> bool:

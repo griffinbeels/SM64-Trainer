@@ -13,13 +13,34 @@ const html = htm.bind(h);
 // `.record-mark.role-start`/`.role-finish`/`.role-stop` at two picks and at
 // three, which covers every branch including the boundary (at two, index 1 is
 // the finish and never a stop).
-function roleOf(index, count) {
+function roleOf(index, count, rowId, boundaries) {
+  if (boundaries) {
+    if (rowId === boundaries.primary_start_id) return "start";
+    if (rowId === boundaries.finish_id) return "finish";
+    return "stop";
+  }
   if (index === 0) return "start";
   if (index === count - 1) return "finish";
   return "stop";
 }
 
 const ROLE_WORDS = { start: "Start", stop: "Stop", finish: "Finish" };
+
+// Review the same explicit roles the timeline marks, including samples from
+// different attempts that do not demonstrate an intermediate walk.
+export function RecordedConditions({ synth }) {
+  return html`<div class="record-conditions">
+    <div class="record-start-review">
+      <p class="meta">Starts when any one happens:</p>
+      ${(synth.start_sentences || [synth.start_sentence]).map((sentence, index) =>
+        html`<p key=${index} class="meta">${index > 0 ? "OR " : ""}<b>${sentence}</b></p>`)}
+    </div>
+    ${(synth.picked || []).map((step, i) => html`<p key=${i} class="meta">
+      Then: <b>${step.sentence}</b></p>`)}
+    <p class="meta">Ends when: <b>${synth.end_sentence}</b></p>
+    ${synth.path_notice && html`<p class="meta record-path-notice">${synth.path_notice}</p>`}
+  </div>`;
+}
 
 // One clickable row per timeline moment. The row IS the picker -- no
 // secondary confirm step (spec: "point at what you just did") -- and it is a
@@ -91,14 +112,15 @@ function RenameInput({ row, onCommit, onCancel }) {
   </span>`;
 }
 
-function TimelineRows({ rows, order, starts, onToggle, renamingId,
+function TimelineRows({ rows, order, starts, boundaries, onToggle, renamingId,
                         onRenameStart, onRenameCommit, onRenameCancel }) {
   return html`<div class="record-rows">
     ${rows.map((row) => {
       const index = order.indexOf(row.id);
       const alternative = starts.includes(row.id);
       const picked = index >= 0 || alternative;
-      const role = alternative ? "start" : picked ? roleOf(index, order.length) : null;
+      const role = alternative ? "start" : picked
+        ? roleOf(index, order.length, row.id, boundaries) : null;
       return html`<div key=${row.id} class="record-row-wrap">
         <button type="button"
           class=${`record-row${picked ? " picked" : ""}`}
@@ -133,7 +155,7 @@ function TimelineRows({ rows, order, starts, onToggle, renamingId,
 // The header is the fold. A separate chevron button beside a heading gives one
 // affordance two hit targets, and this app's own rule is that a card is ONE hit
 // target (the context cards, 2026-07-25, where the mismatch read as a bug).
-export function VisitCard({ card, collapsed, onToggleFold, icon, order, starts, onToggleRow,
+export function VisitCard({ card, collapsed, onToggleFold, icon, order, starts, boundaries, onToggleRow,
                      renamingId, onRenameStart, onRenameCommit, onRenameCancel }) {
   return html`<section class=${`record-card${collapsed ? " folded" : ""}`}>
     <button type="button" class="record-card-head" aria-expanded=${!collapsed}
@@ -154,7 +176,7 @@ export function VisitCard({ card, collapsed, onToggleFold, icon, order, starts, 
          not prevent. */""}
     <div class="record-card-body">
       <div class="record-card-clip">
-        <${TimelineRows} rows=${card.rows} order=${order} starts=${starts}
+        <${TimelineRows} rows=${card.rows} order=${order} starts=${starts} boundaries=${boundaries}
             onToggle=${onToggleRow} renamingId=${renamingId}
             onRenameStart=${onRenameStart} onRenameCommit=${onRenameCommit}
             onRenameCancel=${onRenameCancel} />

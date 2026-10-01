@@ -34,10 +34,8 @@
 //    and there is no second labeller in the browser. A broadcast carries
 //    `seq`, never the journal `id` a row is picked by, so the client has to
 //    come back for the id regardless.
-// 5. PATH MOMENTS KEEP JOURNAL ORDER. The earliest is the primary start,
-//    latest is the finish, and middles are steps unless explicitly marked
-//    as alternative starts. Extra starts can come from another attempt;
-//    they never extend the representative path.
+// 5. ORDINARY PATH PICKS KEEP JOURNAL ORDER. Adding OR starts pins the chosen
+//    endpoints; a finish sampled from another attempt never becomes a start.
 //
 // The old modal's machinery survives unchanged where it was already right:
 // ONE `definitionFor` builder so backtest, lint and save send the identical
@@ -51,7 +49,8 @@ import { useSegmentAuthoring, useSegmentSave,
          shippedSegmentWarning, SegmentSaveControls } from "../segmentauthoring.js";
 import { entityKeyForOption, optionForEntityKey } from "../entities.js";
 import { visitCards } from "../visits.js";
-import { useRecordedSelection, recordedPickSummary } from "../recordselection.js";
+import { useRecordedSelection, recordedPickSummary, hasRecordedFinish,
+  recordedSynthesisQuery } from "../recordselection.js";
 import { Icon } from "./icons.js";
 import { Modal } from "./modal.js";
 import { readRecorder, useUiLog } from "../uilog.js";
@@ -60,7 +59,7 @@ import { readRecorder, useUiLog } from "../uilog.js";
 const RECORDER_READERS = [readRecorder];
 import { optionIconSrc } from "./entityicons.js";
 import { StepPicker } from "./steptrack.js";
-import { VisitCard } from "./recordrows.js";
+import { VisitCard, RecordedConditions } from "./recordrows.js";
 import { RecordParents } from "./recordparents.js";
 
 const html = htm.bind(h);
@@ -129,12 +128,8 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   const [view, setView] = useState("steps");
   const [rows, setRows] = useState(null);      // oldest first, as served
   const [rowsErr, setRowsErr] = useState(null);
-  // The ids the player pointed at, ALWAYS in journal order. Not click order:
-  // the list is drawn newest-first, so clicking down it hands them over
-  // backwards, and "in chronological order" is a property the events already
-  // have. The server sorts too (GET /api/segments/synthesize), so the two
-  // cannot disagree about which end is the start.
-  const { pickedIds, extraStartIds, addingStart, pickNotice,
+  // Chronology supplies ordinary roles. OR-start authoring freezes endpoints.
+  const { pickedIds, extraStartIds, boundaries, addingStart, pickNotice,
     toggleRow, resetPicks, toggleStartMode } = useRecordedSelection(derive);
   const deriveEpoch = useRef(0);
   const checkEpoch = useRef(0);
@@ -428,14 +423,12 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
   // written until Save, so there is no partial state to unwind and un-picking
   // a moment costs exactly what picking one does (his standing rule that a
   // multi-step flow is abandonable with NO side effects).
-  async function derive(ids, starts = extraStartIds) {
+  async function derive(ids, starts = extraStartIds, endpoints = boundaries) {
     const epoch = ++deriveEpoch.current;
     resetDownstream();
-    if (ids.length < 2) return;
+    if (!hasRecordedFinish(ids, endpoints)) return;
     try {
-      const body = await getJSON(
-        `/api/segments/synthesize?ids=${ids.join(",")}`
-        + (starts.length ? `&start_ids=${starts.join(",")}` : ""));
+      const body = await getJSON(recordedSynthesisQuery(ids, starts, endpoints));
       if (deadRef.current || epoch !== deriveEpoch.current) return;
       // Everywhere you went starts REQUIRED. You walked the route you meant to
       // practise, so the common case is that all of it counts; unticking a room
@@ -518,7 +511,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
     ${!rows && !rowsErr && html`<p class="meta">Loading your recent history…</p>`}
 
     ${rows && html`<div class="record-picks">
-      <span class="meta">${recordedPickSummary(pickedIds, extraStartIds)}</span>
+      <span class="meta">${recordedPickSummary(pickedIds, extraStartIds, boundaries)}</span>
       ${pickedIds.length > 0 && html`<button type="button" class="quiet-button"
           aria-pressed=${addingStart}
           onclick=${toggleStartMode}>
@@ -549,13 +542,13 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
         onToggleFold=${() => toggleFold(card.key)}
         icon=${card.level == null ? null
                                   : optionIconSrc(t, "level", card.level)}
-        order=${pickedIds} starts=${extraStartIds} onToggleRow=${toggleRow}
+        order=${pickedIds} starts=${extraStartIds} boundaries=${boundaries} onToggleRow=${toggleRow}
         renamingId=${renamingId} onRenameStart=${startRename}
         onRenameCommit=${commitRename} onRenameCancel=${cancelRename} />`)}
     </div>`}
 
     ${synthErr && html`<p class="badx">${synthErr}</p>`}
-    ${pickedIds.length >= 2 && !synth && !synthErr
+    ${hasRecordedFinish(pickedIds, boundaries) && !synth && !synthErr
       && html`<p class="meta">Working it out…</p>`}
     ${synth && html`<div class="record-review">
       <label class="builder-name">
@@ -565,14 +558,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
           nameEditedRef.current = e.target.value.trim() !== "";
         }} />
       </label>
-      <div class="record-start-review">
-        <p class="meta">Starts when any one happens:</p>
-        ${(synth.start_sentences || [synth.start_sentence]).map((sentence, index) =>
-          html`<p key=${index} class="meta">${index > 0 ? "OR " : ""}<b>${sentence}</b></p>`)}
-      </div>
-      ${(synth.picked || []).map((step, i) => html`<p key=${i} class="meta">
-        Then: <b>${step.sentence}</b></p>`)}
-      <p class="meta">Ends when: <b>${synth.end_sentence}</b></p>
+      <${RecordedConditions} synth=${synth} />
       ${!(synth.picked_explicit ?? !!(synth.picked || []).length)
         && html`<${StepPicker} steps=${synth.steps} required=${required}
           onToggle=${toggleStep} />`}
@@ -614,7 +600,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
     ${saveMessage && html`<p class="meta" role="status">${saveMessage}</p>`}
     <div class="builder-actions">
       <button onclick=${onCancel}>Cancel</button>
-      ${/* Save is simply ABSENT below two picks rather than present and
+      ${/* Save is simply ABSENT until a finish is chosen rather than present and
            refused: a start with no end can never complete, and a disabled
            control whose reason lives in its own hover is the shape he
            reported as a dead button (2026-08-02). The line above the list
@@ -624,7 +610,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
            the click lands, or do not disable it). A click during that window
            does nothing silently, which is exactly how a re-record can be
            believed saved when it never was (round 17 item 1). */""}
-      ${pickedIds.length >= 2 && html`<${SegmentSaveControls}
+      ${hasRecordedFinish(pickedIds, boundaries) && html`<${SegmentSaveControls}
         authoring=${authoring} onSave=${save}
         disabled=${saveDisabled} busy=${saving}
         disabledReason=${lintHasError ? "Fix the error above before saving"

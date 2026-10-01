@@ -229,3 +229,40 @@ def test_lobby_spawn_and_walked_castle_entry_share_the_recorded_path(recorder_ap
     assert report["fires"] == 2
     assert [attempt["anchor_frame"] for attempt in report["attempts"]] == [100, 500]
     assert report["unclosed"] == []
+
+
+def test_explicit_roles_allow_an_older_finish_without_inventing_a_walk(recorder_api):
+    client, db, sid = recorder_api
+    finish = append(db, sid, "warp_entered", 100,
+        {"level": 6, "area": 1, "to": 17})
+    append(db, sid, "area_changed", 200, {"level": 16, "from": 1, "to": 1})
+    alternative = append(db, sid, "level_changed", 300, {"from": 16, "to": 6})
+    append(db, sid, "area_changed", 300, {"level": 6, "from": None, "to": 1})
+    append(db, sid, "area_changed", 400, {"level": 16, "from": 1, "to": 1})
+    primary = append(db, sid, "moment_reached", 500,
+        {"kind": "door_open", "level": 6, "area": 1, "ordinal": 1})
+    response = client.get("/api/segments/synthesize", params={
+        "ids": f"{finish},{primary}", "start_ids": str(alternative),
+        "primary_start_id": primary, "finish_id": finish})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["start_clauses"] == [
+        {"type": "moment_reached", "kind": "door_open", "level": 6, "ordinal": 1},
+        {"type": "level_exit", "from": 16}]
+    assert body["end_clause"] == {"type": "entrance_touched", "to": 17}
+    assert body["steps"] == body["picked"] == []
+    assert body["picked_explicit"] is False
+    assert "No intermediate rooms" in body["path_notice"]
+
+
+@pytest.mark.parametrize("endpoints", [
+    {"primary_start_id": 1}, {"finish_id": 2},
+    {"primary_start_id": 1, "finish_id": 1},
+    {"primary_start_id": 1, "finish_id": 999}])
+def test_invalid_explicit_boundary_pairs_are_refused(recorder_api, endpoints):
+    client, db, sid = recorder_api
+    primary = append(db, sid, "spawned", 100, {"level": 9})
+    finish = append(db, sid, "moment_reached", 300, moment("pole_grab", "pole"))
+    response = client.get("/api/segments/synthesize", params={
+        "ids": f"{primary},{finish}", **endpoints})
+    assert response.status_code == 422

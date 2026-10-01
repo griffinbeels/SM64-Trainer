@@ -845,20 +845,24 @@ def create_api_router(service) -> APIRouter:
         return {"warnings": lint_definition(candidate, service.segment_defs)}
 
     @router.get("/segments/synthesize")
-    def synthesize_from_timeline(ids: str, start_ids: str | None = None):
+    def synthesize_from_timeline(ids: str, start_ids: str | None = None,
+                                primary_start_id: int | None = None,
+                                finish_id: int | None = None,
+                                infer_walk: bool = True):
         """Draft a recorded path, with optional independent OR start samples.
 
-        The server sorts ``ids``: earliest starts, latest finishes, middles
-        are ordered waypoints. ``start_ids`` may name other attempts outside
-        that span; promoted middles stop being waypoints. The primary start
-        remains first. Assembly and error contracts live in
+        Legacy ``ids`` use earliest/latest endpoints. Explicit paired endpoint
+        ids keep selected Start/Finish roles across different attempts; middles
+        remain ordered waypoints. ``start_ids`` supplies independent OR starts.
+        The primary remains first. Assembly and error contracts live in
         ``server/segment_synthesis.py``. Read-only; static route stays before
         ``/segments/{segment_id}`` so the id route cannot swallow it.
         """
         if service.db is None:
             raise HTTPException(503, "database unavailable")
         return synthesize_recording(journal_events(), ids, start_ids,
-                                    service.db.landmark_names())
+                                    service.db.landmark_names(),
+                                    primary_start_id, finish_id, infer_walk)
 
     @router.post("/segments/merge")
     async def merge_segments(body: SegmentMergeBody):
