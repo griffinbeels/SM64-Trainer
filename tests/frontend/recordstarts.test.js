@@ -27,15 +27,20 @@ function synthesize(url) {
   const query = new URL(url, "http://fixture").searchParams;
   const ids = query.get("ids").split(",").filter(Boolean).map(Number).sort((a, b) => a - b);
   const extra = (query.get("start_ids") || "").split(",").filter(Boolean).map(Number);
-  const starts = [ids[0], ...extra.filter((id) => id !== ids[0]).sort((a, b) => a - b)];
-  const middles = ids.slice(1, -1);
+  const primary = query.has("primary_start_id") ? Number(query.get("primary_start_id")) : ids[0];
+  const finish = query.has("finish_id") ? Number(query.get("finish_id")) : ids.at(-1);
+  const starts = [primary, ...extra.filter((id) => id !== primary).sort((a, b) => a - b)];
+  const middles = ids.filter((id) => id !== primary && id !== finish);
   const picked = middles.filter((id) => !extra.includes(id)).map((id) => ({ id,
     clause: clause(id), sentence: samples.find((row) => row.id === id).label }));
   const sentence = (id) => samples.find((row) => row.id === id).label;
-  return { name: "Recorded LBLJ", start_clause: clause(ids[0]), end_clause: clause(ids.at(-1)),
-    start_sentence: sentence(ids[0]), end_sentence: sentence(ids.at(-1)),
+  const hasWalk = primary < finish && query.get("infer_walk") !== "false";
+  return { name: "Recorded LBLJ", start_clause: clause(primary), end_clause: clause(finish),
+    start_sentence: sentence(primary), end_sentence: sentence(finish),
     start_clauses: starts.map(clause), start_sentences: starts.map(sentence),
-    picked, picked_explicit: middles.length > 0, steps: [walked] };
+    picked, picked_explicit: middles.length > 0,
+    steps: hasWalk ? [walked] : [],
+    path_notice: hasWalk ? null : "These samples do not show a continuous run from the primary start to the finish." };
 }
 
 const report = (fires = 1) => ({ arms: 1, fires, unclosed: [], attempts: [] });
@@ -103,6 +108,121 @@ async function readyToSave(view) {
     expect(button.textContent.trim()).toMatch(/^(Save|Replace) segment$/);
   });
 }
+
+test("ordinary newest-first picks still put the earliest row at Start", async () => {
+  const f = fixture(), view = render(h(SegmentTimeline, f.props));
+  await view.findByRole("button", { name: /Another Castle Grounds entry/ });
+  clickRow(view, 40);
+  clickRow(view, 20);
+  clickRow(view, 10);
+  await readyToSave(view);
+  expect(marker(view, 10).classList.contains("role-start")).toBe(true);
+  expect(marker(view, 40).classList.contains("role-finish")).toBe(true);
+  fireEvent.click(saveButton(view));
+  await waitFor(() => expect(f.calls.save).toHaveLength(1));
+  expect(f.calls.save[0].body.start_triggers).toEqual([clause(10)]);
+  expect(f.calls.save[0].body.end_triggers).toEqual([clause(40)]);
+  expect(f.calls.save[0].body.waypoints).toEqual([[clause(20)]]);
+  const query = new URL(f.calls.synthesis.at(-1).path, "http://fixture").searchParams;
+  expect(query.has("primary_start_id")).toBe(false);
+  expect(query.has("finish_id")).toBe(false);
+});
+
+test("a newest primary stays Start when an older Finish is picked after Done adding starts", async () => {
+  const f = fixture(), view = render(h(SegmentTimeline, f.props));
+  await view.findByRole("button", { name: /Another Castle Grounds entry/ });
+  clickRow(view, 40);
+  addStart(view);
+  clickRow(view, 10);
+  finishAdding(view);
+  clickRow(view, 30);
+  await readyToSave(view);
+  expect(marker(view, 40).classList.contains("role-start")).toBe(true);
+  expect(marker(view, 10).textContent.trim()).toBe("OR");
+  expect(marker(view, 30).classList.contains("role-finish")).toBe(true);
+  expect(view.container.querySelector(".record-review").textContent).toContain("primary start to the finish");
+  const query = new URL(f.calls.synthesis.at(-1).path, "http://fixture").searchParams;
+  expect(query.get("primary_start_id")).toBe("40");
+  expect(query.get("finish_id")).toBe("30");
+  fireEvent.click(saveButton(view));
+  await waitFor(() => expect(f.calls.save).toHaveLength(1));
+  const saved = f.calls.save[0].body;
+  expect(saved.start_triggers).toEqual([clause(40), clause(10)]);
+  expect(saved.end_triggers).toEqual([clause(30)]);
+  expect(saved.waypoints).toEqual([]);
+  expect(f.calls.backtest.at(-1).body.definition).toEqual(saved);
+  expect(f.calls.lint.at(-1).body.definition).toEqual(saved);
+});
+
+test("removing every alternate sample keeps the primary pinned until Clear", async () => {
+  const f = fixture(), view = render(h(SegmentTimeline, f.props));
+  await view.findByRole("button", { name: /Another Castle Grounds entry/ });
+  clickRow(view, 40);
+  addStart(view);
+  clickRow(view, 10);
+  finishAdding(view);
+  clickRow(view, 10);
+  clickRow(view, 30);
+  await readyToSave(view);
+  expect(marker(view, 40).classList.contains("role-start")).toBe(true);
+  expect(marker(view, 30).classList.contains("role-finish")).toBe(true);
+  expect(rowButton(view, 10).getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(view.getByRole("button", { name: /Clear/ }));
+  clickRow(view, 40);
+  clickRow(view, 10);
+  await readyToSave(view);
+  expect(marker(view, 10).classList.contains("role-start")).toBe(true);
+  expect(marker(view, 40).classList.contains("role-finish")).toBe(true);
+});
+
+test("removing Finish preserves OR starts and leaves selected middles as steps", async () => {
+  const f = fixture(), view = render(h(SegmentTimeline, f.props));
+  await pickPath(view, true);
+  addStart(view);
+  clickRow(view, 1);
+  finishAdding(view);
+  clickRow(view, 30);
+  expect(marker(view, 10).classList.contains("role-start")).toBe(true);
+  expect(marker(view, 1).textContent.trim()).toBe("OR");
+  expect(marker(view, 20).classList.contains("role-finish")).toBe(false);
+  expect(view.container.querySelectorAll(".record-mark.role-finish")).toHaveLength(0);
+  expect(view.container.querySelector(".builder-actions .primary-button")).toBeNull();
+  expect(view.container.querySelector(".record-picks").textContent).toMatch(/pick.*finish/i);
+  clickRow(view, 40);
+  await readyToSave(view);
+  expect(marker(view, 40).classList.contains("role-finish")).toBe(true);
+  fireEvent.click(saveButton(view));
+  await waitFor(() => expect(f.calls.save).toHaveLength(1));
+  expect(f.calls.save[0].body.start_triggers).toEqual([clause(10), clause(1)]);
+  expect(f.calls.save[0].body.end_triggers).toEqual([clause(40)]);
+  expect(f.calls.save[0].body.waypoints).toEqual([[clause(20)]]);
+});
+
+test("removing the primary promotes the first alternate without inferring a different walk", async () => {
+  const f = fixture(), view = render(h(SegmentTimeline, f.props));
+  await pickPath(view);
+  addStart(view);
+  clickRow(view, 1);
+  clickRow(view, 40);
+  finishAdding(view);
+  clickRow(view, 10);
+  await readyToSave(view);
+  expect(marker(view, 1).textContent.trim()).not.toBe("OR");
+  expect(marker(view, 40).textContent.trim()).toBe("OR");
+  expect(marker(view, 30).classList.contains("role-finish")).toBe(true);
+  const query = new URL(f.calls.synthesis.at(-1).path, "http://fixture").searchParams;
+  expect(query.get("primary_start_id")).toBe("1");
+  expect(query.get("finish_id")).toBe("30");
+  expect(query.get("infer_walk")).toBe("false");
+  fireEvent.click(saveButton(view));
+  await waitFor(() => expect(f.calls.save).toHaveLength(1));
+  expect(f.calls.save[0].body.start_triggers).toEqual([clause(1), clause(40)]);
+  expect(f.calls.save[0].body.waypoints).toEqual([]);
+  clickRow(view, 40);
+  clickRow(view, 1);
+  expect(view.container.querySelectorAll(".record-row.picked")).toHaveLength(0);
+  expect(view.queryByRole("button", { name: "Add another start" })).toBeNull();
+});
 
 test("the extra-start mode appears after a path pick and cannot reclassify its boundaries", async () => {
   const f = fixture(), view = render(h(SegmentTimeline, f.props));
