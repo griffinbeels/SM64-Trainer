@@ -1,7 +1,8 @@
-/* Older clips read as the current GCLIP6: the same header and samples, sizes
+/* Older clips read as the current GCLIP7: the same header and samples, sizes
  * and versions moved on, the blocks they never had zero. GCLIP4 (GC5,
  * 652-byte records) has no particles; GCLIP5 (GC6, 1268-byte records) has a
- * held block without a released object's angle. Saved and PB ghosts recorded
+ * held block without a released object's angle. GCLIP6 (GC7, 1276-byte records)
+ * has no exact pad block. Saved and PB ghosts recorded
  * before either keep playing. Worker-only; allocates. Mirrored by clip.py
  * upgrade_record/decode_clip. */
 #pragma once
@@ -13,17 +14,21 @@
 namespace ghost_clip {
 constexpr char v4_magic[] = "SM64GHO4";
 constexpr uint32_t v4_version = 4, v4_record_bytes = 652, v4_sample_bytes = 636, v4_sample_version = 5;
-static_assert(offsetof(gc_sample, particles) == v4_sample_bytes, "GC5 is GC7 without its particle and held blocks");
+static_assert(offsetof(gc_sample, particles) == v4_sample_bytes, "GC5 lacks particle, held and pad blocks");
 constexpr char v5_magic[] = "SM64GHO5";
 constexpr uint32_t v5_version = 5, v5_record_bytes = 1268, v5_sample_bytes = 1252, v5_sample_version = 6;
 static_assert(offsetof(gc_sample, held) + offsetof(gc_held, angles) == v5_sample_bytes,
-              "GC6 is GC7 without the released object's angle");
+              "GC6 lacks the released object's angle and pad");
+constexpr char v6_magic[] = "SM64GHO6";
+constexpr uint32_t v6_version = 6, v6_record_bytes = 1276, v6_sample_bytes = 1260, v6_sample_version = 7;
+static_assert(offsetof(gc_sample, pad) == v6_sample_bytes, "GC7 lacks only the optional exact pad block");
 
 struct Older { const char *magic; uint32_t version, record_bytes, sample_bytes, sample_version; };
 constexpr Older older[] = {{v4_magic, v4_version, v4_record_bytes, v4_sample_bytes, v4_sample_version},
-                           {v5_magic, v5_version, v5_record_bytes, v5_sample_bytes, v5_sample_version}};
+                           {v5_magic, v5_version, v5_record_bytes, v5_sample_bytes, v5_sample_version},
+                           {v6_magic, v6_version, v6_record_bytes, v6_sample_bytes, v6_sample_version}};
 
-/* True when data holds a structurally sized GCLIP4 or GCLIP5 file and it was
+/* True when data holds a structurally sized GCLIP4, GCLIP5 or GCLIP6 file and it was
  * rewritten in place as the current version; false leaves data untouched
  * (current, or malformed: the ordinary validation then refuses it). */
 inline bool upgrade(std::vector<uint8_t> &data, bool *out_of_memory = nullptr) {

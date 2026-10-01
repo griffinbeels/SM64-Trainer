@@ -11,7 +11,8 @@ from pathlib import Path
 
 from sm64_events.ghost.native_layout import (  # sizes and limits: native_layout.py
     GHOSTS, IPC_MAGIC as MAGIC, IPC_PATH_CHARS as PATH_CHARS, IPC_PREFIX, IPC_RING_AT as RING_OFFSET,
-    IPC_SLOTS as SLOTS, IPC_VERSION as VERSION, LAYOUT_BYTES, RECORD_BYTES,
+    IPC_SLOTS as SLOTS, IPC_VERSION as VERSION, IPC_CLIP_BYTES, IPC_REQUEST_BYTES,
+    LABEL_BYTES, LAYOUT_BYTES, RECORD_BYTES,
 )
 
 PREFIX = IPC_PREFIX  # the named mapping, mutex and event, plus the producer pid
@@ -31,7 +32,7 @@ class Clip(C.LittleEndianStructure):
     _pack_ = 4
     _fields_ = [("clip_id", C.c_ubyte * 16), ("clip_sha256", C.c_ubyte * 32),
                 ("hue_degrees", U32), ("reserved", U32),
-                ("clip_path", C.c_uint16 * PATH_CHARS)]
+                ("clip_path", C.c_uint16 * PATH_CHARS), ("label", C.c_char * LABEL_BYTES)]
 
 
 class Request(C.LittleEndianStructure):
@@ -51,6 +52,7 @@ class Request(C.LittleEndianStructure):
         ("clips", Clip * GHOSTS),
         ("shadow_enabled", U32), ("occlusion_fade", U32),
         ("volume", C.c_float), ("sound_fade", U32),
+        ("names_enabled", U32), ("inputs_enabled", U32), ("input_mode", U32),
     ]
 
 
@@ -80,7 +82,7 @@ class Status(C.LittleEndianStructure):
     ]
 
 
-assert C.sizeof(Origin) == 40 and C.sizeof(Clip) == 1096 and C.sizeof(Request) == 18956
+assert C.sizeof(Origin) == 40 and C.sizeof(Clip) == IPC_CLIP_BYTES and C.sizeof(Request) == IPC_REQUEST_BYTES
 assert C.sizeof(Status) == 256 and 256 + C.sizeof(Request) <= RING_OFFSET
 assert Request.layout.offset == 80 and Status.consumed.offset == 96
 

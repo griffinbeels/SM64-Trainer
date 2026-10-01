@@ -5,12 +5,12 @@
 #include "ghost_origin.h"
 #include "ghost_tuning.h"
 #include <stddef.h>
-#define GIPC_VERSION 8u
-#define GIPC_MAGIC "SM64GIP8"
+#define GIPC_VERSION 9u
+#define GIPC_MAGIC "SM64GIP9"
 #define GIPC_SLOTS 512u
 #define GIPC_PATH_CHARS 520u
 #define GIPC_LEASE_MS 3000u
-#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v8_"
+#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v9_"
 #define GIPC_GHOSTS GP_GHOSTS
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
@@ -28,6 +28,7 @@ typedef struct gipc_clip {
     uint32_t hue_degrees;
     uint32_t reserved;
     uint16_t clip_path[GIPC_PATH_CHARS];
+    char label[GP_LABEL_BYTES]; /* terminated UTF-8, validated before publication */
 } gipc_clip;
 typedef struct gipc_request {
     uint32_t owner_pid, owner_created_lo, owner_created_hi, generation;
@@ -58,6 +59,7 @@ typedef struct gipc_request {
      * formerly the checked-zero reserved3, so 0 is off. */
     float volume;
     uint32_t sound_fade;
+    uint32_t names_enabled, inputs_enabled, input_mode;
 } gipc_request;
 typedef struct gipc_status {
     char magic[8];
@@ -95,8 +97,8 @@ typedef struct gipc_page {
 #pragma pack(pop)
 #ifdef __cplusplus
 static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
-static_assert(sizeof(gipc_clip) == 1096, "ghost clip entry bytes");
-static_assert(sizeof(gipc_request) == 18956, "ghost request bytes");
+static_assert(sizeof(gipc_clip) == 1160, "ghost clip entry bytes");
+static_assert(sizeof(gipc_request) == 19996, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
 static_assert(offsetof(gipc_page, records) == 20480, "ghost ring offset");
 namespace ghost_ipc {

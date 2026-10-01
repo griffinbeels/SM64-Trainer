@@ -5,6 +5,8 @@ tests/native/ghost_layout_host.cpp prints the same names from sizeof, offsetof
 and the C macros. A wrong or missing value fails here, not as a misread clip.
 """
 import importlib.util
+import ctypes as C
+from dataclasses import replace
 import json
 from pathlib import Path
 import subprocess
@@ -68,7 +70,28 @@ def test_python_decoders_fill_the_spans_they_read():
     assert clip._SOUND.size == L.SOUND_BYTES
     assert L.SOUND_BITS_AT + 4 * L.SOUND_EVENTS == L.SOUND_BYTES
     assert L.PARTICLES_ENTRIES_AT + L.PARTICLE_EVENTS * L.PARTICLE_BYTES == L.PARTICLES_BYTES
-    assert L.HELD_AT + L.HELD_BYTES == L.RECORD_BYTES
+    assert L.HELD_AT + L.HELD_BYTES == L.PAD_AT
+    assert L.PAD_AT + L.PAD_BYTES == L.RECORD_BYTES
     assert len(ghost_layout.GhostLayout.from_layout(US).to_bytes()) == L.LAYOUT_BYTES
     assert ghost_layout.VERSION == L.SAMPLE_VERSION
     assert P.PAGE_BYTES == L.IPC_RING_AT + L.IPC_SLOTS * L.RECORD_BYTES
+
+
+def test_annotations_fit_in_the_existing_request_region():
+    assert C.sizeof(P.Clip) == L.IPC_CLIP_BYTES
+    assert C.sizeof(P.Request) == L.IPC_REQUEST_BYTES
+    assert C.sizeof(P.Status) == 256
+    assert C.sizeof(P.Status) + C.sizeof(P.Request) <= L.IPC_RING_AT
+    assert P.Clip.label.offset == P.Clip.clip_path.offset + 2 * L.IPC_PATH_CHARS
+    assert P.Request.names_enabled.offset + 12 == L.IPC_REQUEST_BYTES
+    assert P.Clip().label == b""
+
+
+def test_pad_root_is_optional_and_uses_the_existing_layout():
+    configured = ghost_layout.GhostLayout.from_layout(US)
+    assert configured.player1_controller == US.player1_controller
+    assert int.from_bytes(configured.to_bytes()[-4:], "little") == US.player1_controller
+    without = ghost_layout.GhostLayout.from_layout(replace(US, player1_controller=None))
+    assert without.player1_controller == 0 and without.to_bytes()[-4:] == bytes(4)
+    with pytest.raises(ValueError, match="player1_controller"):
+        replace(configured, player1_controller=configured.player1_controller + 1)
