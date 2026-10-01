@@ -11,6 +11,16 @@ from sm64_events.ghost.sharing_catalog import checked_selection
 from sm64_events.server.jobs import JobBoard
 
 
+def _provider(session_of):
+    try:
+        provider = session_of()._sharing()
+        if provider is None:
+            raise RuntimeError("Ghost sharing is available after the trainer starts recording.")
+        return provider
+    except RuntimeError as error:
+        raise HTTPException(503, str(error)) from error
+
+
 def _mount_import(router, sharing, jobs):
     @router.post("/ghost/library/import")
     async def import_collection(request: Request):
@@ -46,7 +56,8 @@ def _mount_race(router, session_of, sharing):
     @router.post("/ghost/library/prepare-race")
     async def prepare_race(body: dict):
         session = session_of()
-        if set(body) != {"ghosts", "target"} or body["target"] != session._read_target():
+        if (set(body) != {"ghosts", "target"} or not isinstance(body["target"], dict)
+                or body["target"] != session._read_target()):
             raise HTTPException(422, "The practice target changed; choose ghosts for the current target.")
         try:
             choice = await run_in_threadpool(sharing().prepare_race, body["ghosts"], body["target"])
@@ -59,10 +70,7 @@ def mount_collection_routes(router, session_of):
     jobs = JobBoard()
 
     def sharing():
-        try:
-            return session_of()._sharing()
-        except RuntimeError as error:
-            raise HTTPException(503, str(error)) from error
+        return _provider(session_of)
 
     @router.get("/ghost/library")
     def library():

@@ -11,6 +11,7 @@ import sys
 import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.ghost.native_layout import CLIP_VERSION, PLAYBACK_VERSION, SAMPLE_VERSION
 from sm64_events.memory.layout import US
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,7 +114,8 @@ def test_connected_capture_model_gpu_pipeline(tmp_path, width, height):
     keep_evidence(tmp_path, shape)
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
     assert (report["width"], report["height"]) == (width, height)
-    assert report["capture_version"] == 7 and report["clip_version"] == 6 and report["playback_version"] == 7
+    assert (report["capture_version"], report["clip_version"], report["playback_version"]) == (
+        SAMPLE_VERSION, CLIP_VERSION, PLAYBACK_VERSION)
     assert_scene_effects(report)  # the timing below runs with the player-first fade on
     assert_saved_ghost_plays(report["saved_gclip4"])
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]

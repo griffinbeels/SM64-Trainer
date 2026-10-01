@@ -1451,19 +1451,44 @@ the saved PBs on every read, never stored, and never changes the input compariso
 
 ### Ghost set
 
-Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any [[saved ghost]]
-or [[template track]] [[attempt]] you tick, up to 16, each named by the time it achieved.
-Only Mario draws them all at once, each tinted its own colour; Whole picture shows
-the first. With the PB box ticked, no PB saved and nothing else ticked, your active
+Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any [[saved ghost]],
+[[imported ghost]] or [[template track]] [[attempt]] you tick, up to 16, each named by the time it achieved.
+Only Mario draws them all at once, each tinted its own colour. Whole picture
+shows the first ghost's saved video when available; imported collections contain
+native poses only. With the PB box ticked, no PB saved and nothing else ticked, your active
 [[template track]] plays.
 
 - **Lives** — `src/sm64_events/ghost/selection.py`
+
+### Ghost collection
+
+One `.sm64ghosts` file containing selected native [[ghost]] recordings, their
+creator credit, time, [[target]] and [[strategy]]. **Ghost Library** sorts and
+filters recent/saved local recordings and imports; selection spans pages.
+Export selected writes one collection and Import collection reads all of it.
+Practice/unfinished runs are hidden initially. Collections can contain many
+more recordings than the [[ghost set]] can race at once.
+
+- **Lives** — `src/sm64_events/ghost/portable.py` and `sharing.py`;
+  `src/sm64_events/ui/components/ghostlibrary.js`
+
+### Imported ghost
+
+A native [[ghost]] received in a [[ghost collection]], with the original
+exporter's credited name and [[strategy]]. Stored separately from local
+[[attempt]]s and personal bests; importing it never awards a PB or gold.
+[[Segment]] matching compares the actual definition and clock rather than
+another player's numeric ID. Unknown definitions stay unavailable with a
+reason. Re-export preserves the original creator's credit.
+
+- **Lives** — `src/sm64_events/ghost/sharing.py` and `sharing_targets.py`
 
 ### Saved ghost
 
 An [[attempt]] you chose to race that is neither your [[personal best]] nor a
 [[template track]]. Its drawer's save button keeps its Mario poses and ticks it
-in the [[ghost set]]. It carries no inputs, so it never changes the input comparison.
+in the [[ghost set]]. Its native recording can carry exact pad evidence for
+the in-game input display; saving it never changes the input comparison.
 
 - **Lives** — `src/sm64_events/ghost/saved.py`
 

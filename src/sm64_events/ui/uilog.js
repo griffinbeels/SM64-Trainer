@@ -33,9 +33,9 @@ export function readGhostLibrary(root) {
   const list = root.querySelector(".ghost-library-list");
   if (!list) return null;
   return {surface: "ghost_library",
-    filters: [...root.querySelectorAll(".ghost-library-filters select")].map(el => el.value),
-    query: root.querySelector('input[type="search"]')?.value || "",
-    selection: text(root.querySelector(".ghost-library-selection .meta")),
+    note: [...root.querySelectorAll(".ghost-library-filters select")].map(el => el.value).join(" · ")
+      + " · " + (root.querySelector('input[type="search"]')?.value || "")
+      + " · " + text(root.querySelector(".ghost-library-selection .meta")),
     rows: [...list.querySelectorAll(".ghost-library-row")].map(row => ({
       name: text(row.querySelector(".ghost-library-description strong")),
       strategy: text(row.querySelector(".ghost-library-description .meta")),

@@ -105,7 +105,8 @@ function useLibrary(session, write, onClose) {
     setBusy(true); setError("");
     try {
       await send("POST", `${URL}/prepare-race`, {ghosts: choice, target});
-      write({ghosts: choice, target, view: "mario"});
+      const result = await write({ghosts: choice, target, view: "mario"});
+      if (result?.applied === false) {setError(result.error); return;}
       onClose();
     } catch (problem) {setError(problem.message);}
     finally {setBusy(false);}
@@ -128,7 +129,7 @@ function LibraryFooter({ctx}) {
 
 function LibraryMessages({ctx}) {
   const {progress,busy,error,message,skipped,catalog,visible,rows} = ctx;
-  return html`${progress ? html`<${ProgressLine} progress=${progress.progress} message=${progress.message} running=${busy} />` : null}
+  return html`${progress?.state === "running" ? html`<${ProgressLine} progress=${progress.progress} message=${progress.message} running=${busy} />` : null}
       ${error ? html`<p class="error" role="alert">${error}</p>` : null}
       ${message ? html`<p class="meta" role="status">${message}</p>` : null}
       ${skipped.length ? html`<details><summary>${skipped.length} unavailable recordings</summary><ul>${skipped.map(row => html`<li>${row.source === "local" ? `Run #${row.id}` : "Imported ghost"}: ${row.reason}</li>`)}</ul></details>` : null}

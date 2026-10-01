@@ -683,18 +683,29 @@ void retire_clips() {
 // An automatic PB/set refresh can release a recording whose terminal pose
 // is still on screen. Keep ownership until its death/dance ends; a new run,
 // switch-off, owner or context change still clears the terminal set.
-void retire_unwanted() {
+void retire_unwanted(bool visible=true) {
     for(uint32_t i=0;i<GP_CLIP_SLOTS;++i) {
         bool terminal=false;
         for(uint32_t k=0;defeat.active && k<GP_GHOSTS;++k)
             terminal=terminal || defeat.clip[k]==&clips[i];
         for(uint32_t k=0;terminal_pending && k<GP_GHOSTS;++k)
             terminal=terminal || bound[k]==&clips[i];
-        if(terminal)continue;
+        if(terminal && visible)continue;
         uint32_t expected=Unwanted;
         if(!held[i] || !clips[i].state.compare_exchange_strong(expected,Retired))continue;
         held[i]=false;
-        for(auto &clip:bound)if(clip==&clips[i])clip=nullptr;
+        for(uint32_t k=0;k<GP_GHOSTS;++k) {
+            if(bound[k]==&clips[i]) {bound[k]=nullptr;shown_last[k]={};}
+            if(defeat.clip[k]==&clips[i]) {
+                defeat.clip[k]=nullptr;defeat.loser[k]=defeat.winner[k]=false;
+            }
+        }
+    }
+    if(!visible && (defeat.active || terminal_pending)) {
+        bool retained=false;
+        for(uint32_t k=0;k<GP_GHOSTS;++k)
+            retained=retained || (defeat.active && defeat.clip[k]) || (terminal_pending && bound[k]);
+        if(!retained)clear_timeline();
     }
 }
 Clip *adopt(const uint8_t *id,uint32_t current_cancel) {
@@ -1117,6 +1128,11 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
     if(enabled_revision.load()!=next.revision) {
+        // Withdrawal keeps reusable Owned clips and the model, but an explicit
+        // release must reach the worker even while no new command can apply.
+        // Released terminal entries have no visible owner here. Unreleased
+        // terminal entries keep their place and animation for a later resume.
+        retire_unwanted(false);
         // Withdrawal retains reusable assets, but an explicit worker model
         // replacement must still be released at this safe render boundary.
         if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();

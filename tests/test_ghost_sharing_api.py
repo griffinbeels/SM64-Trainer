@@ -79,3 +79,15 @@ def test_race_preparation_checks_current_target_and_import_bytes(tmp_path):
     (sharing.root / f"{row['sha256']}.ghost").write_bytes(b"other")
     assert client.post("/api/ghost/library/prepare-race", json=body).status_code == 422
     assert sharing.database.writes == []
+
+
+def test_unready_collections_and_absent_practice_target_have_readable_refusals(tmp_path):
+    app = FastAPI()
+    unready = SimpleNamespace(_sharing=lambda: None, _read_target=lambda: None)
+    app.include_router(create_ghost_router(None, None, session=unready))
+    client = TestClient(app)
+    assert client.get("/api/ghost/library").status_code == 503
+    assert client.post("/api/ghost/library/export", json={
+        "selected": {"attempts": [1]}, "author": "Name"}).status_code == 503
+    assert client.post("/api/ghost/library/prepare-race", json={
+        "ghosts": {"pb": False, "attempts": []}, "target": None}).status_code == 422

@@ -7,13 +7,14 @@ opacity, timing nudge and tint controls; switching to Mario closes the overlay
 window. See [session.py](../src/sm64_events/ghost/session.py) and
 [native_session.py](../src/sm64_events/ghost/native_session.py).
 
-The **Ghost recording** selector lists saved templates for the current star or
-segment. An explicit choice is stored per target and strategy without changing
-the input-comparison template; **Use input template** restores that relationship.
-Each recording is qualified separately for Mario poses and whole-picture video.
-A removed choice stays unavailable until the user chooses another recording.
-The selection update includes its target so a delayed request cannot choose a
-ghost for a different practice target. See
+The **Ghosts** checkboxes choose the local PB, other saved runs and imported
+ghosts for the current star or segment. The choice is stored per target and
+strategy without changing the input-comparison template. When PB is ticked but
+no PB or other ghost is selected, the active input template supplies the ghost.
+Local recordings are qualified separately for Mario poses and whole-picture
+video; imported collections supply native poses. A removed choice stays
+unavailable until the user chooses another recording. Selection updates include
+the target so a delayed request cannot choose ghosts for another practice target. See
 [selection.py](../src/sm64_events/ghost/selection.py).
 
 The source connects capture, archive publication, native playback, compositing
@@ -23,28 +24,76 @@ physics resimulation and migration of older video-only recordings are outside
 the format. The full game, recording and presentation path has a 33.33 ms budget
 at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
+## Names, inputs and collections
+
+The native controls remember **Names** (on initially), **Inputs** (off initially)
+and **Stick / Values**. Each ghost carries its own bounded credit: `YOUR PB` for
+the selected local PB, `YOUR RUN` for another local recording, and the exporting
+player's name for an imported ghost. Credit is presentation metadata; changing
+it never changes clip identity or restarts playback. Input and label metadata
+travel inside the pose through depth sorting and inherit its visibility.
+
+The input display reads `gc_pad` from the ghost's selected **recorded occurrence**,
+even when a missing body pose is bridged from an earlier occurrence. Raw signed
+stick X/Y and held buttons are captured beside that pose, from the existing
+verified player-one controller root. Pressed buttons only provide a sanity check.
+Unavailable pad evidence is distinct from a known neutral stick, and never hides
+a valid body pose. Older clips keep playing with an unavailable-input indicator. Synthetic
+death, extrapolated dance and post-recording holds have no invented inputs.
+
+The font is the original thin white SM64 dialogue font. Button and stick art
+come from the supported Usamune ROM's actual input display; its stick placement
+uses the same clamp and integer division. Stock dialogue labels cover controls
+for which that display has no art. Annotation rendering belongs to the private
+ghost display surface before HUD compositing; clean video stays unchanged.
+
+**Ghost Library** opens beside the native controls. It shows recent buffer-covered
+and saved local runs plus imported recordings, with creator, target, strategy,
+time, fastest/recent ordering and search. Practice and unfinished runs are hidden
+initially. Selection spans pages: **Select filtered** selects the entire filtered
+list. Export produces one `.sm64ghosts` collection; choosing that file imports
+all its ghosts. The collection bound is 4096 entries per file, independent of
+the renderer's 16-ghost race limit. **Race selected here** preserves selected
+local recordings before applying the target's race choice.
+
+`ghost/portable.py` validates every entry and clip before publication: bounded
+ZIP/manifest/record sizes, exact file hashes, supported native format, recorded
+clock and star course. The 100-coin star retains its legitimate segment-clock
+recording. Creator credit, timing and strategy travel with the original bytes;
+re-export retains foreign credit, and repeated imports are idempotent. Credit
+identifies the name supplied by the exporter, not an authenticated account.
+
+Imported ghosts live beneath `save_root/shared-ghosts`, separate from attempts,
+PBs and input templates. They cannot become personal bests or golds. Star keys
+are canonical course/star IDs. Segment signatures expand parent and trigger
+references and match the actual definition and clock, independent of foreign
+numeric IDs; unmatched or ambiguous segments remain in the library with a
+readable explanation. A bulk read binds one current definition snapshot.
+
 ## Versioned boundaries
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC7: layout 188 (`behaviour_base` at 184), sample 1260; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636) and the [held object](#held-objects) (44 at 1216, its released angle at 36) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC8: layout 192 (`player1_controller` at 188), sample 1268; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636), the [held object](#held-objects) (44 at 1216, its released angle at 36) and optional exact pad (8 at 1260, validity bit 512) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
-| Renderer capture | GS6, still exported as `SM64GhostSourceV3` (the version argument must be 6); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled`, `occlusion_fade` and `sound_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC8: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade`, `volume` and `sound_fade`), ring offset 20480, 512 records of 1276 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
-| Portable clip | GCLIP6: header 160, record 1276, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP5 (record 1268) still loads, read as having nothing released; GCLIP4 (record 652) also as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
+| Renderer capture | GS7, still exported as `SM64GhostSourceV3` (the version argument must be 7); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
+| Playback | GP8: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension and global names/inputs/mode controls | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC9: status 256, request 19996 (layout 192; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; names/inputs/mode appended after sound controls | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Portable clip | GCLIP7: header 160, record 1284, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP6 (1276), GCLIP5 (1268) and GCLIP4 (652) still load with unavailable pad; GCLIP5 also has nothing released, GCLIP4 also has no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
-Sizes are bytes. Native ghost versions are checked together. GCLIP5 (GC6,
+Sizes are bytes. Native ghost versions are checked together. GCLIP6 (GC7,
+1276-byte records, before exact pad), GCLIP5 (GC6,
 1268-byte records, before released objects) and GCLIP4 (GC5, 652-byte records,
 before particles) are read by a compatibility step: the worker, after checking
-the saved file's SHA-256, and `clip.py` both rewrite them as GCLIP6 with every
+the saved file's SHA-256, and `clip.py` both rewrite them as GCLIP7 with every
 sample byte kept and the blocks they never had zero
 ([ghost_clip_upgrade.h](../plugin/gfxwrap/ghost_clip_upgrade.h),
 `upgrade_record`), so they bind to their attempt and play exactly as before
 (GCLIP4 tested on a real saved clip, `tests/fixtures/attempt_2549_*`); an
-older clip longer than 100000 records is refused. The pose archive's GC6 and
-GC5 rows read the same way. Older native clips have no
+older clip longer than 100000 records is refused. An older record claiming the
+new pad-valid bit is refused, rather than fabricating neutral input from a
+zero-extended block. The pose archive's GC7, GC6 and GC5 rows read the same way. Older native clips have no
 compatibility reader. Their files remain on disk; `OlderPoseFormat` provides a
 typed reason (`older_pose_format`) to record a new attempt. An older committed
 file keeps pruning protection and is never overwritten by a later export; a
@@ -809,7 +858,7 @@ live Project64 picture; the current renderer still needs a live tunnel witness.
 ## Recording, preservation and ownership
 
 [NativeCapture](../src/sm64_events/ghost/capture.py) owns a separate leased channel
-named `Local\sm64_trainer_ghost_v4_<PID>`. Process birth, producer/ROM generations,
+named `Local\sm64_trainer_ghost_v9_<PID>`. Process birth, producer/ROM generations,
 configuration, epoch and one QPC/UTC anchor identify its batches. The native
 worker and Python client use a named mutex for mapped-page access; the render
 thread never touches that page. File/hash checks, ROM asset preparation and clip
@@ -830,7 +879,13 @@ ROM failure nor renderer readiness changes saved-recording eligibility.
 
 Losing the active origin withdraws drawing while retaining prepared assets.
 Switching playback off (nothing listed to draw) also releases its clips; a
-later switch-on reads the files again. The worker holds no second copy of
+later switch-on reads the files again. Withdrawal still retires released clips at the next
+render boundary, including released terminal poses, so worker collection can
+free their storage and the same clip can load again. An unreleased terminal pose
+keeps its position and death phase across temporary withdrawal. The
+[recovery witness](../tests/test_ghost_recovery.py) checks both ownership cases,
+off/on reuse and repeated restores without renderer-thread allocation or freeing.
+The worker holds no second copy of
 anything playback holds: a clip file's bytes are dropped once playback has
 prepared its copy (id, SHA-256 and header stay), and the cartridge's once the
 model is built from it (its digest stays). A retired model or a lost renderer

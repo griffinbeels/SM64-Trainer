@@ -89,10 +89,12 @@ export function useGhostSession(t, active = true) {
     inFlight.current += 1;
     try {
       setSession(await send("PUT", GHOST_URL, body));
+      return {applied: true};
     } catch (error) {
       // The server writes the sentence (api.js carries its `detail`
       // through); raising it is what every other write on this page does.
       if (t.setNotice) t.setNotice(error.message);
+      return {applied: false, error: error.message};
     } finally {
       inFlight.current -= 1;
       if (inFlight.current === 0 && timer.current === null) setDraft(null);
@@ -128,7 +130,7 @@ export function useGhostSession(t, active = true) {
   // Show it now, send it now.
   const write = useCallback((patch) => {
     setDraft((prev) => ({ ...(prev || {}), ...patch }));
-    put(patch);
+    return put(patch);
   }, [put]);
 
   useEffect(() => () => {

@@ -114,7 +114,9 @@ struct Run {
                 ++demand.heartbeat;
                 // As the worker loop does: a demand that asks for files loads them
                 // (a switched-off set was released) and is asked again at once.
-                if(session->demand(demand,demand.generation)){session->load_assets();session->demand(demand,demand.generation);}
+                const bool load=session->demand(demand,demand.generation);
+                check(session->play->collect()==GP_OK,"worker collects released playback storage");
+                if(load){session->load_assets();session->demand(demand,demand.generation);}
             };
             if(!worker_after_render)worker();
             ghost::WorldPass world{};world.epoch=live.epoch;world.context_generation=1;world.list_serial=live.dlist_serial;
@@ -146,6 +148,14 @@ struct Run {
         renderer.run([]{ghost_playback::retire_on_context_loss();});
         check(ghost_playback::api()->collect()==GP_OK,"collect witness model");
         check(ghost_playback::api()->release_worker()==GP_OK,"release witness worker");
+    }
+    void released() {
+        // As in the independent worker loop, after the last render boundary.
+        check(session->play->collect()==GP_OK,"collect switched-off clips");
+        gp_status status{};check(session->play->status(&status,sizeof(status))==GP_OK,"read switch-off storage");
+        check(!status.clips_ready && !status.clips_owned && !status.clips_retired && !status.resident_clip_bytes,
+            "explicitly released clips retire while playback is withdrawn");
+        check(status.model_state==GP_MODEL_RENDER_OWNED,"switch-off keeps the reusable body model");
     }
     void reopen(bool same_rom=true,bool same_session=true) {
         // Real Session close/destruction/recreation, asset read+SHA verification,
@@ -208,10 +218,25 @@ int main() {
             run.step(0,0);
             run.demand.play_enabled=0;++run.demand.revision;
             for(uint16_t raw=1;raw<=200;++raw)run.step(raw,-1);
+            run.released();
             run.demand.play_enabled=1;++run.demand.revision;
             run.step(201,201);
             run.step(150,150); // State saved before ghost tracking was enabled.
             run.step(0,0);run.step(1,1);
+        }
+        {
+            Run run;
+            for(uint16_t raw=0;raw<=50;++raw)run.step(raw,raw);
+            run.step(51,50,1,0x1302); // A released dying ghost has no visible terminal owner.
+            run.session->play->withdraw();
+            run.renderer.run([&]{ghost_playback::safe_boundary(run.rom,fixture::configuration);});
+            gp_status retained{};
+            check(run.session->play->status(&retained,sizeof(retained))==GP_OK && retained.clips_owned==1,
+                "temporary withdrawal retains unreleased terminal storage");
+            ++run.demand.revision;run.step(52,50);
+            check(selected_animation==GP_DEFEAT_ANIMATION,"temporary withdrawal resumes the same death pose");
+            run.demand.play_enabled=0;++run.demand.revision;
+            run.step(53,-1);run.released();
         }
         {
             Run run;
