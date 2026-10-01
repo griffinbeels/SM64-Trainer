@@ -75,7 +75,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path, width, height):
     sources = [native / f"{name}.cpp" for name in
                ("ghost_capture", "ghost_root", "ghost_particle_capture", "ghost_clock", "ghost_origin", "ghost_stream",
                 "ghost_pass", "ghost_playback", "ghost_pose", "ghost_particle_pose", "ghost_compositor",
-                "ghost_presentation")]
+                "ghost_presentation", "ghost_annotation_assets")]
     host = ROOT / "tests/native/ghost_pipeline_host.cpp"
     source_inputs = [*sources, host, Path(__file__), COMPONENTS / "tests/native/ghost_capture_host.cpp",
                      COMPONENTS / "tests/native/ghost_root_fixture.h",

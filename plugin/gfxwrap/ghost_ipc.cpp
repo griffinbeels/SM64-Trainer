@@ -4,6 +4,7 @@
 #include "ghost_rom.h"
 #include "ghost_stream.h"
 #include "ghost_playback.h"
+#include "ghost_annotation.h"
 #include <windows.h>
 #include <atomic>
 #include <cmath>
@@ -74,10 +75,11 @@ bool same_controls(gipc_request a, gipc_request b) {
 bool valid_set(const gipc_request &r) {
     if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count)
             || r.shadow_enabled > 1 || r.occlusion_fade > 1 || r.sound_fade > 1
-            || !(r.volume >= 0 && r.volume <= 1)) return false;
+            || !(r.volume >= 0 && r.volume <= 1) || r.names_enabled>1 || r.inputs_enabled>1
+            || r.input_mode>GP_INPUT_VALUES) return false;
     for (uint32_t i = 0; i < r.clip_count; ++i) {
         const auto &clip = r.clips[i];
-        if (clip.hue_degrees > 359 || clip.reserved) return false;
+        if (clip.hue_degrees > 359 || clip.reserved || !ghost_annotation::valid_label(clip.label)) return false;
         if (!r.play_enabled) continue;
         uint8_t any = 0; for (auto byte : clip.clip_id) any |= byte;
         if (!any) return false;
@@ -467,6 +469,7 @@ struct Session {
                     for (uint32_t i = 0; i < r.clip_count; ++i) {
                         std::memcpy(command.clips[i].clip_id, r.clips[i].clip_id, 16);
                         command.clips[i].hue_degrees = r.clips[i].hue_degrees;
+                        std::memcpy(command.clips[i].label,r.clips[i].label,sizeof(command.clips[i].label));
                     }
                     command.mode = r.mode; command.seek_igt = r.seek_igt;
                     command.nudge_frames = r.nudge; command.opacity = r.opacity;
@@ -478,6 +481,8 @@ struct Session {
                     command.shadow_enabled = r.shadow_enabled; command.volume = r.volume;
                     command.occlusion_fade = r.occlusion_fade; command.sound_fade = r.sound_fade;
                     command.suspended = r.owner_suspended;
+                    command.names_enabled=r.names_enabled;command.inputs_enabled=r.inputs_enabled;
+                    command.input_mode=r.input_mode;
                     if (play->configure(&command) != GP_OK) {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
                     } else {

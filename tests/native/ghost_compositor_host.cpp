@@ -385,6 +385,52 @@ static void vanish_witness(const gc::Dispatch& g) {
     }
     gc::destroy(compositor);no_error("vanish witness cleanup");
 }
+static void annotation_witness(const gc::Dispatch& g) {
+    Scene scene(g,320,240);Bindings bindings(g);auto vertices=mesh();
+    for(auto& v:vertices)v.position[0]=5000; // body clipped: the caption is the only visible draw
+    auto* compositor=gc::create(g,1);require(compositor!=nullptr,"annotation compositor create");
+    const uint8_t white[4]={255,255,255,255};
+    hostile(g,scene,bindings);
+    require(gc::prepare(compositor,320,240,60,white,1,1)==gc::Result::ok,"annotation prepare");
+    std::vector<uint8_t> atlas(ghost_annotation::atlas_width*ghost_annotation::atlas_height*4,255);
+    hostile(g,scene,bindings);cgl::State prepared{};prepared.capture(g);const auto prepared_frame=frame_state(g);
+    require(gc::prepare_annotations(compositor,atlas.data(),ghost_annotation::atlas_width,ghost_annotation::atlas_height)
+        ==gc::Result::ok,"annotation atlas and shader prepare");
+    equal_state(g,prepared,bindings);equal_frame(g,prepared_frame);
+    ordinary_state(g,scene);const auto clean=pixels(g,scene.fbo,320,240);const auto z=depth(g,scene);
+    const auto zi=image_depth(g,scene);
+    auto p=pose(vertices,1);p.view_projection[15]=500;p.annotation.names=true;
+    std::strcpy(p.annotation.label,"A");p.annotation.position[0]=100;p.annotation.position[1]=-200;
+    auto render=[&](const gc::Pose& payload,gc::Depth mode,bool hud=false) {
+        hostile(g,scene,bindings);cgl::State before{};before.capture(g);const auto frame_before=frame_state(g);
+        require(gc::begin(compositor,target(scene,mode),payload)==gc::Result::ok,"annotation frame begin");
+        equal_state(g,before,bindings);equal_frame(g,frame_before);
+        if(hud) {ordinary_state(g,scene);require(gc::begin_hud(compositor,77)==gc::Result::ok,"annotation HUD mirror");
+            hud_rect(g,bindings,1);gc::end_hud(compositor);}
+        require(gc::finalize(compositor,77)==gc::Result::ok,"annotation finalize");
+        ordinary_state(g,scene);return pixels(g,gc::display(compositor).framebuffer,320,240);
+    };
+    for(auto mode:{gc::Depth::ordinary,gc::Depth::n64_image}) {
+        const auto full=render(p,mode);require(full!=clean,"name renders above the body on the private display");
+        auto off=p;off.annotation.names=false;require(render(off,mode)==clean,"independent name switch hides only annotation");
+        off=p;off.opacity=0;require(render(off,mode)==clean,"zero body opacity hides annotation");
+        off=p;off.body_alpha=0;require(render(off,mode)==clean,"cap environment alpha also hides annotation");
+        auto half=p;half.opacity=.5f;const auto faint=render(half,mode);
+        unsigned between=0;for(size_t at=0;at<full.size();at+=4)if(full[at]>clean[at]+10
+            && faint[at]>clean[at] && faint[at]<full[at])++between;
+        require(between>30,"annotation inherits the ghost opacity once");
+        auto blocked=p;blocked.annotation.position[0]=-100;
+        require(render(blocked,mode)==clean,"annotation behind copied terrain is occluded");
+        auto close_pose=p;close_pose.view_projection[0]=close_pose.view_projection[5]=.001f;close_pose.view_projection[15]=10;
+        close_pose.occlusion.enabled=1;require(render(close_pose,mode)==clean,"ordinary name shares near-camera body hiding");
+        close_pose.occlusion.minimum=.15f;require(render(close_pose,mode)!=clean,"terminal name shares the death visibility floor");
+        const auto hud=render(p,mode,true);
+        require(hud==clean,"game HUD mirrored afterward covers the name exactly");
+        require(pixels(g,scene.fbo,320,240)==clean && depth(g,scene)==z && image_depth(g,scene)==zi,
+                "annotation never changes clean pixels or either game depth surface");
+    }
+    gc::destroy(compositor);no_error("annotation witness cleanup");
+}
 int main() {
     const auto foreground=GetForegroundWindow();
     Window window;auto g=dispatch();Scene scene(g,32,32);Bindings bindings(g);auto vertices=mesh();
@@ -419,6 +465,7 @@ int main() {
         check_image(pixels(g,gc::display(compositor).framebuffer,32,32),32,32,alpha*floor);
     }
     vanish_witness(g);
+    annotation_witness(g);
     // Independent translucent bodies share one clean copy. A second begin()
     // would erase blue, and one shared stencil pass would suppress red.
     auto blue=vertices;
@@ -752,6 +799,6 @@ int main() {
     }
     require(wglMakeCurrent(window.dc,window.context)!=0,"restore test context");
     require(GetForegroundWindow()==foreground,"foreground preserved");
-    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2 known=nothing_asked vanish=noise_body_only");
+    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2 known=nothing_asked vanish=noise_body_only annotations=private,depth,opacity,terminal,hud");
     return 0;
 }

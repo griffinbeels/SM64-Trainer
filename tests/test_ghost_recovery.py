@@ -22,7 +22,7 @@ def test_native_savestate_recovery(tmp_path):
     assert vcvars, "x86 MSVC toolchain is required for the recovery witness"
     target = tmp_path / "ghost_recovery_host.exe"
     sources = ["ghost_clock.cpp", "ghost_origin.cpp", "ghost_playback.cpp",
-               "ghost_assets.cpp", "ghost_rom.cpp"]
+               "ghost_assets.cpp", "ghost_rom.cpp", "ghost_annotation_assets.cpp"]
     compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy",
         f"/I{ROOT / 'renderer/model'}", f"/I{ROOT / 'plugin/gfxwrap'}",
         *(str(ROOT / "plugin/gfxwrap" / name) for name in sources),

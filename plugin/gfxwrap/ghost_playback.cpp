@@ -8,6 +8,7 @@
 #include "ghost_pose.h"
 #include "ghost_particle_pose.h"
 #include "ghost_compositor.h"
+#include "ghost_annotation_assets.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -56,6 +57,7 @@ struct Model {
     uint32_t cancellation=0;
     uint64_t id=0;
     sg_model *value=nullptr;
+    ghost_annotation::Assets annotations; // worker builds; renderer borrows with the model
     bool reclaim_owned=false; // worker only while RECLAIMING
 } model;
 std::atomic_flag worker_gate=ATOMIC_FLAG_INIT;
@@ -281,6 +283,9 @@ int32_t __cdecl prepare_model(uint64_t id,const uint8_t *rom,uint32_t bytes) {
         }
         model.state.store(GP_MODEL_EMPTY); return worker_leave(GP_MODEL_ERROR);
     }
+    // A missing optional font atlas never refuses the body model. Extraction
+    // happens on this worker, while the verified ROM copy is still resident.
+    try {model.annotations.load(rom,bytes);}catch(const std::bad_alloc&) {model.annotations.ready=false;}
     model.id=id; model.cancellation=before; model_error.store(SG_OK);
     model.state.store(GP_MODEL_READY,std::memory_order_release); return worker_leave(GP_OK);
 }
@@ -460,7 +465,8 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
         if(!(s.valid_fields&GC_VALID_POSE) && std::memcmp(&s.pose,&zero_pose,sizeof(s.pose)))return false;
         if(!(s.valid_fields&GC_VALID_CAMERA) && std::memcmp(&s.camera,&zero_camera,sizeof(s.camera)))return false;
         if(!(s.valid_fields&GC_VALID_WARP) && (s.pending_warp_op || s.delayed_warp_timer))return false;
-        if(!valid_shadow(s) || !valid_sound(s) || !valid_particles(s) || !valid_held(s))return false;
+        if(!valid_shadow(s) || !valid_sound(s) || !valid_particles(s) || !valid_held(s)
+                || !ghost_annotation::valid_pad(s))return false;
         if(s.valid_fields&GC_VALID_POSE)for(unsigned axis=0;axis<3;++axis)
             if(!std::isfinite(s.pose.position[axis]) || !std::isfinite(s.pose.scale[axis]))return false;
         if(s.valid_fields&GC_VALID_POSE) {
@@ -568,12 +574,13 @@ bool valid_request(const gp_request& r) {
             || r.proximity_distance<0 || r.proximity_distance>GP_PROXIMITY_MAX
             || r.shadow_enabled>1 || r.occlusion_fade>1 || r.sound_fade>1
             || !std::isfinite(r.volume) || r.volume<0 || r.volume>1
-            || r.suspended>1 || r.reserved4) return false;
+            || r.suspended>1 || r.reserved4 || r.names_enabled>1 || r.inputs_enabled>1
+            || r.input_mode>GP_INPUT_VALUES) return false;
     const gp_clip unused{};
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         const auto &clip=r.clips[i];
         if(i>=r.clip_count) {if(std::memcmp(&clip,&unused,sizeof(clip)))return false;continue;}
-        if(clip.hue_degrees>359 || clip.reserved)return false;
+        if(clip.hue_degrees>359 || clip.reserved || !ghost_annotation::valid_label(clip.label))return false;
         if(!r.enabled)continue;
         if(!nonzero_id(clip.clip_id))return false;
         for(uint32_t j=0;j<i;++j)if(id_equal(clip.clip_id,r.clips[j].clip_id))return false;
@@ -910,6 +917,7 @@ struct Choice {
     uint64_t target=0,played=0;
     float fade=1;
     bool falling=false;
+    bool recorded=true; // false past the last recorded coordinate, including held-end fade
 };
 // One list's choice for every ghost, used once by evaluate at that list's seal.
 struct Plan {
@@ -938,6 +946,7 @@ uint32_t choose(uint32_t index,const Coordinate& frame,const gc_sample& live,Cho
     if(have_touch[index] && (first>=touch[index] || (!dances && target>=touch[index])))return GP_STAR_ENDED;
     uint64_t at=target;
     if(target>last) {
+        choice.recorded=false;
         if(!dances)return GP_AFTER_END;
         const uint64_t ends=finishes_dance(index,last)?dance[index].end:last;
         if(target>ends) {
@@ -1060,6 +1069,21 @@ uint32_t pose_row(uint32_t index,const Choice& choice,const gc_sample& live,cons
     if(choice.played)play_dance(index,choice.played,clip_coordinate(clip,clip.index_count-1),recorded);
     return draw(index,recorded,choice.played?recorded.sample:clip.frames[choice.record].sample,live,world,
                 choice.fade,out);
+}
+void annotate(uint32_t index,const Choice& choice,ghost_compositor::Pose& pose) {
+    auto& out=pose.annotation;
+    std::memcpy(out.label,active_request.clips[index].label,sizeof(out.label));
+    std::memcpy(out.position,displayed_position[index],sizeof(out.position));
+    out.scale=bound[index]->frames[choice.posed].sample.pose.scale[1];
+    if(!(out.scale>0))out.scale=1;
+    out.names=active_request.names_enabled!=0;
+    out.inputs=active_request.inputs_enabled && choice.recorded && !choice.falling && !choice.played;
+    out.values=active_request.input_mode==GP_INPUT_VALUES;
+    out.artwork=model.annotations.usamune;
+    // A refused pose can borrow older geometry. Its pad remains the exact
+    // current record: independent validity must never borrow a button hold.
+    const auto& selected=bound[index]->frames[choice.record].sample;
+    if(out.inputs && (selected.valid_fields&GC_VALID_PAD)) {out.known=true;out.pad=selected.pad;}
 }
 bool same_list(const Plan& list,const gc_sample& live) {
     return list.made && list.epoch==live.epoch && list.sequence==live.sequence && list.dlist_serial==live.dlist_serial;
@@ -1195,6 +1219,12 @@ bool particles(sg_particle_view *out,uint64_t *id) {
     if(out)*out={};if(id)*id=0;
     if(!out || !id || !renderer_owner() || !have_model || exhausted.load())return false;
     if(sg_model_get_particles(model.value,out)!=SG_OK || !out->frame_count)return false;
+    *id=model.id;return true;
+}
+bool annotations(ghost_annotation::View* out,uint64_t* id) {
+    if(out)*out={};if(id)*id=0;
+    if(!out || !id || !renderer_owner() || !have_model || exhausted.load())return false;
+    *out=model.annotations.view();if(!out->rgba)return false;
     *id=model.id;return true;
 }
 bool drawing() {
@@ -1476,7 +1506,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
             voice_dance(i,choice.played);
         }
         before_start=before_start && result==GP_BEFORE_START;
-        if(pose.count)out[count++]=pose;
+        if(pose.count) {annotate(i,choice,pose);out[count++]=pose;}
     }
     // begin_batch draws in array order: farthest root first. Insertion sort
     // keeps equal depths in request order and never allocates.

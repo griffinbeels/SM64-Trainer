@@ -158,15 +158,16 @@ def test_python_and_native_acceptance_agree(tmp_path):
     host = ROOT / "tests/native/ghost_clip_host.cpp"
     source = native / "ghost_playback.cpp"
     target = tmp_path / "ghost_clip_host.exe"
-    inputs = [source, native / "ghost_origin.cpp", host, *(native / name for name in (
+    inputs = [source, native / "ghost_origin.cpp", native / "ghost_annotation_assets.cpp", host, *(native / name for name in (
         "ghost_clip.h", "ghost_clip_upgrade.h", "ghost_capture.h", "ghost_playback.h", "ghost_origin.h",
-        "ghost_clock.h", "ghost_pose.h")),
+        "ghost_clock.h", "ghost_pose.h", "ghost_annotation.h", "ghost_annotation_assets.h")),
         COMPONENTS / "renderer/model/model.h", COMPONENTS / "tools/build_plugin.py",
         *(ROOT / name for name in ("src/sm64_events/ghost/clip.py", "tests/ghost_native_fixture.py",
                                    "tests/test_ghost_clip.py", "tests/test_ghost_clip_native.py"))]
     hashes = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}
     build._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy",
-        f"/I{native}", f"/I{COMPONENTS / 'renderer/model'}", str(source), str(native / "ghost_origin.cpp"), str(host),
+        f"/I{native}", f"/I{COMPONENTS / 'renderer/model'}", str(source), str(native / "ghost_origin.cpp"),
+        str(native / "ghost_annotation_assets.cpp"), str(host),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/OPT:REF",
         "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *build.LIBS], tmp_path)
     paths, expected = [], []

@@ -164,6 +164,7 @@ typedef struct gp_api {
 #ifdef __cplusplus
 namespace ghost { struct WorldPass; }
 namespace ghost_compositor { struct Pose; }
+namespace ghost_annotation {struct View;}
 namespace ghost_playback {
 const gp_api *api();
 /* Refused rows of a valid clip that playback hides rather than bridging:
@@ -178,6 +179,7 @@ void safe_boundary(uint32_t rom_generation, uint32_t configuration);
 bool atlas(sg_atlas_view *out, uint64_t *model_id);
 /* The prepared model's ROM particle frames and atlas; false when it has none. */
 bool particles(sg_particle_view *out, uint64_t *model_id);
+bool annotations(ghost_annotation::View *out, uint64_t *model_id);
 /* FOLLOW uses exact elapsed-origin differences plus the resolved origin.offset and
  * nudge; FIXED uses an explicit uint32 coordinate without a live arm. Each clip
  * then selects its first exact coordinate INCLUDING refused poses and compares

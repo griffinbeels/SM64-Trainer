@@ -1,6 +1,7 @@
 #include "ghost_compositor_gl.h"
 #include "ghost_shadow_gl.h"
 #include "ghost_particle_gl.h"
+#include "ghost_annotation_gl.h"
 #include <algorithm>
 #include <cmath>
 #include <new>
@@ -190,6 +191,7 @@ struct Instance {
     OcclusionUniforms occlusion;
     shadow::Storage shadow;
     particle::Storage particles;
+    annotation::Storage annotations;
     struct Layer {
         bool open=false,broken=false,active=false;
         LayerPass pass=LayerPass::color;
@@ -375,6 +377,12 @@ Result prepare_particles(Instance* p,const uint8_t* rgba,uint32_t width,uint32_t
     return p->particles.prepare(g,p->particles.program?p->particles.program:
         program(g,particle::vertex_shader,particle::fragment_shader),rgba,width,height) ? Result::ok : Result::resources;
 }
+Result prepare_annotations(Instance* p,const uint8_t* rgba,uint32_t width,uint32_t height) {
+    if(!p || !p->ready)return Result::invalid;
+    abort(p);Metering metering(p->raw,p->queries);const auto& g=p->g;Guard guard(g);
+    return p->annotations.prepare(g,p->annotations.program?p->annotations.program:
+        program(g,annotation::vertex_shader,annotation::fragment_shader),rgba,width,height)?Result::ok:Result::resources;
+}
 
 Result begin(Instance* p,const Target& t,const Pose& pose,const Known* known) {
     return begin_batch(p,t,&pose,1,known);
@@ -401,7 +409,7 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,
        !particle::valid(pose.particles) || pose.body_count>pose.count || pose.body_count%3 ||
        !std::isfinite(pose.occlusion.minimum) || pose.occlusion.minimum<0 || pose.occlusion.minimum>1 ||
        !std::isfinite(pose.body_alpha) || pose.body_alpha<0 || pose.body_alpha>1 ||
-       !std::isfinite(pose.noise_scale) || pose.noise_scale<=0)return Result::invalid;
+       !std::isfinite(pose.noise_scale) || pose.noise_scale<=0 || !ghost_annotation::valid(pose.annotation))return Result::invalid;
     }
     if(t.samples!=1 || t.unsupported || (t.depth!=Depth::ordinary && t.depth!=Depth::n64_image))return Result::unsupported;
     if(t.depth==Depth::n64_image && (!t.n64_depth_texture || t.n64_depth_texture==p->textures[0] ||
@@ -497,6 +505,7 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,
         first+=pose.count;
     }
     p->particles.upload(g,poses,count);
+    p->annotations.upload(g,poses,count,t);
     g.BindVertexArray(p->vao);
     first=0;
     for(uint32_t index=0;index<count;++index) {
@@ -531,6 +540,7 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,
         g.BlendEquationSeparatei(0,FUNC_ADD,FUNC_ADD);g.DrawArrays(TRIANGLES,first,pose.count);
         // This ghost's particles, against its body depth still in self-depth.
         p->particles.draw(g,pose,index,t,layered);
+        p->annotations.draw(g,index,t,layered);
         g.BindVertexArray(p->vao);
     }
       first+=pose.count;
@@ -655,7 +665,7 @@ Display display(const Instance* p) {
 }
 void destroy(Instance* p) {
     if(!p)return;abort(p);const auto& g=p->g;
-    p->shadow.destroy(g);p->particles.destroy(g);
+    p->shadow.destroy(g);p->particles.destroy(g);p->annotations.destroy(g);
     end_layer(p);
     g.DeleteTextures(5,p->textures);g.DeleteFramebuffers(4,p->fbos);g.DeleteRenderbuffers(1,&p->self_depth);
     g.DeleteVertexArrays(1,&p->vao);g.DeleteBuffers(1,&p->vbo);if(p->shader_program)g.DeleteProgram(p->shader_program);delete p;

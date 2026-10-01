@@ -271,6 +271,7 @@ static gp_request request(const Clip& clip,uint64_t revision) {
     r.owner_token=123;r.model_id=1;r.rom_generation=7;r.configuration=4;
     r.clip_count=1;std::memcpy(r.clips[0].clip_id,clip.header.clip_id,16);r.opacity=1;r.star_ends=1;
     r.star_action_count=1;r.star_actions[0]=0x1302;r.shadow_enabled=1;
+    r.names_enabled=r.inputs_enabled=1;std::strcpy(r.clips[0].label,"YOUR PB");
     r.origin={GO_STAR,5,50,77,2000,7,0,0};return r;
 }
 int main() {
@@ -583,6 +584,11 @@ int main() {
             };
             refuse(1);gap.frames[2].sample.area=2;
             refuse(4);refuse(6);refuse(7);refuse(9);refuse(10);refuse(11);refuse(13);
+            for(unsigned i=0;i<gap.frames.size();++i) {
+                auto& s=gap.frames[i].sample;s.valid_fields|=GC_VALID_PAD;
+                s.pad={int16_t(i),int16_t(-int(i)),uint16_t(i%2?0x8000:0x4000),0};
+            }
+            gap.frames[7].sample.valid_fields&=~GC_VALID_PAD;gap.frames[7].sample.pad={};
             check(api->prepare_clip(&gap.header,gap.frames.data())==GP_OK,"prepare clip with short refusal runs");
             revision=r.revision+1;r=request(gap,revision);r.model_id=4;r.mode=GP_FIXED;r.origin={};
             const auto seek=[&](uint32_t at,bool shown,uint32_t why,uint64_t sequence,float x) {
@@ -596,11 +602,16 @@ int main() {
             // from its own empty pose at the world origin.
             ghost_playback::set_sound_sink(&test_sink);for(auto &p:placed)p={};
             seek(4,true,GP_READY,4,2303);   // one refused frame holds row 3
+            check(pose.annotation.inputs && pose.annotation.known && pose.annotation.pad.stick_x==4
+                  && pose.annotation.pad.stick_y==-4 && pose.annotation.pad.buttons==0x4000,
+                  "bridged geometry keeps the selected record's exact pad, not the pose row's pad");
             check(placed[0].count==1 && placed[0].position[0]+live.camera.position[0]==2303,
                   "bridged frame sounds at its held pose");
             ghost_playback::set_sound_sink(nullptr);
             seek(6,true,GP_READY,6,2305);   // two refused frames hold row 5
             seek(7,true,GP_READY,6,2305);
+            check(pose.annotation.inputs && !pose.annotation.known && !pose.annotation.pad.buttons,
+                  "a pad unknown on the exact row stays unknown through a geometry bridge");
             seek(1,false,GP_INVALID_FRAME,0,0);  // next pose is in another area
             seek(10,false,GP_INVALID_FRAME,0,0); // three refused frames: a real gap
             seek(13,false,GP_INVALID_FRAME,0,0); // nothing after it
@@ -677,6 +688,10 @@ int main() {
             // touch or length; a live grab ends them all.
             Clip a=Clip::linear(20,30,20,5),b=Clip::linear(21,30,8,50),c=Clip::linear(22,10,UINT32_MAX,20);
             for(auto *ghost:{&a,&b,&c}) {
+                for(unsigned i=0;i<ghost->frames.size();++i) {
+                    auto& s=ghost->frames[i].sample;s.valid_fields|=GC_VALID_PAD;
+                    s.pad={int16_t(ghost->header.clip_id[0]),int16_t(i),0x8000,0};
+                }
                 check(api->prepare_clip(&ghost->header,ghost->frames.data())==GP_OK,"prepare one ghost of the set");
                 ++multi_prepares;
             }
@@ -684,6 +699,7 @@ int main() {
             r.clip_count=3;r.clips[0].hue_degrees=10;
             std::memcpy(r.clips[1].clip_id,b.header.clip_id,16);r.clips[1].hue_degrees=200;
             std::memcpy(r.clips[2].clip_id,c.header.clip_id,16);r.clips[2].hue_degrees=300;
+            std::strcpy(r.clips[1].label,"SECOND");std::strcpy(r.clips[2].label,"THIRD");
             r.origin={GO_STAR,7,live.sequence+1,source_continuity,7000,source_generation,0,0};elapsed_base=7000;
             live.level=9;live.live_action=1;
             check(api->configure(&r)==GP_OK,"configure three ghosts on one origin");
@@ -714,6 +730,28 @@ int main() {
             frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
             check(poses[0].hue_degrees==200 && poses[1].hue_degrees==300 && poses[2].hue_degrees==10,
                 "hue follows its own ghost");
+            check(!std::strcmp(poses[0].annotation.label,"SECOND") && poses[0].annotation.pad.stick_x==21
+                  && !std::strcmp(poses[1].annotation.label,"THIRD") && poses[1].annotation.pad.stick_x==22
+                  && !std::strcmp(poses[2].annotation.label,"YOUR PB") && poses[2].annotation.pad.stick_x==20,
+                  "names and exact input metadata travel with each body through depth sorting");
+            ++r.revision;std::strcpy(r.clips[1].label,"RENAMED");
+            check(api->configure(&r)==GP_OK,"rename the same clip without changing its identity or origin");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
+            check(!std::strcmp(poses[0].annotation.label,"RENAMED") && poses[0].annotation.pad.stick_y==5,
+                  "label-only update preserves the same FOLLOW time, body position and exact pad");
+            ++r.revision;r.names_enabled=0;check(api->configure(&r)==GP_OK,"names and inputs have independent switches");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
+            check(!poses[0].annotation.names && poses[0].annotation.inputs,"inputs remain available when the name is hidden");
+            ++r.revision;r.names_enabled=1;r.inputs_enabled=0;r.input_mode=GP_INPUT_VALUES;
+            check(api->configure(&r)==GP_OK,"show names while independently hiding raw-mode inputs");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
+            check(poses[0].annotation.names && !poses[0].annotation.inputs && poses[0].annotation.values,
+                  "name, input visibility and raw-mode settings do not alter playback selection");
+            ++r.revision;r.inputs_enabled=1;r.input_mode=GP_INPUT_STICK;check(api->configure(&r)==GP_OK,"restore input widgets");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             frame(8,{2208,2008},GP_READY,{GP_READY,GP_STAR_ENDED,GP_READY});
             frame(9,{2209,2009},GP_READY,{GP_READY,GP_STAR_ENDED,GP_READY});
             frame(10,{2010},GP_READY,{GP_READY,GP_STAR_ENDED,GP_AFTER_END});
@@ -758,6 +796,8 @@ int main() {
             // the other ghost was not drawn, so it stays hidden.
             live.live_action=0x1302;frame(7,{2006},GP_READY,{GP_READY,GP_STAR_ENDED});
             live.live_action=1;frame(8,{2006},GP_READY,{GP_READY,GP_STAR_ENDED});
+            check(poses[0].annotation.names && !poses[0].annotation.inputs,
+                  "synthetic death retains its name and never shows a recorded pad");
         }
         {
             // Ghost sound: each record's recorded requests reach the sink once,
@@ -1082,6 +1122,8 @@ int main() {
                 dance_fade[k]=poses[0].opacity;
                 check(poses[0].opacity==expected && poses[0].opacity<previous && selected_x==4029,
                       "fade falls by one step a frame from the held last pose");
+                check(poses[0].annotation.names && !poses[0].annotation.inputs,
+                      "held post-record end fades retain names while hiding input widgets");
                 check(placed[0].count==1 && placed[0].gain==expected,"its sound fades with it");
                 previous=poses[0].opacity;
             }
@@ -1393,7 +1435,12 @@ int main() {
             // and a winner's dance through his defeat stand still with them and
             // resume from the frame they stood on; a reset still ends a death.
             auto pause=[&](uint64_t time,uint32_t frames,const char *why,const std::function<bool()> &same) {
-                for(uint32_t k=0;k<frames;++k) {++paused;check(step(time,GP_READY,{GP_READY},{}) && same(),why);}
+                char label[GP_LABEL_BYTES]{};std::memcpy(label,poses[0].annotation.label,sizeof(label));
+                bool have_label=poses[0].annotation.names;
+                for(uint32_t k=0;k<frames;++k) {++paused;check(step(time,GP_READY,{GP_READY},{}) && same(),why);
+                    if(!have_label) {std::memcpy(label,poses[0].annotation.label,sizeof(label));have_label=true;}
+                    check(poses[0].annotation.names && !std::memcmp(label,poses[0].annotation.label,sizeof(label)),
+                          "pause and Usamune menus retain the terminal ghost's name");}
             };
             // The worker's completed PB can precede the renderer's FIRST
             // completing-dance list, not just replace an already dying ghost.
@@ -1407,6 +1454,7 @@ int main() {
             check(api->prepare_clip(&early_pb.header,early_pb.frames.data())==GP_OK,"prepare first-list PB replacement");
             ++r.revision;r.suspended=1;std::memcpy(r.clips[0].clip_id,early_pb.header.clip_id,16);
             r.clips[0].hue_degrees=281;
+            std::strcpy(r.clips[0].label,"REPLACEMENT");
             check(api->configure(&r)==GP_OK && api->release_clip(early_loser.header.clip_id)==GP_OK,
                   "publish and release the old selection before any death latch");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
@@ -1418,6 +1466,8 @@ int main() {
             check(step(20,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION
                   && selected_frame==0 && selected_x==20319 && poses[0].hue_degrees==37,
                   "first death list uses the old raced position and tint despite PB replacement");
+            check(!std::strcmp(poses[0].annotation.label,"YOUR PB") && !poses[0].annotation.inputs,
+                  "pending terminal set retains the raced label, never the refreshed PB's label or pad");
             live.live_action=1;
             pause(20,100,"completion-before-render death stays visible in either menu",[&] {
                 return selected_animation==GP_DEFEAT_ANIMATION && selected_frame==0 && selected_x==20319
