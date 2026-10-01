@@ -35,7 +35,8 @@ TARGET_JS = UI / "target.js"
 
 
 def run_node(expression: str):
-    script = (f"import {{ loneOption, targetTuple, needsSoleSelection, soleSelectionBinding }} from {RULE_URI!r};\n"
+    script = (f"import {{ loneOption, targetTuple, needsSoleSelection }} from {RULE_URI!r};\n"
+              f"import {{ soleSelectionBinding }} from {(UI / 'stagecontext.js').as_uri()!r};\n"
               f"console.log(JSON.stringify({expression}));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,

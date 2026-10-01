@@ -750,7 +750,7 @@ def test_the_attempt_row_still_posts_a_reclassification_to_the_server_rule():
     attemptlog_source = strip_comments(ATTEMPTLOG_JS.read_text(encoding="utf-8"))
     assert re.search(
         r'send\("POST", `/api/attempts/\$\{a\.id\}/strat`,\s*'
-        r"\{\s*strat_tag:\s*tag\s*\}\)", attemptlog_source), (
+        r'\{\s*strat_tag:\s*tag,\s*timer_mode:\s*isSeg\s*\?\s*"rta"\s*:\s*t\.clock\s*\}\)', attemptlog_source), (
         "AttemptRow's strategy picker no longer posts to "
         "/api/attempts/{id}/strat -- reclassifying a row from inside a "
         "LogCard would no longer reach set_attempt_strat's newest-row rule")

@@ -167,7 +167,7 @@ Other event types, same envelope:
 | `attempt_cleared` | `attempt_id, reason` | Attempt tombstoned; `reason` is always present, may be null (triggers full re-projection; `attempts_invalidated` follows) |
 | `attempt_restored` | `attempt_id` | Tombstone undone (triggers full re-projection; `attempts_invalidated` follows) |
 | `attempt_strat_set` | `attempt_id` or `attempt_ids`, `strat_tag` | One attempt reclassified onto another strategy (`strat_tag` null = no strategy); last write wins, so re-picking the previous one is the undo (triggers full re-projection; `attempts_invalidated` follows). When the attempt is its entity's newest non-cleared row and the tag is non-null, a `strat_set` follows — the active strategy tracks the newest attempt. A strategy pick (`strat_set`, or `target_set` with a tag) is preceded by one batch `attempt_ids` event adopting every row of that star or segment with no strategy, except rows explicitly set to none |
-| `pb_saved` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id` | Personal best recorded. Segment PBs: `course_id`/`star_id` null, `segment_id` set, `timer_mode` always `"rta"`. |
+| `pb_saved` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id, classification?` | Personal best recorded. Segment PBs: `course_id`/`star_id` null, `segment_id` set, `timer_mode` always `"rta"`. Automatic saves after strategy classification carry `classification`: the destination's pre-change rank banners and game version, for a live earned celebration. It is not replayed on page arrival. |
 | `pb_undone` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id, restored_frames, restored_attempt_id` | The current PB save was deleted; the previous save (if any) is current again — `restored_*` null when none remains |
 | `time_imported` | `source, course_id, star_id, segment_id, strat_tag, timer_mode, frames, game_version` | A time the player brought rather than played — one row per time an import landed. The projector turns it into a finished attempt (`success`, no anchor, started = ended = this row's wall time, `timed_by: "imported"`), so it is a real practice-log row with every row affordance and no replay; `attempt_completed` follows as for any closure. Its PB row links to this journal id. Erasing the import deletes these rows (`DELETE /api/import/{source}`) |
 | `data_wiped` | `kind, course_id, star_id, segment_id, session_id` | History wiped: `kind` `"star"`/`"segment"`/`"all"`, `session_id` null = every session. Applied retroactively on replay; attempts after the wipe accumulate fresh (`attempts_invalidated` follows) |
@@ -182,6 +182,8 @@ Other event types, same envelope:
 **Attempt outcomes:** `success`, `reset`, `death`, `hard_reset`, `abandoned`. `death` and `reset` count toward the default failure rate. `abandoned` (level changed before a grab) and discarded no-op resets (where `mario_acted: false`) never count toward the failure rate. Old journal entries without the `mario_acted` key default to acted (counted as real resets). Three automatic discards never produce attempt rows at all: reset/load closures arriving after ≥5 s of pause (`paused_frames_before` ≥ 150 — AFK, not practice); for attempts opened by an `acted_tracking` anchor, ANY non-success closure with no `mario_acted` event during the attempt (no behavior = garbage); and attempts OPENED while Mario was in a castle hub level (castle movement, never a star attempt — `CASTLE_LEVELS` in addresses.py). Successes always count.
 
 **Strategies:** Strategy names are remembered per star — switching the target star loads that star's own last-used strategy, not the previous star's. Known strategies for a star = everything registered via target-setting plus every tag appearing in that star's attempt history. The session view surfaces them in `strategies` (map of `"course_id:star_id"` → list) and `last_strat_by_star` (map → last used), and per-section `strategies` / `last_strat` fields.
+
+`last_star_choice_by_course` maps a string course ID to its latest explicit star pick or successful completion across all sessions, independent of the selected view scope. It is replayed in journal order and excludes automatic fills, cleared successes and imported times. PSS uses it to restore its last choice on arrival through the ordinary target endpoint, loading that star's remembered strategy. A route's single offered star takes priority; an existing target stays selected. The five single-star secret courses use the shared singleton selection rule. An automatic target offer that arrives after the player leaves its stage expires as a successful no-op; an explicit out-of-place pick is still refused.
 
 **Personal bests are per (target, strategy)** (2026-08-20). Each section carries BOTH: `pb` is the entity's best saved time regardless of how it was run, and `pb_by_strat` is the ACTIVE strategy's own, in the same `{igt, rta}` shape, `null` on a clock the strategy holds no time for (and `{igt: null, rta: null}` when no strategy is selected at all). A consumer showing one number beside a strategy name wants `pb_by_strat`; one answering "what is the best this target has ever gone" wants `pb`. Mixing them is what made a Standard time read as a 3x LJ PB. An attempt row's `pb_delta_frames` is against the active strategy's PB and is `null` on every row that is not the active strategy's (2026-08-22) — a time on another strategy has nothing to be compared with. Every row also carries `other_strat` (bool): it belongs to a strategy other than the active one (an untagged row included; always false when no strategy is selected), decided by the same gate that withholds its PB button — the practice log dims such rows.
 
@@ -248,9 +250,25 @@ The target selector automatically selects its sole visible choice. Its
 stage: [level, area]}` describing the target and place observed by that selector.
 Only castle selectors bind `area`; other rows send `null` because their choices
 span the whole level. This selection can replace a retained target, provided
-the observed target and place still match. A stale place returns 409; a stale
+the observed target and place still match. A stale place expires quietly; a stale
 target is silently declined during projection. Ordinary automatic fills retain
 their existing protection against displacing a hooked target.
+
+Castle offers include all resolved start origins before their triggers fire.
+Door arrivals arm their scenarios without selecting one among multiple choices.
+A deliberate castle selection is recalled in that subarea for the current
+session; `session_started` forgets it. This memory is derived from accepted
+manual `target_set` events and is separate from persistent PSS star memory.
+
+Strategy writes (`POST /api/target`, `/api/strat`, and `/api/attempts/{id}/strat`)
+accept optional `timer_mode: "igt" | "rta"`, defaulting to IGT for stars;
+segments always use RTA. Adopting unclassified history saves its fastest
+positive, eligible success when it beats the destination PB. Reclassifying
+the newest non-cleared attempt performs the same comparison; older-row edits
+retain their scope. Ties and slower times do not create an automatic save;
+rows explicitly set to no strategy remain excluded from batch adoption.
+A successful automatic save adds `automatic_pb` to
+the response, including the same `replay_save` outcome as a manual PB save.
 
 Segment definitions with both `start_triggers: []` and `end_triggers: []`
 are manual entries: they support imported times and standards but never arm

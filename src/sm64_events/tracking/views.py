@@ -71,7 +71,7 @@ from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             origin_course,
                                             origin_view, reachable_places,
                                             segment_origin,
-                                            start_areas, start_levels,
+                                            selector_start_areas, start_levels,
                                             start_origin, time_bounds)
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
@@ -1005,6 +1005,38 @@ def _section_banner(ranks, ek, strat, basis, mode, pb_untagged=False) -> dict | 
     return out
 
 
+@calibrated_view
+def classification_rank_baseline(db, service, attempt, strat_tag: str) -> dict:
+    """Destination ranks before a strategy correction earns an automatic PB.
+
+    Read before retagging or adopting rows. Reuse the section's grading path,
+    including average modes, original ROMs and a pipe segment's borrowed
+    Strategy ladder, so the browser never climbs from the old strategy's rank.
+    """
+    ranks = service.ranks
+    ek = entity_key(attempt.course_id, attempt.star_id, attempt.segment_id)
+    clock = ranks.clock_for(ek) if ranks else (
+        "rta" if attempt.segment_id is not None else "igt")
+    mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
+    if mode not in classify.RANK_MODES:
+        mode = classify.DEFAULT_RANK_MODE
+    history = sorted((row for row in db.attempts()
+                      if entity_key(row.course_id, row.star_id, row.segment_id) == ek),
+                     key=lambda row: journal_id(row.id))
+    pb = db.current_pb(attempt.course_id, attempt.star_id, clock,
+                       segment_id=attempt.segment_id, strat_tag=strat_tag)
+    basis = _ranked_basis(ranks, ek, mode, pb, history, strat_tag, clock,
+                          overall=True)
+    _, pipe_grading = reds_pipe_segments(db.segment_defs())
+    grading_ek = pipe_grading.get(attempt.segment_id, ek)
+    return {
+        "rank": _section_banner(ranks, grading_ek, strat_tag, basis, mode),
+        "entity_rank": entity_rank(ranks, ek, basis and basis["frames"],
+                                   version=basis and basis.get("version")),
+        "game_version": service.game_version(),
+    }
+
+
 def _markers_for(markers_state: dict, course_id, star_id) -> dict:
     """strat -> sorted marker list for ONE section, from the ui_state KV.
     Key shape '<course>:<star>:<strat>' for stars, 'seg:<id>:<strat>' for
@@ -1102,16 +1134,9 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
         for sid, pts in sorted(by_session.items())]}
 
 
-# Castle-subarea quick-select: the (level, area) pairs a segment EXPLICITLY
-# starts in, read off its start triggers. Only subarea-scoped triggers count —
-# a bare "enter Castle Inside" with no subarea must NOT surface the segment in
-# The quick-select banner's two "where does this segment start" readers live in
-# tracking/segments.py as `start_areas`/`start_levels` (moved DOWN there
-# 2026-07-26, beside the `arm_level` they already read through).
-# They are the BANNER's readers only. "May this be practiced here" is answered
-# by start_origin (tracking/practicable.py) — arm_level places 11 of the 65
-# seeded definitions, start_origin places all 65, which is why the banner still
-# offers no castle movement and these two are not the shared answer.
+# Castle offers resolve every start clause through the shared origin owner.
+# Known starts appear before arming; armed extras still carry a running movement
+# at its destination. Explicit arm destinations remain an authoring concept.
 
 
 # Origin stamp for GET /api/segments (spec 2026-07-24-segment-origin-
@@ -1923,6 +1948,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "active_route": service.active_route(),
         "unassigned": unassigned,
         "strategies": registered,
+        "last_star_choice_by_course": service.last_star_choice_by_course,
         "last_strat_by_star": {
             f"{c}:{s}": active.for_star(c, s)
             for (c, s) in service.strat_by_star},
@@ -2036,7 +2062,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # section's own armed_detail carries its arm state instead.
             for d in service.segment_defs
             if d.id not in hundred_coin_ids
-            for areas, levels in ((start_areas(d.start_triggers),
+            for areas, levels in ((selector_start_areas(d.start_triggers, service._landmark_names()),
                                    start_levels(d.start_triggers)),)],
         # user-picked selector icons: entity_key -> icon stem (ui_state KV,
         # written by POST /api/icon; ui/components/stagebanner.js resolves

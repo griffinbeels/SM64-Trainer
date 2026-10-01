@@ -80,13 +80,18 @@ def test_sole_selection_requires_a_well_formed_target_and_stage_binding(tmp_path
         assert response.status_code == 422
 
 
-def test_service_refuses_a_sole_offer_from_an_old_selector_stage(tmp_path):
+def test_expired_sole_stage_is_a_quiet_noop_without_target_or_strategy_writes(tmp_path):
     client, service, _db = make_client(tmp_path)
     with client:
         service._current_stage = {"mode": "stars", "level": 24, "area": 1, "course_id": 2}
-        with pytest.raises(ValueError, match="selector changed"):
-            asyncio.run(service.request_target("star", course_id=2, star_id=1,
-                sole_selection={"target": None, "stage": [6, 1]}))
+        before = [row.id for row in _db.events()]
+        response = client.post("/api/target", json={
+            "course_id": 2, "star_id": 1, "strat_tag": "Expired",
+            "sole_selection": {"target": None, "stage": [6, 1]}})
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        assert service.target is None
+        assert [row.id for row in _db.events()] == before
 
 
 @pytest.mark.parametrize("kind", ["star", "segment"])

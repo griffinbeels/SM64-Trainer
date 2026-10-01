@@ -13,7 +13,13 @@
 // boolean; the rest can ignore it.
 import { send } from "./api.js";
 import { releaseCelebrationHold } from "./rankclimb.js";
-import { soleSelectionBinding } from "./loneoption.js";
+import { soleSelectionBinding } from "./stagecontext.js";
+
+function reportReplaySave(t, result) {
+  const replay = result?.automatic_pb?.replay_save;
+  if (replay?.status === "failed")
+    t.setNotice(`PB saved. Replay could not be saved: ${replay.message}`);
+}
 
 // `quiet` is for a write NO GESTURE ASKED FOR — today only the lone-route
 // auto-pick (loneoption.js). It changes two things, and both follow from the
@@ -54,7 +60,9 @@ export async function requestTarget(t, body, { quiet = false,
   // tests/test_single_source.py rightly rejects.
   if (!quiet) releaseCelebrationHold();
   try {
-    await send("POST", "/api/target", body);
+    const result = await send("POST", "/api/target",
+      { ...body, timer_mode: t.clock || "igt" });
+    reportReplaySave(t, result);
     t.refresh();
     return true;
   } catch (refusal) {

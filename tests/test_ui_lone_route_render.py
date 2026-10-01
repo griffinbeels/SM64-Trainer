@@ -104,14 +104,14 @@ def _retained_reds_in_lobby(base, service):
 def _arm_extra(base, service):
     extra = _request(base, "/api/segments", {
         "name": "Armed Lobby detour", "clock_start": "trigger",
-        # No area in the start clause: it only joins the row through armed extras.
+        # A foreign origin joins the Lobby offer only while it is running.
         "start_triggers": [{"type": "moment_reached", "kind": "door_open",
-            "level": 6, "ordinal": 51}],
+            "level": 17, "ordinal": 51}],
         "end_triggers": [{"type": "moment_reached", "kind": "door_open",
             "level": 6, "ordinal": 99}],
     })
     _publish(service, [("moment_reached", 100, {"kind": "door_open", "ordinal": 51,
-        "level": 6, "area": 1, "action": 0, "landmark": None, "igt_frames": 10})])
+        "level": 17, "area": 1, "action": 0, "landmark": None, "igt_frames": 10})])
     row = next(row for row in _view(base)["segment_targets"] if row["segment_id"] == extra["id"])
     assert row["start_areas"] == []
     assert extra["id"] in service.armed_segment_ids
@@ -268,3 +268,90 @@ def test_the_full_star_row_keeps_its_target_without_a_route(tmp_path):
             assert page.problems() == []
         assert _view(base)["target"]["star_id"] == FIXTURE_STAR
         assert len(_target_writes(service)) == before
+
+
+def _saved_castle_choices(base, service, both=True):
+    lblj_id, _reds_id = _lobby_definitions(base)
+    _request(base, f"/api/segments/{lblj_id}", {"start_triggers": [
+        {"type": "moment_reached", "kind": "door_arrived", "level": 6,
+         "landmark": "6:1:bhvDoorWarp:-1100,0,2202"}]}, "PUT")
+    bob_id = None
+    if both:
+        bob_id = _request(base, "/api/segments", {
+            "name": "Castle Entrance → BoB", "clock_start": "move",
+            "start_triggers": [{"type": "level_enter", "to": 6, "from": 16}],
+            "end_triggers": [{"type": "entrance_touched", "to": 9}],
+        })["id"]
+    _run_coro(service.new_session())
+    _place(service, 16, None, None, 60)
+    _place(service, 6, None, "castle", 90)
+    return lblj_id, bob_id
+
+
+def test_exact_saved_castle_choices_are_complete_before_and_after_door_arrival(tmp_path):
+    with serve_ui_live(seed=False, bundled_library=False) as (base, service):
+        lblj_id, bob_id = _saved_castle_choices(base, service)
+        assert service.target is None
+        assert service.armed_segment_ids == {bob_id}
+        before = len(_target_writes(service))
+        with get_driver().launch() as page:
+            _open_practice(page, base)
+            _wait_for_cells(page, 2)
+            page.wait_ms(400)
+            assert service.target is None
+            assert page.evaluate("document.querySelectorAll('.stagebanner .active-star').length") == 0
+            _publish(service, [("moment_reached", 92, {"kind": "door_arrived",
+                "level": 6, "area": 1, "action": 4898, "igt_frames": 2,
+                "landmark": {"key": "6:1:bhvDoorWarp:-1100,0,2202"}})])
+            _wait_for_cells(page, 2)
+            page.wait_ms(400)
+            _capture(page, base, tmp_path, "complete-two-castle-choices", {"ids": [lblj_id, bob_id]})
+            assert service.target is None
+        assert len(_target_writes(service)) == before
+
+
+def test_explicit_castle_choice_returns_for_this_session_and_new_session_is_idle(tmp_path):
+    with serve_ui_live(seed=False, bundled_library=False) as (base, service):
+        lblj_id, _bob_id = _saved_castle_choices(base, service)
+        with get_driver().launch() as page:
+            _open_practice(page, base)
+            _wait_for_cells(page, 2)
+            page.click('.stagebanner .starcell[title="LBLJ"]')
+            assert _wait_for_target(page, {"kind": "segment", "segment_id": lblj_id})["matched"]
+            _place(service, 17, 16, "bowser_course", 150)
+            _request(base, "/api/target", {"course_id": 16, "star_id": 0})
+            _place(service, 6, None, "castle", 180)
+            _wait_for_cells(page, 2)
+            assert _wait_for_target(page, {"kind": "segment", "segment_id": lblj_id})["matched"]
+            _capture(page, base, tmp_path, "session-castle-choice-restored", {})
+            _run_coro(service.new_session())
+            page.wait_ms(500)
+            _wait_for_cells(page, 2)
+            _capture(page, base, tmp_path, "new-session-castle-idle", {})
+            assert service.target is None
+            assert page.evaluate("document.querySelectorAll('.stagebanner .active-star').length") == 0
+
+
+def test_a_named_door_side_offered_in_another_area_can_be_selected_before_arming():
+    with serve_ui_live(seed=False, bundled_library=False) as (base, service):
+        lblj_id, _bob_id = _saved_castle_choices(base, service, both=False)
+        service.rename_landmark("6:1:bhvDoorWarp:-1100,0,2202", "Shared entry")
+        service.rename_landmark("6:3:bhvDoorWarp:717,-1177,-869", "Shared entry")
+        _publish(service, [("area_changed", 100, {"level": 6, "from": 1, "to": 3}),
+            ("stage_changed", 100, {"level": 6, "area": 3, "course_id": None, "mode": "castle"})])
+        assert service.target is None and lblj_id not in service.armed_segment_ids
+        row = next(row for row in _view(base)["segment_targets"] if row["segment_id"] == lblj_id)
+        assert row["start_areas"] == [[6, 1], [6, 3]]
+        _request(base, "/api/target", {"kind": "segment", "segment_id": lblj_id})
+        assert service.target == ("segment", lblj_id)
+
+
+def test_no_area_sole_lblj_still_selects_without_a_door_event(tmp_path):
+    with serve_ui_live(seed=False, bundled_library=False) as (base, service):
+        lblj_id, _bob_id = _saved_castle_choices(base, service, both=False)
+        with get_driver().launch() as page:
+            _open_practice(page, base)
+            _wait_for_cells(page, 1)
+            result = _wait_for_target(page, {"kind": "segment", "segment_id": lblj_id})
+            _capture(page, base, tmp_path, "sole-no-area-lblj", result)
+            assert result["matched"]

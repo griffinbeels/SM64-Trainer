@@ -5,6 +5,7 @@ import { coalesce } from "./coalesce.js";
 import { pollJSON } from "./pollstate.js";
 import { noteEvent, noteFetchDone, noteFetchStart } from "./latency.js";
 import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
+import { entityKey } from "./entitysection.js";
 
 // segment_progress: an armed segment's step cursor moved. It is the ONLY
 // signal that reaches the browser for it -- a cursor move journals nothing of
@@ -45,6 +46,78 @@ export const RUN_ACTIVE = "run-active";
 export function runBlocksScopeChange(run, currentRouteId, nextRouteId) {
   if (!run || !run.active) return false;
   return nextRouteId !== currentRouteId;
+}
+
+function retirePendingClassifications(receipts, changed) {
+  // A closed body banner may reveal later, but context changes end that reward.
+  // Claimed receipts already belong to a mounted climb; leave its bookkeeping intact.
+  for (const [key, receipt] of Object.entries(receipts)) {
+    if (!receipt.claimed && changed(receipt)) delete receipts[key];
+  }
+}
+
+function classificationContextChanged(receipt, ev) {
+  const payload = ev.payload;
+  if (["strat_set", "target_set", "target_changed"].includes(ev.type)) {
+    const key = entityKey({ ...payload,
+      kind: payload.segment_id != null ? "segment" : undefined });
+    return Object.hasOwn(payload, "strat_tag")
+      && key === entityKey({ ...receipt,
+        kind: receipt.segment_id != null ? "segment" : undefined })
+      && payload.strat_tag !== receipt.strat_tag;
+  }
+  if (ev.type === "rank_mode_changed") return payload.mode !== receipt.classification.rank?.mode;
+  if (ev.type === "game_version_changed") {
+    return payload.effective !== receipt.classification.game_version.effective;
+  }
+  return ev.type === "rank_standards_changed";
+}
+
+function selectClassificationClock(clock, setClock, receipts) {
+  retirePendingClassifications(receipts, (receipt) =>
+    receipt.segment_id == null && receipt.timer_mode !== clock);
+  localStorage.setItem("clock", clock);
+  setClock(clock);
+}
+
+function useEventFeed() {
+  const [feed, setFeed] = useState([]);
+  // Live-earned corrections only: nothing is persisted or reconstructed on
+  // arrival. A local nonce stays unique when a reconnect resets server seq.
+  const classificationPbs = useRef({});
+  const classificationNonce = useRef(0);
+  const recordFeed = (ev) => {
+    if (ev.type === "pb_saved" || ev.type === "pb_undone") {
+      const payload = ev.payload;
+      const key = entityKey({ ...payload,
+        kind: payload.segment_id != null ? "segment" : undefined });
+      if (ev.type === "pb_saved" && payload.classification) {
+        classificationPbs.current[key] = {
+          ...payload, key: ++classificationNonce.current,
+        };
+      } else delete classificationPbs.current[key];
+    } else retirePendingClassifications(classificationPbs.current,
+      (receipt) => classificationContextChanged(receipt, ev));
+    setFeed((f) => [ev, ...f].slice(0, 200));
+  };
+  return [feed, setFeed, classificationPbs.current, recordFeed];
+}
+
+function useLiveStage() {
+  const [stage, setStage] = useState(null);
+  const revision = useRef(0);
+  const loadStage = useCallback(async (load) => {
+    const observed = revision.current;
+    const view = await load();
+    // A response from before a warp cannot replace its newer WS location.
+    if (observed === revision.current) setStage(view ? view.stage : null);
+    return view;
+  }, []);
+  const updateStage = useCallback((payload) => {
+    revision.current += 1;
+    setStage((prev) => ({ ...(prev || {}), ...payload }));
+  }, []);
+  return [stage, loadStage, updateStage];
 }
 
 export function useTracker() {
@@ -96,7 +169,7 @@ export function useTracker() {
     loadSegments();
     getJSON("/api/segments/vocab").then(setVocab).catch(() => {});
   }, []);
-  const [feed, setFeed] = useState([]);
+  const [feed, setFeed, classificationPbs, recordFeed] = useEventFeed();
   const [connected, setConnected] = useState(false);
   // armedOrder: live armed membership (drives the honest "armed" chip) —
   // reconciled from each view fetch (membership authoritative, order
@@ -119,7 +192,7 @@ export function useTracker() {
   // Driven by the broadcast-only stage_changed WS event; intentionally NOT in
   // REFRESH_ON — the view's catalog and last_strat_by_star don't depend on it,
   // so a full refetch would be wasted. Seeded from v.stage for initial load.
-  const [stage, setStage] = useState(null);
+  const [stage, loadStage, updateStage] = useLiveStage();
   const [run, setRun] = useState(null);
   const refreshRun = useCallback(async () => {
     try { setRun(await getJSON("/api/run")); } catch (e) { /* keep last */ }
@@ -344,9 +417,9 @@ export function useTracker() {
 
   const refresh = useCallback(async () => {
     try {
-      const v = await getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`);
+      const v = await loadStage(() =>
+        getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`));
       setView(v);
-      setStage(v ? v.stage : null);
       // armedOrder: live via WS notices, reconciled from every view fetch —
       // instant AND cannot stay stale across reconnects. Keep the existing
       // order filtered to the view's armed ids, then append any view-armed
@@ -371,7 +444,7 @@ export function useTracker() {
         prev == null && viewArmed.size === 1 ? [...viewArmed][0] : prev);
     }
     catch (e) { console.error(e); }
-  }, []);
+  }, [loadStage]);
 
   useEffect(() => { refresh(); }, [clock, scope, refresh]);
 
@@ -427,7 +500,7 @@ export function useTracker() {
         if (!closed) setTimeout(connect, 2000); };
       ws.onmessage = (e) => {
         const ev = JSON.parse(e.data);
-        setFeed((f) => [ev, ...f].slice(0, 200));
+        recordFeed(ev);
         if (ev.type === "rank_standards_changed")
           setStandardsRev((revision) => revision + 1);
         if (REFRESH_ON.has(ev.type)) {
@@ -471,7 +544,7 @@ export function useTracker() {
           // onto both the session view's stage and this broadcast payload, so
           // a merge cannot drop one if the two ever stop agreeing about which
           // keys they carry.
-          setStage((prev) => ({ ...(prev || {}), ...ev.payload }));
+          updateStage(ev.payload);
         }
       };
     }
@@ -557,7 +630,7 @@ export function useTracker() {
     setUpdateForced(false);
   }, []);
 
-  const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
+  const pickClock = (c) => selectClassificationClock(c, setClock, classificationPbs);
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
   const pickStarIcons = (mode) => {
     localStorage.setItem("sm64.starIcons", mode); setStarIcons(mode); };
@@ -566,7 +639,7 @@ export function useTracker() {
   const pickShowDust = (on) => {
     localStorage.setItem("sm64.showDust", on ? "1" : "0"); setShowDust(on); };
   const armedSegs = new Set(armedOrder);
-  return { view, clock, pickClock, scope, pickScope, feed, connected,
+  return { view, clock, pickClock, scope, pickScope, feed, connected, classificationPbs,
            starIcons, pickStarIcons, rankIcons, pickRankIcons,
            showDust, pickShowDust, courseIcons,
            segments, vocab, loadSegments,

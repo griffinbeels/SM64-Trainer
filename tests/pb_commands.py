@@ -12,11 +12,19 @@ def save_pb(svc, db, attempt_id, mode):
     attempt = next(a for a in db.attempts() if a.id == attempt_id)
     tag = attempt.strat_tag or "Standard"
     if attempt.segment_id is not None:
-        asyncio.run(svc.set_strat_segment(attempt.segment_id, tag))
+        automatic = asyncio.run(svc.set_strat_segment(attempt.segment_id, tag))
     else:
-        asyncio.run(svc.set_strat(attempt.course_id, attempt.star_id, tag))
+        automatic = asyncio.run(svc.set_strat(attempt.course_id, attempt.star_id, tag,
+                                            timer_mode=mode))
     if not attempt.strat_tag:
         asyncio.run(svc.set_attempt_strat(attempt_id, tag))
+    row = db.current_pb(attempt.course_id, attempt.star_id, mode,
+                        segment_id=attempt.segment_id, strat_tag=tag)
+    if row and row["attempt_id"] == attempt_id:
+        # Selecting the strategy may already have banked this attempt.
+        if automatic and automatic["attempt_id"] == attempt_id:
+            return automatic
+        return {**row, "replay_save": {"status": "already_saved"}}
     return asyncio.run(svc.save_pb(attempt_id, mode))   # the real command
 
 

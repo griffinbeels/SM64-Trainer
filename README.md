@@ -110,6 +110,9 @@ attempt history, PB, a timeline of what happened, and a completion-time graph
 you can click to jump straight to an attempt — or open its replay. The first
 success after moving to a different star or segment returns Practice to the
 top of the page; repeat successes leave your scroll position alone.
+Choosing a strategy also classifies pending attempts and automatically saves
+the fastest eligible success as GOLD. Correcting the latest attempt's strategy
+saves it when it beats that strategy's PB, with the usual rank celebration.
 
 **Segments.** Not just stars: define any repeatable piece of the run (LBLJ,
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class

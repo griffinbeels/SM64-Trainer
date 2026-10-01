@@ -52,9 +52,3 @@ export function needsSoleSelection(option, target) {
   return option != null
     && JSON.stringify(targetTuple(option)) !== JSON.stringify(targetTuple(target));
 }
-
-export function soleSelectionBinding(target, stage) {
-  const place = stage || {};
-  return { target: targetTuple(target), stage: [place.level ?? null,
-    place.mode === "castle" ? place.area ?? null : null] };
-}

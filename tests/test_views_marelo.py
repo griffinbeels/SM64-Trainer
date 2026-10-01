@@ -206,7 +206,6 @@ def test_star_and_segment_sections_both_carry_entity_rank(tmp_path):
     from test_views import make, seed, seg_section
 
     db, svc = make(tmp_path)
-    seed(svc)
     p = tmp_path / "rs.json"
     p.write_text(json.dumps({"version": 1, "entities": {
         "star:2:2": {"clock": "igt", "strategies": {
@@ -215,9 +214,8 @@ def test_star_and_segment_sections_both_carry_entity_rank(tmp_path):
     svc.ranks.load()
     asyncio.run(svc.set_strat(2, 2, "fast"))
     # A PB ranks ONLY the strat it was achieved with (per-strategy ranking) --
-    # tag the seeded attempts 'fast' before saving, then save the faster one.
-    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
-    db._conn.commit()
+    # seed the attempts on 'fast', then explicitly save the faster one.
+    seed(svc)
     best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
     asyncio.run(svc.save_pb(best_aid, "igt"))
     asyncio.run(svc.set_target_segment(1))

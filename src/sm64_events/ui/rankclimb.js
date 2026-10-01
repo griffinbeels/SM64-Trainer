@@ -238,6 +238,47 @@ function renderState(level, bar, beats, atMs, tune, reveal = 1, line = "rest") {
   };
 }
 
+function rankSnapshot(rank) {
+  const level = rank && rank.tier ? rankPosition(rank.tier, rank.division, 0) : null;
+  return { level, bar: level == null ? 0 : barFill(rank.tier, rank.division, rank.fill) };
+}
+
+/** Consume one live receipt across surfaces and remounts; never persisted. */
+export function claimEarnedTransition(receipt) {
+  if (!receipt || receipt.claimed) return false;
+  receipt.claimed = true;
+  return true;
+}
+
+function useEarnedClimb(transition) {
+  const key = transition && transition.key;
+  const baseline = rankSnapshot(transition && transition.from);
+  const seen = useRef(transition && transition.initial ? null : key);
+  const pending = () => key != null && seen.current !== key;
+  // A claimed live receipt may climb on its first mount. Every other new
+  // mount consumes its arrival key silently, while an existing banner uses
+  // a live correction's destination baseline instead of the old strategy.
+  return {
+    key, level: baseline.level ?? 0, bar: baseline.bar, active: false,
+    identityChanged(prior, current) {
+      this.active = pending();
+      if (key != null) seen.current = key;
+      return !this.active && prior !== current;
+    },
+    changed(value) { return !this.active && value; },
+    start(shownRef, setState, tune) {
+      if (!this.active) return shownRef.current;
+      const start = { level: this.level, bar: this.bar };
+      shownRef.current = start;
+      setState(renderState(start.level, start.bar, [], now(), tune));
+      return start;
+    },
+    firstPaint(state, tuneOverride) {
+      return pending() ? renderState(this.level, this.bar, [], now(), tuneOverride || tuning()) : state;
+    },
+  };
+}
+
 /**
  * `rank` is `{tier, division, fill}` — identity only, the three values the
  * server already grades. `identity` is what the caller considers "the same
@@ -256,6 +297,10 @@ function renderState(level, bar, beats, atMs, tune, reveal = 1, line = "rest") {
  * entity outright — all three legitimately produce a higher rank without
  * anyone having earned anything, and all three would otherwise fire a
  * four-second level-up.
+ * `earnedTransition` carries a live, one-use key and a destination baseline
+ * for a classification that actually earned a PB while changing identity.
+ * It bypasses the exchange snap only for that event, still respecting the
+ * celebration preference, reduced motion and the no-regression guard.
  *
  * Returns `{tier, division, fill, vars, icon, climbing}`. `vars` goes on the
  * surface's own style (it carries `--climb-color` and the effect variables);
@@ -264,14 +309,14 @@ function renderState(level, bar, beats, atMs, tune, reveal = 1, line = "rest") {
  */
 export function useRankClimb(rank, identity = null,
                              { lane = null, order = 0, exchangeKey = null,
-                               tune: tuneOverride = null } = {}) {
+                               tune: tuneOverride = null, earnedTransition } = {}) {
   // Level and fill are kept APART from here down. `rankPosition(..., 0)` is
   // exactly the level, and asking for it with a fill of 1 (which ranks.js
   // legitimately sends for a maxed rank) would return 45 — a level that does
   // not exist. Keeping them separate is what makes that unrepresentable
   // rather than clamped.
-  const targetLevel = rank && rank.tier
-    ? rankPosition(rank.tier, rank.division, 0) : null;
+  const { level: targetLevel, bar: targetBar } =
+    rankSnapshot(rank);
   // THE BAR IS A DRAWN WIDTH FROM HERE DOWN, converted ONCE, here at the
   // plan's boundary. Every rank bar is anchored at the track's midpoint
   // except at the ladder floor (caps.js::barFill), and converting at the
@@ -294,8 +339,6 @@ export function useRankClimb(rank, identity = null,
   // It also makes a sweep's DURATION match the distance it actually travels
   // on screen (`climbcurve.js::barSweepMs` scales with `|barTo - barFrom|`),
   // which it did not while the two spaces disagreed.
-  const targetBar = targetLevel == null
-    ? 0 : barFill(rank.tier, rank.division, rank.fill);
   // One number for the comparisons that only ever ask "is this the same
   // measurement / is it higher": the effect's dependency, the retarget check,
   // and the never-animate-a-regression guard. Built from the DRAWN bar so it
@@ -304,6 +347,7 @@ export function useRankClimb(rank, identity = null,
   // including across the floor seam (level 0 at full draws 1.0, level 1 at
   // empty draws 1.5), which is all these comparisons need.
   const target = targetLevel == null ? null : targetLevel + targetBar;
+  const earned = useEarnedClimb(earnedTransition);
 
   const climbToken = useRef(0);
   if (climbToken.current === 0) climbToken.current = ++nextClimbToken;
@@ -356,14 +400,14 @@ export function useRankClimb(rank, identity = null,
     // effects. Nothing else passes one.
     const tune = tuneOverride || tuning();
 
-    const identityChanged = identityRef.current !== identity;
+    const identityChanged = earned.identityChanged(identityRef.current, identity);
     identityRef.current = identity;
     // A rank-mode exchange owns its own old -> new movement (bar, colour,
     // cap squash and text). Record this before the null-target return too, so
     // ranked -> sentinel -> ranked cannot lose the boundary and replay a
     // floor climb on the way back.
     const exchangeChanged = exchangeKeyRef.current != null
-      && exchangeKeyRef.current !== exchangeKey;
+      && earned.changed(exchangeKeyRef.current !== exchangeKey);
     exchangeKeyRef.current = exchangeKey;
 
     setClimbing(climbToken.current, false);
@@ -392,7 +436,7 @@ export function useRankClimb(rank, identity = null,
     // there was no measurement before.
     const isFirstRun = runsRef.current === 0;
     runsRef.current += 1;
-    const from = shownRef.current;
+    const from = earned.start(shownRef, setState, tune);
     // Two shapes of "a first rank was just earned", both of which look like
     // `from == null`: the banner was on screen showing a sentinel and now has
     // a rank, or the banner did not exist at all and has just ARRIVED into a
@@ -661,7 +705,7 @@ export function useRankClimb(rank, identity = null,
       // not keep its sibling waiting for a slot it will never use.
       if (lane && laneEnds.get(lane) === laneEndsAt) laneEnds.delete(lane);
     };
-  }, [target, identity, lane, order, exchangeKey, tuneOverride]);
+  }, [target, identity, lane, order, exchangeKey, tuneOverride, earned.key, earned.level, earned.bar]);
 
   // `atTarget` answers "is what you are looking at the rank you just handed
   // me", and it is resolved HERE rather than inside the loop for one reason:
@@ -672,7 +716,10 @@ export function useRankClimb(rank, identity = null,
   // "Capless 4 -> Waluigi 3 -> Capless 4" across two frames. `targetLevel` and
   // `targetBar` are recomputed from the props on every render, so asking here
   // compares the state against the payload of the render that is asking.
-  return state && { ...state, climbing: frameRef.current != null,
-    atTarget: state.level === targetLevel
-      && Math.abs(state.bar - targetBar) < 1e-9 };
+  // The first paint of a correction belongs to its destination baseline,
+  // even before the effect starts the climb. Never flash the old ladder.
+  const shown = earned.firstPaint(state, tuneOverride);
+  return shown && { ...shown, climbing: frameRef.current != null,
+    atTarget: shown.level === targetLevel
+      && Math.abs(shown.bar - targetBar) < 1e-9 };
 }

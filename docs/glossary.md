@@ -315,6 +315,11 @@ erases one, and it saves one only under the [[strategy]] you are practicing —
 so every [[strategy]] holds its own, and the [[practice log]] shows whichever
 [[strategy]] you have selected.
 
+Choosing a [[strategy]] for unclassified practice history automatically saves
+its fastest eligible success as GOLD. Correcting the newest [[attempt]]'s
+[[strategy]] also saves it when it improves that [[strategy]]'s PB. [[Star]]s
+use the displayed clock; [[segment]]s use RTA. Ties preserve the existing PB.
+
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]]
 
@@ -1588,9 +1593,9 @@ The screen turning what you just played into a [[segment]]. It lists your recent
 which [[target]] the result is a piece of — which is the only way to make a
 [[subsection]]. Picking two [[moment]]s defines the ends and the [[journal]]
 fills the middle from where you walked; picking more says which stops count.
-**Add another start** marks other recorded moments as OR alternatives. Any one
+**Add another start** marks other recorded [[moment]]s as OR alternatives. Any one
 can begin the same ordered steps and finish, even when its sample came from
-another attempt. A marked alternative is no longer a required intermediate step.
+another [[attempt]]. A marked alternative is no longer a required intermediate step.
 Each row says when it happened on Usamune's clock, and arriving somewhere draws
 ONE row that names the place — the load moves the area byte several times and
 this screen shows you the arrival rather than the load. An arrival is the game
