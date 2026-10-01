@@ -5,7 +5,7 @@ from datetime import datetime
 import threading
 
 from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
-from sm64_events.ghost.native_layout import GP_WRONG_SCENE
+from sm64_events.ghost.native_layout import GP_WRONG_SCENE, LABEL_BYTES
 from sm64_events.ghost.source import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
@@ -55,8 +55,22 @@ def ghost_hue(base: int, index: int) -> int:
     return (base + index * HUE_STEP_DEGREES) % 360
 
 
+def ghost_label(ghost) -> str:
+    """Credit belongs to the selected source, independently of cached poses."""
+    if getattr(ghost, "import_id", None):
+        author = getattr(ghost, "author", None)
+        label = " ".join(author.split()) if isinstance(author, str) else ""
+        label = "".join(char for char in label if ord(char) >= 32 and ord(char) != 127)
+        label = label or "UNCREDITED"
+    else:
+        label = "YOUR PB" if getattr(ghost, "pb", False) else "YOUR RUN"
+    # Portable credits remain intact in the library. The billboard has a
+    # bounded wire field, shortened only at a complete UTF-8 character.
+    return label.encode("utf-8", errors="replace")[:LABEL_BYTES - 1].decode("utf-8", errors="ignore")
+
+
 class NativeGhost:
-    def __init__(self, replay, *, supported=True, origin_of=None, running=emulator_running):
+    def __init__(self, replay, *, supported=True, origin_of=None, running=emulator_running, portable=None):
         self._replay, self._supported = replay, supported
         # (pid, birth) of the game whose renderer last served poses. It
         # outlives a replaced pose source on purpose: the game connection
@@ -76,6 +90,11 @@ class NativeGhost:
         self._controls = None
         self._selected_asset = None
         self._requested = False
+        self._portable = portable
+
+    def set_portable(self, provider):
+        """The human-paced collection provider; never consulted by the clock feed."""
+        self._portable = provider
 
     @staticmethod
     def _fingerprint(path):
@@ -118,16 +137,27 @@ class NativeGhost:
             if missing and target is not None and self._supported:
                 result = {**result, "reason": "selected_template_missing", "reason_text": MISSING_REASON}
             return {**result, "ghosts": []}
-        answers, assets = [], []
+        answers, assets, clip_ids = [], [], set()
         for template in ghosts:
             result, asset = self._resolve_template(target, template)
+            result = {**result, "import_id": getattr(template, "import_id", None),
+                      "author": getattr(template, "author", None), "label": ghost_label(template)}
+            if asset is not None:
+                clip_id = asset[1]["clip_id"]
+                if clip_id in clip_ids:
+                    result = {**result, "available": False, "reason": "duplicate_clip",
+                              "reason_text": "Already shown by another selected ghost."}
+                    asset = None
+                else:
+                    clip_ids.add(clip_id)
             answers.append(result)
             if asset is not None:
-                assets.append(asset)
+                assets.append((*asset, result["label"]))
         self._asset = tuple(assets) or None
         first = next((answer for answer in answers if answer["available"]), answers[0])
         return {**first, "ghosts": [
             {"template_id": answer["template_id"], "attempt_id": answer["attempt_id"],
+             "import_id": answer["import_id"], "author": answer["author"], "label": answer["label"],
              "pb": bool(getattr(template, "pb", False)),
              "available": answer["available"], "reason": answer.get("reason"),
              "reason_text": answer["reason_text"]}
@@ -151,6 +181,8 @@ class NativeGhost:
             return {**answer, "reason": "no_template",
                     "reason_text": "Save a PB with this strategy, or save a run as a ghost, to race Mario here."}, None
         answer["template_id"] = template.id
+        if getattr(template, "import_id", None):
+            return self._resolve_portable(target, template, answer)
         attempt_id = attempt_id_of(template.origin)
         answer["attempt_id"] = attempt_id
         if attempt_id is None or self._replay is None:
@@ -178,6 +210,18 @@ class NativeGhost:
         if len(self._cached) > 128:
             del self._cached[next(iter(self._cached))]
         return result, asset
+
+    def _resolve_portable(self, target, ghost, answer):
+        """Imported bytes have their own provider and never borrow local attempt IDs."""
+        if ((ghost.kind, ghost.entity_key) != (target["kind"], target["entity_key"])
+                or self._portable is None):
+            return {**answer, "reason_text": "This imported ghost is not available for this target."}, None
+        try:
+            path, manifest = self._portable.resolve(ghost, target)
+        except (ValueError, LookupError, OSError) as error:
+            return {**answer, "reason_text": str(error)}, None
+        return {**answer, "available": True, "reason": None, "reason_text": None,
+                "exactness": "native_pose", "blinks": manifest["blink_frames"]}, (path, manifest)
 
     def reconcile(self, *, enabled, target, controls: dict):
         """`controls` are the settings' native command fields
@@ -251,8 +295,8 @@ class NativeGhost:
             controls["stop_at_star"] = controls["stop_at_star"] and origin["kind"] == "star"
             clips = [{"clip_id": bytes.fromhex(manifest["clip_id"]),
                       "clip_sha256": bytes.fromhex(manifest["sha256"]),
-                      "clip_path": str(path), "hue_degrees": ghost_hue(hue, index)}
-                     for index, (path, manifest) in enumerate(self._selected_asset)]
+                      "clip_path": str(path), "hue_degrees": ghost_hue(hue, index), "label": label}
+                     for index, (path, manifest, label) in enumerate(self._selected_asset)]
             command = {"enabled": True, "model_id": 1,
                        "owner_suspended": self._owner_suspended,
                        "clips": clips, "rom_path": "",

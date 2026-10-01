@@ -62,6 +62,12 @@ export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
  *   beside Volume, the sound's other control.
  */
 export const SWITCH_LABELS = {
+  names_enabled: { name: "Names", className: "ghost-names", group: "Ghost names",
+    label: "Show whose run each ghost is playing",
+    waiting: "Waiting for the ghost name setting" },
+  inputs_enabled: { name: "Inputs", className: "ghost-inputs", group: "Ghost inputs",
+    label: "Show each ghost's recorded controller inputs",
+    waiting: "Waiting for the ghost input setting" },
   shadow: { name: "Shadow", className: "ghost-shadow", group: "Ghost shadow",
     label: "Draw Mario's own shadow under the ghost",
     waiting: "Waiting for the ghost's shadow setting" },
@@ -187,7 +193,13 @@ function limitedValues(session, limits) {
     tint: ghostTint(session.tint, limits.tint),
     switches: ghostSwitches(session, limits),
     nudge: clampNudge(session.nudge_frames, nudgeLimit(limits)),
+    inputMode: ghostInputMode(session.input_mode, limits),
   };
+}
+
+export function ghostInputMode(value, limits) {
+  return Array.isArray(limits?.input_mode?.options) && limits.input_mode.options.includes(value)
+    ? value : null;
 }
 
 /**
@@ -266,6 +278,7 @@ export function ghostControls(session, entityKey) {
     // pretend to know -- see clampOpacity.
     showsTuning: false, opacity: null, tint: null, view: null, proximity: null, switches: {},
     volume: null, limits: {},
+    inputMode: null,
     marioBoxes: { available: false, reasonText: null }, nudge: 0,
     selection: null,
   };
@@ -303,20 +316,20 @@ export function ghostRecordingOptions(selection, view, draft = {}, strat = null)
   if (!selection || !GHOST_VIEWS.includes(view)) return null;
   const choice = shownChoice(selection, draft);
   const field = view === "mario" ? "native" : "whole";
-  const candidates = selection.candidates || [];
+  const candidates = (selection.candidates || []).filter((candidate) => candidateShown(candidate, choice));
   const hues = new Map((selection.playing || []).map((row) => [row.key, row.hue_degrees]));
   const items = [pbItem(selection.pb, choice.pb, field, hues)];
   const unplayable = [];
   for (const candidate of candidates) {
-    const checked = choice.attempts.includes(candidate.attempt_id);
+    const checked = candidateChecked(candidate, choice);
     if (view === "mario" && !checked && neverPlaysAsMario(candidate)) {
       unplayable.push(candidate);
       continue;
     }
     items.push(candidateItem(candidate, checked, field, view, hues, strat));
   }
-  const missing = choice.attempts.filter(
-    (id) => !candidates.some((candidate) => candidate.attempt_id === id));
+  const missing = [...choice.attempts, ...(choice.imports || [])].filter(
+    (id) => !candidates.some((candidate) => (candidate.import_id || candidate.attempt_id) === id));
   for (const id of missing) {
     items.push({ key: id, checked: true, disabled: false, hue: null,
       label: "Removed ghost", reason: "no longer saved" });
@@ -331,6 +344,15 @@ export function ghostRecordingOptions(selection, view, draft = {}, strat = null)
       whole: rows.some((row) => row.whole_available),
     },
   };
+}
+
+function candidateChecked(candidate, choice) {
+  return candidate.import_id ? (choice.imports || []).includes(candidate.import_id)
+    : choice.attempts.includes(candidate.attempt_id);
+}
+
+function candidateShown(candidate, choice) {
+  return !candidate.practice || candidateChecked(candidate, choice);
 }
 
 /** The server's reasons a run can NEVER play as Only Mario: its poses are in
@@ -356,11 +378,17 @@ function foldedLine(rows) {
 
 function shownChoice(selection, draft) {
   const choice = Object.hasOwn(draft, "ghosts") ? draft.ghosts : selection.ghosts;
-  return { pb: choice?.pb !== false, attempts: [...(choice?.attempts || [])] };
+  return { pb: choice?.pb !== false, attempts: [...(choice?.attempts || [])],
+    ...(choice?.imports?.length ? { imports: [...choice.imports] } : {}) };
 }
 
 function toggled(choice, key) {
   if (key === "pb") return { ...choice, pb: !choice.pb };
+  if (typeof key === "string") {
+    const imports = (choice.imports || []).includes(key)
+      ? choice.imports.filter((id) => id !== key) : [...(choice.imports || []), key];
+    return { ...choice, imports };
+  }
   const attempts = choice.attempts.includes(key)
     ? choice.attempts.filter((id) => id !== key) : [...choice.attempts, key];
   return { ...choice, attempts };
@@ -385,7 +413,8 @@ function gapReason(run, field) {
 /** A run is named by the time it achieved -- `17"80` -- which is what he
  * remembers it by (his ask, 2026-09-22: "Attempt #1906 means nothing"). */
 function runName(run) {
-  return run.frames == null ? `Attempt #${run.attempt_id}` : fmtIgtShort(run.frames);
+  return run.frames == null ? (run.import_id ? "Imported ghost" : `Attempt #${run.attempt_id}`)
+    : fmtIgtShort(run.frames);
 }
 
 function candidateItem(candidate, checked, field, view, hues, strat) {
@@ -393,10 +422,12 @@ function candidateItem(candidate, checked, field, view, hues, strat) {
   // The strategy only when it is not the one being practised: every row on
   // this card already is, and repeating it is noise.
   const other = candidate.strat && candidate.strat !== strat ? candidate.strat : null;
+  const key = candidate.import_id || candidate.attempt_id;
+  const author = candidate.import_id ? candidate.author || "Uncredited" : null;
   return {
-    key: candidate.attempt_id, checked, disabled: !available && !checked,
-    hue: checked ? hues.get(candidate.attempt_id) ?? null : null,
-    label: [runName(candidate), other].filter(Boolean).join(" · "),
+    key, checked, disabled: !available && !checked,
+    hue: checked ? hues.get(key) ?? null : null,
+    label: [runName(candidate), author, other].filter(Boolean).join(" · "),
     reason: available ? gapReason(candidate, field) : candidate[`${field}_reason_text`]
       || (view === "mario" ? "No saved Mario poses" : "No saved video"),
   };
@@ -404,8 +435,8 @@ function candidateItem(candidate, checked, field, view, hues, strat) {
 
 function choiceReason(choice, missing, view) {
   if (missing.length) return "A ticked ghost is no longer saved. Untick it or choose another.";
-  if (!choice.pb && !choice.attempts.length) return "Tick a ghost to race it here.";
-  if (view === "whole" && choice.pb + choice.attempts.length > 1) {
+  if (!choice.pb && !choice.attempts.length && !choice.imports?.length) return "Tick a ghost to race it here.";
+  if (view === "whole" && choice.pb + choice.attempts.length + (choice.imports?.length || 0) > 1) {
     return "Whole picture shows the first ticked ghost; Only Mario shows them all.";
   }
   return null;

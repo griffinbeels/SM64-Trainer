@@ -177,6 +177,29 @@ def clip(tmp_path, key: bytes, hue=0):
             "clip_path": tmp_path / f"{key.decode()}.ghost", "hue_degrees": hue}
 
 
+def test_name_input_controls_and_utf8_credit_are_encoded_atomically(kernel, tmp_path):
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    controls = {"enabled": True, "model_id": 1, "mode": 1,
+                "clips": [{**clip(tmp_path, b"a"), "label": "René"}],
+                "names_enabled": False, "inputs_enabled": True, "input_mode": 1}
+    try:
+        connection.poll(controls)
+        request = kernel.request
+        assert not request.names_enabled and request.inputs_enabled and request.input_mode == 1
+        assert request.clips[0].label.decode("utf-8") == "René"
+        before = bytes(request)
+        for changes in ({"names_enabled": "yes"}, {"inputs_enabled": 1}, {"input_mode": True},
+                        {"input_mode": 2}, {"clips": [{**controls["clips"][0], "label": "a\0b"}]},
+                        {"clips": [{**controls["clips"][0], "label": "é" * P.LABEL_BYTES}]}):
+            with pytest.raises(channel.RejectedControl):
+                connection.poll({**controls, **changes})
+            assert bytes(kernel.request) == before
+        connection.poll({**controls, "names_enabled": True, "inputs_enabled": False, "input_mode": 0})
+        assert kernel.request.names_enabled and not kernel.request.inputs_enabled and kernel.request.input_mode == 0
+    finally:
+        connection.close()
+
+
 def test_exact_origin_transport_and_full_width_seek(kernel, tmp_path):
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
     controls = {"enabled": True, "model_id": 1, "clips": [clip(tmp_path, b"a")],

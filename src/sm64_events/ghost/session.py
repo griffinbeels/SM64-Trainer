@@ -171,7 +171,7 @@ class GhostSession:
 
     def __init__(self, *, tracker, inputs, replay, broadcaster, clock=None,
                  port: int | None = None, controller_factory=None,
-                 resolve=resolve_ghost, period_s: float = WATCH_PERIOD_S, native=None):
+                 resolve=resolve_ghost, period_s: float = WATCH_PERIOD_S, native=None, portable=None):
         self._tracker = tracker
         self._inputs = inputs
         self._replay = replay
@@ -182,6 +182,7 @@ class GhostSession:
         self._resolve = resolve
         self._period_s = period_s
         self._native = native
+        self._portable = portable
         self._native_answer = {}
         # When the last resolve ran, and what the world it read looked like
         # (`_world`): a change there is itself the event that re-resolves.
@@ -248,8 +249,9 @@ class GhostSession:
         if self._values["view"] != "mario":
             return []
         ghosts = [ghost for ghost in self._native_answer.get("ghosts", []) if ghost["available"]]
-        return [{"key": "pb" if ghost.get("pb") else ghost["attempt_id"],
+        return [{"key": "pb" if ghost.get("pb") else ghost.get("import_id") or ghost["attempt_id"],
                  "attempt_id": ghost["attempt_id"],
+                 "import_id": ghost.get("import_id"), "label": ghost.get("label"),
                  "hue_degrees": ghost_hue(self._values["tint"]["hue_degrees"], index) if self._values["tint"]["enabled"] else None}
                 for index, ghost in enumerate(ghosts)]
 
@@ -311,7 +313,8 @@ class GhostSession:
     def _world_now(self):
         """Everything a resolve reads that can change without an event
         reaching this session: which database, which templates, which saved
-        clips. Each is a counter, so asking costs nothing."""
+        clips and imported collection. This runs on the session worker,
+        separately from the live clock feed."""
         database = self._db()
         try:
             store = template_store(self._inputs)
@@ -319,7 +322,7 @@ class GhostSession:
         except Exception:  # noqa: BLE001 - no input service yet is a world too
             templates = None
         return (id(database) if database is not None else None, templates,
-                getattr(self._replay, "saved_generation", None))
+                getattr(self._replay, "saved_generation", None), getattr(self._sharing(), "generation", None))
 
     # -- the cycle ------------------------------------------------------------
 
@@ -406,7 +409,7 @@ class GhostSession:
             return [], (), False
         library = self.library()
         choice = self._selection.chosen(target, library)
-        if not choice["pb"] and not choice["attempts"]:
+        if not choice["pb"] and not choice["attempts"] and not choice.get("imports"):
             return [], (), True
         ghosts, missing = chosen_ghosts(choice, library, target)
         return ghosts, tuple(missing), False
@@ -432,6 +435,7 @@ class GhostSession:
             video = self._resolve_video_source(target, ghosts[0] if ghosts else None)
         if self._native is not None:
             try:
+                self._native.set_portable(self._sharing())
                 self._native_answer = self._native.resolve(target, ghosts, self._missing)
             except Exception:  # noqa: BLE001 - selection failure must revoke the prior target
                 log.exception("native ghost source unavailable")
@@ -449,6 +453,9 @@ class GhostSession:
             return dict(NO_TARGET)
         if self._replay is None:
             return dict(NO_RECORDINGS)
+        if getattr(ghost, "import_id", None):
+            return {**NO_TARGET, "reason": "native_only",
+                    "reason_text": "Imported ghosts are shown with Only Mario."}
         try:
             chosen = {"template": ghost} if ghost is not None else {}
             answer = self._resolve(target["kind"], target["entity_key"],
@@ -473,7 +480,15 @@ class GhostSession:
         active input template (`ghost/pb.py`). `inputs` lets the source route
         pass the service it already resolved for this request."""
         return GhostLibrary(template_store(inputs if inputs is not None else self._inputs), self._db(),
-                            attempt_of=getattr(self._replay, "attempt", None))
+                            attempt_of=getattr(self._replay, "attempt", None), portable=self._sharing())
+
+    def _sharing(self):
+        if self._portable is not None:
+            return self._portable
+        if self._replay is None or getattr(self._replay, "cfg", None) is None or self._db() is None:
+            return None
+        from sm64_events.ghost.sharing import sharing_for
+        return sharing_for(self._replay, self._db())
 
     def _library_or_none(self):
         try:
@@ -545,12 +560,14 @@ class GhostSession:
                 variant=(self._values["view"], self._world_now()))
             # The chosen ghosts were resolved just now. Do not let the list's
             # short cache hide a deletion or a newly saved file on them.
-            fresh = {ghost["attempt_id"]: ghost for ghost in self._native_answer.get("ghosts", [])}
+            fresh = {ghost.get("import_id") or ghost["attempt_id"]: ghost
+                     for ghost in self._native_answer.get("ghosts", [])}
             for row in self._candidates:
-                if row["attempt_id"] in fresh:
-                    row["native_available"] = fresh[row["attempt_id"]]["available"]
-                    row["native_reason"] = fresh[row["attempt_id"]].get("reason")
-                    row["native_reason_text"] = fresh[row["attempt_id"]]["reason_text"]
+                identity = row.get("import_id") or row["attempt_id"]
+                if identity in fresh:
+                    row["native_available"] = fresh[identity]["available"]
+                    row["native_reason"] = fresh[identity].get("reason")
+                    row["native_reason_text"] = fresh[identity]["reason_text"]
         except Exception:  # noqa: BLE001 - the picker must not stop the current ghost
             log.debug("ghost choices unavailable", exc_info=True)
             self._candidates = []
@@ -694,6 +711,10 @@ class GhostSession:
                        self.library().ghosts_for(target["kind"], target["entity_key"])}
             if any(number not in offered for number in checked["ghosts"]["attempts"]):
                 raise ValueError("That ghost is not saved for this star or segment. Choose another ghost.")
+            imports = {ghost.import_id for ghost in self.library().imports_for(
+                target["kind"], target["entity_key"])}
+            if any(identity not in imports for identity in checked["ghosts"].get("imports", [])):
+                raise ValueError("That imported ghost is not available for this star or segment.")
         # Queued changes FOLD the way applied ones merge: two halves of the
         # colour (or of the overlap fade) queued before one cycle both land.
         for name, value in checked.items():

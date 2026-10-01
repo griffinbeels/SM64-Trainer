@@ -9026,6 +9026,38 @@
   /* Tighter than a default field: its first item is a small switch, not text,
      so the label sits closer to it without the two running together. */
   .ghost-colour, .ghost-onoff { gap: .4rem; }
+  .ghost-input-controls { display: grid; align-self: flex-start; gap: .4rem; }
+  .ghost-input-mode { margin-left: 1rem; }
+  .ghost-input-mode select {
+    background: #101f31; color: var(--text); border: 1px solid var(--border-soft);
+    border-radius: 5px; font: inherit; font-size: .68rem; padding: 1px .3rem;
+    min-height: 22px; cursor: pointer;
+  }
+  .ghost-input-mode select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .ghost-input-mode select:disabled { cursor: default; opacity: .65; }
+  .ghost-library { display: grid; gap: 12px; min-width: 0; }
+  .ghost-library-toolbar, .ghost-library-filters, .ghost-library-selection,
+  .ghost-library-pagination { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ghost-library-author { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 200px; }
+  .ghost-library-author input { flex: 1; min-width: 0; }
+  .ghost-library-filters input[type=search] { flex: 1 1 250px; min-width: 0; }
+  .ghost-library-list { max-height: 430px; overflow: auto; min-width: 0; }
+  .ghost-library-row {
+    display: grid; grid-template-columns: 20px minmax(0,1fr) minmax(80px,120px) 75px;
+    gap: 10px; align-items: center; padding: 10px; border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .ghost-library-row:has(input:checked) { background: rgba(255,204,60,.08); }
+  .ghost-library-description { display: grid; gap: 3px; min-width: 0; }
+  .ghost-library-description strong, .ghost-library-description .meta, .ghost-library-creator {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ghost-library-time { text-align: right; font-variant-numeric: tabular-nums; }
+  .ghost-library-time small { display: block; opacity: .65; }
+  .ghost-library-count { margin-right: auto; }
+  .ghost-library-pagination { justify-content: center; }
+  .ghost-library-button { margin-left: auto; }
+  .ghost-library-filters select { background: #101f31; }
   .ghost-volume-range { width: 90px; min-width: 0; accent-color: var(--gold); }
   /* WHAT THE GHOST DRAWS -- the whole picture, or only Mario.
      A native `<select>` of two options: this project's rule is that a SHORT
