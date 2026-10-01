@@ -20,6 +20,7 @@ from typing import Any, Callable
 from sm64_events.ghost.proximity import (
     DEFAULT_PROXIMITY, MAX_EXTRA_DISTANCE, PROXIMITY_KEY, checked_proximity, saved_proximity,
 )
+from sm64_events.ghost.native_layout import INPUT_STICK, INPUT_VALUES
 
 #: How see-through the ghost is the FIRST time it is ever switched on. A
 #: shipped preference, so its exact value is his to move and no test pins it --
@@ -55,6 +56,8 @@ NUDGE_LIMIT_FRAMES = 600
 #: slider to adjust the ghost volume."* Half by default so the ghost never
 #: drowns out the live game; a shipped preference.
 DEFAULT_VOLUME = 0.5
+INPUT_MODES = {"stick": INPUT_STICK, "values": INPUT_VALUES}
+DEFAULT_INPUT_MODE = "stick"
 #: The least of its opacity a ghost keeps when it overlaps or blocks Mario
 #: (plugin/gfxwrap/ghost_occlusion.h GHOST_FLOOR). Published so the card's
 #: sentence about it is not a second copy of the number.
@@ -186,6 +189,12 @@ def checked_volume(volume) -> float:
     return float(volume)
 
 
+def checked_input_mode(value) -> str:
+    if not isinstance(value, str) or value not in INPUT_MODES:
+        raise ValueError("Show the ghost's stick as a picture or as raw values.")
+    return value
+
+
 def _load_tint(database) -> dict:
     enabled = database.get_state("ghost_tint_enabled", DEFAULT_TINT["enabled"])
     stored = database.get_state("ghost_tint_hue", DEFAULT_TINT["hue_degrees"])
@@ -222,6 +231,14 @@ ROWS = (
     # shadow that follows mario ... and then make sure we can easily A/B test
     # whether we like this or not."* On: the shadow is the game's own.
     switch("shadow", "ghost_shadow", True, "The ghost's shadow is either on or off.", "shadow_enabled"),
+    switch("names_enabled", "ghost_names", True,
+           "The ghost's name is either shown or hidden.", "names_enabled"),
+    switch("inputs_enabled", "ghost_inputs", False,
+           "The ghost's inputs are either shown or hidden.", "inputs_enabled"),
+    Setting("input_mode", DEFAULT_INPUT_MODE, checked_input_mode, key="ghost_input_mode",
+            restore=lambda stored: stored if isinstance(stored, str) and stored in INPUT_MODES else DEFAULT_INPUT_MODE,
+            native=lambda value: {"input_mode": INPUT_MODES[value]},
+            limits={"options": list(INPUT_MODES)}),
     # THE GHOST NEVER BLOCKS THE PLAYER (the player-first fade). His words,
     # 2026-09-23: *"if the ghost is blocking the player in any way, we
     # prioritize rendering the player, not the ghost."* On; his A/B switch.

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from time import monotonic
 
 from sm64_events.ghost.native_layout import GHOSTS
@@ -43,25 +44,31 @@ def checked_template_id(value):
 
 
 def checked_choice(value) -> dict:
-    """`{"pb": bool, "attempts": [attempt ids]}`, or one readable refusal.
+    """PB and local attempt ticks, plus optional imported identities.
 
     A ghost is a recorded ATTEMPT, whichever list offered it (a saved ghost or
-    a template's run), so the tick set names attempts.
+    a template's run), so the tick set names attempts. Imported recordings
+    live in their own collection and carry no local attempt identity.
     """
-    if not isinstance(value, dict) or set(value) - {"pb", "attempts"}:
+    if not isinstance(value, dict) or set(value) - {"pb", "attempts", "imports"}:
         raise ValueError("Choose which ghosts to show.")
     pb = value.get("pb", True)
     attempts = value.get("attempts", [])
-    if type(pb) is not bool or not isinstance(attempts, list):
+    imports = value.get("imports", [])
+    if type(pb) is not bool or not isinstance(attempts, list) or not isinstance(imports, list):
         raise ValueError("Choose which ghosts to show.")
     for number in attempts:
         if type(number) is not int or number <= 0:
             raise ValueError("Choose a saved ghost.")
     if len(set(attempts)) != len(attempts):
         raise ValueError("Each saved ghost can be shown once.")
-    if len(attempts) + pb > MAX_GHOSTS:
+    if any(not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity) for identity in imports):
+        raise ValueError("Choose an imported ghost from the collection.")
+    if len(set(imports)) != len(imports):
+        raise ValueError("Each imported ghost can be shown once.")
+    if len(attempts) + len(imports) + pb > MAX_GHOSTS:
         raise ValueError(f"Show at most {MAX_GHOSTS} ghosts at once.")
-    return {"pb": pb, "attempts": list(attempts)}
+    return {"pb": pb, "attempts": list(attempts), **({"imports": list(imports)} if imports else {})}
 
 
 def _stored_choice(value):
@@ -87,7 +94,7 @@ def upgraded_choice(choice, library):
     from sm64_events.ghost.source import attempt_id_of
 
     if not choice.get("templates"):
-        return {"pb": choice["pb"], "attempts": list(choice["attempts"])}
+        return checked_choice({name: value for name, value in choice.items() if name != "templates"})
     attempts = list(choice["attempts"])
     for number in choice["templates"]:
         try:
@@ -96,7 +103,9 @@ def upgraded_choice(choice, library):
             continue
         if attempt is not None and attempt not in attempts:
             attempts.append(attempt)
-    return {"pb": choice["pb"], "attempts": attempts[:MAX_GHOSTS - choice["pb"]]}
+    imports = choice.get("imports", [])
+    return checked_choice({"pb": choice["pb"], "attempts": attempts[:MAX_GHOSTS - choice["pb"] - len(imports)],
+                           "imports": imports})
 
 
 def chosen_ghosts(choice, library, target):
@@ -116,7 +125,13 @@ def chosen_ghosts(choice, library, target):
             missing.append(number)
         elif all(offered[number].origin != other.origin for other in ghosts):
             ghosts.append(offered[number])
-    if not ghosts and choice["pb"] and not choice["attempts"]:
+    imported = {ghost.import_id: ghost for ghost in library.imports_for(kind, key)}
+    for identity in choice.get("imports", []):
+        if identity not in imported:
+            missing.append(identity)
+        elif all(imported[identity].origin != other.origin for other in ghosts):
+            ghosts.append(imported[identity])
+    if not ghosts and choice["pb"] and not choice["attempts"] and not choice.get("imports"):
         fallback = library.template_for(kind, key, strat)
         if fallback is not None:
             ghosts.append(fallback)
@@ -163,7 +178,7 @@ class GhostSelection:
             return dict(DEFAULT_CHOICE, attempts=[])
         if choice.get("templates") and library is not None:
             choice = self._choices[key] = upgraded_choice(choice, library)
-        return {"pb": choice["pb"], "attempts": list(choice["attempts"])}
+        return checked_choice({name: value for name, value in choice.items() if name != "templates"})
 
     def choose(self, target, choice):
         key = target_key(target)
@@ -192,8 +207,11 @@ class GhostSelection:
         needs it for no row) and is kept as unknown."""
         if target is None:
             return []
-        ghosts = library.ghosts_for(target["kind"], target["entity_key"])
-        signature = (target_key(target), tuple((g.attempt_id, g.frames, g.strat_tag) for g in ghosts),
+        ghosts = [*library.ghosts_for(target["kind"], target["entity_key"]),
+                  *library.imports_for(target["kind"], target["entity_key"])]
+        signature = (target_key(target), tuple((getattr(g, "import_id", None) or g.attempt_id,
+                                                g.frames, g.strat_tag, getattr(g, "author", None),
+                                                getattr(g, "practice", False)) for g in ghosts),
                      variant)
         now = monotonic()
         if self._cache is not None:
@@ -204,7 +222,9 @@ class GhostSelection:
         for ghost in ghosts:
             video = video_of(target, ghost)
             pose = _native_candidate(native, target, ghost)
-            candidates.append({"attempt_id": ghost.attempt_id, "frames": ghost.frames,
+            candidates.append({"attempt_id": ghost.attempt_id, "import_id": getattr(ghost, "import_id", None),
+                               "author": getattr(ghost, "author", None), "practice": bool(getattr(ghost, "practice", False)),
+                               "frames": ghost.frames,
                                "strat": ghost.strat_tag,
                                "native_available": bool(pose["available"]),
                                "native_reason": pose.get("reason"),

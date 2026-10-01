@@ -70,8 +70,20 @@ def test_only_the_ghost_switch_names_the_session_endpoint():
     """One door, the way `ui/target.js` owns /api/target. A second caller is
     how two surfaces come to disagree about one app-wide session."""
     named = [path.name for path in UI.rglob("*.js")
-             if "/api/ghost" in strip_comments(path.read_text(encoding="utf-8"))]
+             if names_ghost_session(strip_comments(path.read_text(encoding="utf-8")))]
     assert named == ["ghostswitch.js"], named
+
+
+def names_ghost_session(source):
+    """The session door, allowing its query; collection routes are separate."""
+    return bool(re.search(r'''(["'])/api/ghost(?:\?[^"']*)?\1''', source))
+
+
+def test_the_session_endpoint_scan_distinguishes_collection_routes():
+    assert names_ghost_session('const url = "/api/ghost";')
+    assert names_ghost_session("const url = '/api/ghost?view=mario';")
+    assert not names_ghost_session('const url = "/api/ghost/library";')
+    assert not names_ghost_session('const url = "/api/ghost/jobs/3";')
 
 
 def ghost_classes_in(source: str) -> set:

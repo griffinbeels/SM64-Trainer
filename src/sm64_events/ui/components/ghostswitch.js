@@ -36,8 +36,9 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { GhostProximity } from "./ghostproximity.js";
+import { GhostLibraryButton } from "./ghostlibrary.js";
 import { clampNudge, clampOpacity, ghostControls, ghostRecordingOptions,
-         ghostViewChoices, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
+         ghostViewChoices, ghostInputMode, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
          nudgeSeconds, nudgeText, opacityText, shownTint, shownView,
          GHOST_VIEWS, NUDGE_STEP, VIEW_LABELS } from "../ghostsession.js";
 
@@ -208,6 +209,23 @@ function GhostOnOff({ setting, value, draft, write }) {
   </div>`;
 }
 
+/** The stick's presentation depends on Inputs, so it nests beneath that switch. */
+function GhostInputControls({ row, mode, options, write }) {
+  const enabled = row.draft == null ? row.value : Boolean(row.draft);
+  const labels = { stick: "Stick", values: "Values" };
+  return html`<div class="ghost-input-controls">
+    <${GhostOnOff} setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />
+    ${enabled === true && html`<label class="ghost-field ghost-input-mode">
+      <span class="ghost-field-name">Stick display</span>
+      <select aria-label="How the ghost's stick input is shown" disabled=${mode == null}
+          value=${mode || ""} onchange=${(event) => write({ input_mode: event.target.value })}>
+        ${mode == null && html`<option value="">Waiting...</option>`}
+        ${(options || []).map((name) => html`<option key=${name} value=${name}>${labels[name] || name}</option>`)}
+      </select>
+    </label>`}
+  </div>`;
+}
+
 /**
  * UNKNOWN IS NOT A POSITION ON THE SLIDER. Until the server has said how
  * solid the ghost is drawn (and what the slider offers), the control carries
@@ -352,7 +370,7 @@ function GhostRecording({ recording, entityKey, target, write }) {
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, switches, volume, view, boxes, nudge, limits, write, queue,
+function GhostTuning({ opacity, tint, switches, inputMode, volume, view, boxes, nudge, limits, write, queue,
                       showView = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
@@ -363,7 +381,10 @@ function GhostTuning({ opacity, tint, switches, volume, view, boxes, nudge, limi
   return html`<div class="ghost-tune">
     <${GhostVisibility} opacity=${opacity} range=${limits.opacity} queue=${queue} />
     <${GhostColour} tint=${tint} range=${limits.tint} write=${write} queue=${queue} />
-    ${view === "mario" && html`${switches.map((row) => html`<${GhostOnOff} key=${row.setting}
+    ${view === "mario" && html`${switches.map((row) => row.setting === "inputs_enabled"
+      ? html`<${GhostInputControls} key=${row.setting} row=${row} mode=${inputMode}
+          options=${limits.input_mode?.options} write=${write} />`
+      : html`<${GhostOnOff} key=${row.setting}
         setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />`)}
       <${GhostVolume} volume=${volume.value} draft=${volume.draft} range=${limits.volume}
         queue=${queue} />`}
@@ -406,6 +427,7 @@ function heldValues(controls, held) {
       .filter(([setting]) => SWITCH_LABELS[setting])
       .map(([setting, value]) => ({ setting, value, draft: held[setting] })),
     tint: shownTint(controls.tint, held.tint, limits.tint),
+    inputMode: ghostInputMode(held.input_mode ?? controls.inputMode, limits),
   };
 }
 
@@ -435,7 +457,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   const on = held.enabled == null
     ? controls.enabled : Boolean(held.enabled) && controls.available;
   const { limits } = controls;
-  const { opacity, nudge, switches, tint } = heldValues(controls, held);
+  const { opacity, nudge, switches, tint, inputMode } = heldValues(controls, held);
   const view = shownView(controls.view, held.view);
   const recording = ghostRecordingOptions(controls.selection, view, held, practisedStrat(session));
   const nativeViews = ghostViewChoices(controls.nativeViews, recording);
@@ -448,6 +470,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         labelId=${labelId} reasonId=${reasonId}
         onToggle=${() => write({ enabled: !on })} />
       <span class="ghost-label" id=${labelId}>Ghost Overlay</span>
+      <${GhostLibraryButton} t=${t} session=${session} write=${write} />
       ${nativeViews && html`<${GhostView} view=${view}
         boxes=${controls.marioBoxes} choices=${nativeViews} write=${write} />`}
       ${controls.reasonText && html`<span class="ghost-why" id=${reasonId}>
@@ -457,7 +480,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
     <${GhostRecording} recording=${recording} entityKey=${entityKey}
       target=${session?.target} write=${write} />
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
-      switches=${switches} limits=${limits}
+      switches=${switches} inputMode=${inputMode} limits=${limits}
       volume=${{ value: controls.volume, draft: held.volume }}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}

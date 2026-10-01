@@ -111,17 +111,25 @@ def _select_ghosts(session: dict, body: dict, input_source: dict) -> None:
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     selection = dict(session["selection"])
-    rows = {candidate["attempt_id"]: candidate for candidate in selection["candidates"]}
+    rows = {candidate["attempt_id"]: candidate for candidate in selection["candidates"]
+            if not candidate.get("import_id")}
+    imports = {candidate["import_id"]: candidate for candidate in selection["candidates"]
+               if candidate.get("import_id")}
     if any(number not in rows for number in choice["attempts"]):
         raise HTTPException(422, "That ghost is not saved for this star or segment. Choose another ghost.")
+    if any(identity not in imports for identity in choice.get("imports", [])):
+        raise HTTPException(422, "That imported ghost is not available for this star or segment.")
     pb = selection.get("pb")
     chosen = ([("pb", {**pb, "template_id": -pb["attempt_id"]})] if choice["pb"] and pb else [])
     chosen += [(number, {**rows[number], "template_id": -number}) for number in choice["attempts"]]
+    chosen += [(identity, {**imports[identity], "template_id": identity})
+               for identity in choice.get("imports", [])]
     selection["ghosts"] = choice
     native = [(key, row) for key, row in chosen if row["native_available"]]
     tint = session["tint"]
     selection["playing"] = [] if session["view"] != "mario" else [
         {"key": key, "attempt_id": row["attempt_id"],
+         **({"import_id": row["import_id"]} if row.get("import_id") else {}),
          "hue_degrees": ghost_hue(tint["hue_degrees"], index) if tint["enabled"] else None}
         for index, (key, row) in enumerate(native)]
     session["selection"] = selection

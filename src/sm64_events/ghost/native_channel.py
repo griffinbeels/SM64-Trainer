@@ -9,7 +9,9 @@ from contextlib import contextmanager
 
 from sm64_events.ghost import native_protocol as P
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
-from sm64_events.ghost.settings import DEFAULT_OPACITY, DEFAULT_VOLUME, NUDGE_LIMIT_FRAMES, native_switches
+from sm64_events.ghost.settings import (
+    DEFAULT_INPUT_MODE, DEFAULT_OPACITY, DEFAULT_VOLUME, INPUT_MODES, NUDGE_LIMIT_FRAMES, native_switches,
+)
 from sm64_events.memory.addresses import ACT_JUMBO_STAR_CUTSCENE, STAR_DANCE_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
 
@@ -176,6 +178,10 @@ class NativeChannel:
         request.volume = _volume(value)
         for field, default in native_switches().items():
             setattr(request, field, _switch(value, field, default))
+        input_mode = value.get("input_mode", INPUT_MODES[DEFAULT_INPUT_MODE])
+        if type(input_mode) is not int or input_mode not in INPUT_MODES.values():
+            raise ValueError("native ghost input display mode is invalid")
+        request.input_mode = input_mode
         mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
         if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
             raise ValueError("invalid native ghost seek")
@@ -251,8 +257,8 @@ def _set_clips(request, clips, enabled: bool):
         raise ValueError(f"native ghost set needs 1..{P.GHOSTS} clips")
     encoded, seen = [], set()
     for entry in clips:
-        if not isinstance(entry, dict) or set(entry) != CLIP_KEYS:
-            raise ValueError(f"native ghost clip needs exactly {sorted(CLIP_KEYS)}")
+        if not isinstance(entry, dict) or not CLIP_KEYS <= set(entry) or set(entry) - CLIP_KEYS - {"label"}:
+            raise ValueError(f"native ghost clip needs {sorted(CLIP_KEYS)} and an optional label")
         clip_id, digest, hue = _bytes(entry["clip_id"]), _bytes(entry["clip_sha256"]), entry["hue_degrees"]
         if len(clip_id) != 16 or not any(clip_id) or len(digest) != 32 or clip_id in seen:
             raise ValueError("native ghost clip identity is missing or repeated")
@@ -261,6 +267,7 @@ def _set_clips(request, clips, enabled: bool):
         seen.add(clip_id)
         clip = P.Clip()
         clip.clip_id[:], clip.clip_sha256[:], clip.hue_degrees = clip_id, digest, hue
+        clip.label = P.label_bytes(entry.get("label", ""))
         units = P.path_units(entry["clip_path"])
         clip.clip_path[:] = units + (0,) * (P.PATH_CHARS - len(units))
         encoded.append(clip)

@@ -400,6 +400,42 @@ def ghosts(pb=True, *attempts):
     return {"pb": pb, "attempts": list(attempts)}
 
 
+def test_imported_ghost_credit_and_choice_stay_separate_from_local_attempt_ids():
+    identity = "ab" * 32
+    selection = {"ghosts": {**ghosts(True, 4), "imports": [identity]}, "pb": PB,
+                 "candidates": [saved_candidate(4),
+                                {**saved_candidate(None, frames=300), "import_id": identity,
+                                 "author": "Other player"}],
+                 "playing": [{"key": identity, "hue_degrees": 257}]}
+    answer = recording_options(selection)
+    foreign = answer["items"][-1]
+    assert foreign["key"] == identity and foreign["checked"] and foreign["hue"] == 257
+    assert foreign["label"] == '10"00 · Other player · TJ Owlless'
+    body = json.dumps(selection)
+    toggle = lambda key: run_node("ghostRecordingOptions", f"ghostRecordingOptions({body}, 'mario').toggle({json.dumps(key)})")
+    assert toggle("pb") == {"pb": False, "attempts": [4], "imports": [identity]}
+    assert toggle(4) == {"pb": True, "attempts": [], "imports": [identity]}
+    assert toggle(identity) == {"pb": True, "attempts": [4], "imports": []}
+
+
+def test_input_mode_waits_for_both_the_state_and_published_options():
+    assert run_node("ghostInputMode", f"ghostInputMode('values', {json.dumps(LIMITS)})") == "values"
+    assert run_node("ghostInputMode", "ghostInputMode('stick', {})") is None
+    assert run_node("ghostInputMode", f"ghostInputMode(null, {json.dumps(LIMITS)})") is None
+    assert run_node("ghostInputMode", f"ghostInputMode('combined', {json.dumps(LIMITS)})") is None
+
+
+def test_imported_practice_ghost_is_hidden_until_explicitly_selected():
+    identity = "ab" * 32
+    candidate = {**saved_candidate(None, frames=300), "import_id": identity,
+                 "author": "Other player", "practice": True}
+    selection = {"ghosts": ghosts(), "pb": PB, "candidates": [candidate]}
+    assert [item["key"] for item in recording_options(selection)["items"]] == ["pb"]
+    selection["ghosts"]["imports"] = [identity]
+    selected = recording_options(selection)["items"][-1]
+    assert selected["key"] == identity and selected["checked"] and not selected["disabled"]
+
+
 def ticks(answer):
     return [(item["key"], item["checked"], item["disabled"]) for item in answer["items"]]
 

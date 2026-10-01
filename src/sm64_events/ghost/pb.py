@@ -87,10 +87,23 @@ class GhostLibrary:
     names each run by its own time.
     """
 
-    def __init__(self, templates, db, attempt_of=None):
+    def __init__(self, templates, db, attempt_of=None, portable=None):
         self._templates = templates
         self._db = db
         self._attempt_of = attempt_of
+        self._portable = portable
+
+    @property
+    def generation(self):
+        return getattr(self._portable, "generation", None)
+
+    def imports_for(self, kind, entity_key):
+        return self._portable.imports_for(kind, entity_key) if self._portable is not None else []
+
+    def imported(self, import_id):
+        if self._portable is None:
+            raise LookupError("That imported ghost is no longer available.")
+        return self._portable.get(import_id)
 
     def active_for(self, kind, entity_key, strat):
         return self.pb_for(kind, entity_key, strat) or self.template_for(kind, entity_key, strat)
@@ -102,6 +115,8 @@ class GhostLibrary:
         return current_pb_ghost(self._db, kind, entity_key, strat)
 
     def get(self, template_id):
+        if isinstance(template_id, str):
+            return self.imported(template_id)
         return self._templates.get(template_id)
 
     def list_for(self, kind, entity_key):

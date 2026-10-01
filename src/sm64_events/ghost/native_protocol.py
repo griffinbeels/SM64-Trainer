@@ -120,6 +120,19 @@ def path_units(path: str | Path) -> tuple[int, ...]:
     return units
 
 
+def label_bytes(label: str) -> bytes:
+    """A display credit, bounded UTF-8; malformed commands never partly apply."""
+    if not isinstance(label, str) or any(ord(char) < 32 or ord(char) == 127 for char in label):
+        raise ValueError("ghost label must be text without control characters")
+    try:
+        encoded = label.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError("ghost label must be valid UTF-8") from error
+    if len(encoded) >= LABEL_BYTES:
+        raise ValueError("ghost label exceeds the native channel limit")
+    return encoded
+
+
 def checked_status(raw: bytes, pid: int) -> Status:
     if len(raw) != C.sizeof(Status):
         raise ValueError("incomplete ghost status")

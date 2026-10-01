@@ -30,6 +30,7 @@ SAMPLES = {
     "proximity": ({"extra_distance": 120.0}, {"extra_distance": 401}),
     "view": ("whole", "rotoscope"),
     "nudge_frames": (12, settings.NUDGE_LIMIT_FRAMES + 1),
+    "input_mode": ("values", "combined"),
 }
 
 
