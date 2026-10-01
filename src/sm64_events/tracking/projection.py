@@ -1171,6 +1171,7 @@ class Projector:
                 and (self.target is not None
                      or (self._level is not None
                          and ev.payload.get("course_id") != course_for_level(self._level))))
+
     def _retire_pending_target(self) -> None:
         # The origin rule's verdict, applied now that the matcher has had this
         # event (see _dispatch's level_changed branch for the whole argument).

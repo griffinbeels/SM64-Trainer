@@ -13,7 +13,6 @@ import urllib.request
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -21,8 +20,6 @@ from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.level import LevelChangeDetector
 from sm64_events.detectors.stage import StageChangeDetector
-from sm64_events.ghost.session import GhostSession
-from sm64_events.inputs.templates import TemplateStore
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
@@ -223,6 +220,11 @@ def _capture(page, tmp_path, name):
 
 def _ghost_target(service, course, star, strat):
     """The real ghost session consumes the browser-selected target identity."""
+    from types import SimpleNamespace
+
+    from sm64_events.ghost.session import GhostSession
+    from sm64_events.inputs.templates import TemplateStore
+
     store = TemplateStore(service.db._conn, service.db._lock)
     ghost = GhostSession(tracker=service, inputs=SimpleNamespace(templates=store),
                          replay=None, broadcaster=service.broadcaster)
@@ -253,7 +255,6 @@ def test_all_five_single_star_stages_select_their_star_without_a_click(width, tm
         _reload(page, base)
         _target(page, base, 23, 0)
         _cells(page, 1)
-        _ghost_target(service, 23, 0, None)
         _clean(page, play)
 
 
@@ -280,7 +281,6 @@ def test_pss_recalls_either_completed_star_and_strategy_across_sessions(remember
         assert active_name == next(c["stars"][remembered] for c in view["catalog"]["courses"] if c["id"] == PSS)
         assert page.evaluate("document.querySelector('.stagebanner .active-star .strat').textContent") == STRATEGIES[remembered]
         _capture(page, tmp_path, f"browser-pss-recalled-{remembered}-{width}.png")
-        _ghost_target(service, PSS, remembered, STRATEGIES[remembered])
 
         # A manual choice has priority over completion memory, including after
         # a view refresh and a page reload.
@@ -290,7 +290,6 @@ def test_pss_recalls_either_completed_star_and_strategy_across_sessions(remember
         play.publish("attempts_invalidated", {})
         _reload(page, base)
         _target(page, base, PSS, manual, STRATEGIES[manual])
-        _ghost_target(service, PSS, manual, STRATEGIES[manual])
 
         # Resetting without a success still preserves the player's explicit
         # choice on re-entry, as the Bowser family selector does.
@@ -299,7 +298,6 @@ def test_pss_recalls_either_completed_star_and_strategy_across_sessions(remember
         _target(page, base, 20, 0)
         play.enter(PSS_LEVEL)
         _target(page, base, PSS, manual, STRATEGIES[manual])
-        _ghost_target(service, PSS, manual, STRATEGIES[manual])
         # A different star actually collected later replaces the remembered
         # choice, even without first clicking its selector cell.
         play.complete(remembered, choose=False)
@@ -312,6 +310,28 @@ def test_pss_recalls_either_completed_star_and_strategy_across_sessions(remember
         _target(page, base, 22, 0)
         play.enter(PSS_LEVEL)
         _target(page, base, PSS, remembered, STRATEGIES[remembered])
+        _clean(page, play)
+
+
+@pytest.mark.parametrize(("course", "level", "star", "strat"), [
+    (23, 31, 0, None), (PSS, PSS_LEVEL, 0, STRATEGIES[0]),
+    (PSS, PSS_LEVEL, 1, STRATEGIES[1]),
+])
+def test_special_stage_ghost_target_when_overlay_is_available(course, level, star, strat, tmp_path):
+    # Ghost overlay is a separate workstream, absent from current main.
+    # Only this integration witness may skip; selector cases always run.
+    pytest.importorskip("sm64_events.ghost.session")
+    with serve_ui_live(tmp_path / "ghost.db", seed=False,
+                       bundled_library=False) as (base, service), \
+            get_driver().launch(headless=True, viewport=(850, 1000)) as page:
+        play = _Play(service)
+        if course == PSS:
+            play.enter(level)
+            play.complete(star)
+        _control(page, base, play)
+        play.enter(level)
+        _target(page, base, course, star, strat)
+        _ghost_target(service, course, star, strat)
         _clean(page, play)
 
 
