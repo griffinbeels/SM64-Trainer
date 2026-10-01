@@ -130,6 +130,9 @@ int main(int argc, char **argv) {
     check(argc == 3, "usage: ghost_capture_host config scenario");
     Fixture f(argv[1]);
     const std::string mode(argv[2]);
+    // The established scenarios qualify their named components in isolation.
+    // The pad scenario uses the actual serialized Python Layout root.
+    if (mode != "pad") f.config.player1_controller = 0;
     if (mode == "basic") {
         check(f.run() == GC_OK && f.sample.valid_fields == 31, "valid capture failed");
         const auto &s = f.sample;
@@ -416,6 +419,45 @@ int main(int argc, char **argv) {
         f.put32(f.config.mario_state + 0x7c, f.config.object_pool + 0x260);
         check(f.run() == GC_UNSUPPORTED_HELD && !(f.sample.valid_fields & (GC_VALID_POSE | GC_VALID_HELD))
               && zero(f.sample.held), "TRS reader recorded a held object");
+    } else if (mode == "pad") {
+        const uint32_t controller = f.config.player1_controller;
+        check(controller != 0, "Python layout lost the Controller root");
+        const auto input = [&](int16_t x, int16_t y, uint16_t buttons, uint16_t pressed) {
+            f.put16(controller, uint16_t(x)); f.put16(controller + 2, uint16_t(y));
+            f.put16(controller + 0x10, buttons); f.put16(controller + 0x12, pressed);
+        };
+        input(-84, 72, 0x8011, 0x8001);
+        check(f.run() == GC_OK && (f.sample.valid_fields & GC_VALID_PAD)
+              && f.sample.pad.stick_x == -84 && f.sample.pad.stick_y == 72
+              && f.sample.pad.buttons == 0x8011 && !f.sample.pad.reserved, "same occurrence pad/endian");
+        input(0, 0, 0, 0);
+        check(f.run() == GC_OK && (f.sample.valid_fields & GC_VALID_PAD) && zero(f.sample.pad),
+              "known neutral was treated as unknown or retained input");
+        input(-128, 127, 0xff3f, 0xff3f);
+        check(f.run() == GC_OK && (f.sample.valid_fields & GC_VALID_PAD)
+              && f.sample.pad.stick_x == -128 && f.sample.pad.stick_y == 127, "pad valid boundary");
+        for (unsigned bad = 0; bad < 7; ++bad) {
+            input(bad == 0 ? -129 : bad == 1 ? 128 : 8,
+                  bad == 2 ? -129 : bad == 3 ? 128 : -8,
+                  bad == 4 ? 0x0080 : bad == 5 ? 0x0040 : 0x8000, bad == 6 ? 0x4000 : 0);
+            check(f.run() == GC_OK && f.sample.valid_fields == GC_VALID_REQUIRED && zero(f.sample.pad),
+                  "invalid pad contaminated pose or reused input");
+        }
+        input(35, -61, 0x2001, 1);
+        f.put32(f.config.mario_object, f.config.object_pool + 1);
+        check(f.run() == GC_BAD_POINTER && (f.sample.valid_fields & GC_VALID_PAD)
+              && !(f.sample.valid_fields & GC_VALID_POSE) && f.sample.pad.buttons == 0x2001,
+              "pose refusal erased exact optional pad");
+        f.put32(f.config.mario_object, f.config.object_pool);
+        f.config.player1_controller = 0;
+        check(f.run() == GC_OK && !(f.sample.valid_fields & GC_VALID_PAD) && zero(f.sample.pad),
+              "unavailable pad became neutral or retained input");
+        f.config.player1_controller = controller + 1;
+        check(f.run() == GC_BAD_CONFIG && !f.sample.valid_fields && zero(f.sample.pad),
+              "unaligned Controller layout accepted");
+        f.config.player1_controller = Fixture::base + f.config.rdram_bytes - 0x1c;
+        check(f.run() == GC_BAD_CONFIG && !f.sample.valid_fields && zero(f.sample.pad),
+              "outside Controller layout accepted");
     } else if (mode == "arguments") {
         f.config.version = GC_VERSION - 1;
         check(f.run() == GC_BAD_CONFIG && f.sample.valid_fields == 0 && f.sample.live_action == 0,

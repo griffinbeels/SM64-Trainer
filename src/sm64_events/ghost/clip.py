@@ -6,6 +6,8 @@ record may also carry the shadow the game drew under Mario, the sound
 requests Mario issued since the previous frame (`Frame.sounds`) and the
 particles the game drew for him (bubbles, splashes, water rings, dust), each
 with its own validity bit.
+Exact raw controller input (`Frame.pad`) is optional evidence from that same
+display-list occurrence. Missing input remains unknown, including older files.
 
 A star run's clip may end with a DANCE TAIL (header flag `DANCE_TAIL`): the
 frames after the attempt closed, through Mario's closing star grab and dance,
@@ -30,6 +32,7 @@ from uuid import UUID, uuid4
 from sm64_events.ghost.native_layout import (  # every size and offset: native_layout.py
     BRIDGE_FRAMES, CAMERA_AT, CAMERA_FOV_AT, CLIP_MAGIC as MAGIC, CLIP_VERSION as VERSION, CLOCK_AT, DANCE_TAIL,
     HEADER_BYTES, HELD_ANGLES_AT, HELD_AT, HELD_BYTES, HELD_HOLP_AT, HELD_RELEASED_AT, MAX_RECORDS, PARTICLE_BYTES as PARTICLE_ENTRY_BYTES,
+    PAD_AT, PAD_BYTES,
     PARTICLE_EVENTS, PARTICLE_OPACITY, PARTICLE_OPACITY_AT, PARTICLE_OVERFLOW, PARTICLE_TRANSLATION_AT,
     PARTICLES_AT, PARTICLES_BYTES as PARTICLE_BYTES, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES,
     REFUSAL_AT, ROOT_KIND_AT, ROOT_MATRIX_AT, ROOT_SCALED_MODELVIEW, ROOT_TRS, SAMPLE_BYTES,
@@ -37,10 +40,13 @@ from sm64_events.ghost.native_layout import (  # every size and offset: native_l
     SHADOW_AT, SHADOW_BYTES, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW,
     STAR_CLOCK, V4_MAGIC, V4_RECORD_BYTES, V4_SAMPLE_BYTES, V4_SAMPLE_VERSION, V4_VERSION,
     V5_MAGIC, V5_RECORD_BYTES, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION, V5_VERSION,
+    V6_MAGIC, V6_RECORD_BYTES, V6_SAMPLE_BYTES, V6_SAMPLE_VERSION, V6_VERSION,
     VALID_ACTION as ACTION, VALID_ALL as ALL_VALID, VALID_CAMERA as CAMERA, VALID_CLOCK as CLOCK,
-    VALID_HELD as HELD, VALID_PARTICLES as PARTICLES, VALID_POSE as POSE, VALID_REQUIRED as REQUIRED,
+    VALID_HELD as HELD, VALID_PAD as PAD, VALID_PARTICLES as PARTICLES, VALID_POSE as POSE, VALID_REQUIRED as REQUIRED,
     VALID_SHADOW as SHADOW, VALID_SOUND as SOUND, VALID_WARP as WARP, WARP_AT,
 )
+from sm64_events.inputs.frame import valid_raw_stick
+from sm64_events.memory.addresses import BUTTON_VALID_MASK
 
 OLDER_MAGICS = (b"SM64GHO1", b"SM64GHO2", b"SM64GHO3")
 RAW_VALID, PROGRESS_VALID, ELAPSED_VALID = 1, 2, 4
@@ -53,6 +59,7 @@ _SAMPLE = struct.Struct("<4I2QqI2H2h2I")
 _WARP = struct.Struct("<Hh")
 _CLOCK = struct.Struct("<4I6Q")
 _SOUND = struct.Struct("<4B8I")
+_PAD = struct.Struct("<hhHH")
 # gc_refusal (ghost_capture.h), by value: the one check that refused the pose.
 # With a valid pose, "not_drawn" means the game culled Mario and the root was
 # carried from the last frame that proved it, or composed as his own TRS.
@@ -137,6 +144,7 @@ class Frame:
     refusal: int = 0  # gc_refusal: why this frame's own lists did not prove the pose
     particles: int = 0  # Mario's particles the game drew this frame
     held_behaviour: int = 0  # segmented behaviour of the object in Mario's hand, 0 if none
+    pad: tuple[int, int, int] | None = None  # raw stick x/y, held buttons; known neutral is (0,0,0)
 
     @property
     def refusal_name(self) -> str:
@@ -163,9 +171,11 @@ class Frame:
 
 
 # Older formats still read, newest last: (magic, version, record bytes, sample
-# bytes, sample version). GCLIP4 had no particles, GCLIP5 no released angle.
+# bytes, sample version). GCLIP4 had no particles, GCLIP5 no released angle,
+# GCLIP6 no exact pad. Their missing blocks remain unknown.
 OLDER_FORMATS = ((V4_MAGIC, V4_VERSION, V4_RECORD_BYTES, V4_SAMPLE_BYTES, V4_SAMPLE_VERSION),
-                 (V5_MAGIC, V5_VERSION, V5_RECORD_BYTES, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION))
+                 (V5_MAGIC, V5_VERSION, V5_RECORD_BYTES, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION),
+                 (V6_MAGIC, V6_VERSION, V6_RECORD_BYTES, V6_SAMPLE_BYTES, V6_SAMPLE_VERSION))
 
 
 def upgrade_record(data: bytes) -> bytes:
@@ -178,6 +188,8 @@ def upgrade_record(data: bytes) -> bytes:
                   and struct.unpack_from("<2I", data, _PREFIX.size) == (f[3], f[4])), None)
     if older is None:
         return data
+    if struct.unpack_from("<I", data, _PREFIX.size + 12)[0] & PAD:
+        return data  # older formats never captured a pad; no invented neutral
     raw = bytearray(RECORD_BYTES)
     raw[:older[2]] = data
     struct.pack_into("<2I", raw, 0, RECORD_BYTES, VERSION)
@@ -207,7 +219,8 @@ def frame_from_bytes(data: bytes) -> Frame:
                   *_WARP.unpack_from(raw, WARP_AT), Clock(*_CLOCK.unpack_from(raw, CLOCK_AT)),
                   tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW),
                   raw[REFUSAL_AT], raw[PARTICLES_AT] if valid & PARTICLES else 0,
-                  struct.unpack_from("<I", raw, HELD_AT)[0] if valid & HELD else 0)
+                  struct.unpack_from("<I", raw, HELD_AT)[0] if valid & HELD else 0,
+                  _validate_pad(raw, valid))
     if frame.refusal >= len(REFUSALS):
         raise ClipError("native ghost pose refusal is unknown")
     if not frame.sequence or not frame.dlist_serial or frame.qpc < 0 or frame.status > 13:
@@ -237,6 +250,17 @@ def frame_from_bytes(data: bytes) -> Frame:
     _validate_held(raw, valid)
     _validate_clock(frame)
     return frame
+
+
+def _validate_pad(raw: bytes, valid: int) -> tuple[int, int, int] | None:
+    if not valid & PAD:
+        if any(raw[PAD_AT:PAD_AT + PAD_BYTES]):
+            raise ClipError("native ghost pad refusal retains component bytes")
+        return None
+    x, y, buttons, reserved = _PAD.unpack_from(raw, PAD_AT)
+    if not valid_raw_stick(x, y) or buttons & ~BUTTON_VALID_MASK or reserved:
+        raise ClipError("native ghost pad is inconsistent")
+    return x, y, buttons
 
 
 def _validate_root(raw: bytes, valid: int) -> None:
@@ -574,6 +598,9 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
             or any(source[key] != getattr(clip, key)
                    for key in ("configuration", "epoch", "qpc_frequency", "qpc_anchor", "utc_anchor"))):
         raise ClipError("native ghost manifest disagrees with its captured bytes")
+    if "pad_records" in manifest and (type(manifest["pad_records"]) is not int
+            or manifest["pad_records"] != sum(item.pad is not None for item in clip.frames)):
+        raise ClipError("native ghost manifest disagrees with its captured pad coverage")
     return clip
 
 
@@ -657,6 +684,7 @@ def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | 
             "first_global_timer": first.global_timer, "last_global_timer": last.global_timer,
             "first_igt": first.igt, "last_igt": last.igt, "level": clip.level, "area": clip.area,
             "invalid_records": sum(not frame.playable for frame in clip.frames),
+            "pad_records": sum(frame.pad is not None for frame in clip.frames),
             "blink_frames": blink_frames(clip),
             "missing_occurrences": last.sequence - first.sequence + 1 - len(clip.frames),
             "tail_records": tail_records,

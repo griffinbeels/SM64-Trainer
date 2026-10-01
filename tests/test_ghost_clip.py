@@ -10,9 +10,10 @@ import pytest
 from ghost_native_fixture import frame, producer
 from sm64_events.ghost.archive import stored_record
 from sm64_events.ghost.native_layout import (
-    CLIP_MAGIC, CLIP_VERSION, HEADER_BYTES, HELD_ANGLES_AT, HELD_AT, HELD_RELEASED_AT, PARTICLES_AT,
+    CLIP_MAGIC, CLIP_VERSION, HEADER_BYTES, HELD_ANGLES_AT, HELD_AT, HELD_RELEASED_AT, PAD_AT, VALID_PAD, PARTICLES_AT,
     PARTICLES_ENTRIES_AT, ROOT_KIND_AT, SAMPLE_VERSION, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
     V5_MAGIC, V5_RECORD_BYTES, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION, V5_VERSION,
+    V6_MAGIC, V6_RECORD_BYTES, V6_SAMPLE_BYTES, V6_SAMPLE_VERSION, V6_VERSION,
 )
 from sm64_events.ghost.clip import (
     PARTICLES, RECORD_BYTES, STAR_CLOCK, SEGMENT_CLOCK, ClipError, OlderPoseFormat, check_manifest,
@@ -30,6 +31,95 @@ def matrix_frame():
     struct.pack_into("<16f", raw, 156, .25, 0, 0, 0, 0, .2, .15, 0,
                      0, -.15, .2, 0, 100, 200, -300, 1)
     return bytes(raw)
+
+
+def test_pad_is_exact_optional_evidence_not_a_pose_default():
+    values = ((-84, 72, 0x8011), (0, 0, 0), None, (35, -61, 0x2001), (-128, 127, 0xff3f))
+    rows = tuple(frame(i, pad=pad) for i, pad in enumerate(values, 1))
+    clip = decode_clip(encoded(rows))
+    assert tuple(item.pad for item in clip.frames) == values
+    assert tuple(item.raw for item in clip.frames) == rows
+    assert all(item.playable for item in clip.frames)
+    assert clip.frames[1].valid_fields & VALID_PAD and not clip.frames[2].valid_fields & VALID_PAD
+    # A refused pose may still have exact pad from its own source occurrence.
+    refused = frame_from_bytes(frame(valid=29, pose_refusal=3, pad=(10, -20, 0x8000)))
+    assert refused.pad == (10, -20, 0x8000) and not refused.playable
+
+
+@pytest.mark.parametrize("pad", [(-129, 0, 0), (128, 0, 0), (0, -129, 0), (0, 128, 0),
+                                  (0, 0, 0x0080), (0, 0, 0x0040)])
+def test_pad_refuses_values_no_n64_pad_can_set(pad):
+    with pytest.raises(ClipError, match="pad is inconsistent"):
+        frame_from_bytes(frame(pad=pad))
+
+
+def test_pad_validity_requires_zero_unknown_and_reserved_bytes():
+    stray = bytearray(frame())
+    struct.pack_into("<h", stray, PAD_AT, 1)
+    with pytest.raises(ClipError, match="pad refusal"):
+        frame_from_bytes(bytes(stray))
+    reserved = bytearray(frame(pad=(0, 0, 0)))
+    struct.pack_into("<H", reserved, PAD_AT + 6, 1)
+    with pytest.raises(ClipError, match="pad is inconsistent"):
+        frame_from_bytes(bytes(reserved))
+
+
+def as_gclip6(data: bytes) -> bytes:
+    """GC7 captured these same poses, with no exact pad block or validity bit."""
+    header = bytearray(data[:HEADER_BYTES])
+    header[:8] = V6_MAGIC
+    struct.pack_into("<3I", header, 8, V6_VERSION, HEADER_BYTES, V6_RECORD_BYTES)
+    struct.pack_into("<I", header, 28, V6_SAMPLE_VERSION)
+    records = []
+    for at in range(HEADER_BYTES, len(data), RECORD_BYTES):
+        record = bytearray(data[at:at + V6_RECORD_BYTES])
+        struct.pack_into("<2I", record, 0, V6_RECORD_BYTES, V6_VERSION)
+        struct.pack_into("<2I", record, 16, V6_SAMPLE_BYTES, V6_SAMPLE_VERSION)
+        valid, = struct.unpack_from("<I", record, 28)
+        struct.pack_into("<I", record, 28, valid & ~VALID_PAD)
+        records.append(bytes(record))
+    return bytes(header) + b"".join(records)
+
+
+def test_gclip6_and_archived_gc7_rows_keep_poses_with_unknown_inputs(tmp_path):
+    current = encoded((frame(1, held=(0x13003174, 1, 12)), frame(2)))
+    saved = as_gclip6(current)
+    clip = decode_clip(saved)
+    assert clip.file_version == V6_VERSION and all(item.pad is None and item.playable for item in clip.frames)
+    assert tuple(item.raw for item in clip.frames) == tuple(item.raw for item in decode_clip(current).frames)
+    rows = [zlib.compress(saved[HEADER_BYTES + i * V6_RECORD_BYTES:HEADER_BYTES + (i + 1) * V6_RECORD_BYTES], 1)
+            for i in range(2)]
+    exported = tmp_path / "exported.ghost"
+    manifest = write_clip(exported, [stored_record(row) for row in rows], producer(), clock_kind=STAR_CLOCK)
+    assert manifest["pad_records"] == 0
+    assert all(item.pad is None for item in read_clip(exported).frames)
+
+
+def test_older_file_cannot_claim_new_pad_validity_as_exact_neutral():
+    malformed = bytearray(as_gclip6(encoded((frame(),))))
+    struct.pack_into("<I", malformed, HEADER_BYTES + 28, 31 | VALID_PAD)
+    with pytest.raises(ClipError):
+        decode_clip(bytes(malformed))
+    with pytest.raises(ClipError):
+        frame_from_bytes(bytes(malformed[HEADER_BYTES:]))
+
+
+def test_manifest_counts_known_neutral_and_missing_pad_separately(tmp_path):
+    manifest = write_clip(tmp_path / "inputs.ghost", (frame(1, pad=(0, 0, 0)), frame(2), frame(3, pad=(10, 20, 1))),
+                          producer(), clock_kind=STAR_CLOCK)
+    assert manifest["pad_records"] == 2
+
+
+@pytest.mark.parametrize("count", [True, -1, 1])
+def test_manifest_optional_pad_coverage_is_checked_when_present(count):
+    manifest = json.loads(REAL_GCLIP5.with_suffix(".manifest.json").read_text(encoding="utf-8"))
+    attempt = SimpleNamespace(id=manifest["attempt_id"], session_id=manifest["session_id"],
+                              **{key: manifest[key] for key in ("native_clock_frame", "native_clock_utc",
+                                                                "native_clock_kind", "closed_frame")})
+    assert all(item.pad is None for item in check_manifest(
+        REAL_GCLIP5, {**manifest, "pad_records": 0}, attempt=attempt, target=manifest["target"]).frames)
+    with pytest.raises(ClipError, match="pad coverage"):
+        check_manifest(REAL_GCLIP5, {**manifest, "pad_records": count}, attempt=attempt, target=manifest["target"])
 
 
 def test_hat_loss_and_return_survive_clip_storage_starting_hatless():
