@@ -5,6 +5,7 @@ paths:
   - "src/sm64_events/detectors/counter_epoch.py"
   - "tests/test_segment_igt.py"
   - "tests/test_clock_start.py"
+  - "tests/test_segment_reset_clock.py"
 ---
 
 # A segment's clock — where it starts, and what number it records
@@ -46,6 +47,15 @@ STORED value. Fixture: journal ids 3930-3933 verbatim in
 the field-sample gate.
 
 ## A segment's time is Usamune's IGT
+
+Move-clock rebases run **after closure and rearm**: a genuine retry's zero
+starts its new arm, while an echo load rebases the surviving arm. A move-clock
+reset can use `practice_reset.igt_frames_before` only when its **pre-reset**
+counter epoch matches that arm's clock origin and fits the measured span.
+Trigger clocks and segments spanning later zeros retain their full delta.
+The captured LBLJ reset changed 711 to 53 frames (23.70 to 1.77 seconds),
+with unchanged attempt identities/count. Dedicated proof and countercases:
+`tests/test_segment_reset_clock.py`.
 
 `SegmentEngine._close` takes the CLOSING EVENT's own `igt_frames` as the
 segment's time when there is one, and the `close.frame - arm.start_frame`

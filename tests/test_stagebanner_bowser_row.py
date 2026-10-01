@@ -472,13 +472,9 @@ def _arena_row_source() -> str:
     return source[start:start + 1 + rest.index("function ")]
 
 
-def test_the_arena_declines_only_for_a_target_that_starts_here():
+def test_the_arena_uses_the_shared_sole_visible_option_policy():
     source = _arena_row_source()
-    assert "heldStartsHere" in source, (
-        "the arena's auto-select no longer asks whether the held target "
-        "belongs to this stage")
-    assert "if (heldStartsHere) return;" in source, (
-        "the auto-select must decline on that question, not on a broader one")
-    assert 'if (tgt.kind === "segment") return;' not in source, (
-        "declining on ANY segment target is the bug: a pick from another "
-        "place blocked this arena's only fight forever")
+    assert "useLoneRouteOption(t, lone," in source
+    assert "loneOption(choices)" in source
+    assert "extraSegments(t, v," in source
+    assert "heldStartsHere" not in source

@@ -1421,6 +1421,11 @@ govern, which is why they are written here rather than left to be rediscovered.
 
 ### The movement grammar is forced, not chosen
 
+Maintainer editor/recorder fixes additionally flow through a tracked authoring
+layer before seed generation. The complete
+[shared-default authoring contract](default-segment-authoring.md) describes
+save scope, stable identities, conflict checks and personal-copy preservation.
+
 `tracking/segments.py` disarms an armed def in two ways that decide the shape
 of every movement:
 
@@ -1593,7 +1598,25 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-21 after AV1 at capture: **70,335 lines, 1,876 public
+Latest reading, 2026-09-30 for shared segment defaults and recording: **72,308
+lines, 1,941 public names, 37.3 lines per public name, 84 pass-through (4.3%)**.
+Against main, this branch adds 742 lines and 18 public names with no new
+forwarders. Shared default authoring has its own source/store owner, recorder
+selection owns pinned roles, and the projector owns session recall. The large
+matcher and projector remain existing size debt; this measurement supplies no
+reason to restructure them during landing.
+
+Previous reading, 2026-09-30 for automatic GOLD on classification: **71,566
+lines, 1,923 public names, 37.2 lines per public name, 84 pass-through (4.4%)**.
+Against this feature's main base, the measured surface adds 174 lines and
+two public names, with no new forwarders. The service owns destination
+comparison and the existing PB publication path; `classification_rank_baseline`
+reads the canonical graded destination, and `Database.reassert_pb` preserves
+saved history while restoring its canonical order. The live reward's path is
+mapped in [classification GOLD](../.claude/rules/chain-classification-gold.md).
+This measurement does not justify a speculative restructuring pass.
+
+Previous reading, 2026-09-21 after AV1 at capture: **70,335 lines, 1,876 public
 names, 37.5 lines per public name, 82 pass-through (4.4%)**. That branch added
 no forwarding name: the codec travels as a field on values that already
 existed (`NativeFormat.codec`, `gbenc_options_v1.codec`) and its one new owner,

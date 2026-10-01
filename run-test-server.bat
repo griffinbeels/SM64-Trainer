@@ -14,6 +14,10 @@ REM ============================================================
 setlocal
 cd /d "%~dp0"
 
+REM Segment definition saves author the defaults for the next release.
+REM The UI also offers Save only for me; packaged builds ignore this flag.
+set "SM64_MAINTAINER=1"
+
 REM --- pick the port (first arg, else 8066) ---
 set "SM64_PORT=%~1"
 if "%SM64_PORT%"=="" set "SM64_PORT=8066"
@@ -65,6 +69,7 @@ echo ============================================================
 echo   SM64 Trainer  --  TEST server (from this source checkout)
 echo   Folder: %CD%
 echo   Code:   %SM64_BRANCH% @ %SM64_HEAD%
+echo   Segment saves: shared defaults for the next release
 echo   URL:    http://127.0.0.1:%SM64_PORT%
 echo           (hard-refresh with CTRL+SHIFT+R -- the browser caches ui/)
 REM  Every dev/demo page this server hosts gets printed HERE, with the port

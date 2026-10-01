@@ -417,6 +417,32 @@ export function strategySwapKey(activeStrat, rankMode, hasSeparateRank) {
   return `strategy:${activeStrat}`;
 }
 
+export function classificationPb(sec, t) {
+  const event = (t.classificationPbs || {})[entityKey(sec)];
+  if (!event || event.strat_tag !== sec.last_strat
+      || event.timer_mode !== sectionClock(sec, t.clock)) return null;
+  const pb = sectionPbByStrat(sec, t.clock);
+  if (!pb || pb.attempt_id !== event.attempt_id || pb.frames !== event.frames)
+    return null;
+  const baseline = event.classification;
+  const view = t.view || {};
+  if (baseline.game_version.effective !== (view.game_version || {}).effective
+      || (baseline.rank && baseline.rank.mode !== view.rank_mode)) return null;
+  return event;
+}
+
+function classificationTransition(sec, t, rankMode, hasSeparateRank) {
+  const event = classificationPb(sec, t);
+  if (!event) return null;
+  const baseline = event.classification;
+  return {
+    key: event.key, receipt: event,
+    banner: rankMode === "strategy" ? baseline.rank
+      : (hasSeparateRank ? baseline.entity_rank : baseline.rank),
+    atFloor: !!(baseline.rank && baseline.rank.reason === "unranked"),
+  };
+}
+
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
@@ -593,7 +619,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           atFloor=${ranksAreAtFloor(sec)}
           identity=${rankIdentity(ek, shownIdentity, sec, t)}
           swapKey=${strategySwapKey(sec.last_strat, rankMode, hasSeparateRank)}
-          showNext=${active} iconSize=${rankIconSize}
+          earnedTransition=${classificationTransition(sec, t, rankMode, hasSeparateRank)} showNext=${active} iconSize=${rankIconSize}
           nextStepMode=${nextStepMode} />
     </div>`;
   return html`<section data-feed-key=${ek}
@@ -699,7 +725,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
               <${StratPicker} entity=${ek} identity=${entityIdentity(sec)}
                   strategies=${sec.strategies} active=${sec.last_strat}
                   groups=${sec.strategy_groups} allowBlank=${!sec.default_strat}
-                  onChanged=${t.refresh} /></span>`}
+                  timerMode=${clock} onNotice=${t.setNotice} onChanged=${t.refresh} /></span>`}
       </div>
       ${!inBody && ranksBlock}
       ${/* The PB is a real link now (amendment A8): "if the card is closed,

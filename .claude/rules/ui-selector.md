@@ -10,6 +10,19 @@ paths:
 
 # The selector — the quick-select row, its cells and their art
 
+## Sole visible choice (2026-09-30)
+
+`stagebanner.js::useLoneRouteOption` serves every row. Exactly one rendered
+choice is always selected, including after a warp while a hidden target is
+retained. Count armed extras too; two cells infer no choice. The old empty-hand
+condition and ArenaRow's `heldStartsHere` exception no longer govern this case.
+Identity dependencies stop repeat writes and retry after a raced target change.
+`target.js` sends a `sole_selection` target/place binding; the projector rejects
+stale offers and keeps automatic selection distinct from a click. Only castle
+choices bind an area; course subareas do not narrow the selector. Generic auto
+fills and the two-choice Bowser family memory retain their existing arbitration.
+Tests: `test_ui_lone_route_render.py`, `test_sole_target_selection.py`.
+
 Split out of `.claude/rules/ui-practice.md` on 2026-08-08, when that file
 passed its 80,000-character ceiling. **`.claude/rules/ui-core.md` loads
 alongside this** (the shell, the shared primitives, the verification norms)
@@ -105,6 +118,22 @@ Two things worth keeping from the fix:
 **What is left, round 31 onward**: `ui/subsections.js::isPiece` is still the ONE definition of piece-ness (the practice log's `wantsAParent` IS it, and `tests/test_single_source.py` forbids a second) — it just no longer has a badge or a cell to feed. `armedExtraCells` still drops a piece unconditionally from the "armed but not otherwise shown" fallback path, for the SAME reason as before: a castle movement usually arrives through this path (a moment-started definition carries no `start_areas`), and letting a piece through it is what drew both his stray cells (BLJs) and the earlier "Volcano Entry" one. Round 20's plural-parents rule survives intact (`parents.includes(key)`) — nesting under EVERY parent that has a card, not just the first. `ui/subsections.js` kept its name across all three designs and now answers only the practice LOG's question: which card does this piece nest inside.
 
 A piece never enabled/disabled from here any more — the Segments tab's own editor checkbox and the library row's hide/show button are the two doors that were always separate from the badge, and they are untouched. A disabled piece still leaves the log entirely, exactly as before.
+
+## Secret course selection
+
+Castle rows use `segments.selector_start_areas`: every OR clause's resolved
+origin, including a pinned landmark's area and same-named door sides. Known
+starts appear before arming; a course exit keeps its source origin. A door
+arrival is presence and does not hook a choice among overlapping scenarios.
+Accepted manual castle picks are remembered per subarea for this session only;
+recall waits for the establishing area event, preserves newer visible clicks,
+and respects the row's route fallback and armed extras. `session_started`
+clears that memory. Witnesses: `test_castle_selector_choices.py` and the exact
+no-area reference definitions in `test_ui_lone_route_render.py`.
+
+PSS's two-star arrival default uses `views.py`'s lifetime `last_star_choice_by_course`, through the shared `useLoneRouteOption` empty-hand guard. The projector remembers the latest explicit star pick or successful completion in journal order; automatic fills and imported times cannot overwrite it. Its actual catalog still offers both stars; a route's lone option wins. The ordinary target request loads the remembered strategy. No choice or played history means no invented PSS default. The other five secret courses each offer one star and use the same singleton guard. Witnesses: `tests/test_special_stage_targets.py`, `tests/test_ui_special_stages.py`. The ghost-overlay integration witness is separate and runs when that workstream is available; its absence cannot skip the selector checks.
+
+An automatic `StarRow` offer holds its star cells out of the rendered set until the session view confirms a target in this course. The heading and armed segment extras stay mounted; `CellRow` owns the confirmed set's reveal. A departing course's stale star target cannot release the hold. Held segments and explicit same-course choices retain precedence; a refused automatic write releases the options for manual recovery. Witness: `tests/test_ui_special_stage_first_paint.py`, with the real target write and confirmed view independently delayed.
 
 ## The Bowser row's round 2
 

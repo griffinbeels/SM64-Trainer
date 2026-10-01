@@ -65,7 +65,11 @@ def _seg(seed_key, name, start, end, category, match_mode=None,
 
 SEGMENTS = [
     _seg("seg:lblj", "LBLJ",
-         [enter_level(6, frm=16), anchor(6, area=1)],
+         # Walking through the front door and menu-warping to that door
+         # share the destination arrival. A lobby reset or pulling this same
+         # door to leave must not start LBLJ (live journal, 2026-09-30).
+         [moment("door_arrived", level=6, area=1,
+                 landmark="6:1:bhvDoorWarp:-1100,0,2202")],
          [enter_entrance(17)], TRICKS, default_strat=STANDARD_STRAT),
     _seg("seg:mips-clip", "MIPS Clip",
          [exit_level(7, to=6)], [enter_entrance(23)], TRICKS,

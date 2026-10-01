@@ -203,7 +203,7 @@ def test_the_pb_row_says_still_saving_only_while_a_save_runs(tmp_path, pending, 
 def test_the_candidate_cache_never_outlives_a_view_or_a_world_change():
     from sm64_events.ghost.selection import GhostSelection
     ghost = SimpleNamespace(attempt_id=5, frames=300, strat_tag="Standard")
-    library = SimpleNamespace(ghosts_for=lambda *_: [ghost])
+    library = SimpleNamespace(ghosts_for=lambda *_: [ghost], imports_for=lambda *_: [])
     target = {"kind": "star", "entity_key": "24-1", "strat": "Standard"}
     selection, asked = GhostSelection(), []
 

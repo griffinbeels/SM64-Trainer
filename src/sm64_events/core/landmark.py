@@ -236,6 +236,16 @@ def group_scope(key: str | None) -> tuple | None:
     return (level, symbol)
 
 
+def instance_place(key: str | None) -> tuple[int, int] | None:
+    """The level and area carried by a placed instance, never a family key."""
+    if group_scope(key) is None:
+        return None
+    level, area, _symbol, _where = key.split(":")
+    if not area.isdigit():
+        return None
+    return int(level), int(area)
+
+
 def same_landmark(pinned: str | None, key: str | None,
                   names: dict | None) -> bool:
     """Whether a payload's landmark IS the pinned one — key equality, or two

@@ -590,10 +590,10 @@ function presentable() {
   if (reason === "before_template") return true;
   const shown = follower.template.igtAtTime(videoTime());
   const target = status.sample.igt + follower.nudge;
-  // The follower's own resync threshold: past it the ghost is not following,
-  // it is on its way somewhere. One number, and it lives in the module that
-  // acts on it.
-  return Math.abs(shown - target) <= DEFAULTS.seekFrames;
+  // The decoded picture can advance between received clock messages. This
+  // presentation allowance retains the window's existing visibility budget;
+  // the follower corrects its per-clock drift using its separate threshold.
+  return Math.abs(shown - target) <= DEFAULTS.presentationFrames;
 }
 
 // The page's whole readable surface. A chrome-less overlay cannot show what it

@@ -1871,6 +1871,24 @@ class Database:
                                (strat_tag, attempt_id))
             self._conn.commit()
 
+    def reassert_pb(self, pb_id: int) -> None:
+        """Keep a destination winner current after a slower save moves into it.
+
+        PBs use save order. Move the original snapshot to the end atomically,
+        retaining its timestamp and provenance exactly once, so Undo removes
+        the save instead of exposing an identical copy beneath it. Nothing
+        references the PB row's surrogate id; attempts keep their own identity.
+        """
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO pbs (course_id, star_id, segment_id, strat_tag,"
+                " timer_mode, frames, attempt_id, saved_utc, imported_from, game_version)"
+                " SELECT course_id, star_id, segment_id, strat_tag, timer_mode, frames,"
+                " attempt_id, saved_utc, imported_from, game_version FROM pbs WHERE id=?",
+                (pb_id,))
+            self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
+            self._conn.commit()
+
     def delete_pbs_for_star(self, course_id: int, star_id: int) -> None:
         with self._lock, self._conn:
             self._conn.execute(

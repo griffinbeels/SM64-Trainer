@@ -42,6 +42,22 @@ def installer_identity() -> dict:
     return {"kind": "checkout", "path": str(Path(__file__).resolve().parents[3])}
 
 
+def shared_defaults_root() -> Path | None:
+    """The checkout explicitly launched for maintainer segment authoring.
+
+    An installed build is always personal, even with an inherited development
+    flag. Source location, rather than cwd, binds writes to the code being run.
+    """
+    if is_frozen() or os.environ.get("SM64_MAINTAINER") != "1":
+        return None
+    root = Path(__file__).resolve().parents[3]
+    if not (root / ".git").exists():
+        return None
+    if not (root / "tools" / "build_defaults_seed.py").is_file():
+        return None
+    return root
+
+
 def server_port() -> int:
     """TCP port the API/UI server binds. The packaged exe (frozen) uses the
     canonical 8064 (the port external consumers/overlays expect); running from

@@ -15,6 +15,13 @@ import { useEffect, useState } from "preact/hooks";
 import { send } from "./api.js";
 import { entityKey } from "./entitysection.js";
 import { releaseCelebrationHold } from "./rankclimb.js";
+import { soleSelectionBinding } from "./stagecontext.js";
+
+function reportReplaySave(t, result) {
+  const replay = result?.automatic_pb?.replay_save;
+  if (replay?.status === "failed")
+    t.setNotice(`PB saved. Replay could not be saved: ${replay.message}`);
+}
 
 // The last target HE picked in this page, `{key, at}`, recorded once the server
 // accepts it. The practice log reads it to tell his pick (its card opens at
@@ -51,12 +58,16 @@ function notePick(key) {
 // `auto` tells the SERVER the same thing `quiet` tells the client: no gesture
 // asked for this write. The projector holds an auto-filled target by round
 // 19's detection rules (complete / forfeit / expire) instead of a click's
-// sovereign hold, and drops a fill that races a promoted detection. It
+// sovereign hold. Ordinary fills cannot displace a hooked target; a sole
+// visible choice can replace only the target/place the selector observed. It
 // defaults from `quiet` — a quiet write is by definition gestureless — and
-// the non-quiet convenience sites (the arena row, the Bowser family memory)
-// pass it explicitly.
+// the Bowser family memory passes it explicitly.
 export async function requestTarget(t, body, { quiet = false,
-                                               auto = quiet } = {}) {
+                                               auto = quiet, sole = false } = {}) {
+  if (sole) {
+    auto = true;
+    body = { ...body, sole_selection: soleSelectionBinding(t.view.target, t.stage) };
+  }
   if (auto) body = { ...body, auto: true };
   // A gesture beats the rank-up HOLD (ui/rankclimb.js). While a rank is
   // climbing the practice page is frozen so the GAME cannot move it out from
@@ -72,7 +83,9 @@ export async function requestTarget(t, body, { quiet = false,
   // tests/test_single_source.py rightly rejects.
   if (!quiet) releaseCelebrationHold();
   try {
-    await send("POST", "/api/target", body);
+    const result = await send("POST", "/api/target",
+      { ...body, timer_mode: t.clock || "igt" });
+    reportReplaySave(t, result);
     // Only an accepted gesture: the practice log opens a PICKED target's card
     // at once, and must not mistake a convenience fill or a refusal for one.
     if (!auto) notePick(entityKey(body));

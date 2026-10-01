@@ -362,6 +362,11 @@ erases one, and it saves one only under the [[strategy]] you are practicing —
 so every [[strategy]] holds its own, and the [[practice log]] shows whichever
 [[strategy]] you have selected.
 
+Choosing a [[strategy]] for unclassified practice history automatically saves
+its fastest eligible success as GOLD. Correcting the newest [[attempt]]'s
+[[strategy]] also saves it when it improves that [[strategy]]'s PB. [[Star]]s
+use the displayed clock; [[segment]]s use RTA. Ties preserve the existing PB.
+
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]], and the gold GOLD!! row that marks
   the [[attempt]] itself (`src/sm64_events/ui/components/attemptlog.js`)
@@ -1454,7 +1459,7 @@ the saved PBs on every read, never stored, and never changes the input compariso
 Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any [[saved ghost]],
 [[imported ghost]] or [[template track]] [[attempt]] you tick, up to 16, each named by the time it achieved.
 Only Mario draws them all at once, each tinted its own colour. Whole picture
-shows the first ghost's saved video when available; imported collections contain
+shows the first [[ghost]]'s saved video when available; imported collections contain
 native poses only. With the PB box ticked, no PB saved and nothing else ticked, your active
 [[template track]] plays.
 
@@ -1463,25 +1468,25 @@ native poses only. With the PB box ticked, no PB saved and nothing else ticked, 
 ### Ghost collection
 
 One `.sm64ghosts` file containing selected native [[ghost]] recordings, their
-creator credit, time, [[target]] and [[strategy]]. **Ghost Library** sorts and
+creator credit, time, [[target]] and [[strategy]]. The **[[Ghost]] Library** dialog sorts and
 filters recent/saved local recordings and imports; selection spans pages.
 Export selected writes one collection and Import collection reads all of it.
-Practice/unfinished runs are hidden initially. Collections can contain many
+The dialog initially hides practice and unfinished [[attempt]]s. Collections can contain many
 more recordings than the [[ghost set]] can race at once.
 
-- **Lives** — `src/sm64_events/ghost/portable.py` and `sharing.py`;
+- **Lives** — `src/sm64_events/ghost/portable.py` and `src/sm64_events/ghost/sharing.py`;
   `src/sm64_events/ui/components/ghostlibrary.js`
 
 ### Imported ghost
 
 A native [[ghost]] received in a [[ghost collection]], with the original
 exporter's credited name and [[strategy]]. Stored separately from local
-[[attempt]]s and personal bests; importing it never awards a PB or gold.
+[[attempt]]s and [[personal best]]s; importing it never awards a PB or gold.
 [[Segment]] matching compares the actual definition and clock rather than
 another player's numeric ID. Unknown definitions stay unavailable with a
 reason. Re-export preserves the original creator's credit.
 
-- **Lives** — `src/sm64_events/ghost/sharing.py` and `sharing_targets.py`
+- **Lives** — `src/sm64_events/ghost/sharing.py` and `src/sm64_events/ghost/sharing_targets.py`
 
 ### Saved ghost
 
@@ -2074,6 +2079,9 @@ The screen turning what you just played into a [[segment]]. It lists your recent
 which [[target]] the result is a piece of — which is the only way to make a
 [[subsection]]. Picking two [[moment]]s defines the ends and the [[journal]]
 fills the middle from where you walked; picking more says which stops count.
+**Add another start** marks other recorded [[moment]]s as OR alternatives. Any one
+can begin the same ordered steps and finish, even when its sample came from
+another [[attempt]]. A marked alternative is no longer a required intermediate step.
 Each row says when it happened on Usamune's clock, and arriving somewhere draws
 ONE row that names the place — the load moves the area byte several times and
 this screen shows you the arrival rather than the load. An arrival is the game

@@ -281,9 +281,9 @@ from sm64_events.tracking.prune import PRUNE_EVENT
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, arms_ambiently,
-    before_control, hooks_on_arm, hundred_coin_entity, origin_course,
-    reachable_places, attributable_parent, entity_parents, segment_origin,
-    speaks_through_a_parent, stage_origin, time_bounds)
+    before_control, hooks_on_arm, hundred_coin_entity, origin_course, reachable_places,
+    attributable_parent, entity_parents, segment_origin,
+    selector_start_areas, speaks_through_a_parent, stage_origin, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -690,6 +690,8 @@ class Projector:
                                    if warp_destinations is not None else {})
         # ("star", course_id, star_id) | ("segment", segment_id) | None
         self.target: tuple | None = None
+        # Service follow-up metadata must belong to an accepted target offer.
+        self.last_target_set_id: int | None = None
         # THE TARGET QUEUE (round 19, 2026-08-08): "the held target should
         # prioritize whatever is hooked into first... first in, first out...
         # If there's nothing left in the queue, it's neutral."
@@ -761,47 +763,16 @@ class Projector:
         # (see `_declines_fill`).
         self._returned_pick: tuple | None = None
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
-        # Pre-seeded from the definitions' own default_strat (caveat 17), so
-        # every consumer of this dict — attempt stamping below, the strat_tag
-        # property, the view's section banner / segment_targets / target
-        # payload — gets the default without a call-site of its own. A
-        # journaled strat_set overwrites the entry; nothing is ever written to
-        # the journal on the user's behalf, so this re-derives identically on
-        # every replay.
-        self._seg_default_strat: dict[int, str] = {
-            d.id: d.default_strat for d in (segments or []) if d.default_strat}
-        self.strat_by_segment: dict[int, str | None] = dict(
-            self._seg_default_strat)
-        self._segments = SegmentEngine(segments or [])
-        # Validity bounds (spec 2026-07-23). Stars: "<course>:<star>" ->
-        # {min_frames, max_frames} from the time_filters ui_state KV.
-        # Segments: derived here from each def's close-phase time guards.
+        # Arrival preference, distinct from the live target. Explicit picks
+        # and successful play update it in journal order; sessions retain it.
+        self.last_star_choice_by_course: dict[int, int] = {}
+        # A click establishes castle practice for this session only. Detection
+        # and automatic singleton fills cannot teach a preference.
+        self._reset_session_recall()
+        self._castle_area_known = False
         self._time_filters = time_filters or {}
         self._touched = touched if touched is not None else set()
-        self._seg_bounds = {d.id: time_bounds(d.guards)
-                            for d in (segments or [])}
-        # def id -> the world node the segment is practiced FROM (None =
-        # anywhere); drives segment-target retirement on level_changed
-        # (caveat 12). `origin_overrides` is the ui_state KV a user sets when
-        # the derivation guesses wrong — threaded in like `time_filters` so
-        # the picker and this rule cannot disagree about where a segment is.
-        self._seg_origins = {
-            d.id: segment_origin(d.id, d.start_triggers, origin_overrides)
-            for d in (segments or [])}
-        # Every world node a definition can be STARTED in or WALKS THROUGH.
-        # The hand is held by this rather than by the origin alone since
-        # 2026-08-10: `origin_course` reads the castle, the hubs and the three
-        # Bowser arenas as one "course-less" bucket, so a target picked up in
-        # BitS survived into the Bowser 3 arena, where the fight is the only
-        # practicable thing and a fresh pick of that target would be refused
-        # outright by `practicable.py`. Setting it there was impossible and
-        # holding it there was fine -- two halves of the system disagreeing
-        # about one fact, which is what he named: *"we should be clearing out
-        # the hand in these cases, or we've defined things incorrectly."*
-        # `ui/stagecontext.js` compares the SAME set for the display half.
-        self._seg_places = {
-            d.id: reachable_places(d, self._seg_origins[d.id])
-            for d in (segments or [])}
+        self._initialize_segments(segments, origin_overrides)
         # {(course_id, 6)} whose whole course-visit span is timed by an
         # ENABLED engine (spec 2026-07-28-multi-step-segments, "the 100-coin
         # star IS the segment"): _close_by_grab reads this to suppress the
@@ -869,6 +840,48 @@ class Projector:
         self._rollouts_dustless = 0
         self._jumps_total = 0
         self._jumps_dustless = 0
+
+    def _initialize_segments(self, segments, origin_overrides) -> None:
+        """Index the matcher, strategy defaults and target bounds together."""
+        # Pre-seeded from the definitions' own default_strat (caveat 17), so
+        # every consumer of this dict — attempt stamping below, the strat_tag
+        # property, the view's section banner / segment_targets / target
+        # payload — gets the default without a call-site of its own. A
+        # journaled strat_set overwrites the entry; nothing is ever written to
+        # the journal on the user's behalf, so this re-derives identically on
+        # every replay.
+        self._seg_default_strat: dict[int, str] = {
+            d.id: d.default_strat for d in (segments or []) if d.default_strat}
+        self.strat_by_segment: dict[int, str | None] = dict(
+            self._seg_default_strat)
+        self._segments = SegmentEngine(segments or [])
+        # Validity bounds (spec 2026-07-23). Stars: "<course>:<star>" ->
+        # {min_frames, max_frames} from the time_filters ui_state KV.
+        # Segments: derived here from each def's close-phase time guards.
+        self._seg_bounds = {d.id: time_bounds(d.guards)
+                            for d in (segments or [])}
+        # def id -> the world node the segment is practiced FROM (None =
+        # anywhere); drives segment-target retirement on level_changed
+        # (caveat 12). `origin_overrides` is the ui_state KV a user sets when
+        # the derivation guesses wrong — threaded in like `time_filters` so
+        # the picker and this rule cannot disagree about where a segment is.
+        self._seg_origins = {
+            d.id: segment_origin(d.id, d.start_triggers, origin_overrides)
+            for d in (segments or [])}
+        # Every world node a definition can be STARTED in or WALKS THROUGH.
+        # The hand is held by this rather than by the origin alone since
+        # 2026-08-10: `origin_course` reads the castle, the hubs and the three
+        # Bowser arenas as one "course-less" bucket, so a target picked up in
+        # BitS survived into the Bowser 3 arena, where the fight is the only
+        # practicable thing and a fresh pick of that target would be refused
+        # outright by `practicable.py`. Setting it there was impossible and
+        # holding it there was fine -- two halves of the system disagreeing
+        # about one fact, which is what he named: *"we should be clearing out
+        # the hand in these cases, or we've defined things incorrectly."*
+        # `ui/stagecontext.js` compares the SAME set for the display half.
+        self._seg_places = {
+            d.id: reachable_places(d, self._seg_origins[d.id])
+            for d in (segments or [])}
 
     def _init_valid_attempts(self) -> None:
         """The state caveat 21 keeps (valid attempts, save-state loads)."""
@@ -1222,8 +1235,10 @@ class Projector:
         self._retire_pending_target()
         head_popped, hidden_exit_ids = self._apply_segment_closures(ev, seg_closed, closed)
         self._set_aside_a_finished_pick(ev, seg_closed, held_pick)
+        self._remember_star_choices(closed)
+        self._remember_session_successes(ev, closed, hidden_exit_ids)
         self._suspend_star_for_segment()
-        self._queue_new_hooks()
+        self._queue_new_hooks(ev)
         self._settle_segment_target(ev, head_popped)
         # Run engine sees the same event + the attempts just closed (star AND
         # segment successes/failures); it owns the run lifecycle independently.
@@ -1241,6 +1256,109 @@ class Projector:
         if hidden_exit_ids:
             return [row for row in closed if row.id not in hidden_exit_ids]
         return closed
+
+    def _remember_star_choices(self, closed) -> None:
+        for a in closed:
+            if (a.segment_id is None and a.course_id is not None
+                    and a.star_id is not None and a.outcome == "success"
+                    and not a.cleared):
+                self.last_star_choice_by_course[a.course_id] = a.star_id
+
+    def _reset_session_recall(self) -> None:
+        self._session_castle_choices: dict[int, tuple[int, int]] = {}
+        # Finalized, visible played successes: attempt id -> (closing event,
+        # resolved entity). A None entity is ambiguous, so it blocks recall.
+        self._session_successes: dict[int, tuple[int, tuple | None]] = {}
+        self._last_manual_target_id = 0
+
+    def _remember_session_successes(self, ev, closed, hidden_exit_ids) -> None:
+        for a in closed:
+            if a.outcome != "success" or a.cleared or a.id in hidden_exit_ids:
+                continue
+            if a.segment_id is not None:
+                entity = self._follow_target(a.segment_id)
+                d = self._segments.definition(a.segment_id)
+                parents = entity_parents(d.parents, d.id) if d else []
+                if parents and target_entity_key(entity) not in parents:
+                    entity = None  # An ambiguous piece cannot resurrect an old focus.
+            elif a.course_id is not None and a.star_id is not None:
+                entity = ("star", a.course_id, a.star_id)
+            else:
+                continue
+            self._session_successes[a.id] = (ev.id, entity)
+
+    def _retain_session_successes(self, attempts) -> None:
+        surviving = {a.id for a in attempts}
+        self._session_successes = {aid: row for aid, row in self._session_successes.items()
+                                   if aid in surviving}
+
+    def _latest_session_success(self) -> tuple[tuple | None, int]:
+        if not self._session_successes:
+            return None, 0
+        newest = max(map(journal_id, self._session_successes))
+        rows = [row for aid, row in self._session_successes.items()
+                if journal_id(aid) == newest]
+        entities = {entity for _, entity in rows}
+        completion = max(row[0] for row in rows)
+        return (next(iter(entities)) if len(entities) == 1 else None), completion
+
+    def _remember_explicit_pick(self, ev) -> None:
+        self._last_manual_target_id = ev.id
+        self._target_queue.clear()
+        if self.target and self.target[0] == "star":
+            self.last_star_choice_by_course[self.target[1]] = self.target[2]
+        elif (self.target and self._level == LEVEL_CASTLE_INSIDE
+              and self._area is not None):
+            self._session_castle_choices[self._area] = (self.target[1], ev.id)
+
+    def _castle_selector_ids(self) -> set[int]:
+        """The same static origin, route fallback and armed union as the row."""
+        names = self._landmark_names() if self._landmark_names else None
+        here = {d.id for d in self._segments.definitions() if d.enabled
+                and [self._level, self._area] in selector_start_areas(d.start_triggers, names)}
+        in_route = here & self._route_segments if self._route_segments else here
+        offered = (in_route or here) | self.armed_segment_ids()
+        return {sid for sid in offered
+                if (d := self._segments.definition(sid)) is not None
+                and d.enabled and not entity_parents(d.parents, d.id)}
+
+    def _castle_recall_choice(self) -> tuple[int | None, bool]:
+        latest, completion = self._latest_session_success()
+        choice = self._session_castle_choices.get(self._area)
+        if (choice and choice[1] == self._last_manual_target_id
+                and (choice[1] > completion or latest == ("segment", choice[0]))):
+            return choice[0], True
+        if (latest is None or latest[0] != "segment"
+                or self._last_manual_target_id > completion):
+            return None, False
+        # The level event can arm before its co-frame area establishes the
+        # complete row. Armed evidence survives that ordering and quiet re-arms.
+        return (latest[1] if latest[1] in self.armed_segment_ids() else None), False
+
+    def _restore_castle_choice(self, ev) -> None:
+        if self._level != LEVEL_CASTLE_INSIDE or not self._castle_area_known:
+            return
+        # Recall fills the return journey; a currently armed hooked segment
+        # already holds its turn, including an accepted arrival offer.
+        if (self._target_hooked and self.target is not None
+                and self.target[0] == "segment"
+                and self.target[1] in self.armed_segment_ids()):
+            return
+        sid, explicit = self._castle_recall_choice()
+        if sid is None or self.target == ("segment", sid):
+            return
+        offered = self._castle_selector_ids()
+        if sid not in offered:
+            return
+        if explicit and self._picked_target == self.target and self.target is not None:
+            if (ev.type != "area_changed" or (self.target[0] == "segment"
+                    and self.target[1] in offered)):
+                return  # Preserve a newer click; restore on returning to this row.
+        self.target = ("segment", sid)
+        self._picked_target = self.target if explicit else None
+        self._target_hooked = False
+        self._target_queue.clear()
+        self._suspended_star = None
 
     def _capture_gap(self, ev) -> None:
         # An observed loss of tracking is neither a game reset nor a
@@ -1351,6 +1469,13 @@ class Projector:
                 and self._picked_target == self._suspended_pick
                 and self.target != self._picked_target
                 and not self._target_hooked):
+            # The same surviving played-success evidence that governs castle
+            # recall also defeats this dormant pick. Its own completion and
+            # later failed practice still leave the original retry intact.
+            latest, completion = self._latest_session_success()
+            if (completion > self._last_manual_target_id
+                    and latest != self._suspended_pick):
+                return
             self.target = self._returned_pick = self._suspended_pick
             self._suspended_pick = self._suspended_star = None
 
@@ -1385,6 +1510,15 @@ class Projector:
                 and self.target == self._picked_target
                 and ev.payload.get("kind") == "segment"
                 and ev.payload.get("segment_id") not in self._segments.armed_ids())
+
+
+    def _declines_star_fill(self, ev) -> bool:
+        # An automatic star offer fills an empty hand, never a newer pick.
+        # Level changes precede the banner event, so recheck the course here.
+        return (ev.payload.get("kind") != "segment"
+                and (self.target is not None
+                     or (self._level is not None
+                         and ev.payload.get("course_id") != course_for_level(self._level))))
 
     def _retire_pending_target(self) -> None:
         # The origin rule's verdict, applied now that the matcher has had this
@@ -1712,7 +1846,7 @@ class Projector:
             self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None
 
-    def _queue_new_hooks(self) -> None:
+    def _queue_new_hooks(self, ev) -> None:
         # THE TARGET QUEUE (round 19). Every DELIBERATE arm this event
         # produced lines up (segments.hooks_on_arm — a presence arm like
         # LBLJ's castle entry or a pipe family's course entry never does);
@@ -1758,7 +1892,7 @@ class Projector:
                 continue
             sid = n["segment_id"]
             armed_def = self._segments.definition(sid)
-            if (armed_def is None or not hooks_on_arm(armed_def.start_triggers)
+            if (armed_def is None or not hooks_on_arm(armed_def.start_triggers, ev)
                     or speaks_through_a_parent(armed_def.parents)
                     or sid == head_seg or sid in self._target_queue
                     or sid in hooking):
@@ -1768,6 +1902,7 @@ class Projector:
             self._target_queue.append(hooking[0])
 
     def _settle_segment_target(self, ev, head_popped) -> None:
+        self._restore_castle_choice(ev)
         self._hold_hooked_head(ev, head_popped)
         armed_now = self._segments.armed_ids()
         # The grab's deferred claim (see _close_by_grab): the hooked head it
@@ -1864,43 +1999,261 @@ class Projector:
             self._clock_origin = ev
         return []
 
+    def _declines_automatic_target(self, ev) -> bool:
+        """A sole offer can replace only the target/place its selector observed."""
+        payload = ev.payload
+        if not payload.get("auto"):
+            return False
+        sole = payload.get("sole_selection")
+        if sole is None:
+            return self._declines_fill(ev)
+        expected = tuple(sole["target"]) if sole["target"] is not None else None
+        level, area = sole["stage"]
+        return (self.target != expected
+                or level != self._level
+                or (area is not None and area != self._area))
+
+    def _accept_target_offer(self, ev) -> bool:
+        if (self._declines_automatic_target(ev)
+                or (ev.payload.get("auto")
+                    and ev.payload.get("sole_selection") is None
+                    and self._declines_star_fill(ev))):
+            return False
+        self.last_target_set_id = ev.id
+        return True
+
+    def _begin_session(self, ev) -> list[Attempt]:
+        closed = self._close(ev, outcome="abandoned", igt_frames=None)
+        self.target = None
+        self._target_hooked = False
+        self._picked_target = self._suspended_pick = self._returned_pick = None
+        self._reset_session_recall()
+        self._target_queue.clear()
+        self._suspended_star = None
+        return closed
+
+    def _change_level(self, ev) -> list[Attempt]:
+        closed = self._close(ev, outcome="abandoned", igt_frames=None)
+        to_level = ev.payload["to"]
+        # Entering a DIFFERENT course retires a stale active-star target:
+        # the practiced star lives in another stage, so it cannot be the
+        # active star here (active-star/segment exclusivity — 2026-06-12).
+        # Hub levels and the Bowser arenas have no course of their own
+        # (course_for_level None) and are NOT a stage, so the target
+        # survives an exit-and-re-enter and the retry loop is undisturbed;
+        # an exit that lands straight INTO a segment is retired by the
+        # arm-clear in feed() instead. Close FIRST (above) so the abandoned
+        # run still attributes to the star we were on.
+        to_course = course_for_level(to_level)
+        # A SEGMENT target is retired by the SAME rule as a star's, one
+        # line below: walking into a course that isn't where this one is
+        # practiced means you are doing something else now (user report
+        # 2026-07-23, Bowser 1 stayed "ACTIVE SEGMENT" after a warp to WF;
+        # again 2026-07-27, WF -> SSL in Cool, Cool Mountain). The hubs
+        # and the castle are TRANSIT for a segment exactly as they are for
+        # a star — every course is entered through them — so they never
+        # retire anything.
+        #
+        # `_seg_origins` is where the segment is practiced FROM
+        # (segments.start_origin), not where its start trigger lands you:
+        # the old reader was `start_level_set`, built on `arm_level`, and
+        # it answered None for 54 of the 65 seeded definitions, so this
+        # branch was dead for every castle movement. A def that names no
+        # place at all still answers None and still keeps its target.
+        # Runs in _dispatch, BEFORE feed()'s close/auto-follow, so a
+        # success closed BY this very level_changed still follows onto the
+        # segment; the NEXT level move retires it. No resume stash: the
+        # matcher re-arms on return (armed pins the UI) and the arena
+        # banner re-targets on entry, so nothing is lost.
+        #
+        # A segment that is still ARMED after this event is exempt, in
+        # EVERY match mode (2026-08-03, live report). The two lines above
+        # were written for an IDLE pin, where entering a foreign course
+        # really does mean "doing something else now"; while the segment
+        # is RUNNING it can mean the opposite, because a re-entry movement
+        # enters another course ON PURPOSE and says so in its own steps.
+        #
+        # His rule, and it is the whole of this: *"If I select a segment,
+        # it should be selected until it's no longer possible for it to be
+        # armed / it gets invalidated by deviating from the path."* Under
+        # the strict path cursor, deviating already cancels the definition
+        # on this very event — so **the matcher's disarm IS the
+        # invalidation**, and it is the only test the target needs.
+        #
+        # THE EXEMPTION USED TO STOP AT LOOSE, via an `_armed_loosely`
+        # helper (deleted with this change, since the deferral subsumes it
+        # entirely -- a redundant condition beside a rule that already
+        # covers it is a second door to keep in step). It was honest about
+        # why it stopped there: this runs BEFORE the matcher, so
+        # `armed_segment_ids()` answers as of the PREVIOUS event — safe
+        # for loose (armed through everything but its own end), wrong for
+        # strict, where exempting on a stale reading would leave a target
+        # pointing at a def the matcher was about to cancel. That is an
+        # ORDERING problem, not a scope one, and this branch turned it
+        # from theory into a live bug: flipping all 56 movements to strict
+        # took the exemption away from every one of them, so picking
+        # `Bowser 1 → WF` and walking into BitDW — step 1 of its own
+        # declared route — retired the pick, and the Bowser row's
+        # remembered-family default then filled the hand it found empty.
+        # (That client guard is correct and never got to run; by the time
+        # it looked, the target was already gone.)
+        #
+        # So the decision is DEFERRED rather than narrowed: record it, and
+        # let the bottom of `feed()` apply it once the matcher has spoken.
+        # A HOOKED head is exempt from the origin rule entirely: its
+        # bounds are round 19's (complete / forfeit / expire), and his
+        # worked example walks INTO a foreign course — BitDW, to redo
+        # the Bowser 1 fight — with the selection expected to hold.
+        #
+        #
+        # A SECOND KILL SITS BESIDE IT (2026-08-10), and the two are ORed
+        # so the hand can only ever empty SOONER. Standing where a segment
+        # neither starts nor passes through is the same impossibility
+        # `practicable.py` refuses a fresh pick for, and the origin
+        # comparison could not see it: `origin_course` reads the castle,
+        # both hubs and the three arenas as one course-less bucket.
+        #
+        # A HOOKED HEAD IS EXEMPT, exactly as it is from the origin rule,
+        # and that is a DEFERRAL rather than an oversight. Round 19's
+        # bounds are his: a detection is held until it completes, forfeits
+        # on a real anchor in a foreign course, or expires -- and his
+        # worked example is a trip out through a course and back to redo
+        # the fight, with the selection expected to survive. A place kill
+        # would fire on that trip. A selector offering exactly one
+        # visible choice can replace that held target separately, through
+        # the observed target/place binding on sole_selection. This place
+        # rule still does not kill a hooked head on its own.
+        #
+        # ADDED rather than substituted, and the measurement is the reason.
+        # `places` contains the origin, so swapping the comparison for it
+        # RELAXES the origin rule -- a pick would survive into any course
+        # on its own route. Replayed over his journal that read as 124 more
+        # targets held in courses where a fresh pick would be refused
+        # (14 -> 138 by `tools/measure_unrunnable_holds.py`), which is the
+        # opposite of what he asked for. Holding longer is a separate
+        # decision with its own report; this change only shortens.
+        #
+        # THE CASTLE INTERIOR IS EXEMPT from the place kill, and not as a
+        # special case: a `level_changed` names a LEVEL, and level 6 holds
+        # three nodes, so `stage_origin(6)` answers "6" -- a key no
+        # definition's places can contain. Judging on it would retire
+        # everything on every castle entry. The castle stays transit.
+        if self.target and self.target[0] == "segment":
+            here = stage_origin(to_level)
+            origin = self._seg_origins.get(self.target[1])
+            places = self._seg_places.get(self.target[1])
+            left_its_origin = (not self._target_hooked
+                               and to_course is not None
+                               and origin is not None and origin != here)
+            off_its_path = (not self._target_hooked
+                            and to_level != LEVEL_CASTLE_INSIDE
+                            and places and here is not None
+                            and here not in places)
+            if left_its_origin or off_its_path:
+                self._pending_target_retire = self.target[1]
+        if self.target and self.target[0] == "star":
+            if to_course is not None and to_course != self.target[1]:
+                self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
+                self.target = None
+        # Resume the star we just stepped out of: re-entering its course
+        # with nothing else active reinstates it (caveat 13). Guarded on
+        # target is None so an explicit star/segment focus is never
+        # overridden; an arm on this same entry re-clears it via feed().
+        elif (self.target is None and self._suspended_star is not None
+              and to_course == self._suspended_star[0]):
+            self.target = ("star", *self._suspended_star)
+            self._suspended_star = None
+        self._level = to_level
+        self._castle_area_known = False
+        # _area is deliberately NOT reset here: every level entry is
+        # followed by an establishing area_changed (area.py keys its
+        # last-EMITTED state on (level, area)), which keeps _area honest;
+        # resetting would only widen the unknown window between the two.
+        return closed
+
+    def _apply_anchor(self, ev) -> list[Attempt]:
+        if ev.payload.get("area_load") or ev.payload.get("teleport"):
+            # Going DEEPER into the level is not a retry: "if we enter a
+            # subarea within a stage, we fundamentally DID NOT RESET…
+            # showing a reset there is an error" (2026-08-01). Usamune
+            # zeroes its counter on the load exactly as it does on an
+            # L-reset, which is why this arrives as an anchor at all;
+            # detectors/anchors.py::_is_area_load carries the measurement
+            # that tells the two apart. An IN-LEVEL TELEPORTER (the CCM
+            # broken bridge, a WDW corner) zeroes it the same way with no
+            # area edge at all to pair the zero with, and is read the same
+            # way here — "we need to not actually detect this as a reset
+            # when playing the level, because otherwise we can't complete
+            # these stars in the practice tool" (2026-08-03);
+            # `_is_teleport` there is that discriminator. Closes NOTHING, so the run
+            # continues across the door and its rta spans the whole star.
+            # Still OPENS one if nothing is open — walking into a course
+            # and straight into its subarea has to start an attempt
+            # somewhere, and this is the last boundary before the grab.
+            if self._open is None:
+                self._open = ev
+                self._open_acted = False
+                self._open_castle = self._level in CASTLE_LEVELS
+                self._open_carried_igt = 0  # the attempt begins HERE
+            else:
+                # Usamune's counter restarted, and this attempt is still
+                # running — bank the leg it just forgot (_with_carried_igt).
+                self._open_carried_igt += \
+                    ev.payload.get("igt_frames_before") or 0
+            return []
+        closed = self._close_by_reset(ev)
+        self._open = ev
+        self._open_acted = False
+        self._open_castle = self._level in CASTLE_LEVELS
+        self._open_carried_igt = 0
+        return closed
+
+    def _apply_target_pick(self, ev) -> list[Attempt]:
+        # `auto` remains detection-flavored. Ordinary fills cannot take
+        # a hooked head. A sole visible choice can replace the observed
+        # target, but only while its target/place binding still matches.
+        # A newly promoted detection or a new place defeats a late offer.
+        auto = bool(ev.payload.get("auto"))
+        if not self._accept_target_offer(ev):
+            return []
+        self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
+        if ev.payload.get("kind") == "segment":
+            self.target = ("segment", ev.payload["segment_id"])
+            # A fill is detection-flavored: round 19's bounds (complete /
+            # forfeit / expire) govern it, so a finished pipe hands the
+            # turn onward instead of holding forever. His CLICK stays
+            # sovereign under the pre-queue rules, and supersedes the
+            # detected backlog (the round's lean: a deliberate choice
+            # clears the queue).
+            self._target_hooked = auto
+            if auto:
+                self._hook_level, self._hook_area = self._level, self._area
+                self._hook_alive_frame = None
+        else:  # legacy payloads have no kind: star (caveat 10)
+            c, s = ev.payload["course_id"], ev.payload["star_id"]
+            self.target = ("star", c, s)
+            self._target_hooked = False
+            if "strat_tag" in ev.payload:
+                self.strat_by_star[(c, s)] = ev.payload["strat_tag"]
+        self._picked_target = None if auto else self.target
+        if not auto:
+            self._remember_explicit_pick(ev)
+        return []
+
+    def _apply_strategy(self, ev) -> list[Attempt]:
+        # Explicit null clears an undefaulted strategy; a defaulted segment
+        # falls back to its definition's default (caveat 17).
+        if ev.payload.get("kind") == "segment":
+            seg_id = ev.payload["segment_id"]
+            self.strat_by_segment[seg_id] = (
+                ev.payload.get("strat_tag") or self._seg_default_strat.get(seg_id))
+        else:
+            self.strat_by_star[(ev.payload["course_id"], ev.payload["star_id"])] = ev.payload.get("strat_tag")
+        return []
+
     def _dispatch(self, ev) -> list[Attempt]:
         if ev.type in ANCHOR_EVENT_TYPES:
-            if ev.payload.get("area_load") or ev.payload.get("teleport"):
-                # Going DEEPER into the level is not a retry: "if we enter a
-                # subarea within a stage, we fundamentally DID NOT RESET…
-                # showing a reset there is an error" (2026-08-01). Usamune
-                # zeroes its counter on the load exactly as it does on an
-                # L-reset, which is why this arrives as an anchor at all;
-                # detectors/anchors.py::_is_area_load carries the measurement
-                # that tells the two apart. An IN-LEVEL TELEPORTER (the CCM
-                # broken bridge, a WDW corner) zeroes it the same way with no
-                # area edge at all to pair the zero with, and is read the same
-                # way here — "we need to not actually detect this as a reset
-                # when playing the level, because otherwise we can't complete
-                # these stars in the practice tool" (2026-08-03);
-                # `_is_teleport` there is that discriminator. Closes NOTHING, so the run
-                # continues across the door and its rta spans the whole star.
-                # Still OPENS one if nothing is open — walking into a course
-                # and straight into its subarea has to start an attempt
-                # somewhere, and this is the last boundary before the grab.
-                if self._open is None:
-                    self._open = ev
-                    self._open_acted = False
-                    self._open_castle = self._level in CASTLE_LEVELS
-                    self._open_carried_igt = 0  # the attempt begins HERE
-                else:
-                    # Usamune's counter restarted, and this attempt is still
-                    # running — bank the leg it just forgot (_with_carried_igt).
-                    self._open_carried_igt += \
-                        ev.payload.get("igt_frames_before") or 0
-                return []
-            closed = self._close_by_reset(ev)
-            self._open = ev
-            self._open_acted = False
-            self._open_castle = self._level in CASTLE_LEVELS
-            self._open_carried_igt = 0
-            return closed
+            return self._apply_anchor(ev)
         if ev.type == "star_collected":
             return self._close_by_grab(ev)
         if ev.type == "death":
@@ -1928,219 +2281,19 @@ class Projector:
             # practices an entity with is a standing preference, and making
             # him re-pick it every launch would be a second annoyance wearing
             # the first one's fix.
-            closed = self._close(ev, outcome="abandoned", igt_frames=None)
-            self.target = None
-            self._target_hooked = False
-            self._target_queue.clear()  # a session boundary ends every
-            # queued detection with the focus they were waiting behind
-            self._suspended_star = None
-            return closed
+            return self._begin_session(ev)
         if ev.type == "level_changed":
-            closed = self._close(ev, outcome="abandoned", igt_frames=None)
-            to_level = ev.payload["to"]
-            # Entering a DIFFERENT course retires a stale active-star target:
-            # the practiced star lives in another stage, so it cannot be the
-            # active star here (active-star/segment exclusivity — 2026-06-12).
-            # Hub levels and the Bowser arenas have no course of their own
-            # (course_for_level None) and are NOT a stage, so the target
-            # survives an exit-and-re-enter and the retry loop is undisturbed;
-            # an exit that lands straight INTO a segment is retired by the
-            # arm-clear in feed() instead. Close FIRST (above) so the abandoned
-            # run still attributes to the star we were on.
-            to_course = course_for_level(to_level)
-            # A SEGMENT target is retired by the SAME rule as a star's, one
-            # line below: walking into a course that isn't where this one is
-            # practiced means you are doing something else now (user report
-            # 2026-07-23, Bowser 1 stayed "ACTIVE SEGMENT" after a warp to WF;
-            # again 2026-07-27, WF -> SSL in Cool, Cool Mountain). The hubs
-            # and the castle are TRANSIT for a segment exactly as they are for
-            # a star — every course is entered through them — so they never
-            # retire anything.
-            #
-            # `_seg_origins` is where the segment is practiced FROM
-            # (segments.start_origin), not where its start trigger lands you:
-            # the old reader was `start_level_set`, built on `arm_level`, and
-            # it answered None for 54 of the 65 seeded definitions, so this
-            # branch was dead for every castle movement. A def that names no
-            # place at all still answers None and still keeps its target.
-            # Runs in _dispatch, BEFORE feed()'s close/auto-follow, so a
-            # success closed BY this very level_changed still follows onto the
-            # segment; the NEXT level move retires it. No resume stash: the
-            # matcher re-arms on return (armed pins the UI) and the arena
-            # banner re-targets on entry, so nothing is lost.
-            #
-            # A segment that is still ARMED after this event is exempt, in
-            # EVERY match mode (2026-08-03, live report). The two lines above
-            # were written for an IDLE pin, where entering a foreign course
-            # really does mean "doing something else now"; while the segment
-            # is RUNNING it can mean the opposite, because a re-entry movement
-            # enters another course ON PURPOSE and says so in its own steps.
-            #
-            # His rule, and it is the whole of this: *"If I select a segment,
-            # it should be selected until it's no longer possible for it to be
-            # armed / it gets invalidated by deviating from the path."* Under
-            # the strict path cursor, deviating already cancels the definition
-            # on this very event — so **the matcher's disarm IS the
-            # invalidation**, and it is the only test the target needs.
-            #
-            # THE EXEMPTION USED TO STOP AT LOOSE, via an `_armed_loosely`
-            # helper (deleted with this change, since the deferral subsumes it
-            # entirely -- a redundant condition beside a rule that already
-            # covers it is a second door to keep in step). It was honest about
-            # why it stopped there: this runs BEFORE the matcher, so
-            # `armed_segment_ids()` answers as of the PREVIOUS event — safe
-            # for loose (armed through everything but its own end), wrong for
-            # strict, where exempting on a stale reading would leave a target
-            # pointing at a def the matcher was about to cancel. That is an
-            # ORDERING problem, not a scope one, and this branch turned it
-            # from theory into a live bug: flipping all 56 movements to strict
-            # took the exemption away from every one of them, so picking
-            # `Bowser 1 → WF` and walking into BitDW — step 1 of its own
-            # declared route — retired the pick, and the Bowser row's
-            # remembered-family default then filled the hand it found empty.
-            # (That client guard is correct and never got to run; by the time
-            # it looked, the target was already gone.)
-            #
-            # So the decision is DEFERRED rather than narrowed: record it, and
-            # let the bottom of `feed()` apply it once the matcher has spoken.
-            # A HOOKED head is exempt from the origin rule entirely: its
-            # bounds are round 19's (complete / forfeit / expire), and his
-            # worked example walks INTO a foreign course — BitDW, to redo
-            # the Bowser 1 fight — with the selection expected to hold.
-            #
-            #
-            # A SECOND KILL SITS BESIDE IT (2026-08-10), and the two are ORed
-            # so the hand can only ever empty SOONER. Standing where a segment
-            # neither starts nor passes through is the same impossibility
-            # `practicable.py` refuses a fresh pick for, and the origin
-            # comparison could not see it: `origin_course` reads the castle,
-            # both hubs and the three arenas as one course-less bucket.
-            #
-            # A HOOKED HEAD IS EXEMPT, exactly as it is from the origin rule,
-            # and that is a DEFERRAL rather than an oversight. Round 19's
-            # bounds are his: a detection is held until it completes, forfeits
-            # on a real anchor in a foreign course, or expires -- and his
-            # worked example is a trip out through a course and back to redo
-            # the fight, with the selection expected to survive. A place kill
-            # would fire on that trip. So the arena hold he reported (`BitS
-            # Pipe Entry`, auto-filled on entering BitS) is NOT fixed here;
-            # round 29's ledger already prescribes the right shape for it --
-            # ship the head FLAVOR on the target payload and let the lone
-            # option displace a hooked head, since a place offering exactly
-            # one practicable thing is a better detection than a stale one
-            # carried in. That reverses a ruling and earns its own measured
-            # round rather than riding on this one. (2026-09-28: the arena
-            # half landed at the fill instead, measured -- a STALE hooked
-            # head yields to the arena's armed fight, `_declines_fill`.)
-            #
-            # ADDED rather than substituted, and the measurement is the reason.
-            # `places` contains the origin, so swapping the comparison for it
-            # RELAXES the origin rule -- a pick would survive into any course
-            # on its own route. Replayed over his journal that read as 124 more
-            # targets held in courses where a fresh pick would be refused
-            # (14 -> 138 by `tools/measure_unrunnable_holds.py`), which is the
-            # opposite of what he asked for. Holding longer is a separate
-            # decision with its own report; this change only shortens.
-            #
-            # THE CASTLE INTERIOR IS EXEMPT from the place kill, and not as a
-            # special case: a `level_changed` names a LEVEL, and level 6 holds
-            # three nodes, so `stage_origin(6)` answers "6" -- a key no
-            # definition's places can contain. Judging on it would retire
-            # everything on every castle entry. The castle stays transit.
-            if self.target and self.target[0] == "segment":
-                here = stage_origin(to_level)
-                origin = self._seg_origins.get(self.target[1])
-                places = self._seg_places.get(self.target[1])
-                left_its_origin = (not self._target_hooked
-                                   and to_course is not None
-                                   and origin is not None and origin != here)
-                off_its_path = (not self._target_hooked
-                                and to_level != LEVEL_CASTLE_INSIDE
-                                and places and here is not None
-                                and here not in places)
-                if left_its_origin or off_its_path:
-                    self._pending_target_retire = self.target[1]
-            if self.target and self.target[0] == "star":
-                if to_course is not None and to_course != self.target[1]:
-                    self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
-                    self.target = None
-            # Resume the star we just stepped out of: re-entering its course
-            # with nothing else active reinstates it (caveat 13). Guarded on
-            # target is None so an explicit star/segment focus is never
-            # overridden; an arm on this same entry re-clears it via feed().
-            elif (self.target is None and self._suspended_star is not None
-                  and to_course == self._suspended_star[0]):
-                self.target = ("star", *self._suspended_star)
-                self._suspended_star = None
-            self._level = to_level
-            # _area is deliberately NOT reset here: every level entry is
-            # followed by an establishing area_changed (area.py keys its
-            # last-EMITTED state on (level, area)), which keeps _area honest;
-            # resetting would only widen the unknown window between the two.
-            return closed
+            return self._change_level(ev)
         if ev.type == "area_changed":
             # Tracked area for the segment matcher's area-scoped
             # attempt_anchor (segments.py — warp-menu arming 2026-06-12).
             self._area = ev.payload["to"]
+            self._castle_area_known = self._level == LEVEL_CASTLE_INSIDE
             return []
         if ev.type == "target_set":
-            # `auto` marks a CONVENIENCE FILL (the arena row, the lone
-            # option) rather than his click. Each fill site carries its own
-            # decline rules (the lone option only fires on an empty hand;
-            # the arena row keeps a held target that starts in its own
-            # arena, 2026-08-05) — what none of them can see is a HOOKED
-            # head the server promoted between their read and their write,
-            # and a detection that won its turn must not lose it to a late
-            # offer (round 19) -- unless that head has gone stale and the
-            # offer names something armed here (`_declines_fill`). Dropped
-            # rather than queued: the queue holds armed detections and a fill
-            # is an offer. The arena row re-offers on its next ARRIVAL, not
-            # when the hand empties, so a refusal here lasts the attempt.
-            auto = bool(ev.payload.get("auto"))
-            if auto and self._declines_fill(ev):
-                return []
-            self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
-            if ev.payload.get("kind") == "segment":
-                self.target = ("segment", ev.payload["segment_id"])
-                # A fill is detection-flavored: round 19's bounds (complete /
-                # forfeit / expire) govern it, so a finished pipe hands the
-                # turn onward instead of holding forever. His CLICK stays
-                # sovereign under the pre-queue rules, and supersedes the
-                # detected backlog (the round's lean: a deliberate choice
-                # clears the queue).
-                self._target_hooked = auto
-                if auto:
-                    self._hook_level, self._hook_area = self._level, self._area
-                    self._hook_alive_frame = None
-            else:  # legacy payloads have no kind: star (caveat 10)
-                c, s = ev.payload["course_id"], ev.payload["star_id"]
-                self.target = ("star", c, s)
-                self._target_hooked = False
-                if "strat_tag" in ev.payload:
-                    self.strat_by_star[(c, s)] = ev.payload["strat_tag"]
-            self._picked_target = None if auto else self.target
-            if not auto:
-                self._target_queue.clear()
-            return []
+            return self._apply_target_pick(ev)
         if ev.type == "strat_set":
-            # per-target strategy memory write WITHOUT moving the target
-            # (target_set is the only other writer); explicit null clears.
-            if ev.payload.get("kind") == "segment":
-                # A FALSY pick falls back to the definition's default instead
-                # of clearing (caveat 17): "no strategy" is not a legitimate
-                # choice for a defaulted segment, and that rule belongs in the
-                # data — the picker merely hides the blank option, and old
-                # journals can still carry a null. Undefaulted segments clear
-                # to None exactly as before.
-                seg_id = ev.payload["segment_id"]
-                self.strat_by_segment[seg_id] = (
-                    ev.payload.get("strat_tag")
-                    or self._seg_default_strat.get(seg_id))
-            else:
-                self.strat_by_star[(ev.payload["course_id"],
-                                    ev.payload["star_id"])] \
-                    = ev.payload.get("strat_tag")
-            return []
+            return self._apply_strategy(ev)
         if ev.type == "mario_acted":
             self._open_acted = True
             return []
@@ -2892,6 +3045,7 @@ def replay(events, segments=None, time_filters=None, origin_overrides=None,
             # reaches proj.feed(), so on_notices is correctly never called
             # for it either -- there are no notices to report.
             attempts = [a for a in attempts if not wipe_matches(a, ev.payload)]
+            proj._retain_session_successes(attempts)
             continue
         if ev.type == PRUNE_EVENT:
             # The startup prune of unlabelled attempts (tracking/prune.py),
@@ -2907,6 +3061,7 @@ def replay(events, segments=None, time_filters=None, origin_overrides=None,
             # last week — and there would be no record that it had.
             pruned = set(ev.payload.get("attempt_ids", ()))
             attempts = [a for a in attempts if a.id not in pruned]
+            proj._retain_session_successes(attempts)
             continue
         attempts.extend(proj.feed(ev))
         if on_notices is not None:

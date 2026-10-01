@@ -757,7 +757,8 @@ const original = window.fetch;
 let savedResponse = null;
 window.fetch = async (url, options) => {
   const response = await original(url, options);
-  if (/\/api\/segments\/\d+$/.test(String(url)) && options?.method === 'PUT') {
+  if (/\/api\/segments\/\d+$/.test(new URL(url, location.href).pathname)
+      && options?.method === 'PUT') {
     await response.clone().json();
     savedResponse = {ok: response.ok, status: response.status};
   }

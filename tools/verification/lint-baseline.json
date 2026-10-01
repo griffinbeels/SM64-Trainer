@@ -101,8 +101,6 @@
     "a84ed41316b127557734d52938fc3f76cfa88d7af65618522768b92d6f0dbb2b",
     "11e21701ce3a97a6ea60cba4f31b7ffbd85bb277749f80d4299390b186be01ca",
     "8f152d5a2cc30f54d26e7b76f6bacc35eb88693c0bc6cb23f308166a3ed28ee0",
-    "ebce0a7a0c08e302db81222861972e4dc7f6e00ca4ef87415e54530979e57008",
-    "9de2187e1dad73daa7d08da93945edf7b68984993a02fe5ddc638b91513f7bbd",
     "75a62a3f9a6f186a3fd3e6eedd80c0778ea834142df81f6eaa68c6612c6d3eb3",
     "75a62a3f9a6f186a3fd3e6eedd80c0778ea834142df81f6eaa68c6612c6d3eb3",
     "6cebdc8a4ac65a8e6f86ed0628df0a949f1e1cf7fb794d2f112f7c2c2da2d998",
@@ -421,12 +419,9 @@
     "9d6a293faddaa7173f598b08950481d4f90a6025906fff556eb04f87971bdbfd",
     "d2aa634513084246674658ee704c9fbc2698620602aac1daa0cde6fa2a5954de",
     "61a17ab7099a635cc8bb8c4d76ed38888582e0e31a705ecbc8f7139209e6e7b7",
-    "10b470144f9f29985cd35755f0c779de243dcefaeff2fb516cdfb4fe1755ad8c",
     "a262d4f1dcc495384347fe14b1df57657e17865c33a6ad087e682ffb12c57631",
     "48486be4de284edfa21b57b998cc5b62c7e14f4b2abdc4a46a1ed69e56cc031d",
     "01abd92659acb319c733c3fa629413613f46610cfd1aef9c8feb68f0683a60ca",
-    "ebd93191ad8dd60c11975ecafa52c60039cc1ceeedfb949ad5ebe26fb3d11a5c",
-    "f03dd72d8e9b047b2a74c8f31207495c22fec3e07115ef3a5d494da5c2607263",
     "5993d5de2f4da2ca839536ffdc2fd144b015c9ecf56d3c55fb09245a6d7312df",
     "b2af8eb78f846a5cfdc1264190ddd38ee8ebe0044dc83c10033f5a828841d913",
     "95d5da3760841b19f656d98d004257fff3d2c7ec4cbdcd9b6863417510aef538",
@@ -474,7 +469,12 @@
     "8949fc3443494399828bb22d86879b8606203f28ad449ae8d5a479220293df73",
     "a988e70ea11adf2480a2e70a19c391f343127c45c395098d48d814777120c692",
     "354a9ddb240b289fbf700592184fa97f56f56ae448e16066c93db5e7f07d7b72",
-    "ab209614cf4302f1ffebcc19ac13801445cde61ed16d039b993aa4867d7ed870"
+    "ab209614cf4302f1ffebcc19ac13801445cde61ed16d039b993aa4867d7ed870",
+    "4373102980df94ccdb09593416bd493ef8f27a7b77122bd21cac579509a94ce5",
+    "71eaefbf6c568bf37953abef05eb78c31898b49cec23c2ed51edd9ef063072f5",
+    "448089a97fa1f09f61c5c2ba8c411a5077b9206d1f70f1b60ee9916f91df662d",
+    "0e8adeb7b4211470ec8e0e009fe76acbb0935afb25ba7b2ec763296347c21b36",
+    "42d72afad0e873df9b821ca8a6b8941bff69a1dad2b63eddde5914c9cd890620"
   ],
   "findings": [
     {
@@ -1049,15 +1049,15 @@
     },
     {
       "path": "src/sm64_events/server/api.py",
-      "line": 374,
+      "line": 391,
       "rule": "C901",
-      "message": "`create_api_router` is too complex (160 > 15)"
+      "message": "`create_api_router` is too complex (153 > 15)"
     },
     {
       "path": "src/sm64_events/server/api.py",
-      "line": 374,
+      "line": 391,
       "rule": "PLR0915",
-      "message": "Too many statements (426 > 50)"
+      "message": "Too many statements (396 > 50)"
     },
     {
       "path": "src/sm64_events/server/api.py",
@@ -2981,9 +2981,9 @@
     },
     {
       "path": "src/sm64_events/ui/components/segments.js",
-      "line": 332,
+      "line": 334,
       "rule": "max-lines-per-function",
-      "message": "Function 'Builder' has too many lines (516). Maximum allowed is 100."
+      "message": "Function 'Builder' has too many lines (499). Maximum allowed is 100."
     },
     {
       "path": "src/sm64_events/ui/components/segments.js",
@@ -3005,15 +3005,15 @@
     },
     {
       "path": "src/sm64_events/ui/components/segmenttimeline.js",
-      "line": 274,
+      "line": 121,
       "rule": "max-lines-per-function",
-      "message": "Function 'SegmentTimeline' has too many lines (359). Maximum allowed is 100."
+      "message": "Function 'SegmentTimeline' has too many lines (299). Maximum allowed is 100."
     },
     {
       "path": "src/sm64_events/ui/components/segmenttimeline.js",
-      "line": 274,
+      "line": 121,
       "rule": "complexity",
-      "message": "Function 'SegmentTimeline' has a complexity of 66. Maximum allowed is 15."
+      "message": "Function 'SegmentTimeline' has a complexity of 60. Maximum allowed is 15."
     },
     {
       "path": "src/sm64_events/ui/components/segmenttimeline.js",
@@ -3528,6 +3528,110 @@
       "source_commit": "74e88755aea85ad64434d4a4f9baa5339c334e49",
       "source_state": "Reviewed working-tree delta from source_commit",
       "reviewer": "alive-gate session self-review"
+    },
+    {
+      "findings": [
+        {
+          "path": "src/sm64_events/server/api.py",
+          "line": 392,
+          "rule": "C901",
+          "message": "`create_api_router` is too complex (159 > 15)",
+          "allowance": "4f0cd70c0efff28958aa2f74d91609ef32bd58624fb6374573331b73256b50dd",
+          "replaces_allowance": "ebce0a7a0c08e302db81222861972e4dc7f6e00ca4ef87415e54530979e57008"
+        },
+        {
+          "path": "src/sm64_events/server/api.py",
+          "line": 392,
+          "rule": "PLR0915",
+          "message": "Too many statements (420 > 50)",
+          "allowance": "e685e3b59036bab15c996a4bcabc1d4c66d8248ae51ffa851f5a5009d9a3e04b",
+          "replaces_allowance": "9de2187e1dad73daa7d08da93945edf7b68984993a02fe5ddc638b91513f7bbd"
+        },
+        {
+          "path": "src/sm64_events/ui/components/segments.js",
+          "line": 334,
+          "rule": "max-lines-per-function",
+          "message": "Function 'Builder' has too many lines (499). Maximum allowed is 100.",
+          "allowance": "4373102980df94ccdb09593416bd493ef8f27a7b77122bd21cac579509a94ce5",
+          "replaces_allowance": "10b470144f9f29985cd35755f0c779de243dcefaeff2fb516cdfb4fe1755ad8c"
+        },
+        {
+          "path": "src/sm64_events/ui/components/segmenttimeline.js",
+          "line": 276,
+          "rule": "max-lines-per-function",
+          "message": "Function 'SegmentTimeline' has too many lines (344). Maximum allowed is 100.",
+          "allowance": "1ad6a2e29e8e81cdf257b72c730ee3dad54775ca541e3da82876eea4b6cad25e",
+          "replaces_allowance": "ebd93191ad8dd60c11975ecafa52c60039cc1ceeedfb949ad5ebe26fb3d11a5c"
+        }
+      ],
+      "reason": "Shared segment save handling moved into cohesive helpers. Reviewed decreases only: create_api_router C901 160 -> 159 and statements 426 -> 420; Builder lines 516 -> 499; SegmentTimeline lines 359 -> 344. Existing UI complexity 110/66 remains unchanged. Four old allowances removed; no new debt adopted.",
+      "source_commit": "9589f825c6228af53a26419a619c1922063fd134",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "scope_review independent read-only agent"
+    },
+    {
+      "findings": [
+        {
+          "path": "src/sm64_events/server/api.py",
+          "line": 391,
+          "rule": "C901",
+          "message": "`create_api_router` is too complex (153 > 15)",
+          "allowance": "71eaefbf6c568bf37953abef05eb78c31898b49cec23c2ed51edd9ef063072f5",
+          "replaces_allowance": "4f0cd70c0efff28958aa2f74d91609ef32bd58624fb6374573331b73256b50dd"
+        },
+        {
+          "path": "src/sm64_events/server/api.py",
+          "line": 391,
+          "rule": "PLR0915",
+          "message": "Too many statements (396 > 50)",
+          "allowance": "448089a97fa1f09f61c5c2ba8c411a5077b9206d1f70f1b60ee9916f91df662d",
+          "replaces_allowance": "e685e3b59036bab15c996a4bcabc1d4c66d8248ae51ffa851f5a5009d9a3e04b"
+        },
+        {
+          "path": "src/sm64_events/ui/components/segmenttimeline.js",
+          "line": 122,
+          "rule": "max-lines-per-function",
+          "message": "Function 'SegmentTimeline' has too many lines (308). Maximum allowed is 100.",
+          "allowance": "4bd39b983f1b631094a16bffba4a3d5f88681d8d295cad71f6e8c51b8eb7399c",
+          "replaces_allowance": "1ad6a2e29e8e81cdf257b72c730ee3dad54775ca541e3da82876eea4b6cad25e"
+        },
+        {
+          "path": "src/sm64_events/ui/components/segmenttimeline.js",
+          "line": 122,
+          "rule": "complexity",
+          "message": "Function 'SegmentTimeline' has a complexity of 62. Maximum allowed is 15.",
+          "allowance": "7d44610ff59e5186cf3d6323c7a4faf8e48682a1f7d9f4a6f8d179f29182d186",
+          "replaces_allowance": "f03dd72d8e9b047b2a74c8f31207495c22fec3e07115ef3a5d494da5c2607263"
+        }
+      ],
+      "reason": "Recorder alternative-start roles and endpoint synthesis have cohesive owners. Independent review confirmed decreases only: router complexity159->153/statements420->396; recorder complexity66->62/lines344->308. Four old allowances replaced; no new debt adopted.",
+      "source_commit": "4bebda62",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "alternate_start_review independent read-only agent"
+    },
+    {
+      "findings": [
+        {
+          "path": "src/sm64_events/ui/components/segmenttimeline.js",
+          "line": 121,
+          "rule": "complexity",
+          "message": "Function 'SegmentTimeline' has a complexity of 60. Maximum allowed is 15.",
+          "allowance": "0e8adeb7b4211470ec8e0e009fe76acbb0935afb25ba7b2ec763296347c21b36",
+          "replaces_allowance": "7d44610ff59e5186cf3d6323c7a4faf8e48682a1f7d9f4a6f8d179f29182d186"
+        },
+        {
+          "path": "src/sm64_events/ui/components/segmenttimeline.js",
+          "line": 121,
+          "rule": "max-lines-per-function",
+          "message": "Function 'SegmentTimeline' has too many lines (299). Maximum allowed is 100.",
+          "allowance": "42d72afad0e873df9b821ca8a6b8941bff69a1dad2b63eddde5914c9cd890620",
+          "replaces_allowance": "4bd39b983f1b631094a16bffba4a3d5f88681d8d295cad71f6e8c51b8eb7399c"
+        }
+      ],
+      "reason": "Explicit recorder endpoints and condition rendering have cohesive owners. Independent ESLint review measured complexity62->60 and lines308->299, with no findings in helpers. Replaces decreased allowances only; no new debt.",
+      "source_commit": "dc8a965a",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "selection_premise independent read-only agent"
     }
   ]
 }

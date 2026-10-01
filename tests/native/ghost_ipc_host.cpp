@@ -229,8 +229,9 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(nudge) X(opacity) X(stop_at_star) X(rom_generation) X(owner_suspended) X(model_id) \
     X(layout) X(rom_path) X(star_action_count) X(star_actions) X(tint_enabled) \
     X(proximity_enabled) X(proximity_distance) X(origin) X(clip_count) X(reserved1) X(clips) \
-    X(shadow_enabled) X(occlusion_fade) X(volume) X(sound_fade)
-#define GIPC_CLIP_FIELDS(X) X(clip_id) X(clip_sha256) X(hue_degrees) X(reserved) X(clip_path)
+    X(shadow_enabled) X(occlusion_fade) X(volume) X(sound_fade) \
+    X(names_enabled) X(inputs_enabled) X(input_mode)
+#define GIPC_CLIP_FIELDS(X) X(clip_id) X(clip_sha256) X(hue_degrees) X(reserved) X(clip_path) X(label)
 #define GIPC_STATUS_FIELDS(X) X(magic) X(version) X(bytes) X(producer_pid) X(producer_created_lo) \
     X(producer_created_hi) X(generation) X(rom_generation) X(rom_open) X(state) X(reason) \
     X(configuration) X(epoch) X(record_bytes) X(capabilities) X(qpc_frequency) X(qpc_anchor) \

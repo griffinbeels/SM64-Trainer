@@ -110,6 +110,9 @@ attempt history, PB, a timeline of what happened, and a completion-time graph
 you can click to jump straight to an attempt — or open its replay. The first
 success after moving to a different star or segment returns Practice to the
 top of the page; repeat successes leave your scroll position alone.
+Choosing a strategy also classifies pending attempts and automatically saves
+the fastest eligible success as GOLD. Correcting the latest attempt's strategy
+saves it when it beats that strategy's PB, with the usual rank celebration.
 
 **Segments.** Not just stars: define any repeatable piece of the run (LBLJ,
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
@@ -255,6 +258,10 @@ uv run python -m sm64_events.main       # headless — then open http://127.0.0.
 Run from the repo root: from source, `data/` is created relative to cwd.
 `uv` only — never pip. The dev server binds **8065**; the packaged exe binds
 **8064**, so the two never collide. Set `SM64_PORT` to override.
+
+For maintainer segment testing, `run-test-server.bat` makes **Save for everyone**
+the primary editor/recorder action. It saves default fixes into release source;
+released apps keep edits personal. See [saving default segment fixes](docs/default-segment-authoring.md).
 
 The **↻ restart server** button in the app header relaunches the backend to
 pick up code changes. UI files are served per request — edit and refresh, no

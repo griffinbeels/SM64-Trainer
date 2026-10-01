@@ -7,7 +7,9 @@ against something invented here.
 """
 import struct
 
-from sm64_events.core.landmark import Landmark, landmark_at
+import pytest
+
+from sm64_events.core.landmark import Landmark, instance_place, landmark_at
 from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
 from sm64_events.memory import addresses as A
 from sm64_events.memory.layout import US
@@ -147,6 +149,16 @@ HALF_A = "6:2:bhvStarDoor:-281,3174,3772"   # the 70 Star Door, left half
 HALF_B = "6:2:bhvStarDoor:-127,3174,3772"   # ... right half — his real keys
 NAMED = {HALF_A: "70 Star Door", HALF_B: "70 Star Door",
          "6:2:bhvStarDoor:-127,2253,4762": "50 Star Door"}
+
+
+@pytest.mark.parametrize("key, expected", [
+    ("6:1:bhvDoorWarp:-1100,0,2202", (6, 1)),
+    ("6:3:bhvDoor:1126,-1074,-2661", (6, 3)),
+    (None, None), ("kind:bhvDoorWarp", None),
+    ("entrance:17", None), ("6:Lobby:bhvDoor:0,0,0", None),
+])
+def test_instance_place_reads_only_an_instance_key(key, expected):
+    assert instance_place(key) == expected
 
 
 def test_two_halves_wearing_one_name_are_one_landmark():

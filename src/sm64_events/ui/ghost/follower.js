@@ -39,10 +39,16 @@ export const DEFAULTS = {
   // by PLAYING. Play adds one frame per game frame (two under a hiccup); a
   // reset lands near zero and a state load lands anywhere.
   jumpFrames: 4,
-  // Drift the ghost may absorb by changing speed. Past it, seek: catching up
+  // One game frame is the follower's timing contract. Drift within it may
+  // be absorbed by changing speed. Past it, seek: catching up
   // over seconds is exactly the "it is out of step" the feature exists to
   // remove.
-  seekFrames: 6,
+  seekFrames: 1,
+  // Visibility compares the decoded picture with the latest received clock,
+  // which can stand still between messages while the video keeps advancing.
+  // Keep its existing six-frame presentation allowance separate from the
+  // per-clock correction threshold; it does not relax follower accuracy.
+  presentationFrames: 6,
   // Seconds for the rate correction to close the remaining error.
   correctionTau: 0.5,
   minRate: 0.5,

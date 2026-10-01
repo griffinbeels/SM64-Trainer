@@ -205,6 +205,29 @@ def stage_model(staging: Path, cache: Path, seed: Path | None = None) -> Path:
     return source
 
 
+def _held_sources(files: dict, name: str, model: HeldModel) -> tuple[str, str]:
+    """Only the actor graph and materials reachable from its pinned root."""
+    geo, lists, inputs = model.geo, model.lists, model.inputs
+    list_text = _expand_texture_blocks("\n".join(
+        files[key].read_text(encoding="utf-8") for key in (lists, *model.extra_lists)))
+    text = "".join(files[key].read_text(encoding="utf-8") + "\n" for key in inputs)
+    # Actor sources also define alternate geometry (for example the metal
+    # cap), whose material commands need not belong to this actor's graph.
+    # Import only this graph's display lists, including every switch case.
+    selected_geos = _reached_geo_layouts(text, geo)
+    text = re.sub(r"const GeoLayout (\w+)\[\] = \{.*?\};",
+                  lambda match: match[0] if match[1] in selected_geos else "", text, flags=re.S)
+    list_text = _selected_display_lists(text, geo, list_text)
+    if name == "hoot":
+        # The canonical Owl has one unmatched closing node. Its original
+        # standalone graph tolerates it, but it would close our wrapper.
+        unmatched = "GEO_CLOSE_NODE(), //! more close than open nodes\n"
+        if text.count(unmatched) != 1:
+            raise ValueError("Pinned Hoot graph's unmatched close changed")
+        text = text.replace(unmatched, "", 1)
+    return text, list_text
+
+
 def _stage_held(files: dict, source: Path) -> None:
     """Two translation units per held model, its lists (texture arrays
     commented out, their names now atlas cells) and its geo and animations,
@@ -213,25 +236,9 @@ def _stage_held(files: dict, source: Path) -> None:
     destination.mkdir(exist_ok=True)
     cell, widths, heights, textures, models, lights = MARIO_ATLAS_CELLS, [], [], [], [], []
     for name, model in HELD_MODELS.items():
-        geo, table, segment, lists, inputs, shift = model[:6]
+        geo, table, segment, shift = model.geo, model.table, model.segment, model.shift
         kind = f"SG_HELD_{name.upper()}"
-        list_text = _expand_texture_blocks("\n".join(
-            files[key].read_text(encoding="utf-8") for key in (lists, *model.extra_lists)))
-        text = "".join(files[key].read_text(encoding="utf-8") + "\n" for key in inputs)
-        # Actor sources also define alternate geometry (for example the metal
-        # cap), whose material commands need not belong to this actor's graph.
-        # Import only this graph's display lists, including every switch case.
-        selected_geos = _reached_geo_layouts(text, geo)
-        text = re.sub(r"const GeoLayout (\w+)\[\] = \{.*?\};",
-                      lambda match: match[0] if match[1] in selected_geos else "", text, flags=re.S)
-        list_text = _selected_display_lists(text, geo, list_text)
-        if name == "hoot":
-            # The canonical Owl has one unmatched closing node. Its original
-            # standalone graph tolerates it, but it would close our wrapper.
-            unmatched = "GEO_CLOSE_NODE(), //! more close than open nodes\n"
-            if text.count(unmatched) != 1:
-                raise ValueError("Pinned Hoot graph's unmatched close changed")
-            text = text.replace(unmatched, "", 1)
+        text, list_text = _held_sources(files, name, model)
         cells = {}
         for symbol, width, height in _reached_textures(text, geo, list_text):
             cells[symbol] = cell

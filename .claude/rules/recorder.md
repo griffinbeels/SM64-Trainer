@@ -3,6 +3,10 @@ paths:
   - "src/sm64_events/tracking/eventlabel.py"
   - "src/sm64_events/tracking/synthesize.py"
   - "src/sm64_events/ui/components/segmenttimeline.js"
+  - "src/sm64_events/ui/components/recordrows.js"
+  - "src/sm64_events/ui/components/recordparents.js"
+  - "src/sm64_events/ui/recordselection.js"
+  - "src/sm64_events/server/segment_synthesis.py"
 ---
 
 # The segment recorder — where to change what
@@ -11,6 +15,15 @@ The screen that reads the JOURNAL back as sentences, decides which rows a human
 would point at, and fills the middle of a two-ended pick from where he walked.
 Full detail, evidence and history: [docs/rules/recorder.md](../../docs/rules/recorder.md) — read it when changing a row's wording, which rows appear, how a pick becomes a definition, or chasing a recorder-list report.
 
+Alternative recorded starts use `ui/recordselection.js` for roles,
+`components/recordrows.js` for markers and `server/segment_synthesis.py` for
+journal-to-clause assembly. `ids` supplies path picks; `start_ids` supplies
+independent OR starts. Paired `primary_start_id`/`finish_id` preserve pinned
+roles after adding starts; legacy callers retain chronology. Backward samples
+and primary promotion infer no intermediate walk. Promoted middles cease to be steps;
+`picked_explicit` prevents an empty explicit path falling back to the walked
+path. See [the recorded-start contract](../../docs/rules/recorder.md#alternative-recorded-starts).
+
 | To change... | Edit |
 |---|---|
 | Which row the recorder draws for ARRIVING somewhere | `tracking/eventlabel.py::level_entry_rows` — **an arrival is a SPAWN, not a level edge**; the level edge opens a load and decides which rows the spawn speaks for. A spawn restarts the level when it lands in `counter_epoch.COURSE_START_AREA`, or has no area edge beside it (L-reset); with one it is a warp, and `anchors.PAUSE_WARP_MIN_STREAK` separates a menu warp from a walked load. Time from `IgtClock.igt_at_spawn`; see `.claude/rules/memory-detectors.md` |
@@ -18,7 +31,7 @@ Full detail, evidence and history: [docs/rules/recorder.md](../../docs/rules/rec
 | What a WARP row says | `tracking/eventlabel.py::_warp_entered` — **an entrance LEAVES the level: `to != level` is the whole test**; an intra-course warp is named from the landmark catalogue (`_READS_THE_CATALOGUE`), KIND name as fallback. A named entrance reads its name under `entrance_key(payload)`, never the payload landmark. Detector half: `.claude/rules/memory-detectors.md`. Open: the warp timer offset is unmeasured; get a screenshot pair before moving it |
 | Turning a PICKED row into a trigger clause | `tracking/synthesize.py::clause_for` — one row per TriggerType in `_SYNTH_PARAMS`; **the two `warp_entered` rows split by `applies(payload)`** (`to != level` → `entrance_touched{to}`, else `warp_entered{level}`), never registry order. A nameable landmark beats the ordinal (`_moment_params` pins `landmark`, drops the ordinal). Sentences via `clause_sentence(clause, names)`, falling back to the kind's wording, never a raw key; the landmark param stays out of the template (`test_segments.py::TEMPLATE_EXEMPT_PARAMS`). The editor shows a pinned landmark as a "✕ this specific one" unpin (`segments.js` ParamInput). Pinned by `test_synthesize.py` + `test_moment_trigger.py` |
 | How a row says he has done this BEFORE | `server/api.py`'s timeline endpoint — a per-SENTENCE occurrence count, `repeat`, folded into the label from 2 up; key is the SENTENCE, not the landmark; scoped to the session; **counted BEFORE the `after_id` skip**. Labels are memoised per row id; the memo drops on a landmark rename or db reattach. `journal_events()` in `create_api_router` caches `db.events()`, extends by `id > cached max`, keyed on the db OBJECT; timeline, backtest and synthesize read through it. Keep the derived walks per-fetch (`level_entry_rows` settles retroactively). Pinned by `test_timeline_journal_cache_extends_instead_of_rereading`, `test_timeline_labels_follow_a_rename_through_the_memo` + the db-swap test |
-| Whether a row's ✎ appears (naming ONE specific thing) | `ui/components/segmenttimeline.js::RenameControl`, gated on `landmark_nameable`, **not `landmark_placed`**; refuse only an object with neither coordinate; `server/api.py` falls back to `placed` for a historical row. **An entrance row's rename identity is `eventlabel.entrance_key(payload)`, never the payload landmark**; `warp.py` stamps a landmark only when the engagement changed within a few frames of the touch. `RenameInput` holds the draft (commits read `e.target.value`); the ✓/✕ pair's `onmousedown` is prevented. SAME NAME = SAME LANDMARK: `core/landmark.py::same_landmark`/`landmark_group` scope to one LEVEL and one KIND (not area); `POST /api/landmark` renames the group via `service.rename_landmark`; the moment pin matches through `MatchContext.landmark_names`. Pinned by `tests/test_recorder_rename.py`, `test_api.py::test_an_entrance_rows_rename_identity_is_the_entrance_itself`, `test_landmark` |
+| Whether a row's ✎ appears (naming ONE specific thing) | `ui/components/recordrows.js::RenameControl`, gated on `landmark_nameable`, **not `landmark_placed`**; refuse only an object with neither coordinate; `server/api.py` falls back to `placed` for a historical row. **An entrance row's rename identity is `eventlabel.entrance_key(payload)`, never the payload landmark**; `warp.py` stamps a landmark only when the engagement changed within a few frames of the touch. `RenameInput` holds the draft (commits read `e.target.value`); the ✓/✕ pair's `onmousedown` is prevented. SAME NAME = SAME LANDMARK: `core/landmark.py::same_landmark`/`landmark_group` scope to one LEVEL and one KIND (not area); `POST /api/landmark` renames the group via `service.rename_landmark`; the moment pin matches through `MatchContext.landmark_names`. Pinned by `tests/test_recorder_rename.py`, `test_api.py::test_an_entrance_rows_rename_identity_is_the_entrance_itself`, `test_landmark` |
 | Naming ONE specific thing so it ships (the instance catalogue) | `tools/corpus_landmarks.py::LANDMARKS` — hand-written INSTANCE rows over the generated kind rows; promote from his db with `uv run python tools/corpus_from_db.py --landmarks`. Pinned by `tests/test_corpus_landmarks.py` |
 | What a row calls an OBJECT (the kind catalogue) | `tools/corpus_behaviors.py` — every US behavior script named through ONE base constant (0x800EB180), seeded via `corpus_landmarks.py` → `data/defaults.seed.json`; **his own rename always wins** (`db.seed_landmark_name`'s `seed_dirty = 0` guard). The seeded name's CASE is the grammar (`eventlabel._kind_phrase`); a kind-named row drops the ordinal. Pinned by `tests/test_corpus_behaviors.py`, `test_seed_reconcile` |
 | Opening the recorder FROM THE LIBRARY (task 0096) | `segmenttimeline.js`'s `prefill={name, parents}` + `librarytarget.js`'s record door: same modal, `nameEditedRef` starts true; `save()` AWAITS `onSaved`; `savedIdRef` makes a retry a PUT, **never a second POST**. Recorder-opening scripts scope their 'Record a segment' match to `.segments-page`. Gate: `tests/test_ui_library_record.py` |

@@ -1,7 +1,7 @@
 // src/sm64_events/ui/components/stagebanner.js
 // Quick-select row, driven by t.stage (the broadcast-only stage_changed event)
 // and dispatched on its `mode`:
-//   "stars"         : a main course 1-15 -> that course's stars (name +
+//   "stars"         : a main or secret course -> that course's stars (name +
 //                     last-strategy subtext); click sets the star target.
 //                     The "100 Coins" cell is a PLAIN star cell like the
 //                     other six (spec 2026-07-28-multi-step-segments, "the
@@ -43,7 +43,7 @@
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { CellRow, SurfaceExchange } from "./cellrow.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
@@ -52,7 +52,7 @@ import { armedSegments, hasPracticeContext, hasStandardsFor,
          justCompletedSegment, practiceMode,
          selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
-import { handIsEmpty, loneOption } from "../loneoption.js";
+import { loneOption, needsSoleSelection, targetTuple } from "../loneoption.js";
 import { PracticeCell } from "./practicecell.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
 import { entityIconSrc } from "./entityicons.js";
@@ -228,30 +228,38 @@ const stratSub = (strat) =>
 async function pickSegmentTarget(t, s, options) {
   if (!s.enabled)
     await send("PUT", `/api/segments/${s.segment_id}`, { enabled: true });
-  await requestTarget(t, { kind: "segment", segment_id: s.segment_id }, options);
+  return requestTarget(t, { kind: "segment", segment_id: s.segment_id }, options);
 }
 
-// THE lone-route auto-pick, shared by the star row and the castle segment row
-// (rule 11 — one implementation, not two that drift). Task 0025: with a route
-// active, a place where the route leaves exactly ONE thing to practice needs no
-// pick from him. The RULE itself is `loneOption`/`handIsEmpty` in
-// ../loneoption.js, import-free so node can test it; this is only the wiring.
-//
-// Deliberately NOT applied to the two Bowser rows above. `ArenaRow` already
-// auto-selects its single fight by its own rule (arriving in an arena IS the
-// intent, route or no route), and `BowserCourseRow` is a two-option toggle
-// whose mutual exclusion has to see both cells whether or not the route uses
-// them — route focus was already withheld there for that reason.
-//
-// Keyed on the PLACE plus the option's identity, so it fires once on arrival
-// rather than every render, and re-arms when he walks somewhere else. It never
-// loops: a successful pick makes the hand non-empty, and a REFUSED one leaves
-// both deps unchanged so the effect does not run again.
-function useLoneRouteOption(v, lone, key, commit) {
-  const empty = handIsEmpty(v.target);
+// All one-choice rows share this policy. Count every drawn cell, including
+// armed extras. A retained hidden target cannot block the only visible choice.
+// Depend on identity (not merely empty/nonempty), so a raced offer can retry
+// after a new view; an already-correct target causes no repeated write.
+function useLoneRouteOption(t, lone, key, sole = true) {
+  const current = JSON.stringify(targetTuple(t.view.target));
+  const next = JSON.stringify(targetTuple(lone));
+  const offerKey = `${key}:${current}:${next}`;
+  const [refusedKey, setRefusedKey] = useState(null);
   useEffect(() => {
-    if (lone && empty) commit();
-  }, [key, empty]);
+    if (!needsSoleSelection(lone, t.view.target) || (!sole && current !== "null")) {
+      setRefusedKey(null);
+      return;
+    }
+    const options = sole ? { quiet: true, sole: true } : { quiet: true };
+    let active = true;
+    const commit = lone.kind === "segment" ? pickSegmentTarget(t, lone, options)
+      : requestTarget(t, {
+      course_id: lone.course_id, star_id: lone.star_id,
+      strat_tag: t.view.last_strat_by_star[`${lone.course_id}:${lone.star_id}`] || null,
+    }, options);
+    Promise.resolve(commit).then((accepted) => {
+      if (active && accepted === false) setRefusedKey(offerKey);
+    });
+    return () => { active = false; };
+  }, [key, current, next, sole]);
+  // A refused convenience write must leave the options available to pick.
+  // HTTP success alone does not settle selection: an expired offer is a no-op.
+  return refusedKey === offerKey;
 }
 
 // The standard segment cell (castle/arena rows, armed extras): name, strat
@@ -304,9 +312,12 @@ function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
 // "Volcano Entry" beside his LLL stars a day earlier, both because each row
 // kept its own list of what to exclude. "A running segment is never
 // invisible" still holds -- it is visible on its parent's card.
-const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
+const extraSegments = (t, v, shownIds, keep = () => true) =>
   armedSegments(t, v)
-    .filter((s) => !shownIds.has(s.segment_id) && !isPiece(s) && keep(s))
+    .filter((s) => !shownIds.has(s.segment_id) && !isPiece(s) && keep(s));
+const segmentChoices = (segments) => segments.map((s) => ({ ...s, kind: "segment" }));
+const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
+  extraSegments(t, v, shownIds, keep)
     .map((s) => html`<${StandardSegmentCell} key=${`seg:${s.segment_id}`}
       t=${t} s=${s} setPicking=${setPicking} />`);
 
@@ -337,6 +348,19 @@ const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
 // (`ui/subsections.js::nestSubsections`) -- that mechanism is what "always
 // displayed... inside the practice log" already meant, and needed no change
 // here.
+function rememberedStarChoice(v, stage, choices) {
+  const slot = stage.course_id === 19
+    ? (v.last_star_choice_by_course || {})[String(stage.course_id)] : null;
+  return slot == null ? null
+    : choices.find(({ course_id, star_id }) => course_id === stage.course_id && star_id === slot);
+}
+
+function arrivalReady(pick, refused, lone, target, course) {
+  return !pick || refused || !needsSoleSelection(pick, target)
+    || (!lone && targetTuple(target) !== null
+      && (target.kind === "segment" || target.course_id === course));
+}
+
 function StarRow({ t, v, stage }) {
   const [fold, toggleFold] = useCollapsed("selector");
   // hooks first — the early return below must never change the hook count
@@ -358,7 +382,7 @@ function StarRow({ t, v, stage }) {
     (v.caveat_by_star || {})[`${stage.course_id}:${i}`];
 
   async function pick(i, options) {
-    await requestTarget(t, {
+    return requestTarget(t, {
       course_id: stage.course_id, star_id: i,
       strat_tag: lastStratFor(i) || null,
     }, options);
@@ -392,9 +416,23 @@ function StarRow({ t, v, stage }) {
   // `shown` is the route-filtered list when a route is active and the whole
   // course otherwise, which is exactly what the widened rule wants: seven
   // stars is not one, so a no-route course still picks nothing.
-  const lone = loneOption(shown);
-  useLoneRouteOption(v, lone, `star:${stage.course_id}:${lone ? lone.i : ""}`,
-                     () => pick(lone.i, { quiet: true }));
+  const choices = course
+    ? shown.map(({ i }) => ({ course_id: stage.course_id, star_id: i }))
+      .concat(segmentChoices(extraSegments(t, v, new Set(), startsInLevel(stage.level))))
+    : [];
+  const lone = loneOption(choices);
+  // PSS offers two stars without an act-selection screen. Restore the last
+  // one explicitly chosen or completed, using journal memory from the server rather
+  // than the possibly session-filtered log. A route's lone option wins;
+  // the shared empty-hand guard keeps explicit stars and segments intact.
+  const arrivalPick = lone || rememberedStarChoice(v, stage, choices);
+  const autoRefused = useLoneRouteOption(t, arrivalPick,
+    `star:${stage.course_id}`, !!lone);
+  // Never paint the idle cards that an arrival offer is about to select.
+  // Derive this during render; an effect would hide them one frame too late.
+  // A stage broadcast can precede the view that retires the departing star,
+  // so only a held segment or a star in this course makes the row ready.
+  const ready = arrivalReady(arrivalPick, autoRefused, lone, tgt, stage.course_id);
 
   // A STAR'S SUBSECTIONS (task 0087, and the case Griffin named first:
   // "sometimes we want to practice only a small portion of a star") no longer
@@ -403,7 +441,8 @@ function StarRow({ t, v, stage }) {
   // with no switch here to forget.
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
-  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}"
+    aria-busy=${!ready}>
     <div class="shead"><b>${course.name}</b>
       <span class="meta">${routeStars
         ? html`showing this route's stars · tap to practice`
@@ -411,7 +450,7 @@ function StarRow({ t, v, stage }) {
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <${CellRow} class="starrow">
-      ${shown.map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
+      ${(ready ? shown : []).map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         key=${`${stage.course_id}:${i}`}
         active=${tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i}
@@ -485,6 +524,12 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   const segs = segsForLevel(v, stage.level);
   const pipeSeg = segs.find((s) => s.is_reds_pipe);
   const noRedsSeg = segs.find((s) => !s.is_reds_pipe);
+  const shownIds = new Set([pipeSeg, noRedsSeg].filter(Boolean)
+    .map((s) => s.segment_id));
+  const choices = course ? segmentChoices([pipeSeg, noRedsSeg].filter(Boolean)
+    .concat(extraSegments(t, v, shownIds))) : [];
+  const lone = loneOption(choices);
+  useLoneRouteOption(t, lone, `bowser:${stage.level}`);
 
   const redsActive = !!pipeSeg
     && tgt.kind === "segment" && tgt.segment_id === pipeSeg.segment_id;
@@ -546,6 +591,7 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // empty hand; it may not take something out of one.
   useEffect(() => {
     const family = bowserFamilyFor(stage.level);
+    if (lone) return; // the sole-choice rule owns this case
     if (!family) return;
     if (redsActive) return;
     if (tgt.kind === "segment") return;
@@ -556,9 +602,6 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   }, [stage.level]);
 
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
-
-  const shownIds = new Set([pipeSeg, noRedsSeg].filter(Boolean)
-    .map((s) => s.segment_id));
 
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
     <div class="shead"><b>${course.name}</b>
@@ -587,51 +630,11 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
 function ArenaRow({ t, v, stage }) {
   const [fold, toggleFold] = useCollapsed("selector");
   const [setPicking, pickerModal] = useIconPicking(t);
-  const tgt = v.target || {};
   const fights = segsForLevel(v, stage.level);
-  const only = fights.length === 1 ? fights[0] : null;
-
-  // Auto-select the single fight on entry (request: "immediately select it
-  // and set it as our active segment"). Keyed on stage.level + the segment id
-  // so it fires once per arena entry, not every render; the already-targeted
-  // guard makes a re-entry a no-op.
-  //
-  // It "always overrode the current target" until 2026-08-01 — the same
-  // ruling that stopped a star grab stealing a segment pick (projection.py's
-  // _close_by_grab). It was the other thief, and a worse one, because it
-  // fires on mere ARRIVAL: picking "Bowser 1 → WF" and then walking into the
-  // arena to run it replaced that pick with the fight, so the movement lost
-  // its target, its arm and its card before he had done anything at all.
-  // A convenience default may fill an empty hand; it may not take something
-  // out of one.
-  //
-  // NARROWED 2026-08-05: `tgt.kind === "segment"` declined whenever ANY
-  // segment was targeted, including one belonging to a different place
-  // entirely -- so walking into Bowser 3 still holding "No Reds" (BitS) left
-  // the arena's only fight unselected. Griffin: "if there's only one option,
-  // that's how it should look. Even if this is our first, second, third time
-  // visiting this place." The 2026-08-01 rule it protects is about a pick
-  // made FOR HERE ("Bowser 1 -> WF", which starts in this very arena), and
-  // `heldStartsHere` is that rule stated exactly: keep a held target this
-  // stage can actually run, override one it cannot. Same question
-  // `ui/stagecontext.js` answers for the pinned card, asked of the row's own
-  // `v.segment_targets` rather than a second source.
-  const heldStartsHere = tgt.kind === "segment" && (v.segment_targets || [])
-    .some((s) => s.segment_id === tgt.segment_id
-      && (s.start_areas || []).some((a) => a[0] === stage.level));
-  useEffect(() => {
-    if (!only) return;
-    if (heldStartsHere) return;
-    (async () => {
-      if (!only.enabled)
-        await send("PUT", `/api/segments/${only.segment_id}`, { enabled: true });
-      // `auto`: an arrival fill, not a click — the server holds it by the
-      // detection rules and refuses to let it steal a promoted detection.
-      await requestTarget(t, { kind: "segment", segment_id: only.segment_id },
-                          { auto: true });
-    })();
-  }, [stage.level, only && only.segment_id, heldStartsHere]);
-
+  const choices = segmentChoices(fights.concat(
+    extraSegments(t, v, new Set(fights.map((s) => s.segment_id)))));
+  const lone = loneOption(choices);
+  useLoneRouteOption(t, lone, `arena:${stage.level}`);
   const extras = armedExtraCells(
     t, v, new Set(fights.map((s) => s.segment_id)), setPicking);
   if (!fights.length && !extras.length) return html`<${StagePlaceholder} t=${t} />`;
@@ -694,10 +697,10 @@ function SegmentRow({ t, v, stage }) {
   // name ("there genuinely being only one option"). The two lists differ only
   // where the route said nothing, and a place that offers exactly one thing is
   // now a pick whether or not a route agreed.
-  const lone = loneOption(segs);
-  useLoneRouteOption(
-    v, lone, `seg:${stage.level}:${stage.area}:${lone ? lone.segment_id : ""}`,
-    () => pickSegmentTarget(t, lone, { quiet: true }));
+  const choices = segmentChoices(segs.concat(
+    extraSegments(t, v, new Set(segs.map((s) => s.segment_id)))));
+  const lone = loneOption(choices);
+  useLoneRouteOption(t, lone, `seg:${stage.level}:${stage.area}`);
 
   const drawn = new Set(segs.map((s) => s.segment_id));
   const extras = armedExtraCells(t, v, drawn, setPicking);
@@ -723,6 +726,9 @@ function SegmentRow({ t, v, stage }) {
 function ArmedOnlyRow({ t, v }) {
   const [fold, toggleFold] = useCollapsed("selector");
   const [setPicking, pickerModal] = useIconPicking(t);
+  const choices = segmentChoices(armedSegments(t, v));
+  const lone = loneOption(choices);
+  useLoneRouteOption(t, lone, `armed:${t.stage?.level}:${t.stage?.area}`);
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
     <div class="shead"><b>Running</b>
       <span class="meta">a segment timer is live</span>

@@ -101,8 +101,10 @@ differ, **0 attempt rows lost, gained or changed**.
 `segments.hooks_on_arm` accepts — no presence-type start clause
 (`level_enter`/`area_enter`/`attempt_anchor`/`spawned`). The pipe/100-coin
 families (course entry) never hook and never queue, which is also why the
-lone-option client rule was NOT dissolved into this: it fills
-presence-armed defs, and folding it in would auto-select on every crossing.
+lone-option client rule was NOT dissolved into this: it selects from the actual
+visible offer. Since 2026-09-30 a sole visible choice replaces even a retained
+target, using a `sole_selection` target/place binding checked at dispatch;
+ordinary `auto` fills still cannot displace a hooked head. See the selector rule.
 Queue entries scrub to the armed set every event; promotion takes the
 oldest survivor; all of it is journal-derived so replay rebuilds head,
 flavor and queue.

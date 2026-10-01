@@ -881,6 +881,7 @@ def _real_clips() -> list[dict]:
 
 REAL = r"""
 import { createFollower, ghostTemplate } from "__FOLLOWER__";
+const { slotAtTime } = await import(new URL("../frame.js", "__FOLLOWER__"));
 const view = __VIEW__;
 const DT = 1 / 30;
 const template = ghostTemplate(view);
@@ -908,25 +909,34 @@ function drive(trace) {
   const follower = createFollower(view, {});
   const video = { currentTime: 0, playbackRate: 1, paused: true };
   const errors = [];
-  let now = 0;
+  let missingTarget = 0, unstampedDisplay = 0;
+  const recorded = new Set(view.picture_igt.filter((igt) => igt != null));
+  let now = 0, warmup = 2;
   for (const sample of trace) {
     const d = follower.sample(sample, video.currentTime, now);
     if (d.action === "seek" && d.time != null) video.currentTime = d.time;
     if (d.rate > 0) { video.playbackRate = d.rate; video.paused = false; }
     else video.paused = true;
-    const shown = template.igtAtTime(video.currentTime);
-    errors.push(shown == null ? null : shown - sample.igt);
+    const shown = view.picture_igt[slotAtTime(video.currentTime, template.clock)];
+    // A null stamp is no ground truth. The preceding known stamp is an
+    // estimate the follower uses, not the timer observed on this picture.
+    // A missing target likewise has no exact recorded picture to score.
+    if (warmup > 0) warmup -= 1;
+    else if (!recorded.has(sample.igt)) missingTarget += 1;
+    else if (shown == null) unstampedDisplay += 1;
+    else errors.push(shown - sample.igt);
     if (!video.paused) video.currentTime += video.playbackRate * DT;
     now += DT * 1000;
   }
-  return errors;
+  return { errors, missingTarget, unstampedDisplay };
 }
 
 // The whole moving span of the real clip, at the game's own rate.
 const play = [];
 for (let igt = first; igt <= last; igt += 1)
   play.push({ igt, global_timer: 5000 + igt, level: 8, area: 1 });
-const steady = drive(play).slice(2).filter((e) => e != null);
+const steadyTrace = drive(play);
+const steady = steadyTrace.errors;
 
 // The same clip, interrupted: a stall at a third of the way, then a load
 // back to the quarter mark.
@@ -939,7 +949,8 @@ for (let k = 0; k < 40; k += 1)
 const quarter = first + Math.floor((last - first) / 4);
 for (let igt = quarter; igt <= last; igt += 1)
   mixed.push({ igt, global_timer: 7000 + igt, level: 8, area: 1 });
-const interrupted = drive(mixed).slice(2).filter((e) => e != null);
+const interruptedTrace = drive(mixed);
+const interrupted = interruptedTrace.errors;
 
 // `Math.max()` of nothing is -Infinity and JSON writes that as null, which
 // reads downstream as "no error" rather than "no samples". An empty trace is
@@ -950,10 +961,12 @@ console.log(JSON.stringify({
   preroll_pictures: template.prerollPictures, stamped: igts.length,
   first, last,
   steady: { worst: worst(steady), over_one: steady.filter((e) => Math.abs(e) > 1).length,
-            samples: steady.length },
+            trace_samples: play.length - 2, samples: steady.length, missing_target: steadyTrace.missingTarget,
+            unstamped_display: steadyTrace.unstampedDisplay },
   interrupted: { worst: worst(interrupted),
                  over_one: interrupted.filter((e) => Math.abs(e) > 1).length,
-                 samples: interrupted.length },
+                 trace_samples: mixed.length - 2, samples: interrupted.length, missing_target: interruptedTrace.missingTarget,
+                 unstamped_display: interruptedTrace.unstampedDisplay },
 }));
 }
 """
@@ -1189,6 +1202,10 @@ def test_the_real_saved_clips_follow_their_own_timer():
         assert result["first"] < result["last"], note
         assert result["steady"]["samples"] > 0, note
         assert result["interrupted"]["samples"] > 0, note
+        for mode in ("steady", "interrupted"):
+            measured = result[mode]
+            assert (measured["samples"] + measured["missing_target"]
+                    + measured["unstamped_display"]) == measured["trace_samples"], note
         assert result["steady"]["worst"] <= 1, note
         assert result["steady"]["over_one"] == 0, note
         assert result["interrupted"]["worst"] <= 1, note
@@ -1197,3 +1214,90 @@ def test_the_real_saved_clips_follow_their_own_timer():
     # A run in which every clip was refused would satisfy every assertion
     # above and prove nothing at all.
     assert followed, f"no clip on this machine was followed: refused {refused}"
+
+
+
+def test_recorded_stall_resyncs_without_hiding_a_known_picture_error():
+    """An actual TTM capture stall: every timer and picture is stamped.
+
+    The source allowed six frames of drift on timers971..975 despite the
+    existing one-frame contract. This excerpt keeps the recorder's original
+    picture intervals, and contains no unavailable measurement to exclude.
+    """
+    view = json.loads((Path(__file__).parent / "fixtures" / "ghost_recorded_stall_view.json")
+                      .read_text(encoding="utf-8"))
+    script = REAL.replace("__FOLLOWER__", FOLLOWER).replace("__VIEW__", json.dumps(view))
+    result = _drive(script)
+    for mode in ("steady", "interrupted"):
+        measured = result[mode]
+        assert measured["missing_target"] == measured["unstamped_display"] == 0, result
+        assert measured["samples"] == measured["trace_samples"] > 150, result
+        assert measured["worst"] <= 1 and measured["over_one"] == 0, result
+
+    # Displace the observed picture AFTER the follower's decision. A broken
+    # timing instrument that skips its errors would pass this counterfactual.
+    displaced = _drive(script.replace(
+        "slotAtTime(video.currentTime, template.clock)",
+        "slotAtTime(video.currentTime + 5 / 30, template.clock)"))
+    assert displaced["steady"]["worst"] >= 4, displaced
+    assert displaced["steady"]["over_one"] > 100, displaced
+
+
+
+def test_clock_correction_and_decoded_presentation_have_separate_budgets():
+    """Execute the real window gate and real controller at their boundaries.
+
+    The decoded picture advances during a quiet clock interval. Reusing the
+    one-frame correction budget here hid a correctly playing video window.
+    """
+    page = (REPO / "src/sm64_events/ui/ghost/index.html").read_text(encoding="utf-8")
+    start = page.index("function presentable() {")
+    stop = page.index("\n}\n", start) + 2
+    result = _drive(r"""
+import { DEFAULTS, createFollower } from "__FOLLOWER__";
+const view = { frame_times: Array.from({length:100}, (_,k)=>k/30),
+               picture_igt: Array.from({length:100}, (_,k)=>k),
+               duration_s: 100/30, video_start_s:0, fps:30, encode:"picture_feed" };
+const follower = createFollower(view);
+const document = {body:{dataset:{shown:"yes"}}};
+const status = {state:"ready", decision:{reason:"playing"}, sample:{igt:50}, holding:false};
+let decodedTime = follower.template.timeAtIgt(50).time;
+const videoTime = () => decodedTime;
+__PRESENTABLE__
+const gate = drift => {
+  decodedTime = follower.template.timeAtIgt(50 + drift).time;
+  return presentable();
+};
+const before = {minus6:gate(-6), plus6:gate(6), minus7:gate(-7), plus7:gate(7)};
+const quietInterval = [2,3,4,5,6].map(gate);
+const guards = {};
+for (const reason of ["elsewhere", "past_template", "grabbed"]) {
+  status.decision.reason = reason;
+  guards[reason] = gate(0);
+}
+status.decision.reason = "no_clock";
+status.holding = true;
+guards.no_clock = gate(0);
+status.holding = false;
+status.decision.reason = "playing";
+// Changing correction tuning must not change the decoded-picture gate.
+const original = DEFAULTS.seekFrames;
+DEFAULTS.seekFrames = 0;
+const correctionIndependent = gate(6);
+DEFAULTS.seekFrames = original;
+const action = drift => {
+  const f = createFollower(view, {presentationFrames:100});
+  f.sample({igt:50}, f.template.timeAtIgt(50).time, 0);
+  return f.sample({igt:51}, f.template.timeAtIgt(51-drift).time, 1000/30);
+};
+console.log(JSON.stringify({before, quietInterval, guards, correctionIndependent,
+  one:action(1), two:action(2),
+  seekFrames:DEFAULTS.seekFrames, presentationFrames:DEFAULTS.presentationFrames}));
+""".replace("__FOLLOWER__", FOLLOWER).replace("__PRESENTABLE__", page[start:stop]))
+    assert result["seekFrames"] == 1 and result["presentationFrames"] == 6, result
+    assert result["before"] == {"minus6": True, "plus6": True, "minus7": False, "plus7": False}, result
+    assert result["quietInterval"] == [True] * 5, result
+    assert result["guards"] == {"elsewhere": False, "past_template": False, "grabbed": False, "no_clock": False}, result
+    assert result["correctionIndependent"] is True, result
+    assert result["one"]["action"] == "play", result
+    assert result["two"]["action"] == "seek" and result["two"]["reason"] == "resync", result

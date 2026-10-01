@@ -10,14 +10,16 @@ import dataclasses
 import re
 import threading
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from sm64_events.core.paths import user_icons_dir
+from sm64_events.core.paths import shared_defaults_root, user_icons_dir
 from sm64_events.memory.addresses import node_label
 from sm64_events.ranks.standards import entity_key
+from sm64_events.server.segment_synthesis import synthesize_recording
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking import topology
@@ -27,16 +29,20 @@ from sm64_events.tracking.eventlabel import (entrance_landmark, is_step,
                                              label_level_entry,
                                              level_entry_rows)
 from sm64_events.tracking.lint import lint_definition
-from sm64_events.tracking.segments import (SegmentDef, clause_sentence,
+from sm64_events.tracking.segments import (SegmentDef,
                                            origin_taxonomy,
                                            validate_definition, vocab)
-from sm64_events.tracking.synthesize import (clause_for, suggest_name,
-                                             synthesize, walked_steps)
 from sm64_events.tracking.views import (build_entity_ranks,
                                         build_entity_strategies,
                                         build_route_view, build_run_history,
                                         build_run_view, build_session_view,
                                         stamp_origins)
+
+
+class SoleSelection(BaseModel):
+    """Bind a sole visible offer to the target and place the client observed."""
+    target: tuple[Literal["segment"], int] | tuple[Literal["star"], int, int] | None
+    stage: tuple[int | None, int | None]
 
 
 class TargetBody(BaseModel):
@@ -50,6 +56,8 @@ class TargetBody(BaseModel):
     # projector holds the two by different rules (round 19: a fill is
     # detection-flavored; a click is sovereign and clears the queue).
     auto: bool = False
+    sole_selection: SoleSelection | None = None
+    timer_mode: Literal["igt", "rta"] = "igt"
 
 
 class ClearBody(BaseModel):
@@ -90,11 +98,13 @@ class StratBody(BaseModel):
     star_id: int | None = Field(default=None, ge=0)
     segment_id: int | None = None
     strat_tag: str | None = None
+    timer_mode: Literal["igt", "rta"] = "igt"
 
 
 class AttemptStratBody(BaseModel):
     # null is meaningful, not missing: it unlabels the attempt
     strat_tag: str | None = None
+    timer_mode: Literal["igt", "rta"] = "igt"
 
 
 class IconBody(BaseModel):
@@ -371,6 +381,24 @@ def _http(e: Exception) -> HTTPException:
     return HTTPException(503, str(e))  # RuntimeError: degraded mode
 
 
+async def _save_segment(service, definition: dict, scope: str,
+                        segment_id: int | None = None) -> dict:
+    """Scope is explicit at definition-save doors; older callers stay personal."""
+    if scope == "shared" and shared_defaults_root() is None:
+        raise HTTPException(403, "Shared saves require the manual test server")
+    try:
+        if scope == "shared":
+            return await service.save_shared_segment(definition, segment_id)
+        if segment_id is None:
+            return {"ok": True, "id": await service.create_segment(definition)}
+        await service.update_segment(segment_id, definition)
+        return {"ok": True}
+    except (LookupError, ValueError, RuntimeError) as exc:
+        raise _http(exc) from exc
+    except OSError as exc:
+        raise HTTPException(503, f"Could not save segment defaults: {exc}") from exc
+
+
 def create_api_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
     # The timeline's label memo — one per router, so tests building several
@@ -468,6 +496,13 @@ def create_api_router(service) -> APIRouter:
             raise HTTPException(503, "database unavailable")
         return stamp_origins(service.db.segment_defs(),
                              service.db.get_state("origin_overrides", {}))
+
+    @router.get("/segments/authoring")
+    async def segment_authoring():
+        """Only the explicitly launched source test server can author defaults."""
+        can_share = shared_defaults_root() is not None
+        return {"can_share": can_share,
+                "default_scope": "shared" if can_share else "personal"}
 
     @router.get("/segments/vocab")
     def segments_vocab():
@@ -714,12 +749,11 @@ def create_api_router(service) -> APIRouter:
         return {"rows": rows[-limit:]}
 
     @router.post("/segments")
-    async def create_segment(body: SegmentBody):
-        try:
-            sid = await service.create_segment(body.model_dump())
-        except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return {"ok": True, "id": sid}
+    async def create_segment(
+        body: SegmentBody,
+        scope: str = Query(default="personal", pattern="^(shared|personal)$"),
+    ):
+        return await _save_segment(service, body.model_dump(), scope)
 
     @router.post("/segments/backtest")
     async def backtest_segment(body: BacktestBody):
@@ -822,119 +856,24 @@ def create_api_router(service) -> APIRouter:
         return {"warnings": lint_definition(candidate, service.segment_defs)}
 
     @router.get("/segments/synthesize")
-    def synthesize_from_timeline(ids: str):
-        """Turn the picked `GET /api/segments/timeline` row ids into the
-        clauses a new segment would be defined by, plus a suggested name and a
-        plain-English sentence for each -- the hinge behind "record what I just
-        did" (`tracking/synthesize.py`, Task 12) wired up for the timeline
-        picker (Task 13). Declared BEFORE /segments/{segment_id} -- same
-        declaration-order rule as /segments/vocab above (fastapi-patterns).
+    def synthesize_from_timeline(ids: str, start_ids: str | None = None,
+                                primary_start_id: int | None = None,
+                                finish_id: int | None = None,
+                                infer_walk: bool = True):
+        """Draft a recorded path, with optional independent OR start samples.
 
-        `ids` is a comma-separated list of at least two row ids. **The SERVER
-        sorts them, and that is the contract** (2026-08-05, replacing the
-        `start_id`/`end_id` pair this took until then): the earliest is the
-        start, the latest is the end, and everything between is a waypoint in
-        journal order. His words were "select any number of the events, IN
-        CHRONOLOGICAL ORDER" — and chronological is a property the events
-        already have, so reading it off the click order instead would let a
-        list drawn newest-first author a definition whose steps run backwards
-        through a walk that only ever happened one way. 422 on fewer than two
-        ids or on anything that is not a number.
-
-        A middle id becomes a waypoint through `clause_for(row, "end")`: a
-        waypoint is a place you REACH, which is the same role the end fills,
-        and the ASYMMETRY in synthesize.py's docstring is exactly about a
-        `level_changed` meaning two different clauses at the two ends.
-
-        Looks every id up directly in the journal (`service.db.events()`,
-        the SAME source `/segments/timeline` reads) rather than trusting a
-        client-supplied payload -- the picker only ever holds row IDS, never
-        the raw event. 404 when any id names no journal event.
-
-        Because the ids are DEDUPED before they are counted, picking one
-        moment twice is not a pair at all and reports the 422 above rather
-        than segments.py's documented COROLLARY (a definition armed and closed
-        on the identical tick) -- the same refusal, reached one step earlier
-        and worded for what the person actually did.
-
-        409 when a picked row's type carries no synthesis rule for the role it
-        was picked for (`attempt_anchor`'s `practice_reset`/`state_loaded`
-        source carries no level/course at all -- the matcher resolves that from
-        live MatchContext, never the event, so a bare row can't supply it --
-        see synthesize.py's module docstring). `synthesize()` itself can't say
-        which of the two ends failed (it returns `None` either way), so on
-        failure this re-checks with `clause_for` to report the specific one --
-        diagnosis, not a second decision.
-
-        Read-only: no journal entry, no state change of any kind.
-
-        `start_sentence`/`end_sentence` render through `clause_sentence` --
-        the SAME card_label/card_template machinery
-        `card_waiting_for_sentence` uses for an armed segment's "waiting for"
-        line, so a synthesized-but-unsaved clause reads in the identical
-        voice a saved one would, not a second renderer built for this
-        endpoint."""
+        Legacy ``ids`` use earliest/latest endpoints. Explicit paired endpoint
+        ids keep selected Start/Finish roles across different attempts; middles
+        remain ordered waypoints. ``start_ids`` supplies independent OR starts.
+        The primary remains first. Assembly and error contracts live in
+        ``server/segment_synthesis.py``. Read-only; static route stays before
+        ``/segments/{segment_id}`` so the id route cannot swallow it.
+        """
         if service.db is None:
             raise HTTPException(503, "database unavailable")
-        try:
-            picked_ids = sorted({int(part) for part in ids.split(",") if part})
-        except ValueError:
-            raise HTTPException(422, "ids must be a comma-separated list of "
-                                     "timeline row ids")
-        if len(picked_ids) < 2:
-            raise HTTPException(422, "pick at least two moments — one to start "
-                                     "on and one to finish on")
-        rows_by_id = {row.id: row for row in journal_events()}
-        picked_rows = [rows_by_id.get(row_id) for row_id in picked_ids]
-        if any(row is None for row in picked_rows):
-            raise HTTPException(404, "unknown timeline event id")
-        start_row, end_row = picked_rows[0], picked_rows[-1]
-        middle_rows = picked_rows[1:-1]
-        result = synthesize(start_row, end_row)
-        if result is None:
-            role = "start" if clause_for(start_row, "start") is None else "end"
-            raise HTTPException(409,
-                f"That moment can't be this segment's {role} — it doesn't "
-                "carry enough information to define a trigger from (for "
-                "example, a reset with no recorded place).")
-        start_clause, end_clause = result
-        # The landmark catalogue rides every sentence here: a clause pinning
-        # a named landmark must read by that name — "Open the CCM Door", the
-        # sentence he picked the row by — or the panel contradicts his own
-        # picks (round 12 item 3).
-        names = service.db.landmark_names()
-        # `steps` (2026-08-03): every place actually walked between the two
-        # picked moments, so the recorder can propose the definition's ORDERED
-        # STEPS instead of only its two ends. The path was always in the
-        # journal; nothing was reading it, which is why a multi-step movement
-        # could not be made in the app at all. Each carries the sentence its
-        # clause renders as, through the same `clause_sentence` the two ends
-        # use — one voice for the whole definition, not a third renderer.
-        steps = [{**step, "sentence": clause_sentence(step["clause"], names)}
-                 for step in walked_steps(rows_by_id.values(),
-                                          start_row, end_row)]
-        # The middles the PERSON picked, as opposed to `steps`, which is the
-        # walk we derived for them. Both ship on every answer and the caller
-        # chooses: picking exactly two moments leaves `picked` empty and the
-        # derived walk is what fills the middle (the two-click case this tool
-        # has always had), and picking more says the walk is not the answer.
-        # A middle whose row carries no clause for the role is a 409 like
-        # either end -- a definition cannot hold a step it cannot express.
-        picked = []
-        for row in middle_rows:
-            clause = clause_for(row, "end")
-            if clause is None:
-                raise HTTPException(409,
-                    f"That moment can't be a step of this segment — it "
-                    "doesn't carry enough information to define a trigger "
-                    "from (for example, a reset with no recorded place).")
-            picked.append({"id": row.id, "clause": clause,
-                           "sentence": clause_sentence(clause, names)})
-        return {"start_clause": start_clause, "end_clause": end_clause,
-                "start_sentence": clause_sentence(start_clause, names),
-                "end_sentence": clause_sentence(end_clause, names),
-                "steps": steps, "picked": picked,
-                "name": suggest_name(start_clause, end_clause, names)}
+        return synthesize_recording(journal_events(), ids, start_ids,
+                                    service.db.landmark_names(),
+                                    primary_start_id, finish_id, infer_walk)
 
     @router.post("/segments/merge")
     async def merge_segments(body: SegmentMergeBody):
@@ -976,18 +915,15 @@ def create_api_router(service) -> APIRouter:
                 "warnings": lint_definition(merged, service.segment_defs)}
 
     @router.put("/segments/{segment_id}")
-    async def update_segment(segment_id: int, body: SegmentPatch):
-        try:
-            # Only the fields the client actually SENT (exclude_unset), so
-            # False/[]/null all round-trip as explicit sets. Dropping every
-            # None instead made `category: null` — "move this out of its
-            # group" — a silent no-op, since null is a meaningful value there
-            # (2026-07-24); an omitted field is still untouched either way.
-            patch = body.model_dump(exclude_unset=True)
-            await service.update_segment(segment_id, patch)
-        except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return {"ok": True}
+    async def update_segment(
+        segment_id: int, body: SegmentPatch,
+        scope: str = Query(default="personal", pattern="^(shared|personal)$"),
+    ):
+        # Only the fields the client actually SENT (exclude_unset), so
+        # False/[]/null all round-trip as explicit sets. category:null means
+        # move out of the group; an omitted field stays untouched.
+        return await _save_segment(service, body.model_dump(exclude_unset=True),
+                                   scope, segment_id)
 
     @router.delete("/segments/{segment_id}")
     async def delete_segment(segment_id: int):
@@ -1259,7 +1195,9 @@ def create_api_router(service) -> APIRouter:
             result = await service.request_target(
                 body.kind, course_id=body.course_id, star_id=body.star_id,
                 segment_id=body.segment_id, strat_tag=body.strat_tag,
-                clear_strat=clear_strat, auto=body.auto)
+                clear_strat=clear_strat, auto=body.auto, timer_mode=body.timer_mode,
+                sole_selection=body.sole_selection.model_dump(mode="json")
+                    if body.sole_selection is not None else None)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True, **result}
@@ -1275,15 +1213,15 @@ def create_api_router(service) -> APIRouter:
             if body.kind == "segment":
                 if body.segment_id is None:
                     raise ValueError("segment strat needs segment_id")
-                await service.set_strat_segment(body.segment_id, body.strat_tag)
+                saved = await service.set_strat_segment(body.segment_id, body.strat_tag)
             else:
                 if body.course_id is None or body.star_id is None:
                     raise ValueError("star strat needs course_id and star_id")
-                await service.set_strat(body.course_id, body.star_id,
-                                        body.strat_tag)
+                saved = await service.set_strat(body.course_id, body.star_id,
+                                                body.strat_tag, timer_mode=body.timer_mode)
         except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return {"ok": True}
+            raise _http(e) from e
+        return {"ok": True, **({"automatic_pb": saved} if saved else {})}
 
     @router.get("/icons")
     async def icons():
@@ -1382,10 +1320,11 @@ def create_api_router(service) -> APIRouter:
         Distinct from POST /strat, which sets what to practice NEXT — this
         one edits history and triggers a re-projection."""
         try:
-            await service.set_attempt_strat(attempt_id, body.strat_tag)
+            saved = await service.set_attempt_strat(attempt_id, body.strat_tag,
+                                                    timer_mode=body.timer_mode)
         except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return {"ok": True}
+            raise _http(e) from e
+        return {"ok": True, **({"automatic_pb": saved} if saved else {})}
 
     @router.get("/landmarks")
     def landmarks():

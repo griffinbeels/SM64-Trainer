@@ -25,7 +25,7 @@ from time import monotonic
 from sm64_events.core.events import Event
 from sm64_events.core.landmark import landmark_group
 from sm64_events.core.modes import ModeConfig, effective_version
-from sm64_events.core.paths import bundled_defaults_seed
+from sm64_events.core.paths import bundled_defaults_seed, shared_defaults_root
 from sm64_events.core.recording_url import validate_recording_url
 from sm64_events.core.timefmt import format_igt_short
 from sm64_events.memory.addresses import course_name, node_label, star_name
@@ -34,7 +34,8 @@ from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import importing, practicable, recordings
-from sm64_events.tracking.views import current_pbs_by_strat
+from sm64_events.tracking.views import (classification_rank_baseline,
+                                        current_pbs_by_strat)
 from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
@@ -44,11 +45,13 @@ from sm64_events.tracking.projection import (ATTEMPT_RULES, Projector,
                                              wipe_matches)
 from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
                                            merge_definitions,
-                                           segment_origin, split_definition,
+                                           segment_origin, selector_start_areas, split_definition,
                                            stage_origin, star_origin,
                                            validate_definition)
 from sm64_events.tracking.pbaction import pb_action
 from sm64_events.tracking import routes as route_logic
+from sm64_events.tracking.shared_defaults import (SharedDefaultsStore,
+                                                 segment_definition_fields)
 
 log = logging.getLogger("sm64.tracker")
 
@@ -700,6 +703,11 @@ class TrackerService:
         return self._projector.strat_by_star
 
     @property
+    def last_star_choice_by_course(self) -> dict[str, int]:
+        """Latest explicit pick or successful play, replayed across sessions."""
+        return {str(c): s for c, s in self._projector.last_star_choice_by_course.items()}
+
+    @property
     def strat_by_segment(self) -> dict:
         return self._projector.strat_by_segment
 
@@ -810,12 +818,22 @@ class TrackerService:
         return self.db.get_state("origin_overrides", {}) \
             if self.db is not None else {}
 
+    def _offered_start_here(self, kind: str, segment_id: int | None) -> bool:
+        if kind != "segment":
+            return False
+        found = next((d for d in self._segment_defs if d.id == segment_id), None)
+        here = [self._current_stage.get("level"), self._current_stage.get("area")]
+        return (found is not None and here in selector_start_areas(
+            found.start_triggers, self._landmark_names()))
+
     async def request_target(self, kind: str, course_id: int | None = None,
                              star_id: int | None = None,
                              segment_id: int | None = None,
                              strat_tag: str | None = None,
                              clear_strat: bool = False,
-                             auto: bool = False) -> dict:
+                             auto: bool = False,
+                             sole_selection: dict | None = None,
+                             timer_mode: str = "igt") -> dict:
         """Set the practice target, or refuse a pick from somewhere else.
 
         You practice what is in front of you: a pick the player is not
@@ -840,6 +858,15 @@ class TrackerService:
         practice card highlights.
         """
         self._require_db()
+        if sole_selection is not None:
+            expected_level, expected_area = sole_selection["stage"]
+            if (expected_level != self._current_stage.get("level")
+                    or (expected_area is not None
+                        and expected_area != self._current_stage.get("area"))):
+                # A departing row can offer after the game has moved. Expire
+                # it quietly so the client refreshes and retries the new row.
+                return {}
+            auto = True
         if kind == "segment" and segment_id is not None:
             found = next((d for d in self._segment_defs if d.id == segment_id),
                         None)
@@ -862,6 +889,9 @@ class TrackerService:
             if course_id is None or star_id is None:
                 raise ValueError("star target needs course_id and star_id")
             already = self.target == ("star", course_id, star_id)
+        if (auto and sole_selection is None and kind == "star"
+                and self.target is not None):
+            return {}  # A stale empty-hand read cannot replace a newer pick.
         node = self.target_node(kind, course_id, star_id, segment_id)
         # A segment whose start trigger has already fired is UNDER WAY, and
         # you pick it where it has got you to, not where it began (user
@@ -871,25 +901,39 @@ class TrackerService:
         # what the banner offers and what the server accepts cannot disagree.
         running = (kind == "segment"
                    and segment_id in self._projector.armed_segment_ids())
-        if not already and not practicable.practicable_here(self._current_stage,
-                                                            node, running):
+        if (not already and not self._offered_start_here(kind, segment_id)
+                and not practicable.practicable_here(self._current_stage, node, running)):
+            # The departing selector can still paint while a new stage has
+            # retired its target. A late convenience offer simply expires;
+            # it must neither retarget that stage nor report a click error.
+            if auto:
+                return {}
             raise ValueError(
                 "you can only practice what you are standing in — "
                 f"that one is in {node_label(node)}")
         if kind == "segment":
-            await self.set_target_segment(segment_id, strat_tag,
-                                          clear_strat=clear_strat, auto=auto)
+            saved = await self.set_target_segment(
+                segment_id, strat_tag, clear_strat=clear_strat, auto=auto,
+                sole_selection=sole_selection)
         else:
-            await self.set_target(course_id, star_id, strat_tag,
-                                  clear_strat=clear_strat, auto=auto)
-        return {}
+            saved = await self.set_target(
+                course_id, star_id, strat_tag, clear_strat=clear_strat,
+                auto=auto, timer_mode=timer_mode, sole_selection=sole_selection)
+        return {"automatic_pb": saved} if saved else {}
 
     async def set_target(self, course_id: int, star_id: int,
                          strat_tag: str | None = None,
                          clear_strat: bool = False,
-                         auto: bool = False) -> None:
+                         auto: bool = False,
+                         sole_selection: dict | None = None,
+                         timer_mode: str = "igt") -> dict | None:
         db = self._require_db()
+        self._validate_pb_clock(timer_mode)
+        adoption = None
         payload = {"course_id": course_id, "star_id": star_id}
+        if sole_selection is not None:
+            payload["sole_selection"] = sole_selection
+            auto = True
         if auto:
             # A convenience fill, not his click (round 19) — the projector
             # holds the two by different rules. Only ever written when true,
@@ -904,33 +948,41 @@ class TrackerService:
         # set_strat_segment(tag), explicit clear -> set_strat_segment(None)).
         if strat_tag is not None:
             payload["strat_tag"] = strat_tag
-        if strat_tag:
-            await self._adopt_untagged(db, strat_tag, course_id=course_id,
-                                       star_id=star_id)
-        await self.publish(Event(type="target_set", frame=0,
-                                 timestamp_utc=_now(), payload=payload))
+        if strat_tag and sole_selection is None:
+            adoption = await self._adopt_untagged(
+                db, strat_tag, course_id=course_id, star_id=star_id)
+        if not await self._publish_target_offer(payload, sole_selection):
+            return
+        if strat_tag and sole_selection is not None:
+            adoption = await self._adopt_untagged(
+                db, strat_tag, course_id=course_id, star_id=star_id)
         if strat_tag:
             self._register_strategy(db, entity_key(course_id, star_id), strat_tag)
         elif clear_strat:
             await self.set_strat(course_id, star_id, None)
+        return await self._save_classified_best(adoption, timer_mode)
 
     async def set_target_segment(self, segment_id: int,
                                  strat_tag: str | None = None,
                                  clear_strat: bool = False,
-                                 auto: bool = False) -> None:
+                                 auto: bool = False,
+                                 sole_selection: dict | None = None) -> dict | None:
         self._require_db()
         if all(d.id != segment_id for d in self._segment_defs):
             raise LookupError(f"segment {segment_id} not found")
         payload = {"kind": "segment", "segment_id": segment_id}
+        if sole_selection is not None:
+            payload["sole_selection"] = sole_selection
+            auto = True
         if auto:
             # See set_target: a fill is detection-flavored, a click is not.
             payload["auto"] = True
-        await self.publish(Event(type="target_set", frame=0,
-                                 timestamp_utc=_now(), payload=payload))
+        if not await self._publish_target_offer(payload, sole_selection):
+            return
         if strat_tag is not None:
             # segment strat memory is written via strat_set (the projector
             # ignores strat_tag inside segment target_set payloads)
-            await self.set_strat_segment(segment_id, strat_tag)
+            return await self.set_strat_segment(segment_id, strat_tag)
         elif clear_strat:
             # mirror of set_target's clear_strat: explicit-null in the
             # picker's "no strategy" card journals a null strat_set rather
@@ -941,10 +993,23 @@ class TrackerService:
             # legacy tricks and user-created segments, deliberately.
             await self.set_strat_segment(segment_id, None)
 
+    async def _publish_target_offer(self, payload: dict,
+                                    sole_selection: dict | None) -> bool:
+        """A declined sole offer must not adopt rows or change strategies.
+
+        Broadcasting can yield before projection, so compare the accepted
+        journal identity, not merely the target that happens to be held later.
+        Ordinary/manual target writes retain their existing metadata ordering.
+        """
+        jid = await self.publish(Event(type="target_set", frame=0,
+                                       timestamp_utc=_now(), payload=payload))
+        return sole_selection is None or (
+            jid is not None and self._projector.last_target_set_id == jid)
+
     async def _adopt_untagged(self, db: Database, strat_tag: str, *,
                               course_id: int | None = None,
                               star_id: int | None = None,
-                              segment_id: int | None = None) -> None:
+                              segment_id: int | None = None) -> dict | None:
         """Picking a strategy claims every row of that star or segment that
         has none (task 0146, his words: "We should assume that the unassigned
         entries are the strategy we selected overall"). Rows he explicitly
@@ -953,8 +1018,10 @@ class TrackerService:
         One journaled `attempt_strat_set` carrying `attempt_ids`, so a replay
         folds the adoption in exactly like a per-row reclassification, and
         the same direct write set_attempt_strat uses (no journal replay).
-        Runs BEFORE the caller's strat_set/target_set publish, so every
-        client refreshing on that event already sees the adopted rows."""
+        Ordinary writes run this BEFORE strat_set/target_set, so clients
+        refreshing on that event already see the adopted rows. Sole automatic
+        offers first require target_set acceptance; declined offers adopt none.
+        """
         ids = [a.id for a in db.attempts()
                if (a.segment_id, a.course_id, a.star_id)
                == ((segment_id, None, None) if segment_id is not None
@@ -963,6 +1030,8 @@ class TrackerService:
                and not self._projector.unlabeled_on_purpose(a.id)]
         if not ids:
             return
+        attempt = next(a for a in db.attempts() if a.id == ids[0])
+        classification = self._classification_context(attempt, strat_tag, ids)
         await self.publish(Event(type="attempt_strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"attempt_ids": ids,
@@ -970,14 +1039,20 @@ class TrackerService:
         db.retag_attempts(ids, strat_tag)
         for attempt_id in ids:
             self._projector.override_strat(attempt_id, strat_tag)
+        self._preserve_destination_pbs(classification)
+        return classification
 
     async def set_strat(self, course_id: int, star_id: int,
-                        strat_tag: str | None) -> None:
+                        strat_tag: str | None,
+                        timer_mode: str = "igt", *,
+                        save_adopted: bool = True) -> dict | None:
         """Set a star's active strategy without touching the target."""
         db = self._require_db()
+        self._validate_pb_clock(timer_mode)
+        adoption = None
         if strat_tag:
-            await self._adopt_untagged(db, strat_tag, course_id=course_id,
-                                       star_id=star_id)
+            adoption = await self._adopt_untagged(
+                db, strat_tag, course_id=course_id, star_id=star_id)
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"course_id": course_id,
@@ -991,14 +1066,17 @@ class TrackerService:
             await self.publish(Event(type="target_changed", frame=0,
                                      timestamp_utc=_now(),
                                      payload=self.target_payload()))
+        return await self._save_classified_best(adoption, timer_mode) if save_adopted else None
 
     async def set_strat_segment(self, segment_id: int,
-                                strat_tag: str | None) -> None:
+                                strat_tag: str | None, *,
+                                save_adopted: bool = True) -> dict | None:
         """Segment sibling of set_strat — same journaled shape, same
         registration, same target-changed republish. Kept in step with the
         star version deliberately: the practice UI drives both through one
         picker (ui/components/stratpicker.js)."""
         db = self._require_db()
+        adoption = None
         # The DB, not self._segment_defs: the cache lags a row created outside
         # the service's own CRUD (a reconcile, a test's direct insert), and the
         # import path already judges importability against the live table —
@@ -1007,7 +1085,7 @@ class TrackerService:
         if all(d["id"] != segment_id for d in db.segment_defs()):
             raise LookupError(f"segment {segment_id} not found")
         if strat_tag:
-            await self._adopt_untagged(db, strat_tag, segment_id=segment_id)
+            adoption = await self._adopt_untagged(db, strat_tag, segment_id=segment_id)
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"kind": "segment",
@@ -1020,6 +1098,7 @@ class TrackerService:
             await self.publish(Event(type="target_changed", frame=0,
                                      timestamp_utc=_now(),
                                      payload=self.target_payload()))
+        return await self._save_classified_best(adoption, "rta") if save_adopted else None
 
     async def clear_attempt(self, attempt_id: int, reason: str | None = None) -> None:
         """Hide one attempt, and UNDO any PB it saved.
@@ -1059,7 +1138,8 @@ class TrackerService:
         await self._reproject()
 
     async def set_attempt_strat(self, attempt_id: int,
-                                strat_tag: str | None) -> None:
+                                strat_tag: str | None,
+                                timer_mode: str = "igt") -> dict | None:
         """Reclassify ONE recorded attempt's strategy (None = unlabeled).
 
         A strategy is declared before a run, so it is routinely wrong after
@@ -1092,9 +1172,25 @@ class TrackerService:
         history stays editable (it doesn't), but because there is no row
         left to gate. Do not "fix" that non-issue by adding the gate."""
         db = self._require_db()
+        self._validate_pb_clock(timer_mode)
         attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
         if attempt is None:
             raise LookupError(f"no attempt {attempt_id}")
+        has_entity = (attempt.segment_id is not None
+                      or attempt.course_id is not None)
+        newest = has_entity and attempt.id == self._newest_attempt_id(db, attempt)
+        changed = strat_tag and strat_tag != attempt.strat_tag
+        classification = (self._classification_context(attempt, strat_tag, [attempt_id])
+                          if changed and has_entity else None)
+        if classification and newest:
+            # A first choice made through the newest row also adopts pending
+            # history. Choose ONE winner across that whole classification.
+            classification["ids"].extend(
+                row.id for row in db.attempts()
+                if row.id != attempt_id and not row.strat_tag
+                and (row.segment_id, row.course_id, row.star_id)
+                    == (attempt.segment_id, attempt.course_id, attempt.star_id)
+                and not self._projector.unlabeled_on_purpose(row.id))
         await self.publish(Event(type="attempt_strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"attempt_id": attempt_id,
@@ -1105,8 +1201,7 @@ class TrackerService:
         # failure between the journal write and this line would strand the PB
         # under the old strategy permanently.
         db.retag_pbs_for_attempt(attempt_id, strat_tag)
-        has_entity = (attempt.segment_id is not None
-                      or attempt.course_id is not None)
+        self._preserve_destination_pbs(classification)
         if strat_tag and has_entity:
             # The name would already resurface via the observed-strats union
             # once the reprojected attempt carries it; registering matters
@@ -1134,18 +1229,97 @@ class TrackerService:
         self._projector.override_strat(attempt_id, strat_tag)
         # Newest-attempt exception (docstring above): the active strategy
         # follows a reclassified top-of-log row.
-        if (strat_tag and has_entity
-                and attempt.id == self._newest_attempt_id(db, attempt)):
+        if strat_tag and newest:
             if attempt.segment_id is not None:
-                await self.set_strat_segment(attempt.segment_id, strat_tag)
+                await self.set_strat_segment(attempt.segment_id, strat_tag,
+                                             save_adopted=False)
             else:
                 await self.set_strat(attempt.course_id, attempt.star_id,
-                                     strat_tag)
+                                     strat_tag, timer_mode=timer_mode, save_adopted=False)
+        saved = await self._save_classified_best(
+            classification if newest else None,
+            "rta" if attempt.segment_id is not None else timer_mode)
         # The same bare refetch ping a reprojection ends with: an OLDER row's
         # retag publishes no strat_set, and a second browser would otherwise
         # keep drawing the old tag.
         await self.publish(Event(type="attempts_invalidated", frame=0,
                                  timestamp_utc=_now(), payload={}))
+        return saved
+
+    @staticmethod
+    def _validate_pb_clock(timer_mode: str) -> None:
+        if timer_mode not in ("igt", "rta"):
+            raise ValueError(f"bad timer_mode {timer_mode!r}")
+
+    def _classification_context(self, attempt, strat_tag: str, ids: list[int]) -> dict:
+        """Capture the destination before retagging can move a saved PB into it."""
+        db = self._require_db()
+        return {"ids": ids, "before": classification_rank_baseline(
+                    db, self, attempt, strat_tag),
+                "pbs": {mode: db.current_pb(
+                    attempt.course_id, attempt.star_id, mode,
+                    segment_id=attempt.segment_id, strat_tag=strat_tag)
+                    for mode in ("igt", "rta")}}
+
+    def _preserve_destination_pbs(self, classification: dict | None) -> None:
+        """A corrected save may not displace a faster destination PB.
+
+        Reassert the destination snapshot only when a migrated slower save
+        displaced it. Keep every historical save, so correcting the strategy
+        back remains reversible; the pbs table deliberately uses latest-save
+        order rather than fastest-time order.
+        """
+        if not classification:
+            return
+        db = self._require_db()
+        for mode, prior in classification["pbs"].items():
+            if not prior:
+                continue
+            current = db.current_pb(prior["course_id"], prior["star_id"], mode,
+                                    segment_id=prior["segment_id"], strat_tag=prior["strat_tag"])
+            if (current and current["attempt_id"] in classification["ids"]
+                    and current["id"] != prior["id"] and current["frames"] >= prior["frames"]):
+                db.reassert_pb(prior["id"])
+
+    async def _save_classified_best(self, classification: dict | None,
+                                    timer_mode: str) -> dict | None:
+        if not classification:
+            return None
+        db = self._require_db()
+        candidates = []
+        for attempt in db.attempts():
+            if attempt.id not in classification["ids"]:
+                continue
+            frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
+            action, _ = self.pb_action(attempt, timer_mode)
+            if frames is not None and frames > 0 and action in ("save", "undo"):
+                candidates.append((frames, journal_id(attempt.id), attempt))
+        if not candidates:
+            return None
+        frames, _, attempt = min(candidates, key=lambda candidate: candidate[:2])
+        prior = classification["pbs"].get(timer_mode)
+        current = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
+                                segment_id=attempt.segment_id, strat_tag=attempt.strat_tag)
+        if prior and frames >= prior["frames"]:
+            return None
+        if current and current["attempt_id"] != attempt.id and frames >= current["frames"]:
+            return None
+        if current and current["attempt_id"] == attempt.id:
+            # Retagging an already-saved winner is an earned correction too;
+            # announce it through the same door without inserting a duplicate.
+            return await self._publish_pb_saved(
+                attempt, timer_mode, classification["before"], auto=True,
+                previous_frames=prior["frames"] if prior else None)
+        migrated = next((row for row in reversed(db.pbs())
+                         if row["attempt_id"] == attempt.id and row["timer_mode"] == timer_mode
+                         and row["strat_tag"] == attempt.strat_tag), None)
+        if migrated:
+            db.reassert_pb(migrated["id"])
+            return await self._publish_pb_saved(
+                attempt, timer_mode, classification["before"], auto=True,
+                previous_frames=prior["frames"] if prior else None)
+        return await self.save_pb(attempt.id, timer_mode, auto=True,
+                                  classification=classification["before"])
 
     @staticmethod
     def _newest_attempt_id(db, attempt) -> int | None:
@@ -1199,6 +1373,46 @@ class TrackerService:
         await self._reproject()
 
     # -- segment definitions ---------------------------------------------------
+    async def save_shared_segment(self, d: dict,
+                                  segment_id: int | None = None) -> dict:
+        """Author a shipped default and apply it to this installation in place.
+
+        The store restores its source files if the local database write fails.
+        Personal copies on other installations keep the existing dirty/deletion
+        protection; no user history or library preferences enter the catalogue.
+        """
+        root = shared_defaults_root()
+        if root is None:
+            raise RuntimeError("Shared saves require the manual test server")
+        db = self._require_db()
+        current = None
+        if segment_id is not None:
+            current = next((row for row in db.segment_defs()
+                            if row["id"] == segment_id), None)
+            if current is None:
+                raise LookupError(f"segment {segment_id} not found")
+        candidate = {**(current or {}), **d}
+        validate_definition(candidate)
+        fields = segment_definition_fields(candidate)
+        seed_key = (current or {}).get("seed_key")
+        with SharedDefaultsStore(root).publish_segment(fields, seed_key) as key:
+            if segment_id is None:
+                segment_id = db.insert_segment_def(
+                    created_utc=_iso(_now()), seed_key=key, **fields)
+            else:
+                db.update_segment_def(segment_id, seed_key=key,
+                                      seed_dirty=0, **fields)
+        message = "Saved for the next release"
+        try:
+            await self._segments_changed()
+        except Exception:
+            # The source and local row are committed. Return their identity so
+            # a failed projection/broadcast cannot turn Retry into a new default.
+            log.exception("Shared segment %s saved; runtime refresh failed", key)
+            message += ". Refresh failed; reload the page or restart the test server."
+        return {"ok": True, "id": segment_id, "scope": "shared",
+                "seed_key": key, "message": message}
+
     async def create_segment(self, d: dict) -> int:
         db = self._require_db()
         validate_definition(d)          # BEFORE insert: invalid defs never land
@@ -1286,13 +1500,8 @@ class TrackerService:
                      if s["seed_key"] == row["seed_key"]), None)
         if srow is None:
             raise LookupError(f"no seed for {row['seed_key']}")
-        db.update_segment_def(segment_id, name=srow["name"],
-            enabled=srow.get("enabled", True),
-            start_triggers=srow["start_triggers"],
-            end_triggers=srow["end_triggers"],
-            waypoints=srow.get("waypoints", []),
-            guards=srow.get("guards", []), category=srow.get("category"))
-        db.set_seed_dirty("segment_defs", segment_id, 0)
+        db.update_segment_def(segment_id, seed_dirty=0,
+                              **segment_definition_fields(srow))
         await self._segments_changed()
 
     def _insert_definition(self, db: Database, d: dict) -> int:
@@ -2251,7 +2460,8 @@ class TrackerService:
             log.exception("automatic PB save failed for attempt %s", attempt_id)
 
     async def save_pb(self, attempt_id: int, timer_mode: str,
-                      auto: bool = False) -> dict:
+                      auto: bool = False, *,
+                      classification: dict | None = None) -> dict:
         db = self._require_db()
         attempt = self._pb_attempt(attempt_id, timer_mode)
         action, blocked = self.pb_action(attempt, timer_mode)
@@ -2281,13 +2491,24 @@ class TrackerService:
                      strat_tag=attempt.strat_tag, timer_mode=timer_mode,
                      frames=frames, attempt_id=attempt_id, saved_utc=_iso(_now()),
                      segment_id=attempt.segment_id)
+        return await self._publish_pb_saved(
+            attempt, timer_mode, classification, auto=auto,
+            previous_frames=replaced["frames"] if replaced else None)
+
+    async def _publish_pb_saved(self, attempt, timer_mode: str,
+                                classification: dict | None = None, *,
+                                auto: bool = False, previous_frames: int | None = None) -> dict:
+        attempt_id = attempt.id
+        frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         payload = {"course_id": attempt.course_id, "star_id": attempt.star_id,
                    "segment_id": attempt.segment_id,
                    "strat_tag": attempt.strat_tag, "timer_mode": timer_mode,
                    "frames": frames, "attempt_id": attempt_id,
-                   "previous_frames": replaced["frames"] if replaced else None}
+                   "previous_frames": previous_frames}
         if auto:
             payload["auto"] = True  # the practice log says who saved it
+        if classification is not None:
+            payload["classification"] = classification
         await self.publish(Event(type="pb_saved", frame=0,
                                  timestamp_utc=_now(), payload=payload))
         await self._pb_changed(attempt, saved=True)

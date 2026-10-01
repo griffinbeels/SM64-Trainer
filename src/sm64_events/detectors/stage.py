@@ -3,7 +3,7 @@
 kind of one-click target the player can pick where they're standing. The payload
 carries a single `mode` that the UI dispatches on:
 
-  "stars"         a main COURSE 1-15 -> that course's stars (course_id set).
+  "stars"         a main or secret COURSE -> that course's stars (course_id set).
   "bowser_course" BitDW/BitFS/BitS (levels 17/19/21 -> course 16/17/18) -> two
                   targets: the "reds" 8-coin star (course_id set, star_id 0) AND
                   the level's "no reds" pipe-entry segment.
@@ -11,9 +11,9 @@ carries a single `mode` that the UI dispatches on:
                   fight segment (the UI auto-selects it). No course of its own.
   "castle"        Castle Inside (level 6) -> the segments whose start triggers
                   begin in this subarea (area 1/2/3 = lobby/upstairs/basement).
-  None            everything else (caps, secret-star areas, hubs) -> no banner.
+  None            everything else (file select, hubs) -> no banner.
 
-Resolves gCurrLevelNum via addresses.course_for_level (1-15 = star course) and
+Resolves gCurrLevelNum via addresses.course_for_level and
 two named level sets (Bowser courses, Bowser arenas). Everything else with no
 course and not Castle Inside is no context -> banner hides.
 
@@ -74,6 +74,11 @@ class StageChangeDetector:
             mode, course_id, context = "arena", None, ("arena", level)
         elif level == LEVEL_CASTLE_INSIDE:
             mode, course_id, context = "castle", None, ("castle", curr.curr_area)
+        elif course is not None:
+            # Secret courses (PSS, Aquarium, caps, WMotR) have real stars too.
+            # Bowser keeps its own row above; every other mapped course uses
+            # the same catalog-driven star selector as the main courses.
+            mode, course_id, context = "stars", course, ("course", course)
         else:
             mode, course_id, context = None, None, None
         if self._last is not _UNSET and context == self._last:
