@@ -8,7 +8,7 @@
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 7u
+#define GP_VERSION 8u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
 /* Sized so a full set of long ghosts can be replaced by another full set in
@@ -38,6 +38,7 @@ enum gp_result {
     GP_WRONG_THREAD = -6
 };
 enum gp_mode { GP_FOLLOW = 0, GP_FIXED = 1 };
+enum gp_input_mode { GP_INPUT_STICK = 0, GP_INPUT_VALUES = 1 };
 enum gp_model_state {
     GP_MODEL_EMPTY, GP_MODEL_BUILDING, GP_MODEL_READY,
     GP_MODEL_RENDER_OWNED, GP_MODEL_RETIRED, GP_MODEL_RECLAIMING
@@ -53,6 +54,7 @@ typedef go_origin gp_origin;
 typedef struct gp_clip {
     uint8_t clip_id[16];
     uint32_t hue_degrees, reserved;
+    char label[GP_LABEL_BYTES]; /* terminated UTF-8, no claim about clip ownership */
 } gp_clip;
 typedef struct gp_request {
     uint32_t bytes, version;
@@ -86,6 +88,9 @@ typedef struct gp_request {
      * silent, unless a state load the renderer resolves after suspension
      * brings the ghost back on that frame, ahead of the owner's next command. */
     uint32_t suspended, reserved4;
+    /* Annotations follow the displayed ghost's own pose/fade and occurrence.
+     * Inputs are omitted when that occurrence has no GC_VALID_PAD. */
+    uint32_t names_enabled, inputs_enabled, input_mode;
 } gp_request;
 
 typedef struct gp_status {

@@ -15,7 +15,7 @@ from sm64_events.memory.layout import Layout, LayoutIncomplete
 
 _CONFIG = struct.Struct("<20I")
 _CLOCK_CONFIG = struct.Struct("<26I")
-VERSION = 7
+VERSION = 8
 RAM_WORD_SWAPPED = 1
 ROM_US = 1
 
@@ -60,6 +60,7 @@ class GhostLayout:
     sound_consumer: int
     sound_ring: int
     behaviour_base: int = 0  # segment 0x13 in RAM; 0 leaves held objects uncaptured
+    player1_controller: int = 0  # existing verified Controller root; 0 leaves pad unknown
 
     def __post_init__(self) -> None:
         if any(type(getattr(self, field.name)) is not int for field in fields(self)):
@@ -83,6 +84,9 @@ class GhostLayout:
         if self.behaviour_base and (self.behaviour_base % 4 or self.behaviour_base < KSEG0_BASE
                                     or self.behaviour_base - KSEG0_BASE + 4 > self.rdram_bytes):
             raise ValueError("Ghost capture behaviour_base lies outside aligned RDRAM")
+        if self.player1_controller and (self.player1_controller % 4 or self.player1_controller < KSEG0_BASE
+                                       or self.player1_controller - KSEG0_BASE + addresses.CONTROLLER_SIZE > self.rdram_bytes):
+            raise ValueError("Ghost capture player1_controller lies outside aligned RDRAM")
 
     @classmethod
     def from_layout(cls, layout: Layout, *, rdram_bytes: int = 8 << 20) -> "GhostLayout":
@@ -95,15 +99,17 @@ class GhostLayout:
                  "sound_code", "sound_producer", "sound_consumer", "sound_ring")
         layout.require(*names)
         return cls(rdram_bytes, *(layout.value(name) for name in names),
-                   behaviour_base=layout.value("behaviour_base") or 0)
+                   behaviour_base=layout.value("behaviour_base") or 0,
+                   player1_controller=layout.value("player1_controller") or 0)
 
     def to_bytes(self) -> bytes:
-        """Exactly 188 bytes; compared against the compiled C reader in tests."""
+        """Exactly 192 bytes; compared against the compiled C reader in tests."""
         roots = (self.global_timer, self.mario_state, self.mario_object,
                  self.current_area_pointer, self.area_update_counter,
                  self.current_level, self.current_area, self.igt_overall,
                  self.object_pool, self.pending_warp_op, self.delayed_warp_timer,
                  self.sound_code, self.sound_producer, self.sound_consumer, self.sound_ring)
-        return (_CONFIG.pack(_CONFIG.size + _CLOCK_CONFIG.size + 4, VERSION, RAM_WORD_SWAPPED,
+        return (_CONFIG.pack(_CONFIG.size + _CLOCK_CONFIG.size + 8, VERSION, RAM_WORD_SWAPPED,
                              self.rdram_bytes, ROM_US, *roots) + clock_config_bytes()
-                + self.behaviour_base.to_bytes(4, "little"))
+                + self.behaviour_base.to_bytes(4, "little")
+                + self.player1_controller.to_bytes(4, "little"))

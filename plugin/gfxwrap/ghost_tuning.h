@@ -8,6 +8,8 @@
 /* Ghosts displayed at once: playback slots, one compositor batch, one sound
  * source each and the IPC request's clip entries all hold this many. */
 #define GP_GHOSTS 16u
+/* Terminated UTF-8 text attached to one immutable clip descriptor. */
+#define GP_LABEL_BYTES 64u
 /* The largest extra overlap-fade distance a request may carry (world units). */
 #define GP_PROXIMITY_MAX 400.0f
 /* Overlap fade (ghost_proximity.h): the ellipsoid proxy for one Mario at gfx

@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define GC_VERSION 7u
+#define GC_VERSION 8u
 #define GC_RAM_WORD_SWAPPED 1u
 #define GC_ROM_US 1u
 #define GC_GRAPH_NODE_LIMIT 256u
@@ -23,10 +23,10 @@ enum gc_valid {
     GC_VALID_ACTION = 8u, GC_VALID_WARP = 16u,
     /* Optional evidence: never part of GC_OK. */
     GC_VALID_SHADOW = 32u, GC_VALID_SOUND = 64u, GC_VALID_PARTICLES = 128u,
-    GC_VALID_HELD = 256u
+    GC_VALID_HELD = 256u, GC_VALID_PAD = 512u
 };
 #define GC_VALID_REQUIRED 31u
-#define GC_VALID_ALL 511u
+#define GC_VALID_ALL 1023u
 #define GC_SHADOW_VERTICES 9u
 #define GC_SHADOW_TEXTURE_BYTES 128u /* 16x16 IA8 alpha nibbles, two per byte */
 #define GC_SOUND_EVENTS 8u
@@ -105,6 +105,8 @@ typedef struct gc_layout {
      * behaviour is stored segmented, never as a per-version pointer. Zero
      * declares held-object capture unavailable. */
     uint32_t behaviour_base;
+    /* Existing Layout player-one Controller root; zero leaves pad unknown. */
+    uint32_t player1_controller;
 } gc_layout;
 
 typedef struct gc_pose {
@@ -212,6 +214,15 @@ typedef struct gc_camera {
     int16_t near_plane, far_plane;
 } gc_camera;
 
+/* Raw Controller input for this same serialized display-list occurrence.
+ * Optional and independent of graphics pose validity. Unknown is all zero
+ * WITHOUT GC_VALID_PAD; known neutral has that bit set. No polled fill,
+ * carried input or button edge reconstruction belongs in this block. */
+typedef struct gc_pad {
+    int16_t stick_x, stick_y;
+    uint16_t buttons, reserved;
+} gc_pad;
+
 /* Fixed-width value packet, little-endian host scalars / IEEE binary32.
  * No pointers, implicit host-size integers, or libsm64 structs. A zero valid
  * bit means that component has been cleared. status is the first refusal.
@@ -246,6 +257,7 @@ typedef struct gc_sample {
     gc_sound sound;
     gc_particles particles;
     gc_held held;
+    gc_pad pad;
 } gc_sample;
 
 /* Zero-initialize or reset before use. One reader per serialized producer.

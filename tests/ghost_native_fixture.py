@@ -6,7 +6,7 @@ import struct
 from types import SimpleNamespace
 
 from sm64_events.ghost.native_layout import (
-    CAMERA_AT, CLIP_VERSION, CLOCK_AT, HELD_ANGLES_AT, HELD_AT, PARTICLE_BYTES, PARTICLES_AT,
+    CAMERA_AT, CLIP_VERSION, CLOCK_AT, HELD_ANGLES_AT, HELD_AT, PAD_AT, VALID_PAD, PARTICLE_BYTES, PARTICLES_AT,
     PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES, RECORD_PREFIX_BYTES, REFUSAL_AT, ROOT_KIND_AT, ROOT_MATRIX_AT, ROOT_SCALED_MODELVIEW,
     SAMPLE_BYTES, SAMPLE_VERSION, SHADOW_ALPHA_AT, SHADOW_AT, SHADOW_BYTES, SHADOW_POSITION_AT,
     SHADOW_TEXTURE_AT, SOUND_AT, SOUND_BITS_AT,
@@ -25,9 +25,10 @@ def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=
           epoch=5, qpc=None, level=24, area=1, elapsed=None, continuity=9,
           origin=1, clock_valid=None, refusal=None, transition=1, banked=0,
           shadow=False, sounds=None, overflow=False, action=None, pose_refusal=0, particles=None,
-          held=None):
+          held=None, pad=None):
     raw_igt = sequence if igt is None else igt
     valid |= (32 if shadow else 0) | (64 if sounds is not None else 0) | (128 if particles is not None else 0) | (256 if held else 0)
+    valid |= VALID_PAD if pad is not None else 0
     raw = bytearray(RECORD_BYTES)
     struct.pack_into("<4I", raw, 0, RECORD_BYTES, CLIP_VERSION, configuration, world)
     struct.pack_into("<4I2QqI2H2h2I", raw, RECORD_PREFIX_BYTES, SAMPLE_BYTES, SAMPLE_VERSION, epoch, valid,
@@ -74,6 +75,8 @@ def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=
         for index, (dl, translation) in enumerate(particles):
             at = PARTICLES_AT + PARTICLES_ENTRIES_AT + PARTICLE_BYTES * index
             struct.pack_into("<I9hh3f", raw, at, dl, 4096, 0, 0, 0, 4096, 0, 0, 0, 4096, 0, *translation)
+    if pad is not None:  # exact raw x/y and held buttons; known neutral is explicit
+        struct.pack_into("<hhHH", raw, PAD_AT, *pad, 0)
     return bytes(raw)
 
 
