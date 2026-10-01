@@ -143,6 +143,13 @@ def main() -> int:
                     help="ffmpeg.exe to bundle (default: the one on PATH)")
     args = ap.parse_args()
 
+    if args.mode in ("app", "all"):
+        from build_defaults_seed import main as check_defaults
+        if check_defaults(["--check"]):
+            print("Build refused: regenerate the defaults seed before building.",
+                  file=sys.stderr)
+            return 1
+
     if needs_reexec(os.environ):
         env = {**os.environ, "PYTHONHASHSEED": "1",
                "SOURCE_DATE_EPOCH": _source_date_epoch()}

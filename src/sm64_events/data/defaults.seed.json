@@ -7,14 +7,10 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "level_enter",
-          "to": 6,
-          "from": 16
-        },
-        {
-          "type": "attempt_anchor",
+          "type": "moment_reached",
+          "kind": "door_arrived",
           "level": 6,
-          "area": 1
+          "landmark": "6:1:bhvDoorWarp:-1100,0,2202"
         }
       ],
       "end_triggers": [
@@ -23,10 +19,24 @@
           "to": 17
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "moment_reached",
+            "kind": "door_open",
+            "level": 6,
+            "landmark": "6:1:bhvDoor:-1775,0,-824"
+          }
+        ]
+      ],
       "guards": [],
       "category": "Tricks",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "strict",
+      "parents": [
+        "area:6:1"
+      ],
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:mips-clip",
@@ -14941,6 +14951,11 @@
       "seed_key": "landmark:kind:bhvIntroScene",
       "key": "kind:bhvIntroScene",
       "name": "intro scene"
+    },
+    {
+      "seed_key": "landmark:6:1:bhvDoorWarp:-1100,0,2202",
+      "key": "6:1:bhvDoorWarp:-1100,0,2202",
+      "name": "Castle Lobby Entrance Door"
     },
     {
       "seed_key": "landmark:6:3:bhvDoor:1126,-1074,-2661",

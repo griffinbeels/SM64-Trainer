@@ -71,7 +71,7 @@ from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             origin_course,
                                             origin_view, reachable_places,
                                             segment_origin,
-                                            start_areas, start_levels,
+                                            selector_start_areas, start_levels,
                                             start_origin, time_bounds)
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
@@ -1134,16 +1134,9 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
         for sid, pts in sorted(by_session.items())]}
 
 
-# Castle-subarea quick-select: the (level, area) pairs a segment EXPLICITLY
-# starts in, read off its start triggers. Only subarea-scoped triggers count —
-# a bare "enter Castle Inside" with no subarea must NOT surface the segment in
-# The quick-select banner's two "where does this segment start" readers live in
-# tracking/segments.py as `start_areas`/`start_levels` (moved DOWN there
-# 2026-07-26, beside the `arm_level` they already read through).
-# They are the BANNER's readers only. "May this be practiced here" is answered
-# by start_origin (tracking/practicable.py) — arm_level places 11 of the 65
-# seeded definitions, start_origin places all 65, which is why the banner still
-# offers no castle movement and these two are not the shared answer.
+# Castle offers resolve every start clause through the shared origin owner.
+# Known starts appear before arming; armed extras still carry a running movement
+# at its destination. Explicit arm destinations remain an authoring concept.
 
 
 # Origin stamp for GET /api/segments (spec 2026-07-24-segment-origin-
@@ -2069,7 +2062,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # section's own armed_detail carries its arm state instead.
             for d in service.segment_defs
             if d.id not in hundred_coin_ids
-            for areas, levels in ((start_areas(d.start_triggers),
+            for areas, levels in ((selector_start_areas(d.start_triggers, service._landmark_names()),
                                    start_levels(d.start_triggers)),)],
         # user-picked selector icons: entity_key -> icon stem (ui_state KV,
         # written by POST /api/icon; ui/components/stagebanner.js resolves

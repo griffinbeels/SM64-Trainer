@@ -35,6 +35,8 @@ SEGMENTS_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
 # that phrase against RAW source stayed green after the real <button> was
 # deleted outright. See test_editor_offers_a_backtest_preview_beside_save.
 SEGMENTS_JS_SOURCE = strip_comments(SEGMENTS_JS.read_text(encoding="utf-8"))
+SEGMENT_AUTHORING_JS_SOURCE = strip_comments(
+    (SEGMENTS_JS.parent.parent / "segmentauthoring.js").read_text(encoding="utf-8"))
 
 
 def _save_fields() -> list[str]:
@@ -297,6 +299,8 @@ SEGMENT_TIMELINE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_event
                        / "ui" / "components" / "segmenttimeline.js")
 SEGMENT_TIMELINE_JS_SOURCE = strip_comments(
     SEGMENT_TIMELINE_JS.read_text(encoding="utf-8"))
+RECORDER_SELECTION_SOURCE = strip_comments(
+    (SEGMENT_TIMELINE_JS.parent.parent / "recordselection.js").read_text(encoding="utf-8"))
 
 
 def _fetches_the_timeline_with_the_view(source: str) -> bool:
@@ -322,8 +326,12 @@ def _a_row_click_toggles_the_pick(source: str) -> bool:
     empty, which is a dead end reached by using the feature correctly.
     """
     stripped = strip_comments(source)
-    return ("pickedIds.filter((id) => id !== row.id)" in stripped
-            and "[...pickedIds, row.id].sort(" in stripped)
+    legacy = ("pickedIds.filter((id) => id !== row.id)" in stripped
+              and "[...pickedIds, row.id].sort(" in stripped)
+    owned = ("selection.ids.includes(id)" in stripped
+             and "selection.ids.filter((item) => item !== id)" in stripped
+             and "chronological([...selection.ids, id])" in stripped)
+    return legacy or owned
 
 
 def _asks_what_the_recording_is_a_piece_of(source: str) -> bool:
@@ -337,7 +345,7 @@ def _asks_what_the_recording_is_a_piece_of(source: str) -> bool:
     to define that?" (2026-08-05).
     """
     stripped = strip_comments(source)
-    return ("setParentOptions(" in stripped
+    return (("setParentOptions(" in stripped or "onChange=${setParentOptions}" in stripped)
             and re.search(r"waypoints,\s+parents,", stripped) is not None)
 
 
@@ -359,7 +367,8 @@ def test_the_timeline_component_fetches_the_recent_journal():
 
 
 def test_a_row_click_toggles_that_moment_in_and_out_of_the_pick():
-    assert _a_row_click_toggles_the_pick(SEGMENT_TIMELINE_JS_SOURCE)
+    assert 'useRecordedSelection(derive)' in SEGMENT_TIMELINE_JS_SOURCE
+    assert _a_row_click_toggles_the_pick(RECORDER_SELECTION_SOURCE)
 
 
 def test_the_recorder_asks_what_the_recording_is_a_piece_of():
@@ -425,7 +434,8 @@ def _saves_through_one_definition_builder(source: str) -> bool:
     ONE function, so the thing tested and the thing written cannot differ. A
     save posting its own object literal is exactly the drift this prevents."""
     stripped = strip_comments(source)
-    return ('"POST", "/api/segments",' in stripped
+    return ("useSegmentSave({" in stripped
+            and 'initialId: replaces?.id' in stripped
             and "definitionFor(synth, required)" in stripped
             and "function definitionFor(" in stripped)
 
@@ -440,8 +450,8 @@ def test_the_save_builder_guard_can_still_fail():
         '// the same object function definitionFor( built for the backtest.\n')
     assert not _saves_through_one_definition_builder(comment_only)
     real_code = ('function definitionFor(s, r) { return {}; }\n'
-                 'await send("POST", "/api/segments", '
-                 'definitionFor(synth, required));')
+                 'useSegmentSave({ initialId: replaces?.id, '
+                 'definition: () => definitionFor(synth, required) });')
     assert _saves_through_one_definition_builder(real_code)
 
 
@@ -474,7 +484,9 @@ def _save_button_waits_for_the_backtest(source: str) -> bool:
     "btReport" substring check -- that would stay green even if the button
     were unconditionally enabled and btReport were merely READ somewhere
     else on the page (e.g. rendered in the summary line)."""
-    return "disabled=${!btReport" in strip_comments(source)
+    stripped = strip_comments(source)
+    return (re.search(r"const saveDisabled = !btReport \|\| (?:lintPending \|\| !!lintErr \|\| )?lintHasError;", stripped)
+            and "disabled=${saveDisabled}" in stripped)
 
 
 def test_the_backtest_result_renders_before_save_is_enabled():
@@ -486,7 +498,8 @@ def test_the_save_disabled_guard_can_still_fail():
         '// Save is disabled=${!btReport || saving} until the backtest\n'
         '// has returned -- see runBacktest above.\n')
     assert not _save_button_waits_for_the_backtest(comment_only)
-    real_code = 'disabled=${!btReport || saving} onclick=${save}'
+    real_code = ('const saveDisabled = !btReport || lintHasError;\n'
+                 'disabled=${saveDisabled} onSave=${save}')
     assert _save_button_waits_for_the_backtest(real_code)
 
 
@@ -744,8 +757,8 @@ def _lints_alongside_the_recorder_backtest(source: str) -> bool:
     # pinned is still the pairing -- lint runs wherever the backtest runs --
     # not the argument's spelling.
     return ('"POST", "/api/segments/lint"' in stripped
-            and "runBacktest(definition);" in stripped
-            and "runLint(definition);" in stripped)
+            and re.search(r"runBacktest\(definition(?:, epoch)?\);", stripped)
+            and re.search(r"runLint\(definition(?:, epoch)?\);", stripped))
 
 
 def test_the_recorder_lints_alongside_its_backtest():
@@ -766,8 +779,10 @@ def test_the_recorder_lint_guard_can_still_fail():
 
 
 def _recorder_save_waits_for_lint(source: str) -> bool:
-    return ("disabled=${!btReport || saving || lintHasError}"
-            in strip_comments(source))
+    stripped = strip_comments(source)
+    return (re.search(r"const saveDisabled = !btReport \|\| (?:lintPending \|\| !!lintErr \|\| )?lintHasError;", stripped)
+            and "disabled=${saveDisabled}" in stripped
+            and "busy=${saving}" in stripped)
 
 
 def test_the_recorder_save_is_disabled_on_a_lint_error():
@@ -779,7 +794,8 @@ def test_the_recorder_save_disable_guard_can_still_fail():
                     '// once the review step lands.\n')
     assert not _recorder_save_waits_for_lint(comment_only)
     assert _recorder_save_waits_for_lint(
-        'disabled=${!btReport || saving || lintHasError} onclick=${save}')
+        'const saveDisabled = !btReport || lintHasError;\n'
+        'disabled=${saveDisabled} busy=${saving} onSave=${save}')
 
 
 # --- round 18: the pin wears his name, and Save says it saved ---------------
@@ -810,27 +826,32 @@ def test_the_pin_name_guard_can_still_fail():
     assert _pin_reads_the_landmark_name(real)
 
 
-def _save_flashes_saved(source: str) -> bool:
+def _save_flashes_saved(source: str, controls: str) -> bool:
     """Item 2: ✓ + "Saved" for ~2 s, set only AFTER the write resolves —
     the flash call sits after onSaved in the source, which only runs once
     the PUT/POST returned."""
     stripped = strip_comments(source)
-    save_site = stripped.find("setSavedFlash(true)")
+    controls = strip_comments(controls)
+    save_site = controls.find("setSavedFlash(true)")
     return (save_site != -1
-            and stripped.rfind("onSaved(savedId)", 0, save_site) != -1
-            and '${savedFlash ? "Saved" : "Save segment"}' in stripped
-            and 'name=${savedFlash ? "check" : "save"}' in stripped)
+            and controls.rfind("await onSaved(savedId)", 0, save_site) != -1
+            and 'savedFlash=${savedFlash}' in stripped
+            and 'savedFlash && savedScope === primaryScope' in controls
+            and '"Saved"' in controls
+            and 'name=${saved ? "check" : "save"}' in controls)
 
 
 def test_the_save_button_confirms_an_actual_save():
-    assert _save_flashes_saved(SEGMENTS_JS_SOURCE)
+    assert _save_flashes_saved(SEGMENTS_JS_SOURCE, SEGMENT_AUTHORING_JS_SOURCE)
 
 
 def test_the_save_flash_guard_can_still_fail():
     comment_only = ('// setSavedFlash(true) after onSaved(savedId)\n'
                     '// ${savedFlash ? "Saved" : "Save segment"}\n')
-    assert not _save_flashes_saved(comment_only)
-    real = ('onSaved(savedId);\nsetSavedFlash(true);\n'
-            'label = `${savedFlash ? "Saved" : "Save segment"}`;\n'
-            'icon = `name=${savedFlash ? "check" : "save"}`;\n')
-    assert _save_flashes_saved(real)
+    assert not _save_flashes_saved(comment_only, SEGMENT_AUTHORING_JS_SOURCE)
+    real = 'x = `savedFlash=${savedFlash}`;\n'
+    controls = ('await onSaved(savedId);\nsetSavedFlash(true);\n'
+                'savedFlash && savedScope === primaryScope ? "Saved" : "Save segment";\n'
+                'x = `name=${saved ? "check" : "save"}`;\n')
+    assert _save_flashes_saved(real, controls)
+    assert not _save_flashes_saved(real, '// "Saved" is rendered after a write.\n')

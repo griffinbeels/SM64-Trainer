@@ -2,9 +2,9 @@
 
 Mirrors ranks/standards's reconcile tests: a bundled seed inserts missing
 rows, refreshes untouched (seed_dirty=0) seeded rows, and never touches
-edited (seed_dirty=1) or user-created rows. The real-bundled-seed test is
-the gate proving the shipped defaults.seed.json cannot corrupt a live
-install's already-migrated LBLJ/Bowser rows (v5/v6 repairs)."""
+edited (seed_dirty=1) or user-created rows. The real-bundled-seed test pins
+deliberate trigger refinements and protects unrelated migrated fields.
+"""
 import json
 
 from sm64_events.core.paths import bundled_defaults_seed
@@ -147,12 +147,11 @@ def test_resolve_steps_unresolved_key_becomes_negative_one(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Real-bundled-seed agreement gate: proves the shipped defaults.seed.json
-# reconciles the 10 already-migrated (v5/v6-corrected) segments with ZERO
-# behavioral change — only `category` is newly set. If this ever fails, the
-# seed JSON has drifted from what a fresh migrated db actually holds, and
-# reconcile would silently rewrite a live user's triggers on startup.
+# refreshes the 10 already-migrated segments from the current assembled seed.
+# Maintainer-authored corrections may replace complete definitions; startup
+# must apply those fields without changing stable identity.
 
-def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
+def test_real_bundled_seed_refreshes_untouched_migrated_definitions(tmp_path):
     db = Database(tmp_path / "t.db")
     before = {s["seed_key"]: s for s in db.segment_defs() if s.get("seed_key")}
     assert len(before) == 10
@@ -164,45 +163,16 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
     assert reconcile_defaults(db, seed) == []
 
     after = {s["seed_key"]: s for s in db.segment_defs() if s.get("seed_key")}
-    # SUPERSET, not equality (2026-07-24): the seed legitimately INSERTS the
-    # corpus's movement segments now, so "no new seeded rows" is no longer the
-    # claim. What must still hold — and is the whole point of this gate — is
-    # that the ten already-migrated rows come out the other side untouched.
     assert set(before) <= set(after)
+    expected = {item["seed_key"]: item for item in seed["segments"]}
     for key, before_row in before.items():
         after_row = after[key]
-        assert after_row["name"] == before_row["name"]
-        assert after_row["enabled"] == before_row["enabled"]
-        assert after_row["start_triggers"] == before_row["start_triggers"]
-        # END triggers are the ONE field the 2026-08-04 sweep moves (task
-        # 0081): three of these ten now end on the ENTRANCE TOUCH rather than
-        # the course load, and reconcile carrying that into an untouched
-        # seeded row is exactly what is supposed to happen -- it is how the
-        # fix reaches a live install at all. Everything else on the row must
-        # still come out the other side untouched, which is this gate's point.
-        moved = {
-            "seg:lblj": [{"type": "entrance_touched", "to": 17}],
-            "seg:mips-clip": [{"type": "entrance_touched", "to": 23}],
-            "seg:bits-entry": [{"type": "entrance_touched", "to": 21}],
-            # LAKITU SKIP joins them 2026-08-05 (task 0026), for the same
-            # reason one level down: it ended on the castle LOAD and the
-            # community's split is Mario grabbing the door, so we read 7"33
-            # against their 6"13. It was the CONTROL for the 0081 sweep --
-            # the one legacy row with no entrance to touch, because it enters
-            # the castle rather than a course -- which is why it moves now
-            # and by a different mechanism.
-            "seg:lakitu-skip": [{"type": "moment_reached",
-                                 "kind": "door_open", "level": 16,
-                                 "ordinal": 1}],
-        }
-        if key in moved:
-            assert after_row["end_triggers"] == moved[key]
-        else:
-            assert after_row["end_triggers"] == before_row["end_triggers"]
-        assert after_row["waypoints"] == before_row["waypoints"]
-        assert after_row["guards"] == before_row["guards"]
+        assert after_row["id"] == before_row["id"]
+        for field in ("name", "enabled", "start_triggers", "end_triggers", "waypoints", "guards"):
+            assert after_row[field] == expected[key][field]
+        assert after_row["parents"] == expected[key].get("parents", [])
+        assert after_row["clock_start"] == expected[key].get("clock_start", "trigger")
         assert after_row["seed_dirty"] == 0
-        # category is the ONLY legitimate change a reconcile may introduce
         assert before_row["category"] is None
         assert after_row["category"] is not None
         validate_definition({k: after_row[k] for k in

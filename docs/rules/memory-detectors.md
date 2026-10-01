@@ -538,6 +538,34 @@ subarea NAMES here are untouched.
 
 ## A moment's time is per-kind
 
+### Door arrival is a separate boundary (2026-09-30)
+
+`door_arrived` fires on entry into `ACT_WARP_DOOR_SPAWN`; `door_open`
+contains the other door actions. The anchor detector still reads the complete
+`DOOR_ACTIONS` set. A walked push to a destination spawn stayed inside the old
+set and emitted no arrival, while a menu warp emitted a misleading opening.
+Both paths now name the destination using the existing one-poll landmark
+settle. The new boundary inherits the measured door clock and its offset.
+
+The lobby front-entry leaf is `6:1:bhvDoorWarp:-1100,0,2202`. In the live
+2026-09-30 recorder journal, subsequent moments' engagement ages point back
+to walked arrivals at frames 2251, 2801 and 13387. Menu arrivals carry that
+same key, sometimes without retargeting it. A fresh-engagement requirement
+would therefore lose repeated menu arrivals. A pull on the same leaf is an
+exit, so an arrival start must pin both `door_arrived` and the landmark.
+
+`Moment.legacy_kind`, `effective_moment_kind` and `matches_moment_kind` own
+compatibility. Old `door_open` rows qualify as arrivals only when their
+recorded action is the door spawn. Labeling and synthesis refine that kind
+without rewriting journal data; old opening definitions continue matching
+new arrival events. The legacy family shares its ordinal counter.
+
+No historical walked-arrival row contains its landmark or warp node. These
+missing rows are not reconstructed from a bare level edge. New walked
+arrival publication still needs a human live check after restarting the
+changed server; the captured engagement evidence establishes the identity,
+not execution of the new detector. No new memory read is introduced.
+
 **2026-08-10, and SUPERSEDED for `textbox` by round 4 (2026-08-11) — see
 [Round 4: two dialogue kinds, two measurements](#round-4-two-dialogue-kinds-two-measurements)
 below.** This section's own measurement was AUTOMATIC dialogue's (the star

@@ -45,10 +45,11 @@ RENDERERS = (UI / "components" / "stagebanner.js",
              UI / "components" / "practicelog.js",
              UI / "components" / "attemptlog.js",
              # readRecorder's renderer. The recorder is a modal on another
-             # tab, so its classes exist in exactly one file and a rename
+             # tab, with its row renderer extracted to recordrows.js. A rename
              # there empties the one log that can answer a recorder latency
              # report (2026-08-06).
-             UI / "components" / "segmenttimeline.js")
+             UI / "components" / "segmenttimeline.js",
+             UI / "components" / "recordrows.js")
 
 
 def _reader_source() -> str:

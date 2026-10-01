@@ -88,6 +88,11 @@ _JP_ONLY_KINDS = tuple((symbol, name) for symbol, name in kind_names("jp")
 _KIND_ROWS = tuple(kind(symbol, name) for symbol, name in _US_KINDS + _JP_ONLY_KINDS)
 
 LANDMARKS: tuple[dict, ...] = _KIND_ROWS + (
+    # 2026-09-30 live recorder rows: menu arrivals and later lobby pulls name
+    # this leaf. Their engagement ages trace back to walked door arrivals too
+    # (frames 2251, 2801 and 13387), where the old action-set edge was silent.
+    at(CASTLE_INSIDE, LOBBY, WARP_DOOR, (-1100, 0, 2202),
+       "Castle Lobby Entrance Door"),
     # HIS OWN LABELS, verbatim from the session that found the key: "21/22 are
     # me opening the door to HMC", "23/24 are me opening the door to the moat
     # area leading to the castle grounds", "25/26 is a different door leading

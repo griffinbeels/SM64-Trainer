@@ -76,7 +76,7 @@ from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.anchors import PAUSE_WARP_MIN_STREAK
 from sm64_events.detectors.counter_epoch import (COURSE_START_AREA,
                                                  LEVEL_LOAD_TAIL_FRAMES)
-from sm64_events.detectors.moment import MOMENTS
+from sm64_events.detectors.moment import MOMENTS, effective_moment_kind
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_CASTLE_INSIDE,
                                           LEVEL_NAMES, course_name, star_name,
                                           subarea_name, warp_word)
@@ -283,7 +283,7 @@ def _moment_reached(payload: dict, names: dict) -> str | None:
     word for every instance in the game at once; grammar comes from the
     name's own case (`_kind_phrase`).
     """
-    kind = payload.get("kind")
+    kind = effective_moment_kind(payload)
     if kind is None:
         return None
     what = _MOMENT_LABELS.get(kind, kind)

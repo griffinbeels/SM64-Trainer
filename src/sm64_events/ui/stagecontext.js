@@ -1,4 +1,5 @@
 // src/sm64_events/ui/stagecontext.js
+import { targetTuple } from "./loneoption.js";
 // "Is there anything to practice where the player is standing?"
 //
 // TWO surfaces ask it and they must never disagree: the quick-select banner
@@ -237,4 +238,12 @@ export const hasStandardsFor = (view, entityKey) => {
 export function stageKey(stage) {
   if (!stage) return null;
   return `${stage.level ?? ""}:${stage.area ?? ""}:${stage.course_id ?? ""}`;
+}
+
+// Castle subareas offer different segments; course subareas share their row.
+// Keep this place rule beside selectorSurfaceId rather than in target policy.
+export function soleSelectionBinding(target, stage) {
+  const place = stage || {};
+  return { target: targetTuple(target), stage: [place.level ?? null,
+    place.mode === "castle" ? place.area ?? null : null] };
 }

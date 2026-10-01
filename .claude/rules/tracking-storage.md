@@ -57,6 +57,12 @@ Full detail, evidence and history: [docs/rules/tracking-storage.md](../../docs/r
 
 | Whether a star/segment's STRATEGY rank and its own rank are one measure or two | `tracking/views.py::ranks_share_ladder` → `sec.one_ladder`: True when the active strategy's ladder IS `scoring.best_ladder`. **Answer from the LADDERS, never from the two graded values** |
 
+Maintainer segment fixes use the tracked authoring layer in
+`tracking/shared_defaults.py` and `data/segments.authored.json`; generation
+assembles it with the base corpus and direct builds check drift. Preserve these
+source corrections when editing the corpus. Scope and distribution contracts:
+[saving default segment fixes](../../docs/default-segment-authoring.md).
+
 ## The arm-position gate
 
 A matched start trigger arms only if the segment could still be RUN from where the event left Mario (`can_run_from`), from three definition-derived rules and no world-edge table: (A) the next required step must be firable from here (`fires_from`, `_PRECONDITION_PARAM`); (B) an unpinned `level_exit` from a non-castle level must land in `CASTLE_LEVELS`; (C) the arm must not stand on every end trigger's destination. `game_reset` is exempt. Pinned by `tests/test_defaults_corpus.py::test_a_menu_warp_into_a_course_arms_no_movement` and `tests/test_segments.py`.
@@ -68,6 +74,13 @@ Detail: [docs/rules/tracking-storage.md#the-arm-position-gate](../../docs/rules/
 Detail: [docs/rules/tracking-storage.md#split-and-merge](../../docs/rules/tracking-storage.md#split-and-merge).
 
 ## The target queue
+
+Castle session recall lives in `projection.py`: a click survives accidental
+visits, but a newer valid played success of another entity defeats dormant
+recall. The latest unique success (ordered by `journal_id`) can select an
+offered, armed segment at its actual start. Imports, hidden/cleared rows and
+failures do not teach it; wipe/prune/restore recompute surviving evidence, and
+`session_started` forgets it. Pinned by `tests/test_practice_recall.py`.
 
 The held target is a FIFO of detections (`Projector._target_hooked`). A PICKED head (his click) keeps every pre-queue rule and clears the queue. A HOOKED head is exempt from origin retirement and pops on success, forfeits on a real anchor in a foreign course, expires on `hold_budget`, drops on `game_reset`/`session_started` — never on a mere disarm. **An ambiguous burst detects nothing: only a lone eligible arm queues.** Only defs `hooks_on_arm` accepts enter; promotion takes the oldest survivor and may replace a leftover hand (`_hand_is_a_leftover`), never a click. A stale hooked head yields to a valid star grab (`_pending_grab_take`); a pick never does. All journal-derived. Measure with `tools/measure_target_queue.py`; pinned by `tests/test_target_queue.py`.
 Detail: [docs/rules/tracking-storage.md#the-target-queue](../../docs/rules/tracking-storage.md#the-target-queue).

@@ -1,7 +1,8 @@
-"""The generator is how the corpus seed is AUTHORED; the JSON is the artifact
-the app reads. These tests pin that the two never disagree (drift guard) and
-that the generator reproduces the ten pre-existing seeded defs unchanged — a
-live install's LBLJ/Bowser rows must not be rewritten at startup."""
+"""Pin generator/seed agreement and deliberate default refinements.
+
+Untouched defaults receive these refinements on startup; personal copies stay
+protected. Trigger changes here must be intentional and tested.
+"""
 import importlib.util
 import json
 import sys
@@ -27,10 +28,11 @@ def test_generated_seed_is_lf_only():
     assert b"\r\n" not in build_seed.OUT.read_bytes()
 
 
-def test_legacy_segments_are_carried_forward_verbatim():
-    """The ten pre-existing seeded defs keep their exact triggers: reconcile
-    overwrites untouched seeded rows, so a drifted trigger here would silently
-    rewrite a live user's segments on the next startup.
+def test_legacy_segments_preserve_their_reviewed_trigger_definitions():
+    """Reconcile refreshes untouched defaults, so pin intended trigger changes.
+
+    On 2026-09-30 LBLJ starts only at the specific lobby door arrival, reached
+    by walking or warping, rather than any lobby reset or grounds level entry.
 
     That is exactly why the end triggers moved DELIBERATELY on 2026-08-04
     (task 0081) and this test moved with them. LBLJ, MIPS Clip and BitS Entry
@@ -40,12 +42,14 @@ def test_legacy_segments_are_carried_forward_verbatim():
     Skip's end is unchanged and is the control: it ends by entering the CASTLE,
     which has no entrance to touch.
     """
-    seed = build_seed.build()
+    # Maintainer-authored corrections legitimately replace these definitions;
+    # pin the base corpus here, while drift tests cover the assembled seed.
+    seed = build_seed.base()
     by_key = {s["seed_key"]: s for s in seed["segments"]}
     lblj = by_key["seg:lblj"]
     assert lblj["start_triggers"] == [
-        {"type": "level_enter", "to": 6, "from": 16},
-        {"type": "attempt_anchor", "level": 6, "area": 1}]
+        {"type": "moment_reached", "kind": "door_arrived", "level": 6,
+         "area": 1, "landmark": "6:1:bhvDoorWarp:-1100,0,2202"}]
     assert lblj["end_triggers"] == [
         {"type": "entrance_touched", "to": 17}]
     assert lblj["guards"] == [] and lblj["waypoints"] == []
@@ -150,7 +154,7 @@ def test_every_non_movement_defs_match_mode():
     pins the actual counts, not a `not s["guards"]` catch-all, so a future
     row landing in the wrong bucket fails here by COUNT instead of silently
     joining whichever assertion still happens to pass."""
-    seed = build_seed.build()
+    seed = build_seed.base()
     by_key = {s["seed_key"]: s for s in seed["segments"]}
     legacy_plain = ["seg:lblj", "seg:mips-clip", "seg:lakitu-skip",
                     "seg:bits-entry", "seg:bowser-1", "seg:bowser-2",

@@ -103,6 +103,23 @@ function useEventFeed() {
   return [feed, setFeed, classificationPbs.current, recordFeed];
 }
 
+function useLiveStage() {
+  const [stage, setStage] = useState(null);
+  const revision = useRef(0);
+  const loadStage = useCallback(async (load) => {
+    const observed = revision.current;
+    const view = await load();
+    // A response from before a warp cannot replace its newer WS location.
+    if (observed === revision.current) setStage(view ? view.stage : null);
+    return view;
+  }, []);
+  const updateStage = useCallback((payload) => {
+    revision.current += 1;
+    setStage((prev) => ({ ...(prev || {}), ...payload }));
+  }, []);
+  return [stage, loadStage, updateStage];
+}
+
 export function useTracker() {
   const [view, setView] = useState(null);
   const [clock, setClock] = useState(localStorage.getItem("clock") || "igt");
@@ -175,7 +192,7 @@ export function useTracker() {
   // Driven by the broadcast-only stage_changed WS event; intentionally NOT in
   // REFRESH_ON — the view's catalog and last_strat_by_star don't depend on it,
   // so a full refetch would be wasted. Seeded from v.stage for initial load.
-  const [stage, setStage] = useState(null);
+  const [stage, loadStage, updateStage] = useLiveStage();
   const [run, setRun] = useState(null);
   const refreshRun = useCallback(async () => {
     try { setRun(await getJSON("/api/run")); } catch (e) { /* keep last */ }
@@ -400,9 +417,9 @@ export function useTracker() {
 
   const refresh = useCallback(async () => {
     try {
-      const v = await getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`);
+      const v = await loadStage(() =>
+        getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`));
       setView(v);
-      setStage(v ? v.stage : null);
       // armedOrder: live via WS notices, reconciled from every view fetch —
       // instant AND cannot stay stale across reconnects. Keep the existing
       // order filtered to the view's armed ids, then append any view-armed
@@ -427,7 +444,7 @@ export function useTracker() {
         prev == null && viewArmed.size === 1 ? [...viewArmed][0] : prev);
     }
     catch (e) { console.error(e); }
-  }, []);
+  }, [loadStage]);
 
   useEffect(() => { refresh(); }, [clock, scope, refresh]);
 
@@ -527,7 +544,7 @@ export function useTracker() {
           // onto both the session view's stage and this broadcast payload, so
           // a merge cannot drop one if the two ever stop agreeing about which
           // keys they carry.
-          setStage((prev) => ({ ...(prev || {}), ...ev.payload }));
+          updateStage(ev.payload);
         }
       };
     }

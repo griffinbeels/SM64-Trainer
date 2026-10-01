@@ -60,6 +60,7 @@ or an explicit addition to `_NOT_SYNTHESIZABLE`.
 `test_every_trigger_type_has_a_synthesis_row_or_is_explicitly_unreachable`
 keeps the two sets covering `TRIGGERS` exactly.
 """
+from sm64_events.detectors.moment import effective_moment_kind
 from sm64_events.memory.addresses import (LEVEL_CASTLE_INSIDE, course_name,
                                           node_short_label, star_name)
 from sm64_events.tracking import topology
@@ -133,7 +134,7 @@ def _moment_params(payload: dict) -> dict | None:
     ordinal survives only on a row whose landmark cannot carry a name
     (shared key), where it is still the only discriminator there is.
     """
-    kind = payload.get("kind")
+    kind = effective_moment_kind(payload)
     if kind is None:
         return None
     params = {"kind": kind}

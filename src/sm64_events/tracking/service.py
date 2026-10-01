@@ -25,7 +25,7 @@ from time import monotonic
 from sm64_events.core.events import Event
 from sm64_events.core.landmark import landmark_group
 from sm64_events.core.modes import ModeConfig, effective_version
-from sm64_events.core.paths import bundled_defaults_seed
+from sm64_events.core.paths import bundled_defaults_seed, shared_defaults_root
 from sm64_events.core.recording_url import validate_recording_url
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, node_label, star_name
@@ -44,11 +44,13 @@ from sm64_events.tracking.projection import (Projector, journal_id, replay,
                                              wipe_matches)
 from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
                                            merge_definitions,
-                                           segment_origin, split_definition,
+                                           segment_origin, selector_start_areas, split_definition,
                                            stage_origin, star_origin,
                                            validate_definition)
 from sm64_events.tracking.pbaction import pb_action
 from sm64_events.tracking import routes as route_logic
+from sm64_events.tracking.shared_defaults import (SharedDefaultsStore,
+                                                 segment_definition_fields)
 
 log = logging.getLogger("sm64.tracker")
 
@@ -793,12 +795,21 @@ class TrackerService:
         return self.db.get_state("origin_overrides", {}) \
             if self.db is not None else {}
 
+    def _offered_start_here(self, kind: str, segment_id: int | None) -> bool:
+        if kind != "segment":
+            return False
+        found = next((d for d in self._segment_defs if d.id == segment_id), None)
+        here = [self._current_stage.get("level"), self._current_stage.get("area")]
+        return (found is not None and here in selector_start_areas(
+            found.start_triggers, self._landmark_names()))
+
     async def request_target(self, kind: str, course_id: int | None = None,
                              star_id: int | None = None,
                              segment_id: int | None = None,
                              strat_tag: str | None = None,
                              clear_strat: bool = False,
                              auto: bool = False,
+                             sole_selection: dict | None = None,
                              timer_mode: str = "igt") -> dict:
         """Set the practice target, or refuse a pick from somewhere else.
 
@@ -824,6 +835,15 @@ class TrackerService:
         practice card highlights.
         """
         self._require_db()
+        if sole_selection is not None:
+            expected_level, expected_area = sole_selection["stage"]
+            if (expected_level != self._current_stage.get("level")
+                    or (expected_area is not None
+                        and expected_area != self._current_stage.get("area"))):
+                # A departing row can offer after the game has moved. Expire
+                # it quietly so the client refreshes and retries the new row.
+                return {}
+            auto = True
         if kind == "segment" and segment_id is not None:
             found = next((d for d in self._segment_defs if d.id == segment_id),
                         None)
@@ -846,7 +866,8 @@ class TrackerService:
             if course_id is None or star_id is None:
                 raise ValueError("star target needs course_id and star_id")
             already = self.target == ("star", course_id, star_id)
-        if auto and kind == "star" and self.target is not None:
+        if (auto and sole_selection is None and kind == "star"
+                and self.target is not None):
             return {}  # A stale empty-hand read cannot replace a newer pick.
         node = self.target_node(kind, course_id, star_id, segment_id)
         # A segment whose start trigger has already fired is UNDER WAY, and
@@ -857,8 +878,8 @@ class TrackerService:
         # what the banner offers and what the server accepts cannot disagree.
         running = (kind == "segment"
                    and segment_id in self._projector.armed_segment_ids())
-        if not already and not practicable.practicable_here(self._current_stage,
-                                                            node, running):
+        if (not already and not self._offered_start_here(kind, segment_id)
+                and not practicable.practicable_here(self._current_stage, node, running)):
             # The departing selector can still paint while a new stage has
             # retired its target. A late convenience offer simply expires;
             # it must neither retarget that stage nor report a click error.
@@ -869,22 +890,27 @@ class TrackerService:
                 f"that one is in {node_label(node)}")
         if kind == "segment":
             saved = await self.set_target_segment(
-                segment_id, strat_tag, clear_strat=clear_strat, auto=auto)
+                segment_id, strat_tag, clear_strat=clear_strat, auto=auto,
+                sole_selection=sole_selection)
         else:
             saved = await self.set_target(
                 course_id, star_id, strat_tag, clear_strat=clear_strat,
-                auto=auto, timer_mode=timer_mode)
+                auto=auto, timer_mode=timer_mode, sole_selection=sole_selection)
         return {"automatic_pb": saved} if saved else {}
 
     async def set_target(self, course_id: int, star_id: int,
                          strat_tag: str | None = None,
                          clear_strat: bool = False,
                          auto: bool = False,
+                         sole_selection: dict | None = None,
                          timer_mode: str = "igt") -> dict | None:
         db = self._require_db()
         self._validate_pb_clock(timer_mode)
         adoption = None
         payload = {"course_id": course_id, "star_id": star_id}
+        if sole_selection is not None:
+            payload["sole_selection"] = sole_selection
+            auto = True
         if auto:
             # A convenience fill, not his click (round 19) — the projector
             # holds the two by different rules. Only ever written when true,
@@ -899,11 +925,14 @@ class TrackerService:
         # set_strat_segment(tag), explicit clear -> set_strat_segment(None)).
         if strat_tag is not None:
             payload["strat_tag"] = strat_tag
-        if strat_tag:
+        if strat_tag and sole_selection is None:
             adoption = await self._adopt_untagged(
                 db, strat_tag, course_id=course_id, star_id=star_id)
-        await self.publish(Event(type="target_set", frame=0,
-                                 timestamp_utc=_now(), payload=payload))
+        if not await self._publish_target_offer(payload, sole_selection):
+            return
+        if strat_tag and sole_selection is not None:
+            adoption = await self._adopt_untagged(
+                db, strat_tag, course_id=course_id, star_id=star_id)
         if strat_tag:
             self._register_strategy(db, entity_key(course_id, star_id), strat_tag)
         elif clear_strat:
@@ -913,16 +942,20 @@ class TrackerService:
     async def set_target_segment(self, segment_id: int,
                                  strat_tag: str | None = None,
                                  clear_strat: bool = False,
-                                 auto: bool = False) -> dict | None:
+                                 auto: bool = False,
+                                 sole_selection: dict | None = None) -> dict | None:
         self._require_db()
         if all(d.id != segment_id for d in self._segment_defs):
             raise LookupError(f"segment {segment_id} not found")
         payload = {"kind": "segment", "segment_id": segment_id}
+        if sole_selection is not None:
+            payload["sole_selection"] = sole_selection
+            auto = True
         if auto:
             # See set_target: a fill is detection-flavored, a click is not.
             payload["auto"] = True
-        await self.publish(Event(type="target_set", frame=0,
-                                 timestamp_utc=_now(), payload=payload))
+        if not await self._publish_target_offer(payload, sole_selection):
+            return
         if strat_tag is not None:
             # segment strat memory is written via strat_set (the projector
             # ignores strat_tag inside segment target_set payloads)
@@ -937,6 +970,19 @@ class TrackerService:
             # legacy tricks and user-created segments, deliberately.
             await self.set_strat_segment(segment_id, None)
 
+    async def _publish_target_offer(self, payload: dict,
+                                    sole_selection: dict | None) -> bool:
+        """A declined sole offer must not adopt rows or change strategies.
+
+        Broadcasting can yield before projection, so compare the accepted
+        journal identity, not merely the target that happens to be held later.
+        Ordinary/manual target writes retain their existing metadata ordering.
+        """
+        jid = await self.publish(Event(type="target_set", frame=0,
+                                       timestamp_utc=_now(), payload=payload))
+        return sole_selection is None or (
+            jid is not None and self._projector.last_target_set_id == jid)
+
     async def _adopt_untagged(self, db: Database, strat_tag: str, *,
                               course_id: int | None = None,
                               star_id: int | None = None,
@@ -949,8 +995,10 @@ class TrackerService:
         One journaled `attempt_strat_set` carrying `attempt_ids`, so a replay
         folds the adoption in exactly like a per-row reclassification, and
         the same direct write set_attempt_strat uses (no journal replay).
-        Runs BEFORE the caller's strat_set/target_set publish, so every
-        client refreshing on that event already sees the adopted rows."""
+        Ordinary writes run this BEFORE strat_set/target_set, so clients
+        refreshing on that event already see the adopted rows. Sole automatic
+        offers first require target_set acceptance; declined offers adopt none.
+        """
         ids = [a.id for a in db.attempts()
                if (a.segment_id, a.course_id, a.star_id)
                == ((segment_id, None, None) if segment_id is not None
@@ -1298,6 +1346,46 @@ class TrackerService:
         await self._reproject()
 
     # -- segment definitions ---------------------------------------------------
+    async def save_shared_segment(self, d: dict,
+                                  segment_id: int | None = None) -> dict:
+        """Author a shipped default and apply it to this installation in place.
+
+        The store restores its source files if the local database write fails.
+        Personal copies on other installations keep the existing dirty/deletion
+        protection; no user history or library preferences enter the catalogue.
+        """
+        root = shared_defaults_root()
+        if root is None:
+            raise RuntimeError("Shared saves require the manual test server")
+        db = self._require_db()
+        current = None
+        if segment_id is not None:
+            current = next((row for row in db.segment_defs()
+                            if row["id"] == segment_id), None)
+            if current is None:
+                raise LookupError(f"segment {segment_id} not found")
+        candidate = {**(current or {}), **d}
+        validate_definition(candidate)
+        fields = segment_definition_fields(candidate)
+        seed_key = (current or {}).get("seed_key")
+        with SharedDefaultsStore(root).publish_segment(fields, seed_key) as key:
+            if segment_id is None:
+                segment_id = db.insert_segment_def(
+                    created_utc=_iso(_now()), seed_key=key, **fields)
+            else:
+                db.update_segment_def(segment_id, seed_key=key,
+                                      seed_dirty=0, **fields)
+        message = "Saved for the next release"
+        try:
+            await self._segments_changed()
+        except Exception:
+            # The source and local row are committed. Return their identity so
+            # a failed projection/broadcast cannot turn Retry into a new default.
+            log.exception("Shared segment %s saved; runtime refresh failed", key)
+            message += ". Refresh failed; reload the page or restart the test server."
+        return {"ok": True, "id": segment_id, "scope": "shared",
+                "seed_key": key, "message": message}
+
     async def create_segment(self, d: dict) -> int:
         db = self._require_db()
         validate_definition(d)          # BEFORE insert: invalid defs never land
@@ -1385,13 +1473,8 @@ class TrackerService:
                      if s["seed_key"] == row["seed_key"]), None)
         if srow is None:
             raise LookupError(f"no seed for {row['seed_key']}")
-        db.update_segment_def(segment_id, name=srow["name"],
-            enabled=srow.get("enabled", True),
-            start_triggers=srow["start_triggers"],
-            end_triggers=srow["end_triggers"],
-            waypoints=srow.get("waypoints", []),
-            guards=srow.get("guards", []), category=srow.get("category"))
-        db.set_seed_dirty("segment_defs", segment_id, 0)
+        db.update_segment_def(segment_id, seed_dirty=0,
+                              **segment_definition_fields(srow))
         await self._segments_changed()
 
     def _insert_definition(self, db: Database, d: dict) -> int:

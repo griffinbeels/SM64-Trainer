@@ -283,15 +283,8 @@ def refuse_a_course_load(seed_key, end):
     (Lakitu Skip ends on entering level 6, and an `enter_area` end never
     reaches here at all).
     """
-    from sm64_events.memory.addresses import CASTLE_REGION_LEVELS
-    for clause in (end if isinstance(end, list) else [end]):
-        if clause.get("type") == "level_enter" \
-                and clause.get("to") not in CASTLE_REGION_LEVELS:
-            raise AssertionError(
-                f"{seed_key}: ending on entering level {clause['to']} "
-                f"measures 77 frames of painting fade as travelling. Use "
-                f"enter_entrance({clause['to']}) -- the entrance touch -- "
-                f"rather than enter_level.")
+    from sm64_events.tracking.shared_defaults import refuse_a_course_load as refuse
+    refuse(seed_key, end)
 
 
 def movement(seed_key, name, start, end, via=(), match_mode=None):

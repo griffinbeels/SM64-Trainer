@@ -345,9 +345,10 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           region_for_node, star_count,
                                           star_name, subarea_name,
                                           world_connections, world_regions)
-from sm64_events.core.landmark import same_landmark
+from sm64_events.core.landmark import instance_place, landmark_group, same_landmark
 from sm64_events.detectors.igt_clock import IgtClock
-from sm64_events.detectors.moment import MOMENTS
+from sm64_events.detectors.moment import (MOMENTS, effective_moment_kind,
+                                          matches_moment_kind)
 # The verb splice ("Open a door" -> "Open") lives with the row labeller and
 # is borrowed, not copied: a landmark-pinned clause must read exactly like
 # the row it was picked from, and two copies of the rule is how they drift.
@@ -842,7 +843,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                           "only_when": _only_castle("level")}},
                 "{kind} #{ordinal} in {level} {area}",
                 lambda p, ev, ctx: ev.type == "moment_reached"
-                and ev.payload.get("kind") == p["kind"]
+                and matches_moment_kind(p["kind"], ev.payload)
                 and (p.get("ordinal") is None
                      or ev.payload.get("ordinal") == p["ordinal"])
                 and (p.get("landmark") is None
@@ -1688,9 +1689,14 @@ def _clause_origin(trig: dict) -> str | None:
         return None
     level_param, area_param = params
     level = trig.get(level_param)
+    place = instance_place(trig.get("landmark")) if kind == "moment_reached" else None
+    if level is None and place is not None:
+        level = place[0]
     if level is None:
         return None
     area = trig.get(area_param) if area_param else None
+    if area is None and place is not None and place[0] == level:
+        area = place[1]
     return node_key(level, area)
 
 
@@ -1849,7 +1855,7 @@ _PRESENCE_TRIGGER_TYPES = frozenset(
     {"level_enter", "area_enter", "attempt_anchor", "spawned"})
 
 
-def hooks_on_arm(start_triggers: list) -> bool:
+def hooks_on_arm(start_triggers: list, ev=None) -> bool:
     """True when this definition's arming is a DELIBERATE act the target
     queue may hook (round 19, 2026-08-08: "the held target should prioritize
     whatever is hooked into first").
@@ -1864,7 +1870,17 @@ def hooks_on_arm(start_triggers: list) -> bool:
     that detection enters the queue. Conservative across any-of clause sets:
     ONE presence clause disqualifies the def, because the notice does not say
     which clause fired."""
+    # A preserved legacy door_open clause also matches arrival rows. Judge
+    # the actual boundary so an arrival cannot masquerade as an opening.
+    if (ev is not None and ev.type == "moment_reached"
+            and effective_moment_kind(ev.payload) == "door_arrived"):
+        return False
+    # Arriving through a door (including a Usamune warp) is presence too.
+    # It can arm LBLJ while Castle Entrance → BoB is also valid; the actual
+    # selector's singleton rule or an explicit click establishes the choice.
     return not any(clause.get("type") in _PRESENCE_TRIGGER_TYPES
+                   or (clause.get("type") == "moment_reached"
+                       and clause.get("kind") == "door_arrived")
                    for clause in start_triggers)
 
 
@@ -1959,6 +1975,32 @@ def attributable_parent(defn, all_defs) -> str | None:
             continue
         keys |= set(entity_parents(fields.get("parents"), fields.get("id")))
     return next(iter(keys)) if len(keys) == 1 else None
+
+
+def selector_start_areas(start_triggers: list, names: dict | None = None) -> list:
+    """Static selector origins, including every OR clause and named door side.
+
+    These are where a choice begins, distinct from start_areas' explicit arm
+    destinations used to join definitions. A course exit never becomes a Lobby
+    start merely because it arms there. Known starts must appear before arming,
+    or a transient singleton invents a choice before its neighbor fires.
+    """
+    out = []
+    for trig in start_triggers:
+        if trig.get("type") == "entrance_touched":
+            areas = start_areas([trig])
+        else:
+            key = trig.get("landmark")
+            clauses = ([{**trig, "landmark": member}
+                        for member in landmark_group(key, names or {})]
+                       if key else [trig])
+            nodes = [start_origin([clause]) for clause in clauses]
+            areas = [[int(node.partition(":")[0]), topology.node_area(node)]
+                     for node in nodes if topology.node_area(node) is not None]
+        for area in areas:
+            if area not in out:
+                out.append(area)
+    return out
 
 
 def origin_view(node: str | None) -> dict:
@@ -2965,6 +3007,7 @@ class SegmentEngine:
         # global_timer restarts there and a stale frame number could otherwise
         # collide with a fresh arm's.
         self._last_igt_zero_frame: int | None = None
+        self._closing_igt_zero_frame: int | None = None
         # How much of the star's clock was banked BEFORE that zero (round 25);
         # 0 unless the zero was an involuntary warp deeper into a course.
         self._banked_before_zero: int = 0
@@ -3141,6 +3184,7 @@ class SegmentEngine:
         for d in self._feed_defs(ev.type):
             closed.extend(self._feed_definition(
                 Attempt, d, ev, ctx, notices, anchor_is_echo))
+        self._rebase_move_clocks(ev)
         # THE GRAND STAR ENDS THE RUN, so nothing may still be running after
         # it. Griffin, 2026-08-05, on the credits screen with "CCM -> BBH"
         # still showing a live timer: "at the end of the game (i.e., after
@@ -3229,6 +3273,9 @@ class SegmentEngine:
             self._last_transition_frame = ev.frame
 
     def _prepare_capture_clock(self, ev) -> None:
+        # A practice reset carries the counter BEFORE its new zero. Its
+        # closing attempt must validate that number against the old epoch.
+        self._closing_igt_zero_frame = self._last_igt_zero_frame
         # Same discipline for Usamune's own clock origin: _close reads this to
         # decide whether a closing event's igt_frames measures the segment, so
         # it has to be current for the closures that run below on THIS event.
@@ -3267,19 +3314,22 @@ class SegmentEngine:
             elif ev.frame != self._last_igt_zero_frame:
                 self._banked_before_zero = 0
             self._last_igt_zero_frame = ev.frame
-            # THE MOVE-CLOCK REBASE (round 15 item 3): a zero landing inside
-            # the window of a "move" arm IS the section entry its start
-            # trigger caused — the moment Mario can actually move — and the
-            # clock's origin moves there. Latest zero inside the window wins
-            # (a load settles across several zeroing events and the counter
-            # measures from the last); one outside it is a mid-piece leg and
-            # must not touch the origin.
-            for def_id, arm in list(self._armed.items()):
-                d = self._def_by_id.get(def_id)
-                if (d is not None and d.clock_start == "move"
-                        and 0 <= ev.frame - arm.start_frame
-                        <= CLOCK_START_WINDOW_FRAMES):
-                    self._armed[def_id] = replace(arm, clock_frame=ev.frame)
+
+    def _rebase_move_clocks(self, ev) -> None:
+        # Rebase AFTER closures and retries: a real reset's zero belongs to
+        # the new arm. Rebasing before closing made early retries zero-length
+        # and let waypoint/loose continuations retain an earlier run's origin
+        # (the reported LBLJ reset: 711 frames for a 95-frame global span).
+        # Echo loads leave the old arm alive, so their latest in-window zero
+        # still starts its move clock; later legs leave that origin intact.
+        if not _zeroes_usamune_igt(ev):
+            return
+        for def_id, arm in list(self._armed.items()):
+            d = self._def_by_id.get(def_id)
+            if (d is not None and d.clock_start == "move"
+                    and 0 <= ev.frame - arm.start_frame
+                    <= CLOCK_START_WINDOW_FRAMES):
+                self._armed[def_id] = replace(arm, clock_frame=ev.frame)
 
     def _settle_area_entries(self, ev, notices) -> None:
         if ev.type == "area_changed":
@@ -4334,6 +4384,15 @@ class SegmentEngine:
         # subtract and is untouched -- which is exactly the half he reported as
         # already correct.
         igt = ev.payload.get("igt_frames")
+        zero_frame = self._last_igt_zero_frame
+        if (d.clock_start == "move" and outcome == "reset"
+                and ev.type == "practice_reset"):
+            # The current run's raw counter need not equal the global-frame
+            # span. Use it only when its PRE-reset epoch begins at this
+            # move origin; a counter from a later leg still falls back to
+            # the segment's full global-frame span below.
+            igt = ev.payload.get("igt_frames_before")
+            zero_frame = self._closing_igt_zero_frame
         span = ev.frame - clock_origin
         # THE DISPLAY TICK SURVIVES THE SUBTRACTION (his third pair of
         # samples, 2026-08-09). Both numbers already carry
@@ -4350,8 +4409,8 @@ class SegmentEngine:
         starts_here = (igt is None
                        or igt <= span + IGT_CARRY_SLACK_FRAMES)
         if igt is not None and starts_here and (
-                self._last_igt_zero_frame is not None and abs(
-                self._last_igt_zero_frame - clock_origin) <= IGT_ARM_SKEW_FRAMES):
+                zero_frame is not None and abs(
+                zero_frame - clock_origin) <= IGT_ARM_SKEW_FRAMES):
             rta, timed_by = igt, "igt"
         else:
             # Which branch ran is itself a fact the display needs (ruling 6):
