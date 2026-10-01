@@ -897,11 +897,14 @@ class TrackerService:
         # set_strat_segment(tag), explicit clear -> set_strat_segment(None)).
         if strat_tag is not None:
             payload["strat_tag"] = strat_tag
-        if strat_tag:
+        if strat_tag and sole_selection is None:
             await self._adopt_untagged(db, strat_tag, course_id=course_id,
                                        star_id=star_id)
-        await self.publish(Event(type="target_set", frame=0,
-                                 timestamp_utc=_now(), payload=payload))
+        if not await self._publish_target_offer(payload, sole_selection):
+            return
+        if strat_tag and sole_selection is not None:
+            await self._adopt_untagged(db, strat_tag, course_id=course_id,
+                                       star_id=star_id)
         if strat_tag:
             self._register_strategy(db, entity_key(course_id, star_id), strat_tag)
         elif clear_strat:
@@ -922,8 +925,8 @@ class TrackerService:
         if auto:
             # See set_target: a fill is detection-flavored, a click is not.
             payload["auto"] = True
-        await self.publish(Event(type="target_set", frame=0,
-                                 timestamp_utc=_now(), payload=payload))
+        if not await self._publish_target_offer(payload, sole_selection):
+            return
         if strat_tag is not None:
             # segment strat memory is written via strat_set (the projector
             # ignores strat_tag inside segment target_set payloads)
@@ -938,6 +941,19 @@ class TrackerService:
             # legacy tricks and user-created segments, deliberately.
             await self.set_strat_segment(segment_id, None)
 
+    async def _publish_target_offer(self, payload: dict,
+                                    sole_selection: dict | None) -> bool:
+        """A declined sole offer must not adopt rows or change strategies.
+
+        Broadcasting can yield before projection, so compare the accepted
+        journal identity, not merely the target that happens to be held later.
+        Ordinary/manual target writes retain their existing metadata ordering.
+        """
+        jid = await self.publish(Event(type="target_set", frame=0,
+                                       timestamp_utc=_now(), payload=payload))
+        return sole_selection is None or (
+            jid is not None and self._projector.last_target_set_id == jid)
+
     async def _adopt_untagged(self, db: Database, strat_tag: str, *,
                               course_id: int | None = None,
                               star_id: int | None = None,
@@ -950,8 +966,10 @@ class TrackerService:
         One journaled `attempt_strat_set` carrying `attempt_ids`, so a replay
         folds the adoption in exactly like a per-row reclassification, and
         the same direct write set_attempt_strat uses (no journal replay).
-        Runs BEFORE the caller's strat_set/target_set publish, so every
-        client refreshing on that event already sees the adopted rows."""
+        Ordinary writes run this BEFORE strat_set/target_set, so clients
+        refreshing on that event already see the adopted rows. Sole automatic
+        offers first require target_set acceptance; declined offers adopt none.
+        """
         ids = [a.id for a in db.attempts()
                if (a.segment_id, a.course_id, a.star_id)
                == ((segment_id, None, None) if segment_id is not None

@@ -620,6 +620,8 @@ class Projector:
                                    if warp_destinations is not None else {})
         # ("star", course_id, star_id) | ("segment", segment_id) | None
         self.target: tuple | None = None
+        # Service follow-up metadata must belong to an accepted target offer.
+        self.last_target_set_id: int | None = None
         # THE TARGET QUEUE (round 19, 2026-08-08): "the held target should
         # prioritize whatever is hooked into first... first in, first out...
         # If there's nothing left in the queue, it's neutral."
@@ -1530,6 +1532,12 @@ class Projector:
                 or level != self._level
                 or (area is not None and area != self._area))
 
+    def _accept_target_offer(self, ev) -> bool:
+        if self._declines_automatic_target(ev.payload):
+            return False
+        self.last_target_set_id = ev.id
+        return True
+
     def _dispatch(self, ev) -> list[Attempt]:
         if ev.type in ANCHOR_EVENT_TYPES:
             if ev.payload.get("area_load") or ev.payload.get("teleport"):
@@ -1749,7 +1757,7 @@ class Projector:
             # target, but only while its target/place binding still matches.
             # A newly promoted detection or a new place defeats a late offer.
             auto = bool(ev.payload.get("auto"))
-            if self._declines_automatic_target(ev.payload):
+            if not self._accept_target_offer(ev):
                 return []
             self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
             if ev.payload.get("kind") == "segment":

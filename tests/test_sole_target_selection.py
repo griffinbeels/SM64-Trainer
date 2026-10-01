@@ -6,6 +6,7 @@ import pytest
 from sm64_events.tracking.projection import Projector
 from test_api import make_client
 from test_target_queue import exit_def, jev
+from test_tracker_service import ev, make, star
 
 
 def held_projector():
@@ -86,3 +87,73 @@ def test_service_refuses_a_sole_offer_from_an_old_selector_stage(tmp_path):
         with pytest.raises(ValueError, match="selector changed"):
             asyncio.run(service.request_target("star", course_id=2, star_id=1,
                 sole_selection={"target": None, "stage": [6, 1]}))
+
+
+@pytest.mark.parametrize("kind", ["star", "segment"])
+@pytest.mark.parametrize("clear", [False, True])
+@pytest.mark.parametrize("race", ["already-stale", "broadcast-before-projection"])
+def test_declined_sole_offer_preserves_strategy_and_history(tmp_path, kind, clear, race):
+    db, service = make(tmp_path)
+
+    async def exercise():
+        await service.publish(ev("practice_reset", 1000, {"igt_frames_before": 0}))
+        await service.publish(star(1350))
+        if clear:
+            if kind == "star":
+                await service.set_strat(2, 2, "Existing")
+            else:
+                await service.set_strat_segment(1, "Existing")
+        await service.set_target(2, 3)
+        before_rows = [(a.id, a.strat_tag) for a in db.attempts()]
+        before_strats = (dict(service.strat_by_star), dict(service.strat_by_segment))
+        expected = ["star", 2, 1] if race == "already-stale" else list(service.target)
+        original = service.broadcaster.publish
+        injected = False
+
+        async def race_publish(event):
+            nonlocal injected
+            if (race == "broadcast-before-projection" and not injected
+                    and event.type == "target_set" and "sole_selection" in event.payload):
+                injected = True
+                await service.set_target(2, 1)
+            return await original(event)
+
+        service.broadcaster.publish = race_publish
+        args = {"course_id": 2, "star_id": 2} if kind == "star" else {"segment_id": 1}
+        await service.request_target(kind, **args, strat_tag=None if clear else "New",
+            clear_strat=clear, sole_selection={"target": expected, "stage": [None, None]})
+        assert service.target == ("star", 2, 1 if injected else 3)
+        assert before_rows == [(a.id, a.strat_tag) for a in db.attempts()]
+        assert before_strats == (service.strat_by_star, service.strat_by_segment)
+        declined = next(row for row in reversed(db.events())
+                        if row.type == "target_set" and "sole_selection" in row.payload)
+        assert service._projector.last_target_set_id != declined.id
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        db.close()
+
+
+def test_an_accepted_sole_star_adopts_history_after_target_acceptance(tmp_path):
+    db, service = make(tmp_path)
+
+    async def exercise():
+        await service.publish(ev("practice_reset", 1000, {"igt_frames_before": 0}))
+        await service.publish(star(1350))
+        await service.set_target(2, 3)
+        before = len(db.events())
+        await service.request_target("star", course_id=2, star_id=2, strat_tag="New",
+            sole_selection={"target": list(service.target), "stage": [None, None]})
+        writes = [row for row in db.events()[before:]
+                  if row.type in {"target_set", "attempt_strat_set"}]
+        assert [row.type for row in writes] == ["target_set", "attempt_strat_set"]
+        assert service._projector.last_target_set_id == writes[0].id
+        assert service.target == ("star", 2, 2)
+        assert service.strat_by_star[(2, 2)] == "New"
+        assert db.attempts()[0].strat_tag == "New"
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        db.close()

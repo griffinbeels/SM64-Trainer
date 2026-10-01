@@ -2,6 +2,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -756,13 +757,14 @@ def test_reset_segment_restores_seed_and_clears_dirty(tmp_path):
     asyncio.run(svc.reset_segment(lblj))
     row = next(d for d in db.segment_defs() if d["id"] == lblj)
     assert row["name"] == "LBLJ" and row["seed_dirty"] == 0 and row["enabled"] is True
-    assert row["start_triggers"] == [
-        {"type": "level_enter", "to": 6, "from": 16},
-        {"type": "attempt_anchor", "level": 6, "area": 1}]
-    # Moved 2026-08-04 (task 0081): LBLJ ends on the ENTRANCE TOUCH, 23 frames
-    # before BitDW loads. Reset-to-default restores what SHIPS, so this
-    # assertion follows the corpus by design rather than pinning history.
-    assert row["end_triggers"] == [{"type": "entrance_touched", "to": 17}]
+    # Reset opts into the current assembled seed, including authored fixes.
+    seed_path = Path(__file__).resolve().parents[1] / "src/sm64_events/data/defaults.seed.json"
+    bundled = next(item for item in json.loads(seed_path.read_text(encoding="utf-8"))["segments"]
+                   if item["seed_key"] == "seg:lblj")
+    for field in ("start_triggers", "end_triggers", "waypoints", "guards"):
+        assert row[field] == bundled[field]
+    assert row["parents"] == bundled.get("parents", [])
+    assert row["clock_start"] == bundled.get("clock_start", "trigger")
 
 
 def test_reset_user_created_segment_raises(tmp_path):
