@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "ghost_occlusion.h"
 #include "ghost_tuning.h"
+#include "ghost_annotation.h"
 
 #ifdef _WIN32
 #define GC_GL_CALL __stdcall
@@ -188,6 +189,7 @@ struct Pose {
     uint32_t noise_seed = 0;
     bool noise_alpha = false;
     float noise_scale = 1.0f; // framebuffer pixels per N64 pixel, not aspect correction
+    ghost_annotation::Payload annotation{}; // carried with this body through sorting
 };
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };
 struct Instance;
@@ -210,6 +212,7 @@ Cost take_cost(Instance*); // returns the cost so far and starts a new count
 /* The ROM particle atlas (model sg_particle_view). Without it particles are
  * skipped; setup-time only, like prepare. */
 Result prepare_particles(Instance*, const uint8_t* atlas_rgba, uint32_t width, uint32_t height);
+Result prepare_annotations(Instance*, const uint8_t* atlas_rgba, uint32_t width, uint32_t height);
 Result begin(Instance*, const Target&, const Pose&, const Known* = nullptr); // copies clean color, draws once
 /* Bounded multi-ghost experiment: copy the clean surface once and draw each
  * body with its own self-depth/stencil pass. Caller supplies back-to-front

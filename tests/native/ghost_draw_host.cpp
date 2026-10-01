@@ -114,6 +114,7 @@ namespace { Instance instance; }
 Instance *create(const Dispatch &, uint64_t) { return &instance; }
 Result prepare(Instance *, uint32_t, uint32_t, uint32_t, const uint8_t *, uint32_t, uint32_t) { return Result::ok; }
 Result prepare_particles(Instance *, const uint8_t *, uint32_t, uint32_t) { return Result::unsupported; }
+Result prepare_annotations(Instance *, const uint8_t *, uint32_t, uint32_t) { return Result::unsupported; }
 Result begin_batch(Instance *, const Target &, const Pose *, uint32_t count, const Known *) {
     if (faults.batch) fail_gl(Owner::ghost);
     begun = count != 0; return begun ? Result::ok : Result::invalid;
@@ -155,6 +156,7 @@ bool atlas(sg_atlas_view *out, uint64_t *id) {
     return true;
 }
 bool particles(sg_particle_view *, uint64_t *) { return false; }
+bool annotations(ghost_annotation::View *, uint64_t *) { return false; }
 bool evaluate(const gc_sample &, const ghost::WorldPass &, ghost_compositor::Pose *out, uint32_t &count,
               gp_draw_token &token) {
     count = 0; token = {};

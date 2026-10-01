@@ -40,6 +40,7 @@ def test_real_compositor(tmp_path):
     # A frame with the renderer's whole record asks the driver nothing.
     assert "known=nothing_asked" in result.stdout
     assert "vanish=noise_body_only" in result.stdout
+    assert "annotations=private,depth,opacity,terminal,hud" in result.stdout
 
 
 @pytest.mark.parametrize("before,after,failure", [
@@ -66,3 +67,16 @@ def test_vanish_witness_refuses_broken_rendering(tmp_path, before, after, failur
     result = run_compositor(tmp_path, source)
     assert result.returncode != 0, "rendered witness accepted the deliberately broken cap effect"
     assert failure in result.stderr, result.stdout + result.stderr
+
+
+def test_annotation_witness_refuses_a_missing_draw(tmp_path):
+    """A successful body draw cannot masquerade as a working name overlay."""
+    original = (SOURCE / "ghost_compositor.cpp").read_text(encoding="utf-8")
+    before = "p->annotations.draw(g,index,t,layered);"
+    assert original.count(before) == 1
+    source = tmp_path / "ghost_compositor.cpp"
+    source.write_text(original.replace(before, "if(false) p->annotations.draw(g,index,t,layered);"),
+        encoding="utf-8", newline="\n")
+    result = run_compositor(tmp_path, source)
+    assert result.returncode != 0, "annotation pixel witness accepted an omitted caption draw"
+    assert "name renders above the body on the private display" in result.stderr, result.stdout + result.stderr
