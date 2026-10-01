@@ -26,6 +26,21 @@ bool finite(float value, float limit = 10000000.0f) {
     return std::isfinite(value) && value >= -limit && value <= limit;
 }
 
+void capture_pad(Ram &ram, const gc_layout &layout, gc_sample &out) {
+    if (!layout.player1_controller) return;
+    const uint32_t controller = layout.player1_controller;
+    gc_pad pad{};
+    pad.stick_x = ram.s16(controller); pad.stick_y = ram.s16(controller + 2);
+    pad.buttons = ram.u16(controller + 0x10);
+    const uint16_t pressed = ram.u16(controller + 0x12);
+    // Same controller sanity used by the exact video stamp's decoder.
+    // A bad optional pad does not invalidate clock, camera or Mario's pose.
+    if (!ram.ok || pad.stick_x < -128 || pad.stick_x > 127
+            || pad.stick_y < -128 || pad.stick_y > 127
+            || (pad.buttons & ~0xff3fu) || (pressed & ~pad.buttons)) return;
+    out.pad = pad; out.valid_fields |= GC_VALID_PAD;
+}
+
 struct GraphWalk {
     Ram &ram;
     uint32_t camera;
@@ -463,6 +478,7 @@ extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
                 || !span(layout->sound_ring, 256 * 8, layout->rdram_bytes, 8)) return GC_BAD_CONFIG;
     }
     if (layout->behaviour_base && !span(layout->behaviour_base, 4, layout->rdram_bytes)) return GC_BAD_CONFIG;
+    if (layout->player1_controller && !span(layout->player1_controller, 0x20, layout->rdram_bytes)) return GC_BAD_CONFIG;
     gcc_clock validation{};
     if (!gcc_init(&validation, &layout->clock)) return GC_BAD_CONFIG;
     return GC_OK;
@@ -500,6 +516,8 @@ static uint32_t capture_read(gc_reader *reader, const gc_layout *layout,
     if (!ram.ok || out->level < 4 || out->level > 36 || out->area < 1 || out->area > 8)
         return out->status = GC_BAD_VALUE;
     out->valid_fields = GC_VALID_CLOCK;
+    capture_pad(ram, *layout, *out);
+    ram.ok = true;
     // Sound needs the game clock of this and the previous captured frame.
     capture_sound(ram, *layout, *reader, *out);
     ram.ok = true;
@@ -549,7 +567,8 @@ extern "C" uint32_t ghost_capture_begin(gc_reader *reader, const gc_layout *layo
     return capture_read(reader,layout,frame,out,probe);
 }
 
-static_assert(sizeof(gc_layout) == 188 && offsetof(gc_layout, behaviour_base) == 184, "Ghost layout ABI changed");
+static_assert(sizeof(gc_layout) == 192 && offsetof(gc_layout, behaviour_base) == 184
+              && offsetof(gc_layout, player1_controller) == 188, "Ghost layout ABI changed");
 static_assert(offsetof(gc_layout, sound_code) == 64, "Ghost sound layout ABI changed");
 static_assert(offsetof(gc_layout, pending_warp_op) == 56, "Ghost warp layout ABI changed");
 static_assert(offsetof(gc_layout, delayed_warp_timer) == 60, "Ghost countdown layout ABI changed");
@@ -557,8 +576,9 @@ static_assert(offsetof(gc_layout, clock) == 80, "Ghost clock layout ABI changed"
 static_assert(sizeof(gc_particle) == 36 && sizeof(gc_particles) == 580 && offsetof(gc_particle, opacity) == 22,
               "Ghost particle ABI changed");
 static_assert(offsetof(gc_sample, particles) == 636, "Ghost particle block follows sound");
-static_assert(sizeof(gc_sample) == 1260 && offsetof(gc_sample, held) == 1216 && sizeof(gc_held) == 44,
+static_assert(sizeof(gc_sample) == 1268 && offsetof(gc_sample, held) == 1216 && sizeof(gc_held) == 44,
               "Ghost sample ABI changed");
+static_assert(sizeof(gc_pad) == 8 && offsetof(gc_sample, pad) == 1260, "Ghost pad append-only ABI changed");
 static_assert(sizeof(gc_shadow) == 292 && sizeof(gc_sound) == 36, "Ghost optional evidence ABI changed");
 static_assert(offsetof(gc_sample, shadow) == 308 && offsetof(gc_sample, sound) == 600, "Ghost optional evidence offsets");
 static_assert(offsetof(gc_shadow, position) == 64 && offsetof(gc_shadow, uv) == 118

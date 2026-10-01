@@ -71,7 +71,7 @@ def capture_host(tmp_path_factory):
 @pytest.mark.parametrize("scenario", [
     "basic", "swizzle", "bounds", "graph", "duplicate", "limits",
     "skip_objects", "values", "unsupported", "action", "warp", "epochs", "transitions", "arguments",
-    "sound", "held",
+    "sound", "held", "pad",
 ])
 def test_compiled_capture(capture_host, scenario):
     target, config = capture_host

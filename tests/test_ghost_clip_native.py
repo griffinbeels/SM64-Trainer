@@ -14,11 +14,11 @@ from ghost_native_fixture import frame, producer
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, STAR_CLOCK, decode_clip, encode_clip, hidden_refusals
 from sm64_events.ghost.native_layout import (
-    CAMERA_FOV_AT, HEADER_BYTES as H, HELD_AT, HELD_RELEASED_AT, PARTICLE_BYTES, PARTICLE_OPACITY_AT,
+    CAMERA_FOV_AT, HEADER_BYTES as H, HELD_AT, HELD_RELEASED_AT, PAD_AT, PARTICLE_BYTES, PARTICLE_OPACITY_AT,
     PARTICLE_TRANSLATION_AT, PARTICLES_AT, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES as R, REFUSAL_AT,
     ROOT_KIND_AT, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
 )
-from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, REAL_GCLIP5, as_gclip5, encoded, matrix_frame
+from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, REAL_GCLIP5, as_gclip5, as_gclip6, encoded, matrix_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = Path(os.environ.get("SM64_GHOST_PLAYBACK_ROOT", ROOT)).resolve()
@@ -65,6 +65,7 @@ def corpus():
         changed = bytearray(encoded((frame(1, valid=29, pose_refusal=19), frame(2))))
         changed[offset] = value
         values.append(bytes(changed))
+    values.extend(pad_cases())
     values.extend(held_cases())
     # Recorded shadow and sound: accepted shapes, then each native refusal.
     evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,), particles=((0x0401DD60, (1, 2, -300)),)),
@@ -95,6 +96,26 @@ def corpus():
         struct.pack_into("<I", broken, offset, value)
         values.append(bytes(broken))
     return values
+
+
+def pad_cases():
+    cases = [encoded((frame(pad=(0, 0, 0)),)), encoded((frame(pad=(-128, 127, 0xff3f)),)),
+             encoded((frame(1, valid=29, pose_refusal=3, pad=(10, -20, 0x8000)), frame(2))),
+             encoded((frame(1, pad=(-84, 72, 0x8011)), frame(2), frame(3, pad=(0, 0, 0))))]
+    for value in ((-129, 0, 0), (128, 0, 0), (0, -129, 0), (0, 128, 0), (0, 0, 0x0080), (0, 0, 0x0040)):
+        cases.append(encoded((frame(),))[:H] + frame(pad=value))
+    stray = bytearray(encoded((frame(),)))
+    stray[H + PAD_AT] = 1
+    cases.append(bytes(stray))
+    reserved = bytearray(encoded((frame(pad=(0, 0, 0)),)))
+    reserved[H + PAD_AT + 6] = 1
+    cases.append(bytes(reserved))
+    old = as_gclip6(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
+    cases.extend((old, old[:-1]))
+    forged = bytearray(old)
+    struct.pack_into("<I", forged, H + 28, 31 | 256 | 512)
+    cases.append(bytes(forged))
+    return cases
 
 
 def held_cases():

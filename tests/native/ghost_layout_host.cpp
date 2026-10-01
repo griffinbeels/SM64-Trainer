@@ -35,6 +35,11 @@ static bool older_fields_survive() {
                                  format.sample_bytes, format.sample_version, 5u, GC_VALID_REQUIRED};
         std::memcpy(record, sizes, sizeof(sizes));
         const std::vector<uint8_t> before(record, record + format.record_bytes);
+        auto forged = data;
+        const uint32_t forged_valid = GC_VALID_REQUIRED | GC_VALID_PAD;
+        std::memcpy(forged.data() + sizeof(header) + SAMPLE_AT(valid_fields), &forged_valid, sizeof(forged_valid));
+        const auto untouched = forged;
+        if (ghost_clip::upgrade(forged) || forged != untouched) return false;
         if (!ghost_clip::upgrade(data) || data.size() != sizeof(header) + sizeof(gclip_frame)) return false;
         gclip_frame after{};
         std::memcpy(&after, data.data() + sizeof(header), sizeof(after));

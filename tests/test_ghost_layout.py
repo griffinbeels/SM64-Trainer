@@ -72,6 +72,7 @@ def test_python_decoders_fill_the_spans_they_read():
     assert L.PARTICLES_ENTRIES_AT + L.PARTICLE_EVENTS * L.PARTICLE_BYTES == L.PARTICLES_BYTES
     assert L.HELD_AT + L.HELD_BYTES == L.PAD_AT
     assert L.PAD_AT + L.PAD_BYTES == L.RECORD_BYTES
+    assert clip._PAD.size == L.PAD_BYTES
     assert len(ghost_layout.GhostLayout.from_layout(US).to_bytes()) == L.LAYOUT_BYTES
     assert ghost_layout.VERSION == L.SAMPLE_VERSION
     assert P.PAGE_BYTES == L.IPC_RING_AT + L.IPC_SLOTS * L.RECORD_BYTES

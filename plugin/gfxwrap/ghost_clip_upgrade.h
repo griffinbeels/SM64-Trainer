@@ -55,6 +55,9 @@ inline bool upgrade(std::vector<uint8_t> &data, bool *out_of_memory = nullptr) {
         uint8_t *to = out.data() + sizeof(header) + size_t(i) * sizeof(gclip_frame);
         std::memcpy(to, source, f.record_bytes);
         gclip_frame frame{}; std::memcpy(&frame, to, sizeof(frame));
+        // No older format captured a pad. A set bit is malformed evidence,
+        // never proof that the zero-extended block is an exact neutral input.
+        if (frame.sample.valid_fields & GC_VALID_PAD) return false;
         // An older record never had the newer blocks: its sizes move on, nothing else.
         if (frame.bytes == f.record_bytes && frame.version == f.version) {
             frame.bytes = sizeof(gclip_frame); frame.version = GCLIP_VERSION;
