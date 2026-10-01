@@ -347,7 +347,7 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           world_connections, world_regions)
 from sm64_events.core.landmark import same_landmark
 from sm64_events.detectors.igt_clock import IgtClock
-from sm64_events.detectors.moment import MOMENTS
+from sm64_events.detectors.moment import MOMENTS, matches_moment_kind
 # The verb splice ("Open a door" -> "Open") lives with the row labeller and
 # is borrowed, not copied: a landmark-pinned clause must read exactly like
 # the row it was picked from, and two copies of the rule is how they drift.
@@ -842,7 +842,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                           "only_when": _only_castle("level")}},
                 "{kind} #{ordinal} in {level} {area}",
                 lambda p, ev, ctx: ev.type == "moment_reached"
-                and ev.payload.get("kind") == p["kind"]
+                and matches_moment_kind(p["kind"], ev.payload)
                 and (p.get("ordinal") is None
                      or ev.payload.get("ordinal") == p["ordinal"])
                 and (p.get("landmark") is None

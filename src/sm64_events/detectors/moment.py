@@ -173,6 +173,9 @@ class Moment:
     # `open_states` at all) uses `display_lag` unchanged -- this is NOT a
     # second shared constant, only a per-action override of the one field.
     gated_display_lag: dict | None = None
+    # A refined kind keeps old definitions matching the events they matched
+    # before. Legacy rows are recognised only by this kind's action set.
+    legacy_kind: str | None = None
 
 
 def _boundary_reached(moment: "Moment", snap: GameSnapshot) -> bool:
@@ -193,10 +196,16 @@ def _boundary_reached(moment: "Moment", snap: GameSnapshot) -> bool:
 
 
 # THE registry. One row per moment kind; the sets are the ones addresses.py
-# already keeps, so what counts as a door here and what counts as a door to
-# the anchor detector can never drift apart.
+# already keeps. Opening and arriving divide the door actions here, while
+# the anchor detector still reads the whole set for involuntary reset echoes.
 MOMENTS: tuple[Moment, ...] = (
-    Moment("door_open", A.DOOR_ACTIONS, "Open a door"),
+    Moment("door_open", A.DOOR_ACTIONS - {A.ACT_WARP_DOOR_SPAWN}, "Open a door"),
+    # PUSH/PULL -> WARP_DOOR_SPAWN never left the old door action set, so a
+    # walked entrance journaled no destination moment. Menu warps did, called
+    # "Open a warp door". Both arrive at this singleton boundary, naming the
+    # destination door from the existing one-poll landmark settle.
+    Moment("door_arrived", frozenset({A.ACT_WARP_DOOR_SPAWN}),
+           "Arrive through a door", legacy_kind="door_open"),
     # AUTOMATIC DIALOGUE READS THE RAW COUNTER (`display_lag=-1`, total
     # `counter + 0`) -- his frame-stepped star-door replay, 2026-08-10, is the
     # only kind of evidence that number has ever moved on. NPC DIALOGUE gates
@@ -233,6 +242,27 @@ MOMENTS: tuple[Moment, ...] = (
     Moment("switch_press", frozenset(), "Press a switch"),
     Moment("enemy_defeated", frozenset(), "Defeat an enemy"),
 )
+
+
+def effective_moment_kind(payload: dict) -> str | None:
+    """A legacy row's more precise kind, without changing its journal data.
+
+    An old door_open is an arrival only when its action was the door spawn;
+    a pull or push of that same landmark remains an opening.
+    """
+    kind = payload.get("kind")
+    for moment in MOMENTS:
+        if (moment.legacy_kind is not None and moment.legacy_kind == kind
+                and payload.get("action") in moment.actions):
+            return moment.kind
+    return kind
+
+
+def matches_moment_kind(kind: str, payload: dict) -> bool:
+    """Match refined kinds and preserve definitions using their legacy kind."""
+    actual = effective_moment_kind(payload)
+    return actual == kind or any(
+        moment.kind == actual and moment.legacy_kind == kind for moment in MOMENTS)
 
 
 def needs_fresh_engagement(kind: str) -> bool:
@@ -501,7 +531,8 @@ class MomentDetector:
         event's payload, so a consumer never re-derives the display form.
         """
         kind = moment.kind
-        self._counts[kind] = self._counts.get(kind, 0) + 1
+        counter_kind = moment.legacy_kind or kind
+        self._counts[counter_kind] = self._counts.get(counter_kind, 0) + 1
         reading, source = self._clock.igt_at(curr.global_timer, curr)
         # The kind's own lag (`display_lag_for`), UNLESS this specific
         # ACTION is gated and carries its own measured override -- NPC
@@ -525,7 +556,7 @@ class MomentDetector:
             found = None
         return Event(type="moment_reached", frame=curr.global_timer,
                      timestamp_utc=curr.wall_time_utc,
-                     payload={"kind": kind, "ordinal": self._counts[kind],
+                     payload={"kind": kind, "ordinal": self._counts[counter_kind],
                               "landmark": found.payload() if found else None,
                               "level": curr.curr_level, "area": curr.curr_area,
                               "action": curr.mario_action,

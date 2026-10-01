@@ -14943,6 +14943,11 @@
       "name": "intro scene"
     },
     {
+      "seed_key": "landmark:6:1:bhvDoorWarp:-1100,0,2202",
+      "key": "6:1:bhvDoorWarp:-1100,0,2202",
+      "name": "Castle Lobby Entrance Door"
+    },
+    {
       "seed_key": "landmark:6:3:bhvDoor:1126,-1074,-2661",
       "key": "6:3:bhvDoor:1126,-1074,-2661",
       "name": "HMC Door"

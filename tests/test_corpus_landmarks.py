@@ -59,6 +59,11 @@ def test_a_seeded_instance_name_beats_its_kind_name():
     assert seeded["6:1:bhvDoor:256,0,-1074"] == "WF Door"
 
 
+def test_the_measured_front_door_leaf_has_a_specific_lobby_name():
+    assert _seeded_names()["6:1:bhvDoorWarp:-1100,0,2202"] == (
+        "Castle Lobby Entrance Door")
+
+
 def test_the_promotion_tool_inverts_a_key_back_into_a_corpus_row():
     """`corpus_landmarks.py`'s docstring named this tool as the promotion path
     for over a day while the tool only handled segment definitions — so every
