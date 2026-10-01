@@ -160,7 +160,12 @@ def test_shipped_lblj_arms_on_both_arrivals_and_finishes_at_bowser_entrance(via)
     closed, _notices = engine.feed(arrival, context)
     assert not closed
     assert engine.armed_ids() == {1}
-    finish = EventRow(id=2, session_id=1, seq=2, type="warp_entered", frame=600,
+    # The maintainer's shared LBLJ recording requires this basement-door stop.
+    # Feed the real event identity before checking its entrance finish.
+    basement = arrival_payload("door_open", ACT_PUSHING_DOOR,
+                               key="6:1:bhvDoor:-1775,0,-824")
+    engine.feed(row(basement), context)
+    finish = EventRow(id=3, session_id=1, seq=3, type="warp_entered", frame=600,
                      wall_time_utc=W, payload={"level": 6, "area": 1, "to": 17,
                                               "igt_frames": 500, "igt_source": "counter"})
     closed, _notices = engine.feed(finish, context)

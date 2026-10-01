@@ -29,20 +29,32 @@
 // without a browser (tests/test_ui_lone_route_option.py). The hook that calls
 // it lives in components/stagebanner.js, which is not import-free.
 //
-// The other condition, an EMPTY HAND, is `handIsEmpty` below and is the rule
-// that has already cost three separate bugs on this surface (a star grab, an
-// arena entry, and the Bowser reds row, all 2026-08-01/02): a convenience
-// default may fill an empty hand; it may not take something out of one.
+// 2026-09-30: a sole VISIBLE choice replaces a retained hidden target too.
+// Count armed extras alongside the row's ordinary choices. Two choices still
+// infer nothing; a delayed selection is bound to the observed target/place.
 
 export function loneOption(options) {
   return (options || []).length === 1 ? options[0] : null;
 }
 
-// The practice target as the server models it: `kind` plus an identity. A
-// target with no identity is what the projector leaves behind when it retires
-// one (entering a course that is not its origin), and it is the state the
-// player sees as "No active objective" — the one an auto-pick may fill.
-export function handIsEmpty(target) {
+// This tuple is the journal's target identity, shared by selector comparison
+// and the automatic request's expected-target binding. Zero is a valid ID.
+export function targetTuple(target) {
   const held = target || {};
-  return held.segment_id == null && held.course_id == null;
+  if (held.kind === "segment" && held.segment_id != null)
+    return ["segment", held.segment_id];
+  if (held.kind !== "segment" && held.course_id != null && held.star_id != null)
+    return ["star", held.course_id, held.star_id];
+  return null;
+}
+
+export function needsSoleSelection(option, target) {
+  return option != null
+    && JSON.stringify(targetTuple(option)) !== JSON.stringify(targetTuple(target));
+}
+
+export function soleSelectionBinding(target, stage) {
+  const place = stage || {};
+  return { target: targetTuple(target), stage: [place.level ?? null,
+    place.mode === "castle" ? place.area ?? null : null] };
 }

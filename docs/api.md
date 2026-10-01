@@ -242,6 +242,16 @@ aborted. `ui/components/marks.js` owns the wording and the badge;
 
 ## HTTP API
 
+The target selector automatically selects its sole visible choice. Its
+`POST /api/target` includes `auto: true` and
+`sole_selection: {target: ["segment", id] | ["star", course, slot] | null,
+stage: [level, area]}` describing the target and place observed by that selector.
+Only castle selectors bind `area`; other rows send `null` because their choices
+span the whole level. This selection can replace a retained target, provided
+the observed target and place still match. A stale place returns 409; a stale
+target is silently declined during projection. Ordinary automatic fills retain
+their existing protection against displacing a hooked target.
+
 Segment definitions with both `start_triggers: []` and `end_triggers: []`
 are manual entries: they support imported times and standards but never arm
 from game events. A definition with only one empty end is invalid. Automatic

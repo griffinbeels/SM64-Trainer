@@ -1,4 +1,45 @@
 {
   "format_version": 1,
-  "segments": []
+  "segments": [
+    {
+      "base_fingerprint": "366824345cd59d1eee553c2fb1ef7f7cf3a0399171d67935d9f2017ecc62e264",
+      "definition": {
+        "seed_key": "seg:lblj",
+        "name": "LBLJ",
+        "enabled": true,
+        "start_triggers": [
+          {
+            "type": "moment_reached",
+            "kind": "door_arrived",
+            "level": 6,
+            "landmark": "6:1:bhvDoorWarp:-1100,0,2202"
+          }
+        ],
+        "end_triggers": [
+          {
+            "type": "entrance_touched",
+            "to": 17
+          }
+        ],
+        "waypoints": [
+          [
+            {
+              "type": "moment_reached",
+              "kind": "door_open",
+              "level": 6,
+              "landmark": "6:1:bhvDoor:-1775,0,-824"
+            }
+          ]
+        ],
+        "guards": [],
+        "category": "Tricks",
+        "default_strat": "Standard",
+        "match_mode": "strict",
+        "parents": [
+          "area:6:1"
+        ],
+        "clock_start": "move"
+      }
+    }
+  ]
 }

@@ -10,6 +10,19 @@ paths:
 
 # The selector — the quick-select row, its cells and their art
 
+## Sole visible choice (2026-09-30)
+
+`stagebanner.js::useLoneRouteOption` serves every row. Exactly one rendered
+choice is always selected, including after a warp while a hidden target is
+retained. Count armed extras too; two cells infer no choice. The old empty-hand
+condition and ArenaRow's `heldStartsHere` exception no longer govern this case.
+Identity dependencies stop repeat writes and retry after a raced target change.
+`target.js` sends a `sole_selection` target/place binding; the projector rejects
+stale offers and keeps automatic selection distinct from a click. Only castle
+choices bind an area; course subareas do not narrow the selector. Generic auto
+fills and the two-choice Bowser family memory retain their existing arbitration.
+Tests: `test_ui_lone_route_render.py`, `test_sole_target_selection.py`.
+
 Split out of `.claude/rules/ui-practice.md` on 2026-08-08, when that file
 passed its 80,000-character ceiling. **`.claude/rules/ui-core.md` loads
 alongside this** (the shell, the shared primitives, the verification norms)

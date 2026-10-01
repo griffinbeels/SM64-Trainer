@@ -10,6 +10,7 @@ import dataclasses
 import re
 import threading
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -38,6 +39,12 @@ from sm64_events.tracking.views import (build_entity_ranks,
                                         stamp_origins)
 
 
+class SoleSelection(BaseModel):
+    """Bind a sole visible offer to the target and place the client observed."""
+    target: tuple[Literal["segment"], int] | tuple[Literal["star"], int, int] | None
+    stage: tuple[int | None, int | None]
+
+
 class TargetBody(BaseModel):
     kind: str = "star"
     course_id: int | None = None
@@ -49,6 +56,7 @@ class TargetBody(BaseModel):
     # projector holds the two by different rules (round 19: a fill is
     # detection-flavored; a click is sovereign and clears the queue).
     auto: bool = False
+    sole_selection: SoleSelection | None = None
 
 
 class ClearBody(BaseModel):
@@ -1184,7 +1192,9 @@ def create_api_router(service) -> APIRouter:
             result = await service.request_target(
                 body.kind, course_id=body.course_id, star_id=body.star_id,
                 segment_id=body.segment_id, strat_tag=body.strat_tag,
-                clear_strat=clear_strat, auto=body.auto)
+                clear_strat=clear_strat, auto=body.auto,
+                sole_selection=body.sole_selection.model_dump(mode="json")
+                    if body.sole_selection is not None else None)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True, **result}

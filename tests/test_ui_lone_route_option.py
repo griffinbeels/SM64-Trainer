@@ -35,7 +35,7 @@ TARGET_JS = UI / "target.js"
 
 
 def run_node(expression: str):
-    script = (f"import {{ loneOption, handIsEmpty }} from {RULE_URI!r};\n"
+    script = (f"import {{ loneOption, targetTuple, needsSoleSelection, soleSelectionBinding }} from {RULE_URI!r};\n"
               f"console.log(JSON.stringify({expression}));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
@@ -76,22 +76,37 @@ def test_no_options_at_all_is_not_a_pick():
     assert run_node("loneOption(undefined)") is None
 
 
-def test_a_hand_holding_anything_is_not_empty():
-    """The third condition, and the one with a body count: a convenience
-    default may FILL an empty hand; it may not take something out of one."""
-    assert run_node("handIsEmpty({})") is True
-    assert run_node("handIsEmpty(null)") is True
-    # What the projector leaves after retiring a target: a kind, no identity.
-    assert run_node('handIsEmpty({"kind": "star"})') is True
-    assert run_node('handIsEmpty({"kind": "star", "course_id": 8, "star_id": 1})') is False
-    assert run_node('handIsEmpty({"kind": "segment", "segment_id": 40})') is False
-    # star_id 0 is a real star (the reds star) and course_id 0 is a real
-    # course (the castle secret stars) -- a falsy-check here would read both
-    # as an empty hand and overwrite them.
-    assert run_node('handIsEmpty({"kind": "star", "course_id": 0, "star_id": 0})') is False
+@pytest.mark.parametrize("held", [None, {}, {"kind": "star"},
+    {"kind": "star", "course_id": 8, "star_id": 1},
+    {"kind": "segment", "segment_id": 40}])
+def test_a_sole_visible_segment_replaces_an_empty_or_different_target(held):
+    assert run_node('needsSoleSelection({"kind":"segment","segment_id":1},'
+                    + json.dumps(held) + ')') is True
 
 
-# --- one door, and both rows go through it ---------------------------------
+def test_an_already_selected_sole_option_causes_no_write():
+    assert run_node('needsSoleSelection({"kind":"segment","segment_id":1},'
+                    '{"kind":"segment","segment_id":1})') is False
+    assert run_node('needsSoleSelection({"course_id":0,"star_id":0},'
+                    '{"kind":"star","course_id":0,"star_id":0})') is False
+    assert run_node('needsSoleSelection(null,{"kind":"segment","segment_id":1})') is False
+
+
+def test_target_identity_preserves_zero_ids_and_distinguishes_both_kinds():
+    assert run_node('targetTuple({"kind":"star","course_id":0,"star_id":0})') == ["star", 0, 0]
+    assert run_node('targetTuple({"kind":"segment","segment_id":1})') == ["segment", 1]
+    assert run_node('targetTuple({"kind":"star"})') is None
+
+
+def test_only_castle_choices_bind_the_subarea():
+    assert run_node('soleSelectionBinding(null,{"mode":"castle","level":6,"area":1})') == {
+        "target": None, "stage": [6, 1]}
+    assert run_node('soleSelectionBinding({"course_id":2,"star_id":1},'
+                    '{"mode":"stars","level":24,"area":1})') == {
+        "target": ["star", 2, 1], "stage": [24, None]}
+
+
+# --- all selector rows share the same policy ------------------------------
 
 def _banner() -> str:
     return strip_comments(BANNER.read_text(encoding="utf-8"))
@@ -103,48 +118,35 @@ def hook_call_sites(source: str) -> int:
 
 def test_the_star_row_and_the_segment_row_share_ONE_implementation():
     """Rule 11 (star/segment parity) as a structural fact rather than a
-    promise: one definition, one import of the rule, and exactly the two
-    call sites — the hook's own and the two rows'."""
+    promise: one definition and all five visible selector rows share it."""
     source = _banner()
     assert source.count("function useLoneRouteOption(") == 1
-    assert hook_call_sites(source) == 3       # the definition + two rows
+    assert hook_call_sites(source) == 6       # definition + all five rows
     assert source.count("loneOption(") >= 2
     assert 'from "../loneoption.js"' in source, (
         "the rule must be imported, never restated in the banner")
 
 
-def test_the_auto_pick_is_quiet_at_both_call_sites():
+def test_the_shared_auto_pick_is_quiet_and_bound_to_a_sole_visible_offer():
     """A write no gesture asked for must not raise the server's refusal notice
     at nobody, and must not cut short a rank-up celebration (target.js says
-    why). Both are one flag, so both call sites have to pass it."""
+    why). The shared hook owns these flags for every row."""
     source = _banner()
-    assert source.count("{ quiet: true }") == 2
+    assert source.count("{ quiet: true, sole: true }") == 1
     assert "quiet = false" in strip_comments(TARGET_JS.read_text(encoding="utf-8"))
 
 
 def test_the_segment_row_reads_THE_LIST_IT_DRAWS():
-    """REVERSED 2026-08-05, and worth stating as a reversal rather than
-    quietly rewriting: this guard used to assert the opposite.
+    """Count the rendered offer, including armed extras and route narrowing.
 
-    It pinned `inRoute`, the route-filtered list, precisely so that a castle
-    subarea holding a single segment would NOT auto-pick -- "a lone option in
-    the fallback list is one the route said nothing about". Griffin then asked
-    for exactly that case by name: "when there's only one valid option for a
-    given course / area due to either there genuinely being only one option
-    (like in Bowser 3...) OR because the route itself reduces the
-    star/segment space down to only one option."
-
-    So the row reads `segs` -- the list actually drawn -- and WHERE the
-    narrowing came from is no longer part of the rule. What still holds the
-    line is the count: two options infer nothing, route or no route
-    (`test_two_options_infer_NOTHING`).
+    This keeps both historical reversals: a fallback sole option is eligible
+    (2026-08-05), and a retained target does not prevent it (2026-09-30).
     """
     source = _banner()
     reads = re.findall(r"const lone = loneOption\((\w+)\)", source)
-    assert reads == ["shown", "segs"], (
-        "both rows must feed the rule the list they RENDER — the star row's "
-        "`shown` and the segment row's `segs` — or a place that genuinely "
-        f"offers one thing goes unpicked: reads {reads}")
+    assert reads == ["choices"] * 5, (
+        "all rows count their full rendered offer, including armed extras: "
+        f"reads {reads}")
 
 
 @pytest.mark.parametrize("sample,expected", [

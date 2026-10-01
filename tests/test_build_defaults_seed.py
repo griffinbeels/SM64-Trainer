@@ -42,7 +42,9 @@ def test_legacy_segments_preserve_their_reviewed_trigger_definitions():
     Skip's end is unchanged and is the control: it ends by entering the CASTLE,
     which has no entrance to touch.
     """
-    seed = build_seed.build()
+    # Maintainer-authored corrections legitimately replace these definitions;
+    # pin the base corpus here, while drift tests cover the assembled seed.
+    seed = build_seed.base()
     by_key = {s["seed_key"]: s for s in seed["segments"]}
     lblj = by_key["seg:lblj"]
     assert lblj["start_triggers"] == [
@@ -152,7 +154,7 @@ def test_every_non_movement_defs_match_mode():
     pins the actual counts, not a `not s["guards"]` catch-all, so a future
     row landing in the wrong bucket fails here by COUNT instead of silently
     joining whichever assertion still happens to pass."""
-    seed = build_seed.build()
+    seed = build_seed.base()
     by_key = {s["seed_key"]: s for s in seed["segments"]}
     legacy_plain = ["seg:lblj", "seg:mips-clip", "seg:lakitu-skip",
                     "seg:bits-entry", "seg:bowser-1", "seg:bowser-2",

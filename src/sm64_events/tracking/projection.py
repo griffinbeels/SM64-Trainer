@@ -1517,6 +1517,19 @@ class Projector:
             self.target = None
             self._promote_or_neutral(ev.frame)
 
+    def _declines_automatic_target(self, payload: dict) -> bool:
+        """A sole offer can replace only the target/place its selector observed."""
+        if not payload.get("auto"):
+            return False
+        sole = payload.get("sole_selection")
+        if sole is None:
+            return self.target is not None and self._target_hooked
+        expected = tuple(sole["target"]) if sole["target"] is not None else None
+        level, area = sole["stage"]
+        return (self.target != expected
+                or level != self._level
+                or (area is not None and area != self._area))
+
     def _dispatch(self, ev) -> list[Attempt]:
         if ev.type in ANCHOR_EVENT_TYPES:
             if ev.payload.get("area_load") or ev.payload.get("teleport"):
@@ -1675,14 +1688,10 @@ class Projector:
             # on a real anchor in a foreign course, or expires -- and his
             # worked example is a trip out through a course and back to redo
             # the fight, with the selection expected to survive. A place kill
-            # would fire on that trip. So the arena hold he reported (`BitS
-            # Pipe Entry`, auto-filled on entering BitS) is NOT fixed here;
-            # round 29's ledger already prescribes the right shape for it --
-            # ship the head FLAVOR on the target payload and let the lone
-            # option displace a hooked head, since a place offering exactly
-            # one practicable thing is a better detection than a stale one
-            # carried in. That reverses a ruling and earns its own measured
-            # round rather than riding on this one.
+            # would fire on that trip. A selector offering exactly one
+            # visible choice can replace that held target separately, through
+            # the observed target/place binding on sole_selection. This place
+            # rule still does not kill a hooked head on its own.
             #
             # ADDED rather than substituted, and the measurement is the reason.
             # `places` contains the origin, so swapping the comparison for it
@@ -1735,18 +1744,12 @@ class Projector:
             self._area = ev.payload["to"]
             return []
         if ev.type == "target_set":
-            # `auto` marks a CONVENIENCE FILL (the arena row, the lone
-            # option) rather than his click. Each fill site carries its own
-            # decline rules (the lone option only fires on an empty hand;
-            # the arena row keeps a held target that starts in its own
-            # arena, 2026-08-05) — what none of them can see is a HOOKED
-            # head the server promoted between their read and their write,
-            # and a detection that won its turn must not lose it to a late
-            # offer (round 19). Dropped rather than queued: the queue holds
-            # armed detections, a fill is an offer, and the client re-offers
-            # whenever the hand empties.
+            # `auto` remains detection-flavored. Ordinary fills cannot take
+            # a hooked head. A sole visible choice can replace the observed
+            # target, but only while its target/place binding still matches.
+            # A newly promoted detection or a new place defeats a late offer.
             auto = bool(ev.payload.get("auto"))
-            if auto and self.target is not None and self._target_hooked:
+            if self._declines_automatic_target(ev.payload):
                 return []
             self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
             if ev.payload.get("kind") == "segment":

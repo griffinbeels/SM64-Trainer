@@ -794,7 +794,8 @@ class TrackerService:
                              segment_id: int | None = None,
                              strat_tag: str | None = None,
                              clear_strat: bool = False,
-                             auto: bool = False) -> dict:
+                             auto: bool = False,
+                             sole_selection: dict | None = None) -> dict:
         """Set the practice target, or refuse a pick from somewhere else.
 
         You practice what is in front of you: a pick the player is not
@@ -819,6 +820,13 @@ class TrackerService:
         practice card highlights.
         """
         self._require_db()
+        if sole_selection is not None:
+            expected_level, expected_area = sole_selection["stage"]
+            if (expected_level != self._current_stage.get("level")
+                    or (expected_area is not None
+                        and expected_area != self._current_stage.get("area"))):
+                raise ValueError("the selector changed before automatic selection")
+            auto = True
         if kind == "segment" and segment_id is not None:
             found = next((d for d in self._segment_defs if d.id == segment_id),
                         None)
@@ -857,18 +865,24 @@ class TrackerService:
                 f"that one is in {node_label(node)}")
         if kind == "segment":
             await self.set_target_segment(segment_id, strat_tag,
-                                          clear_strat=clear_strat, auto=auto)
+                                          clear_strat=clear_strat, auto=auto,
+                                          sole_selection=sole_selection)
         else:
             await self.set_target(course_id, star_id, strat_tag,
-                                  clear_strat=clear_strat, auto=auto)
+                                  clear_strat=clear_strat, auto=auto,
+                                  sole_selection=sole_selection)
         return {}
 
     async def set_target(self, course_id: int, star_id: int,
                          strat_tag: str | None = None,
                          clear_strat: bool = False,
-                         auto: bool = False) -> None:
+                         auto: bool = False,
+                         sole_selection: dict | None = None) -> None:
         db = self._require_db()
         payload = {"course_id": course_id, "star_id": star_id}
+        if sole_selection is not None:
+            payload["sole_selection"] = sole_selection
+            auto = True
         if auto:
             # A convenience fill, not his click (round 19) — the projector
             # holds the two by different rules. Only ever written when true,
@@ -896,11 +910,15 @@ class TrackerService:
     async def set_target_segment(self, segment_id: int,
                                  strat_tag: str | None = None,
                                  clear_strat: bool = False,
-                                 auto: bool = False) -> None:
+                                 auto: bool = False,
+                                 sole_selection: dict | None = None) -> None:
         self._require_db()
         if all(d.id != segment_id for d in self._segment_defs):
             raise LookupError(f"segment {segment_id} not found")
         payload = {"kind": "segment", "segment_id": segment_id}
+        if sole_selection is not None:
+            payload["sole_selection"] = sole_selection
+            auto = True
         if auto:
             # See set_target: a fill is detection-flavored, a click is not.
             payload["auto"] = True
