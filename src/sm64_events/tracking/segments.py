@@ -347,7 +347,8 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           world_connections, world_regions)
 from sm64_events.core.landmark import instance_place, landmark_group, same_landmark
 from sm64_events.detectors.igt_clock import IgtClock
-from sm64_events.detectors.moment import MOMENTS, matches_moment_kind
+from sm64_events.detectors.moment import (MOMENTS, effective_moment_kind,
+                                          matches_moment_kind)
 # The verb splice ("Open a door" -> "Open") lives with the row labeller and
 # is borrowed, not copied: a landmark-pinned clause must read exactly like
 # the row it was picked from, and two copies of the rule is how they drift.
@@ -1854,7 +1855,7 @@ _PRESENCE_TRIGGER_TYPES = frozenset(
     {"level_enter", "area_enter", "attempt_anchor", "spawned"})
 
 
-def hooks_on_arm(start_triggers: list) -> bool:
+def hooks_on_arm(start_triggers: list, ev=None) -> bool:
     """True when this definition's arming is a DELIBERATE act the target
     queue may hook (round 19, 2026-08-08: "the held target should prioritize
     whatever is hooked into first").
@@ -1869,6 +1870,11 @@ def hooks_on_arm(start_triggers: list) -> bool:
     that detection enters the queue. Conservative across any-of clause sets:
     ONE presence clause disqualifies the def, because the notice does not say
     which clause fired."""
+    # A preserved legacy door_open clause also matches arrival rows. Judge
+    # the actual boundary so an arrival cannot masquerade as an opening.
+    if (ev is not None and ev.type == "moment_reached"
+            and effective_moment_kind(ev.payload) == "door_arrived"):
+        return False
     # Arriving through a door (including a Usamune warp) is presence too.
     # It can arm LBLJ while Castle Entrance → BoB is also valid; the actual
     # selector's singleton rule or an explicit click establishes the choice.

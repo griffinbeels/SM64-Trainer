@@ -21,11 +21,11 @@ function pinnedPick(selection, id) {
     boundaries: { ...boundaries, finish_id: null } };
   if (starts.includes(id)) return { ...selection,
     ids: ids.filter((item) => item !== id), starts: starts.filter((item) => item !== id) };
+  if (ids.includes(id)) return { ...selection, ids: ids.filter((item) => item !== id) };
   if (finish == null) return { ...selection, ids: [...ids, id],
     boundaries: { ...boundaries, finish_id: id } };
   const middles = ids.filter((item) => item !== primary && item !== finish);
-  const next = middles.includes(id) ? middles.filter((item) => item !== id) : [...middles, id];
-  return { ...selection, ids: [primary, ...chronological(next), finish] };
+  return { ...selection, ids: [primary, ...chronological([...middles, id]), finish] };
 }
 
 function ordinaryPick(selection, id) {

@@ -310,7 +310,8 @@ def test_exact_saved_castle_choices_are_complete_before_and_after_door_arrival(t
         assert len(_target_writes(service)) == before
 
 
-def test_explicit_castle_choice_returns_for_this_session_and_new_session_is_idle(tmp_path):
+@pytest.mark.parametrize("newer_pick", [False, True])
+def test_castle_choice_survives_travel_but_not_a_newer_click_and_new_session_forgets(tmp_path, newer_pick):
     with serve_ui_live(seed=False, bundled_library=False) as (base, service):
         lblj_id, _bob_id = _saved_castle_choices(base, service)
         with get_driver().launch() as page:
@@ -319,11 +320,18 @@ def test_explicit_castle_choice_returns_for_this_session_and_new_session_is_idle
             page.click('.stagebanner .starcell[title="LBLJ"]')
             assert _wait_for_target(page, {"kind": "segment", "segment_id": lblj_id})["matched"]
             _place(service, 17, 16, "bowser_course", 150)
-            _request(base, "/api/target", {"course_id": 16, "star_id": 0})
+            if newer_pick:
+                _request(base, "/api/target", {"course_id": 16, "star_id": 0})
             _place(service, 6, None, "castle", 180)
             _wait_for_cells(page, 2)
-            assert _wait_for_target(page, {"kind": "segment", "segment_id": lblj_id})["matched"]
-            _capture(page, base, tmp_path, "session-castle-choice-restored", {})
+            expected = ({"kind": "star", "course_id": 16, "star_id": 0} if newer_pick
+                        else {"kind": "segment", "segment_id": lblj_id})
+            result = _wait_for_target(page, expected)
+            assert result["matched"], result
+            if newer_pick:
+                assert page.evaluate("document.querySelectorAll('.stagebanner .active-star').length") == 0
+            label = "newer-click-blocks-castle-recall" if newer_pick else "session-castle-choice-restored"
+            _capture(page, base, tmp_path, label, result)
             _run_coro(service.new_session())
             page.wait_ms(500)
             _wait_for_cells(page, 2)

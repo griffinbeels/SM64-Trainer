@@ -1059,7 +1059,7 @@ class Projector:
         self._remember_star_choices(closed)
         self._remember_session_successes(ev, closed, hidden_exit_ids)
         self._suspend_star_for_segment()
-        self._queue_new_hooks()
+        self._queue_new_hooks(ev)
         self._settle_segment_target(ev, head_popped)
         # Run engine sees the same event + the attempts just closed (star AND
         # segment successes/failures); it owns the run lifecycle independently.
@@ -1143,7 +1143,8 @@ class Projector:
     def _castle_recall_choice(self) -> tuple[int | None, bool]:
         latest, completion = self._latest_session_success()
         choice = self._session_castle_choices.get(self._area)
-        if choice and (choice[1] > completion or latest == ("segment", choice[0])):
+        if (choice and choice[1] == self._last_manual_target_id
+                and (choice[1] > completion or latest == ("segment", choice[0]))):
             return choice[0], True
         if (latest is None or latest[0] != "segment"
                 or self._last_manual_target_id > completion):
@@ -1555,7 +1556,7 @@ class Projector:
             self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None
 
-    def _queue_new_hooks(self) -> None:
+    def _queue_new_hooks(self, ev) -> None:
         # THE TARGET QUEUE (round 19). Every DELIBERATE arm this event
         # produced lines up (segments.hooks_on_arm — a presence arm like
         # LBLJ's castle entry or a pipe family's course entry never does);
@@ -1601,7 +1602,7 @@ class Projector:
                 continue
             sid = n["segment_id"]
             armed_def = self._segments.definition(sid)
-            if (armed_def is None or not hooks_on_arm(armed_def.start_triggers)
+            if (armed_def is None or not hooks_on_arm(armed_def.start_triggers, ev)
                     or speaks_through_a_parent(armed_def.parents)
                     or sid == head_seg or sid in self._target_queue
                     or sid in hooking):

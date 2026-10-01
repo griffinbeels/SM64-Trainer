@@ -260,3 +260,118 @@ def test_an_older_finish_keeps_the_newest_primary_and_alternate_start(tmp_path, 
             for field in ("start_triggers", "end_triggers", "waypoints", "match_mode", "clock_start"):
                 assert latest_backtest[field] == posted[field] == saved[field]
             assert page.problems() == []
+
+
+def _assert_vacant_finish(page, removed_labels, picked_count):
+    state = page.evaluate(f"""return (async () => {{
+      const removedLabels = {json.dumps(removed_labels)};
+      const deadline = Date.now() + 10000;
+      let state;
+      while (Date.now() < deadline) {{
+        const rows = Array.from(document.querySelectorAll('.modal .record-row'));
+        state = {{
+          removed: removedLabels.map(label => {{
+            const matches = rows.filter(row =>
+              row.querySelector('.record-label').textContent.trim() === label);
+            return matches.length === 1 && matches[0].getAttribute('aria-pressed') === 'false'
+              && !matches[0].classList.contains('picked');
+          }}),
+          finishes: document.querySelectorAll('.modal .record-mark.role-finish').length,
+          picked: document.querySelectorAll('.modal .record-row.picked').length,
+          saveAbsent: !document.querySelector('.modal .builder-actions .primary-button'),
+          instruction: document.querySelector('.record-picks').textContent
+        }};
+        if (state.removed.every(Boolean) && state.finishes === 0
+            && state.picked === {picked_count} && state.saveAbsent
+            && state.instruction.includes('Pick the finish')) return state;
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }}
+      return state;
+    }})();""")
+    assert state["removed"] == [True] * len(removed_labels), state
+    assert state["finishes"] == 0 and state["picked"] == picked_count, state
+    assert state["saveAbsent"] and "Pick the finish" in state["instruction"], state
+
+
+def _capture_vacant_finish(page, tmp_path):
+    captures = Path(os.environ.get("SM64_REPORT_DIR") or tmp_path)
+    captures.mkdir(parents=True, exist_ok=True)
+    for width in (1500, 850):
+        page.set_viewport(width, 1180)
+        page.wait_ms(250)
+        page.evaluate("document.querySelector('.modal .modal-body').scrollTop = 0")
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        shot = captures / f"recorder-vacant-finish-{width}.png"
+        shot.write_bytes(page.screenshot())
+        print(f"Vacant-finish screenshot: {shot}")
+
+
+def _open_recorder_and_watch_saves(page, base):
+    page.goto(f"{base}/ui/index.html")
+    page.wait_for('button.nav-item[title="Segments"]')
+    page.click('button.nav-item[title="Segments"]')
+    page.wait_for(".segments-page .library-search")
+    page.evaluate("""const buttons = Array.from(document.querySelectorAll('.segments-page button'));
+      buttons.find(button => button.textContent.includes('Record a segment')).click();""")
+    page.wait_for(".record-row")
+    page.evaluate("""window.__recordStartRequests = [];
+      const original = window.fetch;
+      window.fetch = function(url, options = {}) {
+        if (options.body && String(url).startsWith('/api/segments'))
+          window.__recordStartRequests.push({url: String(url),
+            method: options.method, body: JSON.parse(options.body)});
+        return original.call(this, url, options);
+      };""")
+    timeline = page.evaluate("return fetch('/api/segments/timeline?limit=200&view=steps').then(r=>r.json())")
+    return {row["frame"]: row for row in timeline["rows"]
+            if row["type"] == "moment_reached" and row["frame"] >= 70000}
+
+
+def test_unpicking_a_step_does_not_fill_a_vacant_recorded_finish(tmp_path, monkeypatch):
+    # Exercise the real mounted recorder and actual HTTP writes in an isolated,
+    # personal fixture; the release-authoring files must never enter this test.
+    monkeypatch.setattr(api, "shared_defaults_root", lambda: None)
+    monkeypatch.setattr(service_module, "shared_defaults_root", lambda: None)
+    with serve_ui_live(seed=False) as (base, service):
+        _seed_recording(service)
+        with get_driver().launch() as page:
+            rows = _open_recorder_and_watch_saves(page, base)
+            assert set(rows) == {70000, 70030, 70120, 70140}
+            for frame in (70000, 70030, 70120):
+                _pick_label(page, rows[frame]["label"])
+            _ready_to_save(page)
+            assert page.evaluate("document.querySelectorAll('.modal .record-mark.role-stop').length") == 1
+            name = "Recorder removed step leaves finish vacant"
+            page.evaluate(f"""const input = document.querySelector('.record-review .builder-name input');
+              input.value = {json.dumps(name)};
+              input.dispatchEvent(new Event('input', {{bubbles: true}}));""")
+            _toolbar_click(page, "Add another start")
+            _toolbar_click(page, "Done adding starts")
+            _pick_label(page, rows[70120]["label"])
+            _assert_vacant_finish(page, [rows[70120]["label"]], 2)
+            _pick_label(page, rows[70030]["label"])
+            _assert_vacant_finish(page, [rows[70120]["label"], rows[70030]["label"]], 1)
+            _capture_vacant_finish(page, tmp_path)
+            _pick_label(page, rows[70140]["label"])
+            _ready_to_save(page)
+            _capture_review(page, tmp_path, "recorder-replacement-finish")
+            requests = page.evaluate("window.__recordStartRequests")
+            checked = [next(request["body"]["definition"] for request in reversed(requests)
+                            if request["url"] == f"/api/segments/{endpoint}")
+                       for endpoint in ("backtest", "lint")]
+            page.click(".modal .builder-actions .primary-button")
+            page.wait_for(".segbuilder .builder-name input")
+            saved_rows = page.evaluate("return fetch('/api/segments').then(r=>r.json())")
+            saved = next(row for row in saved_rows if row["name"] == name)
+            expected_start = [{"type": "moment_reached", "kind": "door_open", "level": 6, "ordinal": 51}]
+            expected_end = [{"type": "moment_reached", "kind": "door_open", "level": 6, "ordinal": 54}]
+            assert saved["start_triggers"] == expected_start
+            assert saved["end_triggers"] == expected_end and saved["waypoints"] == []
+            requests = page.evaluate("window.__recordStartRequests")
+            posted = next(request["body"] for request in requests
+                          if request["method"] == "POST" and request["url"] == "/api/segments?scope=personal")
+            assert checked[0] == checked[1] == posted
+            for field in ("start_triggers", "end_triggers", "waypoints", "match_mode", "clock_start"):
+                assert posted[field] == saved[field]
+            assert saved["match_mode"] == "strict" and saved["clock_start"] == "move"
+            assert page.problems() == []

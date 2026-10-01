@@ -3,6 +3,7 @@ from dataclasses import replace
 
 import pytest
 
+from sm64_events.memory.addresses import ACT_PULLING_DOOR, ACT_WARP_DOOR_SPAWN
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.projection import Projector, replay
 from sm64_events.tracking.segments import SegmentDef, selector_start_areas, start_origin
@@ -66,6 +67,30 @@ def test_exact_saved_starts_are_both_offered_before_the_door_fires():
     assert play.projector.target is None
 
 
+@pytest.mark.parametrize("kind,action,hooked", [
+    ("door_arrived", ACT_WARP_DOOR_SPAWN, False),
+    ("door_open", ACT_WARP_DOOR_SPAWN, False),
+    ("door_open", ACT_PULLING_DOOR, True),
+])
+def test_legacy_door_start_hooks_an_opening_but_not_an_arrival(kind, action, hooked):
+    defs = definitions()
+    legacy = replace(defs[0], start_triggers=[{**LBLJ_START, "kind": "door_open"}])
+    play = Play([legacy, *defs[1:]])
+    play.place(16)
+    play.place(6)
+    assert play.projector._castle_selector_ids() == {1, 11}
+    assert play.projector.target is None
+    play.send("moment_reached", {"kind": kind, "action": action, "level": 6,
+        "area": 1, "landmark": {"key": LOBBY_DOOR}, "igt_frames": 2})
+    assert play.projector.armed_segment_ids() == {1, 11}
+    assert play.projector.target == (("segment", 1) if hooked else None)
+    assert play.projector._target_hooked is hooked
+    assert play.projector.target_queue() == []
+    _, rebuilt = replay(play.events, segments=play.defs)
+    assert rebuilt.target == play.projector.target
+    assert rebuilt._target_hooked == play.projector._target_hooked
+
+
 def test_landmark_origin_preserves_explicit_area_and_all_or_sides():
     basement = {**LBLJ_START, "landmark": BASEMENT_DOOR}
     assert start_origin([basement]) == "6:3"
@@ -84,17 +109,20 @@ def test_exit_origin_does_not_offer_a_course_movement_as_a_lobby_start():
     assert selector_start_areas([{"type": "reset_game"}]) == []
 
 
-def test_manual_lblj_choice_restores_after_foreign_play_and_replays_identically():
+@pytest.mark.parametrize("newer_pick", [False, True])
+def test_castle_click_survives_foreign_travel_but_not_a_newer_star_click(newer_pick):
     play = Play()
     play.place(6)
     play.pick(1)
     play.place(17)
-    play.send("target_set", {"course_id": 16, "star_id": 0})
+    if newer_pick:
+        play.send("target_set", {"course_id": 16, "star_id": 0})
     play.place(6)
-    assert play.projector.target == ("segment", 1)
-    assert play.projector._picked_target == ("segment", 1)
+    expected = ("star", 16, 0) if newer_pick else ("segment", 1)
+    assert play.projector.target == expected
+    assert play.projector._picked_target == expected
     assert not play.projector._target_hooked
-    assert len([e for e in play.events if e.type == "target_set"]) == 2
+    assert len([e for e in play.events if e.type == "target_set"]) == 1 + newer_pick
     _, rebuilt = replay(play.events, segments=play.defs)
     assert rebuilt.target == play.projector.target
     assert rebuilt._session_castle_choices == play.projector._session_castle_choices
@@ -127,37 +155,42 @@ def test_a_later_click_replaces_the_session_choice_and_new_session_forgets_it():
     assert play.projector._session_castle_choices == {}
 
 
-def test_departing_area_cannot_restore_a_basement_choice_on_lobby_entry():
+@pytest.mark.parametrize("newer_pick", [False, True])
+def test_lobby_click_survives_area_travel_but_not_a_newer_basement_click(newer_pick):
     play = Play()
     play.place(6, 1)
     play.pick(1)
     play.place(6, 3)
-    play.pick(12)
+    if newer_pick:
+        play.pick(12)
     play.place(7, 3)
     play.send("level_changed", {"from": 7, "to": 6})
     assert play.projector.target != ("segment", 12)
     play.send("area_changed", {"level": 6, "from": None, "to": 1})
-    assert play.projector.target == ("segment", 1)
+    assert play.projector.target == (None if newer_pick else ("segment", 1))
+    _, rebuilt = replay(play.events, segments=play.defs)
+    assert rebuilt.target == play.projector.target
+    assert rebuilt._session_castle_choices == play.projector._session_castle_choices
 
 
-@pytest.mark.parametrize("change", ["disabled", "deleted", "piece"])
+@pytest.mark.parametrize("change", ["unchanged", "disabled", "deleted", "piece"])
 def test_remembered_choice_must_still_be_visible(change):
     play = Play()
     play.place(6)
     play.pick(1)
     play.place(17)
-    play.send("target_set", {"course_id": 16, "star_id": 0})
+    play.send("tracking_gap")  # Drop held focus; test restoring surviving session evidence.
     defs = play.defs
     if change == "disabled":
         defs = [replace(defs[0], enabled=False), *defs[1:]]
     elif change == "deleted":
         defs = defs[1:]
-    else:
+    elif change == "piece":
         defs = [replace(defs[0], parents=["segment:11"]), *defs[1:]]
     _, rebuilt = replay(play.events, segments=defs)
     play.projector = rebuilt
     play.place(6)
-    assert play.projector.target != ("segment", 1)
+    assert (play.projector.target == ("segment", 1)) is (change == "unchanged")
 
 
 def test_route_fallback_and_armed_extras_match_the_castle_offer():

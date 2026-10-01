@@ -224,6 +224,31 @@ test("removing the primary promotes the first alternate without inferring a diff
   expect(view.queryByRole("button", { name: "Add another start" })).toBeNull();
 });
 
+test("unselecting a step after removing Finish leaves Finish vacant", async () => {
+  const f = fixture(), view = render(h(SegmentTimeline, f.props));
+  await pickPath(view, true);
+  addStart(view);
+  clickRow(view, 1);
+  finishAdding(view);
+  clickRow(view, 30);
+  clickRow(view, 20);
+  expect(rowButton(view, 20).getAttribute("aria-pressed")).toBe("false");
+  expect(view.container.querySelectorAll(".record-mark.role-finish")).toHaveLength(0);
+  expect(view.container.querySelectorAll(".record-row.picked")).toHaveLength(2);
+  expect(view.container.querySelector(".record-picks").textContent).toMatch(/pick.*finish/i);
+  expect(view.container.querySelector(".builder-actions .primary-button")).toBeNull();
+  clickRow(view, 40);
+  await readyToSave(view);
+  const query = new URL(f.calls.synthesis.at(-1).path, "http://fixture").searchParams;
+  expect(query.get("ids").split(",").map(Number)).toEqual([10, 40]);
+  expect(query.get("finish_id")).toBe("40");
+  fireEvent.click(saveButton(view));
+  await waitFor(() => expect(f.calls.save).toHaveLength(1));
+  expect(f.calls.save[0].body.start_triggers).toEqual([clause(10), clause(1)]);
+  expect(f.calls.save[0].body.end_triggers).toEqual([clause(40)]);
+  expect(f.unexpected).toEqual([]);
+});
+
 test("the extra-start mode appears after a path pick and cannot reclassify its boundaries", async () => {
   const f = fixture(), view = render(h(SegmentTimeline, f.props));
   await view.findByRole("button", { name: /Usamune warp to Lobby/ });

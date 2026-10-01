@@ -80,6 +80,20 @@ def test_a_newer_successful_star_blocks_lblj_inference_and_dormant_click(pick):
     assert_replay_agrees(play)
 
 
+@pytest.mark.parametrize("old_click", [False, True])
+def test_a_newer_star_click_blocks_old_castle_recall_without_a_new_success(old_click):
+    play = Play()
+    complete_lblj(play, pick=old_click)
+    successes = dict(play.projector._session_successes)
+    play.place(9)
+    play.send("target_set", {"course_id": 1, "star_id": 0})
+    assert play.projector.target == ("star", 1, 0)
+    return_to_start(play)
+    assert play.projector._session_successes == successes
+    assert play.projector.target is None
+    assert_replay_agrees(play)
+
+
 def test_a_newer_other_segment_replaces_the_old_success():
     play = Play()
     complete_lblj(play, pick=True)
