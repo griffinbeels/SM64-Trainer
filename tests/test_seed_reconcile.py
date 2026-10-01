@@ -2,9 +2,9 @@
 
 Mirrors ranks/standards's reconcile tests: a bundled seed inserts missing
 rows, refreshes untouched (seed_dirty=0) seeded rows, and never touches
-edited (seed_dirty=1) or user-created rows. The real-bundled-seed test is
-the gate proving the shipped defaults.seed.json cannot corrupt a live
-install's already-migrated LBLJ/Bowser rows (v5/v6 repairs)."""
+edited (seed_dirty=1) or user-created rows. The real-bundled-seed test pins
+deliberate trigger refinements and protects unrelated migrated fields.
+"""
 import json
 
 from sm64_events.core.paths import bundled_defaults_seed
@@ -147,12 +147,11 @@ def test_resolve_steps_unresolved_key_becomes_negative_one(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Real-bundled-seed agreement gate: proves the shipped defaults.seed.json
-# reconciles the 10 already-migrated (v5/v6-corrected) segments with ZERO
-# behavioral change — only `category` is newly set. If this ever fails, the
-# seed JSON has drifted from what a fresh migrated db actually holds, and
-# reconcile would silently rewrite a live user's triggers on startup.
+# reconciles the 10 already-migrated segments with only the intended trigger
+# refinements pinned below. Other trigger drift would silently rewrite an
+# untouched user's defaults on startup.
 
-def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
+def test_real_bundled_seed_applies_only_intended_segment_refinements(tmp_path):
     db = Database(tmp_path / "t.db")
     before = {s["seed_key"]: s for s in db.segment_defs() if s.get("seed_key")}
     assert len(before) == 10
@@ -167,14 +166,23 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
     # SUPERSET, not equality (2026-07-24): the seed legitimately INSERTS the
     # corpus's movement segments now, so "no new seeded rows" is no longer the
     # claim. What must still hold — and is the whole point of this gate — is
-    # that the ten already-migrated rows come out the other side untouched.
+    # that the ten already-migrated rows retain their identity and unrelated
+    # fields while receiving the deliberate refinements below.
     assert set(before) <= set(after)
     for key, before_row in before.items():
         after_row = after[key]
         assert after_row["name"] == before_row["name"]
         assert after_row["enabled"] == before_row["enabled"]
-        assert after_row["start_triggers"] == before_row["start_triggers"]
-        # END triggers are the ONE field the 2026-08-04 sweep moves (task
+        if key == "seg:lblj":
+            # 2026-09-30: only arriving through the specific front lobby
+            # door starts LBLJ; a generic lobby reset no longer does.
+            assert after_row["start_triggers"] == [
+                {"type": "moment_reached", "kind": "door_arrived",
+                 "level": 6, "area": 1,
+                 "landmark": "6:1:bhvDoorWarp:-1100,0,2202"}]
+        else:
+            assert after_row["start_triggers"] == before_row["start_triggers"]
+        # END triggers are the field the 2026-08-04 sweep moves (task
         # 0081): three of these ten now end on the ENTRANCE TOUCH rather than
         # the course load, and reconcile carrying that into an untouched
         # seeded row is exactly what is supposed to happen -- it is how the

@@ -7,14 +7,11 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "level_enter",
-          "to": 6,
-          "from": 16
-        },
-        {
-          "type": "attempt_anchor",
+          "type": "moment_reached",
+          "kind": "door_arrived",
           "level": 6,
-          "area": 1
+          "area": 1,
+          "landmark": "6:1:bhvDoorWarp:-1100,0,2202"
         }
       ],
       "end_triggers": [

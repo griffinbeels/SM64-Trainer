@@ -12,6 +12,14 @@ as alternative starts. Either start follows the same steps and finish. Shared
 saves preserve the full OR list just like a manually authored definition. See
 [the recorder guide](rules/recorder.md#alternative-recorded-starts).
 
+LBLJ's shipped start is **Arrive through the Castle Lobby Entrance Door**,
+pinned to that specific inside door. Walking in from the grounds and warping to
+it satisfy the same condition. Pulling it to leave, arriving through another
+door, or resetting elsewhere in the lobby does not start LBLJ. Its finish stays
+the Bowser in the Dark World entrance touch. Old menu-warp samples can be picked
+with their corrected arrival label; legitimate arrivals missing from older
+journals need to be recorded again with the corrected detector.
+
 A shared save writes the complete definition into the tracked authoring input
 `src/sm64_events/data/segments.authored.json` and regenerates
 `src/sm64_events/data/defaults.seed.json`. Existing defaults retain their stable
