@@ -685,7 +685,7 @@ class Projector:
         self.last_star_choice_by_course: dict[int, int] = {}
         # A click establishes castle practice for this session only. Detection
         # and automatic singleton fills cannot teach a preference.
-        self._session_castle_choices: dict[int, int] = {}
+        self._reset_session_recall()
         self._castle_area_known = False
         # Pre-seeded from the definitions' own default_strat (caveat 17), so
         # every consumer of this dict — attempt stamping below, the strat_tag
@@ -1057,6 +1057,7 @@ class Projector:
         self._retire_pending_target()
         head_popped, hidden_exit_ids = self._apply_segment_closures(ev, seg_closed, closed)
         self._remember_star_choices(closed)
+        self._remember_session_successes(ev, closed, hidden_exit_ids)
         self._suspend_star_for_segment()
         self._queue_new_hooks()
         self._settle_segment_target(ev, head_popped)
@@ -1081,13 +1082,52 @@ class Projector:
                     and not a.cleared):
                 self.last_star_choice_by_course[a.course_id] = a.star_id
 
-    def _remember_explicit_pick(self) -> None:
+    def _reset_session_recall(self) -> None:
+        self._session_castle_choices: dict[int, tuple[int, int]] = {}
+        # Finalized, visible played successes: attempt id -> (closing event,
+        # resolved entity). A None entity is ambiguous, so it blocks recall.
+        self._session_successes: dict[int, tuple[int, tuple | None]] = {}
+        self._last_manual_target_id = 0
+
+    def _remember_session_successes(self, ev, closed, hidden_exit_ids) -> None:
+        for a in closed:
+            if a.outcome != "success" or a.cleared or a.id in hidden_exit_ids:
+                continue
+            if a.segment_id is not None:
+                entity = self._follow_target(a.segment_id)
+                d = self._segments.definition(a.segment_id)
+                parents = entity_parents(d.parents, d.id) if d else []
+                if parents and target_entity_key(entity) not in parents:
+                    entity = None  # An ambiguous piece cannot resurrect an old focus.
+            elif a.course_id is not None and a.star_id is not None:
+                entity = ("star", a.course_id, a.star_id)
+            else:
+                continue
+            self._session_successes[a.id] = (ev.id, entity)
+
+    def _retain_session_successes(self, attempts) -> None:
+        surviving = {a.id for a in attempts}
+        self._session_successes = {aid: row for aid, row in self._session_successes.items()
+                                   if aid in surviving}
+
+    def _latest_session_success(self) -> tuple[tuple | None, int]:
+        if not self._session_successes:
+            return None, 0
+        newest = max(map(journal_id, self._session_successes))
+        rows = [row for aid, row in self._session_successes.items()
+                if journal_id(aid) == newest]
+        entities = {entity for _, entity in rows}
+        completion = max(row[0] for row in rows)
+        return (next(iter(entities)) if len(entities) == 1 else None), completion
+
+    def _remember_explicit_pick(self, ev) -> None:
+        self._last_manual_target_id = ev.id
         self._target_queue.clear()
         if self.target and self.target[0] == "star":
             self.last_star_choice_by_course[self.target[1]] = self.target[2]
         elif (self.target and self._level == LEVEL_CASTLE_INSIDE
               and self._area is not None):
-            self._session_castle_choices[self._area] = self.target[1]
+            self._session_castle_choices[self._area] = (self.target[1], ev.id)
 
     def _castle_selector_ids(self) -> set[int]:
         """The same static origin, route fallback and armed union as the row."""
@@ -1100,21 +1140,33 @@ class Projector:
                 if (d := self._segments.definition(sid)) is not None
                 and d.enabled and not entity_parents(d.parents, d.id)}
 
+    def _castle_recall_choice(self) -> tuple[int | None, bool]:
+        latest, completion = self._latest_session_success()
+        choice = self._session_castle_choices.get(self._area)
+        if choice and (choice[1] > completion or latest == ("segment", choice[0])):
+            return choice[0], True
+        if (latest is None or latest[0] != "segment"
+                or self._last_manual_target_id > completion):
+            return None, False
+        # The level event can arm before its co-frame area establishes the
+        # complete row. Armed evidence survives that ordering and quiet re-arms.
+        return (latest[1] if latest[1] in self.armed_segment_ids() else None), False
+
     def _restore_castle_choice(self, ev) -> None:
         if self._level != LEVEL_CASTLE_INSIDE or not self._castle_area_known:
             return
-        sid = self._session_castle_choices.get(self._area)
+        sid, explicit = self._castle_recall_choice()
         if sid is None or self.target == ("segment", sid):
             return
         offered = self._castle_selector_ids()
         if sid not in offered:
             return
-        if self._picked_target == self.target and self.target is not None:
+        if explicit and self._picked_target == self.target and self.target is not None:
             if (ev.type != "area_changed" or (self.target[0] == "segment"
                     and self.target[1] in offered)):
                 return  # Preserve a newer click; restore on returning to this row.
         self.target = ("segment", sid)
-        self._picked_target = self.target
+        self._picked_target = self.target if explicit else None
         self._target_hooked = False
         self._target_queue.clear()
         self._suspended_star = None
@@ -1607,7 +1659,7 @@ class Projector:
         closed = self._close(ev, outcome="abandoned", igt_frames=None)
         self.target = None
         self._target_hooked = False
-        self._session_castle_choices.clear()
+        self._reset_session_recall()
         self._target_queue.clear()
         self._suspended_star = None
         return closed
@@ -1817,7 +1869,7 @@ class Projector:
                 self.strat_by_star[(c, s)] = ev.payload["strat_tag"]
         self._picked_target = None if auto else self.target
         if not auto:
-            self._remember_explicit_pick()
+            self._remember_explicit_pick(ev)
         return []
 
     def _apply_strategy(self, ev) -> list[Attempt]:
@@ -2533,6 +2585,7 @@ def replay(events, segments=None, time_filters=None, origin_overrides=None,
             # reaches proj.feed(), so on_notices is correctly never called
             # for it either -- there are no notices to report.
             attempts = [a for a in attempts if not wipe_matches(a, ev.payload)]
+            proj._retain_session_successes(attempts)
             continue
         if ev.type == PRUNE_EVENT:
             # The startup prune of unlabelled attempts (tracking/prune.py),
@@ -2548,6 +2601,7 @@ def replay(events, segments=None, time_filters=None, origin_overrides=None,
             # last week — and there would be no record that it had.
             pruned = set(ev.payload.get("attempt_ids", ()))
             attempts = [a for a in attempts if a.id not in pruned]
+            proj._retain_session_successes(attempts)
             continue
         attempts.extend(proj.feed(ev))
         if on_notices is not None:

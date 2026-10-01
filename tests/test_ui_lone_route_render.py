@@ -355,3 +355,53 @@ def test_no_area_sole_lblj_still_selects_without_a_door_event(tmp_path):
             result = _wait_for_target(page, {"kind": "segment", "segment_id": lblj_id})
             _capture(page, base, tmp_path, "sole-no-area-lblj", result)
             assert result["matched"]
+
+
+def test_latest_valid_success_recalls_lblj_until_a_newer_star_is_played(tmp_path):
+    with serve_ui_live(seed=False, bundled_library=False) as (base, service):
+        lblj_id, _bob_id = _saved_castle_choices(base, service)
+        _request(base, f"/api/segments/{lblj_id}", {
+            "clock_start": "move", "match_mode": "strict", "waypoints": [[{
+                "type": "moment_reached", "kind": "door_open", "level": 6,
+                "landmark": "6:1:bhvDoor:-1775,0,-824"}]]}, "PUT")
+        arrival = {"kind": "door_arrived", "level": 6, "area": 1,
+                   "landmark": {"key": "6:1:bhvDoorWarp:-1100,0,2202"},
+                   "igt_frames": 2, "action": 4898}
+        with get_driver().launch(headless=True) as page:
+            _open_practice(page, base)
+            _wait_for_cells(page, 2)
+            page.wait_ms(300)
+            assert service.target is None
+            _publish(service, [("moment_reached", 92, arrival),
+                ("mario_acted", 100, {"igt_frames": 2}),
+                ("moment_reached", 170, {"kind": "door_open", "level": 6,
+                    "area": 1, "landmark": {"key": "6:1:bhvDoor:-1775,0,-824"}}),
+                ("warp_entered", 700, {"level": 6, "area": 1, "to": 17,
+                    "igt_frames": 602, "igt_source": "counter"})])
+            assert any(a.segment_id == lblj_id and a.outcome == "success"
+                       and not a.cleared for a in service.db.attempts())
+            _place(service, 9, 1, "stars", 800)  # An accidental visit.
+            _place(service, 16, None, None, 900)
+            _place(service, 6, None, "castle", 1000)
+            _wait_for_cells(page, 2)
+            page.wait_ms(300)
+            assert service.target is None
+            _publish(service, [("moment_reached", 1002, arrival)])
+            result = _wait_for_target(page, {"kind": "segment", "segment_id": lblj_id})
+            assert result["matched"]
+            _capture(page, base, tmp_path, "latest-success-lblj-recalled", result)
+
+            _place(service, 9, 1, "stars", 1100)
+            _publish(service, [("practice_reset", 1102, {"igt_frames_before": 0}),
+                ("star_collected", 1502, {"course_id": 1, "star_id": 0,
+                    "igt_frames": 400, "igt_timed_at": "xcam"})])
+            assert any(a.course_id == 1 and a.star_id == 0 and a.outcome == "success"
+                       and not a.cleared for a in service.db.attempts())
+            _place(service, 16, None, None, 1600)
+            _place(service, 6, None, "castle", 1700)
+            _publish(service, [("moment_reached", 1702, arrival)])
+            _wait_for_cells(page, 2)
+            page.wait_ms(400)
+            assert service.target != ("segment", lblj_id)
+            assert page.evaluate("document.querySelectorAll('.stagebanner .active-star').length") == 0
+            _capture(page, base, tmp_path, "newer-star-blocks-lblj-recall", {})

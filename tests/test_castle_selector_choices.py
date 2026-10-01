@@ -35,16 +35,18 @@ class Play:
         self.projector = Projector(segments=self.defs)
         self.events = []
 
-    def send(self, kind, payload=None):
+    def send(self, kind, payload=None, *, frame=None):
         n = len(self.events) + 1
-        event = EventRow(id=n, session_id=1, seq=n, type=kind, frame=n * 100,
+        event = EventRow(id=n, session_id=1, seq=n, type=kind,
+            frame=n * 100 if frame is None else frame,
             wall_time_utc="2026-09-30T12:00:00Z", payload=payload or {})
         self.events.append(event)
-        self.projector.feed(event)
+        return self.projector.feed(event)
 
     def place(self, level, area=1):
         self.send("level_changed", {"from": self.projector._level, "to": level})
-        self.send("area_changed", {"level": level, "from": None, "to": area})
+        self.send("area_changed", {"level": level, "from": None, "to": area},
+                  frame=self.events[-1].frame)
 
     def pick(self, sid, auto=False):
         self.send("target_set", {"kind": "segment", "segment_id": sid, "auto": auto})
