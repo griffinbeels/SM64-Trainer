@@ -24,7 +24,7 @@
 
 // The stage modes detectors/stage.py emits that the banner has a row for.
 // `null` is not on the list and is not an unknown either: the file select, the
-// castle grounds, the courtyard and the cap courses are all real places that
+// castle grounds and the courtyard are all real places that
 // offer nothing to practice. One entry per key of stagebanner.js's STAGE_ROWS,
 // pinned both ways by tests/test_ui_practice_context.py.
 export const PRACTICE_MODES = ["stars", "bowser_course", "arena", "castle"];

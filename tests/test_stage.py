@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.stage import StageChangeDetector
 
@@ -110,7 +112,7 @@ def test_entering_a_bowser_course_emits_bowser_course_mode():
 
 def test_moving_between_two_bowser_courses_re_emits():
     # BitDW -> BitFS: both are bowser_course but a DIFFERENT level, so the
-    # offered targets change and the banner must re-emit (unlike two cap levels).
+    # offered targets change and the banner must re-emit.
     d = StageChangeDetector()
     d.process(snap(curr_level=17), snap(curr_level=17))            # BitDW
     events = d.process(snap(curr_level=17), snap(curr_level=19))   # -> BitFS
@@ -173,7 +175,22 @@ def test_no_event_while_castle_subarea_stable():
                      snap(curr_level=6, curr_area=2)) == []
 
 
-# --- no context (hubs, caps, secret-star areas) ---------------------------
+# --- secret courses (including cap courses) -----------------------------
+
+@pytest.mark.parametrize("level,course", [(27, 19), (28, 20), (29, 21),
+                                         (18, 22), (31, 23), (20, 24)])
+def test_every_secret_course_establishes_and_restores_its_star_context(level, course):
+    d = StageChangeDetector()
+    [first] = d.process(snap(curr_level=level), snap(curr_level=level))
+    assert payload(first) == {"course_id": course, "level": level,
+                              "area": 1, "mode": "stars"}
+    assert d.process(snap(curr_level=level), snap(curr_level=level, curr_area=2)) == []
+    d.process(snap(curr_level=level), snap(curr_level=6))
+    [returned] = d.process(snap(curr_level=6), snap(curr_level=level))
+    assert payload(returned) == payload(first)
+
+
+# --- no context (hubs) ---------------------------------------------------
 
 def test_castle_grounds_is_no_context():
     # Castle GROUNDS is level 16 (not Castle Inside / level 6) — no named
@@ -187,11 +204,9 @@ def test_castle_grounds_is_no_context():
                                  "mode": None}
 
 
-def test_no_event_between_two_cap_levels():
-    # Two levels that are neither a main course, Bowser geography, nor Castle
-    # Inside (Vanish Cap 18 -> Metal Cap 20) — the banner stays hidden, so no
-    # stage_changed.
+def test_moving_between_two_cap_levels_changes_the_offered_star():
     d = StageChangeDetector()
-    d.process(snap(curr_level=18), snap(curr_level=18))           # Vanish Cap (None)
-    assert d.process(snap(curr_level=18), snap(curr_level=20)) == []  # -> Metal Cap
-
+    d.process(snap(curr_level=18), snap(curr_level=18))           # Vanish Cap
+    [changed] = d.process(snap(curr_level=18), snap(curr_level=20))
+    assert payload(changed) == {"course_id": 24, "level": 20,
+                                "area": 1, "mode": "stars"}

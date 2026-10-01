@@ -678,6 +678,9 @@ class Projector:
         # success). See caveat 13.
         self._suspended_star: tuple[int, int] | None = None
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
+        # Arrival preference, distinct from the live target. Explicit picks
+        # and successful play update it in journal order; sessions retain it.
+        self.last_star_choice_by_course: dict[int, int] = {}
         # Pre-seeded from the definitions' own default_strat (caveat 17), so
         # every consumer of this dict — attempt stamping below, the strat_tag
         # property, the view's section banner / segment_targets / target
@@ -1047,6 +1050,7 @@ class Projector:
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
         self._retire_pending_target()
         head_popped, hidden_exit_ids = self._apply_segment_closures(ev, seg_closed, closed)
+        self._remember_star_choices(closed)
         self._suspend_star_for_segment()
         self._queue_new_hooks()
         self._settle_segment_target(ev, head_popped)
@@ -1063,6 +1067,18 @@ class Projector:
         if hidden_exit_ids:
             return [row for row in closed if row.id not in hidden_exit_ids]
         return closed
+
+    def _remember_star_choices(self, closed) -> None:
+        for a in closed:
+            if (a.segment_id is None and a.course_id is not None
+                    and a.star_id is not None and a.outcome == "success"
+                    and not a.cleared):
+                self.last_star_choice_by_course[a.course_id] = a.star_id
+
+    def _remember_explicit_pick(self) -> None:
+        self._target_queue.clear()
+        if self.target and self.target[0] == "star":
+            self.last_star_choice_by_course[self.target[1]] = self.target[2]
 
     def _capture_gap(self, ev) -> None:
         # An observed loss of tracking is neither a game reset nor a
@@ -1147,6 +1163,14 @@ class Projector:
                            target_segment=target_seg,
                            landmark_names=(self._landmark_names()
                                            if self._landmark_names else None))
+
+    def _declines_star_fill(self, ev) -> bool:
+        # An automatic star offer fills an empty hand, never a newer pick.
+        # Level changes precede the banner event, so recheck the course here.
+        return (ev.payload.get("kind") != "segment"
+                and (self.target is not None
+                     or (self._level is not None
+                         and ev.payload.get("course_id") != course_for_level(self._level))))
 
     def _retire_pending_target(self) -> None:
         # The origin rule's verdict, applied now that the matcher has had this
@@ -1746,7 +1770,8 @@ class Projector:
             # armed detections, a fill is an offer, and the client re-offers
             # whenever the hand empties.
             auto = bool(ev.payload.get("auto"))
-            if auto and self.target is not None and self._target_hooked:
+            if auto and (self._declines_star_fill(ev)
+                         or (self.target is not None and self._target_hooked)):
                 return []
             self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
             if ev.payload.get("kind") == "segment":
@@ -1769,7 +1794,7 @@ class Projector:
                     self.strat_by_star[(c, s)] = ev.payload["strat_tag"]
             self._picked_target = None if auto else self.target
             if not auto:
-                self._target_queue.clear()
+                self._remember_explicit_pick()
             return []
         if ev.type == "strat_set":
             # per-target strategy memory write WITHOUT moving the target

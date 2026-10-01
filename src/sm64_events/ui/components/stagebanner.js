@@ -1,7 +1,7 @@
 // src/sm64_events/ui/components/stagebanner.js
 // Quick-select row, driven by t.stage (the broadcast-only stage_changed event)
 // and dispatched on its `mode`:
-//   "stars"         : a main course 1-15 -> that course's stars (name +
+//   "stars"         : a main or secret course -> that course's stars (name +
 //                     last-strategy subtext); click sets the star target.
 //                     The "100 Coins" cell is a PLAIN star cell like the
 //                     other six (spec 2026-07-28-multi-step-segments, "the
@@ -43,7 +43,7 @@
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { CellRow, SurfaceExchange } from "./cellrow.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
@@ -249,9 +249,21 @@ async function pickSegmentTarget(t, s, options) {
 // both deps unchanged so the effect does not run again.
 function useLoneRouteOption(v, lone, key, commit) {
   const empty = handIsEmpty(v.target);
+  const [refusedKey, setRefusedKey] = useState(null);
   useEffect(() => {
-    if (lone && empty) commit();
+    if (!lone || !empty) {
+      setRefusedKey(null);
+      return;
+    }
+    let current = true;
+    Promise.resolve(commit()).then((accepted) => {
+      if (current && accepted === false) setRefusedKey(key);
+    });
+    return () => { current = false; };
   }, [key, empty]);
+  // A refused convenience write must leave the options available to pick.
+  // HTTP success alone does not settle selection: an expired offer is a no-op.
+  return refusedKey === key;
 }
 
 // The standard segment cell (castle/arena rows, armed extras): name, strat
@@ -358,7 +370,7 @@ function StarRow({ t, v, stage }) {
     (v.caveat_by_star || {})[`${stage.course_id}:${i}`];
 
   async function pick(i, options) {
-    await requestTarget(t, {
+    return requestTarget(t, {
       course_id: stage.course_id, star_id: i,
       strat_tag: lastStratFor(i) || null,
     }, options);
@@ -393,8 +405,22 @@ function StarRow({ t, v, stage }) {
   // course otherwise, which is exactly what the widened rule wants: seven
   // stars is not one, so a no-route course still picks nothing.
   const lone = loneOption(shown);
-  useLoneRouteOption(v, lone, `star:${stage.course_id}:${lone ? lone.i : ""}`,
-                     () => pick(lone.i, { quiet: true }));
+  // PSS offers two stars without an act-selection screen. Restore the last
+  // one explicitly chosen or completed, using journal memory from the server rather
+  // than the possibly session-filtered log. A route's lone option wins;
+  // the shared empty-hand guard keeps explicit stars and segments intact.
+  const rememberedSlot = stage.course_id === 19
+    ? (v.last_star_choice_by_course || {})[String(stage.course_id)] : null;
+  const arrivalPick = lone || shown.find(({ i }) => i === rememberedSlot);
+  const autoRefused = useLoneRouteOption(v, arrivalPick,
+    `star:${stage.course_id}:${arrivalPick ? arrivalPick.i : ""}`,
+    () => pick(arrivalPick.i, { quiet: true }));
+  // Never paint the idle cards that an arrival offer is about to select.
+  // Derive this during render; an effect would hide them one frame too late.
+  // A stage broadcast can precede the view that retires the departing star,
+  // so only a held segment or a star in this course makes the row ready.
+  const ready = !arrivalPick || autoRefused || (!handIsEmpty(tgt)
+    && (tgt.kind === "segment" || tgt.course_id === stage.course_id));
 
   // A STAR'S SUBSECTIONS (task 0087, and the case Griffin named first:
   // "sometimes we want to practice only a small portion of a star") no longer
@@ -403,7 +429,8 @@ function StarRow({ t, v, stage }) {
   // with no switch here to forget.
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
-  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}"
+    aria-busy=${!ready}>
     <div class="shead"><b>${course.name}</b>
       <span class="meta">${routeStars
         ? html`showing this route's stars · tap to practice`
@@ -411,7 +438,7 @@ function StarRow({ t, v, stage }) {
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <${CellRow} class="starrow">
-      ${shown.map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
+      ${(ready ? shown : []).map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         key=${`${stage.course_id}:${i}`}
         active=${tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i}

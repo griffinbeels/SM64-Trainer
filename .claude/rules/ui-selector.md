@@ -106,6 +106,12 @@ Two things worth keeping from the fix:
 
 A piece never enabled/disabled from here any more — the Segments tab's own editor checkbox and the library row's hide/show button are the two doors that were always separate from the badge, and they are untouched. A disabled piece still leaves the log entirely, exactly as before.
 
+## Secret course selection
+
+PSS's two-star arrival default uses `views.py`'s lifetime `last_star_choice_by_course`, through the shared `useLoneRouteOption` empty-hand guard. The projector remembers the latest explicit star pick or successful completion in journal order; automatic fills and imported times cannot overwrite it. Its actual catalog still offers both stars; a route's lone option wins. The ordinary target request loads the remembered strategy. No choice or played history means no invented PSS default. The other five secret courses each offer one star and use the same singleton guard. Witnesses: `tests/test_special_stage_targets.py`, `tests/test_ui_special_stages.py`. The ghost-overlay integration witness is separate and runs when that workstream is available; its absence cannot skip the selector checks.
+
+An automatic `StarRow` offer holds its star cells out of the rendered set until the session view confirms a target in this course. The heading and armed segment extras stay mounted; `CellRow` owns the confirmed set's reveal. A departing course's stale star target cannot release the hold. Held segments and explicit same-course choices retain precedence; a refused automatic write releases the options for manual recovery. Witness: `tests/test_ui_special_stage_first_paint.py`, with the real target write and confirmed view independently delayed.
+
 ## The Bowser row's round 2
 
 Round 2 (live report 2026-07-30, five reports, then four more) added: (1) **item 2** — `justCompletedStar`/`justCompletedSegment` (the latter new in stagecontext.js, mirroring the existing segment version one level up), riding `freshIds` (practice.js's `useFreshAttemptIds`, threaded `StageBanner({t, freshIds}) → Row({..., freshIds})` for every row, though only this one reads it) to detect a FRESH success on the star, the pipe segment, or No Reds and update the remembered mode/family automatically, no click required — the star check is gated on `starActive` specifically because `projection.py` caveat 18 (tracking-storage.md) had to first stop a mid-Pipe-run waypoint grab from making the star the target at all, or this detector would relight Star mode on every Pipe run's own reds-star grab.

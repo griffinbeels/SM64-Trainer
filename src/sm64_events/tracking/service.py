@@ -686,6 +686,11 @@ class TrackerService:
         return self._projector.strat_by_star
 
     @property
+    def last_star_choice_by_course(self) -> dict[str, int]:
+        """Latest explicit pick or successful play, replayed across sessions."""
+        return {str(c): s for c, s in self._projector.last_star_choice_by_course.items()}
+
+    @property
     def strat_by_segment(self) -> dict:
         return self._projector.strat_by_segment
 
@@ -841,6 +846,8 @@ class TrackerService:
             if course_id is None or star_id is None:
                 raise ValueError("star target needs course_id and star_id")
             already = self.target == ("star", course_id, star_id)
+        if auto and kind == "star" and self.target is not None:
+            return {}  # A stale empty-hand read cannot replace a newer pick.
         node = self.target_node(kind, course_id, star_id, segment_id)
         # A segment whose start trigger has already fired is UNDER WAY, and
         # you pick it where it has got you to, not where it began (user
@@ -852,6 +859,11 @@ class TrackerService:
                    and segment_id in self._projector.armed_segment_ids())
         if not already and not practicable.practicable_here(self._current_stage,
                                                             node, running):
+            # The departing selector can still paint while a new stage has
+            # retired its target. A late convenience offer simply expires;
+            # it must neither retarget that stage nor report a click error.
+            if auto:
+                return {}
             raise ValueError(
                 "you can only practice what you are standing in — "
                 f"that one is in {node_label(node)}")

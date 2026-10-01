@@ -1955,6 +1955,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "active_route": service.active_route(),
         "unassigned": unassigned,
         "strategies": registered,
+        "last_star_choice_by_course": service.last_star_choice_by_course,
         "last_strat_by_star": {
             f"{c}:{s}": active.for_star(c, s)
             for (c, s) in service.strat_by_star},
