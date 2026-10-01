@@ -79,15 +79,45 @@ def _capture_review(page, tmp_path, name="recorder-alternate-starts"):
     for width in (1500, 850):
         page.set_viewport(width, 1180)
         page.wait_ms(250)
+        page.evaluate("""const body = document.querySelector('.modal .modal-body');
+          body.scrollTop = body.scrollHeight;""")
+        page.wait_ms(40)
         geometry = page.evaluate("""return Array.from(document.querySelectorAll(
           '.record-picks button, .modal .builder-actions button')).map(button => {
             const rect = button.getBoundingClientRect(); return [rect.left, rect.right];
           });""")
         assert geometry and all(0 <= left < right <= width for left, right in geometry)
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        _assert_footer_visible(page)
         shot = captures / f"{name}-{width}.png"
         shot.write_bytes(page.screenshot())
         print(f"Alternate-start screenshot: {shot}")
+
+
+def _assert_footer_visible(page):
+    bounds = page.evaluate("""const body = document.querySelector('.modal .modal-body').getBoundingClientRect();
+      const modal = document.querySelector('.modal').getBoundingClientRect();
+      const footer = document.querySelector('.modal .builder-actions').getBoundingClientRect();
+      return {clip: [Math.max(0, body.left, modal.left), Math.min(innerWidth, body.right, modal.right),
+        Math.max(0, body.top, modal.top), Math.min(innerHeight, body.bottom, modal.bottom)],
+        footer: [footer.left, footer.right, footer.top, footer.bottom]};""")
+    clip_left, clip_right, clip_top, clip_bottom = bounds["clip"]
+    left, right, top, bottom = bounds["footer"]
+    assert clip_left <= left < right <= clip_right, bounds
+    assert clip_top <= top < bottom <= clip_bottom, bounds
+
+
+def _assert_pinned_roles_and_capture(page, rows, tmp_path):
+    roles = page.evaluate("""return Array.from(document.querySelectorAll('.modal .record-row'))
+      .filter(row => row.classList.contains('picked')).map(row => ({
+        label: row.querySelector('.record-label').textContent.trim(),
+        marker: row.querySelector('.record-mark').textContent.trim(),
+        classes: row.querySelector('.record-mark').className}));""")
+    by_label = {row["label"]: row for row in roles}
+    _capture_review(page, tmp_path, "recorder-pinned-older-finish")
+    assert "role-start" in by_label[rows[70140]["label"]]["classes"]
+    assert by_label[rows[70030]["label"]]["marker"] == "OR"
+    assert "role-finish" in by_label[rows[70000]["label"]]["classes"]
 
 
 def test_alternate_starts_persist_through_the_visible_recorder(tmp_path, monkeypatch):
@@ -195,16 +225,7 @@ def test_an_older_finish_keeps_the_newest_primary_and_alternate_start(tmp_path, 
             _toolbar_click(page, "Done adding starts")
             _pick_label(page, rows[70000]["label"])
             _ready_to_save(page)
-            roles = page.evaluate("""return Array.from(document.querySelectorAll('.modal .record-row'))
-              .filter(row => row.classList.contains('picked')).map(row => ({
-                label: row.querySelector('.record-label').textContent.trim(),
-                marker: row.querySelector('.record-mark').textContent.trim(),
-                classes: row.querySelector('.record-mark').className}));""")
-            by_label = {row["label"]: row for row in roles}
-            _capture_review(page, tmp_path, "recorder-pinned-older-finish")
-            assert "role-start" in by_label[rows[70140]["label"]]["classes"]
-            assert by_label[rows[70030]["label"]]["marker"] == "OR"
-            assert "role-finish" in by_label[rows[70000]["label"]]["classes"]
+            _assert_pinned_roles_and_capture(page, rows, tmp_path)
             recorder_requests = page.evaluate("window.__recordStartRequests")
             synthesis = [request for request in recorder_requests
                          if request["url"].startswith("/api/segments/synthesize?")][-1]
