@@ -8,7 +8,7 @@
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 8u
+#define GP_VERSION 9u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
 /* Sized so a full set of long ghosts can be replaced by another full set in
@@ -39,6 +39,9 @@ enum gp_result {
 };
 enum gp_mode { GP_FOLLOW = 0, GP_FIXED = 1 };
 enum gp_input_mode { GP_INPUT_STICK = 0, GP_INPUT_VALUES = 1 };
+/* SM64's two dialog boxes: an NPC's black box with white text, a sign's
+ * white box with black text (ingame_menu.c render_dialog_box_type). */
+enum gp_name_background { GP_NAME_BLACK = 0, GP_NAME_WHITE = 1 };
 enum gp_model_state {
     GP_MODEL_EMPTY, GP_MODEL_BUILDING, GP_MODEL_READY,
     GP_MODEL_RENDER_OWNED, GP_MODEL_RETIRED, GP_MODEL_RECLAIMING
@@ -91,6 +94,11 @@ typedef struct gp_request {
     /* Annotations follow the displayed ghost's own pose/fade and occurrence.
      * Inputs are omitted when that occurrence has no GC_VALID_PAD. */
     uint32_t names_enabled, inputs_enabled, input_mode;
+    /* The name's box and its alpha (0 draws none), and every ghost's
+     * inputs stacked above the game's own input display. */
+    uint32_t name_background;
+    float name_background_opacity;
+    uint32_t hud_inputs_enabled;
 } gp_request;
 
 typedef struct gp_status {

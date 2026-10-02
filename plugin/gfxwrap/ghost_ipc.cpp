@@ -76,7 +76,9 @@ bool valid_set(const gipc_request &r) {
     if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count)
             || r.shadow_enabled > 1 || r.occlusion_fade > 1 || r.sound_fade > 1
             || !(r.volume >= 0 && r.volume <= 1) || r.names_enabled>1 || r.inputs_enabled>1
-            || r.input_mode>GP_INPUT_VALUES) return false;
+            || r.input_mode>GP_INPUT_VALUES || r.name_background>GP_NAME_WHITE
+            || !(r.name_background_opacity >= 0 && r.name_background_opacity <= 1)
+            || r.hud_inputs_enabled>1) return false;
     for (uint32_t i = 0; i < r.clip_count; ++i) {
         const auto &clip = r.clips[i];
         if (clip.hue_degrees > 359 || clip.reserved || !ghost_annotation::valid_label(clip.label)) return false;
@@ -482,7 +484,9 @@ struct Session {
                     command.occlusion_fade = r.occlusion_fade; command.sound_fade = r.sound_fade;
                     command.suspended = r.owner_suspended;
                     command.names_enabled=r.names_enabled;command.inputs_enabled=r.inputs_enabled;
-                    command.input_mode=r.input_mode;
+                    command.input_mode=r.input_mode;command.name_background=r.name_background;
+                    command.name_background_opacity=r.name_background_opacity;
+                    command.hud_inputs_enabled=r.hud_inputs_enabled;
                     if (play->configure(&command) != GP_OK) {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
                     } else {

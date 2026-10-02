@@ -20,7 +20,7 @@ from typing import Any, Callable
 from sm64_events.ghost.proximity import (
     DEFAULT_PROXIMITY, MAX_EXTRA_DISTANCE, PROXIMITY_KEY, checked_proximity, saved_proximity,
 )
-from sm64_events.ghost.native_layout import INPUT_STICK, INPUT_VALUES
+from sm64_events.ghost.native_layout import INPUT_STICK, INPUT_VALUES, NAME_BLACK, NAME_WHITE
 
 #: How see-through the ghost is the FIRST time it is ever switched on. A
 #: shipped preference, so its exact value is his to move and no test pins it --
@@ -58,6 +58,14 @@ NUDGE_LIMIT_FRAMES = 600
 DEFAULT_VOLUME = 0.5
 INPUT_MODES = {"stick": INPUT_STICK, "values": INPUT_VALUES}
 DEFAULT_INPUT_MODE = "stick"
+#: THE BOX BEHIND THE GHOST'S NAME. His words, 2026-10-02: *"The nametag should
+#: have a black background like this (the text for talking to the whomp king)
+#: with adjustable opacity (probably 50% but not sure). Add another option to
+#: have a white background like this (the text for the sign)"*. The game's own
+#: boxes are black or white at alpha 150 (ingame_menu.c render_dialog_box_type).
+NAME_BACKGROUNDS = {"black": NAME_BLACK, "white": NAME_WHITE}
+DEFAULT_NAME_BACKGROUND = "black"
+DEFAULT_NAME_BACKGROUND_OPACITY = 0.6
 #: The least of its opacity a ghost keeps when it overlaps or blocks Mario
 #: (plugin/gfxwrap/ghost_occlusion.h GHOST_FLOOR). Published so the card's
 #: sentence about it is not a second copy of the number.

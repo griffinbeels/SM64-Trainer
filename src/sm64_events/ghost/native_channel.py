@@ -10,7 +10,8 @@ from contextlib import contextmanager
 from sm64_events.ghost import native_protocol as P
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 from sm64_events.ghost.settings import (
-    DEFAULT_INPUT_MODE, DEFAULT_OPACITY, DEFAULT_VOLUME, INPUT_MODES, NUDGE_LIMIT_FRAMES, native_switches,
+    DEFAULT_INPUT_MODE, DEFAULT_NAME_BACKGROUND, DEFAULT_NAME_BACKGROUND_OPACITY, DEFAULT_OPACITY,
+    DEFAULT_VOLUME, INPUT_MODES, NAME_BACKGROUNDS, NUDGE_LIMIT_FRAMES, native_switches,
 )
 from sm64_events.memory.addresses import ACT_JUMBO_STAR_CUTSCENE, STAR_DANCE_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
@@ -66,6 +67,8 @@ class NativeChannel:
                 request.revision = request.heartbeat = request.capture_enabled = 1
                 request.rom_generation = status.rom_generation
                 request.opacity, request.volume = DEFAULT_OPACITY, DEFAULT_VOLUME
+                request.name_background = NAME_BACKGROUNDS[DEFAULT_NAME_BACKGROUND]
+                request.name_background_opacity = DEFAULT_NAME_BACKGROUND_OPACITY
                 for field, default in native_switches().items():
                     setattr(request, field, int(default))
                 request.layout[:] = layout
@@ -182,6 +185,14 @@ class NativeChannel:
         if type(input_mode) is not int or input_mode not in INPUT_MODES.values():
             raise ValueError("native ghost input display mode is invalid")
         request.input_mode = input_mode
+        background = value.get("name_background", NAME_BACKGROUNDS[DEFAULT_NAME_BACKGROUND])
+        if type(background) is not int or background not in NAME_BACKGROUNDS.values():
+            raise ValueError("native ghost name background is invalid")
+        request.name_background = background
+        alpha = value.get("name_background_opacity", DEFAULT_NAME_BACKGROUND_OPACITY)
+        if type(alpha) not in (int, float) or not math.isfinite(alpha) or not 0 <= alpha <= 1:
+            raise ValueError("native ghost name background opacity must be a number in 0..1")
+        request.name_background_opacity = float(alpha)
         mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
         if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
             raise ValueError("invalid native ghost seek")

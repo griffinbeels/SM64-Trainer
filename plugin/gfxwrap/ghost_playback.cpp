@@ -575,7 +575,9 @@ bool valid_request(const gp_request& r) {
             || r.shadow_enabled>1 || r.occlusion_fade>1 || r.sound_fade>1
             || !std::isfinite(r.volume) || r.volume<0 || r.volume>1
             || r.suspended>1 || r.reserved4 || r.names_enabled>1 || r.inputs_enabled>1
-            || r.input_mode>GP_INPUT_VALUES) return false;
+            || r.input_mode>GP_INPUT_VALUES || r.name_background>GP_NAME_WHITE
+            || !std::isfinite(r.name_background_opacity) || r.name_background_opacity<0
+            || r.name_background_opacity>1 || r.hud_inputs_enabled>1) return false;
     const gp_clip unused{};
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         const auto &clip=r.clips[i];
