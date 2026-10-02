@@ -181,18 +181,7 @@ class NativeChannel:
         request.volume = _volume(value)
         for field, default in native_switches().items():
             setattr(request, field, _switch(value, field, default))
-        input_mode = value.get("input_mode", INPUT_MODES[DEFAULT_INPUT_MODE])
-        if type(input_mode) is not int or input_mode not in INPUT_MODES.values():
-            raise ValueError("native ghost input display mode is invalid")
-        request.input_mode = input_mode
-        background = value.get("name_background", NAME_BACKGROUNDS[DEFAULT_NAME_BACKGROUND])
-        if type(background) is not int or background not in NAME_BACKGROUNDS.values():
-            raise ValueError("native ghost name background is invalid")
-        request.name_background = background
-        alpha = value.get("name_background_opacity", DEFAULT_NAME_BACKGROUND_OPACITY)
-        if type(alpha) not in (int, float) or not math.isfinite(alpha) or not 0 <= alpha <= 1:
-            raise ValueError("native ghost name background opacity must be a number in 0..1")
-        request.name_background_opacity = float(alpha)
+        _set_annotations(request, value)
         mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
         if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
             raise ValueError("invalid native ghost seek")
@@ -248,6 +237,21 @@ def _switch(value: dict, key: str, default: bool) -> bool:
     if type(setting) is not bool:
         raise ValueError(f"native ghost {key} must be a bool")
     return setting
+
+
+def _set_annotations(request, value: dict) -> None:
+    """The input display's mode and the name's box, each absent key its default."""
+    input_mode = value.get("input_mode", INPUT_MODES[DEFAULT_INPUT_MODE])
+    if type(input_mode) is not int or input_mode not in INPUT_MODES.values():
+        raise ValueError("native ghost input display mode is invalid")
+    background = value.get("name_background", NAME_BACKGROUNDS[DEFAULT_NAME_BACKGROUND])
+    if type(background) is not int or background not in NAME_BACKGROUNDS.values():
+        raise ValueError("native ghost name background is invalid")
+    alpha = value.get("name_background_opacity", DEFAULT_NAME_BACKGROUND_OPACITY)
+    if type(alpha) not in (int, float) or not math.isfinite(alpha) or not 0 <= alpha <= 1:
+        raise ValueError("native ghost name background opacity must be a number in 0..1")
+    request.input_mode, request.name_background = input_mode, background
+    request.name_background_opacity = float(alpha)
 
 
 def _volume(value: dict) -> float:

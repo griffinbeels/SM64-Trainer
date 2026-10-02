@@ -63,6 +63,18 @@ the D-pad, and neither does the ghost. Unknown input shows a faded base with
 `?`, never a neutral stick. Annotation rendering belongs to the private ghost
 display surface before HUD compositing; clean video stays unchanged.
 
+The name sits `GP_ANNOTATION_GAP` above the top of the ghost's body as drawn
+that frame (his own vertices, not a held object's), so a crouch, slide or dive
+brings it down; arms raised past his cap never lift it above
+`GP_ANNOTATION_TOP_MAX`. It sits on SM64's own dialog box: an NPC's black box
+with white text or a sign's white box with black text (`ingame_menu.c`
+`render_dialog_box_type`, alpha 150), at the chosen opacity; opacity 0 draws
+no box and keeps the drop shadow. **Inputs in corner** stacks each ghost's
+Usamune display, half size and labeled with its name, above the game's own
+input display at the bottom left, in slot order. Rows shrink to fit when many
+ghosts show one (`GP_HUD_*`), are drawn in screen space at full alpha, and stay
+up while the ghost itself is off screen.
+
 **Ghost Library** opens beside the native controls. It shows recent buffer-covered
 and saved local runs plus imported recordings, with creator, target, strategy,
 time, fastest/recent ordering and search. Practice and unfinished runs are hidden

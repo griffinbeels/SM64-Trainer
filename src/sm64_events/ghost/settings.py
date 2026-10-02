@@ -203,6 +203,18 @@ def checked_input_mode(value) -> str:
     return value
 
 
+def checked_name_background(value) -> str:
+    if not isinstance(value, str) or value not in NAME_BACKGROUNDS:
+        raise ValueError("The box behind the ghost's name is either black or white.")
+    return value
+
+
+def checked_name_background_opacity(value) -> float:
+    if type(value) not in (int, float) or not 0 <= value <= 1:
+        raise ValueError("How solid the box behind the ghost's name is goes from 0 (no box) to 1 (solid).")
+    return float(value)
+
+
 def _load_tint(database) -> dict:
     enabled = database.get_state("ghost_tint_enabled", DEFAULT_TINT["enabled"])
     stored = database.get_state("ghost_tint_hue", DEFAULT_TINT["hue_degrees"])
@@ -241,12 +253,28 @@ ROWS = (
     switch("shadow", "ghost_shadow", True, "The ghost's shadow is either on or off.", "shadow_enabled"),
     switch("names_enabled", "ghost_names", True,
            "The ghost's name is either shown or hidden.", "names_enabled"),
+    Setting("name_background", DEFAULT_NAME_BACKGROUND, checked_name_background, key="ghost_name_background",
+            restore=lambda stored: stored if isinstance(stored, str) and stored in NAME_BACKGROUNDS
+            else DEFAULT_NAME_BACKGROUND,
+            native=lambda value: {"name_background": NAME_BACKGROUNDS[value]},
+            limits={"options": list(NAME_BACKGROUNDS)}),
+    Setting("name_background_opacity", DEFAULT_NAME_BACKGROUND_OPACITY, checked_name_background_opacity,
+            key="ghost_name_background_opacity", restore=_clamped(DEFAULT_NAME_BACKGROUND_OPACITY),
+            native=lambda value: {"name_background_opacity": float(value)},
+            limits={"min": 0.0, "max": 1.0, "step": 0.05}),
     switch("inputs_enabled", "ghost_inputs", False,
            "The ghost's inputs are either shown or hidden.", "inputs_enabled"),
     Setting("input_mode", DEFAULT_INPUT_MODE, checked_input_mode, key="ghost_input_mode",
             restore=lambda stored: stored if isinstance(stored, str) and stored in INPUT_MODES else DEFAULT_INPUT_MODE,
             native=lambda value: {"input_mode": INPUT_MODES[value]},
             limits={"options": list(INPUT_MODES)}),
+    # THE GHOSTS' INPUTS IN THE CORNER. His words, 2026-10-02: *"I want this as a
+    # separate toggle. If we toggle this on, then it would add the input overlay
+    # for each ghost above the bottom left pre-existing input overlay."* Off, so
+    # the HUD he already knows is unchanged until he asks for the stack.
+    switch("hud_inputs_enabled", "ghost_hud_inputs", False,
+           "The ghosts' inputs above your own input display are either shown or hidden.",
+           "hud_inputs_enabled"),
     # THE GHOST NEVER BLOCKS THE PLAYER (the player-first fade). His words,
     # 2026-09-23: *"if the ghost is blocking the player in any way, we
     # prioritize rendering the player, not the ghost."* On; his A/B switch.

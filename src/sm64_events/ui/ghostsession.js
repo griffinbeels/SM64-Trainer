@@ -60,6 +60,9 @@ export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
  *   does (overlapping you, in front of you, at the camera), and a sound you
  *   both make on the same frame while it overlaps you plays once. It sits
  *   beside Volume, the sound's other control.
+ * - hud_inputs_enabled (2026-10-02): each ghost's inputs stacked above your
+ *   own input display in the bottom-left corner. Its own switch, beside
+ *   Inputs, because it is a different place to read them, not a style of them.
  */
 export const SWITCH_LABELS = {
   names_enabled: { name: "Names", className: "ghost-names", group: "Ghost names",
@@ -68,6 +71,10 @@ export const SWITCH_LABELS = {
   inputs_enabled: { name: "Inputs", className: "ghost-inputs", group: "Ghost inputs",
     label: "Show each ghost's recorded controller inputs",
     waiting: "Waiting for the ghost input setting" },
+  hud_inputs_enabled: { name: "Inputs in corner", className: "ghost-hud-inputs",
+    group: "Ghost inputs in the corner",
+    label: "Stack each ghost's inputs above your own input display in the bottom-left corner",
+    waiting: "Waiting for the corner input setting" },
   shadow: { name: "Shadow", className: "ghost-shadow", group: "Ghost shadow",
     label: "Draw Mario's own shadow under the ghost",
     waiting: "Waiting for the ghost's shadow setting" },
@@ -194,12 +201,27 @@ function limitedValues(session, limits) {
     switches: ghostSwitches(session, limits),
     nudge: clampNudge(session.nudge_frames, nudgeLimit(limits)),
     inputMode: ghostInputMode(session.input_mode, limits),
+    nameBox: ghostNameBox(session, limits),
   };
 }
 
+/** A choice setting's value when the server publishes it among `limits[name].options`, else null. */
+export function ghostOption(name, value, limits) {
+  const options = limits?.[name]?.options;
+  return Array.isArray(options) && options.includes(value) ? value : null;
+}
+
 export function ghostInputMode(value, limits) {
-  return Array.isArray(limits?.input_mode?.options) && limits.input_mode.options.includes(value)
-    ? value : null;
+  return ghostOption("input_mode", value, limits);
+}
+
+/** The box behind each ghost's name: its colour and how solid it is, each null until the server says. */
+export function ghostNameBox(source, limits) {
+  const range = limits?.name_background_opacity;
+  return {
+    background: ghostOption("name_background", source?.name_background, limits),
+    opacity: range ? clampOpacity(source?.name_background_opacity, range) : null,
+  };
 }
 
 /**
@@ -278,7 +300,7 @@ export function ghostControls(session, entityKey) {
     // pretend to know -- see clampOpacity.
     showsTuning: false, opacity: null, tint: null, view: null, proximity: null, switches: {},
     volume: null, limits: {},
-    inputMode: null,
+    inputMode: null, nameBox: { background: null, opacity: null },
     marioBoxes: { available: false, reasonText: null }, nudge: 0,
     selection: null,
   };

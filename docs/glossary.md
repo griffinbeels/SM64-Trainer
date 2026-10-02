@@ -1618,6 +1618,27 @@ on the next game [[frame]], because it travels the way the [[nudge]] does.
   `plugin/gfxwrap/ghost_compositor.cpp` applies it to Mario. The switch row
   (`src/sm64_events/ui/components/ghostswitch.js`) is where you choose it
 
+### Name box
+
+The box behind a [[ghost]]'s name in the game: SM64's own dialog box, the
+black one with white text that characters speak in, or the white one with
+black text that signs use, at the opacity you choose (none at zero). The name
+itself sits just over the top of the [[ghost]]'s body, so it crouches and dives
+with him.
+
+- **Lives** — its two rows in `src/sm64_events/ghost/settings.py`;
+  `plugin/gfxwrap/ghost_annotation_mesh.h` draws it
+
+### Corner inputs
+
+Every [[ghost]]'s input display stacked above your own in the game's bottom
+left corner, half size and labeled with its name, one row each in the
+order you chose them. It is its own switch, apart from the inputs drawn over
+each [[ghost]], and stays up while that [[ghost]] is off screen.
+
+- **Lives** — its switch row in `src/sm64_events/ghost/settings.py`;
+  `plugin/gfxwrap/ghost_annotation_mesh.h` draws it
+
 ### Input document
 
 An [[input track]] written out as text you can send someone, and edit by hand.

@@ -31,6 +31,8 @@ SAMPLES = {
     "view": ("whole", "rotoscope"),
     "nudge_frames": (12, settings.NUDGE_LIMIT_FRAMES + 1),
     "input_mode": ("values", "combined"),
+    "name_background": ("white", "grey"),
+    "name_background_opacity": (0.25, 1.5),
 }
 
 

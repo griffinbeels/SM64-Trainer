@@ -38,7 +38,7 @@ import { holdRepeat } from "../holdrepeat.js";
 import { GhostProximity } from "./ghostproximity.js";
 import { GhostLibraryButton } from "./ghostlibrary.js";
 import { clampNudge, clampOpacity, ghostControls, ghostRecordingOptions,
-         ghostViewChoices, ghostInputMode, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
+         ghostViewChoices, ghostInputMode, ghostOption, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
          nudgeSeconds, nudgeText, opacityText, shownTint, shownView,
          GHOST_VIEWS, NUDGE_STEP, VIEW_LABELS } from "../ghostsession.js";
 
@@ -203,7 +203,8 @@ function GhostOnOff({ setting, value, draft, write }) {
   const words = SWITCH_LABELS[setting];
   const on = draft == null ? value : Boolean(draft);
   const known = on != null;
-  return html`<div class="ghost-field ghost-onoff ${words.className}" role="group" aria-label=${words.group}>
+  return html`<div class="ghost-field ghost-onoff ${words.className}" role="group" aria-label=${words.group}
+      title=${known ? words.label : words.waiting}>
     <span class="ghost-field-name">${words.name}</span>
     <${GhostSwitchButton} on=${known && on} canToggle=${known} small=${true}
       label=${known ? words.label : words.waiting}
@@ -212,8 +213,9 @@ function GhostOnOff({ setting, value, draft, write }) {
 }
 
 /** The stick's presentation depends on Inputs, so it nests beneath that switch. */
-function GhostInputControls({ row, mode, options, write }) {
-  const enabled = row.draft == null ? row.value : Boolean(row.draft);
+function GhostInputControls({ row, mode, options, write, cornerOn }) {
+  // One stick display serves both: the inputs over each ghost and the stack in the corner.
+  const enabled = (row.draft == null ? row.value : Boolean(row.draft)) || cornerOn === true;
   const labels = { stick: "Stick", values: "Values" };
   return html`<div class="ghost-input-controls">
     <${GhostOnOff} setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />
@@ -226,6 +228,59 @@ function GhostInputControls({ row, mode, options, write }) {
       </select>
     </label>`}
   </div>`;
+}
+
+/**
+ * THE BOX BEHIND EACH NAME. His words, 2026-10-02: *"The nametag should have a
+ * black background like this (the text for talking to the whomp king) with
+ * adjustable opacity ... Add another option to have a white background like
+ * this (the text for the sign)"*. It only means something while names show, so
+ * it nests beneath that switch like the stick display beneath Inputs. The
+ * colour writes on the pick; the slider on its trailing edge, like Volume.
+ */
+function GhostNameControls({ row, box, limits, write, queue }) {
+  const enabled = row.draft == null ? row.value : Boolean(row.draft);
+  const labels = { black: "Black", white: "White" };
+  const range = limits.name_background_opacity;
+  const solid = box.opacity != null && range != null;
+  return html`<div class="ghost-name-controls">
+    <${GhostOnOff} setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />
+    ${enabled === true && html`<div class="ghost-field ghost-name-box" role="group"
+        aria-label="The box behind each ghost's name">
+      <span class="ghost-field-name">Background</span>
+      <select aria-label="The colour of the box behind each ghost's name" disabled=${box.background == null}
+          value=${box.background || ""} onchange=${(event) => write({ name_background: event.target.value })}>
+        ${box.background == null && html`<option value="">Waiting...</option>`}
+        ${(limits.name_background?.options || []).map((name) =>
+          html`<option key=${name} value=${name}>${labels[name] || name}</option>`)}
+      </select>
+      <input class="ghost-name-box-range" type="range" min=${range?.min} max=${range?.max} step=${range?.step}
+        value=${solid ? box.opacity : null} disabled=${!solid}
+        aria-label="How solid the box behind each name is"
+        title=${solid ? "How solid the box behind each name is; 0% draws no box"
+                      : "Waiting for how solid the box behind each name is"}
+        oninput=${(event) => queue({ name_background_opacity: Number(event.target.value) })} />
+      <span class="ghost-field-value">${solid ? `${Math.round(box.opacity * 100)}%` : "--"}</span>
+    </div>`}
+  </div>`;
+}
+
+/** A switch row's shown state: his pending choice, else the server's. */
+function switchOn(switches, setting) {
+  const row = switches.find((candidate) => candidate.setting === setting);
+  return row ? (row.draft == null ? row.value : Boolean(row.draft)) : false;
+}
+
+/** The control for one on/off row: the two that own a nested setting draw it beneath themselves. */
+function GhostSwitchControl({ row, inputMode, nameBox, limits, write, queue, cornerOn }) {
+  if (row.setting === "inputs_enabled") {
+    return html`<${GhostInputControls} row=${row} mode=${inputMode}
+      options=${limits.input_mode?.options} write=${write} cornerOn=${cornerOn} />`;
+  }
+  if (row.setting === "names_enabled") {
+    return html`<${GhostNameControls} row=${row} box=${nameBox} limits=${limits} write=${write} queue=${queue} />`;
+  }
+  return html`<${GhostOnOff} setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />`;
 }
 
 /**
@@ -372,8 +427,8 @@ function GhostRecording({ recording, entityKey, target, write }) {
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, switches, inputMode, volume, view, boxes, nudge, limits, write, queue,
-                      showView = true }) {
+function GhostTuning({ opacity, tint, switches, inputMode, nameBox, volume, view, boxes, nudge, limits, write,
+                      queue, showView = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
@@ -383,11 +438,9 @@ function GhostTuning({ opacity, tint, switches, inputMode, volume, view, boxes, 
   return html`<div class="ghost-tune">
     <${GhostVisibility} opacity=${opacity} range=${limits.opacity} queue=${queue} />
     <${GhostColour} tint=${tint} range=${limits.tint} write=${write} queue=${queue} />
-    ${view === "mario" && html`${switches.map((row) => row.setting === "inputs_enabled"
-      ? html`<${GhostInputControls} key=${row.setting} row=${row} mode=${inputMode}
-          options=${limits.input_mode?.options} write=${write} />`
-      : html`<${GhostOnOff} key=${row.setting}
-        setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />`)}
+    ${view === "mario" && html`${switches.map((row) => html`<${GhostSwitchControl} key=${row.setting}
+        row=${row} inputMode=${inputMode} nameBox=${nameBox} limits=${limits} write=${write} queue=${queue}
+        cornerOn=${switchOn(switches, "hud_inputs_enabled")} />`)}
       <${GhostVolume} volume=${volume.value} draft=${volume.draft} range=${limits.volume}
         queue=${queue} />`}
     ${showView && html`<${GhostView} view=${view} boxes=${boxes} write=${write} />`}
@@ -430,6 +483,11 @@ function heldValues(controls, held) {
       .map(([setting, value]) => ({ setting, value, draft: held[setting] })),
     tint: shownTint(controls.tint, held.tint, limits.tint),
     inputMode: ghostInputMode(held.input_mode ?? controls.inputMode, limits),
+    nameBox: {
+      background: ghostOption("name_background", held.name_background ?? controls.nameBox.background, limits),
+      opacity: held.name_background_opacity == null ? controls.nameBox.opacity
+        : clampOpacity(held.name_background_opacity, limits.name_background_opacity),
+    },
   };
 }
 
@@ -459,7 +517,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   const on = held.enabled == null
     ? controls.enabled : Boolean(held.enabled) && controls.available;
   const { limits } = controls;
-  const { opacity, nudge, switches, tint, inputMode } = heldValues(controls, held);
+  const { opacity, nudge, switches, tint, inputMode, nameBox } = heldValues(controls, held);
   const view = shownView(controls.view, held.view);
   const recording = ghostRecordingOptions(controls.selection, view, held, practisedStrat(session));
   const nativeViews = ghostViewChoices(controls.nativeViews, recording);
@@ -482,7 +540,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
     <${GhostRecording} recording=${recording} entityKey=${entityKey}
       target=${session?.target} write=${write} />
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
-      switches=${switches} inputMode=${inputMode} limits=${limits}
+      switches=${switches} inputMode=${inputMode} nameBox=${nameBox} limits=${limits}
       volume=${{ value: controls.volume, draft: held.volume }}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}

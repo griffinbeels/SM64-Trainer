@@ -9005,8 +9005,11 @@
     font-size: .68rem; color: var(--muted); line-height: 1.35;
     flex: 1 1 18rem; min-width: 0;
   }
+  /* Every field's NAME sits on one text baseline, so a switch with a setting
+     nested beneath it (Names, Inputs) reads on the same line as its
+     neighbours and the nested row hangs below. */
   .ghost-tune {
-    display: flex; align-items: center; gap: .5rem 1rem; flex-wrap: wrap;
+    display: flex; align-items: baseline; gap: .5rem 1rem; flex-wrap: wrap;
   }
   .ghost-proximity { font-size: .72rem; color: var(--muted); }
   .ghost-proximity summary { width: fit-content; cursor: pointer; }
@@ -9028,15 +9031,20 @@
   /* Tighter than a default field: its first item is a small switch, not text,
      so the label sits closer to it without the two running together. */
   .ghost-colour, .ghost-onoff { gap: .4rem; }
-  .ghost-input-controls { display: grid; align-self: flex-start; gap: .4rem; }
-  .ghost-input-mode { margin-left: 1rem; }
-  .ghost-input-mode select {
+  .ghost-input-controls, .ghost-name-controls { display: grid; gap: .4rem; }
+  .ghost-input-mode, .ghost-name-box { margin-left: 1rem; }
+  .ghost-name-box-range { width: 70px; min-width: 0; accent-color: var(--gold); }
+  .ghost-input-mode select, .ghost-name-box select {
     background: #101f31; color: var(--text); border: 1px solid var(--border-soft);
     border-radius: 5px; font: inherit; font-size: .68rem; padding: 1px .3rem;
     min-height: 22px; cursor: pointer;
   }
-  .ghost-input-mode select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
-  .ghost-input-mode select:disabled { cursor: default; opacity: .65; }
+  .ghost-input-mode select:focus-visible, .ghost-name-box select:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  .ghost-input-mode select:disabled, .ghost-name-box select:disabled {
+    cursor: default; opacity: .65;
+  }
   .ghost-library { display: grid; gap: 12px; min-width: 0; }
   .ghost-library-toolbar, .ghost-library-filters, .ghost-library-selection,
   .ghost-library-pagination { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
