@@ -1497,6 +1497,19 @@ the in-game input display; saving it never changes the input comparison.
 
 - **Lives** — `src/sm64_events/ghost/saved.py`
 
+### Playback copy
+
+The copy of a local native recording that the game plays and a
+[[ghost collection]] exports, when the recording predates exact pad capture.
+Each record without a pad takes the [[input track]]'s pad at its own game
+[[frame]], so the [[ghost]]'s input display shows what you pressed. The saved
+recording itself never changes; a [[frame]] the track lacks stays unknown.
+
+- **Lives** — `src/sm64_events/ghost/padfill.py` (written in an inputs
+  folder beside the saved native recordings)
+- **Not** — a [[polled fill]], which is the replay timeline's drawing of a
+  sample with no picture.
+
 ### Ghost window
 
 The see-through window the trainer draws a whole-picture [[ghost]] in: no border, no taskbar

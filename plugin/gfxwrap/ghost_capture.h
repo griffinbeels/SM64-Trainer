@@ -216,8 +216,9 @@ typedef struct gc_camera {
 
 /* Raw Controller input for this same serialized display-list occurrence.
  * Optional and independent of graphics pose validity. Unknown is all zero
- * WITHOUT GC_VALID_PAD; known neutral has that bit set. No polled fill,
- * carried input or button edge reconstruction belongs in this block. */
+ * WITHOUT GC_VALID_PAD; known neutral has that bit set. Capture never fills,
+ * carries or reconstructs input here. Only a playback copy of an older local
+ * clip (ghost/padfill.py) sets it, from the same frame's input-track sample. */
 typedef struct gc_pad {
     int16_t stick_x, stick_y;
     uint16_t buttons, reserved;

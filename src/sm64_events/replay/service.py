@@ -230,6 +230,11 @@ class ReplayService:
     #: ONE injected hook left; there were seven, one per generation of the
     #: derived frame map, and the capture layer retired all of them.
     track_pads = None
+    #: `(attempt, span) -> [(frame, InputFrame)]`: the attempt's own input
+    #: track widened to the raw game frames `span` covers, for filling a
+    #: native clip recorded before pad capture (`native_with_inputs`).
+    #: Injected beside `track_pads` by the same owner.
+    input_track = None
 
     def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
                  revealer=None):
@@ -520,6 +525,21 @@ class ReplayService:
         if older is not None:
             self._remember_native_preservation(self._native_preservation_key(attempt), older)
         return None, older
+
+    def native_with_inputs(self, attempt_id: int, found: tuple[Path, dict]) -> tuple[Path, dict]:
+        """The copy of `find_native`'s clip the renderer plays and a collection
+        exports: the attempt's input track fills the pads its capture never
+        recorded (`ghost/padfill.py`). `found` itself when nothing can be
+        filled; the committed clip and its manifest never change."""
+        if self.input_track is None:
+            return found
+        from sm64_events.ghost.padfill import with_track_pads
+        try:
+            attempt = self._attempt(attempt_id)
+        except (LookupError, RuntimeError, ValueError):
+            return found
+        return with_track_pads(found, attempt, self.input_track,
+                               self.cfg.save_root.resolve() / "native" / "inputs")
 
     def native_identity(self, attempt_id: int) -> dict:
         """Cheap projected ownership key; reprojected origins invalidate cached clips."""

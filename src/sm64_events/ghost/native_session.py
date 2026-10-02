@@ -97,10 +97,11 @@ class NativeGhost:
         self._portable = provider
 
     @staticmethod
-    def _fingerprint(path):
+    def _fingerprint(paths):
+        """Each file and its manifest, or None when any is missing."""
         try:
             return tuple((item.stat().st_size, item.stat().st_mtime_ns, item.stat().st_ctime_ns)
-                         for item in (path, path.with_suffix(".json")))
+                         for path in paths for item in (path, path.with_suffix(".json")))
         except OSError:
             return None
 
@@ -196,17 +197,20 @@ class NativeGhost:
         key = (attempt_id, target["kind"], target["entity_key"], target.get("strat"), identity)
         cached = self._cached.get(attempt_id)
         if cached is not None:
-            cached_key, asset, stamp, result = cached
-            if key == cached_key and stamp is not None and self._fingerprint(asset[0]) == stamp:
+            cached_key, asset, files, stamp, result = cached
+            if key == cached_key and stamp is not None and self._fingerprint(files) == stamp:
                 return {**result, "template_id": template.id}, asset
         found = self._replay.find_native(attempt_id)
         if found is None:
             return self._preservation_failure(answer, attempt_id), None
-        path, manifest = found
-        asset = (path, manifest)
+        # The renderer plays the copy whose missing pads the attempt's input
+        # track filled (ghost/padfill.py); either file changing re-validates.
+        fill = getattr(self._replay, "native_with_inputs", None)
+        asset = fill(attempt_id, found) if fill is not None else found
+        files = tuple(dict.fromkeys((found[0], asset[0])))
         result = {**answer, "available": True, "reason": None, "reason_text": None,
-                  "exactness": "native_pose", "blinks": manifest["blink_frames"]}
-        self._cached[attempt_id] = key, asset, self._fingerprint(path), result
+                  "exactness": "native_pose", "blinks": asset[1]["blink_frames"]}
+        self._cached[attempt_id] = key, asset, files, self._fingerprint(files), result
         if len(self._cached) > 128:
             del self._cached[next(iter(self._cached))]
         return result, asset

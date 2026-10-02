@@ -95,7 +95,8 @@ def export_rows(sharing, selected, author, step):
                 asset = sharing.replay.find_native(number)
                 if asset is None:
                     raise ValueError("Its saved Mario poses could not be validated.")
-                path, _manifest = asset
+                # The ghost as it plays here, inputs from its track included.
+                path, _manifest = sharing.replay.native_with_inputs(number, asset)
                 entry = make_entry(path, author=author, target=row["target"], frames=row["frames"],
                                    clock=row["clock"], recorded_utc=row["recorded_utc"],
                                    practice=row["practice"], outcome=row["outcome"])

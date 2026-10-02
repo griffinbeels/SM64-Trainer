@@ -38,14 +38,28 @@ even when a missing body pose is bridged from an earlier occurrence. Raw signed
 stick X/Y and held buttons are captured beside that pose, from the existing
 verified player-one controller root. Pressed buttons only provide a sanity check.
 Unavailable pad evidence is distinct from a known neutral stick, and never hides
-a valid body pose. Older clips keep playing with an unavailable-input indicator. Synthetic
+a valid body pose. A local clip recorded before pad capture plays as its
+[playback copy](../src/sm64_events/ghost/padfill.py): `ReplayService.native_with_inputs`
+fills each missing pad from the attempt's input track at the record's own
+`global_timer` (calibrated 2026-10-02: 45,659 of 45,659 agree at that frame),
+keeps the clip id and gives the copy its own SHA-256 under `save_root/native/inputs/`.
+The committed clip is never changed. A frame the track lacks, and a whole clip whose
+track Mario's action does not line up, keep the unavailable-input indicator. Synthetic
 death, extrapolated dance and post-recording holds have no invented inputs.
 
-The font is the original thin white SM64 dialogue font. Button and stick art
-come from the supported Usamune ROM's actual input display; its stick placement
-uses the same clamp and integer division. Stock dialogue labels cover controls
-for which that display has no art. Annotation rendering belongs to the private
-ghost display surface before HUD compositing; clean video stays unchanged.
+The font is the original thin white SM64 dialogue font. Names and inputs are
+sized in world units (`GP_ANNOTATION_*` in `ghost_tuning.h`), so a far ghost's
+name shrinks with its body, up to a largest size beside the camera. The
+renderer draws the world upside down (`flip_y`), so layout offsets flip with
+their anchor. The input display sits above the name and reproduces Usamune's
+own, read from its practice code (RAM `0x80408848`) with the big-icon setting:
+the mirrored stick base at its alpha `0x91`, the 16x16 ring moved by the raw
+stick clamped to ±70 and divided by 5, then the held buttons' 16x16 icons in
+its table order. **Values** prints Y's row above X's: a HUD `U`/`D` or `L`/`R`
+letter (none at zero) and the absolute value. Usamune draws nothing for L or
+the D-pad, and neither does the ghost. Unknown input shows a faded base with
+`?`, never a neutral stick. Annotation rendering belongs to the private ghost
+display surface before HUD compositing; clean video stays unchanged.
 
 **Ghost Library** opens beside the native controls. It shows recent buffer-covered
 and saved local runs plus imported recordings, with creator, target, strategy,
@@ -1199,6 +1213,19 @@ known) with scissor, sRGB and a foreign framebuffer set. The
 setters and direct calls and compares each observed value with the driver; it
 goes red without any one observation. The [pipeline](../tests/test_ghost_pipeline.py)
 asks nothing per ghost frame for 1, 4 and 16 ghosts at 640x480 and 1600x1200.
+
+### The first ghost's list
+
+Shader compiles happen before any ghost is asked for. The compositor and its
+four programs (body, shadow, particle, annotation) are created on the first
+list after the trainer's clean recording attaches, seconds after the game
+starts, and `prepare` then takes them (`ghost_compositor::warm`). Before, the first ghost's list
+compiled them: on 2026-10-02 a build with a new shader missed the driver's
+cache and that list took 35.8 ms (the NVIDIA GLCache file was written in the
+same 100 ms). Measured on the RTX 5090 with a hidden context: body 23 ms,
+shadow 11, particle 14, annotation 8 cold; under 0.4 ms each once the driver
+has cached that source. Storage (textures, renderbuffer, buffers) is about
+1 ms either way.
 
 ### What the hook numbers mean
 

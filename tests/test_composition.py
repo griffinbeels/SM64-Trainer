@@ -259,6 +259,8 @@ def test_build_wires_the_pad_stamp_audit_into_replay(monkeypatch):
     assert replay is not None, "the replay service was not composed"
     assert replay.track_pads is not None, (
         "the pad-stamp audit was built but never wired into ReplayService")
+    assert replay.input_track is not None, (
+        "older native ghosts would show unknown inputs: no input track reaches ReplayService")
 
 
 @pytest.mark.parametrize("ffmpeg_works", [True, False])

@@ -42,7 +42,8 @@ def recording(tmp_path, *, kind="star", pad=(12, -34, 0x8000), level=24, target=
 
 
 def provider(tmp_path, store=None):
-    replay = SimpleNamespace(cfg=SimpleNamespace(save_root=tmp_path / "replays"))
+    replay = SimpleNamespace(cfg=SimpleNamespace(save_root=tmp_path / "replays"),
+                             native_with_inputs=lambda _number, found: found)
     return GhostSharing(replay, store or Store())
 
 

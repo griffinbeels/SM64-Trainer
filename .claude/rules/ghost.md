@@ -17,6 +17,7 @@ Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../d
 | A range or limit the card shows | The row's `limits`. `GET /api/ghost` publishes them and the card reads `session.limits` (`ui/ghostsession.js`). JS never restates a Python number. |
 | The words of an on/off switch | `SWITCH_LABELS` in `ui/ghostsession.js`, keyed by the row name |
 | Which ghosts play | `ghost/selection.py`; the native set is built in `ghost/native_session.py` |
+| Inputs an older local clip shows (its playback copy) | `ghost/padfill.py`: the join, its calibration and every refusal. Never write filled pads into the committed clip |
 | What the renderer draws, and how it fades | `plugin/gfxwrap/ghost_*`. The fade rule and its constants are in `ghost_occlusion.h`; see `native-plugin.md` |
 
 **A new on/off setting touches four files:**
