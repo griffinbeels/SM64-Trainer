@@ -176,8 +176,10 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     selected_fields=recorded.sample.valid_fields;selected_hand=recorded.sample.pose.hand_state;
     selected_clock=recorded.sample.area_update_counter;
     if(revoke_evaluation)ghost_playback::api()->revoke(GP_DISABLED);
-    static const ghost_compositor::Vertex triangle[3]{};
-    out.vertices=triangle;out.count=recorded.sample.pose.hidden?0:3;out.opacity=opacity;
+    // His body's top sits 142 above his feet here: the name rides it.
+    static ghost_compositor::Vertex triangle[3]{};
+    for(unsigned i=0;i<3;++i)triangle[i].position[1]=recorded.sample.pose.position[1]+140+float(i);
+    out.vertices=triangle;out.count=recorded.sample.pose.hidden?0:3;out.body_count=out.count;out.opacity=opacity;
     // Identify the recorded row and its depth in the otherwise opaque matrix.
     out.view_projection[0]=recorded.sample.pose.position[0];
     out.view_projection[15]=recorded.sample.pose.position[2];
@@ -734,6 +736,20 @@ int main() {
                   && !std::strcmp(poses[1].annotation.label,"THIRD") && poses[1].annotation.pad.stick_x==22
                   && !std::strcmp(poses[2].annotation.label,"YOUR PB") && poses[2].annotation.pad.stick_x==20,
                   "names and exact input metadata travel with each body through depth sorting");
+            check(poses[0].annotation.slot==1 && poses[1].annotation.slot==2 && poses[2].annotation.slot==0,
+                  "each body keeps its own slot for the input stack's order");
+            for(unsigned i=0;i<3;++i)check(poses[i].annotation.top==poses[i].annotation.position[1]+142,
+                "the name rides the top of each body as drawn");
+            check(!poses[0].annotation.hud,"the input stack stays off until asked for");
+            ++r.revision;r.hud_inputs_enabled=1;r.name_background=GP_NAME_WHITE;r.name_background_opacity=0.25f;
+            check(api->configure(&r)==GP_OK,"stack and name box are their own controls");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
+            check(poses[0].annotation.hud && poses[0].annotation.background==GP_NAME_WHITE
+                  && poses[0].annotation.background_opacity==0.25f,"the stack switch and the name box reach every body");
+            ++r.revision;r.hud_inputs_enabled=0;r.name_background=GP_NAME_BLACK;r.name_background_opacity=0;
+            check(api->configure(&r)==GP_OK,"restore the name box");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             ++r.revision;std::strcpy(r.clips[1].label,"RENAMED");
             check(api->configure(&r)==GP_OK,"rename the same clip without changing its identity or origin");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});

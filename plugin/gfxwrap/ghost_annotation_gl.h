@@ -68,8 +68,15 @@ struct Storage {
     void upload(const Dispatch& g,const Pose* poses,uint32_t count,const Target& t) {
         if(!ready)return;
         g.BindBuffer(gl::COPY_WRITE_BUFFER,vbo);
+        // The stack's rows go in slot order, whatever the depth sort did.
+        unsigned stacked=0;
+        for(unsigned i=0;i<count;++i)stacked+=poses[i].annotation.hud;
         for(unsigned i=0;i<count;++i) {
-            const auto& pose=poses[i];ghost_annotation::build(pose.annotation,pose.view_projection,pose.flip_y,
+            const auto& pose=poses[i];auto payload=pose.annotation;
+            payload.hud_count=uint8_t(stacked);payload.hud_rank=0;
+            for(unsigned j=0;j<count;++j)payload.hud_rank+=poses[j].annotation.hud
+                && (poses[j].annotation.slot<payload.slot || (poses[j].annotation.slot==payload.slot && j<i));
+            ghost_annotation::build(payload,pose.view_projection,pose.flip_y,
                 pose.opacity,pose.body_alpha,pose.occlusion,t.viewport[2],t.viewport[3],mesh);
             counts[i]=mesh.count;
             if(mesh.count)g.BufferSubData(gl::COPY_WRITE_BUFFER,i*ghost_annotation::max_vertices*sizeof(ghost_annotation::Vertex),

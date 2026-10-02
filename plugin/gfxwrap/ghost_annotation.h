@@ -10,8 +10,14 @@ constexpr unsigned label_bytes=64, max_vertices=2048, atlas_width=256, atlas_hei
 struct Payload {
     char label[label_bytes]{};
     float position[3]{}, scale=1.0f;
+    float top=NAN; // world y of the drawn body's top; NaN: no body to measure
     gc_pad pad{};
     bool names=false, inputs=false, known=false, values=false, artwork=false;
+    // The name's dialog box: gp_name_background, and its alpha (0: no box).
+    uint8_t background=0;float background_opacity=0;
+    // This ghost's row in the stack above the game's input display, ordered
+    // by its slot among the ghosts that show one (filled in at upload).
+    bool hud=false;uint8_t slot=0,hud_rank=0,hud_count=0;
 };
 struct Vertex {float clip[4], uv[2], rgba[4];};
 struct Mesh {Vertex vertices[max_vertices]{};unsigned count=0;};

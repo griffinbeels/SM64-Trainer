@@ -10,6 +10,10 @@
 #define GP_GHOSTS 16u
 /* Terminated UTF-8 text attached to one immutable clip descriptor. */
 #define GP_LABEL_BYTES 64u
+/* The box behind a ghost's name (gp_request.name_background). SM64's two
+ * dialog boxes: an NPC's black box with white text, a sign's white box with
+ * black text (ingame_menu.c render_dialog_box_type). */
+enum gp_name_background { GP_NAME_BLACK = 0, GP_NAME_WHITE = 1 };
 /* The name and input display over a ghost (ghost_annotation_mesh.h), judged
  * by feel. His ask, 2026-10-02: the nametag was "way too big" and "should be
  * getting smaller the further away ghost mario is". One layout pixel (the
@@ -19,8 +23,20 @@
 /* A ghost beside the camera never draws larger than this many N64 screen
  * pixels (of 240) per layout pixel. */
 #define GP_ANNOTATION_MAX_SCREEN 0.75f
-/* The name's baseline above the ghost's feet, world units at gfx scale 1. */
-#define GP_ANNOTATION_HEIGHT 185.0f
+/* The name sits this far above the top of the ghost's drawn body (his ask,
+ * 2026-10-02: "directly over mario's head"), world units at gfx scale 1. A
+ * crouch, slide or dive lowers it with him; arms raised past his cap top
+ * (about 147 above his feet) never lift it past GP_ANNOTATION_TOP_MAX. */
+#define GP_ANNOTATION_GAP 8.0f
+#define GP_ANNOTATION_TOP_MAX 150.0f
+/* With no body to measure, the name's baseline above his feet. */
+#define GP_ANNOTATION_HEIGHT (GP_ANNOTATION_TOP_MAX + GP_ANNOTATION_GAP)
+/* The stack of ghosts' inputs above the game's own input display: each row's
+ * Usamune scale (shrunk to fit when many ghosts show), and the HUD pixels the
+ * stack may climb above that display (its top at y=186, the game's star and
+ * coin counters below y=40). */
+#define GP_HUD_ROW_SCALE 0.5f
+#define GP_HUD_STACK_PIXELS 144.0f
 /* Usamune's input display, in its own HUD pixels, relative to the name's. */
 #define GP_ANNOTATION_INPUT_SCALE 0.55f
 /* Held buttons start this many HUD pixels past the stick ring's farthest

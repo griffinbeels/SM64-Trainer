@@ -7,6 +7,7 @@
 #include <fstream>
 #include <stdexcept>
 static unsigned checks=0;
+static ghost_occlusion::Region ghost_annotation_region() {return {};}
 static void check(bool value,const char* why) {++checks;if(!value)throw std::runtime_error(why);}
 static void put(std::vector<uint8_t>& data,unsigned at,uint32_t value) {
     for(unsigned i=0;i<4;++i)data[at+i]=uint8_t(value>>(24-8*i));
@@ -117,6 +118,47 @@ int main(int argc,char** argv) {
             const float base_right=mesh.vertices[1].clip[0],ring_right=mesh.vertices[7].clip[0],button_left=mesh.vertices[12].clip[0];
             check(button_left>=ring_right,"a ring at full right tilt never runs under the first button");
             check(button_left-base_right<=10*hud_pixel,"the first button sits close beside the stick base");
+        }
+        // His ask, 2026-10-02: the name "directly over mario's head". It rides the
+        // top of the drawn body (a crouch brings it down), never above his cap.
+        {
+            Payload q;q.position[1]=100;
+            check(name_height(q)==GP_ANNOTATION_HEIGHT,"with no body measured the name keeps its standing height");
+            q.top=160;check(std::fabs(name_height(q)-(60+GP_ANNOTATION_GAP))<1e-4f,"a crouched body lowers the name");
+            q.top=500;check(std::fabs(name_height(q)-GP_ANNOTATION_HEIGHT)<1e-4f,"raised arms never lift it past the cap");
+        }
+        // SM64's dialog boxes behind the name: the NPC's black box with white
+        // text, the sign's white box with black text; no box keeps the shadow.
+        {
+            Payload q;std::strcpy(q.label,"YOUR PB");q.names=true;q.background_opacity=0.6f;
+            for(uint8_t background:{uint8_t(GP_NAME_BLACK),uint8_t(GP_NAME_WHITE)}) {
+                q.background=background;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
+                const float box=background==GP_NAME_WHITE?1.0f:0.0f,ink=1.0f-box;
+                check(mesh.count==6+6*6 && mesh.vertices[0].rgba[0]==box && mesh.vertices[0].rgba[3]==0.6f,
+                      "the box is one quad in its colour and opacity, the glyphs have no shadow on it");
+                check(mesh.vertices[0].uv[0]==float(atlas_width-1)/atlas_width,"the box samples the white atlas cell");
+                check(mesh.vertices[6].rgba[0]==ink,"the text takes the dialog's own colour on its box");
+            }
+            q.background_opacity=0;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
+            check(mesh.count==2*6*6,"no box: white glyphs with their drop shadow");
+        }
+        // The stack above the game's input display: one row per ghost in slot
+        // order, in screen space, drawn even when the ghost itself is off screen.
+        {
+            Payload q;std::strcpy(q.label,"YOUR PB");q.hud=q.artwork=q.known=true;q.pad={0,0,0x8000,0};q.hud_count=3;
+            float rows[3]{};
+            for(uint8_t rank=0;rank<3;++rank) {
+                q.hud_rank=rank;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
+                check(mesh.count>0 && mesh.vertices[0].clip[3]==1,"a stack row is drawn in screen space");
+                rows[rank]=mesh.vertices[mesh.count-1].clip[1];
+            }
+            check(rows[0]<rows[1] && rows[1]<rows[2],"later ghosts' rows climb above earlier ones");
+            check(rows[0]>-0.6f && rows[2]<0.2f,"the stack starts just above the game's own display");
+            q.hud_rank=0;q.position[2]=-1e6f;float behind[16]{};std::memcpy(behind,vp,sizeof(behind));behind[11]=1;behind[15]=0;
+            build(q,behind,0,1,1,ghost_annotation_region(),640,480,mesh);
+            check(mesh.count>0,"a ghost behind the camera still shows its row");
+            q.hud=false;build(q,behind,0,1,1,ghost_annotation_region(),640,480,mesh);
+            check(mesh.count==0,"the stack is its own switch");
         }
         p.names=true;p.pad={-128,127,0xff3f,0};p.values=true;std::memset(p.label,'W',63);p.label[63]=0;
         unsigned maximum=0;for(unsigned i=0;i<16;++i) {

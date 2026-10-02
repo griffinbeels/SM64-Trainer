@@ -39,9 +39,6 @@ enum gp_result {
 };
 enum gp_mode { GP_FOLLOW = 0, GP_FIXED = 1 };
 enum gp_input_mode { GP_INPUT_STICK = 0, GP_INPUT_VALUES = 1 };
-/* SM64's two dialog boxes: an NPC's black box with white text, a sign's
- * white box with black text (ingame_menu.c render_dialog_box_type). */
-enum gp_name_background { GP_NAME_BLACK = 0, GP_NAME_WHITE = 1 };
 enum gp_model_state {
     GP_MODEL_EMPTY, GP_MODEL_BUILDING, GP_MODEL_READY,
     GP_MODEL_RENDER_OWNED, GP_MODEL_RETIRED, GP_MODEL_RECLAIMING

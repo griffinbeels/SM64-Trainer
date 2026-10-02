@@ -1089,14 +1089,26 @@ void annotate(uint32_t index,const Choice& choice,ghost_compositor::Pose& pose) 
     std::memcpy(out.position,displayed_position[index],sizeof(out.position));
     out.scale=bound[index]->frames[choice.posed].sample.pose.scale[1];
     if(!(out.scale>0))out.scale=1;
+    // The top of the body as drawn this frame (his own vertices, not a held
+    // object's): the name sits on it, crouching, sliding or diving with him.
+    out.top=NAN;
+    for(uint32_t i=0;i<pose.body_count && i<pose.count;++i) {
+        const float y=pose.vertices[i].position[1];
+        if(std::isfinite(y) && !(y<=out.top))out.top=y;
+    }
     out.names=active_request.names_enabled!=0;
-    out.inputs=active_request.inputs_enabled && choice.recorded && !choice.falling && !choice.played;
+    out.background=uint8_t(active_request.name_background);
+    out.background_opacity=active_request.name_background_opacity;
+    out.slot=uint8_t(index);
+    const bool recorded=choice.recorded && !choice.falling && !choice.played;
+    out.hud=active_request.hud_inputs_enabled && recorded;
+    out.inputs=active_request.inputs_enabled && recorded;
     out.values=active_request.input_mode==GP_INPUT_VALUES;
     out.artwork=model.annotations.usamune;
     // A refused pose can borrow older geometry. Its pad remains the exact
     // current record: independent validity must never borrow a button hold.
     const auto& selected=bound[index]->frames[choice.record].sample;
-    if(out.inputs && (selected.valid_fields&GC_VALID_PAD)) {out.known=true;out.pad=selected.pad;}
+    if((out.inputs || out.hud) && (selected.valid_fields&GC_VALID_PAD)) {out.known=true;out.pad=selected.pad;}
 }
 bool same_list(const Plan& list,const gc_sample& live) {
     return list.made && list.epoch==live.epoch && list.sequence==live.sequence && list.dlist_serial==live.dlist_serial;
