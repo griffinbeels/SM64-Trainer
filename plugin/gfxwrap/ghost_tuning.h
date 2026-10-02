@@ -23,6 +23,10 @@
 #define GP_ANNOTATION_HEIGHT 185.0f
 /* Usamune's input display, in its own HUD pixels, relative to the name's. */
 #define GP_ANNOTATION_INPUT_SCALE 0.55f
+/* Held buttons start this many HUD pixels past the stick ring's farthest
+ * reach (or the Values column), the same as between two buttons. His ask,
+ * 2026-10-02: Usamune's own spacing left "way too much of a gap". */
+#define GP_ANNOTATION_BUTTON_GAP 2.0f
 /* The largest extra overlap-fade distance a request may carry (world units). */
 #define GP_PROXIMITY_MAX 400.0f
 /* Overlap fade (ghost_proximity.h): the ellipsoid proxy for one Mario at gfx

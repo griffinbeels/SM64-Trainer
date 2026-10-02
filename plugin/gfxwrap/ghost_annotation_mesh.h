@@ -79,10 +79,15 @@ struct Layout {
     }
     void inputs(const Payload& p,float bottom) {
         using namespace usamune;
-        unsigned held=0;
+        unsigned held=0,digits=1;
         if(p.known)for(auto mask:button_masks)held+=(p.pad.buttons&mask)!=0;
-        const float left=p.values?values_left:stick_left;
-        const float right=held?button_x+float(held)*button_advance-2:p.values?values_right:stick_right;
+        if(p.known)for(int value:{int(p.pad.stick_x),int(p.pad.stick_y)}) {
+            unsigned n=1;for(int v=value<0?-value:value;v>=10;v/=10)++n;
+            if(n>digits)digits=n;
+        }
+        const float left=p.values?values_left:stick_left,column=p.values?values_right(digits):stick_reach;
+        const float first=column+GP_ANNOTATION_BUTTON_GAP;
+        const float right=held?first+float(held)*button_advance-2:p.values?column:stick_right;
         hud_centre=(left+right)*0.5f;
         if(!p.known) { // unavailable evidence is never drawn as a neutral pad
             if(p.values) {hud_glyph(bottom,glyph('?'),digit_x,y_row);hud_glyph(bottom,glyph('?'),digit_x,x_row);}
@@ -98,7 +103,7 @@ struct Layout {
             hud(bottom,knob_x+float(stick_offset(p.pad.stick_x)),knob_y-float(stick_offset(p.pad.stick_y)),16,16,
                 cell::ring_x,cell::ring_y,16,16);
         }
-        float x=button_x;
+        float x=first;
         for(unsigned i=0;i<9;++i)if(p.pad.buttons&button_masks[i]) {
             hud(bottom,x,button_y,16,16,float(i*16),cell::button_y,16,16);x+=button_advance;
         }

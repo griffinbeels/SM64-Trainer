@@ -109,6 +109,15 @@ int main(int argc,char** argv) {
             const float centre=(mesh.vertices[0].clip[0]+mesh.vertices[last].clip[0])*0.5f;
             check(std::fabs(centre)<1e-4f,"the stick base through the last held button is centred on the name");
         }
+        // His ask, 2026-10-02: "way too much of a gap between the stick and the
+        // buttons". The first button follows the ring's farthest reach closely.
+        {
+            p.pad={127,0,0x8000,0};build(p,vp,0,1,1,region,640,480,mesh);
+            const float hud_pixel=(mesh.vertices[1].clip[0]-mesh.vertices[0].clip[0])/32; // the 32-wide base
+            const float base_right=mesh.vertices[1].clip[0],ring_right=mesh.vertices[7].clip[0],button_left=mesh.vertices[12].clip[0];
+            check(button_left>=ring_right,"a ring at full right tilt never runs under the first button");
+            check(button_left-base_right<=10*hud_pixel,"the first button sits close beside the stick base");
+        }
         p.names=true;p.pad={-128,127,0xff3f,0};p.values=true;std::memset(p.label,'W',63);p.label[63]=0;
         unsigned maximum=0;for(unsigned i=0;i<16;++i) {
             p.position[0]=float(i);build(p,vp,0,1,1,region,640,480,mesh);

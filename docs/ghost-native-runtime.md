@@ -56,7 +56,8 @@ Values column) through the last held button centred on it, and reproduces Usamun
 own, read from its practice code (RAM `0x80408848`) with the big-icon setting:
 the mirrored stick base at its alpha `0x91`, the 16x16 ring moved by the raw
 stick clamped to ±70 and divided by 5, then the held buttons' 16x16 icons in
-its table order. **Values** prints Y's row above X's: a HUD `U`/`D` or `L`/`R`
+its table order, drawn just past the ring's farthest reach (`GP_ANNOTATION_BUTTON_GAP`)
+rather than at Usamune's own x=80. **Values** prints Y's row above X's: a HUD `U`/`D` or `L`/`R`
 letter (none at zero) and the absolute value. Usamune draws nothing for L or
 the D-pad, and neither does the ghost. Unknown input shows a faded base with
 `?`, never a neutral stick. Annotation rendering belongs to the private ghost

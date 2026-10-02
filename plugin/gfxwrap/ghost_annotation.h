@@ -36,10 +36,13 @@ constexpr float knob_x=34,knob_y=195;
 constexpr float button_x=80,button_y=204,button_advance=18;
 constexpr float letter_x=20,digit_x=34,digit_advance=12,y_row=186,x_row=204;
 // The ghost centres what is drawn on its name: the stick base (or the Values
-// column, letter to a third digit) through the last held button. The ring's
-// travel is left out, so moving the stick never moves the display.
-constexpr float stick_left=base_x,stick_right=base_x+32;
-constexpr float values_left=letter_x,values_right=digit_x+2*digit_advance+16;
+// column) through the last held button. The ring's travel is left out, so
+// moving the stick never moves the display. Over a ghost the buttons follow
+// the column closely (GP_ANNOTATION_BUTTON_GAP) instead of at Usamune's x=80:
+// past the ring's farthest reach, or the wider Values row (two digits at least).
+constexpr float stick_left=base_x,stick_right=base_x+32,stick_reach=knob_x+14+16;
+constexpr float values_left=letter_x;
+inline float values_right(unsigned digits) {return digit_x+float((digits<2?2:digits)-1)*digit_advance+16;}
 constexpr float bottom=220;
 }
 inline bool valid_pad(const gc_sample& s) {
