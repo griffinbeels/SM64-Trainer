@@ -187,6 +187,7 @@ struct Instance {
     uint32_t textures[5]={}; // display color, copied ordinary depth, atlas, layer color, layer depth
     uint32_t fbos[4]={}; // display/self depth; copied terrain depth; layer color; layer depth
     uint32_t self_depth=0,vao=0,vbo=0,shader_program=0;
+    uint32_t warmed[4]={}; // compiled by warm(), not yet taken: body, shadow, particle, annotation
     int32_t uniforms[17]={};
     OcclusionUniforms occlusion;
     shadow::Storage shadow;
@@ -286,11 +287,16 @@ void abort(Instance* p) {
 }
 
 namespace {
+// A program warm() compiled ahead, or a fresh compile when there is none.
+uint32_t warmed_or(Instance* p,unsigned slot,const char* vertex,const char* fragment) {
+    const uint32_t id=p->warmed[slot];p->warmed[slot]=0;
+    return id?id:program(p->g,vertex,fragment);
+}
 Result allocate(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
                 const uint8_t* atlas,uint32_t aw,uint32_t ah) {
     const auto& g=p->g;
     if(!p->shader_program) {
-        p->shader_program=program(g);if(!p->shader_program)return Result::resources;
+        p->shader_program=warmed_or(p,0,vertex_shader,fragment_shader);if(!p->shader_program)return Result::resources;
         constexpr const char* names[] = {"viewProjection","flipY","lightDirection","lighting","depthMapping","opacity","atlas","terrain","hueDegrees",
             "layerColor","layerDepth","layerEnabled","bodyEnd","bodyAlpha","noiseSeed","noiseAlpha","noiseScale"};
         for(size_t i=0;i<std::size(names);++i) {p->uniforms[i]=g.GetUniformLocation(p->shader_program,names[i]);if(p->uniforms[i]<0)return Result::resources;}
@@ -305,7 +311,7 @@ Result allocate(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
     g.BindBuffer(PIXEL_UNPACK_BUFFER,0);g.PixelStorei(UNPACK_ALIGNMENT,1);
     g.PixelStorei(UNPACK_ROW_LENGTH,0);g.PixelStorei(UNPACK_SKIP_ROWS,0);g.PixelStorei(UNPACK_SKIP_PIXELS,0);
     if(!p->shadow.prepare(g,p->shadow.program?p->shadow.program:
-            program(g,shadow::vertex_shader,shadow::fragment_shader)))return Result::resources;
+            warmed_or(p,1,shadow::vertex_shader,shadow::fragment_shader)))return Result::resources;
     g.ActiveTexture(TEXTURE0);
     texture(g,p->textures[0],RGBA8,RGBA,UNSIGNED_BYTE,width,height,nullptr);
     texture(g,p->textures[1],DEPTH_COMPONENT24,DEPTH_COMPONENT,UNSIGNED_INT,width,height,nullptr);
@@ -375,13 +381,27 @@ Result prepare_particles(Instance* p,const uint8_t* rgba,uint32_t width,uint32_t
     Metering metering(p->raw,p->queries);
     const auto& g=p->g;Guard guard(g);
     return p->particles.prepare(g,p->particles.program?p->particles.program:
-        program(g,particle::vertex_shader,particle::fragment_shader),rgba,width,height) ? Result::ok : Result::resources;
+        warmed_or(p,2,particle::vertex_shader,particle::fragment_shader),rgba,width,height) ? Result::ok : Result::resources;
 }
 Result prepare_annotations(Instance* p,const uint8_t* rgba,uint32_t width,uint32_t height) {
     if(!p || !p->ready)return Result::invalid;
     abort(p);Metering metering(p->raw,p->queries);const auto& g=p->g;Guard guard(g);
     return p->annotations.prepare(g,p->annotations.program?p->annotations.program:
-        program(g,annotation::vertex_shader,annotation::fragment_shader),rgba,width,height)?Result::ok:Result::resources;
+        warmed_or(p,3,annotation::vertex_shader,annotation::fragment_shader),rgba,width,height)?Result::ok:Result::resources;
+}
+Result warm(Instance* p) {
+    if(!p)return Result::invalid;
+    Metering metering(p->raw,p->queries);const auto& g=p->g;Guard guard(g);
+    const struct {bool needed;const char* vertex;const char* fragment;} programs[]={
+        {!p->shader_program,vertex_shader,fragment_shader},
+        {!p->shadow.program,shadow::vertex_shader,shadow::fragment_shader},
+        {!p->particles.program,particle::vertex_shader,particle::fragment_shader},
+        {!p->annotations.program,annotation::vertex_shader,annotation::fragment_shader}};
+    bool all=true;
+    for(unsigned i=0;i<4;++i)if(programs[i].needed && !p->warmed[i]) {
+        p->warmed[i]=program(g,programs[i].vertex,programs[i].fragment);all=all && p->warmed[i];
+    }
+    return all?Result::ok:Result::resources;
 }
 
 Result begin(Instance* p,const Target& t,const Pose& pose,const Known* known) {
@@ -668,7 +688,9 @@ void destroy(Instance* p) {
     p->shadow.destroy(g);p->particles.destroy(g);p->annotations.destroy(g);
     end_layer(p);
     g.DeleteTextures(5,p->textures);g.DeleteFramebuffers(4,p->fbos);g.DeleteRenderbuffers(1,&p->self_depth);
-    g.DeleteVertexArrays(1,&p->vao);g.DeleteBuffers(1,&p->vbo);if(p->shader_program)g.DeleteProgram(p->shader_program);delete p;
+    g.DeleteVertexArrays(1,&p->vao);g.DeleteBuffers(1,&p->vbo);if(p->shader_program)g.DeleteProgram(p->shader_program);
+    for(auto id:p->warmed)if(id)g.DeleteProgram(id);
+    delete p;
 }
 void abandon(Instance* p) {delete p;}
 }

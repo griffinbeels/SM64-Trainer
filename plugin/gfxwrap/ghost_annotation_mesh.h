@@ -1,8 +1,10 @@
 /* Bounded CPU layout. No heap, driver calls, strings or work on other threads.
- * Screen offsets retain the anchor's clip depth and perspective divisor. */
+ * Offsets are world sizes at the anchor, so the perspective divide shrinks a
+ * far ghost's name like its body; every glyph keeps the anchor's clip depth. */
 #pragma once
 #include "ghost_annotation_assets.h"
 #include "ghost_occlusion.h"
+#include "ghost_tuning.h"
 #include <cstdio>
 
 namespace ghost_annotation {
@@ -12,15 +14,16 @@ inline bool valid(const Payload& p) {
     gc_sample sample{};sample.pad=p.pad;if(p.known)sample.valid_fields=GC_VALID_PAD;
     return valid_pad(sample);
 }
+// Layout pixels: x right and y up from the anchor, which the name centres on.
 struct Layout {
-    Mesh& mesh;float anchor[4],sx,sy,alpha;
+    Mesh& mesh;float anchor[4],sx,sy,alpha; // sx, sy: clip units per layout pixel
     void quad(float x,float y,float w,float h,float u,float v,float uw,float vh,float shade=1,float opacity=1) {
         if(mesh.count+6>max_vertices)return;
         constexpr unsigned corners[]={0,1,2,0,2,3};
         for(unsigned corner:corners) {
             auto& out=mesh.vertices[mesh.count++];
-            out.clip[0]=anchor[0]+(x+(corner==1 || corner==2?w:0))*sx*anchor[3];
-            out.clip[1]=anchor[1]+(y+(corner>=2?h:0))*sy*anchor[3];
+            out.clip[0]=anchor[0]+(x+(corner==1 || corner==2?w:0))*sx;
+            out.clip[1]=anchor[1]+(y+(corner>=2?h:0))*sy;
             out.clip[2]=anchor[2];out.clip[3]=anchor[3];
             out.uv[0]=(u+(corner==1 || corner==2?uw:0))/atlas_width;
             out.uv[1]=(v+(corner>=2?0:vh))/atlas_height;
@@ -55,49 +58,45 @@ struct Layout {
         float x=-float(width)*scale*0.5f;
         for(unsigned i=0;i<n;++i) {character(chars[i],x,y,scale);x+=advance(chars[i])*scale;}
     }
-    void number(int value,float x,float y,float scale) {
-        char digits[8]{};std::snprintf(digits,sizeof(digits),"%d",value);
-        for(unsigned i=0;digits[i];++i) {
-            if(digits[i]=='-')character(glyph('-'),x,y+2*scale,scale);
-            else quad(x,y,16*scale,16*scale,float(digits[i]-'0')*16,128,16,16);
-            x+=12*scale;
-        }
+    // One rectangle of Usamune's HUD (its pixels, y down), with its fixed span
+    // centred over the name and its bottom edge at `bottom`.
+    void hud(float bottom,float x,float y,float w,float h,float u,float v,float uw,float vh,float opacity=1) {
+        constexpr float s=GP_ANNOTATION_INPUT_SCALE;
+        const float left=-(usamune::right-usamune::left)*s*0.5f;
+        quad(left+(x-usamune::left)*s,bottom+(usamune::bottom-(y+h))*s,w*s,h*s,u,v,uw,vh,1,opacity);
     }
-    void inputs(const Payload& p,float y) {
-        constexpr float scale=0.625f;
-        const struct {uint16_t mask;const char* name;} extra[]={{0x20,"L"},{0x800,"D^"},
-            {0x400,"Dv"},{0x200,"D<"},{0x100,"D>"}};
-        unsigned held=0;for(auto mask:button_masks)held+=(p.pad.buttons&mask)!=0;
-        // Exact Usamune spacing (32-pixel mirrored base, buttons x80 vs
-        // base x26, eight pixels each, ten-pixel advance), centered as a group.
-        const float button_start=p.values?84.0f:54.0f;
-        float width=held?button_start+held*10.0f-2:(p.values?78.0f:32.0f);
-        for(const auto& key:extra)if(p.pad.buttons&key.mask) {
-            if(!held && width<button_start)width=button_start;
-            for(unsigned i=0;key.name[i];++i)width+=advance(glyph(key.name[i]));
-            width+=2;
+    void hud_glyph(float bottom,uint8_t c,float x,float y) { // a dialogue glyph at HUD size
+        constexpr float s=GP_ANNOTATION_INPUT_SCALE;
+        const float left=-(usamune::right-usamune::left)*s*0.5f;
+        character(c,left+(x-usamune::left)*s,bottom+(usamune::bottom-(y+16))*s,s);
+    }
+    // Usamune's Values row: no letter at zero, then |value| in HUD numerals.
+    void row(float bottom,int value,float y,cell::Letter negative,cell::Letter positive) {
+        if(value)hud(bottom,usamune::letter_x,y,16,16,cell::letter_x+16*float(value<0?negative:positive),cell::letter_y,16,16);
+        char digits[8]{};std::snprintf(digits,sizeof(digits),"%d",value<0?-value:value);
+        float x=usamune::digit_x;
+        for(unsigned i=0;digits[i];++i,x+=usamune::digit_advance)
+            hud(bottom,x,y,16,16,float(digits[i]-'0')*16,cell::digit_y,16,16);
+    }
+    void inputs(const Payload& p,float bottom) {
+        using namespace usamune;
+        if(!p.known) { // unavailable evidence is never drawn as a neutral pad
+            if(p.values) {hud_glyph(bottom,glyph('?'),digit_x,y_row);hud_glyph(bottom,glyph('?'),digit_x,x_row);}
+            else {hud(bottom,base_x,base_y,32,32,cell::base_x,cell::base_y,32,32,base_alpha*0.5f);
+                hud_glyph(bottom,glyph('?'),knob_x+4,knob_y);}
+            return;
         }
-        const float left=-width*scale*0.5f;
         if(p.values) {
-            character(glyph('U'),left,y+16*scale,scale);character(glyph('D'),left+7*scale,y+16*scale,scale);
-            number(p.pad.stick_y,left+24*scale,y+16*scale,scale);
-            character(glyph('L'),left,y,scale);character(glyph('R'),left+7*scale,y,scale);
-            number(p.pad.stick_x,left+24*scale,y,scale);
+            row(bottom,p.pad.stick_y,y_row,cell::D,cell::U);
+            row(bottom,p.pad.stick_x,x_row,cell::L,cell::R);
         } else {
-            quad(left,y,32*scale,32*scale,80,144,32,32);
-            quad(left+(12+stick_offset(p.pad.stick_x))*scale,y+(12+stick_offset(p.pad.stick_y))*scale,
-                8*scale,8*scale,112,144,8,8);
+            hud(bottom,base_x,base_y,32,32,cell::base_x,cell::base_y,32,32,base_alpha);
+            hud(bottom,knob_x+float(stick_offset(p.pad.stick_x)),knob_y-float(stick_offset(p.pad.stick_y)),16,16,
+                cell::ring_x,cell::ring_y,16,16);
         }
-        // Raw values can occupy more than the original stick's 32 pixels.
-        float x=left+button_start*scale;
+        float x=button_x;
         for(unsigned i=0;i<9;++i)if(p.pad.buttons&button_masks[i]) {
-            quad(x,y-scale,8*scale,8*scale,float(i*8),144,8,8);x+=10*scale;
-        }
-        // These controls have no colored Usamune HUD texture. The stock
-        // dialogue glyphs keep their exact held state readable.
-        for(const auto& key:extra)if(p.pad.buttons&key.mask) {
-            for(unsigned i=0;key.name[i];++i) {const auto c=glyph(key.name[i]);character(c,x,y,scale);x+=advance(c)*scale;}
-            x+=2*scale;
+            hud(bottom,x,button_y,16,16,float(i*16),cell::button_y,16,16);x+=button_advance;
         }
     }
 };
@@ -108,24 +107,26 @@ inline void build(const Payload& p,const float vp[16],uint32_t flip_y,float opac
     if((!p.names && !p.inputs) || !viewport_width || !viewport_height || !valid(p))return;
     float anchor[4]{},body[4]{};
     for(unsigned r=0;r<4;++r) {
-        anchor[r]=vp[r]*p.position[0]+vp[4+r]*(p.position[1]+200*p.scale)+vp[8+r]*p.position[2]+vp[12+r];
+        anchor[r]=vp[r]*p.position[0]+vp[4+r]*(p.position[1]+GP_ANNOTATION_HEIGHT*p.scale)+vp[8+r]*p.position[2]+vp[12+r];
         body[r]=vp[r]*p.position[0]+vp[4+r]*(p.position[1]+80*p.scale)+vp[8+r]*p.position[2]+vp[12+r];
     }
     for(float f:anchor)if(!std::isfinite(f))return;
     if(anchor[3]<=1 || std::fabs(anchor[0]/anchor[3])>1.3f || std::fabs(anchor[1]/anchor[3])>1.3f)return;
     const float visibility=opacity*body_alpha*ghost_occlusion::point_fade(occlusion,body);
     if(!(visibility>0))return;
+    // The projection's own per-axis scale (camera roll aside, its row lengths)
+    // turns world units into clip units; dividing by w then shrinks with distance.
+    const float px=std::sqrt(vp[0]*vp[0]+vp[4]*vp[4]+vp[8]*vp[8]),py=std::sqrt(vp[1]*vp[1]+vp[5]*vp[5]+vp[9]*vp[9]);
+    if(!(px>0) || !(py>0) || !std::isfinite(px) || !std::isfinite(py))return;
+    const float largest=2.0f*GP_ANNOTATION_MAX_SCREEN/240*anchor[3];
+    const float sy=std::fmin(GP_ANNOTATION_WORLD_PER_PIXEL*py,largest),sx=sy*px/py;
+    // The renderer draws the world upside down (flip_y) and turns the finished
+    // picture over: offsets flip with the anchor, or every glyph reads mirrored.
+    const float up=flip_y?-1.0f:1.0f;
     if(flip_y)anchor[1]=-anchor[1];
-    Layout layout{mesh,{anchor[0],anchor[1],anchor[2],anchor[3]},
-        2.0f*viewport_height/(240.0f*viewport_width),2.0f/240,visibility};
+    Layout layout{mesh,{anchor[0],anchor[1],anchor[2],anchor[3]},sx,sy*up,visibility};
     if(p.names)layout.text(p.label[0]?p.label:"GHOST",0);
-    if(!p.inputs)return;
-    const float y=p.names?15.0f:0.0f;
-    if(!p.known) {layout.text("INPUTS UNKNOWN",y,0.625f);return;}
-    if(p.artwork)layout.inputs(p,y);
-    else { // old/other cartridges can never masquerade as a neutral pad
-        char values[48]{};std::snprintf(values,sizeof(values),"Y %d X %d PAD %04X",int(p.pad.stick_y),int(p.pad.stick_x),p.pad.buttons);
-        layout.text(values,y,0.625f);
-    }
+    // Usamune's display sits directly above the name.
+    if(p.inputs && p.artwork)layout.inputs(p,p.names?14.0f:0.0f);
 }
 }

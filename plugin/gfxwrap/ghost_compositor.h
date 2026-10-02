@@ -213,6 +213,11 @@ Cost take_cost(Instance*); // returns the cost so far and starts a new count
  * skipped; setup-time only, like prepare. */
 Result prepare_particles(Instance*, const uint8_t* atlas_rgba, uint32_t width, uint32_t height);
 Result prepare_annotations(Instance*, const uint8_t* atlas_rgba, uint32_t width, uint32_t height);
+/* Compile every program ahead, on a list that draws no ghost: the first
+ * ghost's list must not be the one that waits for the driver (a missed
+ * shader cache cost it 36 ms, 2026-10-02). prepare and the optional
+ * storages take them; destroy deletes any never taken. */
+Result warm(Instance*);
 Result begin(Instance*, const Target&, const Pose&, const Known* = nullptr); // copies clean color, draws once
 /* Bounded multi-ghost experiment: copy the clean surface once and draw each
  * body with its own self-depth/stencil pass. Caller supplies back-to-front

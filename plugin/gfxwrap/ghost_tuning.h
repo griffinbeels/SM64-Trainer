@@ -10,6 +10,19 @@
 #define GP_GHOSTS 16u
 /* Terminated UTF-8 text attached to one immutable clip descriptor. */
 #define GP_LABEL_BYTES 64u
+/* The name and input display over a ghost (ghost_annotation_mesh.h), judged
+ * by feel. His ask, 2026-10-02: the nametag was "way too big" and "should be
+ * getting smaller the further away ghost mario is". One layout pixel (the
+ * dialogue font's) is this many WORLD units, so the perspective divide
+ * shrinks a far ghost's name exactly like its body; Mario is 160 tall. */
+#define GP_ANNOTATION_WORLD_PER_PIXEL 1.9f
+/* A ghost beside the camera never draws larger than this many N64 screen
+ * pixels (of 240) per layout pixel. */
+#define GP_ANNOTATION_MAX_SCREEN 0.75f
+/* The name's baseline above the ghost's feet, world units at gfx scale 1. */
+#define GP_ANNOTATION_HEIGHT 185.0f
+/* Usamune's input display, in its own HUD pixels, relative to the name's. */
+#define GP_ANNOTATION_INPUT_SCALE 0.55f
 /* The largest extra overlap-fade distance a request may carry (world units). */
 #define GP_PROXIMITY_MAX 400.0f
 /* Overlap fade (ghost_proximity.h): the ellipsoid proxy for one Mario at gfx

@@ -390,7 +390,9 @@ static void annotation_witness(const gc::Dispatch& g) {
     for(auto& v:vertices)v.position[0]=5000; // body clipped: the caption is the only visible draw
     auto* compositor=gc::create(g,1);require(compositor!=nullptr,"annotation compositor create");
     const uint8_t white[4]={255,255,255,255};
-    hostile(g,scene,bindings);
+    hostile(g,scene,bindings);cgl::State before_warm{};before_warm.capture(g);
+    require(gc::warm(compositor)==gc::Result::ok,"every program compiles ahead of the first ghost");
+    equal_state(g,before_warm,bindings);
     require(gc::prepare(compositor,320,240,60,white,1,1)==gc::Result::ok,"annotation prepare");
     std::vector<uint8_t> atlas(ghost_annotation::atlas_width*ghost_annotation::atlas_height*4,255);
     hostile(g,scene,bindings);cgl::State prepared{};prepared.capture(g);const auto prepared_frame=frame_state(g);
@@ -399,8 +401,9 @@ static void annotation_witness(const gc::Dispatch& g) {
     equal_state(g,prepared,bindings);equal_frame(g,prepared_frame);
     ordinary_state(g,scene);const auto clean=pixels(g,scene.fbo,320,240);const auto z=depth(g,scene);
     const auto zi=image_depth(g,scene);
-    auto p=pose(vertices,1);p.view_projection[15]=500;p.annotation.names=true;
-    std::strcpy(p.annotation.label,"A");p.annotation.position[0]=100;p.annotation.position[1]=-200;
+    // Names are world-sized: w=200 keeps this one at its largest screen size.
+    auto p=pose(vertices,1);p.view_projection[15]=200;p.annotation.names=true;
+    std::strcpy(p.annotation.label,"GHOST");p.annotation.position[0]=40;p.annotation.position[1]=-GP_ANNOTATION_HEIGHT;
     auto render=[&](const gc::Pose& payload,gc::Depth mode,bool hud=false) {
         hostile(g,scene,bindings);cgl::State before{};before.capture(g);const auto frame_before=frame_state(g);
         require(gc::begin(compositor,target(scene,mode),payload)==gc::Result::ok,"annotation frame begin");
@@ -419,9 +422,9 @@ static void annotation_witness(const gc::Dispatch& g) {
         unsigned between=0;for(size_t at=0;at<full.size();at+=4)if(full[at]>clean[at]+10
             && faint[at]>clean[at] && faint[at]<full[at])++between;
         require(between>30,"annotation inherits the ghost opacity once");
-        auto blocked=p;blocked.annotation.position[0]=-100;
+        auto blocked=p;blocked.annotation.position[0]=-40;
         require(render(blocked,mode)==clean,"annotation behind copied terrain is occluded");
-        auto close_pose=p;close_pose.view_projection[0]=close_pose.view_projection[5]=.001f;close_pose.view_projection[15]=10;
+        auto close_pose=p;close_pose.view_projection[15]=10;close_pose.annotation.position[0]=2;
         close_pose.occlusion.enabled=1;require(render(close_pose,mode)==clean,"ordinary name shares near-camera body hiding");
         close_pose.occlusion.minimum=.15f;require(render(close_pose,mode)!=clean,"terminal name shares the death visibility floor");
         const auto hud=render(p,mode,true);

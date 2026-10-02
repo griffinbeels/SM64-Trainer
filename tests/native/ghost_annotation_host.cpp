@@ -50,9 +50,42 @@ int main(int argc,char** argv) {
         const float depth=mesh.vertices[0].clip[2],w=mesh.vertices[0].clip[3];
         for(unsigned i=0;i<mesh.count;++i)check(mesh.vertices[i].clip[2]==depth && mesh.vertices[i].clip[3]==w,
             "every glyph retains the body anchor's terrain depth and perspective divisor");
-        p.inputs=true;build(p,vp,0,1,1,region,640,480,mesh);const auto unknown=mesh.count;
+        // Orientation: the live renderer always flips (flip_y=1). Glyph tops
+        // must still face screen-up, and the input display sits above the name.
+        p.inputs=p.artwork=p.known=true;
+        for(uint32_t flip=0;flip<2;++flip) {
+            build(p,vp,flip,1,1,region,640,480,mesh);
+            const float sign=flip?-1.0f:1.0f; // screen-up in this pass's clip y
+            const auto& bottom=mesh.vertices[6];const auto& top=mesh.vertices[6+2];
+            check(sign*(top.clip[1]-bottom.clip[1])>0 && top.uv[1]<bottom.uv[1],
+                  "a name glyph's atlas top is drawn screen-up in both renderer orientations");
+            const auto& name_first=mesh.vertices[0];const auto& input_last=mesh.vertices[mesh.count-1];
+            check(sign*(input_last.clip[1]-name_first.clip[1])>0,"the input display sits above the name");
+        }
+        p.artwork=p.known=false;build(p,vp,0,1,1,region,640,480,mesh);
+        check(mesh.count==unsigned(2*6*6),"no supported artwork draws the name alone, never a guessed pad");
+        p.artwork=true;build(p,vp,0,1,1,region,640,480,mesh);const auto unknown=mesh.count;
         p.known=true;build(p,vp,0,1,1,region,640,480,mesh);
         check(mesh.count!=unknown,"unknown pad has a readable indication distinct from neutral");
+        p.artwork=false;
+        // World-sized: twice as far is half the size on screen, and a ghost
+        // beside the camera stops at the largest screen size.
+        {
+            Payload far=p;far.inputs=false;far.position[1]=-GP_ANNOTATION_HEIGHT;float persp[16]{};persp[0]=persp[5]=persp[10]=2.4f;persp[11]=1;
+            auto width=[&](float z) {
+                far.position[2]=z;build(far,persp,1,1,1,ghost_occlusion::Region{},640,480,mesh);
+                float lo=1e9f,hi=-1e9f;for(unsigned i=0;i<mesh.count;++i) {
+                    const float x=mesh.vertices[i].clip[0]/mesh.vertices[i].clip[3];lo=std::fmin(lo,x);hi=std::fmax(hi,x);}
+                return mesh.count?hi-lo:0.0f;
+            };
+            const float near=width(800),twice=width(1600);
+            check(near>0 && std::fabs(near/twice-2)<0.01f,"a ghost twice as far draws its name half as wide");
+            const float glyph_ndc=(mesh.vertices[1].clip[0]-mesh.vertices[0].clip[0])/mesh.vertices[0].clip[3];
+            check(glyph_ndc>0,"glyph quads have extent");
+            width(20);const float cap=2.0f*GP_ANNOTATION_MAX_SCREEN/240*8*0.75f;
+            const float close=(mesh.vertices[1].clip[0]-mesh.vertices[0].clip[0])/mesh.vertices[0].clip[3];
+            check(close<=cap*1.001f,"a ghost beside the camera never exceeds the largest name size");
+        }
         region.enabled=1;region.overlap=0.15f;vp[15]=10;region.minimum=0.15f;
         build(p,vp,0,1,1,region,640,480,mesh);
         // Move projection Y back into view without changing depth.
@@ -68,7 +101,7 @@ int main(int argc,char** argv) {
         p.pad={127,-128,0x4000,0};build(p,vp,0,1,1,region,640,480,mesh);
         check(mesh.vertices[6].clip[0]>neutral_x && mesh.vertices[6].clip[1]<neutral_y,
               "right/down raw input moves the exact knob right/down rather than swapping axes");
-        check(mesh.vertices[12].uv[0]==8.0f/atlas_width,"held B resolves to its own canonical table cell");
+        check(mesh.vertices[12].uv[0]==16.0f/atlas_width,"held B resolves to its own canonical table cell");
         p.names=true;p.pad={-128,127,0xff3f,0};p.values=true;std::memset(p.label,'W',63);p.label[63]=0;
         unsigned maximum=0;for(unsigned i=0;i<16;++i) {
             p.position[0]=float(i);build(p,vp,0,1,1,region,640,480,mesh);
@@ -84,10 +117,11 @@ int main(int argc,char** argv) {
             if(argc>=4) {
                 std::ofstream out(argv[3],std::ios::binary);
                 Payload preview;std::strcpy(preview.label,"YOUR PB");preview.names=preview.inputs=preview.known=true;
-                preview.artwork=assets.usamune;preview.pad={-128,70,0xc004,0};preview.position[1]=-100;
-                for(unsigned side=0;side<2;++side) {
-                    preview.position[0]=side?220.0f:-220.0f;preview.values=side!=0;
-                    build(preview,vp,0,0.85f,1,region,640,480,mesh);
+                preview.artwork=assets.usamune;preview.pad={-128,70,0xc004,0};preview.position[1]=-GP_ANNOTATION_HEIGHT;
+                float near[16]{};near[0]=near[5]=near[10]=1;near[15]=60; // close enough to reach the size cap
+                for(unsigned side=0;side<3;++side) {
+                    preview.position[0]=side==0?-30.0f:side==1?0.0f:30.0f;preview.values=side==1;preview.known=side!=2;if(side==2)preview.pad={};
+                    build(preview,near,0,0.85f,1,region,640,480,mesh);
                     out.write(reinterpret_cast<const char*>(&mesh.count),sizeof(mesh.count));
                     out.write(reinterpret_cast<const char*>(mesh.vertices),mesh.count*sizeof(Vertex));
                 }

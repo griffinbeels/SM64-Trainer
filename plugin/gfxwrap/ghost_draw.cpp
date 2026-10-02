@@ -197,8 +197,9 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         ghost_presentation::set_provider(image_for_vi, presented, valid_image);
         ghost_presentation::context_ready(); presentation_owner = identity;
     }
-    sg_atlas_view atlas{}; uint64_t wanted_model = 0;
-    if (!ghost_playback::atlas(&atlas, &wanted_model)) return;
+    // The compositor and its programs exist before any ghost is asked for, so
+    // the driver's compile lands seconds after the game starts, not on the
+    // first ghost's list (a fresh shader cache cost that list 36 ms, 2026-10-02).
     if (!same(identity, owner)) {
         if (compositor) {
             if (identity.context == owner.context) ghost_compositor::destroy(compositor);
@@ -212,8 +213,11 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         if (proc <= 3 || proc == UINTPTR_MAX) get_uniform = nullptr;
         if (!replay_gl::BeginCapture()) return;
         compositor = ghost_compositor::create(dispatch, owner.context_generation);
+        if (compositor) ghost_compositor::warm(compositor);
         if (!replay_gl::EndCapture()) { ghost_compositor::abandon(compositor); compositor = nullptr; return; }
     }
+    sg_atlas_view atlas{}; uint64_t wanted_model = 0;
+    if (!ghost_playback::atlas(&atlas, &wanted_model)) return;
     if (compositor && width && height && (width != prepared_width || height != prepared_height || model_id != wanted_model)) {
         if (!replay_gl::BeginCapture()) return;
         // One vertex range per displayed ghost; begin_batch shares the buffer.

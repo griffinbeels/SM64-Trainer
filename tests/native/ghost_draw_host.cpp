@@ -58,7 +58,8 @@ struct Faults {
     int renderer_before_surface = -1, renderer_before_hud = -1;
     bool renderer_after_huds = false, batch = false, hud_gl = false, layer_gl = false, throw_in_layer = false;
 } faults;
-struct Seen { unsigned layer_passes = 0, broken = 0, finalized = 0, hud_mirrors = 0; } seen;
+struct Seen { unsigned layer_passes = 0, broken = 0, finalized = 0, hud_mirrors = 0, warmed = 0; } seen;
+bool model_ready = true; // playback has built Mario's model
 bool chooses = true; // the list's plan chose a ghost
 bool layer_broken = false, begun = false, in_hud = false;
 unsigned checks = 0;
@@ -115,6 +116,7 @@ Instance *create(const Dispatch &, uint64_t) { return &instance; }
 Result prepare(Instance *, uint32_t, uint32_t, uint32_t, const uint8_t *, uint32_t, uint32_t) { return Result::ok; }
 Result prepare_particles(Instance *, const uint8_t *, uint32_t, uint32_t) { return Result::unsupported; }
 Result prepare_annotations(Instance *, const uint8_t *, uint32_t, uint32_t) { return Result::unsupported; }
+Result warm(Instance *) { ++seen.warmed; return Result::ok; }
 Result begin_batch(Instance *, const Target &, const Pose *, uint32_t count, const Known *) {
     if (faults.batch) fail_gl(Owner::ghost);
     begun = count != 0; return begun ? Result::ok : Result::invalid;
@@ -153,7 +155,7 @@ void safe_boundary(uint32_t, uint32_t) {}
 bool atlas(sg_atlas_view *out, uint64_t *id) {
     static const uint8_t pixel[4]{};
     *out = {}; out->rgba = pixel; out->width = out->height = 1; *id = 1;
-    return true;
+    return model_ready;
 }
 bool particles(sg_particle_view *, uint64_t *) { return false; }
 bool annotations(ghost_annotation::View *, uint64_t *) { return false; }
@@ -257,6 +259,12 @@ void scenario(const char *name, bool comma, Faults fault) {
 
 int main() {
     try {
+#ifndef GHOST_DRAW_BASELINE
+        // Before any ghost or model exists the compositor compiles its programs
+        // once, so the first ghost's list never waits for the driver.
+        model_ready = false; run_list(0, 0); run_list(0, 0); model_ready = true;
+        check(seen.warmed == 1, "programs compile once, before Mario's model or any ghost");
+#endif
         run_list(0, 0); run_list(0, 0); // create and prepare the compositor
         reset();
         std::printf("{\"ok\":true,\"baseline\":%s,",

@@ -4,6 +4,16 @@
 #include "ghost_annotation.h"
 #include <array>
 namespace ghost_annotation {
+// Atlas cells (pixels, row 0 at the top). Dialogue glyph c sits at
+// ((c%32)*8, (c/32)*16); everything else below it.
+namespace cell {
+constexpr float digit_y=128;                 // HUD numeral i at (i*16, 128), 16x16
+constexpr float letter_x=160,letter_y=128;   // HUD U, D, L, R at letter_x + j*16
+constexpr float button_y=144;                // Usamune 16x16 button i at (i*16, 144)
+constexpr float ring_x=144,ring_y=144;       // 16x16 stick ring
+constexpr float base_x=160,base_y=144;       // 32x32 mirrored stick base
+enum Letter {U,D,L,R};
+}
 struct Assets {
     std::array<uint8_t,atlas_width*atlas_height*4> rgba{};
     bool ready=false,usamune=false;
