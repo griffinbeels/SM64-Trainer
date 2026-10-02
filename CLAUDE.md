@@ -106,8 +106,8 @@ together when changing their shared Attempt contract. Land prerequisite contract
 changes before dependent work. Integrate with `--no-ff`.
 
 Choose the smallest meaningful check while editing: rerun a failure by name,
-never the whole suite. The merge check (the blast radius) is the integration
-gate and owns the shared resource budget and child cleanup; the full run on
+never the whole suite. The merge check runs the blast radius and gates every
+merge. It owns the shared resource budget and child cleanup. The full run on
 GitHub runs everything after the push. Repeat or broaden only for changed
 inputs, failures, or unresolved concerns. Preserve actual native exit codes; in
 PowerShell never pipe test output into `Select-Object` or use `2>&1` on native
@@ -123,9 +123,9 @@ failure, then reverting it. Tests alone do not establish visual correctness.
 
 ## Definition of done for integration
 
-- The merge check (`tools/run_tests.py`, the blast radius) passes for the
-  integrated tree. An identical tree reuses that evidence; record revision,
-  command, result and skips. The full run on GitHub covers the whole suite
+- The merge check (`tools/run_tests.py`) passes for the integrated tree. An
+  identical tree reuses that evidence; record revision, command, result and
+  skips. The full run on GitHub covers the whole suite
   after the push and must be green before a release.
 - Relevant behavior tests and, for visible changes, rendered evidence cover
   the change. New memory reads have human live verification.
