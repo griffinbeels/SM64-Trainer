@@ -51,7 +51,8 @@ The font is the original thin white SM64 dialogue font. Names and inputs are
 sized in world units (`GP_ANNOTATION_*` in `ghost_tuning.h`), so a far ghost's
 name shrinks with its body, up to a largest size beside the camera. The
 renderer draws the world upside down (`flip_y`), so layout offsets flip with
-their anchor. The input display sits above the name and reproduces Usamune's
+their anchor. The input display sits above the name, the stick base (or the
+Values column) through the last held button centred on it, and reproduces Usamune's
 own, read from its practice code (RAM `0x80408848`) with the big-icon setting:
 the mirrored stick base at its alpha `0x91`, the 16x16 ring moved by the raw
 stick clamped to ±70 and divided by 5, then the held buttons' 16x16 icons in

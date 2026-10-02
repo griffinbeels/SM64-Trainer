@@ -102,6 +102,13 @@ int main(int argc,char** argv) {
         check(mesh.vertices[6].clip[0]>neutral_x && mesh.vertices[6].clip[1]<neutral_y,
               "right/down raw input moves the exact knob right/down rather than swapping axes");
         check(mesh.vertices[12].uv[0]==16.0f/atlas_width,"held B resolves to its own canonical table cell");
+        // His ask, 2026-10-02: the stick and buttons together are centred on the name.
+        for(uint16_t buttons:{uint16_t(0),uint16_t(0xc004)}) {
+            p.pad={70,70,buttons,0};build(p,vp,0,1,1,region,640,480,mesh);
+            const unsigned last=buttons?(2+3-1)*6+1:1; // the last drawn button's right edge, or the base's
+            const float centre=(mesh.vertices[0].clip[0]+mesh.vertices[last].clip[0])*0.5f;
+            check(std::fabs(centre)<1e-4f,"the stick base through the last held button is centred on the name");
+        }
         p.names=true;p.pad={-128,127,0xff3f,0};p.values=true;std::memset(p.label,'W',63);p.label[63]=0;
         unsigned maximum=0;for(unsigned i=0;i<16;++i) {
             p.position[0]=float(i);build(p,vp,0,1,1,region,640,480,mesh);

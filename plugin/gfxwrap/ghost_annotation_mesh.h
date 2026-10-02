@@ -17,6 +17,7 @@ inline bool valid(const Payload& p) {
 // Layout pixels: x right and y up from the anchor, which the name centres on.
 struct Layout {
     Mesh& mesh;float anchor[4],sx,sy,alpha; // sx, sy: clip units per layout pixel
+    float hud_centre=0; // the Usamune x drawn over the name's centre
     void quad(float x,float y,float w,float h,float u,float v,float uw,float vh,float shade=1,float opacity=1) {
         if(mesh.count+6>max_vertices)return;
         constexpr unsigned corners[]={0,1,2,0,2,3};
@@ -58,17 +59,15 @@ struct Layout {
         float x=-float(width)*scale*0.5f;
         for(unsigned i=0;i<n;++i) {character(chars[i],x,y,scale);x+=advance(chars[i])*scale;}
     }
-    // One rectangle of Usamune's HUD (its pixels, y down), with its fixed span
-    // centred over the name and its bottom edge at `bottom`.
+    // One rectangle of Usamune's HUD (its pixels, y down), its x measured from
+    // hud_centre and its bottom edge at `bottom`.
     void hud(float bottom,float x,float y,float w,float h,float u,float v,float uw,float vh,float opacity=1) {
         constexpr float s=GP_ANNOTATION_INPUT_SCALE;
-        const float left=-(usamune::right-usamune::left)*s*0.5f;
-        quad(left+(x-usamune::left)*s,bottom+(usamune::bottom-(y+h))*s,w*s,h*s,u,v,uw,vh,1,opacity);
+        quad((x-hud_centre)*s,bottom+(usamune::bottom-(y+h))*s,w*s,h*s,u,v,uw,vh,1,opacity);
     }
     void hud_glyph(float bottom,uint8_t c,float x,float y) { // a dialogue glyph at HUD size
         constexpr float s=GP_ANNOTATION_INPUT_SCALE;
-        const float left=-(usamune::right-usamune::left)*s*0.5f;
-        character(c,left+(x-usamune::left)*s,bottom+(usamune::bottom-(y+16))*s,s);
+        character(c,(x-hud_centre)*s,bottom+(usamune::bottom-(y+16))*s,s);
     }
     // Usamune's Values row: no letter at zero, then |value| in HUD numerals.
     void row(float bottom,int value,float y,cell::Letter negative,cell::Letter positive) {
@@ -80,6 +79,11 @@ struct Layout {
     }
     void inputs(const Payload& p,float bottom) {
         using namespace usamune;
+        unsigned held=0;
+        if(p.known)for(auto mask:button_masks)held+=(p.pad.buttons&mask)!=0;
+        const float left=p.values?values_left:stick_left;
+        const float right=held?button_x+float(held)*button_advance-2:p.values?values_right:stick_right;
+        hud_centre=(left+right)*0.5f;
         if(!p.known) { // unavailable evidence is never drawn as a neutral pad
             if(p.values) {hud_glyph(bottom,glyph('?'),digit_x,y_row);hud_glyph(bottom,glyph('?'),digit_x,x_row);}
             else {hud(bottom,base_x,base_y,32,32,cell::base_x,cell::base_y,32,32,base_alpha*0.5f);
