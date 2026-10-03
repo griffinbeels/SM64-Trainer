@@ -25,6 +25,11 @@ int __cdecl configure3(const rs_callbacks*c){
  if(opens||wrapper_value("TestConfigured")!=1||!c||c->bytes!=sizeof(*c)||c->version!=RS_ABI_V2)return 0;
  return rb_configure_images(c->capture,c->completed)&&rb_bind_source3(surface3);}
 void __cdecl negotiate(bool value){clean_enabled=value;}
+// The ghost copy's source: this fixture never presents a ghost.
+int __cdecl query_display(rb_ticket t,rs_source_descriptor3*d){
+ rs_source_descriptor3 clean{};if(!rb_read_source_descriptor3(t,&clean)){*d={};return 0;}
+ *d={};d->bytes=sizeof(*d);d->version=RS_ABI_V4;d->kind=RS_SOURCE_UNAVAILABLE;return 1;}
+void __cdecl display(bool){}
 void update_original(){updates++;if(delta)++swaps;*info.VI_ORIGIN_REG+=delta;}
 void __cdecl captured(const rs_request*r){const auto t=rb_source_begin(r?r->ticket:rb_ticket{});
  update_original();rb_source_end(t);}
@@ -34,6 +39,8 @@ const rs_api source{sizeof(rs_api),RS_ABI_V2,RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMA
 const rs_api_v3 source3{sizeof(rs_api_v3),RS_ABI_V3,RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT|RS_CAP_CLEAN_PRESENTATION,0,
  {sizeof(rs_api),RS_ABI_V2,RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT,0,configure3,
  rb_stage,captured,rb_finish,rb_activate,rb_disarm,rb_take,rb_release,rb_get_stats,errors,errors},rb_read_source_descriptor3,negotiate};
+const rs_api_v4 source4{sizeof(rs_api_v4),RS_ABI_V4,RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT|RS_CAP_CLEAN_PRESENTATION|RS_CAP_DISPLAY_COPY,0,
+ source3,query_display,display};
 int __cdecl acquire(uintptr_t,uint32_t,rcl_lease*){return RCL_UNAVAILABLE;}
 int __cdecl release(rcl_token){return RCL_STALE;}
 uint32_t __cdecl health(){return 0;}
@@ -44,6 +51,13 @@ extern "C" const rs_api_v3* __cdecl SM64ReplaySourceV3(uint32_t v,uint32_t n){
  return nullptr;
 #else
  return v==RS_ABI_V3&&n==sizeof(rs_api_v3)?&source3:nullptr;
+#endif
+}
+extern "C" const rs_api_v4* __cdecl SM64ReplaySourceV4(uint32_t v,uint32_t n){
+#if defined(WR_UNSUPPORTED) || defined(WR_NO_V4)
+ return nullptr;
+#else
+ return v==RS_ABI_V4&&n==sizeof(rs_api_v4)?&source4:nullptr;
 #endif
 }
 extern "C" const rs_api* __cdecl SM64ReplaySourceV2(uint32_t v,uint32_t n){
@@ -84,4 +98,4 @@ EXPORT(GetDllInfo) EXPORT(InitiateGFX) EXPORT(CloseDLL) EXPORT(ChangeWindow) EXP
 EXPORT(ProcessDList) EXPORT(UpdateScreen) EXPORT(RomOpen) EXPORT(RomClosed) EXPORT(ViStatusChanged)
 EXPORT(ViWidthChanged) EXPORT(ProcessRDPList) EXPORT(ShowCFB) EXPORT(MoveScreen) EXPORT(CaptureScreen)
 EXPORT(TestCounts) EXPORT(TestDelta) EXPORT(SM64ReplaySourceV2) EXPORT(SM64ReplayContextV1)
-EXPORT(SM64ReplaySourceV3)
+EXPORT(SM64ReplaySourceV3) EXPORT(SM64ReplaySourceV4)

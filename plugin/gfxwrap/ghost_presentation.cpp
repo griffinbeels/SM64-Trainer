@@ -10,24 +10,26 @@ struct Instance {
     uint32_t context_generation,drawable_generation=0,resource_generation=0;
     uint32_t width=0,height=0,source_width=0,source_height=0;
     int32_t draw_buffers=0;
-    uint32_t textures[2]={},fbos[2]={}; // clean drawable, gamma result
+    enum { CLEAN=0, GAMMA=1, DISPLAY=2 };
+    uint32_t textures[3]={},fbos[3]={}; // clean drawable, gamma result, displayed picture (lazy)
     uint64_t update=0,serial=0;
     uint32_t vi_origin=0;
     Raster raster{};
     GhostViImage image{};
     CleanSurface published{};
+    bool display_copied=false;uint32_t display_generation=0;CleanSurface display_published{};
     bool ready=false,saved=false,replaced=false,osd_window=false,osd=false,qualified=false;
     int32_t osd_fbo=0;
     explicit Instance(const Dispatch& d,uint32_t generation):dispatch(d),context_generation(generation) {}
 };
 namespace {
-std::atomic<bool> negotiated{false};
+std::atomic<bool> negotiated{false},display_wanted{false};
 ImageProvider provider=nullptr;
 PresentationNotice notice=nullptr;
 ImageValidity validity=nullptr;
 bool raster_valid(const Raster& r) {return r.draw && r.begin_gpu && r.end_gpu;}
 void reset(Instance* p) {
-    end_osd(p);p->saved=p->replaced=p->osd_window=p->qualified=false;p->image={};
+    end_osd(p);p->saved=p->replaced=p->osd_window=p->qualified=p->display_copied=false;p->image={};
 }
 bool allocate(Instance* p,uint32_t index,uint32_t width,uint32_t height) {
     const auto& g=p->dispatch.gl;
@@ -84,8 +86,8 @@ struct BlitGuard {
         g.BindFramebuffer(gl::READ_FRAMEBUFFER,uint32_t(read_fbo));g.BindFramebuffer(gl::DRAW_FRAMEBUFFER,uint32_t(draw_fbo));
     }
 };
-// BACK -> the recorded surface (textures[0]), inside the diagnostic gateway.
-bool copy_back(Instance* p) {
+// BACK -> one of our surfaces (clean or display), inside the diagnostic gateway.
+bool copy_back(Instance* p,uint32_t index) {
     if(!p->raster.begin_gpu())return false;
     {
         const auto& g=p->dispatch.gl;const auto k=known(p->raster);CopyGuard guard(g,k);
@@ -93,7 +95,7 @@ bool copy_back(Instance* p) {
         int32_t selector=int32_t(k.default_read);
         if(!(k.fields&Known::default_read_buffer))g.GetIntegerv(gl::READ_BUFFER,&selector);
         g.ReadBuffer(gl::BACK);
-        g.ActiveTexture(gl::TEXTURE0);g.BindTexture(gl::TEXTURE_2D,p->textures[0]);
+        g.ActiveTexture(gl::TEXTURE0);g.BindTexture(gl::TEXTURE_2D,p->textures[index]);
         // CopyTexSubImage transfers the stored RGB values without sRGB conversion.
         p->dispatch.CopyTexSubImage2D(gl::TEXTURE_2D,0,0,0,0,0,p->width,p->height);
         g.ReadBuffer(selector); // restore DEFAULT selector even if another FBO was originally read
@@ -101,8 +103,23 @@ bool copy_back(Instance* p) {
     return p->raster.end_gpu();
 }
 bool save_back(Instance* p) {
-    p->published={};p->qualified=false;
-    p->saved=copy_back(p);return p->saved;
+    p->published=p->display_published={};p->qualified=false;
+    p->saved=copy_back(p,Instance::CLEAN);return p->saved;
+}
+// The display surface's first use, inside the gateway. Allocation binds a
+// framebuffer and the unpack state, so the whole state is put back.
+bool allocate_display(Instance* p) {
+    if(p->textures[Instance::DISPLAY])return true;
+    if(p->display_generation==UINT32_MAX)return false;
+    const auto& g=p->dispatch.gl;gl::Guard guard(g);
+    g.GenTextures(1,&p->textures[Instance::DISPLAY]);g.GenFramebuffers(1,&p->fbos[Instance::DISPLAY]);
+    g.BindBuffer(gl::PIXEL_UNPACK_BUFFER,0);g.PixelStorei(gl::UNPACK_ALIGNMENT,1);
+    g.PixelStorei(gl::UNPACK_ROW_LENGTH,0);g.PixelStorei(gl::UNPACK_SKIP_ROWS,0);g.PixelStorei(gl::UNPACK_SKIP_PIXELS,0);
+    if(p->textures[Instance::DISPLAY] && p->fbos[Instance::DISPLAY] && allocate(p,Instance::DISPLAY,p->width,p->height)) {
+        ++p->display_generation;return true;
+    }
+    g.DeleteTextures(1,&p->textures[Instance::DISPLAY]);g.DeleteFramebuffers(1,&p->fbos[Instance::DISPLAY]);
+    p->textures[Instance::DISPLAY]=p->fbos[Instance::DISPLAY]=0;return false;
 }
 void restore_back(Instance* p) {
     if(!p->saved)return;
@@ -137,18 +154,25 @@ Instance* create(const Dispatch& d,uint32_t generation) {
 bool prepare(Instance* p,uint32_t drawable,uint32_t width,uint32_t height,uint32_t sw,uint32_t sh) {
     if(!p)return false;
     if(!drawable || !width || !height || width>8192 || height>8192 || sw>8192 || sh>8192 || (!sw!=!sh)) {
-        reset(p);p->ready=false;p->published={};return false;
+        reset(p);p->ready=false;p->published=p->display_published={};return false;
     }
     if(p->ready && drawable==p->drawable_generation && width==p->width && height==p->height &&
        sw==p->source_width && sh==p->source_height)return true;
-    reset(p);p->published={};p->ready=false;
+    reset(p);p->published=p->display_published={};p->ready=false;
     if(p->resource_generation==UINT32_MAX)return false;
     const auto& g=p->dispatch.gl;gl::Guard guard(g);
     if(!p->textures[0]){g.GenTextures(2,p->textures);g.GenFramebuffers(2,p->fbos);}
     if(!p->textures[0] || !p->textures[1] || !p->fbos[0] || !p->fbos[1])return false;
     g.BindBuffer(gl::PIXEL_UNPACK_BUFFER,0);g.PixelStorei(gl::UNPACK_ALIGNMENT,1);
     g.PixelStorei(gl::UNPACK_ROW_LENGTH,0);g.PixelStorei(gl::UNPACK_SKIP_ROWS,0);g.PixelStorei(gl::UNPACK_SKIP_PIXELS,0);
-    if(!allocate(p,0,width,height) || (sw && !allocate(p,1,sw,sh)))return false;
+    if(!allocate(p,Instance::CLEAN,width,height) || (sw && !allocate(p,Instance::GAMMA,sw,sh)))return false;
+    // An allocated display surface follows the drawable; a failed one is
+    // dropped and allocated again by the next record_display that needs it.
+    if(p->textures[Instance::DISPLAY]) {
+        if(p->display_generation<UINT32_MAX && allocate(p,Instance::DISPLAY,width,height))++p->display_generation;
+        else {g.DeleteTextures(1,&p->textures[Instance::DISPLAY]);g.DeleteFramebuffers(1,&p->fbos[Instance::DISPLAY]);
+            p->textures[Instance::DISPLAY]=p->fbos[Instance::DISPLAY]=0;}
+    }
     p->drawable_generation=drawable;p->width=width;p->height=height;
     p->source_width=sw;p->source_height=sh;++p->resource_generation;p->ready=true;return true;
 }
@@ -160,7 +184,7 @@ bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma
     if(!p || !p->ready || p->saved || !raster_valid(raster) || !image.texture || !image.occurrence ||
        !image.configuration || !p->update || image.context_generation!=p->context_generation ||
        !image.width || !image.height || image.width!=p->source_width || image.height!=p->source_height ||
-       image.texture==p->textures[0] || image.texture==p->textures[1])return false;
+       image.texture==p->textures[0] || image.texture==p->textures[1] || image.texture==p->textures[2])return false;
     const auto k=known(raster);
     if((k.fields&Known::srgb) ? k.srgb_enabled!=0 : p->dispatch.gl.IsEnabled(gl::FRAMEBUFFER_SRGB)!=0)return false;
     p->raster=raster;p->vi_origin=origin;
@@ -205,19 +229,27 @@ void after_osd(Instance* p) {
     end_osd(p);p->osd_window=false;
     if(!p->qualified && p->replaced){restore_back(p);p->replaced=false;}
 }
-// HIS CHOICE, 2026-10-02 ("A, with it by default off"): with Ghosts in
-// recording on, the recording keeps exactly what the window shows -- ghosts,
-// names, corner inputs and OSD -- so a clip shows him against his ghosts.
-// One more copy of BACK, only on frames that drew a ghost. A failed copy
-// publishes nothing rather than a half-written picture.
+// HIS CHOICE, 2026-10-03 (option A, "the most faithful ghost recreation"):
+// with Ghosts in recording on, a second copy keeps exactly what the window
+// shows -- ghosts, names, corner inputs and OSD -- while the clean recording
+// stays clean ("they will want the clean recording 100% of the time"). One
+// more copy of BACK into the display surface, only on frames that drew a
+// ghost and only while the ghost copy's lane consumes it. A failed copy
+// publishes no display picture; the clean picture is unaffected.
 void record_display(Instance* p) {
-    if(!p || !p->replaced || !p->qualified || !p->image.record_display || p->osd || p->osd_window)return;
-    if(!copy_back(p))p->qualified=false;
+    if(!p || !p->replaced || !p->qualified || !p->image.record_display || p->osd || p->osd_window ||
+       !display_consumer())return;
+    if(!p->textures[Instance::DISPLAY]) {
+        if(!p->raster.begin_gpu())return;
+        const bool made=allocate_display(p);
+        if(!p->raster.end_gpu() || !made)return;
+    }
+    p->display_copied=copy_back(p,Instance::DISPLAY);
 }
 void cancel_overlay(Instance* p) {
     if(!p)return;
     end_osd(p);if(p->replaced)restore_back(p);
-    p->replaced=p->qualified=false;p->image={};p->published={};
+    p->replaced=p->qualified=false;p->image={};p->published=p->display_published={};
 }
 void withdraw_image(Instance* p) {
     if(!p)return;
@@ -229,19 +261,26 @@ void swap_completed(Instance* p,bool success) {
     if(success && p->ready && p->saved && p->qualified && !p->osd && !p->osd_window && p->serial<UINT64_MAX) {
         p->published={p->fbos[0],p->textures[0],p->width,p->height,p->context_generation,
             p->drawable_generation,p->resource_generation,p->vi_origin,++p->serial,p->update};
-    }else p->published={};
+        // The display copy shares the clean picture's serial and update.
+        p->display_published=p->display_copied ? CleanSurface{p->fbos[Instance::DISPLAY],p->textures[Instance::DISPLAY],
+            p->width,p->height,p->context_generation,p->drawable_generation,p->display_generation,p->vi_origin,
+            p->serial,p->update} : CleanSurface{};
+    }else p->published=p->display_published={};
     reset(p);
 }
 CleanSurface surface(const Instance* p){return p?p->published:CleanSurface{};}
+CleanSurface display(const Instance* p){return p?p->display_published:CleanSurface{};}
 GhostViImage pending_image(const Instance* p){return p?p->image:GhostViImage{};}
 void destroy(Instance* p) {
-    if(!p)return;reset(p);p->dispatch.gl.DeleteTextures(2,p->textures);
-    p->dispatch.gl.DeleteFramebuffers(2,p->fbos);delete p;
+    if(!p)return;reset(p);p->dispatch.gl.DeleteTextures(3,p->textures);
+    p->dispatch.gl.DeleteFramebuffers(3,p->fbos);delete p;
 }
 void abandon(Instance* p){delete p;}
 void set_provider(ImageProvider value,PresentationNotice completed,ImageValidity current){provider=value;notice=completed;validity=current;}
 void clean_consumer(bool value){negotiated.store(value,std::memory_order_release);}
 bool clean_consumer(){return negotiated.load(std::memory_order_acquire);}
+void display_consumer(bool value){display_wanted.store(value,std::memory_order_release);}
+bool display_consumer(){return display_wanted.load(std::memory_order_acquire);}
 }
 
 #if defined(SM64_GHOST_RENDERER)
@@ -417,6 +456,13 @@ bool clean_surface(CleanSurface* out) {
     if(out)*out={};
     if(!out || !clean_consumer() || !current || !identity_matches())return false;
     *out=surface(current);return out->presentation_serial!=0;
+}
+bool display_surface(CleanSurface* out) {
+    if(out)*out={};
+    if(!out || !clean_consumer() || !display_consumer() || !current || !identity_matches())return false;
+    const auto clean=surface(current),shown=display(current);
+    if(!clean.presentation_serial || shown.presentation_serial!=clean.presentation_serial)return false;
+    *out=shown;return true;
 }
 }
 #endif

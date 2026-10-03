@@ -23,7 +23,7 @@ struct RetryChannel {
         h.nonce_lo=qpc();h.nonce_hi=scenario+1;h.epoch=h.generation=1;h.qpc_frequency=10000000;
         h.width=h.height=8;h.offer_count=h.table_count=h.packet_count=1;h.table[0]={0,4};
         h.packet_bytes=h.pending_bytes=1024;h.ram_budget=1u<<20;
-        h.texture_names[0][0]='A';h.texture_names[1][0]='B';
+        h.texture_names[0][0]='A';h.texture_names[1][0]='B';h.twin_texture_names[0][0]='C';h.twin_texture_names[1][0]='D';
         if(r.channel->create(h)!=ChannelResult::ok)return false;
         mapping=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,r.channel->name());
         if(mapping)view=static_cast<uint8_t*>(MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,0));

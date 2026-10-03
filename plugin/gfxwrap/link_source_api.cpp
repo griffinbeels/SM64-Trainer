@@ -91,6 +91,36 @@ void __cdecl clean_consumer(bool enabled) {
     (void)enabled;
 #endif
 }
+// SourceV4: the ghost copy's picture for this ticket. Ticket validity and
+// every shared field come from the V3 query itself, so the two cannot differ.
+int __cdecl query_display(rb_ticket ticket,rs_source_descriptor3* out) {
+    if(!out)return 0;
+    rs_source_descriptor3 clean{};
+    if(!rb_read_source_descriptor3(ticket,&clean)){*out={};return 0;}
+    *out={};out->bytes=sizeof(*out);out->version=RS_ABI_V4;out->kind=RS_SOURCE_UNAVAILABLE;
+#if defined(SM64_GHOST_RENDERER)
+    if(!configured_clean || !ghost_presentation::display_consumer())return 1;
+    ghost_presentation::CleanSurface shown{};
+    if(clean.kind==RS_SOURCE_CLEAN_VI && ghost_presentation::display_surface(&shown) && shown.framebuffer &&
+       shown.resource_generation && shown.presentation_serial==clean.presentation_serial &&
+       shown.update_occurrence==clean.update_occurrence && shown.context_generation==clean.context_generation &&
+       shown.drawable_generation==clean.drawable_generation && shown.width==clean.surface_width &&
+       shown.height==clean.surface_height && shown.vi_origin==clean.vi_origin) {
+        *out=clean;out->version=RS_ABI_V4;out->kind=RS_SOURCE_DISPLAY_VI;
+        out->framebuffer=shown.framebuffer;out->read_buffer=0x8CE0; // GL_COLOR_ATTACHMENT0
+        out->source_format=RB_SOURCE_RGB8_LINEAR;out->resource_generation=shown.resource_generation;return 1;
+    }
+    out->kind=RS_SOURCE_SAME_AS_CLEAN;out->update_occurrence=clean.update_occurrence;
+#endif
+    return 1;
+}
+void __cdecl display_consumer(bool enabled) {
+#if defined(SM64_GHOST_RENDERER)
+    ghost_presentation::display_consumer(enabled && configured_clean);
+#else
+    (void)enabled;
+#endif
+}
 void __cdecl update(const rs_request *request) {
     const rb_ticket token=request && request->bytes==sizeof(rs_request) && request->version==RS_ABI_V2
         && !request->reserved[0] && !request->reserved[1] ? request->ticket : rb_ticket{0,0};
@@ -104,12 +134,19 @@ const rs_api_v3 api_v3={sizeof(rs_api_v3),RS_ABI_V3,RS_CAP_BOUNDARY|RS_CAP_SOURC
     {sizeof(rs_api),RS_ABI_V2,RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT,0,
     configure3,rb_stage,update,rb_finish,rb_activate,rb_disarm,rb_take,rb_release,rb_get_stats,
     replay_gl::BeginCapture,replay_gl::EndCapture},rb_read_source_descriptor3,clean_consumer};
+const rs_api_v4 api_v4={sizeof(rs_api_v4),RS_ABI_V4,
+    RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT|RS_CAP_CLEAN_PRESENTATION|RS_CAP_DISPLAY_COPY,0,
+    {sizeof(rs_api_v3),RS_ABI_V3,RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT|RS_CAP_CLEAN_PRESENTATION,0,
+    {sizeof(rs_api),RS_ABI_V2,RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT,0,
+    configure3,rb_stage,update,rb_finish,rb_activate,rb_disarm,rb_take,rb_release,rb_get_stats,
+    replay_gl::BeginCapture,replay_gl::EndCapture},rb_read_source_descriptor3,clean_consumer},
+    query_display,display_consumer};
 }
 extern "C" void rs_before_update() {
     before_swaps=dwnd().getBuffersSwapCount();
     if(update_occurrence<UINT64_MAX)++update_occurrence;
 #if defined(SM64_GHOST_RENDERER)
-    if(update_occurrence==UINT64_MAX)ghost_presentation::clean_consumer(false);
+    if(update_occurrence==UINT64_MAX){ghost_presentation::clean_consumer(false);ghost_presentation::display_consumer(false);}
     ghost_presentation::begin_update(update_occurrence);
 #endif
 }
@@ -120,6 +157,10 @@ extern "C" const rs_api *__cdecl SM64ReplaySourceV2(uint32_t version,uint32_t by
 #pragma comment(linker,"/EXPORT:SM64ReplaySourceV3=_SM64ReplaySourceV3")
 extern "C" const rs_api_v3 *__cdecl SM64ReplaySourceV3(uint32_t version,uint32_t bytes) {
     return version==RS_ABI_V3 && bytes==sizeof(rs_api_v3) ? &api_v3 : nullptr;
+}
+#pragma comment(linker,"/EXPORT:SM64ReplaySourceV4=_SM64ReplaySourceV4")
+extern "C" const rs_api_v4 *__cdecl SM64ReplaySourceV4(uint32_t version,uint32_t bytes) {
+    return version==RS_ABI_V4 && bytes==sizeof(rs_api_v4) ? &api_v4 : nullptr;
 }
 
 // tools/build_renderer.py writes renderer_build_identity.h beside this file

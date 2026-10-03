@@ -9,8 +9,10 @@
 /* The GPU channel wire; GC_VERSION is the ghost capture sample (ghost_capture.h).
  * 2 (2026-09-27): the encoder helper creates the two bridge textures under the
  * header's names (renderer-thread capture); a version-1 wrapper made them itself.
+ * 3 (2026-10-03): the ghost copy's twin block (twin_offset, 768 bytes, always
+ * present) and the two twin texture names a second helper creates.
  * replay/gpuchannel.py VERSION must match; test_gpu_channel compares them. */
-#define GC_CHANNEL_VERSION 2u
+#define GC_CHANNEL_VERSION 3u
 #define GC_HEADER_BYTES 2048u
 #define GC_MAX_OFFERS 8u
 #define GC_BRIDGES 2u
@@ -49,7 +51,9 @@ typedef struct {
     gc_field table[GC_TABLE_FIELDS];
     uint16_t texture_names[GC_BRIDGES][128];
     uint32_t publication_offset, publication_bytes;
-    uint8_t reserved[1208];
+    uint32_t twin_offset, twin_bytes;              /* v3: the ghost copy's block */
+    uint16_t twin_texture_names[GC_BRIDGES][128];  /* "-copy-%u", never a clean name */
+    uint8_t reserved[688];
 } gc_header;
 
 enum gc_state { GC_PREPARING = 1, GC_ACTIVE = 2, GC_CLOSED = 3, GC_FAULT = 4 };
@@ -99,11 +103,43 @@ typedef struct {
     uint8_t reserved[80];
 } gc_client;
 typedef struct { uint32_t seq, reserved0; uint64_t last_token, last_bridge_token; uint8_t reserved[104]; } gc_publication;
+
+/* The ghost copy (twin lane): a second encoder helper records the displayed
+ * picture beside the clean one. RAM only, at twin_offset; every entry has its
+ * own seq (odd while writing, +2 when done). The twin never delays or refuses
+ * a clean picture, and a twin fault stops only the twin. */
+#define GC_TWIN_BYTES 768u
+enum gc_twin_client_state { GC_TWIN_CLIENT_OFF = 0, GC_TWIN_CLIENT_READY = 1 };
+typedef struct {  /* client writes: READY once its helper created both twin textures */
+    uint32_t seq, state; uint64_t lane; /* strictly increasing per READY, 0 when OFF */
+    uint64_t nonce_lo, nonce_hi; uint32_t epoch, generation;
+    uint8_t reserved[88];
+} gc_twin_client;
+enum gc_twin_state { GC_TWIN_OFF = 0, GC_TWIN_PREPARING = 1, GC_TWIN_ACTIVE = 2, GC_TWIN_STOPPED = 3 };
+typedef struct {  /* producer writes; reason is a raw gd_reason (GD_TWIN_*) or 0 */
+    uint32_t seq, state, reason, reserved0;
+    uint64_t lane, resolved_pts, copied, missed; /* resolved_pts: every SELECTED pts <= it has its twin outcome */
+    uint64_t nonce_lo, nonce_hi; uint32_t epoch, generation;
+    uint8_t reserved[56];
+} gc_twin_status;
+typedef struct {
+    gc_twin_client client;
+    gc_twin_status status;
+    gc_bridge bridges[GC_BRIDGES];   /* texture_index 0/1 name the twin textures; flags 0 */
+    gc_receipt receipts[GC_BRIDGES];
+} gc_twin;
 #pragma pack(pop)
 
 #ifdef __cplusplus
 static_assert(sizeof(gc_header) == 2048 && offsetof(gc_header, table) == 192, "header wire");
 static_assert(offsetof(gc_header, texture_names) == 320, "texture names wire");
+static_assert(offsetof(gc_header, twin_offset) == 840 && offsetof(gc_header, twin_bytes) == 844
+    && offsetof(gc_header, twin_texture_names) == 848 && offsetof(gc_header, reserved) == 1360, "twin header wire");
+static_assert(sizeof(gc_twin_client) == 128 && sizeof(gc_twin_status) == 128 && sizeof(gc_twin) == GC_TWIN_BYTES
+    && offsetof(gc_twin, status) == 128 && offsetof(gc_twin, bridges) == 256 && offsetof(gc_twin, receipts) == 512
+    && offsetof(gc_twin_client, lane) == 8 && offsetof(gc_twin_client, nonce_lo) == 16 && offsetof(gc_twin_client, epoch) == 32
+    && offsetof(gc_twin_status, lane) == 16 && offsetof(gc_twin_status, missed) == 40
+    && offsetof(gc_twin_status, nonce_lo) == 48 && offsetof(gc_twin_status, epoch) == 64, "twin block wire");
 static_assert(sizeof(gc_status) == 256 && sizeof(gc_offer) == 256, "producer wire");
 static_assert(sizeof(gc_decision) == 128 && sizeof(gc_bridge) == 128
     && sizeof(gc_receipt) == 128 && sizeof(gc_client) == 128 && sizeof(gc_publication) == 128, "client/bridge wire");
@@ -147,6 +183,16 @@ public:
     // Keep the first nonzero terminal cause and an already-published FAULT.
     // A subsequent explicit close/destructor cannot make that failure clean.
     Result close(uint32_t reason = 0);
+    // The twin lane. A never-written client reads as OFF. None of these
+    // changes any clean state; the delivery maps their failures to the twin.
+    Result twin_client(gc_twin_client &client);
+    Result twin_status(uint32_t state, uint32_t reason, uint64_t lane, uint64_t resolved_pts,
+                       uint64_t copied, uint64_t missed);
+    // Called only after the twin copy succeeds; carries the clean decision's
+    // occurrence, encode serial, pts and duration.
+    Result publish_twin_bridge(unsigned texture_index, uint64_t bridge_token, const gc_decision &);
+    Result take_twin_receipt(unsigned &texture_index, gc_receipt &receipt);
+    Result retire_twin_bridge_after_key0(unsigned texture_index, uint64_t bridge_token);
     const gc_header &header() const { return header_; }
     const wchar_t *name() const { return name_; }
     HANDLE wake_event() const { return wake_; }
@@ -170,6 +216,10 @@ private:
     gc_decision decisions_[GC_MAX_OFFERS]{};
     gc_bridge bridges_[GC_BRIDGES]{};
     uint32_t decision_seq_[GC_MAX_OFFERS]{}, receipt_seq_[GC_BRIDGES]{};
+    gc_bridge twin_bridges_[GC_BRIDGES]{};
+    uint32_t twin_receipt_seq_[GC_BRIDGES]{}, twin_client_seq_ = 0;
+    bool twin_receipted_[GC_BRIDGES]{};
+    uint64_t last_twin_bridge_token_ = 0;
     bool decided_[GC_MAX_OFFERS]{}, bridge_published_[GC_MAX_OFFERS]{}, receipted_[GC_BRIDGES]{};
     uint64_t last_token_ = 0, last_occurrence_ = 0, last_encode_ = 0;
     uint64_t last_pts_ = 0, last_bridge_token_ = 0;

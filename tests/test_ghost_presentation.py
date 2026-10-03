@@ -19,9 +19,16 @@ def module(name, relative):
     return loaded
 
 
-@pytest.mark.skipif(os.environ.get("SM64_TEST_GHOST_PRESENTATION") != "1",
-                   reason="explicit desktop WGL witness: SM64_TEST_GHOST_PRESENTATION=1")
-def test_real_presentation(tmp_path):
+WITNESS = pytest.mark.skipif(os.environ.get("SM64_TEST_GHOST_PRESENTATION") != "1",
+                             reason="explicit desktop WGL witness: SM64_TEST_GHOST_PRESENTATION=1")
+# The display copy goes to its own surface. Restoring the overwrite of the
+# clean surface that "Ghosts in recording" made before the ghost copy existed
+# must turn the witness red (the negative control below).
+DISPLAY_COPY = "p->display_copied=copy_back(p,Instance::DISPLAY);"
+OLD_OVERWRITE = "p->display_copied=copy_back(p,Instance::DISPLAY) && copy_back(p,Instance::CLEAN);"
+
+
+def run_host(tmp_path, presentation=SOURCE / "ghost_presentation.cpp"):
     build = module("presentation_build", "tools/build_plugin.py")
     vc = build.find_vcvars32()
     if vc is None:
@@ -29,17 +36,34 @@ def test_real_presentation(tmp_path):
     executable = tmp_path / "ghost_presentation_host.exe"
     flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
     build._cl(vc, flags + ["/std:c++17", "/EHsc", f"/I{SOURCE}",
-        str(SOURCE / "ghost_presentation.cpp"), str(ROOT / "tests/native/ghost_presentation_host.cpp"),
+        str(presentation), str(ROOT / "tests/native/ghost_presentation_host.cpp"),
         f"/Fe:{executable}", f"/Fo{tmp_path}\\", "/link", "opengl32.lib", "gdi32.lib", "user32.lib"], tmp_path)
-    result = subprocess.run([str(executable)], capture_output=True, text=True, cwd=tmp_path,
+    return subprocess.run([str(executable)], capture_output=True, text=True, cwd=tmp_path,
         timeout=40, check=False, **quiet_spawn_kwargs())
+
+
+@WITNESS
+def test_real_presentation(tmp_path):
+    result = run_host(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     print(result.stdout.strip())
     assert "clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored" in result.stdout
     # With the renderer's record the clean save and the sRGB check ask nothing.
     assert "known=asks_nothing" in result.stdout
-    # Ghosts in recording: only an image that asks puts the displayed picture in the recording.
-    assert "recorded=displayed" in result.stdout
+    # Ghosts in recording: the clean recording stays clean; the ghost copy's
+    # display surface takes the displayed picture, only while its lane consumes it.
+    assert "recorded=clean ghost_copy=displayed consumer_off=no_copy" in result.stdout
+
+
+@WITNESS
+def test_clean_overwrite_negative_control(tmp_path):
+    source = (SOURCE / "ghost_presentation.cpp").read_text(encoding="utf-8")
+    assert source.count(DISPLAY_COPY) == 1
+    mutated = tmp_path / "ghost_presentation.cpp"
+    mutated.write_text(source.replace(DISPLAY_COPY, OLD_OVERWRITE), encoding="utf-8")
+    result = run_host(tmp_path, mutated)
+    assert result.returncode != 0
+    assert "clean stays clean with Ghosts in recording" in result.stderr, result.stdout + result.stderr
 
 
 def test_staging_refuses_unqualified_source(tmp_path):

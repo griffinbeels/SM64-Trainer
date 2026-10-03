@@ -63,13 +63,16 @@ bool before_swap(Instance*,uint32_t vi_origin,const Raster&); // fallback/blank 
 bool begin_osd(Instance*);
 void end_osd(Instance*);
 void after_osd(Instance*);
-// After OSD and any withdrawal: an image asking for it puts the picture the
-// window is about to show into the recorded surface in place of the clean one.
+// After OSD and any withdrawal: an image asking for it, while the display
+// consumer is on, copies the picture the window is about to show into the
+// display surface (allocated on first use). The clean surface is never touched.
 void record_display(Instance*);
 void cancel_overlay(Instance*); // restore already-saved clean BACK before swapping
 void withdraw_image(Instance*); // command changed: restore clean, retain clean capture eligibility
 void swap_completed(Instance*,bool success);
 CleanSurface surface(const Instance*);
+// The display copy published with the same swap as surface(), or nothing.
+CleanSurface display(const Instance*);
 GhostViImage pending_image(const Instance*);
 void destroy(Instance*); // original context current
 void abandon(Instance*); // lost context; no GL calls
@@ -80,6 +83,9 @@ void abandon(Instance*); // lost context; no GL calls
 void set_provider(ImageProvider,PresentationNotice,ImageValidity);
 void clean_consumer(bool negotiated);
 bool clean_consumer();
+// The ghost copy's lane: any thread. Off, record_display copies nothing.
+void display_consumer(bool active);
+bool display_consumer();
 void context_ready();
 void context_stopping();
 void begin_update(uint64_t source_occurrence);
@@ -89,6 +95,8 @@ bool begin_osd_raster();
 void end_osd_raster();
 void swap_completed(bool success);
 bool clean_surface(CleanSurface*);
+// True only when the display copy belongs to the published clean picture.
+bool display_surface(CleanSurface*);
 }
 
 #if defined(SM64_GHOST_RENDERER)

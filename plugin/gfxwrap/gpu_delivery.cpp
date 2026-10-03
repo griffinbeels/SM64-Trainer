@@ -29,6 +29,7 @@ void (__cdecl *test_preparation_probe)()=nullptr;
 std::atomic<void (__cdecl *)()> test_iteration_probe{nullptr},test_retired_probe{nullptr};
 std::atomic<uint32_t> test_deadline_visits{0};
 std::atomic<uint32_t> test_bridge_fault{0}; // the next bridge copy faults with this error
+std::atomic<uint32_t> test_twin_bridge_fault{0}; // the next twin copy faults
 bool (*test_sample)(const snapshot::Image&,uint8_t*)=nullptr; // replaces the GPU sample: true = bytes ready
 #endif
 uint64_t qpc(){LARGE_INTEGER v{};QueryPerformanceCounter(&v);return uint64_t(v.QuadPart);}
@@ -47,6 +48,10 @@ bool limits_valid(const gd_limits* l){
         && l->channel_bytes>=GC_HEADER_BYTES && l->channel_bytes<=GC_MAX_MAP_BYTES
         && l->sample_bytes && l->sample_bytes<=GC_MAX_MAP_BYTES && l->poll_ms && l->poll_ms<=16;
 }
+// What gd_capture did for the ghost copy: a display snapshot of its own, the
+// clean picture stands for it (no ghost copied that update), or nothing.
+enum TwinKind : uint32_t { twin_none=0, twin_display=1, twin_same=2, twin_missing=3 };
+struct TwinCapture { uint64_t occurrence=0,lane=0; uint32_t kind=twin_none; rb_image image{}; };
 struct Pending {
     const rb_record* record=nullptr;
     snapshot::Image image{};
@@ -54,6 +59,7 @@ struct Pending {
     uint64_t token=0,admitted=0;
     bool ready=false,sampled=false,published=false,decided=false,returning=false,copied=false;
     bool omitted=false; // worker dropped it (no usable stamp); image returns, nothing publishes
+    uint32_t twin_kind=twin_none;uint64_t twin_lane=0;rb_image twin_image{}; // returned with the clean image
 };
 struct BridgeCredit {
     uint64_t token=0;bool receipt=false,published=false;
@@ -61,7 +67,7 @@ struct BridgeCredit {
 };
 
 struct Runtime {
-    rs_api source{};rs_api_v3 source3{}; rcl_api contexts{}; gd_limits limits{};
+    rs_api source{};rs_api_v3 source3{};rs_api_v4 source4{}; rcl_api contexts{}; gd_limits limits{};
     HANDLE wake=nullptr,changed=nullptr;
     std::atomic<uint32_t> gate{0},cancel{1},session_cancel{0},state{GD_OFF},reason{GD_NONE};
     // Worker-owned diagnostic, readable by the watchdog. Later disarms still
@@ -81,7 +87,7 @@ struct Runtime {
     // The renderer thread takes this lock only if it is free (it never waits);
     // the delivery thread takes it to drain and to check deadlines.
     SRWLOCK tick_lock=SRWLOCK_INIT;
-    render_capture::Gl gl;
+    render_capture::Gl gl;snapshot::Gl copy_gl;
     source_capture::Snapshots snapshots;
     render_capture::Sampler sampler;
     render_capture::Bridge bridge;
@@ -117,6 +123,25 @@ struct Runtime {
     // never fatal: the replay shows the previous picture held and the input
     // lanes show the polled fill for those frames.
     uint64_t refused_pictures=0;
+    // THE GHOST COPY (twin lane; docs/replay-gpu-runtime.md "The ghost copy").
+    // A second helper records the displayed picture beside the clean one. The
+    // renderer thread owns all of it (render_tick, gd_capture), and nothing
+    // here calls fail() or sets quarantine: the twin never delays or refuses a
+    // clean picture, and a twin fault stops only the twin.
+    source_capture::Snapshots twin_images;
+    render_capture::Bridge twin_bridge;
+    wchar_t twin_names[GC_BRIDGES][128]{};
+    TwinCapture twin_capture[RB_SLOTS]{}; // gd_capture -> take_records, by record slot
+    BridgeCredit twin_credits[GC_BRIDGES]{};uint64_t twin_credit_qpc[GC_BRIDGES]{};
+    std::atomic<uint64_t> twin_capturing{0}; // the lane gd_capture copies for; 0 = none
+    std::atomic<uint32_t> twin_capture_fault{0}; // a twin snapshot fault, handled by the next tick
+    uint32_t twin_state=GC_TWIN_OFF,twin_reason=GD_NONE,twin_poison=GD_NONE;
+    uint64_t twin_lane=0,twin_started_lane=0,twin_resolved=0,twin_copied=0,twin_missed=0;
+    uint64_t twin_stop_qpc=0,twin_bridge_token=0;
+    // twin_gpu: this epoch made twin GL names. twin_poisoned: a twin key is
+    // held or broken, so those names wait for the epoch's GL retirement and
+    // no new lane starts in this epoch.
+    bool twin_stopping=false,twin_gpu=false,twin_poisoned=false,twin_retired=false;
     void reset_metrics(){
         phase=GD_PHASE_WAIT;phase_started=last_active_end=0;
         memset(phase_totals,0,sizeof phase_totals);memset(phase_recent,0,sizeof phase_recent);
@@ -232,7 +257,9 @@ struct Runtime {
     void revoke(uint32_t why){
         gate.store(0);const auto old=cancel.fetch_add(1);
         if(old==UINT32_MAX){exhausted.store(true);cancel.store(UINT32_MAX);}
-        reason.store(why);source.disarm();snapshots.stop();SetEvent(wake);SetEvent(changed);
+        reason.store(why);source.disarm();snapshots.stop();
+        twin_capturing.store(0);twin_images.stop();twin_consumer(false);
+        SetEvent(wake);SetEvent(changed);
     }
     void fail(uint32_t why,uint32_t detail=0,bool poison=false){
         if(!first_failure.load()){first_failure.store(why);error=detail;emit_diagnostic(why,detail);}
@@ -281,7 +308,7 @@ struct Runtime {
                 if(!pending[i].record && !pending[i].token && free==RB_SLOTS)free=i;
             }
             if(r->slot>=RB_SLOTS || free==RB_SLOTS){fail(GD_BAD_SOURCE,ERROR_INVALID_DATA,true);return;}
-            auto&p=pending[free];p.record=r;p.admitted=qpc();
+            auto&p=pending[free];p.record=r;p.admitted=qpc();twin_adopt(p);
             if(!stopping)observe_source(*r);
             if(r->image.ownership==RB_IMAGE_QUARANTINED){fail(GD_SNAPSHOT_FAILED,r->image.status,true);return;}
             if(r->image.ownership==RB_IMAGE_NONE){
@@ -313,7 +340,7 @@ struct Runtime {
             p.ready=true;
         }
         if(!snapshots.images().release(p.image.ticket)){fail(GD_SNAPSHOT_FAILED,ERROR_INVALID_DATA,true);return false;}
-        p.returning=true;return true;
+        twin_release(p);p.returning=true;return true;
     }
     bool retire_record(Pending&p,bool stopping){
         if(p.record){
@@ -371,6 +398,7 @@ struct Runtime {
         config.width=surface.width;config.height=surface.height;
         // Temporary names only for layout validation; replaced by real bridge identities.
         config.texture_names[0][0]='A';config.texture_names[1][0]='B';
+        config.twin_texture_names[0][0]='C';config.twin_texture_names[1][0]='D';
         if(!gpu_channel::layout(config)){fail(GD_BAD_REQUEST,ERROR_NOT_ENOUGH_MEMORY);return false;}
         set_state(GD_PREPARING);publish_status();
 #ifdef GD_TEST_HOST
@@ -380,7 +408,7 @@ struct Runtime {
         // The renderer's own context is current: this is its thread (render_tick).
         prepare_steps.prepare_begin=qpc();
         if(!gl.load()){fail(GD_GL_UNSUPPORTED);return false;}
-        snapshot::Gl copy_gl;if(!copy_gl.load(true)){fail(GD_GL_UNSUPPORTED);return false;}
+        if(!copy_gl.load(true)){fail(GD_GL_UNSUPPORTED);return false;}
         TRACE("prepare snapshots");
         gpu_context=surface.context;gpu_context_generation=surface.context_generation;
         // At most RB_SLOTS-1 pictures are held, so one record slot always
@@ -405,6 +433,9 @@ struct Runtime {
         for(unsigned i=0;i<GC_BRIDGES;++i){
             swprintf_s(texture_names[i],L"Local\\SM64GpuImage-%016llx%016llx-%u-texture-%u",request.nonce_hi,request.nonce_lo,epoch,i);
             for(unsigned c=0;c<128;++c)config.texture_names[i][c]=uint16_t(texture_names[i][c]);
+            // The ghost copy's helper creates these two when its lane starts.
+            swprintf_s(twin_names[i],L"Local\\SM64GpuImage-%016llx%016llx-%u-copy-%u",request.nonce_hi,request.nonce_lo,epoch,i);
+            for(unsigned c=0;c<128;++c)config.twin_texture_names[i][c]=uint16_t(twin_names[i][c]);
         }
         channel.reset(new(std::nothrow)gpu_channel::Producer);
         TRACE("create channel");
@@ -527,14 +558,18 @@ struct Runtime {
 #ifdef GD_TEST_HOST
             if(const auto injected=test_bridge_fault.exchange(0)){fail(GD_BRIDGE_FAILED,injected,true);return;}
 #endif
-            render_capture::Bridge::Result result;
-            {Phase timing(*this,GD_PHASE_COPY);render_capture::StateGuard guard(gl);result=bridge.copy(index,head->image.texture);}
+            render_capture::Bridge::Result result;int twin=twin_skip;
+            {Phase timing(*this,GD_PHASE_COPY);render_capture::StateGuard guard(gl);result=bridge.copy(index,head->image.texture);
+                // The ghost copy of this exact picture, only once the clean copy
+                // succeeded (so no GL error is pending), before its image returns.
+                if(result==render_capture::Bridge::Result::copied && live())twin=twin_copy(*head);}
             if(result==render_capture::Bridge::Result::full)continue;
             if(result!=render_capture::Bridge::Result::copied){fail(GD_BRIDGE_FAILED,bridge.error(),true);return;}
             // Actual key1 exists even if cancellation beats metadata publication.
             credits[index].token=++bridge_token;credits[index].decision=head->decision;
             head->copied=true;
             if(!bridge_token){fail(GD_COUNTER_EXHAUSTED);return;}
+            twin_outcome(*head,twin);
             if(!live())return;
             release_image(*head);
             if(live())publish_bridges();return;
@@ -576,7 +611,7 @@ struct Runtime {
         {Phase timing(*this,GD_PHASE_SAMPLE);sample_head();}if(!live())return;
         {Phase timing(*this,GD_PHASE_DECISIONS);decisions();}if(!live())return;
         {const auto held=bridge_count();if(held>peak_bridges)peak_bridges=held;}
-        {Phase timing(*this,GD_PHASE_BRIDGE_RETURNS);bridge_returns(false);}if(!live())return;
+        {Phase timing(*this,GD_PHASE_BRIDGE_RETURNS);bridge_returns(false);if(live())twin_tick();}if(!live())return;
         {Phase timing(*this,GD_PHASE_REAP);reap_records(false);}if(!live())return;
         const auto now=qpc();
         for(const auto&p:pending)if((p.record || p.token) && now>p.admitted && now-p.admitted>frequency*limits.max_age_ms/1000){fail(GD_DEADLINE);return;}
@@ -614,6 +649,7 @@ struct Runtime {
     bool drain_tick(){
         if(!drain_started){drain_started=qpc();set_state(GD_DRAINING);
             const auto cause=diagnostic_reason();
+            twin_end_epoch();
             if(channel)channel->close(cause ? GC_REASON_RUNTIME|cause : 0); // permanently revoke this unique channel
         }
         if(quarantine){
@@ -626,6 +662,9 @@ struct Runtime {
             // No GL here: a drain runs when the renderer no longer calls back.
             // It deletes this epoch's names before it prepares again.
             if(prepared || sampler_attempted || bridge_attempted)gpu_retired=true;
+            if(twin_gpu)twin_retired=true;
+            twin_state=GC_TWIN_OFF;twin_reason=twin_poison=GD_NONE;twin_lane=twin_started_lane=0;
+            twin_resolved=twin_copied=twin_missed=twin_bridge_token=0;twin_stopping=twin_gpu=twin_poisoned=false;
             channel.reset();sample.reset();prepared=bridge_attempted=sampler_attempted=false;
             surface_state.store(0);epoch=0;drain_started=0;
             set_state(reason.load()==GD_CANCELLED || reason.load()==GD_NONE?GD_OFF:GD_FAULT);
@@ -675,8 +714,15 @@ struct Runtime {
     }
     // Delete (same context) or forget (context replaced) an ended epoch's names.
     void release_retired(const rb_surface&s){
-        if(!gpu_retired || !gpu())return;
         const bool same=s.context==gpu_context && s.context_generation==gpu_context_generation;
+        // The twin's names first, in their own gateway: a held or broken twin
+        // key must not leave an error for the clean capture's gateway.
+        if(twin_retired && (!same || twin_gpu_begin())){
+            if(same){twin_bridge.destroy();if(!twin_images.destroy())twin_images.abandon();twin_gpu_end();}
+            else {twin_bridge=render_capture::Bridge{};twin_images.abandon();}
+            twin_retired=false;
+        }
+        if(!gpu_retired || !gpu())return;
         if(same){sampler.destroy();bridge.destroy();if(!snapshots.destroy())snapshots.abandon();}
         else {sampler=render_capture::Sampler{};bridge=render_capture::Bridge{};snapshots.abandon();}
         gpu_retired=false;
@@ -715,6 +761,188 @@ struct Runtime {
         {render_capture::StateGuard guard(gl);issued=sampler.issue(image.slot,copied.texture);}
         if(!source.end_capture() || !issued)sample_fault.store(sampler.error()?sampler.error():ERROR_INVALID_DATA);
     }
+    // ---- The ghost copy (twin lane) ----
+    static constexpr int twin_skip=-2,twin_miss=-1,twin_fault=-3;
+    void twin_consumer(bool on){if(source4.display_consumer)source4.display_consumer(on);}
+    void twin_publish(){if(channel)channel->twin_status(twin_state,twin_reason,twin_lane,twin_resolved,twin_copied,twin_missed);}
+    // One flag per error kind at most, so a bounded drain empties it.
+    static bool drain_gl(){bool clean=true;for(unsigned i=0;i<8;++i){if(glGetError()==GL_NO_ERROR)return clean;clean=false;}return false;}
+    // Twin GL work outside a picture's copy runs in a gateway of its own and
+    // drains its errors there: the source gateway records any error it finds
+    // and then refuses every later capture, clean included.
+    bool twin_gpu_begin(){
+        if(gateway_open){gateway_open=false;
+            if(!source.end_capture()){if(live())fail(GD_GL_UNSUPPORTED,ERROR_INVALID_DATA);return false;}}
+        return in_render && source.begin_capture();
+    }
+    bool twin_gpu_end(){const bool clean=drain_gl();return source.end_capture() && clean;}
+    // gd_capture, right after the clean snapshot and its sample: the record's
+    // twin picture, kept by record slot until take_records adopts it.
+    void capture_twin(const rb_record&r){
+        auto&c=twin_capture[r.slot];c={};c.occurrence=r.occurrence;
+        const auto lane=twin_capturing.load();if(!lane)return;
+        c.lane=lane;c.kind=twin_missing;
+        rs_source_descriptor3 d{};
+        if(!source4.query_display({r.occurrence,r.slot},&d) || d.bytes!=sizeof d || d.version!=RS_ABI_V4)return;
+        if(d.kind==RS_SOURCE_SAME_AS_CLEAN){c.kind=twin_same;return;}
+        if(d.kind!=RS_SOURCE_DISPLAY_VI)return;
+        rb_image image{};
+        if(twin_images.submit_display(&r,d,&image)){c.kind=twin_display;c.image=image;return;}
+        // A full twin pool is one missed twin picture; any other refusal ends the lane.
+        if(image.status!=uint32_t(snapshot::Result::full) && image.status!=uint32_t(snapshot::Result::inactive))
+            twin_capture_fault.store(GD_TWIN_SNAPSHOT_FAILED);
+    }
+    void twin_release(Pending&p){
+        if(p.twin_kind==twin_display){
+            // One context: CPU-only and repeatable; a stale ticket belongs to a forgotten pool.
+            const snapshot::Ticket ticket{p.twin_image.serial,p.twin_image.slot};snapshot::Image ignored{};
+            if(twin_images.images().poll(ticket,&ignored)==snapshot::Poll::ready)twin_images.images().release(ticket);
+        }
+        p.twin_kind=twin_none;p.twin_image={};
+    }
+    void twin_adopt(Pending&p){
+        const auto&c=twin_capture[p.record->slot];
+        if(c.occurrence!=p.record->occurrence)return;
+        p.twin_kind=c.kind;p.twin_lane=c.lane;p.twin_image=c.image;
+        // Captured for a lane that has since stopped: never copied.
+        if(twin_stopping || twin_state!=GC_TWIN_ACTIVE || p.twin_lane!=twin_lane)twin_release(p);
+    }
+    // Inside the clean copy's state guard, once the clean copy succeeded.
+    int twin_copy(Pending&p){
+        if(twin_state!=GC_TWIN_ACTIVE || twin_stopping)return twin_skip;
+        if(p.twin_lane!=twin_lane || (p.twin_kind!=twin_display && p.twin_kind!=twin_same))return twin_miss;
+        unsigned t=GC_BRIDGES;for(unsigned i=0;i<GC_BRIDGES && t==GC_BRIDGES;++i)if(!twin_credits[i].token)t=i;
+        if(t==GC_BRIDGES)return twin_miss; // both twin textures still with the helper
+        GLuint picture=p.image.texture;
+        if(p.twin_kind==twin_display){snapshot::Image shown{};
+            if(twin_images.images().poll({p.twin_image.serial,p.twin_image.slot},&shown)!=snapshot::Poll::ready || !shown.texture)
+                return twin_miss;
+            picture=shown.texture;
+        }
+#ifdef GD_TEST_HOST
+        if(test_twin_bridge_fault.exchange(0))return twin_fault;
+#endif
+        const auto result=twin_bridge.copy(t,picture);
+        if(result==render_capture::Bridge::Result::full)return twin_miss;
+        if(result!=render_capture::Bridge::Result::copied){drain_gl();return twin_fault;}
+        return int(t);
+    }
+    // Every SELECTED picture of an active lane gets one final twin outcome.
+    void twin_outcome(const Pending&p,int twin){
+        if(twin==twin_skip)return;
+        if(twin==twin_fault){twin_abandon(GD_TWIN_BRIDGE_FAILED);return;}
+        if(twin>=0){
+            auto&c=twin_credits[twin];c={};c.token=++twin_bridge_token;c.decision=p.decision;twin_credit_qpc[twin]=qpc();
+            // The key moved: a twin bridge nobody can learn of could never come back.
+            if(!channel || channel->publish_twin_bridge(unsigned(twin),c.token,p.decision)!=ChannelResult::ok){
+                twin_abandon(GD_TWIN_BRIDGE_FAILED);return;
+            }
+            c.published=true;++twin_copied;
+        }else ++twin_missed;
+        twin_resolved=p.decision.pts;twin_publish();
+    }
+    void twin_start(uint64_t lane){
+        twin_started_lane=twin_lane=lane;twin_reason=GD_NONE;twin_resolved=twin_copied=twin_missed=0;
+        twin_stopping=false;
+        auto refuse=[this](uint32_t why){twin_state=GC_TWIN_STOPPED;twin_reason=why;twin_publish();};
+        if(!source4.query_display){refuse(GD_TWIN_UNAVAILABLE);return;} // "capture layer predates ghost copies"
+        if(twin_poisoned){refuse(twin_poison);return;}
+        twin_state=GC_TWIN_PREPARING;twin_publish();
+        // The twin pool doubles the snapshot memory; the immutable limit bounds both.
+        const uint64_t bytes=snapshots.images().counters().texture_bytes;
+        if(!bytes || bytes>limits.snapshot_bytes/2){refuse(GD_TWIN_SNAPSHOT_FAILED);return;}
+        if(!twin_gpu_begin()){refuse(GD_TWIN_SNAPSHOT_FAILED);return;}
+        twin_gpu=true;
+        const unsigned images=request.offer_count<RB_SLOTS?request.offer_count:RB_SLOTS-1;
+        uint32_t why=GD_NONE;
+        if(!twin_images.prepare(copy_gl,source,surface,images,budget,nullptr,true))why=GD_TWIN_SNAPSHOT_FAILED;
+        else if(!twin_bridge.prepare(gl,surface.width,surface.height,twin_names))why=GD_TWIN_IMPORT_FAILED;
+        if(why){twin_images.stop();if(!twin_images.destroy())twin_images.abandon();twin_bridge.destroy();}
+        if(!twin_gpu_end() && !why){
+            why=GD_TWIN_IMPORT_FAILED; // an error the steps did not report
+            twin_images.stop();
+            if(twin_gpu_begin()){twin_bridge.destroy();if(!twin_images.destroy())twin_images.abandon();twin_gpu_end();}
+            else twin_poisoned=true;
+        }
+        if(why){refuse(why);return;}
+        twin_state=GC_TWIN_ACTIVE;twin_capturing.store(lane);twin_consumer(true);twin_publish();
+    }
+    // No new twin copies from here; STOPPED once every twin credit retired.
+    void twin_stop(uint32_t why){
+        twin_capturing.store(0);twin_consumer(false);
+        if(why && !twin_reason)twin_reason=why;
+        if(twin_state!=GC_TWIN_PREPARING && twin_state!=GC_TWIN_ACTIVE)return;
+        if(twin_stopping)return;
+        twin_stopping=true;twin_stop_qpc=qpc();twin_images.stop();
+        for(auto&p:pending)twin_release(p);
+    }
+    // A twin key that is held or broken: forget its credits, keep its names
+    // for the epoch's GL retirement, and start no other lane this epoch.
+    void twin_abandon(uint32_t why){
+        twin_poisoned=true;if(!twin_poison)twin_poison=why;
+        for(unsigned n=0;n<GC_BRIDGES;++n){twin_credits[n]={};twin_credit_qpc[n]=0;}
+        twin_stop(why);
+    }
+    void twin_returns(){
+        bool held=false;for(const auto&c:twin_credits)held|=c.token!=0;
+        if(!held)return;
+        for(unsigned n=0;n<GC_BRIDGES;++n){unsigned slot=0;gc_receipt receipt{};
+            const auto result=channel->take_twin_receipt(slot,receipt);
+            if(result==ChannelResult::empty || result==ChannelResult::busy)break;
+            if(result!=ChannelResult::ok || slot>=GC_BRIDGES || twin_credits[slot].token!=receipt.token){twin_stop(GD_CHANNEL_FAILED);break;}
+            twin_credits[slot].receipt=true;
+        }
+        const auto now=qpc();
+        for(unsigned n=0;n<GC_BRIDGES;++n){auto&c=twin_credits[n];if(!c.token)continue;
+            if(now>twin_credit_qpc[n] && now-twin_credit_qpc[n]>frequency*limits.max_age_ms/1000){twin_abandon(GD_TWIN_KEY_ABANDONED);return;}
+            // Stopping, the key alone retires it: the receipt only acknowledged metadata.
+            if(!c.receipt && !twin_stopping)continue;
+            if(!gpu())return;
+            const auto key=twin_bridge.key0_returned(n);
+            if(key==render_capture::Bridge::KeyReturn::pending)continue;
+            if(key!=render_capture::Bridge::KeyReturn::ready){drain_gl();twin_abandon(GD_TWIN_BRIDGE_FAILED);return;}
+            if(channel->retire_twin_bridge_after_key0(n,c.token)!=ChannelResult::ok)twin_stop(GD_CHANNEL_FAILED);
+            c={};twin_credit_qpc[n]=0;
+        }
+    }
+    // Every twin credit retired: delete this lane's names, then STOPPED.
+    void twin_finish(){
+        for(const auto&c:twin_credits)if(c.token)return;
+        bool gone=false;
+        if(twin_gpu_begin()){
+            if(!twin_poisoned)twin_bridge.destroy();
+            gone=twin_images.destroy();twin_gpu_end();
+        }
+        // A record taken later still returns its twin image; wait for it, bounded.
+        if(!gone && qpc()-twin_stop_qpc<=frequency*limits.max_age_ms/1000)return;
+        if(!gone)twin_images.abandon();
+        twin_stopping=false;twin_state=GC_TWIN_STOPPED;twin_publish();
+    }
+    // render_tick while the clean capture is ACTIVE: the client's request, then custody.
+    void twin_tick(){
+        if(const auto fault=twin_capture_fault.exchange(0))twin_stop(fault);
+        gc_twin_client client{};
+        const auto read=channel->twin_client(client);
+        const bool running=twin_state==GC_TWIN_PREPARING || twin_state==GC_TWIN_ACTIVE;
+        if(read==ChannelResult::invalid){if(running)twin_stop(GD_CHANNEL_FAILED);}
+        else if(read==ChannelResult::ok){
+            const bool ready=client.state==GC_TWIN_CLIENT_READY;
+            if(running && (!ready || client.lane!=twin_lane))twin_stop(GD_NONE);
+            else if(!running && ready && client.lane>twin_started_lane)twin_start(client.lane);
+        }
+        twin_returns();
+        if(twin_stopping)twin_finish();
+    }
+    // The clean epoch ends: its keys are abandoned with it (the helper's
+    // textures end with its session) and the renderer deletes the imports.
+    void twin_end_epoch(){
+        twin_capturing.store(0);twin_consumer(false);twin_images.stop();
+        for(unsigned n=0;n<GC_BRIDGES;++n){twin_credits[n]={};twin_credit_qpc[n]=0;}
+        if(twin_state==GC_TWIN_PREPARING || twin_state==GC_TWIN_ACTIVE){
+            twin_state=GC_TWIN_STOPPED;if(!twin_reason)twin_reason=GD_CANCELLED;twin_publish();
+        }
+        twin_stopping=false;
+    }
     void run(){
         worker_thread=GetCurrentThreadId();
         for(;;){
@@ -740,11 +968,11 @@ std::atomic<bool> configured{false};
 DWORD WINAPI delivery_thread(void* p){static_cast<Runtime*>(p)->run();return 0;}
 }
 
-static int configure_delivery(const rs_api*s,const rs_api_v3*extended,const rcl_api*c,const gd_limits*l){
+static int configure_delivery(const rs_api*s,const rs_api_v3*extended,const rs_api_v4*display,const rcl_api*c,const gd_limits*l){
     if(!source_valid(s,c) || !limits_valid(l))return GD_INVALID;
     bool no=false;if(!configured.compare_exchange_strong(no,true))return GD_BUSY;
     auto*r=new(std::nothrow)Runtime;if(!r){configured.store(false);return GD_SYSTEM_ERROR;}
-    r->source=*s;if(extended)r->source3=*extended;r->contexts=*c;r->limits=*l;
+    r->source=*s;if(extended)r->source3=*extended;if(display)r->source4=*display;r->contexts=*c;r->limits=*l;
     LARGE_INTEGER f{};QueryPerformanceFrequency(&f);r->frequency=uint64_t(f.QuadPart);
     r->wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r->changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
     if(!r->frequency || !r->wake || !r->changed){if(r->wake)CloseHandle(r->wake);if(r->changed)CloseHandle(r->changed);delete r;configured.store(false);return GD_SYSTEM_ERROR;}
@@ -752,9 +980,12 @@ static int configure_delivery(const rs_api*s,const rs_api_v3*extended,const rcl_
     if(!worker){CloseHandle(r->wake);CloseHandle(r->changed);delete r;configured.store(false);return GD_SYSTEM_ERROR;}
     CloseHandle(worker);runtime.store(r);return GD_ACCEPTED;
 }
-extern "C" int __cdecl gd_configure(const rs_api*s,const rcl_api*c,const gd_limits*l){return configure_delivery(s,nullptr,c,l);}
+extern "C" int __cdecl gd_configure(const rs_api*s,const rcl_api*c,const gd_limits*l){return configure_delivery(s,nullptr,nullptr,c,l);}
 extern "C" int __cdecl gd_configure3(const rs_api_v3*s,const rcl_api*c,const gd_limits*l){
-    return rs_valid_v3(s)?configure_delivery(&s->boundary,s,c,l):GD_INVALID;
+    return rs_valid_v3(s)?configure_delivery(&s->boundary,s,nullptr,c,l):GD_INVALID;
+}
+extern "C" int __cdecl gd_configure4(const rs_api_v4*s,const rcl_api*c,const gd_limits*l){
+    return rs_valid_v4(s)?configure_delivery(&s->v3.boundary,&s->v3,s,c,l):GD_INVALID;
 }
 extern "C" void __cdecl gd_set_diagnostic(gd_diagnostic_callback callback){diagnostic_callback.store(callback);}
 extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
@@ -780,7 +1011,7 @@ extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     // fresh identity and BOOTSTRAP synchronously, before the supervisor can read
     // an old OFF/FAULT status after ACCEPTED. This is bounded CPU metadata only;
     // every graphics allocation/operation remains on the delivery worker.
-    r->started=qpc();r->channel_started=r->drain_started=0;r->offer_token=r->bridge_token=0;
+    r->started=qpc();r->channel_started=r->drain_started=0;r->offer_token=r->bridge_token=r->twin_bridge_token=0;
     r->frontier_qpc=r->frontier_occurrence=0;r->refusal_generation=0;r->status_time=0;r->error=0;
     r->set_state(GD_BOOTSTRAP);r->publish_status();
     if(r->exhausted.load()){r->request_state.store(2);SetEvent(r->wake);return GD_EXHAUSTED;}
@@ -811,7 +1042,7 @@ extern "C" int __cdecl gd_capture(const rb_record*r,rb_image*out){
         return 0;
     }
     const int submitted=self->snapshots.submit(r,out);
-    if(submitted && out->ownership==RB_IMAGE_SUBMITTED)self->issue_sample(*out);
+    if(submitted && out->ownership==RB_IMAGE_SUBMITTED){self->issue_sample(*out);self->capture_twin(*r);}
     return submitted;
 }
 extern "C" int __cdecl gd_completed(const rb_image*i){const auto*r=runtime.load();return r && i && r->snapshots.completed(*i);}
@@ -917,5 +1148,6 @@ extern "C" void gd_test_set_iteration_probe(void (__cdecl *probe)()){
 }
 extern "C" void gd_test_set_retired_probe(void (__cdecl *probe)()){test_retired_probe.store(probe);}
 extern "C" void gd_test_bridge_fault_once(uint32_t error){test_bridge_fault.store(error);}
+extern "C" void gd_test_twin_bridge_fault_once(uint32_t error){test_twin_bridge_fault.store(error);}
 extern "C" uint32_t gd_test_deadline_visits(){return test_deadline_visits.load();}
 #endif

@@ -4,7 +4,10 @@
 #include <stdint.h>
 enum rs_source_kind3 {
     RS_SOURCE_UNAVAILABLE=0, RS_SOURCE_DEFAULT_FRONT=1,
-    RS_SOURCE_CLEAN_VI=2, RS_SOURCE_NO_NEW_PRESENTATION=3
+    RS_SOURCE_CLEAN_VI=2, RS_SOURCE_NO_NEW_PRESENTATION=3,
+    // SourceV4 query_display only (version 4): the displayed picture with
+    // ghosts, or no ghost was copied this update so the clean one stands.
+    RS_SOURCE_DISPLAY_VI=4, RS_SOURCE_SAME_AS_CLEAN=5
 };
 typedef struct {
     uint32_t bytes,version,kind,reserved;

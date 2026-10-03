@@ -22,6 +22,16 @@ poll reads as "not yet" (11-30 us per poll; a scratch probe of 48,000 polls
 against a key another process held never read one as returned). A faulted or
 abandoned key quarantines the process's capture instead of reallocating.
 
+The ghost copy ([runtime](replay-gpu-runtime.md#the-ghost-copy)) imports a
+second pair, `Local\SM64GpuImage-<nonce>-<epoch>-copy-0/1`, created by its own
+helper, into a second `Bridge` with the same crop, flip and ledger. Its faults
+end only the twin: a faulted copy or a key held past the picture deadline is
+never waited for or retried; that pair's imports are kept until the epoch's GL
+retirement and no other lane starts in that capture run. Measured (NVIDIA,
+2026-10-03): a helper killed while holding key 1 leaves an abandoned mutex
+whose key 0 the next poll gets back, so a killed twin helper is a clean stop
+(~0.2 s); only a live helper that never returns its key reaches the deadline.
+
 ## Hardware witnesses
 
 Each builds the shipped code: `gpu_render_witness_host.cpp` is an x86

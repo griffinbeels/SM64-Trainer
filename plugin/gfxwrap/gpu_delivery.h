@@ -22,7 +22,11 @@ enum gd_reason { GD_NONE=0, GD_CANCELLED=10000, GD_BAD_SOURCE, GD_BAD_REQUEST,
     // Append-only terminal reasons; channel/control layouts remain unchanged.
     GD_SOURCE_IMAGE_MISSING, GD_SOURCE_RECORD_INVALID, GD_SOURCE_STAMP_COUNT,
     GD_SOURCE_STAMP_LENGTH, GD_SOURCE_CLIENT_FAILED, GD_SOURCE_EPOCH_CHANGED,
-    GD_SOURCE_REFUSED };
+    GD_SOURCE_REFUSED,
+    // The ghost copy's causes: only ever in gc_twin_status.reason, never a
+    // channel or runtime terminal reason. UNAVAILABLE: a SourceV3 renderer.
+    GD_TWIN_SNAPSHOT_FAILED, GD_TWIN_IMPORT_FAILED, GD_TWIN_BRIDGE_FAILED,
+    GD_TWIN_KEY_ABANDONED, GD_TWIN_UNAVAILABLE };
 
 typedef struct {
     uint32_t bytes, version, max_slots, max_age_ms;
@@ -46,6 +50,9 @@ typedef struct {
  */
 int __cdecl gd_configure(const rs_api*, const rcl_api*, const gd_limits*);
 int __cdecl gd_configure3(const rs_api_v3*,const rcl_api*,const gd_limits*);
+/* SourceV4 adds the ghost copy's display source; without it the twin lane
+ * answers every request with GD_TWIN_UNAVAILABLE. */
+int __cdecl gd_configure4(const rs_api_v4*,const rcl_api*,const gd_limits*);
 
 /* One supervisor. Exact repeats are idempotent. Only these template fields are
  * required: owner_pid/birth, nonce_lo/hi, generation (control generation),
