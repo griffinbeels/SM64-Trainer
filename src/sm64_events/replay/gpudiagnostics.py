@@ -20,6 +20,10 @@ _DELIVERY = dict(enumerate((
     "counter exhausted", "source image missing", "source record invalid",
     "source stamp count mismatch", "source stamp length mismatch",
     "source rejected by client", "source epoch changed", "source admission refused",
+    # The ghost copy's own reasons: only ever in the twin status, never the
+    # channel's terminal reason.
+    "ghost copy snapshot failed", "ghost copy texture import failed",
+    "ghost copy bridge failed", "ghost copy key abandoned",
 ), 10000))
 
 
@@ -71,7 +75,7 @@ class CaptureTimings:
         self.stages = {name: [0, 0.0, 0.0, 0.0] for name in (
             "channel", "encoder", "sink_prepare", "first_offer", "media_setup", "tick", "between_ticks",
             "audio_drain", "adapter_pump", "heartbeat", "media_drain", "media_age", "report",
-            "mux_video", "mux_audio", "ledger_feed",
+            "mux_video", "mux_audio", "ledger_feed", "copy_lane",
         )}
         self.last_tick_end = None
 

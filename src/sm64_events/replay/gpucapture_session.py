@@ -13,6 +13,7 @@ from sm64_events.core.paths import bundled_encoder_dll
 from sm64_events.replay.gpucapture import GpuBackendUnsupported, GpuCleanupError
 from sm64_events.replay import gpuchannel
 from sm64_events.replay.gpuinput import OfferDecoder, ChannelSelection
+from sm64_events.replay.ghostcopy import GhostCopyLane
 from sm64_events.replay.gpumedia import GpuMedia
 from sm64_events.replay.gpuaudio import GpuAudio
 from sm64_events.replay.gpudiagnostics import CaptureTimings, failure_snapshot
@@ -88,6 +89,12 @@ class CaptureSession:
         )
         self.channel = self.controller = self.media = self.adapter = None
         self.codec = None  # set by the Open that actually succeeded
+        self.open_command = None  # that Open, which the ghost copy repeats
+        # The ghost copy lane: started on a switch-on edge, never retried
+        # within this session after it stops.
+        self.copy_lane = None
+        self._copy_wanted = self._copy_edge = False
+        self._copy_lanes = 0
         self.audio = self.archive = self.handoff = self.mux = None
         self.output = None
         self._output_joined = False
@@ -295,6 +302,7 @@ class CaptureSession:
             defer_disposal=True,
         )
         command, request_id, reply = bootstrap
+        self.open_command = command
         self.adapter.attach_open(
             command, request_id, reply, initial_offers=offers, now=time.monotonic()
         )
@@ -395,7 +403,54 @@ class CaptureSession:
             self.timings.measure("heartbeat", self.adapter.heartbeat, self.frontier, now=now)
         self.timings.measure("media_drain", self.media.drain)
         self.timings.measure("media_age", self.media.check_age, now)
+        self.timings.measure("copy_lane", self._tick_copy_lane, now)
         self.timings.measure("report", self.owner.report, self)
+
+    def _tick_copy_lane(self, now):
+        """The ghost copy's whole tick. Nothing raised here reaches the clean
+        run: a lane exception becomes that lane's stop."""
+        lane = self.copy_lane
+        try:
+            # P3's owner method; an owner without it never wants a copy.
+            wanted = getattr(self.owner, "ghost_copy_wanted", None)
+            wanted = bool(wanted()) if wanted is not None else False
+            if wanted and not self._copy_wanted:
+                self._copy_edge = True
+            self._copy_wanted = wanted
+            if lane is not None and not lane.stopped:
+                if not wanted:
+                    lane.stop("Ghosts in recording was switched off")
+                lane.tick(now)
+            elif self._copy_edge and wanted:
+                self._copy_edge = False
+                self._start_copy_lane(now)
+        except Exception as exc:  # noqa: BLE001 - a lane fault stops only the lane.
+            lane = self.copy_lane
+            if lane is None or lane.stopped:
+                log.exception("Ghost copy tick failed")
+            else:
+                lane.stop(str(exc) or type(exc).__name__)
+
+    def _start_copy_lane(self, now):
+        h = self.channel.header
+        self._copy_lanes += 1
+        self.copy_lane = GhostCopyLane(
+            self.owner, self.channel, self.media, self.open_command,
+            codec=self.codec, width=h.even_width, height=h.even_height,
+            settings=self.settings, lane=self._copy_lanes,
+            controller_factory=self.controller_factory, launch=helper_launch,
+        )
+        self.copy_lane.start(now)
+
+    def _close_copy_lane(self):
+        # Before the clean helper retires and while the channel is open: the
+        # twin release and its key returns travel through this channel.
+        lane = self.copy_lane
+        if lane is not None and not lane.stopped:
+            try:
+                lane.close()
+            except Exception:  # noqa: BLE001 - never a clean retirement error.
+                log.exception("Ghost copy close failed")
 
     def _finish_media(self):
         if self.media is None:
@@ -472,6 +527,7 @@ class CaptureSession:
         operations = (
             lambda: self.demand.request_stop("GPU capture run ended"),
             lambda: self.owner.end_audio(self.handoff),
+            self._close_copy_lane,
             self._close_channel,
             self._finish_helper,
             self._finish_media,

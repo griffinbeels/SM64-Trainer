@@ -8,6 +8,7 @@ separately; none of these operations can execute in an emulator callback.
 """
 
 from dataclasses import dataclass
+import logging
 import threading
 
 from sm64_events.replay.packetorder import (
@@ -19,6 +20,8 @@ from sm64_events.replay.packetorder import (
 )
 from sm64_events.replay.packetmux import EncodedPicture
 from sm64_events.replay.pcmbuffer import PcmBuffer
+
+log = logging.getLogger("sm64.replay")
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +54,7 @@ class GpuMedia:
         lead_ticks,
         timings=None,
         publish_picture=None,
+        follower=None,
     ):
         if type(source_namespace) is not str or not 0 < len(source_namespace) <= 130:
             raise ValueError("bounded native session identity required")
@@ -60,6 +64,9 @@ class GpuMedia:
         self.run, self.ledger, self.mux = run, ledger, mux
         self.timings = timings
         self.publish_picture = publish_picture
+        # The ghost copy follows every admitted picture and PCM block in this
+        # run's order. It is a guest: its failure detaches it, never this run.
+        self.follower = follower
         self.namespace, self.packet_limit = source_namespace, packet_limit
         self._first_requested = False
         self.lead_ticks = lead_ticks
@@ -214,8 +221,19 @@ class GpuMedia:
             self.abort(str(exc))
             raise
 
+    def _follow(self, event, *args):
+        follower = self.follower
+        if follower is None:
+            return
+        try:
+            getattr(follower, event)(*args)
+        except Exception:  # noqa: BLE001 - a follower fault must never reach the clean run.
+            self.follower = None
+            log.exception("ghost copy follower failed; the clean recording continues without it")
+
     def _write_audio(self, data, first_us):
         self.mux.write_pcm(data, first_us)
+        self._follow("pcm", data, first_us)
         numerator = (first_us - self.pcm.origin_us) * self.pcm.rate + len(
             data
         ) // 4 * 1_000_000
@@ -280,6 +298,7 @@ class GpuMedia:
                     self._delivered += 1
                 self.video_end = packet.pts + packet.duration
                 self.pending_packet = None
+                self._follow("video", packet.pts, packet.duration, packet.repeat)
         except Exception as exc:
             self.abort(str(exc))
             raise
