@@ -299,6 +299,58 @@ def test_real_x86_twin_block_follows_the_payloads(native):
         assert len({*client.texture_names, *client.twin_texture_names}) == 4
 
 
+def test_real_x86_twin_round_trip(native):
+    """The ghost copy's records through the real x86 producer: the client's
+    READY and OFF, the producer's status, twin bridges copied from clean
+    decisions in alternating slots, and receipts that let it retire them."""
+    with Host(native) as host, host.client() as client:
+        h = client.header
+        assert (host.info["twin_offset"], host.info["twin_bytes"],
+                host.info["twin_names_offset"]) == (h.twin_offset, G.TWIN_BYTES, 848)
+        assert client.twin_texture_names == ("Local\\SM64.GpuChannel.fixture.copy.a",
+                                             "Local\\SM64.GpuChannel.fixture.copy.b")
+        assert host.ask("twin_client")["result"] == "empty"
+        assert client.twin_status() == G.TwinStatus(G.TWIN_OFF, 0, 0, 0, 0, 0)  # A2
+        ok(host, "status 2")
+        client.twin_request(1)
+        assert (lambda r: (r["twin_state"], r["lane"]))(ok(host, "twin_client")) == (1, 1)
+        ok(host, "twin_status 2 0 1 0 0 0")
+        assert client.twin_status() == G.TwinStatus(G.TWIN_ACTIVE, 0, 1, 0, 0, 0)
+        for i in range(3):
+            ok(host, f"publish {i} {i + 1} {i + 1} 100")
+        decided = []
+        for serial, offer in enumerate(client.offers(), 1):
+            client.reply(offer, G.SELECTED, encode_serial=serial, pts=(serial - 1) * 3000,
+                         nominal_duration=3000, force_idr=serial == 1)
+            decided.append(ok(host, "take"))
+        ok(host, f"twin_bridge 0 1 {decided[0]['slot']}")
+        ok(host, f"twin_bridge 1 2 {decided[1]['slot']}")
+        first = client.twin_bridges()
+        assert [(b.texture_index, b.token, b.occurrence, b.encode_serial, b.pts,
+                 b.nominal_duration, b.force_idr) for b in first] == [
+            (0, 1, 1, 1, 0, 3000, False), (1, 2, 2, 2, 3000, 3000, False)]
+        assert host.ask(f"twin_bridge 0 3 {decided[2]['slot']}")["result"] == "busy"
+        for b in first:
+            client.acknowledge_twin_metadata(b)
+        receipts = {(r["slot"], r["token"]) for r in (ok(host, "twin_receipt"),
+                                                      ok(host, "twin_receipt"))}
+        assert receipts == {(0, 1), (1, 2)}
+        ok(host, "twin_key0 0 1")
+        ok(host, "twin_key0 1 2")
+        ok(host, f"twin_bridge 0 3 {decided[2]['slot']}")
+        (third,) = client.twin_bridges()
+        assert (third.texture_index, third.token, third.pts) == (0, 3, 6000)
+        client.acknowledge_twin_metadata(third)
+        assert (lambda r: (r["slot"], r["token"]))(ok(host, "twin_receipt")) == (0, 3)
+        ok(host, "twin_key0 0 3")
+        ok(host, "twin_status 2 0 1 6000 3 0")
+        assert client.twin_status() == G.TwinStatus(G.TWIN_ACTIVE, 0, 1, 6000, 3, 0)
+        client.twin_release()
+        assert (lambda r: (r["twin_state"], r["lane"]))(ok(host, "twin_client")) == (0, 0)
+        ok(host, "twin_status 3 10027 1 6000 3 0")
+        assert client.twin_status() == G.TwinStatus(G.TWIN_STOPPED, 10027, 1, 6000, 3, 0)
+
+
 def test_decisions_found_together_are_taken_in_offer_order(native):
     """Renderer-thread capture takes decisions once per VI, so one pass can
     find the client's replies to two offers. A later offer in a lower slot is
