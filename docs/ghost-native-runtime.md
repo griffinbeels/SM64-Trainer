@@ -128,6 +128,7 @@ readable explanation. A bulk read binds one current definition snapshot.
 | Ghost IPC | GIPC12: status 256, request 20020 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; names/inputs/mode, then name box style/opacity, the HUD input stack switch and `record_ghosts`, appended after sound controls | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP7: header 160, record 1284, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP6 (1276), GCLIP5 (1268) and GCLIP4 (652) still load with unavailable pad; GCLIP5 also has nothing released, GCLIP4 also has no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
+| Ghost copy | SourceV4 (`SM64ReplaySourceV4`, 108 bytes) adds `query_display` and `display_consumer` over an unchanged V3 table; display kinds 4 (`DISPLAY_VI`) and 5 (`SAME_AS_CLEAN`) | [link_source_api.h](../plugin/gfxwrap/link_source_api.h), [source_descriptor3.h](../plugin/gfxwrap/source_descriptor3.h) |
 
 Sizes are bytes. Native ghost versions are checked together. GCLIP6 (GC7,
 1276-byte records, before exact pad), GCLIP5 (GC6,
@@ -1589,11 +1590,15 @@ recording off, "we still incorrectly include the ghost's AUDIO in the recording.
 The recorder taps Project64's whole process tree (proctap,
 `INCLUDE_TARGET_PROCESS_TREE`), Windows has no way to leave one stream of a
 process out of that tap, and subtracting the ghost's samples after the system
-mixer cannot be exact, so the sound had to leave the process. The recorder adds
-a tap of the player only while Ghosts in recording is on
-(`ProcessAudioSource.extra_pid`, `GhostMix`: the player's samples wait at most
-0.25 s for the game's). The device-wide fallback tap hears whatever shares
-Project64's output, ghost sound included. A probe on this machine
+mixer cannot be exact, so the sound had to leave the process. The clean
+recording's audio is the game alone. Only while Ghosts in recording is on does
+the recorder also tap the player (`ProcessAudioSource.extra_pid`), and those
+samples never enter the clean audio: `GhostTimeline` places them on the wall
+clock by when they arrived, and the [ghost copy](#ghosts-in-the-recording) alone
+mixes them under each game block by that block's own UTC stamp (`mix_ghost`,
+saturating). Known gap: the device-wide fallback tap hears whatever shares
+Project64's output, ghost sound included, so on that fallback the clean
+recording can still hear it. A probe on this machine
 (2026-10-03) wrote a near-silent 1 kHz tone into a ring: a tap of the player
 heard 1 kHz, a tap of an unrelated process heard exactly zero. The thread
 synthesizes one tick (two blocks of 528/544 stereo frames at 32 kHz) whenever
@@ -1715,23 +1720,42 @@ alone never reports that the ghost reached the game window.
 ### Ghosts in the recording
 
 His ask (2026-10-02): *"what if I wanted to see exactly what my differences were
-compared to the ghost in my recorded video? ... Ideally this could be done without
-needing a separate ghost recording"*; his choice of the switch set before the run:
-*"A, with it by default off."* With `record_ghosts` (GIPC12/GP10) on, the frame's
-display image says so (`GhostViImage::record_display`, from
-`ghost_playback::records_display`), and after the OSD and any withdrawal
-`ghost_presentation::record_display` copies BACK -- what the window is about to show,
-ghosts, names, corner inputs and OSD -- over the recorded surface, and the
-recorder mixes in the ghost sound player's audio (above). Same encoder,
-same single recording: one extra copy of BACK, only on frames that drew a ghost.
-A failed copy publishes nothing. The choice applies to what is recorded from then on;
-saved clips never change. Whole picture ghosts are a separate window over the game,
-so they never reach the recording. A PB recorded this way keeps its ghosts in its
-video, so the same PB raced later as a Whole picture ghost shows them too; nothing
-marks such clips yet. Rejected: a second encoded stream to toggle while watching (twice
-the encoder load during play, up to twice the disk) and redrawing ghosts on the replay
-(no wall depth, so they would show through walls). The presentation witness checks the
-recorded surface equals the displayed picture only when the image asks.
+compared to the ghost in my recorded video?"*; his choice of the switch set before
+the run: *"A, with it by default off."* Then (2026-10-03): *"if someone gets an
+amazing PB, they will want the clean recording 100% of the time"*, and of the
+options offered: *"I think we probably should go with A -- because that gives the
+most faithful ghost recreation. If the user wants to have ghosts in the recording,
+they're paying the price."* So the clean recording never contains a ghost, and a
+second recording, the **ghost copy**, keeps what the window showed.
+
+With `record_ghosts` (GIPC12/GP10) on, the frame's display image says so
+(`GhostViImage::record_display`, from `ghost_playback::records_display`). After the
+OSD and any withdrawal, `ghost_presentation::record_display` copies BACK -- ghosts,
+names, corner inputs and OSD -- into a separate **display surface** (`textures[DISPLAY]`),
+never into the clean one, and only while the ghost copy's lane consumes it
+(`display_consumer`, which the delivery turns on with the lane). The display surface
+is allocated by the first copy that needs it, follows a resize with a new generation
+and is deleted with the presentation. A failed copy publishes no display picture and
+never touches the clean one. `swap_completed` publishes it with the clean picture's
+serial and update; `display_surface` hands it out only while that serial matches.
+Sound follows the same split: the ghost copy alone carries the ghost sound
+([above](#ghost-sound-playback)).
+
+SourceV4's `query_display` names that surface for a ticket, inside its capture
+callback: `DISPLAY_VI` carries the clean descriptor's geometry and identity with the
+display surface's framebuffer and generation; `SAME_AS_CLEAN` means no ghost was copied
+that update (the twin records the clean picture); `UNAVAILABLE` means the consumer is
+off. The delivery's twin lane records it through a second helper
+([replay-gpu-runtime.md, "The ghost copy"](replay-gpu-runtime.md#the-ghost-copy)).
+Cost: one extra copy of BACK only on frames that drew a ghost, plus the twin's snapshot
+and bridge copies; nothing at all while the switch is off. The choice applies to what
+is recorded from then on; saved clips never change. Whole picture ghosts are a separate
+window over the game, so they never reach either recording. Rejected: redrawing ghosts
+on the replay (no wall depth, so they would show through walls) and overwriting the
+clean recording (the 2026-10-02 design: a PB could only exist with its ghosts). The
+presentation witness checks every clean pixel stays the background with the switch on,
+the display surface equals the displayed picture, and nothing is copied with the
+consumer off; restoring the old overwrite turns it red.
 
 ### Ghost sound follows its picture's fade
 

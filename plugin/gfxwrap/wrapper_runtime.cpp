@@ -26,23 +26,30 @@ extern "C" int __cdecl wr_configure(HMODULE module,const gfx_api_t *original,wr_
     &&original->UpdateScreen==original_update;if(clean_source)clean_source->clean_consumer(same);rc_available(same);return same;}
  using SourceQuery=const rs_api*(__cdecl *)(uint32_t,uint32_t);
  using SourceQuery3=const rs_api_v3*(__cdecl *)(uint32_t,uint32_t);
+ using SourceQuery4=const rs_api_v4*(__cdecl *)(uint32_t,uint32_t);
  using ContextQuery=const rcl_api*(__cdecl *)(uint32_t,uint32_t);
  const auto query=reinterpret_cast<SourceQuery>(GetProcAddress(module,"SM64ReplaySourceV2"));
  const auto query3=reinterpret_cast<SourceQuery3>(GetProcAddress(module,"SM64ReplaySourceV3"));
+ const auto query4=reinterpret_cast<SourceQuery4>(GetProcAddress(module,"SM64ReplaySourceV4"));
  const auto contexts=reinterpret_cast<ContextQuery>(GetProcAddress(module,"SM64ReplayContextV1"));
  if((!query&&!query3)||!contexts)return 0;
- const auto extended=query3?query3(RS_ABI_V3,sizeof(rs_api_v3)):nullptr;
- if(query3&&!rs_valid_v3(extended))return 0;
+ // V4 (the ghost copy's display source) is preferred; V3 renderers still capture clean.
+ const auto display=query4?query4(RS_ABI_V4,sizeof(rs_api_v4)):nullptr;
+ if(query4&&!rs_valid_v4(display))return 0;
+ const auto extended=display?&display->v3:query3?query3(RS_ABI_V3,sizeof(rs_api_v3)):nullptr;
+ if(query3&&!display&&!rs_valid_v3(extended))return 0;
  const auto source=extended?&extended->boundary:query(RS_ABI_V2,sizeof(rs_api));const auto context=contexts(RCL_ABI_V1,sizeof(rcl_api));
  if(!source_valid(source)||!context_valid(context))return 0;
  attempted=true;renderer=module;original_list=original->ProcessDList;original_update=original->UpdateScreen;
  // Source+wrapper code remain bounded process-lifetime residents before worker creation.
- if(!pin(query3?reinterpret_cast<const void*>(query3):reinterpret_cast<const void*>(query))||!pin(reinterpret_cast<const void*>(contexts))
+ const void*queried=query4?reinterpret_cast<const void*>(query4):query3?reinterpret_cast<const void*>(query3):reinterpret_cast<const void*>(query);
+ if(!pin(queried)||!pin(reinterpret_cast<const void*>(contexts))
     ||!pin(reinterpret_cast<const void*>(&wr_configure)))return 0;
  const gd_limits limits{sizeof(gd_limits),GD_VERSION,8,2000,
     256ull<<20,256ull<<20,64u<<20,1u<<20,2,0};
  const sa_ops ops{sizeof(sa_ops),SA_VERSION,nullptr,original_list,original_update,epoch,vi,ram,surface,capture,completed};
- if((extended?gd_configure3(extended,context,&limits):gd_configure(source,context,&limits))!=GD_ACCEPTED)return 0;
+ if((display?gd_configure4(display,context,&limits):extended?gd_configure3(extended,context,&limits)
+    :gd_configure(source,context,&limits))!=GD_ACCEPTED)return 0;
  if(!sa_configure(module,&ops)||!rc_bind_delivery(&limits)){gd_disarm(GD_BAD_SOURCE);return 0;}
  clean_source=extended;if(clean_source)clean_source->clean_consumer(true);
  ready=true;rc_available(TRUE);return 1;

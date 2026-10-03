@@ -457,8 +457,8 @@ or flush, and a poll that makes no GL call. `gl_snapshot.h` is an overlay
 header and did not change, so the renderer keeps its build id
 (`3833db66...-renderer`) and every non-practice ROM still runs the identical
 renderer DLL. Because the helper now creates the bridge textures, the channel
-wire is version 2 (`GC_CHANNEL_VERSION`, `gpuchannel.VERSION`, compared by
-`test_gpu_channel`). A trainer meeting a wrapper from another build fails
+wire became version 2 (`GC_CHANNEL_VERSION`, `gpuchannel.VERSION`, compared by
+`test_gpu_channel`); [the ghost copy](#the-ghost-copy) made it version 3. A trainer meeting a wrapper from another build fails
 with "the capture layer in Project64 speaks GPU channel version 1 and this
 trainer speaks version 2: they come from different builds. Close Project64 so
 the trainer can update the capture layer", and the setup screen's build-id
@@ -592,6 +592,75 @@ froze 100-114 ms without it and 24-30 ms with it, its own 82-90 ms landing
 inside a 250 ms load and nothing outside it. Not yet measured live: Discord's
 real hook in Project64 after the warm-up (the activation log's
 `callback_stall` against `discord_hook.log`, as above).
+
+## The ghost copy
+
+With Ghosts in recording on, the clean recording never contains a ghost; a
+second recording of the displayed picture runs beside it in the same capture
+run (his decision, 2026-10-03, in
+[ghost-native-runtime.md](ghost-native-runtime.md#ghosts-in-the-recording)).
+The renderer keeps the displayed picture in its own display surface and names
+it through SourceV4's `query_display`. The delivery's **twin lane** records it
+through a second helper process with its own two textures. The twin never
+waits on or extends the clean picture's custody, and a twin fault stops only
+the twin: nothing in the lane can fail, quarantine or delay the clean capture.
+With the switch off there is no display copy, no twin pool and no twin helper.
+
+The channel (version 3) carries the lane in a 768-byte block at
+`twin_offset` (after the payloads; RAM only, always present): the client's
+request (`gc_twin_client`: READY with a strictly increasing lane once its
+helper created both `-copy-` textures named in the header, OFF otherwise), the
+producer's status (`gc_twin_status`: OFF, PREPARING, ACTIVE, STOPPED, a raw
+`GD_TWIN_*` reason, and `resolved_pts`, below which every selected picture has
+its twin outcome), two twin bridges and two twin receipts in the clean ones'
+shapes. Every entry has its own sequence word. The producer writes an OFF
+status with the channel's identity before the header, like the clean status.
+
+All twin GPU work is on the renderer's thread, like the clean work:
+
+1. **Start**, the render tick after a READY with a new lane while the clean
+   capture is ACTIVE: a twin snapshot pool with the clean pool's images and
+   size (refused if both pools together would pass the snapshot limit), an
+   import of the twin textures, then ACTIVE and `display_consumer(true)`.
+   A SourceV3 renderer stops the lane at once with `GD_TWIN_UNAVAILABLE`.
+2. **Capture**, in `gd_capture` after the clean copy and its sample:
+   `DISPLAY_VI` snapshots the display surface into the twin pool;
+   `SAME_AS_CLEAN` copies nothing (the clean snapshot stands for it); a full
+   twin pool is a missing twin picture. No sample is taken for the twin.
+3. **Decision**, right after the clean bridge copy succeeded and before the
+   clean image returns: a free twin texture (key 0 proven) receives the display
+   or clean snapshot and its bridge carries the clean decision's occurrence,
+   encode serial, PTS and duration. No free texture, a full key or a missing
+   twin picture counts `missed`; it is never retried. A twin copy fault stops the
+   lane with `GD_TWIN_BRIDGE_FAILED`.
+4. **Custody** mirrors the clean ledger: a twin receipt plus key 0 retires a
+   twin texture. Stopping, key 0 alone retires it.
+5. **Stop**, on OFF or a new lane: no new twin copies, STOPPED once every
+   twin texture came back, then this lane's names are deleted. A key held past
+   the picture deadline (`max_age_ms`) is `GD_TWIN_KEY_ABANDONED`: its names wait
+   for the epoch's GL retirement and no other lane starts in that capture run.
+
+Every twin GL step outside a picture's copy runs in a capture gateway of its
+own and drains its errors there. The source gateway records any GL error it
+finds at its end and then refuses every later capture, so an error left by a
+twin step would have ended the clean recording. The twin pool's copies drain
+their own errors the same way (`Snapshots::prepare(..., owns_errors)`).
+
+Renderer cost, measured 2026-10-03 with the cadence host (`SM64_CADENCE_TWIN=1`,
+`test_ghost_copy_native`): 60 VIs and 30 pictures a second at 1600x1200 through
+the real helper and media path, a ghost on every picture (the worst case: a
+display copy on every presentation), this host returning each twin texture at
+once. Over four paired runs of 660 VIs, the renderer's time per VI (the whole
+update, display copy and capture included) had a median of 811-838 us with the
+lane off and 940-1083 us with it on, a p99 of 1.96-4.87 ms off and 2.12-3.13 ms
+on, and a maximum of 8.5-11.6 ms either way; zero clean refusals, every clean
+picture decoded exactly, and 330 of 330 twin pictures copied. The GPU's power
+state moves these numbers more than the lane does (the same run measured 300 us
+medians while other GPU work held the clocks up), so read them as "about a
+tenth of a millisecond more per VI", not as a precise cost. Under that kind of
+outside load the existing 1600x1200 cadence witness refuses pictures on the
+base commit too (3-7 per run, the same on this design's commit), so a refusal
+there is not attributed to the lane without an interleaved base comparison.
 
 ## Accuracy and bounds
 

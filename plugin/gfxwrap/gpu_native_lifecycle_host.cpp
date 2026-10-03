@@ -35,7 +35,7 @@ struct Fixture {
     bool start(uint64_t nonce){auto h=request(nonce);return gd_request(&h,4u<<20)==GD_ACCEPTED;}
     bool channel(){
         auto h=r.request;h.width=h.height=2;h.epoch=r.epoch;h.qpc_frequency=r.frequency;
-        h.texture_names[0][0]='A';h.texture_names[1][0]='B';
+        h.texture_names[0][0]='A';h.texture_names[1][0]='B';h.twin_texture_names[0][0]='C';h.twin_texture_names[1][0]='D';
         r.channel=std::make_unique<gpu_channel::Producer>();
         return r.channel->create(h)==gpu_channel::Result::ok;
     }

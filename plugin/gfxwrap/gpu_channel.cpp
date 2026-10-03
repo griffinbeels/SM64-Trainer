@@ -39,6 +39,13 @@ bool header_config(const gc_header &h) {
         || !text_valid(h.texture_names[1])
         || !memcmp(h.texture_names[0], h.texture_names[1], sizeof h.texture_names[0])
         || !zero(h.reserved, sizeof h.reserved)) return false;
+    // Four distinct names: the twin helper never opens a clean texture.
+    for (unsigned i = 0; i < GC_BRIDGES; ++i) {
+        if (!text_valid(h.twin_texture_names[i])) return false;
+        for (unsigned j = 0; j < GC_BRIDGES; ++j)
+            if (!memcmp(h.twin_texture_names[i], h.texture_names[j], sizeof h.texture_names[j])) return false;
+    }
+    if (!memcmp(h.twin_texture_names[0], h.twin_texture_names[1], sizeof h.twin_texture_names[0])) return false;
     uint64_t sum = 0;
     for (unsigned i = 0; i < GC_TABLE_FIELDS; ++i) {
         if (i >= h.table_count) {
@@ -92,6 +99,8 @@ bool layout(gc_header &h) {
     h.payload_offset = h.publication_offset + h.publication_bytes;
     h.payload_stride = uint32_t(align64(GC_STAMP_BYTES + sample));
     uint64_t total = uint64_t(h.payload_offset) + uint64_t(h.payload_stride)*h.offer_count;
+    h.twin_offset = uint32_t(total); h.twin_bytes = GC_TWIN_BYTES; // payload_stride keeps it 64-aligned
+    total += GC_TWIN_BYTES;
     if (total > h.ram_budget || total > GC_MAX_MAP_BYTES) return false;
     h.total_bytes = uint32_t(total);
     return true;
@@ -173,7 +182,11 @@ Result Producer::create(const gc_header &config) {
     initial.nonce_lo = h.nonce_lo; initial.nonce_hi = h.nonce_hi;
     initial.epoch = h.epoch; initial.generation = h.generation;
     gc_publication publication{};
+    // The twin starts OFF with this channel's identity, readable before the header.
+    gc_twin_status twin{}; twin.state = GC_TWIN_OFF;
+    twin.nonce_lo = h.nonce_lo; twin.nonce_hi = h.nonce_hi; twin.epoch = h.epoch; twin.generation = h.generation;
     if (!put(h.publication_offset, &publication, sizeof publication)
+        || !put(h.twin_offset + offsetof(gc_twin, status), &twin, sizeof twin)
         || !put(h.status_offset, &initial, sizeof initial) || !put(0, &h, sizeof h)) { close(); return Result::system_error; }
     return Result::ok;
 }
@@ -367,6 +380,73 @@ Result Producer::status(uint32_t state, uint32_t reason, uint64_t heartbeat, uin
     if (!put(header_.status_offset, &s, sizeof s)) return Result::exhausted;
     if (state == GC_CLOSED || state == GC_FAULT) { terminal_ = s; closed_ = true; }
     SetEvent(result_); return Result::ok;
+}
+
+Result Producer::twin_client(gc_twin_client &out) {
+    out = {};
+    Result ready = check(); if (ready != Result::ok) return ready;
+    gc_twin_client c{};
+    if (!stable_read(view_ + header_.twin_offset + offsetof(gc_twin, client), &c, sizeof c)) return Result::busy;
+    if (!c.seq) return twin_client_seq_ ? Result::invalid : Result::ok;
+    if (!identity(header_, c.nonce_lo, c.nonce_hi, c.epoch, c.generation) || !zero(c.reserved, sizeof c.reserved)
+        || (c.state != GC_TWIN_CLIENT_OFF && c.state != GC_TWIN_CLIENT_READY)
+        || (c.state == GC_TWIN_CLIENT_READY) != (c.lane != 0) || c.seq < twin_client_seq_) return Result::invalid;
+    twin_client_seq_ = c.seq; out = c;
+    return Result::ok;
+}
+
+Result Producer::twin_status(uint32_t state, uint32_t reason, uint64_t lane, uint64_t resolved,
+                             uint64_t copied, uint64_t missed) {
+    Result ready = check(); if (ready != Result::ok) return ready;
+    if (state > GC_TWIN_STOPPED) return Result::invalid;
+    gc_twin_status s{}; s.state = state; s.reason = reason; s.lane = lane; s.resolved_pts = resolved;
+    s.copied = copied; s.missed = missed;
+    s.nonce_lo = header_.nonce_lo; s.nonce_hi = header_.nonce_hi; s.epoch = header_.epoch; s.generation = header_.generation;
+    if (!put(header_.twin_offset + offsetof(gc_twin, status), &s, sizeof s)) return Result::exhausted;
+    SetEvent(result_); return Result::ok;
+}
+
+Result Producer::publish_twin_bridge(unsigned index, uint64_t token, const gc_decision &d) {
+    Result ready = check(); if (ready != Result::ok) return ready;
+    if (index >= GC_BRIDGES || !token || !decision_valid(d, header_) || d.kind != GC_SELECTED) return Result::invalid;
+    if (twin_bridges_[index].token) return Result::busy;
+    if (last_twin_bridge_token_ == UINT64_MAX) return Result::exhausted;
+    if (token != last_twin_bridge_token_+1) return Result::stale;
+    gc_bridge b{}; b.ready = 1; b.token = token; b.occurrence = d.occurrence;
+    b.encode_serial = d.encode_serial; b.pts = d.pts; b.nominal_duration = d.nominal_duration;
+    b.nonce_lo = header_.nonce_lo; b.nonce_hi = header_.nonce_hi;
+    b.epoch = header_.epoch; b.generation = header_.generation; b.texture_index = index;
+    if (!put(header_.twin_offset + offsetof(gc_twin, bridges) + index*sizeof b, &b, sizeof b)) return Result::exhausted;
+    twin_bridges_[index] = b; twin_receipted_[index] = false; last_twin_bridge_token_ = token; SetEvent(result_);
+    return Result::ok;
+}
+
+Result Producer::take_twin_receipt(unsigned &index, gc_receipt &out) {
+    Result ready = check(); if (ready != Result::ok) return ready;
+    bool torn = false;
+    for (unsigned i = 0; i < GC_BRIDGES; ++i) {
+        gc_receipt r{};
+        if (!stable_read(view_ + header_.twin_offset + offsetof(gc_twin, receipts) + i*sizeof r, &r, sizeof r)) { torn = true; continue; }
+        if (r.seq == twin_receipt_seq_[i]) continue;
+        if (!r.seq || !identity(header_, r.nonce_lo, r.nonce_hi, r.epoch, r.generation)
+            || r.accepted != 1 || r.reason || r.texture_index != i || !zero(r.reserved, sizeof r.reserved)) return Result::invalid;
+        const auto &b = twin_bridges_[i];
+        if (!b.token || r.token != b.token || r.occurrence != b.occurrence || r.encode_serial != b.encode_serial) return Result::stale;
+        if (twin_receipted_[i]) return Result::repeated;
+        twin_receipted_[i] = true; twin_receipt_seq_[i] = r.seq; index = i; out = r;
+        return Result::ok;
+    }
+    return torn ? Result::busy : Result::empty;
+}
+
+Result Producer::retire_twin_bridge_after_key0(unsigned i, uint64_t token) {
+    Result ready = check(); if (ready != Result::ok) return ready;
+    if (i >= GC_BRIDGES || !token) return Result::invalid;
+    if (twin_bridges_[i].token != token) return Result::stale;
+    gc_bridge empty{};
+    if (!put(header_.twin_offset + offsetof(gc_twin, bridges) + i*sizeof empty, &empty, sizeof empty)) return Result::exhausted;
+    twin_bridges_[i] = {}; twin_receipted_[i] = false; SetEvent(result_);
+    return Result::ok;
 }
 
 Result Producer::close(uint32_t reason) {

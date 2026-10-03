@@ -52,6 +52,11 @@ GP_QUERIES(GP_COUNT)
 #undef GP_COUNT
 static decltype(gc::Dispatch::IsEnabled) real_IsEnabled=nullptr;
 static uint8_t GC_GL_CALL count_IsEnabled(uint32_t a){++queries;return real_IsEnabled(a);}
+// Every copy of BACK the presentation makes (clean save, display copy).
+static unsigned copies=0;
+static void GC_GL_CALL count_copy(uint32_t t,int32_t l,int32_t x,int32_t y,int32_t sx,int32_t sy,int32_t w,int32_t h) {
+    ++copies;glCopyTexSubImage2D(t,l,x,y,sx,sy,w,h);
+}
 static gp::Dispatch dispatch() {
     gp::Dispatch d{};
 #define GP_LOAD(result,name,args) d.gl.name=reinterpret_cast<decltype(d.gl.name)>(load("gl" #name));require(d.gl.name!=nullptr,#name);
@@ -61,7 +66,7 @@ static gp::Dispatch dispatch() {
     GP_QUERIES(GP_WRAP)
 #undef GP_WRAP
     real_IsEnabled=d.gl.IsEnabled;d.gl.IsEnabled=count_IsEnabled;
-    d.CopyTexSubImage2D=glCopyTexSubImage2D;
+    d.CopyTexSubImage2D=count_copy;
     d.DrawBuffers=reinterpret_cast<decltype(d.DrawBuffers)>(load("glDrawBuffers"));return d;
 }
 // The renderer's record, as a renderer that tracks its own calls holds it:
@@ -168,18 +173,36 @@ static void run(uint32_t generation) {
             rgb(recorded,x,y,20,40,60,"clean RGB including same-color OSD");
     }
     require(raster.gamma_calls==2 && raster.vi_calls==4,"gamma once before each VI");
-    // Ghosts in recording: the recorded surface is what the window shows, ghost and OSD included.
+    // Ghosts in recording: the clean surface stays clean, always. The ghost
+    // copy's display surface holds what the window shows, ghost and OSD
+    // included, and only while its lane consumes it.
     {   gp::GhostViImage shown=image;shown.record_display=1;
-        background(g);gp::begin_update(p,150);
-        require(gp::replace_vi(p,shown,0x1000,false,raster.api()),"recorded replace VI");
-        require(gp::before_swap(p,0x1000,raster.api()),"recorded before swap");
-        raster.osd(.5f);require(gp::begin_osd(p),"recorded OSD");raster.osd(.5f);gp::end_osd(p);
-        const auto visible=pixels(g,0);completed(p,window);const auto kept=gp::surface(p);
-        require(kept.presentation_serial && kept.update_occurrence==150,"recorded descriptor");
-        const auto recorded=pixels(g,kept.framebuffer);
+        auto frame=[&](uint64_t update,std::vector<uint8_t>* visible){
+            background(g);gp::begin_update(p,update);
+            require(gp::replace_vi(p,shown,0x1000,false,raster.api()),"recorded replace VI");
+            require(gp::before_swap(p,0x1000,raster.api()),"recorded before swap");
+            raster.osd(.5f);require(gp::begin_osd(p),"recorded OSD");raster.osd(.5f);gp::end_osd(p);
+            if(visible)*visible=pixels(g,0);completed(p,window);
+        };
+        gp::display_consumer(false);copies=0;frame(150,nullptr);
+        require(copies==1 && !gp::display(p).presentation_serial,"no display copy with the consumer off");
+        gp::display_consumer(true);std::vector<uint8_t> visible;frame(151,&visible);
+        const auto clean=gp::surface(p),display=gp::display(p);
+        require(clean.presentation_serial && clean.update_occurrence==151,"recorded descriptor");
+        require(display.presentation_serial==clean.presentation_serial && display.update_occurrence==151 &&
+                display.framebuffer && display.framebuffer!=clean.framebuffer && display.texture!=clean.texture &&
+                display.resource_generation==1 && display.width==64 && display.height==64,"display copy shares the clean picture's serial");
+        const auto recorded=pixels(g,clean.framebuffer),copy=pixels(g,display.framebuffer);
         for(int y=0;y<64;++y)for(int x=0;x<64;++x){const auto* v=&visible[(y*64+x)*4];
-            rgb(recorded,x,y,v[0],v[1],v[2],"recorded picture is the displayed one");}
-        rgb(recorded,12,18,64,144,16,"the ghost is in the recording");
+            rgb(recorded,x,y,20,40,60,"clean stays clean with Ghosts in recording");
+            rgb(copy,x,y,v[0],v[1],v[2],"the ghost copy is the displayed picture");}
+        rgb(copy,12,18,64,144,16,"the ghost is in the ghost copy");
+        // A presentation that drew no ghost copies nothing: the clean picture stands.
+        background(g);gp::begin_update(p,152);copies=0;
+        require(gp::before_swap(p,0x1000,raster.api()),"ghostless before swap");completed(p,window);
+        require(copies==1 && gp::surface(p).presentation_serial && !gp::display(p).presentation_serial,"no display copy without a ghost");
+        frame(153,nullptr);require(gp::display(p).resource_generation==1,"the display surface is allocated once");
+        gp::display_consumer(false);
     }
     const auto old=gp::surface(p);gp::begin_update(p,200);
     require(gp::surface(p).update_occurrence==old.update_occurrence,"no swap retains explicit previous occurrence");
@@ -259,11 +282,18 @@ static void run(uint32_t generation) {
     require(gp::prepare(p,2,32,32,8,8),"resize prepare");require(!gp::surface(p).presentation_serial,"resize invalidates descriptor");
     gp::begin_update(p,205);background(g);require(gp::before_swap(p,0x4000,raster.api()),"resized clean save");completed(p,window);
     require(gp::surface(p).resource_generation>resource && gp::surface(p).width==32 && gp::surface(p).drawable_generation==2,"resource identity");
+    // The allocated display surface followed the resize with a new generation.
+    gp::display_consumer(true);gp::GhostViImage shown=image;shown.record_display=1;
+    background(g);gp::begin_update(p,211);require(gp::replace_vi(p,shown,0x4000,false,raster.api()),"resized ghost");
+    require(gp::before_swap(p,0x4000,raster.api()),"resized ghost swap");completed(p,window);
+    const auto resized=gp::display(p);gp::display_consumer(false);
+    require(resized.presentation_serial==gp::surface(p).presentation_serial && resized.width==32 &&
+            resized.resource_generation==2 && resized.drawable_generation==2,"display surface reallocated on resize");
     gp::destroy(p);require(glGetError()==0,"destroy clean");
 }
 int main() {
-    const auto foreground=GetForegroundWindow();require(!gp::clean_consumer(),"inactive by default");
+    const auto foreground=GetForegroundWindow();require(!gp::clean_consumer() && !gp::display_consumer(),"inactive by default");
     gp::clean_consumer(true);require(gp::clean_consumer(),"negotiated");gp::clean_consumer(false);
     run(1);run(2);require(GetForegroundWindow()==foreground,"focus unchanged");
-    std::puts("presentation passed: hidden=yes contexts=2 clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored known=asks_nothing recorded=displayed");return 0;
+    std::puts("presentation passed: hidden=yes contexts=2 clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored known=asks_nothing recorded=clean ghost_copy=displayed consumer_off=no_copy");return 0;
 }

@@ -2,7 +2,10 @@
  * A render thread owns the producer context, as LINK's does: every picture and
  * every capture tick runs there, and while an epoch is armed it keeps ticking
  * the way a renderer calls back once per VI. The consumer plays the encoder
- * helper: it creates the two keyed-mutex textures the renderer imports. */
+ * helper: it creates the two keyed-mutex textures the renderer imports.
+ *   <owner pid> <owner birth> [twin]   the producer; twin: a SourceV4 renderer
+ *                                      whose display surface shows a ghost
+ *   helper <nonce lo> <nonce hi>       the ghost copy's helper, its own process */
 #include "gpu_delivery.h"
 #include "gpu_delivery_diagnostics.h"
 #include "stamp_adapter.h"
@@ -31,6 +34,7 @@ extern "C" int gd_test_sample_retry(unsigned,uint32_t*);
 extern "C" int gd_test_failure_snapshot(gd_diagnostic*,uint32_t*);
 extern "C" int gd_test_healthy_snapshot(gd_diagnostic*);
 extern "C" void gd_test_bridge_fault_once(uint32_t);
+extern "C" void gd_test_twin_bridge_fault_once(uint32_t);
 namespace {
 source_context::Registry registry;
 Window* producer=nullptr;
@@ -68,6 +72,42 @@ int __cdecl source_surface(rb_surface*s){
     s->drawable_width=64;s->drawable_height=64;s->restore_read_buffer=GL_BACK;
     s->source_format=RB_SOURCE_RGB8_LINEAR;s->post_vi_origin=last_marker;return 1;
 }
+// THE GHOST COPY (twin mode): a SourceV4 renderer whose display surface is a
+// private FBO holding a different picture (the pattern of marker+100: "the
+// ghost"), and the consumer switch the delivery turns on with the lane.
+bool twin_mode=false;
+std::atomic<unsigned> display_mode{1}; // 1 a ghost was drawn, 2 no ghost (same as clean)
+std::atomic<bool> display_on{false};
+std::atomic<unsigned> display_calls{0},consumer_calls{0};
+GLuint display_fbo=0,display_texture=0;
+int __cdecl source_surface3(rb_ticket,rb_surface*s,rs_source_descriptor3*d){
+    source_surface(s);*d={};d->bytes=sizeof(*d);d->version=RS_ABI_V3;d->kind=RS_SOURCE_DEFAULT_FRONT;
+    d->read_buffer=GL_FRONT;d->y=s->bottom_offset;d->width=s->width;d->height=s->height;
+    d->surface_width=s->drawable_width;d->surface_height=s->drawable_height;d->source_format=s->source_format;
+    d->context=s->context;d->read_drawable=s->read_drawable;d->renderer_thread=s->renderer_thread;
+    d->context_generation=s->context_generation;d->drawable_generation=s->drawable_generation;d->vi_origin=s->post_vi_origin;
+    return 1;
+}
+void __cdecl clean_consumer(bool){}
+int __cdecl query_display(rb_ticket t,rs_source_descriptor3*out){
+    display_calls.fetch_add(1);rs_source_descriptor3 clean{};
+    if(!rb_read_source_descriptor3(t,&clean)){*out={};return 0;}
+    *out={};out->bytes=sizeof(*out);out->version=RS_ABI_V4;out->kind=RS_SOURCE_UNAVAILABLE;
+    if(!display_on.load())return 1;
+    if(display_mode.load()==2){out->kind=RS_SOURCE_SAME_AS_CLEAN;out->update_occurrence=t.occurrence;return 1;}
+    *out=clean;out->version=RS_ABI_V4;out->kind=RS_SOURCE_DISPLAY_VI;out->framebuffer=display_fbo;out->read_buffer=0x8CE0;
+    out->source_format=RB_SOURCE_RGB8_LINEAR;out->resource_generation=1;out->presentation_serial=out->update_occurrence=t.occurrence;
+    return 1;
+}
+void __cdecl display_consumer(bool on){display_on.store(on);consumer_calls.fetch_add(1);}
+void make_display(){
+    glGenTextures(1,&display_texture);glBindTexture(GL_TEXTURE_2D,display_texture);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,64,64,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);glBindTexture(GL_TEXTURE_2D,0);
+    proc<GenFbo>("glGenFramebuffers")(1,&display_fbo);proc<BindFbo>("glBindFramebuffer")(framebuffer,display_fbo);
+    proc<Attach>("glFramebufferTexture2D")(framebuffer,attachment,GL_TEXTURE_2D,display_texture,0);
+    CHECK(proc<CheckFbo>("glCheckFramebufferStatus")(framebuffer)==complete);
+    proc<BindFbo>("glBindFramebuffer")(framebuffer,0);CHECK(glGetError()==GL_NO_ERROR);
+}
 int __cdecl capture(const rb_record*r,rb_image*i){gd_surface(r);return gd_capture(r,i);}
 bool __cdecl begin(){return glGetError()==GL_NO_ERROR;}
 bool __cdecl end(){return glGetError()==GL_NO_ERROR;}
@@ -102,7 +142,14 @@ void frame(unsigned marker){
     CHECK(wglGetCurrentContext()==producer->rc);glDrawBuffer(GL_FRONT);glEnable(GL_SCISSOR_TEST);
     for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x){glScissor(x,y,1,1);
         glClearColor(channel(marker,x,y,0)/255.f,channel(marker,x,y,1)/255.f,channel(marker,x,y,2)/255.f,1.f);glClear(GL_COLOR_BUFFER_BIT);}
-    glDrawBuffer(GL_BACK);last_marker=marker;transaction.fetch_add(1);
+    glDrawBuffer(GL_BACK);
+    if(twin_mode){ // the displayed picture: the clean one with a ghost over it
+        proc<BindFbo>("glBindFramebuffer")(draw_fbo,display_fbo);
+        for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x){glScissor(x,y,1,1);
+            glClearColor(channel(marker+100,x,y,0)/255.f,channel(marker+100,x,y,1)/255.f,channel(marker+100,x,y,2)/255.f,1.f);glClear(GL_COLOR_BUFFER_BIT);}
+        proc<BindFbo>("glBindFramebuffer")(draw_fbo,0);
+    }
+    last_marker=marker;transaction.fetch_add(1);
     rb_stamp stamp{};stamp.list_qpc=last_list_qpc=ticks();stamp.table_count=2;stamp.lengths[0]=4;stamp.lengths[1]=8;
     stamp.bytes[0]=uint8_t(marker);stamp.bytes[128]=uint8_t(255-marker);stamp.bytes[132]=0xA5;
     stamp.lists_since=1;const auto ticket=rb_stage(&stamp);
@@ -129,7 +176,8 @@ struct Consumer {
     bool held[2]{};
     // The encoder helper's role: create the keyed-mutex textures under the
     // channel's names (the renderer imports them; it has no D3D device).
-    void open(const gc_header&h){
+    void open(const gc_header&h,const uint16_t (*names)[128]=nullptr){
+        if(!names)names=h.texture_names;
         LUID luid{h.luid_low,h.luid_high};CHECK(device_for_luid(luid,&device,&context));
         D3D11_TEXTURE2D_DESC desc{};desc.Width=h.width&~1u;desc.Height=h.height&~1u;desc.MipLevels=1;desc.ArraySize=1;
         desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;desc.Usage=D3D11_USAGE_DEFAULT;
@@ -139,7 +187,7 @@ struct Consumer {
             CHECK(SUCCEEDED(device->CreateTexture2D(&desc,nullptr,&texture[i])));CHECK(SUCCEEDED(texture[i].As(&mutex[i])));
             Microsoft::WRL::ComPtr<IDXGIResource1> resource;CHECK(SUCCEEDED(texture[i].As(&resource)));
             CHECK(SUCCEEDED(resource->CreateSharedHandle(nullptr,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,
-                reinterpret_cast<const wchar_t*>(h.texture_names[i]),&share[i])));
+                reinterpret_cast<const wchar_t*>(names[i]),&share[i])));
         }
     }
     bool take(unsigned i){CHECK(i<2&&!held[i]);const HRESULT result=mutex[i]->AcquireSync(1,0);held[i]=result==S_OK;CHECK(result==S_OK||result==WAIT_TIMEOUT);return held[i];}
@@ -166,6 +214,7 @@ struct RenderThread {
         thread=std::thread([this]{
             CHECK(wglMakeCurrent(producer->dc,producer->rc));
             glDisable(GL_DITHER);glDisable(0x8DB9);glReadBuffer(GL_BACK);
+            if(twin_mode)make_display();
             for(;;){
                 std::unique_lock<std::mutex> lock(m);
                 cv.wait_for(lock,std::chrono::milliseconds(2),[this]{return has_job;});
@@ -271,6 +320,20 @@ void startup_race(const gc_header& request,const gd_limits& limits){
     for(HANDLE h:{iteration_entered,iteration_continue,retired_entered,retired_continue})CloseHandle(h);
     renderer.ticking.store(true);
 }
+// The ghost copy's helper: its own process, which the witness may kill while
+// it holds a texture. It creates the two "-copy-" textures the lane imports.
+int helper_main(uint64_t lo,uint64_t hi){
+    gc_header named{};named.nonce_lo=lo;named.nonce_hi=hi;const auto h=mapped_header(named);
+    Consumer twin;twin.open(h,h.twin_texture_names);printf("helper ready\n");fflush(stdout);std::string line;
+    while(std::getline(std::cin,line)){std::istringstream in(line);std::string op;in>>op;unsigned index=0,marker=0;
+        if(op=="take"){in>>index>>marker;const bool got=twin.take(index);if(got)twin.verify(index,marker);printf("take %u\n",got);}
+        else if(op=="give"){in>>index;twin.give(index);printf("give\n");}
+        else if(op=="exit"){twin.close();printf("exit\n");fflush(stdout);return 0;}
+        else CHECK(false);
+        fflush(stdout);
+    }
+    return 1;
+}
 }
 extern "C" int __cdecl sa_publish_table(const sa_table*t){table=*t;return t->epoch!=0;}
 extern "C" void __cdecl sa_arm_refusal(uint32_t){}
@@ -356,15 +419,21 @@ int main(int argc,char**argv){
         gd_status results[2]{};uint32_t revoked=0;CHECK(gd_test_terminal_diagnostics(results,&revoked));
         printf("diagnostic %u %u %u %u %u\n",results[0].reason,results[0].error,revoked,results[1].reason,results[1].error);return 0;
     }
-    CHECK(argc==3);const auto owner=uint32_t(strtoul(argv[1],nullptr,10));const auto birth=strtoull(argv[2],nullptr,10);
+    if(argc==4 && !strcmp(argv[1],"helper"))return helper_main(strtoull(argv[2],nullptr,10),strtoull(argv[3],nullptr,10));
+    twin_mode=argc==4 && !strcmp(argv[3],"twin");
+    CHECK(argc==3 || twin_mode);const auto owner=uint32_t(strtoul(argv[1],nullptr,10));const auto birth=strtoull(argv[2],nullptr,10);
     WNDCLASSW wc{};wc.style=CS_OWNDC;wc.lpfnWndProc=DefWindowProcW;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"SnapshotHiddenHost";CHECK(RegisterClassW(&wc));
     Window window;producer=&window;renderer.start();
-    CHECK(rb_configure_images(capture,gd_completed));CHECK(rb_bind_source(source_surface));
+    CHECK(rb_configure_images(capture,gd_completed));CHECK(twin_mode?rb_bind_source3(source_surface3):rb_bind_source(source_surface));
     rs_api source{};source.bytes=sizeof(source);source.version=RS_ABI_V2;source.capabilities=3;
     source.activate=activate;source.disarm=rb_disarm;source.take=rb_take;source.release=rb_release;source.begin_capture=begin;source.end_capture=end;
     rcl_api contexts{sizeof(rcl_api),RCL_ABI_V1,RCL_CAP_NEVER_CURRENT_ANCHOR,0,acquire,release,health,error};
     gd_limits limits{sizeof(gd_limits),GD_VERSION,4,2000,4u*1024*1024,4u*1024*1024,1024*1024,1024*1024,2,0};
-    CHECK(gd_configure(&source,&contexts,&limits)==GD_ACCEPTED);
+    const rs_api_v3 source3{sizeof(rs_api_v3),RS_ABI_V3,RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT|RS_CAP_CLEAN_PRESENTATION,0,
+        source,rb_read_source_descriptor3,clean_consumer};
+    const rs_api_v4 source4{sizeof(rs_api_v4),RS_ABI_V4,
+        RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT|RS_CAP_CLEAN_PRESENTATION|RS_CAP_DISPLAY_COPY,0,source3,query_display,display_consumer};
+    CHECK((twin_mode?gd_configure4(&source4,&contexts,&limits):gd_configure(&source,&contexts,&limits))==GD_ACCEPTED);
     CHECK(gd_configure(&source,&contexts,&limits)==GD_BUSY);CHECK(!gd_epoch());
     gd_set_diagnostic(note);
     rb_rom_open();
@@ -397,6 +466,9 @@ int main(int argc,char**argv){
         }else if(op=="hold"){unsigned value=0;in>>value;gd_test_hold_poll(value);printf("hold\n");
         }else if(op=="laststamp"){printf("stamp %lld\n",last_list_qpc);
         }else if(op=="abandon"){gd_test_bridge_fault_once(128);printf("abandoned injected\n");
+        }else if(op=="mode"){std::string kind;in>>kind;CHECK(kind=="ghost"||kind=="same");display_mode.store(kind=="ghost"?1:2);printf("mode\n");
+        }else if(op=="displaystats"){printf("display %u %u %u\n",display_calls.load(),unsigned(display_on.load()),consumer_calls.load());
+        }else if(op=="twinfault"){gd_test_twin_bridge_fault_once(1);printf("twinfault\n");
         }else if(op=="exhausted"){
             for(unsigned n=0;n<3000 && !status().quarantined;++n)Sleep(1);
             const auto s=status();CHECK(s.quarantined&&s.state==GD_FAULT);++request.nonce_lo;
