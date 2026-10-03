@@ -336,6 +336,36 @@ def test_the_on_off_settings_are_unknown_until_stated_never_off():
     assert controls(session(limits=None))["switches"] == {}
 
 
+def test_the_path_is_unknown_until_stated_and_held_inside_the_published_ranges():
+    """The path's choice and its four numbers: what the server stated, each
+    number clamped into the range it publishes, and null while it has not
+    said -- an unknown thumb is never parked at a default."""
+    ranges = LIMITS["path_tuning"]
+    assert controls(None)["pathTuning"] is None and controls(None)["pathSource"] is None
+    assert controls(session())["pathTuning"] is None  # a payload that never said
+    assert controls(session(path_source="average"))["pathSource"] == "average"
+    assert controls(session(path_source="middle"))["pathSource"] is None
+    stated = {"ahead_s": 99, "width": -5, "opacity": None, "spacing_s": 0.2}
+    shown = controls(session(path_tuning=stated))["pathTuning"]
+    assert shown == {"ahead_s": ranges["ahead_s"]["max"], "width": ranges["width"]["min"],
+                     "opacity": None, "spacing_s": 0.2}
+    # His in-flight drag lays over what the server said, one number at a time.
+    merged = run_node("ghostPathTuning", f"ghostPathTuning({json.dumps(stated)}, "
+                      f"{json.dumps(LIMITS)}, {{width: 60}})")
+    assert merged["width"] == 60 and merged["spacing_s"] == 0.2
+    assert controls(session(path_tuning=stated, limits=None))["pathTuning"] is None
+
+
+@pytest.mark.parametrize("name,value,expected", [
+    ("ahead_s", 3, "3.0 s"), ("ahead_s", 0.5, "0.5 s"), ("width", 40, "40 units"),
+    ("opacity", 0.85, "85%"), ("spacing_s", 0.1, "0.10 s"), ("width", None, "—"),
+])
+def test_each_path_readout_states_its_unit_at_its_sliders_precision(name, value, expected):
+    shown = run_node("pathTuningText", f"pathTuningText({json.dumps(name)}, {json.dumps(value)}, "
+                     f"{json.dumps(LIMITS['path_tuning'][name])})")
+    assert shown == expected
+
+
 def test_a_view_this_build_cannot_draw_reads_as_unknown():
     """A payload from another build, or a typo on the wire. Drawing the
     control on a value nothing renders is how a select goes blank and looks

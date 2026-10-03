@@ -55,6 +55,10 @@ class Request(C.LittleEndianStructure):
         ("names_enabled", U32), ("inputs_enabled", U32), ("input_mode", U32),
         ("name_background", U32), ("name_background_opacity", C.c_float), ("hud_inputs_enabled", U32),
         ("record_ghosts", U32),
+        # The ghost path: path_clip indexes `clips` (the fastest playing ghost).
+        ("path_enabled", U32), ("path_buttons", U32), ("path_source", U32), ("path_clip", U32),
+        ("path_ahead_ms", U32), ("path_width", C.c_float), ("path_opacity", C.c_float),
+        ("path_spacing_ms", U32),
     ]
 
 

@@ -33,6 +33,8 @@ SAMPLES = {
     "input_mode": ("values", "combined"),
     "name_background": ("white", "grey"),
     "name_background_opacity": (0.25, 1.5),
+    "path_source": ("average", "middle"),
+    "path_tuning": ({"width": 60}, {"width": 500}),
 }
 
 

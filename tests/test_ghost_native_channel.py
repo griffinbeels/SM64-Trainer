@@ -400,6 +400,77 @@ def test_disabled_playback_needs_no_clips(kernel, tmp_path):
         connection.close()
 
 
+def path_command(tmp_path, **path):
+    """A session-shaped command for two ghosts, with the path's fields."""
+    return {"enabled": True, "model_id": 1, "mode": 1,
+            "clips": [clip(tmp_path, b"a", 10), clip(tmp_path, b"b", 130)], **path}
+
+
+def test_the_lease_starts_with_the_registrys_path(kernel):
+    """Before any command the renderer reads the shipped path: on, no presses,
+    the fastest ghost, and the registry's own four numbers."""
+    from sm64_events.ghost import settings
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    try:
+        request = kernel.request
+        assert request.path_enabled == 1 and request.path_buttons == 0 and request.path_clip == 0
+        expected = settings.native_path_defaults()
+        assert {field: getattr(request, field) for field in expected} == pytest.approx(expected)
+    finally:
+        connection.close()
+
+
+def test_the_path_is_encoded_and_its_clip_names_a_playing_ghost(kernel, tmp_path):
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    command = path_command(tmp_path, path_enabled=True, path_buttons=True, path_source=1, path_clip=1,
+                           path_ahead_ms=10000, path_width=120.0, path_opacity=0.5, path_spacing_ms=33)
+    try:
+        connection.poll(command)
+        request = kernel.request
+        assert (request.path_enabled, request.path_buttons, request.path_source, request.path_clip) == (1, 1, 1, 1)
+        assert (request.path_ahead_ms, request.path_width, request.path_spacing_ms) == (10000, 120.0, 33)
+        assert request.path_opacity == 0.5
+        before = bytes(request)
+        for change in ({"path_clip": 2}, {"path_clip": -1}, {"path_clip": True},
+                       {"path_source": 2}, {"path_source": True}, {"path_source": "average"},
+                       {"path_ahead_ms": 499}, {"path_ahead_ms": 10001}, {"path_ahead_ms": 3000.0},
+                       {"path_width": 9.5}, {"path_width": 120.5}, {"path_width": float("nan")},
+                       {"path_width": "40"}, {"path_opacity": -0.01}, {"path_opacity": 1.01},
+                       {"path_opacity": float("inf")}, {"path_spacing_ms": 32}, {"path_spacing_ms": 501},
+                       {"path_enabled": 1}, {"path_buttons": "yes"}):
+            with pytest.raises(channel.RejectedControl):
+                connection.poll({**command, **change})
+            assert bytes(kernel.request) == before, change
+        # One ghost: index 0 is the only clip the path may follow.
+        with pytest.raises(channel.RejectedControl):
+            connection.poll({**command, "clips": command["clips"][:1]})
+        connection.poll({**command, "clips": command["clips"][:1], "path_clip": 0, "path_ahead_ms": 500,
+                         "path_width": 10, "path_spacing_ms": 500, "path_enabled": False})
+        request = kernel.request
+        assert request.clip_count == 1 and request.path_clip == 0 and not request.path_enabled
+        assert (request.path_ahead_ms, request.path_width, request.path_spacing_ms) == (500, 10.0, 500)
+        connection.poll({"enabled": False, "clips": []})
+        assert kernel.request.clip_count == 0 and kernel.request.path_clip == 0
+    finally:
+        connection.close()
+
+
+def test_every_tuning_the_card_offers_is_one_the_channel_accepts(kernel, tmp_path):
+    """The card's ranges (`limits`) sit inside the renderer's bounds: each
+    tunable at either end of its slider reaches the request unrefused."""
+    from sm64_events.ghost import settings
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    try:
+        for name, limit in settings.PATH_TUNING_LIMITS.items():
+            for edge in (limit["min"], limit["max"]):
+                tuning = {**settings.DEFAULT_PATH_TUNING, **settings.checked_path_tuning({name: edge})}
+                fields = settings.BY_NAME["path_tuning"].native(tuning)
+                connection.poll(path_command(tmp_path, **fields))
+                assert {field: getattr(kernel.request, field) for field in fields} == pytest.approx(fields)
+    finally:
+        connection.close()
+
+
 def test_stop_retains_owner_until_inflight_callback_releases(monkeypatch):
     entered, release = threading.Event(), threading.Event()
     closed = []

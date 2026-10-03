@@ -84,8 +84,14 @@ def test_annotations_fit_in_the_existing_request_region():
     assert C.sizeof(P.Status) == 256
     assert C.sizeof(P.Status) + C.sizeof(P.Request) <= L.IPC_RING_AT
     assert P.Clip.label.offset == P.Clip.clip_path.offset + 2 * L.IPC_PATH_CHARS
-    assert P.Request.names_enabled.offset + 28 == L.IPC_REQUEST_BYTES
-    assert P.Request.record_ghosts.offset + 4 == L.IPC_REQUEST_BYTES
+    assert P.Request.names_enabled.offset + 28 == P.Request.path_enabled.offset
+    assert P.Request.record_ghosts.offset + 4 == P.Request.path_enabled.offset
+    # The ghost path's eight words close the request (GIPC13 / GP11, I1 order).
+    path = ("path_enabled", "path_buttons", "path_source", "path_clip",
+            "path_ahead_ms", "path_width", "path_opacity", "path_spacing_ms")
+    assert [getattr(P.Request, name).offset for name in path] == list(
+        range(P.Request.path_enabled.offset, L.IPC_REQUEST_BYTES, 4))
+    assert [name for name, *_ in P.Request._fields_][-len(path):] == list(path)
     assert P.Clip().label == b""
 
 

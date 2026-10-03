@@ -16,11 +16,12 @@ block are named <BLOCK>_<FIELD>_AT and are relative to that block.
 # Versions and names
 CLIP_MAGIC, CLIP_VERSION = b"SM64GHO7", 7
 SAMPLE_VERSION = 8  # GC_VERSION: gc_sample, and the gc_layout it is read with
-IPC_MAGIC, IPC_VERSION = b"SM64GI12", 12
-IPC_PREFIX = "Local\\sm64_trainer_ghost_v12_"
-STREAM_VERSION, PLAYBACK_VERSION = 7, 10
+IPC_MAGIC, IPC_VERSION = b"SM64GI13", 13
+IPC_PREFIX = "Local\\sm64_trainer_ghost_v13_"
+STREAM_VERSION, PLAYBACK_VERSION = 7, 11
 INPUT_STICK, INPUT_VALUES = 0, 1
 NAME_BLACK, NAME_WHITE = 0, 1  # gp_name_background
+GP_PATH_FASTEST, GP_PATH_AVERAGE = 0, 1  # the request's path_source
 
 # Renderer playback decisions consumed by the session status.
 GP_WRONG_SCENE = 5
@@ -69,11 +70,15 @@ V6_MAGIC, V6_VERSION, V6_SAMPLE_VERSION, V6_RECORD_BYTES, V6_SAMPLE_BYTES = b"SM
 
 # The IPC page and ghost limits
 IPC_SLOTS, IPC_RING_AT, IPC_PATH_CHARS = 512, 20480, 520
-IPC_CLIP_BYTES, IPC_REQUEST_BYTES, LABEL_BYTES = 1160, 20020, 64
+IPC_CLIP_BYTES, IPC_REQUEST_BYTES, LABEL_BYTES = 1160, 20052, 64
 GHOSTS = 16  # displayed ghosts at once: playback, compositor batch, sound sources, request slots
 PROXIMITY_MAX = 400.0  # the largest overlap-fade distance a request may carry
 BRIDGE_FRAMES = 2  # the longest refused run playback holds the previous pose over
 RELEASED_FRAMES = 300  # the longest a released held object is followed (10 s)
+# The ghost path's bounds a request may carry; its opacity is 0..1 like every other.
+GP_PATH_AHEAD_MS_MIN, GP_PATH_AHEAD_MS_MAX = 500, 10000
+GP_PATH_WIDTH_MIN, GP_PATH_WIDTH_MAX = 10.0, 120.0  # world units
+GP_PATH_SPACING_MS_MIN, GP_PATH_SPACING_MS_MAX = 33, 500
 
 # The shared sound ring (ghost_audio.h): the renderer writes ghost sound, the
 # trainer's player (ghost/sound_player.py) plays it outside Project64's process.

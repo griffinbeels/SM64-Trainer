@@ -67,6 +67,11 @@ export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
  *   the trainer also records a ghost copy, the game window as you saw it, and
  *   the replay's Show ghosts plays it. Your own recording stays clean. Off at
  *   first; it applies to what is recorded from then on.
+ * - path_enabled and path_buttons (2026-10-03): the ghost's path, a line in
+ *   the game world along the route the fastest ghost takes, and each button
+ *   press drawn where it was pressed. The path is on at first; the presses
+ *   are off until he tries them. Path buttons, Path from and Tune path only
+ *   mean something while the path shows, so they nest beneath it.
  */
 export const SWITCH_LABELS = {
   names_enabled: { name: "Names", className: "ghost-names", group: "Ghost names",
@@ -94,6 +99,30 @@ export const SWITCH_LABELS = {
     group: "Ghosts in the recording",
     label: "Also record a copy of your replays with the ghosts in it, as the game window shows them",
     waiting: "Waiting for the recording setting" },
+  path_enabled: { name: "Path", className: "ghost-path", group: "Ghost path",
+    label: "Draw the route the fastest ghost takes, on the ground and through the air",
+    waiting: "Waiting for the ghost path setting" },
+  path_buttons: { name: "Path buttons", className: "ghost-path-buttons", group: "Button presses on the path",
+    label: "Show each button press on the path, where it was pressed",
+    waiting: "Waiting for the path buttons setting" },
+};
+
+/** WHICH GHOSTS THE PATH IS DRAWN FROM, in the words the choice offers. His
+ * ask, 2026-10-03: "it would be nice to test which approach feels better." */
+export const PATH_SOURCE_LABELS = { fastest: "Fastest ghost", average: "Average of ghosts" };
+
+/**
+ * THE PATH'S FOUR TUNABLES, in the order the Tune path disclosure draws them.
+ * `unit` is how the readout states the value; every range, step and default
+ * is the server's (`limits.path_tuning`), never restated here.
+ */
+export const PATH_TUNING_LABELS = {
+  ahead_s: { name: "How far ahead", unit: "s",
+    label: "How many seconds of the ghost's run the path reaches ahead of you" },
+  width: { name: "Width", unit: "units", label: "How wide the path is, in game units" },
+  opacity: { name: "Strength", unit: "%", label: "How strongly the path is drawn" },
+  spacing_s: { name: "Arrow spacing", unit: "s",
+    label: "How many seconds of the ghost's run pass between two arrows; closer arrows mean slower" },
 };
 
 // One press is one game frame: the unit the ghost actually moves in, and the
@@ -209,7 +238,36 @@ function limitedValues(session, limits) {
     switches: ghostSwitches(session, limits),
     nudge: clampNudge(session.nudge_frames, nudgeLimit(limits)),
     nameBox: ghostNameBox(session, limits),
+    pathSource: ghostOption("path_source", session.path_source, limits),
+    pathTuning: ghostPathTuning(session.path_tuning, limits),
   };
+}
+
+/**
+ * The path's tunables as the server stated them, each clamped into its
+ * published range, or null while nobody has said (unknown is not a thumb
+ * parked at a default, the clampOpacity rule). `draft` is the in-flight
+ * partial (`{width}`, say) laid over it, the way the colour's halves merge.
+ */
+export function ghostPathTuning(tuning, limits, draft = null) {
+  const ranges = limits?.path_tuning;
+  if (!ranges || !tuning || typeof tuning !== "object") return null;
+  const shown = { ...tuning, ...(draft || {}) };
+  return Object.fromEntries(Object.keys(ranges).map(
+    (name) => [name, clampOpacity(shown[name], ranges[name])]));
+}
+
+/** The decimals a slider's step shows: 0.5 -> 1, 0.05 -> 2, 5 -> 0. */
+function stepDigits(step) {
+  return (String(step ?? "").split(".")[1] || "").length;
+}
+
+/** "3.0 s", "40 units", "85%" -- a path tunable's readout, or a dash while unknown. */
+export function pathTuningText(name, value, range) {
+  const words = PATH_TUNING_LABELS[name];
+  if (value === null || value === undefined || !words) return "—";
+  if (words.unit === "%") return `${Math.round(value * 100)}%`;
+  return `${Number(value).toFixed(stepDigits(range?.step))} ${words.unit}`;
 }
 
 /** A choice setting's value when the server publishes it among `limits[name].options`, else null. */
@@ -303,7 +361,7 @@ export function ghostControls(session, entityKey) {
     // pretend to know -- see clampOpacity.
     showsTuning: false, opacity: null, tint: null, view: null, proximity: null, switches: {},
     volume: null, limits: {},
-    nameBox: { background: null, opacity: null },
+    nameBox: { background: null, opacity: null }, pathSource: null, pathTuning: null,
     marioBoxes: { available: false, reasonText: null }, nudge: 0,
     selection: null,
   };

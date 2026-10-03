@@ -22,6 +22,7 @@ from sm64_events.ghost.session import (
     GhostSession,
     follower_url,
 )
+from sm64_events.ghost.settings import DEFAULT_PATH_TUNING
 from sm64_events.inputs.templates import TemplateStore
 from sm64_events.server.ghost_clock import GhostClockFeed, clock_message
 from sm64_events.storage.db import Database
@@ -530,6 +531,32 @@ def test_a_nonsense_stored_colour_never_breaks_the_session(tmp_path):
     assert 0 <= tint["hue_degrees"] <= HUE_LIMIT_DEGREES
 
 
+def test_each_path_number_is_set_without_losing_the_others_and_survives_a_restart(tmp_path):
+    """Each Tune path slider sends only its own number; the session merges it
+    over the rest, the way the colour's two halves merge."""
+    db = FakeStateDb()
+    store = a_store(tmp_path)
+    mark(store)
+    session, _c, _t, _s = a_session(tmp_path, db=db, store=store)
+    asyncio.run(session.update(path_tuning={"width": 60}))
+    asyncio.run(session.update(path_tuning={"ahead_s": 5}))
+    asyncio.run(session.update(path_source="average"))
+    expected = {**DEFAULT_PATH_TUNING, "width": 60.0, "ahead_s": 5.0}
+    assert session.payload()["path_tuning"] == expected
+    again, _c2, _t2, _s2 = a_session(tmp_path, db=db, store=store)
+    body = drive(again)
+    assert body["path_tuning"] == expected and body["path_source"] == "average"
+
+
+def test_a_nonsense_stored_path_never_breaks_the_session(tmp_path):
+    db = FakeStateDb({"ghost_path_tuning": {"width": "wide"}, "ghost_path_source": 7})
+    store = a_store(tmp_path)
+    mark(store)
+    session, _c, _t, _s = a_session(tmp_path, db=db, store=store)
+    body = drive(session)
+    assert body["path_tuning"] == DEFAULT_PATH_TUNING and body["path_source"] == "fastest"
+
+
 # -- what a bad value does ----------------------------------------------------
 
 @pytest.mark.parametrize("changes", [
@@ -541,6 +568,9 @@ def test_a_nonsense_stored_colour_never_breaks_the_session(tmp_path):
     {"tint": {"hue_degrees": -1}}, {"tint": {"hue_degrees": 12.5}},
     {"tint": {"enabled": "on"}}, {"tint": {"shade": 3}}, {"tint": 120},
     {"view": "rotoscope"}, {"view": None}, {"view": "Mario"},
+    {"path_source": "middle"}, {"path_tuning": 3}, {"path_tuning": {}},
+    {"path_tuning": {"speed": 3}}, {"path_tuning": {"width": 500}}, {"path_tuning": {"ahead_s": True}},
+    {"path_tuning": {"spacing_s": float("nan")}}, {"path_tuning": {"opacity": "full"}},
 ])
 def test_an_out_of_range_value_is_refused_with_a_readable_sentence(tmp_path, changes):
     session, _controllers, _tracker, store = a_session(tmp_path)

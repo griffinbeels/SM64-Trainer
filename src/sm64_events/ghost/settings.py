@@ -14,13 +14,18 @@ in `ui/ghostsession.js` (`SWITCH_LABELS`), plus -- when the renderer
 reads it -- the field in `ghost/native_protocol.py` and its native side. The
 recipe and the file count are in `.claude/rules/ghost.md`.
 """
+from copy import deepcopy
 from dataclasses import dataclass, field
+import math
 from typing import Any, Callable
 
 from sm64_events.ghost.proximity import (
     DEFAULT_PROXIMITY, MAX_EXTRA_DISTANCE, PROXIMITY_KEY, checked_proximity, saved_proximity,
 )
-from sm64_events.ghost.native_layout import INPUT_STICK, INPUT_VALUES, NAME_BLACK, NAME_WHITE
+from sm64_events.ghost.native_layout import (
+    GP_PATH_AHEAD_MS_MAX, GP_PATH_AHEAD_MS_MIN, GP_PATH_AVERAGE, GP_PATH_FASTEST, GP_PATH_SPACING_MS_MAX,
+    GP_PATH_WIDTH_MAX, GP_PATH_WIDTH_MIN, INPUT_STICK, INPUT_VALUES, NAME_BLACK, NAME_WHITE,
+)
 
 #: How see-through the ghost is the FIRST time it is ever switched on. A
 #: shipped preference, so its exact value is his to move and no test pins it --
@@ -70,6 +75,25 @@ DEFAULT_NAME_BACKGROUND_OPACITY = 0.6
 #: (plugin/gfxwrap/ghost_occlusion.h GHOST_FLOOR). Published so the card's
 #: sentence about it is not a second copy of the number.
 OVERLAP_FLOOR = 0.15
+#: THE GHOST'S PATH, a racing line in the game world. His words, 2026-10-03:
+#: *"maybe we just have the fastest ghost's path ... or, we have an 'average'
+#: path that we calculate based on all of the ghosts. it would be nice to test
+#: which approach feels better."* The fastest is the path he described first.
+PATH_SOURCES = {"fastest": GP_PATH_FASTEST, "average": GP_PATH_AVERAGE}
+DEFAULT_PATH_SOURCE = "fastest"
+#: How far ahead it reaches (seconds of the ghost's run), how wide its ribbon
+#: is (world units), how strongly it is drawn, and how far apart its arrows
+#: sit (seconds). Shipped preferences, his to move. The renderer's own bounds
+#: (ghost_tuning.h GP_PATH_*) cap each range; the arrow spacing and strength
+#: offer a floor above the renderer's, so the control never reaches an
+#: unreadable path.
+DEFAULT_PATH_TUNING = {"ahead_s": 3.0, "width": 40.0, "opacity": 0.85, "spacing_s": 0.1}
+PATH_TUNING_LIMITS = {
+    "ahead_s": {"min": GP_PATH_AHEAD_MS_MIN / 1000, "max": GP_PATH_AHEAD_MS_MAX / 1000, "step": 0.5},
+    "width": {"min": GP_PATH_WIDTH_MIN, "max": GP_PATH_WIDTH_MAX, "step": 5},
+    "opacity": {"min": 0.1, "max": 1.0, "step": 0.05},
+    "spacing_s": {"min": 0.05, "max": GP_PATH_SPACING_MS_MAX / 1000, "step": 0.05},
+}
 
 
 @dataclass(frozen=True)
@@ -215,6 +239,51 @@ def checked_name_background_opacity(value) -> float:
     return float(value)
 
 
+def checked_path_source(value) -> str:
+    if not isinstance(value, str) or value not in PATH_SOURCES:
+        raise ValueError("The ghost's path follows either the fastest ghost or the average of the ghosts.")
+    return value
+
+
+#: What each path tunable is called in a refusal he reads, and its unit.
+_PATH_WORDS = {"ahead_s": ("How far ahead the path reaches", "seconds"),
+               "width": ("The path's width", "game units"),
+               "opacity": ("How strongly the path is drawn", ""),
+               "spacing_s": ("The space between the path's arrows", "seconds")}
+
+
+def checked_path_tuning(value) -> dict:
+    """The path's four numbers, as a PARTIAL like the colour: each slider sends
+    only its own, and the session merges it over the rest."""
+    if not isinstance(value, dict) or not value:
+        raise ValueError("The ghost's path is tuned by how far ahead, width, strength and arrow spacing.")
+    unknown = sorted(set(value) - set(PATH_TUNING_LIMITS))
+    if unknown:
+        raise ValueError(f"The ghost's path has no setting called {unknown[0]!r}.")
+    checked = {}
+    for name, number in value.items():
+        words, unit = _PATH_WORDS[name]
+        low, high = PATH_TUNING_LIMITS[name]["min"], PATH_TUNING_LIMITS[name]["max"]
+        if (type(number) not in (int, float) or not math.isfinite(number)
+                or not low <= number <= high):
+            raise ValueError(f"{words} goes from {low:g} to {high:g}{' ' + unit if unit else ''}.")
+        checked[name] = float(number)
+    return checked
+
+
+def _saved_path_tuning(stored) -> dict:
+    """A malformed stored tuning must not stop practice from opening."""
+    try:
+        return {**DEFAULT_PATH_TUNING, **checked_path_tuning(stored)}
+    except ValueError:
+        return dict(DEFAULT_PATH_TUNING)
+
+
+def _native_path_tuning(value: dict) -> dict:
+    return {"path_ahead_ms": round(value["ahead_s"] * 1000), "path_width": float(value["width"]),
+            "path_opacity": float(value["opacity"]), "path_spacing_ms": round(value["spacing_s"] * 1000)}
+
+
 def _load_tint(database) -> dict:
     enabled = database.get_state("ghost_tint_enabled", DEFAULT_TINT["enabled"])
     stored = database.get_state("ghost_tint_hue", DEFAULT_TINT["hue_degrees"])
@@ -307,6 +376,22 @@ ROWS = (
     # a ghost (docs/ghost-native-runtime.md, "Ghosts in the recording").
     switch("record_ghosts", "ghost_record", False,
            "Recording a ghost copy beside your replay video is either on or off.", "record_ghosts"),
+    # THE GHOST'S PATH. His words, 2026-10-03: *"what if i add iRacing style
+    # path markers on the ground, indicating the path that mario takes, so you
+    # know if you're staying on path or not"*; and of the presses: *"have the
+    # button idea disabled by default but toggleable (i want to test this and
+    # see if it's useful)."* Which ghost it follows is not a setting: the native
+    # session names the fastest playing one in each command (`path_clip`).
+    switch("path_enabled", "ghost_path", True, "The ghost's path is either shown or hidden.", "path_enabled"),
+    switch("path_buttons", "ghost_path_buttons", False,
+           "Button presses on the path are either shown or hidden.", "path_buttons"),
+    Setting("path_source", DEFAULT_PATH_SOURCE, checked_path_source, key="ghost_path_source",
+            restore=lambda stored: stored if isinstance(stored, str) and stored in PATH_SOURCES
+            else DEFAULT_PATH_SOURCE,
+            native=lambda value: {"path_source": PATH_SOURCES[value]},
+            limits={"options": list(PATH_SOURCES)}),
+    Setting("path_tuning", dict(DEFAULT_PATH_TUNING), checked_path_tuning, key="ghost_path_tuning",
+            restore=_saved_path_tuning, merge=True, native=_native_path_tuning, limits=PATH_TUNING_LIMITS),
     # A stored value from a build that knew another view name is not a view:
     # it falls back rather than leaving the page asking for what nothing draws.
     Setting("view", DEFAULT_VIEW, checked_view, key="ghost_view", resolves=True,
@@ -324,7 +409,7 @@ def defaults() -> dict:
 
 def limits() -> dict:
     """What every control offers, plus which settings are on/off switches."""
-    published = {row.name: dict(row.limits) for row in ROWS if row.limits}
+    published = {row.name: deepcopy(row.limits) for row in ROWS if row.limits}
     published["switches"] = [row.name for row in ROWS if row.switch]
     return published
 
@@ -357,6 +442,12 @@ def native_switches() -> dict:
     """The native bool fields the channel decodes, with the value an absent key means."""
     return {row.extra["native_field"]: row.default for row in ROWS
             if row.switch and row.extra.get("native_field")}
+
+
+def native_path_defaults() -> dict:
+    """The path's native numbers an absent key means (its switches ride `native_switches`)."""
+    return {**BY_NAME["path_source"].native(DEFAULT_PATH_SOURCE),
+            **BY_NAME["path_tuning"].native(DEFAULT_PATH_TUNING)}
 
 
 def copied(value):
