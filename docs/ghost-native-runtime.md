@@ -71,11 +71,12 @@ with white text or a sign's white box with black text (`ingame_menu.c`
 `render_dialog_box_type`, alpha 150), at the chosen opacity; opacity 0 draws
 no box and keeps the drop shadow. **Inputs in corner** (on by default; the
 inputs over each ghost are off by default) stacks one compact half-size row
-per ghost above the game's own input display, keeping the player's own x
-positions so the two read against each other: the digit column at Usamune's
-x=34 with the letter just left of it, the stick box centred on his, each held
-button centred in his button slot, and the ghost's name on its name box over
-the buttons. Rows climb in slot order, at most `GP_HUD_STACK_MOST` (7); seven
+per ghost above the game's own input display. His display reads as a table
+and each ghost is a half-size row of its two columns: the ghost's two-digit
+block centred on his two-digit block (the centre fixed at two digits, so a
+9 to 10 change never shifts it) with its letter tucked against it, the stick
+box centred on his, and the held buttons packed at half pitch from his first
+button's left edge, the name on its name box over them. Rows climb in slot order, at most `GP_HUD_STACK_MOST` (7); seven
 fit one column above the display, and more rows than fit would split into two
 columns with the first holding the larger half. Rows are drawn in screen space
 at full alpha and stay up while the ghost itself is off screen.

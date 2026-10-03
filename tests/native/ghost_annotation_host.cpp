@@ -165,15 +165,17 @@ int main(int argc,char** argv) {
             auto ndc=[](float x) {return x/160.0f-1.0f;};
             q.hud=true;q.values=true;q.hud_rank=0;q.pad={12,83,0xc000,0};q.position[2]=0;
             build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
-            // U | 8 3 / R | 1 2 / A B / the name's shadowed glyphs.
-            check(mesh.count>48 && std::fabs(mesh.vertices[6].clip[0]-ndc(usamune::digit_x))<1e-5f
-                  && std::fabs(mesh.vertices[1].clip[0]-ndc(usamune::digit_x))<1e-5f,
-                  "the ghost's digits start in the player's own digit column, its letter just left of it");
-            check(std::fabs((mesh.vertices[36].clip[0]+mesh.vertices[37].clip[0])*0.5f
-                            -ndc(usamune::button_x+8))<1e-5f
-                  && std::fabs((mesh.vertices[42].clip[0]+mesh.vertices[43].clip[0])*0.5f
-                               -ndc(usamune::button_x+usamune::button_advance+8))<1e-5f,
-                  "each held button sits centred in the player's own button slot");
+            // U | 8 3 / R | 1 2 / A B / the name's shadowed glyphs. His round d: "if we draw
+            // a line through the middle of the ghost inputs numbers" it runs through his.
+            const float his_middle=usamune::digit_x+(usamune::digit_advance+16)*0.5f; // his two digits
+            check(mesh.count>48 && std::fabs((mesh.vertices[6].clip[0]+mesh.vertices[13].clip[0])*0.5f-ndc(his_middle))<1e-5f,
+                  "the ghost's two digits are centred on the player's two digits");
+            check(std::fabs(mesh.vertices[1].clip[0]-mesh.vertices[6].clip[0]-ndc(1)+ndc(0))<1e-5f,
+                  "the ghost's letter tucks against its digits in Usamune's own proportion");
+            // "way too spread out": the buttons pack at half pitch from his first button's edge.
+            check(std::fabs(mesh.vertices[36].clip[0]-ndc(usamune::button_x))<1e-5f
+                  && std::fabs(mesh.vertices[42].clip[0]-ndc(usamune::button_x+usamune::button_advance*0.5f))<1e-5f,
+                  "the ghost's buttons start at the player's first button and pack at half pitch");
             check(std::fabs(mesh.vertices[54].clip[0]-ndc(usamune::button_x))<1e-5f
                   && mesh.vertices[54].clip[1]>mesh.vertices[38].clip[1],
                   "the name starts over the buttons and sits above them");
