@@ -154,7 +154,7 @@ class NativeCapture:
     """
 
     def __init__(self, layout, on_batch: Callable[[Producer, tuple[bytes, ...]], None],
-                 *, producer_pid: int | None = None):
+                 *, producer_pid: int | None = None, sound_player=None):
         config = layout if isinstance(layout, GhostLayout) else GhostLayout.from_layout(layout)
         self._layout = config.to_bytes()
         self._on_batch, self._pid = on_batch, producer_pid
@@ -170,6 +170,9 @@ class NativeCapture:
         self._absent = False  # one INFO line per absence of the channel
         self._refused, self._refused_reason = 0, None
         self._hooks, self._hook_summary = HookCost(log), None
+        # The ghost sound player for this Project64 (ghost/sound_player.py):
+        # started with each channel, ended with this capture. None plays nothing.
+        self._sound = sound_player
 
     def start(self):
         if self._thread is not None:
@@ -196,6 +199,14 @@ class NativeCapture:
             return True
         finally:
             self._lock.release()
+
+    def sound_pid(self) -> int | None:
+        """The ghost sound player's pid while the ghosts' command asks for
+        them in the recording (Ghosts in recording), else None."""
+        playback, sound = self._playback, self._sound
+        if sound is None or not playback.get("enabled") or not playback.get("record_ghosts"):
+            return None
+        return sound.pid
 
     def snapshot_status(self, *, blocking=True) -> dict | None:
         if not self._lock.acquire(blocking=blocking):
@@ -250,7 +261,17 @@ class NativeCapture:
         finally:
             while not self._close_channel():
                 threading.Event().wait(0.25)
+            if self._sound is not None:
+                self._sound.stop()
             self._report(available=False, reason="stopped")
+
+    def _start_sound(self, channel) -> None:
+        if self._sound is None:
+            return
+        try:
+            self._sound.start(channel.pid)
+        except Exception as error:  # noqa: BLE001 - ghost sound is optional; poses keep recording
+            self._warn("ghost sound player could not start", f"{type(error).__name__}: {error}")
 
     def _pump(self):
         sent_revision = 0
@@ -259,6 +280,7 @@ class NativeCapture:
                 if self._channel is None:
                     self._channel = NativeChannel(self._discover(), self._layout)
                     sent_revision = 0
+                    self._start_sound(self._channel)
                 with self._lock:
                     revision = self._revision
                     control = dict(self._playback) if revision != sent_revision else None
@@ -281,6 +303,7 @@ class NativeCapture:
                         self._refused_reason = str(error)
                         self._warn("Mario poses refused by the archive; batch dropped", str(error))
                 self._hook_summary = self._hooks.observe(status) or self._hook_summary
+                self._start_sound(self._channel)  # a player that died comes back (rate-limited)
                 self._absent = False
                 self._report(available=True, reason=status.reason, state=status.state,
                              dropped=status.dropped, producer=producer,

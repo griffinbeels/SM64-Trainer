@@ -1,10 +1,9 @@
 /* Ghost sound through the real request queue, audio thread and SM64 audio
- * engine into a captured PCM buffer (no device), plus an optional waveOut
- * smoke that only ever plays silence. */
+ * engine into a captured PCM buffer (no device), plus the shared ring the
+ * renderer really writes, read by an in-process stand-in for the player. */
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <mmsystem.h>
 #define PSAPI_VERSION 2
 #include <psapi.h>
 #include "ghost_audio.h"
@@ -12,6 +11,7 @@
 #include "decomp/include/PR/ultratypes.h"
 #include "decomp/include/audio_defines.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -23,6 +23,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 static unsigned checks = 0;
@@ -355,50 +356,103 @@ int main(int argc, char **argv) {
             check(ghost_audio::stats().dropped - before.dropped == 1, "a ghost index past the sources drops"); }
         const std::string classes = check_classes(rom);
 
-        // Optional device smoke: silence only, skipped (stated) without a device.
-        // A volume too small to reach one int16 step is silent output that still
-        // counts as audible, so its requests reopen the real device.
-        const bool device = waveOutGetNumDevs() > 0;
+        // THE SHARED RING (ghost_audio.h), the renderer's real output. First with
+        // no player: it plays into nothing at the engine's rate, so the thread
+        // is fed in real time, closes after 3 s of silence and reopens on a
+        // request exactly as it did with waveOut. Then with a player that
+        // plays at the device rate: it never finds the ring dry while the
+        // renderer holds it open, and what it reads is what the engine made.
+        const bool device = true; // the ring needs no device; the player owns the real one
         double smoke_latency = -1, fed_rate = 0, device_reopen_latency = -1, device_close_after_s = -1;
-        uint64_t smoke_underruns = 0;
-        if (device) {
+        uint64_t smoke_underruns = 0, player_nonzero = 0, player_frames = 0;
+        {
             const auto before = ghost_audio::stats();
             ghost_audio::control(true, 1e-6f);
             LARGE_INTEGER frequency{}, begin{}, end{}, closed_at{};
             QueryPerformanceFrequency(&frequency);
             const auto seconds = [&](const LARGE_INTEGER &a, const LARGE_INTEGER &b) {
                 return double(b.QuadPart - a.QuadPart) / double(frequency.QuadPart); };
-            check(ghost_audio::start(rom.data(), rom.size(), ghost_audio::wave_out()) == ghost_audio::Start::ok, "waveOut opens");
+            check(ghost_audio::start(rom.data(), rom.size(), ghost_audio::shared_ring()) == ghost_audio::Start::ok, "the ring opens");
             const auto opened = ghost_audio::stats();
             QueryPerformanceCounter(&begin);
             for (int i = 0; i < 45; ++i) { Sleep(33); ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING); }
             QueryPerformanceCounter(&end);
             const auto at_end = ghost_audio::stats();
-            // Nothing audible was ever written, so the stream closes 3 s after it opened.
+            // Nothing audible was ever written, so the ring closes 3 s after it opened.
             while (ghost_audio::stats().device_open && seconds(begin, closed_at) < 6) { Sleep(10); QueryPerformanceCounter(&closed_at); }
             device_close_after_s = seconds(begin, closed_at);
             const auto closed = ghost_audio::stats();
-            check(!closed.device_open && closed.idle_closes - before.idle_closes == 1, "the idle device closes");
+            check(!closed.device_open && closed.idle_closes - before.idle_closes == 1, "the idle ring closes");
             Sleep(300);
-            check(ghost_audio::stats().ticks == closed.ticks, "the closed device is not ticked");
+            check(ghost_audio::stats().ticks == closed.ticks, "the closed ring is not ticked");
+            fed_rate = double(at_end.ticks - opened.ticks) * 1076.0 / seconds(begin, end);
+            check(fed_rate > 30000 && fed_rate < 34500, "with no player the ring is fed in real time");
+
+            // A player, as ghost/sound_player.py does it: attach at the newest
+            // frame, hand everything written to its device at once, and publish
+            // the device's position as played.
+            wchar_t name[80]; swprintf_s(name, L"%ls%lu", GS_RING_PREFIX, GetCurrentProcessId());
+            HANDLE mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, name);
+            check(mapping != nullptr, "the player finds the ring by Project64's pid");
+            auto *header = static_cast<ghost_audio::RingHeader *>(MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0));
+            check(header && !std::memcmp(header->magic, GS_RING_MAGIC, 8) && header->rate == ghost_audio::ring_rate
+                  && header->capacity == ghost_audio::ring_frames, "the ring says what it carries");
+            wchar_t event[96]; swprintf_s(event, L"%ls_written", name);
+            HANDLE written_event = OpenEventW(SYNCHRONIZE, FALSE, event);
+            swprintf_s(event, L"%ls_played", name);
+            HANDLE played_event = OpenEventW(EVENT_MODIFY_STATE, FALSE, event);
+            check(written_event && played_event, "the player opens both events");
+            const auto *data = reinterpret_cast<const int16_t *>(header + 1);
+            std::atomic<bool> quit_player{false};
+            std::atomic<uint64_t> underruns{0}, nonzero{0}, frames_read{0};
+            std::thread player([&] {
+                int64_t sent = InterlockedCompareExchange64(&header->written, 0, 0);
+                double position = double(sent);
+                InterlockedExchange64(&header->played, sent);
+                header->player_beat = GetTickCount(); header->player_pid = GetCurrentProcessId();
+                LARGE_INTEGER last{}; QueryPerformanceCounter(&last);
+                bool playing = false;
+                while (!quit_player.load()) {
+                    WaitForSingleObject(written_event, 5);
+                    header->player_beat = GetTickCount();
+                    LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
+                    const double advance = double(now.QuadPart - last.QuadPart) * ghost_audio::ring_rate / double(frequency.QuadPart);
+                    last = now;
+                    const int64_t written = InterlockedCompareExchange64(&header->written, 0, 0);
+                    for (; sent < written; ++sent) {
+                        const auto at = size_t(sent % ghost_audio::ring_frames) * 2;
+                        nonzero += (data[at] != 0) + (data[at + 1] != 0); ++frames_read;
+                    }
+                    if (playing) {
+                        position += advance;
+                        if (position > double(sent)) {
+                            if (header->renderer_open) ++underruns; // dry while the renderer holds it
+                            position = double(sent); playing = false;
+                        }
+                    }
+                    if (double(sent) > position) playing = true;
+                    InterlockedExchange64(&header->played, int64_t(position));
+                    SetEvent(played_event);
+                }
+                header->player_pid = 0;
+            });
+            const auto attached = ghost_audio::stats();
+            ghost_audio::control(true, 1.0f); // audible now: the player reads the engine's own samples
             ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING);
-            while (ghost_audio::stats().played == closed.played) Sleep(1);
+            while (ghost_audio::stats().played == attached.played) Sleep(1);
             device_reopen_latency = ghost_audio::stats().last_latency_ms;
             for (int i = 0; i < 30; ++i) { Sleep(33); ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING); }
             Sleep(100); // the last request reaches its tick
             const auto stats = ghost_audio::stats();
             ghost_audio::stop();
-            check(stats.played - before.played >= 76 && stats.ticks - before.ticks > 60,
-                  "device fed real ticks of silence");
+            quit_player = true; player.join();
+            UnmapViewOfFile(header); CloseHandle(mapping); CloseHandle(written_event); CloseHandle(played_event);
             check(stats.reopens - before.reopens == 1 && stats.failed_reopens == before.failed_reopens,
-                  "one request reopened the device");
-            // The device never runs dry, before or after the reopen, and is fed
-            // at its own rate (~32000 frames/s).
-            smoke_underruns = stats.underruns - before.underruns;
-            fed_rate = double(at_end.ticks - opened.ticks) * 1076.0 / seconds(begin, end);
-            check(smoke_underruns == 0, "device never runs dry between ticks");
-            check(fed_rate > 30000 && fed_rate < 34500, "device fed in real time");
-            check(device_reopen_latency < 80, "a request that reopens the device is not late");
+                  "one request reopened the ring");
+            smoke_underruns = underruns.load(); player_nonzero = nonzero.load(); player_frames = frames_read.load();
+            check(smoke_underruns == 0, "the player never finds the ring dry while it is open");
+            check(player_nonzero > 10000, "the player reads the engine's sound");
+            check(device_reopen_latency < 80, "a request that reopens the ring is not late");
             smoke_latency = stats.max_latency_ms;
         }
         // The queue is bounded and never blocks its producer (no audio thread now).
@@ -410,13 +464,14 @@ int main(int argc, char **argv) {
             "\"stale_samples_when_left_on\":%zu,\"device_underruns\":%llu,\"device_fed_frames_per_second\":%.0f,"
             "\"right_placed_right_left_energy\":%.4f,\"left_placed_right_left_energy\":%.4f,"
             "\"gain_quarter_energy_ratio\":%.6f,\"camera_5000_energy_ratio\":%.6f,\"second_ghost_routed_identical\":%s,"
-            "\"engine_private_bytes\":%zu,\"capture_reopen_latency_ms\":%.3f,\"capture_reopen_onset_frames\":%zu,"
+            "\"player_nonzero_samples\":%llu,\"player_frames\":%llu,\"engine_private_bytes\":%zu,\"capture_reopen_latency_ms\":%.3f,\"capture_reopen_onset_frames\":%zu,"
             "\"capture_frames_to_close\":%zu,\"device_close_after_s\":%.3f,\"device_reopen_latency_ms\":%.3f,"
             "\"classes\":{%s}}\n",
             checks, full.cue_at.size(), nonzero, half_energy / full_energy, full.stats.max_latency_ms,
             device ? "true" : "false", smoke_latency, stale_full,
             static_cast<unsigned long long>(smoke_underruns), fed_rate,
             right_lr, left_lr, quarter_ratio, far_ratio, routed_identical ? "true" : "false",
+            static_cast<unsigned long long>(player_nonzero), static_cast<unsigned long long>(player_frames),
             engine_bytes, reopen_latency, reopen_onset_frames, reopen_frames_to_close,
             device_close_after_s, device_reopen_latency, classes.c_str());
         return 0;

@@ -707,6 +707,13 @@ class ReplayRecorder:
         """The recorder-owned native control source, also used for playback."""
         return self._pose_owner.source if self._pose_owner is not None else None
 
+    def ghost_sound_pid(self) -> int | None:
+        """The ghost sound player to mix into the recording: only while Ghosts
+        in recording is on (ghost/sound_player.py), else None."""
+        capture = self.ghost_capture
+        sound_pid = getattr(capture, "sound_pid", None)
+        return sound_pid() if sound_pid is not None else None
+
     def _start_pose_capture(self, win):
         if self._ghost_capture_factory is None:
             return

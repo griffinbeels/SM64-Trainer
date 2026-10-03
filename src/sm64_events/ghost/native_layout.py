@@ -74,3 +74,12 @@ GHOSTS = 16  # displayed ghosts at once: playback, compositor batch, sound sourc
 PROXIMITY_MAX = 400.0  # the largest overlap-fade distance a request may carry
 BRIDGE_FRAMES = 2  # the longest refused run playback holds the previous pose over
 RELEASED_FRAMES = 300  # the longest a released held object is followed (10 s)
+
+# The shared sound ring (ghost_audio.h): the renderer writes ghost sound, the
+# trainer's player (ghost/sound_player.py) plays it outside Project64's process.
+SOUND_RING_MAGIC, SOUND_RING_VERSION = b"SM64GS01", 1
+SOUND_RING_PREFIX = "Local\\sm64_trainer_ghost_sound_v1_"
+SOUND_RING_RATE, SOUND_RING_FRAMES, SOUND_RING_HEADER_BYTES = 32000, 8192, 64
+SOUND_RING_PLAYER_TIMEOUT_MS = 500  # an older player beat reads as no player
+SOUND_RING_OPEN_AT, SOUND_RING_WRITTEN_AT, SOUND_RING_PLAYED_AT = 20, 24, 32
+SOUND_RING_PLAYER_PID_AT, SOUND_RING_PLAYER_BEAT_AT = 40, 44

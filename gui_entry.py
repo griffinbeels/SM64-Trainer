@@ -25,6 +25,12 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == GHOST_WINDOW_FLAG:
         from sm64_events.ghost.window.child import main as ghost_window_main
         return ghost_window_main(sys.argv[2:])
+    # The ghost sound player re-enters the same way: it plays ghost sound
+    # from outside Project64 so the recorder's tap of the game never hears it.
+    from sm64_events.ghost.sound_player import SOUND_PLAYER_FLAG
+    if len(sys.argv) > 1 and sys.argv[1] == SOUND_PLAYER_FLAG:
+        from sm64_events.ghost.sound_player import main as sound_player_main
+        return sound_player_main(sys.argv[2:])
     from sm64_events.desktop.app import main as desktop_main
     return desktop_main()
 

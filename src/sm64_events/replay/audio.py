@@ -237,6 +237,39 @@ class DeafStreamWatchdog:
                 raise RuntimeError("audio watchdog did not stop; source may still reopen")
 
 
+class GhostMix:
+    """The ghost sound player's samples, waiting to be added to the game's.
+
+    Both taps deliver float32 stereo at the same rate, continuously, each on
+    its own reader thread; the game's chunk takes as many ghost samples as it
+    has frames. What waits is bounded (`most_s`), so a stalled game tap never
+    lets the ghost drift behind its picture: the oldest samples go first."""
+
+    def __init__(self, rate: int = 48000, most_s: float = 0.25):
+        self._lock = threading.Lock()
+        self._most = int(rate * most_s) * 2
+        self._waiting = np.zeros(0, dtype=np.float32)
+
+    def feed(self, pcm_f32: np.ndarray) -> None:
+        with self._lock:
+            waiting = np.concatenate((self._waiting, pcm_f32))
+            self._waiting = waiting[-self._most:] if len(waiting) > self._most else waiting
+
+    def add_to(self, game_f32: np.ndarray) -> np.ndarray:
+        with self._lock:
+            take = self._waiting[:len(game_f32)]
+            self._waiting = self._waiting[len(take):]
+        if not len(take):
+            return game_f32
+        mixed = game_f32.copy()
+        mixed[:len(take)] += take
+        return mixed
+
+    def clear(self) -> None:
+        with self._lock:
+            self._waiting = np.zeros(0, dtype=np.float32)
+
+
 class ProcessAudioSource:
     """Per-process WASAPI loopback (proctap): captures ONLY the target
     process's render stream, so nothing else playing on the machine can
@@ -247,16 +280,27 @@ class ProcessAudioSource:
     proctap hands PCM to us on its own reader thread, not on a WASAPI
     real-time callback, but it still must not block: the same AudioPump
     stands between it and the recorder, so a wedged writer drops packets
-    instead of stalling the tap."""
+    instead of stalling the tap.
+
+    `extra_pid` names a second process to mix in while it answers one: the
+    ghost sound player while Ghosts in recording is on (his report,
+    2026-10-03: "We should NOT be recording the ghost's audio when this is
+    off"; ghost/sound_player.py). It is followed every `EXTRA_EVERY_S`."""
 
     mode = "process"
+    EXTRA_EVERY_S = 0.25
 
-    def __init__(self, pid: int, rate: int = 48000):
+    def __init__(self, pid: int, rate: int = 48000, extra_pid=None):
         self._pid = pid
         self._rate = rate
         self._tap = None
         self._pump = None
         self._watchdog = None
+        self._extra_pid = extra_pid
+        self._mix = GhostMix(rate)
+        self._extra_tap, self._extra_tapped = None, None
+        self._extra_stop = threading.Event()
+        self._extra_thread = None
 
     def _open_tap(self) -> None:
         """(Re)open the per-process tap feeding the existing pump. Raises on
@@ -264,13 +308,14 @@ class ProcessAudioSource:
         import proctap
 
         pump_feed = self._pump.feed
+        mix = self._mix
 
         def _on_data(pcm_bytes: bytes, num_frames: int) -> None:
             # pcm_bytes: raw float32 stereo 48kHz; num_frames is -1 (unused).
             # The pump speaks int16 — the one format on the wire to the sink —
             # so convert here, off both the recorder and the native drain.
-            pump_feed(f32_to_s16(
-                np.frombuffer(pcm_bytes, dtype=np.float32)).tobytes(), 0)
+            pump_feed(f32_to_s16(mix.add_to(
+                np.frombuffer(pcm_bytes, dtype=np.float32))).tobytes(), 0)
 
         # on_data is passed to __init__, not start(); start() takes no args.
         # proctap also queues every chunk into an internal 100-slot async
@@ -300,6 +345,42 @@ class ProcessAudioSource:
             self._pid, lambda: self._pump.last_loud_t,
             self._reopen, "process tap")
         self._watchdog.start()
+        if self._extra_pid is not None:
+            self._extra_stop.clear()
+            self._extra_thread = threading.Thread(
+                target=self._follow_extra, name="audio-extra-tap", daemon=True)
+            self._extra_thread.start()
+
+    def _follow_extra(self) -> None:
+        """Open, move or close the second tap to match `extra_pid()`."""
+        while not self._extra_stop.wait(self.EXTRA_EVERY_S):
+            try:
+                wanted = self._extra_pid()
+            except Exception:  # noqa: BLE001 - a failed question means: nothing to mix
+                wanted = None
+            if wanted == self._extra_tapped:
+                continue
+            self._close_extra()
+            if wanted is None:
+                continue
+            try:
+                import proctap
+                self._extra_tap = proctap.ProcessAudioCapture(pid=wanted, on_data=self._on_extra)
+                self._extra_tap.start()
+                self._extra_tapped = wanted
+                log.info("audio: mixing in pid %d", wanted)
+            except Exception:  # noqa: BLE001 - the game's own audio keeps recording
+                log.exception("audio: could not tap pid %d to mix in", wanted)
+                self._close_extra()
+
+    def _on_extra(self, pcm_bytes: bytes, _frames: int) -> None:
+        self._mix.feed(np.frombuffer(pcm_bytes, dtype=np.float32))
+
+    def _close_extra(self) -> None:
+        tap, self._extra_tap, self._extra_tapped = self._extra_tap, None, None
+        if tap is not None:
+            stop_process_tap(tap)
+        self._mix.clear()
 
     def _reopen(self) -> None:
         self._close_tap()
@@ -316,6 +397,11 @@ class ProcessAudioSource:
                 raise RuntimeError("process-audio reader is not running")
 
     def stop(self) -> None:
+        if self._extra_thread is not None:
+            self._extra_stop.set()
+            self._extra_thread.join(timeout=5)
+            self._extra_thread = None
+        self._close_extra()
         if self._watchdog is not None:
             self._watchdog.stop()
             self._watchdog = None

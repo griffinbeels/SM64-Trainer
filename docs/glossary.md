@@ -1425,9 +1425,24 @@ on by default), a [[ghost]]'s sound also follows its [[overlap fade]] and
 [[player-first fade]], and while it overlaps him, a sound live Mario made on the same
 [[frame]] plays only once.
 
+They play from the [[ghost sound player]], so a recording only has them while
+[[ghosts in recording]] is on.
+
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
-  `plugin/gfxwrap/ghost_audio.cpp` plays them; `plugin/gfxwrap/ghost_sound_fade.h`
+  `plugin/gfxwrap/ghost_audio.cpp` makes their sound; `plugin/gfxwrap/ghost_sound_fade.h`
   owns how they fade with the picture
+
+### Ghost sound player
+
+The small trainer process that plays [[ghost sound events]] on the output
+Project64's own sound uses. The [[renderer]] still makes the sound and hands it
+over through shared memory; it plays outside Project64 because the [[recorder]]
+takes everything Project64 plays, and a [[ghost]]'s sound belongs in a
+recording only while [[ghosts in recording]] is on. Each open Project64 gets
+one, which ends with it or with the trainer.
+
+- **Lives** — `src/sm64_events/ghost/sound_player.py`; the shared ring is in
+  `plugin/gfxwrap/ghost_audio.h`
 
 ### Ghost source
 
@@ -1644,15 +1659,17 @@ while that [[ghost]] is off screen.
 
 ### Ghosts in recording
 
-The ghost card's switch (off by default) that makes your replay videos keep
+The switch on the [[ghost]] card (off by default) that makes your replay videos keep
 the [[ghost]]s as the game window shows them -- bodies, names and [[corner inputs]] --
-so a clip shows you against them. It is the same single recording: while it is
-on, the recorder takes the picture you see instead of the clean one. It applies
-to what is recorded from then on; a saved clip never gains or loses ghosts, and
-Whole picture ghosts (a separate window) are never in it.
+so a clip shows you against them, and their sound with them. It is the same
+single recording: while it is on, the [[recorder]] takes the picture you see
+instead of the clean one and adds the [[ghost sound player]]'s audio; while it
+is off, neither the picture nor the sound has a [[ghost]]. It applies to what
+the [[recorder]] takes from then on; a saved clip never gains or loses
+[[ghost]]s, and Whole picture [[ghost]]s (a separate window) are never in it.
 
 - **Lives** — its switch row in `src/sm64_events/ghost/settings.py`;
-  `plugin/gfxwrap/ghost_presentation.cpp` (`record_display`) takes the picture
+  `plugin/gfxwrap/ghost_presentation.cpp` takes the picture
 
 ### Input document
 

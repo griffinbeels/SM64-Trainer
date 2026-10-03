@@ -1,7 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <mmsystem.h>
 #include "ghost_audio.h"
 #include "ghost_assets.h"
 #include "ghost_playback.h"
@@ -13,7 +12,8 @@
 #include <vector>
 
 static_assert(SA_SOURCES == ghost_audio::sources, "one engine source per displayed ghost");
-#pragma comment(lib, "winmm.lib")
+static_assert(SA_RATE == ghost_audio::ring_rate, "the ring carries the engine's own rate");
+static_assert(ghost_audio::ring_frames >= 4 * ghost_audio::tick_capacity, "two ticks unplayed fit twice");
 
 namespace ghost_audio {
 namespace {
@@ -146,67 +146,80 @@ DWORD WINAPI audio_main(void *) {
     return 0;
 }
 
-// waveOut: one header per tick, completion signalled by an event. What the
-// device still holds is measured from its play position, not from which
-// headers are done: a header counts in full until it finishes, so a header
-// count reads "empty" only once the device has already run dry, and every
-// tick used to be written into a silent device (the 2026-09-22 crackle).
-constexpr unsigned wave_headers=8;
-struct Wave {
-    HWAVEOUT handle=nullptr; HANDLE event=nullptr;
-    uint64_t written=0; uint32_t last_position=0; uint64_t position_base=0;
-    WAVEHDR headers[wave_headers]{}; int16_t data[wave_headers][2*tick_capacity]{};
-} wave;
-bool __cdecl wave_open(void *, uint32_t rate) {
-    wave.event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
-    if(!wave.event) return false;
-    WAVEFORMATEX format{}; format.wFormatTag=WAVE_FORMAT_PCM; format.nChannels=2;
-    format.nSamplesPerSec=rate; format.wBitsPerSample=16; format.nBlockAlign=4;
-    format.nAvgBytesPerSec=rate*4;
-    if(waveOutOpen(&wave.handle,WAVE_MAPPER,&format,reinterpret_cast<DWORD_PTR>(wave.event),0,
-            CALLBACK_EVENT)!=MMSYSERR_NOERROR) {
-        CloseHandle(wave.event); wave.event=nullptr; wave.handle=nullptr; return false;
+// THE SHARED RING (ghost_audio.h): this side writes, the player plays. The
+// waveOut device that used to live here is the player's now
+// (src/sm64_events/ghost/sound_player.py), with the same pacing contract:
+// queued() is what is written and not yet played, measured from the player's
+// own device position, so the audio thread still refills a tick at a time.
+struct Ring {
+    HANDLE mapping=nullptr, written=nullptr, played=nullptr;
+    RingHeader *header=nullptr; int16_t *data=nullptr;
+    int64_t consumed=0, clock=0; // played as this side last saw it, and when
+} ring;
+bool ring_map() {
+    if(ring.header) return true; // mapped once for the process; a restart reuses it
+    wchar_t name[80]; swprintf_s(name,L"%ls%lu",GS_RING_PREFIX,GetCurrentProcessId());
+    const DWORD bytes=DWORD(sizeof(RingHeader)+size_t(ring_frames)*4);
+    HANDLE mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,bytes,name);
+    if(!mapping) return false;
+    const bool existed=GetLastError()==ERROR_ALREADY_EXISTS;
+    auto *view=static_cast<uint8_t*>(MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,bytes));
+    wchar_t event[96]; swprintf_s(event,L"%ls_written",name);
+    HANDLE written=CreateEventW(nullptr,FALSE,FALSE,event);
+    swprintf_s(event,L"%ls_played",name);
+    HANDLE played=CreateEventW(nullptr,FALSE,FALSE,event);
+    if(!view || !written || !played) {
+        if(view) UnmapViewOfFile(view);
+        if(written) CloseHandle(written);
+        if(played) CloseHandle(played);
+        CloseHandle(mapping); return false;
     }
-    for(unsigned i=0;i<wave_headers;++i) { wave.headers[i]={}; wave.headers[i].dwFlags=WHDR_DONE; }
-    wave.written=0; wave.last_position=0; wave.position_base=0;
+    auto *header=reinterpret_cast<RingHeader*>(view);
+    if(!existed) {
+        std::memset(view,0,bytes);
+        std::memcpy(header->magic,GS_RING_MAGIC,8);
+        header->version=GS_RING_VERSION; header->rate=ring_rate; header->capacity=ring_frames;
+    } else if(std::memcmp(header->magic,GS_RING_MAGIC,8) || header->version!=GS_RING_VERSION
+              || header->rate!=ring_rate || header->capacity!=ring_frames) {
+        UnmapViewOfFile(view); CloseHandle(written); CloseHandle(played); CloseHandle(mapping); return false;
+    }
+    ring.mapping=mapping; ring.written=written; ring.played=played; ring.header=header;
+    ring.data=reinterpret_cast<int16_t*>(view+sizeof(RingHeader));
     return true;
 }
-uint32_t __cdecl wave_queued(void *) {
-    MMTIME time{}; time.wType=TIME_SAMPLES;
-    if(waveOutGetPosition(wave.handle,&time,sizeof(time))!=MMSYSERR_NOERROR || time.wType!=TIME_SAMPLES) {
-        uint32_t frames=0; // no position: fall back to whole unfinished headers
-        for(auto &header:wave.headers) if(!(header.dwFlags&WHDR_DONE)) frames+=header.dwBufferLength/4;
-        return frames;
-    }
-    if(time.u.sample<wave.last_position) wave.position_base+=uint64_t(1)<<32; // 32-bit sample counter wrapped
-    wave.last_position=time.u.sample;
-    const uint64_t consumed=wave.position_base+time.u.sample;
-    return consumed>=wave.written ? 0u : uint32_t(wave.written-consumed);
+int64_t ring_written() { return InterlockedCompareExchange64(&ring.header->written,0,0); }
+bool player_attached() {
+    const uint32_t pid=ring.header->player_pid, beat=ring.header->player_beat;
+    return pid && GetTickCount()-beat<ring_player_timeout_ms;
 }
-bool __cdecl wave_write(void *, const int16_t *stereo, uint32_t frames) {
-    for(unsigned i=0;i<wave_headers;++i) {
-        auto &header=wave.headers[i];
-        if(!(header.dwFlags&WHDR_DONE)) continue;
-        if(header.dwFlags&WHDR_PREPARED) waveOutUnprepareHeader(wave.handle,&header,sizeof(header));
-        std::memcpy(wave.data[i],stereo,frames*4);
-        header={}; header.lpData=reinterpret_cast<LPSTR>(wave.data[i]); header.dwBufferLength=frames*4;
-        const bool queued=waveOutPrepareHeader(wave.handle,&header,sizeof(header))==MMSYSERR_NOERROR
-            && waveOutWrite(wave.handle,&header,sizeof(header))==MMSYSERR_NOERROR;
-        if(queued) wave.written+=frames;
-        return queued;
-    }
-    return false;
+bool __cdecl ring_open(void *, uint32_t rate) {
+    if(rate!=ring_rate || !ring_map()) return false;
+    ring.consumed=ring_written(); ring.clock=now();
+    InterlockedExchange(reinterpret_cast<volatile LONG*>(&ring.header->renderer_open),1);
+    return true;
 }
-void __cdecl wave_wait(void *, uint32_t milliseconds) { WaitForSingleObject(wave.event,milliseconds); }
-void __cdecl wave_close(void *) {
-    if(wave.handle) {
-        waveOutReset(wave.handle);
-        for(auto &header:wave.headers)
-            if(header.dwFlags&WHDR_PREPARED) waveOutUnprepareHeader(wave.handle,&header,sizeof(header));
-        waveOutClose(wave.handle);
-    }
-    if(wave.event) CloseHandle(wave.event);
-    wave.handle=nullptr; wave.event=nullptr;
+uint32_t __cdecl ring_queued(void *) {
+    const int64_t written=ring_written(), at=now();
+    if(player_attached()) ring.consumed=InterlockedCompareExchange64(&ring.header->played,0,0);
+    else ring.consumed+=int64_t(double(at-ring.clock)*ring_rate/frequency()); // into nothing, at rate
+    ring.clock=at;
+    if(ring.consumed>written) ring.consumed=written;
+    const int64_t queued=written-ring.consumed;
+    return queued>int64_t(ring_frames) ? ring_frames : uint32_t(queued);
+}
+bool __cdecl ring_write(void *, const int16_t *stereo, uint32_t frames) {
+    if(frames>ring_frames) return false;
+    const int64_t at=ring_written();
+    const uint32_t first=uint32_t(at%ring_frames), head_frames=std::min(frames,ring_frames-first);
+    std::memcpy(ring.data+size_t(first)*2,stereo,size_t(head_frames)*4);
+    std::memcpy(ring.data,stereo+size_t(head_frames)*2,size_t(frames-head_frames)*4);
+    InterlockedExchange64(&ring.header->written,at+frames); // full barrier: the samples land first
+    SetEvent(ring.written);
+    return true;
+}
+void __cdecl ring_wait(void *, uint32_t milliseconds) { WaitForSingleObject(ring.played,milliseconds); }
+void __cdecl ring_close(void *) {
+    if(ring.header) InterlockedExchange(reinterpret_cast<volatile LONG*>(&ring.header->renderer_open),0);
 }
 
 // SHA-256 of the regions the engine parses: stock SM64 US and the Usamune US
@@ -253,7 +266,7 @@ void control(bool on, float level) {
         stop_generation.fetch_add(1,std::memory_order_acq_rel);
 }
 const ghost_playback::SoundSink *sink() { return &playback_sink; }
-Output wave_out() { return {nullptr,wave_open,wave_queued,wave_write,wave_wait,wave_close}; }
+Output shared_ring() { return {nullptr,ring_open,ring_queued,ring_write,ring_wait,ring_close}; }
 
 bool known_audio(const uint8_t *rom, size_t bytes) {
     if(!rom || bytes!=SA_ROM_BYTES) return false;

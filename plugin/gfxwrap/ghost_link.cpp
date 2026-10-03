@@ -22,9 +22,10 @@
 
 namespace {
 // Ghost sound: playback hands recorded sounds to the audio thread, whose
-// engine the IPC worker starts from its verified ROM and waveOut.
+// engine the IPC worker starts from its verified ROM; the trainer's sound
+// player plays what it writes to the shared ring (ghost_audio.h).
 bool __cdecl audio_start(const uint8_t *rom, size_t bytes) {
-    return ghost_audio::start(rom, bytes, ghost_audio::wave_out()) == ghost_audio::Start::ok;
+    return ghost_audio::start(rom, bytes, ghost_audio::shared_ring()) == ghost_audio::Start::ok;
 }
 void __cdecl audio_stop() { ghost_audio::stop(); }
 const ghost_ipc::AudioHooks audio_hooks{audio_start, audio_stop};

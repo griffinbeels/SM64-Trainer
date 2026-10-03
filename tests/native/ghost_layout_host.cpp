@@ -6,6 +6,7 @@
 #include "ghost_tuning.h"
 #include "ghost_playback.h"
 #include "ghost_stream.h"
+#include "ghost_audio.h"
 #include <cstdio>
 
 static bool first = true;
@@ -123,6 +124,16 @@ int main() {
     number("IPC_CLIP_BYTES", sizeof(gipc_clip)); number("IPC_REQUEST_BYTES", sizeof(gipc_request));
     number("LABEL_BYTES", GP_LABEL_BYTES);
     number("GHOSTS", GP_GHOSTS); number("PROXIMITY_MAX", GP_PROXIMITY_MAX); number("BRIDGE_FRAMES", GP_BRIDGE_FRAMES);
+    text("SOUND_RING_MAGIC", GS_RING_MAGIC); number("SOUND_RING_VERSION", GS_RING_VERSION);
+    wide("SOUND_RING_PREFIX", GS_RING_PREFIX);
+    number("SOUND_RING_RATE", ghost_audio::ring_rate); number("SOUND_RING_FRAMES", ghost_audio::ring_frames);
+    number("SOUND_RING_PLAYER_TIMEOUT_MS", ghost_audio::ring_player_timeout_ms);
+    number("SOUND_RING_HEADER_BYTES", sizeof(ghost_audio::RingHeader));
+    number("SOUND_RING_OPEN_AT", offsetof(ghost_audio::RingHeader, renderer_open));
+    number("SOUND_RING_WRITTEN_AT", offsetof(ghost_audio::RingHeader, written));
+    number("SOUND_RING_PLAYED_AT", offsetof(ghost_audio::RingHeader, played));
+    number("SOUND_RING_PLAYER_PID_AT", offsetof(ghost_audio::RingHeader, player_pid));
+    number("SOUND_RING_PLAYER_BEAT_AT", offsetof(ghost_audio::RingHeader, player_beat));
     std::printf("}\n");
     return 0;
 }

@@ -1578,11 +1578,31 @@ before its start a ghost is silent and sounds its first record when it begins.
 [ghost_audio.cpp](../plugin/gfxwrap/ghost_audio.cpp) owns the rest. The render
 thread only writes a bounded 256-entry single-producer queue (full drops and
 counts) and plain atomics, so it never waits or allocates (the playback witness
-counts zero render allocations). One audio thread owns the engine and a
-shared-mode waveOut device (event driven, no window or focus). It synthesizes
-one tick (two blocks of 528/544 stereo frames at 32 kHz) whenever the device
-holds 1088 frames (34 ms) or fewer. What the device holds is measured from its
-play position (`waveOutGetPosition`), not from finished headers: a header
+counts zero render allocations). One audio thread owns the engine. Since
+2026-10-03 it writes into the **shared sound ring** (`ghost_audio.h`:
+`Local\sm64_trainer_ghost_sound_v1_<Project64 pid>`, 8192 frames, with
+`_written`/`_played` events; restated once in `ghost/native_layout.py`), and the
+trainer's **ghost sound player** (`ghost/sound_player.py`, a child of the
+trainer and never of Project64) plays it with shared-mode waveOut on the output
+Project64's own audio session uses. His report that day: with Ghosts in
+recording off, "we still incorrectly include the ghost's AUDIO in the recording."
+The recorder taps Project64's whole process tree (proctap,
+`INCLUDE_TARGET_PROCESS_TREE`), Windows has no way to leave one stream of a
+process out of that tap, and subtracting the ghost's samples after the system
+mixer cannot be exact, so the sound had to leave the process. The recorder adds
+a tap of the player only while Ghosts in recording is on
+(`ProcessAudioSource.extra_pid`, `GhostMix`: the player's samples wait at most
+0.25 s for the game's). The device-wide fallback tap hears whatever shares
+Project64's output, ghost sound included. A probe on this machine
+(2026-10-03) wrote a near-silent 1 kHz tone into a ring: a tap of the player
+heard 1 kHz, a tap of an unrelated process heard exactly zero. The thread
+synthesizes one tick (two blocks of 528/544 stereo frames at 32 kHz) whenever
+the ring holds 1088 unplayed frames (34 ms) or fewer. What is unplayed is
+measured from the player's device position (`waveOutGetPosition`, published as
+`played`), not from what it was handed; without a player beat in the last
+500 ms the ring reads as a device playing into nothing at 32 kHz, so pacing,
+silence and the idle close are unchanged. Measuring from finished headers, as a
+header
 counts in full until it finishes, and the first version's 544-frame threshold
 sat below its one-tick (1088-frame) headers, so it saw "empty" only after the
 device had already run dry, wrote every tick into silence and chopped the
@@ -1665,11 +1685,13 @@ engine adds 2.5 MB of private memory (under a 4 MB bound). After a sound
 and the idle time the device closes and no tick runs; the next request
 reopens it and sounds within the first tick (49 frames in) with the same
 samples as the first time, and volume 0 closes the device without reopening
-it. Its waveOut smoke plays silence only when a device exists (a volume below
-one sample step, which still counts as audible): for two seconds it must feed
-the device in real time (31501 frames/s measured), close it 3 s after opening
-(2.994 s) and reopen it on a request (7.7 ms from request to first tick,
-waveOutOpen included), with 0 underruns across both. Placed
+it. Its ring smoke runs the renderer's real output: with no player the ring
+is fed in real time (31064 frames/s measured) and closes 3 s after opening
+(2.953 s); a stand-in player that plays at 32 kHz then reopens it with a
+request, reads the engine's own samples back (21746 nonzero) and never finds
+it dry while it is open (0 underruns, at most 66 ms request to sound).
+`tests/test_ghost_sound_player.py` covers the player's pacing, its attach at the
+newest frame, the mix and the real child attaching to a ring. Placed
 (same schedule): 2000 units right of the camera the right channel carries
 21x the left's energy (mirrored on the left); gain 0.25 leaves 0.060 of the
 energy; 5000 units ahead, the engine's own falloff leaves 0.133; and ghost 1
@@ -1699,7 +1721,8 @@ needing a separate ghost recording"*; his choice of the switch set before the ru
 display image says so (`GhostViImage::record_display`, from
 `ghost_playback::records_display`), and after the OSD and any withdrawal
 `ghost_presentation::record_display` copies BACK -- what the window is about to show,
-ghosts, names, corner inputs and OSD -- over the recorded surface. Same encoder,
+ghosts, names, corner inputs and OSD -- over the recorded surface, and the
+recorder mixes in the ghost sound player's audio (above). Same encoder,
 same single recording: one extra copy of BACK, only on frames that drew a ghost.
 A failed copy publishes nothing. The choice applies to what is recorded from then on;
 saved clips never change. Whole picture ghosts are a separate window over the game,
@@ -1766,9 +1789,9 @@ Overlapping means in step (WF alone: 61% on the same frame), so the fade
 quiets the doubling where it happens and leaves every sound offset in place at
 full level. Dropping same-frame twins removes 56% of the overlapping sounds and
 22% of the half-overlapping ones, which still play at 50 to 100% of the gain.
-Not measured: the delay between Project64's own audio output and the ghost's
-waveOut device, which shifts every ghost sound against his by one amount (up
-to about 65 ms on the ghost side, above).
+Not measured: the delay between Project64's own audio output and the ghost
+sound player's waveOut device, which shifts every ghost sound against his by
+one amount (up to about 65 ms on the ghost side, above).
 
 The playback witness walks ghost 0 on live Mario and ghost 1 beside him:
 ghost 0 sounds at exactly the floor from a run's first frame; his same-frame

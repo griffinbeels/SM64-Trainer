@@ -353,14 +353,19 @@ def _build_replay(replay_cfg, layout, service):
     ghost_capture_factory = None
     if layout.version == "us":
         from sm64_events.ghost.capture import NativeCapture
-        ghost_capture_factory = lambda **kwargs: NativeCapture(layout, **kwargs)
+        from sm64_events.ghost.sound_player import SoundPlayerProcess
+        ghost_capture_factory = lambda **kwargs: NativeCapture(
+            layout, sound_player=SoundPlayerProcess(), **kwargs)
 
     recorder = ReplayRecorder(
         cfg=replay_cfg,
         window_finder=find_window,
         video_factory=sources.create,
+        # The ghost sound player joins the game's audio only while Ghosts in
+        # recording is on (ghost/sound_player.py); `recorder` binds late.
         audio_factory=lambda pid: ProcessAudioSource(
-            pid=pid, rate=replay_cfg.audio_rate),
+            pid=pid, rate=replay_cfg.audio_rate,
+            extra_pid=lambda: recorder.ghost_sound_pid()),
         fallback_audio_factory=lambda pid: SystemAudioSource(
             rate=replay_cfg.audio_rate, pid=pid),
         codec=codec,

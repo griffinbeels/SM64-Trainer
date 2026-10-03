@@ -483,6 +483,27 @@ def test_the_frozen_entry_point_opens_the_overlay_window(monkeypatch):
     assert received == [["--url", "http://127.0.0.1:8065/ui/ghost/index.html"]]
 
 
+def test_the_frozen_entry_point_runs_the_ghost_sound_player(monkeypatch):
+    """The ghost sound player is a child of THIS exe in a PyInstaller build,
+    re-entering through its flag like the overlay window above. Without the
+    dispatch the installed app would play no ghost sound at all."""
+    import importlib.util
+    import sys
+
+    from sm64_events.ghost.sound_player import SOUND_PLAYER_FLAG
+
+    entry = Path(sm64_events.__file__).resolve().parents[2] / "gui_entry.py"
+    spec = importlib.util.spec_from_file_location("ghost_sound_dispatch", entry)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    received = []
+    monkeypatch.setattr(sys, "argv", ["SM64Trainer.exe", SOUND_PLAYER_FLAG, "--pj64", "10", "--parent", "11"])
+    monkeypatch.setattr("sm64_events.ghost.sound_player.main", lambda argv: received.append(argv) or 0)
+    monkeypatch.setitem(sys.modules, "sm64_events.desktop.app", None)
+    assert module.main() == 0
+    assert received == [["--pj64", "10", "--parent", "11"]]
+
+
 def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     """A boot that loses the instance-lock race (the reload-handoff race,
     live 2026-07-30 and 2026-08-06) must still mount the compare and
