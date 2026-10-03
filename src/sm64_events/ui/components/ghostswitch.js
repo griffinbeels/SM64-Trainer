@@ -37,10 +37,10 @@ import { getJSON, send } from "../api.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { GhostProximity } from "./ghostproximity.js";
 import { GhostLibraryButton } from "./ghostlibrary.js";
-import { clampNudge, clampOpacity, ghostControls, ghostRecordingOptions,
+import { clampNudge, clampOpacity, ghostControls, ghostPathTuning, ghostRecordingOptions,
          ghostViewChoices, ghostOption, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
-         nudgeSeconds, nudgeText, opacityText, shownTint, shownView,
-         GHOST_VIEWS, NUDGE_STEP, VIEW_LABELS } from "../ghostsession.js";
+         nudgeSeconds, nudgeText, opacityText, pathTuningText, shownTint, shownView,
+         GHOST_VIEWS, NUDGE_STEP, PATH_SOURCE_LABELS, PATH_TUNING_LABELS, VIEW_LABELS } from "../ghostsession.js";
 
 const html = htm.bind(h);
 
@@ -249,14 +249,79 @@ function GhostNameControls({ row, box, limits, write, queue }) {
 }
 
 /**
- * The control for one on/off row: Names draws its box setting beneath itself.
+ * THE GHOST'S PATH. His words, 2026-10-03: *"iRacing style path markers on the
+ * ground, indicating the path that mario takes, so you know if you're staying
+ * on path or not"*. Its presses and which ghosts it is drawn from only mean
+ * something while it shows, so they nest beneath the switch like the box
+ * beneath Names; its four numbers are the Tune path disclosure below the row.
+ */
+function GhostPathControls({ row, buttons, source, limits, write }) {
+  const enabled = row.draft == null ? row.value : Boolean(row.draft);
+  return html`<div class="ghost-path-controls">
+    <${GhostOnOff} setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />
+    ${enabled === true && html`<div class="ghost-path-options">
+      ${buttons && html`<${GhostOnOff} setting=${buttons.setting} value=${buttons.value}
+        draft=${buttons.draft} write=${write} />`}
+      <div class="ghost-field ghost-path-source" role="group" aria-label="Which ghosts the path is drawn from">
+        <span class="ghost-field-name">Path from</span>
+        <select aria-label="Which ghosts the path is drawn from" disabled=${source == null}
+            title="Average of ghosts runs through the middle of their routes where they stay together, and follows the fastest ghost where they split"
+            value=${source || ""} onchange=${(event) => write({ path_source: event.target.value })}>
+          ${source == null && html`<option value="">Waiting...</option>`}
+          ${(limits.path_source?.options || []).map((name) =>
+            html`<option key=${name} value=${name}>${PATH_SOURCE_LABELS[name] || name}</option>`)}
+        </select>
+      </div>
+    </div>`}
+  </div>`;
+}
+
+/**
+ * HOW THE PATH IS DRAWN: how far ahead it reaches, how wide it is, how
+ * strongly it shows and how far apart its arrows sit. Tucked into a
+ * disclosure like Overlap fading, because he tunes it once and then races.
+ * Each slider writes on its trailing edge and sends only its own number,
+ * laid over whatever another slider has in flight (`queue` reads the
+ * pending patch, so two quick drags both land).
+ */
+function GhostPathTune({ active, view, switches, tuning, ranges, draft, queue }) {
+  const path = switches.find((row) => row.setting === "path_enabled");
+  const shown = path && (path.draft == null ? path.value : Boolean(path.draft));
+  if (!active || view !== "mario" || !shown || !tuning || !ranges) return null;
+  const set = (name, value) => queue((pending) => ({
+    path_tuning: { ...(draft || {}), ...(pending.path_tuning || {}), [name]: value },
+  }));
+  return html`<details class="ghost-path-tune">
+    <summary>Tune path</summary>
+    <div class="ghost-path-tune-body">
+      ${Object.entries(PATH_TUNING_LABELS).filter(([name]) => ranges[name]).map(([name, words]) => html`
+        <label key=${name} class="ghost-field">
+          <span class="ghost-field-name">${words.name}</span>
+          <input class="ghost-path-range" type="range" min=${ranges[name].min} max=${ranges[name].max}
+            step=${ranges[name].step} value=${tuning[name]} disabled=${tuning[name] == null}
+            aria-label=${words.label} title=${words.label}
+            oninput=${(event) => set(name, Number(event.target.value))} />
+          <span class="ghost-field-value">${pathTuningText(name, tuning[name], ranges[name])}</span>
+        </label>`)}
+    </div>
+  </details>`;
+}
+
+/**
+ * The control for one on/off row: Names draws its box setting beneath itself,
+ * and Path its presses and its source (so Path buttons draws nothing here).
  * No Stick/Values picker: every ghost input display takes the mode he chose
  * for his own HUD in Usamune's menu (his ask, 2026-10-02: "keep these in sync").
  */
-function GhostSwitchControl({ row, nameBox, limits, write, queue }) {
+function GhostSwitchControl({ row, rows, nameBox, pathSource, limits, write, queue }) {
   if (row.setting === "names_enabled") {
     return html`<${GhostNameControls} row=${row} box=${nameBox} limits=${limits} write=${write} queue=${queue} />`;
   }
+  if (row.setting === "path_enabled") {
+    return html`<${GhostPathControls} row=${row} buttons=${rows.find((other) => other.setting === "path_buttons")}
+      source=${pathSource} limits=${limits} write=${write} />`;
+  }
+  if (row.setting === "path_buttons" && rows.some((other) => other.setting === "path_enabled")) return null;
   return html`<${GhostOnOff} setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />`;
 }
 
@@ -404,21 +469,27 @@ function GhostRecording({ recording, entityKey, target, write }) {
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, switches, nameBox, volume, view, boxes, nudge, limits, write,
-                      queue, showView = true }) {
+function GhostTuning({ opacity, tint, switches, nameBox, pathSource, volume, view, boxes, nudge, limits,
+                      write, queue, showView = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
     nudge_frames: clampNudge(
       (pending.nudge_frames == null ? nudge : pending.nudge_frames) + delta, nudgeLimit(limits)),
   }));
+  const control = (row) => html`<${GhostSwitchControl} key=${row.setting}
+    row=${row} rows=${switches} nameBox=${nameBox} pathSource=${pathSource} limits=${limits}
+    write=${write} queue=${queue} />`;
+  // Volume sits right after Fade its sound, the sound's other control; the
+  // switches listed after that one follow Volume.
+  const sound = switches.findIndex((row) => row.setting === "sound_fade") + 1 || switches.length;
   return html`<div class="ghost-tune">
     <${GhostVisibility} opacity=${opacity} range=${limits.opacity} queue=${queue} />
     <${GhostColour} tint=${tint} range=${limits.tint} write=${write} queue=${queue} />
-    ${view === "mario" && html`${switches.map((row) => html`<${GhostSwitchControl} key=${row.setting}
-        row=${row} nameBox=${nameBox} limits=${limits} write=${write} queue=${queue} />`)}
+    ${view === "mario" && html`${switches.slice(0, sound).map(control)}
       <${GhostVolume} volume=${volume.value} draft=${volume.draft} range=${limits.volume}
-        queue=${queue} />`}
+        queue=${queue} />
+      ${switches.slice(sound).map(control)}`}
     ${showView && html`<${GhostView} view=${view} boxes=${boxes} write=${write} />`}
     <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
       <span class="ghost-field-name">Timing</span>
@@ -463,6 +534,9 @@ function heldValues(controls, held) {
       opacity: held.name_background_opacity == null ? controls.nameBox.opacity
         : clampOpacity(held.name_background_opacity, limits.name_background_opacity),
     },
+    pathSource: ghostOption("path_source", held.path_source ?? controls.pathSource, limits),
+    pathTuning: held.path_tuning == null ? controls.pathTuning
+      : ghostPathTuning(controls.pathTuning, limits, held.path_tuning),
   };
 }
 
@@ -492,7 +566,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   const on = held.enabled == null
     ? controls.enabled : Boolean(held.enabled) && controls.available;
   const { limits } = controls;
-  const { opacity, nudge, switches, tint, nameBox } = heldValues(controls, held);
+  const { opacity, nudge, switches, tint, nameBox, pathSource, pathTuning } = heldValues(controls, held);
   const view = shownView(controls.view, held.view);
   const recording = ghostRecordingOptions(controls.selection, view, held, practisedStrat(session));
   const nativeViews = ghostViewChoices(controls.nativeViews, recording);
@@ -515,11 +589,13 @@ export function GhostSwitch({ t, entityKey, active = true }) {
     <${GhostRecording} recording=${recording} entityKey=${entityKey}
       target=${session?.target} write=${write} />
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
-      switches=${switches} nameBox=${nameBox} limits=${limits}
+      switches=${switches} nameBox=${nameBox} pathSource=${pathSource} limits=${limits}
       volume=${{ value: controls.volume, draft: held.volume }}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}
     <${GhostProximity} active=${on} view=${view} value=${controls.proximity} range=${limits.proximity}
       draft=${held.proximity} write=${write} queue=${queue} />
+    <${GhostPathTune} active=${on} view=${view} switches=${switches} tuning=${pathTuning}
+      ranges=${limits.path_tuning} draft=${held.path_tuning} queue=${queue} />
   </div>`;
 }

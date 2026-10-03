@@ -9011,16 +9011,19 @@
   .ghost-tune {
     display: flex; align-items: baseline; gap: .5rem 1rem; flex-wrap: wrap;
   }
-  .ghost-proximity { font-size: .72rem; color: var(--muted); }
-  .ghost-proximity summary { width: fit-content; cursor: pointer; }
-  .ghost-proximity summary:focus-visible {
+  /* The two disclosures under the tuning line, Overlap fading and Tune path:
+     one look, so a second one reads as the same kind of thing. */
+  .ghost-proximity, .ghost-path-tune { font-size: .72rem; color: var(--muted); }
+  .ghost-proximity summary, .ghost-path-tune summary { width: fit-content; cursor: pointer; }
+  .ghost-proximity summary:focus-visible, .ghost-path-tune summary:focus-visible {
     outline: 2px solid var(--gold); outline-offset: 3px;
   }
-  .ghost-proximity-body {
+  .ghost-proximity-body, .ghost-path-tune-body {
     margin: .5rem 0 0 1rem; display: flex; flex-wrap: wrap;
     align-items: center; gap: .5rem 1rem;
   }
   .ghost-proximity-body .ghost-field { flex-wrap: wrap; }
+  .ghost-path-range { width: 100px; min-width: 0; accent-color: var(--gold); }
   .ghost-proximity-help { margin: 0; flex-basis: 100%; max-width: 45rem; line-height: 1.5; }
   .ghost-distance { width: 120px; min-width: 0; accent-color: var(--gold); }
   .ghost-field { display: flex; align-items: center; gap: .35rem; }
@@ -9031,18 +9034,23 @@
   /* Tighter than a default field: its first item is a small switch, not text,
      so the label sits closer to it without the two running together. */
   .ghost-colour, .ghost-onoff { gap: .4rem; }
-  .ghost-input-controls, .ghost-name-controls { display: grid; gap: .4rem; }
+  .ghost-input-controls, .ghost-name-controls, .ghost-path-controls { display: grid; gap: .4rem; }
   .ghost-name-box { margin-left: 1rem; }
+  /* Path buttons and Path from hang beneath Path, the way the box hangs
+     beneath Names: they only mean something while the path shows. */
+  .ghost-path-options {
+    margin-left: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1rem;
+  }
   .ghost-name-box-range { width: 70px; min-width: 0; accent-color: var(--gold); }
-  .ghost-name-box select {
+  .ghost-name-box select, .ghost-path-source select {
     background: #101f31; color: var(--text); border: 1px solid var(--border-soft);
     border-radius: 5px; font: inherit; font-size: .68rem; padding: 1px .3rem;
     min-height: 22px; cursor: pointer;
   }
-  .ghost-name-box select:focus-visible {
+  .ghost-name-box select:focus-visible, .ghost-path-source select:focus-visible {
     outline: 2px solid var(--gold); outline-offset: 2px;
   }
-  .ghost-name-box select:disabled {
+  .ghost-name-box select:disabled, .ghost-path-source select:disabled {
     cursor: default; opacity: .65;
   }
   .ghost-library { display: grid; gap: 12px; min-width: 0; }

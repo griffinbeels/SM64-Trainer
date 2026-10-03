@@ -55,6 +55,15 @@ def ghost_hue(base: int, index: int) -> int:
     return (base + index * HUE_STEP_DEGREES) % 360
 
 
+def fastest_clip(assets) -> int:
+    """The playing ghost the path follows: the one with the fewest frames (its
+    run time). A tie keeps the earlier (his PB leads the set); a ghost whose
+    time is unknown is never preferred over one whose time is known."""
+    timed = [(frames, index) for index, (*_, frames) in enumerate(assets)
+             if type(frames) is int and frames >= 0]
+    return min(timed)[1] if timed else 0
+
+
 def ghost_label(ghost) -> str:
     """Credit belongs to the selected source, independently of cached poses."""
     if getattr(ghost, "import_id", None):
@@ -153,7 +162,7 @@ class NativeGhost:
                     clip_ids.add(clip_id)
             answers.append(result)
             if asset is not None:
-                assets.append((*asset, result["label"]))
+                assets.append((*asset, result["label"], getattr(template, "frames", None)))
         self._asset = tuple(assets) or None
         first = next((answer for answer in answers if answer["available"]), answers[0])
         return {**first, "ghosts": [
@@ -300,10 +309,11 @@ class NativeGhost:
             clips = [{"clip_id": bytes.fromhex(manifest["clip_id"]),
                       "clip_sha256": bytes.fromhex(manifest["sha256"]),
                       "clip_path": str(path), "hue_degrees": ghost_hue(hue, index), "label": label}
-                     for index, (path, manifest, label) in enumerate(self._selected_asset)]
+                     for index, (path, manifest, label, _frames) in enumerate(self._selected_asset)]
             command = {"enabled": True, "model_id": 1,
                        "owner_suspended": self._owner_suspended,
                        "clips": clips, "rom_path": "",
+                       "path_clip": fastest_clip(self._selected_asset),
                        **controls,
                        "origin": {"kind": 1 if origin["kind"] == "star" else 2,
                                   "configuration": producer.configuration, "epoch": producer.epoch,

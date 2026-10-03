@@ -7,11 +7,12 @@ import os
 import secrets
 from contextlib import contextmanager
 
-from sm64_events.ghost import native_protocol as P
+from sm64_events.ghost import native_layout as L, native_protocol as P
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 from sm64_events.ghost.settings import (
     DEFAULT_INPUT_MODE, DEFAULT_NAME_BACKGROUND, DEFAULT_NAME_BACKGROUND_OPACITY, DEFAULT_OPACITY,
-    DEFAULT_VOLUME, INPUT_MODES, NAME_BACKGROUNDS, NUDGE_LIMIT_FRAMES, native_switches,
+    DEFAULT_VOLUME, INPUT_MODES, NAME_BACKGROUNDS, NUDGE_LIMIT_FRAMES, PATH_SOURCES, native_path_defaults,
+    native_switches,
 )
 from sm64_events.memory.addresses import ACT_JUMBO_STAR_CUTSCENE, STAR_DANCE_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
@@ -66,11 +67,7 @@ class NativeChannel:
                 request.token = secrets.randbelow((1 << 64) - 1) + 1
                 request.revision = request.heartbeat = request.capture_enabled = 1
                 request.rom_generation = status.rom_generation
-                request.opacity, request.volume = DEFAULT_OPACITY, DEFAULT_VOLUME
-                request.name_background = NAME_BACKGROUNDS[DEFAULT_NAME_BACKGROUND]
-                request.name_background_opacity = DEFAULT_NAME_BACKGROUND_OPACITY
-                for field, default in native_switches().items():
-                    setattr(request, field, int(default))
+                _set_defaults(request)
                 request.layout[:] = layout
                 # The race ends at the x-cam, the dance, never the midair fall
                 # before one (his ruling, 2026-09-28: "the ghost death / real
@@ -210,6 +207,7 @@ class NativeChannel:
             request.rom_path[:] = units + (0,) * (P.PATH_CHARS - len(units))
         if enabled or "clips" in value:
             _set_clips(request, value.get("clips"), enabled)
+        _set_path(request, value)
         if request.revision == (1 << 64) - 1:
             raise OverflowError("native ghost command identity exhausted")
         self._request = request
@@ -229,6 +227,17 @@ class NativeChannel:
 
 
 CLIP_KEYS = {"clip_id", "clip_sha256", "clip_path", "hue_degrees"}
+
+
+def _set_defaults(request) -> None:
+    """A new lease's controls: each setting's registry default."""
+    request.opacity, request.volume = DEFAULT_OPACITY, DEFAULT_VOLUME
+    request.name_background = NAME_BACKGROUNDS[DEFAULT_NAME_BACKGROUND]
+    request.name_background_opacity = DEFAULT_NAME_BACKGROUND_OPACITY
+    for field, default in native_switches().items():
+        setattr(request, field, int(default))
+    for field, default in native_path_defaults().items():
+        setattr(request, field, default)
 
 
 def _switch(value: dict, key: str, default: bool) -> bool:
@@ -252,6 +261,35 @@ def _set_annotations(request, value: dict) -> None:
         raise ValueError("native ghost name background opacity must be a number in 0..1")
     request.input_mode, request.name_background = input_mode, background
     request.name_background_opacity = float(alpha)
+
+
+#: Each path number the request carries: (accepted types, low, high); `path_clip` is checked against the clips.
+PATH_BOUNDS = {
+    "path_source": ((int,), min(PATH_SOURCES.values()), max(PATH_SOURCES.values())),
+    "path_ahead_ms": ((int,), L.PATH_AHEAD_MS_MIN, L.PATH_AHEAD_MS_MAX),
+    "path_width": ((int, float), L.PATH_WIDTH_MIN, L.PATH_WIDTH_MAX),
+    "path_opacity": ((int, float), 0, 1),
+    "path_spacing_ms": ((int,), L.PATH_SPACING_MS_MIN, L.PATH_SPACING_MS_MAX),
+}
+
+
+def _set_path(request, value: dict) -> None:
+    """The path's numbers, each absent key its registry default, plus the clip it
+    follows: an index into the clips just encoded (0 while there are none), so
+    the renderer is never handed a ghost that is not playing."""
+    numbers = {}
+    for field, default in native_path_defaults().items():
+        number = value.get(field, default)
+        kinds, low, high = PATH_BOUNDS[field]
+        if type(number) not in kinds or not math.isfinite(number) or not low <= number <= high:
+            raise ValueError(f"native ghost {field} must be a number in {low}..{high}")
+        numbers[field] = number
+    clip = value.get("path_clip", 0)
+    if type(clip) is not int or not 0 <= clip < max(request.clip_count, 1):
+        raise ValueError("native ghost path_clip must name one of the clips")
+    for field, number in numbers.items():
+        setattr(request, field, number)
+    request.path_clip = clip
 
 
 def _volume(value: dict) -> float:
