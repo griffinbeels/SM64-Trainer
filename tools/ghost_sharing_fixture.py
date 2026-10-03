@@ -101,6 +101,10 @@ class ScratchReplay:
         path = self.cfg.save_root / "native" / f"attempt_{number}.ghost"
         return (path, self.assets[number][1]) if path.exists() else None
 
+    def native_with_inputs(self, number, found):
+        # These recordings already carry their pads: the playback copy is the clip itself.
+        return found
+
 
 def foreign_collection(root):
     entries = []
