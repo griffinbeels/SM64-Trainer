@@ -12,11 +12,28 @@ constexpr float letter_x=160,letter_y=128;   // HUD U, D, L, R at letter_x + j*1
 constexpr float button_y=144;                // Usamune 16x16 button i at (i*16, 144)
 constexpr float ring_x=144,ring_y=144;       // 16x16 stick ring
 constexpr float base_x=160,base_y=144;       // 32x32 mirrored stick base
+// The ghost path's 8x8 chevron (ghost_path.h chevron_x/y): grey = its own
+// brightness, alpha = the chevron's pixels, rows in order (tip last).
+constexpr unsigned chevron_x=192,chevron_y=144;
 enum Letter {U,D,L,R};
+}
+// Lethal Lava Land's chevron, cropped from its fire-bank texture (his choice,
+// 2026-10-03: "lll_chevron seems legit, just need to make sure it's cropped
+// properly"). The bank's MIO0 block at ROM 0x31E1D0 decodes to 0xC000 bytes;
+// at 0xB800 lies the 32x32 RGBA16 arrow-platform texture, identical in the US
+// and Usamune ROMs (FNV-1a of its 2048 bytes below). The chevron alone is
+// columns 12-19; rows 1-8 hold one whole V, its tip on the last row, and the
+// texture repeats every 8 rows. Its pixels are those with blue above 3 of 31
+// (the brown around them has 2-3); the four tones it has become brightness,
+// max(r, g, b), floored at 0.35 (89 of 255).
+namespace chevron_texture {
+constexpr uint32_t bank=0x31e1d0,decoded=0xc000,texture=0xb800,texture_fnv1a=0x7e9f2d09u;
+constexpr unsigned first_column=12,first_row=1,size=8;
+constexpr uint8_t floor=89;
 }
 struct Assets {
     std::array<uint8_t,atlas_width*atlas_height*4> rgba{};
-    bool ready=false,usamune=false;
+    bool ready=false,usamune=false,chevron=false;
     bool load(const uint8_t* rom,uint32_t bytes);
     View view() const {return ready?View{rgba.data(),atlas_width,atlas_height,usamune}:View{};}
 };

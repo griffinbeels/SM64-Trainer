@@ -155,12 +155,13 @@ def assert_stage_costs(stages):
 
 
 def assert_scene_effects(report):
-    """The recorded shadow, the water over a submerged ghost, his particles, the player-first fade
-    and the back faces the game culls."""
+    """The recorded shadow, the water over a submerged ghost, his particles, the player-first fade,
+    the back faces the game culls and the ghost's path (with what it costs)."""
     assert_recorded_shadow(report["shadow"])
     assert_submerged(report["water"], report["particles"])
     assert_player_first(report["occlusion"])
     assert_culled(report["culling"])
+    assert_path_cost(report["path"])
 
 
 def assert_culled(culling):
@@ -196,6 +197,19 @@ def assert_submerged(water, particles):
 def assert_player_first(occlusion):
     """A ghost in front of live Mario fades over him only; behind him it is unchanged."""
     assert occlusion["faded"] > 1000 and occlusion["outside_pixels_changed"] == occlusion["behind_errors"] == 0
+
+
+def assert_path_cost(path):
+    """The ghost's path drawn beside one ghost, live Mario running along it: the
+    same frames with it off and on (playback's choice, the compositor's stages,
+    the frame through GPU completion). It asks the driver nothing either way."""
+    print(json.dumps({"path": path}))
+    assert path["points"] > 100 and path["pixels"] > 1000
+    for side in ("off", "on"):
+        queries = path[side]["stages"]["driver_queries"]
+        assert queries["p50"] == queries["max"] == RESIDUE_QUERIES, (side, queries)
+        assert path[side]["pipeline_gpu_completed"]["samples"] == 180
+        assert path[side]["pipeline_gpu_completed"]["over_budget"] == 0, path[side]
 
 
 def assert_full_ghost_set(report):

@@ -24,8 +24,31 @@ bool decode(const uint8_t* p,uint32_t span,std::vector<uint8_t>& out) {
     return true;
 }
 }
+namespace {
+// The chevron cell, only from the exact texture bytes; anything else draws none.
+bool load_chevron(const uint8_t* rom,uint32_t bytes,uint8_t* atlas) {
+    if(bytes<chevron_texture::bank+16)return false;
+    const uint32_t span=bytes-chevron_texture::bank<0x20000u?bytes-chevron_texture::bank:0x20000u;
+    std::vector<uint8_t> bank;
+    if(!decode(rom+chevron_texture::bank,span,bank) || bank.size()!=chevron_texture::decoded)return false;
+    const uint8_t* texture=bank.data()+chevron_texture::texture;
+    uint32_t hash=0x811c9dc5u;
+    for(unsigned i=0;i<32*32*2;++i)hash=(hash^texture[i])*0x01000193u;
+    if(hash!=chevron_texture::texture_fnv1a)return false;
+    for(unsigned y=0;y<chevron_texture::size;++y)for(unsigned x=0;x<chevron_texture::size;++x) {
+        const unsigned at=((chevron_texture::first_row+y)*32+chevron_texture::first_column+x)*2;
+        const unsigned color=(unsigned(texture[at])<<8)|texture[at+1];
+        const unsigned r=((color>>11)&31)*255/31,g=((color>>6)&31)*255/31,b=((color>>1)&31)*255/31;
+        unsigned bright=r>g?r:g;bright=bright>b?bright:b;
+        if(bright<chevron_texture::floor)bright=chevron_texture::floor;
+        auto* pixel=atlas+((cell::chevron_y+y)*atlas_width+cell::chevron_x+x)*4;
+        pixel[0]=pixel[1]=pixel[2]=uint8_t(bright);pixel[3]=((color>>1)&31)>3?255:0;
+    }
+    return true;
+}
+}
 bool Assets::load(const uint8_t* rom,uint32_t bytes) {
-    ready=usamune=false;rgba.fill(0);
+    ready=usamune=chevron=false;rgba.fill(0);
     constexpr uint32_t base=0x108a40,span=128*1024,lut=0x77e8;
     if(!rom || bytes<base+span)return false;
     std::vector<uint8_t> data;
@@ -80,6 +103,7 @@ bool Assets::load(const uint8_t* rom,uint32_t bytes) {
     // A one-pixel white cell supports dialog cards without invented artwork.
     auto* white=rgba.data()+(atlas_width*atlas_height-1)*4;
     white[0]=white[1]=white[2]=white[3]=255;
+    chevron=load_chevron(rom,bytes,rgba.data());
     ready=true;return true;
 }
 }

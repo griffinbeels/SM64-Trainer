@@ -5,6 +5,7 @@
 #include "ghost_occlusion.h"
 #include "ghost_tuning.h"
 #include "ghost_annotation.h"
+namespace ghost_path { struct Frame; }
 
 #ifdef _WIN32
 #define GC_GL_CALL __stdcall
@@ -223,8 +224,11 @@ Result begin(Instance*, const Target&, const Pose&, const Known* = nullptr); // 
  * body with its own self-depth/stencil pass. Caller supplies back-to-front
  * order and live borrowed vertices; prepare capacity is the TOTAL vertices.
  * Body sorting is approximate for interpenetrating translucent ghosts.
- * No allocations; invalid input refuses the entire candidate before drawing. */
-Result begin_batch(Instance*, const Target&, const Pose*, uint32_t count, const Known* = nullptr);
+ * No allocations; invalid input refuses the entire candidate before drawing.
+ * path: the ghost's path this list (ghost_path.h), drawn over the shadows and
+ * under every body; with one, count may be zero (the path alone). */
+Result begin_batch(Instance*, const Target&, const Pose*, uint32_t count, const Known* = nullptr,
+                   const ghost_path::Frame* path = nullptr);
 /* Root establishes semantic HUD safety (no image writes / framebuffer feedback).
  * This scope additionally refuses depth/stencil/raster side effects. Mirror the
  * SAME raster call, then end_hud. No emulation command or state update is replayed. */

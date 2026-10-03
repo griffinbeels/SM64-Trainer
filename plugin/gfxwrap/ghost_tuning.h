@@ -46,6 +46,55 @@ enum gp_name_background { GP_NAME_BLACK = 0, GP_NAME_WHITE = 1 };
 #define GP_ANNOTATION_BUTTON_GAP 2.0f
 /* The largest extra overlap-fade distance a request may carry (world units). */
 #define GP_PROXIMITY_MAX 400.0f
+/* The ghost's path (ghost_path.h), his ask of 2026-10-03: "iRacing style path
+ * markers on the ground, indicating the path that mario takes". The request's
+ * ranges (gp_request.path_*; ghost/native_layout.py restates these), then the
+ * shape, every number judged by feel in the preview of attempt 9797 over 9773. */
+enum gp_path_source { GP_PATH_FASTEST = 0, GP_PATH_AVERAGE = 1 };
+#define GP_PATH_AHEAD_MS_MIN 500u
+#define GP_PATH_AHEAD_MS_MAX 10000u
+#define GP_PATH_WIDTH_MIN 10.0f
+#define GP_PATH_WIDTH_MAX 120.0f
+#define GP_PATH_SPACING_MS_MIN 33u
+#define GP_PATH_SPACING_MS_MAX 500u
+/* Past path_ahead_ms the path fades to nothing over this long; this much of it
+ * behind live Mario stays at GP_PATH_BEHIND_ALPHA (Trackmania's Editor Route
+ * draws the driven part at 25%). */
+#define GP_PATH_FADE_MS 2000u
+#define GP_PATH_BEHIND_MS 1000u
+#define GP_PATH_BEHIND_ALPHA 0.25f
+/* The most records one window holds: the longest look-ahead, its fade and the
+ * part behind, at 30 Hz, with room for a paused record or two. */
+#define GP_PATH_SAMPLES 400u
+/* Live Mario's place on the path is searched for this far back and ahead of
+ * the last match (3 s and 6 s), so a path that crosses itself keeps its place. */
+#define GP_PATH_SEARCH_BACK_FRAMES 90u
+#define GP_PATH_SEARCH_AHEAD_FRAMES 180u
+/* The averaged path averages only where every ghost is this close to the
+ * fastest at the same elapsed frame: two strats never average into a wall. */
+#define GP_PATH_AVERAGE_GATE 200.0f
+/* The ground ribbon sits this far above the floor, along the floor's normal;
+ * the dark casing under it is this much wider. */
+#define GP_PATH_LIFT 2.0f
+#define GP_PATH_CASING_WIDTH 1.35f
+#define GP_PATH_CASING_ALPHA 0.6f
+/* In the air: a ribbon a third as wide, a dot on the floor under him every
+ * GP_PATH_DOT_FRAMES frames at this alpha and size, and a bar across the
+ * ribbon where he leaves the ground and where he lands. */
+#define GP_PATH_AIR_WIDTH (1.0f / 3.0f)
+#define GP_PATH_DOT_FRAMES 3u
+#define GP_PATH_DOT_ALPHA 0.5f
+#define GP_PATH_DOT_WIDTH 0.4f
+#define GP_PATH_TICK_LENGTH 6.0f
+/* Parts behind the game's walls draw at this alpha, so a path around a corner
+ * stays one line; parts this near the camera fade out (world units). */
+#define GP_PATH_HIDDEN_ALPHA 0.2f
+#define GP_PATH_NEAR_HIDDEN 60.0f
+#define GP_PATH_NEAR_FULL 150.0f
+/* A button press (path_buttons): its Usamune icon this far above his root,
+ * this many pixels of a 320x240 screen whatever the distance. */
+#define GP_PATH_BUTTON_HEIGHT 60.0f
+#define GP_PATH_BUTTON_PIXELS 12.0f
 /* Overlap fade (ghost_proximity.h): the ellipsoid proxy for one Mario at gfx
  * scale 1, from bhvMario's radius=37, height=160 (half height 80):
  * https://github.com/n64decomp/sm64/blob/master/data/behavior_data.c */

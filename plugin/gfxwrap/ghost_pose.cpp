@@ -174,6 +174,23 @@ bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
     return true;
 }
 }
+namespace {
+void live_view_projection(const float view[16], const ghost::WorldPass &world, float out[16]) {
+    multiply(world.projection,view,out);
+    for (unsigned c = 0; c < 4; ++c) {
+        out[4*c] *= world.target.screen_scale[0];
+        out[4*c+1] *= world.target.screen_scale[1];
+    }
+}
+}
+bool view_projection(sg_model *model, const gc_camera &live, const ghost::WorldPass &world, float out[16]) {
+    float view[16]{};
+    std::memset(out,0,16*sizeof(float));
+    if(sg_model_view(model,live.position,live.focus,live.roll,view)!=SG_OK) return false;
+    live_view_projection(view,world,out);
+    for(unsigned i=0;i<16;++i)if(!std::isfinite(out[i]))return false;
+    return true;
+}
 bool camera_relative(sg_model *model, const gc_camera &live, const float world[3], float out[3]) {
     float view[16]{};
     if(sg_model_view(model,live.position,live.focus,live.roll,view)!=SG_OK) return false;
@@ -335,11 +352,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
             return Result::model_failed;
         v.material = ghost_compositor::with_tile(static_cast<ghost_compositor::Material>(material), tile);
     }
-    multiply(world.projection,view,built.view_projection);
-    for (unsigned c = 0; c < 4; ++c) {
-        built.view_projection[4*c] *= world.target.screen_scale[0];
-        built.view_projection[4*c+1] *= world.target.screen_scale[1];
-    }
+    live_view_projection(view,world,built.view_projection);
     built.flip_y = 1;
     // The game never draws the back of a triangle its list left G_CULL_BACK
     // on (all of Mario but his cap's wings). From outside that hides nothing

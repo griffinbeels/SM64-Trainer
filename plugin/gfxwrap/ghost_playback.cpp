@@ -9,6 +9,7 @@
 #include "ghost_particle_pose.h"
 #include "ghost_compositor.h"
 #include "ghost_annotation_assets.h"
+#include "ghost_path.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -187,6 +188,31 @@ struct ShadowScratch {
     uint8_t texture[256];
 } shadows[GP_GHOSTS]; // borrowed shadow per displayed ghost
 ghost_compositor::ParticleVertex particle_vertices[GP_GHOSTS][ghost_compositor::particle_vertices];
+// The ghost's path (ghost_path.h), renderer-owned and preallocated. Each
+// record is read once (its floor needs the model's look-at of its recorded
+// camera) and kept while the window passes it; a changed clip, source or
+// ghost alignment starts the records over. The search for live Mario's place
+// restarts with a new clip, run (origin), mode or seek.
+struct PathEntry {uint32_t record=UINT32_MAX,stamp=0;ghost_path::Recorded value{};};
+PathEntry path_cache[512];
+static_assert(sizeof(path_cache)/sizeof(path_cache[0])>GP_PATH_SAMPLES,"one window never wraps the record cache");
+uint32_t path_stamp=1;
+struct PathKey {
+    const void *clip=nullptr;uint32_t index=0,source=0;
+    const void *bound[GP_GHOSTS]{};int64_t shift[GP_GHOSTS]{};
+    bool operator==(const PathKey& o) const {
+        if(clip!=o.clip || index!=o.index || source!=o.source)return false;
+        for(uint32_t i=0;i<GP_GHOSTS;++i)if(bound[i]!=o.bound[i] || shift[i]!=o.shift[i])return false;
+        return true;
+    }
+} path_key;
+struct PathTimeline {
+    const void *clip=nullptr;uint64_t origin=0;uint32_t mode=0,seek=0;
+    bool operator==(const PathTimeline& o) const {return clip==o.clip && origin==o.origin && mode==o.mode && seek==o.seek;}
+} path_timeline;
+ghost_path::Anchor path_anchor;
+ghost_path::Frame path_frame;
+bool path_ready=false;
 
 int worker_enter() {
     if(worker_gate.test_and_set(std::memory_order_acquire)) return GP_BUSY;
@@ -577,7 +603,8 @@ bool valid_request(const gp_request& r) {
             || r.suspended>1 || r.reserved4 || r.names_enabled>1 || r.inputs_enabled>1
             || r.input_mode>GP_INPUT_VALUES || r.name_background>GP_NAME_WHITE
             || !std::isfinite(r.name_background_opacity) || r.name_background_opacity<0
-            || r.name_background_opacity>1 || r.hud_inputs_enabled>1 || r.record_ghosts>1) return false;
+            || r.name_background_opacity>1 || r.hud_inputs_enabled>1 || r.record_ghosts>1
+            || !ghost_path::valid_request(r,r.enabled!=0,r.clip_count)) return false;
     const gp_clip unused{};
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         const auto &clip=r.clips[i];
@@ -939,6 +966,8 @@ struct Plan {
     uint64_t sequence=0,dlist_serial=0;
     gp_draw_token candidate{};
     Choice ghost[GP_GHOSTS];
+    bool path=false;            // the ghost's path draws this list (choose_path)
+    uint64_t origin_sequence=0; // the FOLLOW origin it plays from: a new one restarts the path's search
 } planned;
 uint32_t choose(uint32_t index,const Coordinate& frame,const gc_sample& live,Choice& choice) {
     const Clip *clip=bound[index];
@@ -1110,6 +1139,76 @@ void annotate(uint32_t index,const Choice& choice,ghost_compositor::Pose& pose) 
     const auto& selected=bound[index]->frames[choice.record].sample;
     if((out.inputs || out.hud) && (selected.valid_fields&GC_VALID_PAD)) {out.known=true;out.pad=selected.pad;}
 }
+// Each ghost's coordinate is the live one plus its alignment (and the shared
+// nudge): the same live frame finds ghost j at c_path - shift(path) + shift(j).
+int64_t path_shift(uint32_t i) {
+    return active_request.mode==GP_FOLLOW && i<GP_GHOSTS && bound[i] && aligned[i]?align[i]:0;
+}
+bool record_at(const Clip& clip,uint64_t coordinate,uint32_t& index) {
+    uint32_t lo=0,hi=clip.index_count;
+    while(lo<hi) {const uint32_t middle=lo+(hi-lo)/2;if(clip_coordinate(clip,middle)<coordinate)lo=middle+1;else hi=middle;}
+    index=lo;return lo<clip.index_count && clip_coordinate(clip,lo)==coordinate;
+}
+// The path clip as ghost_path sees it (its Track).
+struct PathTrack {
+    const Clip& clip;uint32_t index;bool average;
+    uint32_t size() const {return clip.index_count;}
+    uint64_t coordinate(uint32_t i) const {return clip_coordinate(clip,i);}
+    bool where(uint32_t i,int16_t level,int16_t area,float out[3]) const {
+        const auto& s=clip.frames[i].sample;float dx=0;
+        if(!(s.valid_fields&GC_VALID_POSE) || !ghost_scene::translation(s.level,s.area,level,area,dx))return false;
+        out[0]=s.pose.position[0]+dx;out[1]=s.pose.position[1];out[2]=s.pose.position[2];
+        return ghost_path::finite3(out);
+    }
+    const ghost_path::Recorded& at(uint32_t i) const {
+        auto& entry=path_cache[i%(sizeof(path_cache)/sizeof(path_cache[0]))];
+        if(entry.stamp==path_stamp && entry.record==i)return entry.value;
+        const auto& s=clip.frames[i].sample;
+        float inverse[16];
+        const bool floor=(s.valid_fields&GC_VALID_SHADOW) && (s.valid_fields&GC_VALID_CAMERA)
+            && ghost_pose::recorded_camera_inverse(model.value,s.camera,inverse);
+        const uint64_t here=clip_coordinate(clip,i);
+        ghost_path::record(s,here,floor?inverse:nullptr,entry.value);
+        if(average) {
+            ghost_path::Recorded others[GP_GHOSTS];uint32_t count=0;
+            const int64_t live=int64_t(here)-path_shift(index);
+            for(uint32_t j=0;j<active_request.clip_count && j<GP_GHOSTS;++j) {
+                if(j==index)continue;
+                auto& other=others[count++];other={};
+                const int64_t theirs=live+path_shift(j);uint32_t row=0;
+                if(bound[j] && theirs>=0 && record_at(*bound[j],uint64_t(theirs),row))
+                    ghost_path::record(bound[j]->frames[row].sample,uint64_t(theirs),nullptr,other);
+            }
+            ghost_path::average(entry.value,others,count);
+        }
+        entry.record=i;entry.stamp=path_stamp;return entry.value;
+    }
+};
+// This list's path: live Mario's place on the path clip, then the window
+// around it, under the live camera every ghost is drawn with.
+bool choose_path(const Plan& list,const gc_sample& live,const ghost::WorldPass& world) {
+    auto& frame=path_frame;frame.count=0;
+    const uint32_t index=active_request.path_clip;
+    const Clip *clip=index<GP_GHOSTS?bound[index]:nullptr;
+    if(!clip || !ghost_pose::view_projection(model.value,live.camera,world,frame.view_projection))return false;
+    const PathTimeline timeline{clip,list.origin_sequence,active_request.mode,active_request.seek_igt};
+    if(!(timeline==path_timeline)) {path_timeline=timeline;path_anchor={};}
+    PathKey key{};key.clip=clip;key.index=index;key.source=active_request.path_source;
+    for(uint32_t j=0;j<GP_GHOSTS;++j) {key.bound[j]=j<active_request.clip_count?bound[j]:nullptr;key.shift[j]=path_shift(j);}
+    if(!(key==path_key)) {path_key=key;if(++path_stamp==0)path_stamp=1;}
+    const PathTrack track{*clip,index,active_request.path_source==GP_PATH_AVERAGE};
+    const auto& choice=list.ghost[index];
+    const bool hinted=choice.result==GP_READY || choice.result==GP_BEFORE_START;
+    if(live.valid_fields&GC_VALID_POSE)
+        ghost_path::locate(track,live.pose.position,live.level,live.area,path_anchor,hinted,choice.record);
+    if(!path_anchor.known)return false;
+    ghost_path::window(track,path_anchor,live.level,live.area,active_request.path_ahead_ms,frame);
+    std::memcpy(frame.eye,live.camera.position,sizeof(frame.eye));frame.flip_y=1;
+    frame.width=active_request.path_width;frame.opacity=active_request.path_opacity;
+    frame.spacing_ms=active_request.path_spacing_ms;frame.buttons=active_request.path_buttons!=0;
+    frame.chevrons=model.annotations.chevron;frame.icons=model.annotations.usamune;
+    return frame.count>0;
+}
 bool same_list(const Plan& list,const gc_sample& live) {
     return list.made && list.epoch==live.epoch && list.sequence==live.sequence && list.dlist_serial==live.dlist_serial;
 }
@@ -1130,7 +1229,7 @@ void set_sound_sink(const SoundSink *sink) {sound_sink.store(sink,std::memory_or
 void safe_boundary(uint32_t rom,uint32_t configuration) {
     const auto thread=GetCurrentThreadId();
     if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return;}
-    render_thread=thread;live_rom=rom;live_configuration=configuration;
+    render_thread=thread;live_rom=rom;live_configuration=configuration;path_ready=false;
     next_boundary();
     PublishedRequest published{};const bool received=requests.get(published);
     const auto &next=published.value; const auto current_cancel=cancellation.load();
@@ -1472,6 +1571,10 @@ void plan_list(const gc_sample& live) {
         list.chosen+=result==GP_READY || result==GP_BEFORE_START;
     }
     list.proceed=true;list.post=post;list.candidate=candidate;
+    // The path: while the attempt runs, never through a defeat (it is over).
+    list.path=active_request.path_enabled && !defeat.active && active_request.path_clip<active_request.clip_count
+        && active_request.path_clip<GP_GHOSTS && bound[active_request.path_clip] && (live.valid_fields&GC_VALID_CAMERA);
+    list.origin_sequence=active_request.mode==GP_FOLLOW?origin.sequence:0;
 }
 bool plan(const gc_sample& live) {
     if(!drawing())return false;
@@ -1480,7 +1583,7 @@ bool plan(const gc_sample& live) {
 }
 bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
               ghost_compositor::Pose *out,uint32_t& count,gp_draw_token& token) {
-    count=0;token={};
+    count=0;token={};path_ready=false;
     if(!out)return false;
     for(uint32_t i=0;i<GP_GHOSTS;++i)out[i]={};
     if(!renderer_owner())return false;
@@ -1555,11 +1658,14 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     report.visible=count;
     if(count)summary=before_start?GP_BEFORE_START:GP_READY;
     decision(summary);
-    if(count)token=candidate;
-    return count!=0;
+    path_ready=list.path && choose_path(list,live,world);
+    if(count || path_ready)token=candidate;
+    return count!=0 || path_ready;
 }
+const ghost_path::Frame *path() {return path_ready && renderer_owner()?&path_frame:nullptr;}
 void retire_on_context_loss() {
     if(!renderer_owner())return;
+    path_ready=false;path_anchor={};path_timeline={};path_key={};
     retire_clips();
     const bool released=retire_model();
     have_request=false;clear_timeline();sound_control(false,0);forget_heard(Forget::move);
