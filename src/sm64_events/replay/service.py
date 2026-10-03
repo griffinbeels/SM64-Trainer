@@ -30,8 +30,8 @@ from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.navigation import captured_input_span, attempt_start_slot
 from sm64_events.replay.reviewstate import ReviewStateStore
 from sm64_events.replay.compress import SavedReplayCompressor
-from sm64_events.replay.publication import (atomic_json, publish as publish_saved, recover as recover_saved,
-                                           resume as resume_saved)
+from sm64_events.replay.publication import (GHOST_COPY_SUFFIX, atomic_json, publish as publish_saved,
+                                           recover as recover_saved, resume as resume_saved)
 from sm64_events.replay.extract import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
@@ -42,6 +42,22 @@ log = logging.getLogger("sm64.replay")
 _CLIP_NAME = "clip_attempt_{id}.mp4"
 # fullmatch pattern — rejects traversal, wrong extension, empty id
 _CLIP_RE = re.compile(r"clip_attempt_\d+\.mp4")
+# The ghost copy (the twin recording, ghosts kept) of a buffer clip.
+_GHOST_COPY_NAME = "ghostcopy_attempt_{id}.mp4"
+_GHOST_COPY_RE = re.compile(r"ghostcopy_attempt_\d+\.mp4")
+
+# Why a replay offers no ghost copy, in the words the player shows.
+GHOST_COPY_NONE = "No ghost copy was recorded for this attempt"
+GHOST_COPY_PARTIAL = "The ghost copy covers only part of this replay"
+GHOST_COPY_UNREADABLE = "The ghost copy could not be read"
+GHOST_COPY_GONE = "The ghost copy is no longer in the buffer"
+GHOST_COPY_LOST_BEFORE_SAVE = "The ghost copy left the buffer before this replay was saved"
+GHOST_COPY_MISSING = "The ghost copy file is missing"
+# The copy's own helper encodes and publishes it, so its tail trails the clean
+# recording's. A cut taken at once waits this long, at most, for the copy to
+# reach the clean clip's last picture -- only while a copy covers the clip's
+# start. With Ghosts in recording off there is no copy and no wait.
+GHOST_COPY_TAIL_WAIT_S = 1.0
 
 
 def saved_attempt_ids(root: Path, *, include_native: bool = True, among=None) -> set[int]:
@@ -298,6 +314,12 @@ class ReplayService:
         source = getattr(self.recorder, "fragments", None)
         return source if source is not None and source.enabled else None
 
+    @property
+    def ghost_copies(self):
+        """The recorder's ghost copy archive; None when it records none."""
+        copies = getattr(self.recorder, "ghost_copies", None)
+        return copies if copies is not None and getattr(copies, "enabled", False) else None
+
     def buffer_coverage(self):
         return self.fragments.coverage() if self.fragments else self.recorder.ring.coverage("video")
 
@@ -308,7 +330,7 @@ class ReplayService:
         if cached and cached.get("fragment_source"):
             with ExitStack() as local:
                 (leases or local).enter_context(source.read(cached["fragment_source"]))
-                return cached, False
+                return self._ghost_copy_held(cached, leases or local), False
         start, end = self._span(attempt)
         # Wait only for the attempted action itself, never future post-padding.
         required = _parse_utc(attempt.ended_utc)
@@ -331,9 +353,98 @@ class ReplayService:
                     "start_utc": result.start_utc.isoformat(), "video_start_s": result.video_start_s,
                     "frame_times": [round(t, 6) for t in result.frame_times], "encode": "picture_feed",
                     "fragment_source": descriptor}
+            meta.update(self._ghost_copy_cut(result, meta["frame_times"], leases or local))
             self._map_from_feeds(meta, result)
         self.clips_dir.mkdir(parents=True, exist_ok=True)
         return meta, True
+
+    def _ghost_copy_cut(self, result, frame_times: list, leases) -> dict:
+        """The ghost copy over the clean clip's exact span, or why there is none.
+
+        Offered only when its first picture starts at the clean clip's start to
+        the microsecond and its picture times equal the clean clip's: the
+        player swaps one for the other at the same `currentTime`, and every
+        consumer of `frame_times`/`frame_map` reads the clean clip's. A fault
+        here never reaches the clean cut."""
+        copies = self.ghost_copies
+        if copies is None:
+            return {"ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_NONE}
+        start = result.start_utc
+        end = start + timedelta(seconds=result.duration_s)
+        try:
+            self._wait_for_ghost_copy(copies, start, end)
+            _, twin, descriptor = leases.enter_context(copies.open(start, end, required_span=(start, end)))
+        except (LookupError, ValueError):
+            return {"ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_NONE}
+        except Exception:  # noqa: BLE001 - a twin fault stops only the twin
+            log.exception("ghost copy cut failed; the replay offers the clean clip only")
+            return {"ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_UNREADABLE}
+        if twin.start_utc != start or [round(t, 6) for t in twin.frame_times] != frame_times:
+            return {"ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_PARTIAL}
+        return {"ghost_copy_source": descriptor, "ghost_copy_reason": None}
+
+    def _wait_for_ghost_copy(self, copies, start: datetime, end: datetime) -> None:
+        """Bounded: see GHOST_COPY_TAIL_WAIT_S. A copy that does not reach back
+        to the clip's start can never match it, so it is not waited for."""
+        deadline = time.monotonic() + min(self.cfg.extract_wait_s, GHOST_COPY_TAIL_WAIT_S)
+        reached = end - timedelta(milliseconds=1)  # µs rounding of two UTC sums
+        while True:
+            coverage = copies.coverage()
+            if coverage is None or coverage[0] > start or coverage[1] >= reached:
+                return
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(0.02)
+
+    def _ghost_copy_held(self, meta: dict, leases) -> dict:
+        """A cached cut's ghost copy, still retained; otherwise say so."""
+        descriptor = meta.get("ghost_copy_source")
+        if descriptor is None:
+            return meta
+        copies = self.ghost_copies
+        try:
+            if copies is None:
+                raise LookupError("no ghost copy archive")
+            leases.enter_context(copies.read(descriptor))
+        except (LookupError, ValueError, OSError):
+            return {**meta, "ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_GONE}
+        return meta
+
+    @staticmethod
+    def _ghost_copy_offer(attempt_id: int, source: str, meta: dict, saved: Path | None) -> dict:
+        """The payload's `ghost_copy_url` and `ghost_copy_reason`."""
+        if source == "saved":
+            block = meta.get("ghost_copy")
+            if isinstance(block, dict) and saved.with_suffix(GHOST_COPY_SUFFIX).is_file():
+                return {"ghost_copy_url": f"/api/replay/saved/{attempt_id}/ghosts",
+                        "ghost_copy_reason": None}
+            reason = GHOST_COPY_MISSING if isinstance(block, dict) else None
+        elif meta.get("ghost_copy_source") is not None:
+            return {"ghost_copy_url": "/api/replay/ghostcopy/clips/"
+                                      + _GHOST_COPY_NAME.format(id=attempt_id),
+                    "ghost_copy_reason": None}
+        else:
+            reason = None
+        return {"ghost_copy_url": None,
+                "ghost_copy_reason": reason or meta.get("ghost_copy_reason") or GHOST_COPY_NONE}
+
+    @contextmanager
+    def _ghost_copy_for_save(self, meta: dict):
+        """`(media, None)` for a cut whose ghost copy is still retained, else
+        `(None, reason)`. The lease lasts through publication."""
+        descriptor = meta.get("ghost_copy_source")
+        if descriptor is None:
+            yield None, meta.get("ghost_copy_reason") or GHOST_COPY_NONE
+            return
+        with ExitStack() as stack:
+            media, reason = None, GHOST_COPY_LOST_BEFORE_SAVE
+            copies = self.ghost_copies
+            if copies is not None:
+                try:
+                    media, reason = stack.enter_context(copies.read(descriptor)), None
+                except (LookupError, ValueError, OSError):
+                    pass
+            yield media, reason
 
     def _pin_clip(self, attempt_id: int):
         pin = getattr(self.recorder.ring, "pin_temp", None)
@@ -792,6 +903,9 @@ class ReplayService:
                 # video_start_s.
                 "frame_times": m.get("frame_times"),
                 "encode": m.get("encode", "cfr"),
+                # The ghost copy, when one matches this clip picture for
+                # picture (the "Show ghosts" toggle); else why there is none.
+                **self._ghost_copy_offer(attempt_id, source, m, saved),
                 # How much of the clip the feed log accounted for, and how
                 # many rows the plugin could not call exact -- the capture's
                 # own health, so a degraded run reads as degraded rather
@@ -1220,10 +1334,10 @@ class ReplayService:
         # fps stamped at save time: the step buttons must match the clip's
         # actual encode rate even if cfg.fps changes in a future version.
         try:
-            with self.read_clip(clip.name) as media:
+            with self.read_clip(clip.name) as media, self._ghost_copy_for_save(m) as (copy, copy_reason):
                 dest = publish_saved(self.cfg.save_root, attempt_id, media, dest,
-                              {**m, "fps": self.cfg.fps}, self._review_state.get(attempt_id, None),
-                              ghost=ghost_path)
+                              {**m, "fps": self.cfg.fps, "ghost_copy": None, "ghost_copy_reason": copy_reason},
+                              self._review_state.get(attempt_id, None), ghost=ghost_path, ghost_copy=copy)
         finally:
             if ghost_path is not None and permanent is None:
                 ghost_path.unlink(missing_ok=True)
@@ -1301,6 +1415,24 @@ class ReplayService:
                     return
             yield self.clip_path(name)
 
+    @contextmanager
+    def read_ghost_copy(self, name: str):
+        """A buffer clip's ghost copy, leased through the entire HTTP range
+        response. After Save the same URL serves the saved copy."""
+        if not _GHOST_COPY_RE.fullmatch(name):
+            raise LookupError("no such ghost copy")
+        attempt_id = int(name.removeprefix("ghostcopy_attempt_").removesuffix(".mp4"))
+        with self._pin_clip(attempt_id):
+            meta = (self.clips_dir / _CLIP_NAME.format(id=attempt_id)).with_suffix(".json")
+            copies = self.ghost_copies
+            if copies is not None and meta.exists():
+                descriptor = self._fragment_descriptor(name, meta, "ghost_copy_source")
+                if descriptor is not None:
+                    with copies.read(descriptor) as media:
+                        yield media
+                    return
+            yield self.saved_ghost_copy_path(attempt_id)
+
     def _footage_note(self) -> str:
         """The recorder's actual state, for an error that would otherwise only
         say that nothing is playable."""
@@ -1317,15 +1449,16 @@ class ReplayService:
             parts.append(f"capture recovery: {recovery['error']}")
         return ", ".join(parts)
 
-    def _fragment_descriptor(self, name: str, meta: Path):
+    def _fragment_descriptor(self, name: str, meta: Path, key: str = "fragment_source"):
         """The sidecar's fragment descriptor, parsed once per sidecar version.
         Every Range request (each seek) came through here and re-parsed a
-        sidecar carrying one dict per picture (round 48)."""
+        sidecar carrying one dict per picture (round 48). `name` is the URL's
+        own name, so a clip and its ghost copy are cached apart."""
         stamp = meta.stat().st_mtime_ns
         cached = self._descriptors.get(name)
         if cached is not None and cached[0] == stamp:
             return cached[1]
-        descriptor = json.loads(meta.read_text()).get("fragment_source")
+        descriptor = json.loads(meta.read_text()).get(key)
         if len(self._descriptors) >= 64:
             self._descriptors.pop(next(iter(self._descriptors)))
         self._descriptors[name] = (stamp, descriptor)
@@ -1342,6 +1475,16 @@ class ReplayService:
             # A player is reading this clip: do not swap its bytes under it.
             self.compressor.touch(p)
         return p
+
+    def saved_ghost_copy_path(self, attempt_id: int) -> Path:
+        """A saved replay's ghost copy for serving; LookupError when none."""
+        saved = self.find_saved(attempt_id)
+        copy = saved.with_suffix(GHOST_COPY_SUFFIX) if saved is not None else None
+        if copy is None or not copy.is_file():
+            raise LookupError("no saved ghost copy for this attempt")
+        if self.compressor is not None:
+            self.compressor.touch(copy)
+        return copy
 
     # -- lifecycle (called from app lifespan) --------------------------------
 

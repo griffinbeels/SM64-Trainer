@@ -33,6 +33,13 @@ job owed, and the next session start runs it.
 The `media` block is also the manifest a later uploader/downloader verifies
 with the same `fingerprint`: the file's sha256, the picture count and a
 digest of the picture ticks, and a digest of the decoded audio.
+
+A replay saved with a ghost copy (`<clip>.ghosts.m4v`, the twin recording with
+the ghosts in it) has it shrunk by the same job, after the clip and on its own:
+the same proof against the same sidecar `frame_times` (the copy was offered
+only because its pictures sit on them), its own working files, and its own
+verdict inside the sidecar's `ghost_copy` block. A refused or failed copy
+keeps its original bytes; an adopted one rewrites only that block.
 """
 from __future__ import annotations
 
@@ -56,7 +63,7 @@ from sm64_events.replay import config as replay_config
 from sm64_events.replay.config import ARCHIVE_CODECS, CLIP_MAXRATE, video_quality_args
 from sm64_events.replay.extract import ffprobe_beside, frame_times_of
 from sm64_events.replay.media import MEDIA_HZ, picture_duration_filter
-from sm64_events.replay.publication import atomic_json
+from sm64_events.replay.publication import GHOST_COPY_SUFFIX, atomic_json
 
 log = logging.getLogger("sm64.replay")
 
@@ -71,6 +78,10 @@ WORK_DIR = ".compressing"
 STAGED_SUFFIX = ".compressed.tmp"    # <clip>.mp4.compressed.tmp
 PROOF_SUFFIX = ".compressed.json"    # <clip>.mp4.compressed.json
 JOB_SUFFIX = ".job.json"             # <clip>.mp4.job.json: {"clip": path under the save tree}
+# The ghost copy's own working files, named so no glob above matches them.
+GHOST_STAGED_SUFFIX = ".ghosts.encoding.tmp"   # <clip>.mp4.ghosts.encoding.tmp
+GHOST_PROOF_SUFFIX = ".ghosts.proven.json"     # <clip>.mp4.ghosts.proven.json
+GHOST_SETTLED_STATES = ("compressed", "kept_original")
 SETTLED_STATES = ("compressed", "kept_original", "adopting")
 # A re-encode that is structurally perfect and visually broken (a driver
 # fault, a green picture) would destroy a PB for good. SSIM against the saved
@@ -464,7 +475,20 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
         # asked again and the close warning never names it.
         return _without_a_file(sidecar, meta,
                                ["recorded in the archive codec already"], None)
-    staged, proof = staged_path(saved, work), proof_path(saved, work)
+    block, reasons, encoded = _encode_proven(
+        ffmpeg, saved, staged_path(saved, work), proof_path(saved, work), meta,
+        codecs=codecs, run=run, cancelled=cancelled, report=report)
+    if block is not None:
+        return block
+    return _without_a_file(sidecar, meta, reasons,
+                           "interrupted" if cancelled() else None if encoded else "unavailable")
+
+
+def _encode_proven(ffmpeg: str, saved: Path, staged: Path, proof: Path, meta: dict, *,
+                   codecs, run, cancelled, report) -> tuple[dict | None, list[str], bool]:
+    """Encode `saved` into `staged` with each candidate until one is proven
+    against it and the sidecar's `frame_times`, and leave the proof at
+    `proof`. `(ready block or None, reasons, whether any encode finished)`."""
     proof.unlink(missing_ok=True)
     staged.unlink(missing_ok=True)
     reasons: list[str] = []
@@ -508,7 +532,7 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
                      "encode_s": round(time.monotonic() - started, 2),
                      "proven_utc": datetime.now(timezone.utc).isoformat()}
             atomic_json(proof, block)
-            return block
+            return block, reasons, encoded
     except Unproven as refused:
         reasons.append(str(refused))
     except (OSError, subprocess.SubprocessError) as failed:
@@ -516,8 +540,7 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
     finally:
         measuring.shutdown(wait=True)   # no read of the clip outlives the job
     staged.unlink(missing_ok=True)
-    return _without_a_file(sidecar, meta, reasons,
-                           "interrupted" if cancelled() else None if encoded else "unavailable")
+    return None, reasons, encoded
 
 
 def adopt(saved: Path, work: Path | None = None) -> dict | None:
@@ -554,6 +577,130 @@ def adopt(saved: Path, work: Path | None = None) -> dict | None:
     return done
 
 
+def ghost_copy_of(saved: Path) -> Path:
+    return saved.with_suffix(GHOST_COPY_SUFFIX)
+
+
+def ghost_staged_path(saved: Path, work: Path | None = None) -> Path:
+    return (work or saved.parent) / (saved.name + GHOST_STAGED_SUFFIX)
+
+
+def ghost_proof_path(saved: Path, work: Path | None = None) -> Path:
+    return (work or saved.parent) / (saved.name + GHOST_PROOF_SUFFIX)
+
+
+def _sidecar_of(saved: Path) -> dict:
+    try:
+        return json.loads(saved.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def ghost_copy_owed(saved: Path) -> bool:
+    """Does the clip's ghost copy still wait for its own verdict? A proven
+    copy waiting to be swapped in is still owed."""
+    block = _sidecar_of(saved).get("ghost_copy")
+    if not isinstance(block, dict):
+        return False
+    media = block.get("media")
+    if isinstance(media, dict) and media.get("state") in GHOST_SETTLED_STATES:
+        return False
+    return ghost_copy_of(saved).is_file()
+
+
+def _record_ghost_copy(saved: Path, media: dict, identity: dict | None = None) -> None:
+    """Write the copy's verdict, and on adoption its new identity, into the
+    sidecar's `ghost_copy` block. No other key of the sidecar changes."""
+    sidecar = saved.with_suffix(".json")
+    meta = json.loads(sidecar.read_text(encoding="utf-8"))
+    block = meta.get("ghost_copy")
+    if not isinstance(block, dict):
+        return
+    atomic_json(sidecar, {**meta, "ghost_copy": {**block, **(identity or {}), "media": media}},
+                allow_nan=True)
+
+
+def shrink_ghost_copy(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
+                      cancel: threading.Event | None = None, work: Path | None = None,
+                      report=None) -> dict | None:
+    """`shrink` for the clip's ghost copy; None when the clip has none.
+
+    The same states. `kept_original` is written into the `ghost_copy` block,
+    so a re-queued job (a second Save of the same replay) never encodes the
+    copy again; `unavailable` and `interrupted` write nothing."""
+    def cancelled() -> bool:
+        return cancel is not None and cancel.is_set()
+
+    meta = _sidecar_of(saved)
+    block = meta.get("ghost_copy")
+    copy = ghost_copy_of(saved)
+    if not isinstance(block, dict) or not copy.is_file():
+        return None
+    settled = block.get("media")
+    if isinstance(settled, dict) and settled.get("state") in GHOST_SETTLED_STATES:
+        return settled
+    if _recorded_at_archive_quality(ffmpeg, copy, codecs):
+        kept = {"version": MEDIA_VERSION, "state": "kept_original",
+                "reasons": ["recorded in the archive codec already"]}
+        _record_ghost_copy(saved, kept)
+        return kept
+    ready, reasons, encoded = _encode_proven(
+        ffmpeg, copy, ghost_staged_path(saved, work), ghost_proof_path(saved, work), meta,
+        codecs=codecs, run=run, cancelled=cancelled, report=report)
+    if ready is not None:
+        return ready
+    if cancelled() or not encoded:
+        return {"version": MEDIA_VERSION, "state": "interrupted" if cancelled() else "unavailable",
+                "reasons": reasons}
+    kept = {"version": MEDIA_VERSION, "state": "kept_original", "reasons": reasons}
+    _record_ghost_copy(saved, kept)
+    return kept
+
+
+def adopt_ghost_copy(saved: Path, work: Path | None = None) -> dict | None:
+    """`adopt` for the ghost copy. The proof stays on disk until the sidecar
+    names the new bytes, so a crash between the swap and that write is
+    repaired by `settle_ghost_copy` from the file's own digest."""
+    staged, proof = ghost_staged_path(saved, work), ghost_proof_path(saved, work)
+    copy = ghost_copy_of(saved)
+    if not (staged.is_file() and proof.is_file() and copy.is_file()
+            and saved.with_suffix(".json").is_file()):
+        return None
+    block = json.loads(proof.read_text(encoding="utf-8"))
+    if block.get("state") != "ready" or staged.stat().st_size != block.get("bytes"):
+        return None
+    if file_sha256(copy) != block["original"]["sha256"]:
+        staged.unlink(missing_ok=True)   # the copy was replaced: the proof is void
+        proof.unlink(missing_ok=True)
+        return None
+    try:
+        os.replace(staged, copy)
+    except PermissionError:
+        return None
+    return _adopted_ghost_copy(saved, proof, block)
+
+
+def _adopted_ghost_copy(saved: Path, proof: Path, block: dict) -> dict:
+    done = {**block, "state": "compressed", "adopted_utc": datetime.now(timezone.utc).isoformat()}
+    _record_ghost_copy(saved, done, {"bytes": block["bytes"], "sha256": block["sha256"]})
+    proof.unlink(missing_ok=True)
+    return done
+
+
+def settle_ghost_copy(saved: Path, work: Path | None = None) -> None:
+    """A proof with no staged file is a swap whose sidecar write never landed:
+    record it when the copy holds the proven bytes, otherwise drop the proof."""
+    staged, proof = ghost_staged_path(saved, work), ghost_proof_path(saved, work)
+    if not proof.is_file() or staged.is_file():
+        return
+    block = json.loads(proof.read_text(encoding="utf-8"))
+    copy = ghost_copy_of(saved)
+    if copy.is_file() and file_sha256(copy) == block.get("sha256"):
+        _adopted_ghost_copy(saved, proof, block)
+    else:
+        proof.unlink(missing_ok=True)
+
+
 def settle(saved: Path, work: Path | None = None) -> None:
     """Repair a sidecar left at `adopting` by a crash: the file's own digest
     says which side of the swap it is on."""
@@ -580,10 +727,12 @@ class SavedReplayCompressor:
     """
 
     def __init__(self, ffmpeg: str, root: Path, *, idle_s: float = 120.0,
-                 poll_s: float = 15.0, clock=time.monotonic, shrink_fn=shrink):
+                 poll_s: float = 15.0, clock=time.monotonic, shrink_fn=shrink,
+                 ghost_shrink_fn=shrink_ghost_copy):
         self._ffmpeg, self._root = ffmpeg, root
         self._idle_s, self._poll_s, self._clock = idle_s, poll_s, clock
         self._shrink = shrink_fn
+        self._shrink_ghost = ghost_shrink_fn
         self._jobs: list[Path] = []
         self._touched: dict[str, float] = {}
         self._guard = threading.Lock()
@@ -609,10 +758,13 @@ class SavedReplayCompressor:
                     fields["fraction"] = max(row.get("fraction") or 0.0, fields["fraction"])
                 row.update(fields)
 
-    def _report_for(self, name: str):
+    def _report_for(self, name: str, low: float = 0.0, high: float = 1.0):
+        """`low..high` is this file's part of the job's one bar: the clip and
+        its ghost copy, when there is one, each fill half."""
         def report(stage: str, fraction: float) -> None:
             share = self._ENCODE_SHARE
             overall = fraction * share if stage == "compressing" else share + fraction * (1 - share)
+            overall = low + (high - low) * overall
             self._show(name, stage=stage, fraction=round(min(overall, 0.999), 4))
         return report
 
@@ -675,20 +827,38 @@ class SavedReplayCompressor:
                 return listed
         return next((p for p in self._root.rglob(name) if p.is_file()), None)
 
-    def _forget(self, saved_name: str) -> None:
-        for suffix in (JOB_SUFFIX, STAGED_SUFFIX, PROOF_SUFFIX):
+    def _forget(self, saved_name: str, *, keep_note: bool = False) -> None:
+        """The clip's own working files, and its job note unless its ghost
+        copy is still owed (the next run of the job is then the copy's)."""
+        suffixes = (STAGED_SUFFIX, PROOF_SUFFIX) if keep_note else (JOB_SUFFIX, STAGED_SUFFIX, PROOF_SUFFIX)
+        for suffix in suffixes:
             (self.work / (saved_name + suffix)).unlink(missing_ok=True)
+
+    def _forget_all(self, saved_name: str) -> None:
+        """He deleted the replay: nothing is owed for it or its ghost copy."""
+        self._forget(saved_name)
+        for suffix in (GHOST_STAGED_SUFFIX, GHOST_PROOF_SUFFIX):
+            (self.work / (saved_name + suffix)).unlink(missing_ok=True)
+
+    def _close_note(self, saved: Path) -> None:
+        """After the ghost copy settles: drop the job note once the clip is
+        settled too (an adoption still pending closes it itself)."""
+        if (self.work / (saved.name + PROOF_SUFFIX)).exists() or ghost_copy_owed(saved):
+            return
+        media = _sidecar_of(saved).get("media")
+        if isinstance(media, dict) and media.get("state") in SETTLED_STATES:
+            (self.work / (saved.name + JOB_SUFFIX)).unlink(missing_ok=True)
 
     def _requeue_interrupted(self) -> None:
         """A job note with no proof is a save the last session never finished
         shrinking: it closed mid-encode, or before the worker reached it."""
         for note in sorted(self.work.glob(f"*{JOB_SUFFIX}")):
             name = note.name.removesuffix(JOB_SUFFIX)
-            if (self.work / (name + PROOF_SUFFIX)).exists():
+            if any((self.work / (name + suffix)).exists() for suffix in (PROOF_SUFFIX, GHOST_PROOF_SUFFIX)):
                 continue
             saved = self._clip_of(note)
             if saved is None:
-                self._forget(name)   # he deleted the replay; nothing is owed
+                self._forget_all(name)   # he deleted the replay; nothing is owed
                 continue
             shown = {}
             with suppress(OSError, ValueError, TypeError):
@@ -735,7 +905,7 @@ class SavedReplayCompressor:
         for proof in sorted(self.work.glob(f"*{PROOF_SUFFIX}")):
             saved = self._clip_of(proof)
             if saved is None:
-                self._forget(proof.name.removesuffix(PROOF_SUFFIX))
+                self._forget_all(proof.name.removesuffix(PROOF_SUFFIX))
                 continue
             if not (everything_idle or self._idle(saved)):
                 continue
@@ -746,13 +916,41 @@ class SavedReplayCompressor:
                 log.warning("replay compression: could not adopt %s: %s", saved.name, failed)
                 continue
             if done is not None:
-                self._forget(saved.name)
+                self._forget(saved.name, keep_note=ghost_copy_owed(saved))
                 self._show(saved.name, stage="done", fraction=1.0,
                            from_bytes=done["original"]["bytes"], to_bytes=done["bytes"])
                 log.info("replay compressed: %s %.1f -> %.1f MB (%s, SSIM %.4f)",
                          saved.name, done["original"]["bytes"] / 2**20,
                          done["bytes"] / 2**20, done["codec"], done["ssim"])
                 adopted.append(done)
+        adopted.extend(self._adopt_ghost_copies(everything_idle))
+        return adopted
+
+    def _adopt_ghost_copies(self, everything_idle: bool) -> list[dict]:
+        """`adopt_ready` for proven ghost copies. Swapped only while neither
+        file of the replay has been asked for: the player toggles between them."""
+        adopted = []
+        for proof in sorted(self.work.glob(f"*{GHOST_PROOF_SUFFIX}")):
+            name = proof.name.removesuffix(GHOST_PROOF_SUFFIX)
+            saved = self._clip_of(self.work / (name + JOB_SUFFIX))
+            if saved is None:
+                self._forget_all(name)
+                continue
+            if not (everything_idle or (self._idle(saved) and self._idle(ghost_copy_of(saved)))):
+                continue
+            try:
+                settle_ghost_copy(saved, self.work)
+                done = adopt_ghost_copy(saved, self.work)
+            except (OSError, ValueError, KeyError) as failed:
+                log.warning("replay compression: could not adopt the ghost copy of %s: %s",
+                            saved.name, failed)
+                continue
+            self._close_note(saved)
+            if done is not None:
+                log.info("ghost copy compressed: %s %.1f -> %.1f MB (%s, SSIM %.4f)",
+                         saved.name, done["original"]["bytes"] / 2**20,
+                         done["bytes"] / 2**20, done["codec"], done["ssim"])
+                adopted.append({**done, "ghost_copy": True})
         return adopted
 
     def _work(self) -> None:
@@ -761,12 +959,15 @@ class SavedReplayCompressor:
                 saved = self._jobs.pop(0) if self._jobs else None
             if saved is not None and saved.is_file():
                 self._show(saved.name, stage="compressing", fraction=0.0)
+                ghost_owed = ghost_copy_owed(saved)
                 try:
-                    outcome = self._shrink(self._ffmpeg, saved, cancel=self._stopping,
-                                           work=self.work, report=self._report_for(saved.name))
+                    outcome = self._shrink(self._ffmpeg, saved, cancel=self._stopping, work=self.work,
+                                           report=self._report_for(saved.name, 0.0, 0.5 if ghost_owed else 1.0))
                 except Exception:  # noqa: BLE001 - the worker outlives one bad clip
                     log.exception("replay compression failed for %s", saved.name)
                     outcome = {"state": "unavailable", "reasons": ["worker error"]}
+                if ghost_owed and not self._stopping.is_set():
+                    self._shrink_ghost_copy(saved)
                 state = outcome.get("state")
                 if state == "ready":
                     self._show(saved.name, stage="in_use", fraction=1.0,
@@ -777,8 +978,9 @@ class SavedReplayCompressor:
                 elif state in ("kept_original", "unavailable"):
                     self._show(saved.name, stage="kept", fraction=1.0)
                 if outcome.get("state") in ("kept_original", "compressed", "adopting"):
-                    self._forget(saved.name)   # answered; `unavailable` and
-                    # `interrupted` keep their note and run again next start
+                    # Answered; `unavailable` and `interrupted` keep their note
+                    # and run again next start, and so does an owed ghost copy.
+                    self._forget(saved.name, keep_note=ghost_copy_owed(saved))
                 if outcome.get("state") in ("kept_original", "unavailable"):
                     log.info("replay kept as saved: %s (%s)", saved.name,
                              "; ".join(outcome.get("reasons", [])))
@@ -789,3 +991,19 @@ class SavedReplayCompressor:
             if not waiting:
                 self._wake.wait(self._poll_s)
                 self._wake.clear()
+
+    def _shrink_ghost_copy(self, saved: Path) -> None:
+        """The second half of a job: the clip's ghost copy, on its own. Its
+        outcome never changes the clip's row, verdict or files."""
+        try:
+            outcome = self._shrink_ghost(self._ffmpeg, saved, cancel=self._stopping, work=self.work,
+                                         report=self._report_for(saved.name, 0.5, 1.0))
+        except Exception:  # noqa: BLE001 - the worker outlives one bad copy
+            log.exception("ghost copy compression failed for %s", saved.name)
+            outcome = {"state": "unavailable", "reasons": ["worker error"]}
+        if outcome is None:
+            return
+        if outcome.get("state") in ("kept_original", "unavailable"):
+            log.info("ghost copy kept as saved: %s (%s)", saved.name,
+                     "; ".join(outcome.get("reasons", [])))
+        self.outcomes.append({"clip": ghost_copy_of(saved).name, "ghost_copy": True, **outcome})
