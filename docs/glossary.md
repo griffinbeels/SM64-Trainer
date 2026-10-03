@@ -1428,9 +1428,11 @@ to 10 s, until it explodes, its slot holds another object, or he grabs it again.
 Where a [[ghost]] goes, drawn in the game world just ahead of you as you
 play: a strip of the game's own chevrons on the floor where it ran, a thin line
 where it was in the air with dots on the floor beneath, coloured from grey
-(standing) to green (full speed) to white (faster than any normal move). It
-follows where you are, not where the [[ghost]] is, so falling behind still
-shows the next stretch from your feet. It is one line: the fastest [[ghost]]'s,
+(standing) to green (full speed) to white (faster than any normal move), and
+hidden behind walls like the [[ghost]]. It follows how far along the route you
+are, not where the [[ghost]] is, and only moves forward: falling behind still
+shows the next stretch from your feet, and coming back through a place shows
+the [[ghost]]'s later pass there. It is one line: the fastest [[ghost]]'s,
 or the average of them where they all ran together. Its button presses, each
 drawn where the [[ghost]] pressed it, are off until you switch them on.
 

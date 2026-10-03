@@ -11,6 +11,10 @@
 #include <cstring>
 #include <new>
 #include <stdexcept>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <algorithm>
 #include <vector>
 
 static bool counting=false;
@@ -132,40 +136,67 @@ static void averaging() {
     mean=fastest;check(!ghost_path::average(mean,others,0),"one ghost alone is its own path");
 }
 
-static void anchoring() {
+// Progress along the path: forward only, the first pass of a place first,
+// held off the route, caught up after a shortcut, and a window that glides.
+static void progressing() {
     // A loop: out along +x for 60 frames, back along the same line (60..119),
     // so every early point has a later twin at the same place.
     Run run(240);
     for(uint32_t i=0;i<240;++i) {
-        const float x=i<60?float(i)*10:i<120?float(119-i)*10:float(i-120)*10+2000;
+        const float x=i<60?float(i)*10:i<120?float(119-i)*10+5:float(i-120)*10+2000;
         run.samples[i].pose.position[0]=x;
     }
-    Track track(run);ghost_path::Anchor anchor{};
+    Track track(run);ghost_path::Progress p{};
     float live[3]={100,100,0};
-    check(ghost_path::locate(track,live,11,1,anchor,true,5) && anchor.record==10,"a new run starts from the ghost's own record");
-    live[0]=300;check(ghost_path::locate(track,live,11,1,anchor,false,0) && anchor.record==30,"forward from the last match");
-    // At x=300 again on the way back: the window ahead (30..210) holds the twin at 89.
-    live[0]=300.4f;anchor.record=85;
-    check(ghost_path::locate(track,live,11,1,anchor,false,0) && anchor.record==89,"a path crossing itself keeps its own pass");
-    // Live Mario stands at record 200, 190 records (past 6 s) ahead of the last match.
-    live[0]=2000+(200-120)*10;anchor.record=10;
-    check(ghost_path::locate(track,live,11,1,anchor,false,0) && anchor.record==10+GP_PATH_SEARCH_AHEAD_FRAMES,
-          "never further than 6 s ahead of the last match");
-    anchor.record=200;live[0]=100;
-    ghost_path::locate(track,live,11,1,anchor,false,0);
-    check(anchor.record>=200-GP_PATH_SEARCH_BACK_FRAMES,"never further than 3 s back");
-    ghost_path::Anchor fresh{};live[0]=2010;
-    check(ghost_path::locate(track,live,11,1,fresh,false,0) && fresh.record==121,"no hint: the whole clip");
-    // The ghost went through a door: live Mario follows into area 2, past the window.
+    check(ghost_path::follow(track,live,11,1,p,true,5) && p.record==10,"a new run starts from the ghost's own record, then moves to him");
+    check(p.shown==5,"a new progress puts the window there at once");
+    live[0]=300;check(ghost_path::follow(track,live,11,1,p,false,0) && p.record==30,"forward to him");
+    // Near x=300 the clip passes twice (records 30 and 89, at 305): the first pass holds.
+    live[0]=300.4f;check(ghost_path::follow(track,live,11,1,p,false,0) && p.record==30,"the first pass of a place, not its later twin");
+    // He follows the route all the way out and back: progress keeps up, frame for frame.
+    bool kept=true;
+    for(uint32_t k=31;k<120;++k) {
+        live[0]=track.cache[k].position[0];
+        kept=kept && ghost_path::follow(track,live,11,1,p,false,0) && p.record==k;
+    }
+    check(kept,"following the route, progress keeps up with him exactly");
+    // Back toward the start (record 10's place): the line ahead holds, never back.
+    live[0]=100;ghost_path::follow(track,live,11,1,p,false,0);check(p.record==119,"progress never moves backward");
+    // Off the route it holds, then a shortcut 100 frames ahead is caught up with.
+    live[0]=2000;live[2]=5000;
+    for(uint32_t k=0;k<GP_PATH_STALL_FRAMES;++k)check(!ghost_path::follow(track,live,11,1,p,false,0),"off the route");
+    check(p.record==119,"off the route, progress holds");
+    live[2]=0;live[0]=track.cache[219].position[0];
+    check(ghost_path::follow(track,live,11,1,p,false,0) && p.record==219,"after a stall the reach widens to catch a shortcut");
+    // The widened reach holds both passes of x=200 (records 20 and 99, at
+    // 205): the first pass is taken though the later one is nearer him.
+    ghost_path::Progress wide{};wide.known=true;wide.stalled=GP_PATH_STALL_FRAMES;live[0]=203;
+    check(ghost_path::follow(track,live,11,1,wide,false,0) && wide.record==20,"a place's first pass, though its later pass is nearer");
+    // Without that stall, a place more than a second of the ghost's run ahead is not his.
+    ghost_path::Progress q{};q.known=true;q.record=120;q.shown=120;
+    live[0]=track.cache[120+GP_PATH_REACH_FRAMES+20].position[0];
+    check(!ghost_path::follow(track,live,11,1,q,false,0) && q.record==120,"never more than the reach ahead in one list");
+    // No hint: the first pass of the whole clip near him.
+    ghost_path::Progress fresh{};live[0]=300;
+    check(ghost_path::follow(track,live,11,1,fresh,false,0) && fresh.record==30,"no hint: the clip's first pass near him");
+    ghost_path::Progress lost{};live[0]=9999;
+    check(!ghost_path::follow(track,live,11,1,lost,false,0) && !lost.known,"nowhere near: not yet");
+    live[0]=300;bool found=false;unsigned lists=0;
+    while(!found && lists<GP_PATH_STALL_FRAMES+1) {found=ghost_path::follow(track,live,11,1,lost,false,0);++lists;}
+    check(found && lost.record==30 && lists<=GP_PATH_STALL_FRAMES,"searched again within GP_PATH_STALL_FRAMES lists");
+    float nowhere[3]={NAN,0,0};check(!ghost_path::follow(track,nowhere,11,1,p,false,0) && p.record==219,"an unknown live Mario holds it");
+    // Another scene: only that scene's records count.
     for(uint32_t i=200;i<240;++i)run.samples[i].area=2;
-    Track doors(run);ghost_path::Anchor through{};through.known=true;through.record=10;through.level=11;through.area=1;
-    live[0]=2000+(230-120)*10;
-    check(ghost_path::locate(doors,live,11,2,through,false,0) && through.record==230,"a new scene the window lacks: the whole clip");
-    through.record=10;through.area=1;live[0]=9999;
-    check(!ghost_path::locate(doors,live,11,3,through,false,0) && through.record==10 && through.area==3,
-          "a scene the ghost never visited keeps the place");
-    check(!ghost_path::locate(doors,live,11,3,through,false,0) && through.record==10,"and searches the whole clip once only");
-    float nowhere[3]={NAN,0,0};check(!ghost_path::locate(doors,nowhere,11,1,through,false,0),"an unknown live Mario keeps the place");
+    Track doors(run);ghost_path::Progress through{};live[0]=track.cache[230].position[0];
+    check(ghost_path::follow(doors,live,11,2,through,false,0) && through.record==230,"his scene's records only");
+    // The window glides: a catch-up slides over several lists, never past, never back.
+    ghost_path::Progress g{};g.known=true;g.record=100;g.shown=60;
+    double before=g.shown;bool forward=true;unsigned steps=0;
+    while(g.shown<100 && steps<100) {ghost_path::glide(track,g);forward=forward && g.shown>before && g.shown<=100;before=g.shown;++steps;}
+    check(forward && steps>3 && steps<20,"a 40-frame correction slides over a handful of lists");
+    check(g.shown==100,"and lands exactly");
+    g.record=101;ghost_path::glide(track,g);check(g.shown==101,"ordinary running is never behind");
+    g.shown=150;ghost_path::glide(track,g);check(g.shown==101,"never ahead of the progress");
 }
 
 static void windows() {
@@ -184,37 +215,43 @@ static void windows() {
     struct Gap : Track {using Track::Track;uint64_t coordinate(uint32_t i) const {return i<100?i:i+1;}
         const ghost_path::Recorded& at(uint32_t i) {cache[i].coordinate=coordinate(i);return cache[i];}};
     Gap gapped(run);
-    ghost_path::Anchor anchor{};anchor.known=true;anchor.record=40;anchor.level=11;anchor.area=1;
+    ghost_path::Progress at{};at.known=true;at.record=40;at.shown=40;
     auto& f=frame_storage;
-    counting=true;ghost_path::window(gapped,anchor,11,1,3000,f);counting=false;
-    // Area 2 records are not drawn while live Mario is in area 1.
-    check(f.count==90-10,"1 s behind through the last record of his scene");
-    check(f.points[0].coordinate==10 && near(f.points[0].alpha,GP_PATH_BEHIND_ALPHA),"behind him at 25%");
-    check(near(f.points[30].alpha,1),"from his place on, full strength");
+    counting=true;ghost_path::window(gapped,at,11,1,1500,f);counting=false;
+    // 0.5 s behind (15 frames) through the last record of his scene (area 2 from 90).
+    check(f.count==90-25,"0.5 s behind through the last record of his scene");
+    check(f.points[0].coordinate==25 && f.points[0].alpha==0,"the very back has faded out");
+    check(near(f.points[10].alpha,GP_PATH_BEHIND_ALPHA),"behind him at 25%");
+    check(near(f.points[15].alpha,1),"from his place on, full strength");
     check(!(f.points[0].flags&ghost_path::joined) && (f.points[1].flags&ghost_path::joined),"the window starts its own line");
-    check(!(f.points[65].flags&ghost_path::joined),"the executed warp breaks the line");
-    check((f.points[64].flags&ghost_path::joined),"a pending warp alone does not");
-    check(f.points[40].pressed==0x8000,"a press edge: A, and START marks nothing");
-    check(f.points[41].pressed==0,"a held button is no new press");
-    check(f.points[43].pressed==0xe000,"same-frame presses together");
-    check(f.points[47].pressed==0,"after unknown pads nothing is guessed");
+    check(!(f.points[50].flags&ghost_path::joined),"the executed warp breaks the line");
+    check((f.points[49].flags&ghost_path::joined),"a pending warp alone does not");
+    check(f.points[25].pressed==0x8000,"a press edge: A, and START marks nothing");
+    check(f.points[26].pressed==0,"a held button is no new press");
+    check(f.points[28].pressed==0xe000,"same-frame presses together");
+    check(f.points[32].pressed==0,"after unknown pads nothing is guessed");
     check(near(f.points[20].speed,10),"speed: horizontal units per frame");
-    // The window's strength: full to 3 s, fading to nothing by 5 s.
-    check(near(ghost_path::strength(90,3000),1) && near(ghost_path::strength(120,3000),.5f) && ghost_path::strength(151,3000)==0,
-          "3 s full, then 2 s of fade");
-    check(near(ghost_path::strength(-30,3000),GP_PATH_BEHIND_ALPHA) && ghost_path::strength(-31,3000)==0,"1 s behind");
-    anchor.area=2;anchor.record=95;
-    ghost_path::window(gapped,anchor,11,2,3000,f);
+    // The window's strength: full to 1.5 s, fading to nothing by 2.5 s; 0.5 s behind.
+    check(near(ghost_path::strength(45,1500),1) && near(ghost_path::strength(60,1500),.5f) && ghost_path::strength(76,1500)==0,
+          "1.5 s full, then 1 s of fade");
+    check(near(ghost_path::strength(-5,1500),GP_PATH_BEHIND_ALPHA) && near(ghost_path::strength(-12,1500),.1f)
+          && ghost_path::strength(-15,1500)==0 && ghost_path::strength(-16,1500)==0,"0.5 s behind, its back fading out");
+    // A gliding window moves its strengths with it, between whole frames.
+    at.shown=39.5;ghost_path::window(gapped,at,11,1,1500,f);
+    check(near(f.points[15].alpha,1) && f.points[15].coordinate==40 && near(f.points[14].alpha,GP_PATH_BEHIND_ALPHA),
+          "the window's place is the glide's, not the progress record's");
+    at.record=95;at.shown=95;
+    ghost_path::window(gapped,at,11,2,1500,f);
     unsigned gap_at=0;for(uint32_t i=0;i<f.count;++i)if(f.points[i].coordinate==101)gap_at=i;
     check(gap_at && !(f.points[gap_at].flags&ghost_path::joined) && (f.points[gap_at-1].flags&ghost_path::joined),
           "across a clip gap the line breaks");
     check(f.points[0].coordinate==90 && !(f.points[0].flags&ghost_path::joined),"the area change breaks it: never across the level");
     // The longest window fits its storage.
     Run long_run(2000);Track long_track(long_run);
-    ghost_path::Anchor middle{};middle.known=true;middle.record=1000;middle.level=11;middle.area=1;
+    ghost_path::Progress middle{};middle.known=true;middle.record=1000;middle.shown=1000;
     ghost_path::window(long_track,middle,11,1,GP_PATH_AHEAD_MS_MAX,f);
     check(f.count==(GP_PATH_BEHIND_MS+GP_PATH_AHEAD_MS_MAX+GP_PATH_FADE_MS)*30/1000+1 && f.count<=ghost_path::samples,
-          "10 s ahead, its fade and 1 s behind fit GP_PATH_SAMPLES");
+          "10 s ahead, its fade and 0.5 s behind fit GP_PATH_SAMPLES");
     check(allocations==0,"the window allocates nothing");
 }
 
@@ -285,8 +322,19 @@ static void meshes() {
     const float x0=(mesh.vertices[mesh.first[icons]].offset[0]+mesh.vertices[mesh.first[icons]+1].offset[0])*.5f;
     const float x2=(mesh.vertices[mesh.first[icons]+12].offset[0]+mesh.vertices[mesh.first[icons]+13].offset[0])*.5f;
     check(near(x0,x2,1e-3f),"side by side across the direction of travel");
-    const float tall=mesh.vertices[mesh.first[icons]+2].offset[1]-mesh.vertices[mesh.first[icons]].offset[1];
-    check(near(tall,GP_PATH_BUTTON_PIXELS/120.f,1e-5f),"12 pixels of a 240-line screen at any distance");
+    // World-sized: GP_PATH_BUTTON_SIZE units tall at the icon's distance
+    // (w = z + 1000 here, the projection's y scale 1), capped near the camera.
+    auto icon_height=[&](float z) {
+        auto& near_frame=jump_frame();near_frame.buttons=near_frame.icons=true;
+        for(uint32_t i=0;i<near_frame.count;++i)near_frame.points[i].position[2]=z;
+        near_frame.points[5].pressed=0x8000;build(near_frame,mesh);
+        return mesh.vertices[mesh.first[icons]+2].offset[1]-mesh.vertices[mesh.first[icons]].offset[1];
+    };
+    const float mid=icon_height(0),far=icon_height(3000),close=icon_height(-950);
+    check(near(mid,GP_PATH_BUTTON_SIZE/1000.0f,1e-6f),"30 world units tall at its distance");
+    check(near(far,GP_PATH_BUTTON_SIZE/4000.0f,1e-6f) && far<mid,"smaller the further away");
+    check(near(close,GP_PATH_BUTTON_MAX_SCREEN/120.0f,1e-6f),"never taller than its cap near the camera");
+    f=jump_frame();f.buttons=true;f.icons=true;f.points[5].pressed=0x8000|0x2000|0x0001;build(f,mesh);
     f.buttons=false;build(f,mesh);check(mesh.count[icons]==0,"off by default");
     f.buttons=true;f.icons=false;build(f,mesh);check(mesh.count[icons]==0,"no Usamune icons in the ROM: none");
     // The worst case fits: every point a takeoff or landing with a dot.
@@ -303,12 +351,186 @@ static void meshes() {
     check(allocations==0,"nothing allocated");
 }
 
-int main() {
+// His recordings (tests/fixtures/ghost_path_revisits.bin.gz, decompressed by
+// the test): in each pair the other attempt is live Mario, replayed frame by
+// frame against the fastest attempt's path exactly as playback runs it each
+// list (follow, glide, window). The nearest-record anchoring it replaced runs
+// beside it on the same frames, so the measures are shown to see its failure.
+#pragma pack(push,1)
+struct FixRecord {uint32_t coordinate;int16_t x,y,z,level;uint8_t area,flags;uint16_t zero;};
+#pragma pack(pop)
+static_assert(sizeof(FixRecord)==16,"fixture record");
+struct FixClip {std::string name;uint32_t attempt=0;std::vector<FixRecord> records;};
+struct FixTrack {
+    const FixClip& clip;std::vector<ghost_path::Recorded> cache;
+    explicit FixTrack(const FixClip& c):clip(c),cache(c.records.size()) {
+        for(size_t i=0;i<c.records.size();++i) {
+            const auto& f=c.records[i];auto& r=cache[i];
+            r.coordinate=f.coordinate;r.level=f.level;r.area=f.area;
+            r.position[0]=f.x;r.position[1]=f.y;r.position[2]=f.z;
+            r.posed=f.flags&1;r.air=(f.flags&2)!=0;r.warping=(f.flags&4)!=0;r.warped=(f.flags&8)!=0;
+        }
+    }
+    uint32_t size() const {return uint32_t(cache.size());}
+    uint64_t coordinate(uint32_t i) const {return cache[i].coordinate;}
+    bool where(uint32_t i,int16_t level,int16_t area,float out[3]) const {
+        const auto& r=cache[i];float dx=0;
+        if(!r.posed || !ghost_scene::translation(r.level,r.area,level,area,dx))return false;
+        out[0]=r.position[0]+dx;out[1]=r.position[1];out[2]=r.position[2];return true;
+    }
+    const ghost_path::Recorded& at(uint32_t i) const {return cache[i];}
+    bool record_at(uint64_t c,uint32_t& i) const {
+        uint32_t lo=0,hi=size();
+        while(lo<hi){const uint32_t m=lo+(hi-lo)/2;if(coordinate(m)<c)lo=m+1;else hi=m;}
+        i=lo;return lo<size() && coordinate(lo)==c;
+    }
+};
+// The replaced rule (round b): the record nearest live Mario within 3 s back
+// and 6 s ahead of the last match, equal distances to the nearer index.
+static uint32_t nearest_record(const FixTrack& t,uint32_t from,const float live[3],int16_t level,int16_t area) {
+    const uint64_t at=t.coordinate(from);uint32_t first=from,last=from;
+    while(first>0 && t.coordinate(first-1)+90>=at)--first;
+    while(last+1<t.size() && t.coordinate(last+1)<=at+180)++last;
+    uint32_t best=from;float closest=INFINITY;
+    for(uint32_t i=first;i<=last;++i) {
+        float q[3];if(!t.where(i,level,area,q))continue;
+        const float d=(q[0]-live[0])*(q[0]-live[0])+(q[1]-live[1])*(q[1]-live[1])+(q[2]-live[2])*(q[2]-live[2]);
+        const auto apart=[from](uint32_t k){return k>from?k-from:from-k;};
+        if(d<closest || (d==closest && apart(i)<apart(best))) {closest=d;best=i;}
+    }
+    return best;
+}
+// Two passes of one place in view: drawn points within 100 units of each
+// other whose recorded times are 1.5 s or more apart.
+// Where live Mario really is on the path: the monotone alignment of his run
+// onto the path's (dynamic time warping), the path advancing 0 to 4 records a
+// frame. Built apart from follow, as the oracle its measures are taken against.
+static std::vector<uint32_t> aligned(const FixTrack& path,const FixTrack& live) {
+    const uint32_t n=path.size(),m=live.size();
+    std::vector<uint8_t> back(size_t(n)*m);std::vector<double> D(n,1e18),next(n);
+    for(uint32_t j=0;j<m;++j) {
+        const auto& r=live.at(j);
+        for(uint32_t i=0;i<n;++i) {
+            float cost=0;
+            if(r.posed) {
+                float q[3];
+                if(path.where(i,r.level,r.area,q)) {
+                    const float x=q[0]-r.position[0],y=(q[1]-r.position[1])*0.5f,z=q[2]-r.position[2];
+                    cost=std::sqrt(x*x+y*y+z*z);
+                } else cost=5000;
+            }
+            double best=j?1e18:(i?1e18:0.0);uint8_t step=0;
+            for(uint8_t k=0;j && k<5 && k<=i;++k)if(D[i-k]<best) {best=D[i-k];step=k;}
+            next[i]=best+cost;back[size_t(j)*n+i]=step;
+        }
+        D.swap(next);
+    }
+    uint32_t i=uint32_t(std::min_element(D.begin(),D.end())-D.begin());
+    std::vector<uint32_t> out(m);
+    for(uint32_t j=m;j-->0;) {out[j]=i;i-=back[size_t(j)*n+i];}
+    return out;
+}
+struct Measure {
+    unsigned frames=0,on_path=0,later=0,lag=0,jumps=0,two_pass=0;bool monotonic=true;
+    double max_step=0,max_lead=-1e9,min_lead=1e9;uint64_t last=0;
+};
+// Two passes of one place in view: drawn points within 100 units of each
+// other, 1.5 s or more apart, the line having left 200 units between them.
+static bool passes_in(const ghost_path::Frame& f) {
+    auto apart=[&](uint32_t i,uint32_t j){float d[3];for(unsigned r=0;r<3;++r)d[r]=f.points[i].position[r]-f.points[j].position[r];
+        return std::sqrt(ghost_path::dot3(d,d));};
+    for(uint32_t i=0;i<f.count;++i) {
+        if(!(f.points[i].alpha>0))continue;
+        bool left=false;
+        for(uint32_t j=i+1;j<f.count;++j) {
+            if(!(f.points[j].alpha>0))continue;
+            const float d=apart(i,j);left=left || d>200;
+            if(left && d<100 && f.points[j].coordinate>=f.points[i].coordinate+45)return true;
+        }
+    }
+    return false;
+}
+static std::string revisits(const char* file) {
+    std::ifstream in(file,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)),{});
+    check(bytes.size()>12 && !std::memcmp(bytes.data(),"GPATHRV1",8),"the revisit fixture");
+    size_t at=8;auto take=[&](void* out,size_t n){check(at+n<=bytes.size(),"fixture length");std::memcpy(out,&bytes[at],n);at+=n;};
+    uint32_t clips=0;take(&clips,4);std::vector<FixClip> all(clips);
+    for(auto& c:all) {
+        uint16_t length=0;take(&length,2);c.name.resize(length);take(c.name.data(),length);
+        uint32_t count=0;take(&c.attempt,4);take(&count,4);c.records.resize(count);take(c.records.data(),count*sizeof(FixRecord));
+    }
+    std::string json="[";
+    static ghost_path::Frame frame;
+    for(size_t k=0;k+1<all.size();k+=2) {
+        const FixTrack path(all[k]),live(all[k+1]);
+        const auto oracle=aligned(path,live);
+        ghost_path::Progress p{};Measure now,old;uint32_t anchor=0;bool anchored=false;
+        for(uint32_t i=0;i<live.size();++i) {
+            const auto& r=live.at(i);
+            if(!r.posed)continue;
+            uint32_t hint=0;const bool hinted=path.record_at(r.coordinate,hint);
+            const uint32_t before=p.record;const double was=p.shown;const bool known=p.known;
+            counting=true;
+            if(ghost_path::follow(path,r.position,r.level,r.area,p,hinted,hint))++now.on_path;
+            ghost_path::glide(path,p);
+            if(p.known)ghost_path::window(path,p,r.level,r.area,1500,frame);
+            counting=false;
+            if(!p.known)continue;
+            // The oracle's place for this frame, and whether he is on the route there.
+            const uint32_t truth=oracle[i];
+            float q[3];bool on_route=false;
+            if(path.where(truth,r.level,r.area,q)) {
+                const float x=q[0]-r.position[0],y=(q[1]-r.position[1])*0.5f,z=q[2]-r.position[2];
+                on_route=x*x+y*y+z*z<=GP_PATH_CAPTURE*GP_PATH_CAPTURE;
+            }
+            ++now.frames;
+            if(known && (p.record<before || p.shown<was))now.monotonic=false;
+            if(known)now.max_step=std::fmax(now.max_step,p.shown-was);
+            if(known && path.coordinate(p.record)>path.coordinate(before)+90)++now.jumps;
+            const double lead=(double(path.coordinate(p.record))-double(path.coordinate(truth)))/30.0;
+            now.max_lead=std::fmax(now.max_lead,lead);now.min_lead=std::fmin(now.min_lead,lead);
+            if(lead>5)++now.later;
+            if(lead<-5 && on_route)++now.lag;
+            if(passes_in(frame))++now.two_pass;
+            now.last=path.coordinate(p.record);
+            // The replaced rule on the same frame, its window as long as it was
+            // (5 s ahead in all).
+            const uint32_t from=anchored?anchor:(hinted?hint:0);
+            const uint32_t next=nearest_record(path,from,r.position,r.level,r.area);
+            if(anchored) {
+                if(next<anchor)old.monotonic=false;
+                const uint64_t x=path.coordinate(anchor),y=path.coordinate(next);
+                if((y>x?y-x:x-y)>90)++old.jumps;
+            }
+            anchor=next;anchored=true;++old.frames;
+            const double old_lead=(double(path.coordinate(anchor))-double(path.coordinate(truth)))/30.0;
+            old.max_lead=std::fmax(old.max_lead,old_lead);if(old_lead>5)++old.later;
+            ghost_path::Progress fixed{};fixed.known=true;fixed.record=anchor;fixed.shown=double(path.coordinate(anchor));
+            ghost_path::window(path,fixed,r.level,r.area,4000,frame);
+            if(passes_in(frame))++old.two_pass;
+        }
+        check(now.frames>0,"the replay reached the path");
+        char row[700];
+        std::snprintf(row,sizeof(row),"%s{\"name\":\"%s\",\"path\":%u,\"live\":%u,\"frames\":%u,\"on_path\":%u,"
+            "\"monotonic\":%s,\"max_step\":%.2f,\"jumps\":%u,\"max_lead_s\":%.2f,\"min_lead_s\":%.2f,\"later\":%u,"
+            "\"lag\":%u,\"two_pass\":%u,\"end\":%llu,\"path_end\":%llu,\"old\":{\"monotonic\":%s,\"jumps\":%u,"
+            "\"max_lead_s\":%.2f,\"later\":%u,\"two_pass\":%u}}",k?",":"",all[k].name.c_str(),all[k].attempt,
+            all[k+1].attempt,now.frames,now.on_path,now.monotonic?"true":"false",now.max_step,now.jumps,now.max_lead,
+            now.min_lead,now.later,now.lag,now.two_pass,(unsigned long long)now.last,
+            (unsigned long long)path.coordinate(path.size()-1),old.monotonic?"true":"false",old.jumps,old.max_lead,
+            old.later,old.two_pass);
+        json+=row;
+    }
+    return json+"]";
+}
+
+int main(int argc,char** argv) {
     try {
-        requests();records();averaging();anchoring();windows();meshes();
+        requests();records();averaging();progressing();windows();meshes();
+        const std::string replays=argc>1?revisits(argv[1]):"[]";
         std::printf("{\"ok\":true,\"checks\":%u,\"allocations\":%u,\"samples\":%u,\"max_vertices\":%u,"
-            "\"frame_bytes\":%u,\"mesh_bytes\":%u}\n",checks,allocations.load(),ghost_path::samples,
-            ghost_path::max_vertices,unsigned(sizeof(ghost_path::Frame)),unsigned(sizeof(ghost_path::Mesh)));
+            "\"frame_bytes\":%u,\"mesh_bytes\":%u,\"revisits\":%s}\n",checks,allocations.load(),ghost_path::samples,
+            ghost_path::max_vertices,unsigned(sizeof(ghost_path::Frame)),unsigned(sizeof(ghost_path::Mesh)),replays.c_str());
         return 0;
     } catch(const std::exception& e) {
         std::fprintf(stderr,"FAILED after %u checks: %s\n",checks,e.what());return 1;

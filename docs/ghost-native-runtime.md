@@ -1330,16 +1330,39 @@ chosen by the trainer), drawn under the same live camera as the ghosts
 checked on every request, the tuning ranges while the path is on (an all-zero
 block means no path).
 
-- **Anchored to live Mario, not the ghost's clock.** Each list, playback finds
-  the path record nearest live Mario's root, searching 3 s back and 6 s ahead
-  of the last match (equal distances: the one nearest the last match), so a
-  path that crosses itself keeps its pass. A new clip, run, seek or mode
-  starts from the ghost's own record, or searches the whole clip; so does live
-  Mario entering a scene the window lacks, once per scene. The window draws
-  `path_ahead_ms` ahead at full strength, fades over the next 2 s, and keeps
-  1 s behind him at 25%. The path draws while every ghost is hidden this list
-  (evaluate returns true with no pose), and stops when the attempt ends (a
-  star, a defeat, the trainer's suspension).
+- **Live Mario's progress, not the ghost's clock.** His ask, 2026-10-03: "the
+  first time we go through an area, we show the first path going through that
+  area; then when we come back, we're using the second path". Progress is a
+  path record that only moves forward. Each list it advances to the nearest
+  record of the first run of records within 150 units of live Mario's root
+  (height counting half) in the next 1 s of the ghost's run; a later pass of
+  that place lies past records he is not near, so it is never taken. Off the
+  route it holds. After 15 lists without a capture the reach widens to 6 s,
+  then 4 frames a list, for a shortcut or a long detour of his own. A new
+  clip, run, seek or mode restarts it at the ghost's own record, else at the
+  clip's first pass near him, searched every 15 lists. The drawn window glides
+  toward it, a quarter of the gap a list and at most 8 recorded frames, so a
+  correction slides instead of snapping. The window draws `path_ahead_ms`
+  ahead at full strength, fades over the next 1 s, and keeps 0.5 s behind him
+  at 25%, its last 250 ms fading out. The path draws while every ghost is
+  hidden this list (evaluate returns true with no pose), and stops when the
+  attempt ends (a star, a defeat, the trainer's suspension).
+- **Measured on his revisits** ([the fixture](../tests/fixtures/ghost_path_revisits.bin.gz):
+  WDW and WF 100 coins and two SSL stars, another attempt replayed as live
+  Mario against the fastest's path, judged by the two runs' own time-warped
+  alignment). Progress never moved back or onto a later pass; it was more than
+  5 s behind him on 0-5.5% of frames, and one place was in view twice on
+  0-7.7% (the ghost's own tight loops, such as wall kicks). The replaced
+  rule (the record nearest him, 3 s back to 6 s ahead) moved back on three of
+  the four and onto a later pass for 27 frames, and with its 5 s window showed
+  a place twice on up to 19.7%.
+- **A new set's path, never the old one.** His report, 2026-10-03: "I swapped
+  from one star to another star, but the OLD GHOST'S PATH was still there".
+  Playback named the path's clip by its storage slot, so a new star's clip
+  prepared into a reclaimed slot drew the old star's cached records; the path
+  now names clips by their 16-byte id. While the IPC worker keeps the old set
+  drawing during a load, it switches that set's path off unless the request's
+  path names the same clip; the new set's command brings the new path.
 - **Exact records, broken where the game jumps.** Points are recorded frames,
   never smoothed. The line breaks at an executed warp (`pending_warp_op` set,
   then clear), a clock warp, retry or level load, an area or level change, a
@@ -1365,38 +1388,45 @@ block means no path).
   the V's tip leading.
 - **Button presses** (`path_buttons`, off by default): at each press edge of
   A, B, Z, R and the C buttons, Usamune's 16x16 icon 60 units above that
-  frame's root, 12 pixels of a 320x240 picture at any distance, presses of one
-  frame side by side across the line on screen in Usamune's table order.
-  Frames without a known pad mark nothing.
+  frame's root, 30 world units tall so it shrinks with distance like the
+  names, and never taller than 5 pixels of a 240-line picture near the camera
+  (his report, 2026-10-03: "They're WAY too big"; they were a fixed 12).
+  Presses of one frame sit side by side across the line on screen in
+  Usamune's table order. Frames without a known pad mark nothing.
 - **`path_source` average**: the mean of every playing ghost at the same
   elapsed frame (each ghost's alignment applied), only where every one is
   within 200 units of the fastest in its scene; the fastest's own point
   elsewhere.
-- **Depth.** The shader compares against the frame's copied terrain depth,
-  like every ghost part, so both depth routes draw it: a first pass draws what
-  the terrain does not hide, with the shadow's decal offset; a second the rest
-  at 20%, so a line around a corner stays one line. Live Mario's depth is in
-  that copy, so the path behind him is the faint part. A stencil bit per
-  layer lets each cover a pixel once where its quads overlap. Within 60-150
-  units of the camera it fades out. Drawn after the shadows, under every
-  body, into the private display only.
+- **Depth.** His ask, 2026-10-03: "I don't want to be able to see the path
+  through walls. It should be hidden by walls / other objects that would block
+  vision, just like ghost mario." The shader compares against the frame's
+  copied terrain depth, like every ghost part, so both depth routes draw it,
+  and discards whatever the game drew in front: line, chevrons, dots, bars and
+  icons alike. The shadow's decal offset keeps it on the floor it lies on.
+  Live Mario's depth is in that copy, so he hides the path behind him. A
+  stencil bit per layer lets each cover a pixel once where its quads overlap.
+  Within 60-150 units of the camera it fades out. Drawn after the shadows,
+  under every body, into the private display only.
 
-Budget: the window holds at most 400 records (10 s ahead, its fade and 1 s
-behind at 30 Hz is 391); each record is read once and kept in a 512-entry
+Budget: the window holds at most 400 records (10 s ahead, its 1 s fade and
+0.5 s behind at 30 Hz is 346); each record is read once and kept in a 512-entry
 cache while the window passes it; the mesh (at most 7,584 vertices) and its
 GPU buffer are preallocated. Nothing is allocated per frame. Measured
 2026-10-03 in the [pipeline](../tests/test_ghost_pipeline.py) (one ghost on
-a 12 s recording, 151 points, RTX 5090, 1600x1200): playback's choice
-68 -> 73 us at p50, the compositor batch 110 -> 144 us (draw 37 -> 67 us),
-the frame through GPU completion 0.275 -> 0.324 ms; no driver queries either
-way. Witnesses: [the CPU witness](../tests/native/ghost_path_host.cpp)
-(selection, mesh, nothing allocated), [the playback
-witness](../tests/native/ghost_playback_host.cpp) (anchoring through real
-playback, hidden ghosts, the average, the switches), and [the GPU
+a 12 s recording, live Mario following it, 76 points, RTX 5090, 1600x1200):
+playback's choice 68 -> 77 us at p50, the compositor batch 114 -> 145 us
+(draw 37 -> 60 us), the frame through GPU completion 0.290 -> 0.351 ms; no
+driver queries either way. Witnesses: [the CPU witness](../tests/native/ghost_path_host.cpp)
+(progress on a looping path and on his revisits, the window, the mesh, icon
+size by distance, nothing allocated), [the playback
+witness](../tests/native/ghost_playback_host.cpp) (progress and glide through
+real playback, a star swap into a reclaimed slot, hidden ghosts, the average,
+the switches), [the IPC witness](../tests/native/ghost_ipc_host.cpp) (no
+command draws the old path while a new set loads), and [the GPU
 witness](../tests/native/ghost_path_gl_host.cpp) through the real compositor
-(behind a wall at 20%, one blend a layer, icon size, and with
-`SM64_GHOST_ROM` the drawn chevron against `tests/test_ghost_path.py`'s own
-decode of the cartridge).
+(hidden behind a wall, one blend a layer, icons capped near, world-sized far
+and hidden behind a wall, and with `SM64_GHOST_ROM` the drawn chevron against
+`tests/test_ghost_path.py`'s own decode of the cartridge).
 
 ### Translucent world layer (water over the ghost)
 

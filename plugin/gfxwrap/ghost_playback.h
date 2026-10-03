@@ -225,8 +225,8 @@ bool annotations(ghost_annotation::View *out, uint64_t *model_id);
 bool evaluate(const gc_sample &, const ghost::WorldPass &,
               ghost_compositor::Pose *out, uint32_t &count, gp_draw_token &token);
 /* The ghost's path the latest evaluate chose (path_enabled), or null: the
- * path_clip ghost's recorded trajectory, its window anchored to LIVE Mario's
- * own place along it (ghost_path::locate), never to the ghost's clock, so it
+ * path_clip ghost's recorded trajectory, its window at LIVE Mario's progress
+ * along it (ghost_path::follow, forward only), never the ghost's clock, so it
  * still draws while every ghost is hidden this list (evaluate then returns
  * true with count 0). Off once the attempt ends (a star, defeat or
  * suspension). Borrowed until the next evaluate, safe_boundary or retire. */

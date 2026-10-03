@@ -289,7 +289,7 @@ static gp_request request(const Clip& clip,uint64_t revision) {
     r.star_action_count=1;r.star_actions[0]=0x1302;r.shadow_enabled=1;
     r.names_enabled=r.inputs_enabled=1;std::strcpy(r.clips[0].label,"YOUR PB");
     // The path off, at the card's defaults (ghost/settings.py path_tuning).
-    r.path_ahead_ms=3000;r.path_width=40;r.path_opacity=.85f;r.path_spacing_ms=100;
+    r.path_ahead_ms=1500;r.path_width=40;r.path_opacity=.85f;r.path_spacing_ms=100;
     r.origin={GO_STAR,5,50,77,2000,7,0,0};return r;
 }
 int main() {
@@ -847,7 +847,7 @@ int main() {
                 check(api->prepare_clip(&ghost->header,ghost->frames.data())==GP_OK,"prepare a path ghost");
             revision=r.revision+1;r=request(fast,revision);r.model_id=4;r.star_ends=0;r.clip_count=2;
             std::memcpy(r.clips[1].clip_id,slow.header.clip_id,16);std::strcpy(r.clips[1].label,"SLOW");
-            r.path_enabled=1;r.path_clip=0;r.path_ahead_ms=3000;r.path_width=50;r.path_opacity=.75f;r.path_spacing_ms=200;
+            r.path_enabled=1;r.path_clip=0;r.path_ahead_ms=1500;r.path_width=50;r.path_opacity=.75f;r.path_spacing_ms=200;
             r.origin={GO_STAR,7,live.sequence+1,source_continuity,9000,source_generation,0,0};elapsed_base=9000;
             live.level=9;live.area=1;live.live_action=1;
             check(api->configure(&r)==GP_OK,"configure two ghosts and the path");
@@ -867,33 +867,67 @@ int main() {
                 });
             };
             at(5,4005,2);
-            check(drawn_path && drawn_path->count==120,"1 s behind his place through the fastest ghost's last frame");
+            // 0.5 s behind, 1.5 s full, 1 s of fade around where he is.
+            check(drawn_path && drawn_path->count==81,"0.5 s behind his place through 2.5 s ahead");
             check(drawn_path->points[5].position[0]==4005 && drawn_path->points[5].alpha==1
-                  && drawn_path->points[0].alpha==GP_PATH_BEHIND_ALPHA,"anchored where he stands, full ahead, 25% behind");
+                  && drawn_path->points[0].alpha==GP_PATH_BEHIND_ALPHA,"where he stands, full ahead, 25% behind");
             check(drawn_path->width==50 && drawn_path->opacity==.75f && drawn_path->spacing_ms==200 && !drawn_path->buttons
                   && !drawn_path->chevrons && !drawn_path->icons,"the request's tuning, and no ROM artwork in this fixture");
             check(drawn_path->points[10].pressed==0x8000 && drawn_path->points[11].pressed==0,"a press edge, not the hold");
             check((drawn_path->points[25].flags&ghost_path::air) && !(drawn_path->points[19].flags&ghost_path::air),
                   "airborne frames carry the air flag");
             check(drawn_path->view_projection[0]==1 && drawn_path->eye[0]==live.camera.position[0],"under the live camera");
-            // He runs ahead of the ghost's clock: the path follows him, not it.
+            // He runs ahead of the ghost's clock: progress follows him, not it,
+            // and the window slides there rather than jumping.
+            auto first_full=[&]{for(uint32_t i=0;i<drawn_path->count;++i)if(drawn_path->points[i].alpha==1)
+                return drawn_path->points[i].coordinate;return uint64_t(0);};
             at(6,4060,2);
-            check(drawn_path && drawn_path->points[0].coordinate==30 && drawn_path->points[30].position[0]==4060,
-                  "the window moves with live Mario's place");
+            check(drawn_path && first_full()>5 && first_full()<35,"a correction slides: one list moves part of the way");
+            for(uint64_t time=7;time<30;++time)at(time,4060,2);
+            check(drawn_path && first_full()==60 && drawn_path->points[15].position[0]==4060,"and arrives where he is");
+            // He walks back toward the start: the path ahead holds, never back.
+            at(30,4010,2);check(drawn_path && first_full()==60,"progress never moves backward");
             // Both ghosts past their ends: only the path is drawn.
             at(400,4115,0);
-            check(drawn_path && drawn_path->points[0].coordinate==85,"with every ghost hidden the path draws on");
+            check(drawn_path && drawn_path->count>0 && first_full()>60,"with every ghost hidden the path draws on");
             // The averaged path: the mean where every ghost is inside the gate.
             ++r.revision;r.path_source=GP_PATH_AVERAGE;check(api->configure(&r)==GP_OK,"average the path");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
-            at(5,4005,2);
-            check(drawn_path && drawn_path->points[5].position[0]==4055 && drawn_path->points[100].position[0]==4150,
-                  "two ghosts 100 apart average to their mean, frame by frame");
+            at(401,4115,0);
+            bool mean=drawn_path && drawn_path->count>0;
+            for(uint32_t i=0;mean && i<drawn_path->count;++i)
+                mean=drawn_path->points[i].position[0]==4050.0f+float(drawn_path->points[i].coordinate);
+            check(mean,"two ghosts 100 apart average to their mean, frame by frame");
             ++r.revision;std::memcpy(r.clips[1].clip_id,apart.header.clip_id,16);
             check(api->configure(&r)==GP_OK,"a ghost 600 away");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            at(402,4115,0);
+            bool own=drawn_path && drawn_path->count>0;
+            for(uint32_t i=0;own && i<drawn_path->count;++i)
+                own=drawn_path->points[i].position[0]==4000.0f+float(drawn_path->points[i].coordinate);
+            check(own,"outside the gate the fastest's own point");
+            // A new run starts progress again from the ghost's own record.
+            ++r.revision;r.origin.sequence=live.sequence+1;check(api->configure(&r)==GP_OK,"a new run");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             at(5,4005,2);
-            check(drawn_path && drawn_path->points[5].position[0]==4005,"outside the gate the fastest's own point");
+            check(drawn_path && first_full()==5 && drawn_path->points[0].coordinate==0,"a new run starts the path again");
+            // His star swap: the path ghost's clip leaves and the new star's is
+            // prepared into the storage it freed. The path is the new clip's (the
+            // average here: it and the ghost 100 away meet at 4650).
+            check(api->release_clip(fast.header.clip_id)==GP_OK,"the old path ghost leaves");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(api->collect()==GP_OK,"its storage is reclaimed");
+            Clip swapped=Clip::linear(47,120,UINT32_MAX,5);
+            for(auto& f:swapped.frames){f.sample.valid_fields|=GC_VALID_PAD;f.sample.pad={};}
+            check(api->prepare_clip(&swapped.header,swapped.frames.data())==GP_OK,"the new star's ghost");
+            ++r.revision;std::memcpy(r.clips[0].clip_id,swapped.header.clip_id,16);
+            check(api->configure(&r)==GP_OK,"the new set, its path ghost first");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            at(6,4706,2);
+            bool fresh=drawn_path && drawn_path->count>0;
+            for(uint32_t i=0;fresh && i<drawn_path->count;++i)
+                fresh=drawn_path->points[i].position[0]==4650.0f+float(drawn_path->points[i].coordinate);
+            check(fresh,"the new ghost's path, nothing of the old one's");
             // Off: the switch, and a finished attempt (suspension).
             ++r.revision;r.path_enabled=0;check(api->configure(&r)==GP_OK,"path off");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});

@@ -57,19 +57,43 @@ enum gp_path_source { GP_PATH_FASTEST = 0, GP_PATH_AVERAGE = 1 };
 #define GP_PATH_WIDTH_MAX 120.0f
 #define GP_PATH_SPACING_MS_MIN 33u
 #define GP_PATH_SPACING_MS_MAX 500u
-/* Past path_ahead_ms the path fades to nothing over this long; this much of it
- * behind live Mario stays at GP_PATH_BEHIND_ALPHA (Trackmania's Editor Route
- * draws the driven part at 25%). */
-#define GP_PATH_FADE_MS 2000u
-#define GP_PATH_BEHIND_MS 1000u
+/* Just enough to know what is coming (his ask, 2026-10-03: "progressively
+ * disclose the path as we're going along it ... we aren't overwhelmed with the
+ * entire path all at once"): past path_ahead_ms (the card's 1.5 s) the path
+ * fades to nothing over GP_PATH_FADE_MS; GP_PATH_BEHIND_MS of it behind him
+ * stays at GP_PATH_BEHIND_ALPHA (Trackmania's Editor Route draws the driven
+ * part at 25%), its last GP_PATH_BEHIND_FADE_MS fading out so a point leaving
+ * the back never pops. */
+#define GP_PATH_FADE_MS 1000u
+#define GP_PATH_BEHIND_MS 500u
+#define GP_PATH_BEHIND_FADE_MS 250u
 #define GP_PATH_BEHIND_ALPHA 0.25f
 /* The most records one window holds: the longest look-ahead, its fade and the
- * part behind, at 30 Hz, with room for a paused record or two. */
+ * part behind, at 30 Hz, with room for paused records. */
 #define GP_PATH_SAMPLES 400u
-/* Live Mario's place on the path is searched for this far back and ahead of
- * the last match (3 s and 6 s), so a path that crosses itself keeps its place. */
-#define GP_PATH_SEARCH_BACK_FRAMES 90u
-#define GP_PATH_SEARCH_AHEAD_FRAMES 180u
+/* Live Mario's PROGRESS along the path (his ask: "the first time we go through
+ * an area, we show the first path going through that area; then when we come
+ * back, we're using the second path"): it only moves forward. Each list it may
+ * advance to the first run of records within GP_PATH_CAPTURE of him (height
+ * counts half) inside GP_PATH_REACH_FRAMES of the ghost's time ahead of it,
+ * taking the nearest of that run; off the route it holds ("the path only
+ * advances when we're actually following it"). After GP_PATH_STALL_FRAMES
+ * lists without a capture the reach widens to GP_PATH_CATCHUP_FRAMES and then
+ * by GP_PATH_CATCHUP_GROWTH frames a list, so a shortcut, or a stretch of his
+ * own route, is caught up with when he rejoins the ghost's (on his WF 100-coin
+ * pair a 9 s detour never was with a fixed 6 s). A new clip, run, seek or mode
+ * starts it again. Measured on his recordings (tests/test_ghost_path.py). */
+#define GP_PATH_CAPTURE 150.0f
+#define GP_PATH_REACH_FRAMES 30u
+#define GP_PATH_STALL_FRAMES 15u
+#define GP_PATH_CATCHUP_FRAMES 180u
+#define GP_PATH_CATCHUP_GROWTH 4u
+/* The drawn window glides to new progress instead of snapping: each list it
+ * closes GP_PATH_GLIDE of the gap, at most GP_PATH_GLIDE_MAX frames of the
+ * ghost's run and at least one, so a correction slides (a 9 s catch-up over
+ * about a second) and ordinary running is never behind. */
+#define GP_PATH_GLIDE 0.25f
+#define GP_PATH_GLIDE_MAX 8.0f
 /* The averaged path averages only where every ghost is this close to the
  * fastest at the same elapsed frame: two strats never average into a wall. */
 #define GP_PATH_AVERAGE_GATE 200.0f
@@ -86,15 +110,19 @@ enum gp_path_source { GP_PATH_FASTEST = 0, GP_PATH_AVERAGE = 1 };
 #define GP_PATH_DOT_ALPHA 0.5f
 #define GP_PATH_DOT_WIDTH 0.4f
 #define GP_PATH_TICK_LENGTH 6.0f
-/* Parts behind the game's walls draw at this alpha, so a path around a corner
- * stays one line; parts this near the camera fade out (world units). */
-#define GP_PATH_HIDDEN_ALPHA 0.2f
+/* Parts this near the camera fade out (world units). Walls and objects hide
+ * the path like the ghost's body (his ask, 2026-10-03: "I don't want to be
+ * able to see the path through walls"). */
 #define GP_PATH_NEAR_HIDDEN 60.0f
 #define GP_PATH_NEAR_FULL 150.0f
 /* A button press (path_buttons): its Usamune icon this far above his root,
- * this many pixels of a 320x240 screen whatever the distance. */
+ * GP_PATH_BUTTON_SIZE world units tall so it shrinks with distance like the
+ * names (his ask, 2026-10-03: "The buttons should scale with distance ...
+ * They're WAY too big"), and never taller than GP_PATH_BUTTON_MAX_SCREEN
+ * pixels of a 240-line picture near the camera (was a fixed 12). */
 #define GP_PATH_BUTTON_HEIGHT 60.0f
-#define GP_PATH_BUTTON_PIXELS 12.0f
+#define GP_PATH_BUTTON_SIZE 30.0f
+#define GP_PATH_BUTTON_MAX_SCREEN 5.0f
 /* Overlap fade (ghost_proximity.h): the ellipsoid proxy for one Mario at gfx
  * scale 1, from bhvMario's radius=37, height=160 (half height 80):
  * https://github.com/n64decomp/sm64/blob/master/data/behavior_data.c */

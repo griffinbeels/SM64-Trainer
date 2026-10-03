@@ -422,7 +422,7 @@ int main(int argc,char** argv){
     request.owner_token=1;request.model_id=1;request.rom_generation=7;request.configuration=captured.configuration;
     request.clip_count=1;request.clips[0].clip_id[0]=1;request.opacity=1;
     request.shadow_enabled=0; // body-only proofs first; the shadow has its own section
-    request.path_ahead_ms=3000;request.path_width=40;request.path_opacity=.85f;request.path_spacing_ms=100;
+    request.path_ahead_ms=1500;request.path_width=40;request.path_opacity=.85f;request.path_spacing_ms=100;
     require(first.valid_fields&GC_VALID_SHADOW,"recorded pose carries its shadow");
     request.origin={GO_SEGMENT,first.epoch,first.sequence,first.clock.continuity_id,first.clock.elapsed_frames,first.clock.origin_id,0,0};
     require(api->configure(&request)==GP_OK,"configure exact-origin FOLLOW playback");std::unique_ptr<Pipeline> pipeline;
@@ -626,7 +626,9 @@ int main(int argc,char** argv){
         renderer.run([&]{
             pipeline->frame(true,true);ppm(out/"path.ppm",pipeline->last_visible);
             path_points=pipeline->path_points;path_pixels=changed(without,pipeline->last_visible);
-            require(path_points>100 && path_pixels>1000,"the path draws beside the ghost");});
+            // Live Mario at the recording's start: the window ahead and its fade.
+            require(path_points>=(request.path_ahead_ms+GP_PATH_FADE_MS)*30/1000 && path_pixels>1000,
+                    "the path draws beside the ghost");});
         for(bool on:{false,true}) {
             request.path_enabled=on;++request.revision;require(api->configure(&request)==GP_OK,"path timing");
             renderer.run([&]{

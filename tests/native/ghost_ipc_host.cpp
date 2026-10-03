@@ -63,6 +63,8 @@ std::atomic<bool> intercept_expiry{false},intercept_wait{false},barrier_failed{f
 Handle expiry_seen,resume_expiry,wait_seen,resume_wait;
 std::mutex command_mutex;
 gp_request command{};
+// Every command the worker configured, in order (the path's set-change proof).
+std::vector<gp_request> history;
 uint64_t last_revision=0;
 bool enter_worker() {
     DWORD expected=0,thread=GetCurrentThreadId();
@@ -131,7 +133,8 @@ int32_t __cdecl configure(const gp_request* value) {
     if(!enter_worker())return GP_WRONG_THREAD;
     std::lock_guard<std::mutex> lock(command_mutex);
     if(!value || value->revision<=last_revision)return GP_INVALID;
-    last_revision=value->revision;command=*value;++commands;model_state=GP_MODEL_RENDER_OWNED;return GP_OK;
+    last_revision=value->revision;command=*value;history.push_back(*value);++commands;
+    model_state=GP_MODEL_RENDER_OWNED;return GP_OK;
 }
 void __cdecl revoke(uint32_t why) {
     ++revokes;if(model_state.load()!=GP_MODEL_EMPTY)model_state=GP_MODEL_RETIRED;
@@ -480,7 +483,30 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         rom[0]=0x40;const auto before_rebuild=rom_validations.load();
         r.revision=23;ready(page,r);
         check(rom_validations.load()>before_rebuild,"a retired model is rebuilt from a fresh cartridge read");
-        r.revision=24;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
+        // His star swap (2026-10-03: "the OLD GHOST'S PATH was still there"):
+        // the path now names clip 1, which must be read again. While it loads,
+        // the old set keeps drawing with its path off; the new set brings the
+        // new path. Never a command drawing a path for a clip it was not asked for.
+        {
+            const size_t before=[&]{std::lock_guard<std::mutex> lock(command_mutex);return history.size();}();
+            const auto shown=last_command();
+            check(shown.path_enabled && shown.clips[shown.path_clip].clip_id[0]==2,"the path draws clip 2's route");
+            r.revision=24;set_clip(r.clips[0],1,argv[1],argv[2],217);r.path_clip=0;ready(page,r);
+            std::vector<gp_request> sent;{std::lock_guard<std::mutex> lock(command_mutex);sent.assign(history.begin()+before,history.end());}
+            bool withheld=false,wrong=false;
+            for(const auto& c:sent) {
+                if(c.path_enabled && c.clips[c.path_clip].clip_id[0]!=1)wrong=true;
+                if(!c.path_enabled && c.clip_count==2 && c.clips[0].clip_id[0]==2)withheld=true;
+            }
+            const auto now=last_command();
+            check(withheld,"while the new path's ghost loads, the old set draws on without a path");
+            check(!wrong,"no command draws a path other than the one asked for");
+            check(now.path_enabled && now.clips[now.path_clip].clip_id[0]==1 && now.clips[1].clip_id[0]==3,
+                  "the new set brings its own path");
+        }
+        // The set as it was (clip 2 then 3) for the sections that follow.
+        r.revision=25;set_clip(r.clips[0],2,argv[4],argv[5],40);ready(page,r);
+        r.revision=26;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
         r.owner_created_lo^=1;r.token=124;r.revision=1;ready(page,r);
         // Reproduce the reader owning the page exactly when lease expiry must
         // be published. No new request/event wakes the worker after this race.

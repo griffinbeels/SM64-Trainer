@@ -164,7 +164,11 @@ def test_the_path_nests_its_choices_and_tunes_from_the_published_ranges():
                 assert [(slider["min"], slider["max"], slider["step"]) for slider in shown["sliders"]] == [
                     (ranges[name]["min"], ranges[name]["max"], ranges[name]["step"])
                     for name in ("ahead_s", "width", "opacity", "spacing_s")]
-                assert [slider["readout"] for slider in shown["sliders"]] == ["3.0 s", "40 units", "85%", "0.10 s"]
+                # The shipped defaults, read from the registry rather than restated.
+                tuning = settings.DEFAULT_PATH_TUNING
+                assert [slider["readout"] for slider in shown["sliders"]] == [
+                    f"{tuning['ahead_s']:.1f} s", f"{tuning['width']:.0f} units", f"{tuning['opacity']:.0%}",
+                    f"{tuning['spacing_s']:.2f} s"]
                 assert shown["child"] > shown["parent"], "the path's choices hang beneath it"
                 assert shown["row"] <= 1 and shown["card"] <= 1 and shown["page"] <= 0
                 assert all(slider["right"] <= shown["cardRight"] + 1 for slider in shown["sliders"])
