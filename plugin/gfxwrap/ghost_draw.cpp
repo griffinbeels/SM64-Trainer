@@ -116,7 +116,8 @@ bool image_for_vi(const ghost_presentation::ViSource &source, ghost_presentation
             || source.drawable_generation != owner.drawable_generation) return false;
     const auto display = ghost_compositor::display(compositor);
     ghost_presentation::GhostViImage image{display.texture, display.width, display.height,
-        configuration, owner.context_generation, display.occurrence, display.framebuffer};
+        configuration, owner.context_generation, display.occurrence, display.framebuffer,
+        ghost_playback::records_display() ? 1u : 0u};
     if (!valid_image(image) || display.width != source.width || display.height != source.height) return false;
     *out = image; return true;
 }

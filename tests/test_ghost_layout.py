@@ -84,8 +84,8 @@ def test_annotations_fit_in_the_existing_request_region():
     assert C.sizeof(P.Status) == 256
     assert C.sizeof(P.Status) + C.sizeof(P.Request) <= L.IPC_RING_AT
     assert P.Clip.label.offset == P.Clip.clip_path.offset + 2 * L.IPC_PATH_CHARS
-    assert P.Request.names_enabled.offset + 24 == L.IPC_REQUEST_BYTES
-    assert P.Request.hud_inputs_enabled.offset + 4 == L.IPC_REQUEST_BYTES
+    assert P.Request.names_enabled.offset + 28 == L.IPC_REQUEST_BYTES
+    assert P.Request.record_ghosts.offset + 4 == L.IPC_REQUEST_BYTES
     assert P.Clip().label == b""
 
 

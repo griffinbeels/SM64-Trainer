@@ -78,7 +78,7 @@ bool valid_set(const gipc_request &r) {
             || !(r.volume >= 0 && r.volume <= 1) || r.names_enabled>1 || r.inputs_enabled>1
             || r.input_mode>GP_INPUT_VALUES || r.name_background>GP_NAME_WHITE
             || !(r.name_background_opacity >= 0 && r.name_background_opacity <= 1)
-            || r.hud_inputs_enabled>1) return false;
+            || r.hud_inputs_enabled>1 || r.record_ghosts>1) return false;
     for (uint32_t i = 0; i < r.clip_count; ++i) {
         const auto &clip = r.clips[i];
         if (clip.hue_degrees > 359 || clip.reserved || !ghost_annotation::valid_label(clip.label)) return false;
@@ -487,6 +487,7 @@ struct Session {
                     command.input_mode=r.input_mode;command.name_background=r.name_background;
                     command.name_background_opacity=r.name_background_opacity;
                     command.hud_inputs_enabled=r.hud_inputs_enabled;
+                    command.record_ghosts=r.record_ghosts;
                     if (play->configure(&command) != GP_OK) {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
                     } else {

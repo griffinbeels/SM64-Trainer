@@ -12,6 +12,7 @@ struct GhostViImage {
     uint32_t texture, width, height, configuration, context_generation;
     uint64_t occurrence;
     uint32_t framebuffer; // private display FBO; required for the screen-size blit route
+    uint32_t record_display; // 1: the recording takes this displayed picture (Ghosts in recording)
 };
 using ImageProvider = bool (*)(const ViSource&, GhostViImage*);
 using ImageValidity = bool (*)(const GhostViImage&); // current command/configuration revision
@@ -62,6 +63,9 @@ bool before_swap(Instance*,uint32_t vi_origin,const Raster&); // fallback/blank 
 bool begin_osd(Instance*);
 void end_osd(Instance*);
 void after_osd(Instance*);
+// After OSD and any withdrawal: an image asking for it puts the picture the
+// window is about to show into the recorded surface in place of the clean one.
+void record_display(Instance*);
 void cancel_overlay(Instance*); // restore already-saved clean BACK before swapping
 void withdraw_image(Instance*); // command changed: restore clean, retain clean capture eligibility
 void swap_completed(Instance*,bool success);

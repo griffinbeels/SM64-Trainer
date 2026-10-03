@@ -577,7 +577,7 @@ bool valid_request(const gp_request& r) {
             || r.suspended>1 || r.reserved4 || r.names_enabled>1 || r.inputs_enabled>1
             || r.input_mode>GP_INPUT_VALUES || r.name_background>GP_NAME_WHITE
             || !std::isfinite(r.name_background_opacity) || r.name_background_opacity<0
-            || r.name_background_opacity>1 || r.hud_inputs_enabled>1) return false;
+            || r.name_background_opacity>1 || r.hud_inputs_enabled>1 || r.record_ghosts>1) return false;
     const gp_clip unused{};
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         const auto &clip=r.clips[i];
@@ -1267,6 +1267,7 @@ bool terminal() {
     const auto revision=terminal_revision.load(std::memory_order_acquire);
     return revision && revision==enabled_revision.load(std::memory_order_acquire);
 }
+bool records_display() {return have_request && active_request.record_ghosts!=0;}
 bool current(const gp_draw_token& token) {
     return drawing() && token.revision==active_request.revision && token.cancellation==acquired_cancel
         && context_serial.load()==token.context_serial;

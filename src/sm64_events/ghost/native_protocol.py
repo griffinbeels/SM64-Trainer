@@ -54,6 +54,7 @@ class Request(C.LittleEndianStructure):
         ("volume", C.c_float), ("sound_fade", U32),
         ("names_enabled", U32), ("inputs_enabled", U32), ("input_mode", U32),
         ("name_background", U32), ("name_background_opacity", C.c_float), ("hud_inputs_enabled", U32),
+        ("record_ghosts", U32),
     ]
 
 

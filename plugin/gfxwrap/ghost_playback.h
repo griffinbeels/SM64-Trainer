@@ -8,7 +8,7 @@
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 9u
+#define GP_VERSION 10u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
 /* Sized so a full set of long ghosts can be replaced by another full set in
@@ -96,6 +96,9 @@ typedef struct gp_request {
     uint32_t name_background;
     float name_background_opacity;
     uint32_t hud_inputs_enabled;
+    /* 1: the recording takes the picture the window shows, ghosts and all
+     * (Ghosts in recording, off by default), instead of the clean one. */
+    uint32_t record_ghosts;
 } gp_request;
 
 typedef struct gp_status {
@@ -247,6 +250,9 @@ void set_sound_sink(const SoundSink *);
 /* Recheck immediately before final presentation; cancellation/configuration
  * during a list must not present an older provisional candidate. */
 bool current(const gp_draw_token &);
+/* Renderer-owned: the applied command asks the recording for the displayed
+ * picture (record_ghosts). Read where the frame's display image is handed over. */
+bool records_display();
 /* A displayed request holds clips for the prepared model on this renderer:
  * the only state in which a frame can draw a ghost, though a finished or
  * hidden ghost holds it too (plan() says whether this list draws one).

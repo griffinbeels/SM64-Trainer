@@ -32,6 +32,9 @@ def test_billboard_switches_write_immediately_and_offer_no_mode_of_their_own():
                 assert settled(page, state, 2)[1] == {"inputs_enabled": True}
                 page.click(".ghost-hud-inputs .ghost-switch")
                 assert settled(page, state, 3)[2] == {"hud_inputs_enabled": True}
+                # Ghosts in recording: off until he turns it on (his choice, 2026-10-02).
+                page.click(".ghost-record .ghost-switch")
+                assert settled(page, state, 4)[3] == {"record_ghosts": True}
                 measured = page.evaluate("""(() => {
                   const input=document.querySelector('.ghost-inputs');
                   const row=input.closest('.ghost-row');

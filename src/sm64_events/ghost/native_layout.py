@@ -16,9 +16,9 @@ block are named <BLOCK>_<FIELD>_AT and are relative to that block.
 # Versions and names
 CLIP_MAGIC, CLIP_VERSION = b"SM64GHO7", 7
 SAMPLE_VERSION = 8  # GC_VERSION: gc_sample, and the gc_layout it is read with
-IPC_MAGIC, IPC_VERSION = b"SM64GI11", 11
-IPC_PREFIX = "Local\\sm64_trainer_ghost_v11_"
-STREAM_VERSION, PLAYBACK_VERSION = 7, 9
+IPC_MAGIC, IPC_VERSION = b"SM64GI12", 12
+IPC_PREFIX = "Local\\sm64_trainer_ghost_v12_"
+STREAM_VERSION, PLAYBACK_VERSION = 7, 10
 INPUT_STICK, INPUT_VALUES = 0, 1
 NAME_BLACK, NAME_WHITE = 0, 1  # gp_name_background
 
@@ -69,7 +69,7 @@ V6_MAGIC, V6_VERSION, V6_SAMPLE_VERSION, V6_RECORD_BYTES, V6_SAMPLE_BYTES = b"SM
 
 # The IPC page and ghost limits
 IPC_SLOTS, IPC_RING_AT, IPC_PATH_CHARS = 512, 20480, 520
-IPC_CLIP_BYTES, IPC_REQUEST_BYTES, LABEL_BYTES = 1160, 20016, 64
+IPC_CLIP_BYTES, IPC_REQUEST_BYTES, LABEL_BYTES = 1160, 20020, 64
 GHOSTS = 16  # displayed ghosts at once: playback, compositor batch, sound sources, request slots
 PROXIMITY_MAX = 400.0  # the largest overlap-fade distance a request may carry
 BRIDGE_FRAMES = 2  # the longest refused run playback holds the previous pose over

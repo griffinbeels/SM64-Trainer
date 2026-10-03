@@ -1633,13 +1633,26 @@ with him.
 
 Every [[ghost]]'s inputs in the game's bottom left corner, one compact row
 each stacked above your own input display (on by default). A row keeps your
-display at half size: its numbers centred over yours, its buttons and name
+display at half size, in the Stick or Values style you chose for yours in
+Usamune's menu: its numbers centred over yours, its buttons and name
 packed close beside them, and it hides whenever Usamune hides yours (its menu
 open or its display off). At most seven show, in the order you chose them, and a row stays up
 while that [[ghost]] is off screen.
 
 - **Lives** — its switch row in `src/sm64_events/ghost/settings.py`;
   `plugin/gfxwrap/ghost_annotation_mesh.h` draws it
+
+### Ghosts in recording
+
+The ghost card's switch (off by default) that makes your replay videos keep
+the [[ghost]]s as the game window shows them -- bodies, names and [[corner inputs]] --
+so a clip shows you against them. It is the same single recording: while it is
+on, the recorder takes the picture you see instead of the clean one. It applies
+to what is recorded from then on; a saved clip never gains or loses ghosts, and
+Whole picture ghosts (a separate window) are never in it.
+
+- **Lives** — its switch row in `src/sm64_events/ghost/settings.py`;
+  `plugin/gfxwrap/ghost_presentation.cpp` (`record_display`) takes the picture
 
 ### Input document
 

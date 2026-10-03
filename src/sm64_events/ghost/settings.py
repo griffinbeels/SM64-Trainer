@@ -297,6 +297,14 @@ ROWS = (
     # choice he already made survives.
     switch("sound_fade", "ghost_overlap_sound", True,
            "Fading the ghost's sound with its picture is either on or off.", "sound_fade"),
+    # GHOSTS IN THE RECORDING. His words, 2026-10-02: *"what if I wanted to see
+    # exactly what my differences were compared to the ghost in my recorded
+    # video? ... Ideally this could be done without needing a separate ghost
+    # recording"*, then, choosing the switch set before the run: *"A, with it
+    # by default off."* On: the recording keeps the picture the game window
+    # shows, ghosts and all, instead of the clean one.
+    switch("record_ghosts", "ghost_record", False,
+           "Recording the ghosts into your replay video is either on or off.", "record_ghosts"),
     # A stored value from a build that knew another view name is not a view:
     # it falls back rather than leaving the page asking for what nothing draws.
     Setting("view", DEFAULT_VIEW, checked_view, key="ghost_view", resolves=True,

@@ -989,8 +989,10 @@ Native settings also include `names_enabled` (boolean, initially true),
 mode whenever it can read one, so this applies only while that display is off
 or unread, and the card offers no control for it), `name_background` (`"black"`
 or `"white"`, initially `"black"`), `name_background_opacity` (0..1; 0 draws no
-box) and `hud_inputs_enabled` (boolean, initially true: each ghost's inputs
-stacked above the game's own input display), remembered globally. Labels carry source
+box), `hud_inputs_enabled` (boolean, initially true: each ghost's inputs
+stacked above the game's own input display) and `record_ghosts` (boolean,
+initially false: the replay recording keeps the ghosts as the game window shows
+them), remembered globally. Labels carry source
 credit (`YOUR PB`, `YOUR RUN` or the imported creator). Inputs are the pad
 captured with the selected native occurrence; old recordings have unavailable
 inputs rather than a guessed neutral pad.

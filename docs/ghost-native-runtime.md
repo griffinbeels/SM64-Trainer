@@ -26,8 +26,9 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
 ## Names, inputs and collections
 
-The native controls remember **Names** (on initially), **Inputs** (off initially)
-and **Inputs in corner** (on initially). There is no Stick / Values control of
+The native controls remember **Names** (on initially), **Inputs** (off initially),
+**Inputs in corner** (on initially) and **Ghosts in recording** (off initially;
+see [the recorded picture](#ghosts-in-the-recording)). There is no Stick / Values control of
 our own: every ghost input display, over the ghost and in the corner, takes the
 mode Usamune's own input display is set to in its menu (u8 `0x80417B57`, layout
 row `usamune_input_display`: 2 draws the stick, any other nonzero value the
@@ -123,8 +124,8 @@ readable explanation. A bulk read binds one current definition snapshot.
 | Capture | GC8: layout 200 (`player1_controller` at 188; Usamune's menu and input display bytes at 192 and 196, never recorded), sample 1268; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636), the [held object](#held-objects) (44 at 1216, its released angle at 36) and optional exact pad (8 at 1260, validity bit 512) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS7, still exported as `SM64GhostSourceV3` (the version argument must be 7); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP9: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension and global names/inputs/mode, name box and HUD input stack controls | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC11: status 256, request 20016 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; names/inputs/mode, then name box style/opacity and the HUD input stack switch, appended after sound controls | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Playback | GP10: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension and global names/inputs/mode, name box and HUD input stack controls, and whether the recording keeps the displayed picture | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC12: status 256, request 20020 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; names/inputs/mode, then name box style/opacity, the HUD input stack switch and `record_ghosts`, appended after sound controls | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP7: header 160, record 1284, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP6 (1276), GCLIP5 (1268) and GCLIP4 (652) still load with unavailable pad; GCLIP5 also has nothing released, GCLIP4 also has no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
@@ -904,7 +905,7 @@ live Project64 picture; the current renderer still needs a live tunnel witness.
 ## Recording, preservation and ownership
 
 [NativeCapture](../src/sm64_events/ghost/capture.py) owns a separate leased channel
-named `Local\sm64_trainer_ghost_v11_<PID>`. Process birth, producer/ROM generations,
+named `Local\sm64_trainer_ghost_v12_<PID>`. Process birth, producer/ROM generations,
 configuration, epoch and one QPC/UTC anchor identify its batches. The native
 worker and Python client use a named mutex for mapped-page access; the render
 thread never touches that page. File/hash checks, ROM asset preparation and clip
@@ -1688,6 +1689,26 @@ generations and successful presentation serial. SourceV2's front-buffer contract
 is not relabeled. No negotiated clean consumer means no native ghost display.
 Clean/failed swaps and context loss clear visible telemetry; a generated mesh
 alone never reports that the ghost reached the game window.
+
+### Ghosts in the recording
+
+His ask (2026-10-02): *"what if I wanted to see exactly what my differences were
+compared to the ghost in my recorded video? ... Ideally this could be done without
+needing a separate ghost recording"*; his choice of the switch set before the run:
+*"A, with it by default off."* With `record_ghosts` (GIPC12/GP10) on, the frame's
+display image says so (`GhostViImage::record_display`, from
+`ghost_playback::records_display`), and after the OSD and any withdrawal
+`ghost_presentation::record_display` copies BACK -- what the window is about to show,
+ghosts, names, corner inputs and OSD -- over the recorded surface. Same encoder,
+same single recording: one extra copy of BACK, only on frames that drew a ghost.
+A failed copy publishes nothing. The choice applies to what is recorded from then on;
+saved clips never change. Whole picture ghosts are a separate window over the game,
+so they never reach the recording. A PB recorded this way keeps its ghosts in its
+video, so the same PB raced later as a Whole picture ghost shows them too; nothing
+marks such clips yet. Rejected: a second encoded stream to toggle while watching (twice
+the encoder load during play, up to twice the disk) and redrawing ghosts on the replay
+(no wall depth, so they would show through walls). The presentation witness checks the
+recorded surface equals the displayed picture only when the image asks.
 
 ### Ghost sound follows its picture's fade
 

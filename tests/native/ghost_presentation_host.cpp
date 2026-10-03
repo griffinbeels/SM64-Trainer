@@ -143,7 +143,8 @@ struct Raster {
     }
 };
 static void background(const gc::Dispatch& g) {ordinary(g);glClearColor(20.f/255,40.f/255,60.f/255,1);glClear(GL_COLOR_BUFFER_BIT);}
-static void completed(gp::Instance* p,Window& window){gp::after_osd(p);gp::swap_completed(p,SwapBuffers(window.dc)!=FALSE);}
+// The renderer's order: OSD ends, the recording may take the displayed picture, swap.
+static void completed(gp::Instance* p,Window& window){gp::after_osd(p);gp::record_display(p);gp::swap_completed(p,SwapBuffers(window.dc)!=FALSE);}
 static void run(uint32_t generation) {
     Window window;const auto d=dispatch();const auto& g=d.gl;ordinary(g);Raster raster(g);
     auto* p=gp::create(d,generation);require(p && gp::prepare(p,1,64,64,8,8),"prepare");
@@ -167,6 +168,19 @@ static void run(uint32_t generation) {
             rgb(recorded,x,y,20,40,60,"clean RGB including same-color OSD");
     }
     require(raster.gamma_calls==2 && raster.vi_calls==4,"gamma once before each VI");
+    // Ghosts in recording: the recorded surface is what the window shows, ghost and OSD included.
+    {   gp::GhostViImage shown=image;shown.record_display=1;
+        background(g);gp::begin_update(p,150);
+        require(gp::replace_vi(p,shown,0x1000,false,raster.api()),"recorded replace VI");
+        require(gp::before_swap(p,0x1000,raster.api()),"recorded before swap");
+        raster.osd(.5f);require(gp::begin_osd(p),"recorded OSD");raster.osd(.5f);gp::end_osd(p);
+        const auto visible=pixels(g,0);completed(p,window);const auto kept=gp::surface(p);
+        require(kept.presentation_serial && kept.update_occurrence==150,"recorded descriptor");
+        const auto recorded=pixels(g,kept.framebuffer);
+        for(int y=0;y<64;++y)for(int x=0;x<64;++x){const auto* v=&visible[(y*64+x)*4];
+            rgb(recorded,x,y,v[0],v[1],v[2],"recorded picture is the displayed one");}
+        rgb(recorded,12,18,64,144,16,"the ghost is in the recording");
+    }
     const auto old=gp::surface(p);gp::begin_update(p,200);
     require(gp::surface(p).update_occurrence==old.update_occurrence,"no swap retains explicit previous occurrence");
     background(g);require(gp::before_swap(p,0x2000,raster.api()),"clean-only fallback");
@@ -251,5 +265,5 @@ int main() {
     const auto foreground=GetForegroundWindow();require(!gp::clean_consumer(),"inactive by default");
     gp::clean_consumer(true);require(gp::clean_consumer(),"negotiated");gp::clean_consumer(false);
     run(1);run(2);require(GetForegroundWindow()==foreground,"focus unchanged");
-    std::puts("presentation passed: hidden=yes contexts=2 clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored known=asks_nothing");return 0;
+    std::puts("presentation passed: hidden=yes contexts=2 clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored known=asks_nothing recorded=displayed");return 0;
 }

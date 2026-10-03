@@ -170,6 +170,7 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &, ghost_compositor::Pos
     return true;
 }
 bool current(const gp_draw_token &token) { return token.revision != 0; }
+bool records_display() { return false; }
 void retire_on_context_loss() {}
 }
 namespace ghost_presentation {

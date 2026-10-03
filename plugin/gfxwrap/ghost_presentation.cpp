@@ -84,8 +84,8 @@ struct BlitGuard {
         g.BindFramebuffer(gl::READ_FRAMEBUFFER,uint32_t(read_fbo));g.BindFramebuffer(gl::DRAW_FRAMEBUFFER,uint32_t(draw_fbo));
     }
 };
-bool save_back(Instance* p) {
-    p->published={};p->qualified=false;
+// BACK -> the recorded surface (textures[0]), inside the diagnostic gateway.
+bool copy_back(Instance* p) {
     if(!p->raster.begin_gpu())return false;
     {
         const auto& g=p->dispatch.gl;const auto k=known(p->raster);CopyGuard guard(g,k);
@@ -98,7 +98,11 @@ bool save_back(Instance* p) {
         p->dispatch.CopyTexSubImage2D(gl::TEXTURE_2D,0,0,0,0,0,p->width,p->height);
         g.ReadBuffer(selector); // restore DEFAULT selector even if another FBO was originally read
     }
-    p->saved=p->raster.end_gpu();return p->saved;
+    return p->raster.end_gpu();
+}
+bool save_back(Instance* p) {
+    p->published={};p->qualified=false;
+    p->saved=copy_back(p);return p->saved;
 }
 void restore_back(Instance* p) {
     if(!p->saved)return;
@@ -200,6 +204,15 @@ void after_osd(Instance* p) {
     if(!p)return;
     end_osd(p);p->osd_window=false;
     if(!p->qualified && p->replaced){restore_back(p);p->replaced=false;}
+}
+// HIS CHOICE, 2026-10-02 ("A, with it by default off"): with Ghosts in
+// recording on, the recording keeps exactly what the window shows -- ghosts,
+// names, corner inputs and OSD -- so a clip shows him against his ghosts.
+// One more copy of BACK, only on frames that drew a ghost. A failed copy
+// publishes nothing rather than a half-written picture.
+void record_display(Instance* p) {
+    if(!p || !p->replaced || !p->qualified || !p->image.record_display || p->osd || p->osd_window)return;
+    if(!copy_back(p))p->qualified=false;
 }
 void cancel_overlay(Instance* p) {
     if(!p)return;
@@ -390,7 +403,7 @@ void after_osd() {
     if(!current)return;
     after_osd(current);osd_phase=false;
     if(!clean_consumer())cancel_overlay(current);
-    else revalidate_image();
+    else {revalidate_image();record_display(current);}
 }
 void swap_completed(bool success) {
     const auto image=pending_image(current);
