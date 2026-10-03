@@ -90,6 +90,12 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("sound_ring", "sSoundRequests", None,
               "256 x {u32 sound bits, u32 source}; Mario's source is his "
               "object's gfx.cameraToObject (object + 0x54)"),
+    LayoutRow("usamune_menu", None, "usamune_hud",
+              "VERIFY: u8, nonzero while Usamune's practice menu is open: its HUD hook "
+              "(RAM 0x80410f14) then draws the menu instead of its HUD and input display"),
+    LayoutRow("usamune_input_display", None, "usamune_hud",
+              "VERIFY: u8 Usamune input display setting, 0 = off (2 = stick, else values); "
+              "its HUD path calls the display (RAM 0x80408848) only while nonzero"),
     LayoutRow("behaviour_base", None, "mario_object_behaviour",
               "RAM address of segment 0x13; = mario_object->behaviour "
               "minus bhvMario's segmented offset for this version"),
@@ -122,6 +128,8 @@ class Layout:
     usamune_overall: int | None = None
     usamune_star_result: int | None = None
     usamune_timer: int | None = None
+    usamune_menu: int | None = None
+    usamune_input_display: int | None = None
     behaviour_base: int | None = None
 
     def value(self, field: str) -> int | None:
@@ -183,6 +191,11 @@ US = Layout(
     usamune_overall=0x80417C72,     # tools/hunt_value.py + watch session 2026-06-10
     usamune_star_result=0x80417C74,
     usamune_timer=0x8033D5DC,       # section counter; diagnostics only
+    # VERIFY: read off Usamune's own code, 2026-10-02 (disassembly of its HUD
+    # hook at RAM 0x80410f14: `lbu 0x68d8(0x8041)` picks the menu path; the HUD
+    # path's `lbu 0xb(0x80417b4c)` gates `jal 0x80408848`, the input display).
+    usamune_menu=0x804168D8,
+    usamune_input_display=0x80417B57,
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
 

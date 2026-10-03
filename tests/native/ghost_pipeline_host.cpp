@@ -609,6 +609,17 @@ int main(int argc,char** argv){
             ppm(out/"saved-gclip4.ppm",pipeline->last_visible);
             require(saved_visible==1 && saved_pixels>300,"the saved GCLIP4 ghost draws");});
     }
+    // His ask, 2026-10-02: the corner stack hides whenever Usamune hides his own
+    // input display -- its menu open (u8 at 0x804168D8) or the display off (u8 at
+    // 0x80417B57), the US layout rows the server sends.
+    renderer.run([&]{float matrix[16];projection(matrix);
+        const ghost::RasterTarget target{1,2,W,H,1,0,{0,0,int32_t(W),int32_t(H)},{.5f,.5f},{1,1}};
+        int64_t qpc=900000;
+        auto hidden=[&](uint8_t menu,uint8_t display) {
+            fixture.ram[(0x804168D8u-Fixture::base)^3]=menu;fixture.ram[(0x80417B57u-Fixture::base)^3]=display;
+            capture_source(fixture,target,matrix,++qpc);return ghost_stream::usamune_display_hidden();};
+        require(!hidden(0,2) && !hidden(0,1) && hidden(1,2) && hidden(0,0),
+                "the stream reads Usamune's menu and display bytes from the live list");});
     renderer.run([&]{pipeline.reset();});ghost_stream::api()->disable();api->revoke(GP_DISABLED);require(api->collect()==GP_OK,"worker collects real retired model");
     require(api->release_worker()==GP_OK,"worker releases real storage");require(GetForegroundWindow()==foreground,"foreground unchanged");
     std::printf("{\"ok\":true,\"synthetic\":true,\"live_gliden64\":false,\"width\":%u,\"height\":%u,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"setup_ms\":%.6f,\"swap_interval_disabled\":%s,",

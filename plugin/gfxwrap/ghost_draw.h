@@ -7,7 +7,9 @@ namespace ghost_draw {
 // sample: the list's own, for playback to choose this list's ghosts (null: none).
 void begin(uint32_t rom_generation, uint32_t configuration, const gc_sample *sample);
 void observe(const ghost::RasterTarget&);
-void seal(const gc_sample&, const ghost::WorldPass&);
+// `usamune_hidden`: Usamune hides the player's own input display this list
+// (its menu is open or the display is off), so the corner stack hides too.
+void seal(const gc_sample&, const ghost::WorldPass&, bool usamune_hidden = false);
 void finish(const ghost::WorldPass*);
 void cancel();
 bool begin_hud();

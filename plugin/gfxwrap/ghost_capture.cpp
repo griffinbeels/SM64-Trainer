@@ -479,6 +479,9 @@ extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
     }
     if (layout->behaviour_base && !span(layout->behaviour_base, 4, layout->rdram_bytes)) return GC_BAD_CONFIG;
     if (layout->player1_controller && !span(layout->player1_controller, 0x20, layout->rdram_bytes)) return GC_BAD_CONFIG;
+    const uint32_t usamune[] = {layout->usamune_menu, layout->usamune_input_display};
+    for (auto address : usamune)
+        if (address && !span(address, 1, layout->rdram_bytes, 1)) return GC_BAD_CONFIG;
     gcc_clock validation{};
     if (!gcc_init(&validation, &layout->clock)) return GC_BAD_CONFIG;
     return GC_OK;
@@ -567,8 +570,9 @@ extern "C" uint32_t ghost_capture_begin(gc_reader *reader, const gc_layout *layo
     return capture_read(reader,layout,frame,out,probe);
 }
 
-static_assert(sizeof(gc_layout) == 192 && offsetof(gc_layout, behaviour_base) == 184
-              && offsetof(gc_layout, player1_controller) == 188, "Ghost layout ABI changed");
+static_assert(sizeof(gc_layout) == 200 && offsetof(gc_layout, behaviour_base) == 184
+              && offsetof(gc_layout, player1_controller) == 188
+              && offsetof(gc_layout, usamune_input_display) == 196, "Ghost layout ABI changed");
 static_assert(offsetof(gc_layout, sound_code) == 64, "Ghost sound layout ABI changed");
 static_assert(offsetof(gc_layout, pending_warp_op) == 56, "Ghost warp layout ABI changed");
 static_assert(offsetof(gc_layout, delayed_warp_timer) == 60, "Ghost countdown layout ABI changed");

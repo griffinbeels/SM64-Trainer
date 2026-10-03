@@ -153,21 +153,25 @@ struct Layout {
         }
     }
 };
-// THE CORNER STACK, in the game's 320x240 HUD space (y down). His display is
-// read as a table and each ghost is a half-size row of the same two columns.
-// Numbers: "if we draw a line through the middle of the ghost inputs numbers"
-// it runs through the middle of his (2026-10-02), so the ghost's two-digit
-// block is centred on his two-digit block, its letter tucked against it in
-// Usamune's own proportion; the centre is fixed at two digits so a 9 -> 10
-// never shifts it. Buttons: the column starts where his first button does
-// (x=80) and packs at half pitch, never spread over his full-size slots ("way
-// too spread out"); the name sits over them on the same left edge.
+// THE CORNER STACK, in the game's 320x240 HUD space (y down). Each ghost is a
+// half-size row: its numbers centred over his, then its buttons and name in a
+// compact column right beside them. His asks, 2026-10-02: "if we draw a line
+// through the middle of the ghost inputs numbers" it runs through the middle
+// of his; "the top set of 00 should be center aligned with the below set of
+// 00"; "the buttons + the name need to be more compact & shifted to the left".
+// So the ghost's two rows (left-aligned together, like his) are centred where
+// HIS number of the same digit count is centred, and the buttons pack at half
+// pitch from a column just past a two-digit ghost number.
 namespace stack {
 constexpr float scale=0.5f,half=8; // half-size cells: 16 HUD pixels become 8
-constexpr float digits_centre=usamune::digit_x+(usamune::digit_advance+16)*0.5f; // his two digits' middle
-constexpr float digit_x=digits_centre-(usamune::digit_advance+16)*0.5f*scale;
-constexpr float letter_x=digit_x-(usamune::digit_x-usamune::letter_x)*scale;
+// His m-digit number spans digit_x .. digit_x + 12(m-1) + 16; the ghost's is half as wide.
+inline float digits_width(unsigned m) {return (float(m-1)*usamune::digit_advance+16)*scale;}
+inline float digits_start(unsigned m) {
+    return usamune::digit_x+(float(m-1)*usamune::digit_advance+16)*0.5f-digits_width(m)*0.5f;
+}
+constexpr float letter_gap=(usamune::digit_x-usamune::letter_x)*scale; // the letter tucks this far left
 constexpr float button_pitch=usamune::button_advance*scale;
+constexpr float buttons_x=usamune::digit_x+(usamune::digit_advance+16)*0.5f+(usamune::digit_advance+16)*0.25f+3;
 constexpr float row_height=20;     // one ghost's rectangle plus the ring's travel
 constexpr float base=usamune::y_row-2; // the lowest row's bottom edge
 constexpr float column_width=usamune::button_x+4*usamune::button_advance-usamune::letter_x;
@@ -193,16 +197,24 @@ inline void stack_row(const Payload& p,uint32_t flip_y,Mesh& mesh) {
     Layout layout{mesh,{-1.0f,up,-0.99f,1.0f},2.0f/320,2.0f/240*up,1.0f};
     const float top_row=bottom-2*stack::half-1,low_row=bottom-stack::half; // Y's row over X's
     auto dialog=[&](uint8_t c,float x,float top) {layout.character(c,dx+x,-(top+stack::half),stack::scale);};
+    // Both rows share the wider row's left edge, as his do.
+    unsigned wide=1;
+    if(p.known)for(int v:{int(p.pad.stick_x),int(p.pad.stick_y)}) {
+        unsigned n=1;for(int a=v<0?-v:v;a>=10;a/=10)++n;
+        if(n>wide)wide=n;
+    }
+    const float digit_left=stack::digits_start(wide);
+    const float buttons_left=std::fmax(stack::buttons_x,digit_left+stack::digits_width(wide)+3);
     auto value=[&](int v,float top,cell::Letter negative,cell::Letter positive) {
-        if(v)hud_rect(layout,dx+stack::letter_x,top,stack::half,stack::half,
+        if(v)hud_rect(layout,dx+digit_left-stack::letter_gap,top,stack::half,stack::half,
                       cell::letter_x+16*float(v<0?negative:positive),cell::letter_y,16,16);
         char digits[8]{};std::snprintf(digits,sizeof(digits),"%d",v<0?-v:v);
-        for(unsigned i=0;digits[i];++i)hud_rect(layout,dx+stack::digit_x+float(i)*digit_advance*stack::scale,top,
+        for(unsigned i=0;digits[i];++i)hud_rect(layout,dx+digit_left+float(i)*digit_advance*stack::scale,top,
             stack::half,stack::half,float(digits[i]-'0')*16,cell::digit_y,16,16);
     };
     const float box_left=dx+base_x+16*stack::scale,box_top=bottom-32*stack::scale; // centred on his base
     if(!p.known) { // unavailable evidence is never drawn as a neutral pad
-        if(p.values) {dialog(glyph('?'),stack::digit_x,top_row);dialog(glyph('?'),stack::digit_x,low_row);}
+        if(p.values) {dialog(glyph('?'),digit_left+2,top_row);dialog(glyph('?'),digit_left+2,low_row);}
         else {hud_rect(layout,box_left,box_top,16,16,cell::base_x,cell::base_y,32,32,base_alpha*0.5f);
             dialog(glyph('?'),base_x+16*stack::scale+6,box_top+4);}
     } else if(p.values) {
@@ -216,13 +228,13 @@ inline void stack_row(const Payload& p,uint32_t flip_y,Mesh& mesh) {
     if(p.known) {
         unsigned slot=0;
         for(unsigned i=0;i<9;++i)if(p.pad.buttons&button_masks[i]) {
-            hud_rect(layout,dx+button_x+float(slot++)*stack::button_pitch,low_row,stack::half,stack::half,
+            hud_rect(layout,dx+buttons_left+float(slot++)*stack::button_pitch,low_row,stack::half,stack::half,
                      float(i*16),cell::button_y,16,16);
         }
     }
     // The name over the buttons, on the same box as the name over the ghost.
     layout.text(p.label[0]?p.label:"GHOST",-(top_row+stack::half),stack::scale,p.background_opacity,p.background,
-                dx+button_x,stack::column_width-(button_x-letter_x)-2);
+                dx+buttons_left,stack::column_width-(buttons_left-letter_x)-2);
 }
 inline void build(const Payload& p,const float vp[16],uint32_t flip_y,float opacity,float body_alpha,
                   const ghost_occlusion::Region& occlusion,unsigned viewport_width,unsigned viewport_height,

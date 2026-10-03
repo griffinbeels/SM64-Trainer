@@ -5,12 +5,12 @@
 #include "ghost_origin.h"
 #include "ghost_tuning.h"
 #include <stddef.h>
-#define GIPC_VERSION 10u
-#define GIPC_MAGIC "SM64GI10"
+#define GIPC_VERSION 11u
+#define GIPC_MAGIC "SM64GI11"
 #define GIPC_SLOTS 512u
 #define GIPC_PATH_CHARS 520u
 #define GIPC_LEASE_MS 3000u
-#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v10_"
+#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v11_"
 #define GIPC_GHOSTS GP_GHOSTS
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
@@ -103,7 +103,7 @@ typedef struct gipc_page {
 #ifdef __cplusplus
 static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
 static_assert(sizeof(gipc_clip) == 1160, "ghost clip entry bytes");
-static_assert(sizeof(gipc_request) == 20008, "ghost request bytes");
+static_assert(sizeof(gipc_request) == 20016, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
 static_assert(offsetof(gipc_page, records) == 20480, "ghost ring offset");
 namespace ghost_ipc {

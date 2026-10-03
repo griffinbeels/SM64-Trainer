@@ -88,6 +88,9 @@ void end(bool completed);
 // Renderer thread, once per list: the hooks' own cost for that list.
 void hooks(const gs_hook_cost &);
 const gc_sample *sample();
+// This list's Usamune HUD: true while its menu is open or its input display
+// is switched off, so the player's own display is hidden (false if unknown).
+bool usamune_display_hidden();
 const ghost::WorldPass *candidate();
 }
 #endif

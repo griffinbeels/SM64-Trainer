@@ -92,8 +92,21 @@ def test_annotations_fit_in_the_existing_request_region():
 def test_pad_root_is_optional_and_uses_the_existing_layout():
     configured = ghost_layout.GhostLayout.from_layout(US)
     assert configured.player1_controller == US.player1_controller
-    assert int.from_bytes(configured.to_bytes()[-4:], "little") == US.player1_controller
+    assert int.from_bytes(configured.to_bytes()[188:192], "little") == US.player1_controller
     without = ghost_layout.GhostLayout.from_layout(replace(US, player1_controller=None))
-    assert without.player1_controller == 0 and without.to_bytes()[-4:] == bytes(4)
+    assert without.player1_controller == 0 and without.to_bytes()[188:192] == bytes(4)
     with pytest.raises(ValueError, match="player1_controller"):
         replace(configured, player1_controller=configured.player1_controller + 1)
+
+
+def test_usamune_display_bytes_follow_the_pad_and_are_optional():
+    """The corner stack hides while Usamune hides his display (2026-10-02)."""
+    configured = ghost_layout.GhostLayout.from_layout(US)
+    data = configured.to_bytes()
+    assert len(data) == L.LAYOUT_BYTES
+    assert int.from_bytes(data[192:196], "little") == US.usamune_menu
+    assert int.from_bytes(data[196:200], "little") == US.usamune_input_display
+    without = ghost_layout.GhostLayout.from_layout(replace(US, usamune_menu=None, usamune_input_display=None))
+    assert without.to_bytes()[192:] == bytes(8)
+    with pytest.raises(ValueError, match="usamune_menu"):
+        replace(configured, usamune_menu=0x7F000000)

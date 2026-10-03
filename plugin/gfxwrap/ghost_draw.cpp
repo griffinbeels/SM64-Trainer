@@ -251,7 +251,7 @@ void observe(const ghost::RasterTarget &target) {
         width = target.width; height = target.height;
     }
 }
-void seal(const gc_sample &sample, const ghost::WorldPass &world) {
+void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_hidden) {
     if (display_scope) cancel(); // a list seals once; never nest its scope
     if (!compositor || !model_id || !ghost_presentation::clean_consumer()
             || world.context_generation != owner.context_generation
@@ -261,6 +261,10 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world) {
     // Zero visible ghosts leaves this frame exactly as a hidden single ghost did.
     ghost_compositor::Pose poses[GP_GHOSTS]{}; uint32_t count = 0;
     if (!ghost_playback::evaluate(sample, world, poses, count, draw_token)) return;
+    // His ask, 2026-10-02: "when in the usamune menu, we should hide the input
+    // display in the bottom left ... because the normal player's input display
+    // is also hidden." The stack follows his display; names and bodies do not.
+    if (usamune_hidden) for (uint32_t i = 0; i < count; ++i) poses[i].annotation.hud = false;
     ghost_compositor::Target target{};
     target.occurrence = world.list_serial; target.generation = world.context_generation;
     target.framebuffer = world.target.color; target.width = world.target.width; target.height = world.target.height;

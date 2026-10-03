@@ -1633,8 +1633,9 @@ with him.
 
 Every [[ghost]]'s inputs in the game's bottom left corner, one compact row
 each stacked above your own input display (on by default). A row keeps your
-display's columns at half size: its numbers centred over yours, its buttons
-packed from where your first button starts, its name over its buttons. At most seven show, in the order you chose them, and a row stays up
+display at half size: its numbers centred over yours, its buttons and name
+packed close beside them, and it hides whenever Usamune hides yours (its menu
+open or its display off). At most seven show, in the order you chose them, and a row stays up
 while that [[ghost]] is off screen.
 
 - **Lives** — its switch row in `src/sm64_events/ghost/settings.py`;

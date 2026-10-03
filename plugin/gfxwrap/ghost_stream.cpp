@@ -1,6 +1,7 @@
 #include "ghost_stream.h"
 #include "ghost_root.h"
 #include "ghost_particle_capture.h"
+#include "ghost_ram.h"
 #include <atomic>
 #include <cstring>
 #include <limits>
@@ -37,6 +38,7 @@ uint64_t serial = 0;
 gc_reader reader{};
 gcc_clock source_clock{};
 gc_layout layout{};
+bool usamune_hidden = false; // this list's Usamune HUD hides the player's display
 gc_sample current{};
 gc_sample drawing_sample{};
 gc_root_probe root_probe{};
@@ -127,12 +129,13 @@ const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WOR
 namespace ghost_stream {
 const gs_api *api() { return &capture_api; }
 bool requested() { return rom_open && configured.load(std::memory_order_acquire) != 0; }
-void cancel() { active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset(); }
+void cancel() { active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset(); usamune_hidden = false; }
 void rom(bool opened) {
     active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset(); rom_open = opened; new_epoch();
+    usamune_hidden = false;
 }
 bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc, const uint32_t *segments) {
-    active = false; current = {}; root_probe = {}; pass.reset();
+    active = false; current = {}; root_probe = {}; pass.reset(); usamune_hidden = false;
     uint32_t revision = 0;
     if (!rom_open || !generation || !read_config(layout, revision)) return false;
     if (revision != observed_config) {
@@ -143,6 +146,13 @@ bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc,
     ++serial;
     gc_frame frame{ram,bytes,epoch.load(std::memory_order_relaxed),serial,serial,qpc,segments};
     ghost_capture_begin(&reader, &layout, &frame, &current, &root_probe);
+    // Usamune draws the player's input display only while its menu is closed
+    // and the display is switched on (its HUD hook, RAM 0x80410f14).
+    if (layout.usamune_menu && layout.usamune_input_display) {
+        ghost::Ram usamune{ram, bytes};
+        const uint8_t menu = usamune.u8(layout.usamune_menu), display = usamune.u8(layout.usamune_input_display);
+        usamune_hidden = usamune.ok && (menu != 0 || display == 0);
+    }
     ghost_particles_prepare(particle_probe, ram, bytes, layout.mario_object, layout.object_pool);
     gcc_input timing{};
     timing.fields = ((current.valid_fields & GC_VALID_CLOCK) ? GCC_CLOCK : 0)
@@ -207,6 +217,8 @@ void end(bool completed) {
     }
     publish(out); active = false;
 }
+// The last begun list's answer: seal reads it inside that list, after begin.
+bool usamune_display_hidden() { return usamune_hidden; }
 const gc_sample *sample() {
     if (!active) return nullptr;
     drawing_sample=current;

@@ -71,15 +71,21 @@ with white text or a sign's white box with black text (`ingame_menu.c`
 `render_dialog_box_type`, alpha 150), at the chosen opacity; opacity 0 draws
 no box and keeps the drop shadow. **Inputs in corner** (on by default; the
 inputs over each ghost are off by default) stacks one compact half-size row
-per ghost above the game's own input display. His display reads as a table
-and each ghost is a half-size row of its two columns: the ghost's two-digit
-block centred on his two-digit block (the centre fixed at two digits, so a
-9 to 10 change never shifts it) with its letter tucked against it, the stick
-box centred on his, and the held buttons packed at half pitch from his first
-button's left edge, the name on its name box over them. Rows climb in slot order, at most `GP_HUD_STACK_MOST` (7); seven
+per ghost above the game's own input display. The ghost's numbers (both rows,
+left-aligned together like his) are centred where his number of the same
+digit count is centred, so 0 over 0 and 71 over 82 both line up, with its
+letter tucked against them; crossing 9 to 10 moves the ghost's block 3 HUD
+pixels. Its stick box is centred on his. Its held buttons pack at half pitch
+in a compact column just past a two-digit ghost number (left of his own
+buttons), the name on its name box over them. Rows climb in slot order, at most `GP_HUD_STACK_MOST` (7); seven
 fit one column above the display, and more rows than fit would split into two
 columns with the first holding the larger half. Rows are drawn in screen space
-at full alpha and stay up while the ghost itself is off screen.
+at full alpha and stay up while the ghost itself is off screen. They hide
+exactly when Usamune hides his own display: its HUD hook (RAM `0x80410f14`)
+draws the menu instead while the byte at `0x804168D8` is nonzero, and draws the
+input display only while `0x80417B57` is nonzero (layout rows `usamune_menu`,
+`usamune_input_display`, VERIFY until their live gates). The stream reads both
+from each list's RDRAM, so the rows leave on the same frame his display does.
 
 **Ghost Library** opens beside the native controls. It shows recent buffer-covered
 and saved local runs plus imported recordings, with creator, target, strategy,
@@ -108,11 +114,11 @@ readable explanation. A bulk read binds one current definition snapshot.
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC8: layout 192 (`player1_controller` at 188), sample 1268; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636), the [held object](#held-objects) (44 at 1216, its released angle at 36) and optional exact pad (8 at 1260, validity bit 512) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC8: layout 200 (`player1_controller` at 188; Usamune's menu and input display bytes at 192 and 196, never recorded), sample 1268; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636), the [held object](#held-objects) (44 at 1216, its released angle at 36) and optional exact pad (8 at 1260, validity bit 512) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS7, still exported as `SM64GhostSourceV3` (the version argument must be 7); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP9: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension and global names/inputs/mode, name box and HUD input stack controls | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC10: status 256, request 20008 (layout 192; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; names/inputs/mode, then name box style/opacity and the HUD input stack switch, appended after sound controls | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Ghost IPC | GIPC11: status 256, request 20016 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; names/inputs/mode, then name box style/opacity and the HUD input stack switch, appended after sound controls | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP7: header 160, record 1284, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP6 (1276), GCLIP5 (1268) and GCLIP4 (652) still load with unavailable pad; GCLIP5 also has nothing released, GCLIP4 also has no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
@@ -892,7 +898,7 @@ live Project64 picture; the current renderer still needs a live tunnel witness.
 ## Recording, preservation and ownership
 
 [NativeCapture](../src/sm64_events/ghost/capture.py) owns a separate leased channel
-named `Local\sm64_trainer_ghost_v10_<PID>`. Process birth, producer/ROM generations,
+named `Local\sm64_trainer_ghost_v11_<PID>`. Process birth, producer/ROM generations,
 configuration, epoch and one QPC/UTC anchor identify its batches. The native
 worker and Python client use a named mutex for mapped-page access; the render
 thread never touches that page. File/hash checks, ROM asset preparation and clip

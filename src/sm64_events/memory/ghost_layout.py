@@ -61,6 +61,10 @@ class GhostLayout:
     sound_ring: int
     behaviour_base: int = 0  # segment 0x13 in RAM; 0 leaves held objects uncaptured
     player1_controller: int = 0  # existing verified Controller root; 0 leaves pad unknown
+    # Usamune's menu-open byte and input display setting; 0 shows the corner
+    # stack whatever Usamune does with its own display.
+    usamune_menu: int = 0
+    usamune_input_display: int = 0
 
     def __post_init__(self) -> None:
         if any(type(getattr(self, field.name)) is not int for field in fields(self)):
@@ -87,6 +91,10 @@ class GhostLayout:
         if self.player1_controller and (self.player1_controller % 4 or self.player1_controller < KSEG0_BASE
                                        or self.player1_controller - KSEG0_BASE + addresses.CONTROLLER_SIZE > self.rdram_bytes):
             raise ValueError("Ghost capture player1_controller lies outside aligned RDRAM")
+        for name in ("usamune_menu", "usamune_input_display"):
+            address = getattr(self, name)
+            if address and (address < KSEG0_BASE or address - KSEG0_BASE + 1 > self.rdram_bytes):
+                raise ValueError(f"Ghost capture {name} lies outside RDRAM")
 
     @classmethod
     def from_layout(cls, layout: Layout, *, rdram_bytes: int = 8 << 20) -> "GhostLayout":
@@ -100,16 +108,20 @@ class GhostLayout:
         layout.require(*names)
         return cls(rdram_bytes, *(layout.value(name) for name in names),
                    behaviour_base=layout.value("behaviour_base") or 0,
-                   player1_controller=layout.value("player1_controller") or 0)
+                   player1_controller=layout.value("player1_controller") or 0,
+                   usamune_menu=layout.value("usamune_menu") or 0,
+                   usamune_input_display=layout.value("usamune_input_display") or 0)
 
     def to_bytes(self) -> bytes:
-        """Exactly 192 bytes; compared against the compiled C reader in tests."""
+        """Exactly 200 bytes; compared against the compiled C reader in tests."""
         roots = (self.global_timer, self.mario_state, self.mario_object,
                  self.current_area_pointer, self.area_update_counter,
                  self.current_level, self.current_area, self.igt_overall,
                  self.object_pool, self.pending_warp_op, self.delayed_warp_timer,
                  self.sound_code, self.sound_producer, self.sound_consumer, self.sound_ring)
-        return (_CONFIG.pack(_CONFIG.size + _CLOCK_CONFIG.size + 8, VERSION, RAM_WORD_SWAPPED,
+        return (_CONFIG.pack(_CONFIG.size + _CLOCK_CONFIG.size + 16, VERSION, RAM_WORD_SWAPPED,
                              self.rdram_bytes, ROM_US, *roots) + clock_config_bytes()
                 + self.behaviour_base.to_bytes(4, "little")
-                + self.player1_controller.to_bytes(4, "little"))
+                + self.player1_controller.to_bytes(4, "little")
+                + self.usamune_menu.to_bytes(4, "little")
+                + self.usamune_input_display.to_bytes(4, "little"))

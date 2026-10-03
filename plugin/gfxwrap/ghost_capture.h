@@ -107,6 +107,10 @@ typedef struct gc_layout {
     uint32_t behaviour_base;
     /* Existing Layout player-one Controller root; zero leaves pad unknown. */
     uint32_t player1_controller;
+    /* Usamune's u8 menu-open flag and u8 input display setting (layout.py):
+     * the corner stack hides whenever Usamune hides the player's display.
+     * Zero shows it regardless. Never part of a recorded sample. */
+    uint32_t usamune_menu, usamune_input_display;
 } gc_layout;
 
 typedef struct gc_pose {

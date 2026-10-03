@@ -1042,6 +1042,59 @@ register(Gate(
 ))
 
 
+# --- usamune_menu / usamune_input_display ------------------------------------
+
+USAMUNE_HUD_TIMEOUT_S = 90.0
+
+
+def _seen_off_and_on(ctx, field: str, what: str) -> Verdict:
+    """The byte must read zero AND nonzero while the human flips the thing, and
+    zero again when it is closed or switched back: a constant byte, or one
+    that only ever moves, proves nothing."""
+    candidate = ctx.candidate(field)
+    if candidate is None:
+        return Verdict("missing", evidence=f"no candidate for {field}: it is read off "
+                                           "Usamune's HUD code, so a new ROM needs that read again")
+    seen, last = set(), None
+    start = ctx.now()
+    while ctx.now() - start < USAMUNE_HUD_TIMEOUT_S:
+        value = ctx.raw().read_u8(candidate)
+        seen.add(value != 0)
+        if last is not None and last != 0 and value == 0 and seen == {False, True}:
+            return Verdict("verified", value=candidate, measured={"on": True, "off": True},
+                           evidence=f"read 0 while {what} was off and nonzero while on, then 0 again")
+        last = value
+        ctx.sleep(POLL_INTERVAL_S)
+    return Verdict("failed", value=candidate,
+                   evidence=f"never saw it go nonzero and back to 0 while {what} was flipped")
+
+
+def _check_usamune_menu(ctx) -> Verdict:
+    return _seen_off_and_on(ctx, "usamune_menu", "Usamune's menu")
+
+
+def _check_usamune_input_display(ctx) -> Verdict:
+    return _seen_off_and_on(ctx, "usamune_input_display", "Usamune's input display")
+
+
+register(Gate(
+    id="address.usamune_menu", feature="controller input", kind="address",
+    needs=("version.rom",), timeout_s=USAMUNE_HUD_TIMEOUT_S + 10,
+    instruction="Open Usamune's practice menu, wait a moment, then close it.",
+    proves="the RAM byte that is nonzero exactly while Usamune's menu is open, when "
+           "it hides its own HUD and input display.",
+    check=_check_usamune_menu,
+))
+register(Gate(
+    id="address.usamune_input_display", feature="controller input", kind="address",
+    needs=("version.rom",), timeout_s=USAMUNE_HUD_TIMEOUT_S + 10,
+    instruction="In Usamune's menu, turn its input display off, close the menu, then "
+                "turn the display back on.",
+    proves="the RAM byte holding Usamune's input display setting, zero while it is off.",
+    check=_check_usamune_input_display,
+))
+
+
 # --- player1_controller -----------------------------------------------------
 
 CONTROLLER_HOLD_TIMEOUT_S = 60.0
