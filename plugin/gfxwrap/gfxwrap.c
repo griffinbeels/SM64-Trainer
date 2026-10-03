@@ -42,6 +42,7 @@
 #include "gpu_delivery_diagnostics.h"
 #include "control_worker.h"
 #include "practice_rom.h"
+#include "overlay_warmup.h"
 
 #define EXPORT __declspec(dllexport)
 #define CALL __cdecl
@@ -309,18 +310,31 @@ EXPORT void CALL ProcessDList(void) {
     if (g_runtime_ready) sa_process_dlist();
     else if (g_wrapped.ProcessDList) g_wrapped.ProcessDList();
     callback_diagnostic_end(&g_diagnostic_list, begin, qpc_now());
+    ow_list();
 }
 
 EXPORT void CALL UpdateScreen(void) {
     if (!g_practice_rom) { if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen(); return; }
     int64_t begin = qpc_now();
+    /* While the game is loading, pay an overlay's driver start-up where the
+     * picture is already still (overlay_warmup.h). */
+    const int warming = ow_vi();
     if (g_runtime_ready) sa_update_screen();
     else if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen();
-    callback_diagnostic_end(&g_diagnostic_update, begin, qpc_now());
+    int64_t end = qpc_now();
+    callback_diagnostic_end(&g_diagnostic_update, begin, end);
+    if (warming) {
+        ow_stats warm;
+        ow_vi_done(g_diagnostic_frequency ? 1000.0 * (end - begin) / g_diagnostic_frequency : 0.0);
+        warm = ow_read();
+        plugin_logf("overlay_warmup", "attempt=%u devices=%u vi_ms=%.1f absorbed=%u lists=%u",
+            warm.attempts, warm.devices, warm.last_vi_ms, warm.absorbed, warm.lists);
+    }
 }
 
 EXPORT void CALL RomOpen(void) {
     sa_reset();
+    ow_reset();
     /* Decided before the renderer opens the ROM, so no frame of a baseline
      * ROM ever reaches the stamp adapter. */
     g_practice_rom = g_have_gfx && loaded_rom_is_practice();

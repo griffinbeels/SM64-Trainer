@@ -1260,6 +1260,18 @@ delete the one you do not want instead of cropping it.
 - **Lives** — the overlay planner (`src/sm64_events/inputs/overlay.py`)
   → `tools/export_overlay.py`
 
+### Overlay warm-up
+
+What the [[capture layer]] does once, the first time the game stops drawing
+for a load or a [[reset]], so a screen overlay starting later (Discord's, most of
+all) no longer freezes the picture for about a tenth of a second. Starting
+that overlay makes the graphics driver do a one-time start-up while the game
+is drawing; the warm-up makes the driver do it while the picture is already
+still, and the overlay's own start then costs about a quarter of what it did.
+
+- **Lives** — `plugin/gfxwrap/overlay_warmup.cpp`, called from
+  `plugin/gfxwrap/gfxwrap.c`
+
 ### Ghost
 
 The [[attempt]] you are racing from your active [[template track]]. Whole-picture

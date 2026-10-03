@@ -565,8 +565,33 @@ Successful shared-texture binding does not prove cold capture initialization
 is fast. Compare fresh PIDs with Overlay enabled, preserving the actual
 Clips/screensharing conditions, and correlate both logs as above. The candidate
 needs native compilation, recording/ghost GPU witnesses and human live
-verification before it can be called compatible or a stutter fix. Do not add a
-warmup context or worker-thread GPU work to hide an external hook's startup.
+verification before it can be called compatible or a stutter fix.
+
+**The overlay warm-up (2026-10-03).** His report: "the entire picture
+freezes", and "we shouldn't assume that players will disable [the Discord
+overlay], because most people use it!!!" This section used to say not to add
+warm-up GPU work to hide an external hook's start-up; that rule predates a
+measurement of where the hook's cost comes from. A fresh-process host doing
+Discord's init (a D3D11 device, `WGL_NV_DX_interop2`, one registered texture)
+inside the present of a busy hidden GL renderer froze it 96-114 ms with nothing
+before it. With a D3D11 device made earlier in the process, once the renderer
+was drawing (as soon as 50 ms in, on the renderer thread or another), the same
+init froze 22-33 ms. Loading `d3d11.dll` and `dxgi.dll` alone saved nothing
+(93-99 ms), and a device made at context creation, before the first picture,
+saved nothing either (100-101 ms): the driver's start-up is paid by the first
+device made once the renderer draws. So the wrapper (`overlay_warmup.*`, called
+from `gfxwrap.c` on the practice-ROM path) makes one D3D11 device on the
+renderer's adapter and thread at the sixth VI in a row without a new picture,
+after 30 pictures: a load or reset, where the picture is already still. If that
+VI took under 40 ms the driver had nothing to start yet, and the next hold tries
+again (at most 3). The devices stay for the life of Project64 and are never
+used; `overlay_warmup` lines in the plugin log record each attempt.
+`tests/test_overlay_warmup.py` drives the real unit the way the wrapper does
+(policy anywhere; timing with `SM64_TEST_OVERLAY_WARMUP=1`): four fresh pairs
+froze 100-114 ms without it and 24-30 ms with it, its own 82-90 ms landing
+inside a 250 ms load and nothing outside it. Not yet measured live: Discord's
+real hook in Project64 after the warm-up (the activation log's
+`callback_stall` against `discord_hook.log`, as above).
 
 ## Accuracy and bounds
 
