@@ -1423,6 +1423,21 @@ to 10 s, until it explodes, its slot holds another object, or he grabs it again.
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` (capture); decoded in
   `src/sm64_events/ghost/clip.py`; drawn by `renderer/model/held.c`
 
+### Ghost path
+
+Where a [[ghost]] goes, drawn in the game world just ahead of you as you
+play: a strip of the game's own chevrons on the floor where it ran, a thin line
+where it was in the air with dots on the floor beneath, coloured from grey
+(standing) to green (full speed) to white (faster than any normal move). It
+follows where you are, not where the [[ghost]] is, so falling behind still
+shows the next stretch from your feet. It is one line: the fastest [[ghost]]'s,
+or the average of them where they all ran together. Its button presses, each
+drawn where the [[ghost]] pressed it, are off until you switch them on.
+
+- **Lives** — `plugin/gfxwrap/ghost_path.h` (what is drawn) and
+  `plugin/gfxwrap/ghost_playback.cpp` (which stretch); its settings rows in
+  `src/sm64_events/ghost/settings.py`
+
 ### Ghost sound events
 
 The sound requests Mario issued on a recorded [[frame]] (up to eight, in

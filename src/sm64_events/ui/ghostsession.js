@@ -68,7 +68,8 @@ export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
  *   the replay's Show ghosts plays it. Your own recording stays clean. Off at
  *   first; it applies to what is recorded from then on.
  * - path_enabled and path_buttons (2026-10-03): the ghost's path, a line in
- *   the game world along the route the fastest ghost takes, and each button
+ *   the game world along the route the ghosts take (the fastest one's, or their
+ *   average), and each button
  *   press drawn where it was pressed. The path is on at first; the presses
  *   are off until he tries them. Path buttons, Path from and Tune path only
  *   mean something while the path shows, so they nest beneath it.
@@ -100,7 +101,7 @@ export const SWITCH_LABELS = {
     label: "Also record a copy of your replays with the ghosts in it, as the game window shows them",
     waiting: "Waiting for the recording setting" },
   path_enabled: { name: "Path", className: "ghost-path", group: "Ghost path",
-    label: "Draw the route the fastest ghost takes, on the ground and through the air",
+    label: "Draw the route ahead of you that your ghosts take, on the ground and through the air",
     waiting: "Waiting for the ghost path setting" },
   path_buttons: { name: "Path buttons", className: "ghost-path-buttons", group: "Button presses on the path",
     label: "Show each button press on the path, where it was pressed",

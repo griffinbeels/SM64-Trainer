@@ -53,9 +53,9 @@ GP_QUERIES(GP_COUNT)
 static decltype(gc::Dispatch::IsEnabled) real_IsEnabled=nullptr;
 static uint8_t GC_GL_CALL count_IsEnabled(uint32_t a){++queries;return real_IsEnabled(a);}
 // Every copy of BACK the presentation makes (clean save, display copy).
-static unsigned copies=0;
+static unsigned back_copies=0;
 static void GC_GL_CALL count_copy(uint32_t t,int32_t l,int32_t x,int32_t y,int32_t sx,int32_t sy,int32_t w,int32_t h) {
-    ++copies;glCopyTexSubImage2D(t,l,x,y,sx,sy,w,h);
+    ++back_copies;glCopyTexSubImage2D(t,l,x,y,sx,sy,w,h);
 }
 static gp::Dispatch dispatch() {
     gp::Dispatch d{};
@@ -184,8 +184,8 @@ static void run(uint32_t generation) {
             raster.osd(.5f);require(gp::begin_osd(p),"recorded OSD");raster.osd(.5f);gp::end_osd(p);
             if(visible)*visible=pixels(g,0);completed(p,window);
         };
-        gp::display_consumer(false);copies=0;frame(150,nullptr);
-        require(copies==1 && !gp::display(p).presentation_serial,"no display copy with the consumer off");
+        gp::display_consumer(false);back_copies=0;frame(150,nullptr);
+        require(back_copies==1 && !gp::display(p).presentation_serial,"no display copy with the consumer off");
         gp::display_consumer(true);std::vector<uint8_t> visible;frame(151,&visible);
         const auto clean=gp::surface(p),display=gp::display(p);
         require(clean.presentation_serial && clean.update_occurrence==151,"recorded descriptor");
@@ -198,9 +198,9 @@ static void run(uint32_t generation) {
             rgb(copy,x,y,v[0],v[1],v[2],"the ghost copy is the displayed picture");}
         rgb(copy,12,18,64,144,16,"the ghost is in the ghost copy");
         // A presentation that drew no ghost copies nothing: the clean picture stands.
-        background(g);gp::begin_update(p,152);copies=0;
+        background(g);gp::begin_update(p,152);back_copies=0;
         require(gp::before_swap(p,0x1000,raster.api()),"ghostless before swap");completed(p,window);
-        require(copies==1 && gp::surface(p).presentation_serial && !gp::display(p).presentation_serial,"no display copy without a ghost");
+        require(back_copies==1 && gp::surface(p).presentation_serial && !gp::display(p).presentation_serial,"no display copy without a ghost");
         frame(153,nullptr);require(gp::display(p).resource_generation==1,"the display surface is allocated once");
         gp::display_consumer(false);
     }
