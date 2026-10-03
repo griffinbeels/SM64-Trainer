@@ -1590,11 +1590,15 @@ recording off, "we still incorrectly include the ghost's AUDIO in the recording.
 The recorder taps Project64's whole process tree (proctap,
 `INCLUDE_TARGET_PROCESS_TREE`), Windows has no way to leave one stream of a
 process out of that tap, and subtracting the ghost's samples after the system
-mixer cannot be exact, so the sound had to leave the process. The recorder adds
-a tap of the player only while Ghosts in recording is on
-(`ProcessAudioSource.extra_pid`, `GhostMix`: the player's samples wait at most
-0.25 s for the game's). The device-wide fallback tap hears whatever shares
-Project64's output, ghost sound included. A probe on this machine
+mixer cannot be exact, so the sound had to leave the process. The clean
+recording's audio is the game alone. Only while Ghosts in recording is on does
+the recorder also tap the player (`ProcessAudioSource.extra_pid`), and those
+samples never enter the clean audio: `GhostTimeline` places them on the wall
+clock by when they arrived, and the [ghost copy](#ghosts-in-the-recording) alone
+mixes them under each game block by that block's own UTC stamp (`mix_ghost`,
+saturating). Known gap: the device-wide fallback tap hears whatever shares
+Project64's output, ghost sound included, so on that fallback the clean
+recording can still hear it. A probe on this machine
 (2026-10-03) wrote a near-silent 1 kHz tone into a ring: a tap of the player
 heard 1 kHz, a tap of an unrelated process heard exactly zero. The thread
 synthesizes one tick (two blocks of 528/544 stereo frames at 32 kHz) whenever
@@ -1734,6 +1738,8 @@ is allocated by the first copy that needs it, follows a resize with a new genera
 and is deleted with the presentation. A failed copy publishes no display picture and
 never touches the clean one. `swap_completed` publishes it with the clean picture's
 serial and update; `display_surface` hands it out only while that serial matches.
+Sound follows the same split: the ghost copy alone carries the ghost sound
+([above](#ghost-sound-playback)).
 
 SourceV4's `query_display` names that surface for a ticket, inside its capture
 callback: `DISPLAY_VI` carries the clean descriptor's geometry and identity with the

@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
         << ",\"header_bytes\":" << sizeof(gc_header) << ",\"offer_bytes\":" << sizeof(gc_offer)
         << ",\"table_offset\":" << offsetof(gc_header, table) << ",\"name_offset\":" << offsetof(gc_header, texture_names)
         << ",\"twin_offset\":" << producer.header().twin_offset << ",\"twin_bytes\":" << producer.header().twin_bytes
-        << ",\"twin_name_offset\":" << offsetof(gc_header, twin_texture_names)
+        << ",\"twin_names_offset\":" << offsetof(gc_header, twin_texture_names)
         << "}" << std::endl;
     if (created != Result::ok) return 0;
     std::vector<uint8_t> sample(producer.header().sample_bytes);
@@ -44,6 +44,7 @@ int main(int argc, char **argv) {
     while (std::getline(std::cin, line)) {
         std::istringstream in(line); std::string command; in >> command;
         Result result = Result::invalid; unsigned slot = 0; uint64_t token = 0, occurrence = 0;
+        unsigned twin_state = 0; uint64_t lane = 0; bool unwritten = false;
         gc_decision d{}; gc_receipt receipt{};
         if (command == "quit") { producer.close(); break; }
         if (command == "publish") {
@@ -68,19 +69,20 @@ int main(int argc, char **argv) {
             result = producer.take_receipt(slot, receipt);
         } else if (command == "key0") {
             in >> slot >> token; result = producer.retire_bridge_after_key0(slot, token);
-        } else if (command == "twinclient") {
-            // The ghost copy's client request: kind = state, token = lane.
-            gc_twin_client c{}; result = producer.twin_client(c); d.kind = c.state; d.token = c.lane;
-        } else if (command == "twinstatus") {
+        } else if (command == "twin_client") {
+            // The ghost copy's client request; "empty" while the client never wrote it.
+            gc_twin_client c{}; result = producer.twin_client(c); twin_state = c.state; lane = c.lane;
+            unwritten = result == Result::ok && !c.seq;
+        } else if (command == "twin_status") {
             unsigned state = 0, reason = 0; uint64_t lane = 0, resolved = 0, copied = 0, missed = 0;
             in >> state >> reason >> lane >> resolved >> copied >> missed;
             result = producer.twin_status(state, reason, lane, resolved, copied, missed);
-        } else if (command == "twinbridge") {
+        } else if (command == "twin_bridge") {
             unsigned decision_slot; in >> slot >> token >> decision_slot;
             if (decision_slot < GC_MAX_OFFERS) result = producer.publish_twin_bridge(slot, token, cache[decision_slot]);
-        } else if (command == "twinreceipt") {
+        } else if (command == "twin_receipt") {
             result = producer.take_twin_receipt(slot, receipt); d.token = receipt.token;
-        } else if (command == "twinkey0") {
+        } else if (command == "twin_key0") {
             in >> slot >> token; result = producer.retire_twin_bridge_after_key0(slot, token);
         } else if (command == "status") {
             unsigned state, reason=0; in >> state >> reason; result = producer.status(state, reason, 12345);
@@ -112,10 +114,11 @@ int main(int argc, char **argv) {
                 CloseHandle(thread);
             }
         }
-        std::cout << "{\"result\":\"" << label(result) << "\",\"slot\":" << slot
+        std::cout << "{\"result\":\"" << (unwritten ? "empty" : label(result)) << "\",\"slot\":" << slot
             << ",\"kind\":" << d.kind << ",\"occurrence\":" << d.occurrence << ",\"token\":" << d.token
             << ",\"encode_serial\":" << d.encode_serial << ",\"pts\":" << d.pts
-            << ",\"duration\":" << d.nominal_duration << ",\"retained\":" << d.retained_occurrence << "}" << std::endl;
+            << ",\"duration\":" << d.nominal_duration << ",\"retained\":" << d.retained_occurrence
+            << ",\"twin_state\":" << twin_state << ",\"lane\":" << lane << "}" << std::endl;
     }
     return 0;
 }

@@ -228,7 +228,7 @@ class ChannelHost:
 
 def check_twin_header(wire, info, lo, hi):
     assert info["result"] == "ok" and info["header_bytes"] == HEADER_BYTES
-    assert info["twin_name_offset"] == TWIN_NAMES_AT
+    assert info["twin_names_offset"] == TWIN_NAMES_AT
     assert wire.version == 3 and (wire.nonce_lo, wire.nonce_hi, wire.epoch, wire.generation) == (lo, hi, 7, 3)
     payload_offset, payload_stride = struct.unpack_from("<II", wire.raw(PAYLOAD_AT, 8))
     offer_count = wire.u32(OFFER_COUNT_AT)
@@ -246,12 +246,12 @@ def check_twin_client_and_status(wire, host):
     status = wire.status()
     assert (status.seq, status.state, status.reason, status.lane) == (2, OFF, 0, 0)
     assert status.identity == wire.identity()
-    reply = host.command("twinclient")
-    assert (reply["result"], reply["kind"]) == ("ok", CLIENT_OFF)
+    reply = host.command("twin_client")
+    assert (reply["result"], reply["twin_state"], reply["lane"]) == ("empty", CLIENT_OFF, 0)
     wire.request(5)
-    reply = host.command("twinclient")
-    assert (reply["result"], reply["kind"], reply["token"]) == ("ok", CLIENT_READY, 5)
-    assert host.command("twinstatus 2 0 5 900 4 1")["result"] == "ok"
+    reply = host.command("twin_client")
+    assert (reply["result"], reply["twin_state"], reply["lane"]) == ("ok", CLIENT_READY, 5)
+    assert host.command("twin_status 2 0 5 900 4 1")["result"] == "ok"
     status = wire.status()
     assert (status.state, status.reason, status.lane, status.resolved_pts, status.copied, status.missed) == (
         ACTIVE, 0, 5, 900, 4, 1)
@@ -264,22 +264,22 @@ def check_twin_bridge_custody(wire, host, lo, hi):
     body = struct.pack("<IQQQQIIQQQQQII32x", 1, 1, 10, lo, hi, 7, 3, 1, 0, 3000, 0, 0, 0, 0)
     wire.write(wire.u32(DECISION_AT), body)  # slot 0: SELECTED, encode serial 1, pts 0
     assert host.command("take")["result"] == "ok"
-    assert host.command("twinbridge 1 1 0")["result"] == "ok"
+    assert host.command("twin_bridge 1 1 0")["result"] == "ok"
     (bridge,) = wire.bridges()
     assert (bridge.token, bridge.occurrence, bridge.encode_serial, bridge.pts, bridge.duration) == (1, 10, 1, 0, 3000)
     assert (bridge.texture_index, bridge.flags, bridge.identity) == (1, 0, wire.identity())
-    assert host.command("twinbridge 1 2 0")["result"] == "busy"
+    assert host.command("twin_bridge 1 2 0")["result"] == "busy"
     wire.receipt(bridge, texture_index=0)
-    assert host.command("twinreceipt")["result"] == "invalid"
-    assert host.command("twinkey0 1 1")["result"] == "ok" and not wire.bridges()
-    assert host.command("twinbridge 0 2 0")["result"] == "ok"
+    assert host.command("twin_receipt")["result"] == "invalid"
+    assert host.command("twin_key0 1 1")["result"] == "ok" and not wire.bridges()
+    assert host.command("twin_bridge 0 2 0")["result"] == "ok"
     (bridge,) = wire.bridges()
     wire.receipt(bridge)
-    reply = host.command("twinreceipt")
+    reply = host.command("twin_receipt")
     assert (reply["result"], reply["slot"], reply["token"]) == ("ok", 0, 2)
     # A client request with another channel's identity is refused.
     wire.write(wire.twin_offset + CLIENT, struct.pack("<IQQQII88x", CLIENT_READY, 6, lo, hi, 8, 3))
-    assert host.command("twinclient")["result"] == "invalid"
+    assert host.command("twin_client")["result"] == "invalid"
 
 
 def test_twin_wire_layout_cpu(tmp_path):
