@@ -270,9 +270,10 @@ ROWS = (
             limits={"options": list(INPUT_MODES)}),
     # THE GHOSTS' INPUTS IN THE CORNER. His words, 2026-10-02: *"I want this as a
     # separate toggle. If we toggle this on, then it would add the input overlay
-    # for each ghost above the bottom left pre-existing input overlay."* Off, so
-    # the HUD he already knows is unchanged until he asks for the stack.
-    switch("hud_inputs_enabled", "ghost_hud_inputs", False,
+    # for each ghost above the bottom left pre-existing input overlay."* On, by
+    # his later ruling the same day: *"I really like the inputs in the corner. I
+    # think that should be default on, with inputs above the ghost default off."*
+    switch("hud_inputs_enabled", "ghost_hud_inputs", True,
            "The ghosts' inputs above your own input display are either shown or hidden.",
            "hud_inputs_enabled"),
     # THE GHOST NEVER BLOCKS THE PLAYER (the player-first fade). His words,

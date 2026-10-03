@@ -1631,10 +1631,12 @@ with him.
 
 ### Corner inputs
 
-Every [[ghost]]'s input display stacked above your own in the game's bottom
-left corner, half size and labeled with its name, one row each in the
-order you chose them. It is its own switch, apart from the inputs drawn over
-each [[ghost]], and stays up while that [[ghost]] is off screen.
+Every [[ghost]]'s inputs in the game's bottom left corner, one compact row
+each stacked above your own input display (on by default). A row keeps your
+display's own positions at half size, so its numbers sit in line with yours
+and each held button over the slot yours shows in, with its name over its
+buttons. At most seven show, in the order you chose them, and a row stays up
+while that [[ghost]] is off screen.
 
 - **Lives** — its switch row in `src/sm64_events/ghost/settings.py`;
   `plugin/gfxwrap/ghost_annotation_mesh.h` draws it

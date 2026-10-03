@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_billboard_controls_write_immediately_keep_the_mode_and_fit_the_card():
     initial = ghost_session(enabled=True, view="mario", mario_boxes=True)
+    # The corner stack off, so the Stick display answers to Inputs alone here.
+    initial["hud_inputs_enabled"] = False
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
                              seed_editor_fixtures=True) as (base, state):
         with get_driver().launch() as page:
@@ -60,6 +62,7 @@ def test_name_box_and_corner_inputs_write_and_fit_the_card():
     """The box behind the names nests under Names (colour on the pick, solidity
     on the slider's trailing edge) and the corner inputs are their own switch."""
     initial = ghost_session(enabled=True, view="mario", mario_boxes=True)
+    initial["hud_inputs_enabled"] = False  # the switch is probed from off
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
                              seed_editor_fixtures=True) as (base, state):
         with get_driver().launch() as page:

@@ -73,12 +73,13 @@ struct Layout {
         }
         return n;
     }
-    // The name, centred on the anchor, on SM64's NPC (black, white text) or
-    // sign (white, black text) dialog box when `box` is above zero.
-    void text(const char* value,float y,float scale=0.75f,float box=0,uint8_t background=GP_NAME_BLACK) {
-        uint8_t chars[64]{};unsigned width=0;const unsigned n=fitted(value,scale,180,chars,width);
+    // The name, centred on the anchor (or from `left`), on SM64's NPC (black,
+    // white text) or sign (white, black text) dialog box when `box` is above zero.
+    void text(const char* value,float y,float scale=0.75f,float box=0,uint8_t background=GP_NAME_BLACK,
+              float left=NAN,float limit=180) {
+        uint8_t chars[64]{};unsigned width=0;const unsigned n=fitted(value,scale,limit,chars,width);
         if(value[0] && n==0)return;
-        float x=-float(width)*scale*0.5f;
+        float x=std::isnan(left)?-float(width)*scale*0.5f:left;
         const bool boxed=box>0,white=background==GP_NAME_WHITE;
         if(boxed) {
             // The glyph cell is 16 tall with its letters in rows 2-15 (caps 2-12).
@@ -152,35 +153,70 @@ struct Layout {
         }
     }
 };
-// The stack's geometry in the game's 320x240 HUD space (y down): rows climb
-// from just above the game's own input display, shrinking to fit when many
-// ghosts show one.
+// THE CORNER STACK, in the game's 320x240 HUD space (y down). His ask,
+// 2026-10-02: each ghost a compact rectangle whose values sit "directly in
+// line with the player's active input values" and whose buttons are "aligned
+// with where the player's button inputs actually show up", its name over the
+// buttons. So every row is half size but keeps the player's own x: the digit
+// column at Usamune's x=34, the stick box centred on his, each held button
+// centred in his button slot (80 + 18k), the name from x=80 on the top half.
 namespace stack {
-constexpr float left=usamune::letter_x,base=usamune::y_row-2;
-// A row is Usamune's display plus room for the ring's travel above its base.
-constexpr float row_height=usamune::bottom-usamune::y_row+6;
-inline float scale(unsigned count) {
-    const float fit=count?GP_HUD_STACK_PIXELS/(float(count)*row_height):GP_HUD_ROW_SCALE;
-    return std::fmin(GP_HUD_ROW_SCALE,fit);
+constexpr float scale=0.5f,half=8; // half-size cells: 16 HUD pixels become 8
+constexpr float row_height=20;     // one ghost's rectangle plus the ring's travel
+constexpr float base=usamune::y_row-2; // the lowest row's bottom edge
+constexpr float column_width=usamune::button_x+4*usamune::button_advance-usamune::letter_x;
+constexpr unsigned most=GP_HUD_STACK_MOST;
+inline unsigned rows_per_column(unsigned count) {
+    const unsigned fit=unsigned(GP_HUD_STACK_PIXELS/row_height);
+    return count<=fit?count:(count+1)/2;
 }
-inline float row_pixels(float scale) {return row_height*scale;}
-inline float label_pixels(float scale) {return 64*scale;}
 }
-// This ghost's row of the stack: its name, then its inputs, at full alpha in
-// screen space (a readout beside the player's own, never hidden by terrain).
+// One rectangle at HUD (x, top) of w x h, y down, into y-up layout pixels.
+inline void hud_rect(Layout& l,float x,float top,float w,float h,float u,float v,float uw,float vh,float opacity=1) {
+    l.quad(x,-(top+h),w,h,u,v,uw,vh,1,opacity);
+}
+// This ghost's rectangle: full alpha, screen space, kept while the ghost
+// itself is off screen (a readout beside the player's own display).
 inline void stack_row(const Payload& p,uint32_t flip_y,Mesh& mesh) {
-    if(!p.hud || !p.artwork || !p.hud_count || p.hud_rank>=p.hud_count)return;
-    const float r=stack::scale(p.hud_count);
-    // One layout pixel is one HUD pixel: NDC is 2/320 across, 2/240 down.
-    float anchor[4]={stack::left/160.0f-1.0f,1.0f-stack::base/120.0f,-0.99f,1.0f};
+    using namespace usamune;
+    if(!p.hud || !p.artwork || !p.hud_count || p.hud_rank>=p.hud_count || p.hud_rank>=stack::most)return;
+    const unsigned count=p.hud_count<stack::most?p.hud_count:stack::most,per=stack::rows_per_column(count);
+    const float dx=float(p.hud_rank/per)*stack::column_width,bottom=stack::base-float(p.hud_rank%per)*stack::row_height;
+    // One layout pixel is one HUD pixel from its top-left corner: NDC is 2/320 across, 2/240 down.
     const float up=flip_y?-1.0f:1.0f;
-    if(flip_y)anchor[1]=-anchor[1];
-    Layout layout{mesh,{anchor[0],anchor[1],anchor[2],anchor[3]},2.0f/320,2.0f/240*up,1.0f};
-    const float bottom=float(p.hud_rank)*stack::row_pixels(r);
-    const float glyph=r*1.1f,label_width=stack::label_pixels(r);
-    layout.label(p.label[0]?p.label:"GHOST",0,bottom+((usamune::bottom-usamune::y_row)*r-16*glyph)*0.5f,glyph,label_width);
-    layout.hud_scale=r;layout.hud_left=label_width+2*r;
-    layout.inputs(p,bottom,false);
+    Layout layout{mesh,{-1.0f,up,-0.99f,1.0f},2.0f/320,2.0f/240*up,1.0f};
+    const float top_row=bottom-2*stack::half-1,low_row=bottom-stack::half; // Y's row over X's
+    auto dialog=[&](uint8_t c,float x,float top) {layout.character(c,dx+x,-(top+stack::half),stack::scale);};
+    auto value=[&](int v,float top,cell::Letter negative,cell::Letter positive) {
+        if(v)hud_rect(layout,dx+digit_x-stack::half,top,stack::half,stack::half,
+                      cell::letter_x+16*float(v<0?negative:positive),cell::letter_y,16,16);
+        char digits[8]{};std::snprintf(digits,sizeof(digits),"%d",v<0?-v:v);
+        for(unsigned i=0;digits[i];++i)hud_rect(layout,dx+digit_x+float(i)*digit_advance*stack::scale,top,
+            stack::half,stack::half,float(digits[i]-'0')*16,cell::digit_y,16,16);
+    };
+    const float box_left=dx+base_x+16*stack::scale,box_top=bottom-32*stack::scale; // centred on his base
+    if(!p.known) { // unavailable evidence is never drawn as a neutral pad
+        if(p.values) {dialog(glyph('?'),digit_x,top_row);dialog(glyph('?'),digit_x,low_row);}
+        else {hud_rect(layout,box_left,box_top,16,16,cell::base_x,cell::base_y,32,32,base_alpha*0.5f);
+            dialog(glyph('?'),base_x+16*stack::scale+6,box_top+4);}
+    } else if(p.values) {
+        value(p.pad.stick_y,top_row,cell::D,cell::U);
+        value(p.pad.stick_x,low_row,cell::L,cell::R);
+    } else {
+        hud_rect(layout,box_left,box_top,16,16,cell::base_x,cell::base_y,32,32,base_alpha);
+        hud_rect(layout,box_left+4+float(stick_offset(p.pad.stick_x))*stack::scale,
+                 box_top+4-float(stick_offset(p.pad.stick_y))*stack::scale,8,8,cell::ring_x,cell::ring_y,16,16);
+    }
+    if(p.known) {
+        unsigned slot=0;
+        for(unsigned i=0;i<9;++i)if(p.pad.buttons&button_masks[i]) {
+            hud_rect(layout,dx+button_x+float(slot++)*button_advance+4,low_row,stack::half,stack::half,
+                     float(i*16),cell::button_y,16,16);
+        }
+    }
+    // The name over the buttons, on the same box as the name over the ghost.
+    layout.text(p.label[0]?p.label:"GHOST",-(top_row+stack::half),stack::scale,p.background_opacity,p.background,
+                dx+button_x,stack::column_width-(button_x-letter_x)-2);
 }
 inline void build(const Payload& p,const float vp[16],uint32_t flip_y,float opacity,float body_alpha,
                   const ghost_occlusion::Region& occlusion,unsigned viewport_width,unsigned viewport_height,

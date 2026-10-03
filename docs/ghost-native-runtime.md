@@ -69,11 +69,16 @@ brings it down; arms raised past his cap never lift it above
 `GP_ANNOTATION_TOP_MAX`. It sits on SM64's own dialog box: an NPC's black box
 with white text or a sign's white box with black text (`ingame_menu.c`
 `render_dialog_box_type`, alpha 150), at the chosen opacity; opacity 0 draws
-no box and keeps the drop shadow. **Inputs in corner** stacks each ghost's
-Usamune display, half size and labeled with its name, above the game's own
-input display at the bottom left, in slot order. Rows shrink to fit when many
-ghosts show one (`GP_HUD_*`), are drawn in screen space at full alpha, and stay
-up while the ghost itself is off screen.
+no box and keeps the drop shadow. **Inputs in corner** (on by default; the
+inputs over each ghost are off by default) stacks one compact half-size row
+per ghost above the game's own input display, keeping the player's own x
+positions so the two read against each other: the digit column at Usamune's
+x=34 with the letter just left of it, the stick box centred on his, each held
+button centred in his button slot, and the ghost's name on its name box over
+the buttons. Rows climb in slot order, at most `GP_HUD_STACK_MOST` (7); seven
+fit one column above the display, and more rows than fit would split into two
+columns with the first holding the larger half. Rows are drawn in screen space
+at full alpha and stay up while the ghost itself is off screen.
 
 **Ghost Library** opens beside the native controls. It shows recent buffer-covered
 and saved local runs plus imported recordings, with creator, target, strategy,

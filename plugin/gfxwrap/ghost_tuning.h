@@ -31,12 +31,13 @@ enum gp_name_background { GP_NAME_BLACK = 0, GP_NAME_WHITE = 1 };
 #define GP_ANNOTATION_TOP_MAX 150.0f
 /* With no body to measure, the name's baseline above his feet. */
 #define GP_ANNOTATION_HEIGHT (GP_ANNOTATION_TOP_MAX + GP_ANNOTATION_GAP)
-/* The stack of ghosts' inputs above the game's own input display: each row's
- * Usamune scale (shrunk to fit when many ghosts show), and the HUD pixels the
- * stack may climb above that display (its top at y=186, the game's star and
- * coin counters below y=40). */
-#define GP_HUD_ROW_SCALE 0.5f
+/* The corner stack above the game's own input display: the HUD pixels it may
+ * climb above that display (its top at y=186; the game's lives, coin and star
+ * counters end near y=40), and how many ghosts it shows. His ask, 2026-10-02:
+ * "ideally up to 7 total ghosts. That's probably the max cap"; rows that do
+ * not fit one column split into two, the first holding the larger half. */
 #define GP_HUD_STACK_PIXELS 144.0f
+#define GP_HUD_STACK_MOST 7u
 /* Usamune's input display, in its own HUD pixels, relative to the name's. */
 #define GP_ANNOTATION_INPUT_SCALE 0.55f
 /* Held buttons start this many HUD pixels past the stick ring's farthest

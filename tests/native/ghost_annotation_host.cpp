@@ -159,6 +159,32 @@ int main(int argc,char** argv) {
             check(mesh.count>0,"a ghost behind the camera still shows its row");
             q.hud=false;build(q,behind,0,1,1,ghost_annotation_region(),640,480,mesh);
             check(mesh.count==0,"the stack is its own switch");
+            // His ask, 2026-10-02: values "directly in line with the player's", buttons
+            // "aligned with where the player's button inputs actually show up", the name
+            // over the buttons. HUD x to NDC: x/160 - 1.
+            auto ndc=[](float x) {return x/160.0f-1.0f;};
+            q.hud=true;q.values=true;q.hud_rank=0;q.pad={12,83,0xc000,0};q.position[2]=0;
+            build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
+            // U | 8 3 / R | 1 2 / A B / the name's shadowed glyphs.
+            check(mesh.count>48 && std::fabs(mesh.vertices[6].clip[0]-ndc(usamune::digit_x))<1e-5f
+                  && std::fabs(mesh.vertices[1].clip[0]-ndc(usamune::digit_x))<1e-5f,
+                  "the ghost's digits start in the player's own digit column, its letter just left of it");
+            check(std::fabs((mesh.vertices[36].clip[0]+mesh.vertices[37].clip[0])*0.5f
+                            -ndc(usamune::button_x+8))<1e-5f
+                  && std::fabs((mesh.vertices[42].clip[0]+mesh.vertices[43].clip[0])*0.5f
+                               -ndc(usamune::button_x+usamune::button_advance+8))<1e-5f,
+                  "each held button sits centred in the player's own button slot");
+            check(std::fabs(mesh.vertices[54].clip[0]-ndc(usamune::button_x))<1e-5f
+                  && mesh.vertices[54].clip[1]>mesh.vertices[38].clip[1],
+                  "the name starts over the buttons and sits above them");
+            q.values=false;q.pad={0,0,0,0};build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
+            check(std::fabs((mesh.vertices[0].clip[0]+mesh.vertices[1].clip[0])*0.5f-ndc(usamune::base_x+16))<1e-5f,
+                  "the ghost's stick box is centred on the player's");
+            q.hud_count=9;q.hud_rank=7;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
+            check(mesh.count==0,"the corner shows at most seven ghosts");
+            q.hud_rank=6;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
+            check(mesh.count>0 && std::fabs((mesh.vertices[0].clip[0]+mesh.vertices[1].clip[0])*0.5f
+                                            -ndc(usamune::base_x+16))<1e-5f,"seven rows fit one column");
         }
         p.names=true;p.pad={-128,127,0xff3f,0};p.values=true;std::memset(p.label,'W',63);p.label[63]=0;
         unsigned maximum=0;for(unsigned i=0;i<16;++i) {
