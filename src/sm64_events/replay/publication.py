@@ -4,13 +4,23 @@ The MP4 filename is the public commit point. Metadata is installed first;
 incomplete copies never acquire that name. A same-volume hard link keeps the
 immutable recording bytes without another full file write. Recovery only
 touches validated destinations recorded beneath this save root.
+
+A ghost copy (the twin recording with the ghosts in it) is staged and renamed
+beside the MP4 before that commit, as `<clip>.ghosts.m4v`. It is the twin's
+own file: a fault staging it saves the clean replay without it.
 """
+from contextlib import closing
 import json
 import hashlib
 import os
 from pathlib import Path
 import shutil
 import tempfile
+
+#: A saved ghost copy's name beside its MP4. Never `.mp4`: every
+#: `attempt_*.mp4` under the save root is a saved replay to the save tree's
+#: scanners (the saved index, the prune's protected ids, Compare).
+GHOST_COPY_SUFFIX = ".ghosts.m4v"
 
 
 def atomic_json(path: Path, document: dict, *, allow_nan: bool = False) -> None:
@@ -82,9 +92,56 @@ def _stage_ghost(pending, ghost, metadata, reserve_bytes):
     return identity
 
 
+def _media_chunks(source):
+    if isinstance(source, Path):
+        with source.open("rb") as stream:
+            yield from iter(lambda: stream.read(1 << 20), b"")
+    else:
+        with closing(source.chunks()) as chunks:
+            yield from chunks
+
+
+def _stage_ghost_copy(pending: Path, source, reserve_bytes: int) -> tuple[dict | None, str | None]:
+    """Stage the ghost copy as `ghostcopy.m4v`: its `{bytes, sha256}`, or None
+    and the reason it was not kept. Never raises: the clean save goes on."""
+    staged, copying = pending / "ghostcopy.m4v", pending / "ghostcopy.copying"
+    try:
+        size = source.stat().st_size if isinstance(source, Path) else source.size
+        if shutil.disk_usage(pending).free - size < reserve_bytes:
+            return None, "Not enough free storage to keep the ghost copy"
+        digest = hashlib.sha256()
+        with copying.open("wb") as target:
+            for chunk in _media_chunks(source):
+                digest.update(chunk)
+                target.write(chunk)
+            target.flush()
+            os.fsync(target.fileno())
+        if copying.stat().st_size != size:
+            raise OSError("incomplete ghost copy")
+        os.replace(copying, staged)
+        return {"bytes": size, "sha256": digest.hexdigest()}, None
+    except Exception as error:  # noqa: BLE001 - a twin fault stops only the twin
+        staged.unlink(missing_ok=True)
+        return None, f"The ghost copy could not be saved: {error}"
+    finally:
+        copying.unlink(missing_ok=True)
+
+
+def _install_ghost_copy(pending: Path, destination: Path, identity: dict) -> None:
+    """Rename a staged ghost copy beside the MP4. An incomplete one is dropped
+    rather than blocking the clean commit; the view then reports it missing."""
+    staged = pending / "ghostcopy.m4v"
+    target = destination.with_suffix(GHOST_COPY_SUFFIX)
+    if staged.is_file():
+        if staged.stat().st_size == identity.get("bytes"):
+            os.replace(staged, target)
+        else:
+            staged.unlink()
+
+
 def _finish(root: Path, pending: Path) -> Path:
     intent = json.loads((pending / "intent.json").read_text(encoding="utf-8"))
-    if intent.get("version") not in (1, 2):
+    if intent.get("version") not in (1, 2, 3):
         raise ValueError("unknown replay publication version")
     destination = _destination(root, intent["destination"])
     staged = pending / "media.mp4"
@@ -93,12 +150,16 @@ def _finish(root: Path, pending: Path) -> Path:
         if not staged.is_file() or staged.stat().st_size != intent["media_bytes"]:
             raise ValueError("replay publication has no complete staged media")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if intent["version"] == 2:
+        # Version 2 always carries native poses; version 3 may carry either
+        # the poses or a ghost copy, each optional.
+        if intent["version"] == 2 or intent.get("ghost") is not None:
             ghost = pending / "ghost.bin"
             target = destination.with_suffix(".ghost")
             _checked_ghost(ghost if ghost.is_file() else target, intent["ghost"])
             if ghost.is_file():
                 os.replace(ghost, target)
+        if intent["version"] == 3 and intent.get("ghost_copy") is not None:
+            _install_ghost_copy(pending, destination, intent["ghost_copy"])
         for suffix, filename in ((".json", "metadata.json"), (".review.json", "review.json")):
             source = pending / filename
             target = destination.with_suffix(suffix)
@@ -109,7 +170,7 @@ def _finish(root: Path, pending: Path) -> Path:
         os.replace(staged, destination)
     # All paths are explicit children of a validated pending directory.
     for filename in ("media.mp4", "metadata.json", "review.json", "media.copying", "intent.json",
-                     "ghost.bin", "ghost.copying"):
+                     "ghost.bin", "ghost.copying", "ghostcopy.m4v", "ghostcopy.copying"):
         (pending / filename).unlink(missing_ok=True)
     pending.rmdir()
     return destination
@@ -125,8 +186,13 @@ def resume(root: Path, attempt_id: int) -> Path | None:
 
 def publish(root: Path, attempt_id: int, source, destination: Path,
             metadata: dict, review: dict, *, reserve_bytes: int = 5 * 1024**3,
-            ghost: Path | None = None) -> Path:
-    """Publish one serialized Save/PB. Retry/recovery resumes a staged copy."""
+            ghost: Path | None = None, ghost_copy=None) -> Path:
+    """Publish one serialized Save/PB. Retry/recovery resumes a staged copy.
+
+    `ghost_copy` (a path, or media with `size` and `chunks()`) becomes
+    `<destination>.ghosts.m4v`, and the sidecar's `ghost_copy` becomes
+    `{file, bytes, sha256}` -- or null with a `ghost_copy_reason` when it
+    could not be kept. Without one the caller's metadata is written as is."""
     root = root.resolve()
     destination = _destination(root, str(destination.resolve().relative_to(root)))
     pending = root / ".pending" / str(int(attempt_id))
@@ -135,14 +201,23 @@ def publish(root: Path, attempt_id: int, source, destination: Path,
         return resumed
     pending.mkdir(parents=True, exist_ok=True)
     ghost_identity = _stage_ghost(pending, ghost, metadata, reserve_bytes)
+    media_bytes = source.stat().st_size if isinstance(source, Path) else source.size
+    copy_identity = None
+    if ghost_copy is not None:
+        # Room for the clean media first: the copy never costs the replay.
+        copy_identity, copy_reason = _stage_ghost_copy(pending, ghost_copy, reserve_bytes + media_bytes)
+        metadata = {**metadata, "ghost_copy_reason": copy_reason,
+                    "ghost_copy": ({"file": destination.with_suffix(GHOST_COPY_SUFFIX).name, **copy_identity}
+                                   if copy_identity else None)}
     # Archival evidence may contain non-finite values from old sidecars. Keep
     # those bytes interpretable; the service validates them before HTTP output.
     atomic_json(pending / "metadata.json", metadata, allow_nan=True)
     atomic_json(pending / "review.json", {"version": 1, "state": review})
-    atomic_json(pending / "intent.json", {"version": 2 if ghost_identity else 1,
+    atomic_json(pending / "intent.json", {"version": 3 if copy_identity else 2 if ghost_identity else 1,
         "destination": str(destination.relative_to(root)),
         "ghost": {key: ghost_identity[key] for key in ("bytes", "sha256")} if ghost_identity else None,
-        "media_bytes": source.stat().st_size if isinstance(source, Path) else source.size})
+        **({"ghost_copy": copy_identity} if copy_identity else {}),
+        "media_bytes": media_bytes})
     staged = pending / "media.mp4"
     if not staged.exists():
         try:
@@ -158,7 +233,6 @@ def publish(root: Path, attempt_id: int, source, destination: Path,
                 if isinstance(source, Path):
                     shutil.copyfile(source, copying)
                 else:
-                    from contextlib import closing
                     with copying.open("wb") as target, closing(source.chunks()) as chunks:
                         for chunk in chunks:
                             target.write(chunk)

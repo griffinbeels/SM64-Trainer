@@ -451,7 +451,8 @@ preferences remain in the replay's separate preference file across restarts.
   `{clip_url, duration_s, truncated, fps, game_fps, source, anchor_offset_s,
   attempt_start_slot, input_span, frame_map, frame_map_source, input_alignment,
   picture_ids, picture_states, picture_igt, pad_stamp_agreement,
-  video_start_s, frame_times, encode, feed_match, plugin_inexact_rows, saved_path}`.
+  video_start_s, frame_times, encode, feed_match, plugin_inexact_rows, saved_path,
+  ghost_copy_url, ghost_copy_reason}`.
   `source` is `buffer` or `saved`; `saved_path` names an existing saved copy.
   `fps` describes the encoded rate and `game_fps` is the 30 Hz game clock.
   `frame_times` gives each encoded picture's actual start in VFR clips
@@ -502,11 +503,27 @@ preferences remain in the replay's separate preference file across restarts.
   when their interpreted map is withheld. This does not independently certify
   the plugin's picture/state convention or recover missing legacy identities.
   A saved clip without a sidecar has unknown duration and no truncation flag.
+  `ghost_copy_url` is the **ghost copy**, the second recording made while
+  Ghosts in recording is on: the same pictures with the ghosts in them. It is
+  offered only when its first picture starts at the clip's `start_utc` to the
+  microsecond and its picture times equal `frame_times`, so a player can swap
+  `src` at the same `currentTime` and keep `frame_times`, `frame_map` and every
+  other field of this payload, which always describe the clean clip. It is
+  `/api/replay/ghostcopy/clips/ghostcopy_attempt_{id}.mp4` for a buffer clip
+  and `/api/replay/saved/{id}/ghosts` for a saved one; otherwise null, and
+  `ghost_copy_reason` says why in plain words ("No ghost copy was recorded for
+  this attempt", "The ghost copy covers only part of this replay", "The ghost
+  copy left the buffer before this replay was saved", ...). A buffer cut taken
+  right after the attempt waits up to 1 s for the copy's tail, and only while
+  a copy covers the clip's start. A fault reading the copy never fails the
+  clean replay. Whole picture ghosts and sharing always use `clip_url`.
 - `GET  /api/replay/available` — `{available: [attempt_id, …]}`: every attempt whose clip is still cuttable (in the ring buffer) or already saved; the Compare tab reads it to badge which runs can load a video
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly). A fragment-backed clip carries an `ETag` naming its immutable descriptor and `Cache-Control: private, max-age=3600`, and honours a matching `If-Range`, so the browser resumes ranges instead of reopening a connection per seek.
 - `GET  /api/replay/saved/{attempt_id}` — a SAVED attempt's MP4 (same Range support); 404 when that attempt has no saved file
+- `GET|HEAD /api/replay/ghostcopy/clips/{name}` — a buffer clip's ghost copy, served exactly like `/api/replay/clips/{name}` (Range, `ETag`, `If-Range`). `name` must be `ghostcopy_attempt_<id>.mp4`; anything else is 404. After Save the same URL serves the saved copy, so an open player keeps playing.
+- `GET|HEAD /api/replay/saved/{attempt_id}/ghosts` — a SAVED attempt's ghost copy (MP4 bytes, same Range support as the saved clip); 404 when the replay was saved without one
 - `GET  /api/replay/compression` — which saved replays are being shrunk right now, for the close warning and the recording panel (polled; no WebSocket event). `{active, jobs: [{attempt_id, label, time_text, stage, fraction, from_bytes, to_bytes}]}`: this session's jobs newest first (at most 8, finished ones included); `stage` is `waiting` / `compressing` / `checking` / `in_use` (proven, waiting for the player to stop watching it) / `done` / `kept` (stays full size); `fraction` is one forward-only 0..1 across compressing and checking, null while waiting. `active` is true only for waiting/compressing/checking: an `in_use` replay's work is finished and closing the app swaps it. Compression off answers `{active: false, jobs: []}`; with replay off the route is not mounted, so a client treats any non-200 as idle. The replay is already saved at full size whatever this says; an unfinished job runs again at the next launch.
-- `POST /api/attempts/{id}/replay/save` — atomically publish to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding)
+- `POST /api/attempts/{id}/replay/save` — atomically publish to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding). A cut that offered a ghost copy also publishes it beside the clip as `<slug>.ghosts.m4v`, installed before the MP4 commits and recovered with it after a crash; the sidecar records `"ghost_copy": {file, bytes, sha256}` or null with `ghost_copy_reason`. The `.m4v` name keeps it out of every `attempt_*.mp4` index (saved ids, Compare, the startup prune). Compression shrinks it after the clip in the same job, on its own proof: a refused copy keeps its bytes, an adopted one rewrites only that block (`bytes`, `sha256` and its own `media` verdict)
 - `POST /api/compilation` — start a failure compilation for a star (`{"star":{"course_id":C,"star_id":S}}`) or segment (`{"segment_id":N}`), with `x_before`/`y_after` seconds around each failure. Returns `{job_id}`.
 - `GET /api/compilation/{job_id}` — poll job `{state, progress, message, result}`; `result` on done: `{path, clip_count, skipped, no_finale, finale_time}`. Output MP4 lives under the replays `compilations/` dir; open it via `POST /api/replay/reveal`.
 

@@ -37,16 +37,21 @@ def _http(e: Exception) -> HTTPException:
 
 
 class ReplayClipResponse(Response):
-    """Release the disk lease on success, cancellation and failed sends."""
+    """Release the disk lease on success, cancellation and failed sends.
 
-    def __init__(self, replay, name: str):
+    `reader` names the service method that leases the bytes: `read_clip` for
+    a buffer clip, `read_ghost_copy` for its ghost copy."""
+
+    def __init__(self, replay, name: str, reader: str = "read_clip"):
         super().__init__()
         self.replay = replay
         self.name = name
+        self.reader = reader
 
     async def __call__(self, scope, receive, send):
         try:
-            async with contextmanager_in_threadpool(self.replay.read_clip(self.name)) as path:
+            read = getattr(self.replay, self.reader)
+            async with contextmanager_in_threadpool(read(self.name)) as path:
                 if isinstance(path, VirtualMp4):
                     await serve_media(path, scope, receive, send)
                 else:
@@ -80,6 +85,12 @@ def _media_routes(router, replay):
     def clip(name: str):
         return ReplayClipResponse(replay, name)
 
+    # The ghost copy of a buffer clip: same leases, ranges and ETag as the
+    # clip itself. The name is validated by the service, like the clip's.
+    @router.api_route("/replay/ghostcopy/clips/{name}", methods=["GET", "HEAD"])
+    def ghost_copy_clip(name: str):
+        return ReplayClipResponse(replay, name, reader="read_ghost_copy")
+
     # HEAD serves the progress-graph click's existence probe (auto-open the
     # player only when a saved file exists) — FastAPI does NOT add HEAD to
     # GET routes by itself; FileResponse already sends headers-only for HEAD.
@@ -92,6 +103,16 @@ def _media_routes(router, replay):
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return FileResponse(path, media_type="video/mp4")  # native Range/206
+
+    # A saved replay's ghost copy (`<clip>.ghosts.m4v`): MP4 bytes, served
+    # exactly like the saved clip. 404 when the replay was saved without one.
+    @router.api_route("/replay/saved/{attempt_id}/ghosts", methods=["GET", "HEAD"])
+    def saved_ghost_copy(attempt_id: int):
+        try:
+            path = replay.saved_ghost_copy_path(attempt_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e) from e
+        return FileResponse(path, media_type="video/mp4")
 
     # Which saved replays are being shrunk right now and how far along each
     # is: the close warning and the recording panel poll this. A read of the
