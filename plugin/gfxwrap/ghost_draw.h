@@ -9,7 +9,9 @@ void begin(uint32_t rom_generation, uint32_t configuration, const gc_sample *sam
 void observe(const ghost::RasterTarget&);
 // `usamune_hidden`: Usamune hides the player's own input display this list
 // (its menu is open or the display is off), so the corner stack hides too.
-void seal(const gc_sample&, const ghost::WorldPass&, bool usamune_hidden = false);
+// `usamune_values`: its own Stick (0) or Values (1) setting, which every ghost
+// input display follows; -1 keeps the trainer's stored mode.
+void seal(const gc_sample&, const ghost::WorldPass&, bool usamune_hidden = false, int usamune_values = -1);
 void finish(const ghost::WorldPass*);
 void cancel();
 bool begin_hud();

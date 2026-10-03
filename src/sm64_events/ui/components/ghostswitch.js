@@ -38,7 +38,7 @@ import { holdRepeat } from "../holdrepeat.js";
 import { GhostProximity } from "./ghostproximity.js";
 import { GhostLibraryButton } from "./ghostlibrary.js";
 import { clampNudge, clampOpacity, ghostControls, ghostRecordingOptions,
-         ghostViewChoices, ghostInputMode, ghostOption, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
+         ghostViewChoices, ghostOption, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
          nudgeSeconds, nudgeText, opacityText, shownTint, shownView,
          GHOST_VIEWS, NUDGE_STEP, VIEW_LABELS } from "../ghostsession.js";
 
@@ -213,23 +213,6 @@ function GhostOnOff({ setting, value, draft, write }) {
 }
 
 /** The stick's presentation depends on Inputs, so it nests beneath that switch. */
-function GhostInputControls({ row, mode, options, write, cornerOn }) {
-  // One stick display serves both: the inputs over each ghost and the stack in the corner.
-  const enabled = (row.draft == null ? row.value : Boolean(row.draft)) || cornerOn === true;
-  const labels = { stick: "Stick", values: "Values" };
-  return html`<div class="ghost-input-controls">
-    <${GhostOnOff} setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />
-    ${enabled === true && html`<label class="ghost-field ghost-input-mode">
-      <span class="ghost-field-name">Stick display</span>
-      <select aria-label="How the ghost's stick input is shown" disabled=${mode == null}
-          value=${mode || ""} onchange=${(event) => write({ input_mode: event.target.value })}>
-        ${mode == null && html`<option value="">Waiting...</option>`}
-        ${(options || []).map((name) => html`<option key=${name} value=${name}>${labels[name] || name}</option>`)}
-      </select>
-    </label>`}
-  </div>`;
-}
-
 /**
  * THE BOX BEHIND EACH NAME. His words, 2026-10-02: *"The nametag should have a
  * black background like this (the text for talking to the whomp king) with
@@ -265,18 +248,12 @@ function GhostNameControls({ row, box, limits, write, queue }) {
   </div>`;
 }
 
-/** A switch row's shown state: his pending choice, else the server's. */
-function switchOn(switches, setting) {
-  const row = switches.find((candidate) => candidate.setting === setting);
-  return row ? (row.draft == null ? row.value : Boolean(row.draft)) : false;
-}
-
-/** The control for one on/off row: the two that own a nested setting draw it beneath themselves. */
-function GhostSwitchControl({ row, inputMode, nameBox, limits, write, queue, cornerOn }) {
-  if (row.setting === "inputs_enabled") {
-    return html`<${GhostInputControls} row=${row} mode=${inputMode}
-      options=${limits.input_mode?.options} write=${write} cornerOn=${cornerOn} />`;
-  }
+/**
+ * The control for one on/off row: Names draws its box setting beneath itself.
+ * No Stick/Values picker: every ghost input display takes the mode he chose
+ * for his own HUD in Usamune's menu (his ask, 2026-10-02: "keep these in sync").
+ */
+function GhostSwitchControl({ row, nameBox, limits, write, queue }) {
   if (row.setting === "names_enabled") {
     return html`<${GhostNameControls} row=${row} box=${nameBox} limits=${limits} write=${write} queue=${queue} />`;
   }
@@ -427,7 +404,7 @@ function GhostRecording({ recording, entityKey, target, write }) {
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, switches, inputMode, nameBox, volume, view, boxes, nudge, limits, write,
+function GhostTuning({ opacity, tint, switches, nameBox, volume, view, boxes, nudge, limits, write,
                       queue, showView = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
@@ -439,8 +416,7 @@ function GhostTuning({ opacity, tint, switches, inputMode, nameBox, volume, view
     <${GhostVisibility} opacity=${opacity} range=${limits.opacity} queue=${queue} />
     <${GhostColour} tint=${tint} range=${limits.tint} write=${write} queue=${queue} />
     ${view === "mario" && html`${switches.map((row) => html`<${GhostSwitchControl} key=${row.setting}
-        row=${row} inputMode=${inputMode} nameBox=${nameBox} limits=${limits} write=${write} queue=${queue}
-        cornerOn=${switchOn(switches, "hud_inputs_enabled")} />`)}
+        row=${row} nameBox=${nameBox} limits=${limits} write=${write} queue=${queue} />`)}
       <${GhostVolume} volume=${volume.value} draft=${volume.draft} range=${limits.volume}
         queue=${queue} />`}
     ${showView && html`<${GhostView} view=${view} boxes=${boxes} write=${write} />`}
@@ -482,7 +458,6 @@ function heldValues(controls, held) {
       .filter(([setting]) => SWITCH_LABELS[setting])
       .map(([setting, value]) => ({ setting, value, draft: held[setting] })),
     tint: shownTint(controls.tint, held.tint, limits.tint),
-    inputMode: ghostInputMode(held.input_mode ?? controls.inputMode, limits),
     nameBox: {
       background: ghostOption("name_background", held.name_background ?? controls.nameBox.background, limits),
       opacity: held.name_background_opacity == null ? controls.nameBox.opacity
@@ -517,7 +492,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   const on = held.enabled == null
     ? controls.enabled : Boolean(held.enabled) && controls.available;
   const { limits } = controls;
-  const { opacity, nudge, switches, tint, inputMode, nameBox } = heldValues(controls, held);
+  const { opacity, nudge, switches, tint, nameBox } = heldValues(controls, held);
   const view = shownView(controls.view, held.view);
   const recording = ghostRecordingOptions(controls.selection, view, held, practisedStrat(session));
   const nativeViews = ghostViewChoices(controls.nativeViews, recording);
@@ -540,7 +515,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
     <${GhostRecording} recording=${recording} entityKey=${entityKey}
       target=${session?.target} write=${write} />
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
-      switches=${switches} inputMode=${inputMode} nameBox=${nameBox} limits=${limits}
+      switches=${switches} nameBox=${nameBox} limits=${limits}
       volume=${{ value: controls.volume, draft: held.volume }}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}

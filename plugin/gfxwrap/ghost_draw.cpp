@@ -251,7 +251,7 @@ void observe(const ghost::RasterTarget &target) {
         width = target.width; height = target.height;
     }
 }
-void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_hidden) {
+void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_hidden, int usamune_values) {
     if (display_scope) cancel(); // a list seals once; never nest its scope
     if (!compositor || !model_id || !ghost_presentation::clean_consumer()
             || world.context_generation != owner.context_generation
@@ -265,6 +265,9 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_h
     // display in the bottom left ... because the normal player's input display
     // is also hidden." The stack follows his display; names and bodies do not.
     if (usamune_hidden) for (uint32_t i = 0; i < count; ++i) poses[i].annotation.hud = false;
+    // And "the input display shown over Ghost Mario ... matches the option we've
+    // selected for the overall HUD": every ghost display takes his HUD's mode.
+    if (usamune_values >= 0) for (uint32_t i = 0; i < count; ++i) poses[i].annotation.values = usamune_values != 0;
     ghost_compositor::Target target{};
     target.occurrence = world.list_serial; target.generation = world.context_generation;
     target.framebuffer = world.target.color; target.width = world.target.width; target.height = world.target.height;

@@ -27,7 +27,13 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 ## Names, inputs and collections
 
 The native controls remember **Names** (on initially), **Inputs** (off initially)
-and **Stick / Values**. Each ghost carries its own bounded credit: `YOUR PB` for
+and **Inputs in corner** (on initially). There is no Stick / Values control of
+our own: every ghost input display, over the ghost and in the corner, takes the
+mode Usamune's own input display is set to in its menu (u8 `0x80417B57`, layout
+row `usamune_input_display`: 2 draws the stick, any other nonzero value the
+Values rows, per its branch at RAM `0x80408a14`), read from each list's RDRAM so
+the ghosts switch on the same frame his display does. The stored `input_mode`
+(initially Stick) applies only while his display is off or unread. Each ghost carries its own bounded credit: `YOUR PB` for
 the selected local PB, `YOUR RUN` for another local recording, and the exporting
 player's name for an imported ghost. Credit is presentation metadata; changing
 it never changes clip identity or restarts playback. Input and label metadata

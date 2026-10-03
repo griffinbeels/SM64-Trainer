@@ -619,7 +619,10 @@ int main(int argc,char** argv){
             fixture.ram[(0x804168D8u-Fixture::base)^3]=menu;fixture.ram[(0x80417B57u-Fixture::base)^3]=display;
             capture_source(fixture,target,matrix,++qpc);return ghost_stream::usamune_display_hidden();};
         require(!hidden(0,2) && !hidden(0,1) && hidden(1,2) && hidden(0,0),
-                "the stream reads Usamune's menu and display bytes from the live list");});
+                "the stream reads Usamune's menu and display bytes from the live list");
+        hidden(0,2);require(ghost_stream::usamune_display_values()==0,"his HUD's Stick setting reads as stick");
+        hidden(0,1);require(ghost_stream::usamune_display_values()==1,"his HUD's Values setting reads as values");
+        hidden(0,0);require(ghost_stream::usamune_display_values()==-1,"a switched-off display names no mode");});
     renderer.run([&]{pipeline.reset();});ghost_stream::api()->disable();api->revoke(GP_DISABLED);require(api->collect()==GP_OK,"worker collects real retired model");
     require(api->release_worker()==GP_OK,"worker releases real storage");require(GetForegroundWindow()==foreground,"foreground unchanged");
     std::printf("{\"ok\":true,\"synthetic\":true,\"live_gliden64\":false,\"width\":%u,\"height\":%u,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"setup_ms\":%.6f,\"swap_interval_disabled\":%s,",

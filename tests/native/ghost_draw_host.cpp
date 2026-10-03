@@ -58,8 +58,9 @@ struct Faults {
     int renderer_before_surface = -1, renderer_before_hud = -1;
     bool renderer_after_huds = false, batch = false, hud_gl = false, layer_gl = false, throw_in_layer = false;
 } faults;
-struct Seen { unsigned layer_passes = 0, broken = 0, finalized = 0, hud_mirrors = 0, warmed = 0, stacked = 0; } seen;
+struct Seen { unsigned layer_passes = 0, broken = 0, finalized = 0, hud_mirrors = 0, warmed = 0, stacked = 0, values = 0; } seen;
 bool usamune_hidden = false; // the list's Usamune HUD hides the player's display
+int usamune_values = -1;      // its Stick (0) / Values (1) setting, -1 unknown
 bool model_ready = true; // playback has built Mario's model
 bool chooses = true; // the list's plan chose a ghost
 bool layer_broken = false, begun = false, in_hud = false;
@@ -120,7 +121,7 @@ Result prepare_annotations(Instance *, const uint8_t *, uint32_t, uint32_t) { re
 Result warm(Instance *) { ++seen.warmed; return Result::ok; }
 Result begin_batch(Instance *, const Target &, const Pose *poses, uint32_t count, const Known *) {
     if (faults.batch) fail_gl(Owner::ghost);
-    for (uint32_t i = 0; i < count; ++i) seen.stacked += poses[i].annotation.hud;
+    for (uint32_t i = 0; i < count; ++i) {seen.stacked += poses[i].annotation.hud; seen.values += poses[i].annotation.values;}
     begun = count != 0; return begun ? Result::ok : Result::invalid;
 }
 Result begin_hud(Instance *, uint64_t, const Known *) {
@@ -226,7 +227,7 @@ List run_list(unsigned surfaces, unsigned huds) {
 #ifdef GHOST_DRAW_BASELINE
     ghost_draw::seal(sample, world);
 #else
-    ghost_draw::seal(sample, world, usamune_hidden);
+    ghost_draw::seal(sample, world, usamune_hidden, usamune_values);
 #endif
     for (unsigned h = 0; h < huds; ++h) {
         if (int(h) == faults.renderer_before_hud) fail_gl(Owner::renderer); // the original HUD draw
@@ -277,7 +278,12 @@ int main() {
         { const unsigned before = seen.stacked; run_list(0, 0);
           check(seen.stacked == before + 1, "a ghost's corner row reaches the compositor");
           usamune_hidden = true; run_list(0, 0); usamune_hidden = false;
-          check(seen.stacked == before + 1, "Usamune's menu hides every ghost's corner row"); }
+          check(seen.stacked == before + 1, "Usamune's menu hides every ghost's corner row");
+          const unsigned shown = seen.values; run_list(0, 0);
+          check(seen.values == shown, "an unknown HUD mode keeps the stored stick display");
+          usamune_values = 1; run_list(0, 0); check(seen.values == shown + 1, "his HUD's Values mode reaches every ghost");
+          usamune_values = 0; run_list(0, 0); check(seen.values == shown + 1, "his HUD's Stick mode reaches every ghost");
+          usamune_values = -1; }
 #endif
         reset();
         std::printf("{\"ok\":true,\"baseline\":%s,",

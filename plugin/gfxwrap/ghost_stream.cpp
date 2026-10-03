@@ -39,6 +39,7 @@ gc_reader reader{};
 gcc_clock source_clock{};
 gc_layout layout{};
 bool usamune_hidden = false; // this list's Usamune HUD hides the player's display
+uint8_t usamune_mode = 0;    // its input display setting: 0 off/unknown, 2 stick, else values
 gc_sample current{};
 gc_sample drawing_sample{};
 gc_root_probe root_probe{};
@@ -129,13 +130,16 @@ const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WOR
 namespace ghost_stream {
 const gs_api *api() { return &capture_api; }
 bool requested() { return rom_open && configured.load(std::memory_order_acquire) != 0; }
-void cancel() { active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset(); usamune_hidden = false; }
+void cancel() {
+    active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset();
+    usamune_hidden = false; usamune_mode = 0;
+}
 void rom(bool opened) {
     active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset(); rom_open = opened; new_epoch();
-    usamune_hidden = false;
+    usamune_hidden = false; usamune_mode = 0;
 }
 bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc, const uint32_t *segments) {
-    active = false; current = {}; root_probe = {}; pass.reset(); usamune_hidden = false;
+    active = false; current = {}; root_probe = {}; pass.reset(); usamune_hidden = false; usamune_mode = 0;
     uint32_t revision = 0;
     if (!rom_open || !generation || !read_config(layout, revision)) return false;
     if (revision != observed_config) {
@@ -152,6 +156,7 @@ bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc,
         ghost::Ram usamune{ram, bytes};
         const uint8_t menu = usamune.u8(layout.usamune_menu), display = usamune.u8(layout.usamune_input_display);
         usamune_hidden = usamune.ok && (menu != 0 || display == 0);
+        usamune_mode = usamune.ok ? display : 0;
     }
     ghost_particles_prepare(particle_probe, ram, bytes, layout.mario_object, layout.object_pool);
     gcc_input timing{};
@@ -219,6 +224,7 @@ void end(bool completed) {
 }
 // The last begun list's answer: seal reads it inside that list, after begin.
 bool usamune_display_hidden() { return usamune_hidden; }
+int usamune_display_values() { return usamune_mode == 0 ? -1 : usamune_mode == 2 ? 0 : 1; }
 const gc_sample *sample() {
     if (!active) return nullptr;
     drawing_sample=current;

@@ -10,10 +10,12 @@ from test_ui_ghost_selector import PB, picks, problems_but_own_navigation, tick
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_billboard_controls_write_immediately_keep_the_mode_and_fit_the_card():
+def test_billboard_switches_write_immediately_and_offer_no_mode_of_their_own():
+    """Names and Inputs write on the click; there is no Stick/Values picker,
+    because every ghost display takes the mode he chose for his own HUD in
+    Usamune's menu (his ask, 2026-10-02: "keep these in sync")."""
     initial = ghost_session(enabled=True, view="mario", mario_boxes=True)
-    # The corner stack off, so the Stick display answers to Inputs alone here.
-    initial["hud_inputs_enabled"] = False
+    initial["hud_inputs_enabled"] = False  # each switch is probed from off
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
                              seed_editor_fixtures=True) as (base, state):
         with get_driver().launch() as page:
@@ -28,33 +30,20 @@ def test_billboard_controls_write_immediately_keep_the_mode_and_fit_the_card():
                 assert settled(page, state, 1)[0] == {"names_enabled": False}
                 page.click(".ghost-inputs .ghost-switch")
                 assert settled(page, state, 2)[1] == {"inputs_enabled": True}
-                page.wait_for(".ghost-input-mode select")
-                page.evaluate("""(() => {
-                  const select=document.querySelector('.ghost-input-mode select');
-                  select.value='values';select.dispatchEvent(new Event('change',{bubbles:true}));
-                })()""")
-                assert settled(page, state, 3)[2] == {"input_mode": "values"}
+                page.click(".ghost-hud-inputs .ghost-switch")
+                assert settled(page, state, 3)[2] == {"hud_inputs_enabled": True}
                 measured = page.evaluate("""(() => {
                   const input=document.querySelector('.ghost-inputs');
-                  const child=document.querySelector('.ghost-input-mode');
                   const row=input.closest('.ghost-row');
                   const card=row.closest('.log-card');
-                  return {parent:input.getBoundingClientRect().left, child:child.getBoundingClientRect().left,
-                    selected:child.querySelector('select').value,
+                  return {picker:document.querySelector('.ghost-input-mode')!==null,
                     row:row.scrollWidth-row.clientWidth, card:card.scrollWidth-card.clientWidth};
                 })()""")
-                assert measured["selected"] == "values" and measured["child"] > measured["parent"]
+                assert not measured["picker"], "no separate Stick/Values choice to drift from his HUD"
                 assert measured["row"] <= 1 and measured["card"] <= 1
                 shots = ROOT / ".iteration" / "ghost148-controls"
                 shots.mkdir(parents=True, exist_ok=True)
-                (shots / f"inputs-values-{width}.png").write_bytes(page.screenshot())
-                page.click(".ghost-inputs .ghost-switch")
-                assert settled(page, state, 4)[3] == {"inputs_enabled": False}
-                assert page.evaluate("document.querySelector('.ghost-input-mode') === null")
-                page.click(".ghost-inputs .ghost-switch")
-                assert settled(page, state, 5)[4] == {"inputs_enabled": True}
-                page.wait_for(".ghost-input-mode select")
-                assert page.evaluate("document.querySelector('.ghost-input-mode select').value") == "values"
+                (shots / f"inputs-{width}.png").write_bytes(page.screenshot())
                 assert problems_but_own_navigation(page) == []
 
 
@@ -89,7 +78,6 @@ def test_name_box_and_corner_inputs_write_and_fit_the_card():
                 assert settled(page, state, 3)[2:] == [{"name_background_opacity": 0.3}]
                 page.click(".ghost-hud-inputs .ghost-switch")
                 assert settled(page, state, 4)[3] == {"hud_inputs_enabled": True}
-                page.wait_for(".ghost-input-mode select")
                 measured = page.evaluate("""(() => {
                   const names=document.querySelector('.ghost-names');
                   const box=document.querySelector('.ghost-name-box');
@@ -113,13 +101,6 @@ def test_name_box_and_corner_inputs_write_and_fit_the_card():
                 assert settled(page, state, 6)[5] == {"names_enabled": True}
                 page.wait_for(".ghost-name-box select")
                 assert page.evaluate("document.querySelector('.ghost-name-box select').value") == "white"
-                # One stick display serves both: with only the corner stack on it stays offered.
-                page.click(".ghost-inputs .ghost-switch")
-                assert settled(page, state, 7)[6] == {"inputs_enabled": False}
-                page.wait_for(".ghost-input-mode select")
-                page.click(".ghost-hud-inputs .ghost-switch")
-                assert settled(page, state, 8)[7] == {"hud_inputs_enabled": False}
-                assert page.evaluate("document.querySelector('.ghost-input-mode') === null")
                 assert problems_but_own_navigation(page) == []
 
 

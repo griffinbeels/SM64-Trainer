@@ -200,7 +200,6 @@ function limitedValues(session, limits) {
     tint: ghostTint(session.tint, limits.tint),
     switches: ghostSwitches(session, limits),
     nudge: clampNudge(session.nudge_frames, nudgeLimit(limits)),
-    inputMode: ghostInputMode(session.input_mode, limits),
     nameBox: ghostNameBox(session, limits),
   };
 }
@@ -209,10 +208,6 @@ function limitedValues(session, limits) {
 export function ghostOption(name, value, limits) {
   const options = limits?.[name]?.options;
   return Array.isArray(options) && options.includes(value) ? value : null;
-}
-
-export function ghostInputMode(value, limits) {
-  return ghostOption("input_mode", value, limits);
 }
 
 /** The box behind each ghost's name: its colour and how solid it is, each null until the server says. */
@@ -300,7 +295,7 @@ export function ghostControls(session, entityKey) {
     // pretend to know -- see clampOpacity.
     showsTuning: false, opacity: null, tint: null, view: null, proximity: null, switches: {},
     volume: null, limits: {},
-    inputMode: null, nameBox: { background: null, opacity: null },
+    nameBox: { background: null, opacity: null },
     marioBoxes: { available: false, reasonText: null }, nudge: 0,
     selection: null,
   };

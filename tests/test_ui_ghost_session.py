@@ -418,11 +418,11 @@ def test_imported_ghost_credit_and_choice_stay_separate_from_local_attempt_ids()
     assert toggle(identity) == {"pb": True, "attempts": [4], "imports": []}
 
 
-def test_input_mode_waits_for_both_the_state_and_published_options():
-    assert run_node("ghostInputMode", f"ghostInputMode('values', {json.dumps(LIMITS)})") == "values"
-    assert run_node("ghostInputMode", "ghostInputMode('stick', {})") is None
-    assert run_node("ghostInputMode", f"ghostInputMode(null, {json.dumps(LIMITS)})") is None
-    assert run_node("ghostInputMode", f"ghostInputMode('combined', {json.dumps(LIMITS)})") is None
+def test_a_choice_waits_for_both_the_state_and_published_options():
+    assert run_node("ghostOption", f"ghostOption('input_mode', 'values', {json.dumps(LIMITS)})") == "values"
+    assert run_node("ghostOption", "ghostOption('input_mode', 'stick', {})") is None
+    assert run_node("ghostOption", f"ghostOption('input_mode', null, {json.dumps(LIMITS)})") is None
+    assert run_node("ghostOption", f"ghostOption('input_mode', 'combined', {json.dumps(LIMITS)})") is None
 
 
 def test_imported_practice_ghost_is_hidden_until_explicitly_selected():

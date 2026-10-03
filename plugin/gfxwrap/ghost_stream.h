@@ -91,6 +91,9 @@ const gc_sample *sample();
 // This list's Usamune HUD: true while its menu is open or its input display
 // is switched off, so the player's own display is hidden (false if unknown).
 bool usamune_display_hidden();
+// Its own Stick/Values setting (its branch at RAM 0x80408a14: 2 draws the
+// stick): 0 stick, 1 values, -1 when its display is off or unknown.
+int usamune_display_values();
 const ghost::WorldPass *candidate();
 }
 #endif

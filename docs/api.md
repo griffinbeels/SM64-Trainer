@@ -985,10 +985,12 @@ there is no whole-picture fallback for this mode.
 
 Native settings also include `names_enabled` (boolean, initially true),
 `inputs_enabled` (boolean, initially false), `input_mode` (`"stick"` or
-`"values"`, initially `"stick"`), `name_background` (`"black"` or `"white"`,
-initially `"black"`), `name_background_opacity` (0..1; 0 draws no box) and
-`hud_inputs_enabled` (boolean, initially false: each ghost's inputs stacked
-above the game's own input display), remembered globally. Labels carry source
+`"values"`, initially `"stick"`; the renderer follows Usamune's own input display
+mode whenever it can read one, so this applies only while that display is off
+or unread, and the card offers no control for it), `name_background` (`"black"`
+or `"white"`, initially `"black"`), `name_background_opacity` (0..1; 0 draws no
+box) and `hud_inputs_enabled` (boolean, initially true: each ghost's inputs
+stacked above the game's own input display), remembered globally. Labels carry source
 credit (`YOUR PB`, `YOUR RUN` or the imported creator). Inputs are the pad
 captured with the selected native occurrence; old recordings have unavailable
 inputs rather than a guessed neutral pad.

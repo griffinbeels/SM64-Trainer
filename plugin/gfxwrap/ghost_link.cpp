@@ -156,7 +156,8 @@ void geometry(uint32_t before, uint32_t after) {
     if (ghost_stream::geometry((before & G_ZBUFFER) != 0,(after & G_ZBUFFER) != 0)) {
         const auto *sample = ghost_stream::sample();
         const auto *world = ghost_stream::candidate();
-        if (sample && world) ghost_draw::seal(*sample, *world, ghost_stream::usamune_display_hidden());
+        if (sample && world) ghost_draw::seal(*sample, *world, ghost_stream::usamune_display_hidden(),
+                                              ghost_stream::usamune_display_values());
     } else if (!ghost_stream::candidate()) ghost_draw::cancel();
 }
 void color_target_changed() {
