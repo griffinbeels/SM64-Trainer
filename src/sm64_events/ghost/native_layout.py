@@ -21,7 +21,7 @@ IPC_PREFIX = "Local\\sm64_trainer_ghost_v13_"
 STREAM_VERSION, PLAYBACK_VERSION = 7, 11
 INPUT_STICK, INPUT_VALUES = 0, 1
 NAME_BLACK, NAME_WHITE = 0, 1  # gp_name_background
-GP_PATH_FASTEST, GP_PATH_AVERAGE = 0, 1  # the request's path_source
+PATH_FASTEST, PATH_AVERAGE = 0, 1  # gp_path_source
 
 # Renderer playback decisions consumed by the session status.
 GP_WRONG_SCENE = 5
@@ -75,10 +75,10 @@ GHOSTS = 16  # displayed ghosts at once: playback, compositor batch, sound sourc
 PROXIMITY_MAX = 400.0  # the largest overlap-fade distance a request may carry
 BRIDGE_FRAMES = 2  # the longest refused run playback holds the previous pose over
 RELEASED_FRAMES = 300  # the longest a released held object is followed (10 s)
-# The ghost path's bounds a request may carry; its opacity is 0..1 like every other.
-GP_PATH_AHEAD_MS_MIN, GP_PATH_AHEAD_MS_MAX = 500, 10000
-GP_PATH_WIDTH_MIN, GP_PATH_WIDTH_MAX = 10.0, 120.0  # world units
-GP_PATH_SPACING_MS_MIN, GP_PATH_SPACING_MS_MAX = 33, 500
+# The ghost path's bounds a request may carry (GP_PATH_*); its opacity is 0..1 like every other.
+PATH_AHEAD_MS_MIN, PATH_AHEAD_MS_MAX = 500, 10000
+PATH_WIDTH_MIN, PATH_WIDTH_MAX = 10.0, 120.0  # world units
+PATH_SPACING_MS_MIN, PATH_SPACING_MS_MAX = 33, 500
 
 # The shared sound ring (ghost_audio.h): the renderer writes ghost sound, the
 # trainer's player (ghost/sound_player.py) plays it outside Project64's process.

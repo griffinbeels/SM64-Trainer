@@ -266,10 +266,10 @@ def _set_annotations(request, value: dict) -> None:
 #: Each path number the request carries: (accepted types, low, high); `path_clip` is checked against the clips.
 PATH_BOUNDS = {
     "path_source": ((int,), min(PATH_SOURCES.values()), max(PATH_SOURCES.values())),
-    "path_ahead_ms": ((int,), L.GP_PATH_AHEAD_MS_MIN, L.GP_PATH_AHEAD_MS_MAX),
-    "path_width": ((int, float), L.GP_PATH_WIDTH_MIN, L.GP_PATH_WIDTH_MAX),
+    "path_ahead_ms": ((int,), L.PATH_AHEAD_MS_MIN, L.PATH_AHEAD_MS_MAX),
+    "path_width": ((int, float), L.PATH_WIDTH_MIN, L.PATH_WIDTH_MAX),
     "path_opacity": ((int, float), 0, 1),
-    "path_spacing_ms": ((int,), L.GP_PATH_SPACING_MS_MIN, L.GP_PATH_SPACING_MS_MAX),
+    "path_spacing_ms": ((int,), L.PATH_SPACING_MS_MIN, L.PATH_SPACING_MS_MAX),
 }
 
 

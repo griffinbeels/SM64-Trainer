@@ -23,8 +23,8 @@ from sm64_events.ghost.proximity import (
     DEFAULT_PROXIMITY, MAX_EXTRA_DISTANCE, PROXIMITY_KEY, checked_proximity, saved_proximity,
 )
 from sm64_events.ghost.native_layout import (
-    GP_PATH_AHEAD_MS_MAX, GP_PATH_AHEAD_MS_MIN, GP_PATH_AVERAGE, GP_PATH_FASTEST, GP_PATH_SPACING_MS_MAX,
-    GP_PATH_WIDTH_MAX, GP_PATH_WIDTH_MIN, INPUT_STICK, INPUT_VALUES, NAME_BLACK, NAME_WHITE,
+    INPUT_STICK, INPUT_VALUES, NAME_BLACK, NAME_WHITE, PATH_AHEAD_MS_MAX, PATH_AHEAD_MS_MIN, PATH_AVERAGE,
+    PATH_FASTEST, PATH_SPACING_MS_MAX, PATH_WIDTH_MAX, PATH_WIDTH_MIN,
 )
 
 #: How see-through the ghost is the FIRST time it is ever switched on. A
@@ -79,7 +79,7 @@ OVERLAP_FLOOR = 0.15
 #: *"maybe we just have the fastest ghost's path ... or, we have an 'average'
 #: path that we calculate based on all of the ghosts. it would be nice to test
 #: which approach feels better."* The fastest is the path he described first.
-PATH_SOURCES = {"fastest": GP_PATH_FASTEST, "average": GP_PATH_AVERAGE}
+PATH_SOURCES = {"fastest": PATH_FASTEST, "average": PATH_AVERAGE}
 DEFAULT_PATH_SOURCE = "fastest"
 #: How far ahead it reaches (seconds of the ghost's run), how wide its ribbon
 #: is (world units), how strongly it is drawn, and how far apart its arrows
@@ -89,10 +89,10 @@ DEFAULT_PATH_SOURCE = "fastest"
 #: unreadable path.
 DEFAULT_PATH_TUNING = {"ahead_s": 3.0, "width": 40.0, "opacity": 0.85, "spacing_s": 0.1}
 PATH_TUNING_LIMITS = {
-    "ahead_s": {"min": GP_PATH_AHEAD_MS_MIN / 1000, "max": GP_PATH_AHEAD_MS_MAX / 1000, "step": 0.5},
-    "width": {"min": GP_PATH_WIDTH_MIN, "max": GP_PATH_WIDTH_MAX, "step": 5},
+    "ahead_s": {"min": PATH_AHEAD_MS_MIN / 1000, "max": PATH_AHEAD_MS_MAX / 1000, "step": 0.5},
+    "width": {"min": PATH_WIDTH_MIN, "max": PATH_WIDTH_MAX, "step": 5},
     "opacity": {"min": 0.1, "max": 1.0, "step": 0.05},
-    "spacing_s": {"min": 0.05, "max": GP_PATH_SPACING_MS_MAX / 1000, "step": 0.05},
+    "spacing_s": {"min": 0.05, "max": PATH_SPACING_MS_MAX / 1000, "step": 0.05},
 }
 
 

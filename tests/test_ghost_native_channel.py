@@ -411,13 +411,18 @@ def test_the_lease_starts_with_the_registrys_path(kernel):
     the fastest ghost, and the registry's own four numbers."""
     from sm64_events.ghost import settings
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    expected = settings.native_path_defaults()
     try:
         request = kernel.request
         assert request.path_enabled == 1 and request.path_buttons == 0 and request.path_clip == 0
-        expected = settings.native_path_defaults()
         assert {field: getattr(request, field) for field in expected} == pytest.approx(expected)
+        connection.poll({"enabled": False})  # a command that names no path field
     finally:
         connection.close()
+    # The renderer checks the path's ranges on EVERY request, the path off or
+    # not, so no request this channel publishes is ever zero-filled there.
+    assert {field: getattr(kernel.request, field) for field in expected} == pytest.approx(expected)
+    assert not kernel.request.capture_enabled
 
 
 def test_the_path_is_encoded_and_its_clip_names_a_playing_ghost(kernel, tmp_path):
