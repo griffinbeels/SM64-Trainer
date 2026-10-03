@@ -63,9 +63,10 @@ export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
  * - hud_inputs_enabled (2026-10-02): each ghost's inputs stacked above your
  *   own input display in the bottom-left corner. Its own switch, beside
  *   Inputs, because it is a different place to read them, not a style of them.
- * - record_ghosts (2026-10-02): the replay video keeps the ghosts as the game
- *   window shows them, so a clip shows you against your ghosts. Off at first;
- *   it applies to what is recorded from then on, never to saved clips.
+ * - record_ghosts (2026-10-02, a second copy since 2026-10-03): while it is on
+ *   the trainer also records a ghost copy, the game window as you saw it, and
+ *   the replay's Show ghosts plays it. Your own recording stays clean. Off at
+ *   first; it applies to what is recorded from then on.
  */
 export const SWITCH_LABELS = {
   names_enabled: { name: "Names", className: "ghost-names", group: "Ghost names",
@@ -91,7 +92,7 @@ export const SWITCH_LABELS = {
     waiting: "Waiting for the ghost's sound setting" },
   record_ghosts: { name: "Ghosts in recording", className: "ghost-record",
     group: "Ghosts in the recording",
-    label: "Keep the ghosts in your replay videos, as the game window shows them",
+    label: "Also record a copy of your replays with the ghosts in it, as the game window shows them",
     waiting: "Waiting for the recording setting" },
 };
 

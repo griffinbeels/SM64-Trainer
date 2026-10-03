@@ -19,7 +19,8 @@ Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../d
 | Which ghosts play | `ghost/selection.py`; the native set is built in `ghost/native_session.py` |
 | Inputs an older local clip shows (its playback copy) | `ghost/padfill.py`: the join, its calibration and every refusal. Never write filled pads into the committed clip |
 | What the renderer draws, and how it fades | `plugin/gfxwrap/ghost_*`. The fade rule and its constants are in `ghost_occlusion.h`; see `native-plugin.md` |
-| Where ghost sound plays, and when a recording hears it | `ghost/sound_player.py` plays the renderer's shared ring (`ghost_audio.h`) outside Project64; `replay/audio.py` taps it only while Ghosts in recording is on |
+| Where ghost sound plays, and which recording hears it | `ghost/sound_player.py` plays the renderer's shared ring (`ghost_audio.h`) outside Project64; `replay/audio.py` taps it only while Ghosts in recording is on, onto a `GhostTimeline` that only the ghost copy mixes in. The clean recording never hears it |
+| The ghost copy (the second recording while Ghosts in recording is on) | `replay/ghostcopy.py` (lane), `gpu_delivery.cpp` twin lane, `fragmentmedia.py` "ghostcopy:" archive, `service.py` cut/save; contract in `docs/replay-gpu-runtime.md`, "The ghost copy" |
 
 **A new on/off setting touches four files:**
 1. A `switch(name, db_key, default, sentence, native_field)` row in `ghost/settings.py`.

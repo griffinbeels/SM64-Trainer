@@ -1671,17 +1671,31 @@ while that [[ghost]] is off screen.
 
 ### Ghosts in recording
 
-The switch on the [[ghost]] card (off by default) that makes your replay videos keep
-the [[ghost]]s as the game window shows them -- bodies, names and [[corner inputs]] --
-so a clip shows you against them, and their sound with them. It is the same
-single recording: while it is on, the [[recorder]] takes the picture you see
-instead of the clean one and adds the [[ghost sound player]]'s audio; while it
-is off, neither the picture nor the sound has a [[ghost]]. It applies to what
-the [[recorder]] takes from then on; a saved clip never gains or loses
-[[ghost]]s, and Whole picture [[ghost]]s (a separate window) are never in it.
+The switch on the [[ghost]] card (off by default) that also records a [[ghost copy]]
+of your play while it is on. Your own recording stays clean either way: no
+[[ghost]] picture and no [[ghost]] sound, so a PB is always clean. It applies to
+what the [[recorder]] takes from then on, and Whole picture [[ghost]]s (a separate
+window) are never in either recording.
 
-- **Lives** — its switch row in `src/sm64_events/ghost/settings.py`;
-  `plugin/gfxwrap/ghost_presentation.cpp` takes the picture
+- **Lives** — its switch row in `src/sm64_events/ghost/settings.py`
+
+### Ghost copy
+
+A second recording, made beside your clean one while [[ghosts in recording]] is
+on, that keeps what the game window showed: the [[ghost]] bodies hidden behind
+walls as you saw them, their names and [[corner inputs]], and their sound mixed
+with the game's. It holds the clean recording's pictures, one for one, at the
+same times, so the replay's button that shows the [[ghost]]s switches between
+the two without losing your place. Saving a replay keeps the copy beside it; nothing else
+(sharing, Whole picture [[ghost]]s, the saved list) ever reads it. It costs a
+second video encode and its own disk space only while the switch is on, and if
+anything goes wrong with it, only the copy stops.
+
+- **Lives** — `plugin/gfxwrap/ghost_presentation.cpp` (the picture the window
+  showed) and `plugin/gfxwrap/gpu_delivery.cpp` (its capture);
+  `src/sm64_events/replay/ghostcopy.py` (its encoder);
+  `src/sm64_events/replay/service.py` (cut, save and serve);
+  `src/sm64_events/ui/components/replay.js` (Show ghosts)
 
 ### Input document
 

@@ -548,6 +548,13 @@ def _until(settled, worker, saved=None):
 
 
 def _sidecar(saved):
+    # The compressor replaces the sidecar while this polls it; on Windows a read
+    # that lands inside that replace is refused, so a poll retries it briefly.
+    for _ in range(50):
+        try:
+            return json.loads(saved.with_suffix(".json").read_text())
+        except PermissionError:
+            time.sleep(0.01)
     return json.loads(saved.with_suffix(".json").read_text())
 
 

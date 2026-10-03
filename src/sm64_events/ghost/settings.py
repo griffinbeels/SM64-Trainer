@@ -301,10 +301,12 @@ ROWS = (
     # exactly what my differences were compared to the ghost in my recorded
     # video? ... Ideally this could be done without needing a separate ghost
     # recording"*, then, choosing the switch set before the run: *"A, with it
-    # by default off."* On: the recording keeps the picture the game window
-    # shows, ghosts and all, instead of the clean one.
+    # by default off."* Then, 2026-10-03, keeping a PB clean: *"I think we
+    # probably should go with A"* (a second copy). On: the trainer also records
+    # a ghost copy of what the game window shows; the clean recording never has
+    # a ghost (docs/ghost-native-runtime.md, "Ghosts in the recording").
     switch("record_ghosts", "ghost_record", False,
-           "Recording the ghosts into your replay video is either on or off.", "record_ghosts"),
+           "Recording a ghost copy beside your replay video is either on or off.", "record_ghosts"),
     # A stored value from a build that knew another view name is not a view:
     # it falls back rather than leaving the page asking for what nothing draws.
     Setting("view", DEFAULT_VIEW, checked_view, key="ghost_view", resolves=True,

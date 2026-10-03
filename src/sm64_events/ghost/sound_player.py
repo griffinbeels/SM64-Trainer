@@ -9,8 +9,9 @@ The renderer still makes the sound; it writes it to a shared ring
 (plugin/gfxwrap/ghost_audio.h, restated in ghost/native_layout.py), and this
 small process -- a child of the trainer, never of Project64 -- plays it on
 the output Project64's own session uses, so per-app routing (his Wave Link
-"Game" output) still carries both. The recorder taps this process too, and
-only while Ghosts in recording is on (`ProcessAudioSource.extra_pid`).
+"Game" output) still carries both. The recorder taps this process too, only
+while Ghosts in recording is on (`ProcessAudioSource.extra_pid`), and only the
+ghost copy mixes that sound in; the clean recording never hears it.
 
 Pacing is the renderer's, unchanged: it refills a tick at a time when what
 is written and not yet played falls to 34 ms. This player hands everything
