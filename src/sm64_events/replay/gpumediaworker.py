@@ -7,6 +7,8 @@ Queue admission is not delivery: receipts advance after successful sink writes.
 
 from collections import deque
 import copy
+from dataclasses import replace
+from math import gcd
 import io
 import threading
 import time
@@ -14,6 +16,7 @@ import time
 from sm64_events.replay.gpupublication import (
     PublicationBusyError, PublicationError, PublicationWriteError,
 )
+from sm64_events.replay.media import MediaRun
 from sm64_events.replay.packetmux import PacketFragmentMux
 
 
@@ -46,16 +49,48 @@ def _row_size(row):
     return size
 
 
+class _NullLedger:
+    """A sink whose pictures need no identity rows: the ghost copy's. Its
+    pictures are the clean run's, whose ledger already holds them."""
+
+    def accept_row(self, row):
+        pass
+
+    def mark_fed(self, *args, **kwargs):
+        pass
+
+
+NULL_LEDGER = _NullLedger()
+
+
+def clock_offset_us(pts, rate):
+    """Microseconds from a run's origin to where a sink starting at `pts`
+    places its audio: the latest whole audio sample on the microsecond grid
+    at or before that picture, so the archive can shift both tracks exactly."""
+    step = 1_000_000 // gcd(1_000_000, rate)
+    return pts * 100 // 9 // step * step
+
+
 class MediaWorker(io.RawIOBase):
-    """One producer, one sink, one run. No slow work while holding queue lock."""
+    """One producer, one sink, one run. No slow work while holding queue lock.
+
+    `mid_run`: the bound run's clock began before this sink's first picture
+    (the ghost copy shares the clean run's clock and starts whenever the
+    switch does). The mux then records from that picture as zero and the
+    archive shifts its index back onto the run's clock (offset_clock), so
+    callers keep the run's own pts and UTC. PCM before the first picture is
+    dropped; it precedes the copy.
+    """
 
     def __init__(self, template, ledger, publish, *, audio_rate, audio_bitrate,
                  packet_limit, pcm_limit, max_bytes, max_blocks=256, max_age=2.0,
-                 timings=None, mux_factory=PacketFragmentMux, clock=time.monotonic):
+                 timings=None, mux_factory=PacketFragmentMux, clock=time.monotonic,
+                 mid_run=False, name="replay-media-sink"):
         super().__init__()
         if min(max_bytes, max_blocks, max_age) <= 0:
             raise ValueError("positive media sink bounds required")
         self.template, self.ledger, self.publish = template, ledger, publish
+        self._mid_run, self._bound_run, self._first_pts = mid_run, None, None
         self.rate, self.clock = audio_rate, clock
         self.max_bytes, self.max_blocks, self.max_age = max_bytes, max_blocks, max_age
         self.timings = timings
@@ -75,7 +110,7 @@ class MediaWorker(io.RawIOBase):
         self._peak_kind = None
         self._peak_bytes = self._peak_blocks = 0
         self.archive = self.mux = None
-        self._worker = threading.Thread(target=self._run, name="replay-media-sink", daemon=True)
+        self._worker = threading.Thread(target=self._run, name=name, daemon=True)
         self._worker.start()
 
     @property
@@ -164,13 +199,19 @@ class MediaWorker(io.RawIOBase):
     def _execute(self, kind, payload):
         if kind == "bind":
             self.archive = self.publish(payload)
-            self.mux.bind_run(payload)
+            if self._mid_run:
+                self._bound_run = payload  # the mux binds at the first picture
+            else:
+                self.mux.bind_run(payload)
         elif kind == "row":
             self.ledger.accept_row(payload)
         elif kind == "pcm":
-            self.mux.write_pcm(*payload)
+            if not self._mid_run or self._first_pts is not None:
+                self.mux.write_pcm(*payload)
         elif kind == "video":
             picture, row_ts, wrote_at, run, pts, source_id, repeat = payload
+            if self._mid_run:
+                picture = self._from_first(picture)
             # Persist association before mux may expose bytes to range readers.
             # This feed alone is not a mux/delivery receipt; counts below are.
             operation = lambda: self.ledger.mark_fed(
@@ -185,6 +226,16 @@ class MediaWorker(io.RawIOBase):
                 self._delivered += 1
         else:
             raise RuntimeError("unknown media sink command")
+
+    def _from_first(self, picture):
+        if self._first_pts is None:
+            micros = clock_offset_us(picture.pts, self.rate)
+            self.archive.offset_clock(picture.pts, micros)
+            run = self._bound_run
+            origin = (round(run.origin_ts * 1_000_000) + micros) / 1_000_000
+            self.mux.bind_run(MediaRun(run.id, origin))
+            self._first_pts = picture.pts
+        return replace(picture, pts=picture.pts - self._first_pts)
 
     def _consume(self):
         while True:

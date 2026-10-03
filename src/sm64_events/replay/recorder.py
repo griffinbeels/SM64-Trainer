@@ -169,9 +169,8 @@ class ReplayRecorder:
             on_evict=self.ledger.discard_segment,
             scratch_root=cfg.scratch_dir,
             deletion_guard=self._scratch.deletion_guard,
-            on_temp_evict=lambda *args: self.fragments.evicted(*args))
-        self.fragments = FragmentMedia(cfg.scratch_dir, self.ring, self.ledger,
-            idle_window=self._fragment_idle_window, discard=self._fragment_paused)
+            on_temp_evict=self._temp_evicted)
+        self._configure_fragments(cfg)
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -220,6 +219,16 @@ class ReplayRecorder:
         self._ghost_capture_factory = factory
         self._pose_owner = None
         self.pose_archive = None
+
+    def _configure_fragments(self, cfg) -> None:
+        self.fragments = FragmentMedia(cfg.scratch_dir, self.ring, self.ledger,
+            idle_window=self._fragment_idle_window, discard=self._fragment_paused)
+        # The ghost copy (Ghosts in recording): a second archive under its own
+        # ring prefix, sharing the ring budget with no eviction priority. It
+        # has no picture ledger; its pictures are the clean run's.
+        self.ghost_copies = FragmentMedia(cfg.scratch_dir / "ghostcopy", self.ring, None,
+            prefix="ghostcopy", idle_window=self._fragment_idle_window,
+            discard=self._fragment_paused)
 
     def _configure_recovery(self) -> None:
         self.maintain_history = lambda: None
@@ -302,6 +311,7 @@ class ReplayRecorder:
                 with self._capture_lock:
                     self.ring.maintain()
                     self.fragments.maintain()
+                    self.ghost_copies.maintain()
                     self.maintain_history()
                     # The GPU path never rotates a legacy segment, so its
                     # picture rows sat in one open SQLite transaction until
@@ -348,6 +358,7 @@ class ReplayRecorder:
             # entries whose files and picture identities no longer exist.
             self._scratch_ready = False
         self.fragments.reset()
+        self.ghost_copies.reset()
         self.ledger.reset()
         # The machine-wide lock is already held. A viewer-only boot must
         # neither remove the owner's footage nor run this recorder's own
@@ -450,6 +461,7 @@ class ReplayRecorder:
             self._scratch.resume_deletion()
             self.ring.clear()
             self.fragments.reset()
+            self.ghost_copies.reset()
             self.ledger.reset()
             self._ledger_name = f"picture-identity-{uuid4().hex}.sqlite3"
             self._pose_archive_name = f"ghost-poses-{uuid4().hex}.sqlite3"
@@ -528,7 +540,7 @@ class ReplayRecorder:
         if make_sink is not None:
             self._video_sink = make_sink(self._cfg, clock, self.ledger,
                                          self.fragments.create)
-            self.fragments.enabled = True
+            self.fragments.enabled = self.ghost_copies.enabled = True
             self._video_sink.start()
         elif self._video_sink_factory is not None:
             # codec is supplied by main or picked on first owned capture:
@@ -540,6 +552,7 @@ class ReplayRecorder:
                                                         self._codec)
             publish = getattr(self._video_sink, "publish_fragments", None)
             self.fragments.enabled = bool(publish and publish(self.fragments.create))
+            self.ghost_copies.enabled = self.fragments.enabled
             self._video_sink.on_fed = self._on_fed
             self._video_sink.start()
         else:
@@ -555,12 +568,7 @@ class ReplayRecorder:
             return
         self._frame_source = getattr(video, "frame_source", "desktop")
         self._frame_source_note = getattr(video, "frame_source_note", None)
-        # The paired source records through automatic idle. Explicit pause is
-        # a separate stop signal; legacy cameras keep their throttle policy.
-        if hasattr(video, "set_idle_check"):
-            video.set_idle_check(self.is_idle)
-        if hasattr(video, "set_pause_check"):
-            video.set_pause_check(lambda: self._session_paused)
+        self._connect_source(video)
         if not self._start_sources(win, clock, video, paired=make_sink is not None):
             return
         self._last_player_active = time.monotonic()  # fresh grace period
@@ -573,6 +581,17 @@ class ReplayRecorder:
         # recording active"; self._codec is only the desktop route's pick.
         log.info("capture started — window=%r audio=%s route=%s", win.title, self._audio_mode,
                  "gpu" if make_sink is not None else f"desktop codec={self._codec}")
+
+    def _connect_source(self, video) -> None:
+        # The paired source records through automatic idle. Explicit pause is
+        # a separate stop signal; legacy cameras keep their throttle policy.
+        if hasattr(video, "set_idle_check"):
+            video.set_idle_check(self.is_idle)
+        if hasattr(video, "set_pause_check"):
+            video.set_pause_check(lambda: self._session_paused)
+        if hasattr(video, "set_ghost_copy"):
+            video.set_ghost_copy(wanted=self.ghost_copy_wanted, publish=self.ghost_copies.create,
+                                 timeline=self._ghost_timeline)
 
     def _create_video_source(self, win: WindowInfo):
         video = self._video_factory(win)
@@ -708,11 +727,27 @@ class ReplayRecorder:
         return self._pose_owner.source if self._pose_owner is not None else None
 
     def ghost_sound_pid(self) -> int | None:
-        """The ghost sound player to mix into the recording: only while Ghosts
-        in recording is on (ghost/sound_player.py), else None."""
+        """The ghost sound player to tap for the ghost copy: only while Ghosts
+        in recording is on (ghost/sound_player.py), else None. The clean
+        recording never hears it (replay/audio.py GhostTimeline)."""
         capture = self.ghost_capture
         sound_pid = getattr(capture, "sound_pid", None)
         return sound_pid() if sound_pid is not None else None
+
+    def ghost_copy_wanted(self) -> bool:
+        """Ghosts in recording is on: the GPU route records a ghost copy
+        beside the clean recording (GpuCapture.ghost_copy_wanted)."""
+        records = getattr(self.ghost_capture, "records_ghosts", None)
+        return bool(records()) if records is not None else False
+
+    def _ghost_timeline(self):
+        # The process tap's ghost sound; the device-wide fallback has none.
+        return getattr(self._audio_source, "ghost_timeline", None)
+
+    def _temp_evicted(self, group, start, end):
+        # Each media owner keeps only its own prefix (ring.FRAGMENT_PREFIXES).
+        self.fragments.evicted(group, start, end)
+        self.ghost_copies.evicted(group, start, end)
 
     def _start_pose_capture(self, win):
         if self._ghost_capture_factory is None:

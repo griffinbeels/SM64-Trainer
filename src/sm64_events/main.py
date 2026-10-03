@@ -361,8 +361,9 @@ def _build_replay(replay_cfg, layout, service):
         cfg=replay_cfg,
         window_finder=find_window,
         video_factory=sources.create,
-        # The ghost sound player joins the game's audio only while Ghosts in
-        # recording is on (ghost/sound_player.py); `recorder` binds late.
+        # The ghost sound player is tapped only while Ghosts in recording is
+        # on, for the ghost copy; the clean audio is the game alone
+        # (replay/audio.py GhostTimeline). `recorder` binds late.
         audio_factory=lambda pid: ProcessAudioSource(
             pid=pid, rate=replay_cfg.audio_rate,
             extra_pid=lambda: recorder.ghost_sound_pid()),

@@ -16,8 +16,15 @@ from sm64_events.replay.virtualmp4 import VirtualMp4
 
 
 class FragmentMedia:
-    def __init__(self, directory, ring, ledger, *, discard=None, idle_window=None):
+    def __init__(self, directory, ring, ledger, *, prefix="fragments", discard=None,
+                 idle_window=None):
+        # One owner per ring prefix (ring.FRAGMENT_PREFIXES): the clean
+        # recording's, and the ghost copy's with no ledger (ledger=None skips
+        # identity pruning). An owner never reads another prefix's evictions,
+        # so evicting a ghost copy can never prune a clean picture identity.
         self.directory, self.ring, self.ledger = directory, ring, ledger
+        self.prefix = prefix
+        self._group = f"{prefix}:"
         self._discard = discard
         self._idle_window = idle_window
         self._runs, self._evicted = {}, deque()
@@ -27,14 +34,14 @@ class FragmentMedia:
         self.enabled = False
 
     def create(self, run, dims):
-        archive = FragmentArchive(self.directory, self.ring, run, discard=self._discard,
-                                  idle_window=self._idle_window)
+        archive = FragmentArchive(self.directory, self.ring, run, prefix=self.prefix,
+                                  discard=self._discard, idle_window=self._idle_window)
         with self._lock:
             self._runs[run.id] = archive
         return archive
 
     def evicted(self, group, start, end):
-        if group.startswith("fragments:"):
+        if group.startswith(self._group):
             self._evicted.append((group.split(":")[1], start, end))
 
     def reset(self):
@@ -74,7 +81,7 @@ class FragmentMedia:
         # A leased extent can outlive archive metadata. Keep its run clock
         # until the eventual ring eviction has been acknowledged too.
         groups = {group.split(":")[1] for group in self.ring.temporary_groups()
-                  if group.startswith("fragments:")}
+                  if group.startswith(self._group)}
         with self._lock:
             pending = groups | {entry[0] for entry in self._evicted.copy()}
             for archive in archives:
@@ -94,7 +101,7 @@ class FragmentMedia:
             identity, start, end = entry
             with self._lock:
                 archive = self._runs.get(identity)
-            if archive is not None:
+            if archive is not None and self.ledger is not None:
                 self.ledger.discard_segment(SimpleNamespace(kind="video", media_run=archive.run,
                     utc_start=start, utc_end=end))
             with self._lock:
