@@ -68,6 +68,10 @@ class FakeArchive:
         self.error = None     # what open() raises
         self.gone = False     # read() finds the footage evicted
         self.opened = []
+        self.expired = []
+
+    def expire_before(self, cutoff):
+        self.expired.append(cutoff)
 
     def coverage(self):
         return self._coverage() if callable(self._coverage) else self._coverage
@@ -92,7 +96,9 @@ class FakeArchive:
 class Recorder:
     def __init__(self, fragments, ghost_copies):
         self.fragments, self.ghost_copies = fragments, ghost_copies
-        self.ring = SimpleNamespace(coverage=lambda kind: None, retention_s=None, max_bytes=10**9)
+        self.expired = []
+        self.ring = SimpleNamespace(coverage=lambda kind: None, retention_s=None, max_bytes=10**9,
+                                    expire_before=self.expired.append)
 
     def status(self):
         return {"recording": True, "frame_source": "plugin"}
@@ -204,6 +210,24 @@ def test_a_legacy_segment_cut_has_no_copy(tmp_path):
     from test_replay_service import make_service as legacy_service
     view = legacy_service(tmp_path, [attempt()]).view(42)
     assert (view["ghost_copy_url"], view["ghost_copy_reason"]) == (None, GHOST_COPY_NONE)
+
+
+def test_the_recent_attempt_window_expires_ghost_copies_with_the_clean_footage(tmp_path):
+    """The ring leaves `ghostcopy:` extents to their own archive, so the
+    service's history cutoff must reach it, or copies outlive their replays."""
+    cutoff = T0 - timedelta(seconds=90)
+    for index, enabled in enumerate((True, False)):
+        twin = FakeArchive("twin-run", TWIN_BYTES)
+        twin.enabled = enabled
+        svc = make_service(tmp_path / str(index), twin)
+        svc.history.cutoff = lambda pre_pad_s: cutoff
+        svc.recorder.maintain_history()
+        assert svc.recorder.expired == [cutoff] and svc.fragments.expired == [cutoff]
+        assert twin.expired == [cutoff]
+    bare = make_service(tmp_path / "none", None)    # a recorder without ghost copies
+    bare.history.cutoff = lambda pre_pad_s: cutoff
+    bare.recorder.maintain_history()
+    assert bare.fragments.expired == [cutoff]
 
 
 # -- the two routes serve ranges exactly like the clean ones -------------------

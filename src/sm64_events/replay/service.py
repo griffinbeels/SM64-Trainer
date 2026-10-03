@@ -304,6 +304,11 @@ class ReplayService:
             self.recorder.ring.expire_before(cutoff)
             if self.fragments is not None:
                 self.fragments.expire_before(cutoff)
+            # The ring leaves ghost copy extents to their own archive. Expired
+            # even while it records nothing, so no copy outlives its history.
+            copies = getattr(self.recorder, "ghost_copies", None)
+            if copies is not None:
+                copies.expire_before(cutoff)
 
     def _protected_scratch(self):
         with self._save_guard:
