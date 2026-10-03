@@ -1,10 +1,13 @@
-"""Ghost sound plays from a trainer-owned process, and reaches a recording only when asked.
+"""Ghost sound plays from a trainer-owned process, and the clean recording never hears it.
 
 His report, 2026-10-03: with Ghosts in recording off, "we still incorrectly
 include the ghost's AUDIO in the recording." The renderer writes ghost sound
 to a shared ring (plugin/gfxwrap/ghost_audio.h; its own witness is
-tests/test_ghost_audio.py); ghost/sound_player.py plays it outside Project64,
-and the recorder taps that player only while the switch is on.
+tests/test_ghost_audio.py); ghost/sound_player.py plays it outside Project64.
+His decision the same day: the clean recording stays clean, and Ghosts in
+recording adds a second copy with the ghosts. So the recorder taps that
+player only while the switch is on, and only for the ghost copy's timeline
+(tests/test_ghost_timeline.py): the clean audio is the game alone.
 """
 import ctypes as C
 import ctypes.wintypes as W
@@ -138,17 +141,6 @@ def test_the_device_closes_once_the_renderer_closes_and_it_has_drained():
     assert device.is_open and device.opens == 2, "a new write reopens it"
 
 
-def test_the_mix_adds_the_ghost_to_the_game_and_never_lets_it_drift():
-    mix = A.GhostMix(rate=48000, most_s=0.25)
-    game = np.full(960, 0.25, dtype=np.float32)
-    assert mix.add_to(game) is game, "nothing waiting: the game's own samples, untouched"
-    mix.feed(np.full(600, 0.5, dtype=np.float32))
-    mixed = mix.add_to(game)
-    assert np.allclose(mixed[:600], 0.75) and np.allclose(mixed[600:], 0.25)
-    mix.feed(np.ones(48000 * 2, dtype=np.float32))  # a second of ghost while the game tap stalled
-    assert len(mix._waiting) == 24000, "at most a quarter second waits"
-
-
 class FakeTap:
     taps = []
 
@@ -163,7 +155,14 @@ class FakeTap:
         self.stopped = True
 
 
-def test_the_recording_taps_the_player_only_while_asked(monkeypatch):
+def wait_for(predicate):
+    deadline = time.monotonic() + 2
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_the_clean_audio_is_the_game_alone_and_the_player_is_tapped_only_while_asked(monkeypatch):
     FakeTap.taps = []
     monkeypatch.setitem(sys.modules, "proctap", type(sys)("proctap"))
     sys.modules["proctap"].ProcessAudioCapture = FakeTap
@@ -178,22 +177,20 @@ def test_the_recording_taps_the_player_only_while_asked(monkeypatch):
         time.sleep(0.1)
         assert len(FakeTap.taps) == 1, "off: the player is never tapped"
         wanted[0] = 222
-        deadline = time.monotonic() + 2
-        while len(FakeTap.taps) < 2 and time.monotonic() < deadline:
-            time.sleep(0.01)
+        assert wait_for(lambda: len(FakeTap.taps) == 2)
         player = FakeTap.taps[1]
         assert player.pid == 222
-        player.on_data(np.full(200, 0.5, dtype=np.float32).tobytes(), -1)
-        game.on_data(np.full(200, 0.25, dtype=np.float32).tobytes(), -1)
-        deadline = time.monotonic() + 2
-        while not got and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert int(got[-1][0][0]) == int(0.75 * 32767), "on: the ghost is mixed into the game"
+        before = time.time()
+        player.on_data(np.full(400, 0.5, dtype=np.float32).tobytes(), -1)
+        game.on_data(np.full(400, 0.25, dtype=np.float32).tobytes(), -1)
+        assert wait_for(lambda: got)
+        clean = np.concatenate([np.asarray(pcm).reshape(-1) for pcm in got])
+        assert (clean == int(0.25 * 32767)).all(), "on: the clean audio is still the game alone"
+        heard = source.ghost_timeline.take(round((before - 0.5) * 1e6), 48000 * 2)
+        assert np.allclose(heard[np.abs(heard).sum(axis=1) > 0], 0.5, atol=1 / 32767)
+        assert (np.abs(heard).sum(axis=1) > 0).sum() == 200, "the player's sound waits for the ghost copy"
         wanted[0] = None
-        deadline = time.monotonic() + 2
-        while not player.stopped and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert player.stopped, "off again: the player's tap closes"
+        assert wait_for(lambda: player.stopped), "off again: the player's tap closes"
     finally:
         source.stop()
 
@@ -213,13 +210,14 @@ class FakeSound:
 
 def test_the_capture_names_its_player_only_for_ghosts_in_the_recording():
     capture = NativeCapture(US, lambda *_: None, producer_pid=1, sound_player=FakeSound())
-    assert capture.sound_pid() is None, "no ghosts playing"
+    assert capture.sound_pid() is None and not capture.records_ghosts(), "no ghosts playing"
     capture.set_playback(enabled=True, record_ghosts=False)
-    assert capture.sound_pid() is None, "Ghosts in recording off: the recording never hears it"
+    assert capture.sound_pid() is None, "Ghosts in recording off: no ghost copy hears it"
+    assert not capture.records_ghosts()
     capture.set_playback(enabled=True, record_ghosts=True)
-    assert capture.sound_pid() == 4242
-    capture.set_playback(enabled=False)
-    assert capture.sound_pid() is None
+    assert capture.sound_pid() == 4242 and capture.records_ghosts()
+    capture.set_playback(enabled=False, record_ghosts=True)
+    assert capture.sound_pid() is None and not capture.records_ghosts(), "no ghosts, no copy"
 
 
 def test_one_player_per_project64_and_it_ends_when_asked():

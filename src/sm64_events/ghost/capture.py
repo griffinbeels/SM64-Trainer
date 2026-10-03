@@ -200,11 +200,17 @@ class NativeCapture:
         finally:
             self._lock.release()
 
+    def records_ghosts(self) -> bool:
+        """The ghosts' command asks for them in the recording (Ghosts in
+        recording): the recorder then keeps a ghost copy beside the clean one."""
+        playback = self._playback
+        return bool(playback.get("enabled") and playback.get("record_ghosts"))
+
     def sound_pid(self) -> int | None:
-        """The ghost sound player's pid while the ghosts' command asks for
-        them in the recording (Ghosts in recording), else None."""
-        playback, sound = self._playback, self._sound
-        if sound is None or not playback.get("enabled") or not playback.get("record_ghosts"):
+        """The ghost sound player's pid while Ghosts in recording is on, for
+        the ghost copy's sound, else None."""
+        sound = self._sound
+        if sound is None or not self.records_ghosts():
             return None
         return sound.pid
 

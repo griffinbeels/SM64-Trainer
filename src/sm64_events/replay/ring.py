@@ -26,6 +26,11 @@ log = logging.getLogger("sm64.replay")
 # large that free space would drop below this.
 _DISK_MARGIN_BYTES = 5 * 1024 ** 3
 
+# Temporary groups a fragment archive owns: the clean recording's and the
+# ghost copy's (fragmentstore.py). Their archives expire them GOP-aware, and a
+# video span pin holds both. Each media owner prunes only its own prefix.
+FRAGMENT_PREFIXES = ("fragments:", "ghostcopy:")
+
 
 def effective_cap(configured_cap: int, free_bytes: int, current_total: int,
                   *, margin_bytes: int = _DISK_MARGIN_BYTES) -> int:
@@ -194,7 +199,7 @@ class SegmentRing:
         if self._temp_pins.get(group):
             return True
         entry = self._temporary.get(group)
-        return bool(entry and group.startswith("fragments:") and any(
+        return bool(entry and group.startswith(FRAGMENT_PREFIXES) and any(
             kind == "video" and entry.utc_end > start and entry.utc_start < end
             for kind, start, end in self._span_pins.values()))
 
@@ -203,7 +208,7 @@ class SegmentRing:
         with self._lock:
             self._clear_segments.update(s.path for s in self._segments if s.utc_end < cutoff)
             for group, entry in tuple(self._temporary.items()):
-                if not group.startswith("fragments:") and entry.utc_end < cutoff:
+                if not group.startswith(FRAGMENT_PREFIXES) and entry.utc_end < cutoff:
                     self.forget_temp(group, delete=True)
             self._evict()
 

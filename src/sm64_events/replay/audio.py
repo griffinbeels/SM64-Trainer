@@ -37,6 +37,7 @@ proctap API notes (installed 1.0.3):
 - Output is always float32, 48000 Hz, 2-channel (stereo), values in [-1, 1],
   delivered CONTINUOUSLY — silence arrives as zeros rather than as a gap,
   unlike device loopback, which delivers nothing while the endpoint idles."""
+from collections import deque
 import logging
 import threading
 import time
@@ -237,37 +238,111 @@ class DeafStreamWatchdog:
                 raise RuntimeError("audio watchdog did not stop; source may still reopen")
 
 
-class GhostMix:
-    """The ghost sound player's samples, waiting to be added to the game's.
+class GhostTimeline:
+    """The ghost sound player's samples on the wall clock, for the ghost copy.
 
-    Both taps deliver float32 stereo at the same rate, continuously, each on
-    its own reader thread; the game's chunk takes as many ghost samples as it
-    has frames. What waits is bounded (`most_s`), so a stalled game tap never
-    lets the ghost drift behind its picture: the oldest samples go first."""
+    The clean recording never hears the ghost: its tap feeds the game alone.
+    The ghost copy's sink asks for the ghost samples under each game block by
+    that block's own UTC stamp, so the two line up by when they were heard,
+    not by how many samples each tap happened to deliver.
 
-    def __init__(self, rate: int = 48000, most_s: float = 0.25):
+    A tap delivers its stream without holes, each chunk a little after its
+    last sample (callback jitter, or a stall's backlog). So the stream's start
+    is pinned by the least-delayed chunk of the last `ANCHOR_WINDOW_S`, and a
+    chunk sits where the count of samples since that start puts it: a stall
+    delays chunks but never moves them. A chunk within `SNAP_S` of the last
+    one's end follows on, so a moving minimum never opens an audible hole.
+    A chunk more than `HOLE_S` later than its count allows means the stream
+    skipped time, and `restart()` means a new tap: either begins a new
+    stream. Only the newest `most_s` seconds wait; anything older or never
+    heard reads as silence."""
+
+    ANCHOR_WINDOW_S = 1.0
+    SNAP_S = 0.005
+    HOLE_S = 0.2
+
+    def __init__(self, rate: int = 48000, most_s: float = 2.0):
+        self._rate = rate
+        self._size = int(rate * most_s)
+        self._ring = np.zeros((self._size, 2), dtype=np.float32)
+        self._first = self._end = None  # absolute sample indices held: [first, end)
         self._lock = threading.Lock()
-        self._most = int(rate * most_s) * 2
-        self._waiting = np.zeros(0, dtype=np.float32)
+        self._heard = 0
+        self._anchors = deque()  # (arrival, implied stream start), increasing starts
 
-    def feed(self, pcm_f32: np.ndarray) -> None:
+    def restart(self) -> None:
+        """The next chunk opens a new stream; what was heard stays readable."""
         with self._lock:
-            waiting = np.concatenate((self._waiting, pcm_f32))
-            self._waiting = waiting[-self._most:] if len(waiting) > self._most else waiting
+            self._heard = 0
+            self._anchors.clear()
 
-    def add_to(self, game_f32: np.ndarray) -> np.ndarray:
+    def feed(self, pcm_f32: np.ndarray, arrived_utc: float) -> None:
+        """One tap chunk (float32 stereo) that arrived at `arrived_utc`."""
+        data = np.asarray(pcm_f32, dtype=np.float32).reshape(-1, 2)
+        if not len(data):
+            return
         with self._lock:
-            take = self._waiting[:len(game_f32)]
-            self._waiting = self._waiting[len(take):]
-        if not len(take):
-            return game_f32
-        mixed = game_f32.copy()
-        mixed[:len(take)] += take
-        return mixed
+            self._heard += len(data)
+            implied = arrived_utc - self._heard / self._rate
+            if self._anchors and implied - self._anchors[0][1] > self.HOLE_S:
+                self._heard, self._anchors = len(data), deque()
+                implied = arrived_utc - self._heard / self._rate
+            while self._anchors and self._anchors[-1][1] >= implied:
+                self._anchors.pop()
+            self._anchors.append((arrived_utc, implied))
+            while arrived_utc - self._anchors[0][0] > self.ANCHOR_WINDOW_S:
+                self._anchors.popleft()
+            end = round((self._anchors[0][1] + self._heard / self._rate) * self._rate)
+            start = end - len(data)
+            if self._end is not None and abs(start - self._end) <= self.SNAP_S * self._rate:
+                start = self._end
+            self._place(start, data)
 
-    def clear(self) -> None:
+    def _place(self, start: int, data: np.ndarray) -> None:
+        if self._end is None or start >= self._end + self._size:
+            self._first = self._end = start  # nothing held is still within reach
+        elif start > self._end:
+            self._write(self._end, np.zeros((start - self._end, 2), dtype=np.float32))
+        top = max(start + len(data), self._end)
+        floor = top - self._size  # the oldest sample the ring can still hold
+        if start + len(data) <= floor:
+            return
+        if start < floor:
+            data, start = data[floor - start:], floor
+        self._write(start, data)
+        self._first = max(min(self._first, start), floor)
+        self._end = top
+
+    def _write(self, at: int, data: np.ndarray) -> None:
+        index = at % self._size
+        head = min(len(data), self._size - index)
+        self._ring[index:index + head] = data[:head]
+        self._ring[:len(data) - head] = data[head:]
+
+    def take(self, first_us: int, frames: int) -> np.ndarray:
+        """(frames, 2) float32 of ghost sound from UTC microsecond `first_us`,
+        zeros wherever no ghost sample is held."""
+        out = np.zeros((frames, 2), dtype=np.float32)
+        start = round(first_us * self._rate / 1_000_000)
         with self._lock:
-            self._waiting = np.zeros(0, dtype=np.float32)
+            if self._end is None:
+                return out
+            low, high = max(start, self._first), min(start + frames, self._end)
+            if high > low:
+                index = low % self._size
+                head = min(high - low, self._size - index)
+                out[low - start:low - start + head] = self._ring[index:index + head]
+                out[low - start + head:high - start] = self._ring[:high - low - head]
+        return out
+
+
+def mix_ghost(game_s16: bytes, ghost_f32) -> bytes:
+    """The game's int16 stereo block plus the ghost's samples, saturated."""
+    game = np.frombuffer(game_s16, dtype=np.int16).reshape(-1, 2)
+    ghost = np.asarray(ghost_f32, dtype=np.float32).reshape(-1, 2)[:len(game)]
+    mixed = game.astype(np.float32)
+    mixed[:len(ghost)] += ghost * 32767.0
+    return np.clip(np.rint(mixed), -32768, 32767).astype(np.int16).tobytes()
 
 
 class ProcessAudioSource:
@@ -282,10 +357,12 @@ class ProcessAudioSource:
     stands between it and the recorder, so a wedged writer drops packets
     instead of stalling the tap.
 
-    `extra_pid` names a second process to mix in while it answers one: the
-    ghost sound player while Ghosts in recording is on (his report,
-    2026-10-03: "We should NOT be recording the ghost's audio when this is
-    off"; ghost/sound_player.py). It is followed every `EXTRA_EVERY_S`."""
+    `extra_pid` names a second process to tap while it answers one: the
+    ghost sound player while Ghosts in recording is on (ghost/sound_player.py).
+    Its samples go to `ghost_timeline` for the ghost copy and never into this
+    source's own PCM: the clean recording is the game alone (his decision,
+    2026-10-03: "if someone gets an amazing PB, they will want the clean
+    recording 100% of the time"). It is followed every `EXTRA_EVERY_S`."""
 
     mode = "process"
     EXTRA_EVERY_S = 0.25
@@ -297,7 +374,7 @@ class ProcessAudioSource:
         self._pump = None
         self._watchdog = None
         self._extra_pid = extra_pid
-        self._mix = GhostMix(rate)
+        self.ghost_timeline = GhostTimeline(rate)
         self._extra_tap, self._extra_tapped = None, None
         self._extra_stop = threading.Event()
         self._extra_thread = None
@@ -308,14 +385,12 @@ class ProcessAudioSource:
         import proctap
 
         pump_feed = self._pump.feed
-        mix = self._mix
 
         def _on_data(pcm_bytes: bytes, num_frames: int) -> None:
             # pcm_bytes: raw float32 stereo 48kHz; num_frames is -1 (unused).
             # The pump speaks int16 — the one format on the wire to the sink —
             # so convert here, off both the recorder and the native drain.
-            pump_feed(f32_to_s16(mix.add_to(
-                np.frombuffer(pcm_bytes, dtype=np.float32))).tobytes(), 0)
+            pump_feed(f32_to_s16(np.frombuffer(pcm_bytes, dtype=np.float32)).tobytes(), 0)
 
         # on_data is passed to __init__, not start(); start() takes no args.
         # proctap also queues every chunk into an internal 100-slot async
@@ -365,22 +440,22 @@ class ProcessAudioSource:
                 continue
             try:
                 import proctap
+                self.ghost_timeline.restart()  # a new tap's samples count from its own start
                 self._extra_tap = proctap.ProcessAudioCapture(pid=wanted, on_data=self._on_extra)
                 self._extra_tap.start()
                 self._extra_tapped = wanted
-                log.info("audio: mixing in pid %d", wanted)
+                log.info("audio: tapping pid %d for the ghost copy", wanted)
             except Exception:  # noqa: BLE001 - the game's own audio keeps recording
-                log.exception("audio: could not tap pid %d to mix in", wanted)
+                log.exception("audio: could not tap pid %d for the ghost copy", wanted)
                 self._close_extra()
 
     def _on_extra(self, pcm_bytes: bytes, _frames: int) -> None:
-        self._mix.feed(np.frombuffer(pcm_bytes, dtype=np.float32))
+        self.ghost_timeline.feed(np.frombuffer(pcm_bytes, dtype=np.float32), time.time())
 
     def _close_extra(self) -> None:
         tap, self._extra_tap, self._extra_tapped = self._extra_tap, None, None
         if tap is not None:
             stop_process_tap(tap)
-        self._mix.clear()
 
     def _reopen(self) -> None:
         self._close_tap()

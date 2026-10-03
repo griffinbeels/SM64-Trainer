@@ -7,7 +7,9 @@ import time
 
 from sm64_events.replay.capturecontrol import CaptureControl, CAP_GPU, CLOSED
 from sm64_events.replay.gpuaudio import PcmHandoff
+from sm64_events.replay.gpumediaworker import MediaWorker, NULL_LEDGER
 from sm64_events.replay.gpusettings import GpuSettings
+from sm64_events.replay.packetmux import NativeFormat
 from sm64_events.replay.pluginsource import table_for
 from sm64_events.replay.ownedclose import CleanupPending, CleanupRetrier, retain
 from sm64_events.replay.tickwait import TickWaiter
@@ -89,6 +91,8 @@ class GpuCapture:
         self.error = None
         self.cleanup_error = None
         self.cfg = self.clock = self.ledger = self.publish = None
+        self._copy_wanted, self._copy_publish = (lambda: False), None
+        self._copy_timeline, self._copy_want_failed = (lambda: None), False
         self._on_stopped = None
         self.retry_gate, self.producer_identity = retry_gate, producer_identity
 
@@ -99,6 +103,45 @@ class GpuCapture:
             raise RuntimeError("GPU capture requires the exact picture feed")
         self.cfg, self.clock, self.ledger, self.publish = cfg, clock, ledger, publish
         return GpuSink(self)
+
+    def set_ghost_copy(self, *, wanted, publish, timeline):
+        """The recorder's ghost copy: whether Ghosts in recording wants one,
+        its archive (recorder.ghost_copies.create) and the ghost sound on the
+        wall clock (the process tap's GhostTimeline, None without one)."""
+        self._copy_wanted, self._copy_publish, self._copy_timeline = wanted, publish, timeline
+
+    def ghost_copy_wanted(self) -> bool:
+        """Asked every media tick; a failed question means no copy, logged once."""
+        try:
+            return bool(self._copy_wanted())
+        except Exception:  # noqa: BLE001 - clean records on whatever the question raised
+            if not self._copy_want_failed:
+                self._copy_want_failed = True
+                log.exception("ghost copy want-signal failed; no ghost copy")
+            return False
+
+    def ghost_timeline(self):
+        """The ghost sound to mix into the copy, or None on the device-wide
+        fallback tap (which already hears ghost sound in clean)."""
+        return self._copy_timeline()
+
+    def ghost_copy_sink(self, codec: str, width: int, height: int) -> MediaWorker:
+        """An unbound sink for one ghost copy: the clean sink's format and
+        bounds, no picture ledger, its own archive. It binds the clean run
+        (same origin) and keeps the clean pts; the archive starts at its
+        first picture (MediaWorker mid_run)."""
+        if self.cfg is None or self._copy_publish is None:
+            raise RuntimeError("ghost copy has no archive")
+        cfg, limits, publish = self.cfg, self.settings, self._copy_publish
+        return MediaWorker(
+            NativeFormat(codec, width, height, self.nominal_rate),
+            NULL_LEDGER,
+            lambda run: publish(run, (width, height)),
+            audio_rate=cfg.audio_rate, audio_bitrate=160000,
+            packet_limit=limits.packet_bytes, pcm_limit=limits.pcm_bytes,
+            max_bytes=limits.pending_bytes, max_blocks=limits.pcm_blocks,
+            max_age=limits.max_age, mid_run=True, name="replay-ghost-copy-sink",
+        )
 
     def set_idle_check(self, check):
         self._idle_check = check
