@@ -28,6 +28,10 @@ Result evaluate(sg_model *, const gs_record &recorded, const gc_sample &live,
 /* A world point relative to the LIVE camera, in the space SM64 hands its own
  * sound engine (Mario's cameraToObject: +x right, +y up, -z ahead). */
 bool camera_relative(sg_model *, const gc_camera &live, const float world[3], float out[3]);
+/* The LIVE camera's view-projection, as every pose carries it: the world
+ * pass's projection, the live look-at and the target's screen scale (the
+ * renderer's y flip is separate). For a part drawn without a pose, the path. */
+bool view_projection(sg_model *, const gc_camera &live, const ghost::WorldPass &, float out[16]);
 /* The inverse of a recorded camera's look-at (rigid: transpose), native
  * column-major; removes that camera from an executed modelview. */
 bool recorded_camera_inverse(sg_model *, const gc_camera &recorded, float inverse[16]);

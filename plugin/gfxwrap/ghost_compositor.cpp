@@ -2,6 +2,7 @@
 #include "ghost_shadow_gl.h"
 #include "ghost_particle_gl.h"
 #include "ghost_annotation_gl.h"
+#include "ghost_path_gl.h"
 #include <algorithm>
 #include <cmath>
 #include <new>
@@ -187,12 +188,13 @@ struct Instance {
     uint32_t textures[5]={}; // display color, copied ordinary depth, atlas, layer color, layer depth
     uint32_t fbos[4]={}; // display/self depth; copied terrain depth; layer color; layer depth
     uint32_t self_depth=0,vao=0,vbo=0,shader_program=0;
-    uint32_t warmed[4]={}; // compiled by warm(), not yet taken: body, shadow, particle, annotation
+    uint32_t warmed[5]={}; // compiled by warm(), not yet taken: body, shadow, particle, annotation, path
     int32_t uniforms[17]={};
     OcclusionUniforms occlusion;
     shadow::Storage shadow;
     particle::Storage particles;
     annotation::Storage annotations;
+    path::Storage path;
     struct Layer {
         bool open=false,broken=false,active=false;
         LayerPass pass=LayerPass::color;
@@ -312,6 +314,8 @@ Result allocate(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
     g.PixelStorei(UNPACK_ROW_LENGTH,0);g.PixelStorei(UNPACK_SKIP_ROWS,0);g.PixelStorei(UNPACK_SKIP_PIXELS,0);
     if(!p->shadow.prepare(g,p->shadow.program?p->shadow.program:
             warmed_or(p,1,shadow::vertex_shader,shadow::fragment_shader)))return Result::resources;
+    if(!p->path.prepare(g,p->path.program?p->path.program:
+            warmed_or(p,4,path::vertex_shader,path::fragment_shader)))return Result::resources;
     g.ActiveTexture(TEXTURE0);
     texture(g,p->textures[0],RGBA8,RGBA,UNSIGNED_BYTE,width,height,nullptr);
     texture(g,p->textures[1],DEPTH_COMPONENT24,DEPTH_COMPONENT,UNSIGNED_INT,width,height,nullptr);
@@ -396,9 +400,10 @@ Result warm(Instance* p) {
         {!p->shader_program,vertex_shader,fragment_shader},
         {!p->shadow.program,shadow::vertex_shader,shadow::fragment_shader},
         {!p->particles.program,particle::vertex_shader,particle::fragment_shader},
-        {!p->annotations.program,annotation::vertex_shader,annotation::fragment_shader}};
+        {!p->annotations.program,annotation::vertex_shader,annotation::fragment_shader},
+        {!p->path.program,path::vertex_shader,path::fragment_shader}};
     bool all=true;
-    for(unsigned i=0;i<4;++i)if(programs[i].needed && !p->warmed[i]) {
+    for(unsigned i=0;i<5;++i)if(programs[i].needed && !p->warmed[i]) {
         p->warmed[i]=program(g,programs[i].vertex,programs[i].fragment);all=all && p->warmed[i];
     }
     return all?Result::ok:Result::resources;
@@ -408,11 +413,14 @@ Result begin(Instance* p,const Target& t,const Pose& pose,const Known* known) {
     return begin_batch(p,t,&pose,1,known);
 }
 
-Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,const Known* known) {
+Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,const Known* known,
+                   const ghost_path::Frame* route) {
     if(!p)return Result::invalid;
     abort(p);
     const auto start=clock::now();p->batch={};
-    if(!poses || !count || count>max_poses)return Result::invalid;
+    const bool drawn_route=route && route->count;
+    if((count && !poses) || count>max_poses || (!count && !drawn_route) || (route && !ghost_path::valid(*route)))
+        return Result::invalid;
     if(!p->ready || t.generation!=p->generation || !t.occurrence || !t.framebuffer ||
        t.framebuffer==p->fbos[0] || t.framebuffer==p->fbos[1] || t.framebuffer==p->fbos[2] || t.framebuffer==p->fbos[3] ||
        t.width!=p->width || t.height!=p->height ||
@@ -514,6 +522,10 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,
         g.FramebufferTexture2D(DRAW_FRAMEBUFFER,DEPTH_ATTACHMENT,TEXTURE_2D,0,0);
         g.FramebufferRenderbuffer(DRAW_FRAMEBUFFER,DEPTH_STENCIL_ATTACHMENT,RENDERBUFFER,p->self_depth);
     }
+    // The ghost's path: over the shadows, under every body, against the same
+    // terrain the bodies test (their passes clear its stencil after it).
+    if(drawn_route)p->path.draw(g,*route,t,p->annotations.ready?p->annotations.texture:0,
+        t.depth==Depth::ordinary ? p->textures[1] : t.n64_depth_texture);
     // Upload disjoint ranges before issuing draws: avoid overwriting a range
     // still being consumed by the GPU for the preceding Mario. Uploads go
     // through the copy-write target, leaving the renderer's array buffer alone.
@@ -685,7 +697,7 @@ Display display(const Instance* p) {
 }
 void destroy(Instance* p) {
     if(!p)return;abort(p);const auto& g=p->g;
-    p->shadow.destroy(g);p->particles.destroy(g);p->annotations.destroy(g);
+    p->shadow.destroy(g);p->particles.destroy(g);p->annotations.destroy(g);p->path.destroy(g);
     end_layer(p);
     g.DeleteTextures(5,p->textures);g.DeleteFramebuffers(4,p->fbos);g.DeleteRenderbuffers(1,&p->self_depth);
     g.DeleteVertexArrays(1,&p->vao);g.DeleteBuffers(1,&p->vbo);if(p->shader_program)g.DeleteProgram(p->shader_program);

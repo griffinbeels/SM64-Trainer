@@ -259,7 +259,8 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_h
             || world.target.width != prepared_width || world.target.height != prepared_height) return;
     auto *buffer = ghost_link::raster_buffer();
     if (!buffer || !buffer->m_pTexture || uint32_t(buffer->m_FBO) != world.target.color) return;
-    // Zero visible ghosts leaves this frame exactly as a hidden single ghost did.
+    // Zero visible ghosts and no path leaves this frame exactly as a hidden
+    // single ghost did.
     ghost_compositor::Pose poses[GP_GHOSTS]{}; uint32_t count = 0;
     if (!ghost_playback::evaluate(sample, world, poses, count, draw_token)) return;
     // His ask, 2026-10-02: "when in the usamune menu, we should hide the input
@@ -293,7 +294,8 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_h
     if (!open) return;
     display_scope = true;
     stage = Clock::now();
-    const auto result = ghost_compositor::begin_batch(compositor, target, poses, count, &known);
+    // The ghost's path rides the same batch; it may draw with no ghost in view.
+    const auto result = ghost_compositor::begin_batch(compositor, target, poses, count, &known, ghost_playback::path());
     cost.batch_micros += since(stage);
     // The batch's own errors are read when the display scope closes.
     provisional = result == ghost_compositor::Result::ok;

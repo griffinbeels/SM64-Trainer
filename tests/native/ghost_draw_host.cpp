@@ -119,7 +119,8 @@ Result prepare(Instance *, uint32_t, uint32_t, uint32_t, const uint8_t *, uint32
 Result prepare_particles(Instance *, const uint8_t *, uint32_t, uint32_t) { return Result::unsupported; }
 Result prepare_annotations(Instance *, const uint8_t *, uint32_t, uint32_t) { return Result::unsupported; }
 Result warm(Instance *) { ++seen.warmed; return Result::ok; }
-Result begin_batch(Instance *, const Target &, const Pose *poses, uint32_t count, const Known *) {
+Result begin_batch(Instance *, const Target &, const Pose *poses, uint32_t count, const Known *,
+                   const ghost_path::Frame *) {
     if (faults.batch) fail_gl(Owner::ghost);
     for (uint32_t i = 0; i < count; ++i) {seen.stacked += poses[i].annotation.hud; seen.values += poses[i].annotation.values;}
     begun = count != 0; return begun ? Result::ok : Result::invalid;
@@ -171,6 +172,7 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &, ghost_compositor::Pos
 }
 bool current(const gp_draw_token &token) { return token.revision != 0; }
 bool records_display() { return false; }
+const ghost_path::Frame *path() { return nullptr; }
 void retire_on_context_loss() {}
 }
 namespace ghost_presentation {

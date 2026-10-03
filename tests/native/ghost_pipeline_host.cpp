@@ -14,6 +14,7 @@
 #include "ghost_pass.h"
 #include "ghost_presentation.h"
 #include "ghost_stream.h"
+#include "ghost_path.h"
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -197,6 +198,9 @@ struct Pipeline {
     std::string gpu_vendor,gpu_renderer,gl_version;
     std::vector<float> clean_depth;ghost::WorldPass world{};uint32_t configuration=0;gcc_output origin_clock{};
     float live_shift=0; // moves live Mario along world z (the camera looks down -z) for the player-first proof
+    float live_x=0; // moves live Mario along world x: his place on the ghost's path
+    double evaluate_ms=0; // the last ghost frame's playback choice (the path's window included)
+    uint32_t path_points=0;
     bool two_sided=false; // draw the back faces the game culls too (the culling proof's reference)
     explicit Pipeline(Fixture& f,const gs_record& first):g(dispatch()),scene(g,W,H),raster(g),fixture(f),
         configuration(first.configuration),origin_clock(first.sample.clock){
@@ -313,7 +317,7 @@ struct Pipeline {
         const auto start=Clock::now();++frames;
         clock_word(fixture,fixture.config.global_timer,100+frames,4);
         const auto captured_source=capture_source(fixture,world.target,world.projection,1234+frames);
-        auto live=captured_source.sample;live.pose.position[2]+=live_shift;const auto* qualified=ghost_stream::candidate();
+        auto live=captured_source.sample;live.pose.position[2]+=live_shift;live.pose.position[0]+=live_x;const auto* qualified=ghost_stream::candidate();
         require(qualified && qualified->list_serial==live.dlist_serial,"world and source share exact occurrence");world=*qualified;
         require(live.global_timer==100+frames && live.igt==10 && live.clock.elapsed_frames==origin_clock.elapsed_frames
             && live.clock.continuity_id==origin_clock.continuity_id,"paused IGT stays at origin while global timer advances");
@@ -321,7 +325,10 @@ struct Pipeline {
         ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,W,H});world_state(g);
         present::begin_update(presentation,live.sequence);
         gc::Pose poses[GP_GHOSTS]{};uint32_t count=0;gp_draw_token token{};
-        if(draw){require(ghost_playback::evaluate(live,world,poses,count,token) && poses[0].count>800,"actual playback/model geometry, its back faces culled");
+        if(draw){const auto choosing=Clock::now();
+            require(ghost_playback::evaluate(live,world,poses,count,token) && poses[0].count>800,"actual playback/model geometry, its back faces culled");
+            evaluate_ms=ms(choosing,Clock::now());
+            path_points=ghost_playback::path()?ghost_playback::path()->count:0;
             // The reference: every triangle drawn, the culled ones after the rest.
             if(two_sided)for(uint32_t i=0;i<count;++i){poses[i].count+=poses[i].culled;poses[i].culled=0;}
             vertices=0;for(uint32_t i=0;i<count;++i)vertices+=poses[i].count;visible=count;
@@ -344,7 +351,8 @@ struct Pipeline {
                 require(same,"the known state is the driver's");
             }
             (void)gc::take_cost(compositor);
-            require(gc::begin_batch(compositor,destination,poses,count,&known)==gc::Result::ok,"real compositor batch");
+            require(gc::begin_batch(compositor,destination,poses,count,&known,ghost_playback::path())==gc::Result::ok,
+                "real compositor batch");
             cost=gc::take_cost(compositor);
             require(gc::finalize(compositor,live.sequence)==gc::Result::ok && ghost_playback::current(token),"finalized current ghost");
             const auto image=gc::display(compositor);
@@ -414,6 +422,7 @@ int main(int argc,char** argv){
     request.owner_token=1;request.model_id=1;request.rom_generation=7;request.configuration=captured.configuration;
     request.clip_count=1;request.clips[0].clip_id[0]=1;request.opacity=1;
     request.shadow_enabled=0; // body-only proofs first; the shadow has its own section
+    request.path_ahead_ms=3000;request.path_width=40;request.path_opacity=.85f;request.path_spacing_ms=100;
     require(first.valid_fields&GC_VALID_SHADOW,"recorded pose carries its shadow");
     request.origin={GO_SEGMENT,first.epoch,first.sequence,first.clock.continuity_id,first.clock.elapsed_frames,first.clock.origin_id,0,0};
     require(api->configure(&request)==GP_OK,"configure exact-origin FOLLOW playback");std::unique_ptr<Pipeline> pipeline;
@@ -582,6 +591,60 @@ int main(int argc,char** argv){
             multi_stages.add(pipeline->cost);
             multi_times.push_back(ghost.pipeline);multi_swap_times.push_back(ghost.swap);multi_total_times.push_back(ghost.pipeline+ghost.swap);}
         require(pipeline->visible==GP_GHOSTS,"full set stays visible");});
+    // The ghost's path: one ghost on a 12 s recording that runs along world x
+    // (20 units a frame, airborne a third of every 40 frames, a press every 15),
+    // live Mario walking along it. The same frames with the path off, then on:
+    // the list's cost the path adds (playback's choice and the compositor's
+    // stages) and the frame through GPU completion.
+    Stages path_off_stages,path_on_stages;std::vector<double> path_off_times,path_on_times,path_off_choice,path_on_choice;
+    unsigned path_pixels=0,path_points=0;
+    {
+        constexpr uint32_t records=360;
+        std::vector<gclip_frame> rows(records,recorded);
+        for(uint32_t i=0;i<records;++i) {
+            auto& s=rows[i].sample;s.sequence=first.sequence+i;s.dlist_serial=first.dlist_serial+i;
+            s.global_timer=first.global_timer+i;s.qpc=first.qpc+i;s.igt=uint16_t(first.igt+i);
+            s.clock.raw_igt=s.igt;s.clock.elapsed_frames=first.clock.elapsed_frames+i;
+            if(s.clock.valid&GCC_PROGRESS_VALID)s.clock.progress_frames=s.clock.banked_frames+s.clock.raw_igt;
+            s.pose.position[0]+=float(i)*20;
+            if(i%40>=27)s.live_action|=0x800u; // ACT_FLAG_AIR
+            s.valid_fields|=GC_VALID_PAD;s.pad={};s.pad.buttons=i%15==0?0x8000:0;
+        }
+        auto h=header;h.clip_id[0]=0x50;h.record_count=records;
+        h.last_sequence=rows.back().sample.sequence;h.last_global_timer=rows.back().sample.global_timer;
+        require(api->prepare_clip(&h,rows.data())==GP_OK,"prepare the path's recording");
+        request.clip_count=1;request.tint_enabled=0;for(auto& clip:request.clips)clip={};request.clips[0].clip_id[0]=0x50;
+        request.shadow_enabled=1;request.path_enabled=0;request.path_clip=0;request.path_buttons=1;
+        ++request.revision;require(api->configure(&request)==GP_OK,"one ghost on the path recording");
+        std::vector<uint8_t> without;
+        renderer.run([&]{
+            ghost_annotation::View view{};uint64_t id=0;
+            require(ghost_playback::annotations(&view,&id) && gc::prepare_annotations(pipeline->compositor,view.rgba,view.width,
+                view.height)==gc::Result::ok,"the ROM atlas with its chevron");
+            pipeline->live_shift=0;pipeline->live_x=0;pipeline->frame(true,true);without=pipeline->last_visible;});
+        request.path_enabled=1;++request.revision;require(api->configure(&request)==GP_OK,"path on");
+        renderer.run([&]{
+            pipeline->frame(true,true);ppm(out/"path.ppm",pipeline->last_visible);
+            path_points=pipeline->path_points;path_pixels=changed(without,pipeline->last_visible);
+            require(path_points>100 && path_pixels>1000,"the path draws beside the ghost");});
+        for(bool on:{false,true}) {
+            request.path_enabled=on;++request.revision;require(api->configure(&request)==GP_OK,"path timing");
+            renderer.run([&]{
+                pipeline->live_x=0;
+                for(unsigned i=0;i<20;++i){pipeline->frame(false);pipeline->frame(true);}
+                for(unsigned i=0;i<180;++i){
+                    // Live Mario runs on along the recording: a new record enters the window each frame.
+                    pipeline->live_x+=20;pipeline->frame(false);const auto ghost=pipeline->frame(true);
+                    (on?path_on_stages:path_off_stages).add(pipeline->cost);
+                    (on?path_on_times:path_off_times).push_back(ghost.pipeline);
+                    (on?path_on_choice:path_off_choice).push_back(pipeline->evaluate_ms*1000);
+                    require(on==(pipeline->path_points>0),"the path follows its switch");
+                }
+                pipeline->live_x=0;});
+        }
+        request.path_enabled=0;
+        ++request.revision;require(api->configure(&request)==GP_OK,"path off for the saved clip");
+    }
     const auto vertex_count=pipeline->vertices;const auto swap_disabled=pipeline->swap_interval_disabled;
     const auto gpu_vendor=pipeline->gpu_vendor,gpu_renderer=pipeline->gpu_renderer,gl_version=pipeline->gl_version;
     // A real saved GCLIP4 clip (recorded before particles, Whomp's Fortress like
@@ -651,5 +714,10 @@ int main(int argc,char** argv){
     std::printf(",\"multi\":{\"ghosts\":%u,\"visible\":%u,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,",
         unsigned(GP_GHOSTS),multi_visible,multi_vertices,multi_silhouette,multi_outside);
     statistics("pipeline_gpu_completed",multi_times);std::printf(",");statistics("blocking_swap",multi_swap_times);
-    std::printf(",");statistics("including_swap",multi_total_times);std::printf("}}\n");return 0;
+    std::printf(",");statistics("including_swap",multi_total_times);std::printf("}");
+    std::printf(",\"path\":{\"points\":%u,\"pixels\":%u,\"off\":{",path_points,path_pixels);
+    stages("stages",path_off_stages);std::printf(",");percentiles("choice_us",path_off_choice);std::printf(",");
+    statistics("pipeline_gpu_completed",path_off_times);std::printf("},\"on\":{");
+    stages("stages",path_on_stages);std::printf(",");percentiles("choice_us",path_on_choice);std::printf(",");
+    statistics("pipeline_gpu_completed",path_on_times);std::printf("}}}\n");return 0;
 }

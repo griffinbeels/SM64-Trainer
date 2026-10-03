@@ -7,6 +7,7 @@
 #include "ghost_pose.h"
 #include "ghost_particle_pose.h"
 #include "ghost_sound_fade.h"
+#include "ghost_path.h"
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -50,9 +51,11 @@ static bool evaluate_planned(const gc_sample& live,const ghost::WorldPass& world
     gp_status status{};
     bool refused=ghost_playback::api()->status(&status,sizeof(status))==GP_OK && status.decision==GP_POSE_REFUSED;
     for(auto decision:status.clip_decisions)refused=refused || decision==GP_POSE_REFUSED;
-    if(planned!=drawn && !(planned && refused))
+    // The path alone draws a list whose plan chose no ghost.
+    const bool path_only=!planned && drawn && !count && ghost_playback::path();
+    if(planned!=drawn && !(planned && refused) && !path_only)
         std::fprintf(stderr,"planned %d, drew %d, decision %u\n",int(planned),int(drawn),status.decision);
-    check(planned==drawn || (planned && refused),"the list's plan chooses exactly the ghosts it draws");
+    check(planned==drawn || (planned && refused) || path_only,"the list's plan chooses exactly the ghosts it draws");
     ++(drawn?plans_drawn:planned?plans_refused:plans_hidden);
     return drawn;
 }
@@ -192,6 +195,17 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
 }
 // The pose witness proves the look-at product; this one proves which point
 // is placed: the camera here is a pure translation.
+// The path's live camera: identity here (its geometry has its own witness).
+bool view_projection(sg_model *p,const gc_camera&,const ghost::WorldPass&,float out[16]) {
+    std::memset(out,0,16*sizeof(float));
+    if(!p || p!=fake_model || p->owner!=GetCurrentThreadId())return false;
+    out[0]=out[5]=out[10]=out[15]=1;return true;
+}
+bool recorded_camera_inverse(sg_model *p,const gc_camera&,float inverse[16]) {
+    std::memset(inverse,0,16*sizeof(float));
+    if(!p || p!=fake_model || p->owner!=GetCurrentThreadId())return false;
+    inverse[0]=inverse[5]=inverse[10]=inverse[15]=1;return true;
+}
 bool camera_relative(sg_model *p,const gc_camera& live,const float world[3],float out[3]) {
     if(!p || p!=fake_model || p->owner!=GetCurrentThreadId())return false;
     for(unsigned axis=0;axis<3;++axis)out[axis]=world[axis]-live.position[axis];
@@ -274,6 +288,8 @@ static gp_request request(const Clip& clip,uint64_t revision) {
     r.clip_count=1;std::memcpy(r.clips[0].clip_id,clip.header.clip_id,16);r.opacity=1;r.star_ends=1;
     r.star_action_count=1;r.star_actions[0]=0x1302;r.shadow_enabled=1;
     r.names_enabled=r.inputs_enabled=1;std::strcpy(r.clips[0].label,"YOUR PB");
+    // The path off, at the card's defaults (ghost/settings.py path_tuning).
+    r.path_ahead_ms=3000;r.path_width=40;r.path_opacity=.85f;r.path_spacing_ms=100;
     r.origin={GO_STAR,5,50,77,2000,7,0,0};return r;
 }
 int main() {
@@ -814,6 +830,78 @@ int main() {
             live.live_action=1;frame(8,{2006},GP_READY,{GP_READY,GP_STAR_ENDED});
             check(poses[0].annotation.names && !poses[0].annotation.inputs,
                   "synthetic death retains its name and never shows a recorded pad");
+        }
+        {
+            // The ghost's path: the fastest ghost's recorded line, its window
+            // anchored to live Mario's own place on it, drawn on while every
+            // ghost is hidden, averaged only inside the gate, off once the
+            // attempt ends. x names the clip (4000 fast, 4100 slow) and frame.
+            Clip fast=Clip::linear(40,120,UINT32_MAX,5),slow=Clip::linear(41,150,UINT32_MAX,5),
+                 apart=Clip::linear(46,150,UINT32_MAX,5);
+            for(auto *ghost:{&fast,&slow,&apart})for(auto& f:ghost->frames) {
+                f.sample.valid_fields|=GC_VALID_PAD;f.sample.pad={};
+            }
+            fast.frames[10].sample.pad.buttons=0x8000;fast.frames[11].sample.pad.buttons=0x8000;
+            for(uint32_t i=20;i<30;++i)fast.frames[i].sample.live_action=0x03000880; // a jump: ACT_FLAG_AIR
+            for(auto *ghost:{&fast,&slow,&apart})
+                check(api->prepare_clip(&ghost->header,ghost->frames.data())==GP_OK,"prepare a path ghost");
+            revision=r.revision+1;r=request(fast,revision);r.model_id=4;r.star_ends=0;r.clip_count=2;
+            std::memcpy(r.clips[1].clip_id,slow.header.clip_id,16);std::strcpy(r.clips[1].label,"SLOW");
+            r.path_enabled=1;r.path_clip=0;r.path_ahead_ms=3000;r.path_width=50;r.path_opacity=.75f;r.path_spacing_ms=200;
+            r.origin={GO_STAR,7,live.sequence+1,source_continuity,9000,source_generation,0,0};elapsed_base=9000;
+            live.level=9;live.area=1;live.live_action=1;
+            check(api->configure(&r)==GP_OK,"configure two ghosts and the path");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            const ghost_path::Frame *drawn_path=nullptr;
+            auto at=[&](uint64_t time,float x,uint32_t ghosts) {
+                live.igt=uint16_t(time);++live.sequence;++live.dlist_serial;live.global_timer=uint32_t(12000+time);
+                world.list_serial=live.dlist_serial;
+                live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
+                    0,0,source_generation,1,elapsed_base+time,source_continuity};
+                live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=x;live.pose.position[1]=0;live.pose.position[2]=5;
+                renderer.run([&] {
+                    const bool drawn=evaluate_planned(live,world,poses,count,token);
+                    drawn_path=ghost_playback::path();
+                    check(count==ghosts && drawn==(ghosts>0 || drawn_path!=nullptr),"ghosts drawn, and the path beside them");
+                    check(!drawn || ghost_playback::current(token),"the path's list carries the batch token");
+                });
+            };
+            at(5,4005,2);
+            check(drawn_path && drawn_path->count==120,"1 s behind his place through the fastest ghost's last frame");
+            check(drawn_path->points[5].position[0]==4005 && drawn_path->points[5].alpha==1
+                  && drawn_path->points[0].alpha==GP_PATH_BEHIND_ALPHA,"anchored where he stands, full ahead, 25% behind");
+            check(drawn_path->width==50 && drawn_path->opacity==.75f && drawn_path->spacing_ms==200 && !drawn_path->buttons
+                  && !drawn_path->chevrons && !drawn_path->icons,"the request's tuning, and no ROM artwork in this fixture");
+            check(drawn_path->points[10].pressed==0x8000 && drawn_path->points[11].pressed==0,"a press edge, not the hold");
+            check((drawn_path->points[25].flags&ghost_path::air) && !(drawn_path->points[19].flags&ghost_path::air),
+                  "airborne frames carry the air flag");
+            check(drawn_path->view_projection[0]==1 && drawn_path->eye[0]==live.camera.position[0],"under the live camera");
+            // He runs ahead of the ghost's clock: the path follows him, not it.
+            at(6,4060,2);
+            check(drawn_path && drawn_path->points[0].coordinate==30 && drawn_path->points[30].position[0]==4060,
+                  "the window moves with live Mario's place");
+            // Both ghosts past their ends: only the path is drawn.
+            at(400,4115,0);
+            check(drawn_path && drawn_path->points[0].coordinate==85,"with every ghost hidden the path draws on");
+            // The averaged path: the mean where every ghost is inside the gate.
+            ++r.revision;r.path_source=GP_PATH_AVERAGE;check(api->configure(&r)==GP_OK,"average the path");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            at(5,4005,2);
+            check(drawn_path && drawn_path->points[5].position[0]==4055 && drawn_path->points[100].position[0]==4150,
+                  "two ghosts 100 apart average to their mean, frame by frame");
+            ++r.revision;std::memcpy(r.clips[1].clip_id,apart.header.clip_id,16);
+            check(api->configure(&r)==GP_OK,"a ghost 600 away");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            at(5,4005,2);
+            check(drawn_path && drawn_path->points[5].position[0]==4005,"outside the gate the fastest's own point");
+            // Off: the switch, and a finished attempt (suspension).
+            ++r.revision;r.path_enabled=0;check(api->configure(&r)==GP_OK,"path off");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            at(5,4005,2);check(!drawn_path,"the switch hides the path");
+            ++r.revision;r.path_enabled=1;r.suspended=1;check(api->configure(&r)==GP_OK,"attempt complete");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            at(400,4115,0);check(!drawn_path,"no path once the attempt is over");
+            r.suspended=0;
         }
         {
             // Ghost sound: each record's recorded requests reach the sink once,
@@ -1788,6 +1876,11 @@ int main() {
         r.proximity_enabled=1;r.proximity_distance=std::numeric_limits<float>::quiet_NaN();
         check(api->configure(&r)==GP_INVALID,"proximity NaN refused");
         r.proximity_distance=401;check(api->configure(&r)==GP_INVALID,"proximity distance bounded");
+        r.proximity_distance=0;r.proximity_enabled=0;
+        r.path_enabled=1;r.path_clip=1;check(api->configure(&r)==GP_INVALID,"a path naming no playing ghost is refused");
+        r.path_clip=0;r.path_ahead_ms=0;check(api->configure(&r)==GP_INVALID,"path look-ahead bounded while the path is on");
+        r.path_ahead_ms=3000;r.path_width=NAN;check(api->configure(&r)==GP_INVALID,"path width NaN refused");
+        r.path_width=40;r.path_enabled=0;
         r.proximity_distance=0;
         r.shadow_enabled=2;check(api->configure(&r)==GP_INVALID,"shadow flag bounded");
         r.shadow_enabled=1;r.occlusion_fade=2;check(api->configure(&r)==GP_INVALID,"occlusion flag bounded");

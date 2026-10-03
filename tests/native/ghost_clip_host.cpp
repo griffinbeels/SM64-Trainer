@@ -28,6 +28,8 @@ Result evaluate(sg_model*,const gs_record&,const gc_sample&,const ghost::WorldPa
 bool shadow(sg_model*,const gc_sample&,const float*,ghost_compositor::ShadowVertex*,uint8_t*,
             ghost_compositor::Shadow&) {std::abort();}
 bool camera_relative(sg_model*,const gc_camera&,const float*,float*) {std::abort();}
+bool view_projection(sg_model*,const gc_camera&,const ghost::WorldPass&,float*) {std::abort();}
+bool recorded_camera_inverse(sg_model*,const gc_camera&,float*) {std::abort();}
 }
 
 static uint32_t hidden=0; // the refused rows playback hides; 0 for a refused clip

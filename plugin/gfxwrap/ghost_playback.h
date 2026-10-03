@@ -8,7 +8,7 @@
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 10u
+#define GP_VERSION 11u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
 /* Sized so a full set of long ghosts can be replaced by another full set in
@@ -99,6 +99,14 @@ typedef struct gp_request {
     /* 1: the recording takes the picture the window shows, ghosts and all
      * (Ghosts in recording, off by default), instead of the clean one. */
     uint32_t record_ghosts;
+    /* The ghost's path (ghost_path.h; ranges GP_PATH_* in ghost_tuning.h):
+     * on/off, its button presses, fastest or averaged (gp_path_source), the
+     * clips[] index of the fastest playing ghost (below clip_count while the
+     * path and playback are on), how far ahead it shows, its width in world
+     * units, its strength and its arrow spacing. */
+    uint32_t path_enabled, path_buttons, path_source, path_clip, path_ahead_ms;
+    float path_width, path_opacity;
+    uint32_t path_spacing_ms;
 } gp_request;
 
 typedef struct gp_status {
@@ -173,6 +181,7 @@ typedef struct gp_api {
 namespace ghost { struct WorldPass; }
 namespace ghost_compositor { struct Pose; }
 namespace ghost_annotation {struct View;}
+namespace ghost_path { struct Frame; }
 namespace ghost_playback {
 const gp_api *api();
 /* Refused rows of a valid clip that playback hides rather than bridging:
@@ -215,6 +224,13 @@ bool annotations(ghost_annotation::View *out, uint64_t *model_id);
  * epoch, sequence and list serial), once; without one it plans first. */
 bool evaluate(const gc_sample &, const ghost::WorldPass &,
               ghost_compositor::Pose *out, uint32_t &count, gp_draw_token &token);
+/* The ghost's path the latest evaluate chose (path_enabled), or null: the
+ * path_clip ghost's recorded trajectory, its window anchored to LIVE Mario's
+ * own place along it (ghost_path::locate), never to the ghost's clock, so it
+ * still draws while every ghost is hidden this list (evaluate then returns
+ * true with count 0). Off once the attempt ends (a star, defeat or
+ * suspension). Borrowed until the next evaluate, safe_boundary or retire. */
+const ghost_path::Frame *path();
 /* Renderer thread, at list start, from the list's own sample (its clock,
  * scene and action; the world pass has not run): chooses what every ghost
  * shows this list exactly as evaluate would, and returns whether any ghost

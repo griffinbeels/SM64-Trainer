@@ -5,6 +5,7 @@
 #include "ghost_stream.h"
 #include "ghost_playback.h"
 #include "ghost_annotation.h"
+#include "ghost_path.h"
 #include <windows.h>
 #include <atomic>
 #include <cmath>
@@ -70,6 +71,8 @@ bool same_controls(gipc_request a, gipc_request b) {
     a.heartbeat = b.heartbeat = 0; a.revision = b.revision = 0;
     a.clip_count = b.clip_count = 0;
     std::memset(a.clips, 0, sizeof(a.clips)); std::memset(b.clips, 0, sizeof(b.clips));
+    // Which ghost is the fastest belongs to the set, like its clips.
+    a.path_clip = b.path_clip = 0;
     return !std::memcmp(&a, &b, sizeof(a));
 }
 bool valid_set(const gipc_request &r) {
@@ -78,7 +81,8 @@ bool valid_set(const gipc_request &r) {
             || !(r.volume >= 0 && r.volume <= 1) || r.names_enabled>1 || r.inputs_enabled>1
             || r.input_mode>GP_INPUT_VALUES || r.name_background>GP_NAME_WHITE
             || !(r.name_background_opacity >= 0 && r.name_background_opacity <= 1)
-            || r.hud_inputs_enabled>1 || r.record_ghosts>1) return false;
+            || r.hud_inputs_enabled>1 || r.record_ghosts>1
+            || !ghost_path::valid_request(r, r.play_enabled != 0, r.clip_count)) return false;
     for (uint32_t i = 0; i < r.clip_count; ++i) {
         const auto &clip = r.clips[i];
         if (clip.hue_degrees > 359 || clip.reserved || !ghost_annotation::valid_label(clip.label)) return false;
@@ -488,6 +492,10 @@ struct Session {
                     command.name_background_opacity=r.name_background_opacity;
                     command.hud_inputs_enabled=r.hud_inputs_enabled;
                     command.record_ghosts=r.record_ghosts;
+                    command.path_enabled=r.path_enabled;command.path_buttons=r.path_buttons;
+                    command.path_source=r.path_source;command.path_clip=r.path_clip;
+                    command.path_ahead_ms=r.path_ahead_ms;command.path_width=r.path_width;
+                    command.path_opacity=r.path_opacity;command.path_spacing_ms=r.path_spacing_ms;
                     if (play->configure(&command) != GP_OK) {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
                     } else {

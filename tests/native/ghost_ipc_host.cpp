@@ -231,7 +231,8 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(proximity_enabled) X(proximity_distance) X(origin) X(clip_count) X(reserved1) X(clips) \
     X(shadow_enabled) X(occlusion_fade) X(volume) X(sound_fade) \
     X(names_enabled) X(inputs_enabled) X(input_mode) X(name_background) X(name_background_opacity) \
-    X(hud_inputs_enabled) X(record_ghosts)
+    X(hud_inputs_enabled) X(record_ghosts) X(path_enabled) X(path_buttons) X(path_source) X(path_clip) \
+    X(path_ahead_ms) X(path_width) X(path_opacity) X(path_spacing_ms)
 #define GIPC_CLIP_FIELDS(X) X(clip_id) X(clip_sha256) X(hue_degrees) X(reserved) X(clip_path) X(label)
 #define GIPC_STATUS_FIELDS(X) X(magic) X(version) X(bytes) X(producer_pid) X(producer_created_lo) \
     X(producer_created_hi) X(generation) X(rom_generation) X(rom_open) X(state) X(reason) \
@@ -369,6 +370,8 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.proximity_enabled=1;r.proximity_distance=120;r.shadow_enabled=1;r.occlusion_fade=1;r.volume=0.625f;r.sound_fade=1;
         r.mode=GP_FIXED;
         r.star_action_count=1;r.star_actions[0]=0x1302;r.stop_at_star=1;
+        r.path_enabled=1;r.path_buttons=1;r.path_source=GP_PATH_AVERAGE;r.path_clip=0;
+        r.path_ahead_ms=4500;r.path_width=55.5f;r.path_opacity=.7f;r.path_spacing_ms=150;
         r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
         r.layout.clock.near_zero=30;
         ready(page,r);auto first=last_command();
@@ -383,6 +386,9 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(first.configuration && first.revision,"capture and playback identities acknowledged");
         check(first.proximity_enabled==1 && first.proximity_distance==120,"proximity crosses actual IPC worker");
         check(first.shadow_enabled==1 && first.volume==0.625f,"shadow switch and volume cross actual IPC worker");
+        check(first.path_enabled==1 && first.path_buttons==1 && first.path_source==GP_PATH_AVERAGE && first.path_clip==0
+            && first.path_ahead_ms==4500 && first.path_width==55.5f && first.path_opacity==.7f
+            && first.path_spacing_ms==150,"every path field crosses the actual IPC worker");
         check(!page.status().displayed,"ready pose is not presentation evidence");
         ghost_ipc::presented(first.revision);
         page.wait([](const gipc_status& s){return s.displayed==1;},"actual matching presentation acknowledged");

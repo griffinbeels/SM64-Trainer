@@ -76,6 +76,7 @@ struct Run {
         std::memcpy(clip_bytes.data()+sizeof(clip.header),clip.frames.data(),sizeof(gclip_frame)*clip.frames.size());
         demand.play_enabled=1;demand.model_id=1;demand.opacity=1;demand.stop_at_star=!segment;
         demand.star_action_count=1;demand.star_actions[0]=0x1302;
+        demand.path_ahead_ms=3000;demand.path_width=40;demand.path_opacity=.85f;demand.path_spacing_ms=100;
         demand.clip_count=1;demand.clips[0].clip_id[0]=segment?72:71;
         // Each Run is its own tracker session and arm: every Run restarts the
         // same global timers, so a restore parked by an earlier Run's close

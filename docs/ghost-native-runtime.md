@@ -124,8 +124,8 @@ readable explanation. A bulk read binds one current definition snapshot.
 | Capture | GC8: layout 200 (`player1_controller` at 188; Usamune's menu and input display bytes at 192 and 196, never recorded), sample 1268; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636), the [held object](#held-objects) (44 at 1216, its released angle at 36) and optional exact pad (8 at 1260, validity bit 512) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS7, still exported as `SM64GhostSourceV3` (the version argument must be 7); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP10: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension and global names/inputs/mode, name box and HUD input stack controls, and whether the recording keeps the displayed picture | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC12: status 256, request 20020 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; names/inputs/mode, then name box style/opacity, the HUD input stack switch and `record_ghosts`, appended after sound controls | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Playback | GP11: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension and global names/inputs/mode, name box and HUD input stack controls, whether the recording keeps the displayed picture, and [the ghost's path](#the-ghosts-path) | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC13: status 256, request 20052 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; names/inputs/mode, then name box style/opacity, the HUD input stack switch, `record_ghosts` and the eight path fields, appended after sound controls | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP7: header 160, record 1284, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP6 (1276), GCLIP5 (1268) and GCLIP4 (652) still load with unavailable pad; GCLIP5 also has nothing released, GCLIP4 also has no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 | Ghost copy | SourceV4 (`SM64ReplaySourceV4`, 108 bytes) adds `query_display` and `display_consumer` over an unchanged V3 table; display kinds 4 (`DISPLAY_VI`) and 5 (`SAME_AS_CLEAN`) | [link_source_api.h](../plugin/gfxwrap/link_source_api.h), [source_descriptor3.h](../plugin/gfxwrap/source_descriptor3.h) |
@@ -906,7 +906,7 @@ live Project64 picture; the current renderer still needs a live tunnel witness.
 ## Recording, preservation and ownership
 
 [NativeCapture](../src/sm64_events/ghost/capture.py) owns a separate leased channel
-named `Local\sm64_trainer_ghost_v12_<PID>`. Process birth, producer/ROM generations,
+named `Local\sm64_trainer_ghost_v13_<PID>`. Process birth, producer/ROM generations,
 configuration, epoch and one QPC/UTC anchor identify its batches. The native
 worker and Python client use a named mutex for mapped-page access; the render
 thread never touches that page. File/hash checks, ROM asset preparation and clip
@@ -1251,7 +1251,7 @@ asks nothing per ghost frame for 1, 4 and 16 ghosts at 640x480 and 1600x1200.
 ### The first ghost's list
 
 Shader compiles happen before any ghost is asked for. The compositor and its
-four programs (body, shadow, particle, annotation) are created on the first
+five programs (body, shadow, particle, annotation, path) are created on the first
 list after the trainer's clean recording attaches, seconds after the game
 starts, and `prepare` then takes them (`ghost_compositor::warm`). Before, the first ghost's list
 compiled them: on 2026-10-02 a build with a new shader missed the driver's
@@ -1315,6 +1315,88 @@ world-space vertices under the body's live view-projection. Opacity and
 overlap fade apply through the pose; the shadow is black, so tint does not.
 `shadow_enabled` (GP5/GIPC5 onward, default on; `NativeChannel` key
 `shadow_enabled`, a bool) removes every ghost's shadow without rebuilding it.
+
+### The ghost's path
+
+His ask, 2026-10-03: "iRacing style path markers on the ground, indicating
+the path that mario takes ... if he's in the air, it matches his air
+position". One path, the request's `path_clip` ghost (the fastest playing,
+chosen by the trainer), drawn under the same live camera as the ghosts
+([ghost_path.h](../plugin/gfxwrap/ghost_path.h) chooses and lays it out,
+[ghost_path_gl.h](../plugin/gfxwrap/ghost_path_gl.h) draws it; numbers in
+`ghost_tuning.h` `GP_PATH_*`). GP11/GIPC13 carry `path_enabled`,
+`path_buttons`, `path_source`, `path_clip`, `path_ahead_ms`, `path_width`,
+`path_opacity` and `path_spacing_ms`. The switches and `path_clip` are
+checked on every request, the tuning ranges while the path is on (an all-zero
+block means no path).
+
+- **Anchored to live Mario, not the ghost's clock.** Each list, playback finds
+  the path record nearest live Mario's root, searching 3 s back and 6 s ahead
+  of the last match (equal distances: the one nearest the last match), so a
+  path that crosses itself keeps its pass. A new clip, run, seek or mode
+  starts from the ghost's own record, or searches the whole clip; so does live
+  Mario entering a scene the window lacks, once per scene. The window draws
+  `path_ahead_ms` ahead at full strength, fades over the next 2 s, and keeps
+  1 s behind him at 25%. The path draws while every ghost is hidden this list
+  (evaluate returns true with no pose), and stops when the attempt ends (a
+  star, a defeat, the trainer's suspension).
+- **Exact records, broken where the game jumps.** Points are recorded frames,
+  never smoothed. The line breaks at an executed warp (`pending_warp_op` set,
+  then clear), a clock warp, retry or level load, an area or level change, a
+  refused pose and a clip gap; DDD's two tunnel copies translate as the
+  ghosts do.
+- **Ground and air.** Without `ACT_FLAG_AIR` or `ACT_FLAG_SWIMMING`: a flat
+  ribbon `path_width` wide on the floor at his root, lifted 2 units along the
+  recorded shadow's plane and tilted to it, over a dark casing 1.35 times as
+  wide. Otherwise a ribbon a third as wide facing the camera at his root, a
+  faint dot every 3 recorded frames on the floor under him (the recorded
+  shadow's centre, with the recorded camera removed), and a bar across the
+  line at takeoff and landing.
+- **Speed** is horizontal units per frame on one scale in every level: 0
+  grey #6E6E6E, 32 (full run) #38D45E, 48 (dive and long-jump cap) #9BF0A8, 64
+  and faster white.
+- **Chevrons** are Lethal Lava Land's, from the cartridge
+  ([ghost_annotation_assets.h](../plugin/gfxwrap/ghost_annotation_assets.h)
+  `chevron_texture`): the fire bank's MIO0 at ROM 0x31E1D0, its RGBA16 texture
+  at 0xB800, columns 12-19 and rows 1-8, its pixels blue above 3, its tones as
+  brightness under the speed tint. Its 2048 bytes must match their FNV-1a
+  (the US and Usamune ROMs agree); otherwise the ribbon is plain. One 8-row
+  cell per `path_spacing_ms` of recorded time, so their length shows speed,
+  the V's tip leading.
+- **Button presses** (`path_buttons`, off by default): at each press edge of
+  A, B, Z, R and the C buttons, Usamune's 16x16 icon 60 units above that
+  frame's root, 12 pixels of a 320x240 picture at any distance, presses of one
+  frame side by side across the line on screen in Usamune's table order.
+  Frames without a known pad mark nothing.
+- **`path_source` average**: the mean of every playing ghost at the same
+  elapsed frame (each ghost's alignment applied), only where every one is
+  within 200 units of the fastest in its scene; the fastest's own point
+  elsewhere.
+- **Depth.** The shader compares against the frame's copied terrain depth,
+  like every ghost part, so both depth routes draw it: a first pass draws what
+  the terrain does not hide, with the shadow's decal offset; a second the rest
+  at 20%, so a line around a corner stays one line. Live Mario's depth is in
+  that copy, so the path behind him is the faint part. A stencil bit per
+  layer lets each cover a pixel once where its quads overlap. Within 60-150
+  units of the camera it fades out. Drawn after the shadows, under every
+  body, into the private display only.
+
+Budget: the window holds at most 400 records (10 s ahead, its fade and 1 s
+behind at 30 Hz is 391); each record is read once and kept in a 512-entry
+cache while the window passes it; the mesh (at most 7,584 vertices) and its
+GPU buffer are preallocated. Nothing is allocated per frame. Measured
+2026-10-03 in the [pipeline](../tests/test_ghost_pipeline.py) (one ghost on
+a 12 s recording, 151 points, RTX 5090, 1600x1200): playback's choice
+68 -> 73 us at p50, the compositor batch 110 -> 144 us (draw 37 -> 67 us),
+the frame through GPU completion 0.275 -> 0.324 ms; no driver queries either
+way. Witnesses: [the CPU witness](../tests/native/ghost_path_host.cpp)
+(selection, mesh, nothing allocated), [the playback
+witness](../tests/native/ghost_playback_host.cpp) (anchoring through real
+playback, hidden ghosts, the average, the switches), and [the GPU
+witness](../tests/native/ghost_path_gl_host.cpp) through the real compositor
+(behind a wall at 20%, one blend a layer, icon size, and with
+`SM64_GHOST_ROM` the drawn chevron against `tests/test_ghost_path.py`'s own
+decode of the cartridge).
 
 ### Translucent world layer (water over the ghost)
 
