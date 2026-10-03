@@ -4,13 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { pollJSON } from "../pollstate.js";
-import { clipClock, stepGameFrame, jumpToStart, attemptStartTime } from "../frame.js";
-import { watchVideoPicture } from "../videopicture.js";
+import { clipClock, stepGameFrame, jumpToStart, attemptStartTime, slotAtTime, timeOfSlot } from "../frame.js";
+import { presentedVideoTime, watchVideoPicture } from "../videopicture.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { watchReplayKeys } from "../replaykeys.js";
 import { stopShuttle } from "../replayshuttle.js";
 import { playReview } from "../reviewcommands.js";
-import { pauseReviewSource } from "../reviewsource.js";
+import { pauseReviewSource, seekReviewSource } from "../reviewsource.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
@@ -119,6 +119,75 @@ function useNativeReplayState(attemptId, onView, onUnavailable) {
   return { state, savedPath, setSavedPath };
 }
 
+// "Show ghosts" plays the ghost copy: a second recording of the attempt with
+// the ghosts drawn in. The server offers it only on the clean recording's
+// exact picture times, so one clip clock, frame map and set of loop marks
+// serve both, and swapping keeps the viewer's place. The choice is remembered
+// for the next replay that has a copy.
+const SHOW_GHOSTS_KEY = "sm64.replayShowGhosts";
+const GHOST_COPY_FAILED = "The ghost copy could not be played";
+
+function storedShowGhosts() {
+  try { return localStorage.getItem(SHOW_GHOSTS_KEY) === "1"; } catch { return false; }
+}
+
+function rememberShowGhosts(on) {
+  try { localStorage.setItem(SHOW_GHOSTS_KEY, on ? "1" : "0"); } catch { /* storage unavailable */ }
+}
+
+// Read before the source changes. Paused, the place is the picture on screen:
+// the middle of its slot, which the other copy shows too. The presented time
+// is microsecond-rounded and frame_times are rounded to 6 places, so it is
+// nudged forward less than the closest two pictures ever sit (1/90000 s).
+// Playing, the place is the playhead.
+export function placeOf(video, clock) {
+  const presented = presentedVideoTime(video);
+  const onPicture = video.paused && presented != null && clock?.times?.length;
+  return { time: onPicture ? timeOfSlot(slotAtTime(presented + 2e-6, clock), clock) : video.currentTime || 0,
+           paused: video.paused, rate: video.playbackRate };
+}
+
+// A new source loads paused, at its start, at the default speed.
+function restorePlace(video, place) {
+  video.playbackRate = place.rate;
+  seekReviewSource(video, place.time);
+  if (!place.paused) video.play().catch(() => {});
+}
+
+function useGhostCopy(videoEl, state) {
+  const offered = state.ghost_copy_url || null;
+  const [wanted, setWanted] = useState(storedShowGhosts);
+  const [failedUrl, setFailedUrl] = useState(null);
+  const pending = useRef(null);
+  useEffect(() => () => pending.current?.cancel(), []);
+  const failed = !!offered && failedUrl === offered;
+  const shown = !!offered && wanted && !failed;
+  // One place per swap: a second change while the first source is still
+  // loading keeps the first place, not the loading element's zero.
+  function keepPlace() {
+    const video = videoEl.current;
+    if (!video || pending.current || video.readyState < 1) return;
+    const place = placeOf(video, clipClock(state));
+    stopShuttle(video);
+    const restore = () => { pending.current = null; restorePlace(video, place); };
+    video.addEventListener("loadedmetadata", restore, { once: true });
+    pending.current = { cancel: () => video.removeEventListener("loadedmetadata", restore) };
+  }
+  function toggle() {
+    keepPlace();
+    rememberShowGhosts(!shown);
+    setWanted(!shown);
+  }
+  // A copy that cannot play falls back to the clean recording, in place.
+  function sourceFailed() {
+    if (!shown) return;
+    keepPlace();
+    setFailedUrl(offered);
+  }
+  return { src: shown ? offered : state.clip_url, failed, sourceFailed,
+           control: offered ? { shown, toggle, unavailable: failed ? GHOST_COPY_FAILED : null } : null };
+}
+
 function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, onView,
     reviewState, onReviewState, beforeSave }) {
   const { state, savedPath, setSavedPath } = useNativeReplayState(attemptId, onView, onUnavailable);
@@ -175,6 +244,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
   }
 
   const { step, stepHold, toStart } = useReplayStepping(videoEl, state);
+  const ghosts = useGhostCopy(videoEl, state);
 
   function togglePlay() {
     const v = videoEl.current;
@@ -207,14 +277,16 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
       ${state.source === "saved" && html`<span class="replay-notice">
         <${Icon} name="save" size=${14} /> Playing saved replay
       </span>`}
+      ${ghosts.failed && html`<span class="replay-notice warning">${GHOST_COPY_FAILED}</span>`}
     </div>
-    <video preload="auto" src=${state.clip_url} aria-label="Attempt recording" tabindex="0"
+    <video preload="auto" src=${ghosts.src} aria-label="Attempt recording" tabindex="0"
            onclick=${togglePlay}
            onplay=${() => setPlaying(true)}
            onpause=${() => setPlaying(false)}
+           onerror=${ghosts.sourceFailed}
            ref=${attachVideoEl}></video>
     <${ReplayTransport} playing=${playing} onStart=${toStart} onStep=${step}
-      video=${mediaVideo} clock=${clipClock(state)}
+      video=${mediaVideo} clock=${clipClock(state)} ghosts=${ghosts.control}
       loop=${reviewState === undefined ? undefined : reviewState?.loop ?? null}
       reviewReady=${reviewState !== null}
       onLoopChange=${onReviewState ? loop => onReviewState({ loop }) : undefined}
