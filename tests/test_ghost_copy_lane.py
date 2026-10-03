@@ -415,10 +415,16 @@ def test_a_codec_refusal_ends_the_lane_without_retry():
     assert not t.log  # never requested, so never released
 
 
-def test_a_producer_stop_names_its_reason():
+@pytest.mark.parametrize("reason,text", [
+    # Contract A1: raw GD codes, only ever in the twin status.
+    (10023, "ghost copy snapshot failed"), (10024, "ghost copy texture import failed"),
+    (10025, "ghost copy bridge failed"), (10026, "ghost copy key abandoned"),
+    (10027, "capture layer predates ghost copies"), (10009, "channel failed"),
+])
+def test_a_producer_stop_names_its_reason(reason, text):
     t = started()
-    t.channel.set(G.TWIN_STOPPED, reason=10025)
-    with pytest.raises(RuntimeError, match="ghost copy bridge failed"):
+    t.channel.set(G.TWIN_STOPPED, reason=reason)
+    with pytest.raises(RuntimeError, match=f"stopped the ghost copy: {text}$"):
         drive(t, 1)
 
 

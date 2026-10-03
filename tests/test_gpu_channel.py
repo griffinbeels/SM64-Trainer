@@ -1007,6 +1007,9 @@ def test_twin_client_requests_lanes_and_reads_status():
     with TwinProducer() as p, p.client() as client:
         assert client.twin_texture_names == p.TWINS
         assert client.twin_status() == G.TwinStatus(G.TWIN_OFF, 0, 0, 0, 0, 0)
+        p.status(G.TWIN_OFF, 0)  # contract A2: the producer's initial twin status
+        assert p.word(p.twin(G.TWIN_STATUS)) == 2
+        assert client.twin_status() == G.TwinStatus(G.TWIN_OFF, 0, 0, 0, 0, 0)
         client.twin_request(1)
         wire = p.read(p.twin(G.TWIN_CLIENT), G.TwinClientWire)
         assert (wire.seq, wire.state, wire.lane, wire.nonce_lo, wire.nonce_hi,

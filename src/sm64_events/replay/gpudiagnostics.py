@@ -24,6 +24,7 @@ _DELIVERY = dict(enumerate((
     # channel's terminal reason.
     "ghost copy snapshot failed", "ghost copy texture import failed",
     "ghost copy bridge failed", "ghost copy key abandoned",
+    "capture layer predates ghost copies",
 ), 10000))
 
 
