@@ -254,6 +254,18 @@ struct Session {
         applied_command=command;applied_request.owner_suspended=1;
         return true;
     }
+    /* A kept command's path belongs to the clip it names. While a request for
+     * another ghost's path loads (his star swap, 2026-10-03: "the OLD GHOST'S
+     * PATH was still there"), the old set keeps drawing with its path off; the
+     * new set's command brings the new path the moment it applies. */
+    void withhold_path(const gipc_request &r) {
+        if (!applied || !applied_command.path_enabled || playback_revision == UINT64_MAX) return;
+        const auto *shown = applied_command.clips[applied_command.path_clip].clip_id;
+        if (r.play_enabled && r.path_enabled && r.path_clip < r.clip_count
+                && !std::memcmp(shown, r.clips[r.path_clip].clip_id, 16)) return;
+        auto command = applied_command; command.revision = ++playback_revision; command.path_enabled = 0;
+        if (play->configure(&command) == GP_OK) applied_command = command;
+    }
     bool keep_applied(const gipc_request &r) const {
         if(!applied)return false;
         if(same_controls(r,applied_request))return true;
@@ -401,6 +413,7 @@ struct Session {
             // Only a new clip is read. Unchanged clips keep drawing under an
             // applied command with the same controls; a new ROM rebuilds all.
             if (!keep_applied(r)) withdraw();
+            else withhold_path(r);
             if (!same_rom(r, loaded)) {
                 if (rom_ready) { play->revoke(GP_PREPARING); applied = 0; forget_prepared(); rom_ready = false; }
                 recovery.clear(); have_origin = false;
@@ -440,8 +453,10 @@ struct Session {
                 if (result != GP_OK && (clip == GP_OK || result == GP_INVALID)) clip = result;
             }
             // The old command may keep drawing only while it means the same thing.
-            if ((model != GP_OK || clip != GP_OK) && applied != r.revision
-                    && !keep_applied(r)) withdraw();
+            if ((model != GP_OK || clip != GP_OK) && applied != r.revision) {
+                if (!keep_applied(r)) withdraw();
+                else withhold_path(r);
+            }
             if (model == GP_OK && clip == GP_OK) {
                 if (applied != r.revision) {
                     gp_request command{};

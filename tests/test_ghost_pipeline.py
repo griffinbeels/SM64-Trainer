@@ -204,7 +204,8 @@ def assert_path_cost(path):
     same frames with it off and on (playback's choice, the compositor's stages,
     the frame through GPU completion). It asks the driver nothing either way."""
     print(json.dumps({"path": path}))
-    assert path["points"] > 100 and path["pixels"] > 1000
+    # The host asks for 1.5 s ahead; live Mario at the start: that and its 1 s fade at 30 Hz.
+    assert path["points"] >= (1500 + 1000) * 30 // 1000 and path["pixels"] > 1000
     for side in ("off", "on"):
         queries = path[side]["stages"]["driver_queries"]
         assert queries["p50"] == queries["max"] == RESIDUE_QUERIES, (side, queries)

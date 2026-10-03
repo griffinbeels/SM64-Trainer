@@ -86,8 +86,10 @@ DEFAULT_PATH_SOURCE = "fastest"
 #: sit (seconds). Shipped preferences, his to move. The renderer's own bounds
 #: (ghost_tuning.h GP_PATH_*) cap each range; the arrow spacing and strength
 #: offer a floor above the renderer's, so the control never reaches an
-#: unreadable path.
-DEFAULT_PATH_TUNING = {"ahead_s": 3.0, "width": 40.0, "opacity": 0.85, "spacing_s": 0.1}
+#: unreadable path. 1.5 s ahead (was 3), his ask of 2026-10-03: "progressively
+#: disclose the path as we're going along it, so that we have just enough to
+#: know where we're going / what's coming up".
+DEFAULT_PATH_TUNING = {"ahead_s": 1.5, "width": 40.0, "opacity": 0.85, "spacing_s": 0.1}
 PATH_TUNING_LIMITS = {
     "ahead_s": {"min": PATH_AHEAD_MS_MIN / 1000, "max": PATH_AHEAD_MS_MAX / 1000, "step": 0.5},
     "width": {"min": PATH_WIDTH_MIN, "max": PATH_WIDTH_MAX, "step": 5},

@@ -2,7 +2,7 @@
  * Mario (his ask, 2026-10-03: "iRacing style path markers on the ground ...
  * if he's in the air, it matches his air position"). CPU only: no GL, heap,
  * threads or waits; every array is fixed. Playback picks the window from one
- * clip (Recorded, average, locate, window); the compositor turns a Frame into
+ * clip (Recorded, average, follow, glide, window); the compositor turns a Frame into
  * a Mesh (build) and draws it (ghost_path_gl.h). Tuning: ghost_tuning.h. */
 #pragma once
 #include "ghost_capture.h"
@@ -124,10 +124,12 @@ inline bool average(Recorded& fastest,const Recorded* others,uint32_t count) {
     return true;
 }
 
-// Live Mario's place on the path: a record index of the path clip.
-struct Anchor {
+// Live Mario's progress along the path: a record of the path clip that only
+// moves forward, and where the drawn window is (gliding to that record).
+struct Progress {
     bool known=false;uint32_t record=0;
-    int16_t level=0,area=0; // the live scene of the last match or whole-clip search
+    double shown=0;      // the window's anchor in the clip's frames; glides to record's coordinate
+    uint32_t stalled=0;  // lists since the path ahead last came within the capture of live Mario
 };
 /* Track: the path clip as playback sees it.
  *   uint32_t size() const;                       its records
@@ -135,48 +137,67 @@ struct Anchor {
  *   bool where(uint32_t,int16_t level,int16_t area,float out[3]) const;
  *                                                a posed record's root in that live scene, or false
  *   const Recorded& at(uint32_t);                the record as drawn (averaged when asked)
- * locate moves the anchor to the record nearest live Mario, searching
- * GP_PATH_SEARCH_BACK_FRAMES back and GP_PATH_SEARCH_AHEAD_FRAMES ahead of
- * the last match. A new anchor starts at hint (the ghost's own record), or
- * with no hint, and whenever live Mario enters a scene the window lacks,
- * searches the whole clip once. Returns whether it matched this frame. */
-// Equally near records (a path over its own earlier pass): the one nearest
-// the last match in the clip wins.
-template<class Track> bool nearest(const Track& track,uint32_t first,uint32_t last,const float live[3],
-                                   int16_t level,int16_t area,uint32_t from,uint32_t& best) {
-    float closest=INFINITY;bool found=false;
-    const auto apart_from=[from](uint32_t i) {return i>from?i-from:from-i;};
-    for(uint32_t i=first;i<=last;++i) {
-        float at[3];
-        if(!track.where(i,level,area,at))continue;
-        float apart[3];for(unsigned r=0;r<3;++r)apart[r]=at[r]-live[r];
-        const float d=dot3(apart,apart);
-        if(d<closest || (found && d==closest && apart_from(i)<apart_from(best))) {closest=d;best=i;found=true;}
-    }
-    return found;
+ * Whether live Mario is on the path at record i: within GP_PATH_CAPTURE of
+ * it, height counting half (a jump a little higher or lower than the ghost's
+ * is still its path). d: the weighted distance squared. */
+template<class Track> bool on_path(const Track& track,uint32_t i,const float live[3],int16_t level,int16_t area,float& d) {
+    float at[3];
+    if(!track.where(i,level,area,at))return false;
+    const float x=at[0]-live[0],y=(at[1]-live[1])*0.5f,z=at[2]-live[2];
+    d=x*x+y*y+z*z;
+    return d<=GP_PATH_CAPTURE*GP_PATH_CAPTURE;
 }
-template<class Track> bool locate(const Track& track,const float live[3],int16_t level,int16_t area,
-                                  Anchor& anchor,bool hinted,uint32_t hint) {
+// The first run of records on the path near live Mario, from record first to
+// coordinate until: its nearest record. A later pass of the same place lies
+// past records off his capture, so it is never this run.
+template<class Track> bool first_run(const Track& track,uint32_t first,uint64_t until,const float live[3],
+                                     int16_t level,int16_t area,uint32_t& best) {
+    const uint32_t n=track.size();
+    bool run=false;float closest=INFINITY;
+    for(uint32_t i=first;i<n && track.coordinate(i)<=until;++i) {
+        float d=0;
+        if(on_path(track,i,live,level,area,d)) {run=true;if(d<closest) {closest=d;best=i;}}
+        else if(run)break;
+    }
+    return run;
+}
+/* Moves progress forward to live Mario (GP_PATH_* in ghost_tuning.h). A new
+ * progress starts at hint, the ghost's own record this list, else at the first
+ * run of the clip near him (its first pass), searched again every
+ * GP_PATH_STALL_FRAMES lists until he is on the path. Returns whether he is on
+ * the path this list; off it the progress holds. */
+template<class Track> bool follow(const Track& track,const float live[3],int16_t level,int16_t area,
+                                  Progress& p,bool hinted,uint32_t hint) {
     const uint32_t n=track.size();
     if(!n || !finite3(live))return false;
-    if(anchor.known && anchor.record>=n)anchor={};
-    if(!anchor.known && hinted && hint<n) {anchor.known=true;anchor.record=hint;anchor.level=level;anchor.area=area;}
+    if(p.known && p.record>=n)p={};
     uint32_t best=0;
-    if(anchor.known) {
-        // Bounded in records too: a paused recording repeats its coordinate.
-        constexpr uint32_t reach=4*GP_PATH_SAMPLES;
-        const uint64_t at=track.coordinate(anchor.record);
-        uint32_t first=anchor.record,last=anchor.record;
-        while(first>0 && anchor.record-first<reach && track.coordinate(first-1)+GP_PATH_SEARCH_BACK_FRAMES>=at)--first;
-        while(last+1<n && last-anchor.record<reach && track.coordinate(last+1)<=at+GP_PATH_SEARCH_AHEAD_FRAMES)++last;
-        if(nearest(track,first,last,live,level,area,anchor.record,best)) {
-            anchor.record=best;anchor.level=level;anchor.area=area;return true;
-        }
-        if(anchor.level==level && anchor.area==area)return false;
+    if(!p.known) {
+        bool found=hinted && hint<n;
+        if(found)best=hint;
+        else if(p.stalled++%GP_PATH_STALL_FRAMES==0)found=first_run(track,0,UINT64_MAX,live,level,area,best);
+        if(!found)return false;
+        p.known=true;p.record=best;p.shown=double(track.coordinate(best));p.stalled=0;
     }
-    anchor.level=level;anchor.area=area;
-    if(!nearest(track,0,n-1,live,level,area,anchor.known?anchor.record:0,best))return false;
-    anchor.known=true;anchor.record=best;return true;
+    const uint64_t reach=p.stalled<GP_PATH_STALL_FRAMES?GP_PATH_REACH_FRAMES
+        :GP_PATH_CATCHUP_FRAMES+uint64_t(p.stalled-GP_PATH_STALL_FRAMES)*GP_PATH_CATCHUP_GROWTH;
+    if(first_run(track,p.record,track.coordinate(p.record)+reach,live,level,area,best)) {
+        p.stalled=0;
+        if(best>p.record)p.record=best;
+        return true;
+    }
+    if(p.stalled<UINT32_MAX)++p.stalled;
+    return false;
+}
+// Once a list, the drawn window moves toward the progress: GP_PATH_GLIDE of
+// the way (at most GP_PATH_GLIDE_MAX frames, at least one), never back (a
+// new progress has snapped).
+template<class Track> void glide(const Track& track,Progress& p) {
+    if(!p.known || p.record>=track.size())return;
+    const double goal=double(track.coordinate(p.record));
+    if(!(p.shown<goal)) {p.shown=goal;return;}
+    const double gap=goal-p.shown;
+    p.shown+=std::fmax(std::fmin(gap*GP_PATH_GLIDE,double(GP_PATH_GLIDE_MAX)),std::fmin(gap,1.0));
 }
 
 // One drawn point of the window, in the live scene's world coordinates.
@@ -217,10 +238,16 @@ inline bool valid(const Frame& f) {
     return true;
 }
 // The window's strength dt frames from the anchor: full for ahead_ms, then
-// fading to nothing over GP_PATH_FADE_MS; GP_PATH_BEHIND_ALPHA behind him.
+// fading to nothing over GP_PATH_FADE_MS; GP_PATH_BEHIND_ALPHA behind him,
+// fading out over the last GP_PATH_BEHIND_FADE_MS.
 inline float strength(double dt_frames,uint32_t ahead_ms) {
     const double ms=dt_frames*frame_ms;
-    if(ms<0)return ms>=-double(GP_PATH_BEHIND_MS)-1e-6?GP_PATH_BEHIND_ALPHA:0.0f;
+    if(ms<0) {
+        const double left=ms+double(GP_PATH_BEHIND_MS);
+        if(left<-1e-6)return 0.0f;
+        return left>=double(GP_PATH_BEHIND_FADE_MS)?GP_PATH_BEHIND_ALPHA
+            :float(GP_PATH_BEHIND_ALPHA*std::fmax(left,0.0)/double(GP_PATH_BEHIND_FADE_MS));
+    }
     if(ms<=double(ahead_ms)+1e-6)return 1.0f;
     const double faded=1.0-(ms-double(ahead_ms))/double(GP_PATH_FADE_MS);
     return faded>0?float(faded):0.0f;
@@ -229,15 +256,15 @@ inline float strength(double dt_frames,uint32_t ahead_ms) {
 // one unbroken line: both posed, the same recorded scene, consecutive frames,
 // no warp between (a pending warp that executed, or the clock's own warp,
 // retry or level load). Never smoothed: every point is a recorded frame.
-template<class Track> void window(Track& track,const Anchor& anchor,int16_t level,int16_t area,
+template<class Track> void window(Track& track,const Progress& progress,int16_t level,int16_t area,
                                   uint32_t ahead_ms,Frame& out) {
     out.count=0;
     const uint32_t n=track.size();
-    if(!anchor.known || anchor.record>=n)return;
-    const uint64_t at=track.coordinate(anchor.record);
-    const uint64_t behind=uint64_t(GP_PATH_BEHIND_MS)*30u/1000u,ahead=uint64_t(ahead_ms+GP_PATH_FADE_MS)*30u/1000u;
-    uint32_t first=anchor.record;
-    while(first>0 && anchor.record-first<samples/2 && track.coordinate(first-1)+behind>=at)--first;
+    if(!progress.known || progress.record>=n)return;
+    const double at=progress.shown;
+    const double behind=double(GP_PATH_BEHIND_MS)/frame_ms,ahead=double(ahead_ms+GP_PATH_FADE_MS)/frame_ms;
+    uint32_t first=progress.record;
+    while(first>0 && progress.record-first<samples/2 && double(track.coordinate(first-1))>=at-behind-1e-9)--first;
     Recorded previous{};bool have_previous=false;
     if(first>0) {previous=track.at(first-1);have_previous=true;}
     bool previous_drawable=false;
@@ -246,7 +273,7 @@ template<class Track> void window(Track& track,const Anchor& anchor,int16_t leve
         && ghost_scene::translation(previous.level,previous.area,level,area,shift);
     for(uint32_t i=first;i<n && out.count<samples;++i) {
         const Recorded& r=track.at(i);
-        if(r.coordinate>at+ahead)break;
+        if(double(r.coordinate)>at+ahead+1e-9)break;
         float dx=0;
         const bool drawable=r.posed && ghost_scene::translation(r.level,r.area,level,area,dx);
         if(drawable) {
@@ -256,7 +283,7 @@ template<class Track> void window(Track& track,const Anchor& anchor,int16_t leve
                 std::memcpy(p.normal,r.normal,sizeof(p.normal));}
             else {std::memcpy(p.floor,p.position,sizeof(p.floor));p.normal[0]=p.normal[2]=0;p.normal[1]=1;}
             p.coordinate=r.coordinate;
-            p.alpha=strength(double(int64_t(r.coordinate-at)),ahead_ms);
+            p.alpha=strength(double(r.coordinate)-at,ahead_ms);
             p.speed=0;p.pressed=0;p.reserved=0;
             p.flags=uint8_t((r.air?air:0)|(r.shadowed?shadowed:0)|(r.padded?padded:0));
             // Joined only to a point of this window (the record before the
@@ -476,32 +503,38 @@ inline void build(const Frame& f,Mesh& mesh) {
         }
     }
     mesh.count[marks]=mesh.total-mesh.first[marks];
-    // Button presses: an icon per pressed button, in table order, centred
-    // across the line's direction on the finished picture.
+    // Button presses: an icon per pressed button, in table order, side by
+    // side across the line's direction on the finished picture. Each is
+    // GP_PATH_BUTTON_SIZE world units tall, shrinking with distance like the
+    // names, and never taller than GP_PATH_BUTTON_MAX_SCREEN pixels of 240.
+    // Picture units: 1/120 of the picture's height, the same length across.
     mesh.first[icons]=mesh.total;
     uint32_t drawn=0;
     const float* m=f.view_projection;
-    auto project=[&](const float q[3],float out[2])->bool {
+    const float px=std::sqrt(m[0]*m[0]+m[4]*m[4]+m[8]*m[8]),py=std::sqrt(m[1]*m[1]+m[5]*m[5]+m[9]*m[9]);
+    auto project=[&](const float q[3],float out[3])->bool {
         float c[4];for(unsigned r=0;r<4;++r)c[r]=m[r]*q[0]+m[4+r]*q[1]+m[8+r]*q[2]+m[12+r];
         if(!(c[3]>1e-3f))return false;
-        out[0]=c[0]/c[3];out[1]=c[1]/c[3];return true;
+        out[0]=c[0]/c[3];out[1]=c[1]/c[3];out[2]=c[3];return true;
     };
-    for(uint32_t i=0;f.buttons && f.icons && i<f.count;++i) {
+    for(uint32_t i=0;f.buttons && f.icons && px>0 && py>0 && i<f.count;++i) {
         const auto& p=f.points[i];
         if(!p.pressed || !(p.alpha>0))continue;
         float anchor[3]={p.position[0],p.position[1]+GP_PATH_BUTTON_HEIGHT,p.position[2]};
-        float here[2],there[2],row[2]={1,0};
+        float here[3],there[3],row[2]={1,0};
         float ahead[3];for(unsigned r=0;r<3;++r)ahead[r]=p.position[r]+mesh.along[i][r]*50.0f;
         ahead[1]+=GP_PATH_BUTTON_HEIGHT;
-        if(project(anchor,here) && project(ahead,there)) {
-            // In 320x240 pixels, then a quarter turn: across the direction of travel.
-            const float dx=(there[0]-here[0])*160.0f,dy=(there[1]-here[1])*120.0f;
+        if(!project(anchor,here))continue;
+        if(project(ahead,there)) {
+            // A quarter turn from the line's direction: across it.
+            const float dx=(there[0]-here[0])*120.0f*py/px,dy=(there[1]-here[1])*120.0f;
             const float n=std::sqrt(dx*dx+dy*dy);
             if(n>1e-3f) {row[0]=-dy/n;row[1]=dx/n;}
             if(row[0]<0 || (row[0]==0 && row[1]<0)) {row[0]=-row[0];row[1]=-row[1];}
         }
+        const float height=std::fmin(GP_PATH_BUTTON_SIZE*py/here[2]*120.0f,GP_PATH_BUTTON_MAX_SCREEN);
         unsigned pressed=0;for(auto mask:buttons)pressed+=(p.pressed&mask)!=0;
-        const float pitch=GP_PATH_BUTTON_PIXELS+1.0f,size=GP_PATH_BUTTON_PIXELS*0.5f;
+        const float pitch=height*13.0f/12.0f,side=height*0.5f;
         unsigned k=0;
         for(unsigned b=0;b<8;++b) {
             if(!(p.pressed&buttons[b]))continue;
@@ -512,11 +545,11 @@ inline void build(const Frame& f,Mesh& mesh) {
             using namespace ghost_annotation;
             const float u0=float(table[b]*16)/atlas_width,u1=float(table[b]*16+16)/atlas_width;
             const float v_top=cell::button_y/atlas_height,v_bottom=(cell::button_y+16)/atlas_height;
-            const float corner[4][4]={{-size,-size,u0,v_bottom},{size,-size,u1,v_bottom},{-size,size,u0,v_top},{size,size,u1,v_top}};
+            const float corner[4][4]={{-side,-side,u0,v_bottom},{side,-side,u1,v_bottom},{-side,side,u0,v_top},{side,side,u1,v_top}};
             constexpr unsigned order[6]={0,1,2,2,1,3};
             for(unsigned o:order) {
                 const auto& c=corner[o];
-                w.vertex(anchor,c[2],c[3],white,p.alpha,icon,(cx+c[0])/160.0f,(cy+c[1])/120.0f);
+                w.vertex(anchor,c[2],c[3],white,p.alpha,icon,(cx+c[0])/120.0f*px/py,(cy+c[1])/120.0f);
             }
             ++drawn;
         }
