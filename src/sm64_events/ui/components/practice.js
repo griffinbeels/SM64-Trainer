@@ -11,7 +11,8 @@ import { useTargetPicker } from "./targetpicker.js";
 import { PageState } from "./states.js";
 import { entityKey, sectionClock } from "../entitysection.js";
 import { EntityAnalysis, EntityDrawer } from "./entitydetail.js";
-import { comparator, useGraphPick, SORT_OPTIONS, attemptHiddenByDefault } from "./attemptlog.js";
+import { comparator, useGraphPick, SORT_OPTIONS, attemptHiddenByDefault,
+         attemptMatchesLogFilters } from "./attemptlog.js";
 import { liveSnapshot, resolveFocus, newestJournalId } from "../focustarget.js";
 import { orderedSections, playedEntityKeys, PracticeLog } from "./practicelog.js";
 import { practiceSuccessSnapshot, usePracticeScroll } from "../practicescroll.js";
@@ -53,16 +54,22 @@ function useFreshAttemptIds(t) {
   return freshIds;
 }
 
-function usePracticeLogPreferences(initialSort) {
+export function usePracticeLogPreferences(initialSort) {
   const [sort, setSortState] = useState(initialSort);
   const [hideResets, setHideResetsState] = useState(
-    localStorage.getItem("sm64.hideResets") === "1");
+    () => localStorage.getItem("sm64.hideResets") === "1");
+  const [hideSavestates, setHideSavestatesState] = useState(
+    () => localStorage.getItem("sm64.hideSavestates") !== "0");
   return {
-    sort, hideResets,
+    sort, hideResets, hideSavestates,
     setSort: (v) => { localStorage.setItem("sm64.sort", v); setSortState(v); },
     setHideResets: (v) => {
       localStorage.setItem("sm64.hideResets", v ? "1" : "0");
       setHideResetsState(v);
+    },
+    setHideSavestates: (v) => {
+      localStorage.setItem("sm64.hideSavestates", v ? "1" : "0");
+      setHideSavestatesState(v);
     },
   };
 }
@@ -355,16 +362,15 @@ export function Practice({ t, openCompare, openLibrary }) {
   // `live.activeKey` needs no freeze of its own -- it already derives from
   // `frozen.stage`/`frozen.target`, so it cannot move mid-celebration either.
   // The rows useGraphPick checks membership against -- the same default
-  // filter every log card applies (including save-state practice, resets per the
-  // shared toggle). Computed here, at page level, because the trend graph
+  // filter every log card applies, including both visibility preferences.
+  // Computed here, at page level, because the trend graph
   // (EntityAnalysis) and the card a pick reveals a row in (a LogCard, in the
   // practice log below) are separate components now; useGraphPick used to
   // live inside the one card that drew both.
   const focusedRows = focusedSec
     ? focusedSec.attempts
         .filter((a) => !attemptHiddenByDefault(a))
-        .filter((a) => !(ui.hideResets
-          && (a.outcome === "reset" || a.outcome === "hard_reset" || a.outcome === "loaded")))
+        .filter((a) => attemptMatchesLogFilters(a, ui))
         .slice()
         .sort(comparator(ui.sort, sectionClock(focusedSec, t.clock)))
     : [];
