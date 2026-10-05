@@ -302,10 +302,10 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
 
 EXPORT void CALL ProcessDList(void) {
     if (!g_practice_rom) { if (g_wrapped.ProcessDList) g_wrapped.ProcessDList(); return; }
-    /* The only witness on the thread that matters: two QPC reads per
-     * call (~50 ns) and a bounded off-thread log. The adapter wraps the
-     * original call, so total_ms here includes the stamp copy. */
-    int64_t begin = qpc_now();
+    /* Producer timing covers every completed callback, independent of
+     * recording retention or polling. The adapter wraps the original call,
+     * so the duration includes stamp copying; formatting runs off-thread. */
+    int64_t begin = callback_diagnostic_begin(&g_diagnostic_list);
     if (g_runtime_ready) sa_process_dlist();
     else if (g_wrapped.ProcessDList) g_wrapped.ProcessDList();
     callback_diagnostic_end(&g_diagnostic_list, begin, qpc_now());
@@ -313,7 +313,7 @@ EXPORT void CALL ProcessDList(void) {
 
 EXPORT void CALL UpdateScreen(void) {
     if (!g_practice_rom) { if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen(); return; }
-    int64_t begin = qpc_now();
+    int64_t begin = callback_diagnostic_begin(&g_diagnostic_update);
     if (g_runtime_ready) sa_update_screen();
     else if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen();
     int64_t end = qpc_now();
@@ -362,7 +362,7 @@ EXPORT void CALL CloseDLL(void) {
 
 EXPORT void CALL ProcessRDPList(void) {
     if (!g_practice_rom) { if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList(); return; }
-    int64_t begin = qpc_now();
+    int64_t begin = callback_diagnostic_begin(&g_diagnostic_rdp);
     if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList();
     callback_diagnostic_end(&g_diagnostic_rdp, begin, qpc_now());
 }
