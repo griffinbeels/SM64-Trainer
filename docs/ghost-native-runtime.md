@@ -1272,16 +1272,26 @@ list). Per list, from `gs_hook_cost` in
 
 | Number | What it covers |
 |---|---|
-| hooks | Time inside the timed hooks: list begin, the per-draw hooks, the seal, list end. Its definition predates the stages, so older lines compare. It includes the renderer flush. |
-| renderer flush | GLideN64's deferred triangles and rectangles, flushed at the seal: the renderer's own work, moved earlier, not the ghost's. |
+| hooks | Time inside the timed hooks: list begin, the per-draw hooks, the seal, list end. It includes the seal's renderer flush; the staged list-end flush precedes the timed end hook and is excluded. |
+| renderer flush | GLideN64's deferred triangles and rectangles, flushed at the seal only when a ghost draw is planned. Playback-off pose capture keeps normal renderer batching. |
 | gateway open, close | The capture gateway's glGetError before the seal, and once when the list's ghost GL ends (the batch and every HUD mirror; at list end, inside hooks, or at a cancel). Under threaded optimization each waits for everything queued before it: the open for the renderer's world pass, the close for the batch and the HUD. |
 | batch | The compositor's begin_batch: validate (every pose and vertex), state (the renderer state it will restore: known values plus the residue), copy (clean color and depth), draw (shadows, uploads, bodies, particles; also the slowest single ghost), restore. |
 | finalize | Closing the ghost branch at list end. |
-| whole list | ProcessDList, begin to end, the renderer's own work included. |
+| whole list | Staged renderer list begin to end, including the renderer and extra list-end flush. Wrapper callback timing additionally includes stamp-adapter/runtime work. |
 | HUD mirror | Each HUD draw mirrored into the ghost's display, the duplicate draw included; it reads no error of its own. Not part of hooks. |
 | layer passes | Translucent-layer (water) mirrors, two per surface; none on a list whose plan chose no ghost. |
 | driver queries | Every query the ghost code made in the list, and the time inside them. |
 | gateway error reads | glGetError calls around ghost GL: 2 per drawn list plus 2 per mirrored surface (was 2, plus 2 per HUD draw, plus 4 per surface). |
+
+These sampled hook reports cannot certify uninterrupted gameplay: the pump
+may miss list serials and the recording retains selected/coalesced pictures.
+Native `callback_pacing` reports producer duration and entry-gap distributions
+for every completed callback, independently of playback, recording and polling.
+They identify PID/thread/build, QPC frequency, reset generation, invalid samples,
+snapshot contention and lost legacy log records. `callback_progress` separately
+reports unfinished/no-new-callback age. Neither is a physical monitor clock.
+Normal 30 Hz lists and 60 Hz VI callbacks are distinct valid cadences. Holds,
+loading and resets require game-state correlation rather than a fixed stutter label.
 
 ### Recorded shadow
 
@@ -1822,8 +1832,10 @@ Windows' own mixer and output delay.
 
 [ghost_presentation.cpp](../plugin/gfxwrap/ghost_presentation.cpp) preserves the
 clean drawable, applies the renderer's VI mapping/gamma to the display branch,
-and mirrors qualifying OSD into clean recording. SourceV3 publishes an explicit
-clean-VI descriptor bound to update occurrence, context/drawable/resource
+and mirrors qualifying OSD into clean recording only after a ghost replacement.
+An unmodified successful swap requires no duplicate clean copy or OSD mirror;
+SourceV3 names the actual default front. A modified picture names its private
+clean-VI descriptor, bound to update occurrence, context/drawable/resource
 generations and successful presentation serial. SourceV2's front-buffer contract
 is not relabeled. No negotiated clean consumer means no native ghost display.
 Clean/failed swaps and context loss clear visible telemetry; a generated mesh
@@ -1855,9 +1867,11 @@ Sound follows the same split: the ghost copy alone carries the ghost sound
 
 SourceV4's `query_display` names that surface for a ticket, inside its capture
 callback: `DISPLAY_VI` carries the clean descriptor's geometry and identity with the
-display surface's framebuffer and generation; `SAME_AS_CLEAN` means no ghost was copied
-that update (the twin records the clean picture); `UNAVAILABLE` means the consumer is
-off. The delivery's twin lane records it through a second helper
+display surface's framebuffer and generation; `SAME_AS_CLEAN` requires a qualified
+unmodified default front (the twin records the clean picture). A private clean
+picture without an exact qualified display copy is `UNAVAILABLE`, even if no
+copy completed. Absence is not proof of equal pixels. Consumer-off, no-new-swap
+and revoked sources are also unavailable. The delivery's twin lane records it through a second helper
 ([replay-gpu-runtime.md, "The ghost copy"](replay-gpu-runtime.md#the-ghost-copy)).
 Cost: one extra copy of BACK only on frames that drew a ghost, plus the twin's snapshot
 and bridge copies; nothing at all while the switch is off. The choice applies to what

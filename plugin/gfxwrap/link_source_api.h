@@ -48,8 +48,9 @@ typedef struct {
  * (renderer thread, inside that ticket's capture callback) and writes a
  * version-4 descriptor: DISPLAY_VI (the clean descriptor's geometry and
  * identity, the display surface's framebuffer and resource generation),
- * SAME_AS_CLEAN (no ghost copied this update; only bytes, version, kind and
- * update_occurrence) or UNAVAILABLE (the consumer is off). It returns 0 only
+ * SAME_AS_CLEAN (a qualified unmodified DEFAULT_FRONT; only bytes, version,
+ * kind and update_occurrence) or UNAVAILABLE (consumer off or no qualified
+ * display evidence for a private CLEAN_VI). It returns 0 only
  * for a ticket the V3 query refuses. display_consumer gates every display
  * copy; nothing is allocated or copied while it is off. */
 typedef struct {
