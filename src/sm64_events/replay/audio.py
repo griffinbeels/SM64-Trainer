@@ -46,53 +46,9 @@ import numpy as np
 
 from sm64_events.replay._system_audio import AudioPump
 from sm64_events.replay.audiostop import stop_process_tap
+from sm64_events.replay.audioendpoint import device_name_hosting_pid
 
 log = logging.getLogger("sm64.replay")
-
-
-def device_name_hosting_pid(pid: int) -> str | None:
-    """FriendlyName of the active render endpoint whose session list contains
-    `pid`, else None. Pure Core Audio enumeration (pycaw/comtypes); the
-    session→device mapping persists even while the app is silent."""
-    try:
-        import comtypes
-        from comtypes import CLSCTX_ALL
-        from pycaw.api.audiopolicy import IAudioSessionControl2, IAudioSessionManager2
-        from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
-        from pycaw.constants import CLSID_MMDeviceEnumerator
-        from pycaw.pycaw import AudioUtilities
-
-        # This scan runs on watchdog/rescan threads that never touched COM —
-        # comtypes only auto-initializes the thread that first IMPORTS it, so
-        # the frozen exe logged 33x "CoInitialize has not been called"
-        # (2026-06-17) and the endpoint fallback silently never engaged.
-        # Deliberately never balanced with CoUninitialize: the threads are
-        # long-lived re-scanners, and uninitializing per call risks releasing
-        # COM wrappers after their apartment is gone.
-        try:
-            comtypes.CoInitialize()
-        except OSError:
-            pass  # already initialized on this thread in another mode — usable
-
-        devenum = comtypes.CoCreateInstance(
-            CLSID_MMDeviceEnumerator, IMMDeviceEnumerator,
-            comtypes.CLSCTX_INPROC_SERVER)
-        coll = devenum.EnumAudioEndpoints(0, 1)  # eRender, DEVICE_STATE_ACTIVE
-        for i in range(coll.GetCount()):
-            dev = coll.Item(i)
-            mgr = dev.Activate(IAudioSessionManager2._iid_, CLSCTX_ALL, None)
-            mgr = mgr.QueryInterface(IAudioSessionManager2)
-            sess_enum = mgr.GetSessionEnumerator()
-            for j in range(sess_enum.GetCount()):
-                ctl2 = sess_enum.GetSession(j).QueryInterface(IAudioSessionControl2)
-                try:
-                    if ctl2.GetProcessId() == pid:
-                        return AudioUtilities.CreateDevice(dev).FriendlyName
-                except Exception:
-                    continue
-    except Exception:
-        log.exception("audio session scan failed")
-    return None
 
 
 def pick_loopback_device(loopback_devices: list[dict], target_name: str | None,
