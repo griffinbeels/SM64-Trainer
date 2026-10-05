@@ -49,6 +49,21 @@ def failure_snapshot(exc, *, frontier, adapter, output):
     """
     result = dict(observed_unix_s=time.time(), frontier=frontier,
                   error=str(exc)[:512])
+    from sm64_events.replay.gpuencoder import EncoderFailure, Result
+    if isinstance(exc, EncoderFailure):
+        code = exc.result
+        result["encoder_failure"] = dict(
+            operation=getattr(exc, "operation", None),
+            # The existing protocol can synthesize STATE/QUARANTINE for
+            # worker/controller faults. Do not call this a native return.
+            result_namespace="encoder_protocol",
+            result=int(code) if isinstance(code, int) else None,
+            result_name=(Result(code).name if isinstance(code, int) and code in Result._value2member_map_ else None),
+            native_status=exc.status,
+            native_status_state="available" if exc.status is not None else "unavailable",
+            worker_disposal_required=exc.worker_disposal_required,
+            status_error=exc.status_error,
+        )
     for name in ("state", "reason"):
         value = getattr(exc, name, None)
         if isinstance(value, int):

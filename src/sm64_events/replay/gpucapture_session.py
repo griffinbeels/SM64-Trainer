@@ -18,7 +18,7 @@ from sm64_events.replay.gpumedia import GpuMedia
 from sm64_events.replay.gpuaudio import GpuAudio
 from sm64_events.replay.gpudiagnostics import CaptureTimings, failure_snapshot
 from sm64_events.replay.encoderstage import staged_encoder_dll
-from sm64_events.replay.gpuencoder import Result
+from sm64_events.replay.gpuencoder import EncoderFailure, Result
 from sm64_events.replay.gpuencoder_abi import CODEC_STREAM_NAMES
 from sm64_events.replay.gpupublication import PublicationError, PublicationWriteError
 from sm64_events.replay.gpumediaworker import MediaWorker
@@ -194,7 +194,23 @@ class CaptureSession:
             raise RuntimeError("encoder bootstrap admission refused")
         while self._continue():
             reply = self.controller.take_result()
+            if reply is None:
+                status = self.controller.status()
+                if status["fault"]:
+                    # Terminal fault publication can race the first queue read.
+                    # Consume its already-validated reply before discarding the
+                    # encoder result/status; never enqueue another Open here.
+                    reply = self.controller.take_result()
+                    if reply is None:
+                        failure = EncoderFailure(
+                            f"{status['fault']}; encoder result=unknown; native status=unavailable",
+                            worker_disposal_required=True,
+                        )
+                        failure.operation = "Open"
+                        raise failure
             if reply is not None:
+                if reply.request_id != request_id:
+                    raise RuntimeError("GPU encoder Open reply request mismatch")
                 if (
                     reply.request_id == request_id
                     and reply.metadata["result"] == Result.CODEC
@@ -216,14 +232,21 @@ class CaptureSession:
                     note_backend_unsupported(luid, reason)
                     raise GpuBackendUnsupported(reason)
                 if (
-                    reply.request_id != request_id
-                    or reply.metadata["result"] != 0
+                    reply.metadata["result"] != 0
                     or reply.metadata["error"]
                     or reply.metadata["worker_disposal_required"]
                 ):
-                    raise RuntimeError(
-                        reply.metadata["error"] or "GPU encoder Open failed"
+                    result = Result(reply.metadata["result"])
+                    status = reply.metadata.get("status")
+                    message = reply.metadata["error"] or "GPU encoder Open failed"
+                    failure = EncoderFailure(
+                        f"{message}; encoder result={int(result)}:{result.name}; "
+                        f"native status={'available' if status is not None else 'unavailable'}",
+                        result=result, status=status,
+                        worker_disposal_required=reply.metadata["worker_disposal_required"],
                     )
+                    failure.operation = "Open"
+                    raise failure
                 self.codec = CODEC_STREAM_NAMES[codec]
                 # Native has names/contexts ready but has captured no pixels yet.
                 # Cold AAC/filter/format preparation must finish before source
@@ -233,9 +256,6 @@ class CaptureSession:
                 self.handoff = self.owner.begin_audio()
                 self.channel.encoder_ready()
                 return command, request_id, reply
-            status = self.controller.status()
-            if status["fault"]:
-                raise RuntimeError(status["fault"])
             if not self._wait(deadline):
                 return None
         return None

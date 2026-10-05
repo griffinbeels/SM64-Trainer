@@ -46,14 +46,16 @@ class EncodedPacket:
 
 
 class EncoderFailure(RuntimeError):
-    def __init__(self, message, *, result=None, status=None):
+    def __init__(self, message, *, result=None, status=None,
+                 worker_disposal_required=False, status_error=None):
         super().__init__(message)
         self.result = result
         self.status = status
+        self.status_error = status_error
         self.worker_disposal_required = result in (
             Result.ABANDONED,
             Result.QUARANTINE,
-        ) or bool(status and status.get("state") == 5)
+        ) or bool(status and status.get("state") == 5) or bool(worker_disposal_required)
 
 
 # No destructor teardown: retain any native session whose Close did not succeed.
@@ -168,14 +170,26 @@ class EncoderClient:
 
     def _raise(self, result, message):
         self.failed = True
-        status = None
+        status, status_error = None, None
+        primary = self.failure or message
         self._uncertain |= result in (Result.QUARANTINE, Result.ABANDONED)
         if self._token.value:
             value = abi.initialize(abi.Status)
-            if self._call("Status", self._token, C.byref(value)) == Result.OK:
-                status = abi.snapshot(value)
-        self.failure = self.failure or message
-        raise EncoderFailure(self.failure, result=result, status=status)
+            try:
+                diagnostic_result = self._call("Status", self._token, C.byref(value))
+                if diagnostic_result == Result.OK:
+                    status = abi.snapshot(value)
+                else:
+                    self._uncertain = True
+                    status_error = f"native Status result={int(diagnostic_result)}:{diagnostic_result.name}"
+            except EncoderFailure as diagnostic_failure:
+                # Optional diagnostics must not replace the original native
+                # result. Its failed query still makes disposal mandatory.
+                self._uncertain = True
+                status_error = str(diagnostic_failure)[:256]
+        self.failure = primary + (f"; native status unavailable: {status_error}" if status_error else "")
+        raise EncoderFailure(self.failure, result=result, status=status,
+                             worker_disposal_required=self._uncertain, status_error=status_error)
 
     def _receive(self, user, pointer):
         try:

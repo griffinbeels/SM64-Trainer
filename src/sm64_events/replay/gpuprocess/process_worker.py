@@ -144,12 +144,17 @@ class Worker:
         self.packet = None
         error = None
         disposal = False
+        failure_status = None
         try:
             result = self._dispatch(command)
         except EncoderFailure as exc:
             result = exc.result if exc.result is not None else Result.STATE
             error = str(exc)[:512]
             disposal = exc.worker_disposal_required
+            if command.get("op") == "Open" and self.client is None:
+                # Constructor failure never assigns client. The exception can
+                # still carry its existing flat native ABI snapshot (quarantine).
+                failure_status = exc.status
             if (command.get("op") == "Open" and result == Result.CODEC
                     and not disposal and self.client is None):
                 # Refused by codec, and nothing was opened: an answer about
@@ -169,6 +174,8 @@ class Worker:
             returned = []
             error = error or ("status failed: " + type(exc).__name__)
             disposal = True
+        if status is None and failure_status is not None:
+            status = failure_status
         payload = b""
         packet = None
         if self.packet is not None and result == Result.OK and not error:
