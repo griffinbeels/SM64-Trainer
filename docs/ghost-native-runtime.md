@@ -1252,14 +1252,30 @@ asks nothing per ghost frame for 1, 4 and 16 ghosts at 640x480 and 1600x1200.
 
 Shader compiles happen before any ghost is asked for. The compositor and its
 five programs (body, shadow, particle, annotation, path) are created on the first
-list after the trainer's clean recording attaches, seconds after the game
-starts, and `prepare` then takes them (`ghost_compositor::warm`). Before, the first ghost's list
+list after clean presentation is negotiated, and `prepare` then takes them
+(`ghost_compositor::warm`). This initialization can run with playback disabled.
+Before, the first ghost's list
 compiled them: on 2026-10-02 a build with a new shader missed the driver's
 cache and that list took 35.8 ms (the NVIDIA GLCache file was written in the
 same 100 ms). Measured on the RTX 5090 with a hidden context: body 23 ms,
 shadow 11, particle 14, annotation 8 cold; under 0.4 ms each once the driver
 has cached that source. Storage (textures, renderbuffer, buffers) is about
 1 ms either way.
+
+Programs belong to a GL context generation and its owner thread. Changing the
+drawable or its extent within that context retains the five warmed compositor
+programs and the presentation gamma program. The resize/fullscreen entry point
+withdraws old pixels before changing the window, then renews presentation identity
+and prepares the new extent. Changing gamma force/level rebuilds the gamma program
+so its uniforms reflect the new settings. A new context generation rebuilds;
+an unproven old owner is abandoned without restoring or deleting foreign GL names.
+Initial prewarm stays before the first requested ghost.
+
+CPU witnesses run the shipped drawing code and actual presentation lifecycle
+functions, including the pinned staged resize/fullscreen entry points. Restoring
+either the old rebuild policy or its caller's premature stop makes those witnesses
+fail. They prove the lifetime/control policy; real driver behavior and pixels
+still require the explicit WGL witness and live playback.
 
 ### What the hook numbers mean
 
@@ -1285,11 +1301,32 @@ list). Per list, from `gs_hook_cost` in
 
 These sampled hook reports cannot certify uninterrupted gameplay: the pump
 may miss list serials and the recording retains selected/coalesced pictures.
-Native `callback_pacing` reports producer duration and entry-gap distributions
-for every completed callback, independently of playback, recording and polling.
-They identify PID/thread/build, QPC frequency, reset generation, invalid samples,
-snapshot contention and lost legacy log records. `callback_progress` separately
-reports unfinished/no-new-callback age. Neither is a physical monitor clock.
+Native `callback_pacing` counts completed callbacks independently of playback,
+recording and polling. The ordinary serialized path retains every duration and
+entry gap. Overlapping completions never wait for the meter: contention counts
+as an invalid observation, breaks the predecessor chain and remains explicit.
+Reports identify PID/build, submitter thread, QPC frequency, reset generation,
+invalid samples, snapshot contention and lost legacy log records. A busy snapshot
+queue retains the aggregate for its next attempt instead of discarding samples.
+
+Version 2 pairs each maximum duration/gap with its QPC boundaries, measured
+producer thread, raw thread-cycle delta and quantized kernel/user CPU-time delta.
+The maximum gap also retains the preceding callback-end to next callback-entry
+interval. Two cycle queries and two CPU-time queries bracket each normal callback;
+their read apertures are recorded. Thread changes, failed queries, resets and
+overlap invalidate affected CPU pairs. Raw cycles are never converted to time.
+Local busy/Sleep/mixed controls distinguish sustained CPU work from a timed wait;
+`GetThreadTimes` advanced in 15.625 ms steps in those controls and often stayed
+zero for short busy work. Zero therefore leaves CPU attribution unresolved.
+Low producer CPU cannot distinguish pacing, intentional pause, an external wait
+or a ready thread which Windows did not schedule.
+
+`callback_progress` separately reports unfinished/no-new-callback age. Shutdown
+tries to queue each partial window without waiting; `callback_final_window`
+distinguishes queued, unsent and unavailable windows. The writer drains queued
+snapshots before exiting, but queued does not prove a successful disk write.
+Rotated/bounded tails and unknown windows cannot certify a complete session.
+Neither these measurements nor the sampled hook report is a physical monitor clock.
 Normal 30 Hz lists and 60 Hz VI callbacks are distinct valid cadences. Holds,
 loading and resets require game-state correlation rather than a fixed stutter label.
 
