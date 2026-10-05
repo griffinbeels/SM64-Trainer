@@ -5,6 +5,8 @@
  * writer's instructions valid until FreeLibraryAndExitThread. */
 #pragma once
 #include <stdarg.h>
+#include <stddef.h>
+#include "callback_pacing.h"
 #ifndef GFXWRAP_BUILD_ID
 #define GFXWRAP_BUILD_ID "development-unidentified"
 #endif
@@ -35,6 +37,7 @@ typedef struct {
     unsigned read, count;
     char lines[LOG_CAPACITY][LOG_LINE_BYTES];
     unsigned char sidecar[LOG_CAPACITY];
+    int64_t pacing_progress_last[3]; /* only this session's writer uses these */
     wchar_t path[MAX_PATH], rotated[LOG_ROTATED][MAX_PATH];
     wchar_t activation[MAX_PATH], activation_previous[MAX_PATH];
 } log_session_t;
@@ -153,10 +156,17 @@ static void log_write_line(log_session_t *session, const char *line, int sidecar
     log_append(file, line);
 }
 
+#include "callback_pacing_log.h"
+
 static DWORD WINAPI log_worker(LPVOID parameter) {
     log_session_t *session = parameter;
     for (;;) {
-        WaitForSingleObject(session->event, INFINITE);
+        /* Also notice a callback which never returns. This reads three
+         * atomic timestamps, performs no GPU work, and reports at most
+         * once per callback per five seconds. Idle/loading is not a defect. */
+        WaitForSingleObject(session->event, 250);
+        callback_pacing_drain(session);
+        callback_progress_drain(session);
         for (;;) {
             char line[LOG_LINE_BYTES];
             int sidecar = 0;
@@ -255,6 +265,8 @@ typedef struct {
     uint64_t window_calls;
     int64_t window_total, window_max_total, window_max_gap;
     uint32_t histogram[CALLBACK_BUCKETS];
+    cp_meter pacing;
+    volatile LONG64 in_flight_qpc, completed_qpc;
 } callback_diagnostic_t;
 static callback_diagnostic_t g_diagnostic_list = {"ProcessDList"};
 static callback_diagnostic_t g_diagnostic_update = {"UpdateScreen"};
@@ -262,8 +274,51 @@ static callback_diagnostic_t g_diagnostic_rdp = {"ProcessRDPList"};
 
 static void callback_diagnostic_reset(callback_diagnostic_t *note) {
     const char *name = note->name;
-    memset(note, 0, sizeof *note);
+    cp_meter pacing = note->pacing;
+    cp_reset(&pacing);
+    memset(note, 0, offsetof(callback_diagnostic_t, in_flight_qpc));
+    InterlockedExchange64(&note->in_flight_qpc,0);
+    InterlockedExchange64(&note->completed_qpc,0);
     note->name = name;
+    note->pacing = pacing;
+}
+
+static int64_t callback_diagnostic_begin(callback_diagnostic_t *note) {
+    LARGE_INTEGER at; QueryPerformanceCounter(&at);
+#ifndef CALLBACK_PACING_BASELINE_HOST
+    InterlockedExchange64(&note->in_flight_qpc, at.QuadPart);
+#else
+    (void)note; /* CPU host only: measure the original two-QPC/end path. */
+#endif
+    return at.QuadPart;
+}
+
+static void callback_progress_drain(log_session_t *session) {
+    callback_diagnostic_t *notes[] = {&g_diagnostic_list,&g_diagnostic_update,&g_diagnostic_rdp};
+    static const char *const names[] = {"ProcessDList","UpdateScreen","ProcessRDPList"};
+    int64_t *last_report = session->pacing_progress_last;
+    LARGE_INTEGER at; QueryPerformanceCounter(&at);
+    if (!g_diagnostic_frequency) return;
+    for (unsigned n = 0; n < sizeof notes / sizeof *notes; ++n) {
+        callback_diagnostic_t *note = notes[n];
+        const int64_t begin = InterlockedCompareExchange64(&note->in_flight_qpc,0,0);
+        const int64_t completed = InterlockedCompareExchange64(&note->completed_qpc,0,0);
+        const int64_t last = begin ? begin : completed;
+        if (!last || at.QuadPart < last || at.QuadPart-last < g_diagnostic_frequency/4
+                || (last_report[n] && at.QuadPart-last_report[n] < g_diagnostic_frequency*5)) continue;
+        last_report[n] = at.QuadPart;
+        SYSTEMTIME utc; GetSystemTime(&utc);
+        char line[LOG_LINE_BYTES];
+        snprintf(line,sizeof line,
+            "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ pid=%lu tid=%lu build=%s event=callback_progress "
+            "version=1 coverage=callback callback=%s state=%s observed_qpc=%lld frequency=%lld "
+            "started_qpc=%lld last_completed_qpc=%lld age_ticks=%lld dropped_records=%ld\n",
+            utc.wYear,utc.wMonth,utc.wDay,utc.wHour,utc.wMinute,utc.wSecond,utc.wMilliseconds,
+            (unsigned long)GetCurrentProcessId(),(unsigned long)GetCurrentThreadId(),GFXWRAP_BUILD_ID,
+            names[n],begin?"in_flight":"no_new_callback",at.QuadPart,g_diagnostic_frequency,
+            begin,completed,at.QuadPart-last,(long)g_log_dropped);
+        log_write_line(session,line,0);
+    }
 }
 
 static double callback_ms(int64_t ticks) { return 1000.0 * ticks / g_diagnostic_frequency; }
@@ -281,6 +336,17 @@ static double callback_p99_ms(const callback_diagnostic_t *note) {
 /* total spans the whole forwarded callback, including any stamp adapter work. */
 static void callback_diagnostic_end(callback_diagnostic_t *note, int64_t begin, int64_t end) {
     if (!g_diagnostic_frequency) return;
+#ifndef CALLBACK_PACING_BASELINE_HOST
+    cp_observe(&note->pacing,(uint64_t)begin,(uint64_t)end,(uint64_t)g_diagnostic_frequency);
+    InterlockedExchange64(&note->completed_qpc,end);
+    InterlockedExchange64(&note->in_flight_qpc,0);
+    if (begin <= 0 || end < begin) return;
+    const int attention = note->pacing.duration.max_ticks >= (uint64_t)g_diagnostic_frequency/100
+        || note->pacing.gap.max_ticks >= (uint64_t)g_diagnostic_frequency/20;
+    const uint64_t pacing_span = note->pacing.last_qpc-note->pacing.first_qpc;
+    if (pacing_span >= (uint64_t)g_diagnostic_frequency*(attention?5:60))
+        callback_pacing_send(note->name,&note->pacing,(uint64_t)end);
+#endif
     int64_t gap = note->previous ? begin - note->previous : 0;
     note->previous = begin;
     int64_t total = end - begin;

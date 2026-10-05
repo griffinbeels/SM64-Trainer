@@ -306,7 +306,7 @@ EXPORT void CALL ProcessDList(void) {
     /* The only witness on the thread that matters: two QPC reads per
      * call (~50 ns) and a bounded off-thread log. The adapter wraps the
      * original call, so total_ms here includes the stamp copy. */
-    int64_t begin = qpc_now();
+    int64_t begin = callback_diagnostic_begin(&g_diagnostic_list);
     if (g_runtime_ready) sa_process_dlist();
     else if (g_wrapped.ProcessDList) g_wrapped.ProcessDList();
     callback_diagnostic_end(&g_diagnostic_list, begin, qpc_now());
@@ -315,7 +315,7 @@ EXPORT void CALL ProcessDList(void) {
 
 EXPORT void CALL UpdateScreen(void) {
     if (!g_practice_rom) { if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen(); return; }
-    int64_t begin = qpc_now();
+    int64_t begin = callback_diagnostic_begin(&g_diagnostic_update);
     /* While the game is loading, pay an overlay's driver start-up where the
      * picture is already still (overlay_warmup.h). */
     const int warming = ow_vi();
@@ -375,7 +375,7 @@ EXPORT void CALL CloseDLL(void) {
 
 EXPORT void CALL ProcessRDPList(void) {
     if (!g_practice_rom) { if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList(); return; }
-    int64_t begin = qpc_now();
+    int64_t begin = callback_diagnostic_begin(&g_diagnostic_rdp);
     if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList();
     callback_diagnostic_end(&g_diagnostic_rdp, begin, qpc_now());
 }
