@@ -15,7 +15,7 @@ static void self_dir(wchar_t *out,size_t count) {
     GetCurrentDirectoryW((DWORD)count,out);wcsncat_s(out,count,L"\\",_TRUNCATE);
 }
 #define WriteFile blocked_write
-#include "diagnostics.h"
+#include "../../plugin/gfxwrap/diagnostics.h"
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"callback pacing calibration line %d\n",__LINE__); return 1; } } while (0)
 
 static int distributions(void) {

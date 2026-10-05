@@ -19,7 +19,7 @@ def test_callback_producer_observes_injected_stalls_and_preserves_unpolled_overf
         pytest.skip("no x86 MSVC toolchain")
     target = tmp_path / "callback_cpu.exe"
     build._cl(build.find_vcvars32(), build.COMMON_FLAGS + [
-        str(ROOT / "plugin/gfxwrap/callback_pacing_cpu_test.c"),
+        str(ROOT / "tests/native/callback_pacing_cpu_test.c"),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *build.LIBS], tmp_path)
     result = subprocess.run([str(target)], capture_output=True, text=True, timeout=10,
                             cwd=tmp_path, **quiet_spawn_kwargs(), check=False)
@@ -46,7 +46,7 @@ def test_callback_producer_observes_injected_stalls_and_preserves_unpolled_overf
     assert all(row["monitor_presentation"] == "unmeasured" for row in rows)
     baseline_target = tmp_path / "callback_baseline.exe"
     build._cl(build.find_vcvars32(), build.COMMON_FLAGS + [
-        "/DCALLBACK_PACING_BASELINE_HOST", str(ROOT / "plugin/gfxwrap/callback_pacing_cpu_test.c"),
+        "/DCALLBACK_PACING_BASELINE_HOST", str(ROOT / "tests/native/callback_pacing_cpu_test.c"),
         f"/Fe:{baseline_target}", f"/Fo{tmp_path}\\", "/link", *build.LIBS], tmp_path)
     baseline = subprocess.run([str(baseline_target)], capture_output=True, text=True, timeout=10,
                               cwd=tmp_path, **quiet_spawn_kwargs(), check=False)
