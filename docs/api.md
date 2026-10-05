@@ -402,6 +402,26 @@ operation (bad timer mode, already cleared, non-success outcome, missing clock, 
 
 ### Replay
 
+`PUT /api/replay/recording` accepts exactly `{"enabled": true|false}` (literal
+JSON boolean; missing/extra fields or coercible strings/numbers return 422).
+It persists the requested setting before waking the existing recorder worker,
+then returns the full replay status. `enabled` still means replay service
+availability; `recording_enabled` is the persisted manual capture setting.
+Other replay settings saves preserve this setting. It defaults to true in old
+settings files and stays disabled across AFK, window reattachment, session
+rotation and server restart until explicitly enabled.
+
+Both this response and `GET /api/replay/status` report `capture_state`: `off`,
+`stopping`, `starting`, `waiting`, `recording`, `paused`, or `error`. `off`
+requires no startup in flight and successful closure of every recorder-owned
+video, WASAPI audio, native pose, sink/encoder and machine lease. Startup
+cancellation, retained workers or failed cleanup remain `stopping`; the
+existing `recovery.error` explains a failure. HTTP never joins capture workers.
+The PUT response uses cached buffer coverage; the next GET refreshes it.
+Unlike session Pause, this switch closes capture owners. It preserves tracking,
+saved replays, buffered media and the separate session pause setting. It does
+not stop an independent Ghost Overlay playback owner.
+
 While the server runs it records the PJ64 window (DWM shared-surface
 capture — modern window capture sees frozen content for PJ64's D3D8, and
 GDI stalls on its window lock) plus game audio — per-process WASAPI

@@ -49,6 +49,7 @@ class ReplayConfig:
     # (replay/compress.py). Only what is saved from now on: a replay already
     # on disk is never rewritten without being asked.
     compress_saved: bool = True
+    recording_enabled: bool = True       # persisted manual capture switch
 
 
 # -- video encode QUALITY (ONE authoritative place: ring sink + clip extract) -
@@ -234,13 +235,23 @@ def validate_settings(retention_s: float | None, max_buffer_bytes: int,
 
 def save_settings(path: Path, retention_s: float | None,
                   max_buffer_bytes: int, pre_pad_s: float,
-                  post_pad_s: float, retention_attempts: int | None = 10) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(
+                  post_pad_s: float, retention_attempts: int | None = 10,
+                  *, recording_enabled: bool | None = None) -> None:
+    from sm64_events.replay.publication import atomic_json
+    if recording_enabled is None:
+        # Legacy storage callers must not silently re-enable recording.
+        try:
+            saved = json.loads(path.read_text()).get("recording_enabled", True)
+        except (OSError, ValueError, AttributeError):
+            saved = True
+        recording_enabled = saved if type(saved) is bool else True
+    if type(recording_enabled) is not bool:
+        raise ValueError("recording_enabled must be a boolean")
+    atomic_json(path,
         {"retention_s": retention_s, "retention_attempts": retention_attempts,
          "max_buffer_bytes": int(max_buffer_bytes),
-         "pre_pad_s": float(pre_pad_s), "post_pad_s": float(post_pad_s)},
-        indent=2))
+         "pre_pad_s": float(pre_pad_s), "post_pad_s": float(post_pad_s),
+         "recording_enabled": recording_enabled})
 
 
 def apply_settings_file(cfg: ReplayConfig) -> ReplayConfig:
@@ -255,6 +266,15 @@ def apply_settings_file(cfg: ReplayConfig) -> ReplayConfig:
         logging.getLogger("sm64.replay").warning(
             "ignoring unreadable %s", cfg.settings_path)
         return cfg
+    if not isinstance(raw, dict):
+        logging.getLogger("sm64.replay").warning("ignoring invalid %s", cfg.settings_path)
+        return cfg
+    enabled = raw.get("recording_enabled", cfg.recording_enabled)
+    if type(enabled) is bool and enabled != cfg.recording_enabled:
+        cfg = replace(cfg, recording_enabled=enabled)
+    elif type(enabled) is not bool:
+        logging.getLogger("sm64.replay").warning(
+            "ignoring invalid recording_enabled in %s", cfg.settings_path)
     retention = raw.get("retention_s", cfg.retention_s)
     cap = raw.get("max_buffer_bytes", cfg.max_buffer_bytes)
     pre = raw.get("pre_pad_s", cfg.pre_pad_s)

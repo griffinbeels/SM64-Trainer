@@ -409,9 +409,10 @@ class ProcessAudioSource:
         self.ghost_timeline.feed(np.frombuffer(pcm_bytes, dtype=np.float32), time.time())
 
     def _close_extra(self) -> None:
-        tap, self._extra_tap, self._extra_tapped = self._extra_tap, None, None
+        tap = self._extra_tap
         if tap is not None:
             stop_process_tap(tap)
+            self._extra_tap, self._extra_tapped = None, None
 
     def _reopen(self) -> None:
         self._close_tap()
@@ -431,6 +432,8 @@ class ProcessAudioSource:
         if self._extra_thread is not None:
             self._extra_stop.set()
             self._extra_thread.join(timeout=5)
+            if self._extra_thread.is_alive():
+                raise RuntimeError("extra process-audio follower cleanup pending")
             self._extra_thread = None
         self._close_extra()
         if self._watchdog is not None:

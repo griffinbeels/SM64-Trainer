@@ -281,6 +281,7 @@ class ReplayService:
         # what _span uses; update_settings replaces them.
         self.pre_pad_s = cfg.pre_pad_s
         self.post_pad_s = cfg.post_pad_s
+        self._settings_guard = threading.Lock()
         self._save_guard = threading.Lock()
         self._active_saves = 0
         self._session_gate = SessionGate()
@@ -500,10 +501,11 @@ class ReplayService:
 
     # -- queries -------------------------------------------------------------
 
-    def status(self) -> dict:
+    def status(self, *, nonblocking: bool = False) -> dict:
         with self._save_guard:
             failures = dict(self._save_failures)
-        return {"enabled": True, **self.recorder.status(),
+        current = self.recorder.status(nonblocking=True) if nonblocking else self.recorder.status()
+        return {"enabled": True, **current,
                 "retention_attempts": self.history.count,
                 "save_failures": failures, "recovery_failures": self._recovery_failures}
 
@@ -531,18 +533,41 @@ class ReplayService:
         affect the next view(); the recorder's idle threshold follows the
         padding window). None pads = keep current. Persist before apply so
         a write failure can't leave limits applied but not durable."""
+        with self._settings_guard:
+            return self._update_settings(retention_s, max_buffer_bytes, pre_pad_s,
+                                         post_pad_s, retention_attempts)
+
+    def _update_settings(self, retention_s, max_buffer_bytes, pre_pad_s,
+                         post_pad_s, retention_attempts):
         pre = self.pre_pad_s if pre_pad_s is None else float(pre_pad_s)
         post = self.post_pad_s if post_pad_s is None else float(post_pad_s)
         count = self.history.count if retention_attempts == "unchanged" else retention_attempts
         validate_settings(retention_s, max_buffer_bytes, pre, post, count)
         save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes,
-                      pre, post, count)
+                      pre, post, count,
+                      recording_enabled=getattr(self.recorder, "recording_enabled",
+                                                self.cfg.recording_enabled))
         self.recorder.ring.set_limits(retention_s, max_buffer_bytes)
         self.history.configure(count)
         self.pre_pad_s, self.post_pad_s = pre, post
         self.recorder.set_idle_after(pre + post)
         self._maintain_history()
         return self.settings()
+
+    def set_recording_enabled(self, enabled: bool) -> dict:
+        """Persist desired capture state, then wake the existing attach owner.
+
+        Closing and joining video/audio/pose/encoder owners happens on that
+        worker. The request never waits for capture startup or teardown.
+        """
+        if type(enabled) is not bool:
+            raise ValueError("enabled must be a boolean")
+        with self._settings_guard:
+            save_settings(self.cfg.settings_path, self.recorder.ring.retention_s,
+                          self.recorder.ring.max_bytes, self.pre_pad_s, self.post_pad_s,
+                          self.history.count, recording_enabled=enabled)
+            self.recorder.set_recording_enabled(enabled)
+        return self.status(nonblocking=True)
 
     def attempt(self, attempt_id: int):
         """The projected attempt row; LookupError when there is none."""

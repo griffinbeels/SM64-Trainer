@@ -119,8 +119,8 @@ if hasattr(ctypes, "windll"):
 
 def _assign_kill_on_close(proc) -> int | None:
     """Assign `proc` to a Windows Job Object whose last-handle-close kills its
-    members. We never close the returned handle: it dies WITH this process and
-    the OS then terminates ffmpeg. Returns the job handle to keep alive, or
+    members. Keep the returned handle until the child exits; if this process
+    dies first the OS closes it and terminates ffmpeg. Returns its handle, or
     None (logged) if assignment failed."""
     class _IO_COUNTERS(ctypes.Structure):
         _fields_ = [(n, ctypes.c_ulonglong) for n in (
@@ -367,6 +367,13 @@ class FfmpegAvSink:
         self._stop.set()
         if self._feeder is not None:
             self._feeder.join(timeout=10)
+            if self._feeder.is_alive():
+                # A blocked write cannot observe _stop. Abort only our exact
+                # child without first taking its mux lock or flushing stdin.
+                self._abort_proc()
+                self._feeder.join(timeout=5)
+                if self._feeder.is_alive():
+                    raise RuntimeError("ffmpeg feeder cleanup pending")
             self._feeder = None
         if not self._picture:
             # The CFR feed's audio pipe teardown flushes, and a flush waits
@@ -381,7 +388,22 @@ class FfmpegAvSink:
         self._stop_proc()
         for t in self._readers:
             t.join(timeout=10)
-        self._readers.clear()
+        self._readers = [t for t in self._readers if t.is_alive()]
+        if self._readers:
+            raise RuntimeError("ffmpeg readers cleanup pending")
+        self._close_jobs()
+
+    def _close_jobs(self, *, require_closed: bool = True) -> None:
+        pending = []
+        for job, proc in self._jobs:
+            try:
+                if proc.poll() is None or not _k32.CloseHandle(job):
+                    pending.append((job, proc))
+            except Exception:
+                pending.append((job, proc))
+        self._jobs = pending
+        if pending and require_closed:
+            raise RuntimeError("ffmpeg child job ownership cleanup pending")
 
     # -- process management ----------------------------------------------------
     def _spawn(self, w: int, h: int, first_stamp: float | None = None) -> None:
@@ -468,13 +490,7 @@ class FfmpegAvSink:
         # A job handle must outlive its child (closing it kills the child).
         # Children that already exited release theirs now, so a respawn
         # loop cannot accumulate one handle per spawn for the session.
-        kept = []
-        for old_job, old_proc in self._jobs:
-            if old_proc.poll() is None:
-                kept.append((old_job, old_proc))
-            else:
-                _k32.CloseHandle(old_job)
-        self._jobs = kept
+        self._close_jobs(require_closed=False)
         job = _assign_kill_on_close(self._proc)
         if job is not None:
             self._jobs.append((job, self._proc))
@@ -571,7 +587,6 @@ class FfmpegAvSink:
 
     def _stop_proc(self) -> None:
         proc = self._proc
-        self._proc = None
         if proc is None:
             return
         self._close_mux()
@@ -582,6 +597,14 @@ class FfmpegAvSink:
         except Exception:
             log.exception("ffmpeg shutdown failed - killing")
             proc.kill()
+            proc.wait(timeout=5)
+        self._proc = None  # Failed wait/kill retains the exact process for retry.
+
+    def _abort_proc(self) -> None:
+        proc = self._proc
+        if proc is not None:
+            proc.kill()
+            proc.wait(timeout=5)
 
     # -- audio named pipe ------------------------------------------------------
     def _open_audio_pipe(self) -> None:
@@ -668,6 +691,11 @@ class FfmpegAvSink:
                 pass
         if self._audio_thread is not None:
             self._audio_thread.join(timeout=5)
+            if self._audio_thread.is_alive():
+                self._abort_proc()
+                self._audio_thread.join(timeout=5)
+                if self._audio_thread.is_alive():
+                    raise RuntimeError("ffmpeg audio feeder cleanup pending")
             self._audio_thread = None
         h, self._pipe_handle = self._pipe_handle, None
         if h is not None:
