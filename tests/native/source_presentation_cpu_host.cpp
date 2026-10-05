@@ -16,7 +16,7 @@ bool display_consumer(){return true;}
 void begin_update(uint64_t value){current_update=value;}
 bool clean_surface(CleanSurface* out) {
     *out={};if(!consumer || mode==0)return false;
-    const bool private_surface=mode==2 || mode==8;
+    const bool private_surface=mode==2 || mode==8 || mode>=12;
     *out={private_surface?101u:0u,private_surface?102u:0u,640,480,1,1,private_surface?3u:0u,origin,
           current_update,current_update};
     if(mode==3)--out->update_occurrence;
@@ -28,7 +28,20 @@ bool clean_surface(CleanSurface* out) {
     if(mode==11)out->presentation_serial=0;
     return true;
 }
-bool display_surface(CleanSurface* out){*out={};return false;}
+bool display_surface(CleanSurface* out){
+    *out={};if(mode<12 || mode==13)return false; // absent or failed display copy
+    *out={201,202,640,480,1,1,4,origin,current_update,current_update};
+    if(mode==14)--out->presentation_serial;
+    if(mode==15)--out->update_occurrence;
+    if(mode==16)++out->context_generation;
+    if(mode==17)++out->drawable_generation;
+    if(mode==18)++out->width;
+    if(mode==19)++out->vi_origin;
+    if(mode==20)out->resource_generation=0;
+    if(mode==21)out->framebuffer=0;
+    if(mode==22)out->texture=0;
+    return true;
+}
 }
 static const rs_api_v3* source=nullptr;
 static const rs_api_v4* display=nullptr;
@@ -51,7 +64,9 @@ int main() {
     source->clean_consumer(true);rb_rom_open();require(source->boundary.activate()!=0,"activate");
     const uint32_t expected[]={RS_SOURCE_UNAVAILABLE,RS_SOURCE_DEFAULT_FRONT,RS_SOURCE_CLEAN_VI,
         RS_SOURCE_UNAVAILABLE,RS_SOURCE_UNAVAILABLE,RS_SOURCE_NO_NEW_PRESENTATION,RS_SOURCE_UNAVAILABLE,
-        RS_SOURCE_UNAVAILABLE,RS_SOURCE_UNAVAILABLE,RS_SOURCE_UNAVAILABLE,RS_SOURCE_UNAVAILABLE,RS_SOURCE_UNAVAILABLE};
+        RS_SOURCE_UNAVAILABLE,RS_SOURCE_UNAVAILABLE,RS_SOURCE_UNAVAILABLE,RS_SOURCE_UNAVAILABLE,RS_SOURCE_UNAVAILABLE,
+        RS_SOURCE_CLEAN_VI,RS_SOURCE_CLEAN_VI,RS_SOURCE_CLEAN_VI,RS_SOURCE_CLEAN_VI,RS_SOURCE_CLEAN_VI,
+        RS_SOURCE_CLEAN_VI,RS_SOURCE_CLEAN_VI,RS_SOURCE_CLEAN_VI,RS_SOURCE_CLEAN_VI,RS_SOURCE_CLEAN_VI,RS_SOURCE_CLEAN_VI};
     for(mode=0;mode<sizeof(expected)/sizeof(expected[0]);++mode) {
         source_swap_success=mode!=5;source->clean_consumer(mode!=6);
         rb_stamp stamp{};const auto ticket=source->boundary.stage(&stamp);require(ticket.occurrence!=0,"stage");
@@ -61,14 +76,18 @@ int main() {
         if(mode==1)require(!observed.framebuffer && !observed.resource_generation && observed.read_buffer==0x404 &&
             observed.source_format==RB_SOURCE_RGB8_SRGB && observed.presentation_serial==current_update &&
             observed.update_occurrence==current_update,"default front keeps truthful format and swap identity");
-        if(mode==2)require(observed.framebuffer==101 && observed.resource_generation==3 && observed.read_buffer==0x8CE0 &&
+        if(mode==2 || mode>=12)require(observed.framebuffer==101 && observed.resource_generation==3 && observed.read_buffer==0x8CE0 &&
             observed.source_format==RB_SOURCE_RGB8_LINEAR,"modified picture keeps its private clean resource");
-        if(mode==1 || mode==2) {
+        if(mode==1) {
             require(observed_display.kind==RS_SOURCE_SAME_AS_CLEAN &&
                 observed_display.update_occurrence==current_update,"ghostless twin shares this clean occurrence");
-        }else require(observed_display.kind==RS_SOURCE_UNAVAILABLE,"refused presentation has no twin identity");
+        }else if(mode==12) {
+            require(observed_display.kind==RS_SOURCE_DISPLAY_VI && observed_display.framebuffer==201 &&
+                observed_display.resource_generation==4 && observed_display.presentation_serial==current_update &&
+                observed_display.update_occurrence==current_update,"exact display copy shares private clean occurrence");
+        }else require(observed_display.kind==RS_SOURCE_UNAVAILABLE,"private clean does not prove displayed equality");
         require(source->boundary.release(ticket)!=0,"release");
     }
     source->boundary.disarm();rb_rom_closed();
-    std::puts("CPU source passed: front=truthful clean=private stale=refused revoke=refused failed_swap=omitted twin=same_occurrence");
+    std::puts("CPU source passed: front=truthful clean=private stale=refused revoke=refused failed_swap=omitted twin=exact_or_unavailable front_alias=same_occurrence");
 }

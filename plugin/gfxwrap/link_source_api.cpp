@@ -108,7 +108,7 @@ int __cdecl query_display(rb_ticket ticket,rs_source_descriptor3* out) {
     if(!configured_clean || !ghost_presentation::display_consumer())return 1;
     if(clean.kind!=RS_SOURCE_CLEAN_VI && clean.kind!=RS_SOURCE_DEFAULT_FRONT)return 1;
     ghost_presentation::CleanSurface shown{};
-    if(clean.kind==RS_SOURCE_CLEAN_VI && ghost_presentation::display_surface(&shown) && shown.framebuffer &&
+    if(clean.kind==RS_SOURCE_CLEAN_VI && ghost_presentation::display_surface(&shown) && shown.framebuffer && shown.texture &&
        shown.resource_generation && shown.presentation_serial==clean.presentation_serial &&
        shown.update_occurrence==clean.update_occurrence && shown.context_generation==clean.context_generation &&
        shown.drawable_generation==clean.drawable_generation && shown.width==clean.surface_width &&
@@ -117,6 +117,9 @@ int __cdecl query_display(rb_ticket ticket,rs_source_descriptor3* out) {
         out->framebuffer=shown.framebuffer;out->read_buffer=0x8CE0; // GL_COLOR_ATTACHMENT0
         out->source_format=RB_SOURCE_RGB8_LINEAR;out->resource_generation=shown.resource_generation;return 1;
     }
+    // A private clean picture proves only clean capture. A missing or refused
+    // display copy never proves that the ghosted window showed those pixels.
+    if(clean.kind!=RS_SOURCE_DEFAULT_FRONT)return 1;
     out->kind=RS_SOURCE_SAME_AS_CLEAN;out->update_occurrence=clean.update_occurrence;
 #endif
     return 1;

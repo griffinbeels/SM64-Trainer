@@ -3,13 +3,16 @@ import importlib.util
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from sm64_events.core.childproc import quiet_spawn_kwargs
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "plugin/gfxwrap"
 
 
-def test_qualified_front_source_and_refusals(tmp_path):
+@pytest.mark.parametrize("restore_private_alias", [False, True])
+def test_qualified_front_source_and_refusals(tmp_path, restore_private_alias):
     spec = importlib.util.spec_from_file_location("source_presentation_build", ROOT / "tools/build_plugin.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
@@ -46,11 +49,22 @@ inline PluginAPI &api(){static PluginAPI p;return p;}
 """, encoding="utf-8")
     flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
     target = tmp_path / "source_presentation_cpu.exe"
+    source = NATIVE / "link_source_api.cpp"
+    if restore_private_alias:
+        text = source.read_text(encoding="utf-8")
+        anchor = "    if(clean.kind!=RS_SOURCE_DEFAULT_FRONT)return 1;\n"
+        assert text.count(anchor) == 1
+        source = tmp_path / "link_source_api.cpp"
+        source.write_text(text.replace(anchor, ""), encoding="utf-8")
     build._cl(vcvars, flags + ["/std:c++17", "/EHsc", "/DSM64_GHOST_RENDERER", f"/I{tmp_path}", f"/I{NATIVE}",
-        str(NATIVE / "link_source_api.cpp"), str(NATIVE / "renderer_boundary.cpp"),
+        str(source), str(NATIVE / "renderer_boundary.cpp"),
         str(ROOT / "tests/native/source_presentation_cpu_host.cpp"), f"/Fe:{target}", f"/Fo{tmp_path}\\",
         "/link", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", "kernel32.lib"], tmp_path)
     result = subprocess.run([str(target)], capture_output=True, text=True, timeout=10,
                             cwd=tmp_path, check=False, **quiet_spawn_kwargs())
+    if restore_private_alias:
+        assert result.returncode != 0
+        assert "private clean does not prove displayed equality" in result.stderr
+        return
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "front=truthful clean=private stale=refused revoke=refused failed_swap=omitted twin=same_occurrence" in result.stdout
+    assert "front=truthful clean=private stale=refused revoke=refused failed_swap=omitted twin=exact_or_unavailable front_alias=same_occurrence" in result.stdout

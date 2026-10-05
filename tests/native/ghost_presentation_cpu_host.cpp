@@ -7,7 +7,7 @@ namespace gp=ghost_presentation;
 namespace gc=ghost_compositor;
 namespace gl=ghost_compositor::gl;
 static unsigned calls=0,copies=0,opened=0,ended=0,next_name=1,draws=0;
-static bool gpu_open=false,refuse_second_open=false;
+static bool gpu_open=false,refuse_second_open=false,refuse_next_open=false;
 static void require(bool okay,const char* message) {
     if(!okay){std::fprintf(stderr,"FAILED: %s\n",message);std::exit(1);}
 }
@@ -33,7 +33,7 @@ static gp::Dispatch dispatch() {
     out.gl.GetIntegerv=integer;out.gl.GenTextures=out.gl.GenFramebuffers=names;
     out.gl.CheckFramebufferStatus=complete;out.CopyTexSubImage2D=copy;out.DrawBuffers=buffers;return out;
 }
-static bool begin(){if(refuse_second_open && opened==1)return false;require(!gpu_open,"gateway not nested");gpu_open=true;++opened;return true;}
+static bool begin(){if(refuse_next_open || (refuse_second_open && opened==1))return false;require(!gpu_open,"gateway not nested");gpu_open=true;++opened;return true;}
 static bool end(){require(gpu_open,"gateway balanced");gpu_open=false;++ended;return true;}
 static void draw(void*,const gp::Draw&){++draws;}
 static bool known(gp::Known* out) {
@@ -88,6 +88,11 @@ int main() {
     require(gp::before_swap(p,0x3000,raster) && !gp::begin_osd(p),"refused replacement needs no OSD mirror");swapped(p);
     require(!gp::surface(p).framebuffer && gp::surface(p).update_occurrence==10 && copies==1,
             "unchanged BACK publishes truthful front after a refused replacement");
+    gp::begin_update(p,11);reset_counts();require(gp::replace_vi(p,image,0x3000,false,raster),"display-copy refusal candidate");
+    require(gp::before_swap(p,0x3000,raster) && gp::begin_osd(p),"display-copy refusal OSD");gp::end_osd(p);gp::after_osd(p);
+    refuse_next_open=true;gp::record_display(p);refuse_next_open=false;gp::swap_completed(p,true);
+    require(gp::surface(p).framebuffer && gp::surface(p).update_occurrence==11 && copies==1 &&
+            !gp::display(p).presentation_serial,"refused display copy preserves qualified private clean picture only");
     gp::display_consumer(false);gp::destroy(p);require(!gpu_open && opened==ended,"balanced final gateway");
-    std::puts("CPU presentation passed: plain_gl_calls=0 plain_copies=0 plain_osd_mirrors=0 ghost_copies=2 identity=qualified");
+    std::puts("CPU presentation passed: plain_gl_calls=0 plain_copies=0 plain_osd_mirrors=0 ghost_copies=2 identity=qualified failed_display=clean_preserved");
 }

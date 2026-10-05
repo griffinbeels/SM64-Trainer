@@ -69,6 +69,7 @@ def test_cpu_presentation_custody_and_removed_work(tmp_path, restore_duplicate_c
         return
     assert result.returncode == 0, result.stdout + result.stderr
     assert "plain_gl_calls=0 plain_copies=0 plain_osd_mirrors=0 ghost_copies=2 identity=qualified" in result.stdout
+    assert "failed_display=clean_preserved" in result.stdout
 
 
 @WITNESS
