@@ -57,13 +57,3 @@ extern "C" int __cdecl TestTake(rb_record*out){if(!source)return 0;const auto r=
 #pragma comment(linker,"/EXPORT:TestRequests=_TestRequests")
 #pragma comment(linker,"/EXPORT:TestTake=_TestTake")
 #pragma comment(linker,"/EXPORT:TestDiagnostic=_TestDiagnostic")
-
-// The overlay warm-up makes a real D3D11 device (overlay_warmup.cpp, its own
-// GPU witness); this composition host stays CPU-only, so it never warms.
-#include "overlay_warmup.h"
-extern "C" void ow_list(void){}
-extern "C" int ow_vi(void){return 0;}
-extern "C" void ow_vi_done(double){}
-extern "C" void ow_reset(void){}
-extern "C" ow_stats ow_read(void){return ow_stats{};}
-extern "C" void ow_set_maker(int(*)(void)){}

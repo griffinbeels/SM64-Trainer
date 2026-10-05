@@ -1301,8 +1301,10 @@ list). Per list, from `gs_hook_cost` in
 
 These sampled hook reports cannot certify uninterrupted gameplay: the pump
 may miss list serials and the recording retains selected/coalesced pictures.
-Native `callback_pacing` counts completed callbacks independently of playback,
-recording and polling. The ordinary serialized path retains every duration and
+Native `callback_pacing` covers `ProcessDList`, `ProcessRDPList` and `UpdateScreen`
+independently of playback, recording and polling. Other forwarded exports such
+as `FBRead` and `ReadScreen` are outside these measured callback bodies. The
+ordinary serialized path retains every duration and
 entry gap. Overlapping completions never wait for the meter: contention counts
 as an invalid observation, breaks the predecessor chain and remains explicit.
 Reports identify PID/build, submitter thread, QPC frequency, reset generation,
