@@ -180,7 +180,13 @@ static DWORD WINAPI log_worker(LPVOID parameter) {
                 session->count--;
             }
             ReleaseSRWLockExclusive(&session->lock);
-            if (!have_line && stopping) goto finished;
+            if (!have_line && stopping) {
+                /* Stop detached g_log before setting this flag: no producer
+                 * can enqueue now. Final snapshots may have arrived after
+                 * this iteration's first drain, while ordinary I/O ran. */
+                callback_pacing_drain(session);
+                goto finished;
+            }
             if (!have_line) break;
             log_write_line(session, line, sidecar);
         }
@@ -225,6 +231,9 @@ failed:
 }
 
 static void diagnostics_stop(void) {
+    /* Try-only final partial windows, while the writer still has its session.
+     * Queued is not persisted: file failures retain their existing counters. */
+    callback_pacing_flush_all();
     plugin_logf("diagnostics_stop", "dropped_records=%ld", (long)g_log_dropped);
     AcquireSRWLockExclusive(&g_log_lifetime);
     log_session_t *session = g_log;
@@ -257,6 +266,31 @@ static void log_module_path(const char *event, HMODULE module) {
 /* Per-call durations of one summary window in 0.1 ms steps; the last
  * bucket holds everything slower (its p99 then reports the window max). */
 #define CALLBACK_BUCKETS 256u
+/* Counters bracket callback boundaries, not an exact scheduler trace. CPU time
+ * can be coarse/quantized (15.625 ms observed in this machine's controls).
+ * Cycles stay raw: the API explicitly forbids converting them to elapsed time.
+ * Retain the QPC-to-read aperture so a delayed endpoint cannot look exact. */
+static cp_cpu_sample callback_cpu_read(uint64_t boundary_qpc) {
+    cp_cpu_sample sample = {0};
+    const DWORD saved = GetLastError();
+    const HANDLE thread = GetCurrentThread();
+    sample.tid = GetCurrentThreadId(); sample.valid = 1;
+    if (!QueryThreadCycleTime(thread, &sample.cycles)) {
+        sample.valid = 0; sample.reason = CP_CPU_QUERY_FAILED; sample.error = GetLastError();
+    }
+    FILETIME created, exited, kernel = {0}, user = {0};
+    if (!GetThreadTimes(thread, &created, &exited, &kernel, &user)) {
+        sample.valid = 0; sample.reason = CP_CPU_QUERY_FAILED;
+        if (!sample.error) sample.error = GetLastError();
+    }
+    sample.kernel_100ns = ((uint64_t)kernel.dwHighDateTime << 32) | kernel.dwLowDateTime;
+    sample.user_100ns = ((uint64_t)user.dwHighDateTime << 32) | user.dwLowDateTime;
+    LARGE_INTEGER at; QueryPerformanceCounter(&at);
+    if ((uint64_t)at.QuadPart >= boundary_qpc) sample.aperture_ticks = (uint64_t)at.QuadPart-boundary_qpc;
+    else { sample.valid = 0; sample.reason = CP_CPU_CLOCK_INVALID; }
+    SetLastError(saved);
+    return sample;
+}
 typedef struct {
     const char *name;
     uint64_t calls, slow_calls;
@@ -266,26 +300,90 @@ typedef struct {
     int64_t window_total, window_max_total, window_max_gap;
     uint32_t histogram[CALLBACK_BUCKETS];
     cp_meter pacing;
+    cp_cpu_sample entry_cpu;
+    volatile LONG cpu_owner, cpu_conflicts;
+    LONG entry_conflicts;
+    int64_t entry_qpc;
     volatile LONG64 in_flight_qpc, completed_qpc;
+    SRWLOCK pacing_commit;
+    volatile LONG pending_resets;
+    volatile LONG64 pacing_busy;
 } callback_diagnostic_t;
 static callback_diagnostic_t g_diagnostic_list = {"ProcessDList"};
 static callback_diagnostic_t g_diagnostic_update = {"UpdateScreen"};
 static callback_diagnostic_t g_diagnostic_rdp = {"ProcessRDPList"};
 
-static void callback_diagnostic_reset(callback_diagnostic_t *note) {
+static void callback_diagnostic_reset_locked(callback_diagnostic_t *note) {
     const char *name = note->name;
     cp_meter pacing = note->pacing;
     cp_reset(&pacing);
-    memset(note, 0, offsetof(callback_diagnostic_t, in_flight_qpc));
+    memset(note, 0, offsetof(callback_diagnostic_t, pacing));
+    /* A reset inside an active call invalidates its CPU endpoints. Leave its
+     * owner/entry slot intact until its matching end releases it. */
+    InterlockedIncrement(&note->cpu_conflicts);
     InterlockedExchange64(&note->in_flight_qpc,0);
     InterlockedExchange64(&note->completed_qpc,0);
     note->name = name;
     note->pacing = pacing;
 }
+static void callback_diagnostic_reset(callback_diagnostic_t *note) {
+    if (!TryAcquireSRWLockExclusive(&note->pacing_commit)) {
+        InterlockedIncrement(&note->pending_resets); return;
+    }
+    callback_diagnostic_reset_locked(note);
+    ReleaseSRWLockExclusive(&note->pacing_commit);
+}
+static int callback_pacing_prepare(callback_diagnostic_t *note) {
+    const LONG resets = InterlockedExchange(&note->pending_resets, 0);
+    if (resets) {
+        callback_diagnostic_reset_locked(note);
+        note->pacing.generation += (uint64_t)resets-1; note->pacing.resets += (uint64_t)resets-1;
+    }
+    const uint64_t busy = (uint64_t)InterlockedCompareExchange64(&note->pacing_busy, 0, 0);
+    const uint64_t missed = busy-note->pacing.cpu_commit_busy;
+    if (missed) {
+        /* Count contended completions as unknown, without bridging a gap over
+         * a missing endpoint or waiting for another producer. */
+        note->pacing.samples += missed; note->pacing.invalid += missed;
+        note->pacing.cpu_invalid += missed; note->pacing.cpu_commit_busy = busy;
+        cp_reset(&note->pacing);
+    }
+    return resets != 0;
+}
+static void callback_pacing_flush_all(void) {
+    callback_diagnostic_t *notes[] = {&g_diagnostic_list,&g_diagnostic_update,&g_diagnostic_rdp};
+    static const char *const names[] = {"ProcessDList","UpdateScreen","ProcessRDPList"};
+    LARGE_INTEGER at; QueryPerformanceCounter(&at);
+    for (unsigned n=0;n<sizeof notes/sizeof *notes;++n) {
+        callback_diagnostic_t *note=notes[n];
+        if (!TryAcquireSRWLockExclusive(&note->pacing_commit)) {
+            plugin_logf("callback_final_window","version=2 coverage=callback callback=%s frequency=%lld "
+                "state=unavailable reason=busy_commit unsent_samples=unknown",names[n],g_diagnostic_frequency);
+            continue;
+        }
+        callback_pacing_prepare(note);
+        const uint64_t pending=note->pacing.samples-note->pacing.sent_samples;
+        const int in_flight=InterlockedCompareExchange(&note->cpu_owner,0,0)!=0;
+        const int queued=pending && callback_pacing_send(names[n],&note->pacing,(uint64_t)at.QuadPart);
+        ReleaseSRWLockExclusive(&note->pacing_commit);
+        plugin_logf("callback_final_window","version=2 coverage=callback callback=%s frequency=%lld "
+            "state=%s queued_samples=%llu unsent_samples=%llu in_flight=%d",
+            names[n],g_diagnostic_frequency,pending?(queued?"queued":"unsent"):"empty",
+            queued?pending:0,queued?0:pending,in_flight);
+    }
+}
 
 static int64_t callback_diagnostic_begin(callback_diagnostic_t *note) {
     LARGE_INTEGER at; QueryPerformanceCounter(&at);
 #ifndef CALLBACK_PACING_BASELINE_HOST
+    if (!g_diagnostic_frequency) return at.QuadPart;
+    const LONG tid = (LONG)GetCurrentThreadId();
+    const LONG conflicts = InterlockedCompareExchange(&note->cpu_conflicts, 0, 0);
+    if (InterlockedCompareExchange(&note->cpu_owner, tid, 0) == 0) {
+        note->entry_qpc = at.QuadPart;
+        note->entry_conflicts = conflicts;
+        note->entry_cpu = callback_cpu_read((uint64_t)at.QuadPart);
+    } else InterlockedIncrement(&note->cpu_conflicts);
     InterlockedExchange64(&note->in_flight_qpc, at.QuadPart);
 #else
     (void)note; /* CPU host only: measure the original two-QPC/end path. */
@@ -337,15 +435,39 @@ static double callback_p99_ms(const callback_diagnostic_t *note) {
 static void callback_diagnostic_end(callback_diagnostic_t *note, int64_t begin, int64_t end) {
     if (!g_diagnostic_frequency) return;
 #ifndef CALLBACK_PACING_BASELINE_HOST
-    cp_observe(&note->pacing,(uint64_t)begin,(uint64_t)end,(uint64_t)g_diagnostic_frequency);
+    cp_cpu_sample entry = {0}, exit = {0};
+    entry.reason = exit.reason = CP_CPU_OVERLAP;
+    const LONG tid = (LONG)GetCurrentThreadId();
+    const int owns_entry = InterlockedCompareExchange(&note->cpu_owner, 0, 0) == tid && note->entry_qpc == begin;
+    if (owns_entry) {
+        entry = note->entry_cpu;
+        exit = callback_cpu_read((uint64_t)end);
+        if (note->entry_conflicts != InterlockedCompareExchange(&note->cpu_conflicts, 0, 0)) {
+            entry.valid = exit.valid = 0; entry.reason = exit.reason = CP_CPU_OVERLAP;
+        }
+    }
+    if (TryAcquireSRWLockExclusive(&note->pacing_commit)) {
+        if (callback_pacing_prepare(note)) {
+            entry.valid = exit.valid = 0; entry.reason = exit.reason = CP_CPU_OVERLAP;
+        }
+        if (owns_entry && note->entry_conflicts != InterlockedCompareExchange(&note->cpu_conflicts, 0, 0)) {
+            entry.valid = exit.valid = 0; entry.reason = exit.reason = CP_CPU_OVERLAP;
+        }
+        cp_observe_cpu(&note->pacing,(uint64_t)begin,(uint64_t)end,
+                       (uint64_t)g_diagnostic_frequency,&entry,&exit);
+        if (begin > 0 && end >= begin) {
+            const int attention = note->pacing.duration.max_ticks >= (uint64_t)g_diagnostic_frequency/100
+                || note->pacing.gap.max_ticks >= (uint64_t)g_diagnostic_frequency/20;
+            const uint64_t pacing_span = note->pacing.last_qpc-note->pacing.first_qpc;
+            if (pacing_span >= (uint64_t)g_diagnostic_frequency*(attention?5:60))
+                callback_pacing_send(note->name,&note->pacing,(uint64_t)end);
+        }
+        ReleaseSRWLockExclusive(&note->pacing_commit);
+    } else InterlockedIncrement64(&note->pacing_busy);
+    if (owns_entry) InterlockedExchange(&note->cpu_owner, 0);
     InterlockedExchange64(&note->completed_qpc,end);
     InterlockedExchange64(&note->in_flight_qpc,0);
     if (begin <= 0 || end < begin) return;
-    const int attention = note->pacing.duration.max_ticks >= (uint64_t)g_diagnostic_frequency/100
-        || note->pacing.gap.max_ticks >= (uint64_t)g_diagnostic_frequency/20;
-    const uint64_t pacing_span = note->pacing.last_qpc-note->pacing.first_qpc;
-    if (pacing_span >= (uint64_t)g_diagnostic_frequency*(attention?5:60))
-        callback_pacing_send(note->name,&note->pacing,(uint64_t)end);
 #endif
     int64_t gap = note->previous ? begin - note->previous : 0;
     note->previous = begin;

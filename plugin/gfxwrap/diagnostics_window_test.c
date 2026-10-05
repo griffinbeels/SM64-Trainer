@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define LOG_MAX_BYTES 4096u
+#define LOG_MAX_BYTES 8192u /* larger CPU tuples; 200 fillers still exceed three files */
 #define ACTIVATION_MAX_BYTES 3000u
 static void self_dir(wchar_t *out, size_t count) {
     GetCurrentDirectoryW((DWORD)count, out);
