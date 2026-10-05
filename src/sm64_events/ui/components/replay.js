@@ -326,30 +326,73 @@ function fmtSpan(st) {
   return `${Math.round(s)} s`;
 }
 
-// Header indicator: red = recording, grey = no capture, hidden = replay
-// absent. Always shows buffer disk use vs cap; click opens the limits panel.
+function captureLabel(st) {
+  if (st.capture_state === "stopping") return "Stopping recording…";
+  if (st.capture_state === "off") return "Recording off";
+  if (st.capture_state === "starting") return "Starting recording…";
+  if (st.capture_state === "paused") return "Recording paused";
+  if (st.capture_state === "error") return "Recording needs attention";
+  if (st.recording) return `rec${st.idle ? " (idle)" : ""} · ${fmtSpan(st)} · ${fmtGB(st.disk_bytes)}/${fmtGB(st.max_buffer_bytes)} GB`;
+  return st.capture_gated ? "replay off · not Usamune" : "no capture";
+}
+
+// Header indicator and panel share the recorder's actual lifecycle status.
 export function RecordingDot() {
   const [st, setSt] = useState(null);
   const [open, setOpen] = useState(false);
   const [tick, setTick] = useState(0); // bump to re-poll immediately
   useEffect(() => pollJSON("/api/replay/status", setSt,
-    {onError: () => setSt(null)}), [tick]);
+    {intervalMs: (next) => ["starting", "stopping"].includes(next?.capture_state) ? 300 : 5000,
+      onError: () => setSt(null)}), [tick]);
   if (st === null) return null;
   const cls = st.recording ? "ok" : "bad";
-  // Off on purpose during a real run on another ROM, not failing.
-  const label = st.recording
-    ? `rec${st.idle ? " (idle)" : ""} · ${fmtSpan(st)} · ${fmtGB(st.disk_bytes)}/${fmtGB(st.max_buffer_bytes)} GB`
-    : st.capture_gated ? "replay off · not Usamune" : "no capture";
+  const label = captureLabel(st);
   return html`<span class="recording-control">
     <button class=${`dot recording-button ${cls}`}
-          title="replay buffer (${st.encoder} · audio ${st.audio_mode}) — click for storage limits"
+          title="Recording controls and replay storage"
           aria-expanded=${open} onclick=${() => setOpen(!open)}>
       <span class="recording-light"></span>${label}
     </button>
-    ${open && html`<${BufferSettings} st=${st}
+    ${open && html`<${BufferSettings} st=${st} onStatus=${setSt}
         refresh=${() => setTick((t) => t + 1)}
         close=${() => setOpen(false)} />`}
   </span>`;
+}
+
+function RecordingSwitch({st, onStatus, refresh}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const inFlight = useRef(false);
+  const supported = typeof st.recording_enabled === "boolean";
+  const cleanupError = st.recovery?.state === "cleanup_pending" ? st.recovery.error : null;
+  const captureError = st.capture_state === "error"
+    ? st.recovery?.error || st.frame_source_health?.error || st.publication_error : null;
+  async function toggle() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await send("PUT", "/api/replay/recording", {enabled: !st.recording_enabled});
+      onStatus(next);
+      refresh();
+    } catch (e) {
+      setError(`Could not change recording: ${String(e)}`);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+  return html`<div class="recording-switch">
+    <div><b>Gameplay recording</b><span role="status">${captureLabel(st)}</span></div>
+    <button disabled=${!supported || busy || st.capture_state === "stopping"}
+      onclick=${toggle}>${st.recording_enabled === false ? "Start recording" : "Stop recording"}</button>
+    <p>${supported
+      ? "Stops video, audio, recorded Mario poses and Only Mario ghosts. Practice tracking continues."
+      : "Restart the trainer to enable these recording controls."}</p>
+    ${error && html`<p role="alert">${error}</p>`}
+    ${(cleanupError || captureError) && html`<p role="alert">${cleanupError || captureError}</p>`}
+  </div>`;
 }
 
 function RetentionControls({mode, setMode, attempts, setAttempts, mins, setMins, ready}) {
@@ -416,7 +459,7 @@ function CompressionSection() {
 }
 
 // Unsaved replay history: attempt/time windows plus the shared disk cap.
-function BufferSettings({ st, refresh, close }) {
+function BufferSettings({ st, onStatus, refresh, close }) {
   const [info, setInfo] = useState(null);
   // Retention placeholders: its controls and Apply wait for the settings GET,
   // which replaces all three before either can show or send them.
@@ -471,10 +514,11 @@ function BufferSettings({ st, refresh, close }) {
   const pct = Math.min(100, (st.disk_bytes / st.max_buffer_bytes) * 100);
   return html`<div class="popover replay-settings-popover">
     <div class="popover-heading">
-      <div><span class="eyebrow">Replay</span><b>Buffer storage</b></div>
+      <div><span class="eyebrow">Replay</span><b>Recording and storage</b></div>
       <button class="icon-button" title="Close" aria-label="Close replay settings"
           onclick=${close}><${Icon} name="close" size=${16} /></button>
     </div>
+    <${RecordingSwitch} st=${st} onStatus=${onStatus} refresh=${refresh} />
     <p class="popover-note">Keep recent attempts for review. Saved replays and marked PBs stay saved.</p>
     <div class="buffer-usage">
       <div><b>${fmtGB(st.disk_bytes)} GB</b>

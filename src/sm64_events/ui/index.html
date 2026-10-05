@@ -5766,6 +5766,15 @@
   }
   .popover-heading { display: flex; align-items: center; justify-content: space-between; gap: .7rem; }
   .popover-heading > div { display: grid; gap: .08rem; }
+  .recording-switch {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+    gap: .35rem .7rem; margin: .65rem 0; padding-bottom: .65rem; white-space: normal;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .recording-switch > div { display: grid; gap: .12rem; min-width: 0; }
+  .recording-switch [role="status"] { color: var(--muted); font-size: .72rem; }
+  .recording-switch > p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .68rem; }
+  .recording-switch > p[role="alert"] { color: var(--danger, #ffb1b1); }
   .popover-note { margin: .25rem 0 .7rem; color: var(--muted); font-size: .68rem; }
   .buffer-usage { display: grid; gap: .4rem; margin-bottom: .7rem; }
   .buffer-usage > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
