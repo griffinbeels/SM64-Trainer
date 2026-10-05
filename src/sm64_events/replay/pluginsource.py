@@ -222,8 +222,12 @@ class DesktopUntilLayerPresents:
         if (thread is not None and thread is not threading.current_thread()
                 and thread.ident is not None):
             thread.join(timeout=2.0)
-        self._thread = None
+        pending = thread is not None and thread.is_alive()
+        if not pending:
+            self._thread = None
         self._desktop.stop()
+        if pending:
+            raise RuntimeError("capture layer watch cleanup pending")
 
     def _watch(self) -> None:
         while not self._stop.wait(LAYER_WATCH_S):

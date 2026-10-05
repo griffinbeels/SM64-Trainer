@@ -10,7 +10,7 @@ never blocks."""
 from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.concurrency import contextmanager_in_threadpool
-from pydantic import BaseModel, StrictInt
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 
 from sm64_events.replay.virtualmp4 import VirtualMp4
 from sm64_events.server.replay_range import serve_media
@@ -26,6 +26,11 @@ class SettingsBody(BaseModel):
     max_buffer_bytes: int
     pre_pad_s: float | None = None     # omitted = keep current
     post_pad_s: float | None = None    # omitted = keep current
+
+
+class RecordingBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool
 
 
 def _http(e: Exception) -> HTTPException:
@@ -129,6 +134,13 @@ def create_replay_router(replay) -> APIRouter:
     @router.get("/replay/status")
     def status():
         return replay.status()
+
+    @router.put("/replay/recording")
+    def recording(body: RecordingBody):
+        try:
+            return replay.set_recording_enabled(body.enabled)
+        except (LookupError, ValueError, RuntimeError) as error:
+            raise _http(error) from error
 
     @router.get("/replay/settings")
     def get_settings():
