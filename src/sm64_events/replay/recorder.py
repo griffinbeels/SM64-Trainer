@@ -1266,18 +1266,22 @@ class ReplayRecorder:
         # M3: reads of _recording/_window_found/_audio_mode/_codec are unlocked;
         # CPython attribute reads are atomic, so these are stale-but-never-torn —
         # acceptable for a polling status surface.
-        # PUT uses the last observed coverage: archive/ring locks can be held
-        # across disk writes or session rotation. Closure proof is independent
-        # of this optional media summary and must never wait on those locks.
+        # Lifecycle polls and PUT use the last observed coverage: archive/ring
+        # locks can be held across disk writes or session rotation. Closure
+        # proof must not wait on that optional media summary during a transition.
+        control = self._capture_control_status()
         cov = self._status_coverage
-        if not nonblocking:
+        if not nonblocking and control["capture_state"] not in {"starting", "stopping", "off"}:
             cov = self.fragments.coverage() if self.fragments.enabled else self.ring.coverage("video")
             self._status_coverage = cov
+            # An active poll may have begun before Stop and waited on storage.
+            # Its response must reflect the request published during that wait.
+            control = self._capture_control_status()
         # Teardown can detach either owner during a read. Each health lookup
         # uses one retained reference instead of a check/dereference race.
         source, sink = self._video_source, self._video_sink
         return {
-            **self._capture_control_status(),
+            **control,
             "recording": self._recording_active(),
             "window_found": self._window_found,
             "audio_mode": self._audio_mode,

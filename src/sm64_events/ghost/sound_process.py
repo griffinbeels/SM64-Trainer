@@ -66,8 +66,9 @@ class _Diagnostics:
 
     def finish(self):
         self._reader.join(timeout=2)
-        if not self._reader.is_alive():
-            self.stream.close()
+        if self._reader.is_alive():
+            raise RuntimeError("ghost sound diagnostics reader cleanup pending")
+        self.stream.close()
         return b"".join(tuple(self._tail))[-MAX_DIAGNOSTIC_BYTES:].decode("utf-8", errors="replace")
 
 
@@ -126,19 +127,29 @@ class SoundPlayerProcess:
                  pj64_pid, self._child.pid, self._attempts, (self._clock() - self._started_at) * 1000)
 
     def _finish_diagnostics(self):
-        diagnostics, self._diagnostics = self._diagnostics, None
-        return diagnostics.finish() if diagnostics is not None else ""
+        diagnostics = self._diagnostics
+        if diagnostics is None:
+            return ""
+        details = diagnostics.finish()
+        self._diagnostics = None
+        return details
 
     def stop(self, timeout_s: float = 2.0) -> None:
-        child, self._child, self.pj64_pid = self._child, None, None
-        try:
-            if child is None or child.poll() is not None:
-                return
+        # Keep both owners until process exit, reader join and pipe closure
+        # succeed. A failed close must also prevent spawning a second player.
+        child = self._child
+        if child is not None and child.poll() is None:
             child.terminate()
             try:
                 child.wait(timeout_s)
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait(timeout_s)
-        finally:
+            if child.poll() is None:
+                raise RuntimeError("ghost sound child cleanup pending")
+        if self._diagnostics is not None:
             self._finish_diagnostics()
+        elif child is not None and (stream := getattr(child, "stderr", None)) is not None:
+            # Diagnostics setup itself may have failed after spawning.
+            stream.close()
+        self._child, self.pj64_pid = None, None
