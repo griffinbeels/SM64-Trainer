@@ -100,10 +100,12 @@ ghost_compositor::Known known_state() {
     return known;
 }
 
-bool same(const renderer::Identity &a, const renderer::Identity &b) {
+bool same_context(const renderer::Identity &a, const renderer::Identity &b) {
     return a.context && a.context == b.context && a.context_generation == b.context_generation
-        && a.drawable_generation == b.drawable_generation && a.read_drawable == b.read_drawable
         && a.owner_thread == b.owner_thread;
+}
+bool same(const renderer::Identity &a, const renderer::Identity &b) {
+    return same_context(a, b) && a.drawable_generation == b.drawable_generation && a.read_drawable == b.read_drawable;
 }
 bool valid_image(const ghost_presentation::GhostViImage &image) {
     return ready && image.occurrence == occurrence && image.configuration == configuration
@@ -166,6 +168,10 @@ bool close_display() {
     cost.close_micros += since(stage);
     return clean;
 }
+void forget_scopes() {
+    provisional = ready = hud = layer = display_scope = layer_scope = layer_color = false;
+    occurrence = 0; draw_token = {};
+}
 }
 void cancel() {
     if (hud) end_hud();
@@ -174,12 +180,17 @@ void cancel() {
     provisional = ready = false; occurrence = 0; draw_token = {};
 }
 void context_lost() {
+    renderer::Identity identity{};snapshot::RestoreBindings ignored{};
+    const bool owned = replay_gl::CandidateBindings(&identity, &ignored) && same_context(identity, owner);
     ghost_ipc::presented(0);
-    close_layer(); cancel();
+    if (owned) { close_layer(); cancel(); }
+    else {
+        // A scope from another generation cannot restore bindings here.
+        forget_scopes();
+    }
     ghost_playback::retire_on_context_loss();
     if (compositor) {
-        if (reinterpret_cast<uintptr_t>(wglGetCurrentContext()) == owner.context)
-            ghost_compositor::destroy(compositor);
+        if (owned) ghost_compositor::destroy(compositor);
         else ghost_compositor::abandon(compositor);
     }
     compositor = nullptr; owner = {}; presentation_owner = {}; dispatch = {};
@@ -187,13 +198,23 @@ void context_lost() {
     get_uniform = nullptr;
 }
 void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
-    close_layer(); cancel(); will_draw = false;
-    ghost_compositor::clear_layer(compositor);
+    renderer::Identity identity{}; snapshot::RestoreBindings ignored{};
+    const bool identified = replay_gl::CandidateBindings(&identity, &ignored);
+    if (identified && same_context(identity, owner)) {
+        close_layer(); cancel(); ghost_compositor::clear_layer(compositor);
+    } else {
+        // A missed loss may leave scopes from the old context open. Forget
+        // them without restoring their bindings through the new context.
+        forget_scopes();
+        if (compositor) ghost_compositor::abandon(compositor);
+        compositor = nullptr; owner = {};
+        prepared_width = prepared_height = 0; model_id = particle_model = annotation_model = 0;
+    }
+    will_draw = false;
     ghost_playback::safe_boundary(rom, config_id);
     configuration = config_id;
     if (!ghost_presentation::clean_consumer()) return;
-    renderer::Identity identity{}; snapshot::RestoreBindings ignored{};
-    if (!replay_gl::CandidateBindings(&identity, &ignored)) return;
+    if (!identified) return;
     if (!same(identity, presentation_owner)) {
         ghost_presentation::set_provider(image_for_vi, presented, valid_image);
         ghost_presentation::context_ready(); presentation_owner = identity;
@@ -201,11 +222,7 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
     // The compositor and its programs exist before any ghost is asked for, so
     // the driver's compile lands seconds after the game starts, not on the
     // first ghost's list (a fresh shader cache cost that list 36 ms, 2026-10-02).
-    if (!same(identity, owner)) {
-        if (compositor) {
-            if (identity.context == owner.context) ghost_compositor::destroy(compositor);
-            else ghost_compositor::abandon(compositor);
-        }
+    if (!same_context(identity, owner)) {
         compositor = nullptr; prepared_width = prepared_height = 0; model_id = particle_model = annotation_model = 0;
         if (!ghost_dispatch::load(dispatch)) return;
         owner = identity;
@@ -217,6 +234,9 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         if (compositor) ghost_compositor::warm(compositor);
         if (!replay_gl::EndCapture()) { ghost_compositor::abandon(compositor); compositor = nullptr; return; }
     }
+    // Programs belong to the context. Picture admission still follows every
+    // drawable change, and prepare below reallocates only a changed extent.
+    owner = identity;
     sg_atlas_view atlas{}; uint64_t wanted_model = 0;
     if (!ghost_playback::atlas(&atlas, &wanted_model)) return;
     if (compositor && width && height && (width != prepared_width || height != prepared_height || model_id != wanted_model)) {

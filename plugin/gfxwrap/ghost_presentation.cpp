@@ -303,6 +303,7 @@ namespace {
 Instance* current=nullptr;
 renderer::Identity owner{};
 std::unique_ptr<graphics::ShaderProgram> gamma_program;
+uint32_t gamma_force=0;float gamma_level=0;
 uint32_t source_width=0,source_height=0;
 bool osd_phase=false;
 struct ViRaster {
@@ -366,6 +367,10 @@ bool identity_matches() {
         now.context_generation==owner.context_generation && now.drawable_generation==owner.drawable_generation &&
         now.owner_thread==owner.owner_thread && now.read_drawable==owner.read_drawable;
 }
+bool owns_context(const renderer::Identity& now) {
+    return owner.context && now.context==owner.context && now.context_generation==owner.context_generation &&
+        now.owner_thread==owner.owner_thread;
+}
 bool prepare_extent(uint32_t width,uint32_t height) {
     unsigned dw=0,dh=0;
     if(!current || !identity_matches() || !replay_gl::DrawableExtent(&dw,&dh) || !replay_gl::BeginCapture())return false;
@@ -378,7 +383,8 @@ bool prepare_extent(uint32_t width,uint32_t height) {
 void context_stopping() {
     if(notice)notice({},0,false);
     osd_phase=false;
-    const bool same_context=reinterpret_cast<uintptr_t>(wglGetCurrentContext())==owner.context;
+    renderer::Identity now{};snapshot::RestoreBindings ignored{};
+    const bool same_context=replay_gl::CandidateBindings(&now,&ignored) && owns_context(now);
     if(current) {
         if(same_context)destroy(current);
         else abandon(current);
@@ -389,17 +395,49 @@ void context_stopping() {
     if(same_context)gamma_program.reset();else (void)gamma_program.release();
     current=nullptr;owner={};source_width=source_height=0;
 }
+void drawable_changing() {
+    if(notice)notice({},0,false);
+    osd_phase=false;
+    if(current) {
+        renderer::Identity now{};snapshot::RestoreBindings ignored{};
+        if(!replay_gl::CandidateBindings(&now,&ignored) || !owns_context(now)) {
+            context_stopping();return;
+        }
+        reset(current);current->update=0;current->published=current->display_published={};
+    }
+}
 void context_ready() {
-    context_stopping();if(!clean_consumer())return;
+    if(!clean_consumer()){context_stopping();return;}
+    renderer::Identity now{};
     snapshot::RestoreBindings ignored{};
-    if(!replay_gl::CandidateBindings(&owner,&ignored) || replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN)return;
+    if(!replay_gl::CandidateBindings(&now,&ignored) || replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN) {
+        context_stopping();return;
+    }
+    if(current && gamma_program && owns_context(now)) {
+        drawable_changing();owner=now;source_width=source_height=0;
+        // The pinned shader captures these uniforms in its constructor. A
+        // settings-driven drawer restart must apply the new gamma too.
+        if(gamma_force!=config.gammaCorrection.force || gamma_level!=config.gammaCorrection.level) {
+            if(!replay_gl::BeginCapture()){current->ready=false;return;}
+            gamma_program.reset(gfxContext.createGammaCorrectionShader());
+            gamma_force=config.gammaCorrection.force;gamma_level=config.gammaCorrection.level;
+            const bool clean=replay_gl::EndCapture();
+            if(!gamma_program || !clean){context_stopping();return;}
+        }
+        if(!prepare_extent(0,0))current->ready=false;
+        return;
+    }
+    context_stopping();owner=now;
     Dispatch dispatch{};
     if(!ghost_dispatch::load(dispatch.gl))return;
     dispatch.CopyTexSubImage2D=reinterpret_cast<decltype(dispatch.CopyTexSubImage2D)>(glCopyTexSubImage2D);
     dispatch.DrawBuffers=reinterpret_cast<decltype(dispatch.DrawBuffers)>(g_glDrawBuffers);
     if(!replay_gl::BeginCapture())return;
     current=create(dispatch,owner.context_generation);
-    if(current)gamma_program.reset(gfxContext.createGammaCorrectionShader());
+    if(current) {
+        gamma_program.reset(gfxContext.createGammaCorrectionShader());
+        gamma_force=config.gammaCorrection.force;gamma_level=config.gammaCorrection.level;
+    }
     const bool clean=replay_gl::EndCapture();
     if(!current || !gamma_program || !clean || !prepare_extent(0,0)){context_stopping();return;}
 }

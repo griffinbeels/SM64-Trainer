@@ -38,7 +38,7 @@ def edits(source: Path, replace_once) -> dict[str, bytes]:
     for guard in ["m_bToggleFullscreen", "m_bResizeWindow"]:
         anchor = f"\tif (!{guard})\n\t\treturn false;\n\tm_drawer._destroyData();"
         data = replace_once(data, anchor, f"\tif (!{guard})\n\t\treturn false;\n" + GUARD +
-            "\tghost_presentation::context_stopping();\n#endif\n\tm_drawer._destroyData();")
+            "\tghost_presentation::drawable_changing();\n#endif\n\tm_drawer._destroyData();")
         anchor = f"\tm_drawer._initData();\n\t{guard} = false;"
         data = replace_once(data, anchor, "\tm_drawer._initData();\n" + GUARD +
             f"\tghost_presentation::context_ready();\n#endif\n\t{guard} = false;")
