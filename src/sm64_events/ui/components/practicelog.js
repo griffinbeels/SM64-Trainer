@@ -16,7 +16,7 @@
 // ONE card serves both kinds. That is rule 11 becoming structural rather
 // than an agreement between two hand-written sections that a test compares.
 import { h } from "preact";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { displayName, entityIdentity, entityKey, isSegment, isManualSegment,
          sectionClock, sectionPb, sectionPbByStrat,
@@ -32,8 +32,9 @@ import { useFeedMotion } from "./feedmotion.js";
 import { StratPicker } from "./stratpicker.js";
 import { StandardsPanel } from "./standards.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
-         ResetFilterToggle, StatMenuTrigger, comparator, ranksAreAtFloor,
-         showsEntityBanner, rankIdentity, PbTag, PbNews, attemptHiddenByDefault }
+         StatMenuTrigger, comparator, ranksAreAtFloor,
+         showsEntityBanner, rankIdentity, PbTag, PbNews, attemptHiddenByDefault,
+         attemptMatchesLogFilters }
   from "./attemptlog.js";
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
@@ -48,6 +49,94 @@ import { GoalPlate, useEntryGoals } from "./goalplate.js";
 import { useTargetPick } from "../target.js";
 
 const html = htm.bind(h);
+
+function LogPreferenceSwitch({ label, description, checked, onChange }) {
+  return html`<label class="log-preference">
+    <span class="log-preference-copy"><b>${label}</b><small>${description}</small></span>
+    <span class="log-preference-control">
+      <span class="log-preference-state" aria-hidden="true">${checked ? "On" : "Off"}</span>
+      <span class="log-preference-switch">
+        <input type="checkbox" role="switch" checked=${checked}
+          aria-label=${label} onchange=${(e) => onChange(e.target.checked)} />
+        <span class="log-preference-track" aria-hidden="true"></span>
+      </span>
+    </span>
+  </label>`;
+}
+
+export function PracticeLogSettings({ ui, t }) {
+  const [anchor, setAnchor] = useState(null);
+  const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  const panelRef = useRef(null);
+  const open = Boolean(anchor);
+  const dismiss = (restoreFocus = false) => {
+    setAnchor(null);
+    if (restoreFocus) triggerRef.current?.focus({ preventScroll: true });
+  };
+  useLayoutEffect(() => {
+    if (!open || !panelRef.current) return;
+    const height = panelRef.current.getBoundingClientRect().height;
+    const top = Math.max(12, Math.min(anchor.top, window.innerHeight - height - 12));
+    // Measure while hidden. Preact batches layout-effect updates, so drawing
+    // the initial position would flash a clipped panel for one frame.
+    setAnchor({ ...anchor, top, ready: true });
+  }, [open]);
+  useEffect(() => {
+    if (!open) return undefined;
+    if (anchor.ready) panelRef.current?.querySelector("input")?.focus({ preventScroll: true });
+    const outside = (e) => {
+      if (!rootRef.current?.contains(e.target)) dismiss();
+    };
+    const escape = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      dismiss(true);
+    };
+    const resize = () => dismiss();
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    window.addEventListener("resize", resize);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", resize);
+    };
+  }, [open, anchor?.ready]);
+  const toggle = () => {
+    if (open) { dismiss(); return; }
+    const box = triggerRef.current.getBoundingClientRect();
+    setAnchor({ top: box.bottom + 8, ready: false,
+      right: Math.max(12, window.innerWidth - box.right) });
+  };
+  return html`<span class="log-settings" ref=${rootRef}>
+    <button ref=${triggerRef} type="button" class="icon-button log-settings-trigger"
+      aria-label="Practice log settings" title="Practice log settings"
+      aria-haspopup="dialog" aria-expanded=${open ? "true" : "false"}
+      aria-controls=${open ? "practice-log-settings" : undefined} onclick=${toggle}>
+      <${Icon} name="settings" size=${18} />
+    </button>
+    ${open && html`<div ref=${panelRef} id="practice-log-settings"
+      class="log-settings-panel" role="dialog" aria-label="Practice log settings"
+      style=${`top:${anchor.top}px;right:${anchor.right}px;visibility:${anchor.ready ? "visible" : "hidden"}`}>
+      <div class="log-settings-head"><b>Practice log settings</b>
+        <button type="button" class="icon-button" aria-label="Close practice log settings"
+          onclick=${() => dismiss(true)}><${Icon} name="close" size=${16} /></button>
+      </div>
+      <div class="log-settings-preferences">
+        <${LogPreferenceSwitch} label="Hide resets and deaths"
+          description="Keep failed resets and deaths out of the log."
+          checked=${Boolean(ui.hideResets)} onChange=${ui.setHideResets} />
+        <${LogPreferenceSwitch} label="Hide savestated entries"
+          description="Hide attempts started from or interrupted by a save state."
+          checked=${ui.hideSavestates !== false} onChange=${ui.setHideSavestates} />
+      </div>
+      <div class="log-settings-option"><span>Sort attempts</span><${SortControl} ui=${ui} /></div>
+      <div class="log-settings-option"><span>Visible stats</span><${StatMenuTrigger} t=${t} withinSettings=${true} /></div>
+    </div>`}
+  </span>`;
+}
 
 // How many entity cards render before "Show 5 more". Superseded rule, kept
 // legible rather than deleted outright: every shown card used to be OPEN by
@@ -526,8 +615,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
     : sec.attempts.filter((a) => !attemptHiddenByDefault(a));
   const hidden = sec.attempts.filter(attemptHiddenByDefault);
   const rows = base
-    .filter((a) => !(ui.hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset" || a.outcome === "loaded")))
+    .filter((a) => attemptMatchesLogFilters(a, ui))
     .slice()
     .sort(comparator(ui.sort, clock));
   // A pick (this card's own PbTag jump, or a trend-graph dot in
@@ -917,8 +1005,7 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
     : unassigned.filter((a) => !attemptHiddenByDefault(a));
   const hidden = unassigned.filter(attemptHiddenByDefault);
   const rows = visibleAttempts
-    .filter((a) => !(ui.hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset" || a.outcome === "loaded")))
+    .filter((a) => attemptMatchesLogFilters(a, ui))
     .slice()
     .sort(comparator(ui.sort, t.clock));
   const shown = rows.slice(0, visible);
@@ -1211,9 +1298,6 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
              behind the number -- so the noun goes in the label rather than
              staying implied. */""}
         <span class="meta">${page.length} entities shown</span>
-        <${StatMenuTrigger} t=${t} />
-        <${SortControl} ui=${ui} />
-        <${ResetFilterToggle} ui=${ui} />
         ${/* The target picker's TRIGGER, re-homed here now that the card it
              used to live on (the Active Target card) is deleted (amendment
              A9). Griffin retired the feature outright, then gave it a home
@@ -1232,6 +1316,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
             title="Pick a star or segment to practice manually">
           <${Icon} name="target" size=${14} />${" "}<span class="stat-menu-label">Target</span>
         </button>`}
+        <${PracticeLogSettings} ui=${ui} t=${t} />
       </div>
     </div>
     ${/* THE FEED'S OWN MOTION. `.log-list` is the element every card is a

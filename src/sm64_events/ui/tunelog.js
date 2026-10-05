@@ -404,6 +404,7 @@ function Inspector() {
   const [status, setStatus] = useState(null);
   const [sort, setSort] = useState("newest");
   const [hideResets, setHideResets] = useState(false);
+  const [hideSavestates, setHideSavestates] = useState(true);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, encodeTuning(values)); }, [values]);
   // Commit to the active slot SYNCHRONOUSLY, in the render body -- not in a
@@ -423,8 +424,8 @@ function Inspector() {
   const tuningKey = encodeTuning(values);
 
   const ui = useMemo(() => ({
-    sort, hideResets, setSort, setHideResets,
-  }), [sort, hideResets]);
+    sort, hideResets, hideSavestates, setSort, setHideResets, setHideSavestates,
+  }), [sort, hideResets, hideSavestates]);
   const pbDemo = usePbDemo();
   const view = useMemo(() => fixtureView(pbDemo.demo),
     [pbDemo.demo.extra, pbDemo.demo.crowns]);

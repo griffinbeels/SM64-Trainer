@@ -38,12 +38,19 @@ export const SORT_OPTIONS = [
   ["newest", "newest first"], ["oldest", "oldest first"],
   ["fastest", "fastest first"], ["slowest", "slowest first"]];
 
-// One visibility rule for entity cards, unassigned rows and graph picks.
-// Save-state practice stays available through the existing hidden-row toggle.
+// Removed rows have their own per-card reveal. The log's preferences apply
+// independently, including while removed rows are being shown.
 export function attemptHiddenByDefault(a) {
-  return Boolean(a.cleared || a.outcome === "abandoned"
-    || a.outcome === "loaded" || a.state_loads > 0 || a.anchor_type === "state_loaded"
-    || a.invalid_reason === "save_state");
+  return Boolean(a.cleared || a.outcome === "abandoned");
+}
+
+// Shared by star/segment cards, the unassigned bucket and graph-pick membership.
+// Missing preferences retain the default: saved-state entries are hidden.
+export function attemptMatchesLogFilters(a, ui) {
+  const savestated = a.outcome === "loaded" || a.state_loads > 0
+    || a.anchor_type === "state_loaded" || a.invalid_reason === "save_state";
+  return !(ui.hideSavestates !== false && savestated)
+    && !(ui.hideResets && ["reset", "hard_reset", "death"].includes(a.outcome));
 }
 
 // Row time on the current clock: completion time for successes, how-far-in
@@ -596,10 +603,27 @@ export function AttemptLogEmpty({ hasAttempts, manualTiming = false }) {
 // behavioural gain, since nothing between the trigger and the viewport
 // declares a transform/filter/perspective/contain that would trap a
 // `position: fixed` descendant back inside an ancestor's overflow anyway.
-export function StatMenuTrigger({ t }) {
+export function StatMenuTrigger({ t, withinSettings = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [anchor, setAnchor] = useState(null);
   const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (!menuOpen || !withinSettings || !menuRef.current) return undefined;
+    // The settings panel places this trigger lower than the old heading.
+    // Keep the fetched checklist on screen as its height settles.
+    const place = () => {
+      const box = buttonRef.current.getBoundingClientRect();
+      const height = menuRef.current.getBoundingClientRect().height;
+      const top = Math.max(12, Math.min(box.bottom + 6, window.innerHeight - height - 12));
+      setAnchor((current) => current && current.top !== top ? { ...current, top } : current);
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(menuRef.current);
+    return () => observer.disconnect();
+  }, [menuOpen, withinSettings]);
 
   const toggle = () => {
     if (!menuOpen && buttonRef.current) {
@@ -614,7 +638,7 @@ export function StatMenuTrigger({ t }) {
         onclick=${toggle} title="Choose which stats appear on the practice log">
       <${Icon} name="feed" size=${14} />${" "}<span class="stat-menu-label">Stats</span>
     </button>
-    ${menuOpen && anchor && html`<div class="stats-popover"
+    ${menuOpen && anchor && html`<div class="stats-popover" ref=${menuRef}
         style=${`top:${anchor.top}px; right:${anchor.right}px`}>
       <${StatMenu} t=${t} close=${() => setMenuOpen(false)} />
     </div>`}
@@ -622,7 +646,7 @@ export function StatMenuTrigger({ t }) {
 }
 
 // Practice-log controls live IN the log card they act on (2026-07-24 UX
-// pass): sort in the card heading, reset visibility in the footer. They used
+// pass); sort and visibility now live in the heading's settings panel. They used
 // to sit in an "analysis toolbar" under the charts, which read as controls
 // for the graphs.
 export function SortControl({ ui }) {
@@ -631,12 +655,4 @@ export function SortControl({ ui }) {
     <select value=${ui.sort} onchange=${(e) => ui.setSort(e.target.value)}>
       ${SORT_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
     </select></label>`;
-}
-
-export function ResetFilterToggle({ ui }) {
-  return html`<label class="reset-toggle" title="Hide reset attempts from the log">
-    <${Icon} name="eyeOff" size=${16} />
-    <input type="checkbox" checked=${ui.hideResets}
-           onchange=${(e) => ui.setHideResets(e.target.checked)} />
-    <span>Hide resets</span></label>`;
 }

@@ -3622,6 +3622,50 @@
   /* Practice-log controls, in the card they act on: sort in the heading,
      reset visibility in the footer (the old analysis toolbar is gone). */
   .attempts-tools { display: flex; align-items: center; gap: .7rem; }
+  .log-settings { display: inline-flex; }
+  .log-settings-trigger[aria-expanded="true"] { color: var(--text); background: #20364e; }
+  .log-settings-panel {
+    position: fixed; z-index: 35; width: 340px; max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px); overflow: auto; padding: .9rem;
+    border: 1px solid #3c536b; border-radius: 14px; background: #142438;
+    color: var(--text); box-shadow: 0 14px 40px rgba(0,0,0,.4);
+  }
+  .log-settings-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+  .log-settings-head > b { font-size: .95rem; }
+  .log-settings-preferences { margin-block: .5rem; }
+  .log-preference {
+    display: flex; align-items: center; justify-content: space-between; gap: .85rem;
+    padding-block: .85rem; cursor: pointer;
+  }
+  .log-preference + .log-preference { border-top: 1px solid #2b4057; }
+  .log-preference-copy { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+  .log-preference-copy > b { font-size: .86rem; font-weight: 600; }
+  .log-preference-copy > small { color: var(--muted); font-size: .76rem; line-height: 1.45; }
+  .log-preference-control { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
+  .log-preference-state { min-width: 1.6rem; color: var(--muted); font-size: .74rem; }
+  .log-preference-switch { position: relative; display: inline-flex; width: 42px; height: 26px; }
+  .log-preference-switch input {
+    position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0;
+    margin: 0; opacity: 0; cursor: pointer; z-index: 1;
+  }
+  .log-preference-track {
+    position: absolute; inset: 0; border: 1px solid #62758b; border-radius: 999px;
+    background: #394e65; transition: background-color .2s ease, border-color .2s ease;
+  }
+  .log-preference-track::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+    border-radius: 50%; background: #f7faff; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+    transition: transform .2s ease;
+  }
+  .log-preference-switch input:checked + .log-preference-track { background: #21895a; border-color: #45b77f; }
+  .log-preference-switch input:checked + .log-preference-track::after { transform: translateX(16px); }
+  .log-preference-switch input:focus-visible + .log-preference-track { outline: 2px solid #78b9ff; outline-offset: 3px; }
+  .log-settings-option {
+    display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+    border-top: 1px solid #2b4057; padding-top: .75rem; margin-top: .75rem; font-size: .85rem;
+  }
+  .log-settings-panel .stat-menu-label { display: inline; }
+  .log-settings-panel .stats-popover > .popover { max-height: calc(100dvh - 24px); overflow: auto; }
   /* Three controls ("N shown" / Stats / sort) need more width than the two
      this row used to have, and the row is kept to one line rather than left
      to wrap: `.log-list-card` is variable-height and does not clip (Task 7),

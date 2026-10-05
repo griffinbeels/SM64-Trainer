@@ -54,7 +54,7 @@ def _ordered_sections_source() -> str:
     return _extract(source, "orderedSections")
 
 
-def test_save_state_rows_share_the_default_hidden_rule():
+def test_log_preferences_filter_state_loads_and_resets_independently():
     source = strip_comments((UI / "components/attemptlog.js").read_text(encoding="utf-8"))
     rows = [{"id": "clean", "outcome": "success"},
             {"id": "partial", "outcome": "success", "state_loads": 9},
@@ -62,18 +62,28 @@ def test_save_state_rows_share_the_default_hidden_rule():
             {"id": "legacy", "outcome": "success", "invalid_reason": "save_state"},
             {"id": "interrupted", "outcome": "loaded"},
             {"id": "reset", "outcome": "reset"},
+            {"id": "hard-reset", "outcome": "hard_reset"},
+            {"id": "death", "outcome": "death"},
             {"id": "other-invalid", "outcome": "success", "invalid_reason": "no_reset"}]
-    script = (_extract(source, "attemptHiddenByDefault") + "\n"
-              f"console.log(JSON.stringify({json.dumps(rows)}"
-              ".filter(attemptHiddenByDefault).map(a => a.id)));" )
+    script = (_extract(source, "attemptMatchesLogFilters") + "\n"
+              f"const rows = {json.dumps(rows)};\n"
+              "const ids = ui => rows.filter(a => attemptMatchesLogFilters(a, ui)).map(a => a.id);\n"
+              "console.log(JSON.stringify([ids({}), ids({hideSavestates: false}),"
+              "ids({hideResets: true}), ids({hideResets: true, hideSavestates: false})]));")
     result = subprocess.run(["node", "--input-type=module", "-"], input=script,
                             capture_output=True, text=True, encoding="utf-8",
                             timeout=30, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == ["partial", "load-start", "legacy", "interrupted"]
+    assert json.loads(result.stdout) == [
+        ["clean", "reset", "hard-reset", "death", "other-invalid"],
+        ["clean", "partial", "load-start", "legacy", "interrupted", "reset", "hard-reset", "death", "other-invalid"],
+        ["clean", "other-invalid"],
+        ["clean", "partial", "legacy", "interrupted", "other-invalid"],
+    ]
     for filename in ("practicelog.js", "practice.js"):
         consumer = strip_comments((UI / "components" / filename).read_text(encoding="utf-8"))
         assert "!attemptHiddenByDefault(a)" in consumer
+        assert "attemptMatchesLogFilters(a, ui)" in consumer
     log = strip_comments(LOG_JS.read_text(encoding="utf-8"))
     assert log.count(".filter(attemptHiddenByDefault)") == 2
 
