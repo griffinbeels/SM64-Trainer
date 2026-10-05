@@ -100,8 +100,8 @@ static void ordinary(const gc::Dispatch& g) {
     g.PixelStorei(gl::UNPACK_SKIP_ROWS,0);g.PixelStorei(gl::UNPACK_SKIP_PIXELS,0);
     g.BindFramebuffer(gl::FRAMEBUFFER,0);g.DrawBuffer(gl::BACK);g.ReadBuffer(gl::BACK);
 }
-static std::vector<uint8_t> pixels(const gc::Dispatch& g,uint32_t fbo,uint32_t w=64,uint32_t h=64) {
-    gl::Guard guard(g);g.BindFramebuffer(gl::READ_FRAMEBUFFER,fbo);g.ReadBuffer(fbo?gl::COLOR_ATTACHMENT0:gl::BACK);
+static std::vector<uint8_t> pixels(const gc::Dispatch& g,uint32_t fbo,uint32_t w=64,uint32_t h=64,bool front=false) {
+    gl::Guard guard(g);g.BindFramebuffer(gl::READ_FRAMEBUFFER,fbo);g.ReadBuffer(fbo?gl::COLOR_ATTACHMENT0:front?gl::FRONT:gl::BACK);
     std::vector<uint8_t> out(w*h*4);glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,out.data());
     require(glGetError()==0,"pixel read");return out;
 }
@@ -198,9 +198,15 @@ static void run(uint32_t generation) {
             rgb(copy,x,y,v[0],v[1],v[2],"the ghost copy is the displayed picture");}
         rgb(copy,12,18,64,144,16,"the ghost is in the ghost copy");
         // A presentation that drew no ghost copies nothing: the clean picture stands.
-        background(g);gp::begin_update(p,152);back_copies=0;
-        require(gp::before_swap(p,0x1000,raster.api()),"ghostless before swap");completed(p,window);
-        require(back_copies==1 && gp::surface(p).presentation_serial && !gp::display(p).presentation_serial,"no display copy without a ghost");
+        background(g);glClearColor(40.f/255,60.f/255,80.f/255,1);glClear(GL_COLOR_BUFFER_BIT);
+        gp::begin_update(p,152);back_copies=0;
+        require(gp::before_swap(p,0x1000,raster.api()),"ghostless before swap");
+        raster.osd(.5f);require(!gp::begin_osd(p),"unmodified OSD is not mirrored");completed(p,window);
+        require(back_copies==0 && gp::surface(p).presentation_serial && !gp::surface(p).framebuffer &&
+                !gp::display(p).presentation_serial,"unmodified front needs no clean or display copy");
+        const auto front=pixels(g,0,64,64,true);
+        rgb(front,20,24,30,50,70,"unmodified front includes original OSD");
+        rgb(front,0,0,40,60,80,"unmodified front preserves world pixels");
         frame(153,nullptr);require(gp::display(p).resource_generation==1,"the display surface is allocated once");
         gp::display_consumer(false);
     }
@@ -250,24 +256,21 @@ static void run(uint32_t generation) {
     rgb(pixels(g,0),20,30,20,40,60,"failed mirror cancels display");gp::swap_completed(p,true);
     require(!gp::surface(p).presentation_serial,"failed mirror no clean claim");
 
-    // Saving BACK restores both the original read FBO and the default read
-    // selector, even when those are different state objects.
+    // An unmodified presentation touches neither the original read FBO nor
+    // the default read selector, even when those are different state objects.
     background(g);gp::begin_update(p,204);g.ReadBuffer(gl::FRONT);g.BindFramebuffer(gl::READ_FRAMEBUFFER,old.framebuffer);g.ReadBuffer(GL_NONE);
     gl::State before{};before.capture(g);queries=0;
-    require(gp::before_swap(p,0x3000,raster.api()),"foreign read FBO clean save");
-    // Saving the clean picture reads four values (read FBO, active unit, its
-    // texture, the default read selector), not the full state guard.
-    std::printf("clean save state queries: %u\n",queries);
-    require(queries<=4,"the clean save queries only what it changes");
-    gl::State after{};after.capture(g);require(std::memcmp(&before,&after,sizeof before)==0,"save restores touched GL state");
+    require(gp::before_swap(p,0x3000,raster.api()),"foreign read FBO unmodified front");
+    require(queries==0,"unmodified front makes no state queries");
+    gl::State after{};after.capture(g);require(std::memcmp(&before,&after,sizeof before)==0,"unmodified front preserves GL state");
     g.BindFramebuffer(gl::READ_FRAMEBUFFER,0);g.GetIntegerv(gl::READ_BUFFER,&selector);require(selector==gl::FRONT,"default read selector restored");
     completed(p,window);
-    // With the renderer's record the clean save and the sRGB check ask
-    // nothing, and taking the ghost back asks only the default draw selectors.
+    // Unmodified presentations ask nothing even without a renderer record.
+    // A ghost replacement uses the record; take-back asks for draw selectors.
     background(g);gp::begin_update(p,209);g.BindFramebuffer(gl::READ_FRAMEBUFFER,foreign);
     {gl::State saved{};saved.capture(g);queries=0;
-     require(gp::before_swap(p,0x3000,raster.known_api()) && queries==0,"a known clean save asks nothing");
-     gl::State after{};after.capture(g);require(std::memcmp(&saved,&after,sizeof saved)==0,"a known clean save restores state");}
+     require(gp::before_swap(p,0x3000,raster.known_api()) && queries==0,"a known unmodified front asks nothing");
+     gl::State after{};after.capture(g);require(std::memcmp(&saved,&after,sizeof saved)==0,"a known unmodified front preserves state");}
     g.BindFramebuffer(gl::READ_FRAMEBUFFER,0);completed(p,window);
     background(g);gp::begin_update(p,210);queries=0;
     require(gp::replace_vi(p,image,0x2000,false,raster.known_api()) && queries==0,"a known ghost replace asks nothing");
@@ -278,10 +281,10 @@ static void run(uint32_t generation) {
     g.Disablei(gl::SCISSOR_TEST,0);g.Disable(gl::FRAMEBUFFER_SRGB);g.BindFramebuffer(gl::FRAMEBUFFER,0);
     rgb(pixels(g,0),20,30,20,40,60,"a known take-back restores clean BACK");gp::swap_completed(p,true);
     g.DeleteFramebuffers(1,&foreign);
-    const auto resource=gp::surface(p).resource_generation;
     require(gp::prepare(p,2,32,32,8,8),"resize prepare");require(!gp::surface(p).presentation_serial,"resize invalidates descriptor");
-    gp::begin_update(p,205);background(g);require(gp::before_swap(p,0x4000,raster.api()),"resized clean save");completed(p,window);
-    require(gp::surface(p).resource_generation>resource && gp::surface(p).width==32 && gp::surface(p).drawable_generation==2,"resource identity");
+    gp::begin_update(p,205);background(g);require(gp::before_swap(p,0x4000,raster.api()),"resized unmodified front");completed(p,window);
+    require(!gp::surface(p).resource_generation && !gp::surface(p).framebuffer && gp::surface(p).width==32 &&
+            gp::surface(p).drawable_generation==2,"resized front identity without a private resource");
     // The allocated display surface followed the resize with a new generation.
     gp::display_consumer(true);gp::GhostViImage shown=image;shown.record_display=1;
     background(g);gp::begin_update(p,211);require(gp::replace_vi(p,shown,0x4000,false,raster.api()),"resized ghost");
@@ -295,5 +298,5 @@ int main() {
     const auto foreground=GetForegroundWindow();require(!gp::clean_consumer() && !gp::display_consumer(),"inactive by default");
     gp::clean_consumer(true);require(gp::clean_consumer(),"negotiated");gp::clean_consumer(false);
     run(1);run(2);require(GetForegroundWindow()==foreground,"focus unchanged");
-    std::puts("presentation passed: hidden=yes contexts=2 clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored known=asks_nothing recorded=clean ghost_copy=displayed consumer_off=no_copy");return 0;
+    std::puts("presentation passed: hidden=yes contexts=2 clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored known=asks_nothing recorded=clean ghost_copy=displayed consumer_off=no_copy plain_front=exact,no_copy");return 0;
 }

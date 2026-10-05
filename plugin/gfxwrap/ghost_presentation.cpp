@@ -189,7 +189,7 @@ bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma
     if((k.fields&Known::srgb) ? k.srgb_enabled!=0 : p->dispatch.gl.IsEnabled(gl::FRAMEBUFFER_SRGB)!=0)return false;
     p->raster=raster;p->vi_origin=origin;
     if(!save_back(p))return false;
-    if(!raster.begin_gpu())return false;
+    if(!raster.begin_gpu()){p->saved=false;return false;}
     bool drawn=false;
     try {
         if(gamma)raster.draw(raster.user,{DrawKind::gamma,image.texture,p->fbos[1],image.width,image.height,image.framebuffer});
@@ -204,11 +204,14 @@ bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma
 bool before_swap(Instance* p,uint32_t origin,const Raster& raster) {
     if(!p || !p->ready || !p->update || p->osd_window || !raster_valid(raster))return false;
     p->raster=raster;p->vi_origin=origin;
-    if(!p->saved && !save_back(p))return false;
+    // The original BACK is already clean when no ghost replaced the VI.
+    // Qualify its successful swap without another full-drawable copy or OSD
+    // mirror; SourceV3 names DEFAULT_FRONT for this occurrence after the swap.
+    p->published=p->display_published={};
     p->osd_window=true;p->qualified=true;return true;
 }
 bool begin_osd(Instance* p) {
-    if(!p || !p->osd_window || !p->qualified || p->osd)return false;
+    if(!p || !p->saved || !p->osd_window || !p->qualified || p->osd)return false;
     const auto& g=p->dispatch.gl;int32_t fbo=0,buffer=0;uint8_t feedback=0;
     g.GetIntegerv(gl::DRAW_FRAMEBUFFER_BINDING,&fbo);g.GetIntegerv(gl::DRAW_BUFFER0,&buffer);
     g.GetBooleanv(gl::TRANSFORM_FEEDBACK_ACTIVE,&feedback);
@@ -258,9 +261,9 @@ void withdraw_image(Instance* p) {
 }
 void swap_completed(Instance* p,bool success) {
     if(!p)return;
-    if(success && p->ready && p->saved && p->qualified && !p->osd && !p->osd_window && p->serial<UINT64_MAX) {
-        p->published={p->fbos[0],p->textures[0],p->width,p->height,p->context_generation,
-            p->drawable_generation,p->resource_generation,p->vi_origin,++p->serial,p->update};
+    if(success && p->ready && p->qualified && !p->osd && !p->osd_window && p->serial<UINT64_MAX) {
+        p->published={p->saved?p->fbos[0]:0,p->saved?p->textures[0]:0,p->width,p->height,p->context_generation,
+            p->drawable_generation,p->saved?p->resource_generation:0,p->vi_origin,++p->serial,p->update};
         // The display copy shares the clean picture's serial and update.
         p->display_published=p->display_copied ? CleanSurface{p->fbos[Instance::DISPLAY],p->textures[Instance::DISPLAY],
             p->width,p->height,p->context_generation,p->drawable_generation,p->display_generation,p->vi_origin,

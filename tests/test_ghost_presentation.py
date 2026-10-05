@@ -42,6 +42,35 @@ def run_host(tmp_path, presentation=SOURCE / "ghost_presentation.cpp"):
         timeout=40, check=False, **quiet_spawn_kwargs())
 
 
+@pytest.mark.parametrize("restore_duplicate_copy", [False, True])
+def test_cpu_presentation_custody_and_removed_work(tmp_path, restore_duplicate_copy):
+    """Exercise shipped presentation logic without a WGL context or GPU calls."""
+    build = module("presentation_cpu_build", "tools/build_plugin.py")
+    vc = build.find_vcvars32()
+    assert vc, "CPU presentation witness requires x86 MSVC"
+    executable = tmp_path / "ghost_presentation_cpu_host.exe"
+    presentation = SOURCE / "ghost_presentation.cpp"
+    if restore_duplicate_copy:
+        source = presentation.read_text(encoding="utf-8")
+        anchor = "p->published=p->display_published={};\n    p->osd_window=true;"
+        assert source.count(anchor) == 1
+        presentation = tmp_path / "ghost_presentation.cpp"
+        presentation.write_text(source.replace(anchor,
+            "if(!p->saved && !save_back(p))return false;\n    p->osd_window=true;"), encoding="utf-8")
+    flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
+    build._cl(vc, flags + ["/std:c++17", "/EHsc", f"/I{SOURCE}",
+        str(presentation), str(ROOT / "tests/native/ghost_presentation_cpu_host.cpp"),
+        f"/Fe:{executable}", f"/Fo{tmp_path}\\", "/link", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'"], tmp_path)
+    result = subprocess.run([str(executable)], capture_output=True, text=True, cwd=tmp_path,
+        timeout=10, check=False, **quiet_spawn_kwargs())
+    if restore_duplicate_copy:
+        assert result.returncode != 0
+        assert "plain OSD is not mirrored" in result.stderr
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "plain_gl_calls=0 plain_copies=0 plain_osd_mirrors=0 ghost_copies=2 identity=qualified" in result.stdout
+
+
 @WITNESS
 def test_real_presentation(tmp_path):
     result = run_host(tmp_path)
@@ -53,6 +82,7 @@ def test_real_presentation(tmp_path):
     # Ghosts in recording: the clean recording stays clean; the ghost copy's
     # display surface takes the displayed picture, only while its lane consumes it.
     assert "recorded=clean ghost_copy=displayed consumer_off=no_copy" in result.stdout
+    assert "plain_front=exact,no_copy" in result.stdout
 
 
 @WITNESS
