@@ -24,16 +24,17 @@ from __future__ import annotations
 import ctypes as C
 import ctypes.wintypes as W
 import functools
-import logging
 import os
-import subprocess
 import sys
 import time
 
 from sm64_events.ghost import native_layout as L
-
-SOUND_PLAYER_FLAG = "--ghost-sound"
-MODULE = "sm64_events.ghost.sound_player"
+from sm64_events.ghost.sound_process import (
+    SOUND_PLAYER_FLAG as SOUND_PLAYER_FLAG,
+    SoundPlayerProcess as SoundPlayerProcess,
+    StageNotes,
+    child_command as child_command,
+)
 CHUNK_FRAMES = 1024  # one device buffer, 32 ms
 BUFFERS = 8  # more than the renderer ever keeps unplayed (two ticks)
 IDLE_CLOSE_S = 3.0  # the renderer closes after 3 s of silence; the device follows once drained
@@ -159,6 +160,11 @@ class RingPlayer:
     def busy(self) -> bool:
         return self._device.is_open or self._ring.renderer_open
 
+    @property
+    def needs_service(self) -> bool:
+        """New or queued sound needs service; a drained open device is idle."""
+        return self._ring.renderer_open or self._ring.written > self.sent or self.sent > self._played
+
     def close(self) -> None:
         if self._device.is_open:
             self._device.close()
@@ -257,7 +263,7 @@ def device_for(pj64_pid: int):
     """The waveOut device on the endpoint Project64's own audio session uses."""
     def find() -> int:
         try:
-            from sm64_events.replay.audio import device_name_hosting_pid
+            from sm64_events.replay.audioendpoint import device_name_hosting_pid
             endpoint = device_name_hosting_pid(pj64_pid)
         except Exception:  # noqa: BLE001 - routing is a preference; the default device still plays
             endpoint = None
@@ -302,89 +308,82 @@ def _alive(handle) -> bool:
 def main(argv) -> int:
     """`--pj64 PID --parent PID`: play that Project64's ghost sound until it or
     the trainer is gone. Never a window, never focus."""
+    notes = StageNotes()
+    try:
+        return _play(argv, notes)
+    except Exception as error:  # noqa: BLE001 - child boundary preserves failures for its parent
+        notes.report("error", error=f"{type(error).__name__}: {error}")
+        return 1
+
+
+class ServicePriority:
+    """Only active sound gets HIGHEST; imports, endpoint lookup and idle are NORMAL."""
+
+    def __init__(self, kernel, notes):
+        self._kernel, self._notes, self._thread = kernel, notes, kernel.GetCurrentThread()
+        self._active = None
+        self.set(False)
+
+    def set(self, active):
+        if self._active == active:
+            return
+        self._active = active
+        if not self._kernel.SetThreadPriority(self._thread, 2 if active else 0):
+            self._notes.report("priority_error", active=active)
+
+
+def _play(argv, notes):
     args = dict(zip(argv[::2], argv[1::2], strict=True))
     pj64_pid, parent_pid = int(args["--pj64"]), int(args["--parent"])
     k = _kernel()
     pj64, parent = k.OpenProcess(SYNCHRONIZE, False, pj64_pid), k.OpenProcess(SYNCHRONIZE, False, parent_pid)
-    k.SetThreadPriority(k.GetCurrentThread(), 2)  # HIGHEST, as the renderer's audio thread
-    ring = None
-    while ring is None:
-        if not (_alive(pj64) and _alive(parent)):
-            return 0
-        try:
-            ring = Ring(pj64_pid)
-        except FileNotFoundError:
-            time.sleep(0.25)  # the renderer makes the ring when its sound engine starts
-    # Resolved once: a lookup on every reopen would delay the first sound after an idle close.
-    chosen = device_for(pj64_pid)()
-    player = RingPlayer(ring, WaveOutDevice(device_id=lambda: chosen), os.getpid())
+    priority = ServicePriority(k, notes)
+    ring = player = None
     try:
+        notes.report("started", pj64=pj64_pid, parent=parent_pid, priority="normal")
+        while ring is None:
+            if not (_alive(pj64) and _alive(parent)):
+                return 0
+            try:
+                ring = Ring(pj64_pid)
+            except FileNotFoundError:
+                notes.report("waiting_ring")
+                time.sleep(0.25)
+        notes.report("ring_attached")
+        # Preserve the original lookup timing, once the renderer has sound:
+        # earlier startup may precede Project64's routed audio session.
+        # Initialization stays NORMAL and imports no capture code or NumPy.
+        chosen = device_for(pj64_pid)()
+        notes.report("endpoint_ready", device=chosen)
+        player = RingPlayer(ring, WaveOutDevice(device_id=lambda: chosen), os.getpid())
+        first = player.sent
         while _alive(pj64) and _alive(parent):
             # A write wakes it at once; the timeout only paces the played
             # position while sound plays, and keeps the beat well inside
             # SOUND_RING_PLAYER_TIMEOUT_MS while nothing does.
             ring.wait_written(10 if player.busy else 100)
+            priority.set(player.needs_service)
             player.step()
+            if player._device.is_open:
+                notes.report("first_device_open")
+            if player._played > first:
+                notes.report("first_played", frames=player._played - first)
+            priority.set(player.needs_service)
     finally:
-        player.close()
-        ring.close()
-    return 0
-
-
-def child_command(pj64_pid: int):
-    """(argv, env) for the player of that Project64, a child of this trainer."""
-    from sm64_events.core.childproc import python_child
-    # site-packages: finding Project64's output reads Core Audio through pycaw.
-    return python_child(MODULE, SOUND_PLAYER_FLAG,
-                        ("--pj64", str(pj64_pid), "--parent", str(os.getpid())), site_packages=True)
-
-
-class SoundPlayerProcess:
-    """The trainer's handle on one player child for one Project64.
-
-    `start` is cheap to repeat: it respawns a player that died, at most once
-    every `RESPAWN_S`, and says once why the last one ended."""
-
-    RESPAWN_S = 5.0
-
-    def __init__(self, spawn=subprocess.Popen, clock=time.monotonic):
-        self._spawn, self._clock, self._child, self.pj64_pid = spawn, clock, None, None
-        self._started_at = None
-
-    @property
-    def pid(self) -> int | None:
-        child = self._child
-        return child.pid if child is not None and child.poll() is None else None
-
-    def start(self, pj64_pid: int) -> None:
-        if self.pid is not None and self.pj64_pid == pj64_pid:
-            return
-        if (self._child is not None and self.pj64_pid == pj64_pid and self._started_at is not None
-                and self._clock() - self._started_at < self.RESPAWN_S):
-            return
-        if self._child is not None and self._child.poll() is not None:
-            logging.getLogger("sm64.ghost.sound").warning(
-                "ghost sound player for Project64 %s ended (exit %s); starting another",
-                self.pj64_pid, self._child.returncode)
-        self.stop()
-        self._started_at = self._clock()
-        from sm64_events.core.childproc import quiet_spawn_kwargs
-        command, env = child_command(pj64_pid)
-        self._child = self._spawn(command, env=env, stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                  **quiet_spawn_kwargs())
-        self.pj64_pid = pj64_pid
-
-    def stop(self, timeout_s: float = 2.0) -> None:
-        child, self._child, self.pj64_pid = self._child, None, None
-        if child is None or child.poll() is not None:
-            return
-        child.terminate()
+        priority.set(False)
         try:
-            child.wait(timeout_s)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait(timeout_s)
+            if player is not None:
+                player.close()
+        finally:
+            try:
+                if ring is not None:
+                    ring.close()
+            finally:
+                for handle in (pj64, parent):
+                    if handle:
+                        k.CloseHandle(handle)
+                notes.report("exit")
+    return 0
 
 
 if __name__ == "__main__":
