@@ -13,7 +13,7 @@
 extern unsigned swaps;
 extern bool swap_next;
 namespace stub {
-extern bool clean_on,display_on,display_copied,display_wrong_serial;
+extern bool clean_on,display_on,display_copied,display_wrong_serial,clean_front;
 extern uint64_t occurrence,serial;
 }
 namespace {
@@ -77,19 +77,25 @@ int main() {
         CHECK(shown.presentation_serial==stub::serial && shown.update_occurrence==stub::occurrence && shown.width==320);
     }
 
-    // Consumer on, nothing copied this update: SAME_AS_CLEAN, only its four fields.
+    // Consumer on, private clean with no display copy: unavailable, never an alias.
     stub::display_copied=false;frame(true);
-    CHECK(clean.kind==RS_SOURCE_CLEAN_VI && shown_result==1 && shown.kind==RS_SOURCE_SAME_AS_CLEAN);
+    CHECK(clean.kind==RS_SOURCE_CLEAN_VI && shown_result==1 && shown.kind==RS_SOURCE_UNAVAILABLE);
+    CHECK(zero_after_header(shown) && !shown.update_occurrence);
+
+    // A qualified unmodified front is the same picture, with only its four fields.
+    stub::clean_front=true;frame(true);
+    CHECK(clean.kind==RS_SOURCE_DEFAULT_FRONT && shown_result==1 && shown.kind==RS_SOURCE_SAME_AS_CLEAN);
     CHECK(zero_after_header(shown) && shown.update_occurrence==clean.update_occurrence && shown.update_occurrence==stub::occurrence);
+    stub::clean_front=false;
 
     // A display surface from another presentation is never this ticket's picture.
     stub::display_copied=true;stub::display_wrong_serial=true;frame(true);
-    CHECK(shown.kind==RS_SOURCE_SAME_AS_CLEAN && zero_after_header(shown));
+    CHECK(shown.kind==RS_SOURCE_UNAVAILABLE && zero_after_header(shown) && !shown.update_occurrence);
     stub::display_wrong_serial=false;
 
     // No new presentation this VI: the clean query says so and no ghost was copied.
     frame(false);
-    CHECK(clean.kind==RS_SOURCE_NO_NEW_PRESENTATION && shown.kind==RS_SOURCE_SAME_AS_CLEAN && zero_after_header(shown));
+    CHECK(clean.kind==RS_SOURCE_NO_NEW_PRESENTATION && shown.kind==RS_SOURCE_UNAVAILABLE && zero_after_header(shown));
 
     // Outside any capture callback no ticket is valid.
     rs_source_descriptor3 outside{};outside.kind=99;CHECK(!v4->query_display(last,&outside) && outside.kind==0);
@@ -105,7 +111,7 @@ int main() {
  * when this host says so, and the ghost presentation's published surfaces. */
 unsigned swaps=0;bool swap_next=false;
 namespace stub {
-bool clean_on=false,display_on=false,display_copied=false,display_wrong_serial=false;
+bool clean_on=false,display_on=false,display_copied=false,display_wrong_serial=false,clean_front=false;
 uint64_t occurrence=0,serial=0;
 }
 unsigned origin=0x1234;
@@ -118,7 +124,8 @@ void display_consumer(bool v){stub::display_on=v;}
 bool display_consumer(){return stub::display_on;}
 void begin_update(uint64_t occurrence){stub::occurrence=occurrence;}
 bool clean_surface(CleanSurface* out){
-    *out={11,12,640,480,1,1,3,origin,stub::serial,stub::occurrence};return stub::clean_on;
+    *out={stub::clean_front?0u:11u,stub::clean_front?0u:12u,640,480,1,1,stub::clean_front?0u:3u,
+          origin,stub::serial,stub::occurrence};return stub::clean_on;
 }
 bool display_surface(CleanSurface* out){
     *out={};

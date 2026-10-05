@@ -18,6 +18,8 @@ using ImageProvider = bool (*)(const ViSource&, GhostViImage*);
 using ImageValidity = bool (*)(const GhostViImage&); // current command/configuration revision
 using PresentationNotice = void (*)(const GhostViImage&, uint64_t presentation_serial, bool displayed);
 struct CleanSurface {
+    // Zero framebuffer/texture/resource names the unmodified default front,
+    // qualified by the same successful swap and occurrence as a private copy.
     uint32_t framebuffer, texture, width, height;
     uint32_t context_generation, drawable_generation, resource_generation, vi_origin;
     uint64_t presentation_serial, update_occurrence;
@@ -59,7 +61,7 @@ bool prepare(Instance*,uint32_t drawable_generation,uint32_t width,uint32_t heig
              uint32_t source_width,uint32_t source_height);
 void begin_update(Instance*,uint64_t occurrence);
 bool replace_vi(Instance*,const GhostViImage&,uint32_t vi_origin,bool gamma,const Raster&);
-bool before_swap(Instance*,uint32_t vi_origin,const Raster&); // fallback/blank VI too
+bool before_swap(Instance*,uint32_t vi_origin,const Raster&); // unmodified/blank VI needs no copy
 bool begin_osd(Instance*);
 void end_osd(Instance*);
 void after_osd(Instance*);

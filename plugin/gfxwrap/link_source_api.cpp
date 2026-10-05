@@ -52,10 +52,16 @@ int surface3(rb_ticket,rb_surface* out,rs_source_descriptor3* image) {
     if(configured_clean) {
         if(out->swap_count==before_swaps){image->kind=RS_SOURCE_NO_NEW_PRESENTATION;return 1;}
         ghost_presentation::CleanSurface clean{};
-        if(!ghost_presentation::clean_surface(&clean) || clean.update_occurrence!=update_occurrence ||
+        if(!ghost_presentation::clean_surface(&clean) || !clean.presentation_serial || clean.update_occurrence!=update_occurrence ||
            clean.context_generation!=out->context_generation || clean.drawable_generation!=out->drawable_generation ||
            clean.width!=out->drawable_width || clean.height!=out->drawable_height || clean.vi_origin!=out->post_vi_origin)
             return 1; // explicitly unavailable: never fall back to a visible ghost
+        if(!clean.framebuffer) {
+            if(clean.texture || clean.resource_generation)return 1;
+            image->kind=RS_SOURCE_DEFAULT_FRONT;image->presentation_serial=clean.presentation_serial;
+            image->read_buffer=0x404;return 1; // GL_FRONT
+        }
+        if(!clean.texture || !clean.resource_generation)return 1;
         image->kind=RS_SOURCE_CLEAN_VI;image->framebuffer=clean.framebuffer;image->read_buffer=0x8CE0; // GL_COLOR_ATTACHMENT0
         image->resource_generation=clean.resource_generation;image->presentation_serial=clean.presentation_serial;
         // The owned clean texture stores the same RGB bytes in a linear RGBA8
@@ -100,8 +106,9 @@ int __cdecl query_display(rb_ticket ticket,rs_source_descriptor3* out) {
     *out={};out->bytes=sizeof(*out);out->version=RS_ABI_V4;out->kind=RS_SOURCE_UNAVAILABLE;
 #if defined(SM64_GHOST_RENDERER)
     if(!configured_clean || !ghost_presentation::display_consumer())return 1;
+    if(clean.kind!=RS_SOURCE_CLEAN_VI && clean.kind!=RS_SOURCE_DEFAULT_FRONT)return 1;
     ghost_presentation::CleanSurface shown{};
-    if(clean.kind==RS_SOURCE_CLEAN_VI && ghost_presentation::display_surface(&shown) && shown.framebuffer &&
+    if(clean.kind==RS_SOURCE_CLEAN_VI && ghost_presentation::display_surface(&shown) && shown.framebuffer && shown.texture &&
        shown.resource_generation && shown.presentation_serial==clean.presentation_serial &&
        shown.update_occurrence==clean.update_occurrence && shown.context_generation==clean.context_generation &&
        shown.drawable_generation==clean.drawable_generation && shown.width==clean.surface_width &&
@@ -110,6 +117,9 @@ int __cdecl query_display(rb_ticket ticket,rs_source_descriptor3* out) {
         out->framebuffer=shown.framebuffer;out->read_buffer=0x8CE0; // GL_COLOR_ATTACHMENT0
         out->source_format=RB_SOURCE_RGB8_LINEAR;out->resource_generation=shown.resource_generation;return 1;
     }
+    // A private clean picture proves only clean capture. A missing or refused
+    // display copy never proves that the ghosted window showed those pixels.
+    if(clean.kind!=RS_SOURCE_DEFAULT_FRONT)return 1;
     out->kind=RS_SOURCE_SAME_AS_CLEAN;out->update_occurrence=clean.update_occurrence;
 #endif
     return 1;
