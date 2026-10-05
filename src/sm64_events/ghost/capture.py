@@ -161,6 +161,10 @@ class NativeCapture:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread = None
+        self._cleanup_complete = threading.Event()
+        self._cleanup_complete.set()  # an unstarted source owns no resources
+        self.cleanup_error = None
+        self._channel_cleanup_error = None
         self._playback = {"enabled": False}
         self._revision = 1
         self._status = {"available": False, "reason": "not_started"}
@@ -173,19 +177,27 @@ class NativeCapture:
         # The ghost sound player for this Project64 (ghost/sound_player.py):
         # started with each channel, ended with this capture. None plays nothing.
         self._sound = sound_player
+        self._sound_closed = sound_player is None
 
     def start(self):
         if self._thread is not None:
             raise RuntimeError("native ghost capture already started")
         self._thread = threading.Thread(target=self._run, name="ghost-pose-capture", daemon=True)
-        self._thread.start()
+        self._cleanup_complete.clear()
+        try:
+            self._thread.start()
+        except Exception:
+            if self._thread.ident is None:
+                self._thread = None
+                self._cleanup_complete.set()
+            raise
 
     def stop(self, timeout_s: float = 3.0) -> bool:
         self._stop.set()
         if self._thread is None:
-            return True
+            return self._cleanup_complete.is_set()
         self._thread.join(timeout_s)
-        return not self._thread.is_alive()
+        return not self._thread.is_alive() and self._cleanup_complete.is_set()
 
     def set_playback(self, *, blocking=True, **controls) -> bool:
         """Control changes only; poll callbacks skip a contended publication."""
@@ -252,24 +264,49 @@ class NativeCapture:
             if self._channel is not None:
                 self._channel.close()
         except CleanupPending as error:
+            self._channel_cleanup_error = f"{type(error).__name__}: {error}"
             self._pending_cleanup = (retain(self._pending_cleanup, error)
                                      if self._pending_cleanup is not None else error.owner)
             return False
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError) as error:
+            self._channel_cleanup_error = f"{type(error).__name__}: {error}"
             log.exception("Native ghost channel retains ownership during close")
             return False
         self._channel = None
+        self._channel_cleanup_error = None
         return True
 
     def _run(self):
         try:
             self._pump()
         finally:
-            while not self._close_channel():
+            # Retire independently: a retained channel must not strand the
+            # sound child. Only this worker retries its nested owners.
+            while not self._finish_cleanup():
                 threading.Event().wait(0.25)
-            if self._sound is not None:
-                self._sound.stop()
             self._report(available=False, reason="stopped")
+            self._cleanup_complete.set()
+
+    def _finish_cleanup(self) -> bool:
+        errors = []
+        try:
+            channel_closed = self._close_channel()
+            if not channel_closed:
+                errors.append(self._channel_cleanup_error or "native ghost channel cleanup pending")
+        except Exception as error:  # keep this owner available for retry
+            channel_closed = False
+            errors.append(f"native ghost channel: {type(error).__name__}: {error}")
+        if not self._sound_closed:
+            try:
+                self._sound.stop()
+                self._sound_closed = True
+            except Exception as error:
+                errors.append(f"ghost sound: {type(error).__name__}: {error}")
+        self.cleanup_error = "; ".join(errors) or None
+        if self.cleanup_error:
+            self._report(available=False, reason="cleanup_pending", cleanup_error=self.cleanup_error)
+            self._warn("native ghost capture cleanup pending", self.cleanup_error)
+        return channel_closed and self._sound_closed
 
     def _start_sound(self, channel) -> None:
         if self._sound is None:
@@ -333,8 +370,8 @@ class NativeCapture:
             except CleanupPending as error:
                 self._pending_cleanup = error.owner
                 self._report(available=False, reason=str(error))
-                while not self._close_channel():
-                    threading.Event().wait(0.25)
+                while not self._stop.is_set() and not self._close_channel():
+                    self._stop.wait(0.25)
             except Exception as error:  # noqa: BLE001 - this thread also records every attempt's poses
                 if isinstance(error, (FileNotFoundError, ProcessLookupError)):
                     self._note_absent(error)
@@ -347,6 +384,6 @@ class NativeCapture:
                 if not self._close_channel():
                     # A close failure may retain handles. Never acquire a new
                     # channel until the preceding owner has actually released.
-                    while not self._close_channel():
-                        threading.Event().wait(0.25)
+                    while not self._stop.is_set() and not self._close_channel():
+                        self._stop.wait(0.25)
                 self._stop.wait(0.5)

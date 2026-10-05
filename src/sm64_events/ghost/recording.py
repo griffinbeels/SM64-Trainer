@@ -27,5 +27,6 @@ class PoseRecording:
     def stop(self):
         self.request_stop()
         if self.source is not None and not self.source.stop(timeout_s=3):
-            raise RuntimeError("native ghost capture cleanup pending")
+            details = getattr(self.source, "cleanup_error", None)
+            raise RuntimeError("native ghost capture cleanup pending" + (f": {details}" if details else ""))
         self.archive.close()

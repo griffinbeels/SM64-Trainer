@@ -108,6 +108,88 @@ def test_disabled_worker_skips_discovery_and_never_restarts_on_afk_or_reattach(t
     assert rec.status()["capture_state"] == "off"
 
 
+@pytest.mark.parametrize("state", ["starting", "stopping", "off"])
+@pytest.mark.parametrize("storage", ["ring", "fragments"])
+def test_lifecycle_get_uses_cached_coverage_while_storage_lock_is_held(tmp_path, state, storage):
+    from datetime import datetime, timezone
+    rec, *_ = make(tmp_path)
+    svc = service(tmp_path, rec)
+    bounds = (datetime(2026, 10, 5, tzinfo=timezone.utc), datetime(2026, 10, 5, 0, 1, tzinfo=timezone.utc))
+    rec._status_coverage = bounds
+    if state == "starting":
+        rec._capture_start_revision = rec._recording_revision
+    else:
+        rec.set_recording_enabled(False)
+        rec._capture_closed = state == "off"
+    storage_lock = threading.Lock()
+    entered, done, result, failures = threading.Event(), threading.Event(), [], []
+    owner = getattr(rec, storage)
+    if storage == "fragments":
+        rec.fragments.enabled = True
+    def locked_coverage(*_):
+        entered.set()
+        with storage_lock:
+            return None
+    owner.coverage = locked_coverage
+    def request():
+        try:
+            result.append(client(svc).get("/api/replay/status"))
+        except Exception as error:
+            failures.append(error)
+        finally:
+            done.set()
+    caller = threading.Thread(target=request, name="owned-transition-status", daemon=True)
+    try:
+        with storage_lock:
+            caller.start()
+            assert done.wait(1), "lifecycle GET waited on media storage"
+            assert not entered.is_set() and not failures
+            body = result[0].json()
+            assert result[0].status_code == 200 and body["capture_state"] == state
+            assert body["recording_enabled"] is (state == "starting")
+            assert body["buffer_start_utc"] == bounds[0].isoformat()
+            assert body["buffer_end_utc"] == bounds[1].isoformat()
+    finally:
+        # Releasing the lock also frees a faulty implementation's caller.
+        if caller.ident is not None:
+            caller.join(2)
+    assert not caller.is_alive()
+
+
+def test_running_get_returns_current_stop_state_after_its_coverage_wait(tmp_path):
+    rec, *_ = make(tmp_path)
+    svc = service(tmp_path, rec)
+    rec._begin_capture(WIN)
+    entered, release = threading.Event(), threading.Event()
+    results, errors = [], []
+    def coverage(*_):
+        entered.set()
+        assert release.wait(3)
+        return None
+    owner = rec.fragments if rec.fragments.enabled else rec.ring
+    owner.coverage = coverage
+    def request():
+        try:
+            results.append(client(svc).get("/api/replay/status"))
+        except Exception as error:
+            errors.append(error)
+    caller = threading.Thread(target=request, name="owned-running-status", daemon=True)
+    caller.start()
+    try:
+        assert entered.wait(1)
+        rec.set_recording_enabled(False)
+        release.set()
+        caller.join(2)
+        assert not caller.is_alive() and not errors
+        body = results[0].json()
+        assert body["recording_enabled"] is False and body["capture_state"] == "stopping"
+        assert body["recording"] is False
+    finally:
+        release.set()
+        caller.join(2)
+        rec.stop(cleanup=False)
+
+
 def test_existing_attach_owner_wakes_to_close_all_sources(tmp_path, monkeypatch):
     rec, video, audio, _, lease, calls, *_ = make(tmp_path)
     poses = []
@@ -269,6 +351,107 @@ def test_settings_writes_serialize_with_the_recording_request(tmp_path, monkeypa
     assert not disable.is_alive() and not storage.is_alive() and not errors
     assert writes == [False, False]
     assert json.loads(svc.cfg.settings_path.read_text())["recording_enabled"] is False
+
+
+@pytest.mark.parametrize("work", ["limits", "history", "saved_scan"])
+def test_stop_put_does_not_queue_behind_storage_settings_work(tmp_path, work):
+    rec, *_ = make(tmp_path)
+    svc = service(tmp_path, rec)
+    entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
+    results, errors = [], []
+    def block():
+        entered.set()
+        if not release.wait(3):
+            raise AssertionError("test did not release owned settings storage")
+    original_limits = rec.ring.set_limits
+    if work == "limits":
+        def limits(*args):
+            block()  # Before apply: live values still differ from durable desire.
+            original_limits(*args)
+        rec.ring.set_limits = limits
+    elif work == "history":
+        svc._maintain_history = block
+    else:
+        original_settings = svc.settings
+        def settings():
+            block()
+            return original_settings()
+        svc.settings = settings
+    def update():
+        try:
+            svc.update_settings(600, 3 * 1024**3, 1.0, 2.0, 25)
+        except Exception as error:
+            errors.append(error)
+    def stop():
+        try:
+            results.append(client(svc).put("/api/replay/recording", json={"enabled": False}))
+        except Exception as error:
+            errors.append(error)
+        finally:
+            stopped.set()
+    storage = threading.Thread(target=update, name="owned-settings-storage", daemon=True)
+    caller = threading.Thread(target=stop, name="owned-storage-stop-put", daemon=True)
+    storage.start()
+    try:
+        assert entered.wait(1)
+        caller.start()
+        assert stopped.wait(1), "Stop PUT waited for eviction/history/saved-file scanning"
+        assert not release.is_set() and storage.is_alive() and not errors
+        assert results[0].status_code == 200
+        assert results[0].json()["recording_enabled"] is False
+        cfg = apply_settings_file(svc.cfg)
+        assert not cfg.recording_enabled and cfg.retention_s == 600
+        assert cfg.max_buffer_bytes == 3 * 1024**3
+        assert (cfg.pre_pad_s, cfg.post_pad_s, cfg.retention_attempts) == (1.0, 2.0, 25)
+    finally:
+        release.set()
+        storage.join(3)
+        if caller.ident is not None:
+            caller.join(3)
+    assert not storage.is_alive() and not caller.is_alive() and not errors
+    assert (rec.ring.retention_s, rec.ring.max_bytes) == (600, 3 * 1024**3)
+    assert not rec.recording_enabled
+
+
+def test_storage_settings_applies_stay_ordered_while_stop_bypasses_them(tmp_path):
+    rec, *_ = make(tmp_path)
+    svc = service(tmp_path, rec)
+    entered, release, queued = threading.Event(), threading.Event(), threading.Event()
+    limits, errors = [], []
+    original_limits = rec.ring.set_limits
+    def set_limits(*args):
+        limits.append(args)
+        if len(limits) == 1:
+            entered.set()
+            assert release.wait(3)
+        original_limits(*args)
+    rec.ring.set_limits = set_limits
+    def update(retention, cap, second=False):
+        if second:
+            queued.set()
+        try:
+            svc.update_settings(retention, cap)
+        except Exception as error:
+            errors.append(error)
+    first = threading.Thread(target=lambda: update(600, 3 * 1024**3), daemon=True)
+    second = threading.Thread(target=lambda: update(None, 4 * 1024**3, True), daemon=True)
+    first.start()
+    try:
+        assert entered.wait(1)
+        second.start()
+        assert queued.wait(1)
+        assert svc.set_recording_enabled(False)["recording_enabled"] is False
+        assert limits == [(600, 3 * 1024**3)], "second apply overtook the blocked first"
+    finally:
+        release.set()
+        first.join(3)
+        if second.ident is not None:
+            second.join(3)
+    assert not first.is_alive() and not second.is_alive() and not errors
+    assert limits == [(600, 3 * 1024**3), (None, 4 * 1024**3)]
+    cfg = apply_settings_file(svc.cfg)
+    assert not cfg.recording_enabled and cfg.retention_s is None and cfg.max_buffer_bytes == 4 * 1024**3
+    assert (rec.ring.retention_s, rec.ring.max_bytes) == (None, 4 * 1024**3)
 
 
 def test_legacy_and_invalid_storage_overlay_never_undo_valid_manual_disable(tmp_path):

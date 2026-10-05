@@ -282,6 +282,10 @@ class ReplayService:
         self.pre_pad_s = cfg.pre_pad_s
         self.post_pad_s = cfg.post_pad_s
         self._settings_guard = threading.Lock()
+        # Storage applies stay ordered without holding the persistence lock
+        # used by Stop. Published limits may still be awaiting disk eviction.
+        self._settings_apply_guard = threading.Lock()
+        self._settings_limits = None
         self._save_guard = threading.Lock()
         self._active_saves = 0
         self._session_gate = SessionGate()
@@ -533,24 +537,28 @@ class ReplayService:
         affect the next view(); the recorder's idle threshold follows the
         padding window). None pads = keep current. Persist before apply so
         a write failure can't leave limits applied but not durable."""
-        with self._settings_guard:
+        with self._settings_apply_guard:
             return self._update_settings(retention_s, max_buffer_bytes, pre_pad_s,
                                          post_pad_s, retention_attempts)
 
     def _update_settings(self, retention_s, max_buffer_bytes, pre_pad_s,
                          post_pad_s, retention_attempts):
-        pre = self.pre_pad_s if pre_pad_s is None else float(pre_pad_s)
-        post = self.post_pad_s if post_pad_s is None else float(post_pad_s)
-        count = self.history.count if retention_attempts == "unchanged" else retention_attempts
-        validate_settings(retention_s, max_buffer_bytes, pre, post, count)
-        save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes,
-                      pre, post, count,
-                      recording_enabled=getattr(self.recorder, "recording_enabled",
-                                                self.cfg.recording_enabled))
+        with self._settings_guard:
+            pre = self.pre_pad_s if pre_pad_s is None else float(pre_pad_s)
+            post = self.post_pad_s if post_pad_s is None else float(post_pad_s)
+            count = self.history.count if retention_attempts == "unchanged" else retention_attempts
+            validate_settings(retention_s, max_buffer_bytes, pre, post, count)
+            save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes,
+                          pre, post, count,
+                          recording_enabled=getattr(self.recorder, "recording_enabled",
+                                                    self.cfg.recording_enabled))
+            # Stop must preserve the durable request, even if the ring is
+            # blocked before applying it. None remains a valid retention limit.
+            self._settings_limits = (retention_s, max_buffer_bytes)
+            self.history.configure(count)
+            self.pre_pad_s, self.post_pad_s = pre, post
+            self.recorder.set_idle_after(pre + post)
         self.recorder.ring.set_limits(retention_s, max_buffer_bytes)
-        self.history.configure(count)
-        self.pre_pad_s, self.post_pad_s = pre, post
-        self.recorder.set_idle_after(pre + post)
         self._maintain_history()
         return self.settings()
 
@@ -563,8 +571,10 @@ class ReplayService:
         if type(enabled) is not bool:
             raise ValueError("enabled must be a boolean")
         with self._settings_guard:
-            save_settings(self.cfg.settings_path, self.recorder.ring.retention_s,
-                          self.recorder.ring.max_bytes, self.pre_pad_s, self.post_pad_s,
+            retention, cap = (self._settings_limits if self._settings_limits is not None else
+                              (self.recorder.ring.retention_s, self.recorder.ring.max_bytes))
+            save_settings(self.cfg.settings_path, retention,
+                          cap, self.pre_pad_s, self.post_pad_s,
                           self.history.count, recording_enabled=enabled)
             self.recorder.set_recording_enabled(enabled)
         return self.status(nonblocking=True)
