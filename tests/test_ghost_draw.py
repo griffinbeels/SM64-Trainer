@@ -22,7 +22,7 @@ NATIVE = ROOT / "plugin/gfxwrap"
 SHELLED = ("Config.h", "FrameBuffer.h", "gSP.h", "gDP.h", "GBI.h", "GLFunctions.h", "Graphics/Context.h")
 
 
-def build(tmp_path, glue_dir=NATIVE, baseline=False):
+def build(tmp_path, glue_dir=NATIVE, baseline=False, failure=None):
     spec = importlib.util.spec_from_file_location("build_plugin", ROOT / "tools/build_plugin.py")
     compiler = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(compiler)
@@ -41,6 +41,9 @@ def build(tmp_path, glue_dir=NATIVE, baseline=False):
         "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *compiler.LIBS], tmp_path)
     result = subprocess.run([str(target)], cwd=tmp_path, capture_output=True, text=True,
                             timeout=30, check=False, **quiet_spawn_kwargs())
+    if failure:
+        assert result.returncode != 0 and failure in result.stderr, result.stdout + result.stderr
+        return None
     assert result.returncode == 0, result.stdout + result.stderr
     return json.loads(result.stdout)
 
@@ -66,6 +69,13 @@ def test_ghost_glue_gateway_reads_and_error_owners(tmp_path):
         print(json.dumps({"before": {key: before[key] for key in ("finished", "drawn", "shapes")},
                           "after": {key: report[key] for key in ("finished", "drawn", "shapes")}}))
     assert report["ok"] and not report["baseline"] and report["driver_queries"] == 0
+    assert report["transitions"] == {
+        "initial_prewarm": True, "drawable_rebuilds": 0, "extent_prepares": 1,
+        "generation_rebuilds": 1, "foreign_deletes": 0,
+        "stale_images_refused": True, "revoked_token_refused": True,
+        "loss_foreign_deletes": 0, "owned_loss_destroys": 1,
+        "missed_loss_foreign_restores": 0,
+    }
     # A list whose plan chose no ghost (finished, faded, suspended, out of its
     # scene) costs what no ghost costs: live, his LLL lists after his 7-2 run
     # mirrored 24 layer passes and read 48 errors each.
@@ -93,3 +103,14 @@ def test_ghost_glue_gateway_reads_and_error_owners(tmp_path):
                            "drained_renderer": 0, "broken": 0, "scope_open": False}, name
     # A surface whose upstream draw throws still closes its one scope.
     assert s["throw_in_layer"]["scope_open"] is False and s["throw_in_layer"]["drawn"] == 1
+
+
+def test_old_scope_teardown_before_identity_negative_control(tmp_path):
+    if sys.platform != "win32":
+        pytest.skip("Win32 renderer component")
+    source = (NATIVE / "ghost_draw.cpp").read_text(encoding="utf-8")
+    anchor = "    if (identified && same_context(identity, owner)) {"
+    assert source.count(anchor) == 1
+    (tmp_path / "ghost_draw.cpp").write_text(source.replace(anchor,
+        "    close_layer(); cancel(); ghost_compositor::clear_layer(compositor);\n" + anchor), encoding="utf-8")
+    build(tmp_path, tmp_path, failure="begin abandons old display scopes without foreign restoration")

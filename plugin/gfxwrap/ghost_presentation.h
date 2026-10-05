@@ -90,6 +90,7 @@ void display_consumer(bool active);
 bool display_consumer();
 void context_ready();
 void context_stopping();
+void drawable_changing(); // invalidate pictures before resize; retain live context resources
 void begin_update(uint64_t source_occurrence);
 void before_swap();
 void after_osd();
