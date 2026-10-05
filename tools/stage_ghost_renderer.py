@@ -12,11 +12,8 @@ def display_list_edit(data: bytes, replace_once) -> bytes:
         '\t\tDebugMsg(DEBUG_NORMAL, "gSPDisplayList( 0x%08X ) push\\n", dl);')
 
 
-def edits(source: Path, replace_once) -> dict[str, bytes]:
-    """Each anchor is checked exactly once by the pinned source staging tool."""
-    result = {}
-    path = "src/RSP.cpp"
-    data = (source / path).read_bytes()
+def list_lifetime_edit(data: bytes, replace_once) -> bytes:
+    """Keep the list seal testable against the exact pinned upstream body."""
     data = replace_once(data, '#include "DisplayWindow.h"', '#include "DisplayWindow.h"\n' + INCLUDE)
     # The guard's destructor runs on every return, including skipped/interrupted
     # lists. It publishes after deferred raster work, before another occurrence.
@@ -25,10 +22,15 @@ def edits(source: Path, replace_once) -> dict[str, bytes]:
         "\t\tbool active = ghost_link::begin_list();\n"
         "\t\t~GhostList() { if (!active) return;\n"
         "\t\t\tconst bool complete = !resumed && !ConfigOpen && !dwnd().isResizeWindow() && RSP.halt && !RSP.infloop;\n"
-        "\t\t\tif (complete) { dwnd().getDrawer().drawTriangles(); dwnd().getDrawer().flush(); }\n"
+        "\t\t\tif (complete && ghost_link::drawing()) { dwnd().getDrawer().drawTriangles(); dwnd().getDrawer().flush(); }\n"
         "\t\t\tghost_link::end_list(complete); }\n"
         "\t} ghostList;\n#endif")
-    result[path] = data
+    return data
+
+
+def edits(source: Path, replace_once) -> dict[str, bytes]:
+    """Each anchor is checked exactly once by the pinned source staging tool."""
+    result = {"src/RSP.cpp": list_lifetime_edit((source / "src/RSP.cpp").read_bytes(), replace_once)}
     path = "src/gSP.cpp"
     data = (source / path).read_bytes()
     data = replace_once(data, '#include "DisplayWindow.h"', '#include "DisplayWindow.h"\n' + INCLUDE)

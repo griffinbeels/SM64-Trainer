@@ -119,6 +119,7 @@ bool begin_list() {
                       observing ? ghost_stream::sample() : nullptr);
     return observing;
 }
+bool drawing() { return observing && ghost_draw::drawing(); }
 void end_list(bool completed) {
     {
         HookTime timed;
@@ -147,9 +148,10 @@ void display_list(uint32_t dl, uint32_t physical_dl) {
 void geometry(uint32_t before, uint32_t after) {
     if (!observing) return;
     HookTime timed;
-    if ((before & G_ZBUFFER) && !(after & G_ZBUFFER)) {
+    if (drawing() && (before & G_ZBUFFER) && !(after & G_ZBUFFER)) {
         // PipeSync is a no-op upstream. Flush BOTH triangles and deferred rects
         // while the world state is still current, before sealing its branch.
+        // Recording a pose alone must retain the renderer's normal batching.
         auto &drawer = dwnd().getDrawer();
         HookTime flushed(flush_ticks); // inside the hook's time too, and apart
         drawer.drawTriangles(); drawer.flush();

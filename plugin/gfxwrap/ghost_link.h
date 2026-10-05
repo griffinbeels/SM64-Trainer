@@ -13,6 +13,9 @@ void rom(bool opened);
 void context_created();
 void context_lost();
 bool begin_list();
+// Pose capture observes lists independently. Only a planned ghost draw needs
+// extra raster flushes before its seal and at the list boundary.
+bool drawing();
 void end_list(bool completed);
 void projection();
 void display_list(uint32_t dl, uint32_t physical_dl);

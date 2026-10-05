@@ -45,7 +45,7 @@ COMMON_FLAGS = ["/nologo", "/O2", "/W4", "/std:c17", "/MT", "/D_CRT_SECURE_NO_WA
 LIBS = ["opengl32.lib", "user32.lib", "gdi32.lib", "kernel32.lib"]
 RUNTIME_SOURCES = (
     "wrapper_runtime", "stamp_adapter", "runtime_control", "runtime_delivery", "gpu_request",
-    "gpu_delivery", "gpu_render", "source_snapshot", "gl_snapshot", "gpu_channel", "overlay_warmup",
+    "gpu_delivery", "gpu_render", "source_snapshot", "gl_snapshot", "gpu_channel",
 )
 # The encoder helper: a 64-bit DLL loaded by the isolated helper process,
 # never by Project64. Its NVENC header is the vendored nvEncodeAPI.h.

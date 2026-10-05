@@ -218,13 +218,9 @@ def test_project64_code_opens_no_second_gpu_context():
         spec.loader.exec_module(module)
         return module
 
-    # The one sanctioned device: the overlay warm-up, made on the renderer's
-    # thread while the game is loading and never used, so an injected overlay's
-    # own device (Discord's) no longer freezes the picture (his ask, 2026-10-03;
-    # overlay_warmup.h). tests/test_overlay_warmup.py owns its behaviour.
-    sanctioned = {"overlay_warmup.cpp"}
-    units = ["gfxwrap.c", *(f"{name}.cpp" for name in load("build_plugin").RUNTIME_SOURCES
-                            if f"{name}.cpp" not in sanctioned),
+    # Every shipped Project64 unit is covered. No speculative device warm-up
+    # may bypass this guard: its own initialization can stall the game thread.
+    units = ["gfxwrap.c", *(f"{name}.cpp" for name in load("build_plugin").RUNTIME_SOURCES),
              *load("build_renderer").OVERLAY_MODULES]
     forbidden = re.compile(r"\b(wglCreateContext\w*|wglShareLists|wglMakeCurrent|D3D11CreateDevice\w*|CreateDXGIFactory\w*)\b")
     offenders = {}

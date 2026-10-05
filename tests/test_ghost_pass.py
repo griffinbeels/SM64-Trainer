@@ -1,12 +1,15 @@
 """Native occurrence, pose and queue contracts; no emulator or installation.
 
-The actual staged-list test additionally needs SM64_GHOST_WITNESS_SOURCE set
-to a current tools/stage_link_witness.py --boundary --context-lifetime --ghost
-output. An absent staged renderer is an explicit skip, not integration proof.
+The actual staged-list test uses verified cached upstream source or a current
+SM64_GHOST_WITNESS_SOURCE staging. Its fake drawer proves list/flush ownership;
+it does not establish actual GPU cost or displayed-frame pacing.
 """
 import importlib.util
+import hashlib
+import json
 import os
 import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -47,13 +50,29 @@ def test_native_world_and_stream_contracts(tmp_path, host, sources):
 
 def test_actual_staged_list_lifetime(tmp_path):
     value = os.environ.get("SM64_GHOST_WITNESS_SOURCE")
-    if not value:
-        pytest.skip("requires current pinned renderer staging (SM64_GHOST_WITNESS_SOURCE)")
-    source = Path(value).resolve() / "src"
-    gl = source / "Graphics/OpenGLContext"
-    for name in ("ghost_link.cpp", "ghost_link.h", "ghost_stream.cpp", "ghost_pass.cpp"):
-        assert (gl / name).read_bytes() == (ROOT / "plugin/gfxwrap" / name).read_bytes(), name
-    rsp = (source / "RSP.cpp").read_bytes()
+    if value:
+        source = Path(value).resolve() / "src"
+        gl = source / "Graphics/OpenGLContext"
+        for name in ("ghost_link.cpp", "ghost_link.h", "ghost_stream.cpp", "ghost_pass.cpp"):
+            assert (gl / name).read_bytes() == (ROOT / "plugin/gfxwrap" / name).read_bytes(), name
+        rsp = (source / "RSP.cpp").read_bytes()
+    else:
+        # Exercise the shipped staging function with verified cached upstream
+        # source. This is a CPU witness, with no renderer build or GPU context.
+        pinned = json.loads((ROOT / "renderer/build-inputs.json").read_text())["upstream"]
+        archive = Path(os.environ["LOCALAPPDATA"]) / "SM64Trainer/build-cache/renderer" / f"GLideN64-{pinned['commit']}.zip"
+        if not archive.is_file():
+            pytest.skip("requires verified cached pinned renderer archive")
+        assert hashlib.sha256(archive.read_bytes()).hexdigest() == pinned["archive_sha256"]
+        modules = {}
+        for name in ("stage_ghost_renderer", "stage_link_witness"):
+            spec = importlib.util.spec_from_file_location(name, ROOT / f"tools/{name}.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            modules[name] = module
+        with zipfile.ZipFile(archive) as upstream:
+            rsp = upstream.read(f"GLideN64-{pinned['commit']}/src/RSP.cpp")
+        rsp = modules["stage_ghost_renderer"].list_lifetime_edit(rsp, modules["stage_link_witness"].replace_once)
     start = rsp.index(b"\tstruct GhostList {")
     end = rsp.index(b"\t} ghostList;", start) + len(b"\t} ghostList;")
     (tmp_path / "actual_ghost_list.inc").write_bytes(rsp[start:end])
