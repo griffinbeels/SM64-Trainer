@@ -105,7 +105,7 @@ function useLibrary(session, write, onClose) {
     setBusy(true); setError("");
     try {
       await send("POST", `${URL}/prepare-race`, {ghosts: choice, target});
-      const result = await write({ghosts: choice, target, view: "mario"});
+      const result = await write({ghosts: choice, target});
       if (result?.applied === false) {setError(result.error); return;}
       onClose();
     } catch (problem) {setError(problem.message);}

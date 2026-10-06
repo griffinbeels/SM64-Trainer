@@ -7,11 +7,9 @@ from tests.test_ui_ghost_switch import (FIXTURE_SEGMENT, WIDTHS, get_driver,
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_native_overlap_controls_preserve_distance_and_hide_for_video():
-    initial = ghost_session(enabled=True, available=True, view="mario")
+def test_native_overlap_controls_preserve_distance_across_switches():
+    initial = ghost_session(enabled=True, available=True)
     initial["proximity"] = {"enabled": True, "extra_distance": 0}
-    initial["source"].update(native_available=True, native_reason_text=None,
-        whole_available=True, whole_reason_text=None)
     screenshots = ROOT / ".iteration/ghost-overlay/round-5-ui"
     screenshots.mkdir(parents=True, exist_ok=True)
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
@@ -50,10 +48,11 @@ def test_native_overlap_controls_preserve_distance_and_hide_for_video():
                   return row.scrollWidth <= row.clientWidth + 1;
                 })()""")
                 (screenshots / f"overlap-{width}.png").write_bytes(page.screenshot())
-                page.evaluate("""(() => {
-                  const select=document.querySelector('.ghost-view-select');
-                  select.value='whole';select.dispatchEvent(new Event('change',{bubbles:true}));
-                })()""")
-                assert settled(page, state, 4)[3] == {"view": "whole"}
+                page.click(".ghost-row-head > .ghost-switch")
+                assert settled(page, state, 4)[3] == {"enabled": False}
                 assert not page.evaluate("!!document.querySelector('.ghost-proximity')")
+                page.click(".ghost-row-head > .ghost-switch")
+                assert settled(page, state, 5)[4] == {"enabled": True}
+                page.click(".ghost-proximity summary")
+                assert page.evaluate("document.querySelector('.ghost-distance').value") == "120"
                 assert page.problems() == []

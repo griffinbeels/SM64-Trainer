@@ -1,8 +1,6 @@
 """The ghost session (interface I5) answered beside the real UI fixture.
 
-Track E builds the server side of `GET|PUT /api/ghost` in parallel with the
-practice card's switch, so the card cannot be rendered against the real route
-yet. This serves the frozen SHAPE instead, attached to the same offline app
+This serves the native ghost session shape, attached to the same offline app
 `tools/ui_fixture.py` already boots -- the real `index.html`, the real
 stylesheet, the real shell and the real practice log, with one extra router.
 
@@ -10,7 +8,7 @@ Why a wrapper rather than a hand-built harness page: a harness that mounts the
 component alone measures a layout that does not exist (no `.app-shell`, no
 `.practice-page` container, so every `@container` rule silently never
 matches). The rule is in `.claude/rules/ui-core.md` and this is the shape it
-prescribes -- serve the real page, fake only the endpoint that is missing.
+prescribes -- serve the real page and provide an isolated ghost session.
 
 `ui_fixture.py` itself is untouched: `create_app` is swapped for the duration
 of the context and put back, so nothing here is a change another branch has to
@@ -32,32 +30,19 @@ import ui_fixture  # noqa: E402
 FIXTURE_TARGET = {"kind": "star", "entity_key": "2-4",
                   "strat": ui_fixture.FIXTURE_STRAT}
 
-# Two of the four real refusal sentences from `ghost/source.py::REASONS`,
+# Representative native refusal sentences,
 # copied rather than imported so a fixture cannot silently start passing by
-# agreeing with a sentence somebody shortened. The second is the LONGEST of
-# the four: a fixture that sits at the easy end of a range measures a layout
-# nobody has (`.claude/rules/ui-core.md`), so the disabled state is rendered
-# with the worst sentence the server can actually produce.
-NO_TEMPLATE_TEXT = ("You have not set a template for this yet, so there is "
-                    "no run to play alongside you.")
-NO_FRAME_MAP_TEXT = ("The recording behind this template does not say which "
-                     "moment of the game each picture shows, so it could not "
-                     "stay in step with your play.")
+# agreeing with a sentence somebody shortened. The disabled state uses a
+# complete native refusal rather than a short placeholder.
+NO_TEMPLATE_TEXT = "There is no personal best to race here yet."
+NO_POSES_TEXT = ("This Mario recording uses an older pose format. "
+                 "Record a new attempt to use it.")
 
 
-#: The server's own sentence for a ghost whose recording has never had Mario
-#: found in it, copied rather than imported so a fixture cannot start passing
-#: by agreeing with a sentence somebody shortened (`ghost/mariobox.py`).
-NO_BOXES_TEXT = ("This run has not had Mario found in it yet, so only the "
-                 "whole picture can be shown.")
-
-
-def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
+def ghost_session(*, enabled: bool | None = None, opacity: float | None = None,
                   nudge_frames: int = 0, available: bool = True,
                   reason: str | None = None, reason_text: str | None = None,
-                  target: dict | None = None,
-                  tint: dict | None = None, view: str = "whole",
-                  mario_boxes: bool = False) -> dict:
+                  target: dict | None = None, tint: dict | None = None) -> dict:
     """One I5 payload, in the frozen shape.
 
     Every setting is the registry's own default and the ranges are the ones
@@ -69,7 +54,11 @@ def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
     from sm64_events.ghost import settings
 
     values = settings.defaults()
-    values.update(enabled=enabled, opacity=opacity, nudge_frames=nudge_frames, view=view)
+    values["nudge_frames"] = nudge_frames
+    if enabled is not None:
+        values["enabled"] = enabled
+    if opacity is not None:
+        values["opacity"] = opacity
     if tint is not None:
         values["tint"] = tint
     return {
@@ -79,19 +68,10 @@ def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
         "source": {"available": available,
                    "reason": reason,
                    "reason_text": reason_text,
-                   "template_id": 7 if available else None,
                    "attempt_id": 91 if available else None,
-                   "exactness": "frame_map" if available else None,
-                   # Whether this ghost can be drawn as Mario alone, and the
-                   # server's own sentence when it cannot. One bit and one
-                   # sentence: the boxes themselves never ride the broadcast.
-                   "mario_boxes_available": bool(mario_boxes and available),
-                   "mario_boxes_reason":
-                       None if (mario_boxes and available) else "no_box_list",
-                   "mario_boxes_reason_text":
-                       None if (mario_boxes and available) else NO_BOXES_TEXT},
-        "window": {"running": enabled and available,
-                   "visible": enabled and available},
+                   "ghosts": []},
+        "window": {"running": values["enabled"] and available,
+                   "visible": values["enabled"] and available, "backend": "native"},
     }
 
 
@@ -127,18 +107,20 @@ def _select_ghosts(session: dict, body: dict, input_source: dict) -> None:
     selection["ghosts"] = choice
     native = [(key, row) for key, row in chosen if row["native_available"]]
     tint = session["tint"]
-    selection["playing"] = [] if session["view"] != "mario" else [
+    selection["playing"] = [
         {"key": key, "attempt_id": row["attempt_id"],
          **({"import_id": row["import_id"]} if row.get("import_id") else {}),
          "hue_degrees": ghost_hue(tint["hue_degrees"], index) if tint["enabled"] else None}
         for index, (key, row) in enumerate(native)]
     session["selection"] = selection
     session["source"] = dict(input_source)
-    if chosen:
-        first = chosen[0][1]
-        for key in ("template_id", "attempt_id", "native_available",
-                    "native_reason_text", "whole_available", "whole_reason_text"):
-            session["source"][key] = first[key]
+    source = session["source"]
+    source["available"] = bool(native)
+    source["ghosts"] = [row["attempt_id"] for _key, row in native]
+    first = (native or chosen)[0][1] if native or chosen else None
+    source["attempt_id"] = first["attempt_id"] if first else None
+    source["reason_text"] = (None if native else first["native_reason_text"] if first
+                             else "Tick a ghost to race it here.")
 
 
 def _set_settings(session: dict, body: dict) -> None:
@@ -191,15 +173,9 @@ def attach_ghost_routes(app, state: dict) -> None:
         _set_settings(session, body)
         if "ghosts" in body:
             _select_ghosts(session, body, input_source)
-        if "native_available" in session["source"]:
-            source = dict(session["source"])
-            native = session["view"] == "mario"
-            source["available"] = source["native_available" if native else "whole_available"]
-            source["reason_text"] = source["native_reason_text" if native else "whole_reason_text"]
-            session["source"] = source
         available = session["source"]["available"]
         session["window"] = {"running": session["enabled"] and available,
-                             "visible": session["enabled"] and available}
+                             "visible": session["enabled"] and available, "backend": "native"}
         state["session"] = session
         state["writes"].append(dict(body))
         return session

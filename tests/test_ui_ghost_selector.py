@@ -18,8 +18,7 @@ READ_SLIDERS = """(() => Object.fromEntries(%s.map((selector) => {
   return [selector, input && [input.min, input.max, input.step].map(Number)];
 })))()"""
 PB = {"attempt_id": 1906, "frames": 534, "native_available": True,
-      "native_reason_text": None, "whole_available": False,
-      "whole_reason_text": "This PB's video is still being saved."}
+      "native_reason_text": None}
 
 
 def tick(page, index):
@@ -48,18 +47,16 @@ def shoot(page, path):
 
 
 def selection_session(pb=PB):
-    initial = ghost_session(enabled=False, available=False, view="mario")
+    available = bool(pb and pb["native_available"])
+    initial = ghost_session(enabled=False, available=available)
     # The real, longest native refusal: an older pose file he must re-record.
-    initial["source"].update(native_available=False, native_reason_text=OLDER_POSE_FORMAT_TEXT,
-                              whole_available=False, whole_reason_text="No saved video",
-                              reason_text=OLDER_POSE_FORMAT_TEXT)
+    initial["source"]["reason_text"] = None if available else "There is no personal best to race here yet."
     strat = initial["target"]["strat"]
     initial["selection"] = {"ghosts": {"pb": True, "attempts": []}, "missing": [],
                             "pb": dict(pb) if pb else None, "playing": [], "candidates": [
         {"attempt_id": attempt, "frames": frames, "strat": run_strat or strat,
-         "native_available": native, "whole_available": not native,
-         "native_reason_text": None if native else OLDER_POSE_FORMAT_TEXT,
-         "whole_reason_text": "No saved video" if native else None}
+         "native_available": native,
+         "native_reason_text": None if native else OLDER_POSE_FORMAT_TEXT}
         for attempt, frames, run_strat, native in [
             (1907, 538, None, False), (1908, 540, None, True), (1909, 560, "Sideflip", True)]
     ]}
@@ -80,7 +77,7 @@ def problems_but_own_navigation(page):
 
 
 def flip_off(page, state, owner, setting, writes):
-    """An Only-Mario switch that starts on: one press is one write turning it off."""
+    """A native ghost switch that starts on: one press turns it off."""
     checked = f"document.querySelector('.{owner} .ghost-switch').getAttribute('aria-checked')"
     assert page.evaluate(checked) == "true"
     page.click(f".{owner} .ghost-switch")
@@ -133,7 +130,7 @@ def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
                 assert shown == {selector: [ranges[name][key] for key in ("min", "max", "step")]
                                  for selector, name in SLIDERS.items()}
 
-                # The shadow A/B switch sits beside the colour in Only Mario.
+                # The shadow A/B switch sits beside the colour.
                 flip_off(page, state, "ghost-shadow", "shadow", 4)
                 page.evaluate("""(() => { const range = document.querySelector('.ghost-volume-range');
                   range.value = '0.8'; range.dispatchEvent(new Event('input', {bubbles: true})); })()""")

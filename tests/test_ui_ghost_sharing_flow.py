@@ -117,7 +117,7 @@ def local_export_and_race(page, base, state, folder, width):
     # The catalog supplies race order; display sort is independently checked.
     expected = list(reversed(range(2, 23, 2)))
     assert state["session"].writes[-1] == {"ghosts": {"pb": True, "attempts": expected, "imports": []},
-                                           "target": TARGET, "view": "mario"}
+                                           "target": TARGET}
     assert [row["attempt_id"] for row in state["store"].get_state("ghost_saved")] == expected
     return exported, download
 
@@ -140,7 +140,7 @@ def imported_race(page, state, width):
     click_race(page)
     until(page, "document.querySelector('.ghost-library') === null", True)
     assert state["session"].writes[-1] == {"ghosts": {"pb": True, "attempts": [], "imports": expected},
-                                           "target": TARGET, "view": "mario"}
+                                           "target": TARGET}
     assert len(state["session"].payload()["selection"]["playing"]) == 7
     assert not any("pb" in key for key in state["store"].writes)
 

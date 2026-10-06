@@ -1,4 +1,4 @@
-"""In Only Mario the runs that can never play fold into one quiet line.
+"""Runs that can never play as ghosts fold into one quiet line.
 
 His picker, 2026-09-23: several older-format runs each drew a disabled box
 saying the same "older pose format" sentence. Rendered through the real card
@@ -14,17 +14,13 @@ from tests.test_ui_ghost_switch import (FIXTURE_SEGMENT, WIDTHS, get_driver,
 
 
 def folded_session():
-    initial = ghost_session(enabled=True, available=True, view="mario")
-    initial["source"].update(native_available=True, native_reason_text=None,
-                             whole_available=True, whole_reason_text=None)
+    initial = ghost_session(enabled=True, available=True)
     strat = initial["target"]["strat"]
     playable = {"attempt_id": 1908, "frames": 540, "strat": strat,
-                "native_available": True, "native_reason": None, "native_reason_text": None,
-                "whole_available": None, "whole_reason_text": None}
+                "native_available": True, "native_reason": None, "native_reason_text": None}
     older = [{"attempt_id": attempt, "frames": frames, "strat": strat,
               "native_available": False, "native_reason": "older_pose_format",
-              "native_reason_text": OLDER_POSE_FORMAT_TEXT,
-              "whole_available": None, "whole_reason_text": None}
+              "native_reason_text": OLDER_POSE_FORMAT_TEXT}
              for attempt, frames in [(1901, 560), (1902, 571), (1903, 590)]]
     initial["selection"] = {"ghosts": {"pb": True, "attempts": []}, "missing": [],
                             "pb": dict(PB), "playing": [], "candidates": [playable, *older]}
@@ -49,7 +45,7 @@ def test_older_runs_fold_into_one_quiet_line_at_every_width():
                   return {text: el.textContent.trim(), title: el.getAttribute('title'),
                           fits: box.right <= row.right + 0.5 && box.width > 0};
                 })()""")
-                assert line["text"] == "3 older runs can't play as Only Mario"
+                assert line["text"] == "3 older runs can't play as ghosts"
                 assert line["title"] == OLDER_POSE_FORMAT_TEXT and line["fits"]
                 assert not page.problems(), page.problems()
                 if shots:

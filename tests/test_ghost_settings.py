@@ -28,12 +28,11 @@ SAMPLES = {
     "tint": ({"hue_degrees": 200}, {"hue_degrees": 400}),
     "volume": (0.25, "loud"),
     "proximity": ({"extra_distance": 120.0}, {"extra_distance": 401}),
-    "view": ("whole", "rotoscope"),
     "nudge_frames": (12, settings.NUDGE_LIMIT_FRAMES + 1),
     "input_mode": ("values", "combined"),
     "name_background": ("white", "grey"),
     "name_background_opacity": (0.25, 1.5),
-    "path_source": ("average", "middle"),
+    "path_source": ("fastest", "middle"),
     "path_tuning": ({"width": 60}, {"width": 500}),
 }
 
@@ -47,13 +46,35 @@ def test_every_row_has_samples():
     assert not missing, f"add a changed and a refused value for {missing}"
 
 
+def test_every_shipped_default_is_valid():
+    """Tuning may change; each default must still satisfy its own contract."""
+    for row in settings.ROWS:
+        assert row.check(row.default) == row.default
+
+
+def test_retired_view_is_not_loaded_or_written():
+    """Retiring a renderer leaves saved preferences in their original keys."""
+    class Database:
+        state = {"ghost_view": "whole", "ghost_enabled": False, "ghost_opacity": 0.25}
+
+        def get_state(self, key, default):
+            return self.state.get(key, default)
+
+    database = Database()
+    before = dict(database.state)
+    restored = {row.name: row.read(database) for row in settings.ROWS if row.remembered()}
+    assert "view" not in restored
+    assert restored["enabled"] is False and restored["opacity"] == 0.25
+    assert database.state == before
+
+
 @pytest.mark.parametrize("row", settings.ROWS, ids=lambda row: row.name)
 def test_a_setting_is_checked_remembered_and_reaches_the_renderer(tmp_path, row):
     session, _replay, pb, archive, db, _store, capture = pb_world(tmp_path)
     changed, refused = sample(row)
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         save_pb(db, pb)
         await session.pb_changed(pb, True)
         session._native.note()
@@ -134,8 +155,7 @@ def test_the_card_reads_every_published_limit_and_switch():
 GUARDED = ("opacity", "volume")
 #: The shipped modules a ghost setting passes through.
 GHOST_MODULES = sorted([*(REPO / "src/sm64_events/ghost").glob("*.py"),
-                        REPO / "src/sm64_events/server/ghost_api.py",
-                        REPO / "src/sm64_events/server/ghost_clock.py"])
+                        REPO / "src/sm64_events/server/ghost_api.py"])
 
 
 def restated_defaults(source: str, names=GUARDED) -> list[str]:

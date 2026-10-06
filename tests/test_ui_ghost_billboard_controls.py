@@ -14,7 +14,7 @@ def test_billboard_switches_write_immediately_and_offer_no_mode_of_their_own():
     """Names and Inputs write on the click; there is no Stick/Values picker,
     because every ghost display takes the mode he chose for his own HUD in
     Usamune's menu (his ask, 2026-10-02: "keep these in sync")."""
-    initial = ghost_session(enabled=True, view="mario", mario_boxes=True)
+    initial = ghost_session(enabled=True)
     initial["hud_inputs_enabled"] = False  # each switch is probed from off
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
                              seed_editor_fixtures=True) as (base, state):
@@ -53,7 +53,7 @@ def test_billboard_switches_write_immediately_and_offer_no_mode_of_their_own():
 def test_name_box_and_corner_inputs_write_and_fit_the_card():
     """The box behind the names nests under Names (colour on the pick, solidity
     on the slider's trailing edge) and the corner inputs are their own switch."""
-    initial = ghost_session(enabled=True, view="mario", mario_boxes=True)
+    initial = ghost_session(enabled=True)
     initial["hud_inputs_enabled"] = False  # the switch is probed from off
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
                              seed_editor_fixtures=True) as (base, state):
@@ -140,7 +140,9 @@ def test_the_path_nests_its_choices_and_tunes_from_the_published_ranges():
     them away (his ruling: omit what does not apply)."""
     from sm64_events.ghost import settings
     ranges = settings.limits()["path_tuning"]
-    initial = ghost_session(enabled=True, view="mario", mario_boxes=True)
+    initial = ghost_session(enabled=True)
+    # This interaction probes a chosen configuration, independent of shipped defaults.
+    initial.update(path_buttons=False, path_source="fastest")
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
                              seed_editor_fixtures=True) as (base, state):
         with get_driver().launch() as page:
@@ -200,7 +202,7 @@ def test_the_path_nests_its_choices_and_tunes_from_the_published_ranges():
 
 def test_imported_ghost_credit_and_ticks_survive_local_and_pb_changes():
     identity = "ab" * 32
-    initial = ghost_session(enabled=True, view="mario", mario_boxes=True)
+    initial = ghost_session(enabled=True)
     initial["selection"] = {
         "ghosts": {"pb": True, "attempts": [1908], "imports": [identity]}, "missing": [],
         "pb": dict(PB), "playing": [{"key": "pb", "hue_degrees": 120},
@@ -208,12 +210,10 @@ def test_imported_ghost_credit_and_ticks_survive_local_and_pb_changes():
                                      {"key": identity, "hue_degrees": 34}],
         "candidates": [
             {"attempt_id": 1908, "frames": 540, "strat": initial["target"]["strat"],
-             "native_available": True, "native_reason_text": None,
-             "whole_available": False, "whole_reason_text": "No saved video"},
+             "native_available": True, "native_reason_text": None},
             {"attempt_id": None, "import_id": identity, "frames": 538,
              "author": "René the Very Patient Speedrunner", "strat": "Sideflip",
-             "native_available": True, "native_reason_text": None,
-             "whole_available": False, "whole_reason_text": "Imported ghosts are shown with Only Mario."},
+             "native_available": True, "native_reason_text": None},
         ],
     }
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,

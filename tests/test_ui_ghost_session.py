@@ -7,8 +7,8 @@ are wrong:
 
   * the session is answering about ANOTHER entity (a target change the server
     has not caught up with yet) -- the control must not borrow that answer;
-  * the entity genuinely has no footage -- the control is off and says why;
-  * the entity has footage -- the control works.
+  * the entity has no recorded poses -- the control is off and says why;
+  * the entity has recorded poses -- the control works.
 
 The middle one is the state Griffin asked for ("disabled / not selectable if
 the user hasn't set up a template for the star/segment yet"), and the first is
@@ -48,15 +48,13 @@ def controls(session, entity_key="star:8:1"):
                     f"{json.dumps(entity_key)})")
 
 
-def test_pose_only_template_offers_mario_even_when_whole_video_is_unavailable():
-    result = controls(session(source={"available": False, "native_available": True,
-                                      "whole_available": False, "native_reason_text": None}))
-    assert result["nativeViews"]["mario"] and not result["nativeViews"]["whole"]
-    assert result["marioBoxes"]["available"]
+def test_pose_only_ghost_is_available_without_video_metadata():
+    result = controls(session(source={"available": True}))
+    assert result["available"] and result["canToggle"]
 
 
 def test_native_preparation_is_visible_while_switch_stays_usable():
-    result = controls(session(enabled=True, view="mario", source={"native_available": True},
+    result = controls(session(enabled=True, source={"available": True},
                               window={"backend": "native", "reason": "Preparing Mario..."}))
     assert result["canToggle"] and result["reasonText"] == "Preparing Mario..."
 
@@ -64,16 +62,9 @@ def test_native_preparation_is_visible_while_switch_stays_usable():
 def session(**over):
     body = {"enabled": False, "opacity": 0.6, "nudge_frames": 0, "limits": LIMITS,
             "tint": {"enabled": True, "hue_degrees": 120},
-            "view": "whole",
             "target": {"kind": "star", "entity_key": "8-1", "strat": None},
             "source": {"available": True, "reason": None, "reason_text": None,
-                       "template_id": 4, "attempt_id": 90,
-                       "exactness": "frame_map",
-                       "mario_boxes_available": False,
-                       "mario_boxes_reason": "no_box_list",
-                       "mario_boxes_reason_text":
-                           "This run has not had Mario found in it yet, so "
-                           "only the whole picture can be shown."},
+                       "attempt_id": 90, "ghosts": []},
             "window": {"running": False, "visible": False}}
     for key, value in over.items():
         if key in ("source", "target", "window") and isinstance(value, dict):
@@ -134,13 +125,13 @@ def test_the_tuning_controls_appear_only_while_it_is_on():
     assert answer["showsTuning"] is True
 
 
-def test_enabled_can_never_outlive_its_footage():
+def test_enabled_can_never_outlive_its_recorded_poses():
     """`enabled` persists across restarts, so it legitimately arrives true on
     a target with nothing to play. Drawing it ON would promise a ghost that
     cannot appear."""
     answer = controls(session(enabled=True,
                               source={"available": False,
-                                      "reason_text": "no footage"}))
+                                      "reason_text": "no recorded poses"}))
     assert answer["enabled"] is False
     assert answer["showsTuning"] is False
 
@@ -309,18 +300,6 @@ def test_the_newest_ghost_change_is_picked_out_of_the_raw_feed():
 
 # --- what the ghost shows ---------------------------------------------------
 
-def test_the_control_claims_no_view_before_the_server_states_one():
-    """Unknown is null, the same rule the colour and the visibility follow: a
-    control that guesses is one small gesture from writing its guess back."""
-    assert controls(None)["view"] is None
-    unstated = session()
-    del unstated["view"]
-    assert controls(unstated)["known"] is True
-    assert controls(unstated)["view"] is None
-    assert controls(session())["view"] == "whole"
-    assert controls(session(view="mario"))["view"] == "mario"
-
-
 def test_the_on_off_settings_are_unknown_until_stated_never_off():
     """The shadow and the fade-in-front switches: a bool the server stated,
     otherwise null, so an unknown switch is drawn unknown rather than off."""
@@ -366,64 +345,20 @@ def test_each_path_readout_states_its_unit_at_its_sliders_precision(name, value,
     assert shown == expected
 
 
-def test_a_view_this_build_cannot_draw_reads_as_unknown():
-    """A payload from another build, or a typo on the wire. Drawing the
-    control on a value nothing renders is how a select goes blank and looks
-    unset (the same trap a filtered dropdown already paid for)."""
-    assert controls(session(view="rotoscope"))["view"] is None
-
-
-def test_the_card_is_told_whether_this_ghost_can_be_drawn_as_mario():
-    """One bit and one sentence. The boxes themselves are hundreds of rows and
-    never ride `ghost_changed`; what the control needs is whether it may be
-    used and, if not, the server's own words for why."""
-    without = controls(session())["marioBoxes"]
-    assert without["available"] is False
-    assert "Mario" in without["reasonText"]
-
-    with_boxes = controls(session(source={"mario_boxes_available": True,
-                                          "mario_boxes_reason": None,
-                                          "mario_boxes_reason_text": None}))
-    assert with_boxes["marioBoxes"] == {"available": True, "reasonText": None}
-
-
-@pytest.mark.parametrize("current,draft,expected", [
-    (None, None, None),
-    ("whole", None, "whole"),
-    ("whole", "mario", "mario"),      # his choice wins while it is in flight
-    ("mario", "whole", "whole"),
-    (None, "mario", "mario"),
-    ("whole", "rotoscope", "whole"),  # a draft nothing draws is not a choice
-])
-def test_the_view_control_shows_his_choice_before_the_server_agrees(
-        current, draft, expected):
-    assert run_node("shownView", f"shownView({json.dumps(current)}, "
-                                 f"{json.dumps(draft)})") == expected
-
-
-def test_the_two_views_are_named_for_what_they_draw():
-    """His standing rule for anything a user reads: say what it does. Neither
-    label names a rectangle, a model or a box."""
-    labels = run_node("GHOST_VIEWS, VIEW_LABELS",
-                      "GHOST_VIEWS.map((name) => VIEW_LABELS[name])")
-    assert labels == ["Whole picture", "Only Mario"]
-
-
 # --- choosing a ghost independently of the input-comparison template --------
 
 
-def recording_options(selection, view="mario", draft=None, strat=None):
+def recording_options(selection, draft=None, strat=None):
     return run_node("ghostRecordingOptions",
                     f"ghostRecordingOptions({json.dumps(selection)}, "
-                    f"{json.dumps(view)}, {json.dumps(draft or {})}, {json.dumps(strat)})")
+                    f"{json.dumps(draft or {})}, {json.dumps(strat)})")
 
 
-def saved_candidate(attempt_id, *, native=True, whole=True, frames=None, strat="TJ Owlless"):
+def saved_candidate(attempt_id, *, native=True, frames=None, strat="TJ Owlless"):
     return {"attempt_id": attempt_id, "frames": 534 + attempt_id if frames is None else frames,
             "strat": strat,
-            "native_available": native, "whole_available": whole,
-            "native_reason_text": None if native else "No saved Mario poses",
-            "whole_reason_text": None if whole else "No saved video"}
+            "native_available": native,
+            "native_reason_text": None if native else "No saved Mario poses"}
 
 
 def ghosts(pb=True, *attempts):
@@ -442,7 +377,7 @@ def test_imported_ghost_credit_and_choice_stay_separate_from_local_attempt_ids()
     assert foreign["key"] == identity and foreign["checked"] and foreign["hue"] == 257
     assert foreign["label"] == '10"00 · Other player · TJ Owlless'
     body = json.dumps(selection)
-    toggle = lambda key: run_node("ghostRecordingOptions", f"ghostRecordingOptions({body}, 'mario').toggle({json.dumps(key)})")
+    toggle = lambda key: run_node("ghostRecordingOptions", f"ghostRecordingOptions({body}).toggle({json.dumps(key)})")
     assert toggle("pb") == {"pb": False, "attempts": [4], "imports": [identity]}
     assert toggle(4) == {"pb": True, "attempts": [], "imports": [identity]}
     assert toggle(identity) == {"pb": True, "attempts": [4], "imports": []}
@@ -471,8 +406,7 @@ def ticks(answer):
 
 
 PB = {"attempt_id": 1906, "frames": 534, "native_available": True,
-      "native_reason_text": None, "whole_available": False,
-      "whole_reason_text": "This PB's video is still being saved."}
+      "native_reason_text": None}
 
 
 def test_ghost_picker_never_borrows_candidates_from_another_target():
@@ -482,23 +416,19 @@ def test_ghost_picker_never_borrows_candidates_from_another_target():
     assert recording_options(None) is None
 
 
-@pytest.mark.parametrize("view,disabled", [("mario", [True, False]),
-                                            ("whole", [False, True])])
-def test_each_recording_is_qualified_for_the_show_mode_and_the_pb_box_leads(view, disabled):
+def test_each_recording_is_qualified_for_native_playback_and_the_pb_box_leads():
     answer = recording_options({"ghosts": ghosts(), "candidates": [
-        saved_candidate(4, native=False), saved_candidate(5, whole=False),
-    ]}, view)
+        saved_candidate(4, native=False), saved_candidate(5),
+    ]})
     assert answer["items"][0]["key"] == "pb" and answer["items"][0]["checked"]
-    assert "next PB" in answer["items"][0]["reason"]  # tickable before any PB exists
-    assert [item["disabled"] for item in answer["items"][1:]] == disabled
-    refused = next(item for item in answer["items"] if item["disabled"])
-    assert refused["reason"] == ("No saved Mario poses" if view == "mario" else "No saved video")
-    assert answer["views"] == {"mario": True, "whole": True}
+    assert "next PB" in answer["items"][0]["reason"]
+    assert [item["disabled"] for item in answer["items"][1:]] == [True, False]
+    assert answer["items"][1]["reason"] == "No saved Mario poses"
 
 
-def test_a_ticked_recording_that_cannot_show_this_mode_can_still_be_unticked():
+def test_a_ticked_unplayable_recording_can_still_be_unticked():
     answer = recording_options({"ghosts": ghosts(True, 4), "candidates": [
-        saved_candidate(4, native=False), saved_candidate(5)]}, "mario", None, "TJ Owlless")
+        saved_candidate(4, native=False), saved_candidate(5)]}, None, "TJ Owlless")
     assert ticks(answer) == [("pb", True, False), (4, True, False), (5, False, False)]
     assert answer["items"][1]["label"] == '17"93' and answer["items"][2]["label"] == '17"96'
 
@@ -515,19 +445,18 @@ def test_the_optimistic_draft_is_the_whole_set():
     assert recording_options(selection)["choice"] == ghosts(True, 4)
 
 
-def test_nothing_ticked_says_so_and_whole_picture_names_its_limit():
+def test_nothing_ticked_says_so():
     selection = {"ghosts": ghosts(False), "candidates": [saved_candidate(4)]}
     data = session(enabled=False, source={"available": False}, selection=selection)
     assert "Tick a ghost" in recording_options(controls(data)["selection"])["reasonText"]
     both = {"ghosts": ghosts(True, 4), "pb": PB, "candidates": [saved_candidate(4)]}
-    assert "first ticked ghost" in recording_options(both, "whole")["reasonText"]
-    assert recording_options(both, "mario")["reasonText"] is None
+    assert recording_options(both)["reasonText"] is None
 
 
 def test_runs_are_named_by_their_time_and_other_strategies_only_when_different():
     answer = recording_options({"ghosts": ghosts(True, 1923), "pb": PB, "candidates": [
         saved_candidate(1923, frames=538), saved_candidate(1950, frames=560, strat="Sideflip")]},
-        "mario", None, "TJ Owlless")
+        None, "TJ Owlless")
     assert [item["label"] for item in answer["items"]] == ['Your PB · 17"80', '17"93', '18"66 · Sideflip']
     minute = recording_options({"ghosts": ghosts(), "pb": {**PB, "frames": 1830}, "candidates": []})
     assert minute["items"][0]["label"] == "Your PB · 1'01\"00"
@@ -540,18 +469,14 @@ def test_his_pb_leads_with_its_time_and_each_playing_ghost_wears_its_colour():
     answer = recording_options(selection)
     assert answer["items"][0]["label"] == 'Your PB · 17"80'
     assert [item["hue"] for item in answer["items"]] == [120, 257, None]
-    assert answer["views"] == {"mario": True, "whole": True}
-    whole = recording_options(selection, "whole")
-    assert whole["items"][0]["reason"] == "This PB's video is still being saved."
 
 
 def test_a_run_with_missing_positions_says_where_the_ghost_will_blink():
     selection = {"ghosts": ghosts(True, 4), "pb": {**PB, "blinks": 1},
                  "candidates": [{**saved_candidate(4), "blinks": 12}]}
-    mario = recording_options(selection, "mario")
+    mario = recording_options(selection)
     assert [item["reason"] for item in mario["items"]] == [
         "blinks on 1 frame with no recorded position", "blinks on 12 frames with no recorded position"]
-    assert recording_options(selection, "whole")["items"][1]["reason"] is None
 
 
 OLDER = "This Mario recording uses an older pose format. Record a new attempt to use it."
@@ -564,16 +489,14 @@ def older_candidate(attempt_id, reason="older_pose_format", text=OLDER):
 
 def test_runs_that_can_never_play_as_mario_fold_into_one_quiet_line():
     """His picker, 2026-09-23: a column of disabled boxes each saying "older
-    pose format" is noise in Only Mario. They fold into one line; a ticked
-    one stays a box so it can be unticked; Whole picture folds nothing."""
+    pose format" is noise in ghosts. They fold into one line; a ticked
+    one stays a box so it can be unticked."""
     selection = {"ghosts": ghosts(True, 3), "pb": PB, "candidates": [
         saved_candidate(1), older_candidate(2), older_candidate(3),
         older_candidate(4, "no_native_poses", "Mario poses were not recorded."),
         saved_candidate(5, native=False)]}
-    mario = recording_options(selection, "mario")
+    mario = recording_options(selection)
     assert [item["key"] for item in mario["items"]] == ["pb", 1, 3, 5]
     assert mario["folded"]["count"] == 2
-    assert mario["folded"]["label"] == "2 older runs can't play as Only Mario"
+    assert mario["folded"]["label"] == "2 older runs can't play as ghosts"
     assert OLDER in mario["folded"]["reason"] and "not recorded" in mario["folded"]["reason"]
-    whole = recording_options(selection, "whole")
-    assert whole["folded"] is None and len(whole["items"]) == 6

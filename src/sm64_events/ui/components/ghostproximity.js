@@ -6,8 +6,8 @@ const html = htm.bind(h);
 
 // `range` is the server's limits.proximity: the distance slider and the floor
 // an overlapping ghost keeps (ghost/settings.py), never restated here.
-export function GhostProximity({ active, view, value, range, draft, write, queue }) {
-  if (!active || view !== "mario" || !value || !range) return null;
+export function GhostProximity({ active, value, range, draft, write, queue }) {
+  if (!active || !value || !range) return null;
   const shown = { ...value, ...draft };
   return html`<details class="ghost-proximity">
     <summary>Overlap fading</summary>

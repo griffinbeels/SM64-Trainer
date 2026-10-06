@@ -31,7 +31,7 @@ if _MISSING:
     raise SystemExit(_MISSING)
 
 from uilab import sheet                                 # noqa: E402
-from ghost_fixture import (NO_FRAME_MAP_TEXT,           # noqa: E402
+from ghost_fixture import (NO_POSES_TEXT,               # noqa: E402
                            ghost_session, serve_ui_with_ghost)
 from ui_fixture import FIXTURE_SEGMENT                  # noqa: E402
 from uilab_project import PROJECT                       # noqa: E402
@@ -40,29 +40,17 @@ from uilab_project import PROJECT                       # noqa: E402
 WIDTHS = (1500, 1200, 900, 850)
 
 STATES = {
+    "defaults": ghost_session(),
     "on": ghost_session(enabled=True, opacity=0.6, nudge_frames=3),
     # The colour treatment switched off: the tuning line is at its WIDEST in
     # "on" (the wheel is out), and this is where a control has to disappear
     # cleanly rather than sit there greyed. Both are worth looking at.
     "plain": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
                            tint={"enabled": False, "hue_degrees": 120}),
-    # WHAT THE GHOST SHOWS. Three states worth a look: the control usable
-    # in either position, and the one every recording made before this round
-    # lands in -- disabled, with the server's own sentence beside it.
-    "boxed": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
-                           mario_boxes=True),
-    "mario": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
-                           mario_boxes=True, view="mario"),
-    # The session asks for Mario and THIS ghost has no boxes: the ordinary
-    # state on every older recording once he has picked the Mario view.
-    "asked": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
-                           view="mario"),
     "off": ghost_session(enabled=False, opacity=0.6),
-    # The longest refusal the server can produce, not the shortest: a sheet
-    # of the easy end of a range is a picture of a card nobody has.
+    # A native refusal with its complete readable reason.
     "disabled": ghost_session(available=False,
-                              reason="recording_has_no_frame_map",
-                              reason_text=NO_FRAME_MAP_TEXT),
+                              reason="older_pose_format", reason_text=NO_POSES_TEXT),
 }
 
 

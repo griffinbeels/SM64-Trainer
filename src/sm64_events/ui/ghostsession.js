@@ -7,7 +7,7 @@
 // The server side is ONE session for the whole app (interface I5): it knows
 // whether the overlay is on, how solid it is drawn, how many game frames the
 // ghost is nudged by, which target it is following, and whether that target
-// has any footage to play. The card only ever draws that answer.
+// has recorded Mario poses to play. The card only ever draws that answer.
 //
 // THE IDENTITY CHECK IS THE POINT OF THIS MODULE. The session names its own
 // target, and the card that hosts the switch is the ACTIVE one -- but those
@@ -35,24 +35,14 @@ export const GAME_FPS = 30;
 // settings are on/off switches. Nothing here restates one of those numbers; a
 // JS copy of the nudge limit once said ten seconds while the server said twenty.
 
-// WHAT THE GHOST SHOWS. His report is why there is a choice: *"it's still
-// extremely hard to understand the ghost, because all the camera movement /
-// scenery overlaps."* The whole recorded screen is the ghost he already knows;
-// only-Mario draws the recorded Mario pose into the live game.
-//
-// The LABELS say what each one does rather than naming the technique, and they
-// are the words the control offers -- there is no second list anywhere.
-export const GHOST_VIEWS = ["whole", "mario"];
-export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
-
 /**
  * THE WORDS FOR EACH ON/OFF SETTING, one row per `switch(...)` row in
- * ghost/settings.py (the server lists them in `limits.switches`). Only Mario
+ * ghost/settings.py (the server lists them in `limits.switches`). The renderer
  * draws each of them. A switch the server lists without a row here is not
  * drawn, and tests/test_ghost_settings.py fails on it.
  *
  * - shadow: his A/B switch for the game's own shadow under Ghost Mario
- *   (2026-09-22); the whole picture already contains the recorded one.
+ *   (2026-09-22).
  * - occlusion_fade: the player-first fade (2026-09-23): where Ghost Mario
  *   stands between the camera and you it goes faint over your Mario, and it
  *   fades out right at the camera.
@@ -70,8 +60,8 @@ export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
  * - path_enabled and path_buttons (2026-10-03): the ghost's path, a line in
  *   the game world along the route the ghosts take (the fastest one's, or their
  *   average), and each button
- *   press drawn where it was pressed. The path is on at first; the presses
- *   are off until he tries them. Path buttons, Path from and Tune path only
+ *   press drawn where it was pressed. The path and presses are on at first.
+ *   Path buttons, Path from and Tune path only
  *   mean something while the path shows, so they nest beneath it.
  */
 export const SWITCH_LABELS = {
@@ -138,8 +128,7 @@ export const NUDGE_STEP = 1;
 // mirror of the same mistake and the worse direction: the control then SHOWS
 // "100%" for a value the server never sent, and a number on screen that
 // nobody chose is one small drag away from being written back as though he
-// had chosen it. His stored ghost opacity is 1.0 while the server's default
-// has always been 0.5, and this is the shape that could put it there.
+// had chosen it. The server owns both the default and his saved preference.
 //
 // So: unknown stays unknown, the control says so, and nothing sends it.
 // `range` is a published `{min, max}` (limits.opacity); without one the
@@ -314,7 +303,7 @@ export function ghostTargetKey(target) {
  *
  * Returns:
  *   known       the session is answering about THIS entity
- *   available   that entity has footage to play alongside you
+ *   available   that entity has a native ghost to play alongside you
  *   enabled     the switch is on
  *   canToggle   the switch may be flipped at all
  *   reasonText  why it may not be -- never null while canToggle is false
@@ -323,32 +312,11 @@ export function ghostTargetKey(target) {
  *               while nobody has said, which the control draws as unknown and
  *               never writes back
  *   tint        {enabled, hue} as the SERVER stated it -- or null, same rule
- *   view        "whole" or "mario" as the SERVER stated it -- or null, same
- *               rule again: a control that guesses is a control that writes
- *               its guess back the first time he touches it
- *   marioBoxes  whether this ghost CAN be drawn as Mario alone, and the
- *               server's own sentence saying why not
  *   nudge       whole game frames, already clamped
  */
-function viewAvailability(source) {
-  return {
-    nativeViews: typeof source.native_available === "boolean" ? {
-      mario: source.native_available,
-      whole: Boolean(source.whole_available),
-      marioReason: source.native_reason_text,
-      wholeReason: source.whole_reason_text,
-    } : null,
-    marioBoxes: {
-      available: Boolean(source.native_available ?? source.mario_boxes_available),
-      reasonText: (typeof source.native_available === "boolean"
-        ? source.native_reason_text : source.mario_boxes_reason_text) || null,
-    },
-  };
-}
-
 function ghostReason(session, source) {
   if (!source.available) return source.reason_text || "There is no run to play alongside you here yet.";
-  return session.enabled && session.view === "mario" ? session.window?.reason || null : null;
+  return session.enabled ? session.window?.reason || null : null;
 }
 
 export function ghostControls(session, entityKey) {
@@ -360,10 +328,10 @@ export function ghostControls(session, entityKey) {
     reasonText: "Checking whether this has a run to play alongside you...",
     // Nobody has said how solid the ghost is drawn, so the control does not
     // pretend to know -- see clampOpacity.
-    showsTuning: false, opacity: null, tint: null, view: null, proximity: null, switches: {},
+    showsTuning: false, opacity: null, tint: null, proximity: null, switches: {},
     volume: null, limits: {},
     nameBox: { background: null, opacity: null }, pathSource: null, pathTuning: null,
-    marioBoxes: { available: false, reasonText: null }, nudge: 0,
+    nudge: 0,
     selection: null,
   };
   if (!session || typeof session !== "object") return waiting;
@@ -384,33 +352,30 @@ export function ghostControls(session, entityKey) {
     volume: typeof session.volume === "number" ? session.volume : null,
     limits,
     proximity: session.proximity || null,
-    view: GHOST_VIEWS.includes(session.view) ? session.view : null,
-    ...viewAvailability(source),
     selection: session.selection || null,
   };
 }
 
 /** WHICH GHOSTS PLAY: a set of ticks, his PB first (`ghost/selection.py`).
  * The PB box stays tickable with no PB saved yet -- ticking it is what makes
- * his NEXT PB appear. A saved recording that cannot show this Show mode can
+ * his NEXT PB appear. A saved recording that cannot play as a ghost can
  * be unticked but not ticked; a ticked one that was deleted stays listed so
  * it can be unticked rather than silently vanishing.
  */
-export function ghostRecordingOptions(selection, view, draft = {}, strat = null) {
-  if (!selection || !GHOST_VIEWS.includes(view)) return null;
+export function ghostRecordingOptions(selection, draft = {}, strat = null) {
+  if (!selection) return null;
   const choice = shownChoice(selection, draft);
-  const field = view === "mario" ? "native" : "whole";
   const candidates = (selection.candidates || []).filter((candidate) => candidateShown(candidate, choice));
   const hues = new Map((selection.playing || []).map((row) => [row.key, row.hue_degrees]));
-  const items = [pbItem(selection.pb, choice.pb, field, hues)];
+  const items = [pbItem(selection.pb, choice.pb, hues)];
   const unplayable = [];
   for (const candidate of candidates) {
     const checked = candidateChecked(candidate, choice);
-    if (view === "mario" && !checked && neverPlaysAsMario(candidate)) {
+    if (!checked && neverPlaysAsMario(candidate)) {
       unplayable.push(candidate);
       continue;
     }
-    items.push(candidateItem(candidate, checked, field, view, hues, strat));
+    items.push(candidateItem(candidate, checked, hues, strat));
   }
   const missing = [...choice.attempts, ...(choice.imports || [])].filter(
     (id) => !candidates.some((candidate) => (candidate.import_id || candidate.attempt_id) === id));
@@ -418,15 +383,10 @@ export function ghostRecordingOptions(selection, view, draft = {}, strat = null)
     items.push({ key: id, checked: true, disabled: false, hue: null,
       label: "Removed ghost", reason: "no longer saved" });
   }
-  const rows = selection.pb ? [selection.pb, ...candidates] : candidates;
   return {
-    items, choice, reasonText: choiceReason(choice, missing, view),
+    items, choice, reasonText: choiceReason(choice, missing),
     folded: foldedLine(unplayable),
     toggle: (key) => toggled(choice, key),
-    views: {
-      mario: rows.some((row) => row.native_available),
-      whole: rows.some((row) => row.whole_available),
-    },
   };
 }
 
@@ -439,9 +399,9 @@ function candidateShown(candidate, choice) {
   return !candidate.practice || candidateChecked(candidate, choice);
 }
 
-/** The server's reasons a run can NEVER play as Only Mario: its poses are in
+/** The server's reasons a run can NEVER play as a ghost: its poses are in
  * an older format, or were never recorded or kept. Nothing he does on this
- * card changes that, so in Only Mario those runs fold into one quiet line
+ * card changes that, so those runs fold into one quiet line
  * instead of a column of disabled boxes each saying the same thing (his
  * picker, 2026-09-23). A ticked one stays a box so it can be unticked. */
 const NEVER_PLAYS_AS_MARIO = new Set(["older_pose_format", "no_native_poses", "native_preservation_failed"]);
@@ -455,7 +415,7 @@ function foldedLine(rows) {
   const reasons = [...new Set(rows.map((row) => row.native_reason_text).filter(Boolean))];
   return {
     count: rows.length,
-    label: `${rows.length} older run${rows.length === 1 ? "" : "s"} can't play as Only Mario`,
+    label: `${rows.length} older run${rows.length === 1 ? "" : "s"} can't play as ghosts`,
     reason: reasons.join(" "),
   };
 }
@@ -478,19 +438,18 @@ function toggled(choice, key) {
   return { ...choice, attempts };
 }
 
-function pbItem(pb, checked, field, hues) {
+function pbItem(pb, checked, hues) {
   if (!pb) return { key: "pb", checked, disabled: false, hue: null,
     label: "Your PB", reason: "none saved yet; your next PB appears here" };
-  const available = Boolean(pb[`${field}_available`]);
+  const available = Boolean(pb.native_available);
   return { key: "pb", checked, disabled: false, hue: checked ? hues.get("pb") ?? null : null,
     label: `Your PB · ${runName(pb)}`,
-    reason: available ? gapReason(pb, field) : pb[`${field}_reason_text`] };
+    reason: available ? gapReason(pb) : pb.native_reason_text };
 }
 
-/** Frames where Mario's position was not recorded: the ghost blinks there.
- * Only Mario reads positions, so only that view says so. */
-function gapReason(run, field) {
-  const gaps = field === "native" ? run.blinks || 0 : 0;
+/** Frames where Mario's position was not recorded: the ghost blinks there. */
+function gapReason(run) {
+  const gaps = run.blinks || 0;
   return gaps ? `blinks on ${gaps} frame${gaps === 1 ? "" : "s"} with no recorded position` : null;
 }
 
@@ -501,8 +460,8 @@ function runName(run) {
     : fmtIgtShort(run.frames);
 }
 
-function candidateItem(candidate, checked, field, view, hues, strat) {
-  const available = Boolean(candidate[`${field}_available`]);
+function candidateItem(candidate, checked, hues, strat) {
+  const available = Boolean(candidate.native_available);
   // The strategy only when it is not the one being practised: every row on
   // this card already is, and repeating it is noise.
   const other = candidate.strat && candidate.strat !== strat ? candidate.strat : null;
@@ -512,28 +471,14 @@ function candidateItem(candidate, checked, field, view, hues, strat) {
     key, checked, disabled: !available && !checked,
     hue: checked ? hues.get(key) ?? null : null,
     label: [runName(candidate), author, other].filter(Boolean).join(" · "),
-    reason: available ? gapReason(candidate, field) : candidate[`${field}_reason_text`]
-      || (view === "mario" ? "No saved Mario poses" : "No saved video"),
+    reason: available ? gapReason(candidate) : candidate.native_reason_text || "No saved Mario poses",
   };
 }
 
-function choiceReason(choice, missing, view) {
+function choiceReason(choice, missing) {
   if (missing.length) return "A ticked ghost is no longer saved. Untick it or choose another.";
   if (!choice.pb && !choice.attempts.length && !choice.imports?.length) return "Tick a ghost to race it here.";
-  if (view === "whole" && choice.pb + choice.attempts.length + (choice.imports?.length || 0) > 1) {
-    return "Whole picture shows the first ticked ghost; Only Mario shows them all.";
-  }
   return null;
-}
-
-/** Let another saved recording offer a mode the current source cannot show. */
-export function ghostViewChoices(nativeViews, recording) {
-  if (!nativeViews || !recording) return nativeViews;
-  return {
-    ...nativeViews,
-    mario: nativeViews.mario || recording.views.mario,
-    whole: nativeViews.whole || recording.views.whole,
-  };
 }
 
 /** "60%" -- what the slider is showing, for the readout beside it. An unknown
@@ -559,20 +504,6 @@ export function nudgeText(frames) {
 /** The same offset as a duration, for the control's own hover text. */
 export function nudgeSeconds(frames) {
   return clampNudge(frames) / GAME_FPS;
-}
-
-/**
- * What the view control SHOWS: the server's answer, or the choice he has just
- * made and which has not come back yet. Null while nobody has said.
- *
- * The same optimistic-draft rule the colour follows, and it is its own
- * function for the same reason: the control has to be able to tell "the
- * server says whole" from "nobody has said", because only one of those may be
- * written back.
- */
-export function shownView(current, draft) {
-  if (GHOST_VIEWS.includes(draft)) return draft;
-  return GHOST_VIEWS.includes(current) ? current : null;
 }
 
 /**

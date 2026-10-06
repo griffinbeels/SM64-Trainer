@@ -28,7 +28,7 @@ export function SaveGhostButton({ attemptId }) {
       const answer = await send(saved ? "DELETE" : "POST", url);
       setSaved(Boolean(answer.saved));
       setNotice(!answer.saved ? "Removed from your ghosts."
-        : answer.poses_reason ? `Saved as a ghost, but only the whole picture can show it: ${answer.poses_reason}`
+        : answer.poses_reason ? `Saved, but this run cannot play as a ghost: ${answer.poses_reason}`
         : "Saved as a ghost. It is ticked in the Ghosts row.");
     } catch (error) {
       setNotice(`Ghost not saved: ${error.message}`);

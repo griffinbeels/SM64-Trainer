@@ -27,12 +27,10 @@ from sm64_events.ghost.native_layout import (
     PATH_FASTEST, PATH_SPACING_MS_MAX, PATH_WIDTH_MAX, PATH_WIDTH_MIN,
 )
 
-#: How see-through the ghost is the FIRST time it is ever switched on. A
-#: shipped preference, so its exact value is his to move and no test pins it --
-#: what matters is that a first switch-on is see-through, because a solid
-#: overlay is indistinguishable from the emulator having vanished (which is
-#: what it looked like on 2026-09-19). A value he has already chosen wins.
-DEFAULT_OPACITY = 0.5
+#: First-use preferences follow his accepted native ghost screenshot of
+#: 2026-10-06. Existing stored choices win; tests check their valid ranges
+#: and persistence rather than pinning these tuning values.
+DEFAULT_OPACITY = 1.0
 #: The slider's own floor: a ghost at zero is a control that looks broken. The
 #: server still accepts 0..1; this is what the control offers.
 OPACITY_OFFERED_MIN = 0.15
@@ -40,27 +38,21 @@ OPACITY_OFFERED_MIN = 0.15
 #: His words, 2026-09-19: *"It feels really hard to understand which one is the
 #: ACTUAL LIVE GAMEPLAY and which one is the GHOST gameplay... Maybe we can have
 #: a color picker... The user can disable the color shift if they want."* So:
-#: on by default, a third of the way round the colour wheel, and his to move or
-#: switch off. A shipped preference, so no test pins these two numbers.
-DEFAULT_TINT = {"enabled": True, "hue_degrees": 120}
+#: on by default, at his chosen colour, and his to move or switch off.
+DEFAULT_TINT = {"enabled": True, "hue_degrees": 250}
 #: One full turn of the colour wheel. 0 and 360 are the same colour, so the
 #: control offers the half-open range and 360 is refused rather than silently
 #: meaning "off".
 HUE_LIMIT_DEGREES = 359
-#: WHAT THE GHOST SHOWS. His words, 2026-09-20: *"let's do tight rectangles on
-#: our existing ghosts, let's try it."* Default "whole", because that is the
-#: ghost he already knows and most clips have no boxes to draw the other one from.
-GHOST_VIEWS = ("whole", "mario")
-DEFAULT_VIEW = "whole"
 #: How far the ghost may be nudged, in game frames. 600 is twenty seconds at
 #: 30 fps -- past the length of most of the stars this is used on, so the limit
 #: only ever catches a typo or a stuck key. The native channel and renderer
 #: bound the same number; the card reads it from `limits`.
 NUDGE_LIMIT_FRAMES = 600
 #: HOW LOUD GHOST MARIO IS. His words, 2026-09-22: *"We should have a volume
-#: slider to adjust the ghost volume."* Half by default so the ghost never
-#: drowns out the live game; a shipped preference.
-DEFAULT_VOLUME = 0.5
+#: slider to adjust the ghost volume."* His accepted first-use volume is
+#: below the live game; a shipped preference.
+DEFAULT_VOLUME = 0.3
 INPUT_MODES = {"stick": INPUT_STICK, "values": INPUT_VALUES}
 DEFAULT_INPUT_MODE = "stick"
 #: THE BOX BEHIND THE GHOST'S NAME. His words, 2026-10-02: *"The nametag should
@@ -78,18 +70,16 @@ OVERLAP_FLOOR = 0.15
 #: THE GHOST'S PATH, a racing line in the game world. His words, 2026-10-03:
 #: *"maybe we just have the fastest ghost's path ... or, we have an 'average'
 #: path that we calculate based on all of the ghosts. it would be nice to test
-#: which approach feels better."* The fastest is the path he described first.
+#: which approach feels better."* His accepted default follows their average.
 PATH_SOURCES = {"fastest": PATH_FASTEST, "average": PATH_AVERAGE}
-DEFAULT_PATH_SOURCE = "fastest"
+DEFAULT_PATH_SOURCE = "average"
 #: How far ahead it reaches (seconds of the ghost's run), how wide its ribbon
 #: is (world units), how strongly it is drawn, and how far apart its arrows
 #: sit (seconds). Shipped preferences, his to move. The renderer's own bounds
 #: (ghost_tuning.h GP_PATH_*) cap each range; the arrow spacing and strength
 #: offer a floor above the renderer's, so the control never reaches an
-#: unreadable path. 1.5 s ahead (was 3), his ask of 2026-10-03: "progressively
-#: disclose the path as we're going along it, so that we have just enough to
-#: know where we're going / what's coming up".
-DEFAULT_PATH_TUNING = {"ahead_s": 1.5, "width": 40.0, "opacity": 0.85, "spacing_s": 0.1}
+#: unreadable path. These first-use values follow his accepted screenshot.
+DEFAULT_PATH_TUNING = {"ahead_s": 3.0, "width": 20.0, "opacity": 0.8, "spacing_s": 0.05}
 PATH_TUNING_LIMITS = {
     "ahead_s": {"min": PATH_AHEAD_MS_MIN / 1000, "max": PATH_AHEAD_MS_MAX / 1000, "step": 0.5},
     "width": {"min": PATH_WIDTH_MIN, "max": PATH_WIDTH_MAX, "step": 5},
@@ -208,15 +198,6 @@ def checked_tint(value) -> dict:
     return checked
 
 
-def checked_view(value) -> str:
-    """Asking for "mario" on a ghost whose clip has no boxes is NOT an error:
-    the setting is app-wide and he walks between stars, so refusing it would
-    make the control jam on the first ghost without boxes."""
-    if value not in GHOST_VIEWS:
-        raise ValueError("The ghost shows either the whole picture or only Mario.")
-    return value
-
-
 def checked_volume(volume) -> float:
     if type(volume) not in (int, float) or not 0 <= volume <= 1:
         raise ValueError("The ghost's volume is between silent and full.")
@@ -308,9 +289,9 @@ def _native_proximity(value: dict) -> dict:
 
 #: EVERY GHOST PREFERENCE, in payload order. `enabled` reaches the renderer
 #: through the session itself, which decides what "enabled" means for the
-#: current target and view, so its row carries no native field.
+#: current target, so its row carries no native field.
 ROWS = (
-    Setting("enabled", False, _checked_bool("The ghost overlay is either on or off."), resolves=True,
+    Setting("enabled", True, _checked_bool("The ghost overlay is either on or off."), resolves=True,
             key="ghost_enabled", restore=bool),
     Setting("opacity", DEFAULT_OPACITY, checked_opacity, key="ghost_opacity",
             restore=_clamped(DEFAULT_OPACITY), native=lambda value: {"opacity": value},
@@ -382,10 +363,10 @@ ROWS = (
     # path markers on the ground, indicating the path that mario takes, so you
     # know if you're staying on path or not"*; and of the presses: *"have the
     # button idea disabled by default but toggleable (i want to test this and
-    # see if it's useful)."* Which ghost it follows is not a setting: the native
-    # session names the fastest playing one in each command (`path_clip`).
+    # see if it's useful)."* His accepted screenshot now has the presses on.
+    # The native session names its anchor recording in each command (`path_clip`).
     switch("path_enabled", "ghost_path", True, "The ghost's path is either shown or hidden.", "path_enabled"),
-    switch("path_buttons", "ghost_path_buttons", False,
+    switch("path_buttons", "ghost_path_buttons", True,
            "Button presses on the path are either shown or hidden.", "path_buttons"),
     Setting("path_source", DEFAULT_PATH_SOURCE, checked_path_source, key="ghost_path_source",
             restore=lambda stored: stored if isinstance(stored, str) and stored in PATH_SOURCES
@@ -394,10 +375,6 @@ ROWS = (
             limits={"options": list(PATH_SOURCES)}),
     Setting("path_tuning", dict(DEFAULT_PATH_TUNING), checked_path_tuning, key="ghost_path_tuning",
             restore=_saved_path_tuning, merge=True, native=_native_path_tuning, limits=PATH_TUNING_LIMITS),
-    # A stored value from a build that knew another view name is not a view:
-    # it falls back rather than leaving the page asking for what nothing draws.
-    Setting("view", DEFAULT_VIEW, checked_view, key="ghost_view", resolves=True,
-            restore=lambda stored: stored if stored in GHOST_VIEWS else DEFAULT_VIEW),
     # Never remembered: it belongs to the target, gone by the next session.
     Setting("nudge_frames", 0, checked_nudge, native=lambda value: {"nudge": value},
             limits={"limit": NUDGE_LIMIT_FRAMES}),

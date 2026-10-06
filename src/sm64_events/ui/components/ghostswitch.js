@@ -38,9 +38,9 @@ import { holdRepeat } from "../holdrepeat.js";
 import { GhostProximity } from "./ghostproximity.js";
 import { GhostLibraryButton } from "./ghostlibrary.js";
 import { clampNudge, clampOpacity, ghostControls, ghostPathTuning, ghostRecordingOptions,
-         ghostViewChoices, ghostOption, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
-         nudgeSeconds, nudgeText, opacityText, pathTuningText, shownTint, shownView,
-         GHOST_VIEWS, NUDGE_STEP, PATH_SOURCE_LABELS, PATH_TUNING_LABELS, VIEW_LABELS } from "../ghostsession.js";
+         ghostOption, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
+         nudgeSeconds, nudgeText, opacityText, pathTuningText, shownTint,
+         NUDGE_STEP, PATH_SOURCE_LABELS, PATH_TUNING_LABELS } from "../ghostsession.js";
 
 const html = htm.bind(h);
 
@@ -284,10 +284,10 @@ function GhostPathControls({ row, buttons, source, limits, write }) {
  * laid over whatever another slider has in flight (`queue` reads the
  * pending patch, so two quick drags both land).
  */
-function GhostPathTune({ active, view, switches, tuning, ranges, draft, queue }) {
+function GhostPathTune({ active, switches, tuning, ranges, draft, queue }) {
   const path = switches.find((row) => row.setting === "path_enabled");
   const shown = path && (path.draft == null ? path.value : Boolean(path.draft));
-  if (!active || view !== "mario" || !shown || !tuning || !ranges) return null;
+  if (!active || !shown || !tuning || !ranges) return null;
   const set = (name, value) => queue((pending) => ({
     path_tuning: { ...(draft || {}), ...(pending.path_tuning || {}), [name]: value },
   }));
@@ -382,56 +382,6 @@ function GhostColour({ tint, range, write, queue }) {
   </div>`;
 }
 
-/**
- * WHAT THE GHOST SHOWS: the whole recorded screen, or only Mario.
- *
- * His report is the reason this exists: *"It's still extremely hard to
- * understand the ghost, because all the camera movement / scenery overlaps.
- * So, what if we train an image detection model on detecting the exact
- * position of Mario in every single frame of the ghost. Then, we extract ONLY
- * mario."*
- *
- * A native `<select>` of two options, which is this project's rule for a SHORT
- * dropdown -- a filtered popup over two rows is worse than what it replaces.
- * The labels say what each one draws; neither of them names a rectangle, a
- * model or a box.
- *
- * DISABLED WITH ITS REASON when this ghost's recording has never had Mario
- * found in it, which is every recording made before this round. That is his
- * acceptance rule -- a control that cannot run says why -- and it matters more
- * than usual here: the whole point of the round is the Mario view, so a
- * control that silently vanished would read as the feature not shipping.
- *
- * The sentence itself is the SERVER's and it is NOT inside this group: a whole
- * sentence is not part of a control's box, and putting it there made the group
- * two lines tall, which is indistinguishable from the controls wrapping. It is
- * rendered beside this one by `GhostTuning`, on a row of its own.
- */
-function GhostView({ view, boxes, choices = null, write }) {
-  const known = view != null;
-  const can = known && (choices ? choices.whole || choices.mario : boxes.available);
-  // WHAT IS ON SCREEN, not what the session is set to. The setting is app-wide
-  // and he walks between stars, so it arrives at "only Mario" on ghosts whose
-  // recording has no boxes -- and the overlay is drawing the whole picture
-  // there. A disabled control reading "Only Mario" beside a whole-picture
-  // ghost is a control contradicting the screen.
-  const shown = choices ? view : (can ? view : "whole");
-  return html`<div class="ghost-field ghost-view">
-    <span class="ghost-field-name">Show</span>
-    <select class="ghost-view-select" disabled=${!can}
-      value=${shown}
-      aria-label="What the ghost draws over your game"
-      title=${can ? "What the ghost draws over your game"
-                  : (boxes.reasonText || "Waiting for what the ghost draws")}
-      onchange=${(event) => write({ view: event.target.value })}>
-      ${GHOST_VIEWS.map((name) => html`<option key=${name} value=${name}
-        disabled=${choices ? !choices[name] : false}>
-        ${VIEW_LABELS[name]}
-      </option>`)}
-    </select>
-  </div>`;
-}
-
 /** WHICH GHOSTS PLAY: one tick per recording, his PB first. A tick writes
  * the whole set at once; each ticked ghost wears the colour dot it is drawn
  * in, so several Marios on screen can be told apart. */
@@ -462,15 +412,13 @@ function GhostRecording({ recording, entityKey, target, write }) {
 }
 
 /**
- * The four things worth reaching for while the ghost is up, and nothing else:
- * how solid it is drawn over the game, how it is coloured so the two pictures
- * cannot be confused, what it draws at all, and where it sits against your own
- * run. The whole block is absent while the overlay is off -- there would be
+ * The ghost's visibility, colour, annotations, sound, path and timing.
+ * The block is absent while the overlay is off -- there would be
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, switches, nameBox, pathSource, volume, view, boxes, nudge, limits,
-                      write, queue, showView = true }) {
+function GhostTuning({ opacity, tint, switches, nameBox, pathSource, volume, nudge, limits,
+                      write, queue }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
@@ -486,11 +434,10 @@ function GhostTuning({ opacity, tint, switches, nameBox, pathSource, volume, vie
   return html`<div class="ghost-tune">
     <${GhostVisibility} opacity=${opacity} range=${limits.opacity} queue=${queue} />
     <${GhostColour} tint=${tint} range=${limits.tint} write=${write} queue=${queue} />
-    ${view === "mario" && html`${switches.slice(0, sound).map(control)}
+    ${switches.slice(0, sound).map(control)}
       <${GhostVolume} volume=${volume.value} draft=${volume.draft} range=${limits.volume}
         queue=${queue} />
-      ${switches.slice(sound).map(control)}`}
-    ${showView && html`<${GhostView} view=${view} boxes=${boxes} write=${write} />`}
+    ${switches.slice(sound).map(control)}
     <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
       <span class="ghost-field-name">Timing</span>
       <button type="button" class="ghost-step"
@@ -507,8 +454,6 @@ function GhostTuning({ opacity, tint, switches, nameBox, pathSource, volume, vie
           title="Put the ghost back in step with your own run"
           onclick=${() => queue({ nudge_frames: 0 })}>Reset</button>`}
     </div>
-    ${showView && view != null && !boxes.available && boxes.reasonText
-      && html`<span class="ghost-why ghost-view-why">${boxes.reasonText}</span>`}
   </div>`;
 }
 
@@ -567,9 +512,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
     ? controls.enabled : Boolean(held.enabled) && controls.available;
   const { limits } = controls;
   const { opacity, nudge, switches, tint, nameBox, pathSource, pathTuning } = heldValues(controls, held);
-  const view = shownView(controls.view, held.view);
-  const recording = ghostRecordingOptions(controls.selection, view, held, practisedStrat(session));
-  const nativeViews = ghostViewChoices(controls.nativeViews, recording);
+  const recording = ghostRecordingOptions(controls.selection, held, practisedStrat(session));
   const labelId = idFor(entityKey, "label");
   const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;
 
@@ -580,22 +523,19 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         onToggle=${() => write({ enabled: !on })} />
       <span class="ghost-label" id=${labelId}>Ghost Overlay</span>
       <${GhostLibraryButton} t=${t} session=${session} write=${write} />
-      ${nativeViews && html`<${GhostView} view=${view}
-        boxes=${controls.marioBoxes} choices=${nativeViews} write=${write} />`}
       ${controls.reasonText && html`<span class="ghost-why" id=${reasonId}>
         ${controls.reasonText}
       </span>`}
     </div>
     <${GhostRecording} recording=${recording} entityKey=${entityKey}
       target=${session?.target} write=${write} />
-    ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
+    ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint}
       switches=${switches} nameBox=${nameBox} pathSource=${pathSource} limits=${limits}
       volume=${{ value: controls.volume, draft: held.volume }}
-      boxes=${controls.marioBoxes} nudge=${nudge}
-      write=${write} queue=${queue} showView=${!controls.nativeViews} />`}
-    <${GhostProximity} active=${on} view=${view} value=${controls.proximity} range=${limits.proximity}
+      nudge=${nudge} write=${write} queue=${queue} />`}
+    <${GhostProximity} active=${on} value=${controls.proximity} range=${limits.proximity}
       draft=${held.proximity} write=${write} queue=${queue} />
-    <${GhostPathTune} active=${on} view=${view} switches=${switches} tuning=${pathTuning}
+    <${GhostPathTune} active=${on} switches=${switches} tuning=${pathTuning}
       ranges=${limits.path_tuning} draft=${held.path_tuning} queue=${queue} />
   </div>`;
 }
