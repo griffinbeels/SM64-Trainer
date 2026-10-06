@@ -1,18 +1,17 @@
 # Native ghost runtime contracts
 
-The Mario view evaluates recorded graphics poses with the libsm64 C model and
-draws them inside the pinned GLideN64 renderer under the live camera. The whole
-picture view retains the video overlay. Both use the existing ghost preference,
-opacity, timing nudge and tint controls; switching to Mario closes the overlay
-window. See [session.py](../src/sm64_events/ghost/session.py) and
+Ghosts evaluate recorded graphics poses with the libsm64 C model and draw them
+inside the pinned GLideN64 renderer under the live camera. This is the sole
+supported ghost renderer. The retired video overlay, browser crop page and
+companion window are removed; older video-only recordings remain playable as
+replays but cannot supply ghost poses. See [session.py](../src/sm64_events/ghost/session.py) and
 [native_session.py](../src/sm64_events/ghost/native_session.py).
 
 The **Ghosts** checkboxes choose the local PB, other saved runs and imported
 ghosts for the current star or segment. The choice is stored per target and
 strategy without changing the input-comparison template. When PB is ticked but
 no PB or other ghost is selected, the active input template supplies the ghost.
-Local recordings are qualified separately for Mario poses and whole-picture
-video; imported collections supply native poses. A removed choice stays
+Local and imported recordings are qualified for native poses. A removed choice stays
 unavailable until the user chooses another recording. Selection updates include
 the target so a delayed request cannot choose ghosts for another practice target. See
 [selection.py](../src/sm64_events/ghost/selection.py).
@@ -23,6 +22,24 @@ release build or live acceptance result. New native recordings are required;
 physics resimulation and migration of older video-only recordings are outside
 the format. The full game, recording and presentation path has a 33.33 ms budget
 at 30 Hz. A geometry benchmark alone cannot establish that budget.
+
+## New-user settings and iteration boundary
+
+`ghost/settings.py` owns the defaults accepted on October 6: ghosts enabled,
+visibility 100%, colour enabled at +250 degrees, shadow and names enabled,
+inputs over the ghost disabled, corner inputs and front-of-Mario fading enabled,
+black name boxes at 60%, sound fading enabled at 30% volume, and ghosts in
+recording disabled. The path is enabled with button presses and the average
+of ghosts, looking 3 seconds ahead at width 20, strength 80% and arrow spacing
+0.05 seconds. Near-player fading is enabled with 300 units of extra distance;
+timing starts with the player. Saved preferences override these defaults.
+The old `ghost_view` preference is ignored; no view selector remains.
+
+Griffin accepted the single-ghost experience. Simultaneous ghosts and sharing
+remain untested by him. Existing collection/import/export contracts below are
+retained for the next iteration; their automated coverage is distinct from
+live acceptance. Neither this cleanup nor that acceptance changes stored
+recordings, local PBs or imported credit.
 
 ## Names, inputs and collections
 
@@ -1914,8 +1931,7 @@ and revoked sources are also unavailable. The delivery's twin lane records it th
 ([replay-gpu-runtime.md, "The ghost copy"](replay-gpu-runtime.md#the-ghost-copy)).
 Cost: one extra copy of BACK only on frames that drew a ghost, plus the twin's snapshot
 and bridge copies; nothing at all while the switch is off. The choice applies to what
-is recorded from then on; saved clips never change. Whole picture ghosts are a separate
-window over the game, so they never reach either recording. Rejected: redrawing ghosts
+is recorded from then on; saved clips never change. Rejected: redrawing ghosts
 on the replay (no wall depth, so they would show through walls) and overwriting the
 clean recording (the 2026-10-02 design: a PB could only exist with its ghosts). The
 presentation witness checks every clean pixel stays the background with the switch on,

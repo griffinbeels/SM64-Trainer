@@ -9130,29 +9130,6 @@
   .ghost-library-button { margin-left: auto; }
   .ghost-library-filters select { background: #101f31; }
   .ghost-volume-range { width: 90px; min-width: 0; accent-color: var(--gold); }
-  /* WHAT THE GHOST DRAWS -- the whole picture, or only Mario.
-     A native `<select>` of two options: this project's rule is that a SHORT
-     dropdown stays native, because a filtered popup over two rows is worse
-     than what it replaces. It carries its own opaque background for the same
-     reason every select here does (a transparent one gets a WHITE popup from
-     Chromium), and the option colour is deliberately NOT set -- the row text
-     colour is the browser's to choose, or the highlighted row goes
-     light-on-light. */
-  .ghost-view { gap: .35rem; }
-  .ghost-view-select {
-    background: #101f31; color: var(--text);
-    border: 1px solid var(--border-soft); border-radius: 5px;
-    font: inherit; font-size: .68rem; padding: 1px .3rem;
-    min-height: 22px; cursor: pointer;
-  }
-  .ghost-view-select option { background-color: #101f31; }
-  .ghost-view-select:hover:not(:disabled) {
-    border-color: var(--gold-soft);
-  }
-  .ghost-view-select:focus-visible {
-    outline: 2px solid var(--gold); outline-offset: 2px;
-  }
-  .ghost-view-select:disabled { cursor: default; opacity: .65; }
   .ghost-recording-row {
     display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .75rem;
     min-width: 0;
@@ -9193,11 +9170,6 @@
     align-self: center; color: var(--muted); font-size: .72rem; cursor: help;
   }
   .ghost-pick-why::before { content: "— "; }
-  /* The reason takes its OWN ROW, beside the control groups rather than
-     inside one: a whole sentence is not part of a control's box, and while it
-     was in the group the group measured two lines tall -- which is exactly
-     what a control that had wrapped would measure. */
-  .ghost-view-why { flex: 1 0 100%; margin: 0; }
   .ghost-field-name {
     font-size: .66rem; color: var(--muted-2); text-transform: uppercase;
     letter-spacing: .05em; white-space: nowrap;

@@ -1262,19 +1262,16 @@ delete the one you do not want instead of cropping it.
 
 ### Ghost
 
-The [[attempt]] you are racing from your active [[template track]]. Whole-picture
-mode draws its footage over the [[game picture]]. Mario-only mode rebuilds its
-recorded graphics pose through libsm64 inside GLideN64, using the live camera
-and terrain depth. Opacity and tint apply to the displayed ghost.
-Playback follows [[in-game time]] plus the [[nudge]]. The native path binds the
-exact recorded and live [[attempt]] origins; a missing clock or a save-state
-discontinuity hides the ghost until the tracker establishes its identity again. The
+The recorded [[attempt]] you race beside your current play. Its captured
+graphics pose is rebuilt through libsm64 inside GLideN64, using the live
+camera and terrain depth. Opacity and tint apply to the displayed ghost.
+Playback binds the exact recorded and live [[attempt]] origins and applies
+the [[nudge]]. Missing poses or clock identity have a readable refusal. The
 practice card's switch calls it Ghost Overlay.
 
-- **Lives** — the one thing that joins the switch, the [[ghost window]] and the
-  [[target]] (`src/sm64_events/ghost/session.py`)
-- **Not** — the [[overlay layer]], which writes a video file you take into an
-  editor.
+- **Lives** — `src/sm64_events/ghost/session.py` joins selection, settings and
+  the [[target]]; `src/sm64_events/ghost/native_session.py` publishes native playback
+- **Not** — the [[overlay layer]], which writes a video file for an editor.
 
 ### Recorded shadow
 
@@ -1421,8 +1418,8 @@ hidden behind walls like the [[ghost]]. It follows how far along its line you
 are, not where the [[ghost]] is, and only moves forward: falling behind still
 shows the next stretch from your feet, and coming back through a place shows
 the [[ghost]]'s later pass there. It is one line: the fastest [[ghost]]'s,
-or the average of them where they all ran together. Its button presses, each
-drawn where the [[ghost]] pressed it, are off until you switch them on.
+or the average of them where they all ran together. New users start with
+the average path and button presses drawn where the [[ghost]] pressed them.
 
 - **Lives** — `plugin/gfxwrap/ghost_path.h` (what is drawn) and
   `plugin/gfxwrap/ghost_playback.cpp` (which stretch); its settings rows in
@@ -1463,17 +1460,14 @@ one, which ends with it or with the trainer.
 
 ### Ghost source
 
-Where a [[ghost]]'s pictures or poses come from, and how exact their timing is.
-Mario-only uses a new native pose recording with exact [[attempt]] origin metadata;
-old video-only recordings cannot supply it. Whole-picture mode uses the saved
-recording of the [[attempt]] you marked your active [[template track]] from,
-whose [[frame map]] says which game [[frame]] each picture shows. A [[template track]]
-that came from an input file has no pictures or poses. Marking a newly recorded
-native [[attempt]] preserves its poses even without saved footage. Each mode
-reports its own availability, with a sentence explaining every missing source.
+The native poses a [[ghost]] plays, with their exact [[attempt]] origin.
+They come from a local recorded [[attempt]] or an [[imported ghost]]. Marking a
+newly recorded [[attempt]] preserves its poses independently of saved video.
+Older video-only recordings and input-file templates cannot supply them.
+Unavailable sources include a sentence explaining why.
 
-- **Lives** — `src/sm64_events/ghost/source.py`, one function per kind of
-  source
+- **Lives** — `src/sm64_events/ghost/native_session.py` resolves playback;
+  `src/sm64_events/ghost/selection.py` qualifies the offered recordings
 
 ### PB ghost
 
@@ -1490,9 +1484,8 @@ the saved PBs on every read, never stored, and never changes the input compariso
 
 Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any [[saved ghost]],
 [[imported ghost]] or [[template track]] [[attempt]] you tick, up to 16, each named by the time it achieved.
-Only Mario draws them all at once, each tinted its own colour. Whole picture
-shows the first [[ghost]]'s saved video when available; imported collections contain
-native poses only. With the PB box ticked, no PB saved and nothing else ticked, your active
+The [[renderer]] draws them together, each tinted its own colour. Collections
+contain native poses. With the PB box ticked, no PB saved and nothing else ticked, your active
 [[template track]] plays.
 
 - **Lives** — `src/sm64_events/ghost/selection.py`
@@ -1542,113 +1535,49 @@ recording itself never changes; a [[frame]] the track lacks stays unknown.
 - **Not** — a [[polled fill]], which is the replay timeline's drawing of a
   sample with no picture.
 
-### Ghost window
-
-The see-through window the trainer draws a whole-picture [[ghost]] in: no border, no taskbar
-button, never taking focus, the mouse passing straight through to the game.
-It sits on the [[game picture]] and follows it, hides when the emulator goes
-away or small, and ends when the trainer does. It stays up while you work in
-another app: the trainer inserts it directly above Project64 rather than above
-everything, so whatever covers the emulator covers it too. Native Mario-only
-mode draws inside the [[renderer]] and does not use this window.
-
-- **Lives** — `src/sm64_events/ghost/window/`, a child process of its own
-  because the window toolkit wants a main thread
 
 ### Game picture
 
-The part of Project64's window its [[renderer]] draws into: the client area
-minus whatever chrome Project64 keeps inside it, which on 1.6 is a status bar
-docked along the bottom. This, not the client area, is what the
-[[capture layer]] records and what a [[ghost window]] has to cover — a
-[[ghost]] placed on the whole client area covers that strip too, which
-stretches the footage by its height.
+The part of Project64's window its [[renderer]] draws into. On 1.6 the client
+area also contains a status bar; the game picture excludes that strip. Native
+[[ghost]]s draw directly inside this picture.
 
-- **Not** the client area, and not the window's outer border
-- **Lives** — `src/sm64_events/ghost/window/geometry.py` derives it; the
-  emulator's own child windows come from
-  `src/sm64_events/ghost/window/native.py`
+- **Lives** — the renderer's presentation surfaces;
+  `src/sm64_events/replay/video.py` owns recording-window geometry
 
 ### Ghost clock
 
-The live [[attempt]]'s timer, pushed to the whole-picture overlay: Usamune's own
-counter exactly as the poll loop reads it, beside the emulator's [[frame]]
-counter, which keeps moving while the game pauses. It carries the [[nudge]] and
-the [[ghost colour]] too — both are things the running overlay page can simply
-take, so neither needs the page reloaded — and it says whether you have just
-touched a [[star]], which is what ends your own [[run]]. With nothing listening it
-costs the poll loop one test and never touches the [[snapshot]]. Native Mario
-playback uses its own clock inside the [[renderer]], with origins from the tracker.
+The [[renderer]]'s clock that chooses a recorded [[ghost]] occurrence from the
+live [[attempt]] origin and its timing [[nudge]]. The tracker publishes settled
+arm, rebase and disarm markers; native playback advances from the game's own
+timer each occurrence. No browser timer socket drives it.
 
-- **Lives** — `src/sm64_events/server/ghost_clock.py` → the /ws/ghost-clock
-  socket
+- **Lives** — `plugin/gfxwrap/ghost_clock.h` and `plugin/gfxwrap/ghost_clock.cpp`, with
+  origin commands from `src/sm64_events/ghost/native_session.py`
 
-### Ghost follower
-
-The rule that turns a [[ghost clock]] reading into a picture: show the template
-picture whose [[in-game time]] equals the live one plus the [[nudge]]. Steady
-play moves the footage at game speed and corrects; a stalled timer holds; a
-jump either way seeks. It also knows when there is nothing honest to show: when
-you are not in the course the [[ghost]] belongs to, and once you have touched the
-[[star]] yourself — either way it holds until your timer is back inside the [[run]].
-
-- **Lives** — `src/sm64_events/ui/ghost/follower.js`, drawn by
-  `src/sm64_events/ui/ghost/index.html`
 
 ### Nudge
 
 How far ahead or behind the [[ghost]] plays, counted in game [[frame]]s.
-Positive shows you where you should be next; negative shows what you just did.
-It belongs to the one thing you are practising, so it goes back to zero as soon
-as the [[target]] changes.
+Positive shows a later recorded occurrence; negative shows an earlier one.
+It belongs to the practice [[target]] and returns to zero when that changes.
 
-- **Lives** — `src/sm64_events/ghost/session.py` holds it; it travels to the
-  whole-picture overlay on the [[ghost clock]] and to native playback through
-  `src/sm64_events/ghost/native_session.py`; the [[ghost follower]] or
+- **Lives** — `src/sm64_events/ghost/session.py` holds it;
+  `src/sm64_events/ghost/native_session.py` publishes it;
   `plugin/gfxwrap/ghost_playback.cpp` applies it
 
-### Ghost view
 
-What a [[ghost]] draws: the whole recorded screen, or Mario's recorded pose
-under the live camera. Mario-only uses libsm64 inside the [[renderer]] and can
-hide behind the live terrain. It needs a new native pose recording; older
-footage cannot supply one. The choice stays reachable before enabling the
-[[ghost]], and the control explains when the selected mode lacks a source.
-
-- **Lives** — `src/sm64_events/ghost/session.py` holds it and remembers it;
-  `src/sm64_events/ui/ghost/index.html` draws whole-picture mode and
-  `src/sm64_events/ghost/native_session.py` controls native Mario mode; the switch
-  row (`src/sm64_events/ui/components/ghostswitch.js`) is where you choose it
-
-### Mario box list
-
-Where Mario is in every picture of one saved recording, for the retained
-browser crop rig: a rectangle per picture, or nothing for a picture he is not
-in. Native Mario-only playback does not use these lists. You make one outside the
-trainer and save it beside the clip, so the recording itself stays untouched
-and the whole picture stays watchable. The trainer re-checks the list against
-the recording every time it reads one — it refuses a list that does not match
-picture for picture rather than drawing it a few pictures out.
-
-- **Lives** — `src/sm64_events/ghost/mariobox.py` reads it and checks it, from
-  a file named after the clip beside the clip; the [[ghost source]] hands it to
-  the overlay page
 
 ### Ghost colour
 
-The colour shift applied to a [[ghost]] so it cannot be mistaken for the live
-game — every colour in the footage moved the same way around the colour wheel.
-It follows the [[ghost view]]: showing the whole picture colours the whole
-picture, and showing only Mario colours only him, because he is the only thing
-on screen. On by default, at a third of a turn; you can pick another angle or
-switch it off, and the trainer remembers the choice. Changing it takes effect
-on the next game [[frame]], because it travels the way the [[nudge]] does.
+The colour shift applied to a [[ghost]]'s body and supported held objects,
+so you can distinguish it from live Mario. It starts enabled at
++250 degrees for new users. You can change the angle or disable the colour;
+saved preferences remain in effect. Each selected [[ghost]] gets its own hue.
 
-- **Lives** — `src/sm64_events/ghost/session.py` holds it and remembers it;
-  it travels on the [[ghost clock]] or through the native session;
-  `src/sm64_events/ui/ghost/index.html` applies it to the picture and
-  `plugin/gfxwrap/ghost_compositor.cpp` applies it to Mario. The switch row
-  (`src/sm64_events/ui/components/ghostswitch.js`) is where you choose it
+- **Lives** — `src/sm64_events/ghost/settings.py` owns the preference;
+  `plugin/gfxwrap/ghost_compositor.cpp` applies it; the practice card's
+  `src/sm64_events/ui/components/ghostswitch.js` provides the controls
 
 ### Name box
 
@@ -1679,8 +1608,7 @@ while that [[ghost]] is off screen.
 The switch on the [[ghost]] card (off by default) that also records a [[ghost copy]]
 of your play while it is on. Your own recording stays clean either way: no
 [[ghost]] picture and no [[ghost]] sound, so a PB is always clean. It applies to
-what the [[recorder]] takes from then on, and Whole picture [[ghost]]s (a separate
-window) are never in either recording.
+what the [[recorder]] takes from then on.
 
 - **Lives** — its switch row in `src/sm64_events/ghost/settings.py`
 
@@ -1692,7 +1620,7 @@ walls as you saw them, their names and [[corner inputs]], and their sound mixed
 with the game's. It holds the clean recording's pictures, one for one, at the
 same times, so the replay's button that shows the [[ghost]]s switches between
 the two without losing your place. Saving a replay keeps the copy beside it; nothing else
-(sharing, Whole picture [[ghost]]s, the saved list) ever reads it. It costs a
+(sharing or the saved list) ever reads it. It costs a
 second video encode and its own disk space only while the switch is on, and if
 anything goes wrong with it, only the copy stops.
 

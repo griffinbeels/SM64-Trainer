@@ -655,10 +655,8 @@ renderer draws into the remainder. Live, 2026-09-19, per-monitor-aware: client
 `[18, 81, 2400, 1802]`; unaware (PJ64's own space) client `1600x1224`, picture
 `1600x1201`. That remainder, floor-even cropped, is the size of every clip the
 capture layer records — `1600x1200` — which is the independent check on the
-rule. Anything that has to COVER the picture derives it from the client
-rectangle and the emulator's child windows
-(`ghost/window/geometry.py::picture_rect`); the desktop-grab fallback crops the
-whole client and keeps the strip, which is a difference, not a disagreement.
+rule. Native ghosts draw directly in the renderer's game picture. The
+desktop-grab recording fallback crops the whole client and keeps the strip.
 GLideN64 ships here with `frameBufferEmulation\aspect=1` (force 4:3), so the
 game image is inscribed 4:3 inside that rectangle; the black bands top and
 bottom of a clip are the GAME's own 8-of-240 scanline borders (40 rows of 1200,
@@ -674,20 +672,6 @@ for recording. Opacity and tint affect only Mario pixels. Poll callbacks skip
 contended control locks; neither Python nor IPC paces rendered ghost frames.
 See [native runtime contracts](ghost-native-runtime.md) for identity, timing,
 refusals and the remaining live verification boundary.
-
-**Legacy browser crop composition.** Whole-picture mode still uses the browser.
-The crop page and its diagnostic rig retain the earlier video path: the browser
-owns decoding, clock lookup and colour treatment. Its canvas sends crop RGBA
-pixels and physical destination through a bounded latest-frame bridge
-(`ui/ghost/presenter.js` → `ghost/window/presentation.py`). A separate unowned,
-click-through HWND submits that bitmap, position, dimensions and opacity together
-with `UpdateLayeredWindow` (`ghost/window/surface.py`). Mario mode holds the
-full-size browser HWND at alpha zero: transparent page pixels otherwise reveal
-its black WinForms backing and darken the whole game. The native crop HWND must
-never receive `SetLayeredWindowAttributes`, which disables later layered bitmap
-uploads. Whole-picture mode continues through the browser HWND. Navigation tokens,
-null crops, stale producers and unproved geometry fail closed; the existing page
-diagnostic records include native crop geometry, alpha, upload count and errors.
 
 **Hard real-time in CPython — why encoding left the process.** At 60 fps
 (16.7 ms/frame) and PortAudio callbacks (21 ms budget), every Python thread

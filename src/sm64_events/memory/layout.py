@@ -179,7 +179,8 @@ US = Layout(
                                     # new ghost read, not yet live gate verified.
     area_update_counter=0x8032DF08, # VERIFY: STROOP MappingUS.map gAreaUpdateCounter;
                                     # u16, distinct from gGlobalTimer.
-    # STROOP MappingUS.map symbols; tools/ghost_audio_spike/qualify_ring.py
+    # STROOP MappingUS.map symbols; the retired audio feasibility probe
+    # (docs/history/ghost-audio-feasibility-20260922.md)
     # found identical play_sound code in stock and Usamune (SHA256 1c8030b6...)
     # naming exactly this producer and ring, 2026-09-22. Live gates
     # address.sound_* all verified on Usamune US while he jumped, 2026-09-23

@@ -424,9 +424,8 @@ then reports the latest capture state when that query finishes.
 Unlike session Pause, this switch closes capture owners. It preserves tracking,
 saved replays, buffered media and the separate session pause setting. It does
 stop the native pose source, Only Mario ghost playback and its native sound
-player. Ghost Overlay preferences stay unchanged; Only Mario can resume when
-recording starts and the current attempt has a valid origin. The whole-picture
-overlay's muted saved-video window can remain open while recording is off.
+player. Ghost Overlay preferences stay unchanged; native ghosts can resume when
+recording starts and the current attempt has a valid origin.
 
 While the server runs it records the PJ64 window (DWM shared-surface
 capture — modern window capture sees frozen content for PJ64's D3D8, and
@@ -542,7 +541,7 @@ preferences remain in the replay's separate preference file across restarts.
   copy left the buffer before this replay was saved", ...). A buffer cut taken
   right after the attempt waits up to 1 s for the copy's tail, and only while
   a copy covers the clip's start. A fault reading the copy never fails the
-  clean replay. Whole picture ghosts and sharing always use `clip_url`.
+  clean replay. Sharing uses `clip_url`; native ghosts use pose clips.
 - `GET  /api/replay/available` — `{available: [attempt_id, …]}`: every attempt whose clip is still cuttable (in the ring buffer) or already saved; the Compare tab reads it to badge which runs can load a video
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly). A fragment-backed clip carries an `ETag` naming its immutable descriptor and `Cache-Control: private, max-age=3600`, and honours a matching `If-Range`, so the browser resumes ranges instead of reopening a connection per seek.
 - `GET  /api/replay/saved/{attempt_id}` — a SAVED attempt's MP4 (same Range support); 404 when that attempt has no saved file
@@ -1013,18 +1012,16 @@ Deleting the file resets all history.
 | `tools/watch_timer.py` | Characterize a candidate address across game scenarios |
 | `tools/dedupe_journal.py` | Scan for double-journaled events from concurrent-instance incidents (read-only); `--fix` deletes duplicates and re-projects (server must be stopped first) |
 
-## Ghost overlay — native Mario and whole-picture video
+## Ghosts — native playback
 
-`GET /api/ghost`, `PUT /api/ghost` and `ghost_changed` control both views.
-With the application's native backend, `view: "mario"` selects recorded native
-poses and does not open the companion browser window. Its `source.exactness`
-is `"native_pose"`; `source.native_available` and `source.native_reason_text`
-describe native availability, with equivalent `whole_*` fields for video.
-`window` adds `backend: "native"` and a readable `reason` while
-waiting. `running` means the command is ready; `visible` requires a matching
-renderer presentation acknowledgement, not merely a generated pose. Opacity,
-tint and nudge apply inside GLideN64. Missing native poses remain unavailable;
-there is no whole-picture fallback for this mode.
+`GET /api/ghost`, `PUT /api/ghost` and `ghost_changed` control native ghost
+playback inside GLideN64. `source.exactness` is `"native_pose"`;
+`source.native_available` and `source.native_reason_text` explain availability.
+`window` describes the renderer command/presentation state, including
+`backend: "native"` and a readable waiting `reason`. `running` means the command
+is ready; `visible` requires a matching renderer acknowledgement. There is no
+separate ghost window or video fallback. Opacity, tint and timing apply inside
+the renderer. See [new-user defaults](ghost-native-runtime.md#new-user-settings-and-iteration-boundary).
 
 Native settings also include `names_enabled` (boolean, initially true),
 `inputs_enabled` (boolean, initially false), `input_mode` (`"stick"` or
@@ -1036,15 +1033,15 @@ box), `hud_inputs_enabled` (boolean, initially true: each ghost's inputs
 stacked above the game's own input display) and `record_ghosts` (boolean,
 initially false: the replay recording keeps the ghosts as the game window shows
 them), and the [[ghost path]]: `path_enabled` (boolean, initially true: the
-route the fastest ghost takes, drawn in the game world), `path_buttons`
-(boolean, initially false: each button press drawn on the path where it was
-pressed), `path_source` (`"fastest"` or `"average"`, initially `"fastest"`) and
+route selected from the playing ghosts, drawn in the game world), `path_buttons`
+(boolean, initially true: each button press drawn on the path where it was
+pressed), `path_source` (`"fastest"` or `"average"`, initially `"average"`) and
 `path_tuning` (`{ahead_s, width, opacity, spacing_s}`: seconds of the ghost's
 run drawn ahead, ribbon width in game units, strength 0..1 and seconds between
 arrows; a PARTIAL merged over what is set, like `tint`, each number refused
 outside its published range), all remembered globally. Which ghost the path
 follows is not a setting: each native command names the playing ghost with the
-fewest frames. Labels carry source
+fewest frames as the timing reference. Labels carry source
 credit (`YOUR PB`, `YOUR RUN` or the imported creator). Inputs are the pad
 captured with the selected native occurrence; old recordings have unavailable
 inputs rather than a guessed neutral pad.
@@ -1078,90 +1075,19 @@ attempt as a template preserves its available native poses independently of
 video extraction. Native clips bind the current database attempt's exact clock
 origin and closing frame; changed projected metadata invalidates a cached clip.
 The tracker's settled arm/rebase/disarm markers control FOLLOW playback, while
-the renderer advances its own IGT clock each occurrence. The browser clock feed
-below does not drive native frame selection. See [native runtime contracts](ghost-native-runtime.md).
+the renderer advances its own IGT clock each occurrence. See [native runtime contracts](ghost-native-runtime.md).
 
-The remaining page/crop protocol below documents whole-picture playback and
-the retained standalone browser crop rig. Statements about Mario box lists and
-browser fallback apply to that page, not the native application mode.
-
-The ghost overlay shows your own best attempt inside the game picture. It is
-not a video that plays: every game frame it shows the template picture whose
-game timer equals your live timer plus your nudge. Pausing, the Usamune menu,
-a reset and a save-state load all move that timer, so all four are the same
-rule and none of them has a detector.
-
-| Surface | Purpose |
+| Session route | Contract |
 |---|---|
-| `GET /api/ghost/source?kind=&entity_key=&strat=` | Is there a ghost for this star or segment, and where is its footage: `{available, reason, reason_text, template_id, attempt_id, media_url, view, exactness, span, level, area, mario_boxes, mario_boxes_reason, mario_boxes_reason_text}`. "There is no ghost here" is a 200 with `available: false` and a sentence a player can read — a switch that had to parse an error body could not tell it apart from the network failing. `view` is the clip's existing view payload, passed through untouched from its one owner. `span` is the part of that clip the ghost may show: `{first_picture, last_picture, start_frame, end_frame, timed_frame, grab_frame, basis}` or null. **The picture indices are INCLUSIVE indices into the view's own per-picture arrays**, so the page clamps with them and does no arithmetic of its own. **A star ENDS ON THE TOUCH** (his ruling, 2026-09-19: *"End at the touch. No reason to keep it after that... Disappear upon its own star touch"*) — `end_frame` is the grab frame, read off the closing `star_collected`'s own `grab_frame` through `storage/db.py::events_between`, the journal rows inside the attempt's own wall-clock span, matched to the row's star. `timed_frame` is where the recorded TIME was taken, which for a midair grab is the landing (the x-cam) a few frames later; it is kept so the two answers stay reconcilable. A SEGMENT has no touch and ends on its own frames. Both ends are looked up rather than inferred, and `basis` says which reading answered: `attempt_frames+grab_event` is the star case above; `attempt_frames` means the end came from the attempt row alone (a segment, a grab journaled before that field existed, a row whose `timed_at` is `"grab"` so the landing IS the touch, or a boot with no database to ask); `picture_timer` means the row had no frames of its own and the clip's per-picture game timer answered instead — the LAST drop into the near-zero band for the start (`detectors/anchors.py::NEAR_ZERO_IGT`, the same near-zero the detectors use) and the first picture to reach the recorded time for the end. Null when nothing can answer, which leaves the footage playable and unclamped. Two pictures sharing a game frame and a picture with no stamp at all move neither end. **`level` and `area` say WHERE THIS GHOST BELONGS**, and the page holds the ghost down whenever the live clock is somewhere else (his report, 2026-09-19: LLL footage still playing in the castle after he died out of the course). A star's course names its level through `memory/addresses.py::COURSE_BY_LEVEL`, read backwards; the AREA is null, because a course's own subareas are that course — gating on the area would take the ghost down inside the pyramid or the volcano, in the middle of the very star it is playing. The castle is the one exception: a castle secret star (course 0) names the castle interior AND its room where the game pins one down (`CASTLE_SECRET_STAR_AREAS`). A SEGMENT answers null for both: a movement crosses levels by definition, and a gate that refused the second half of a route would be worse than none. **`mario_boxes` is the [[Mario box list]]** for this clip — `{width, height, maker, boxes}`, one `[x, y, w, h]` or `null` per picture, in the SAME order and count as the view's own per-picture arrays — or null with a named `mario_boxes_reason` and a readable `mario_boxes_reason_text`. The list is made outside the app (a hand-run SAM 2.1 session) and saved as `<clip stem>.mario.json` beside the clip, so it is RE-VALIDATED on every read (`ghost/mariobox.py`), never cached: `no_box_list` (the ordinary case — every recording made before this existed), `box_list_unreadable`, `box_list_version`, `box_list_count` (it does not index like this clip, which is the check that matters: a list of another length would draw a box on every picture a few pictures out), `box_list_boxes` (a rectangle outside the picture). The clip's path on disk is deliberately NOT on the wire. |
-| `GET /api/ghost` | The whole ghost in one read: one key per setting row of `ghost/settings.py` `ROWS` (the names, defaults, checks and ranges live there), plus `{limits, target, selection, source, window}`. `limits` is what each control offers, `{opacity, tint, volume, proximity: {min, max, step}, proximity.floor, nudge_frames: {limit}, input_mode: {options}, path_source: {options}, path_tuning: {ahead_s, width, opacity, spacing_s: {min, max, step}}, switches: [names]}`: the card reads every range and the list of on/off switches here and restates none of them. `selection` is the [[ghost set]] for this target: `{ghosts: {pb, attempts, imports?}, missing, pb, playing, candidates}` — `ghosts` is what is ticked (his PB box plus ticked attempt ids), `pb` is his current PB run `{attempt_id, frames, blinks, native_available, …}` or null, `candidates` are the saved ghosts and template runs offered here (each `{attempt_id, frames, strat, blinks, native_available, native_reason, native_reason_text, whole_available, whole_reason_text}`; `native_reason` is the refusal's code (`older_pose_format`, `no_native_poses`, `native_preservation_failed`, …), which the card uses to fold runs that can never play as Only Mario into one line; in Only Mario a row's `whole_available` may be `null` -- not asked, because one playable recording already settles whether Whole picture is offered -- and switching views re-asks, named by `frames` on the card), `playing` lists the ghosts Only Mario draws, in order, with the hue each wears, and `missing` the ticked attempts no longer offered. `tint` is `{enabled, hue_degrees}` — the colour treatment — and `view` is `"whole"` or `"mario"`; both are null in a window with no ghost session, which the card draws as unknown rather than as off. `shadow` and `occlusion_fade` are Only Mario's on/off switches for the [[recorded shadow]] and the [[player-first fade]]; `sound_fade` is the one beside Volume that fades [[ghost sound events]] with the picture ([[overlap fade]] and [[player-first fade]]). `source` also carries `mario_boxes_available` plus `mario_boxes_reason`/`mario_boxes_reason_text` — one bit and one sentence rather than the boxes themselves, because this shape is broadcast on every `ghost_changed` and a list is one rectangle per picture. `target` is `{kind, entity_key, strat}` or null — the practice target, read through the tracker's own door, stars and segments alike. `source` is the `/api/ghost/source` answer without `view` and `media_url`, so a disabled switch always has a sentence to show. `window` is `{running, visible}`. Not re-resolved per read (a resolve is ~86 ms of CPU and every page load asks): the session re-resolves whenever anything its answer reads moves -- the target, the templates, the saved clips, the database, a PB save or undo, a saved-ghost change, a PUT of `enabled`, `view` or `ghosts` -- and every 45 s while the switch is on as a backstop, so a deleted template never leaves the switch enabled. A PB's `whole_reason_text` says its video "is still being saved" only while that save is running, and otherwise that there is no saved video. |
-| `PUT /api/ghost` | Any setting row's key (each checked by its row, merged for `tint` and `proximity`), or `{ghosts: {pb, attempts, imports?}, target}` to change the ticked set (the target must be the current one; each attempt must be offered for it; at most 16 including the PB); answers the same shape. `shadow` (bool, default on) draws the game's own shadow under Only Mario ghosts; `volume` (0..1, default 0.5) is how loud their recorded sounds play; `sound_fade` (bool, default on) lets each ghost's sound follow every fade its picture has and, while it overlaps him, plays a sound Mario made on the same frame once; all three persist. `opacity` is 0..1, `nudge_frames` is a whole number of game frames within ±600 (about twenty seconds either way). A value it cannot take is a 422 whose `detail` is ONE sentence a player can read, and nothing in the request is applied. `enabled` and `opacity` persist across restarts; `nudge_frames` resets to 0 whenever the target changes, because the offset belongs to the thing being practised. `tint` is a PARTIAL — `{enabled}` or `{hue_degrees}` or both — merged over what is already set, because the switch and the angle are written by different gestures and either can arrive alone; `hue_degrees` is 0..359 (0 and 360 are the same colour, and the switch beside it is what turns the treatment off). It persists across restarts like `enabled` and `opacity`, and ships ON at +120 degrees. `view` is `"whole"` (the default) or `"mario"`, persisted the same way. **Asking for `"mario"` on a ghost with no box list is NOT an error**: the setting is app-wide and he walks between stars, so refusing it would jam the control on the first ghost without boxes — the page draws the whole picture and says why in `ghostStatus()`, and the switch row greys the control with the server's own sentence. Changing the nudge or the colour reaches the overlay on the clock feed, within one game frame and without the page being reloaded, so a held key or a dragged slider is a stream of writes and not a stream of page loads. |
-| `ghost_changed` (broadcast) | The same shape, whenever any of it moves — another tab flipping the switch, the target changing, the overlay window dying. Broadcast-only, like the segment notices: it is published on the Broadcaster and never through the tracker, so there is no journal row behind it. |
-| `WS /ws/ghost-clock` | The live attempt's clock. While at least one client is connected the server pushes one message per game snapshot: `{global_timer, igt, level, area, nudge_frames, tint, view, star_grab}` — `igt` is Usamune's counter exactly as sampled, the same number every template picture is stamped with, `nudge_frames`, `tint` and `view` are the ghost session's current settings, carried on every message so a page that has just loaded converges on its first sample — which is why the overlay page ships no default for any of them. `star_grab` is true while Mario is in an action a star grab puts him in (`memory/addresses.py::STAR_GRAB_ACTIONS`, the project's one registry for that, shared with the star-grab detector). It is the TOUCH rather than the journal's `star_collected`, which is a held emit published after the fact, and it is a LEVEL rather than an edge because the star dance holds the action for seconds: the page latches it, takes the ghost down, and keeps it down until the live timer goes back inside the run. The socket carries nothing upstream. Its cost on the poll loop is one set-membership test when nobody is connected, and a burst collapses to its NEWEST sample rather than queueing, because a clock consumer wants where the game IS (`server/ghost_clock.py`). |
-| `GET/POST/DELETE /api/saved-ghosts/{attempt_id}` | A [[saved ghost]]: GET answers `{attempt_id, saved, available}` (available false with no ghost session, never an error); POST keeps that run's Mario poses, saves it for its star or segment and ticks it, answering `{attempt_id, saved, poses_reason, session}` (404 for an unknown attempt); DELETE forgets it and unticks it everywhere. Kept off the `/api/ghost` path on purpose: that door belongs to the switch alone. |
-| `/ui/ghost/index.html?kind=&entity_key=&strat=` | The overlay page: one full-bleed muted `<video>` and no chrome at all, so it works in an ordinary browser tab and inside the companion window alike. It resolves its clip through `GET /api/ghost/source`, then slaves the element to the clock feed. **The nudge is deliberately NOT in this URL**: changing the URL is how the window is told to load another page, so a nudge in it made every press of his timing key blink the overlay off and re-seek it. It rides the clock feed instead. A hand-opened tab may still pass `?nudge=` as a starting value; the first clock sample replaces it. |
+| `GET /api/ghost` | Setting rows from `ghost/settings.py`, plus `{limits, target, selection, source, window}`. Limits and switch names come from the registry. Selection carries the checked PB/attempt/import choice, candidates, missing choices and playing ghosts. Each unavailable source has a readable reason. |
+| `PUT /api/ghost` | Any registry setting, or `{ghosts: {pb, attempts, imports?}, target}`. The target must still be current, and choices must be offered for it. Validation completes before any change; refusal returns 422 with readable `detail`. Tint, path tuning and proximity accept partial updates. Persisted settings survive restarts; timing resets when the practice target changes. |
 
-The page takes four things by `postMessage` from whatever window hosts it:
-`{type: "ghost-nudge", nudge_frames}` (his timing hotkey),
-`{type: "ghost-tint", tint}`, `{type: "ghost-view", view}` and
-`{type: "ghost-clock", global_timer, igt, level, area}` — the same message the
-socket carries, from another source, which is how the graphics plugin could
-publish the picture it is drawing if the memory poll ever proves too slow.
-`window.ghostStatus()` reads back what the page is doing: its state and reason,
-the last decision and why, the nudge, the colour treatment and the filter it
-produced, whether his own grab is holding the ghost down, and the template
-picture currently on screen against the one the rule asked for.
-
-**In the `mario` view the page draws only the box region**, cut out of the
-picture that is actually on screen and put where the footage has it: a canvas
-over the same box as the video, drawn inside `requestVideoFrameCallback` from
-the presented picture's own index, so the box and the picture change in one
-paint (a clip updated afterwards lags by a refresh and visibly swims). A small
-margin comes with him (`ui/ghost/mariobox.js::MARGIN_FRACTION`); a picture he
-is not in paints nothing. **The colour follows the VIEW**: the whole-picture view is exactly the base
-behaviour (the filter on the element), and the Mario view draws the cut-out
-through the same filter, so it is the only thing tinted because it is the only
-thing on screen (his ruling, 2026-09-20: *"color correction should only apply
-to the Mario box now... the cutout mario"*). The canvas paints in the Mario
-view and nowhere else: it and the element reach the screen by two different
-paths, so a cut-out laid over the footage can land a refresh after the picture
-under it — on a pan that is a tinted rectangle of scenery sliding against the
-game. The page also refuses the Mario view outright (`no_frame_callback`) on
-an engine with no `requestVideoFrameCallback`, since it would have no picture
-to key the cut-out on, and it re-asks the source every few seconds while that
-view is wanted so a box list finished after the ghost went up is picked up
-without switching the overlay off and on.
-
-An empty overlay has more than one meaning, so `ghostStatus()` names which one
-in `mario_state`: `drawn`, `no_mario` (this PICTURE has no box — a cutscene, a
-fade, or a single-picture dropout in a fast flip; nothing is bridged, because
-null means null), `no_boxes` (the recording has no list), `whole_view`, or
-`no_picture`. The first two look identical on screen, which is exactly what a
-reported flicker looks like, so `pictures_without_mario` counts them and the
-answer can be read off the log instead of reproduced.
-
-The video element covers the window and MAPS the picture into it (`object-fit:
-contain`, centred — never `fill`). The companion window is sized to the
-rectangle Project64's renderer draws into, and this project's GLideN64 build
-forces 4:3 (`frameBufferEmulation\aspect=1`), so the game image is inscribed
-4:3 and centred inside that rectangle and the black bands in saved footage are
-the game's own borders. Mapping the clip's 4:3 box onto the live 4:3 box is
-therefore identical to stretching while the two aspects agree, and undistorted
-when the player has resized Project64 to another shape.
-
-The decision rule itself is `ui/ghost/follower.js`, a pure module scored over
-clock traces in `tests/test_ui_ghost_follower.py`.
-
-One session owns all of it (`ghost/session.py`), built in `main.py` and started
-and stopped by the server app's lifespan. While the switch is on AND the
-current target has an available source, the overlay window runs, is visible,
-and shows the follower page on this server's own port; anything else hides it
-and `source.reason_text` says why. Walking to another star HIDES the window and
-keeps the child process, so coming back costs nothing; turning the switch off,
-or stopping the server, ENDS the child. The session re-reads the world twice a
-second rather than waiting to be asked, because marking a template, saving a
-recording, the database arriving after a db-less boot and the overlay child
-dying all change the answer and none of them is a target change.
+The session owns source qualification and native commands. Target, PB, template,
+saved-ghost and collection changes invalidate the source; slider/timing updates
+change the command without reloading a browser page. The obsolete `view` field,
+`/api/ghost/source`, `/ws/ghost-clock` and `/ui/ghost/` page are retired. An old
+stored `ghost_view` does not select another renderer. Native clips and collection
+files remain versioned independently of these removed prototype endpoints.
 
 ## Behavior notes
 

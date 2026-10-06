@@ -1,4 +1,12 @@
-# Native ghost audio experiment
+# Native ghost audio feasibility — September 22 history
+
+This is the original feasibility record, retained as provenance for the
+verified US sound-request addresses in `memory/layout.py`. The October 6
+cleanup removed the obsolete `tools/ghost_audio_spike/` executable probes;
+their source is recoverable from Git before that cleanup. Commands and
+unfinished-feature statements below describe the September experiment.
+Current playback and verification contracts live in
+[ghost-native-runtime](../ghost-native-runtime.md).
 
 This is an isolated feasibility probe, not shipped playback code. The synthesis
 probe never attaches to an emulator. The separately invoked live sampler reads
