@@ -20,7 +20,8 @@ def test_pose_only_ghost_can_be_enabled_at_supported_widths():
                 state["writes"].clear()
                 page.set_viewport(width, 1200)
                 page.goto(base)
-                page.wait_for(".ghost-row-head > .ghost-switch")
+                # The row mounts before GET /api/ghost supplies availability.
+                page.wait_for(".ghost-row-head > .ghost-switch:enabled")
                 row = page.evaluate(MEASURE)[0]
                 assert not row["disabled"] and row["checked"] == "false"
                 page.click(".ghost-row-head > .ghost-switch")
