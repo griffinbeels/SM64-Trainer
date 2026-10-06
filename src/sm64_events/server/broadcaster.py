@@ -17,7 +17,7 @@ def _log_line(wire: dict) -> str:
     for `ghost_changed`. That one restates the ghost session's full state --
     ~2.9 KB, and 27% of the log's bytes (2026-09-23) -- every time any of it
     moves, and the browser already has every field. The line keeps what a
-    reader of the log asks of it: which target, on or off, which view, what
+    reader of the log asks of it: which target, on or off, what
     plays and why not."""
     if wire.get("type") != "ghost_changed":
         return json.dumps(wire)
@@ -28,7 +28,7 @@ def _log_line(wire: dict) -> str:
     summary = {
         "seq": wire.get("seq"), "type": "ghost_changed",
         "target": target.get("entity_key"), "strat": target.get("strat"),
-        "enabled": body.get("enabled"), "view": body.get("view"),
+        "enabled": body.get("enabled"),
         "available": source.get("available"), "reason": source.get("reason"),
         "ghosts": selection.get("ghosts"),
         "candidates": len(selection.get("candidates") or []),

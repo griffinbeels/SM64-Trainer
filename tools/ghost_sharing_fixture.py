@@ -17,7 +17,6 @@ from sm64_events.ghost.portable import make_entry, write_package
 from sm64_events.ghost.session import GhostSession
 from sm64_events.ghost.sharing import GhostSharing
 from sm64_events.ghost.sharing_targets import describe
-from sm64_events.ghost.source import GhostSource
 from sm64_events.server.ghost_api import create_ghost_router
 from tests.ghost_native_fixture import frame, producer
 
@@ -30,7 +29,7 @@ AUTHORS = ("Aster", "René the Very Patient Speedrunner", "Luigi Runner")
 
 class ScratchStore:
     def __init__(self):
-        self.runs, self.state, self.writes = [], {"ghost_view": "mario"}, []
+        self.runs, self.state, self.writes = [], {}, []
 
     def attempts(self):
         return self.runs
@@ -150,12 +149,11 @@ def serve_collection(root: Path):
         app = original(*args, **kwargs)
         inputs = SimpleNamespace(templates=templates)
         session = RecordedSession(tracker=tracker, inputs=inputs, replay=replay, portable=sharing,
-                                  broadcaster=args[1], native=NativeGhost(replay),
-                                  resolve=lambda *_args, **_kwargs: GhostSource(False, reason_text="No saved video"))
+                                  broadcaster=args[1], native=NativeGhost(replay))
         holder["session"] = session
         app.router.routes = [route for route in app.router.routes
                              if not str(getattr(route, "path", "")).startswith(("/api/ghost", "/api/saved-ghosts"))]
-        app.include_router(create_ghost_router(inputs, replay, session=session))
+        app.include_router(create_ghost_router(session=session))
         return app
 
     ui_fixture.create_app = create_app

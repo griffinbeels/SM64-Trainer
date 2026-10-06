@@ -33,7 +33,7 @@ def pb_world(tmp_path):
     store = a_store(tmp_path)
     tracker = FakeTracker(db=db, target=("star", row.course_id, row.star_id), strat_tag=row.strat_tag)
     session = GhostSession(tracker=tracker, inputs=SimpleNamespace(templates=store), replay=replay,
-                           broadcaster=FakeBroadcaster(), controller_factory=lambda **_: None,
+                           broadcaster=FakeBroadcaster(),
                            native=NativeGhost(replay, origin_of=lambda *_: dict(ORIGIN)))
     return session, replay, row, archive, db, store, capture
 
@@ -61,7 +61,7 @@ def test_saving_a_pb_makes_it_the_playing_ghost_immediately(tmp_path):
     session, _replay, row, archive, db, store, capture = pb_world(tmp_path)
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         assert not session.payload()["source"]["available"]
         assert not any(command.get("enabled") for command in capture.commands)
         save_pb(db, row)
@@ -90,7 +90,7 @@ def test_undoing_the_pb_removes_it_as_the_ghost(tmp_path):
     session, _replay, row, archive, db, store, capture = pb_world(tmp_path)
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         pb = save_pb(db, row)
         await session.pb_changed(row, True)
         assert session.payload()["source"]["available"]
@@ -123,7 +123,7 @@ def test_pb_plays_beside_ticked_recordings_and_unticking_it_ignores_future_pbs(t
         return [clip["clip_path"].rsplit("attempt_", 1)[1] for clip in capture.commands[-1].get("clips", [])]
 
     async def check():
-        target = (await session.update({"enabled": True, "view": "mario"}))["target"]
+        target = (await session.update({"enabled": True}))["target"]
         await session.update({"ghosts": {"pb": True, "attempts": [other.id]}, "target": target})
         assert playing() == [f"{other.id}.ghost"]
         save_pb(db, row)
@@ -180,7 +180,7 @@ def test_the_sessions_real_command_encodes_on_the_real_channel(tmp_path, kernel)
                   attempt_id=other.id)
 
     async def check():
-        target = (await session.update({"enabled": True, "view": "mario"}))["target"]
+        target = (await session.update({"enabled": True}))["target"]
         save_pb(db, row)
         await session.pb_changed(row, True)
         await session.update({"ghosts": {"pb": True, "attempts": [other.id]}, "target": target})
@@ -213,7 +213,7 @@ def test_saving_any_run_as_a_ghost_ticks_it_without_touching_templates(tmp_path)
     replay.tracker.db._attempts.append(other)
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         answer = await session.save_ghost(other.id)  # poses kept here, not earlier
         assert answer["saved"] and answer["poses_reason"] is None
         body = answer["session"]
@@ -261,7 +261,7 @@ def test_the_saved_ghost_doors(tmp_path):
     other = replace(row, id=row.id + 1)
     replay.tracker.db._attempts.append(other)
     app = FastAPI()
-    app.include_router(create_ghost_router(session._inputs, replay, session))
+    app.include_router(create_ghost_router(session=session))
     try:
         with TestClient(app) as client:
             assert client.get(f"/api/saved-ghosts/{other.id}").json()["saved"] is False

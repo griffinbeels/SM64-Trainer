@@ -6,7 +6,7 @@ import threading
 
 from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
 from sm64_events.ghost.native_layout import GP_WRONG_SCENE, LABEL_BYTES
-from sm64_events.ghost.source import attempt_id_of
+from sm64_events.ghost.pb import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
 

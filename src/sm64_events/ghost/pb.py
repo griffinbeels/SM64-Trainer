@@ -9,15 +9,20 @@ answer again, with nothing to keep in step.
 It is not an input template. Templates also drive the input comparison, and a
 template he imported from another player must keep driving it after he sets a
 PB. So the PB reaches the ghost through `GhostLibrary`: `pb_for` is the PB box
-in the ghost picker (`selection.py::chosen_ghosts`), and `active_for` -- the
-one-recording question whole-picture readers ask -- answers with the PB first
-and the active input template second.
+in the ghost picker (`selection.py::chosen_ghosts`). With that box ticked and
+no PB saved yet, the active input template supplies a fallback.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 PB_NAME = "Your PB"
+
+
+def attempt_id_of(origin: str) -> int | None:
+    """The local attempt behind a template; imported/authored origins have none."""
+    prefix, sep, rest = origin.partition(":")
+    return int(rest) if prefix == "attempt" and sep and rest.isdigit() else None
 
 
 @dataclass(frozen=True)
@@ -105,8 +110,6 @@ class GhostLibrary:
             raise LookupError("That imported ghost is no longer available.")
         return self._portable.get(import_id)
 
-    def active_for(self, kind, entity_key, strat):
-        return self.pb_for(kind, entity_key, strat) or self.template_for(kind, entity_key, strat)
 
     def template_for(self, kind, entity_key, strat):
         return self._templates.active_for(kind, entity_key, strat)
@@ -125,7 +128,6 @@ class GhostLibrary:
     def ghosts_for(self, kind, entity_key) -> list[AttemptGhost]:
         """Saved ghosts, then template runs, newest first; one per attempt."""
         from sm64_events.ghost.saved import saved_for
-        from sm64_events.ghost.source import attempt_id_of
 
         ids = {number: None for number in
                (saved_for(self._db, kind, entity_key) if hasattr(self._db, "get_state") else [])}

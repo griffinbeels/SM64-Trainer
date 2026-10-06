@@ -37,12 +37,6 @@ def _native_candidate(native, target, template):
                 "reason_text": "This ghost's saved Mario poses could not be read."}
 
 
-def checked_template_id(value):
-    if value is not None and (type(value) is not int or value <= 0):
-        raise ValueError("Choose a saved ghost or follow the input template.")
-    return value
-
-
 def checked_choice(value) -> dict:
     """PB and local attempt ticks, plus optional imported identities.
 
@@ -91,7 +85,7 @@ def _stored_choice(value):
 
 def upgraded_choice(choice, library):
     """Replace legacy ticked template ids with their runs' attempt ids."""
-    from sm64_events.ghost.source import attempt_id_of
+    from sm64_events.ghost.pb import attempt_id_of
 
     if not choice.get("templates"):
         return checked_choice({name: value for name, value in choice.items() if name != "templates"})
@@ -143,17 +137,6 @@ def target_key(target):
                       separators=(",", ":"))
 
 
-def selected_template(templates, kind, entity_key, strat, template_id=None):
-    if template_id is None:
-        return templates.active_for(kind, entity_key, strat)
-    checked_template_id(template_id)
-    try:
-        template = templates.get(template_id)
-    except LookupError:
-        return None
-    return template if (template.kind, template.entity_key) == (kind, entity_key) else None
-
-
 class GhostSelection:
     def __init__(self):
         self._choices = {}
@@ -196,15 +179,12 @@ class GhostSelection:
     def stored(self):
         return {name: dict(value) for name, value in self._choices.items()}
 
-    def candidates(self, target, library, video_of, native, variant=None):
-        """Every run this target can race except his PB (the PB box is its own
-        row), named by time, each qualified for both Show modes.
+    def candidates(self, target, library, native, variant=None):
+        """Saved runs and imported ghosts, qualified for native playback.
 
-        `variant` joins the cache key: the session passes what else decides a
-        row (the view, and the world its resolve read), so a cached list can
-        never outlive a saved clip or a view switch. A `video_of` answer of
-        `available: None` means the whole picture was not asked (Only Mario
-        needs it for no row) and is kept as unknown."""
+        The world signature invalidates the short cache when files or the
+        library change. Probing never changes selected native clips.
+        """
         if target is None:
             return []
         ghosts = [*library.ghosts_for(target["kind"], target["entity_key"]),
@@ -220,7 +200,6 @@ class GhostSelection:
                 return [dict(row) for row in candidates]
         candidates = []
         for ghost in ghosts:
-            video = video_of(target, ghost)
             pose = _native_candidate(native, target, ghost)
             candidates.append({"attempt_id": ghost.attempt_id, "import_id": getattr(ghost, "import_id", None),
                                "author": getattr(ghost, "author", None), "practice": bool(getattr(ghost, "practice", False)),
@@ -229,9 +208,6 @@ class GhostSelection:
                                "native_available": bool(pose["available"]),
                                "native_reason": pose.get("reason"),
                                "native_reason_text": pose["reason_text"],
-                               "blinks": pose.get("blinks", 0),
-                               "whole_available": (None if video["available"] is None
-                                                   else bool(video["available"])),
-                               "whole_reason_text": video["reason_text"]})
+                               "blinks": pose.get("blinks", 0)})
         self._cache = signature, now + CANDIDATE_CACHE_S, candidates
         return [dict(row) for row in candidates]

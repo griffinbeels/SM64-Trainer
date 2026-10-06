@@ -28,7 +28,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
-from sm64_events.ghost.window.controller import parent_map
+from sm64_events.core.procmem import machine_snapshot
 from sm64_events.memory.layout import US as US_LAYOUT
 from sm64_events.replay import gpuadapter, gpusettings, sourcefactory
 from sm64_events.replay import gpucapture_session as session_module
@@ -191,7 +191,7 @@ def test_the_source_helper_starts_through_the_recorders_launch_and_answers():
                             limits=GpuSettings().helper())
     try:
         pid = eventually(lambda: controller.status()["pid"])
-        assert parent_map().get(pid) == os.getpid()
+        assert machine_snapshot().procs[pid].ppid == os.getpid()
         assert type(controller.enqueue({"op": "Poll"})) is int
         reply = eventually(controller.take_result)
         # The real worker, through the real protocol: nothing is open yet.

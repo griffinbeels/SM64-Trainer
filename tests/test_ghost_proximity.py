@@ -17,7 +17,7 @@ def test_invalid_distance_never_reaches_renderer(value):
     assert saved_proximity(value) == DEFAULT_PROXIMITY
 
 
-def test_partial_tuning_survives_reload_and_view_changes(tmp_path):
+def test_partial_tuning_survives_reload_and_switch_changes(tmp_path):
     session, _, tracker, _ = a_session(tmp_path)
 
     async def check():
@@ -25,9 +25,9 @@ def test_partial_tuning_survives_reload_and_view_changes(tmp_path):
         await session.update({"proximity": {"enabled": False}})
         assert session.payload()["proximity"] == {"enabled": False, "extra_distance": 120}
         session._loaded = False
-        await session.update({"view": "mario"})
+        await session.refresh()
         assert session.payload()["proximity"] == {"enabled": False, "extra_distance": 120}
-        await session.update({"proximity": {"enabled": True}, "view": "whole"})
+        await session.update({"proximity": {"enabled": True}, "enabled": False})
         assert session.payload()["proximity"] == {"enabled": True, "extra_distance": 120}
         await session.stop()
 

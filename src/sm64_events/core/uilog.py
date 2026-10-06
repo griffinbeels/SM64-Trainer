@@ -116,7 +116,7 @@ def record(body: dict, frame: int | None = None,
 def append_bounded(path: Path, entry: dict, max_records: int,
                    trim_above_bytes: int) -> None:
     """Append one JSON line; past `trim_above_bytes`, cut back to HALF of
-    both bounds. Shared by every bounded debugging log (`ghost/window/diag.py`).
+    both bounds. The append and trim share one lock for each bounded debugging log.
 
     The half is the point. Trimming back to exactly the bound left the file
     at the bound, so once 4000 records outgrew 2 MB (they average 518-609 B)

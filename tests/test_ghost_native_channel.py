@@ -669,3 +669,20 @@ def test_render_hook_cost_is_logged_once_a_minute_per_list_with_and_without_a_gh
     assert lines[1].startswith("native render hooks, last 61 s, 1 lists without a ghost (5 polls): hooks 50.0")
     now[0] = 170.0
     assert cost.observe(status(4, 0, 10)) is None and len(lines) == 2  # a fresh window
+
+
+def test_new_lease_and_missing_playback_fields_use_registry_defaults(kernel):
+    from sm64_events.ghost import settings
+    expected = settings.native_controls(settings.defaults())
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    try:
+        for field, value in expected.items():
+            if field != "hue_degrees":
+                assert getattr(kernel.request, field) == pytest.approx(value), field
+        connection.poll({"enabled": False})
+        assert not kernel.request.play_enabled
+        assert kernel.request.tint_enabled == expected["tint_enabled"]
+        assert kernel.request.proximity_enabled == expected["proximity_enabled"]
+        assert kernel.request.proximity_distance == pytest.approx(expected["proximity_distance"])
+    finally:
+        connection.close()

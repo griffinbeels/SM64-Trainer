@@ -1,7 +1,6 @@
 # src/sm64_events/ghost/__init__.py
-"""The ghost overlay — his own best run, playing inside the game picture.
+"""Saved Mario poses playing beside the current run through the native renderer.
 
-`source.py` answers the first question the feature asks: for this star or
-segment, is there a ghost at all, and where is its footage. The window that
-shows it lives in `ghost/window/`.
+The session follows the practice target and chosen library ghosts. Native
+playback owns frame timing, drawing and visibility.
 """

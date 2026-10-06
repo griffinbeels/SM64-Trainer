@@ -5,7 +5,7 @@ cost 86 ms of CPU on his PB and ran every 4 s whatever happened, switch off
 included (2026-09-23: ~21 ms CPU a second for nothing). These pin the new
 contract: idle ticks resolve nothing; a moved target, template set, saved-clip
 set or database resolves on the very next tick; a PUT resolves only when it
-changes which ghosts, which view or the switch; and a backstop resolve runs
+changes which ghosts or the switch; and a backstop resolve runs
 every `SAFETY_RESOLVE_S` while the switch is on, so an event nobody signalled
 is still picked up.
 """
@@ -42,27 +42,27 @@ def switched(session, on):
 
 @pytest.mark.parametrize("on", [True, False])
 def test_idle_ticks_resolve_nothing(tmp_path, clock, on):
-    session, _made, _tracker, store = a_session(tmp_path)
+    session, _native, _tracker, store = a_session(tmp_path)
     mark(store)
     tick(session, clock)                       # the first read resolves once
     switched(session, on)
-    viewed = list(session._replay.viewed)
+    viewed = list(session._replay.probed)
     for _ in range(80):                        # 40 s of ticks
         tick(session, clock)
-    assert session._replay.viewed == viewed
+    assert session._replay.probed == viewed
 
 
 def test_the_backstop_resolves_while_on_and_never_while_off(tmp_path, clock):
-    session, _made, _tracker, store = a_session(tmp_path)
+    session, _native, _tracker, store = a_session(tmp_path)
     mark(store)
     tick(session, clock)
     switched(session, False)
-    before = len(session._replay.viewed)
+    before = len(session._replay.probed)
     tick(session, clock, SAFETY_RESOLVE_S * 3)
-    assert len(session._replay.viewed) == before
+    assert len(session._replay.probed) == before
     switched(session, True)
     tick(session, clock, SAFETY_RESOLVE_S)
-    assert len(session._replay.viewed) > before
+    assert len(session._replay.probed) > before
 
 
 def test_a_change_nobody_signalled_is_found_by_the_backstop(tmp_path, clock):
@@ -70,7 +70,7 @@ def test_a_change_nobody_signalled_is_found_by_the_backstop(tmp_path, clock):
     nothing (the fake replay has no saved-clip counter). The answer stays
     stale until the backstop, then corrects itself -- the guarantee that no
     missed event can leave the ghost wrong for longer than SAFETY_RESOLVE_S."""
-    session, _made, _tracker, store = a_session(tmp_path, saved=())
+    session, _native, _tracker, store = a_session(tmp_path, saved=())
     mark(store)
     assert tick(session, clock)["source"]["available"] is False
     switched(session, True)
@@ -80,14 +80,14 @@ def test_a_change_nobody_signalled_is_found_by_the_backstop(tmp_path, clock):
 
 
 def test_a_marked_template_resolves_on_the_next_tick(tmp_path, clock):
-    session, _made, _tracker, store = a_session(tmp_path)
+    session, _native, _tracker, store = a_session(tmp_path)
     assert tick(session, clock)["source"]["available"] is False
     mark(store)                                # the store's generation moves
     assert tick(session, clock)["source"]["available"] is True
 
 
 def test_a_saved_clip_resolves_on_the_next_tick(tmp_path, clock):
-    session, _made, _tracker, store = a_session(tmp_path, saved=())
+    session, _native, _tracker, store = a_session(tmp_path, saved=())
     session._replay.saved_generation = 0
     mark(store)
     assert tick(session, clock)["source"]["available"] is False
@@ -97,42 +97,38 @@ def test_a_saved_clip_resolves_on_the_next_tick(tmp_path, clock):
 
 
 def test_a_target_change_resolves_at_once(tmp_path, clock):
-    session, _made, tracker, store = a_session(tmp_path, target=None)
+    session, _native, tracker, store = a_session(tmp_path, target=None)
     mark(store)
     assert tick(session, clock)["source"]["available"] is False
     tracker.target = ("star", 24, 1)
     assert tick(session, clock)["source"]["available"] is True
 
 
-def test_a_slider_put_does_not_resolve_but_a_view_or_the_switch_does(tmp_path, clock):
-    session, _made, _tracker, store = a_session(tmp_path)
+def test_a_slider_put_does_not_resolve_but_the_switch_does(tmp_path, clock):
+    session, _native, _tracker, store = a_session(tmp_path)
     mark(store)
     tick(session, clock)
-    before = len(session._replay.viewed)
+    before = len(session._replay.probed)
     asyncio.run(session.update(opacity=0.3))
     asyncio.run(session.update(nudge_frames=4))
-    assert len(session._replay.viewed) == before
-    asyncio.run(session.update(enabled=True))
-    assert len(session._replay.viewed) > before
-    # Only Mario asks different questions of each ghost than the whole picture.
-    before = len(session._replay.viewed)
-    asyncio.run(session.update(view="mario"))
-    assert len(session._replay.viewed) > before
+    assert len(session._replay.probed) == before
+    asyncio.run(session.update(enabled=not session._values["enabled"]))
+    assert len(session._replay.probed) > before
 
 
 @pytest.mark.parametrize("row", settings.ROWS, ids=lambda row: row.name)
 def test_every_setting_put_resolves_exactly_when_its_row_says_so(tmp_path, clock, row):
     """Every PUT goes through its registry row; only the rows marked
-    `resolves` (the switch, the view) ask the resolve anything new, so a new
+    `resolves` (the switch) ask the resolve anything new, so a new
     setting cannot silently start -- or stop -- re-reading the ghosts."""
-    session, _made, _tracker, store = a_session(tmp_path)
+    session, _native, _tracker, store = a_session(tmp_path)
     mark(store)
     tick(session, clock)
-    before = len(session._replay.viewed)
+    before = len(session._replay.probed)
     changed, _refused = sample(row)
     body = asyncio.run(session.update({row.name: changed}))
     assert body[row.name] == settings.applied(settings.BY_NAME[row.name].default, row, row.check(changed))
-    assert (len(session._replay.viewed) > before) is (row.name in RESOLVING_CHANGES)
+    assert (len(session._replay.probed) > before) is (row.name in RESOLVING_CHANGES)
     assert body["limits"] == settings.limits()
 
 
@@ -144,7 +140,7 @@ def test_the_resolving_puts_are_registry_rows_and_the_ghost_set():
 def test_queued_halves_of_a_partial_setting_fold_before_they_apply(tmp_path):
     """Two halves of the colour, or of the overlap fade, queued before one
     cycle both land -- the queue merges exactly as applying does."""
-    session, _made, _tracker, _store = a_session(tmp_path)
+    session, _native, _tracker, _store = a_session(tmp_path)
     for half in ({"tint": {"enabled": False}}, {"tint": {"hue_degrees": 200}},
                  {"proximity": {"enabled": False}}, {"proximity": {"extra_distance": 80}}):
         session._queue_update(validate_changes(half), None)
@@ -160,59 +156,16 @@ def test_the_empty_session_publishes_the_same_limits():
 
 # -- what a resolve asks -------------------------------------------------------
 
-def test_only_mario_asks_the_whole_picture_no_more_than_it_needs(tmp_path):
-    session, _made, _tracker, _store = a_session(tmp_path)
-    asked = []
 
-    def whole(target, ghost):
-        asked.append(ghost)
-        return {"available": ghost == "b", "reason_text": None}
-    session._resolve_video_source = whole
-    session._values["view"] = "whole"
-    assert session._row_video() is whole       # every row is shown this way
-    session._values["view"] = "mario"
-    session._source = {"whole_available": True}
-    rows = [session._row_video()(None, name) for name in "abc"]
-    assert asked == [] and {row["available"] for row in rows} == {None}
-    session._source = {"whole_available": False}
-    video_of = session._row_video()
-    assert [video_of(None, name)["available"] for name in "abcd"] == [False, True, None, None]
-    assert asked == ["a", "b"]
-
-
-class _Library:
-    def pb_for(self, *_):
-        return SimpleNamespace(attempt_id=9, frames=300)
-
-
-@pytest.mark.parametrize("pending,reason", [
-    (True, "This PB's video is still being saved."),
-    (False, "There is no saved video for this PB."),
-])
-def test_the_pb_row_says_still_saving_only_while_a_save_runs(tmp_path, pending, reason):
-    session, _made, _tracker, _store = a_session(tmp_path)
-    session.library = lambda inputs=None: _Library()
-    session.video_pending(9, pending)
-    row = session._refresh_pb({"kind": "star", "entity_key": "24-1", "strat": "10 coin"},
-                              lambda *_: {"available": False, "reason_text": "none", "attempt_id": None})
-    assert row["whole_available"] is False and row["whole_reason_text"] == reason
-    session.video_pending(9, False)
-    assert 9 not in session._videos_pending
-
-
-def test_the_candidate_cache_never_outlives_a_view_or_a_world_change():
+def test_the_candidate_cache_never_outlives_a_world_change():
     from sm64_events.ghost.selection import GhostSelection
     ghost = SimpleNamespace(attempt_id=5, frames=300, strat_tag="Standard")
     library = SimpleNamespace(ghosts_for=lambda *_: [ghost], imports_for=lambda *_: [])
     target = {"kind": "star", "entity_key": "24-1", "strat": "Standard"}
     selection, asked = GhostSelection(), []
-
-    def video_of(_target, _ghost):
-        asked.append(1)
-        return {"available": True, "reason_text": None}
-    selection.candidates(target, library, video_of, None, variant=("mario", 1))
-    selection.candidates(target, library, video_of, None, variant=("mario", 1))
-    assert len(asked) == 1                          # the short cache still serves a burst
-    selection.candidates(target, library, video_of, None, variant=("whole", 1))
-    selection.candidates(target, library, video_of, None, variant=("whole", 2))
-    assert len(asked) == 3
+    native = SimpleNamespace(probe=lambda *_: asked.append(1) or {"available": True, "reason_text": None})
+    selection.candidates(target, library, native, variant=1)
+    selection.candidates(target, library, native, variant=1)
+    assert len(asked) == 1
+    selection.candidates(target, library, native, variant=2)
+    assert len(asked) == 2

@@ -146,10 +146,11 @@ def test_candidate_metadata_retains_practice_state_for_explicit_collection_choic
     selection = GhostSelection()
     library = GhostLibrary(a_store(tmp_path), None, portable=Collection([other]))
     native = SimpleNamespace(probe=lambda *_: {"available": True, "reason_text": None})
-    video = lambda *_: {"available": False, "reason_text": "Only Mario"}
-    assert selection.candidates(TARGET, library, video, native)[0]["practice"] is True
+    candidate = selection.candidates(TARGET, library, native)[0]
+    assert candidate["practice"] is True and candidate["native_available"] is True
     other.practice = False
-    assert selection.candidates(TARGET, library, video, native)[0]["practice"] is False
+    candidate = selection.candidates(TARGET, library, native)[0]
+    assert candidate["practice"] is False and candidate["native_available"] is True
 
 
 def test_legacy_template_choice_remains_readable_before_the_library_arrives():

@@ -1,4 +1,4 @@
-"""Reach the native renderer through the same ghost switch as video playback."""
+"""Native playback controls, ownership and refusal through the ghost session."""
 import asyncio
 import json
 import threading
@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from sm64_events.ghost import settings
 from sm64_events.ghost.native_session import NATIVE_BUDGET_REASON, NativeGhost, budget_reason
 from sm64_events.ghost.native_layout import GP_WRONG_SCENE
 from tests.test_ghost_session import a_session, mark
@@ -36,7 +37,7 @@ class Capture:
 
 
 def native_session(tmp_path, *, asset=True):
-    session, windows, tracker, store = a_session(tmp_path)
+    session, _, tracker, store = a_session(tmp_path)
     source = Capture()
     manifest = {"clip_id": "ab" * 16, "sha256": "cd" * 32, "blink_frames": 0}
     replay = SimpleNamespace(recorder=SimpleNamespace(ghost_capture=source),
@@ -46,22 +47,21 @@ def native_session(tmp_path, *, asset=True):
         "kind": "star", "session_id": 1, "arm_id": 9,
         "frame": 100, "utc": "2026-09-21T08:00:00+00:00"})
     mark(store)
-    return session, source, windows, tracker
+    return session, source, tracker
 
 
-def test_native_switch_uses_pose_without_video_window_and_preserves_controls(tmp_path):
-    session, source, windows, _ = native_session(tmp_path)
+def test_native_switch_uses_saved_poses_and_preserves_controls(tmp_path):
+    session, source, _ = native_session(tmp_path)
 
     async def check():
-        await session.update({"enabled": True, "view": "mario", "opacity": 1,
+        await session.update({"enabled": True, "opacity": 1,
                            "tint": {"enabled": True, "hue_degrees": 120}, "nudge_frames": 9})
         session._native.note()
-        assert not windows
         assert session.payload()["source"]["exactness"] == "native_pose"
         command = source.commands[-1]
         assert command["enabled"] and command["opacity"] == 1 and command["nudge"] == 9
         assert command["tint_enabled"] and [clip["hue_degrees"] for clip in command["clips"]] == [120]
-        assert command["proximity_enabled"] and command["proximity_distance"] == 0
+        assert command["proximity_enabled"] and command["proximity_distance"] == settings.DEFAULT_PROXIMITY["extra_distance"]
         assert command["stop_at_star"] and command["rom_path"] == ""
         assert command["origin"]["global_timer"] == 100
         assert command["origin"]["configuration"] == 2 and command["origin"]["epoch"] == 3
@@ -73,8 +73,8 @@ def test_native_switch_uses_pose_without_video_window_and_preserves_controls(tmp
         await session.update({"proximity": {"enabled": False}})
         assert not source.commands[-1]["proximity_enabled"]
         assert source.commands[-1]["proximity_distance"] == 120
-        await session.update({"view": "whole"})
-        assert not source.commands[-1]["enabled"] and windows[-1].visible
+        await session.update({"enabled": False})
+        assert not source.commands[-1]["enabled"]
         await session.stop()
 
     asyncio.run(check())
@@ -84,12 +84,12 @@ def test_native_switch_uses_pose_without_video_window_and_preserves_controls(tmp
 def test_a_star_timed_by_its_exit_segment_is_not_over_at_the_first_grab(tmp_path, clock, stops):
     """The 100-coin star's live clock is its exit segment's: his 100-coin grab
     (or the ghost's) must not end the run; the exit star's close does."""
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
     session._native._origin_of = lambda *_: {"kind": clock, "session_id": 1, "arm_id": 9,
                                              "frame": 100, "utc": "2026-09-21T08:00:00+00:00"}
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         session._native.note()
         assert source.commands[-1]["enabled"] and source.commands[-1]["stop_at_star"] is stops
         await session.stop()
@@ -97,14 +97,14 @@ def test_a_star_timed_by_its_exit_segment_is_not_over_at_the_first_grab(tmp_path
     asyncio.run(check())
 
 
-def test_missing_pose_never_opens_whole_picture_as_mario(tmp_path):
-    session, source, windows, _ = native_session(tmp_path, asset=False)
+def test_missing_pose_disables_native_playback(tmp_path):
+    session, source, _ = native_session(tmp_path, asset=False)
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         assert not session.payload()["source"]["available"]
         assert session.payload()["source"]["reason"] == "no_native_poses"
-        assert not windows and not source.commands[-1]["enabled"]
+        assert not source.commands[-1]["enabled"]
         await session.stop()
 
     asyncio.run(check())
@@ -113,10 +113,10 @@ def test_missing_pose_never_opens_whole_picture_as_mario(tmp_path):
 def test_a_set_that_does_not_fit_says_so_on_the_ghost_card(tmp_path):
     """The renderer refusing a set for room (GIPC_BUDGET) reaches the ghost card
     as a sentence he can act on, not the bad-file "could not be played"."""
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         session._native.note()
         source.snapshot_status = lambda **_: {
             "available": True, "state": 5, "reason": NATIVE_BUDGET_REASON,
@@ -133,10 +133,10 @@ def test_a_set_that_does_not_fit_says_so_on_the_ghost_card(tmp_path):
 
 
 def test_pose_ready_is_not_display_evidence(tmp_path):
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         session._native.note()
         assert session._native.state()["running"]
         assert not session._native.state()["visible"]
@@ -158,11 +158,11 @@ def test_pose_ready_is_not_display_evidence(tmp_path):
     (False, None, None),
 ])
 def test_area_mismatch_is_explained_only_when_ready_and_hidden(tmp_path, displayed, playback_reason, reason):
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
     served = source.snapshot_status
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         session._native.note()
         source.snapshot_status = lambda **_: {**served(), "displayed": displayed,
                                                "playback_reason": playback_reason}
@@ -179,12 +179,12 @@ def test_area_mismatch_is_explained_only_when_ready_and_hidden(tmp_path, display
 
 
 def test_area_reason_does_not_replace_waiting_for_an_attempt(tmp_path):
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
     served = source.snapshot_status
     source.snapshot_status = lambda **_: {**served(), "playback_reason": GP_WRONG_SCENE}
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         assert session._native.state()["reason"] == "Waiting for the next attempt."
         session._native.note()
         assert session._native.state()["reason"] == "Ghost is in another area."
@@ -203,11 +203,11 @@ def test_area_reason_does_not_replace_waiting_for_an_attempt(tmp_path):
     ({"available": False, "state": 4}, "Start the game with the trainer's GLideN64 renderer."),
 ])
 def test_unready_renderer_does_not_publish_a_stale_area_reason(tmp_path, status, reason):
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
     served = source.snapshot_status
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         session._native.note()
         source.snapshot_status = lambda **_: {**served(), **status,
                                                "playback_reason": GP_WRONG_SCENE}
@@ -219,14 +219,14 @@ def test_unready_renderer_does_not_publish_a_stale_area_reason(tmp_path, status,
 
 
 def test_poll_markers_rebase_and_disarm_without_frame_pacing_or_file_reads(tmp_path):
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
     origin = {"kind": "segment", "session_id": 1, "arm_id": 99,
               "frame": 120, "utc": "2026-09-21T08:00:00+00:00"}
     session._native._origin_of = lambda *_: origin
 
     async def check():
         nonlocal origin
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         assert not source.commands[-1]["enabled"]
         assert session._native.state()["reason"] == "Waiting for the next attempt."
         session._native.note()
@@ -258,11 +258,11 @@ def test_poll_markers_rebase_and_disarm_without_frame_pacing_or_file_reads(tmp_p
 
 
 def test_rom_reopen_keeps_binding_until_new_producer_identity_arrives(tmp_path):
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
     original_status = source.snapshot_status
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         session._native.note()
         before = len(source.commands)
         source.snapshot_status = lambda **_: {"available": False}
@@ -289,7 +289,7 @@ def test_a_capture_reconnect_says_reconnecting_not_start_the_game(tmp_path):
     renderer is reconnecting; a game that never served, or has exited, is
     still one to start."""
     from sm64_events.ghost.native_session import RECONNECTING_REASON, START_GAME_REASON
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
     game = SimpleNamespace(pid=4242, created=77, configuration=2, epoch=3)
     alive = {game.pid: game.created}
     session._native._running = lambda pid, created: alive.get(pid) == created
@@ -302,7 +302,7 @@ def test_a_capture_reconnect_says_reconnecting_not_start_the_game(tmp_path):
 
     async def check():
         source.snapshot_status = lambda **_: {"available": False, "reason": "not_started"}
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         assert await card() == START_GAME_REASON          # never served
         source.snapshot_status = lambda **_: {**served(), "producer": game}
         session._native.note()
@@ -339,21 +339,21 @@ def test_the_game_is_running_only_while_its_own_process_is():
 
 
 def test_target_change_revokes_old_pose_and_resets_nudge(tmp_path):
-    session, source, windows, tracker = native_session(tmp_path)
+    session, source, tracker = native_session(tmp_path)
 
     async def check():
-        await session.update({"enabled": True, "view": "mario", "nudge_frames": 8})
+        await session.update({"enabled": True, "nudge_frames": 8})
         tracker.target = ("segment", 55)
         await session.refresh()
         assert not source.commands[-1]["enabled"]
-        assert session.payload()["nudge_frames"] == 0 and not windows
+        assert session.payload()["nudge_frames"] == 0
         await session.stop()
 
     asyncio.run(check())
 
 
 def test_stop_joins_uncancelled_selection_before_final_revoke(tmp_path):
-    session, source, _, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
     entered, release = threading.Event(), threading.Event()
     resolve = session._native.resolve
 
@@ -366,7 +366,7 @@ def test_stop_joins_uncancelled_selection_before_final_revoke(tmp_path):
     session._native.resolve = blocked
 
     async def check():
-        selection = asyncio.create_task(session.update({"enabled": True, "view": "mario"}))
+        selection = asyncio.create_task(session.update({"enabled": True}))
         assert await asyncio.to_thread(entered.wait, 3)
         stopping = asyncio.create_task(session.stop())
         try:
@@ -385,7 +385,7 @@ def test_stop_joins_uncancelled_selection_before_final_revoke(tmp_path):
 
 
 def test_unchanged_clip_is_validated_once_until_asset_changes(tmp_path):
-    session, _, _, _ = native_session(tmp_path)
+    session, _, _ = native_session(tmp_path)
     path = tmp_path / "run.ghost"
     path.write_bytes(b"asset")
     path.with_suffix(".json").write_text("{}")
@@ -406,7 +406,7 @@ def test_unchanged_clip_is_validated_once_until_asset_changes(tmp_path):
 
 
 def test_reprojected_attempt_invalidates_unchanged_cached_asset(tmp_path):
-    session, _, _, _ = native_session(tmp_path)
+    session, _, _ = native_session(tmp_path)
     path = tmp_path / "run.ghost"
     path.write_bytes(b"asset")
     path.with_suffix(".json").write_text("{}")
@@ -416,7 +416,7 @@ def test_reprojected_attempt_invalidates_unchanged_cached_asset(tmp_path):
     replay.find_native = lambda number: calls.append(number) or find(number)
 
     async def check():
-        await session.update({"view": "mario"})
+        await session.refresh()
         await session.refresh()
         assert session._native._asset is not None
         replay.native_identity = lambda _: {"native_clock_frame": 145}
@@ -433,13 +433,13 @@ def test_poll_tick_skips_capture_lock_and_retries_unpublished_command(tmp_path):
     from sm64_events.ghost.capture import NativeCapture
     from sm64_events.memory.layout import US
 
-    session, fake, _, _ = native_session(tmp_path)
+    session, fake, _ = native_session(tmp_path)
     source = NativeCapture(US, lambda *_: None)
     source._report(**fake.snapshot_status())
     session._native._replay.recorder.ghost_capture = source
 
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         completed = threading.Event()
         thread = threading.Thread(target=lambda: (session._native.note(), completed.set()))
         source._lock.acquire()

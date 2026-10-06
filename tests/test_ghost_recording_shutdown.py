@@ -222,12 +222,12 @@ def test_recording_off_retains_pose_and_machine_lease_until_sound_retires(tmp_pa
 
 
 def test_native_card_explains_recording_off_before_stale_source_dies_then_resumes(tmp_path):
-    session, source, windows, _ = native_session(tmp_path)
+    session, source, _ = native_session(tmp_path)
     recorder = session._native._replay.recorder
     recorder.recording_enabled = True
     source.displayed = True
     async def check():
-        await session.update({"enabled": True, "view": "mario"})
+        await session.update({"enabled": True})
         session._native.note()
         before = dict(session._values)
         assert session.payload()["window"]["visible"]
@@ -241,7 +241,7 @@ def test_native_card_explains_recording_off_before_stale_source_dies_then_resume
         recorder.ghost_capture = None
         await session.refresh(resolve=False)
         assert "Start recording" in session.payload()["window"]["reason"]
-        assert session._values == before and not windows
+        assert session._values == before
         recorder.recording_enabled = True
         fresh = recorder.ghost_capture = Capture()
         fresh.displayed = True
@@ -250,19 +250,4 @@ def test_native_card_explains_recording_off_before_stale_source_dies_then_resume
         assert fresh.commands[-1]["enabled"] and session.payload()["window"]["visible"]
         assert session._values == before
         await session.stop()
-    asyncio.run(check())
-
-
-def test_whole_picture_window_can_remain_while_native_recording_is_disabled(tmp_path):
-    session, source, windows, _ = native_session(tmp_path)
-    recorder = session._native._replay.recorder
-    recorder.recording_enabled = False
-    async def check():
-        try:
-            await session.update({"enabled": True, "view": "whole"})
-            assert windows and windows[-1].visible
-            assert session.payload()["window"].get("backend") != "native"
-            assert not session._native._enabled and session._values["enabled"]
-        finally:
-            await session.stop()
     asyncio.run(check())

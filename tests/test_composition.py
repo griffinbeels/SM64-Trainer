@@ -402,17 +402,12 @@ def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
     caused._counts["switch_press"] = 2
     hook()
     assert moment._counts == {} and caused._counts == {}
-def test_build_hands_every_snapshot_to_the_ghost_clock(monkeypatch):
-    """The overlay follows the game's own timer, and the only place that timer
-    is read is the poll loop. Unwired, `GhostClockFeed` passes every one of its
-    own tests and the overlay simply never moves — the same shape as the frame
-    heartbeat above."""
-    from sm64_events.server.ghost_clock import GhostClockFeed
+def test_build_hands_every_snapshot_to_native_ghost_ownership(monkeypatch):
+    """Settled poll snapshots reach the native arm/rebase observer."""
     from sm64_events.ghost.native_session import NativeGhost
     main_mod = _stubbed_main(monkeypatch)
     captured = {}
     delivered = []
-    monkeypatch.setattr(GhostClockFeed, "note", lambda self, snapshot: delivered.append(("video", snapshot)))
     monkeypatch.setattr(NativeGhost, "note", lambda self, snapshot=None: delivered.append(("native", snapshot)))
     real_poller = main_mod.Poller
 
@@ -426,19 +421,19 @@ def test_build_hands_every_snapshot_to_the_ghost_clock(monkeypatch):
     assert note is not None, "the poller was built with no snapshot hook"
     sample = object()
     note(sample)
-    assert delivered == [("video", sample), ("native", sample)]
+    assert delivered == [("native", sample)]
 
 
 def test_build_mounts_every_ghost_door(monkeypatch):
-    """The switch, the source lookup and the clock socket. A door that was
-    never mounted 404s forever and reads exactly like a missing feature."""
+    """Native preferences are reachable and retired video doors are absent."""
     main_mod = _stubbed_main(monkeypatch)
     app = main_mod.build()
     paths = {r.path for r in app.routes}
-    assert {"/api/ghost", "/api/ghost/source", "/ws/ghost-clock"} <= paths
+    assert "/api/ghost" in paths
+    assert not ({"/api/ghost/source", "/ws/ghost-clock"} & paths)
 
 
-def test_build_gives_the_app_the_session_that_owns_the_window(monkeypatch):
+def test_build_gives_the_app_the_native_ghost_session(monkeypatch):
     from sm64_events.ghost.session import GhostSession
     main_mod = _stubbed_main(monkeypatch)
     captured = {}
@@ -451,41 +446,11 @@ def test_build_gives_the_app_the_session_that_owns_the_window(monkeypatch):
     monkeypatch.setattr(main_mod, "create_app", spy)
     main_mod.build()
     assert isinstance(captured.get("ghost"), GhostSession)
-    assert captured.get("ghost_clock") is not None
-    # And the two are JOINED: the nudge travels on the clock feed, so a built
-    # app that hands them over separately has a timing key that reaches no
-    # overlay at all — while every unit below it still passes.
-    assert captured["ghost"]._clock is captured["ghost_clock"]
-
-
-def test_the_frozen_entry_point_opens_the_overlay_window(monkeypatch):
-    """A PyInstaller build has no `-m`: the overlay child re-enters through
-    THIS exe, so the packaged entry point has to recognise the controller's own
-    flag. From source it works already, which is exactly why nothing else would
-    catch this going missing."""
-    import importlib.util
-    import sys
-
-    from sm64_events.ghost.window import GHOST_WINDOW_FLAG
-
-    entry = Path(sm64_events.__file__).resolve().parents[2] / "gui_entry.py"
-    spec = importlib.util.spec_from_file_location("ghost_gui_dispatch", entry)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    received = []
-    monkeypatch.setattr(sys, "argv",
-                        ["SM64Trainer.exe", GHOST_WINDOW_FLAG, "--url",
-                         "http://127.0.0.1:8065/ui/ghost/index.html"])
-    monkeypatch.setattr("sm64_events.ghost.window.child.main",
-                        lambda argv: received.append(argv) or 0)
-    monkeypatch.setitem(sys.modules, "sm64_events.desktop.app", None)
-    assert module.main() == 0
-    assert received == [["--url", "http://127.0.0.1:8065/ui/ghost/index.html"]]
 
 
 def test_the_frozen_entry_point_runs_the_ghost_sound_player(monkeypatch):
     """The ghost sound player is a child of THIS exe in a PyInstaller build,
-    re-entering through its flag like the overlay window above. Without the
+    re-entering through its own flag. Without the
     dispatch the installed app would play no ghost sound at all."""
     import importlib.util
     import sys

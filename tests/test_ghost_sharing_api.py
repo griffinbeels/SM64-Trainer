@@ -15,7 +15,7 @@ def client_for(tmp_path):
     sharing = GhostSharing(replay, Store())
     session = SimpleNamespace(_sharing=lambda: sharing, _read_target=lambda: {"kind": "star", "entity_key": "2-1", "strat": "Standard"})
     app = FastAPI()
-    app.include_router(create_ghost_router(None, replay, session=session))
+    app.include_router(create_ghost_router(session=session))
     return TestClient(app), sharing
 
 
@@ -84,7 +84,7 @@ def test_race_preparation_checks_current_target_and_import_bytes(tmp_path):
 def test_unready_collections_and_absent_practice_target_have_readable_refusals(tmp_path):
     app = FastAPI()
     unready = SimpleNamespace(_sharing=lambda: None, _read_target=lambda: None)
-    app.include_router(create_ghost_router(None, None, session=unready))
+    app.include_router(create_ghost_router(session=unready))
     client = TestClient(app)
     assert client.get("/api/ghost/library").status_code == 503
     assert client.post("/api/ghost/library/export", json={

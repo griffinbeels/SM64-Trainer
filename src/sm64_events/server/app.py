@@ -390,7 +390,7 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
                                          app.state.adoptions, service))
         yield
         if ghost is not None:
-            await ghost.stop()          # no overlay window outlives the server
+            await ghost.stop()          # revoke native playback before recording ends
         if refresh_task is not None:
             refresh_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -816,7 +816,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
                setup_observer=None, on_db_attached=None,
                library_path=None, refresh_library_on_start=False,
-               library_bundled_path=None, ghost=None, ghost_clock=None) -> FastAPI:
+               library_bundled_path=None, ghost=None) -> FastAPI:
     # `library_bundled_path` overrides the BUNDLED snapshot the library falls
     # back to (None = the shipped one). Since round 33 every fitted star row
     # in the library becomes a sheet-fitted rank standard at load, so a test
@@ -855,8 +855,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     _mount_optional_routes(app, replay, inputs, capture_layer, compare,
                            compilation, updater, mode_path, setup_observer)
     from sm64_events.server.ghost_api import mount_ghost_routes
-    mount_ghost_routes(app, inputs=inputs, replay=replay, session=ghost,
-                       clock=ghost_clock)
+    mount_ghost_routes(app, session=ghost)
     _mount_controls(app, poller, replay)
     _mount_diagnostics(app, poller, broadcaster, service, monitor)
     _mount_events(app, poller, broadcaster, debug_hooks)

@@ -11,8 +11,8 @@ from sm64_events.ghost import native_layout as L, native_protocol as P
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 from sm64_events.ghost.settings import (
     DEFAULT_INPUT_MODE, DEFAULT_NAME_BACKGROUND, DEFAULT_NAME_BACKGROUND_OPACITY, DEFAULT_OPACITY,
-    DEFAULT_VOLUME, INPUT_MODES, NAME_BACKGROUNDS, NUDGE_LIMIT_FRAMES, PATH_SOURCES, native_path_defaults,
-    native_switches,
+    DEFAULT_TINT, DEFAULT_VOLUME, INPUT_MODES, NAME_BACKGROUNDS, NUDGE_LIMIT_FRAMES, PATH_SOURCES, native_path_defaults,
+    defaults, native_controls, native_switches,
 )
 from sm64_events.memory.addresses import ACT_JUMBO_STAR_CUTSCENE, STAR_DANCE_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
@@ -174,7 +174,7 @@ class NativeChannel:
         })
         request.proximity_enabled = proximity["enabled"]
         request.proximity_distance = proximity["extra_distance"]
-        request.tint_enabled = bool(value.get("tint_enabled", False))
+        request.tint_enabled = bool(value.get("tint_enabled", DEFAULT_TINT["enabled"]))
         request.volume = _volume(value)
         for field, default in native_switches().items():
             setattr(request, field, _switch(value, field, default))
@@ -230,14 +230,11 @@ CLIP_KEYS = {"clip_id", "clip_sha256", "clip_path", "hue_degrees"}
 
 
 def _set_defaults(request) -> None:
-    """A new lease's controls: each setting's registry default."""
-    request.opacity, request.volume = DEFAULT_OPACITY, DEFAULT_VOLUME
-    request.name_background = NAME_BACKGROUNDS[DEFAULT_NAME_BACKGROUND]
-    request.name_background_opacity = DEFAULT_NAME_BACKGROUND_OPACITY
-    for field, default in native_switches().items():
-        setattr(request, field, int(default))
-    for field, default in native_path_defaults().items():
-        setattr(request, field, default)
+    """A new lease's controls come from the same registry as the session."""
+    for field, default in native_controls(defaults()).items():
+        # Hue belongs to each selected clip, not to the request header.
+        if field != "hue_degrees":
+            setattr(request, field, default)
 
 
 def _switch(value: dict, key: str, default: bool) -> bool:

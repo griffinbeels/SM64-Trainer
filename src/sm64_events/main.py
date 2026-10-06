@@ -47,7 +47,6 @@ from sm64_events.replay.video import DwmSurfaceVideoSource
 from sm64_events.replay.window import find_window
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
-from sm64_events.server.ghost_clock import GhostClockFeed
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
 from sm64_events.storage.instance_lock import acquire_instance_lock
@@ -214,28 +213,8 @@ def _replay_service(cfg, recorder, codec, tracker):
 
 
 def _ghost_follows_pb(service, ghost):
-    """A saved or undone PB re-points the ghost at once (`ghost/pb.py`)."""
+    """Preserve the new PB's native poses and follow it immediately."""
     service.on_pb_changed = ghost.pb_changed
-    if service.on_pb_saved is None:
-        return
-    save_media = service.on_pb_saved
-
-    async def pb_changed(attempt, saved):
-        # The video save follows this call; until it finishes the picker may
-        # truly say the PB's video "is still being saved".
-        if saved and attempt is not None:
-            ghost.video_pending(attempt.id, True)
-        await ghost.pb_changed(attempt, saved)
-
-    async def save_pb_media(attempt_id):
-        # Whole picture follows the PB once its video exists, not a watch later.
-        try:
-            return await save_media(attempt_id)
-        finally:
-            ghost.video_pending(attempt_id, False)
-            await ghost.refresh(resolve=True)
-    service.on_pb_changed = pb_changed
-    service.on_pb_saved = save_pb_media
 
 
 def _build_tracker(broadcaster):
@@ -493,16 +472,11 @@ def build():
 
     from sm64_events.server.inputruntime import InputRuntime
     inputs = InputRuntime(service, memory, layout, replay)
-    # The ghost overlay follows the game's own clock, so the feed takes each
-    # accepted reading straight off the poll loop -- publish-and-forget, one
-    # set test when no overlay is open (server/ghost_clock.py).
-    ghost_clock = GhostClockFeed()
     from sm64_events.ghost.native_session import NativeGhost
     native_ghost = NativeGhost(replay, supported=layout.version == "us",
                                origin_of=service.native_ghost_origin)
 
     def note_ghost_snapshot(snapshot):
-        ghost_clock.note(snapshot)
         native_ghost.note(snapshot)
 
     async def ghost_capture_gap(reason):
@@ -513,7 +487,7 @@ def build():
                     reader=reader, detector_factory=detector_stream,
                     on_gap=ghost_capture_gap, on_snapshot=note_ghost_snapshot)
     inputs.bind(poller)
-    # One ghost for the app: the switch, its window, and the target it follows.
+    # One session owns native ghost preferences and the practice target.
     ghost = GhostSession(tracker=service, inputs=inputs.get_service,
                          replay=replay, broadcaster=broadcaster,
                          native=native_ghost)
@@ -530,7 +504,6 @@ def build():
                       updater=updater, compare=compare, compilation=compilation,
                       db_retry=db_retry, capture_layer=capture_layer,
                       setup_observer=setup_observer, ghost=ghost,
-                      ghost_clock=ghost_clock,
                       refresh_library_on_start=True)
 
 

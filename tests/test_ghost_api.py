@@ -1,171 +1,9 @@
-"""The ghost-source route is a skin over `ghost/source.py`: one read, the
-agreed JSON, and this project's exception taxonomy (404 / 409 / 503).
-
-It answers 200 with `available: false` for every ordinary "no ghost here"
-case, because "this star has no footage yet" is an answer, not an error — a
-switch that has to read an error body to know it should be disabled would
-also have to guess at a network failure.
-"""
-import pytest
+"""The native session REST routes and readable validation failures."""
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
-from sm64_events.inputs.service import InputsService
-from sm64_events.server.ghost_api import create_ghost_router, journal_door
-from sm64_events.storage.db import Database
-
-from tests.ghost_fixture import (
-    FakeReplay, a_document, a_real_clip_attempt, a_real_clip_journal,
-    a_real_clip_view, a_view)
-
-
-@pytest.fixture
-def db(tmp_path):
-    return Database(tmp_path / "t.db")
-
-
-def a_service(db, *attempts) -> InputsService:
-    """The captured-input service the route reads BOTH doors of: the template
-    store, and `attempt` for the frames the span is clamped to."""
-    return InputsService(db.inputs, db.input_templates, lambda: list(attempts))
-
-
-def mark(db, *, kind="star", entity_key="24-1", strat_tag="10 coin",
-         origin="attempt:7", target="star 24 1"):
-    return db.input_templates.save(kind=kind, entity_key=entity_key,
-                                   strat_tag=strat_tag, name="the good one",
-                                   origin=origin, document=a_document(target))
-
-
-def client(inputs, replay) -> TestClient:
-    app = FastAPI()
-    app.include_router(create_ghost_router(inputs, replay))
-    return TestClient(app)
-
-
-def ask(client, kind="star", entity_key="24-1", strat="10 coin"):
-    params = {"kind": kind, "entity_key": entity_key}
-    if strat is not None:
-        params["strat"] = strat
-    return client.get("/api/ghost/source", params=params)
-
-
-def test_a_ready_ghost_answers_with_its_footage_and_view(db):
-    template = mark(db)
-    replay = FakeReplay(saved=[7], views={7: a_view(7)})
-    body = ask(client(a_service(db), replay)).json()
-    assert body["available"] is True
-    assert body["reason"] is None and body["reason_text"] is None
-    assert body["template_id"] == template.id
-    assert body["attempt_id"] == 7
-    assert body["media_url"] == "/api/replay/saved/7"
-    assert body["exactness"] == "frame_map"
-    assert body["view"]["frame_map"] == [11, 11, 12, 13]
-    assert body["view"]["picture_igt"] == [100, 100, 101, 102]
-
-
-def test_the_answer_carries_the_span_the_ghost_is_clamped_to(db):
-    """His ruling, over his own clip: the ghost is exactly the attempt and it
-    ends on the TOUCH, so the 45 pictures of the previous run and the 61 after
-    the grab are out. Every number here is the journal's own."""
-    mark(db, origin="attempt:9")
-    replay = FakeReplay(saved=[9], views={9: a_real_clip_view(9)},
-                        journal=a_real_clip_journal())
-    body = ask(client(a_service(db, a_real_clip_attempt(9)), replay)).json()
-    assert body["span"] == {"first_picture": 45, "last_picture": 580,
-                            "start_frame": 308679, "end_frame": 309215,
-                            "timed_frame": 309219, "grab_frame": 309215,
-                            "basis": "attempt_frames+grab_event"}
-    assert len(body["view"]["frame_map"]) == 642
-
-
-def test_the_journal_door_is_the_replay_services_own_database(db):
-    """One read-only slice of the journal, reached through the object already
-    resolving this attempt against the same database. A boot with no database
-    yet has no door, and the span falls back rather than failing."""
-    events = a_real_clip_journal()
-    replay = FakeReplay(saved=[9], journal=events)
-    assert journal_door(replay) is events
-    assert journal_door(FakeReplay()) is None
-    assert journal_door(None) is None
-    assert callable(Database.events_between)
-
-
-def test_a_ghost_whose_run_left_the_history_is_served_unclamped(db):
-    """`span: null` is an answer the page can act on; refusing the footage
-    would hide a run he can still watch."""
-    mark(db)
-    replay = FakeReplay(saved=[7], views={7: a_view(7)})
-    body = ask(client(a_service(db), replay)).json()
-    assert body["available"] is True and body["span"] is None
-
-
-def test_no_ghost_is_a_200_carrying_the_reason_to_show(db):
-    response = ask(client(a_service(db), FakeReplay()))
-    assert response.status_code == 200
-    body = response.json()
-    assert body["available"] is False
-    assert body["reason"] == "no_template"
-    assert body["reason_text"].endswith(".")
-
-
-def test_the_strategy_is_optional(db):
-    mark(db, strat_tag=None)
-    replay = FakeReplay(saved=[7], views={7: a_view(7)})
-    assert ask(client(a_service(db), replay), strat=None).json()["available"]
-
-
-def test_a_segment_is_asked_for_the_same_way(db):
-    mark(db, kind="segment", entity_key="12", strat_tag=None,
-         origin="attempt:9", target="segment 12")
-    replay = FakeReplay(saved=[9], views={9: a_view(9)})
-    body = ask(client(a_service(db), replay), kind="segment",
-               entity_key="12", strat=None).json()
-    assert (body["available"], body["attempt_id"]) == (True, 9)
-
-
-def test_an_unknown_kind_is_refused(db):
-    response = ask(client(a_service(db), FakeReplay()), kind="course")
-    assert response.status_code == 409
-
-
-def test_a_request_that_names_no_target_is_rejected_by_the_route(db):
-    assert client(a_service(db), FakeReplay()).get(
-        "/api/ghost/source").status_code == 422
-
-
-def test_without_recordings_the_answer_is_unavailable_not_a_wrong_no(db):
-    """Replay off is a 503: the truthful answer is "cannot tell", and a
-    `no_template` here would disable his switch for a reason that is false."""
-    mark(db)
-    assert ask(client(a_service(db), None)).status_code == 503
-
-
-def test_a_boot_with_no_database_yet_answers_503(db):
-    def not_ready():
-        raise RuntimeError("database unavailable")
-
-    replay = FakeReplay(saved=[7], views={7: a_view(7)})
-    assert ask(client(not_ready, replay)).status_code == 503
-
-
-def test_the_service_is_resolved_per_request(db):
-    """Same reason `create_inputs_router` takes a callable: the database can
-    arrive after boot, and the router is built once."""
-    ready = {"service": None}
-    replay = FakeReplay(saved=[7], views={7: a_view(7)})
-    session = client(lambda: ready["service"] or _raise(), replay)
-    assert ask(session).status_code == 503
-    mark(db)
-    ready["service"] = a_service(db)
-    assert ask(session).json()["available"] is True
-
-
-def _raise():
-    raise RuntimeError("database unavailable")
-
-
-# -- the session doors: GET / PUT /api/ghost ---------------------------------
+from sm64_events.server.ghost_api import create_ghost_router
 
 class FakeSession:
     """The two calls the routes make, and nothing else."""
@@ -189,7 +27,7 @@ class FakeSession:
 
 def session_client(session) -> TestClient:
     app = FastAPI()
-    app.include_router(create_ghost_router(None, None, session=session))
+    app.include_router(create_ghost_router(session=session))
     return TestClient(app)
 
 
@@ -249,3 +87,7 @@ def test_without_a_session_the_read_says_so_and_the_write_is_refused():
     assert state["source"]["reason"] == "no_session"
     assert "this window" in state["source"]["reason_text"]
     assert unmanned.put("/api/ghost", json={"enabled": True}).status_code == 503
+
+
+def test_retired_video_source_route_is_not_mounted():
+    assert session_client(None).get("/api/ghost/source").status_code == 404

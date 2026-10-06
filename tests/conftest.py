@@ -452,26 +452,6 @@ def _isolate_ui_log(tmp_path, monkeypatch):
     monkeypatch.setattr(uilog, "data_root", lambda: tmp_path)
 
 
-@pytest.fixture(autouse=True)
-def _isolate_ghost_window_log(tmp_path, monkeypatch):
-    """No test may append to the checkout's own ghost overlay log.
-
-    `GhostSession` writes a row every time it starts or ends the overlay
-    window, so every session test appended to the file at the data root. His
-    second try was read off that file and it carried rows from test runs on
-    ports 8099 and 8123 interleaved with his own -- the same pollution
-    `_isolate_ui_log` above was written for, in the file that now diagnoses
-    the overlay.
-
-    `diag` holds `data_root` as an import-time alias, so the ALIAS is what is
-    rebound. The env override is left alone: the overlay child is a separate
-    process and `tests/test_ghost_window_child.py` points it at its own file
-    that way. `tests/test_ghost_window_diag.py::
-    test_no_test_can_reach_the_checkouts_own_ghost_log` proves this is active.
-    """
-    from sm64_events.ghost.window import diag
-    monkeypatch.delenv(diag.PATH_ENV, raising=False)
-    monkeypatch.setattr(diag, "data_root", lambda: tmp_path)
 
 
 @pytest.fixture

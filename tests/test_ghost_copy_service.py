@@ -747,9 +747,8 @@ def real_service(tmp_path):
 
 def test_a_real_twin_archive_end_to_end(real_service):
     """View offers the copy, its route serves the twin archive's own selection
-    with ranges, Save publishes exactly those bytes, and the Whole picture
-    ghost still reads the clean clip."""
-    from sm64_events.ghost.source import from_marked_attempt
+    with ranges, Save publishes exactly those bytes, and the clean replay
+    still reads the clean clip."""
     svc, _ = real_service
     with client_for(svc) as client:
         view = client.post("/api/attempts/42/replay").json()
@@ -771,10 +770,9 @@ def test_a_real_twin_archive_end_to_end(real_service):
         assert client.get(SAVED_URL).content == media
         assert client.get(BUFFER_URL).content == media       # the drawer's old URL
 
-    ghost = from_marked_attempt(SimpleNamespace(origin="attempt:42", id=5), replay=svc)
-    assert ghost.available and ghost.media_url == "/api/replay/saved/42"
-    assert Path(ghost.clip_path).resolve() == saved.resolve()
-    assert ghost.view["clip_url"] == "/api/replay/saved/42"
+    clean = svc.view(42)
+    assert clean["clip_url"] == "/api/replay/saved/42"
+    assert svc.find_saved(42).resolve() == saved.resolve()
 
 
 def test_a_real_twin_one_tick_off_the_clean_clock_is_refused(real_service):

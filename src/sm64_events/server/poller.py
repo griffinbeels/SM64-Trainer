@@ -214,10 +214,8 @@ class Poller:
         # `broadcaster`, which is sometimes a plain Broadcaster: this poller's
         # sink contract is publish(), and a clock consumer is a second concern.
         self.on_frame = on_frame
-        # Called synchronously with each accepted reading, never awaited --
-        # the ghost overlay follows this clock (server/ghost_clock.py) and
-        # nothing on this path may wait for a browser. With no overlay open
-        # the feed's own early return makes this one set test.
+        # Native ghost ownership observes accepted readings synchronously.
+        # The callback never waits for rendering, files or a browser.
         self.on_snapshot = on_snapshot
         self.interval = 1.0 / hz
         self.reader = reader or SnapshotReader(memory)
