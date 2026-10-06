@@ -107,7 +107,7 @@ def test_legacy_whole_view_is_ignored_without_rewriting_other_preferences(tmp_pa
     session, _, _, _ = a_session(tmp_path, db=db)
     body = drive(session)
     assert "view" not in body and body["opacity"] == 0.25
-    assert db.get_state("ghost_view") == "whole"
+    assert db.get_state("ghost_view", None) == "whole"
 
 
 @pytest.mark.parametrize("changes", [

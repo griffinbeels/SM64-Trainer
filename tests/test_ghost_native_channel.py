@@ -302,9 +302,11 @@ def test_session_shaped_command_carries_the_sound_fade_switch(kernel, tmp_path):
 
 
 def test_session_shaped_command_carries_the_ghost_volume(kernel, tmp_path):
-    """`volume`: absent is half, 0 is kept exactly, anything outside 0..1 changes nothing."""
+    """Absent volume follows the registry; zero is exact and invalid values change nothing."""
+    from sm64_events.ghost import settings
+    default_volume = settings.native_controls(settings.defaults())["volume"]
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
-    assert kernel.request.volume == 0.5
+    assert kernel.request.volume == pytest.approx(default_volume)
     command = {"enabled": True, "model_id": 1, "owner_suspended": False,
                "clips": [clip(tmp_path, b"a", 10)], "rom_path": "", "opacity": 0.5, "nudge": 0,
                "proximity_enabled": False, "proximity_distance": 0.0, "tint_enabled": False,
@@ -313,7 +315,7 @@ def test_session_shaped_command_carries_the_ghost_volume(kernel, tmp_path):
                           "utc": 1000.0, "session_id": 7, "arm_id": 8}}
     try:
         connection.poll(command)
-        assert kernel.request.volume == 0.5
+        assert kernel.request.volume == pytest.approx(default_volume)
         connection.poll({**command, "volume": 0})
         assert kernel.request.volume == 0.0 and kernel.request.sound_fade == 1
         connection.poll({**command, "volume": 0.8})
@@ -407,14 +409,16 @@ def path_command(tmp_path, **path):
 
 
 def test_the_lease_starts_with_the_registrys_path(kernel):
-    """Before any command the renderer reads the shipped path: on, no presses,
-    the fastest ghost, and the registry's own four numbers."""
+    """Before any command the renderer reads the registry's path controls and numbers."""
     from sm64_events.ghost import settings
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
     expected = settings.native_path_defaults()
     try:
         request = kernel.request
-        assert request.path_enabled == 1 and request.path_buttons == 0 and request.path_clip == 0
+        switches = settings.native_switches()
+        assert request.path_enabled == switches["path_enabled"]
+        assert request.path_buttons == switches["path_buttons"]
+        assert request.clip_count == request.path_clip == 0  # No selected clips yet.
         assert {field: getattr(request, field) for field in expected} == pytest.approx(expected)
         connection.poll({"enabled": False})  # a command that names no path field
     finally:
@@ -676,9 +680,11 @@ def test_new_lease_and_missing_playback_fields_use_registry_defaults(kernel):
     expected = settings.native_controls(settings.defaults())
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
     try:
+        assert not kernel.request.play_enabled
         for field, value in expected.items():
             if field != "hue_degrees":
-                assert getattr(kernel.request, field) == pytest.approx(value), field
+                actual = getattr(kernel.request, field)
+                assert actual == (pytest.approx(value) if type(value) is float else value), field
         connection.poll({"enabled": False})
         assert not kernel.request.play_enabled
         assert kernel.request.tint_enabled == expected["tint_enabled"]
