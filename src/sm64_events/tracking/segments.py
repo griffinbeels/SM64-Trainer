@@ -3839,12 +3839,13 @@ class SegmentEngine:
         """True when a practice_reset/state_loaded is an INVOLUNTARY IGT-reset
         echo — a door crossing, the post-star save prompt, a textbox/cutscene
         time-stop, a paused-briefly transition co-frame, or an in-level
-        teleporter — rather than a real player reset. Moved verbatim out of `feed`'s per-event
-        `anchor_is_echo` local (spec 2026-07-23-default-routes-foundation) so
+        teleporter or an area load — rather than a real player reset. Moved
+        out of `feed`'s per-event `anchor_is_echo` local (spec
+        2026-07-23-default-routes-foundation) so
         the waypoint matcher (`_feed_waypoint`) shares the SAME echo
         definition instead of a second copy that could drift; the full
         shape-by-shape rationale lives in the module docstring's "load-echo
-        rule" section. Shapes (2a)/(2b)/(3)/(4)/(5)/(6) depend only on the event
+        rule" section. Shapes (2a)/(2b)/(3)/(4)/(5)/(6)/(7) depend only on the event
         payload + `_last_transition_frame` (an instance attribute), never on
         a per-def arm — shape (1), the arm-frame echo, is checked separately
         per def by its callers (`ev.frame == arm.start_frame`)."""
@@ -3894,7 +3895,11 @@ class SegmentEngine:
             # one must not rewind, re-arm or bank a row. Still an ANCHOR, so
             # `_zeroes_usamune_igt` moves the IGT basis and the segment's time
             # falls back to the rta delta rather than measuring from the warp.
-            or ev.payload.get("teleport", False))
+            or ev.payload.get("teleport", False)
+            # (7) area entry/exit can zero IGT on a later sampled frame than the
+            # area_changed event. The detector's recency-based classification
+            # preserves the original attempt across that sampling gap.
+            or ev.payload.get("area_load", False))
 
     def _confirm_held_reset(self, Attempt, ev, ctx, notices) -> list:
         """Replay a held textbox-time reset as the real one it was.
