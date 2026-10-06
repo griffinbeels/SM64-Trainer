@@ -48,6 +48,43 @@ def context_profile_overlay(data: bytes) -> bytes:
         "\t\t\t\tWGL_CONTEXT_CORE_PROFILE_BIT_ARB,\n#endif")
 
 
+def buffered_drawer_overlay(data: bytes) -> bytes:
+    """Use each buffer's actual mapping; failed immutable maps become mutable.
+
+    Buffer.data is owned by the renderer's context/thread and exists only for a
+    successful persistent map. Capability alone cannot authorize a CPU copy.
+    Streaming SubData is a void GL call: its admission is not upload proof.
+    """
+    data = replace_once(data,
+        "\t\t_buffer.data = (GLubyte*)glMapBufferRange(_buffer.type, 0, _bufSize, m_bufMapBits);\n"
+        "\t} else {\n\t\tglBufferData(_buffer.type, _bufSize, nullptr, GL_DYNAMIC_DRAW);\n\t}",
+        "\t\t_buffer.data = (GLubyte*)glMapBufferRange(_buffer.type, 0, _bufSize, m_bufMapBits);\n"
+        "\t\tif (_buffer.data != nullptr)\n\t\t\treturn;\n"
+        "\t\t// Immutable storage cannot accept SubData. Recreate before VAO attributes.\n"
+        "\t\tconst GLuint retired = _buffer.handle;\n"
+        "\t\tglDeleteBuffers(1, &_buffer.handle);\n"
+        "\t\tglGenBuffers(1, &_buffer.handle);\n"
+        "\t\t// Deletion unbinds the old object, even when its name is recycled.\n"
+        "\t\tm_bindBuffer->reset();\n"
+        "\t\tm_bindBuffer->bind(Parameter(_buffer.type), ObjectHandle(_buffer.handle));\n"
+        "\t\tglBufferData(_buffer.type, _bufSize, nullptr, GL_DYNAMIC_DRAW);\n"
+        "\t\tLOG(LOG_ERROR, \"buffer_fallback target=0x%x retired=%u replacement=%u bytes=%u "
+        "map=null mutable_request=issued error_observed=unavailable error_origin=unassigned\\n\",\n"
+        "\t\t\t_buffer.type, retired, _buffer.handle, _bufSize);\n"
+        "\t\treturn;\n\t}\n\tglBufferData(_buffer.type, _bufSize, nullptr, GL_DYNAMIC_DRAW);")
+    data = replace_once(data,
+        "\tif (m_glInfo.bufferStorage) {\n\t\tmemcpy(&_buffer.data[_buffer.offset], _data, _dataSize);",
+        "\tif (_buffer.data != nullptr) {\n\t\tmemcpy(&_buffer.data[_buffer.offset], _data, _dataSize);")
+    data = replace_once(data,
+        "\t\tvoid* buffer_pointer = glMapBufferRange(_buffer.type, _buffer.offset, _dataSize, GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);\n"
+        "\t\tmemcpy(buffer_pointer, _data, _dataSize);\n\t\tglUnmapBuffer(_buffer.type);",
+        "\t\t// Mutable upload needs no CPU mapping and cannot memcpy a failed map.\n"
+        "\t\tglBufferSubData(_buffer.type, _buffer.offset, _dataSize, _data);")
+    return replace_once(data,
+        "\tif (m_glInfo.bufferStorage) {\n\t\t_updateBuffer(buffer, _params.verticesCount, dataSize, _params.vertices);",
+        "\tif (buffer.data != nullptr) {\n\t\t_updateBuffer(buffer, _params.verticesCount, dataSize, _params.vertices);")
+
+
 def boundary_overlay(source: Path) -> dict[str, bytes]:
     edited = {}
     api_header = "src/PluginAPI.h"
@@ -184,6 +221,8 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
         observed = original.replace("return (", "return replay_gl::DrawableCommitted(hWnd, (")[:-1] + ");"
         data = replace_once(data, original, GUARD + observed + "\n#else\n" + original + "\n#endif")
     edited[key] = data
+    key = GL + "opengl_BufferedDrawer.cpp"
+    edited[key] = buffered_drawer_overlay((source / key).read_bytes())
     if boundary:
         edited.update(boundary_overlay(source))
     if label:

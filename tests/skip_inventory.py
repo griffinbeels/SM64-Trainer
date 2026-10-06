@@ -24,8 +24,11 @@ ALLOWED = (
     ("separately staged pinned LINK source",
      "The renderer-source witnesses compile against the pinned third-party "
      "tree. Lifts with SM64_LINK_WITNESS_SOURCE pointing at "
-     "tools/stage_link_witness.py's output.",
-     "tests/test_link_source_witness.py, tests/test_renderer_source.py"),
+     "tools/stage_link_witness.py's output. The inert drawer witness instead "
+     "reads pristine bytes from SM64_BUFFER_DRAWER_SOURCE or the verified "
+     "local build-cache archive; it never downloads them.",
+     "tests/test_link_source_witness.py, tests/test_renderer_source.py, "
+     "tests/test_renderer_buffer_fallback.py"),
     ("SM64_TEST_GPU",
      "The real-adapter GPU witnesses. Kept out of the gate on purpose "
      "(.claude/rules/native-plugin.md): they need the NVIDIA adapter and are "
