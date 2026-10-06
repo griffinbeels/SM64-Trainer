@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from sm64_events.memory.addresses import course_name, star_count, star_name
 
@@ -40,9 +41,23 @@ def segment_signature(row, definitions, trail=()) -> str:
             raise ValueError("This segment refers to a missing definition.")
         return segment_signature(found, definitions, trail)
 
+    def parent_identity(parent):
+        # SegmentDef parents are entity keys; star and area keys are global.
+        if not isinstance(parent, str) or not re.fullmatch(r"star:\d+:\d+|segment:\d+|area:\d+(?::\d+)?", parent):
+            raise ValueError("This segment has an invalid parent key.")
+        return signature(int(parent.split(":")[1])) if parent.startswith("segment:") else parent
+
+    parents = row.get("parents")
+    if parents is None:
+        parents = []
+    if not isinstance(parents, list):
+        raise ValueError("This segment has an invalid parent list.")
+    portable_parents = [parent_identity(parent) for parent in parents]
+    if len(set(parents)) != len(parents):
+        raise ValueError("This segment repeats a parent key.")
     values = {key: expand(row.get(key, [] if key not in ("match_mode", "clock_start") else
                                "strict" if key == "match_mode" else "trigger")) for key in MATCH_FIELDS}
-    values["parents"] = sorted(signature(parent) for parent in row.get("parents", []))
+    values["parents"] = sorted(portable_parents)
     return hashlib.sha256(canonical(values)).hexdigest()
 
 

@@ -10,6 +10,7 @@ from sm64_events.ghost.clip import encode_clip, read_clip
 from sm64_events.ghost.portable import make_entry, validate_package, write_package
 from sm64_events.ghost.sharing import AUTHOR_KEY, GhostSharing
 from sm64_events.ghost.sharing_targets import bind, describe
+from sm64_events.tracking.segments import validate_definition
 from tests.ghost_native_fixture import attempt, frame, producer
 
 
@@ -58,8 +59,8 @@ def package(tmp_path, *, rows=None, kind="star"):
 
 
 def segment(number, name="Bowser 2", end_level=8):
-    return dict(id=number, name=name, enabled=True, start_triggers=[{"type": "level_enter", "params": {"level_id": 34}}],
-                end_triggers=[{"type": "warp_entered", "params": {"level_id": end_level}}], guards=[],
+    return dict(id=number, name=name, enabled=True, start_triggers=[{"type": "level_enter", "to": 34}],
+                end_triggers=[{"type": "warp_entered", "level": end_level}], guards=[],
                 waypoints=[], parents=[], match_mode="strict", clock_start="trigger")
 
 
@@ -104,13 +105,54 @@ def test_same_segment_definition_binds_a_different_local_id_and_wrong_definition
     assert bind(target, [changed_clock])[0] is None
 
 
-def test_parent_and_trigger_references_are_portable_not_numeric():
+def test_segment_parent_references_are_portable_not_numeric():
     parent, child = segment(3), segment(4)
-    child.update(parents=[3], start_triggers=[{"type": "segment_completed", "params": {"segment_id": 3}}])
+    child.update(parents=["segment:3"])
     other_parent, other_child = segment(30), segment(40)
-    other_child.update(parents=[30], start_triggers=[{"type": "segment_completed", "params": {"segment_id": 30}}])
+    other_child.update(parents=["segment:30"])
+    for row in (parent, child, other_parent, other_child):
+        validate_definition(row)
     target = describe("segment", "4", None, [parent, child])
     assert bind(target, [other_parent, other_child]) == ("40", None)
+    assert bind(target, [segment(30, end_level=9), other_child])[0] is None
+
+
+@pytest.mark.parametrize("parents", [["star:2:1"], ["area:6:1"], ["area:6"],
+                                     ["star:2:1", "area:6:1"]])
+def test_star_and_area_parents_keep_global_identity_across_segment_numbers(parents):
+    original, local = segment(3), segment(97)
+    original.update(parents=parents)
+    local.update(parents=list(parents))
+    validate_definition(original)
+    target = describe("segment", "3", None, [original])
+    assert bind(target, [local]) == ("97", None)
+    assert bind(target, [{**local, "parents": ["star:2:2"]}])[0] is None
+
+
+@pytest.mark.parametrize("parent", [3, None, "3", "segment:", "segment:missing",
+                                    "star:2", "area:6:1:2", "route:3", "star:2:1\n"])
+def test_malformed_parent_keys_cannot_become_portable_identity(parent):
+    row = {**segment(3), "parents": [parent]}
+    with pytest.raises(ValueError, match="parent"):
+        describe("segment", "3", None, [row])
+
+
+def test_missing_and_circular_segment_parents_remain_unavailable():
+    missing = {**segment(3), "parents": ["segment:99"]}
+    with pytest.raises(ValueError, match="missing"):
+        describe("segment", "3", None, [missing])
+    first, second = segment(3), segment(4)
+    first.update(parents=["segment:4"])
+    second.update(parents=["segment:3"])
+    with pytest.raises(ValueError, match="circular"):
+        describe("segment", "3", None, [first, second])
+
+
+@pytest.mark.parametrize("parents", ["star:2:1", {}, (), ["star:2:1", "star:2:1"]])
+def test_malformed_parent_lists_cannot_become_portable_identity(parents):
+    row = {**segment(3), "parents": parents}
+    with pytest.raises(ValueError, match="parent"):
+        describe("segment", "3", None, [row])
 
 
 def test_whole_collection_is_validated_before_publication(tmp_path):
