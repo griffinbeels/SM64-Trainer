@@ -189,6 +189,16 @@ def test_watch_recovers_after_a_failing_cycle_and_follows_the_target(tmp_path):
 
     async def check():
         failed = asyncio.Event()
+        followed = asyncio.Event()
+        publish = session._broadcaster.publish
+
+        async def note_target(event):
+            result = await publish(event)
+            if (event.payload.get("target") or {}).get("kind") == "segment":
+                followed.set()
+            return result
+
+        session._broadcaster.publish = note_target
 
         class Exploding:
             db = None
@@ -207,11 +217,7 @@ def test_watch_recovers_after_a_failing_cycle_and_follows_the_target(tmp_path):
             tracker.target, tracker.strat_tag = ("segment", 31), None
             session._tracker = tracker
 
-            async def wait_for_target():
-                while session.payload()["target"]["kind"] != "segment":
-                    await asyncio.sleep(0.01)
-
-            await asyncio.wait_for(wait_for_target(), 1)
+            await asyncio.wait_for(followed.wait(), 1)
             assert session.payload()["target"]["entity_key"] == "31"
         finally:
             session._tracker = tracker

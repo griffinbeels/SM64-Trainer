@@ -102,29 +102,23 @@ def test_a_ghost_failure_never_undoes_the_pb_or_its_video(tmp_path):
     assert db.pbs()
 
 
-def test_the_app_wiring_re_points_the_ghost_before_and_after_the_video(tmp_path):
+def test_app_wiring_follows_the_native_pb_before_video_and_on_undo(tmp_path):
     from sm64_events.main import _ghost_follows_pb
     db, tracker, replay, aid = setup(tmp_path)
     calls = []
+    save_video = tracker.on_pb_saved
 
     class Ghost:
-        def video_pending(self, attempt_id, pending):
-            calls.append(("pending", attempt_id, pending, len(replay.extractor.calls)))
-
         async def pb_changed(self, attempt, saved):
-            calls.append(("pb", attempt.id, saved, len(replay.extractor.calls)))
-
-        async def refresh(self, *, resolve):
-            calls.append(("refresh", resolve, len(replay.extractor.calls)))
+            calls.append((attempt.id, saved, len(replay.extractor.calls), bool(db.pbs())))
 
     _ghost_follows_pb(tracker, Ghost())
+    assert tracker.on_pb_saved is save_video
     save_pb(tracker, db, aid, "igt")
-    # The picker may say "still being saved" exactly while the save runs:
-    # pending before the ghost follows the PB, cleared once the video exists.
-    assert calls[0] == ("pending", aid, True, 0)
-    assert calls[1] == ("pb", aid, True, 0)
-    assert calls[-2][:3] == ("pending", aid, False) and calls[-2][3] > 0
-    assert calls[-1][0] == "refresh" and calls[-1][2] > 0
+    assert calls == [(aid, True, 0, True)]  # Native PB follows before video is cut.
+    assert replay.extractor.calls
+    undo_pb(tracker, db, aid, "igt")
+    assert calls[-1] == (aid, False, len(replay.extractor.calls), False)
 
 
 def test_hiding_the_pb_run_tells_the_ghost(tmp_path):
