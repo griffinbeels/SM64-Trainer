@@ -121,8 +121,9 @@ class RingPlayer:
 
     Pure pacing over a ring and a device, so a test drives it with fakes."""
 
-    def __init__(self, ring, device, pid: int, clock=time.monotonic):
+    def __init__(self, ring, device, pid: int, clock=time.monotonic, *, priority=None):
         self._ring, self._device, self._clock = ring, device, clock
+        self._priority, self.last_open_ms = priority, None
         self.sent = ring.written  # attach at the newest frame: nothing stale plays
         self._played = self.sent
         self._idle_since = None
@@ -136,9 +137,22 @@ class RingPlayer:
         if written - self.sent > ring.capacity:  # fell a whole ring behind: skip, never replay stale
             self.sent = written
         while self.sent < written:
-            if not device.is_open and not device.open():
-                self.sent = written  # no device now: drop, the next write retries
-                break
+            if not device.is_open:
+                # Driver/session setup is initialization, including every retry.
+                # Elevate only after it returns and PCM can actually be handed over.
+                if self._priority is not None:
+                    if self._priority(False) is False:
+                        break  # retain pending PCM until NORMAL is actually admitted
+                opened_at = self._clock()
+                try:
+                    opened = device.open()
+                finally:
+                    self.last_open_ms = (self._clock() - opened_at) * 1000
+                if not opened:
+                    self.sent = written  # no device now: drop, the next write retries
+                    break
+                if self._priority is not None:
+                    self._priority(True)
             count = min(written - self.sent, CHUNK_FRAMES, ring.capacity - self.sent % ring.capacity)
             if not device.write(ring.read(self.sent, count)):
                 break  # every buffer busy; the rest goes next step
@@ -317,7 +331,7 @@ def main(argv) -> int:
 
 
 class ServicePriority:
-    """Only active sound gets HIGHEST; imports, endpoint lookup and idle are NORMAL."""
+    """PCM service gets HIGHEST; imports, device setup and idle are NORMAL."""
 
     def __init__(self, kernel, notes):
         self._kernel, self._notes, self._thread = kernel, notes, kernel.GetCurrentThread()
@@ -326,10 +340,12 @@ class ServicePriority:
 
     def set(self, active):
         if self._active == active:
-            return
-        self._active = active
+            return True
         if not self._kernel.SetThreadPriority(self._thread, 2 if active else 0):
             self._notes.report("priority_error", active=active)
+            return False
+        self._active = active
+        return True
 
 
 def _play(argv, notes):
@@ -349,26 +365,30 @@ def _play(argv, notes):
             except FileNotFoundError:
                 notes.report("waiting_ring")
                 time.sleep(0.25)
-        notes.report("ring_attached")
+        notes.report("ring_attached", written=ring.written)
         # Preserve the original lookup timing, once the renderer has sound:
         # earlier startup may precede Project64's routed audio session.
         # Initialization stays NORMAL and imports no capture code or NumPy.
         chosen = device_for(pj64_pid)()
-        notes.report("endpoint_ready", device=chosen)
-        player = RingPlayer(ring, WaveOutDevice(device_id=lambda: chosen), os.getpid())
+        notes.report("endpoint_ready", device=chosen, written=ring.written)
+        player = RingPlayer(ring, WaveOutDevice(device_id=lambda: chosen), os.getpid(),
+                            priority=priority.set)
         first = player.sent
+        device_reported = False
         while _alive(pj64) and _alive(parent):
             # A write wakes it at once; the timeout only paces the played
             # position while sound plays, and keeps the beat well inside
             # SOUND_RING_PLAYER_TIMEOUT_MS while nothing does.
             ring.wait_written(10 if player.busy else 100)
-            priority.set(player.needs_service)
+            priority.set(player._device.is_open and player.needs_service)
             player.step()
-            if player._device.is_open:
-                notes.report("first_device_open")
+            if player._device.is_open and not device_reported:
+                notes.report("first_device_open", open_ms=round(player.last_open_ms, 3),
+                             attach_written=first)
+                device_reported = True
             if player._played > first:
                 notes.report("first_played", frames=player._played - first)
-            priority.set(player.needs_service)
+            priority.set(player._device.is_open and player.needs_service)
     finally:
         priority.set(False)
         try:
