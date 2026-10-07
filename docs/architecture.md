@@ -228,6 +228,11 @@ lockstep.
 
 ## Where the deep facts live (authoritative homes)
 
+- **Ghost Library discovery and sharing**: [native ghost contracts](ghost-native-runtime.md#names-inputs-and-collections)
+  describe the contextual guided flows, historical bests and recording availability;
+  [collection API](api.md#ghosts--native-playback) owns staged import, version
+  comparability, author credit and dynamic saved searches. The library works on
+  explicit user actions, outside the native frame loop.
 - **Addresses, per ROM version**: `memory/layout.py` — one row per RAM
   global, US pinned by `tests/test_layout_us.py`, JP filled through the sync
   loop (this file → "Two ROM versions"). **Meaning, provenance, traps**

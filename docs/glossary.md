@@ -1493,11 +1493,13 @@ contain native poses. With the PB box ticked, no PB saved and nothing else ticke
 ### Ghost collection
 
 One `.sm64ghosts` file containing selected native [[ghost]] recordings, their
-creator credit, time, [[target]] and [[strategy]]. The **[[Ghost]] Library** dialog sorts and
-filters recent/saved local recordings and imports; selection spans pages.
-Export selected writes one collection and Import collection reads all of it.
-The dialog initially hides practice and unfinished [[attempt]]s. Collections can contain many
-more recordings than the [[ghost set]] can race at once.
+creator credit, time, [[game version]], [[target]] and [[strategy]]. The **[[Ghost]]
+Library** dialog opens with the originating [[target]] and currently raced
+recordings. Separate import and export flows preview the chosen recordings before
+confirmation. Export can choose each [[strategy]]'s best independently or use a
+saved search that resolves current results next time. Import selects all new
+recordings by default and supports a smaller selection. Collections can contain
+many more recordings than the [[ghost set]] can race at once.
 
 - **Lives** — `src/sm64_events/ghost/portable.py` and `src/sm64_events/ghost/sharing.py`;
   `src/sm64_events/ui/components/ghostlibrary.js`

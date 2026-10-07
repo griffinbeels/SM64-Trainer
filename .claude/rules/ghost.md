@@ -2,8 +2,11 @@
 paths:
   - "src/sm64_events/ghost/**"
   - "src/sm64_events/server/ghost_api.py"
+  - "src/sm64_events/server/ghost_sharing_api.py"
   - "src/sm64_events/ui/ghostsession.js"
+  - "src/sm64_events/ui/ghostlibrary*.js"
   - "src/sm64_events/ui/components/ghostswitch.js"
+  - "src/sm64_events/ui/components/ghostlibrary*.js"
   - "plugin/gfxwrap/ghost_*"
 ---
 
@@ -17,6 +20,10 @@ Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../d
 | A range or limit the card shows | The row's `limits`. `GET /api/ghost` publishes them and the card reads `session.limits` (`ui/ghostsession.js`). JS never restates a Python number. |
 | The words of an on/off switch | `SWITCH_LABELS` in `ui/ghostsession.js`, keyed by the row name |
 | Which ghosts play | `ghost/selection.py`; the native set is built in `ghost/native_session.py` |
+| Historical bests and surviving recordings in Ghost Library | `ghost/library_bests.py` resolves winners before joining `sharing_catalog.py` availability. It never changes the current saved PB slot or promotes a slower recording when a winner expires. |
+| Reviewing and importing only selected ghosts | `ghost/library_imports.py` owns bounded staging leases; `sharing.py` revalidates selected clips before publishing the collection index; `server/ghost_sharing_api.py` mounts preview/commit/discard jobs. |
+| Remembered export credit and saved searches | `ghost/library_preferences.py` validates and stores the existing author key plus versioned dynamic criteria; `ui/ghostlibraryflow.js` keeps pending choices local. |
+| The contextual library and guided import/export steps | `ui/components/ghostlibrary*.js`, using the shared Modal and entity picker. `ui/ghostlibrary.js` owns pure selection/filter/group derivations. Browsing never writes the practice target. |
 | Inputs an older local clip shows (its playback copy) | `ghost/padfill.py`: the join, its calibration and every refusal. Never write filled pads into the committed clip |
 | What the renderer draws, and how it fades | `plugin/gfxwrap/ghost_*`. The fade rule and its constants are in `ghost_occlusion.h`; see `native-plugin.md` |
 | Where ghost sound plays, and which recording hears it | `ghost/sound_player.py` plays the renderer's shared ring (`ghost_audio.h`) outside Project64; `replay/audio.py` taps it only while Ghosts in recording is on, onto a `GhostTimeline` that only the ghost copy mixes in. The clean recording never hears it |

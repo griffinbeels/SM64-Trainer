@@ -111,14 +111,24 @@ input display only while `0x80417B57` is nonzero (layout rows `usamune_menu`,
 `usamune_input_display`, VERIFY until their live gates). The stream reads both
 from each list's RDRAM, so the rows leave on the same frame his display does.
 
-**Ghost Library** opens beside the native controls. It shows recent buffer-covered
-and saved local runs plus imported recordings, with creator, target, strategy,
-time, fastest/recent ordering and search. Practice and unfinished runs are hidden
-initially. Selection spans pages: **Select filtered** selects the entire filtered
-list. Export produces one `.sm64ghosts` collection; choosing that file imports
-all its ghosts. The collection bound is 4096 entries per file, independent of
-the renderer's 16-ghost race limit. **Race selected here** preserves selected
-local recordings before applying the target's race choice.
+**Ghost Library** opens beside the native controls with the originating star or
+segment and currently raced recordings first. Separate Import and Export actions
+lead through one task at a time. Browsing personal bests or picking a course and
+target changes only the library filter. Export offers the current target's
+overall best and each strategy's best independently, all personal bests, a custom
+selection, or a saved dynamic search. The player name is remembered and can be
+changed. Historical best results remain visible when their recordings expire;
+recording availability never promotes a slower run to best.
+
+Import validates a collection into private staging, then previews its entries.
+All new entries start selected; a player can choose only comparable faster ghosts
+or any custom subset. Back retains the pending selection; Cancel discards staging
+without publishing imports. Explicit confirmation revalidates and commits only
+the chosen entries. See [collection API contracts](api.md#ghosts--native-playback) for
+metadata, comparison and publication boundaries. The collection bound is 4096
+entries per file, independent of the renderer's 16-ghost race limit. Racing
+preserves selected local recordings and checks the live target before applying
+the choice.
 
 `ghost/portable.py` validates every entry and clip before publication: bounded
 ZIP/manifest/record sizes, exact file hashes, supported native format, recorded

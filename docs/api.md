@@ -1056,9 +1056,15 @@ Collections never create local PBs, golds or input templates.
 
 | Collection route | Contract |
 |---|---|
-| `GET /api/ghost/library` | `{ghosts, author, max_export, max_race}`. Local recent/saved and imported rows include source, distinct attempt/import IDs, creator, target/name, strategy, frames/clock, recorded UTC, practice/outcome, availability and reason. Read on modal open, independently of frame playback. |
+| `GET /api/ghost/library` | `{ghosts, bests, shortcuts, author, max_export, max_race}`. Recent/saved local and imported rows include source, distinct attempt/import IDs, creator, target/name, strategy, frames/clock, game version (or null), recorded UTC, practice/outcome, availability and reason. `bests` resolves historical local winners per target, strategy, clock and game version, including winners whose recordings are unavailable. Read on modal open, independently of frame playback. |
 | `POST /api/ghost/library/export` | JSON `{selected: {attempts: [id, ...], imports: [identity, ...]}, author}`; returns `{job_id}`. Preserves selected local poses, retains foreign credit and produces one `.sm64ghosts` file. Up to 4096 selected entries per collection. Unavailable selected runs are reported as `skipped`, not silently relabeled. Successful export remembers the author's credit. |
 | `POST /api/ghost/library/import` | Raw `.sm64ghosts` file body, `application/octet-stream`; returns `{job_id}`. Validates the whole bounded package before publishing. Result `{imported, duplicates, unmatched, import_ids, recorded_utc}`. Repeated imports are idempotent. Unmatched segments remain stored but unavailable. |
+| `POST /api/ghost/library/import/preview` | Raw collection body; returns `{job_id}`. The completed job supplies `{preview_id, ghosts, expires_utc}` after validation in private staging. Each row adds `duplicate`, `importable`, `comparison` (`faster`, `not_faster`, `no_best`, `unknown`) and `your_best_frames`. Preview does not publish imports or award PBs. |
+| `POST /api/ghost/library/import/commit` | `{preview_id, selected: [portable_identity, ...]}`; returns `{job_id}`. Revalidates the selected staged recordings, current bindings, duplicates and capacity before publishing only that selection. Result has the direct import route's shape. Invalid, empty or expired choices fail without publication. |
+| `DELETE /api/ghost/library/import/preview/{preview_id}` | Discards owned preview staging and returns `{discarded: true}`. Preview count and lifetime are bounded; cancelled selections leave the library unchanged. |
+| `PUT /api/ghost/library/author` | `{author}` validates and remembers the exporter credit independently of exporting. Returns `{author}`. Uses the existing `ghost_share_author` setting and 128 UTF-8 byte limit. |
+| `POST /api/ghost/library/shortcuts` | `{name, criteria}` saves a versioned dynamic search; returns `{shortcuts}`. Criteria contain `query`, `source` (`local`, `import`, `all`), `target` (null or fixed `{kind, entity_key}`), `practice`, `sort` (`fastest`, `recent`) and `bests`. Each saved shortcut has `{id, name, version: 1, criteria}`; reopening resolves current matching rows rather than retaining old attempt IDs. |
+| `DELETE /api/ghost/library/shortcuts/{id}` | Removes the named shortcut and returns `{shortcuts}`. |
 | `GET /api/ghost/library/jobs/{id}` | `{state, progress, message, result}`. Export result supplies `{exported, skipped, download_url}` without internal filesystem paths. Failed jobs have a readable message. |
 | `GET /api/ghost/library/download/{id}` | Completed collection download with attachment filename `sm64-ghost-collection.sm64ghosts`; expired or unknown exports return 404. |
 | `POST /api/ghost/library/prepare-race` | `{ghosts, target}` validates the current target, qualifies imports and preserves all chosen local runs before registering them as saved ghosts. Returns the checked choice/target; the modal then applies it with `PUT /api/ghost` and closes after success. A changed target or unusable recording returns 422. |
@@ -1069,6 +1075,24 @@ Segment identity compares the matcher, expanded references, parents and clock
 definition, independent of foreign numeric IDs. The original exporting name is
 credit supplied by the file, not an authenticated account identity. See
 [native ghost contracts](ghost-native-runtime.md#names-inputs-and-collections).
+
+The library's historical best result is separate from the current saved PB slot
+used in practice. Clearing a run, proven save-state use, an explicitly invalid
+result or an unfinished outcome excludes it from library bests. Legacy successful
+results whose validity was never judged remain eligible unless their provenance
+proves otherwise. Recording availability does not choose the winner: an expired
+winner remains visible with its reason, and a slower surviving recording never
+replaces it. The current-target export step compares strategies only within the
+same clock and game version; each strategy's best remains separately selectable.
+
+New collection metadata carries the recording's game version. Older version-1
+collections remain readable and retain their identities and creator credit on
+re-export; their absent game version remains unknown. "Faster than my best"
+requires a matching target, strategy, clock and explicitly known game version,
+plus a successful non-practice result. Unknown comparability is displayed
+separately, and including entries without a comparable local best is an explicit
+choice. Library browsing uses local picker state; it does not move the practice
+target. Racing continues to check the live target at preservation and application.
 
 Native capture uses the existing recorder ownership lock. Marking a local
 attempt as a template preserves its available native poses independently of

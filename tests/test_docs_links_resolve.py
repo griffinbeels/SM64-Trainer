@@ -63,6 +63,9 @@ BARE_TASK_ARTIFACT = re.compile(
 # Files allowed to name a private directory, because naming it IS their job.
 # (path, why) — add a row consciously; do not widen this into a glob.
 EXEMPT = {
+    "tests/test_ui_practice_log_settings.py":
+        "creates its screenshot output directory at runtime; the path is an "
+        "output destination, not a citation to private source evidence",
     ".gitignore": "declares the rule",
     "docs/architecture.md": "its header explains why specs are absent, and "
                             "names the directory once to do so",
