@@ -21,6 +21,7 @@ def _local_row(attempt, definitions):
             "strat": attempt.strat_tag, "target": target, "target_name": target["name"],
             "frames": frames, "clock": clock, "recorded_utc": attempt.started_utc,
             "practice": save_state_run(attempt) or getattr(attempt, "valid", None) is False,
+            "game_version": getattr(attempt, "game_version", None),
             "outcome": attempt.outcome, "available": True, "reason": None}
 
 
@@ -99,7 +100,8 @@ def export_rows(sharing, selected, author, step):
                 path, _manifest = sharing.replay.native_with_inputs(number, asset)
                 entry = make_entry(path, author=author, target=row["target"], frames=row["frames"],
                                    clock=row["clock"], recorded_utc=row["recorded_utc"],
-                                   practice=row["practice"], outcome=row["outcome"])
+                                   practice=row["practice"], outcome=row["outcome"],
+                                   game_version=row["game_version"])
             else:
                 path, _manifest = sharing.export_asset(number)
                 entry = sharing.portable_entry(number)  # preserve original credit and portable target

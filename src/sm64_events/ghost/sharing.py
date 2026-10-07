@@ -10,17 +10,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import threading
 from uuid import uuid4
 
 from sm64_events.ghost.clip import blink_frames, read_clip
 from sm64_events.ghost.portable import (MAX_ENTRIES, checked_author, checked_entry, checked_hash,
-                                       validate_package, write_package)
+                                       _checked_recording_target, validate_package, write_package)
+from sm64_events.ghost.library_preferences import AUTHOR_KEY, shortcuts, save_author, save_shortcut, remove_shortcut
 from sm64_events.ghost.sharing_targets import bind, binding_index
 from sm64_events.replay.publication import atomic_json
 
-AUTHOR_KEY = "ghost_share_author"
 MAX_IMPORTED = 16384
 
 
@@ -72,6 +73,8 @@ class GhostSharing:
         self._stamp = None
         self._lock = threading.RLock()
         self._verified = {}
+        from sm64_events.ghost.library_imports import ImportPreviews
+        self.previews = ImportPreviews(self)
 
     def _load(self):
         try:
@@ -176,23 +179,49 @@ class GhostSharing:
             result = []
             bindings = self._bindings(self._rows.values())
             for row in self._rows.values():
-                key, reason = bind(row["target"], index=bindings)
-                path = self.root / f"{row['sha256']}.ghost"
-                if not reason and not path.is_file():
-                    reason = "This imported recording was removed from disk."
-                result.append({**row, "source": "import", "import_id": row["id"], "attempt_id": None,
-                               "entity_key": key, "kind": row["target"]["kind"],
-                               "strat": row["target"].get("strat"), "target_name": row["target"].get("name"),
-                               "available": reason is None, "reason": reason})
+                result.append(self._import_row(row, bindings, self.root))
             return result
+
+    def _import_row(self, row, bindings, folder):
+        key, reason = bind(row["target"], index=bindings)
+        if not reason and not (folder / f"{row['sha256']}.ghost").is_file():
+            reason = "This imported recording was removed from disk."
+        return {**row, "source": "import", "import_id": row["id"], "attempt_id": None,
+                "entity_key": key, "kind": row["target"]["kind"], "strat": row["target"].get("strat"),
+                "target_name": row["target"].get("name"), "game_version": row.get("game_version"),
+                "available": reason is None, "reason": reason}
 
     def catalog(self):
         """Recent local pose candidates plus durable imports, asked on open."""
         from sm64_events.ghost.sharing_catalog import local_rows
+        from sm64_events.ghost.library_bests import historical_bests
         from sm64_events.ghost.native_layout import GHOSTS
-        return {"ghosts": [*local_rows(self.replay, self.database), *self.imported_rows()],
+        local = local_rows(self.replay, self.database)
+        return {"ghosts": [*local, *self.imported_rows()], "bests": historical_bests(self.database, local),
+                "shortcuts": shortcuts(self.database),
                 "author": self.database.get_state(AUTHOR_KEY, ""), "max_export": MAX_ENTRIES,
                 "max_race": GHOSTS}
+
+    def save_author(self, author):
+        with self._lock:
+            return {"author": save_author(self.database, author)}
+
+    def save_shortcut(self, name, criteria):
+        with self._lock:
+            return {"shortcuts": save_shortcut(self.database, name, criteria)}
+
+    def remove_shortcut(self, number):
+        with self._lock:
+            return {"shortcuts": remove_shortcut(self.database, number)}
+
+    def preview_import(self, source, step=lambda *_: None):
+        return self.previews.preview(source, step)
+
+    def commit_import(self, number, selected, step=lambda *_: None):
+        return self.previews.commit(number, selected, step)
+
+    def discard_preview(self, number):
+        return self.previews.discard(number)
 
     def prepare_race(self, choice, target):
         """Preserve explicitly chosen recent runs before the session selects them."""
@@ -243,21 +272,44 @@ class GhostSharing:
         self.root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="import-", dir=self.root) as staging:
             rows, _verified = validate_package(source, staging, lambda progress, text: step(.9 * progress, text))
+            return self._publish(rows, Path(staging), lambda progress, text: step(.9 + .1 * progress, text))
+
+    def _publish(self, rows, staging, step):
+        rows = [checked_entry(row) for row in rows]
+        # Decode and copy off the provider lock: the native session can read
+        # generation/selection while a large explicit import is being checked.
+        checked = {}
+        for index, row in enumerate(rows):
+            recording_target = checked.get(row["sha256"])
+            if recording_target is None:
+                clip = read_clip(staging / f"{row['sha256']}.ghost", row["sha256"])
+                recording_target = clip.clock_kind, clip.level
+                checked[row["sha256"]] = recording_target
+                del clip
+            _checked_recording_target(row["target"], *recording_target)
+            step(.7 * (index + 1) / len(rows), f"Checked {index + 1} of {len(rows)} selected ghosts.")
+        temporary_assets = {}
+        try:
+            for digest in checked:
+                temporary = self.root / f"{uuid4().hex}.pending"
+                temporary_assets[digest] = temporary
+                shutil.copyfile(staging / f"{digest}.ghost", temporary)
             with self._lock:
+                bindings = self._bindings(rows)
+                unmatched = [row["id"] for row in rows if bind(row["target"], index=bindings)[1]]
                 self._load()
                 new = {row["id"]: row for row in rows if row["id"] not in self._rows}
                 if len(self._rows) + len(new) > MAX_IMPORTED:
                     raise ValueError("The ghost library is full; remove old imports before adding this collection.")
-                # Files are immutable. The index is the publication boundary; no
-                # partially validated collection is offered to the renderer.
-                for row in {item['sha256']: item for item in rows}.values():
-                    destination = self.root / f"{row['sha256']}.ghost"
-                    (Path(staging) / destination.name).replace(destination)
-                merged = {**self._rows, **new}
-                atomic_json(self._index, {"version": 1, "ghosts": list(merged.values())})
-                self._stamp = None
-                self._load()
-        bindings = self._bindings(rows)
-        unmatched = [row["id"] for row in rows if bind(row["target"], index=bindings)[1]]
-        return {"imported": len(new), "duplicates": len(rows) - len(new), "unmatched": len(unmatched),
-                "import_ids": [row["id"] for row in rows], "recorded_utc": datetime.now(timezone.utc).isoformat()}
+                for digest in {row["sha256"] for row in new.values()}:
+                    temporary_assets[digest].replace(self.root / f"{digest}.ghost")
+                if new:
+                    atomic_json(self._index, {"version": 1, "ghosts": list({**self._rows, **new}.values())})
+                    self._stamp = None
+                    self._load()
+                step(1, f"Imported {len(new)} selected ghosts.")
+                return {"imported": len(new), "duplicates": len(rows) - len(new), "unmatched": len(unmatched),
+                        "import_ids": [row["id"] for row in rows], "recorded_utc": datetime.now(timezone.utc).isoformat()}
+        finally:
+            for temporary in temporary_assets.values():
+                temporary.unlink(missing_ok=True)

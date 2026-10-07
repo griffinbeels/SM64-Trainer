@@ -22,8 +22,7 @@ def _provider(session_of):
 
 
 def _mount_import(router, sharing, jobs):
-    @router.post("/ghost/library/import")
-    async def import_collection(request: Request):
+    async def upload(request: Request, preview=False):
         provider = sharing()
         folder = provider.root / "uploads"
         await run_in_threadpool(folder.mkdir, parents=True, exist_ok=True)
@@ -44,12 +43,70 @@ def _mount_import(router, sharing, jobs):
 
         def work(step):
             try:
+                if preview:
+                    result = provider.preview_import(source, step)
+                    return result, f"Review {len(result['ghosts'])} ghosts before importing."
                 result = provider.import_file(source, step)
                 return result, f"Imported {result['imported']} ghosts; {result['duplicates']} were already in your library."
             finally:
                 source.unlink(missing_ok=True)
 
+        return {"job_id": jobs.start("ghost-import-preview" if preview else "ghost-import", work)}
+
+    @router.post("/ghost/library/import")
+    async def import_collection(request: Request):
+        return await upload(request)
+
+    @router.post("/ghost/library/import/preview")
+    async def preview_collection(request: Request):
+        return await upload(request, preview=True)
+
+    @router.post("/ghost/library/import/commit")
+    def commit_collection(body: dict):
+        provider = sharing()
+        try:
+            if set(body) != {"preview_id", "selected"}:
+                raise ValueError("Choose the preview and ghosts to import.")
+            provider.previews.checked_selection(body["preview_id"], body["selected"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+        def work(step):
+            result = provider.commit_import(body["preview_id"], body["selected"], step)
+            return result, f"Imported {result['imported']} ghosts; {result['duplicates']} were already in your library."
+
         return {"job_id": jobs.start("ghost-import", work)}
+
+    @router.delete("/ghost/library/import/preview/{number}")
+    def discard_preview(number: str):
+        return sharing().discard_preview(number)
+
+
+def _mount_preferences(router, sharing):
+    @router.put("/ghost/library/author")
+    def author(body: dict):
+        try:
+            if set(body) != {"author"}:
+                raise ValueError("Enter the name to credit on your exported ghosts.")
+            return sharing().save_author(body["author"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @router.post("/ghost/library/shortcuts")
+    def shortcut(body: dict):
+        try:
+            if set(body) != {"name", "criteria"}:
+                raise ValueError("Name this shortcut and choose its search options.")
+            return sharing().save_shortcut(body["name"], body["criteria"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @router.delete("/ghost/library/shortcuts/{number}")
+    def remove_shortcut(number: str):
+        try:
+            return sharing().remove_shortcut(number)
+        except LookupError as error:
+            raise HTTPException(404, str(error)) from error
 
 
 def _mount_race(router, session_of, sharing):
@@ -94,6 +151,7 @@ def mount_collection_routes(router, session_of):
         return {"job_id": jobs.start("ghost-export", work)}
 
     _mount_import(router, sharing, jobs)
+    _mount_preferences(router, sharing)
     _mount_race(router, session_of, sharing)
 
     def job_of(number):

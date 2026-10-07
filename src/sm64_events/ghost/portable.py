@@ -17,7 +17,7 @@ from sm64_events.ghost.native_layout import SEGMENT_CLOCK, STAR_CLOCK
 from sm64_events.ghost.sharing_targets import canonical, checked_target
 from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 
-FORMAT, VERSION = "sm64-ghost-collection", 1
+FORMAT, VERSION = "sm64-ghost-collection", 2
 MAX_ENTRIES = 4096
 MAX_PACKAGE_BYTES = 2 << 30
 MAX_UNPACKED_BYTES = 4 << 30
@@ -39,12 +39,21 @@ def checked_author(value):
 
 
 def identity(row):
-    return hashlib.sha256(canonical({key: row[key] for key in IDENTITY_FIELDS})).hexdigest()
+    fields = (*IDENTITY_FIELDS, "game_version") if "game_version" in row else IDENTITY_FIELDS
+    return hashlib.sha256(canonical({key: row[key] for key in fields})).hexdigest()
+
+
+def checked_version(value):
+    if value is not None and (not isinstance(value, str) or value not in ("us", "jp")):
+        raise ValueError("This collection has an unknown game version.")
+    return value
 
 
 def checked_entry(row):
-    if not isinstance(row, dict) or set(row) != {*IDENTITY_FIELDS, "id", "file"}:
+    if not isinstance(row, dict) or set(row) not in (
+            {*IDENTITY_FIELDS, "id", "file"}, {*IDENTITY_FIELDS, "id", "file", "game_version"}):
         raise ValueError("This collection has invalid ghost metadata.")
+    checked_version(row.get("game_version"))
     checked_hash(row["id"]); checked_hash(row["sha256"])
     if checked_author(row["author"]) != row["author"]:
         raise ValueError("This collection has an invalid creator name.")
@@ -65,11 +74,12 @@ def checked_entry(row):
     return dict(row)
 
 
-def make_entry(path, *, author, target, frames, clock, recorded_utc, practice, outcome):
+def make_entry(path, *, author, target, frames, clock, recorded_utc, practice, outcome, game_version=None):
     with Path(path).open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     row = dict(sha256=digest, author=checked_author(author), target=checked_target(target), frames=frames,
-               clock=clock, recorded_utc=recorded_utc, practice=practice, outcome=outcome)
+               clock=clock, recorded_utc=recorded_utc, practice=practice, outcome=outcome,
+               game_version=checked_version(game_version))
     return checked_entry({**row, "id": identity(row), "file": f"clips/{digest}.ghost"})
 
 
@@ -116,7 +126,7 @@ def _checked_recording_target(target, clock_kind, level):
             raise ValueError("This ghost's recorded course belongs to a different star target.")
 
 
-def validate_package(path, staging, step=lambda *_: None):
+def validate_package(path, staging, step=lambda *_: None, *, unpacked_limit=None):
     if Path(path).stat().st_size > MAX_PACKAGE_BYTES:
         raise ValueError("This ghost collection exceeds the file size limit.")
     try:
@@ -126,14 +136,18 @@ def validate_package(path, staging, step=lambda *_: None):
             if len(names) != len(set(names)) or len(files) > MAX_ENTRIES + 1:
                 raise ValueError("This collection has duplicate files or too many ghosts.")
             meta = bundle.getinfo("collection.json")
-            if meta.file_size > MAX_MANIFEST_BYTES or sum(item.file_size for item in files) > MAX_UNPACKED_BYTES:
+            limit = MAX_UNPACKED_BYTES if unpacked_limit is None else min(MAX_UNPACKED_BYTES, unpacked_limit)
+            if meta.file_size > MAX_MANIFEST_BYTES or sum(item.file_size for item in files) > limit:
                 raise ValueError("This ghost collection expands beyond the size limit.")
             document = json.loads(bundle.read(meta))
             if (not isinstance(document, dict) or set(document) != {"format", "version", "ghosts"}
-                    or document["format"] != FORMAT or document["version"] != VERSION
+                    or document["format"] != FORMAT or type(document["version"]) is not int
+                    or document["version"] not in (1, VERSION)
                     or not isinstance(document["ghosts"], list) or not 1 <= len(document["ghosts"]) <= MAX_ENTRIES):
                 raise ValueError("Choose an SM64 ghost collection (.sm64ghosts).")
             rows = [checked_entry(row) for row in document["ghosts"]]
+            if document["version"] == 1 and any("game_version" in row for row in rows):
+                raise ValueError("Version 1 collections cannot declare a game version.")
             if len({row["id"] for row in rows}) != len(rows):
                 raise ValueError("This collection repeats a ghost.")
             if set(names) != {"collection.json", *(row["file"] for row in rows)}:
