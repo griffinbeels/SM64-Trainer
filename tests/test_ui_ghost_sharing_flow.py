@@ -47,7 +47,7 @@ def action(page, caption):
                + json.dumps(caption) + "||b.textContent.trim()===" + json.dumps(caption) + ")")
     # The shell mounts while the catalog is loading. Its step attribute does
     # not prove that the action exists or has finished its preceding write.
-    until(page, f"Boolean({control} && !({control}).disabled)", True)
+    until(page, f"Boolean({control} && !({control}).matches(':disabled'))", True)
     page.evaluate(f"({control}).click()")
 
 
