@@ -24,6 +24,10 @@ def until(page, expression, expected, timeout=15):
 
 
 def choose(page, label, value):
+    if label == "Ghost targets":
+        caption = "Opened target" if value == "current" else "All targets"
+        page.evaluate("Array.from(document.querySelectorAll('.ghost-library button')).find(b=>b.textContent.trim()===" + json.dumps(caption) + ")?.click()")
+        return
     selector = json.dumps(f'.ghost-library select[aria-label="{label}"]')
     page.evaluate(f"""(() => {{ const field=document.querySelector({selector});
       field.value={json.dumps(value)};field.dispatchEvent(new Event('change',{{bubbles:true}})); }})()""")
@@ -35,7 +39,17 @@ def search(page, query):
 
 
 def click_race(page):
-    page.evaluate("Array.from(document.querySelectorAll('.modal-actions button')).find(b=>b.textContent.startsWith('Race ')).click()")
+    page.evaluate("Array.from(document.querySelectorAll('.modal-actions button')).find(b=>b.textContent==='Use selected ghosts').click()")
+
+
+def action(page, caption):
+    page.evaluate("Array.from(document.querySelectorAll('.modal button')).find(b=>b.getAttribute('aria-label')===" + json.dumps(caption) + "||b.textContent.trim()===" + json.dumps(caption) + ").click()")
+
+
+def browse(page):
+    action(page, "Done")
+    action(page, "Browse all ghosts")
+    choose(page, "Ghost ownership", "import")
 
 
 def rows(page):
@@ -61,8 +75,10 @@ def assert_fits_and_shoot(page, width, name):
 
 def exported_collection(page, base, folder):
     page.click(".modal-actions button.primary")
-    page.wait_for(".modal-actions a[download]")
-    href = page.evaluate("document.querySelector('.modal-actions a[download]').getAttribute('href')")
+    page.wait_for('.ghost-library[data-step="review"]')
+    page.click(".modal-actions button.primary")
+    page.wait_for(".ghost-library a[download]")
+    href = page.evaluate("document.querySelector('.ghost-library a[download]').getAttribute('href')")
     with urlopen(base + href, timeout=10) as response:
         assert response.status == 200 and ".sm64ghosts" in response.headers["Content-Disposition"]
         raw = response.read()
@@ -75,9 +91,16 @@ def exported_collection(page, base, folder):
 
 def import_collection(page, path, text):
     page.set_input_files(".ghost-library input[type=file]", str(path))
-    # The job progress is also a live region. Wait for the final result, which
-    # is published after refreshing the catalog, rather than that earlier line.
-    until(page, "Boolean(document.querySelector('.ghost-library [role=status]:not(.job-status)')?.textContent.includes(" + json.dumps(text) + "))", True)
+    page.wait_for('.ghost-library[data-step="import-review"]')
+    can_import = page.evaluate("!document.querySelector('.modal-actions button.primary').disabled")
+    if can_import:
+        page.click('.modal-actions button.primary')
+        page.wait_for('.ghost-library[data-step="receipt"]')
+        browse(page)
+    else:
+        action(page, "Cancel import")
+        action(page, "Browse all ghosts")
+        choose(page, "Ghost ownership", "import")
 
 
 def check_problems(page, download):
@@ -92,23 +115,29 @@ def check_problems(page, download):
 
 
 def local_export_and_race(page, base, state, folder, width):
+    page.wait_for('.ghost-library[data-step="home"]')
+    action(page, "Export")
+    page.wait_for('.ghost-library-name input')
+    page.evaluate("""(() => {const field=document.querySelector('.ghost-library-name input');
+      field.value='Local Runner';field.dispatchEvent(new Event('input',{bubbles:true}));})()""")
+    action(page, "Continue")
+    page.wait_for('.ghost-library[data-step="export"]')
+    action(page, "Choose a custom set")
+    choose(page, "Ghost targets", "all")
     page.wait_for(".ghost-library-row")
     assert len(rows(page)) == 23  # the save-stated attempt is hidden by default
     choose(page, "Sort ghosts", "recent")  # positive control before the sharing gestures
     until(page, "document.querySelector('.ghost-library-time').firstChild.textContent.trim()", format_igt_short(143))
     choose(page, "Sort ghosts", "fastest")
     until(page, "document.querySelector('.ghost-library-time').firstChild.textContent.trim()", format_igt_short(121))
-    page.evaluate("""(() => {const field=document.querySelector('.ghost-library-author input');
-      field.value='Local Runner';field.dispatchEvent(new Event('input',{bubbles:true}));})()""")
     page.click(".ghost-library-selection button:first-child")
     until(page, "document.querySelector('.ghost-library-count').textContent.trim()", "23 selected")
-    assert page.evaluate("Array.from(document.querySelectorAll('.modal-actions button')).find(b=>b.textContent.startsWith('Race ')).disabled")
     assert_fits_and_shoot(page, width, "bulk-export")
     exported, manifest, download = exported_collection(page, base, folder)
     assert len(manifest) == 23 and {row["author"] for row in manifest} == {"Local Runner"}
     assert state["store"].get_state("ghost_saved", []) == []
-    page.click(".ghost-library-selection button:nth-child(2)")
-    choose(page, "Ghost targets", "current")
+    action(page, "Done")
+    action(page, "Choose ghosts to race")
     search(page, "Sideflip")
     until(page, "document.querySelectorAll('.ghost-library-row').length", 11)
     page.click(".ghost-library-selection button:first-child")
@@ -123,12 +152,16 @@ def local_export_and_race(page, base, state, folder, width):
 
 
 def imported_race(page, state, width):
+    action(page, "Back")
+    action(page, "Choose ghosts to race")
     page.click(".ghost-library-selection button:nth-child(2)")
-    choose(page, "Ghost targets", "current")
+    choose(page, "Ghost ownership", "import")
     # Imported practice rows stay available through an explicit filter, and
     # disappear when that filter is turned off.
-    page.evaluate("document.querySelector('.ghost-library-filters input[type=checkbox]').click()")
     search(page, "René")
+    page.evaluate("Array.from(document.querySelectorAll('.ghost-library-filters label')).find(el=>el.textContent.includes('Show practice')).querySelector('input').click()")
+    until(page, "document.querySelectorAll('.ghost-library-row').length", 8)
+    page.evaluate("Array.from(document.querySelectorAll('.ghost-library-filters label')).find(el=>el.textContent.includes('Show practice')).querySelector('input').click()")
     until(page, "document.querySelectorAll('.ghost-library-row').length", 7)
     shown = rows(page)
     assert {row["creator"] for row in shown} == {"René the Very Patient Speedrunner"}
@@ -156,7 +189,8 @@ def test_real_bulk_collection_flow_at_supported_widths(tmp_path):
                 page.click(".ghost-library-button")
                 exported, download = local_export_and_race(page, base, state, folder, width)
                 page.click(".ghost-library-button")
-                page.wait_for(".ghost-library-row")
+                page.wait_for('.ghost-library[data-step="home"]')
+                action(page, "Import")
                 import_collection(page, exported, "Imported 23 ghosts")
                 assert len(state["sharing"].imported_rows()) == 23
                 assert {row["creator"] for row in rows(page)} == {"Local Runner"}
@@ -181,6 +215,8 @@ def test_race_keeps_library_open_when_target_changes_during_preservation(tmp_pat
             page.goto(base)
             page.wait_for(".ghost-library-button")
             page.click(".ghost-library-button")
+            page.wait_for('.ghost-library[data-step="home"]')
+            action(page, "Choose ghosts to race")
             page.wait_for(".ghost-library-row")
             selection = state["session"].payload()["selection"]["ghosts"]
             assert page.problems() == []

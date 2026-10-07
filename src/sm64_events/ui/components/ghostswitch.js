@@ -522,7 +522,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         labelId=${labelId} reasonId=${reasonId}
         onToggle=${() => write({ enabled: !on })} />
       <span class="ghost-label" id=${labelId}>Ghost Overlay</span>
-      <${GhostLibraryButton} t=${t} session=${session} write=${write} />
+      <${GhostLibraryButton} t=${t} entityKey=${entityKey} session=${session} write=${write} />
       ${controls.reasonText && html`<span class="ghost-why" id=${reasonId}>
         ${controls.reasonText}
       </span>`}
