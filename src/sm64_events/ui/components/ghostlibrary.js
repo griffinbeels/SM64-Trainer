@@ -19,20 +19,20 @@ function FooterAction({ctx}) {
   const readyToExport = ctx.exportFits && ctx.author.trim();
   if (ctx.page === "name") return html`<${NameFooter} ctx=${ctx} />`;
   if (ctx.page === "browser" && ctx.view === "race")
-    return html`<button class="primary" disabled=${ctx.busy || !ctx.raceFits} onclick=${ctx.race}>Use selected ghosts</button>`;
+    return html`<button class="primary primary-button" disabled=${ctx.busy || !ctx.raceFits} onclick=${ctx.race}>Use selected ghosts</button>`;
   if (ctx.page === "browser" || ctx.page === "target-bests")
-    return html`<button class="primary" disabled=${ctx.busy || !ctx.exportFits} onclick=${ctx.review}>Review ${plural}</button>`;
+    return html`<button class="primary primary-button" disabled=${ctx.busy || !ctx.exportFits} onclick=${ctx.review}>Review ${plural}</button>`;
   if (ctx.page === "review")
-    return html`<button class="primary" disabled=${ctx.busy || !readyToExport} onclick=${ctx.exportSelected}>Export collection</button>`;
+    return html`<button class="primary primary-button" disabled=${ctx.busy || !readyToExport} onclick=${ctx.exportSelected}>Export collection</button>`;
   if (ctx.page === "import-review")
-    return html`<button class="primary" disabled=${ctx.busy || !ctx.importChosen.length} onclick=${ctx.commitImport}>Import ${ctx.importChosen.length} ghosts</button>`;
-  if (ctx.page === "receipt") return html`<button class="primary" disabled=${ctx.busy} onclick=${() => ctx.go("home")}>Done</button>`;
+    return html`<button class="primary primary-button" disabled=${ctx.busy || !ctx.importChosen.length} onclick=${ctx.commitImport}>Import ${ctx.importChosen.length} ghosts</button>`;
+  if (ctx.page === "receipt") return html`<button class="primary primary-button" disabled=${ctx.busy} onclick=${() => ctx.go("home")}>Done</button>`;
   return null;
 }
 
 function NameFooter({ctx}) {
   const bytes = new TextEncoder().encode(ctx.author.trim()).length;
-  return html`<button class="primary" disabled=${ctx.busy || !bytes || bytes > 128} onclick=${ctx.saveName}>Continue</button>`;
+  return html`<button class="primary primary-button" disabled=${ctx.busy || !bytes || bytes > 128} onclick=${ctx.saveName}>Continue</button>`;
 }
 
 function LibraryFooter({ctx}) {

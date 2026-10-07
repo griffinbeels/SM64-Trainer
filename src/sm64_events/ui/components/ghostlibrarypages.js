@@ -81,7 +81,7 @@ export function LibraryReview({ctx}) {
 export function LibraryImport({ctx}) {
   return html`${heading("Choose a ghost collection", "Preview its ghosts before anything is added to your library.")}
     <div class="ghost-library-file"><strong>One file, many ghosts</strong><p class="meta">Choose a .sm64ghosts collection another player shared with you.</p>
-      <button class="primary" onclick=${() => ctx.upload.current.click()}>Choose collection file</button></div>
+      <button class="primary primary-button" onclick=${() => ctx.upload.current.click()}>Choose collection file</button></div>
     ${ctx.preview ? html`<div class="ghost-library-resume"><strong>${ctx.fileName}</strong><button onclick=${() => ctx.go("import-review")}>Continue review</button></div>` : null}`;
 }
 
