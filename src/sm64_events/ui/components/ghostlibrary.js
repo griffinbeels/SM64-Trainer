@@ -14,6 +14,8 @@ const PAGES = {home: LibraryHome, name: LibraryName, export: LibraryExport,
   "target-bests": LibraryTargetBests, browser: LibraryBrowser, review: LibraryReview,
   import: LibraryImport, "import-review": LibraryImportReview, receipt: LibraryReceipt};
 
+const countNoun = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
 function FooterAction({ctx}) {
   const n = ctx.chosen.length, plural = `${n} ${n === 1 ? "ghost" : "ghosts"}`;
   const readyToExport = ctx.exportFits && ctx.author.trim();
@@ -25,7 +27,7 @@ function FooterAction({ctx}) {
   if (ctx.page === "review")
     return html`<button class="primary primary-button" disabled=${ctx.busy || !readyToExport} onclick=${ctx.exportSelected}>Export collection</button>`;
   if (ctx.page === "import-review")
-    return html`<button class="primary primary-button" disabled=${ctx.busy || !ctx.importChosen.length} onclick=${ctx.commitImport}>Import ${ctx.importChosen.length} ghosts</button>`;
+    return html`<button class="primary primary-button" disabled=${ctx.busy || !ctx.importChosen.length} onclick=${ctx.commitImport}>Import ${countNoun(ctx.importChosen.length, "ghost")}</button>`;
   if (ctx.page === "receipt") return html`<button class="primary primary-button" disabled=${ctx.busy} onclick=${() => ctx.go("home")}>Done</button>`;
   return null;
 }
@@ -41,10 +43,11 @@ function LibraryFooter({ctx}) {
   const importing = ctx.page === "import" || ctx.page === "import-review";
   const count = importing ? ctx.importChosen.length : ctx.chosen.length;
   const cap = ctx.catalog?.max_export || 0;
+  const raceLimit = ctx.catalog.max_race - Number(ctx.choice.pb);
   const raceOverflow = ctx.page === "browser" && ctx.view === "race" && ctx.raceCount + Number(ctx.choice.pb) > ctx.catalog.max_race;
   return html`${back ? html`<button disabled=${ctx.busy} onclick=${() => {if (ctx.page === "name") ctx.setAuthor(ctx.rememberedAuthor); ctx.go(back);}}>Back</button>` : null}
     <span class="ghost-library-count">${["browser", "target-bests", "review", "import-review"].includes(ctx.page) ? `${count} selected` : ""}</span>
-    ${raceOverflow ? html`<span class="meta">Choose at most ${ctx.catalog.max_race - Number(ctx.choice.pb)} recordings with this PB choice.</span>` : null}
+    ${raceOverflow ? html`<span class="meta">Choose at most ${countNoun(raceLimit, "recording")} with this PB choice.</span>` : null}
     ${count > cap && !importing && !raceOverflow ? html`<span class="meta">A collection holds up to ${cap} ghosts.</span>` : null}
     ${importing ? html`<button disabled=${ctx.busy} onclick=${ctx.cancelImport}>Cancel import</button>` : null}
     <${FooterAction} ctx=${ctx} />`;
