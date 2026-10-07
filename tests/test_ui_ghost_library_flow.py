@@ -411,7 +411,7 @@ def test_context_strategy_bests_author_once_and_back_preserves_choices(tmp_path,
             home = rendered_rows(page)
             assert {row["id"] for row in home} == {"attempt:1", "a" * 64}, home
             assert all(STAR_NAME in row["text"] for row in home)
-            assert "Owl" not in " ".join(row["text"] for row in home)
+            assert all("TJ Owlless" in row["text"] for row in home)
             log = library_log(page)
             assert log and log["surface"] == "ghost_library" and log["note"].startswith("home · "), log
             assert log["title"] == "Ghosts you are racing" and len(log["rows"]) == 2, log
