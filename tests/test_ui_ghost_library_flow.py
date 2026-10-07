@@ -336,6 +336,10 @@ def export_start(page, state, name="Local Runner"):
     click_text(page, "Export")
     if not state["catalog"]["author"]:
         page_is(page, "name")
+        input_value(page, '.ghost-library-name input', "é" * 65)
+        assert page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+        assert page.evaluate("document.querySelector('.ghost-library .error').getBoundingClientRect().height") > 0
+        assert not any(call[1].endswith("/author") for call in state["calls"])
         input_value(page, '.ghost-library-name input', name)
         click_text(page, "Continue")
     page_is(page, "export")
@@ -437,6 +441,20 @@ def test_missing_overall_is_visible_not_replaced_and_segment_shortcut_matches(tm
             tick(page, "attempt:1")
             click_text(page, "Review 1 ghost")
             page_is(page, "review")
+            assert_clean(page, state, base)
+            # An equally fast available strategy may default when its tied
+            # peer is missing. No slower recording is substituted.
+            state["catalog"]["bests"].append(local(52, 500, strat="Owl tied route"))
+            state["catalog"]["ghosts"].append(local(52, 500, strat="Owl tied route"))
+            page.click(".modal-close")
+            page.click(".ghost-library-button")
+            page_is(page, "home")
+            export_start(page, state)
+            click_text(page, "This Star's Personal Bests")
+            page_is(page, "target-bests")
+            assert selected_ids(page) == ["attempt:52"]
+            tied = [row for row in rendered_rows(page) if row["id"] in ("attempt:50", "attempt:52")]
+            assert len(tied) == 2 and all("Joint overall best" in row["text"] for row in tied), tied
             assert_clean(page, state, base)
     catalog = examples()
     catalog["author"] = "Known Runner"
