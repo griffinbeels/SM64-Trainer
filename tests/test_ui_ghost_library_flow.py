@@ -64,6 +64,10 @@ def preview_examples():
                "import_id": str(number) * 64, "author": LONG_AUTHOR,
                "duplicate": False, "importable": True, "comparison": comparison,
                "your_best_frames": 600 if comparison in ("faster", "not_faster") else None}
+        if comparison == "not_faster":
+            row["frames"] = 650
+        if comparison == "no_best":
+            row.update(entity_key="1-0", target_name="Bob-omb Battlefield · Big Bob-omb on the Summit")
         if comparison == "unknown":
             row["game_version"] = None
         rows.append(row)
@@ -203,7 +207,7 @@ def serve_library(folder, *, catalog=None, target=None):
     folder.mkdir(parents=True, exist_ok=True)
     catalog = deepcopy(catalog or examples())
     session = ghost_session(enabled=False, target=target or TARGET)
-    session["selection"] = {"ghosts": {"pb": True, "attempts": [1], "imports": ["a" * 64]},
+    session["selection"] = {"ghosts": {"pb": True, "attempts": [], "imports": ["a" * 64]},
                             "pb": {"attempt_id": 1, "frames": 600, "native_available": True},
                             "playing": [{"key": "pb", "attempt_id": 1},
                                         {"key": "a" * 64, "attempt_id": None, "import_id": "a" * 64}],
@@ -227,10 +231,11 @@ def serve_library(folder, *, catalog=None, target=None):
                                         "message": message, "result": result}
             return {"job_id": identity}
 
-        attach_session_routes(app, state, record, job)
         attach_preference_routes(app, state, record, job)
         attach_export_routes(app, state, record, job)
         attach_import_routes(app, state, record, job)
+        # The broad unmatched-call refusal follows every exact library route.
+        attach_session_routes(app, state, record, job)
         return app
 
     ui_fixture.create_app = create_app
@@ -566,6 +571,17 @@ def test_import_preview_selection_back_cancel_and_explicit_commit(tmp_path, widt
             assert_clean(page, state, base)
 
 
+def choose_empty_target(page):
+    click_text(page, "Choose a star or segment")
+    page.wait_for(".modal-grid .entity-grid")
+    page.click('.modal-grid button[title="Whomp\'s Fortress"]')
+    page.click('.modal-grid button[title="Chip Off Whomp\'s Block"]')
+    page_is(page, "browser")
+    assert rendered_rows(page) == []
+    assert "Chip Off Whomp's Block" in page.evaluate(
+        "document.querySelector('.ghost-library-filter-target').textContent")
+
+
 @pytest.mark.parametrize("width", WIDTHS)
 def test_local_target_picker_and_saved_search_resolve_new_results(tmp_path, width):
     catalog = examples()
@@ -581,6 +597,7 @@ def test_local_target_picker_and_saved_search_resolve_new_results(tmp_path, widt
             assert {row["id"] for row in rendered_rows(page)} == {"attempt:6"}
             assert state["target_writes"] == []
             assert state["session"]["target"] == TARGET
+            choose_empty_target(page)
             click_text(page, "Back")
             page_is(page, "home")
             export_start(page, state)
@@ -644,7 +661,7 @@ def test_empty_import_error_and_stale_race_keep_the_user_choices(tmp_path):
             assert selected_ids(page) == ["attempt:1"]
             assert state["writes"] == []
             preparation = [call[2] for call in state["calls"] if call[1].endswith("/prepare-race")]
-            assert preparation == [{"ghosts": {"pb": True, "attempts": [1], "imports": []}, "target": TARGET}]
+            assert preparation == [{"ghosts": {"pb": True, "attempts": [], "imports": []}, "target": TARGET}]
             fits_and_shoot(page, 850, "stale-race")
             assert_clean(page, state, base, expected_http="/api/ghost")
     empty = {**examples(), "ghosts": [], "bests": [], "author": "Known Runner"}
@@ -687,4 +704,53 @@ def test_first_name_back_returns_to_pending_browse_selection(tmp_path):
             click_text(page, "Back")
             page_is(page, "browser")
             assert set(selected_ids(page)) == {"attempt:1", "attempt:2"}
+            assert_clean(page, state, base)
+
+
+@pytest.mark.parametrize("keep_pb", (True, False))
+def test_race_checkbox_selection_matches_the_applied_slots(tmp_path, keep_pb):
+    """The saved PB has one slot; unchecking its row removes that slot."""
+    catalog = {**examples(), "max_race": 2}
+    with serve_library(tmp_path / f"race-pb-{keep_pb}", catalog=catalog) as (base, state):
+        with get_driver().launch() as page:
+            open_library(page, base, 850)
+            click_text(page, "Choose ghosts to race")
+            page_is(page, "browser")
+            assert set(selected_ids(page)) == {"attempt:1", "a" * 64}
+            assert not page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+            if keep_pb:
+                tick(page, "a" * 64)
+                expected = {"pb": True, "attempts": [], "imports": []}
+            else:
+                tick(page, "attempt:1")
+                tick(page, "attempt:101")
+                expected = {"pb": False, "attempts": [101], "imports": ["a" * 64]}
+            click_text(page, "Use selected ghosts")
+            until(page, "document.querySelector('.ghost-library')===null")
+            assert state["writes"] == [{"ghosts": expected, "target": TARGET}]
+            preparations = [call[2] for call in state["calls"] if call[1].endswith("/prepare-race")]
+            assert preparations == state["writes"]
+            assert_clean(page, state, base)
+
+
+def test_race_slot_limit_includes_pb_and_empty_selection_is_disabled(tmp_path):
+    catalog = {**examples(), "max_race": 2}
+    with serve_library(tmp_path / "race-cap", catalog=catalog) as (base, state):
+        with get_driver().launch() as page:
+            open_library(page, base, 850)
+            click_text(page, "Choose ghosts to race")
+            page_is(page, "browser")
+            tick(page, "attempt:101")
+            assert page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+            assert "Choose at most 1 recordings with this PB choice" in page.evaluate(
+                "document.querySelector('.modal-actions').textContent")
+            assert not any(call[1].endswith("/prepare-race") for call in state["calls"])
+            fits_and_shoot(page, 850, "race-cap")
+            tick(page, "attempt:1")
+            assert not page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+            tick(page, "attempt:101")
+            tick(page, "a" * 64)
+            assert selected_ids(page) == []
+            assert page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+            assert state["writes"] == []
             assert_clean(page, state, base)
