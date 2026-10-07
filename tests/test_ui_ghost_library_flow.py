@@ -576,10 +576,10 @@ def choose_empty_target(page):
     click_text(page, "Choose a star or segment")
     page.wait_for(".modal-grid .entity-grid")
     page.click('.modal-grid button[title="Whomp\'s Fortress"]')
-    page.click('.modal-grid button[title="Chip Off Whomp\'s Block"]')
+    page.click('.modal-grid button[title="Chip off Whomp\'s Block"]')
     page_is(page, "browser")
     assert rendered_rows(page) == []
-    assert "Chip Off Whomp's Block" in page.evaluate(
+    assert "Chip off Whomp's Block" in page.evaluate(
         "document.querySelector('.ghost-library-filter-target').textContent")
 
 
