@@ -76,6 +76,123 @@ def preview_examples():
     return rows
 
 
+def attach_session_routes(app, state, record, job):
+    @app.middleware("http")
+    async def observe(request, call_next):
+        if request.url.path == "/api/target" and request.method != "GET":
+            state["target_writes"].append(request.url.path)
+        return await call_next(request)
+
+    @app.get("/api/ghost")
+    def ghost_get():
+        return state["session"]
+
+    @app.put("/api/ghost")
+    def ghost_put(body: dict):
+        record("PUT", "/api/ghost", body)
+        if body.get("target") != state["session"]["target"]:
+            raise HTTPException(422, STALE_ERROR)
+        state["writes"].append(deepcopy(body))
+        state["session"]["selection"]["ghosts"] = body["ghosts"]
+        return state["session"]
+
+    @app.post(LIBRARY + "/prepare-race")
+    def prepare_race(body: dict):
+        record("POST", LIBRARY + "/prepare-race", body)
+        if state["stale_race"]:
+            state["session"]["target"] = {**TARGET, "entity_key": "2-3"}
+        return {"prepared": True}
+
+    @app.api_route("/api/ghost/{unknown:path}", methods=["GET", "POST", "PUT", "DELETE"])
+    def unknown(request: Request, unknown):
+        text = f"Unmatched fixture call: {request.method} {request.url.path}?{request.url.query}"
+        state["unmatched"].append(text)
+        print(text, flush=True)
+        raise HTTPException(404, text)
+
+
+def attach_preference_routes(app, state, record, job):
+    @app.get(LIBRARY)
+    def library_get(request: Request):
+        assert not request.url.query, f"Unexpected catalog query: {request.url}"
+        record("GET", LIBRARY)
+        return state["catalog"]
+
+    @app.put(LIBRARY + "/author")
+    def author_put(body: dict):
+        record("PUT", LIBRARY + "/author", body)
+        if not body["author"].strip() or len(body["author"].encode("utf-8")) > 128:
+            raise HTTPException(422, "Use a player name up to 128 UTF-8 bytes.")
+        state["catalog"]["author"] = body["author"].strip()
+        return {"author": state["catalog"]["author"]}
+
+    @app.post(LIBRARY + "/shortcuts")
+    def shortcut_post(body: dict):
+        record("POST", LIBRARY + "/shortcuts", body)
+        shortcut = {"id": "shortcut-1", "name": body["name"], "version": 1,
+                    "criteria": deepcopy(body["criteria"])}
+        state["catalog"]["shortcuts"].append(shortcut)
+        return {"shortcuts": state["catalog"]["shortcuts"]}
+
+    @app.delete(LIBRARY + "/shortcuts/{identity}")
+    def shortcut_delete(identity):
+        record("DELETE", LIBRARY + "/shortcuts/" + identity)
+        state["catalog"]["shortcuts"] = [row for row in state["catalog"]["shortcuts"]
+                                         if row["id"] != identity]
+        return {"shortcuts": state["catalog"]["shortcuts"]}
+
+
+def attach_export_routes(app, state, record, job):
+    @app.post(LIBRARY + "/export")
+    def export_post(body: dict):
+        record("POST", LIBRARY + "/export", body)
+        selected = body["selected"]
+        count = len(selected["attempts"]) + len(selected["imports"])
+        assert count > 0, "UI submitted an empty export"
+        return job({"download_url": LIBRARY + "/downloads/fixture", "exported": count, "skipped": []})
+
+    @app.get(LIBRARY + "/downloads/fixture")
+    def download():
+        return Response(b"isolated export receipt", media_type="application/octet-stream",
+                        headers={"Content-Disposition": 'attachment; filename="fixture.sm64ghosts"'})
+
+
+def attach_import_routes(app, state, record, job):
+    @app.post(LIBRARY + "/import/preview")
+    async def import_preview(request: Request):
+        raw = await request.body()
+        record("POST", LIBRARY + "/import/preview", {"bytes": len(raw)})
+        if raw == b"broken":
+            return job(None, "Choose a valid SM64 ghost collection.", failed=True)
+        identity = "preview-" + str(len(state["previews"]) + 1)
+        result = {"preview_id": identity, "ghosts": deepcopy(state["preview_rows"]),
+                  "expires_utc": "2099-01-01T00:00:00+00:00"}
+        state["previews"][identity] = result
+        return job(result)
+
+    @app.post(LIBRARY + "/import/commit")
+    def import_commit(body: dict):
+        record("POST", LIBRARY + "/import/commit", body)
+        assert body["selected"], "UI submitted an empty import"
+        preview = state["previews"].pop(body["preview_id"])
+        selected = [row for row in preview["ghosts"] if row["import_id"] in body["selected"]]
+        assert len(selected) == len(body["selected"]) and all(row["importable"] for row in selected)
+        state["catalog"]["ghosts"].extend(deepcopy(selected))
+        return job({"imported": len(selected), "duplicates": 0,
+                    "unmatched": sum(not row["available"] for row in selected),
+                    "import_ids": list(body["selected"]), "recorded_utc": "2026-10-07T12:00:00+00:00"})
+
+    @app.delete(LIBRARY + "/import/preview/{identity}")
+    def preview_delete(identity):
+        record("DELETE", LIBRARY + "/import/preview/" + identity)
+        state["previews"].pop(identity, None)
+        return {"discarded": True}
+
+    @app.get(LIBRARY + "/jobs/{identity}")
+    def jobs_get(identity):
+        return state["jobs"][identity]
+
+
 @contextlib.contextmanager
 def serve_library(folder, *, catalog=None, target=None):
     """Shipping UI; fixture APIs record every sharing write and reject unknown calls.
@@ -101,12 +218,6 @@ def serve_library(folder, *, catalog=None, target=None):
         app.router.routes = [route for route in app.router.routes
                              if not str(getattr(route, "path", "")).startswith("/api/ghost")]
 
-        @app.middleware("http")
-        async def observe(request, call_next):
-            if request.url.path == "/api/target" and request.method != "GET":
-                state["target_writes"].append(request.url.path)
-            return await call_next(request)
-
         def record(method, path, body=None):
             state["calls"].append((method, path, deepcopy(body)))
 
@@ -116,109 +227,10 @@ def serve_library(folder, *, catalog=None, target=None):
                                         "message": message, "result": result}
             return {"job_id": identity}
 
-        @app.get("/api/ghost")
-        def ghost_get():
-            return state["session"]
-
-        @app.put("/api/ghost")
-        def ghost_put(body: dict):
-            record("PUT", "/api/ghost", body)
-            if body.get("target") != state["session"]["target"]:
-                raise HTTPException(422, STALE_ERROR)
-            state["writes"].append(deepcopy(body))
-            state["session"]["selection"]["ghosts"] = body["ghosts"]
-            return state["session"]
-
-        @app.get(LIBRARY)
-        def library_get(request: Request):
-            assert not request.url.query, f"Unexpected catalog query: {request.url}"
-            record("GET", LIBRARY)
-            return state["catalog"]
-
-        @app.put(LIBRARY + "/author")
-        def author_put(body: dict):
-            record("PUT", LIBRARY + "/author", body)
-            if not body["author"].strip() or len(body["author"].encode("utf-8")) > 128:
-                raise HTTPException(422, "Use a player name up to 128 UTF-8 bytes.")
-            state["catalog"]["author"] = body["author"].strip()
-            return {"author": state["catalog"]["author"]}
-
-        @app.post(LIBRARY + "/export")
-        def export_post(body: dict):
-            record("POST", LIBRARY + "/export", body)
-            selected = body["selected"]
-            count = len(selected["attempts"]) + len(selected["imports"])
-            assert count > 0, "UI submitted an empty export"
-            return job({"download_url": LIBRARY + "/downloads/fixture", "exported": count, "skipped": []})
-
-        @app.get(LIBRARY + "/downloads/fixture")
-        def download():
-            return Response(b"isolated export receipt", media_type="application/octet-stream",
-                            headers={"Content-Disposition": 'attachment; filename="fixture.sm64ghosts"'})
-
-        @app.post(LIBRARY + "/shortcuts")
-        def shortcut_post(body: dict):
-            record("POST", LIBRARY + "/shortcuts", body)
-            shortcut = {"id": "shortcut-1", "name": body["name"], "version": 1,
-                        "criteria": deepcopy(body["criteria"])}
-            state["catalog"]["shortcuts"].append(shortcut)
-            return {"shortcuts": state["catalog"]["shortcuts"]}
-
-        @app.delete(LIBRARY + "/shortcuts/{identity}")
-        def shortcut_delete(identity):
-            record("DELETE", LIBRARY + "/shortcuts/" + identity)
-            state["catalog"]["shortcuts"] = [row for row in state["catalog"]["shortcuts"]
-                                             if row["id"] != identity]
-            return {"shortcuts": state["catalog"]["shortcuts"]}
-
-        @app.post(LIBRARY + "/import/preview")
-        async def import_preview(request: Request):
-            raw = await request.body()
-            record("POST", LIBRARY + "/import/preview", {"bytes": len(raw)})
-            if raw == b"broken":
-                return job(None, "Choose a valid SM64 ghost collection.", failed=True)
-            identity = "preview-" + str(len(state["previews"]) + 1)
-            result = {"preview_id": identity, "ghosts": deepcopy(state["preview_rows"]),
-                      "expires_utc": "2099-01-01T00:00:00+00:00"}
-            state["previews"][identity] = result
-            return job(result)
-
-        @app.post(LIBRARY + "/import/commit")
-        def import_commit(body: dict):
-            record("POST", LIBRARY + "/import/commit", body)
-            assert body["selected"], "UI submitted an empty import"
-            preview = state["previews"].pop(body["preview_id"])
-            selected = [row for row in preview["ghosts"] if row["import_id"] in body["selected"]]
-            assert len(selected) == len(body["selected"]) and all(row["importable"] for row in selected)
-            state["catalog"]["ghosts"].extend(deepcopy(selected))
-            return job({"imported": len(selected), "duplicates": 0,
-                        "unmatched": sum(not row["available"] for row in selected),
-                        "import_ids": list(body["selected"]), "recorded_utc": "2026-10-07T12:00:00+00:00"})
-
-        @app.delete(LIBRARY + "/import/preview/{identity}")
-        def preview_delete(identity):
-            record("DELETE", LIBRARY + "/import/preview/" + identity)
-            state["previews"].pop(identity, None)
-            return {"discarded": True}
-
-        @app.get(LIBRARY + "/jobs/{identity}")
-        def jobs_get(identity):
-            return state["jobs"][identity]
-
-        @app.post(LIBRARY + "/prepare-race")
-        def prepare_race(body: dict):
-            record("POST", LIBRARY + "/prepare-race", body)
-            if state["stale_race"]:
-                state["session"]["target"] = {**TARGET, "entity_key": "2-3"}
-            return {"prepared": True}
-
-        @app.api_route("/api/ghost/{unknown:path}", methods=["GET", "POST", "PUT", "DELETE"])
-        def unknown(request: Request, unknown):
-            text = f"Unmatched fixture call: {request.method} {request.url.path}?{request.url.query}"
-            state["unmatched"].append(text)
-            print(text, flush=True)
-            raise HTTPException(404, text)
-
+        attach_session_routes(app, state, record, job)
+        attach_preference_routes(app, state, record, job)
+        attach_export_routes(app, state, record, job)
+        attach_import_routes(app, state, record, job)
         return app
 
     ui_fixture.create_app = create_app
@@ -296,12 +308,14 @@ def fits_and_shoot(page, width, name):
       const rows=Array.from(library.querySelectorAll('.ghost-library-row'));
       return {modal:modal.scrollWidth-modal.clientWidth,library:library.scrollWidth-library.clientWidth,
         body:library.closest('.modal-body').scrollWidth-library.closest('.modal-body').clientWidth,
-        text:library.textContent.trim().length,
+        text:library.textContent.trim().length,bound:library.getBoundingClientRect().right,
         rows:rows.map(row=>({overflow:row.scrollWidth-row.clientWidth,
+          right:row.getBoundingClientRect().right,
           time:row.querySelector('.ghost-library-time')?.getBoundingClientRect().right??null}))};})()""")
     assert measured["text"] > 20, measured
     assert all(measured[key] <= 1 for key in ("modal", "library", "body")), measured
     assert all(row["overflow"] <= 1 for row in measured["rows"]), measured
+    assert all(row["right"] <= measured["bound"] + 1 for row in measured["rows"]), measured
     times = [row["time"] for row in measured["rows"] if row["time"] is not None]
     if times:
         assert max(times) - min(times) <= 1, measured
@@ -332,6 +346,16 @@ def library_log(page):
       return reader.readGhostLibrary(document.querySelector('.ghost-library'));})()""")
 
 
+def prove_layout_guard(page, width):
+    """A deliberately overflowing rendered row must make the same guard fail."""
+    page.evaluate("document.querySelector('.ghost-library-row').style.minWidth='2000px'")
+    try:
+        with pytest.raises(AssertionError):
+            fits_and_shoot(page, width, "deliberate-overflow-must-not-pass")
+    finally:
+        page.evaluate("document.querySelector('.ghost-library-row').style.removeProperty('min-width')")
+
+
 def export_start(page, state, name="Local Runner"):
     click_text(page, "Export")
     if not state["catalog"]["author"]:
@@ -343,6 +367,34 @@ def export_start(page, state, name="Local Runner"):
         input_value(page, '.ghost-library-name input', name)
         click_text(page, "Continue")
     page_is(page, "export")
+
+
+def repeat_export_and_browse(page, state, width):
+    page.click(".modal-close")
+    page.wait_for(".ghost-library-button")
+    page.click(".ghost-library-button")
+    page_is(page, "home")
+    export_start(page, state)
+    assert len([call for call in state["calls"] if call[1].endswith("/author")]) == 1
+    click_text(page, "Change")
+    page_is(page, "name")
+    input_value(page, '.ghost-library-name input', "Renamed Runner")
+    click_text(page, "Continue")
+    page_is(page, "export")
+    assert state["catalog"]["author"] == "Renamed Runner"
+    click_text(page, "All personal bests")
+    page_is(page, "review")
+    assert {row["id"] for row in rendered_rows(page)} == {
+        "attempt:1", "attempt:2", "attempt:4", "attempt:5", "attempt:6", "attempt:7", "attempt:8"}
+    assert "attempt:101" not in {row["id"] for row in rendered_rows(page)}
+    page.click(".modal-close")
+    page.click(".ghost-library-button")
+    page_is(page, "home")
+    click_text(page, "Your personal bests")
+    page_is(page, "browser")
+    assert {row["id"] for row in rendered_rows(page)} == {
+        "attempt:1", "attempt:2", "attempt:3", "attempt:4", "attempt:5", "attempt:6", "attempt:7", "attempt:8"}
+    fits_and_shoot(page, width, "personal-bests")
 
 
 @pytest.mark.parametrize("width", WIDTHS)
@@ -359,6 +411,7 @@ def test_context_strategy_bests_author_once_and_back_preserves_choices(tmp_path,
             assert log and log["surface"] == "ghost_library" and log["note"].startswith("home · "), log
             assert log["title"] == "Ghosts you are racing" and len(log["rows"]) == 2, log
             fits_and_shoot(page, width, "home")
+            prove_layout_guard(page, width)
             export_start(page, state)
             assert [(method, path, body) for method, path, body in state["calls"]
                     if path.endswith("/author")] == [("PUT", LIBRARY + "/author", {"author": "Local Runner"})]
@@ -392,31 +445,7 @@ def test_context_strategy_bests_author_once_and_back_preserves_choices(tmp_path,
             exported = [body for method, path, body in state["calls"] if path.endswith("/export")]
             assert exported == [{"selected": {"attempts": [1], "imports": []}, "author": "Local Runner"}]
             fits_and_shoot(page, width, "export-receipt")
-            page.click(".modal-close")
-            page.wait_for(".ghost-library-button")
-            page.click(".ghost-library-button")
-            page_is(page, "home")
-            export_start(page, state)
-            assert len([call for call in state["calls"] if call[1].endswith("/author")]) == 1
-            click_text(page, "Change")
-            page_is(page, "name")
-            input_value(page, '.ghost-library-name input', "Renamed Runner")
-            click_text(page, "Continue")
-            page_is(page, "export")
-            assert state["catalog"]["author"] == "Renamed Runner"
-            click_text(page, "All personal bests")
-            page_is(page, "review")
-            assert {row["id"] for row in rendered_rows(page)} == {
-                "attempt:1", "attempt:2", "attempt:4", "attempt:5", "attempt:6", "attempt:7", "attempt:8"}
-            assert "attempt:101" not in {row["id"] for row in rendered_rows(page)}
-            page.click(".modal-close")
-            page.click(".ghost-library-button")
-            page_is(page, "home")
-            click_text(page, "Your personal bests")
-            page_is(page, "browser")
-            assert {row["id"] for row in rendered_rows(page)} == {
-                "attempt:1", "attempt:2", "attempt:3", "attempt:4", "attempt:5", "attempt:6", "attempt:7", "attempt:8"}
-            fits_and_shoot(page, width, "personal-bests")
+            repeat_export_and_browse(page, state, width)
             assert_clean(page, state, base)
 
 
@@ -474,6 +503,30 @@ def test_missing_overall_is_visible_not_replaced_and_segment_shortcut_matches(tm
             assert_clean(page, state, base)
 
 
+def cancel_then_commit_subset(page, state, package, width):
+    click_text(page, "Cancel import")
+    page_is(page, "home")
+    assert state["previews"] == {}
+    assert len(state["catalog"]["ghosts"]) == len(examples()["ghosts"])
+    assert any(call[0] == "DELETE" and "/import/preview/" in call[1] for call in state["calls"])
+    click_text(page, "Import")
+    page_is(page, "import")
+    page.set_input_files('.ghost-library input[type="file"]', str(package))
+    page_is(page, "import-review")
+    # Manual subset includes an unmatched segment: storage is allowed;
+    # racing it still requires its missing definition.
+    for identity in ("1" * 64, "2" * 64, "4" * 64):
+        tick(page, identity)
+    assert set(selected_ids(page)) == {"3" * 64, "6" * 64}
+    click_text(page, "Import 2 ghosts")
+    page_is(page, "receipt")
+    commits = [call[2] for call in state["calls"] if call[1].endswith("/commit")]
+    assert len(commits) == 1 and set(commits[0]["selected"]) == {"3" * 64, "6" * 64}
+    assert state["previews"] == {}
+    assert len(state["catalog"]["ghosts"]) == len(examples()["ghosts"]) + 2
+    fits_and_shoot(page, width, "import-receipt")
+
+
 @pytest.mark.parametrize("width", WIDTHS)
 def test_import_preview_selection_back_cancel_and_explicit_commit(tmp_path, width):
     """File selection is only preview; duplicates and unknowns remain explicit."""
@@ -509,27 +562,7 @@ def test_import_preview_selection_back_cancel_and_explicit_commit(tmp_path, widt
             click_text(page, "Continue review")
             page_is(page, "import-review")
             assert selected_ids(page) == ["3" * 64]
-            click_text(page, "Cancel import")
-            page_is(page, "home")
-            assert state["previews"] == {}
-            assert len(state["catalog"]["ghosts"]) == len(examples()["ghosts"])
-            assert any(call[0] == "DELETE" and "/import/preview/" in call[1] for call in state["calls"])
-            click_text(page, "Import")
-            page_is(page, "import")
-            page.set_input_files('.ghost-library input[type="file"]', str(package))
-            page_is(page, "import-review")
-            # Manual subset includes an unmatched segment: storage is allowed;
-            # racing it still requires its missing definition.
-            for identity in ("1" * 64, "2" * 64, "4" * 64):
-                tick(page, identity)
-            assert set(selected_ids(page)) == {"3" * 64, "6" * 64}
-            click_text(page, "Import 2 ghosts")
-            page_is(page, "receipt")
-            commits = [call[2] for call in state["calls"] if call[1].endswith("/commit")]
-            assert len(commits) == 1 and set(commits[0]["selected"]) == {"3" * 64, "6" * 64}
-            assert state["previews"] == {}
-            assert len(state["catalog"]["ghosts"]) == len(examples()["ghosts"]) + 2
-            fits_and_shoot(page, width, "import-receipt")
+            cancel_then_commit_subset(page, state, package, width)
             assert_clean(page, state, base)
 
 
@@ -623,4 +656,35 @@ def test_empty_import_error_and_stale_race_keep_the_user_choices(tmp_path):
               .find(node=>node.textContent.includes("This Star's Personal Bests")).disabled""")
             assert "No" in page.evaluate("document.querySelector('.ghost-library').textContent")
             fits_and_shoot(page, 850, "empty-export")
+            assert_clean(page, state, base)
+
+
+def test_first_name_back_returns_to_pending_browse_selection(tmp_path):
+    """Browse-first export preserves local filters/checkboxes through first name."""
+    with serve_library(tmp_path / "name-back") as (base, state):
+        with get_driver().launch() as page:
+            open_library(page, base, 850)
+            click_text(page, "Your personal bests")
+            page_is(page, "browser")
+            input_value(page, '.ghost-library input[type="search"]', "Owl")
+            tick(page, "attempt:1")
+            tick(page, "attempt:2")
+            assert set(selected_ids(page)) == {"attempt:1", "attempt:2"}
+            click_text(page, "Review 2 ghosts")
+            page_is(page, "name")
+            click_text(page, "Back")
+            page_is(page, "browser")
+            assert set(selected_ids(page)) == {"attempt:1", "attempt:2"}
+            assert page.evaluate("document.querySelector('.ghost-library input[type=search]').value") == "Owl"
+            assert not any(call[1].endswith("/author") for call in state["calls"])
+            click_text(page, "Review 2 ghosts")
+            page_is(page, "name")
+            input_value(page, '.ghost-library-name input', "Browse-first Runner")
+            click_text(page, "Continue")
+            page_is(page, "review")
+            assert {row["id"] for row in rendered_rows(page)} == {"attempt:1", "attempt:2"}
+            fits_and_shoot(page, 850, "browse-name-review")
+            click_text(page, "Back")
+            page_is(page, "browser")
+            assert set(selected_ids(page)) == {"attempt:1", "attempt:2"}
             assert_clean(page, state, base)
