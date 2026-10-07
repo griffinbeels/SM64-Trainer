@@ -43,7 +43,12 @@ def click_race(page):
 
 
 def action(page, caption):
-    page.evaluate("Array.from(document.querySelectorAll('.modal button')).find(b=>b.getAttribute('aria-label')===" + json.dumps(caption) + "||b.textContent.trim()===" + json.dumps(caption) + ").click()")
+    control = ("Array.from(document.querySelectorAll('.modal button')).find(b=>b.getAttribute('aria-label')==="
+               + json.dumps(caption) + "||b.textContent.trim()===" + json.dumps(caption) + ")")
+    # The shell mounts while the catalog is loading. Its step attribute does
+    # not prove that the action exists or has finished its preceding write.
+    until(page, f"Boolean({control} && !({control}).disabled)", True)
+    page.evaluate(f"({control}).click()")
 
 
 def browse(page):
