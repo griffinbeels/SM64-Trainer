@@ -1056,6 +1056,9 @@ Collections never create local PBs, golds or input templates.
 
 | Collection route | Contract |
 |---|---|
+| `GET /api/saved-ghosts/{attempt_id}` | `{attempt_id, saved, available}` for the attempt drawer. Without a ghost session, reads return `saved: false, available: false`. |
+| `POST /api/saved-ghosts/{attempt_id}` | Preserves the local run as a saved ghost and selects it for its target; unavailable attempts or recordings return a readable error. |
+| `DELETE /api/saved-ghosts/{attempt_id}` | Removes the saved-ghost selection for the local attempt. |
 | `GET /api/ghost/library` | `{ghosts, bests, shortcuts, author, max_export, max_race}`. Recent/saved local and imported rows include source, distinct attempt/import IDs, creator, target/name, strategy, frames/clock, game version (or null), recorded UTC, practice/outcome, availability and reason. `bests` resolves historical local winners per target, strategy, clock and game version, including winners whose recordings are unavailable. Read on modal open, independently of frame playback. |
 | `POST /api/ghost/library/export` | JSON `{selected: {attempts: [id, ...], imports: [identity, ...]}, author}`; returns `{job_id}`. Preserves selected local poses, retains foreign credit and produces one `.sm64ghosts` file. Up to 4096 selected entries per collection. Unavailable selected runs are reported as `skipped`, not silently relabeled. Successful export remembers the author's credit. |
 | `POST /api/ghost/library/import` | Raw `.sm64ghosts` file body, `application/octet-stream`; returns `{job_id}`. Validates the whole bounded package before publishing. Result `{imported, duplicates, unmatched, import_ids, recorded_utc}`. Repeated imports are idempotent. Unmatched segments remain stored but unavailable. |
