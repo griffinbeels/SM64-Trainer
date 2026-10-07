@@ -265,9 +265,10 @@ def click_text(page, text, scope=".modal"):
       .filter(node=>node.getClientRects().length && (node.getAttribute('aria-label')==={json.dumps(text)}
         || node.textContent.trim()==={json.dumps(text)} || node.textContent.trim()==={json.dumps(text + '→')}
         || node.textContent.trim().startsWith({json.dumps(text + ' (')})));
-      if (found.length!==1) throw new Error('Expected one button '+{json.dumps(text)}+', got '+found.length);
-      found[0].setAttribute('data-flow-click','yes'); }})()"""
-    page.evaluate(expression)
+      if (found.length>1) throw new Error('Expected one button '+{json.dumps(text)}+', got '+found.length);
+      if (!found.length) return false;
+      found[0].setAttribute('data-flow-click','yes'); return true; }})()"""
+    until(page, expression)
     page.click('[data-flow-click="yes"]')
     page.evaluate("document.querySelector('[data-flow-click]')?.removeAttribute('data-flow-click')")
 
