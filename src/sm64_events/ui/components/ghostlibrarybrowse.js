@@ -2,7 +2,7 @@ import { h } from "preact";
 import { useState } from "preact/hooks";
 import htm from "htm";
 import { fmtIgtShort } from "../format.js";
-import { belongsHere, rowId } from "../ghostlibrary.js";
+import { rowId } from "../ghostlibrary.js";
 import { courseUnionGroups, parseSegmentId, parseStarId } from "../entities.js";
 import { PickerDialog } from "./entitymodal.js";
 import { optionIconSrc } from "./entityicons.js";
@@ -44,7 +44,8 @@ function importNote(row) {
 }
 
 export function Rows({rows, ctx, check = true, importing = false}) {
-  return html`<div class="ghost-library-list">${rows.map(row => html`<${GhostRow} key=${rowId(row)} row=${row} ctx=${ctx} check=${check} importing=${importing} />`)}</div>`;
+  return html`<div class="ghost-library-list">${rows.map(row => html`<${GhostRow} key=${rowId(row)} row=${row} ctx=${ctx} check=${check} importing=${importing}
+    label=${ctx.view === "race" && row.source === "local" && row.attempt_id === ctx.selection?.pb?.attempt_id ? "Current saved PB" : null} />`)}</div>`;
 }
 
 export function LibraryPicker({ctx, t}) {
@@ -65,7 +66,7 @@ export function LibraryPicker({ctx, t}) {
 
 function BrowserFilters({ctx}) {
   const {filters, filter} = ctx;
-  const targetName = ctx.rows.find(row => belongsHere(row, filters.target))?.target_name || "Chosen target";
+  const targetName = ctx.filterTargetName;
   return html`<div class="ghost-library-filters">
     <input type="search" aria-label="Search ghosts" placeholder="Search player, target or strategy" value=${filters.query}
       oninput=${event => filter({query: event.target.value})} />

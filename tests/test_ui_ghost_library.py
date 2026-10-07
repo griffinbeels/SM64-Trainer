@@ -18,7 +18,7 @@ ROWS = [dict(source="local", attempt_id=7, frames=120, author="You", kind="star"
 
 
 def run(expression):
-    program = f"import {{libraryRows, selectionOf, raceChoice, raceContextReason, bestGroups, overallSelection, importSelection, openingTarget, resolveShortcut}} from {JS!r};\nconst rows={json.dumps(ROWS)};\nconsole.log(JSON.stringify({expression}));"
+    program = f"import {{libraryRows, selectionOf, raceChoice, raceFits, raceSelection, raceContextReason, bestGroups, overallSelection, importSelection, openingTarget, resolveShortcut}} from {JS!r};\nconst rows={json.dumps(ROWS)};\nconsole.log(JSON.stringify({expression}));"
     result = subprocess.run(["node", "--input-type=module", "-"], input=program, capture_output=True,
                             text=True, encoding="utf-8", timeout=30, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stderr
@@ -39,6 +39,23 @@ def test_bulk_export_selection_and_race_selection_preserve_distinct_id_namespace
     assert run('raceChoice(rows,{kind:"star",entity_key:"2-1"},false)') == {
         "pb": False, "attempts": [7], "imports": ["a" * 64, "b" * 64]}
     assert run('raceChoice(rows,{kind:"star",entity_key:"2-2"},false)') == {"pb": False, "attempts": [], "imports": []}
+
+
+def test_current_pb_checkbox_is_one_race_slot_and_unchecking_it_disables_pb():
+    target = '{kind:"star",entity_key:"2-1"}'
+    assert run(f'raceSelection([rows[0]],rows,{target},{{attempt_id:7}},false)') == {"pb": True, "attempts": [], "imports": []}
+    assert run(f'raceSelection([rows[1]],rows,{target},{{attempt_id:7}},true)') == {"pb": False, "attempts": [], "imports": ["a" * 64]}
+    assert run(f'raceSelection(rows,rows,{target},{{attempt_id:7}},true)') == {"pb": True, "attempts": [], "imports": ["a" * 64, "b" * 64]}
+
+
+def test_unavailable_pb_keeps_its_preference_and_capacity_counts_it_once():
+    target = '{kind:"star",entity_key:"2-1"}'
+    assert run(f'raceSelection([rows[1]],[{{...rows[0],available:false}},rows[1]],{target},{{attempt_id:7}},true)') == {"pb": True, "attempts": [], "imports": ["a" * 64]}
+    assert run(f'raceSelection([rows[1]],[],{target},{{attempt_id:7}},false)') == {"pb": False, "attempts": [], "imports": ["a" * 64]}
+    assert run('raceFits({pb:true,attempts:[],imports:[]},16)') is True
+    assert run('raceFits({pb:false,attempts:[],imports:[]},16)') is False
+    assert run('raceFits({pb:true,attempts:Array.from({length:15},(_,i)=>i+1),imports:[]},16)') is True
+    assert run('raceFits({pb:true,attempts:Array.from({length:16},(_,i)=>i+1),imports:[]},16)') is False
 
 
 def test_opening_section_is_independent_of_live_target_and_local_browse_is_fixed():

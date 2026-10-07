@@ -81,3 +81,18 @@ export function importSelection(rows, mode, includeNoBest = false) {
 export function raceChoice(rows, target, pb = true) {
   return {pb, ...selectionOf(rows.filter(row => row.available && belongsHere(row, target)))};
 }
+
+// The current saved PB has one racing slot even when its recording also
+// appears as a normal library row. Historical strategy winners keep theirs.
+export function raceSelection(rows, candidates, target, currentPb, defaultPb = true) {
+  const pbRow = candidates.find(row => row.source === "local" && row.available &&
+    row.attempt_id === currentPb?.attempt_id && belongsHere(row, target));
+  const pb = pbRow ? rows.some(row => rowId(row) === rowId(pbRow)) : defaultPb;
+  const recordings = pbRow ? rows.filter(row => rowId(row) !== rowId(pbRow)) : rows;
+  return raceChoice(recordings, target, pb);
+}
+
+export function raceFits(choice, cap) {
+  const slots = choice.attempts.length + choice.imports.length + Number(choice.pb);
+  return slots > 0 && slots <= cap;
+}

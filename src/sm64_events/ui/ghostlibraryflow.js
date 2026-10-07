@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { getJSON, pollJob, send } from "./api.js";
 import { belongsHere, importSelection, libraryRows, openingTarget, overallSelection,
-         raceChoice, raceContextReason, resolveShortcut, rowId, selectionOf, uniqueRows } from "./ghostlibrary.js";
+         raceFits, raceSelection, raceContextReason, resolveShortcut, rowId, selectionOf, uniqueRows } from "./ghostlibrary.js";
 
 const URL = "/api/ghost/library";
 export const emptyFilters = () => ({query: "", source: "local", target: null,
@@ -39,19 +39,20 @@ function libraryData(state, fixed, t) {
   const current = rows.filter(row => belongsHere(row, fixed.opening) && ids.has(rowId(row)));
   const openingName = rows.find(row => belongsHere(row, fixed.opening))?.target_name || sectionName(fixed.opening, t);
   return {...fixed, rows, bests, chosen, visible, current, openingName,
+    filterTargetName: rows.find(row => belongsHere(row, filters.target))?.target_name || sectionName(filters.target, t),
     raceReason: raceContextReason(fixed.opening, fixed.raceTarget),
-    ...selectionData(state, fixed, chosen)};
+    ...selectionData(state, fixed, chosen, rows)};
 }
 
-function selectionData(state, fixed, chosen) {
+function selectionData(state, fixed, chosen, rows) {
   const {catalog, selected, preview} = state;
-  const choice = raceChoice(chosen, fixed.raceTarget, fixed.selection.ghosts?.pb ?? true);
+  const choice = raceSelection(chosen, rows, fixed.raceTarget, fixed.selection.pb, fixed.selection.ghosts?.pb ?? true);
   const raceCount = choice.attempts.length + choice.imports.length;
-  const raceFits = raceCount > 0 && raceCount + Number(choice.pb) <= (catalog?.max_race || 0);
+  const fitsRace = raceFits(choice, catalog?.max_race || 0);
   const exportFits = chosen.length > 0 && chosen.length <= (catalog?.max_export || 0);
   const importRows = preview?.ghosts || [];
   const importChosen = importRows.filter(row => selected.has(row.id || row.import_id) && row.importable && !row.duplicate);
-  return {choice, raceCount, raceFits, exportFits, importRows, importChosen};
+  return {choice, raceCount, raceFits: fitsRace, exportFits, importRows, importChosen};
 }
 
 function commonActions(state, patch, resources, onClose) {
