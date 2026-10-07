@@ -743,7 +743,7 @@ def test_race_slot_limit_includes_pb_and_empty_selection_is_disabled(tmp_path):
             page_is(page, "browser")
             tick(page, "attempt:101")
             assert page.evaluate("document.querySelector('.modal-actions .primary').disabled")
-            assert "Choose at most 1 recordings with this PB choice" in page.evaluate(
+            assert "Choose at most 1 recording" in page.evaluate(
                 "document.querySelector('.modal-actions').textContent")
             assert not any(call[1].endswith("/prepare-race") for call in state["calls"])
             fits_and_shoot(page, 850, "race-cap")
