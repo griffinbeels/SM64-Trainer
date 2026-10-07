@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { getJSON, pollJob, send } from "./api.js";
 import { belongsHere, importSelection, libraryRows, openingTarget, overallSelection,
-         raceChoice, resolveShortcut, rowId, selectionOf, uniqueRows } from "./ghostlibrary.js";
+         raceChoice, raceContextReason, resolveShortcut, rowId, selectionOf, uniqueRows } from "./ghostlibrary.js";
 
 const URL = "/api/ghost/library";
 export const emptyFilters = () => ({query: "", source: "local", target: null,
@@ -39,6 +39,7 @@ function libraryData(state, fixed, t) {
   const current = rows.filter(row => belongsHere(row, fixed.opening) && ids.has(rowId(row)));
   const openingName = rows.find(row => belongsHere(row, fixed.opening))?.target_name || sectionName(fixed.opening, t);
   return {...fixed, rows, bests, chosen, visible, current, openingName,
+    raceReason: raceContextReason(fixed.opening, fixed.raceTarget),
     ...selectionData(state, fixed, chosen)};
 }
 
@@ -107,7 +108,7 @@ function browseActions(state, data, patch, actions, write, onClose) {
   };
   const review = () => {
     if (!data.exportFits) return;
-    patch({reviewBack: state.page, selectionLabel: state.page === "target-bests" ? `${data.openingName} · Personal bests` : "Custom selection", nameReturn: "review"});
+    patch({reviewBack: state.page, selectionLabel: state.page === "target-bests" ? `${data.openingName} · Personal bests` : "Custom selection", nameReturn: "review", nameBack: state.page});
     actions.go(state.author.trim() ? "review" : "name");
   };
   const race = () => actions.run(async () => {

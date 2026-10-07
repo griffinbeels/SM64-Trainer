@@ -7,6 +7,10 @@ export function belongsHere(row, target) {
   return Boolean(target && row.kind === target.kind && row.entity_key === target.entity_key);
 }
 
+export function raceContextReason(opening, liveTarget) {
+  return belongsHere(opening, liveTarget) ? "" : "Make this star or segment your practice target, then reopen the library to race its ghosts.";
+}
+
 export function libraryRows(rows, filters, target) {
   const query = filters.query.trim().toLocaleLowerCase();
   const visible = rows.filter(row =>

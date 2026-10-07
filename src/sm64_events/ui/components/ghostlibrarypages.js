@@ -13,7 +13,8 @@ export function LibraryHome({ctx}) {
     <h3 class="ghost-library-step-title" tabindex="-1">Ghosts you are racing</h3>
     ${ctx.current.length ? html`<${Rows} rows=${ctx.current} ctx=${ctx} check=${false} />`
       : html`<p class="meta">No ghosts are currently playing for this target.</p>`}
-    <button onclick=${() => ctx.startBrowser("race", false, ctx.opening)}>Choose ghosts to race</button>
+    <button disabled=${Boolean(ctx.raceReason)} onclick=${() => ctx.startBrowser("race", false, ctx.opening)}>Choose ghosts to race</button>
+    ${ctx.raceReason ? html`<p class="meta">${ctx.raceReason}</p>` : null}
   </section>
   <div class="ghost-library-task-choices">
     <button class="ghost-library-task" aria-label="Import" onclick=${() => ctx.go("import")}><strong>Import</strong><span>Bring in another player's ghost collection.</span><span aria-hidden="true">→</span></button>
@@ -104,7 +105,8 @@ export function LibraryReceipt({ctx}) {
       imported ? `${count(receipt.imported)} added.` : `${count(receipt.exported)} · Shared as ${ctx.author}`)}
     ${imported ? html`<p class="ghost-library-notice">${receipt.duplicates || 0} already in your library.${receipt.unmatched ? ` ${receipt.unmatched} need a matching segment definition before racing.` : ""}</p>
       <div class="ghost-library-home-links"><button onclick=${() => {ctx.startBrowser("browse"); ctx.filter({source: "import", practice: true});}}>View imported ghosts</button>
-        <button onclick=${() => ctx.startBrowser("race", false, ctx.opening)}>Choose ghosts to race</button></div>` : html`
+        <button disabled=${Boolean(ctx.raceReason)} onclick=${() => ctx.startBrowser("race", false, ctx.opening)}>Choose ghosts to race</button></div>
+      ${ctx.raceReason ? html`<p class="meta">${ctx.raceReason}</p>` : null}` : html`
       <a class="button" href=${receipt.download_url} download="sm64-ghost-collection.sm64ghosts">Download collection</a>
       ${receipt.skipped?.length ? html`<details><summary>${receipt.skipped.length} recordings could not be exported</summary><ul>${receipt.skipped.map(row => html`<li>${row.reason}</li>`)}</ul></details>` : null}`}
     ${!imported && ctx.view === "custom" ? html`<${SaveShortcut} ctx=${ctx} />` : null}`;

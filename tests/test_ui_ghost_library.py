@@ -18,7 +18,7 @@ ROWS = [dict(source="local", attempt_id=7, frames=120, author="You", kind="star"
 
 
 def run(expression):
-    program = f"import {{libraryRows, selectionOf, raceChoice, bestGroups, overallSelection, importSelection, openingTarget, resolveShortcut}} from {JS!r};\nconst rows={json.dumps(ROWS)};\nconsole.log(JSON.stringify({expression}));"
+    program = f"import {{libraryRows, selectionOf, raceChoice, raceContextReason, bestGroups, overallSelection, importSelection, openingTarget, resolveShortcut}} from {JS!r};\nconst rows={json.dumps(ROWS)};\nconsole.log(JSON.stringify({expression}));"
     result = subprocess.run(["node", "--input-type=module", "-"], input=program, capture_output=True,
                             text=True, encoding="utf-8", timeout=30, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stderr
@@ -45,6 +45,8 @@ def test_opening_section_is_independent_of_live_target_and_local_browse_is_fixed
     assert run('openingTarget("star:2:1",{kind:"segment",entity_key:"6"})') == {"kind": "star", "entity_key": "2-1"}
     assert run('openingTarget("segment:6",null)') == {"kind": "segment", "entity_key": "6"}
     assert run('libraryRows(rows,{query:"",source:"all",target:{kind:"star",entity_key:"2-2"},practice:true,sort:"fastest"},null)') == []
+    assert run('raceContextReason({kind:"star",entity_key:"2-1"},{kind:"star",entity_key:"2-1",strat:"Cannon"})') == ""
+    assert "practice target" in run('raceContextReason({kind:"star",entity_key:"2-1"},{kind:"segment",entity_key:"6"})')
 
 
 def test_unavailable_overall_best_never_selects_a_slower_strategy():
