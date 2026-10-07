@@ -97,9 +97,11 @@ function BestList({rows, ctx}) {
 }
 
 export function LibraryBrowser({ctx}) {
-  const [offset, setOffset] = useState(0);
+  const [paging, setPaging] = useState({identity: null, offset: 0});
+  const identity = JSON.stringify(ctx.filters);
   const pages = Math.max(1, Math.ceil(ctx.visible.length / PAGE_SIZE));
-  const currentPage = Math.min(offset, pages - 1);
+  const currentPage = identity === paging.identity ? Math.min(paging.offset, pages - 1) : 0;
+  const setOffset = offset => setPaging({identity, offset});
   const shown = ctx.visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
   const available = ctx.visible.filter(row => row.available);
   const title = ctx.view === "race" ? "Choose ghosts to race" : ctx.view === "custom" ? "Choose your ghosts" : "Your ghost collection";
