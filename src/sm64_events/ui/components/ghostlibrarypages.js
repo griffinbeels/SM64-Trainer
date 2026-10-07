@@ -6,6 +6,7 @@ import { GhostRow, Rows } from "./ghostlibrarybrowse.js";
 const html = htm.bind(h);
 const heading = (title, text) => html`<div class="ghost-library-page-heading"><h3 class="ghost-library-step-title" tabindex="-1">${title}</h3><p class="meta">${text}</p></div>`;
 const count = n => `${n} ${n === 1 ? "ghost" : "ghosts"}`;
+const unmatchedNote = n => n ? ` ${n} ${n === 1 ? "needs" : "need"} a matching segment definition before racing.` : "";
 
 export function LibraryHome({ctx}) {
   return html`<section class="ghost-library-context">
@@ -103,7 +104,7 @@ export function LibraryReceipt({ctx}) {
   return html`<span class="ghost-library-receipt-mark" aria-hidden="true">✓</span>
     ${heading(imported ? "Ghosts added to your library" : "Your collection is ready",
       imported ? `${count(receipt.imported)} added.` : `${count(receipt.exported)} · Shared as ${ctx.author}`)}
-    ${imported ? html`<p class="ghost-library-notice">${receipt.duplicates || 0} already in your library.${receipt.unmatched ? ` ${receipt.unmatched} need a matching segment definition before racing.` : ""}</p>
+    ${imported ? html`<p class="ghost-library-notice">${receipt.duplicates || 0} already in your library.${unmatchedNote(receipt.unmatched)}</p>
       <div class="ghost-library-home-links"><button onclick=${() => {ctx.startBrowser("browse"); ctx.filter({source: "import", practice: true});}}>View imported ghosts</button>
         <button disabled=${Boolean(ctx.raceReason)} onclick=${() => ctx.startBrowser("race", false, ctx.opening)}>Choose ghosts to race</button></div>
       ${ctx.raceReason ? html`<p class="meta">${ctx.raceReason}</p>` : null}` : html`
