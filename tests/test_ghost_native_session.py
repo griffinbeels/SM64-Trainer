@@ -231,6 +231,58 @@ def test_scope_round_trip_with_identical_clips_never_reuses_the_same_start(tmp_p
     native.stop()
 
 
+def test_scope_switch_revokes_native_owner_before_population_failure(tmp_path):
+    from sm64_events.ghost.rivals import Rivals
+    from sm64_events.storage.db import Database
+    from tests.test_ghost_adaptive import Standards, attempt, save
+
+    session, source, tracker = native_session(tmp_path)
+    native = session._native
+    tracker.db, tracker.ranks = Database(tmp_path / "scope-failure.db"), Standards()
+    row = attempt(7, 30, course_id=24, star_id=1, strat_tag="10 coin",
+                  native_clock_frame=100, closed_frame=130)
+    tracker.db.upsert_attempt(row)
+    save(tracker.db, row)
+    target = session._read_target()
+    origin = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+              "utc": "2026-09-21T08:00:00+00:00", "full_start_token": (1, 9), "full_start_now": True}
+    native._origin_of = lambda kind, entity_key: origin
+    served = source.snapshot_status
+    generations = {"prepared_generation": 1, "active_generation": 1}
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
+
+    def metadata_snapshot(_kind, _entity, *, clock, game_version, strategy=None):
+        if strategy is None:
+            assert source.commands[-1] == {"enabled": False}
+            assert native._asset is native._selected_asset is None
+            raise OSError("Overall population unavailable")
+        return ()
+
+    population = SimpleNamespace(generation=1, metadata_snapshot=metadata_snapshot)
+    session._rivals = Rivals(tracker, population, native, lambda: "us")
+
+    async def check():
+        await session.update(enabled=True)
+        native.note()
+        assert source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 1
+        with pytest.raises(OSError, match="Overall population unavailable"):
+            await session.update({"target": target, "rivals": {"scope": "overall"}})
+        native.note()
+        assert source.commands[-1] == {"enabled": False}
+        assert native._selected_asset is None
+        await session.update({"target": target, "rivals": {"scope": "strategy"}})
+        generations["prepared_generation"] = session._rivals.generation
+        native.note()
+        assert not source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 0
+        assert native._selected_asset is None
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        tracker.db.close()
+
+
 def test_cancel_preparation_invalidates_obsolete_readiness_but_retains_the_active_race(tmp_path):
     session, source, _ = native_session(tmp_path)
     native = session._native
