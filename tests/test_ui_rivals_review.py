@@ -387,7 +387,7 @@ def practice_scopes(browser):
     payload = {**ghost_session(enabled=True), "rivals": session()["rivals"]}
     for recording in (*payload["rivals"]["rows"], payload["rivals"]["pb"]):
         recording.update(strategy=payload["target"]["strat"], strategy_name=payload["target"]["strat"])
-    payload["rivals"]["pb"]["hue_degrees"] = 250
+    payload["rivals"]["pb"].update(frames=343, hue_degrees=250)
     with serve_ui_with_ghost(payload) as (base, _state):
         context = browser.new_context(viewport={"width": 1500, "height": 1100})
         page = context.new_page()
@@ -426,6 +426,7 @@ def practice_scopes(browser):
                 for star in data["stars"]:
                     if (star["course_id"], star["star_id"]) == (2, 4):
                         star["one_ladder"] = True
+                        star["rank"] = deepcopy(star["entity_rank"])
             route.fulfill(response=response, json=data)
         page.route("**/api/ghost", ghost_write)
         page.route("**/api/ghost/rivals/search?*", search)
@@ -458,6 +459,8 @@ def test_practice_tabs_swap_ghost_scope_and_show_recorded_strategy(practice_scop
     panel.get_by_text("Cannonless", exact=True).wait_for()
     assert state["searches"][-1]["scope"] == ["overall"]
     panel.get_by_role("button", name="Close dialog", exact=True).click()
+    assert card.locator(".rival-row").filter(has_text="Your personal best").get_by_text('11"43', exact=True).is_visible()
+    assert card.locator(".rank-banner-empty").count() == 0
     _screenshot(page, tmp_path, f"round10-overall-rivals-{width}.png")
     strategy.click()
     card.get_by_role("button", name="Replace Alex", exact=True).wait_for()
