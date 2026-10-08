@@ -85,12 +85,12 @@ def current_pb_ghost(db, kind: str, entity_key: str, strat: str | None) -> Attem
 
 
 def eligible_attempt(attempt, identity) -> bool:
-    """A current local save may anchor rivals only with judged complete evidence.
+    """Population admission requires judged complete evidence.
 
-    This deliberately differs from legacy manual PB playback. Unknown validity,
-    ROM or star timing remains privately playable but cannot seed automatic
-    selection. A 100-coin star reattributed from the segment engine retains that
-    engine's known clock span instead of pretending it began at a star reset.
+    Local saves with unknown validity, ROM or star timing remain privately
+    playable; those facts cannot certify a population recording. A 100-coin
+    star reattributed from the segment engine retains that engine's known clock
+    span instead of pretending it began at a star reset.
     """
     from sm64_events.inputs.service import entity_key_of
     from sm64_events.tracking.caveats import save_state_run
@@ -130,44 +130,47 @@ def local_attempt_source(attempt) -> dict | None:
 
 
 def saved_pb_basis(db, ranks, identity) -> dict | None:
-    """Best current saved strategy slot, on the canonical clock and explicit ROM.
+    """The current strategy's saved PB, graded exactly as Practice grades it.
 
-    Resolve latest slots BEFORE strict filtering and comparison. A deliberately
-    slower save replaces its predecessor; an undo reveals the predecessor through
-    the existing database visibility rules. Historical minima never participate.
-    The rank basis survives expired pose files; the native provider decides
-    whether its separate PB playback copy can still be prepared.
+    Resolve the latest visible slot through the canonical practice lookup. A
+    deliberately slower save replaces its predecessor; an undo reveals the
+    predecessor through database visibility. Historical minima never participate.
+    Local legacy and imported saves remain legitimate rank anchors; strict
+    population certificates are a separate contract. The rank survives expired
+    pose files and incompatible ROMs. Playback needs a compatible local owner,
+    and the native provider decides whether its pose files can be prepared.
     """
     from sm64_events.ghost.adaptive import rank_frames
     from sm64_events.inputs.service import entity_key_of
-    from sm64_events.tracking.views import latest_pbs_by_strategy
-    from types import SimpleNamespace
+    from sm64_events.tracking.views import current_pbs_by_strat
 
-    if db is None or ranks is None or identity.game_version not in ("us", "jp"):
+    if db is None or ranks is None or not identity.strategy or identity.game_version not in ("us", "jp"):
         return None
-    choices = []
-    for row in latest_pbs_by_strategy(db.pbs()).values():
-        if (row["timer_mode"] != identity.clock or row.get("game_version") != identity.game_version
-                or not row.get("strat_tag") or type(row.get("frames")) is not int or row["frames"] <= 0
-                or type(row.get("attempt_id")) is not int):
-            continue
-        target = SimpleNamespace(segment_id=row["segment_id"], course_id=row["course_id"], star_id=row["star_id"])
-        if entity_key_of(target) != (identity.kind, identity.entity_key):
-            continue
-        attempt = db.attempt(row["attempt_id"])
-        if eligible_attempt(attempt, identity):
-            choices.append({**row, "source": local_attempt_source(attempt)})
-    if not choices:
+    if identity.kind == "segment":
+        key = ("segment", int(identity.entity_key), identity.clock, identity.strategy)
+    elif identity.kind == "star":
+        course, star = map(int, identity.entity_key.split("-"))
+        key = (course, star, identity.clock, identity.strategy)
+    else:
         return None
-    row = min(choices, key=lambda item: (item["frames"], -item["id"]))
-    progress = rank_frames(ranks, identity, row["frames"])
+    row = current_pbs_by_strat(db.pbs()).get(key)
+    if row is None or type(row.get("frames")) is not int or row["frames"] <= 0:
+        return None
+    progress = rank_frames(ranks, identity, row["frames"], version=row.get("game_version"))
     if progress is None:
         return None
-    ghost = AttemptGhost(row["attempt_id"], identity.kind, identity.entity_key,
-                         row["strat_tag"], row["frames"], pb=True)
+    number = row.get("attempt_id")
+    attempt = db.attempt(number) if type(number) is int and number > 0 else None
+    source, ghost = local_attempt_source(attempt), None
+    if (attempt is not None and entity_key_of(attempt) == (identity.kind, identity.entity_key)
+            and getattr(attempt, "strat_tag", None) in (None, identity.strategy)
+            and row.get("game_version") in (None, identity.game_version)
+            and getattr(attempt, "game_version", None) in (None, identity.game_version)):
+        ghost = AttemptGhost(number, identity.kind, identity.entity_key,
+                             row["strat_tag"], row["frames"], pb=True)
     return {"frames": row["frames"], **progress, "attempt_id": row["attempt_id"],
             "pb_id": row["id"], "strategy": row["strat_tag"], "current_strategy": identity.strategy,
-            "source": row["source"], "ghost": ghost}
+            "game_version": row.get("game_version"), "source": source, "ghost": ghost}
 
 
 class GhostLibrary:

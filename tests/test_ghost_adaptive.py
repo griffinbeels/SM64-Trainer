@@ -1,6 +1,7 @@
 """Adaptive rivals preserve current saves, canonical ranks and chosen slots."""
 from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +11,7 @@ from sm64_events.ghost.adaptive import (
     PracticeIdentity, add_slot, checked_options, rank_frames, rank_recordings, select_rivals,
 )
 from sm64_events.ghost.pb import AttemptGhost, current_pb_ghost, eligible_attempt, saved_pb_basis
-from sm64_events.ranks import curves, scoring
+from sm64_events.ranks import classify, curves, scoring
 from sm64_events.storage.db import Database
 from sm64_events.tracking.projection import Attempt
 
@@ -19,8 +20,9 @@ SIGNATURE = "ab" * 32
 
 
 class Standards:
-    """Only the store boundary is a fixture; the actual full curve is evaluated."""
+    """Only the store boundary is a fixture; canonical strategy scoring is real."""
     calibration_revision = "compiled-current"
+    grading_version = "us"
 
     def __init__(self, clock="igt"):
         self.clock, self.reads, self.requests = clock, 0, []
@@ -33,9 +35,12 @@ class Standards:
         self.reads += 1
         yield
 
-    def overall_curve(self, key, version=None):
-        self.requests.append((key, version))
-        return self.curves[version]
+    def ladder_cs(self, key, strategy, version=None):
+        self.requests.append((key, strategy, version))
+        ladder = self.curves[version or self.grading_version]["ladder_cs"]
+        if strategy == "Missing":
+            return {}
+        return {tier: round(value * (.75 if strategy == "Other" else 1)) for tier, value in ladder.items()}
 
     def clock_for(self, _key):
         return self.clock
@@ -76,19 +81,21 @@ def save(database, run, **values):
                                      game_version=run.game_version) | values))
 
 
-def test_complete_curve_and_exact_displayed_frames_grade_every_row():
+def test_current_strategy_and_exact_displayed_frames_grade_every_row():
     store = Standards()
     row = recording(step=44, tier="Mario", division="I")
     result, = rank_recordings([row], store, IDENTITY)
-    # The 2000cs interior node earns 61.3: Platinum V. The neighboring 2100cs
-    # observation distinguishes the complete shape from its tier-only ladder.
+    # Claimed ranks never participate; the strategy's canonical ladder does.
     assert (result["tier"], result["division"], result["step"]) == ("Platinum", "V", 20)
     assert result["calibration_revision"] == "compiled-current" and result["current_strategy"] == "Standard"
-    assert row["step"] == 44 and store.reads == 1 and store.requests == [("star:2:1", "us")]
+    assert row["step"] == 44 and store.reads == 1 and store.requests == [("star:2:1", "Standard", "us")]
     nearby = rank_frames(store, IDENTITY, 630)
-    assert (nearby["tier"], nearby["division"], nearby["step"]) == ("Gold", "I", 19)
-    legacy = scoring.progress_for_time(store.curves["us"]["ladder_cs"], 2100)
-    assert (legacy["tier"], legacy["division"]) == ("Gold", "II")
+    assert (nearby["tier"], nearby["division"], nearby["step"]) == ("Gold", "II", 18)
+    overall = curves.progress_for_time(store.curves["us"], 2100)
+    assert (overall["tier"], overall["division"]) == ("Gold", "I")
+    assert rank_frames(store, replace(IDENTITY, strategy="Other"), 630) != nearby
+    assert rank_frames(store, replace(IDENTITY, strategy="Missing"), 630) is None
+    assert rank_frames(store, replace(IDENTITY, strategy=None), 630) is None
 
 
 @pytest.mark.parametrize("bad", [
@@ -98,7 +105,7 @@ def test_complete_curve_and_exact_displayed_frames_grade_every_row():
     {"kind": "segment"}, {"entity_key": "2-2"}, {"clock": "rta"},
     {"game_version": None}, {"game_version": "jp"}, {"practice": False, "certified": False},
     {"frames": True}, {"frames": 0}, {"frames": -1}, {"frames": 600.0},
-    {"id": ""}, {"player_id": ""}, {"player_name": " "}, {"strategy": None}, {"ghost": None},
+    {"id": ""}, {"player_id": ""}, {"player_name": " "}, {"strategy": None}, {"strategy": "Other"}, {"ghost": None},
 ])
 def test_uncertified_incompatible_and_malformed_metadata_cannot_be_ranked(bad):
     assert rank_recordings([recording(**bad)], Standards(), IDENTITY) == ()
@@ -109,7 +116,7 @@ def test_explicit_rom_and_canonical_clock_never_fall_back():
     jp = replace(IDENTITY, game_version="jp")
     result, = rank_recordings([recording(game_version="jp")], store, jp)
     assert result["step"] != rank_recordings([recording()], store, IDENTITY)[0]["step"]
-    assert store.requests[0] == ("star:2:1", "jp")
+    assert store.requests[0] == ("star:2:1", "Standard", "jp")
     assert rank_recordings([recording()], Standards("rta"), IDENTITY) == ()
     assert rank_frames(Standards("rta"), IDENTITY, 600) is None
     assert rank_recordings([recording()], store, replace(IDENTITY, game_version=None)) == ()
@@ -165,7 +172,20 @@ def test_ceiling_caps_both_endpoints_and_only_faster_final_recordings_qualify():
     rows = [ranked(43, "lower", 10), ranked(44, "equal", 100), ranked(44, "slower", 101), ranked(44, "faster", 99)]
     result = select_rivals(rows, basis(44, 100), {}, {})
     assert [row["id"] for row in result] == ["faster"]
-    assert [row["id"] for row in select_rivals(rows, basis(43, 100), {}, {})] == ["faster"]
+    # A genuinely lower same-ROM subdivision has a slower time; all of these
+    # top-subdivision records then represent progress. The cap alone compares
+    # times within the same final subdivision.
+    assert {row["id"] for row in select_rivals(rows, basis(43, 102), {}, {})} == {"faster", "equal", "slower"}
+
+
+def test_foreign_region_anchor_compares_strategy_steps_and_never_claims_faster_ceiling_time():
+    # The current-ROM recording takes longer in frames but earns a higher rank
+    # on its own strategy standards than the PB set on the other ROM.
+    row = ranked(21, "higher-rank", 200, game_version="us")
+    assert select_rivals([row], basis(20, 100, game_version="jp"), {}, {})[0]["id"] == "higher-rank"
+    capped = ranked(44, "different-clock", 99, game_version="us")
+    assert select_rivals([capped], basis(44, 100, game_version="jp"), {}, {}) == ()
+    assert select_rivals([capped], basis(44, 100, game_version="us"), {}, {})[0]["id"] == "different-clock"
 
 
 def test_no_pb_begins_at_the_floor_and_fixed_range_can_include_slower_runs():
@@ -176,12 +196,17 @@ def test_no_pb_begins_at_the_floor_and_fixed_range_can_include_slower_runs():
     assert result[0]["frames"] == 2000
 
 
-def test_strategy_filter_uses_the_current_strategy_even_when_another_strategy_owns_the_pb():
+def test_strategy_is_always_required_for_automatic_and_chosen_rivals():
     rows = [ranked(10, "standard"), ranked(11, "other", strategy="Other")]
     pb = basis(strategy="Other", current_strategy="Standard")
-    assert [row["id"] for row in select_rivals(rows, pb, {"strategy_only": True}, {})] == ["standard"]
+    assert [row["id"] for row in select_rivals(rows, pb, {"strategy_only": False}, {})] == ["standard"]
     assert [row["id"] for row in select_rivals(rows, None, {"strategy_only": True}, {})] == []
     assert len(select_rivals([ranked(1)], None, {"strategy_only": True}, {})) == 1
+    chosen, = select_rivals([rows[1]], pb, {}, {"0": "other"})
+    assert chosen["ghost"] is None and chosen["available"] is False
+    assert select_rivals([rows[1]], basis(current_strategy="Other"), {}, {})[0]["id"] == "other"
+    assert "strategy_only" not in checked_options({"strategy_only": False, "count": 2})
+    assert checked_options({"strategy_only": True, "count": 2})["count"] == 2
 
 
 def test_population_winner_is_per_stable_player_strategy_and_subdivision():
@@ -190,7 +215,7 @@ def test_population_winner_is_per_stable_player_strategy_and_subdivision():
             ranked(10, "other-player", 1650, player_id="B", player_name="Same name"),
             ranked(10, "other-strategy", 1690, player_id="A", strategy="Other")]
     result = select_rivals(rows, basis(), {}, {})
-    assert {row["id"] for row in result} == {"fast", "other-player", "other-strategy"}
+    assert {row["id"] for row in result} == {"fast", "other-player"}
 
 
 def test_sparse_ranges_never_substitute_an_outside_rank():
@@ -300,7 +325,8 @@ def test_latest_saved_strategy_slots_are_resolved_before_comparing_or_undoing(tm
         save(database, runs[0])
         slower = save(database, runs[1])
         other = save(database, runs[2])
-        assert saved_pb_basis(database, Standards(), IDENTITY)["attempt_id"] == 3
+        assert saved_pb_basis(database, Standards(), IDENTITY)["attempt_id"] == 2
+        assert saved_pb_basis(database, Standards(), replace(IDENTITY, strategy="Other"))["attempt_id"] == 3
         database.delete_pb(other)
         assert saved_pb_basis(database, Standards(), IDENTITY)["attempt_id"] == 2
         database.delete_pb(slower)
@@ -312,15 +338,15 @@ def test_latest_saved_strategy_slots_are_resolved_before_comparing_or_undoing(tm
         database.close()
 
 
-def test_invalid_latest_save_does_not_resurrect_a_historical_minimum(tmp_path):
+def test_visible_local_save_remains_current_without_community_admission(tmp_path):
     database = Database(tmp_path / "history.db")
     clean, invalid = attempt(1), attempt(2, 500, valid=False, invalid_reason="no_reset")
     try:
         database.replace_attempts([clean, invalid])
         save(database, clean)
         latest = save(database, invalid)
-        assert saved_pb_basis(database, Standards(), IDENTITY) is None
-        # Manual legacy playback deliberately keeps its independent contract.
+        assert saved_pb_basis(database, Standards(), IDENTITY)["attempt_id"] == 2
+        assert not eligible_attempt(invalid, IDENTITY)
         assert current_pb_ghost(database, "star", "2-1", "Standard").attempt_id == 2
         database.delete_pb(latest)
         assert saved_pb_basis(database, Standards(), IDENTITY)["attempt_id"] == 1
@@ -328,7 +354,7 @@ def test_invalid_latest_save_does_not_resurrect_a_historical_minimum(tmp_path):
         database.close()
 
 
-def test_pb_anchor_excludes_other_clocks_regions_and_unknown_history(tmp_path):
+def test_pb_anchor_uses_its_original_region_and_exact_strategy_clock(tmp_path):
     database = Database(tmp_path / "history.db")
     runs = [attempt(1, 600), attempt(2, 300, game_version="jp"),
             attempt(3, 400, strat_tag="Unknown", game_version=None),
@@ -339,21 +365,109 @@ def test_pb_anchor_excludes_other_clocks_regions_and_unknown_history(tmp_path):
             save(database, run)
         save(database, runs[0], timer_mode="rta", frames=100)
         database.insert_pb(2, 1, "Imported", "igt", 100, None, "2026-10-07T00:00:20Z", game_version="us")
-        assert saved_pb_basis(database, Standards(), IDENTITY)["attempt_id"] == 1
+        result = saved_pb_basis(database, Standards(), IDENTITY)
+        assert result["attempt_id"] == 2 and result["ghost"] is None
+        assert {key: result[key] for key in ("step", "tier", "division")} == rank_frames(Standards(), IDENTITY, 300, version="jp")
         assert saved_pb_basis(database, Standards(), replace(IDENTITY, game_version="jp"))["attempt_id"] == 2
         assert saved_pb_basis(database, Standards("rta"), IDENTITY) is None
     finally:
         database.close()
 
 
-def test_saved_pb_row_and_backing_attempt_must_belong_to_the_same_target(tmp_path):
+def test_reported_wild_blue_legacy_pb_remains_playable_and_matches_practice_rank(tmp_path):
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import _strat_rank, grading_basis
+
+    # Round9's actual saved owner: PB321frames, ROM null on both rows. Its
+    # judged native span is complete; unknown historical ROM is not a new
+    # community certificate and must not erase the user's own saved ghost.
+    identity = replace(IDENTITY, entity_key="2-2")
+    run = attempt(13194, 321, session_id=50, star_id=2, game_version=None,
+                  rta_frames=319, anchor_frame=30978, native_clock_frame=30978,
+                  closed_frame=31297, started_utc="2026-10-06T21:31:30.931468Z",
+                  native_clock_utc="2026-10-06T21:31:30.931468Z",
+                  ended_utc="2026-10-06T21:31:41.611583Z")
+    database = Database(tmp_path / "reported.db")
+    bundled = Path(adaptive.__file__).parents[1] / "data"
+    ranks = RankStandards(tmp_path / "standards.json", bundled / "rank_standards.seed.json",
+                          bundled / "sheet_ladders.seed.json")
+    ranks.load()
+    try:
+        database.replace_attempts([run])
+        save(database, run)
+        pb = database.current_pb(2, 2, "igt", strat_tag="Standard")
+        practice = _strat_rank(ranks, "star:2:2", "Standard", grading_basis("pb", pb, [], "Standard", "igt"))
+        result = saved_pb_basis(database, ranks, identity)
+        assert result["frames"] == 321 and classify.display_cs(result["frames"]) == 1070
+        assert (result["tier"], result["division"]) == (practice["rank"], practice["division"])
+        assert result["step"] == scoring.progression_key(practice["rank"], practice["division"])
+        assert result["ghost"].attempt_id == 13194 and result["ghost"].pb
+        assert result["source"] == {"session_id": 50, "attempt_id": 13194, "started_utc": run.started_utc}
+        assert not eligible_attempt(run, identity)
+        assert rank_recordings([recording(game_version=None, entity_key="2-2", frames=321)], ranks, identity) == ()
+        # This fixture also catches stale strategy cutoffs: each resolution
+        # reads the current store, just like the live practice banner does.
+        ranks.set_threshold("star:2:2", "Standard", "Mario", 20)
+        after = saved_pb_basis(database, ranks, identity)
+        assert after["tier"] == "Mario" and after["step"] != result["step"]
+    finally:
+        database.close()
+
+
+def test_reported_gold_i_range_is_the_next_tiers_five_subdivisions():
+    saved = basis(scoring.progression_key("Gold", "I"), 321)
+    rows = [ranked(step, frames=320 - index) for index, step in enumerate(range(20, 25))]
+    selected = select_rivals(rows, saved, {}, {})
+    assert (selected[0]["step"], selected[-1]["step"]) == (
+        scoring.progression_key("Platinum", "V"), scoring.progression_key("Platinum", "I"))
+
+
+def test_imported_baseline_and_legacy_unknown_validity_anchor_without_fabricated_playback(tmp_path):
+    database = Database(tmp_path / "baseline.db")
+    ranks = Standards()
+    run = attempt(game_version=None, valid=None, native_clock_frame=None, closed_frame=None, timed_at=None)
+    try:
+        database.replace_attempts([run])
+        save(database, run)
+        legacy = saved_pb_basis(database, ranks, IDENTITY)
+        assert legacy["ghost"].attempt_id == run.id and not eligible_attempt(run, IDENTITY)
+        imported = database.insert_pb(2, 1, "Standard", "igt", 900, None, "2026-10-08T00:00:00Z",
+                                      imported_from="Developer simulation", game_version=None)
+        ranks.grading_version = "jp"
+        result = saved_pb_basis(database, ranks, IDENTITY)
+        assert result["pb_id"] == imported and result["attempt_id"] is None
+        assert result["ghost"] is None and result["source"] is None
+        assert {key: result[key] for key in ("step", "tier", "division")} == rank_frames(ranks, IDENTITY, 900, version=None)
+        database.delete_pb(imported)
+        assert saved_pb_basis(database, ranks, IDENTITY)["ghost"].attempt_id == run.id
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize("hidden", [
+    {"cleared": True}, {"anchor_type": "state_loaded"}, {"state_loads": 1}, {"invalid_reason": "save_state"},
+])
+def test_canonical_pb_visibility_excludes_hidden_and_save_state_runs(tmp_path, hidden):
+    database = Database(tmp_path / "visibility.db")
+    runs = [attempt(1), attempt(2, 500, **hidden)]
+    try:
+        database.replace_attempts(runs)
+        for run in runs:
+            save(database, run)
+        assert saved_pb_basis(database, Standards(), IDENTITY)["attempt_id"] == 1
+    finally:
+        database.close()
+
+
+def test_saved_pb_ranks_keep_practice_identity_but_wrong_backing_owner_cannot_play(tmp_path):
     database = Database(tmp_path / "history.db")
     run = attempt()
     try:
         database.replace_attempts([run])
         save(database, run, star_id=2)
         assert saved_pb_basis(database, Standards(), IDENTITY) is None
-        assert saved_pb_basis(database, Standards(), replace(IDENTITY, entity_key="2-2")) is None
+        result = saved_pb_basis(database, Standards(), replace(IDENTITY, entity_key="2-2"))
+        assert result["frames"] == run.igt_frames and result["ghost"] is None
     finally:
         database.close()
 
@@ -365,7 +479,7 @@ def test_saved_pb_row_and_backing_attempt_must_belong_to_the_same_target(tmp_pat
     {"native_clock_utc": None}, {"native_clock_frame": 100, "closed_frame": 99},
     {"timed_at": None}, {"timed_at": "grab"},
 ])
-def test_strict_anchor_requires_judged_complete_supported_evidence(bad):
+def test_population_admission_requires_judged_complete_supported_evidence(bad):
     assert not eligible_attempt(attempt(**bad), IDENTITY)
 
 

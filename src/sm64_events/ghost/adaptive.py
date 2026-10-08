@@ -1,4 +1,4 @@
-"""Pure selection of certified rivals against the current Overall rank.
+"""Pure selection of certified rivals against the current strategy rank.
 
 The population provider owns admission, clip validation and storage. This
 module consumes bounded metadata snapshots; it never opens clips or fetches
@@ -11,8 +11,7 @@ from dataclasses import dataclass
 from itertools import islice
 
 from sm64_events.ghost.native_session import ghost_hue
-from sm64_events.ranks import classify, curves, scoring
-from sm64_events.ranks.calibration import resolve_curve
+from sm64_events.ranks import classify, scoring
 from sm64_events.ranks.standards import entity_key
 
 MAX_RIVALS = 4
@@ -22,9 +21,10 @@ MAX_STEP = scoring.progression_key(classify.RANK_NAMES[0], scoring.DIVISION_NUME
 PB_HUE_DEGREES = 250
 DEFAULT_OPTIONS = {
     "mode": "adaptive", "count": MAX_RIVALS, "include_pb": True,
-    "strategy_only": False, "min_ahead": 1, "max_ahead": 5,
+    "min_ahead": 1, "max_ahead": 5,
     "min_step": 0, "max_step": MAX_STEP,
 }
+_IDENTITY_VERSION = object()
 
 
 @dataclass(frozen=True)
@@ -51,35 +51,44 @@ def _read_context(ranks):
     return ranks.read_context() if hasattr(ranks, "read_context") else nullcontext()
 
 
-def _progress(curve, frames):
-    result = curves.progress_for_time(curve, classify.display_cs(frames))
-    if result is None:
+def _progress(ladder, frames):
+    if not ladder:
         return None
+    result = scoring.progress_for_time(ladder, classify.display_cs(frames))
     return {"tier": result["tier"], "division": result["division"],
             "step": scoring.progression_key(result["tier"], result["division"])}
 
 
-def rank_frames(ranks, identity: PracticeIdentity, frames: int) -> dict | None:
-    """Grade one saved basis using the same complete curve as population rows."""
-    if ranks is None or type(frames) is not int or frames <= 0 or identity.game_version not in ("us", "jp"):
+def rank_frames(ranks, identity: PracticeIdentity, frames: int, *, version=_IDENTITY_VERSION) -> dict | None:
+    """Grade the practice strategy; saved times may name their original ROM.
+
+    Omitting version grades a recording on the observed ROM. Explicit None is
+    the existing legacy saved-time rule: follow the store's grading version.
+    """
+    version = identity.game_version if version is _IDENTITY_VERSION else version
+    if (ranks is None or type(frames) is not int or frames <= 0 or not identity.strategy
+            or identity.game_version not in ("us", "jp") or version not in (None, "us", "jp")):
         return None
     with _read_context(ranks):
         key = rank_entity_key(identity)
         if ranks.clock_for(key) != identity.clock:
             return None
-        return _progress(resolve_curve(ranks, key, identity.game_version), frames)
+        return _progress(ranks.ladder_cs(key, identity.strategy, version), frames)
 
 
 def checked_options(value: dict) -> dict:
     """Validate the complete settings draft without changing its caller."""
-    if not isinstance(value, dict) or set(value) - DEFAULT_OPTIONS.keys():
+    if not isinstance(value, dict) or set(value) - (DEFAULT_OPTIONS.keys() | {"strategy_only"}):
         raise ValueError("Choose valid rival settings.")
-    result = DEFAULT_OPTIONS | value
+    if "strategy_only" in value and type(value["strategy_only"]) is not bool:
+        raise ValueError("Choose valid rival settings.")
+    # Old persisted drafts keep their other choices; every strategy now has its
+    # own rivals, so the former opt-in field no longer controls selection.
+    result = DEFAULT_OPTIONS | {key: item for key, item in value.items() if key != "strategy_only"}
     if result["mode"] not in ("adaptive", "fixed"):
         raise ValueError("Choose how the rival range follows your practice.")
-    for key in ("include_pb", "strategy_only"):
-        if type(result[key]) is not bool:
-            raise ValueError("Choose valid rival settings.")
+    if type(result["include_pb"]) is not bool:
+        raise ValueError("Choose valid rival settings.")
     limits = {"count": (1, MAX_RIVALS), "min_ahead": (0, MAX_AHEAD), "max_ahead": (0, MAX_AHEAD),
               "min_step": (0, MAX_STEP), "max_step": (0, MAX_STEP)}
     for key, (low, high) in limits.items():
@@ -100,6 +109,7 @@ def _bounded(rows):
 def _compatible(row, identity):
     return (isinstance(row, dict) and row.get("certified") is True and row.get("valid") is True
             and row.get("full_start") is True
+            and row.get("strategy") == identity.strategy
             and (row.get("kind"), row.get("entity_key"), row.get("clock"), row.get("game_version"))
             == (identity.kind, identity.entity_key, identity.clock, identity.game_version)
             and (identity.kind != "segment" or identity.signature is not None
@@ -113,19 +123,19 @@ def _compatible(row, identity):
 def rank_recordings(rows, ranks, identity: PracticeIdentity) -> tuple[dict, ...]:
     """Regrade certified metadata; ignore claimed ranks and uncertified imports."""
     rows = _bounded(rows)
-    if ranks is None or identity.game_version not in ("us", "jp"):
+    if ranks is None or not identity.strategy or identity.game_version not in ("us", "jp"):
         return ()
     with _read_context(ranks):
         key = rank_entity_key(identity)
         if ranks.clock_for(key) != identity.clock:
             return ()
-        curve = resolve_curve(ranks, key, identity.game_version)
+        ladder = ranks.ladder_cs(key, identity.strategy, identity.game_version)
         revision = getattr(ranks, "calibration_revision", None)
         result = {}
         for row in rows:
             if not _compatible(row, identity):
                 continue
-            progress = _progress(curve, row["frames"])
+            progress = _progress(ladder, row["frames"])
             if progress is not None:
                 result.setdefault(row["id"], {**row, **progress, "calibration_revision": revision,
                                               "current_strategy": identity.strategy})
@@ -193,9 +203,14 @@ def _missing_pin(identity, slot):
 
 
 def _eligible_auto(row, pb, options, low, high, strategy):
+    # Different ROMs have different timing standards. A higher strategy step
+    # proves progress without comparing their raw clocks. At the capped final
+    # step, a faster time only proves progress on the same ROM (or legacy PB).
+    progresses = (pb is None or row["step"] > pb["step"]
+                  or pb.get("game_version") in (None, row.get("game_version")) and row["frames"] < pb["frames"])
     return (row.get("manual_only") is not True and low <= row["step"] <= high
-            and (options["mode"] == "fixed" or pb is None or row["frames"] < pb["frames"])
-            and (not options["strategy_only"] or row.get("strategy") == strategy))
+            and (options["mode"] == "fixed" or progresses)
+            and row.get("strategy") == strategy)
 
 
 def _automatic(rows, count, low, high, players):
@@ -234,6 +249,7 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=()) -> tuple
     if strategy is None:
         strategy = next((row.get("current_strategy") for row in candidates.values()
                          if row.get("current_strategy") is not None), None)
+    candidates = {key: row for key, row in candidates.items() if strategy is not None and row.get("strategy") == strategy}
     used = {row["id"] for row in candidates.values()
             if options["include_pb"] and _same_as_pb(row, pb)}
     result = {}
