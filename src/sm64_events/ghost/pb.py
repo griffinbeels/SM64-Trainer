@@ -114,6 +114,21 @@ def eligible_attempt(attempt, identity) -> bool:
     return native_kind == "star" and getattr(attempt, "timed_at", None) == "xcam"
 
 
+def local_attempt_source(attempt) -> dict | None:
+    """Local owner lineage, never an identity claimed by a private import.
+
+    Session and start time distinguish attempt numbers reused by fresh profiles.
+    Population admission derives this from its verified projected attempt; these
+    fields must not be accepted as evidence in a future remote provider.
+    """
+    number = getattr(attempt, "id", None)
+    session = getattr(attempt, "session_id", None)
+    started = getattr(attempt, "started_utc", None)
+    if type(number) is not int or number <= 0 or type(session) is not int or session <= 0 or not started:
+        return None
+    return {"session_id": session, "attempt_id": number, "started_utc": started}
+
+
 def saved_pb_basis(db, ranks, identity) -> dict | None:
     """Best current saved strategy slot, on the canonical clock and explicit ROM.
 
@@ -141,7 +156,7 @@ def saved_pb_basis(db, ranks, identity) -> dict | None:
             continue
         attempt = db.attempt(row["attempt_id"])
         if eligible_attempt(attempt, identity):
-            choices.append(row)
+            choices.append({**row, "source": local_attempt_source(attempt)})
     if not choices:
         return None
     row = min(choices, key=lambda item: (item["frames"], -item["id"]))
@@ -152,7 +167,7 @@ def saved_pb_basis(db, ranks, identity) -> dict | None:
                          row["strat_tag"], row["frames"], pb=True)
     return {"frames": row["frames"], **progress, "attempt_id": row["attempt_id"],
             "pb_id": row["id"], "strategy": row["strat_tag"], "current_strategy": identity.strategy,
-            "ghost": ghost}
+            "source": row["source"], "ghost": ghost}
 
 
 class GhostLibrary:

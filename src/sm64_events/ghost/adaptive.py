@@ -171,6 +171,11 @@ def _same_as_pb(row, pb):
         return False
     if pb.get("id") == row["id"]:
         return True
+    source = pb.get("source")
+    # Only locally certified population rows carry admission-derived lineage.
+    # Private manual imports cannot assert that they own a local saved run.
+    if source is not None and row.get("manual_only") is not True and source == row.get("source"):
+        return True
     origin = getattr(pb.get("ghost"), "origin", None)
     return origin is not None and origin == getattr(row.get("ghost"), "origin", None)
 
