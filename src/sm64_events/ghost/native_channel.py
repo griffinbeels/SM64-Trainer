@@ -134,6 +134,7 @@ class NativeChannel:
                     raise RejectedControl(f"native ghost command rejected: {error!r}") from error
                 request = self._request
             if request.rom_generation != status.rom_generation:
+                status.prepared_generation = status.active_generation = 0
                 request.rom_generation = status.rom_generation
                 self._next_revision()
             request.heartbeat = (request.heartbeat + 1) & 0xFFFFFFFF
@@ -148,6 +149,8 @@ class NativeChannel:
                 status.displayed = 0
                 status.playback_reason = 1  # GP_PREPARING
                 status.state = 3 if request.play_enabled else 2
+            if status.ack_token != request.token:
+                status.prepared_generation = status.active_generation = 0
             return status, frames
 
     def _next_revision(self):
@@ -162,6 +165,23 @@ class NativeChannel:
         if retired:
             raise ValueError(f"native ghost clips are a list; retired keys: {retired}")
         enabled = bool(value.get("enabled", False))
+        generations = {}
+        for name in ("prepare_generation", "activate_generation", "activate_start"):
+            number = value.get(name, 0)
+            if type(number) is not int or not 0 <= number < 2**64:
+                raise ValueError(f"native ghost {name} is invalid")
+            generations[name] = number
+        if generations["activate_generation"] not in (0, generations["prepare_generation"]):
+            raise ValueError("native ghost activation must name its prepared generation")
+        preparing = generations["prepare_generation"] != 0
+        request.prepare_generation = generations["prepare_generation"]
+        request.activate_generation = generations["activate_generation"]
+        request.activate_start = generations["activate_start"]
+        request.cancel_preparation = int(_switch(value, "cancel_preparation", False))
+        if bool(request.activate_generation) != bool(request.activate_start):
+            raise ValueError("activation requires a certified start sequence")
+        if request.cancel_preparation and (not preparing or request.activate_generation):
+            raise ValueError("cancellation requires a staged generation without activation")
         opacity, nudge = float(value.get("opacity", DEFAULT_OPACITY)), int(value.get("nudge", 0))
         if not 0 <= opacity <= 1 or not -NUDGE_LIMIT_FRAMES <= nudge <= NUDGE_LIMIT_FRAMES:
             raise ValueError("invalid native ghost opacity or timing nudge")
@@ -198,15 +218,15 @@ class NativeChannel:
                     or not math.isfinite(instant) or instant <= 0):
                 raise ValueError("native ghost origin timestamp is invalid")
             request.origin.utc = instant
-        if enabled:
+        if enabled or preparing:
             model_id = value["model_id"]
             if type(model_id) is not int or not 0 < model_id < 2**64:
                 raise ValueError("native ghost model identity is invalid")
             request.model_id = model_id
             units = P.path_units(value["rom_path"]) if value.get("rom_path") else ()
             request.rom_path[:] = units + (0,) * (P.PATH_CHARS - len(units))
-        if enabled or "clips" in value:
-            _set_clips(request, value.get("clips"), enabled)
+        if enabled or preparing or "clips" in value:
+            _set_clips(request, value.get("clips"), enabled and not preparing)
         _set_path(request, value)
         if request.revision == (1 << 64) - 1:
             raise OverflowError("native ghost command identity exhausted")

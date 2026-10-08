@@ -86,12 +86,14 @@ def test_annotations_fit_in_the_existing_request_region():
     assert P.Clip.label.offset == P.Clip.clip_path.offset + 2 * L.IPC_PATH_CHARS
     assert P.Request.names_enabled.offset + 28 == P.Request.path_enabled.offset
     assert P.Request.record_ghosts.offset + 4 == P.Request.path_enabled.offset
-    # The ghost path's eight words close the request (GIPC13 / GP11, I1 order).
+    # Generation scalars follow the original ghost-path block, without moving it.
     path = ("path_enabled", "path_buttons", "path_source", "path_clip",
             "path_ahead_ms", "path_width", "path_opacity", "path_spacing_ms")
     assert [getattr(P.Request, name).offset for name in path] == list(
-        range(P.Request.path_enabled.offset, L.IPC_REQUEST_BYTES, 4))
-    assert [name for name, *_ in P.Request._fields_][-len(path):] == list(path)
+        range(P.Request.path_enabled.offset, P.Request.prepare_generation.offset, 4))
+    assert [name for name, *_ in P.Request._fields_][-12:] == [*path, "prepare_generation", "activate_generation", "activate_start", "cancel_preparation"]
+    assert P.Status.prepared_generation.offset == 240
+    assert P.Status.active_generation.offset == 248
     assert P.Clip().label == b""
 
 

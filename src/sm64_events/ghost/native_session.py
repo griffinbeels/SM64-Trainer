@@ -100,6 +100,15 @@ class NativeGhost:
         self._selected_asset = None
         self._requested = False
         self._portable = portable
+        self._adaptive_generation = 0
+        self._activate_generation = 0
+        self._activate_start = 0
+        self._start_sequence = 0
+        self._pending_asset = None
+        self._pending_hues = {}
+        self._asset_hues = {}
+        self._last_full_start = None
+        self._preparation_canceled = False
 
     def set_portable(self, provider):
         """The human-paced collection provider; never consulted by the clock feed."""
@@ -142,6 +151,7 @@ class NativeGhost:
         lists each one, PB first.
         """
         self._asset = None
+        self._asset_hues = {}
         if not ghosts:
             result, _ = self._resolve_template(target, None)
             if missing and target is not None and self._supported:
@@ -160,6 +170,11 @@ class NativeGhost:
                     asset = None
                 else:
                     clip_ids.add(clip_id)
+                    hue = getattr(template, "hue_degrees", None)
+                    if hue is not None:
+                        if type(hue) is not int or not 0 <= hue < 360:
+                            raise ValueError("ghost hue must be an integer in 0..359")
+                        self._asset_hues[clip_id] = hue
             answers.append(result)
             if asset is not None:
                 assets.append((*asset, result["label"], getattr(template, "frames", None)))
@@ -176,6 +191,45 @@ class NativeGhost:
     def probe(self, target, template):
         """Validate a candidate without changing the asset sent to the renderer."""
         return self._resolve_template(target, template)[0]
+
+    def prepare(self, target, ghosts, controls: dict, generation: int):
+        """Resolve and preload a roster off the poll loop, without adopting it.
+
+        A certified start consumes one readiness snapshot in ``note``. A
+        preparation that finishes later waits for the next full start.
+        """
+        if type(generation) is not int or not 0 < generation < 2**64:
+            raise ValueError("ghost roster generation must be a positive uint64")
+        answer = self.resolve(target, ghosts)
+        assets, hues = self._asset or (), dict(self._asset_hues)
+        source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
+        identity = (target["kind"], target["entity_key"]) if target else None
+        with self._control_lock:
+            if source is not self._source or identity != self._target:
+                self._stop()
+                self._source, self._sent = source, None
+                self._selected_asset = None
+            if self._adaptive_generation and generation < self._adaptive_generation:
+                raise ValueError("ghost roster generation must not move backward")
+            self._target = identity
+            self._pending_asset, self._pending_hues = assets, hues
+            self._adaptive_generation = generation
+            self._preparation_canceled = False
+            self._requested = True
+            self._controls = {**controls,
+                              "stop_at_star": bool(target and target["kind"] == "star"), "mode": 0}
+            self._send()
+        return {**answer, "generation": generation}
+
+    def cancel_preparation(self):
+        """Discard an obsolete future roster while retaining the current race."""
+        with self._control_lock:
+            if not self._adaptive_generation:
+                return
+            self._preparation_canceled = True
+            self._pending_asset, self._pending_hues = (), {}
+            self._activate_generation = self._activate_start = 0
+            self._send()
 
     def _resolve_template(self, target, template):
         answer = {"available": False, "reason": "no_native_poses",
@@ -241,6 +295,26 @@ class NativeGhost:
         (`ghost/settings.py::native_controls`); the target adds the rest."""
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
         with self._control_lock:
+            if self._adaptive_generation:
+                if source is not self._source:
+                    if self._source is not None:
+                        self._source.set_playback(enabled=False)
+                    self._source, self._sent = source, None
+                    self._activate_generation = self._activate_start = 0
+                identity = (target["kind"], target["entity_key"]) if target else None
+                if identity != self._target:
+                    self._stop()
+                else:
+                    self._requested = bool(enabled)
+                    if not enabled:
+                        self._activate_generation = self._activate_start = 0
+                    self._controls = {**controls,
+                                      "stop_at_star": bool(target and target["kind"] == "star"), "mode": 0}
+                    self._send()
+                    return
+            self._adaptive_generation = self._activate_generation = 0
+            self._pending_asset = None
+            self._pending_hues = {}
             if source is not self._source:
                 self._stop()
                 self._source, self._sent = source, None
@@ -267,6 +341,18 @@ class NativeGhost:
         try:
             origin = (self._origin_of(*self._target)
                       if self._target and self._origin_of and self._requested else None)
+            if self._adaptive_generation and not self._preparation_canceled and origin is not None:
+                token = origin.get("full_start_token")
+                if origin.get("full_start_now") and token is not None and token != self._last_full_start:
+                    # Consume even while unready: the later status update may
+                    # never turn this start into a mid-run roster change.
+                    self._last_full_start = token
+                    self._start_sequence += 1
+                    status = self._source.snapshot_status(blocking=False) if self._source is not None else None
+                    if status is not None and status.get("available") and status.get("prepared_generation") == self._adaptive_generation:
+                        self._activate_generation = self._adaptive_generation
+                        self._activate_start = self._start_sequence
+                        self._selected_asset = self._pending_asset
             # Completion or a restore can temporarily remove the tracker arm.
             # Hide presentation while retaining native checkpoints. Explicit
             # switch-off and target changes still revoke the binding.
@@ -287,17 +373,18 @@ class NativeGhost:
         self._remember_renderer(status)
         producer = status.get("producer")
         origin = self._origin
+        assets = self._pending_asset if self._adaptive_generation else self._selected_asset
         if (recording_enabled and self._requested and self._selected_asset is not None and origin is not None
                 and (producer is None or not producer.configuration or not producer.epoch)):
             # RomClosed/RomOpen temporarily removes the producer namespace.
             # Keep the requested binding through it; sending OFF here would
             # erase the native recovery cache before the same ROM reopens.
             return
-        if (recording_enabled and self._requested and self._selected_asset is not None and source is not None
-                and origin is not None and producer is not None
+        if (recording_enabled and self._requested and assets is not None and source is not None
+                and (origin is not None or self._adaptive_generation) and producer is not None
                 and producer.configuration and producer.epoch):
-            instant = datetime.fromisoformat(origin["utc"].replace("Z", "+00:00"))
-            if instant.tzinfo is None:
+            instant = datetime.fromisoformat(origin["utc"].replace("Z", "+00:00")) if origin else None
+            if instant is not None and instant.tzinfo is None:
                 self._origin = None
                 return self._send(blocking=blocking)
             controls = dict(self._controls)
@@ -306,20 +393,28 @@ class NativeGhost:
             # to its exit star) is not over at the first star grab: his
             # 100-coin grab must not end the ghosts, nor theirs end them. His
             # exit grab closes the attempt, and the suspension hides them.
-            controls["stop_at_star"] = controls["stop_at_star"] and origin["kind"] == "star"
+            controls["stop_at_star"] = controls["stop_at_star"] and bool(origin and origin["kind"] == "star")
+            hues = self._pending_hues if self._adaptive_generation else self._asset_hues
             clips = [{"clip_id": bytes.fromhex(manifest["clip_id"]),
                       "clip_sha256": bytes.fromhex(manifest["sha256"]),
-                      "clip_path": str(path), "hue_degrees": ghost_hue(hue, index), "label": label}
-                     for index, (path, manifest, label, _frames) in enumerate(self._selected_asset)]
-            command = {"enabled": True, "model_id": 1,
+                      "clip_path": str(path), "hue_degrees": hues.get(manifest["clip_id"], ghost_hue(hue, index)), "label": label}
+                     for index, (path, manifest, label, _frames) in enumerate(assets)]
+            command = {"enabled": bool(origin and (clips or self._adaptive_generation and self._selected_asset)), "model_id": 1,
                        "owner_suspended": self._owner_suspended,
                        "clips": clips, "rom_path": "",
-                       "path_clip": fastest_clip(self._selected_asset),
-                       **controls,
-                       "origin": {"kind": 1 if origin["kind"] == "star" else 2,
+                       "path_clip": fastest_clip(assets), **controls}
+            if origin is not None:
+                command["origin"] = {"kind": 1 if origin["kind"] == "star" else 2,
                                   "configuration": producer.configuration, "epoch": producer.epoch,
                                   "global_timer": origin["frame"], "utc": instant.timestamp(),
-                                  "session_id": origin["session_id"], "arm_id": origin["arm_id"]}}
+                                  "session_id": origin["session_id"], "arm_id": origin["arm_id"]}
+            if self._adaptive_generation:
+                adopting = self._activate_generation == self._adaptive_generation
+                command.update(prepare_generation=self._adaptive_generation,
+                               activate_generation=self._activate_generation if adopting else 0,
+                               activate_start=self._activate_start if adopting else 0)
+                if self._preparation_canceled:
+                    command["cancel_preparation"] = True
         if source is not None and command != self._sent:
             if source.set_playback(blocking=blocking, **command) is False:
                 return
@@ -374,7 +469,11 @@ class NativeGhost:
                               status.get("reason"), "Mario playback is unavailable; try switching it off and on.")
             else:
                 reason = RECONNECTING_REASON if self._reconnecting() else START_GAME_REASON
-        return {"running": ready, "visible": visible, "backend": "native", "reason": reason}
+        result = {"running": ready, "visible": visible, "backend": "native", "reason": reason}
+        if self._adaptive_generation:
+            result.update(prepared_generation=status.get("prepared_generation", 0) if status.get("available") and not self._preparation_canceled else 0,
+                          active_generation=status.get("active_generation", 0) if status.get("available") else 0)
+        return result
 
     def stop(self):
         with self._control_lock:
@@ -388,3 +487,9 @@ class NativeGhost:
         self._requested = False
         self._origin = None
         self._owner_suspended = False
+        self._adaptive_generation = self._activate_generation = 0
+        self._activate_start = self._start_sequence = 0
+        self._pending_asset = None
+        self._pending_hues = {}
+        self._last_full_start = None
+        self._preparation_canceled = False

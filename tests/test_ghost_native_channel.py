@@ -177,6 +177,30 @@ def clip(tmp_path, key: bytes, hue=0):
             "clip_path": tmp_path / f"{key.decode()}.ghost", "hue_degrees": hue}
 
 
+def test_prepared_roster_is_encoded_without_playback_or_origin(kernel, tmp_path):
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    try:
+        connection.poll({"enabled": False, "model_id": 1, "prepare_generation": 8,
+                         "clips": [clip(tmp_path, b"a", 48)]})
+        request = kernel.request
+        assert request.prepare_generation == 8 and request.activate_generation == request.activate_start == 0
+        assert not request.play_enabled and request.clip_count == 1 and request.model_id == 1
+        assert request.clips[0].hue_degrees == 48
+        assert bytes(request.origin) == bytes(P.Origin())
+        before = bytes(request)
+        for bad in ({"prepare_generation": -1}, {"prepare_generation": True},
+                    {"activate_generation": 7, "activate_start": 1},
+                    {"activate_generation": 8}, {"activate_start": 1}):
+            with pytest.raises(channel.RejectedControl):
+                connection.poll({"enabled": False, "model_id": 1, "prepare_generation": 8,
+                                 "clips": [clip(tmp_path, b"a")], **bad})
+            assert bytes(kernel.request) == before
+        connection.poll({"enabled": False, "model_id": 1, "prepare_generation": 9, "clips": []})
+        assert kernel.request.prepare_generation == 9 and kernel.request.clip_count == 0
+    finally:
+        connection.close()
+
+
 def test_name_input_controls_and_utf8_credit_are_encoded_atomically(kernel, tmp_path):
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
     controls = {"enabled": True, "model_id": 1, "mode": 1,

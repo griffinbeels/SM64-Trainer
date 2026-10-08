@@ -43,6 +43,7 @@ struct CartridgeHeader {
 std::atomic<DWORD> worker_owner{0};
 std::atomic<unsigned> wrong_thread{0},binds{0},releases{0},revokes{0},commands{0},models{0},withdrawals{0};
 std::atomic<unsigned> prepared_ids[256]{},released_ids[256]{},rom_validations{0};
+std::atomic<uint64_t> resident_clip_bytes{0};
 // Ghost sound engine lifetime: started from the verified ROM, stopped with it.
 std::atomic<unsigned> audio_starts{0},audio_stops{0};
 bool __cdecl fake_audio_start(const uint8_t *rom,size_t bytes) {
@@ -158,8 +159,10 @@ int32_t __cdecl playback_status(gp_status* out,uint32_t bytes) {
     if(!out || bytes!=sizeof(*out))return GP_INVALID;
     *out={};out->bytes=sizeof(*out);out->version=GP_VERSION;
     out->model_state=model_state.load();
+    out->resident_clip_bytes=resident_clip_bytes.load();
     std::lock_guard<std::mutex> lock(command_mutex);
     out->revision=command.revision;out->owner_token=command.owner_token;
+    out->clips_active=command.clip_count;
     out->decision=out->model_state==GP_MODEL_RENDER_OWNED?GP_READY:GP_DISABLED;
     return GP_OK;
 }
@@ -235,7 +238,8 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(shadow_enabled) X(occlusion_fade) X(volume) X(sound_fade) \
     X(names_enabled) X(inputs_enabled) X(input_mode) X(name_background) X(name_background_opacity) \
     X(hud_inputs_enabled) X(record_ghosts) X(path_enabled) X(path_buttons) X(path_source) X(path_clip) \
-    X(path_ahead_ms) X(path_width) X(path_opacity) X(path_spacing_ms)
+    X(path_ahead_ms) X(path_width) X(path_opacity) X(path_spacing_ms) \
+    X(prepare_generation) X(activate_generation) X(activate_start) X(cancel_preparation)
 #define GIPC_CLIP_FIELDS(X) X(clip_id) X(clip_sha256) X(hue_degrees) X(reserved) X(clip_path) X(label)
 #define GIPC_STATUS_FIELDS(X) X(magic) X(version) X(bytes) X(producer_pid) X(producer_created_lo) \
     X(producer_created_hi) X(generation) X(rom_generation) X(rom_open) X(state) X(reason) \
@@ -246,7 +250,7 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(hook_flush_micros) X(hook_open_micros) X(hook_batch_micros) X(hook_validate_micros) X(hook_close_micros) X(hook_finalize_micros) \
     X(hook_state_micros) X(hook_copy_micros) X(hook_draw_micros) X(hook_draw_max_micros) X(hook_restore_micros) \
     X(hook_hud_micros) X(hook_hud_draws) X(hook_layer_passes) X(hook_query_micros) X(hook_error_reads) \
-    X(hook_ghosts) X(reserved)
+    X(hook_ghosts) X(prepared_generation) X(active_generation)
 void field(const char* name,size_t offset) {std::printf("\"%s\":%u,",name,unsigned(offset));}
 void print_layout() {
     std::printf("\"layout\":{\"page\":%u,\"ring\":%u,\"request\":{",unsigned(sizeof(gipc_page)),
@@ -580,7 +584,63 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
               "completion-before-render keeps FOLLOW ownership during PB asset I/O");
         check(!budget_waits_for_release,"obsolete storage releases before replacement preparation: no budget deadlock");
         check(completion_published_before_release,"old raced set receives suspension before its storage releases");
+        // Adaptive preparation never adopts by itself. An activation consumed
+        // while unready is not revived by IO, telemetry or a control revision.
+        r.revision=6;r.mode=GP_FIXED;r.origin={};r.owner_suspended=0;r.play_enabled=0;r.clip_count=1;
+        r.path_clip=0;r.prepare_generation=100;r.activate_generation=r.activate_start=0;
+        set_clip(r.clips[0],1,argv[1],argv[2],48);
+        std::memset(r.clips+1,0,sizeof(r.clips)-sizeof(r.clips[0]));
+        const unsigned before_staging=commands.load();page.send(r);
+        page.wait([](const gipc_status& s){return s.prepared_generation==100;},"prepared generation acknowledged without an origin");
+        check(!page.status().active_generation && commands.load()==before_staging,"preparation does not configure playback");
+        r.revision=7;r.prepare_generation=101;r.activate_generation=101;r.activate_start=1;r.play_enabled=1;
+        set_clip(r.clips[0],2,argv[4],argv[5],207);fail_budget=true;page.send(r);
+        page.wait([](const gipc_status& s){return s.ack_revision==7 && s.reason==GIPC_BUDGET;},"unready activation is bounded and refused");
+        fail_budget=false;r.revision=8;page.send(r);
+        page.wait([](const gipc_status& s){return s.prepared_generation==101;},"late preparation becomes ready separately");
+        check(!page.status().active_generation && commands.load()==before_staging,"late readiness never activates the consumed start");
+        r.revision=9;r.opacity=.6f;page.send(r);
+        page.wait([](const gipc_status& s){return s.ack_revision==9;},"control revision consumed");
+        check(!page.status().active_generation,"control revision cannot reuse a missed start");
+        r.revision=10;r.activate_start=2;page.send(r);
+        page.wait([](const gipc_status& s){return s.active_generation==101;},"a later certified start activates ready generation");
+        check(last_command().clip_count==1 && last_command().clips[0].clip_id[0]==2
+            && last_command().clips[0].hue_degrees==207,"active roster carries the prepared identities and explicit hues");
+        r.revision=11;r.prepare_generation=102;r.activate_generation=r.activate_start=0;
+        set_clip(r.clips[0],3,argv[6],argv[7],336);page.send(r);
+        page.wait([](const gipc_status& s){return s.prepared_generation==102;},"replacement is prepared beside the active roster");
+        check(page.status().active_generation==101 && last_command().clips[0].clip_id[0]==2,
+            "next preparation retains the existing active roster");
+        r.revision=12;r.activate_generation=102;r.activate_start=3;page.send(r);
+        page.wait([](const gipc_status& s){return s.active_generation==102;},"replacement activates at its later start");
+        check(last_command().clips[0].clip_id[0]==3,"replacement reaches playback without loading on activation");
+        const unsigned before_budget=prepared_ids[1].load();
+        resident_clip_bytes=GP_CLIP_BUDGET-512;
+        r.revision=13;r.prepare_generation=103;r.activate_generation=r.activate_start=0;
+        set_clip(r.clips[0],1,argv[1],argv[2],48);page.send(r);
+        page.wait([](const gipc_status& s){return s.ack_revision==13 && s.reason==GIPC_BUDGET;},"aggregate active plus staging read is bounded");
+        check(prepared_ids[1]==before_budget && page.status().active_generation==102
+            && last_command().clips[0].clip_id[0]==3,"budget refusal preserves active playback and never allocates a candidate copy");
+        resident_clip_bytes=0;r.revision=14;page.send(r);
+        page.wait([](const gipc_status& s){return s.prepared_generation==103;},"preparation retries when aggregate room becomes available");
+        check(page.status().active_generation==102,"a later budget recovery still waits for a certified start");
+        r.revision=15;r.cancel_preparation=1;r.clip_count=0;
+        std::memset(r.clips,0,sizeof(r.clips));page.send(r);
+        page.wait([](const gipc_status& s){return s.ack_revision==15 && !s.prepared_generation && s.active_generation==102;},
+            "obsolete preparation cancellation retains the active generation");
+        check(last_command().clips[0].clip_id[0]==3,"canceling future clips retains the current race");
+        r.revision=16;r.opacity=.5f;page.send(r);
+        page.wait([](const gipc_status& s){return s.ack_revision==16;},"canceled command survives later control updates");
+        check(!page.status().prepared_generation && page.status().active_generation==102,"canceled preparation cannot become ready again");
+        r.revision=17;r.cancel_preparation=0;r.prepare_generation=104;r.clip_count=1;
+        set_clip(r.clips[0],1,argv[1],argv[2],48);page.send(r);
+        page.wait([](const gipc_status& s){return s.prepared_generation==104;},"fresh preparation follows cancellation");
+        model_state=GP_MODEL_EMPTY;r.revision=18;r.activate_generation=104;r.activate_start=4;page.send(r);
+        page.wait([](const gipc_status& s){return s.ack_revision==18 && s.prepared_generation==104;},
+            "context rebuild acknowledges readiness again after the missed start");
+        check(page.status().active_generation!=104,"lost model readiness cannot turn a consumed start into late activation");
         ghost_ipc::rom(false);page.stopped();
+        check(!page.status().prepared_generation && !page.status().active_generation,"ROM closure invalidates both generation acknowledgements");
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");
         check(audio_starts.load()>=1 && audio_stops.load()==audio_starts.load(),"every sound engine stopped with its ROM");
         ghost_ipc::set_audio(nullptr);
