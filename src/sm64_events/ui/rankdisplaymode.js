@@ -1,9 +1,9 @@
 // src/sm64_events/ui/rankdisplaymode.js -- which rank a practice-log card
-// shows when its strategy and overall ladders differ.
+// shows, and which ghosts active practice matches.
 //
-// This is a display preference, not tracker state: it lives in localStorage
-// per entity so choosing Overall on one star/segment neither changes the
-// active strategy nor changes another card. The pure read/write functions
+// This view preference lives in localStorage per entity. The active Practice
+// card also sends it as its ghost matching scope; choosing Overall neither
+// changes the practice strategy nor changes another card. The pure read/write functions
 // keep malformed or stale storage from breaking the Practice page and make
 // the persistence rule directly testable under node.
 

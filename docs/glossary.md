@@ -1506,12 +1506,22 @@ many more recordings than the [[ghost set]] can race at once.
 
 ### Rival slot
 
-One place in the adaptive [[ghost set]] for the current [[target]] and [[strategy]]. The trainer
+One place in the adaptive [[ghost set]] for the current [[target]] and [[ghost matching scope]]. The trainer
 chooses a compatible recording above the saved [[personal best]], or protects
 the player's exact manual choice until they clear it. The slot keeps its colour when
 its recording changes; the separate [[PB ghost]] keeps its own colour.
 
 - **Lives** — `src/sm64_events/ghost/adaptive.py` and `src/sm64_events/ghost/rivals.py`
+
+### Ghost matching scope
+
+The [[Strategy]] or Overall choice on the practice card. [[Strategy]] restricts
+[[rival slot]]s to the current [[strategy]]; `Overall` admits other strategies
+and grades them on the [[Overall curve]]. Both use the current [[strategy]]'s saved
+[[personal best]] as their starting basis. Each choice remembers its own manual
+choices, and every [[ghost]] keeps its recorded [[strategy]] label.
+
+- **Lives** — `src/sm64_events/ghost/rivals.py` and `src/sm64_events/ui/components/practicelog.js`
 
 ### Climb profile
 

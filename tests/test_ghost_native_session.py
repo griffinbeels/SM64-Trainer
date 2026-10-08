@@ -267,6 +267,8 @@ def test_scope_switch_revokes_native_owner_before_population_failure(tmp_path):
         assert source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 1
         with pytest.raises(OSError, match="Overall population unavailable"):
             await session.update({"target": target, "rivals": {"scope": "overall"}})
+        assert session.payload()["rivals"]["scope"] == "strategy"
+        assert session._pending == {}
         native.note()
         assert source.commands[-1] == {"enabled": False}
         assert native._selected_asset is None

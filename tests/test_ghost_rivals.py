@@ -57,6 +57,9 @@ class Native:
     def cancel_preparation(self):
         self.canceled += 1
 
+    def reconcile(self, **_command):
+        pass
+
 
 def controller(tmp_path, monkeypatch):
     tracker = SimpleNamespace(db=Database(tmp_path/"practice.db"),ranks=Standards())

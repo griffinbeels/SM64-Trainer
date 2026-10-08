@@ -40,5 +40,10 @@ Adaptive local PB visibility follows Practice's `current_pbs_by_strat`; strict
 resolved strategy ladder can include live library fits absent from the bundled
 seed. `tests/test_ghost_rival_strategy.py` and `tests/test_ui_rivals_review.py`
 cover the reported null-ROM Wild Blue PB and the resolved Waluigi1 range.
+Practice's Strategy/Overall tabs select the ghost scope: both grade that saved
+strategy PB, while Overall admits other compatible strategies and uses the full
+Overall curve. `tests/test_ghost_rival_scope.py` pins scope-separated choices,
+search guards and native target propagation; the active card offers both tabs
+even when their rank ladders coincide.
 
 `tests/test_ghost_settings.py` covers the row with no edit: refused, applied, remembered, carried to the native command, and read by the card. The fixture and the API docs follow the registry. A setting of another kind also needs its sample pair in that test's `SAMPLES`, plus its control in `ui/components/ghostswitch.js`.

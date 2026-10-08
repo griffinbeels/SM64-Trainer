@@ -8,9 +8,12 @@ and appearance; Cancel leaves the saved settings unchanged.
 
 ## Selection and playback
 
-Automatic selection uses the current practice strategy's ladder and canonical
-clock, through the same scoring path as Practice Strategy. Its anchor is that
-strategy's current visible saved PB. Legacy rows with no ROM stamp still grade
+The Practice card's Strategy/Overall tabs also choose its ghosts. Strategy is
+the default: it uses the current strategy's ladder and opponents. Overall uses
+the complete Overall curve and admits compatible opponents from other strategies.
+Each rival keeps its recorded strategy label. Both views grade the current
+strategy's visible saved PB, matching the existing Practice banner's basis.
+Legacy rows with no ROM stamp still grade
 on the running version; imported times can also supply the rank anchor.
 The native provider separately checks whether that PB has playable poses.
 An expired clip retains its PB time/rank and reports its playback failure.
@@ -20,9 +23,11 @@ undone PB. Without a saved basis, selection starts at the bottom tier.
 The default range is one to five subdivisions above that basis. The floor stays
 above the PB until the final subdivision. At the ceiling, only faster runs in
 that subdivision qualify. Fixed mode selects an absolute rank range.
-Every automatic, searched or manually selected rival belongs to the strategy
-selected for practice. Switching strategy uses its own saved PB, ladder, pool
-and protected choices. Stored `strategy_only` settings migrate automatically.
+In Strategy, every automatic, searched or manually selected rival belongs to
+the strategy selected for practice. Overall broadens that pool without changing
+the practice strategy. The choice is remembered per star or segment; Strategy
+keeps its strategy-specific protected choices, and Overall has separate choices.
+Switching back restores them. Stored `strategy_only` settings migrate automatically.
 
 Adding fills a vacancy or replaces the slowest automatic rival. Other chosen
 rivals and the separate PB remain protected. Decreasing the count retains hidden
@@ -46,7 +51,11 @@ The session reads the final saved state when the window expires. File validation
 rank selection and preparation run outside the game poll loop. Native playback
 retains the current roster during same-strategy updates until an acknowledged
 replacement can adopt at a certified full start. Changing strategy immediately
-revokes its old roster. Readiness arriving later waits for another start.
+revokes its old roster. Changing Strategy/Overall also revokes the previous
+scope, including when both happen to select the same clips. Readiness arriving
+later waits for another start. Population lookup failure also revokes the old
+scope; a refused scope swap restores the preceding choice without resuming
+its old race mid-attempt.
 
 A fresh segment arm selects its roster before a move clock resolves; drawing
 waits for the existing authoritative clock policy. Clock rebases and save-state
@@ -64,8 +73,10 @@ at 512 MiB. Capacity refusal preserves existing recordings. This pilot does not
 yet garbage-collect obsolete unchosen improvements; a hard crash can leave an
 unindexed asset. These local limits do not implement remote account quotas.
 
-Search filters the current strategy before paging, uses normalized indexed
+Search filters the selected scope before paging, uses normalized indexed
 player prefixes, at most 20 records per page and a checked keyset cursor.
+Scope is part of the query/cache identity; a stale search, manual choice or
+settings draft cannot change a different view.
 The UI debounces input, caches bounded results and drops
 stale replies. Private-import credit remains user-supplied. The local HTTP server
 is loopback-only; a future cloud endpoint must independently authenticate and

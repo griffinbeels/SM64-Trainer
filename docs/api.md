@@ -1055,7 +1055,9 @@ are hidden by default; explicitly selected practice ghosts remain reachable.
 Collections never create local PBs, golds or input templates.
 
 The adaptive session adds `rivals` to the state: `{options, limits, rows, pb,
-strategy_name, status, generation, manual, simulation}`. `simulation` is an
+strategy_name, status, generation, manual, simulation, scope}`. `scope` is
+`strategy` (default) or `overall`; the existing Practice tabs choose it per entity.
+`simulation` is an
 isolated developer profile label or null. Rows include immutable `id`, slot,
 player/name, strategy, rank/time, `pinned` and explicit `hue_degrees`.
 Unavailable chosen rows remain occupied with a readable reason. Local lineage,
@@ -1063,27 +1065,34 @@ paths and playback objects never enter this payload. Native `window` adds
 `prepared_generation` and `active_generation`; preparation acknowledgement does
 not prove a roster is playing. [Adaptive contracts and local testing](adaptive-rivals.md).
 
-`PUT /api/ghost` also accepts `{target, rivals: {options}}`, or
+`PUT /api/ghost` accepts `{target, rivals: {scope: "strategy" | "overall"}}`
+to change the matching scope without changing the practice strategy.
+It also accepts `{target, rivals: {options, scope?}}`, or
 `{target, rivals: {action: "add", id, slot?}}`, or
 `{target, rivals: {action: "reset", slot}}`. Target identity must still match.
+Actions/settings can carry `scope` as a guard; a different scope rejects the
+stale choice. Scope changes use their own request.
 Settings validates the entire draft before applying. Options contain `mode`
 (`adaptive`/`fixed`), `count` (1–4), `include_pb`, relative
 `min_ahead`/`max_ahead` (0–10, with the effective adaptive floor above PB) and
 absolute `min_step`/`max_step` (0–44). Minimum cannot exceed maximum.
-Legacy `strategy_only` booleans are accepted and dropped; matching always uses
-the current practice strategy and its own saved PB/rank ladder.
+Legacy `strategy_only` booleans are accepted and dropped. Strategy restricts
+opponents to the current strategy; Overall permits other compatible strategies
+and grades them on the full Overall curve. Both keep the current strategy's
+saved PB owner, as the existing Practice rank tabs do.
 Library racing in an adaptive session accepts up to four explicit rivals plus
 the current strategy PB; the library publishes `max_race: 5` and `max_rivals: 4`
 when that saved basis exists. Local historical provenance does not require a
 community certificate. Without that basis, the capacity is four.
 
-`GET /api/ghost/rivals/search?target=<JSON>&player=<prefix>&cursor=<JSON>`
+`GET /api/ghost/rivals/search?target=<JSON>&player=<prefix>&cursor=<JSON>&scope=strategy|overall`
 returns `{records, next_cursor}`. The current target JSON is bounded to 512
 characters, player input to 80 and cursor to 512. The provider checks a cursor
 array `[normalized_name, frames, immutable_id]`, and limits pages to 20.
 Empty player input returns no results. Explicit private imports can appear
 alongside certified population rows; they never acquire automatic certification.
-Changed targets or invalid queries return readable 422 errors. No cloud route
+Scope is optional for legacy clients; when supplied it must match the active
+scope. Changed targets, stale scopes or invalid queries return readable 422 errors. No cloud route
 or cloud authorization is implied by this loopback endpoint.
 
 | Collection route | Contract |

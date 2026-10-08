@@ -1,6 +1,7 @@
 # src/sm64_events/server/ghost_api.py
 """Ghost preferences, saved runs and collections over the native session."""
 import json
+from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 
 from sm64_events.ghost import settings
@@ -81,14 +82,17 @@ def create_ghost_router(session=None) -> APIRouter:
     @router.get("/ghost/rivals/search")
     async def search_rivals(target: str = Query(max_length=512),
                             player: str = Query(default="",max_length=80),
-                            cursor: str | None = Query(default=None,max_length=512)):
+                            cursor: str | None = Query(default=None,max_length=512),
+                            scope: Literal["strategy","overall"] | None = None):
         """Bounded target-scoped player lookup; provider owns indexed pagination."""
         try:
             parsed = json.loads(target)
             if not isinstance(parsed,dict):
                 raise ValueError("Choose a star or segment before searching rivals.")
             after = json.loads(cursor) if cursor is not None else None
-            return await _session().search_rivals(parsed,player,after)
+            if scope is None:
+                return await _session().search_rivals(parsed,player,after)
+            return await _session().search_rivals(parsed,player,after,scope=scope)
         except (ValueError,LookupError) as error:
             raise HTTPException(422,str(error)) from error
     from sm64_events.server.ghost_sharing_api import mount_collection_routes

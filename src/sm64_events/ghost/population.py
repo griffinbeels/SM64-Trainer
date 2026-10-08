@@ -200,6 +200,9 @@ class LocalPopulation:
         clock = identity["clock"] if isinstance(identity, dict) else identity.clock
         version = identity["game_version"] if isinstance(identity, dict) else identity.game_version
         strategy = identity.get("strategy") if isinstance(identity, dict) else getattr(identity,"strategy",None)
+        matching_scope = identity.get("scope","strategy") if isinstance(identity,dict) else getattr(identity,"scope","strategy")
+        if matching_scope=="overall":
+            strategy = None
         scope = " AND json_extract(document,'$.target.strat')=?" if strategy is not None else ""
         parameters = (strategy,) if strategy is not None else ()
         target = self._target(kind, key)
@@ -223,7 +226,7 @@ class LocalPopulation:
     def resolve(self, ghost, target):
         row = self.get(ghost.id)
         if (target is None or (row["kind"], row["entity_key"]) != (target["kind"], target["entity_key"])
-                or (row["strategy"] or "Standard") != (target.get("strat") or "Standard")):
+                or target.get("scope","strategy")=="strategy" and (row["strategy"] or "Standard") != (target.get("strat") or "Standard")):
             raise ValueError("This rival belongs to another practice target.")
         path = self.root / "clips" / f"{checked_hash(row['sha256'])}.ghost"
         if not path.resolve().is_relative_to(self.root):

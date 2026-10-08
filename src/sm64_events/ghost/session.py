@@ -277,7 +277,19 @@ class GhostSession:
     def _cycle(self, target: dict | None, resolve: bool) -> None:
         with self._lifecycle_lock:
             if not self._closing:
-                self._active_cycle(target, resolve)
+                previous_scope = (self._rivals.scope_for(target) if self._rivals is not None
+                                  and "scope" in self._pending.get("rivals",{}) else None)
+                try:
+                    self._active_cycle(target, resolve)
+                except Exception:  # noqa: BLE001 - a refused scope swap leaves its preference unchanged
+                    if previous_scope is not None and self._rivals.scope_for(target)!=previous_scope:
+                        self._rivals.apply({"scope":previous_scope})
+                    raise
+                finally:
+                    try:
+                        self._reconcile()
+                    except Exception:  # noqa: BLE001 - renderer failure must not stop practice
+                        log.exception("native ghost playback could not be reconciled")
 
     def _active_cycle(self, target: dict | None, resolve: bool) -> None:
         if target != self._target:
@@ -287,9 +299,9 @@ class GhostSession:
             resolve = True
         self._load_persisted()
         if self._pending:
-            resolve = resolve or bool(RESOLVING_CHANGES & set(self._pending))
-            self._apply(self._pending)
-            self._pending = {}
+            pending, self._pending = self._pending, {}
+            resolve = resolve or bool(RESOLVING_CHANGES & set(pending))
+            self._apply(pending)
         world = self._world_now()
         resolve = resolve or world != self._world or self._resolved_at is None
         if resolve:
@@ -303,10 +315,6 @@ class GhostSession:
             if answer is not None:
                 self._native_answer = answer
                 self._source = {**NO_TARGET,**answer}
-        try:
-            self._reconcile()
-        except Exception:  # noqa: BLE001 - renderer failure must not stop practice
-            log.exception("native ghost playback could not be reconciled")
 
     def _read_target(self) -> dict | None:
         """The practice target through the tracker's own door, stars and
@@ -533,6 +541,9 @@ class GhostSession:
 
     def _apply(self, changes: dict) -> None:
         database = self._db()
+        if "ghosts" in changes and self._rivals is not None:
+            ghosts,_ = chosen_ghosts(changes["ghosts"],self.library(),self._target)
+            self._rivals.choose_library(self._target,ghosts,changes["ghosts"]["pb"])
         for name, checked in changes.items():
             row = settings.BY_NAME.get(name)
             if row is None:
@@ -543,9 +554,6 @@ class GhostSession:
         if "ghosts" in changes:
             choices = self._selection.choose(self._target, changes["ghosts"])
             _remember(database, SELECTION_KEY, choices)
-            if self._rivals is not None:
-                ghosts,_,_ = self._chosen(self._target)
-                self._rivals.choose_library(self._target,ghosts,changes["ghosts"]["pb"])
         if "rivals" in changes and self._rivals is not None:
             self._rivals.apply(changes["rivals"])
 
@@ -592,6 +600,9 @@ class GhostSession:
                 target["kind"], target["entity_key"])}
             if any(identity not in imports for identity in checked["ghosts"].get("imports", [])):
                 raise ValueError("That imported ghost is not available for this star or segment.")
+            if self._rivals is not None:
+                ghosts,_ = chosen_ghosts(checked["ghosts"],self.library(),target)
+                self._rivals.check_library(target,ghosts)
         # Queued changes FOLD the way applied ones merge: two halves of the
         # colour (or of the overlap fade) queued before one cycle both land.
         for name, value in checked.items():
@@ -609,7 +620,8 @@ class GhostSession:
             available = (self._rivals.identity is not None if self._rivals is not None
                          else self._source.get("available",False))
             self._native.reconcile(enabled=self._values["enabled"] and available,
-                                   target=self._target, controls=settings.native_controls(self._values))
+                                   target=self._rivals.native_target(self._target) if self._rivals is not None else self._target,
+                                   controls=settings.native_controls(self._values))
 
     def attempt_saved(self, attempt):
         if self._population_recorder is not None:
@@ -625,11 +637,11 @@ class GhostSession:
                                              version=attempt.game_version)
         return identity if identity is not None and eligible_attempt(attempt,identity) else None
 
-    async def search_rivals(self, target, player, cursor=None):
+    async def search_rivals(self, target, player, cursor=None, *, scope=None):
         if self._rivals is None:
             raise ValueError("Adaptive rivals are unavailable in this window.")
         async with self._lock:
-            return await asyncio.to_thread(self._rivals.search,target,player,cursor)
+            return await asyncio.to_thread(self._rivals.search,target,player,cursor,scope=scope)
 
 
     # -- the wire -------------------------------------------------------------

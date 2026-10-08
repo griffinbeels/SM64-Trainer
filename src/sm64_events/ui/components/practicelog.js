@@ -534,7 +534,11 @@ function classificationTransition(sec, t, rankMode, hasSeparateRank) {
 
 function rankViewFor(active, preferred, separate) {
   return {rankMode: active ? preferred : effectiveRankDisplayMode(preferred, separate),
-    canChooseScope: active || separate};
+    canChooseScope: active || separate,
+    strategyTitle: active ? "Show this strategy's rank and ghosts"
+      : "Show the rank for the strategy selected on this card",
+    overallTitle: active ? "Show overall rank and ghosts from any strategy" : separate
+      ? "Show this PB's overall rank" : "Strategy and overall use the same rank standards"};
 }
 
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
@@ -668,26 +672,26 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // that one display has a genuinely different Overall measurement to offer;
   // it controls the two-button switch, never the number of banners painted.
   const hasSeparateRank = showsEntityBanner(sec);
-  const {rankMode, canChooseScope} =
+  const {rankMode, canChooseScope, strategyTitle, overallTitle} =
     rankViewFor(active, preferredRankMode, hasSeparateRank);
   const pickRankMode = (mode) => {
     if (!canChooseScope || mode === rankMode) return;
     writeRankDisplayMode(ek, mode);
     setPreferredRankMode(mode);
   };
+  const scopeLabel = active
+    ? "Rank and ghosts" : "Rank view";
   const rankModeButtons = html`<span class="rank-mode-buttons" role="group"
-      aria-label="Rank view">
+      aria-label=${scopeLabel}>
     ${canChooseScope && html`<button type="button"
         class=${`rank-mode-button${rankMode === "strategy" ? " is-selected" : ""}`}
         aria-pressed=${rankMode === "strategy" ? "true" : "false"}
-        title="Show the rank for the strategy selected on this card"
+        title=${strategyTitle}
         onclick=${() => pickRankMode("strategy")}>Strategy</button>`}
     <button type="button"
         class=${`rank-mode-button${rankMode === "overall" ? " is-selected" : ""}`}
         aria-pressed=${rankMode === "overall" ? "true" : "false"}
-        title=${hasSeparateRank
-          ? "Show the best overall rank across this entity's strategies"
-          : "Strategy and overall use the same rank standards"}
+        title=${overallTitle}
         onclick=${() => pickRankMode("overall")}>Overall</button>
   </span>`;
   const shownBanner = rankMode === "strategy"

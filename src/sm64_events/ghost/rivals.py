@@ -62,6 +62,7 @@ class Rivals:
         self.source_of = source_of
         self.options = checked_options({})
         self.pins = {}
+        self.scopes = {}
         self.local_choices = {}
         self.loaded_db = None
         self.target = None
@@ -92,9 +93,33 @@ class Rivals:
             signature = describe(target["kind"],target["entity_key"],target.get("strat"),
                                  self.tracker.db.segment_defs()).get("signature")
         return PracticeIdentity(target["kind"],target["entity_key"],ranks.clock_for(ek),
-                                version,target.get("strat"),signature)
+                                version,target.get("strat"),signature,self.scope_for(target))
+
+    def scope_for(self, target):
+        return self.scopes.get(self._entity_key(target),"strategy") if target else "strategy"
+
+    def native_target(self, target=None):
+        target = target or self.target
+        return {**target,"scope":self.scope_for(target)} if target else None
+
+    def _update_identity(self, target, controls, changed_target):
+        identity = self.identity_for(target)
+        changed_scope = self.identity is not None and identity is not None and self.identity.scope!=identity.scope
+        if changed_scope:
+            self.rows, self.pb = (),None
+            self.fingerprint = self.prepared_key = None
+            self.manual = False
+        self.identity = identity
+        if changed_target or changed_scope:
+            self.native.reconcile(enabled=False,target=self.native_target(target),controls=controls)
+        return changed_scope
 
     def _key(self, target):
+        if self.scope_for(target)=="overall":
+            return json.dumps([target["kind"],target["entity_key"],"overall",None],separators=(",",":"))
+        return self._strategy_key(target)
+
+    def _strategy_key(self, target):
         return json.dumps([target["kind"],target["entity_key"],target.get("strat") or "Standard"],separators=(",",":"))
 
     def _entity_key(self, target):
@@ -122,7 +147,7 @@ class Rivals:
                     except (LookupError,AttributeError,ValueError):
                         continue
             destination = {**target,"strat":strategy}
-            choices = self.pins.setdefault(self._key(destination),{})
+            choices = self.pins.setdefault(self._strategy_key(destination),{})
             if identity not in choices.values():
                 vacancy = slot if slot not in choices else next((str(n) for n in range(MAX_RIVALS) if str(n) not in choices),None)
                 if vacancy is None:
@@ -177,11 +202,15 @@ class Rivals:
         if database is None or database is self.loaded_db:
             return
         stored = database.get_state(STATE_KEY,{})
-        self.pins, self.local_choices = {},{}
+        self.pins, self.local_choices, self.scopes = {},{},{}
         try:
             self.options = checked_options(stored.get("options",{}))
             pins = stored.get("pins",{})
             self.local_choices = stored.get("local_choices",{})
+            scopes = stored.get("scopes",{})
+            if isinstance(scopes,dict):
+                self.scopes = {key:value for key,value in scopes.items()
+                               if isinstance(key,str) and value in ("strategy","overall")}
             if not isinstance(self.local_choices,dict):
                 self.local_choices = {}
             if isinstance(pins,dict):
@@ -225,8 +254,8 @@ class Rivals:
             self.manual = False
         self.pb_deadlines = {key:value for key,value in self.pb_deadlines.items() if value>self.now()}
         self.pb_deadline = self.pb_deadlines.get(self._entity_key(target)) if target else None
-        identity = self.identity_for(target)
-        self.identity = identity
+        changed_scope = self._update_identity(target,controls,changed_target)
+        identity = self.identity
         self.sharing = sharing
         if self.manual:
             return None
@@ -242,7 +271,7 @@ class Rivals:
         if not settled:
             self.status = "Updating rivals after the PB undo window."
             return ({"available":False,"reason":"pb_settling","reason_text":self.status,"ghosts":[]}
-                    if changed_entity else None)
+                    if changed_entity or changed_scope else None)
         self.pb_deadline = None
         source = self.source_of()
         stamp = (id(self.loaded_db),identity,enabled,source,controls["hue_degrees"],getattr(self.population,"generation",None),
@@ -253,12 +282,13 @@ class Rivals:
             pb = saved_pb_basis(self.tracker.db,self.tracker.ranks,identity)
             pb = self._simulation_pb(pb,target)
             records = self.population.metadata_snapshot(identity.kind,identity.entity_key,
-                clock=identity.clock,game_version=identity.game_version,strategy=identity.strategy)
+                clock=identity.clock,game_version=identity.game_version,
+                strategy=identity.strategy if identity.scope=="strategy" else None)
             ranked = rank_recordings(records,self.tracker.ranks,identity)
             pins = self.pins.get(self._key(target),{})
             private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
             self.rows = select_rivals((*ranked,*private),pb,self.options,pins,
-                                      self.rows if self.preserve_slots else ())
+                                      self.rows if self.preserve_slots else (),scope=identity.scope)
             self.preserve_slots = False
             self.pb = pb
             ghosts = [ColoredGhost(row["ghost"],row["hue_degrees"]) for row in self.rows if row.get("ghost") is not None]
@@ -273,7 +303,7 @@ class Rivals:
             self.prepared_key = prepared_key
             self.generation += 1
             self.native.set_portable(RivalProvider(self.population,sharing))
-            answer = self.native.prepare(target,ghosts,controls,self.generation) if enabled else None
+            answer = self.native.prepare(self.native_target(target),ghosts,controls,self.generation) if enabled else None
             self._pb_playback(answer)
             self.status = "Updates on your next attempt." if ghosts else None
             return (answer if ghosts else None) or {"available":bool(ghosts),"reason":None if ghosts else "no_rivals",
@@ -293,17 +323,19 @@ class Rivals:
         if native.get("active_generation")==self.generation and self.pb_deadline is None:
             self.status = None
         simulation = self._simulation()
-        return {"options":dict(self.options),"limits":dict(LIMITS),
+        return {"options":dict(self.options),"limits":dict(LIMITS),"scope":self.scope_for(self.target),
                 "simulation":simulation.get("label") if simulation else None,
                 "rows":[wire(row) for row in self.rows],
                 "pb":wire(self.pb) if self.pb else None,
                 "strategy_name":self.target.get("strat") or "Standard" if self.target else None,
                 "status":self.status,"generation":self.generation,"manual":self.manual}
 
-    def search(self, target, player, cursor=None):
+    def search(self, target, player, cursor=None, *, scope=None):
         identity = self.identity_for(target)
         if target != self.target or identity is None:
             raise ValueError("The practice target changed. Search for the current star or segment.")
+        if scope is not None and scope!=identity.scope:
+            raise ValueError("The ghost view changed. Search in the current Strategy or Overall view.")
         result = self.population.search(identity,player,cursor=cursor,limit=20)
         records = rank_recordings(result["records"],self.tracker.ranks,identity)
         if cursor is None and player.strip() and self.sharing is not None and len(records)<20:
@@ -325,7 +357,7 @@ class Rivals:
             attempt = self.tracker.db.attempt(number) if type(number) is int else None
             if (attempt is None or local_attempt_source(attempt)!=local
                     or entity_key_of(attempt)!=(target.kind,target.entity_key)
-                    or (attempt.strat_tag or "Standard") != (target.strategy or "Standard")
+                    or target.scope=="strategy" and (attempt.strat_tag or "Standard") != (target.strategy or "Standard")
                     or attempt.game_version not in (None,target.game_version)):
                 return None
             frames = getattr(attempt,f"{target.clock}_frames")
@@ -344,7 +376,7 @@ class Rivals:
         except (LookupError,ValueError):
             return None
         if ((ghost.kind,ghost.entity_key)!=(target.kind,target.entity_key)
-                or (ghost.strat_tag or "Standard") != (target.strategy or "Standard")
+                or target.scope=="strategy" and (ghost.strat_tag or "Standard") != (target.strategy or "Standard")
                 or row["clock"]!=target.clock or row.get("game_version") not in (None,target.game_version)):
             return None
         progress = rank_frames(self.tracker.ranks,target,ghost.frames)
@@ -397,12 +429,10 @@ class Rivals:
         self.fingerprint = None
         self._store()
 
-    def choose_library(self, target, ghosts, include_pb):
-        """Explicit library choices become protected slots in the same roster."""
-        from sm64_events.ghost.pb import local_attempt_source
-        self._load()
+    def check_library(self, target, ghosts):
+        """Validate the roster before a session persists any accompanying values."""
         identity = self.identity_for(target)
-        if any((getattr(ghost,"strat_tag",None) or "Standard") != (target.get("strat") or "Standard") for ghost in ghosts):
+        if self.scope_for(target)=="strategy" and any((getattr(ghost,"strat_tag",None) or "Standard") != (target.get("strat") or "Standard") for ghost in ghosts):
             raise ValueError("Choose ghosts for the strategy you are practicing.")
         basis = saved_pb_basis(self.tracker.db,self.tracker.ranks,identity) if identity else None
         dedicated = getattr(basis.get("ghost"),"origin",None) if basis else None
@@ -410,10 +440,17 @@ class Rivals:
             return getattr(ghost,"pb",False) and dedicated is not None and ghost.origin==dedicated
         if sum(not own_pb(ghost) for ghost in ghosts)>MAX_RIVALS:
             raise ValueError("Choose up to four rivals; this historical PB also needs a rival slot.")
+        return identity,dedicated
+
+    def choose_library(self, target, ghosts, include_pb):
+        """Explicit library choices become protected slots in the same roster."""
+        from sm64_events.ghost.pb import local_attempt_source
+        self._load()
+        identity,dedicated = self.check_library(target,ghosts)
         self.target, self.identity = target,identity
         choices = {}
         for ghost in ghosts:
-            if own_pb(ghost):
+            if getattr(ghost,"pb",False) and dedicated is not None and ghost.origin==dedicated:
                 continue
             identity = getattr(ghost,"import_id",None)
             if identity is None:
@@ -432,12 +469,21 @@ class Rivals:
         basis = saved_pb_basis(self.tracker.db,self.tracker.ranks,identity) if identity else None
         return MAX_RIVALS + int(basis is not None)
 
+    def _checked_scope(self, body, target):
+        if "scope" not in body:
+            return {}
+        if body["scope"] not in ("strategy","overall"):
+            raise ValueError("Choose Strategy or Overall ghosts.")
+        if body["scope"]!=self.scope_for(target) and set(body)!={"scope"}:
+            raise ValueError("The ghost view changed. Reopen this choice in the current view.")
+        return {"scope":body["scope"]}
+
     def checked(self, body, target):
-        if not isinstance(body,dict) or set(body)-{"options","action","id","slot"}:
+        if not isinstance(body,dict) or set(body)-{"options","action","id","slot","scope"}:
             raise ValueError("Choose rival settings or a saved ghost.")
         if target != self.target or self.identity is None:
             raise ValueError("The practice target changed. Choose rivals for the current target.")
-        result = {}
+        result = self._checked_scope(body,target)
         if "options" in body:
             result["options"] = checked_options(body["options"])
         action = body.get("action")
@@ -472,6 +518,8 @@ class Rivals:
         return result
 
     def apply(self, body):
+        if "scope" in body:
+            self.scopes[self._entity_key(self.target)] = body["scope"]
         if "options" in body:
             self.options = body["options"]
         choices = self.pins.setdefault(self._key(self.target),{})
@@ -488,5 +536,5 @@ class Rivals:
         if self.tracker.db is not None:
             used = {identity for values in self.pins.values() for identity in values.values()}
             self.local_choices = {key:value for key,value in self.local_choices.items() if key in used}
-            self.tracker.db.set_state(STATE_KEY,{"version":2,"options":self.options,"pins":self.pins,
+            self.tracker.db.set_state(STATE_KEY,{"version":3,"options":self.options,"pins":self.pins,"scopes":self.scopes,
                                                "local_choices":self.local_choices})
