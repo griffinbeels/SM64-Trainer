@@ -73,6 +73,7 @@ class Rivals:
         self.manual = False
         self.preserve_slots = False
         self.prepared_key = None
+        self.prepared_answer = None
         self.sharing = None
 
     def identity_for(self, target, *, version=None):
@@ -234,6 +235,24 @@ class Rivals:
         # retain an unchanged active/pending roster rather than canceling it.
         self.fingerprint = None
 
+    def pb_preserved(self, attempt_id):
+        """Retry a refused current PB only after its committed poses validate."""
+        if (self.loaded_db is not self.tracker.db or self.identity is None
+                or not self.pb or self.pb.get("available") is not False):
+            return False
+        ghost = self.pb.get("ghost")
+        if getattr(ghost, "attempt_id", None) != attempt_id:
+            return False
+        current = saved_pb_basis(self.tracker.db, self.tracker.ranks, self.identity)
+        if (not current or current.get("attempt_id") != attempt_id
+                or current.get("source") != self.pb.get("source")
+                or getattr(current.get("ghost"), "origin", None) != ghost.origin):
+            return False
+        if not self.native.probe(self.native_target(), ghost).get("available"):
+            return False
+        self.fingerprint = self.prepared_key = None
+        return True
+
     def refresh(self, target, controls, *, enabled, sharing=None, force=False):
         self._load()
         changed_target = target != self.target
@@ -290,11 +309,13 @@ class Rivals:
                             tuple((ghost.origin,ghost.hue_degrees) for ghost in ghosts))
             self.fingerprint = stamp
             if prepared_key == self.prepared_key:
+                self._pb_playback(self.prepared_answer)
                 return None
             self.prepared_key = prepared_key
             self.generation += 1
             self.native.set_portable(RivalProvider(self.population,sharing))
             answer = self.native.prepare(self.native_target(target),ghosts,controls,self.generation) if enabled else None
+            self.prepared_answer = answer
             self._pb_playback(answer)
             self.status = ("Updates on your next attempt."
                            if enabled and ghosts and answer and answer.get("available") else None)

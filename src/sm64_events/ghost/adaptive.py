@@ -294,6 +294,13 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
             used.add(row["id"])
     available = [row for row in candidates.values() if row["id"] not in used
                  and _eligible_auto(row, pb, options, low, high, strategy, scope)]
+    if (options["mode"] == "adaptive" and pb is not None and not available
+            and not any(not row["pinned"] for row in result.values())):
+        # An empty higher-rank pool can still offer progress within the PB's
+        # subdivision. Keep strict faster/comparable timing and chosen slots.
+        low = high = pb["step"]
+        available = [row for row in candidates.values() if row["id"] not in used
+                     and _eligible_auto(row, pb, options, low, high, strategy, scope)]
     players = {row["player_id"] for row in result.values() if row.get("player_id") is not None}
     automatic = iter(_automatic(available, options["count"] - len(result), low, high, players))
     for slot in range(options["count"]):

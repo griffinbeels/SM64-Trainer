@@ -238,7 +238,7 @@ class NativeGhost:
 
     def _resolve_template(self, target, template):
         answer = {"available": False, "reason": "no_native_poses",
-                  "reason_text": "Save a PB with this strategy, or save a run as a ghost, to race Mario here.",
+                  "reason_text": "This run has no saved Mario poses.",
                   "template_id": None, "attempt_id": None, "exactness": None}
         if not self._supported:
             return {**answer, "reason": "unsupported_rom",

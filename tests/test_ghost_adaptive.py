@@ -223,6 +223,38 @@ def test_minimum_is_next_subdivision_even_when_stored_offsets_are_zero():
     assert [row["id"] for row in result] == ["next"]
 
 
+def test_empty_adaptive_range_uses_only_faster_comparable_same_subdivision():
+    rows = [ranked(19, "faster", 320), ranked(19, "equal", 321), ranked(19, "slower", 322),
+            ranked(18, "lower", 300), ranked(19, "foreign", 319, game_version="jp"),
+            ranked(19, "private", 318, manual_only=True),
+            ranked(19, "other-strategy", 317, strategy="Other")]
+    pb = basis(19, 321, game_version="us")
+    selected, = select_rivals(rows, pb, {}, {})
+    assert selected["id"] == "faster" and not selected["pinned"]
+    assert select_rivals(rows, None, {}, {}) == ()
+    assert select_rivals(rows, pb, {"mode": "fixed", "min_step": 20, "max_step": 24}, {}) == ()
+
+
+def test_range_opponents_take_priority_over_same_subdivision_fallback():
+    same, higher = ranked(19, "same", 320), ranked(20, "higher", 310)
+    pb = basis(19, 321, game_version="us")
+    assert [row["id"] for row in select_rivals([same, higher], pb, {}, {})] == ["higher"]
+    previous = [{**higher, "slot": 1, "pinned": False}]
+    rows = select_rivals([same, higher], pb, {}, {}, previous=previous)
+    assert [(row["id"], row["slot"]) for row in rows] == [("higher", 1)]
+
+
+def test_same_subdivision_fallback_preserves_pins_and_winners():
+    rows = [ranked(19, "slow", 320, player_id="one"), ranked(19, "fast", 319, player_id="one"),
+            ranked(19, "another", 320), ranked(10, "chosen", 700)]
+    pins = {"0": "chosen", "3": "unavailable"}
+    selected = select_rivals(rows, basis(19, 321), {}, pins)
+    assert [(row["id"], row["pinned"]) for row in selected] == [
+        ("chosen", True), ("fast", False), ("another", False), ("unavailable", True)]
+    assert pins == {"0": "chosen", "3": "unavailable"}
+    assert len({row["hue_degrees"] for row in selected}) == 4
+
+
 def test_ceiling_caps_both_endpoints_and_only_faster_final_recordings_qualify():
     rows = [ranked(43, "lower", 10), ranked(44, "equal", 100), ranked(44, "slower", 101), ranked(44, "faster", 99)]
     result = select_rivals(rows, basis(44, 100), {}, {})

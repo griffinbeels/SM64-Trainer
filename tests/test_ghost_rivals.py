@@ -142,6 +142,59 @@ def test_forced_reads_do_not_reprepare_identical_rosters(tmp_path,monkeypatch):
     assert (len(native.preparations),rivals.generation)==before
 
 
+@pytest.mark.parametrize("available", [True, False])
+def test_unchanged_pb_refresh_retains_playback_and_reason(tmp_path, monkeypatch, available):
+    rivals, _, native, _, _ = controller(tmp_path, monkeypatch)
+    ghost = AttemptGhost(1, "star", "2-1", "Standard", 1200, pb=True)
+    pb = basis(step=10, frames=1200, attempt_id=1, ghost=ghost)
+    monkeypatch.setattr(module, "saved_pb_basis", lambda *_: dict(pb))
+    reason = None if available else "This run has no saved Mario poses."
+
+    def prepare(target, ghosts, controls, generation):
+        native.preparations.append((target, ghosts, controls, generation))
+        return {"available": available, "ghosts": [{"pb": True, "available": available, "reason_text": reason}]}
+
+    monkeypatch.setattr(native, "prepare", prepare)
+    rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+    before = len(native.preparations), rivals.generation
+    rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+    assert (len(native.preparations), rivals.generation) == before
+    assert rivals.payload()["pb"]["available"] is available
+    assert rivals.payload()["pb"]["reason_text"] == reason
+
+
+@pytest.mark.parametrize("case", ["ready", "already-ready", "missing", "superseded", "other-run", "new-database", "new-lineage"])
+def test_pose_commit_retries_only_a_refused_still_current_local_pb(tmp_path, monkeypatch, case):
+    rivals, tracker, native, _, _ = controller(tmp_path, monkeypatch)
+    ghost = AttemptGhost(1, "star", "2-1", "Standard", 1200, pb=True)
+    pb = basis(step=10, frames=1200, attempt_id=1, ghost=ghost, source={"session_id": 1})
+    current = [pb]
+    monkeypatch.setattr(module, "saved_pb_basis", lambda *_: current[0])
+    rivals.pb = {**pb, "available": case == "already-ready"}
+    probes = []
+
+    def probe(target, saved):
+        probes.append((target, saved))
+        return {"available": case != "missing"}
+
+    monkeypatch.setattr(native, "probe", probe, raising=False)
+    if case == "superseded":
+        current[0] = None
+    elif case == "new-lineage":
+        current[0] = {**pb, "source": {"session_id": 2}}
+    elif case == "new-database":
+        tracker.db = Database(tmp_path / "different.db")
+    before = rivals.fingerprint, rivals.prepared_key, len(native.preparations), rivals.generation
+    retried = rivals.pb_preserved(2 if case == "other-run" else 1)
+    assert retried is (case == "ready")
+    assert len(probes) == int(case in ("ready", "missing"))
+    if retried:
+        assert rivals.fingerprint is None and rivals.prepared_key is None
+        assert (len(native.preparations), rivals.generation) == before[2:]
+    else:
+        assert (rivals.fingerprint, rivals.prepared_key, len(native.preparations), rivals.generation) == before
+
+
 def test_pb_and_undo_recompute_immediately_without_repreparing_unchanged_clips(tmp_path,monkeypatch):
     rivals,_,native,_,clock = controller(tmp_path,monkeypatch)
     rivals.pb_changed()

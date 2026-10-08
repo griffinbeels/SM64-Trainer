@@ -21,8 +21,11 @@ Undo resolves the surviving saved slot; historical minima cannot restore an
 undone PB. Without a saved basis, selection starts at the bottom tier.
 
 The default range is one to five subdivisions above that basis. The floor stays
-above the PB until the final subdivision. At the ceiling, only faster runs in
-that subdivision qualify. Fixed mode selects an absolute rank range.
+above the PB until the final subdivision. If that range has no automatic
+opponents, faster ghosts in the PB's own subdivision can fill automatic slots.
+Those times must use the same ROM as the PB, or its legacy unstamped ROM basis.
+At the ceiling, only faster runs in that subdivision qualify. Fixed mode selects
+an absolute rank range and does not use this fallback.
 Automatic opponents exclude your own recordings; the separate PB slot remains.
 An explicit chosen rival can still name one of your other recordings.
 In Strategy, every automatic, searched or manually selected rival belongs to
@@ -49,7 +52,11 @@ admission still requires complete validated run evidence and an explicit ROM.
 
 A PB save or undo immediately reads the authoritative saved state. There is no
 confidence debounce. An unchanged set retains its acknowledged preparation;
-an actual changed set supersedes the pending generation. The updates message
+refreshing its rank also retains its playback availability and refusal reason.
+If a concurrent read checks the PB before its poses finish saving, a successful
+pose commit validates that same current PB and retries the refused preparation.
+Unrelated, superseded or still-unavailable runs cannot trigger that retry.
+An actual changed set supersedes the pending generation. The updates message
 appears only when the renderer has prepared that set and has not adopted it.
 Disabled or unavailable ghosts do not promise a pending update. File validation,
 rank selection and preparation run outside the game poll loop. Native playback

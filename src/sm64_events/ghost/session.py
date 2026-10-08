@@ -518,7 +518,13 @@ class GhostSession:
             preserve = getattr(self._replay, "preserve_native", None)
             if preserve is not None:
                 try:
-                    await asyncio.to_thread(preserve, attempt.id)
+                    kept = await asyncio.to_thread(preserve, attempt.id)
+                    if self._rivals is not None and isinstance(kept, dict) and kept.get("native_ghost"):
+                        async with self._lock:
+                            def committed():
+                                with self._lifecycle_lock:
+                                    self._rivals.pb_preserved(attempt.id)
+                            await asyncio.to_thread(committed)
                 except Exception:  # noqa: BLE001 - the PB itself is saved; say why in the picker
                     log.exception("PB %s Mario poses could not be kept", attempt.id)
         await self.refresh(resolve=True)
