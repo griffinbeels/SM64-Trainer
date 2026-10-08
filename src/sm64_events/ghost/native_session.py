@@ -94,6 +94,7 @@ class NativeGhost:
         self._origin_of = origin_of
         self._control_lock = threading.Lock()
         self._target = None
+        self._roster_target = None
         self._origin = None
         self._owner_suspended = False
         self._controls = None
@@ -200,18 +201,22 @@ class NativeGhost:
         """
         if type(generation) is not int or not 0 < generation < 2**64:
             raise ValueError("ghost roster generation must be a positive uint64")
-        answer = self.resolve(target, ghosts)
-        assets, hues = self._asset or (), dict(self._asset_hues)
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
         identity = (target["kind"], target["entity_key"]) if target else None
+        roster_target = (*identity, target.get("strat")) if target else None
         with self._control_lock:
-            if source is not self._source or identity != self._target:
-                self._stop()
-                self._source, self._sent = source, None
-                self._selected_asset = None
             if self._adaptive_generation and generation < self._adaptive_generation:
                 raise ValueError("ghost roster generation must not move backward")
+            if source is not self._source or roster_target != self._roster_target:
+                # Revocation precedes potentially slow file validation. An
+                # active race belongs to its exact practice strategy.
+                self._revoke_roster()
+                self._source, self._sent = source, None
             self._target = identity
+            self._roster_target = roster_target
+        answer = self.resolve(target, ghosts)
+        assets, hues = self._asset or (), dict(self._asset_hues)
+        with self._control_lock:
             self._pending_asset, self._pending_hues = assets, hues
             self._adaptive_generation = generation
             self._preparation_canceled = False
@@ -294,6 +299,8 @@ class NativeGhost:
         """`controls` are the settings' native command fields
         (`ghost/settings.py::native_controls`); the target adds the rest."""
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
+        identity = (target["kind"], target["entity_key"]) if target else None
+        roster_target = (*identity, target.get("strat")) if target else None
         with self._control_lock:
             if self._adaptive_generation:
                 if source is not self._source:
@@ -301,12 +308,10 @@ class NativeGhost:
                         self._source.set_playback(enabled=False)
                     self._source, self._sent = source, None
                     self._activate_generation = self._activate_start = 0
-                identity = (target["kind"], target["entity_key"]) if target else None
-                if identity != self._target:
-                    self._stop()
-                    self._asset = self._selected_asset = None
-                    self._asset_hues = {}
+                if roster_target != self._roster_target:
+                    self._revoke_roster()
                     self._target = identity
+                    self._roster_target = roster_target
                     return
                 else:
                     self._requested = bool(enabled)
@@ -322,11 +327,11 @@ class NativeGhost:
             if source is not self._source:
                 self._stop()
                 self._source, self._sent = source, None
-            identity = (target["kind"], target["entity_key"]) if target else None
             if identity != self._target:
                 self._origin = None
                 self._owner_suspended = False
             self._target = identity
+            self._roster_target = roster_target
             self._selected_asset = self._asset
             self._requested = bool(enabled)
             self._controls = {**controls,
@@ -411,7 +416,10 @@ class NativeGhost:
                       "clip_sha256": bytes.fromhex(manifest["sha256"]),
                       "clip_path": str(path), "hue_degrees": hues.get(manifest["clip_id"], ghost_hue(hue, index)), "label": label}
                      for index, (path, manifest, label, _frames) in enumerate(assets)]
-            command = {"enabled": bool(origin and (clips or self._adaptive_generation and self._selected_asset)), "model_id": 1,
+            # IPC keeps the latest command, so a revoking OFF may be coalesced
+            # with preparation. Only a roster chosen at a full start may draw.
+            playing = self._selected_asset if self._adaptive_generation else clips
+            command = {"enabled": bool(origin and playing), "model_id": 1,
                        "owner_suspended": self._owner_suspended,
                        "clips": clips, "rom_path": "",
                        "path_clip": fastest_clip(assets), **controls}
@@ -484,8 +492,18 @@ class NativeGhost:
         result = {"running": ready, "visible": visible, "backend": "native", "reason": reason}
         if self._adaptive_generation:
             result.update(prepared_generation=status.get("prepared_generation", 0) if status.get("available") and not self._preparation_canceled else 0,
-                          active_generation=status.get("active_generation", 0) if status.get("available") else 0)
+                          active_generation=status.get("active_generation", 0) if status.get("available") and self._selected_asset else 0)
         return result
+
+    def _revoke_roster(self):
+        """Release a different practice owner's race without replaying its start."""
+        last_start, sequence = self._last_full_start, self._start_sequence
+        self._stop()
+        self._asset = self._selected_asset = None
+        self._asset_hues = {}
+        # Strategy changes share the tracker origin. Returning to a strategy
+        # during that same settled start must not adopt its prepared roster.
+        self._last_full_start, self._start_sequence = last_start, sequence
 
     def stop(self):
         with self._control_lock:

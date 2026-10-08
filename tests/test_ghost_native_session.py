@@ -108,9 +108,12 @@ def test_new_preparation_and_switch_off_preserve_the_certified_start_gate(tmp_pa
     native.prepare(target, [ghost], controls, 1)
     native.note()
     assert source.commands[-1]["activate_generation"] == 1
+    selected = native._selected_asset
     native.prepare(target, [ghost], controls, 2)
-    native.reconcile(enabled=True, target=target, controls=controls)
+    native.reconcile(enabled=True, target=target, controls={**controls, "opacity": .7})
     assert source.commands[-1]["prepare_generation"] == 2 and source.commands[-1]["activate_generation"] == 0
+    assert source.commands[-1]["enabled"] and source.commands[-1]["opacity"] == .7
+    assert native._selected_asset is selected
     source.snapshot_status = lambda **kwargs: {**served(**kwargs), "prepared_generation": 2}
     native.note()
     assert source.commands[-1]["activate_generation"] == 0
@@ -118,6 +121,70 @@ def test_new_preparation_and_switch_off_preserve_the_certified_start_gate(tmp_pa
     assert source.commands[-1] == {"enabled": False}
     native.reconcile(enabled=True, target=target, controls=controls)
     assert source.commands[-1]["prepare_generation"] == 2 and source.commands[-1]["activate_generation"] == 0
+    native.stop()
+
+
+@pytest.mark.parametrize("reconcile_first", [False, True])
+def test_strategy_swap_revokes_the_active_roster_and_return_waits_for_a_new_start(tmp_path, monkeypatch, reconcile_first):
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    standard = {"kind": "star", "entity_key": "2-2", "strat": "Standard"}
+    alternate = {**standard, "strat": "Single jump ending"}
+    controls = settings.native_controls(settings.defaults())
+    ghosts = [SimpleNamespace(id=index, origin=f"attempt:{index}", frames=30, pb=True)
+              for index in range(1, 3)]
+    manifests = {index: {"clip_id": f"{index:02x}" * 16, "sha256": "cd" * 32, "blink_frames": 0}
+                 for index in range(1, 3)}
+    native._replay.find_native = lambda attempt: (tmp_path / f"{attempt}.ghost", manifests[attempt])
+    origin = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+              "utc": "2026-09-21T08:00:00+00:00", "full_start_token": (1, 9), "full_start_now": True}
+
+    native._origin_of = lambda kind, entity_key: origin
+    served = source.snapshot_status
+    generations = {"prepared_generation": 1, "active_generation": 0}
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
+    native.prepare(standard, [ghosts[0]], controls, 1)
+    native.reconcile(enabled=True, target=standard, controls=controls)
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 1 and source.commands[-1]["enabled"]
+    generations["active_generation"] = 1
+
+    def switch(target, ghost, generation):
+        if reconcile_first:
+            native.reconcile(enabled=True, target=target, controls=controls)
+            assert source.commands[-1] == {"enabled": False}
+        resolve = native.resolve
+
+        def resolve_after_revocation(*args):
+            assert native._selected_asset is native._asset is None
+            assert source.commands[-1] == {"enabled": False}
+            return resolve(*args)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(native, "resolve", resolve_after_revocation)
+            native.prepare(target, [ghost], controls, generation)
+        native.reconcile(enabled=True, target=target, controls=controls)
+        generations["prepared_generation"] = generation
+        native.note()
+        # The renderer can observe only the last command, missing the OFF.
+        # Even with its previous active acknowledgement, that command stays off.
+        assert not source.commands[-1]["enabled"]
+        assert source.commands[-1]["activate_generation"] == 0
+        assert native._selected_asset is None
+        assert native.state()["active_generation"] == 0
+
+    switch(alternate, ghosts[1], 3)
+    origin = {**origin, "arm_id": 10, "full_start_token": (1, 10)}
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 3 and source.commands[-1]["enabled"]
+    assert native._selected_asset[0][1]["clip_id"] == manifests[2]["clip_id"]
+    generations["active_generation"] = 3
+    switch(standard, ghosts[0], 4)
+    origin = {**origin, "arm_id": 11, "full_start_token": (1, 11)}
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 4 and source.commands[-1]["enabled"]
+    assert source.commands[-1]["activate_start"] == 3
+    assert native._selected_asset[0][1]["clip_id"] == manifests[1]["clip_id"]
     native.stop()
 
 
