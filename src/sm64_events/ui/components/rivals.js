@@ -32,6 +32,12 @@ function RivalRow({row, replace, reset}) {
   </li>`;
 }
 
+function rivalContext(session, dialog) {
+  const scope = session?.rivals?.scope || "strategy";
+  const identity = JSON.stringify([session?.target,scope]);
+  return {scope, identity, currentDialog: dialog?.identity === identity ? dialog : null};
+}
+
 export function Rivals({session, write, renderAppearance}) {
   const rivals = session?.rivals;
   const card = useRef(null);
@@ -39,8 +45,10 @@ export function Rivals({session, write, renderAppearance}) {
   const [dialog,setDialog] = useState(null);
   const [anchor,setAnchor] = useState({});
   const [error,setError] = useState(null);
+  const {scope, identity, currentDialog} = rivalContext(session, dialog);
+  const openDialog = value=>{setError(null);setDialog({...value,identity});};
   useEffect(()=>{
-    if (!dialog || !card.current) return undefined;
+    if (!currentDialog || !card.current) return undefined;
     const measure=()=>{
       const rect=card.current.getBoundingClientRect();
       const half=Math.min(320,(innerWidth-32)/2);
@@ -54,11 +62,11 @@ export function Rivals({session, write, renderAppearance}) {
     if(modal) observer.observe(modal);
     window.addEventListener("resize",measure); window.addEventListener("scroll",measure,true);
     return ()=>{observer.disconnect();window.removeEventListener("resize",measure);window.removeEventListener("scroll",measure,true);};
-  }, [dialog]);
+  }, [currentDialog]);
   if(!rivals) return null;
   const act=async body=>{
     setError(null);
-    const result=await write({rivals:body,target:session.target});
+    const result=await write({rivals:{scope,...body},target:session.target});
     if(!result.applied) setError(result.error);
     return result;
   };
@@ -70,21 +78,21 @@ export function Rivals({session, write, renderAppearance}) {
   if(rivals.options.include_pb && rivals.pb) visible.push({...rivals.pb,pb:true,hue_degrees:rivals.pb.hue_degrees ?? 250});
   return html`<section class="rivals" ref=${card} aria-label="Your rivals">
     <header class="rivals-header"><h3>Your rivals</h3><div>
-      <button class="primary-button" onclick=${()=>setDialog({kind:"picker",slot:null})}><${Icon} name="plus" />Add Rival</button>
+      <button class="primary-button" onclick=${()=>openDialog({kind:"picker",slot:null})}><${Icon} name="plus" />Add Rival</button>
       <button class="icon-button" aria-label="Rival settings" title="Rival settings"
-        onclick=${()=>setDialog({kind:"settings"})}><${Icon} name="settings" /></button>
+        onclick=${()=>openDialog({kind:"settings"})}><${Icon} name="settings" /></button>
     </div></header>
     ${rivals.simulation && html`<div class="rival-status" role="status">${rivals.simulation}</div>`}
     ${rivals.status && html`<div class="rival-status" role="status">${rivals.status}</div>`}
     ${visible.length ? html`<ul class="rival-roster">${visible.map(row=>html`
       <${RivalRow} key=${row.pb ? "pb" : row.slot} row=${row} reset=${reset}
-        replace=${slot=>setDialog({kind:"picker",slot})} />`)}</ul>`
+        replace=${slot=>openDialog({kind:"picker",slot})} />`)}</ul>`
       : html`<p class="rival-empty">No ghosts in this range yet.</p>`}
     ${error && html`<p class="error" role="alert">${error}</p>`}
-    ${dialog && html`<div class="rival-dialog-host" ref=${dialogHost} style=${anchor}>
-      ${dialog.kind==="settings" ? html`<${RivalSettings} rivals=${rivals} onClose=${()=>setDialog(null)}
-        renderAppearance=${renderAppearance} onSave=${(options,appearance)=>write({rivals:{options},target:session.target,...appearance})} />`
-        : html`<${RivalPicker} target=${session.target} rows=${visible} replacement=${dialog.slot}
+    ${currentDialog && html`<div class="rival-dialog-host" ref=${dialogHost} style=${anchor}>
+      ${currentDialog.kind==="settings" ? html`<${RivalSettings} rivals=${rivals} onClose=${()=>setDialog(null)}
+        renderAppearance=${renderAppearance} onSave=${(options,appearance)=>write({rivals:{scope,options},target:session.target,...appearance})} />`
+        : html`<${RivalPicker} target=${session.target} scope=${scope} rows=${visible} replacement=${currentDialog.slot}
           onClose=${()=>setDialog(null)} onAdd=${(id,slot)=>act({action:"add",id,...(slot == null ? {} : {slot})})} />`}
     </div>`}
   </section>`;

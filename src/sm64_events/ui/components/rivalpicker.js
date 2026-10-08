@@ -29,7 +29,7 @@ function PlayerResult({player, chosen, onAdd, busy}) {
   </li>`;
 }
 
-export function RivalPicker({target, rows, replacement, onClose, onAdd}) {
+export function RivalPicker({target, scope = "strategy", rows, replacement, onClose, onAdd}) {
   const [query,setQuery] = useState("");
   const [answer,setAnswer] = useState(null);
   const [error,setError] = useState(null);
@@ -39,13 +39,13 @@ export function RivalPicker({target, rows, replacement, onClose, onAdd}) {
   useEffect(()=>{
     const revision = ++request.current;
     setError(null);
-    const key = JSON.stringify([target,query.trim()]);
+    const key = JSON.stringify([target,scope,query.trim()]);
     const cached = cache.current.get(key);
     if (cached) {setAnswer(cached); return undefined;}
     setAnswer(null);
     const timer = setTimeout(async()=>{
       try {
-        const params = new URLSearchParams({player:query.trim(),target:JSON.stringify(target)});
+        const params = new URLSearchParams({player:query.trim(),target:JSON.stringify(target),scope});
         const result = await getJSON(`/api/ghost/rivals/search?${params}`);
         if (revision===request.current) {
           cache.current.set(key,result);
@@ -55,7 +55,7 @@ export function RivalPicker({target, rows, replacement, onClose, onAdd}) {
       } catch(failure) {if(revision===request.current) setError(failure.message);}
     }, query ? 250 : 0);
     return ()=>{clearTimeout(timer);request.current++;};
-  }, [query,JSON.stringify(target)]);
+  }, [query,JSON.stringify(target),scope]);
   const add = async id=>{
     setBusy(true); setError(null);
     const result = await onAdd(id,replacement);
@@ -76,7 +76,7 @@ export function RivalPicker({target, rows, replacement, onClose, onAdd}) {
       const revision = request.current;
       setBusy(true);
       try {
-        const params = new URLSearchParams({player:query.trim(),target:JSON.stringify(target),cursor:JSON.stringify(answer.next_cursor)});
+        const params = new URLSearchParams({player:query.trim(),target:JSON.stringify(target),scope,cursor:JSON.stringify(answer.next_cursor)});
         const result = await getJSON(`/api/ghost/rivals/search?${params}`);
         if (revision===request.current) setAnswer({...result,records:[...answer.records,...result.records]});
       } catch(failure){if(revision===request.current) setError(failure.message);} finally {setBusy(false);}

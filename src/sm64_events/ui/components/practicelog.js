@@ -532,6 +532,11 @@ function classificationTransition(sec, t, rankMode, hasSeparateRank) {
   };
 }
 
+function rankViewFor(active, preferred, separate) {
+  return {rankMode: active ? preferred : effectiveRankDisplayMode(preferred, separate),
+    canChooseScope: active || separate};
+}
+
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
@@ -542,9 +547,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const [page, setPage] = useState(0);
   const ek = entityKey(sec);
   // A card remembers this preference by ENTITY, not by its current strategy:
-  // switching from Standard to Cannonless should keep showing whichever rank
-  // the player chose to watch here. A shared ladder temporarily forces the
-  // only honest reading (Overall) without erasing that remembered preference.
+  // switching from Standard to Cannonless keeps the player's chosen scope.
+  // Active practice also uses this choice for ghosts, even on a shared ladder.
   const [preferredRankMode, setPreferredRankMode] = useState(
     () => readRankDisplayMode(ek));
   // `forceOpen` exists for exactly one moment (Task 6 brief, Step 1): "so a
@@ -664,15 +668,16 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // that one display has a genuinely different Overall measurement to offer;
   // it controls the two-button switch, never the number of banners painted.
   const hasSeparateRank = showsEntityBanner(sec);
-  const rankMode = effectiveRankDisplayMode(preferredRankMode, hasSeparateRank);
+  const {rankMode, canChooseScope} =
+    rankViewFor(active, preferredRankMode, hasSeparateRank);
   const pickRankMode = (mode) => {
-    if (!hasSeparateRank || mode === rankMode) return;
+    if (!canChooseScope || mode === rankMode) return;
     writeRankDisplayMode(ek, mode);
     setPreferredRankMode(mode);
   };
   const rankModeButtons = html`<span class="rank-mode-buttons" role="group"
       aria-label="Rank view">
-    ${hasSeparateRank && html`<button type="button"
+    ${canChooseScope && html`<button type="button"
         class=${`rank-mode-button${rankMode === "strategy" ? " is-selected" : ""}`}
         aria-pressed=${rankMode === "strategy" ? "true" : "false"}
         title="Show the rank for the strategy selected on this card"
@@ -871,7 +876,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           <${Icon} name="chevron" size=${18} />
         </button>
       </div>
-    </div><${GhostSwitch} t=${t} entityKey=${ek} active=${active} />
+    </div><${GhostSwitch} t=${t} entityKey=${ek} active=${active} scope=${rankMode} />
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
       ${inBody && ranksBlock}

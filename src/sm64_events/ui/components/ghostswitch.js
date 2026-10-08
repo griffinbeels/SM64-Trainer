@@ -39,7 +39,7 @@ import { GhostProximity } from "./ghostproximity.js";
 import { GhostLibraryButton } from "./ghostlibrary.js";
 import { Rivals } from "./rivals.js";
 import { clampNudge, clampOpacity, ghostControls, ghostPathTuning, ghostRecordingOptions,
-         ghostOption, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
+         ghostOption, ghostTargetKey, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
          nudgeSeconds, nudgeText, opacityText, pathTuningText, shownTint,
          NUDGE_STEP, PATH_SOURCE_LABELS, PATH_TUNING_LABELS } from "../ghostsession.js";
 
@@ -503,7 +503,8 @@ function GhostAppearance({controls, appearance, patch}) {
 }
 
 function GhostRacing({session, controls, held, on, write, queue, entityKey}) {
-  if (session?.rivals) return html`<${Rivals} session=${session} write=${write}
+  if (session?.rivals) return html`<${Rivals} key=${JSON.stringify([session.target,session.rivals.scope || "strategy"])}
+    session=${session} write=${write}
     renderAppearance=${(appearance, patch) => html`<${GhostAppearance} controls=${controls}
       appearance=${appearance} patch=${patch} />`} />`;
   const values = heldValues(controls, held);
@@ -519,6 +520,31 @@ function GhostRacing({session, controls, held, on, write, queue, entityKey}) {
       ranges=${limits.path_tuning} draft=${held.path_tuning} queue=${queue} />`;
 }
 
+/** Serial scope swaps follow the latest tab; a rejection never retries itself. */
+function useRivalScope(session, scope, entityKey, active, write) {
+  const pending = useRef(false);
+  const attempted = useRef(null);
+  const [revision, settled] = useState(0);
+  const actual = session?.rivals?.scope || "strategy";
+  const wanted = active && session?.rivals && ghostTargetKey(session.target) === entityKey
+    && (scope === "strategy" || scope === "overall")
+    ? JSON.stringify([session.target,scope]) : null;
+  useEffect(()=>{
+    if (!wanted || actual === scope) {attempted.current = null; return;}
+    if (pending.current || attempted.current === wanted) return;
+    attempted.current = wanted;
+    pending.current = true;
+    write({target:session.target,rivals:{scope}}).finally(()=>{
+      pending.current = false;
+      settled(value=>value+1);
+    });
+  }, [wanted,actual,revision,write]);
+}
+
+function racingScopeReady(session, scope, known) {
+  return known && (!session?.rivals || (session.rivals.scope || "strategy") === scope);
+}
+
 /**
  * The row itself. `entityKey` is the hosting card's own key -- the control
  * refuses to speak for a session that names a different entity (see
@@ -532,8 +558,9 @@ function GhostRacing({session, controls, held, on, write, queue, entityKey}) {
  * it is this prop, and it is what both the fetch above and the early return
  * below read. Nothing renders and nothing is requested on the other cards.
  */
-export function GhostSwitch({ t, entityKey, active = true }) {
+export function GhostSwitch({ t, entityKey, active = true, scope = "strategy" }) {
   const { session, reachable, draft, write, queue } = useGhostSession(t, active);
+  useRivalScope(session, scope, entityKey, active && reachable, write);
   if (!active || !reachable) return null;
   const controls = ghostControls(session, entityKey);
   const held = draft || {};
@@ -553,7 +580,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         ${controls.reasonText}
       </span>`}
     </div>
-    <${GhostRacing} session=${session} controls=${controls} held=${held} on=${on}
-      write=${write} queue=${queue} entityKey=${entityKey} />
+    ${racingScopeReady(session,scope,controls.known) ? html`<${GhostRacing} session=${session} controls=${controls} held=${held} on=${on}
+      write=${write} queue=${queue} entityKey=${entityKey} />` : null}
   </div>`;
 }

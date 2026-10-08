@@ -32,7 +32,7 @@ def row(identity, player, frames, *, slot=None, pinned=False):
 def session(*, fresh=False):
     rows = [row(str(n) * 64, name, frames, slot=n-1)
             for n, (name, frames) in enumerate((('Alex', 600), ('Sam', 570), ('Kai', 540), ('Morgan', 510)), 1)]
-    return {"target": TARGET, "rivals": {"rows": rows, "status": None, "strategy_name": "Standard",
+    return {"target": TARGET, "rivals": {"scope": "strategy", "rows": rows, "status": None, "strategy_name": "Standard",
         "pb": None if fresh else {**row("e" * 64, "You", 630), "tier": "Iron", "division": "I", "step": 4},
         "options": {"mode": "adaptive", "count": 4, "include_pb": True,
                     "min_ahead": 1, "max_ahead": 5, "min_step": 0, "max_step": 44},
@@ -95,6 +95,7 @@ def _write(route, state):
     assert body["target"] == TARGET
     state["writes"].append(body)
     command = body["rivals"]
+    assert command["scope"] == state["session"]["rivals"]["scope"]
     rows = state["session"]["rivals"]["rows"]
     if command.get("action") == "add":
         slot = command.get("slot", 0)
@@ -116,6 +117,7 @@ def _request(route, state, markup):
         query = parse_qs(parsed.query, keep_blank_values=True)
         state["requests"].append(query)
         assert json.loads(query["target"][0]) == TARGET
+        assert query["scope"][0] == state["session"]["rivals"]["scope"]
         _search(route, query, state)
     elif parsed.path == "/api/ghost" and route.request.method == "PUT":
         _write(route, state)
@@ -252,17 +254,17 @@ def test_search_fastest_or_slower_add_replace_and_symbol_reset(fixture):
     panel.get_by_role("button", name="Add", exact=True).click()
     reset = page.get_by_role("button", name="Restore automatic rival in FormFrame’s slot")
     reset.wait_for()
-    assert state["writes"][-1]["rivals"] == {"action": "add", "id": "b" * 64}
+    assert state["writes"][-1]["rivals"] == {"scope": "strategy", "action": "add", "id": "b" * 64}
     assert not reset.inner_text().strip()
     reset.click()
-    assert state["writes"][-1]["rivals"] == {"action": "reset", "slot": 0}
+    assert state["writes"][-1]["rivals"] == {"scope": "strategy", "action": "reset", "slot": 0}
     page.get_by_role("button", name="Replace Sam", exact=True).click()
     panel = page.get_by_role("dialog", name="Replace rival")
     panel.get_by_role("searchbox", name="Search player").fill("Form")
     panel.get_by_label("Recording by FormFrame").wait_for()
     panel.get_by_role("button", name="Add", exact=True).click()
     reset.wait_for()
-    assert state["writes"][-1]["rivals"] == {"action": "add", "id": "a" * 64, "slot": 1}
+    assert state["writes"][-1]["rivals"] == {"scope": "strategy", "action": "add", "id": "a" * 64, "slot": 1}
     assert state["errors"] == []
 
 
@@ -333,7 +335,7 @@ def test_real_practice_ghost_switch_reaches_rivals_and_saves_draft_once(browser,
                 route.continue_()
                 return
             body = route.request.post_data_json
-            assert body["target"] == payload["target"]
+            assert body["target"] == payload["target"] and body["rivals"]["scope"] == "strategy"
             writes.append(body)
             payload["rivals"]["options"] = deepcopy(body["rivals"]["options"])
             payload["opacity"] = body.get("opacity", payload["opacity"])
@@ -368,6 +370,151 @@ def test_real_practice_ghost_switch_reaches_rivals_and_saves_draft_once(browser,
             assert errors == [] and responses and all(200 <= value < 300 for value in responses), failed
         finally:
             context.close()
+
+
+def _scope_answer(payload, scope):
+    answer = deepcopy(payload)
+    answer["rivals"]["scope"] = scope
+    if scope == "overall":
+        answer["rivals"]["rows"] = [{**row("f" * 64, "FormFrame", 390, slot=0),
+            "strategy": "Cannonless", "strategy_name": "Cannonless", "tier": "Gold", "division": "III", "step": 17}]
+    return answer
+
+
+@pytest.fixture
+def practice_scopes(browser):
+    from tools.ghost_fixture import ghost_session, serve_ui_with_ghost
+    payload = {**ghost_session(enabled=True), "rivals": session()["rivals"]}
+    for recording in (*payload["rivals"]["rows"], payload["rivals"]["pb"]):
+        recording.update(strategy=payload["target"]["strat"], strategy_name=payload["target"]["strat"])
+    payload["rivals"]["pb"]["hue_degrees"] = 250
+    with serve_ui_with_ghost(payload) as (base, _state):
+        context = browser.new_context(viewport={"width": 1500, "height": 1100})
+        page = context.new_page()
+        page.set_default_timeout(10000)
+        state = {"writes": [], "errors": [], "failed": [], "searches": [], "pending": [],
+                 "defer": False, "reject": False, "scope": "strategy", "shared": False}
+        page.on("pageerror", lambda error: state["errors"].append(str(error)))
+        page.on("console", lambda message: state["errors"].append(message.text) if message.type == "error" else None)
+        page.on("response", lambda response: state["failed"].append((response.status, response.url))
+                if response.status >= 400 else None)
+        def ghost_write(route):
+            if route.request.method != "PUT":
+                route.continue_()
+                return
+            body = route.request.post_data_json
+            assert body["target"] == payload["target"]
+            state["writes"].append(body)
+            scope = body["rivals"]["scope"]
+            if state["reject"]:
+                route.fulfill(status=422, json={"detail": "Choose the current practice scope."})
+            elif state["defer"]:
+                state["pending"].append((route, scope))
+            else:
+                state["scope"] = scope
+                route.fulfill(json=_scope_answer(payload, scope))
+        def search(route):
+            query = parse_qs(urlparse(route.request.url).query, keep_blank_values=True)
+            assert json.loads(query["target"][0]) == payload["target"]
+            assert query["scope"][0] == state["scope"]
+            state["searches"].append(query)
+            route.fulfill(json={"records": _scope_answer(payload, state["scope"])["rivals"]["rows"], "next_cursor": None})
+        def practice_view(route):
+            response = route.fetch()
+            data = response.json()
+            if state["shared"]:
+                for star in data["stars"]:
+                    if (star["course_id"], star["star_id"]) == (2, 4):
+                        star["one_ladder"] = True
+            route.fulfill(response=response, json=data)
+        page.route("**/api/ghost", ghost_write)
+        page.route("**/api/ghost/rivals/search?*", search)
+        page.route("**/api/session?*", practice_view)
+        page.route("**/api/replay/available", lambda route: route.fulfill(json={"available": []}))
+        try:
+            yield page, base, state, payload
+        finally:
+            context.close()
+
+
+@pytest.mark.parametrize("width,shared", [(1500, False), (850, True)])
+def test_practice_tabs_swap_ghost_scope_and_show_recorded_strategy(practice_scopes, tmp_path, width, shared):
+    page, base, state, _payload = practice_scopes
+    state["shared"] = shared
+    page.set_viewport_size({"width": width, "height": 1100})
+    _practice_entry(page, base)
+    card = page.locator(".log-card-active")
+    strategy = card.get_by_role("button", name="Strategy", exact=True)
+    overall = card.get_by_role("button", name="Overall", exact=True)
+    assert strategy.get_attribute("aria-pressed") == "true" and state["writes"] == []
+    assert card.get_by_text("Automatic · " + _payload["target"]["strat"], exact=True).first.is_visible()
+    overall.click()
+    opponent = card.locator(".rival-row").filter(has_text="FormFrame")
+    opponent.get_by_text("Automatic · Cannonless", exact=True).wait_for()
+    assert opponent.get_by_title("Waluigi 3", exact=True).is_visible()
+    assert state["writes"] == [{"target": _payload["target"], "rivals": {"scope": "overall"}}]
+    card.get_by_role("button", name="Add Rival", exact=True).click()
+    panel = page.get_by_role("dialog", name="Add Rival", exact=True)
+    panel.get_by_text("Cannonless", exact=True).wait_for()
+    assert state["searches"][-1]["scope"] == ["overall"]
+    panel.get_by_role("button", name="Close dialog", exact=True).click()
+    _screenshot(page, tmp_path, f"round10-overall-rivals-{width}.png")
+    strategy.click()
+    card.get_by_role("button", name="Replace Alex", exact=True).wait_for()
+    assert state["writes"][-1] == {"target": _payload["target"], "rivals": {"scope": "strategy"}}
+    assert strategy.get_attribute("aria-pressed") == "true"
+    assert opponent.count() == 0
+    assert state["errors"] == [] and state["failed"] == []
+
+
+def test_rapid_practice_scope_changes_finish_on_latest_tab(practice_scopes):
+    page, base, state, payload = practice_scopes
+    _practice_entry(page, base)
+    card = page.locator(".log-card-active")
+    state["defer"] = True
+    card.get_by_role("button", name="Overall", exact=True).click()
+    page.wait_for_function("!document.querySelector('.ghost-row .rivals')")
+    assert len(state["pending"]) == 1
+    card.get_by_role("button", name="Strategy", exact=True).click()
+    assert len(state["writes"]) == 1
+    pending, scope = state["pending"].pop()
+    state["defer"] = False
+    state["scope"] = scope
+    pending.fulfill(json=_scope_answer(payload, scope))
+    card.get_by_role("button", name="Replace Alex", exact=True).wait_for()
+    assert [body["rivals"]["scope"] for body in state["writes"]] == ["overall", "strategy"]
+    assert card.get_by_role("button", name="Strategy", exact=True).get_attribute("aria-pressed") == "true"
+    assert state["errors"] == [] and state["failed"] == []
+
+
+def test_failed_scope_swap_does_not_repeat_without_another_gesture(practice_scopes):
+    page, base, state, _payload = practice_scopes
+    _practice_entry(page, base)
+    card = page.locator(".log-card-active")
+    state["reject"] = True
+    card.get_by_role("button", name="Overall", exact=True).click()
+    page.get_by_text("Choose the current practice scope.", exact=True).wait_for()
+    page.wait_for_timeout(350)
+    assert len(state["writes"]) == 1
+    state["reject"] = False
+    card.get_by_role("button", name="Strategy", exact=True).click()
+    card.get_by_role("button", name="Overall", exact=True).click()
+    card.get_by_role("button", name="Replace FormFrame", exact=True).wait_for()
+    assert len(state["writes"]) == 2
+    assert state["failed"] == [(422, base + "/api/ghost")]
+    assert len(state["errors"]) == 1 and "422 (Unprocessable Entity)" in state["errors"][0]
+
+
+def test_scope_change_closes_pending_picker_and_settings_drafts(fixture):
+    page, state = fixture
+    for opener in (lambda: settings(page), lambda: page.get_by_role("button", name="Add Rival", exact=True).click()):
+        opener()
+        updated = deepcopy(state["session"])
+        updated["rivals"]["scope"] = "overall" if updated["rivals"]["scope"] == "strategy" else "strategy"
+        state["session"] = updated
+        page.evaluate("state => window.reviewSet(state)", updated)
+        page.wait_for_function("!document.querySelector('.rival-dialog-host')")
+    assert state["writes"] == [] and state["errors"] == []
 
 
 def _reported_practice_pb(service):
