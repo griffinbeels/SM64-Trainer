@@ -400,6 +400,14 @@ struct Session {
     bool demand(const gipc_request &incoming, uint32_t generation) {
         auto r = incoming;
         bool stage_load = false;
+        const auto finish = [&]() {
+            if (stage_load) {
+                // Apply the current race's origin, suspension and controls
+                // before independent future-roster disk work.
+                loaded = staged_request; staged_attempted = incoming.revision; staged_retry_at = 0;
+            }
+            previous = incoming; return stage_load;
+        };
         const uint32_t now = GetTickCount(), current_rom = opened.load(std::memory_order_acquire);
         const bool identity = r.token && r.revision && r.owner_pid && r.generation == generation;
         const bool changed = !same_owner(r, previous);
@@ -585,7 +593,7 @@ struct Session {
                         if (r.origin.configuration != configuration || resolved != GO_READY) {
                             have_origin = false; withdraw();
                             state = resolved == GO_MISSING ? GIPC_PREPARING : GIPC_REFUSED;
-                            reason = GIPC_ORIGIN; previous = r; return false;
+                            reason = GIPC_ORIGIN; return finish();
                         }
                         resolved_marker = r.origin; have_origin = true;
                         command.origin = resolved_origin;
@@ -641,12 +649,7 @@ struct Session {
             reason = staged_reason;
             if (!applied) state = staged_reason ? GIPC_REFUSED : GIPC_PREPARING;
         }
-        if (stage_load) {
-            // Apply the current race's origin, suspension and controls before
-            // future-roster disk work. Its IO attempt never owns the active set.
-            loaded = staged_request; staged_attempted = incoming.revision; staged_retry_at = 0;
-        }
-        previous = incoming; return stage_load;
+        return finish();
     }
     void load_assets() {
         // A retained command may still draw unchanged clips during this IO.
@@ -658,8 +661,16 @@ struct Session {
             const auto &clip = loaded.clips[i];
             Asset *known = find(clip);
             if (known && (known->prepared || !known->bytes.empty())) {
-                if (loaded.prepare_generation && !known->prepared && prepare_assets(loaded) == GP_BUSY) {
-                    attempted = staged_attempted = 0; staged_retry_at = GetTickCount()+16; return;
+                if (loaded.prepare_generation && !known->prepared) {
+                    const int prepared = prepare_assets(loaded);
+                    if (prepared == GP_BUSY || prepared == GP_DEFERRED) {
+                        attempted = staged_attempted = 0; staged_retry_at = GetTickCount()+16; return;
+                    }
+                    if (prepared != GP_OK) {
+                        failed = loaded.revision; reason = staged_reason = prepared == GP_BUDGET ? GIPC_BUDGET : GIPC_CLIP;
+                        if (prepared == GP_BUDGET) { staged_attempted = 0; staged_retry_at = GetTickCount()+100; }
+                        state = GIPC_REFUSED; return;
+                    }
                 }
                 continue;
             }
@@ -729,6 +740,7 @@ struct Session {
                 }
                 if (prepared != GP_OK) {
                     failed = loaded.revision; reason = staged_reason = prepared == GP_BUDGET ? GIPC_BUDGET : GIPC_CLIP;
+                    if (prepared == GP_BUDGET) { staged_attempted = 0; staged_retry_at = GetTickCount()+100; }
                     state = GIPC_REFUSED; return;
                 }
                 total = retained_bytes();

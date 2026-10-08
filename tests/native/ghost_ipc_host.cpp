@@ -43,6 +43,7 @@ struct CartridgeHeader {
 std::atomic<DWORD> worker_owner{0};
 std::atomic<unsigned> wrong_thread{0},binds{0},releases{0},revokes{0},commands{0},models{0},withdrawals{0};
 std::atomic<unsigned> prepared_ids[256]{},released_ids[256]{},rom_validations{0};
+std::atomic<unsigned> copy_budget_refusals{0};
 std::atomic<uint64_t> resident_clip_bytes{0};
 // Ghost sound engine lifetime: started from the verified ROM, stopped with it.
 std::atomic<unsigned> audio_starts{0},audio_stops{0};
@@ -114,7 +115,7 @@ int32_t __cdecl prepare_model(uint64_t id,const uint8_t* bytes,uint32_t size) {
 }
 int32_t __cdecl prepare_clip(const gclip_header* h,const gclip_frame* frame) {
     if(!enter_worker())return GP_WRONG_THREAD;
-    if(fail_budget.load() || budget_waits_for_release.load())return GP_BUDGET;
+    if(fail_budget.load() || budget_waits_for_release.load()){++copy_budget_refusals;return GP_BUDGET;}
     if(h)++prepared_ids[h->clip_id[0]];
     return h && frame && h->record_count==1 && frame->bytes==sizeof(*frame)?GP_OK:GP_INVALID;
 }
@@ -617,15 +618,21 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         const unsigned before_budget=prepared_ids[1].load();
         const unsigned before_budget_withdrawal=withdrawals.load();
         resident_clip_bytes=GP_CLIP_BUDGET-512;
-        r.revision=13;r.prepare_generation=103;r.activate_generation=r.activate_start=0;r.opacity=.4f;r.owner_suspended=1;
-        set_clip(r.clips[0],1,argv[1],argv[2],48);page.send(r);
+        r.revision=13;r.prepare_generation=103;r.activate_generation=r.activate_start=0;r.opacity=.4f;r.owner_suspended=1;r.clip_count=2;
+        set_clip(r.clips[0],1,argv[1],argv[2],48);set_clip(r.clips[1],2,argv[4],argv[5],207);page.send(r);
         page.wait([](const gipc_status& s){return s.ack_revision==13 && s.reason==GIPC_BUDGET;},"aggregate active plus staging read is bounded");
         check(prepared_ids[1]==before_budget && page.status().active_generation==102
             && last_command().clips[0].clip_id[0]==3,"budget refusal preserves active playback and never allocates a candidate copy");
         check(last_command().opacity==.4f && last_command().suspended,
             "active suspension and appearance apply before staging IO can fail");
         check(withdrawals.load()==before_budget_withdrawal,"a future-roster budget refusal never withdraws the active race");
-        resident_clip_bytes=0;
+        const unsigned before_copy_budget=copy_budget_refusals.load();
+        fail_budget=true;resident_clip_bytes=0;
+        page.wait([&](const gipc_status&){return copy_budget_refusals.load()>before_copy_budget;},
+            "multi-clip preparation reaches a native copy budget refusal before later files load");
+        check(!page.status().prepared_generation && page.status().active_generation==102,
+            "native copy refusal retains the active roster and never acknowledges the partial set");
+        fail_budget=false;
         page.wait([](const gipc_status& s){return s.prepared_generation==103;},"preparation retries when aggregate room becomes available");
         check(page.status().ack_revision==13,"transient budget recovery requires no UI or origin revision");
         check(page.status().active_generation==102,"a later budget recovery still waits for a certified start");
@@ -637,9 +644,10 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.revision=16;r.opacity=.5f;page.send(r);
         page.wait([](const gipc_status& s){return s.ack_revision==16;},"canceled command survives later control updates");
         check(!page.status().prepared_generation && page.status().active_generation==102,"canceled preparation cannot become ready again");
-        r.revision=17;r.cancel_preparation=0;r.prepare_generation=104;r.clip_count=1;
+        r.revision=17;r.cancel_preparation=0;r.prepare_generation=104;r.clip_count=1;r.mode=GP_FOLLOW;
+        r.origin={GO_SEGMENT,anchor.configuration,1,2000000000,anchor.utc_anchor,1,99};
         set_clip(r.clips[0],1,argv[1],argv[2],48);page.send(r);
-        page.wait([](const gipc_status& s){return s.prepared_generation==104;},"fresh preparation follows cancellation");
+        page.wait([](const gipc_status& s){return s.prepared_generation==104;},"fresh preparation survives an unresolved active origin");
         model_state=GP_MODEL_EMPTY;r.revision=18;r.activate_generation=104;r.activate_start=4;page.send(r);
         page.wait([](const gipc_status& s){return s.ack_revision==18 && s.prepared_generation==104;},
             "context rebuild acknowledges readiness again after the missed start");
@@ -647,7 +655,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         // A move-clock arm may be certified before any playable origin exists.
         // Select its ready roster while drawing is off, then begin that same
         // roster when the clock resolves, even if a newer roster is now ready.
-        r.revision=19;r.prepare_generation=105;r.activate_generation=r.activate_start=0;r.play_enabled=0;
+        r.revision=19;r.prepare_generation=105;r.activate_generation=r.activate_start=0;r.play_enabled=0;r.mode=GP_FIXED;r.origin={};
         set_clip(r.clips[0],2,argv[4],argv[5],207);page.send(r);
         page.wait([](const gipc_status& s){return s.prepared_generation==105;},"roster prepared before move clock readiness");
         const unsigned before_certificate=commands.load();
