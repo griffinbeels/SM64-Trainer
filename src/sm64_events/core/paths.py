@@ -48,7 +48,7 @@ def shared_defaults_root() -> Path | None:
     An installed build is always personal, even with an inherited development
     flag. Source location, rather than cwd, binds writes to the code being run.
     """
-    if is_frozen() or os.environ.get("SM64_MAINTAINER") != "1":
+    if is_frozen() or practice_root() is not None or os.environ.get("SM64_MAINTAINER") != "1":
         return None
     root = Path(__file__).resolve().parents[3]
     if not (root / ".git").exists():
@@ -97,11 +97,35 @@ def data_root() -> Path:
 
     Source: ``Path(".")`` — joins collapse the leading dot, so
     ``data_root()/"data"/"tracker.db" == Path("data")/"tracker.db"`` exactly
-    as before. Frozen: ``%LOCALAPPDATA%\\SM64Trainer``.
+    as before. Frozen: ``%LOCALAPPDATA%\\SM64Trainer``. An absolute
+    ``SM64_PRACTICE_ROOT`` selects an isolated profile before either default.
     """
+    isolated = practice_root()
+    if isolated is not None:
+        return isolated
     if is_frozen():
         return user_data_root()
     return Path(".")
+
+
+def _absolute_override(name: str) -> Path | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    path = Path(value)
+    if not value.strip() or not path.is_absolute():
+        raise ValueError(f"{name} must name an absolute directory")
+    return path.resolve()
+
+
+def practice_root() -> Path | None:
+    """Explicit isolated practice profile; never redirects installation metadata."""
+    return _absolute_override("SM64_PRACTICE_ROOT")
+
+
+def ghost_population_root() -> Path:
+    """The local population can survive a fresh practice profile."""
+    return _absolute_override("SM64_GHOST_POPULATION") or data_root() / "data" / "ghost_population"
 
 
 def user_data_root() -> Path:
@@ -116,7 +140,7 @@ def migrate_legacy_data_dir() -> None:
     / settings carry over after the SM64Trainer rename. Frozen only; idempotent;
     NEVER destroys data — if the new dir already holds data, the legacy dir is
     left untouched. Call before any data path is read/created."""
-    if not is_frozen():
+    if not is_frozen() or practice_root() is not None:
         return
     base = Path(os.environ.get("LOCALAPPDATA") or str(
         Path.home() / "AppData" / "Local"))
