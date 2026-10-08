@@ -19,6 +19,7 @@ import threading
 import unicodedata
 
 from sm64_events.ghost.clip import attempt_origin, blink_frames, read_clip
+from sm64_events.ghost.pb import local_attempt_source
 from sm64_events.ghost.portable import checked_author, checked_hash
 from sm64_events.ghost.sharing import PortableGhost
 from sm64_events.ghost.sharing_targets import bind, canonical, describe
@@ -90,7 +91,7 @@ def _admission(attempt, clock, game_version, full_start):
     frames = _admissible(attempt, clock, game_version, full_start)
     return Admission(canonical({"id": attempt.id, "session": attempt.session_id,
         "target": entity_key_of(attempt), "strategy": attempt.strat_tag, "frames": frames,
-        "ended": attempt.ended_utc, **attempt_origin(attempt)}), frames)
+        "ended": attempt.ended_utc, "source": local_attempt_source(attempt), **attempt_origin(attempt)}), frames)
 
 
 def _preserved_asset(replay, attempt):
@@ -246,6 +247,7 @@ class LocalPopulation:
         document = {"player_id": player_id, "player_name": player_name, "target": target,
             "frames": before.frames, "clock": clock, "game_version": game_version,
             "sha256": digest, "recorded_utc": current.started_utc,
+            "source": local_attempt_source(current),
             "certified": True, "valid": True, "full_start": True,
             "certificate_source": getattr(replay, "certificate_source", "observed_runtime")}
         document["id"] = hashlib.sha256(canonical(document)).hexdigest()

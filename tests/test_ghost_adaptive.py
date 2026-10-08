@@ -241,6 +241,44 @@ def test_pb_playback_identity_cannot_also_fill_a_rival_slot():
     assert select_rivals([row], pb, {"include_pb": False}, {})[0]["id"] == "own-pb"
 
 
+@pytest.mark.parametrize("pins", [{}, {"0": "own-pb"}])
+def test_certified_pb_lineage_is_played_once_in_fixed_or_manually_chosen_slots(tmp_path, pins):
+    database = Database(tmp_path / "lineage.db")
+    run = attempt(7)
+    try:
+        database.replace_attempts([run])
+        save(database, run)
+        pb = saved_pb_basis(database, Standards(), IDENTITY)
+        row = ranked(pb["step"], "own-pb", pb["frames"], source=dict(pb["source"]),
+                     ghost=SimpleNamespace(import_id="own-pb"))
+        options = {"mode": "fixed"}
+        selected = select_rivals([row], pb, options, pins)
+        assert not [item for item in selected if item.get("ghost") is not None]
+        selected_without_pb = select_rivals([row], pb, {**options, "include_pb": False}, pins)
+        assert selected_without_pb[0]["ghost"] is row["ghost"]
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize("different", [
+    {"session_id": 2}, {"started_utc": "2026-10-08T00:00:00Z"}, {"attempt_id": 8},
+])
+def test_attempt_numbers_reused_by_other_profile_runs_are_distinct_rivals(different):
+    source = {"session_id": 1, "attempt_id": 7, "started_utc": "2026-10-07T00:00:00Z"}
+    row = ranked(20, "other-run", 600, source={**source, **different},
+                 ghost=SimpleNamespace(import_id="other-run"))
+    selected = select_rivals([row], basis(20, 600, source=source), {"mode": "fixed"}, {})
+    assert selected[0]["id"] == "other-run"
+
+
+def test_private_import_claimed_lineage_does_not_exclude_a_manual_rival():
+    source = {"session_id": 1, "attempt_id": 7, "started_utc": "2026-10-07T00:00:00Z"}
+    row = ranked(20, "private", 600, source=source, manual_only=True, certified=False,
+                 ghost=SimpleNamespace(import_id="private"))
+    selected = select_rivals([row], basis(20, 600, source=source), {"mode": "fixed"}, {"0": "private"})
+    assert selected[0]["id"] == "private" and selected[0]["ghost"] is row["ghost"]
+
+
 def test_add_fills_vacancy_then_replaces_slowest_automatic_and_protects_chosen():
     assert add_slot([], 4) == 0
     assert add_slot([{"slot": 0, "frames": 9000, "pinned": True}], 4) == 1
@@ -269,6 +307,7 @@ def test_latest_saved_strategy_slots_are_resolved_before_comparing_or_undoing(tm
         result = saved_pb_basis(database, Standards(), IDENTITY)
         assert (result["attempt_id"], result["frames"], result["step"]) == (1, 600, 20)
         assert result["ghost"].pb and result["ghost"].origin == "attempt:1"
+        assert result["source"] == {"session_id": 1, "attempt_id": 1, "started_utc": runs[0].started_utc}
     finally:
         database.close()
 

@@ -56,6 +56,7 @@ def test_preserved_identity_survives_reused_attempt_ids_and_population_restart(t
     assert first["id"] != second["id"]
     assert first["ghost"].attempt_id is None
     assert first["certified"] and first["valid"] and first["full_start"]
+    assert first["source"] == {"session_id": row.session_id, "attempt_id": row.id, "started_utc": row.started_utc}
     assert provider.metadata_snapshot("star", "2-1", clock="igt", game_version="jp") == ()
     path, manifest = provider.resolve(first["ghost"], {"kind": "star", "entity_key": "2-1"})
     assert path.read_bytes() == original.read_bytes()
