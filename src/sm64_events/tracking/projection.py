@@ -1191,12 +1191,14 @@ class Projector:
         return self._runs.armed_route_id()
 
     def native_rival_start(self, kind: str, entity_key: str):
-        """The immutable full-start identity; a restore keeps only playback."""
-        origin = self.native_ghost_origin(kind,entity_key)
-        if origin is None:
+        """The immutable full-start certificate, independent of clock readiness."""
+        target = self.target
+        if target is None or target[0] != kind:
             return None
         if kind == "segment":
-            return self._segments.native_rival_start(int(entity_key))
+            return self._segments.native_rival_start(target[1]) if entity_key == str(target[1]) else None
+        if kind != "star" or entity_key != f"{target[1]}-{target[2]}":
+            return None
         engines = [sid for sid,entity in self._hundred_coin_engine_ids.items()
                    if entity == self.target[1:] and sid in self._segments.armed_ids()]
         if engines:
@@ -1205,7 +1207,8 @@ class Projector:
         if (not _native_star_origin_known(first) or first.type != "practice_reset"
                 or first is not self._open):
             return None
-        return (kind,entity_key,origin["session_id"],origin["arm_id"])
+        return {"token": (kind,entity_key,first.session_id,first.id),
+                "session_id": first.session_id, "start_frame": first.frame}
 
     def active_route_id(self):
         """The route_id of the most recent route_selected — replay-derived,
@@ -1725,7 +1728,9 @@ class Projector:
                             a.id, self.strat_by_segment.get(a.segment_id)),
                         cleared=a.id in self._cleared,
                         cleared_reason=self._cleared.get(a.id))
-        a = replace(a, game_version=ev.payload.get("game_version"), **self._segment_validity(ev, a, hc))
+        # The engine compared the arm's observed ROM with this closing event.
+        # Reattribution to a 100-coin star must retain that same certificate.
+        a = replace(a, **self._segment_validity(ev, a, hc))
         a = self._auto_ignored(a)
         return a
 

@@ -775,12 +775,19 @@ class TrackerService:
         Merely selecting a target midway, restoring a state or rebasing its
         clock never certifies adopting newly prepared rivals.
         """
-        origin = self.native_ghost_origin(kind,entity_key)
-        if origin is None:
+        if self.db is None or self.session_id is None or self._tracking_dirty:
             return None
-        token = self._projector.native_rival_start(kind,entity_key)
-        return {**origin,"full_start_token":token,
-                "full_start_now":token is not None and frame == origin["frame"]}
+        origin = self.native_ghost_origin(kind,entity_key)
+        certificate = self._projector.native_rival_start(kind,entity_key)
+        if certificate is not None and certificate["session_id"] != self.session_id:
+            certificate = None
+        if origin is None and certificate is None:
+            return None
+        waiting = ({"session_id":certificate["session_id"], "start_frame":certificate["start_frame"]}
+                   if certificate else {})
+        return {**(origin if origin is not None else waiting),"clock_ready":origin is not None,
+                "full_start_token":certificate["token"] if certificate else None,
+                "full_start_now":certificate is not None and frame == certificate["start_frame"]}
 
     def _require_db(self) -> Database:
         if self.db is None or self.session_id is None:

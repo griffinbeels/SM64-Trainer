@@ -10,7 +10,7 @@ from sm64_events.core.events import Event
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database, EventRow, MIGRATIONS
 from sm64_events.tracking.projection import Projector, project
-from sm64_events.tracking.segments import SEGMENT_ATTEMPT_OFFSET, SegmentEngine
+from sm64_events.tracking.segments import CLOCK_START_WINDOW_FRAMES, SEGMENT_ATTEMPT_OFFSET, SegmentEngine
 from sm64_events.tracking.service import TrackerService
 from tests.test_clock_start import DOOR_ECHO, ccm_piece, ctx
 from tests.test_segments import _hundred_coin_def
@@ -78,6 +78,58 @@ def test_latest_move_zero_changes_origin_without_changing_the_arm():
     assert projector.native_ghost_origin("segment", "1") == rebased
     rebased["frame"] = 999
     assert projector.native_ghost_origin("segment", "1")["frame"] == 1052
+
+
+def test_a_move_arm_certifies_adoption_before_playback_clock_readiness(tmp_path):
+    projector = selected_segment()
+    certificate = projector.native_rival_start("segment", "1")
+    assert certificate == {"token": ("segment",1,1,10 + SEGMENT_ATTEMPT_OFFSET),
+                           "session_id":1, "start_frame":1000}
+    assert projector.native_ghost_origin("segment", "1") is None
+    database = Database(tmp_path / "clock.db")
+    service = TrackerService(database, Broadcaster())
+    service.session_id, service._projector = 1, projector
+    try:
+        start = service.native_rival_origin("segment", "1", frame=1000)
+        assert start["full_start_now"] and start["clock_ready"] is False
+        assert start["full_start_token"] == certificate["token"]
+        assert "frame" not in start and "utc" not in start
+        projector.settle(1000 + CLOCK_START_WINDOW_FRAMES)
+        assert not service.native_rival_origin("segment", "1", frame=1090)["clock_ready"]
+        projector.settle(1000 + CLOCK_START_WINDOW_FRAMES + 1)
+        playable = service.native_rival_origin("segment", "1", frame=1091)
+        assert playable["clock_ready"] and not playable["full_start_now"]
+        assert playable["frame"] == 1000 and playable["full_start_token"] == start["full_start_token"]
+        service._tracking_dirty = True
+        assert service.native_rival_origin("segment", "1", frame=1000) is None
+        service._tracking_dirty = False
+        service.session_id = 2
+        assert service.native_rival_origin("segment", "1", frame=1000) is None
+    finally:
+        database.close()
+
+
+def test_move_rebases_preserve_one_start_and_restores_never_create_a_start():
+    projector = selected_segment()
+    started = projector.native_rival_start("segment", "1")
+    for number, frame in ((11,1051),(12,1052)):
+        projector.feed(row(number, "practice_reset", frame, dict(DOOR_ECHO), utc=LATER))
+        assert projector.native_rival_start("segment", "1") == started
+    projector.feed(row(20, "state_loaded", 1300, dict(LOADED), utc=LAST))
+    assert projector.native_ghost_origin("segment", "1") is not None
+    assert projector.native_rival_start("segment", "1") is None
+
+
+def test_start_certificate_requires_the_selected_real_start_location():
+    projector = mips_clip()
+    projector.feed(door(5,29303))
+    assert projector.native_rival_start("segment", "2") is not None
+    assert projector.native_rival_start("segment", "1") is None
+    projector.feed(row(6,"practice_reset",29364,dict(DOOR_ECHO),utc=LATER))
+    projector.feed(row(7,"practice_reset",29439,{"mario_acted":True,"acted_tracking":True,
+                                                 "igt_frames_before":75},utc=LAST))
+    assert projector.native_rival_start("segment", "2") is None
+    assert projector.native_rival_start("star", "2-2") is None
 
 
 LOADED = {"igt_frames_restored": 60, "igt_frames_before": 90, "load_signature": "igt_rewound",
@@ -239,6 +291,19 @@ def test_star_origin_survives_a_banked_area_leg_and_closes_at_observed_frame():
     assert projector.native_ghost_origin("star", "2-2") is None
 
 
+def test_a_star_full_reset_certifies_one_start_and_a_load_only_restarts_playback():
+    projector = Projector()
+    projector.feed(row(1,"target_set",990,{"course_id":2,"star_id":2}))
+    projector.feed(row(2,"practice_reset",1000))
+    first = projector.native_rival_start("star","2-2")
+    assert first == {"token":("star","2-2",1,2),"session_id":1,"start_frame":1000}
+    projector.feed(row(3,"practice_reset",1200,{"area_load":True,"igt_frames_before":101},utc=LATER))
+    assert projector.native_rival_start("star","2-2") == first
+    projector.feed(row(4,"state_loaded",1400,dict(LOADED),utc=LAST))
+    assert projector.native_ghost_origin("star","2-2") is not None
+    assert projector.native_rival_start("star","2-2") is None
+
+
 def test_unobserved_star_beginning_does_not_invent_a_native_origin():
     [attempt] = project([row(1, "star_collected", 1800,
                             {"course_id": 2, "star_id": 2, "igt_frames": 251})])
@@ -296,6 +361,44 @@ def test_proof_arm_with_unobserved_beginning_and_ambiguous_engines_refuse():
     assert attempt.native_clock_frame is None and attempt.native_clock_kind is None
     assert attempt.closed_frame == 1300
     assert hundred_projector(observed=True, duplicate=True).native_ghost_origin("star", "2-6") is None
+
+
+def test_hundred_coin_start_requires_one_observed_engine():
+    certificate = hundred_projector(observed=True).native_rival_start("star","2-6")
+    assert certificate is not None and certificate["start_frame"] == 900
+    assert hundred_projector(observed=False).native_rival_start("star","2-6") is None
+    assert hundred_projector(observed=True,duplicate=True).native_rival_start("star","2-6") is None
+
+
+@pytest.mark.parametrize("start_version,end_version,expected", [
+    ("us","us","us"),("jp","jp","jp"),("us","jp",None),(None,"us",None),("us",None,None),
+])
+@pytest.mark.parametrize("hundred_coin", [False,True])
+def test_segment_and_reattributed_hundred_coin_rom_require_start_close_agreement(
+        start_version,end_version,expected,hundred_coin):
+    projector = Projector(segments=[_hundred_coin_def() if hundred_coin else ccm_piece("trigger")])
+    projector.feed(row(1,"session_started",800,{"attempt_rules":2}))
+    if hundred_coin:
+        projector.feed(row(2,"level_changed",900,{"from":16,"to":24,"game_version":start_version}))
+        projector.feed(row(3,"target_set",910,{"course_id":2,"star_id":6}))
+        projector.feed(row(10,"star_collected",1000,{"course_id":2,"star_id":6,"igt_frames":101,
+                                                   "game_version":start_version}))
+        closed = projector.feed(row(13,"star_collected",1300,{"course_id":2,"star_id":3,"igt_frames":301,
+                                                             "game_version":end_version},utc=LAST))
+        attempt, = [attempt for attempt in closed if attempt.star_id == 6]
+        assert attempt.native_clock_kind == "segment" and attempt.native_clock_frame == 900
+        assert attempt.igt_frames == 301
+    else:
+        projector.feed(row(2,"level_changed",990,{"from":16,"to":6}))
+        projector.feed(row(3,"target_set",991,{"kind":"segment","segment_id":1}))
+        event = arm_row()
+        projector.feed(row(event.id,event.type,event.frame,{**event.payload,"game_version":start_version},
+                           utc=event.wall_time_utc,session=event.session_id))
+        event = close_row()
+        attempt, = projector.feed(row(event.id,event.type,event.frame,{**event.payload,"game_version":end_version},
+                                      utc=event.wall_time_utc,session=event.session_id))
+        assert attempt.native_clock_frame == 1000 and attempt.rta_frames == 127
+    assert attempt.game_version == expected
 
 
 def test_service_refuses_unrecovered_or_previous_session_origins(tmp_path):
