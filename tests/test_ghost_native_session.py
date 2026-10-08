@@ -151,6 +151,32 @@ def test_cancel_preparation_invalidates_obsolete_readiness_but_retains_the_activ
     native.stop()
 
 
+def test_target_change_during_canceled_preparation_never_plays_the_previous_targets_asset(tmp_path):
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    target = {"kind": "star", "entity_key": "24-1", "strat": "10 coin"}
+    ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
+    controls = settings.native_controls(settings.defaults())
+    served = source.snapshot_status
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), "prepared_generation": 1}
+    native._origin_of = lambda *_: {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+        "utc": "2026-09-21T08:00:00+00:00", "full_start_token": (1, 9), "full_start_now": True}
+    native.prepare(target, [ghost], controls, 1)
+    native.note()
+    assert source.commands[-1]["enabled"] and native._selected_asset
+    native.cancel_preparation()
+    other = {**target, "entity_key": "27-1"}
+    native.reconcile(enabled=True, target=other, controls=controls)
+    count = len(source.commands)
+    native.note()
+    native.reconcile(enabled=True, target=other, controls=controls)
+    native.note()
+    assert source.commands[-1] == {"enabled": False}
+    assert len(source.commands) == count
+    assert native._asset is native._selected_asset is None
+    native.stop()
+
+
 def test_certificate_selects_a_ready_roster_before_the_move_clock_exists(tmp_path, monkeypatch):
     session, source, _ = native_session(tmp_path)
     native = session._native

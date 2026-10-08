@@ -178,6 +178,8 @@ struct Session {
     uint64_t activation_generation = 0;
     uint64_t active_native_revision = 0;
     uint32_t staged_reason = GIPC_OK;
+    uint64_t staged_attempted = 0;
+    uint32_t staged_retry_at = 0;
     ghost_origin::Ledger origins;
     go_marker resolved_marker{};
     go_origin resolved_origin{};
@@ -203,7 +205,7 @@ struct Session {
         prepared_generation = 0;
         bool reread = false;
         for (auto &asset : assets) { asset.prepared = false; reread |= asset.bytes.empty(); }
-        if (reread) attempted = 0; // this revision loads again, from disk
+        if (reread) attempted = staged_attempted = staged_retry_at = 0; // this revision loads again, from disk
     }
     void release_all() {
         for (const auto &asset : assets) play->release_clip(asset.id);
@@ -388,6 +390,7 @@ struct Session {
         have_origin = false;
         prepared_generation = active_generation = activation_start = active_native_revision = 0;
         activation_generation = 0;
+        staged_attempted = staged_retry_at = 0;
         staged_request = active_roster = {};
         reason = why; state = why ? GIPC_REFUSED : GIPC_PASSIVE;
         if (why == GIPC_NO_ROM) {
@@ -396,6 +399,7 @@ struct Session {
     }
     bool demand(const gipc_request &incoming, uint32_t generation) {
         auto r = incoming;
+        bool stage_load = false;
         const uint32_t now = GetTickCount(), current_rom = opened.load(std::memory_order_acquire);
         const bool identity = r.token && r.revision && r.owner_pid && r.generation == generation;
         const bool changed = !same_owner(r, previous);
@@ -476,15 +480,16 @@ struct Session {
                 if (r.prepare_generation == staged_request.prepare_generation && !same_assets(r, staged_request)) {
                     reason = GIPC_PROTOCOL; state = GIPC_REFUSED; previous = incoming; return false;
                 }
-                if (r.prepare_generation != staged_request.prepare_generation) { prepared_generation = 0; staged_reason = GIPC_OK; }
+                if (r.prepare_generation != staged_request.prepare_generation) {
+                    prepared_generation = 0; staged_reason = GIPC_OK; staged_attempted = staged_retry_at = 0;
+                }
                 staged_request = r;
                 if (active_generation == r.prepare_generation) active_roster = r; // appearance controls, same immutable assets
                 release_unlisted(r);
-                if (r.clip_count && needs_load(r) && attempted != r.revision) {
-                    attempted = r.revision; loaded = r;
-                    state = applied ? GIPC_READY : GIPC_PREPARING;
-                    previous = incoming;
-                    return true;
+                if (r.clip_count && needs_load(r)) {
+                    prepared_generation = 0;
+                    stage_load = staged_attempted != r.revision
+                        && (!staged_retry_at || static_cast<int32_t>(now-staged_retry_at) >= 0);
                 }
                 if (configuration && (!r.clip_count || !needs_load(r))) {
                     const int model = r.clip_count ? model_ready(r) : GP_OK;
@@ -514,6 +519,7 @@ struct Session {
             staged_request = active_roster = {};
             prepared_generation = active_generation = activation_start = active_native_revision = 0;
             activation_generation = 0;
+            staged_attempted = staged_retry_at = 0;
         }
         if(r.play_enabled) {
             if(!suspend_applied(r)) {withdraw();state=GIPC_REFUSED;reason=GIPC_PROTOCOL;previous=r;return false;}
@@ -532,7 +538,7 @@ struct Session {
             state = GIPC_PREPARING; previous = r;
             return true; // caller loads outside the page mutex, then revalidates the lease
         }
-        if (r.play_enabled && failed == r.revision) {
+        if (r.play_enabled && failed == r.revision && !incoming.prepare_generation) {
             withdraw(); state = GIPC_REFUSED; previous = r; return false;
         }
         reason = GIPC_OK; state = configuration ? GIPC_CAPTURING : GIPC_PREPARING;
@@ -635,7 +641,12 @@ struct Session {
             reason = staged_reason;
             if (!applied) state = staged_reason ? GIPC_REFUSED : GIPC_PREPARING;
         }
-        previous = incoming; return false;
+        if (stage_load) {
+            // Apply the current race's origin, suspension and controls before
+            // future-roster disk work. Its IO attempt never owns the active set.
+            loaded = staged_request; staged_attempted = incoming.revision; staged_retry_at = 0;
+        }
+        previous = incoming; return stage_load;
     }
     void load_assets() {
         // A retained command may still draw unchanged clips during this IO.
@@ -648,7 +659,7 @@ struct Session {
             Asset *known = find(clip);
             if (known && (known->prepared || !known->bytes.empty())) {
                 if (loaded.prepare_generation && !known->prepared && prepare_assets(loaded) == GP_BUSY) {
-                    attempted = 0; return;
+                    attempted = staged_attempted = 0; staged_retry_at = GetTickCount()+16; return;
                 }
                 continue;
             }
@@ -661,7 +672,9 @@ struct Session {
             uint64_t resident = 0;
             if (loaded.prepare_generation) {
                 gp_status status{};
-                if (play->status(&status, sizeof(status)) != GP_OK) { attempted = 0; return; }
+                if (play->status(&status, sizeof(status)) != GP_OK) {
+                    attempted = staged_attempted = 0; staged_retry_at = GetTickCount()+16; return;
+                }
                 resident = status.resident_clip_bytes;
                 const uint64_t held = resident + retained_bytes();
                 maximum = held < GP_CLIP_BUDGET ? static_cast<uint32_t>((std::min)(uint64_t(file_maximum), GP_CLIP_BUDGET - held)) : 0;
@@ -670,6 +683,9 @@ struct Session {
                     maximum, asset.bytes, &memory)) {
                 failed = loaded.revision; reason = memory || maximum < file_maximum ? GIPC_BUDGET : GIPC_FILE;
                 if (loaded.prepare_generation) staged_reason = reason;
+                if (loaded.prepare_generation && reason == GIPC_BUDGET) {
+                    staged_attempted = 0; staged_retry_at = GetTickCount()+100;
+                }
                 state = GIPC_REFUSED; return;
             }
             if (loaded.prepare_generation && asset.bytes.size() >= sizeof(gclip_header)) {
@@ -678,12 +694,16 @@ struct Session {
                     && header.record_count <= GCLIP_MAX_RECORDS && header.record_bytes < sizeof(gclip_frame);
                 const uint64_t scratch = upgrades ? sizeof(header) + uint64_t(header.record_count) * sizeof(gclip_frame) : 0;
                 if (resident + retained_bytes() + asset.bytes.capacity() + scratch > GP_CLIP_BUDGET) {
-                    failed = loaded.revision; reason = staged_reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
+                    failed = loaded.revision; reason = staged_reason = GIPC_BUDGET;
+                    staged_attempted = 0; staged_retry_at = GetTickCount()+100; state = GIPC_REFUSED; return;
                 }
             }
             if (!ghost_assets::clip(asset.bytes, clip.clip_sha256, clip.clip_id, asset.header, &memory)) {
                 failed = loaded.revision; reason = memory ? GIPC_BUDGET : GIPC_FILE;
                 if (loaded.prepare_generation) staged_reason = reason;
+                if (loaded.prepare_generation && reason == GIPC_BUDGET) {
+                    staged_attempted = 0; staged_retry_at = GetTickCount()+100;
+                }
                 state = GIPC_REFUSED; return;
             }
             // Retained files are bounded like their resident playback copies.
@@ -697,11 +717,16 @@ struct Session {
             // throw into the worker's last-resort handler (which revokes all).
             try { if (!known) assets.push_back(std::move(asset)); }
             catch (const std::bad_alloc &) {
+                if (loaded.prepare_generation) {
+                    staged_reason = GIPC_BUDGET; staged_attempted = 0; staged_retry_at = GetTickCount()+100;
+                }
                 failed = loaded.revision; reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
             }
             if (loaded.prepare_generation) {
                 const int prepared = prepare_assets(loaded);
-                if (prepared == GP_BUSY || prepared == GP_DEFERRED) { attempted = 0; return; }
+                if (prepared == GP_BUSY || prepared == GP_DEFERRED) {
+                    attempted = staged_attempted = 0; staged_retry_at = GetTickCount()+16; return;
+                }
                 if (prepared != GP_OK) {
                     failed = loaded.revision; reason = staged_reason = prepared == GP_BUDGET ? GIPC_BUDGET : GIPC_CLIP;
                     state = GIPC_REFUSED; return;

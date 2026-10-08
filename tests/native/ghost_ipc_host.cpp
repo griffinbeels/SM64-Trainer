@@ -615,14 +615,19 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         page.wait([](const gipc_status& s){return s.active_generation==102;},"replacement activates at its later start");
         check(last_command().clips[0].clip_id[0]==3,"replacement reaches playback without loading on activation");
         const unsigned before_budget=prepared_ids[1].load();
+        const unsigned before_budget_withdrawal=withdrawals.load();
         resident_clip_bytes=GP_CLIP_BUDGET-512;
-        r.revision=13;r.prepare_generation=103;r.activate_generation=r.activate_start=0;
+        r.revision=13;r.prepare_generation=103;r.activate_generation=r.activate_start=0;r.opacity=.4f;r.owner_suspended=1;
         set_clip(r.clips[0],1,argv[1],argv[2],48);page.send(r);
         page.wait([](const gipc_status& s){return s.ack_revision==13 && s.reason==GIPC_BUDGET;},"aggregate active plus staging read is bounded");
         check(prepared_ids[1]==before_budget && page.status().active_generation==102
             && last_command().clips[0].clip_id[0]==3,"budget refusal preserves active playback and never allocates a candidate copy");
-        resident_clip_bytes=0;r.revision=14;page.send(r);
+        check(last_command().opacity==.4f && last_command().suspended,
+            "active suspension and appearance apply before staging IO can fail");
+        check(withdrawals.load()==before_budget_withdrawal,"a future-roster budget refusal never withdraws the active race");
+        resident_clip_bytes=0;
         page.wait([](const gipc_status& s){return s.prepared_generation==103;},"preparation retries when aggregate room becomes available");
+        check(page.status().ack_revision==13,"transient budget recovery requires no UI or origin revision");
         check(page.status().active_generation==102,"a later budget recovery still waits for a certified start");
         r.revision=15;r.cancel_preparation=1;r.clip_count=0;
         std::memset(r.clips,0,sizeof(r.clips));page.send(r);

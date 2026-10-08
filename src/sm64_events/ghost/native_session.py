@@ -304,6 +304,10 @@ class NativeGhost:
                 identity = (target["kind"], target["entity_key"]) if target else None
                 if identity != self._target:
                     self._stop()
+                    self._asset = self._selected_asset = None
+                    self._asset_hues = {}
+                    self._target = identity
+                    return
                 else:
                     self._requested = bool(enabled)
                     if not enabled:
