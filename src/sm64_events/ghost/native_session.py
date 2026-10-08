@@ -353,6 +353,13 @@ class NativeGhost:
                         self._activate_generation = self._adaptive_generation
                         self._activate_start = self._start_sequence
                         self._selected_asset = self._pending_asset
+            if origin is not None and origin.get("clock_ready") is False:
+                # A fresh arm can be certified before its move clock settles.
+                # Freeze the ready roster now; publish no playable origin until
+                # this same arm has an authoritative clock. Its later rebase
+                # never becomes a second chance to adopt a different roster.
+                self._origin = None
+                origin = None
             # Completion or a restore can temporarily remove the tracker arm.
             # Hide presentation while retaining native checkpoints. Explicit
             # switch-off and target changes still revoke the binding.

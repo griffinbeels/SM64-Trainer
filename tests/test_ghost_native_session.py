@@ -151,6 +151,68 @@ def test_cancel_preparation_invalidates_obsolete_readiness_but_retains_the_activ
     native.stop()
 
 
+def test_certificate_selects_a_ready_roster_before_the_move_clock_exists(tmp_path, monkeypatch):
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    target = {"kind": "segment", "entity_key": "move-clock", "strat": "10 coin"}
+    ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
+    controls = settings.native_controls(settings.defaults())
+    certificate = {"clock_ready": False, "full_start_token": ("segment", 1, 9),
+                   "full_start_now": True, "session_id": 1, "start_frame": 100}
+    origin = certificate
+    native._origin_of = lambda *_: origin
+    served = source.snapshot_status
+    generations = {"prepared_generation": 1, "active_generation": 0}
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
+    native.prepare(target, [ghost], controls, 1)
+    native.note()
+    selected = source.commands[-1]
+    assert not selected["enabled"] and "origin" not in selected
+    assert selected["prepare_generation"] == selected["activate_generation"] == 1
+    assert selected["activate_start"] == 1 and native._selected_asset[0][1]["clip_id"] == "ab" * 16
+    # Another roster can become ready during the clock's 90-frame fallback.
+    # The already certified start remains bound to its original choice.
+    native._replay.find_native = lambda _: (tmp_path / "later.ghost", {
+        "clip_id": "ef" * 16, "sha256": "cd" * 32, "blink_frames": 0})
+    later = SimpleNamespace(id=18, origin="attempt:8", frames=60, pb=True)
+    native.prepare(target, [later], controls, 2)
+    generations["prepared_generation"] = 2
+    monkeypatch.setattr(native, "resolve", lambda *_: pytest.fail("poll resolved assets"))
+    monkeypatch.setattr(native, "_fingerprint", lambda *_: pytest.fail("poll inspected files"))
+    origin = {**certificate, "full_start_now": False}
+    native.note()
+    assert not source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 0
+    origin = {**certificate, "clock_ready": True, "full_start_now": False,
+              "kind": "segment", "arm_id": 9, "frame": 190, "utc": "2026-09-21T08:00:03+00:00"}
+    native.note()
+    playing = source.commands[-1]
+    assert playing["enabled"] and playing["origin"]["global_timer"] == 190
+    assert playing["prepare_generation"] == 2 and playing["activate_generation"] == 0
+    assert native._selected_asset[0][1]["clip_id"] == "ab" * 16
+    native.stop()
+
+
+def test_late_readiness_does_not_adopt_when_an_uncertified_move_clock_resolves(tmp_path):
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    target = {"kind": "segment", "entity_key": "move-clock", "strat": "10 coin"}
+    ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
+    controls = settings.native_controls(settings.defaults())
+    origin = {"clock_ready": False, "full_start_token": (1, 9), "full_start_now": True}
+    native._origin_of = lambda *_: origin
+    served = source.snapshot_status
+    native.prepare(target, [ghost], controls, 1)
+    native.note()  # not prepared at the actual arm boundary
+    assert source.commands[-1]["activate_generation"] == 0
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), "prepared_generation": 1}
+    origin = {**origin, "clock_ready": True, "full_start_now": False,
+              "kind": "segment", "session_id": 1, "arm_id": 9, "frame": 190,
+              "utc": "2026-09-21T08:00:03+00:00"}
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 0
+    native.stop()
+
+
 def test_native_switch_uses_saved_poses_and_preserves_controls(tmp_path):
     session, source, _ = native_session(tmp_path)
 
