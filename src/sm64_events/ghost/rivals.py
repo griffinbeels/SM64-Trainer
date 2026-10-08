@@ -91,16 +91,19 @@ class Rivals:
         if database is None or database is self.loaded_db:
             return
         stored = database.get_state(STATE_KEY,{})
+        self.pins, self.local_choices = {},{}
         try:
             self.options = checked_options(stored.get("options",{}))
             pins = stored.get("pins",{})
             self.local_choices = stored.get("local_choices",{})
-            if not isinstance(self.local_choices,dict) or len(self.local_choices)>512:
+            if not isinstance(self.local_choices,dict):
                 self.local_choices = {}
             if isinstance(pins,dict):
                 self.pins = {key:{slot:value for slot,value in choices.items()
                     if slot in {"0","1","2","3"} and isinstance(value,str) and len(value)==64}
                     for key,choices in pins.items() if isinstance(key,str) and isinstance(choices,dict)}
+            used = {identity for choices in self.pins.values() for identity in choices.values()}
+            self.local_choices = {key:value for key,value in self.local_choices.items() if key in used}
         except (ValueError,AttributeError):
             self.options = checked_options({})
             self.pins = {}
@@ -265,10 +268,12 @@ class Rivals:
         choices = self.pins.setdefault(self._key(target),{})
         if any(self.local_choices.get(identity) == source for identity in choices.values()):
             return True
-        rows = self.rows if target == self.target else [
-            {"slot":int(slot),"pinned":True} for slot in choices]
+        rows = {row["slot"]:row for row in self.rows} if target == self.target else {}
+        # A settling target can have no displayed rows. Persisted choices still
+        # own their slots and must never become automatic placement vacancies.
+        rows.update({int(slot):{"slot":int(slot),"pinned":True} for slot in choices})
         try:
-            slot = add_slot(rows,self.options["count"])
+            slot = add_slot(rows.values(),self.options["count"])
         except ValueError:
             return False
         identity = self._remember_local(source)

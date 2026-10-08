@@ -210,6 +210,45 @@ def test_saving_with_all_visible_pins_keeps_them_and_does_not_leak_a_local_refer
     assert (json.dumps(rivals.pins),rivals.local_choices)==before
 
 
+@pytest.mark.parametrize("occupied", [1,4])
+def test_saved_run_respects_persisted_pins_while_strategy_change_is_settling(tmp_path,monkeypatch,occupied):
+    rivals,tracker,_,population,_ = controller(tmp_path,monkeypatch)
+    protected = {str(slot):population.rows[slot]["id"] for slot in range(occupied)}
+    rivals.pins[rivals._key(TARGET)] = dict(protected)
+    rivals.pb_changed(TARGET)
+    target = {**TARGET,"strat":"Different"}
+    rivals.refresh(target,CONTROLS,enabled=True)
+    assert not rivals.rows and rivals.pb_deadline is not None
+    run = attempt(strat_tag="Different")
+    tracker.db.upsert_attempt(run)
+    assert rivals.remember_saved(target,run) is (occupied<4)
+    choices = rivals.pins[rivals._key(target)]
+    assert all(choices[slot]==identity for slot,identity in protected.items())
+    assert len(choices)==min(4,occupied+1)
+
+
+def test_reopening_preserves_referenced_local_choices_across_many_targets(tmp_path,monkeypatch):
+    rivals,tracker,native,population,_ = controller(tmp_path,monkeypatch)
+    references = {f"{number:064x}":{"attempt_id":number,"session_id":1,"started_utc":"2026-10-07T00:00:00Z"}
+                  for number in range(516)}
+    pins = {json.dumps(["segment",str(target)]):{str(slot):f"{target*4+slot:064x}" for slot in range(4)}
+            for target in range(129)}
+    tracker.db.set_state(module.STATE_KEY,{"version":1,"options":rivals.options,"pins":pins,
+                                          "local_choices":{**references,"unused":{}}})
+    restored = Rivals(tracker,population,native,lambda:"us")
+    restored._load()
+    assert restored.local_choices==references and restored.pins==pins
+
+
+def test_malformed_preferences_in_new_profile_do_not_retain_previous_profiles_pins(tmp_path,monkeypatch):
+    rivals,tracker,_,population,_ = controller(tmp_path,monkeypatch)
+    rivals.pins[rivals._key(TARGET)] = {"0":population.rows[0]["id"]}
+    tracker.db = Database(tmp_path/"other.db")
+    tracker.db.set_state(module.STATE_KEY,{"options":{},"pins":[]})
+    rivals._load()
+    assert not rivals.pins and not rivals.local_choices
+
+
 def test_queue_never_reads_identity_and_stop_joins_preservation(tmp_path):
     entered, release = threading.Event(),threading.Event()
     threads=[]
