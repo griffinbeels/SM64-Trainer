@@ -2985,6 +2985,8 @@ class _Arm:
     # load: (arm_id, start_frame, started_utc, frame, utc) of the arm the run
     # began on. None = this arm is its own owner. See `_continued_ghost`.
     ghost_origin: tuple | None = None
+    # The observed cartridge at this arm's true start, never inferred at close.
+    game_version: str | None = None
 
     def clock_origin(self, mode: str) -> tuple[int, str | None]:
         if mode == "move" and self.clock_frame is not None:
@@ -3215,15 +3217,16 @@ class SegmentEngine:
                 "frame": frame, "utc": utc}
 
     def native_rival_start(self, sid: int):
-        """Certify a fresh complete arm, never its save-state continuation."""
-        arm = self._armed.get(sid)
-        origin = self.native_ghost_origin(sid)
-        if (arm is None or origin is None or arm.anchor_type == "state_loaded"
-                or arm.ghost_origin is not None):
+        """Certify the fresh arm before its move clock becomes playable."""
+        arm, definition = self._armed.get(sid), self._def_by_id.get(sid)
+        if (arm is None or definition is None or not arm.native_origin_known
+                or arm.anchor_type == "state_loaded" or arm.ghost_origin is not None
+                or not self._ghost_starts_here(arm, definition, wait_for_clock=False)):
             return None
-        return ("segment",sid,arm.session_id,origin["arm_id"])
+        return {"token": ("segment",sid,arm.session_id,arm.jid + SEGMENT_ATTEMPT_OFFSET * sid),
+                "session_id": arm.session_id, "start_frame": arm.start_frame}
 
-    def _ghost_starts_here(self, arm, d) -> bool:
+    def _ghost_starts_here(self, arm, d, *, wait_for_clock=True) -> bool:
         """Whether this arm's own clock is where the segment's ghost starts.
 
         His MIPS Clip (2026-09-24) starts when he opens the HMC door, mid-area
@@ -3242,7 +3245,7 @@ class SegmentEngine:
         if arm.anchor_type in _ANCHOR_TYPES and not any(
                 clause.get("type") in _RESET_RETURNS_TO for clause in d.start_triggers):
             return False
-        if d.clock_start == "move" and arm.clock_frame is None:
+        if wait_for_clock and d.clock_start == "move" and arm.clock_frame is None:
             return (self._now_frame is not None
                     and self._now_frame - arm.start_frame > CLOCK_START_WINDOW_FRAMES)
         return True
@@ -3701,6 +3704,7 @@ class SegmentEngine:
                 jid=ev.id, start_frame=ev.frame,
                 started_utc=ev.wall_time_utc, anchor_type=ev.type,
                 session_id=ev.session_id, level=ctx.level,
+                game_version=ev.payload.get("game_version"),
                 area=ctx.area, required_area=req,
                 deadline_frame=self._deadline_for(d, ev))
         else:
@@ -3739,6 +3743,7 @@ class SegmentEngine:
                                      started_utc=ev.wall_time_utc,
                                      anchor_type=ev.type,
                                      session_id=ev.session_id,
+                                     game_version=ev.payload.get("game_version"),
                                      level=ctx.level, area=ctx.area,
                                      deadline_frame=self._deadline_for(d, ev),
                                      ghost_origin=self._continued_ghost(kept, d, ev))
@@ -3785,6 +3790,7 @@ class SegmentEngine:
                     jid=ev.id, start_frame=ev.frame,
                     started_utc=ev.wall_time_utc, anchor_type=ev.type,
                     session_id=ev.session_id,
+                    game_version=ev.payload.get("game_version"),
                     level=(ctx.level if ctx.level is not None
                            else cancelled_arm.level),
                     area=(ctx.area if ctx.area is not None
@@ -4118,6 +4124,7 @@ class SegmentEngine:
                 started_utc=ev.wall_time_utc,
                 anchor_type=ev.type,
                 session_id=ev.session_id,
+                game_version=ev.payload.get("game_version"),
                 level=ctx.level if ctx.level is not None else arm.level,
                 area=ctx.area if ctx.area is not None else arm.area,
                 ghost_origin=self._continued_ghost(arm, d, ev),
@@ -4265,6 +4272,7 @@ class SegmentEngine:
                 arm, progress=0, start_frame=ev.frame,
                 started_utc=ev.wall_time_utc, jid=ev.id,
                 anchor_type=ev.type, session_id=ev.session_id,
+                game_version=ev.payload.get("game_version"),
                 level=ctx.level if ctx.level is not None else arm.level,
                 area=ctx.area if ctx.area is not None else arm.area,
                 ghost_origin=self._continued_ghost(arm, d, ev))
@@ -4392,6 +4400,7 @@ class SegmentEngine:
                 arm, progress=0, start_frame=ev.frame,
                 started_utc=ev.wall_time_utc, jid=ev.id,
                 anchor_type=ev.type, session_id=ev.session_id,
+                game_version=ev.payload.get("game_version"),
                 deadline_frame=self._deadline_for(d, ev),
                 level=ctx.level if ctx.level is not None else arm.level,
                 area=ctx.area if ctx.area is not None else arm.area,
@@ -4581,6 +4590,7 @@ class SegmentEngine:
         arm = _Arm(jid=ev.id, start_frame=ev.frame,
                    started_utc=ev.wall_time_utc, anchor_type=ev.type,
                    session_id=ev.session_id, level=ctx.level, area=ctx.area,
+                   game_version=ev.payload.get("game_version"),
                    progress=(star_index + 1 if is_the_grab
                              else len(d.waypoints)),
                    deadline_frame=self._deadline_for(d, ev),
@@ -4749,6 +4759,7 @@ class SegmentEngine:
             started_utc=arm.started_utc, ended_utc=ev.wall_time_utc,
             cleared=False, cleared_reason=None, segment_id=d.id,
             timed_by=timed_by, closed_by=ev.type,
+            game_version=(arm.game_version if arm.game_version == ev.payload.get("game_version") else None),
             native_clock_frame=(clock_origin if span_known and arm.native_origin_known else None),
             native_clock_utc=(clock_utc if span_known and arm.native_origin_known else None),
             native_clock_kind=("segment" if span_known and arm.native_origin_known else None),
