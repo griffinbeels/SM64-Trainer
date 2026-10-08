@@ -10,6 +10,10 @@ import {prefersReducedMotion} from "../useTween.js";
 
 const html = htm.bind(h);
 
+function RankPicture({display,motion}) {
+  return display?.tier ? html`<${RankIcon} tier=${display.tier} division=${display.division} size=${48} ...${motion} />` : "–";
+}
+
 // One source transition at a time. Fast presses update the draft immediately
 // and coalesce the next visual destination, preserving the squash/pop pivot.
 function MovingRank({step, mode}) {
@@ -52,7 +56,7 @@ function MovingRank({step, mode}) {
     ? {scale:`${motion.squashX ?? 1} ${motion.squashY ?? 1}`} : {};
   return html`<span class="rank-icon-slot rival-rank" style=${{...medalStyle,"--icon-size":"48px"}}
       data-progress=${swap?.progress ?? 1} data-displayed-step=${display?.step ?? ""}>
-    ${display ? html`<${RankIcon} tier=${display.tier} division=${display.division} size=${48} ...${motion} />` : "–"}
+    <${RankPicture} display=${display} motion=${motion} />
   </span>`;
 }
 

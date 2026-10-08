@@ -19,7 +19,7 @@ Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../d
 | A ghost setting (default, range, sentence, db key, native field) | One row in `ghost/settings.py` `ROWS`. It drives validation, load/apply, the payload, `limits` and the native command. |
 | A range or limit the card shows | The row's `limits`. `GET /api/ghost` publishes them and the card reads `session.limits` (`ui/ghostsession.js`). JS never restates a Python number. |
 | The words of an on/off switch | `SWITCH_LABELS` in `ui/ghostsession.js`, keyed by the row name |
-| Which ghosts play | `ghost/selection.py`; the native set is built in `ghost/native_session.py` |
+| Which ghosts play | Adaptive `ghost/rivals.py` uses `ghost/adaptive.py` and the current strategy saved PB from `ghost/pb.py`; legacy choices use `ghost/selection.py`. Native sets are built in `ghost/native_session.py`. |
 | Historical bests and surviving recordings in Ghost Library | `ghost/library_bests.py` resolves winners before joining `sharing_catalog.py` availability. It never changes the current saved PB slot or promotes a slower recording when a winner expires. |
 | Reviewing and importing only selected ghosts | `ghost/library_imports.py` owns bounded staging leases; `sharing.py` revalidates selected clips before publishing the collection index; `server/ghost_sharing_api.py` mounts preview/commit/discard jobs. |
 | Remembered export credit and saved searches | `ghost/library_preferences.py` validates and stores the existing author key plus versioned dynamic criteria; `ui/ghostlibraryflow.js` keeps pending choices local. |
@@ -34,5 +34,11 @@ Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../d
 2. A `SWITCH_LABELS` row in `ui/ghostsession.js`.
 3. When the renderer reads it: the field in `ghost/native_protocol.py`, which the channel encodes from `native_switches()`.
 4. The native side itself.
+
+Adaptive local PB visibility follows Practice's `current_pbs_by_strat`; strict
+`eligible_attempt` certificates govern population admission separately. The
+resolved strategy ladder can include live library fits absent from the bundled
+seed. `tests/test_ghost_rival_strategy.py` and `tests/test_ui_rivals_review.py`
+cover the reported null-ROM Wild Blue PB and the resolved Waluigi1 range.
 
 `tests/test_ghost_settings.py` covers the row with no edit: refused, applied, remembered, carried to the native command, and read by the card. The fixture and the API docs follow the registry. A setting of another kind also needs its sample pair in that test's `SAMPLES`, plus its control in `ui/components/ghostswitch.js`.

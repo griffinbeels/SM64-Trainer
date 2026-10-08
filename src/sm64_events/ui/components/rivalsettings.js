@@ -36,8 +36,6 @@ export function RivalSettings({rivals, onClose, onSave, renderAppearance}) {
     </div>
     <label class="rival-check"><input type="checkbox" checked=${draft.include_pb}
       onchange=${event=>setDraft({...draft,include_pb:event.target.checked})} />Also race my personal best</label>
-    <label class="rival-check"><input type="checkbox" checked=${draft.strategy_only}
-      onchange=${event=>setDraft({...draft,strategy_only:event.target.checked})} />${rivals.strategy_name || "Standard"} only</label>
     <div class="rival-range">
       ${["min","max"].map(name=>{
         const key = adaptive ? `${name}_ahead` : `${name}_step`;
@@ -48,6 +46,7 @@ export function RivalSettings({rivals, onClose, onSave, renderAppearance}) {
           canIncrease=${stepRange(draft,pb,limits,name,1)[key] !== draft[key]} change=${delta=>change(name,delta)} />`;
       })}
     </div>
+    ${adaptive && !pb && html`<p class="rival-empty">Save a personal best for ${rivals.strategy_name || "this strategy"} to set ranks above it.</p>`}
     ${adaptive && pb && html`<div class="rival-pb-context">${pb.step === limits.last_step ? "Your PB" : "Above your PB"}
       <span class="rank-icon-slot" style="--icon-size:32px"><${RankIcon} tier=${pb.tier} division=${pb.division} size=${32} /></span>
     </div>`}

@@ -74,6 +74,7 @@ export function Rivals({session, write, renderAppearance}) {
       <button class="icon-button" aria-label="Rival settings" title="Rival settings"
         onclick=${()=>setDialog({kind:"settings"})}><${Icon} name="settings" /></button>
     </div></header>
+    ${rivals.simulation && html`<div class="rival-status" role="status">${rivals.simulation}</div>`}
     ${rivals.status && html`<div class="rival-status" role="status">${rivals.status}</div>`}
     ${visible.length ? html`<ul class="rival-roster">${visible.map(row=>html`
       <${RivalRow} key=${row.pb ? "pb" : row.slot} row=${row} reset=${reset}

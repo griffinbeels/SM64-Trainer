@@ -8,16 +8,21 @@ and appearance; Cancel leaves the saved settings unchanged.
 
 ## Selection and playback
 
-Automatic selection uses the complete current Overall curve and the target's
-canonical clock. The saved basis is the best current strategy slot with a valid
-backing attempt, explicit matching ROM, and a complete native clock span.
-Undo resolves the surviving saved slots; historical minima cannot restore an
-undone PB. Without a qualifying basis, selection starts at the bottom tier.
+Automatic selection uses the current practice strategy's ladder and canonical
+clock, through the same scoring path as Practice Strategy. Its anchor is that
+strategy's current visible saved PB. Legacy rows with no ROM stamp still grade
+on the running version; imported times can also supply the rank anchor.
+The native provider separately checks whether that PB has playable poses.
+An expired clip retains its PB time/rank and reports its playback failure.
+Undo resolves the surviving saved slot; historical minima cannot restore an
+undone PB. Without a saved basis, selection starts at the bottom tier.
 
 The default range is one to five subdivisions above that basis. The floor stays
 above the PB until the final subdivision. At the ceiling, only faster runs in
 that subdivision qualify. Fixed mode selects an absolute rank range.
-Current-strategy-only uses the strategy selected for practice.
+Every automatic, searched or manually selected rival belongs to the strategy
+selected for practice. Switching strategy uses its own saved PB, ladder, pool
+and protected choices. Stored `strategy_only` settings migrate automatically.
 
 Adding fills a vacancy or replaces the slowest automatic rival. Other chosen
 rivals and the separate PB remain protected. Decreasing the count retains hidden
@@ -32,15 +37,16 @@ imports and saved library choices can occupy protected slots without qualifying
 for automatic admission. Unknown historical ROM metadata does not become a
 certificate. The source session, attempt and start time distinguish local
 recordings across fresh profiles; exported credits never establish that lineage.
-A historical PB selected explicitly from the library uses a protected rival
-slot when its provenance cannot supply the separate certified PB slot.
+Historical local PBs remain eligible for the separate PB slot. Community
+admission still requires complete validated run evidence and an explicit ROM.
 
 A PB save or undo cancels obsolete pending preparation and opens a five-second
 settle window for that target. Target or strategy changes cannot bypass it.
 The session reads the final saved state when the window expires. File validation,
 rank selection and preparation run outside the game poll loop. Native playback
-retains the current roster until an acknowledged replacement can adopt at a
-certified full start. Readiness arriving later waits for another start.
+retains the current roster during same-strategy updates until an acknowledged
+replacement can adopt at a certified full start. Changing strategy immediately
+revokes its old roster. Readiness arriving later waits for another start.
 
 A fresh segment arm selects its roster before a move clock resolves; drawing
 waits for the existing authoritative clock policy. Clock rebases and save-state
@@ -58,8 +64,9 @@ at 512 MiB. Capacity refusal preserves existing recordings. This pilot does not
 yet garbage-collect obsolete unchosen improvements; a hard crash can leave an
 unindexed asset. These local limits do not implement remote account quotas.
 
-Search uses normalized indexed player prefixes, at most 20 records per page and
-a checked keyset cursor. The UI debounces input, caches bounded results and drops
+Search filters the current strategy before paging, uses normalized indexed
+player prefixes, at most 20 records per page and a checked keyset cursor.
+The UI debounces input, caches bounded results and drops
 stale replies. Private-import credit remains user-supplied. The local HTTP server
 is loopback-only; a future cloud endpoint must independently authenticate and
 authorize every request.
@@ -67,21 +74,36 @@ authorize every request.
 ## Test a fresh climb
 
 Close the other trainer, then run `run-ghost-climb.bat` from this checkout.
-It builds the native bundle, seeds compatible saved recordings, creates a new
-practice profile and opens the trainer on port 8070. Open that address in the
+It builds the native bundle, creates an isolated Wild Blue tester with named
+opponents copied from your real Standard recordings, and opens port 8070.
+Open that address in the
 browser. Install the source build's capture layer through Setup with Project64
-closed, then open the practice ROM. Source builds do not silently replace an
-installed layer. A competing recorder makes the launcher refuse to start.
+closed if Setup requires installation, then open the practice ROM. Source builds
+can refresh their own prior layer but do not automatically replace another
+installer's layer. A competing recorder makes the launcher refuse to start.
 
-Each launch creates a new profile with the same definitions and calibration,
-empty attempts/PBs and the retained population. Your original practice database,
-recordings and PBs stay intact. To repeat an existing profile, use:
+Each ordinary launch creates a new profile with the same definitions and
+calibration, its own player identity, and one starting PB at the slowest playable
+Wild Blue recording. Every opponent retains its original timing and pose bytes.
+The tester can race that starting clip through a marked portable PB reference.
+Your first played/saved PB supersedes the reference. The card displays
+`Developer simulation · Wild Blue`; these records never establish community
+authentication. Your original practice database, recordings and PBs stay intact.
+To repeat an existing profile, use:
 
 ```powershell
-.venv\Scripts\python.exe tools\ghost_climb.py --launch --profile C:\absolute\profile
+.\run-ghost-climb.bat --profile "C:\absolute\profile"
 ```
 
-For historical clips lacking an observed ROM stamp, the developer can explicitly
+The reported sample set contains eleven distinct playable times, 10"66–11"23.
+Starting at 11"23 selects two rivals inside the default range: 11"06 and 11"03.
+Four is the capacity; available recordings determine the actual count. Saving
+11"03 brings faster Gold ghosts into range. Search `Simulated` to choose a
+specific opponent manually. A fresh double-click restarts the climb independently.
+
+The generic empty-profile/retained-population workflow remains available through
+`tools/ghost_climb.py --seed --prepare --launch`. For historical clips lacking
+an observed ROM stamp, the developer can explicitly
 declare the source ROM when seeding. Use this only when that declaration is true:
 
 ```powershell

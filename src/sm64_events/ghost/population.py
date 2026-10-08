@@ -132,6 +132,8 @@ class LocalPopulation:
                 sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, document TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS recordings_target ON recordings(target,clock,version,frames,id);
             CREATE INDEX IF NOT EXISTS recordings_player ON recordings(target,clock,version,normalized,frames,id);
+            CREATE INDEX IF NOT EXISTS recordings_strategy ON recordings(target,clock,version,json_extract(document,'$.target.strat'),frames,id);
+            CREATE INDEX IF NOT EXISTS recordings_strategy_player ON recordings(target,clock,version,json_extract(document,'$.target.strat'),normalized,frames,id);
             PRAGMA user_version=1;
         """)
         self._verified = {}
@@ -169,12 +171,14 @@ class LocalPopulation:
         return {**row, "kind": ghost.kind, "entity_key": key, "strategy": ghost.strat_tag,
                 "signature": row["target"].get("signature"), "ghost": ghost}
 
-    def metadata_snapshot(self, kind, entity_key, *, clock, game_version):
+    def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None):
         target = self._target(kind, entity_key)
+        scope = " AND json_extract(document,'$.target.strat')=?" if strategy is not None else ""
+        parameters = (strategy,) if strategy is not None else ()
         with self._lock:
-            rows = self._db.execute("SELECT document FROM recordings WHERE target=? AND clock=? AND version=? "
-                                    "ORDER BY frames,id LIMIT ?",
-                                    (target, clock, game_version, MAX_RECORDINGS)).fetchall()
+            rows = self._db.execute("SELECT document FROM recordings WHERE target=? AND clock=? AND version=?" + scope +
+                                    " ORDER BY frames,id LIMIT ?",
+                                    (target, clock, game_version, *parameters, MAX_RECORDINGS)).fetchall()
         return tuple(self._row(row) for row in rows)
 
     def get(self, identity):
@@ -195,6 +199,9 @@ class LocalPopulation:
         key = identity["entity_key"] if isinstance(identity, dict) else identity.entity_key
         clock = identity["clock"] if isinstance(identity, dict) else identity.clock
         version = identity["game_version"] if isinstance(identity, dict) else identity.game_version
+        strategy = identity.get("strategy") if isinstance(identity, dict) else getattr(identity,"strategy",None)
+        scope = " AND json_extract(document,'$.target.strat')=?" if strategy is not None else ""
+        parameters = (strategy,) if strategy is not None else ()
         target = self._target(kind, key)
         after = ()
         if cursor is not None:
@@ -206,16 +213,17 @@ class LocalPopulation:
         where = " AND (normalized,frames,id) > (?,?,?)" if after else ""
         with self._lock:
             rows = self._db.execute("SELECT document,normalized,frames,id FROM recordings "
-                "WHERE target=? AND clock=? AND version=? AND normalized>=? AND normalized<?" + where +
+                "WHERE target=? AND clock=? AND version=?" + scope + " AND normalized>=? AND normalized<?" + where +
                 " ORDER BY normalized,frames,id LIMIT ?",
-                (target, clock, version, prefix, prefix + chr(0x10ffff), *after, limit + 1)).fetchall()
+                (target, clock, version, *parameters, prefix, prefix + chr(0x10ffff), *after, limit + 1)).fetchall()
         next_cursor = ([rows[limit - 1][key] for key in ("normalized", "frames", "id")]
                        if len(rows) > limit else None)
         return {"records": [self._row(row) for row in rows[:limit]], "next_cursor": next_cursor}
 
     def resolve(self, ghost, target):
         row = self.get(ghost.id)
-        if target is None or (row["kind"], row["entity_key"]) != (target["kind"], target["entity_key"]):
+        if (target is None or (row["kind"], row["entity_key"]) != (target["kind"], target["entity_key"])
+                or (row["strategy"] or "Standard") != (target.get("strat") or "Standard")):
             raise ValueError("This rival belongs to another practice target.")
         path = self.root / "clips" / f"{checked_hash(row['sha256'])}.ghost"
         if not path.resolve().is_relative_to(self.root):

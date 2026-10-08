@@ -1506,7 +1506,7 @@ many more recordings than the [[ghost set]] can race at once.
 
 ### Rival slot
 
-One place in the adaptive [[ghost set]] for the current [[target]]. The trainer
+One place in the adaptive [[ghost set]] for the current [[target]] and [[strategy]]. The trainer
 chooses a compatible recording above the saved [[personal best]], or protects
 the player's exact manual choice until they clear it. The slot keeps its colour when
 its recording changes; the separate [[PB ghost]] keeps its own colour.
@@ -1515,10 +1515,11 @@ its recording changes; the separate [[PB ghost]] keeps its own colour.
 
 ### Climb profile
 
-A separate practice database with empty [[attempt]]s and [[personal best]]s,
-the original [[segment]] definitions and calibration, and a retained local
-[[ghost]] population. The launcher creates it to test progression without
-changing the original practice history.
+A separate practice database with its own player identity, the original
+[[segment]] definitions and calibration, and a local [[ghost]] population.
+The Wild Blue developer simulation starts at the slowest real donor recording
+and credits faster unchanged clips to simulated opponents. Generic profiles can
+start empty. The launcher tests progression without changing original history.
 
 - **Lives** — `tools/ghost_climb.py` and `src/sm64_events/core/paths.py`
 

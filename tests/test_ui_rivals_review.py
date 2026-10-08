@@ -34,9 +34,9 @@ def session(*, fresh=False):
             for n, (name, frames) in enumerate((('Alex', 600), ('Sam', 570), ('Kai', 540), ('Morgan', 510)), 1)]
     return {"target": TARGET, "rivals": {"rows": rows, "status": None, "strategy_name": "Standard",
         "pb": None if fresh else {**row("e" * 64, "You", 630), "tier": "Iron", "division": "I", "step": 4},
-        "options": {"mode": "adaptive", "count": 4, "include_pb": True, "strategy_only": False,
+        "options": {"mode": "adaptive", "count": 4, "include_pb": True,
                     "min_ahead": 1, "max_ahead": 5, "min_step": 0, "max_step": 44},
-        "limits": {"last_step": 44, "max_ahead": 20, "counts": [1, 2, 3, 4, 6]}}}
+        "limits": {"last_step": 44, "max_ahead": 10, "counts": [1, 2, 3, 4]}}}
 
 
 HARNESS = """
@@ -195,6 +195,8 @@ def test_fresh_profile_can_open_rank_settings_without_a_personal_best(fixture):
     page.wait_for_function("document.querySelectorAll('.rival-row').length === 4")
     panel = settings(page)
     assert panel.get_by_role("group", name="Minimum rank").count() == 1
+    assert panel.get_by_text("Save a personal best for Standard to set ranks above it.").is_visible()
+    assert panel.locator('.rival-rank .hat').count()==0
     assert panel.get_by_role("button", name="Cancel").is_visible()
     assert state["errors"] == []
 
@@ -364,5 +366,69 @@ def test_real_practice_ghost_switch_reaches_rivals_and_saves_draft_once(browser,
             assert len(writes) == 1
             assert writes[0]["rivals"]["options"]["count"] == 3 and writes[0]["opacity"] == .5
             assert errors == [] and responses and all(200 <= value < 300 for value in responses), failed
+        finally:
+            context.close()
+
+
+def _reported_practice_pb(service):
+    from dataclasses import replace
+    from tests.test_ghost_adaptive import attempt
+    run=replace(attempt(frames=321),id=13194,course_id=2,star_id=2,session_id=service.session_id,
+        game_version=None,native_clock_frame=30978,closed_frame=31297,native_clock_kind='star',timed_at='xcam')
+    service.db.upsert_attempt(run)
+    service.db.insert_pb(2,2,'Standard','igt',321,run.id,'2026-10-06T21:31:41Z',game_version=None)
+
+
+@pytest.mark.parametrize('width',[1500,850])
+def test_reported_wild_blue_pb_reaches_real_practice_and_wario_range(browser,tmp_path,monkeypatch,width):
+    from tools import ui_fixture
+    from tools.ghost_fixture import ghost_session, attach_ghost_routes
+    from sm64_events.ghost.rivals import Rivals
+    from tests.test_ghost_rivals import Native, Population, CONTROLS
+    from tests.test_ghost_rival_strategy import reported_wild_blue_standards
+
+    target = {'kind':'star','entity_key':'2-2','strat':'Standard'}
+    state = {'session':ghost_session(target=target,enabled=True),'writes':[]}
+    original = ui_fixture.create_app
+    def create(*args,**kwargs):
+        app = original(*args,**kwargs)
+        attach_ghost_routes(app,state)
+        return app
+    monkeypatch.setattr(ui_fixture,'create_app',create)
+    with ui_fixture.serve_ui_live(target=(2,2)) as (base,service):
+        ui_fixture._run_coro(service.set_strat(2,2,'Standard'))
+        ui_fixture._run_coro(service.set_rank_mode('pb'))
+        reported_wild_blue_standards(service.ranks)
+        _reported_practice_pb(service)
+        population, native = Population(),Native()
+        population.rows=[]
+        rivals = Rivals(service,population,native,lambda:'us')
+        source = rivals.refresh(target,CONTROLS,enabled=True)
+        assert rivals.pb['step']==19 and source['available']
+        state['session'].update(source=source,rivals=rivals.payload())
+        errors,failed = [],[]
+        context = browser.new_context(viewport={'width':width,'height':1100})
+        page = context.new_page()
+        page.set_default_timeout(10000)
+        page.on('pageerror',lambda error:errors.append(str(error)))
+        page.on('console',lambda message:errors.append(message.text) if message.type=='error' else None)
+        page.on('response',lambda response:failed.append((response.status,response.url)) if response.status>=400 else None)
+        page.route('**/api/replay/available',lambda route:route.fulfill(json={'available':[]}))
+        try:
+            _practice_entry(page,base)
+            pb = page.locator('.rival-row').filter(has_text='Your personal best')
+            assert pb.get_by_text('10"70',exact=True).is_visible()
+            assert page.locator('.rival-row').count()==1
+            practice = page.request.get(base+'/api/session?clock=igt').json()
+            star = next(s for s in practice['stars'] if (s['course_id'],s['star_id'])==(2,2))
+            assert (star['rank']['rank'],star['rank']['division'])==('Gold','I')
+            panel = settings(page)
+            assert panel.get_by_label('Wario 5',exact=True).is_visible()
+            assert panel.get_by_label('Wario 1',exact=True).is_visible()
+            assert panel.get_by_label('Standard only').count()==0
+            assert panel.locator('.rival-rank').first.get_attribute('data-displayed-step')=='20'
+            assert panel.locator('.rival-rank').last.get_attribute('data-displayed-step')=='24'
+            _screenshot(page,tmp_path,f'round9-wild-blue-settings-{width}.png')
+            assert errors==[] and failed==[]
         finally:
             context.close()

@@ -221,10 +221,10 @@ def test_saved_run_respects_persisted_pins_while_strategy_change_is_settling(tmp
     assert not rivals.rows and rivals.pb_deadline is not None
     run = attempt(strat_tag="Different")
     tracker.db.upsert_attempt(run)
-    assert rivals.remember_saved(target,run) is (occupied<4)
+    assert rivals.remember_saved(target,run)
     choices = rivals.pins[rivals._key(target)]
-    assert all(choices[slot]==identity for slot,identity in protected.items())
-    assert len(choices)==min(4,occupied+1)
+    assert len(choices)==1
+    assert rivals.pins[rivals._key(TARGET)]==protected
 
 
 def test_reopening_preserves_referenced_local_choices_across_many_targets(tmp_path,monkeypatch):

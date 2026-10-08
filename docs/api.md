@@ -1055,7 +1055,8 @@ are hidden by default; explicitly selected practice ghosts remain reachable.
 Collections never create local PBs, golds or input templates.
 
 The adaptive session adds `rivals` to the state: `{options, limits, rows, pb,
-strategy_name, status, generation, manual}`. Rows include immutable `id`, slot,
+strategy_name, status, generation, manual, simulation}`. `simulation` is an
+isolated developer profile label or null. Rows include immutable `id`, slot,
 player/name, strategy, rank/time, `pinned` and explicit `hue_degrees`.
 Unavailable chosen rows remain occupied with a readable reason. Local lineage,
 paths and playback objects never enter this payload. Native `window` adds
@@ -1066,13 +1067,15 @@ not prove a roster is playing. [Adaptive contracts and local testing](adaptive-r
 `{target, rivals: {action: "add", id, slot?}}`, or
 `{target, rivals: {action: "reset", slot}}`. Target identity must still match.
 Settings validates the entire draft before applying. Options contain `mode`
-(`adaptive`/`fixed`), `count` (1–4), `include_pb`, `strategy_only`, relative
+(`adaptive`/`fixed`), `count` (1–4), `include_pb`, relative
 `min_ahead`/`max_ahead` (0–10, with the effective adaptive floor above PB) and
 absolute `min_step`/`max_step` (0–44). Minimum cannot exceed maximum.
+Legacy `strategy_only` booleans are accepted and dropped; matching always uses
+the current practice strategy and its own saved PB/rank ladder.
 Library racing in an adaptive session accepts up to four explicit rivals plus
-the qualifying PB; the library publishes `max_race: 5` and `max_rivals: 4`.
-A historical PB without certified provenance occupies one of the four rival
-slots instead, so that library publishes `max_race: 4`.
+the current strategy PB; the library publishes `max_race: 5` and `max_rivals: 4`
+when that saved basis exists. Local historical provenance does not require a
+community certificate. Without that basis, the capacity is four.
 
 `GET /api/ghost/rivals/search?target=<JSON>&player=<prefix>&cursor=<JSON>`
 returns `{records, next_cursor}`. The current target JSON is bounded to 512
