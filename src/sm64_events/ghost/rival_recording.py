@@ -16,6 +16,7 @@ class PopulationRecorder:
         self.dropped = 0
         self.refused = 0
         self.accepted = 0
+        self.skipped = 0
 
     def enqueue(self, attempt):
         """A synchronous enqueue only; never preserve/read/grade on the poll loop."""
@@ -48,8 +49,11 @@ class PopulationRecorder:
             attempt = await self.queue.get()
             try:
                 self.job = asyncio.create_task(asyncio.to_thread(self._admit, attempt))
-                await asyncio.shield(self.job)
-                self.accepted += 1
+                accepted = await asyncio.shield(self.job)
+                if accepted:
+                    self.accepted += 1
+                else:
+                    self.skipped += 1
             except (ValueError, LookupError, OSError):
                 self.refused += 1
                 log.debug("population refused attempt %s", attempt.id, exc_info=True)
@@ -75,6 +79,20 @@ class PopulationRecorder:
             player_id = str(uuid4())
             database.set_state("ghost_player_id", player_id)
         author = database.get_state(AUTHOR_KEY, "") or "You"
+        ranks = getattr(self.tracker,"ranks",None)
+        if ranks is not None:
+            from sm64_events.ghost.adaptive import rank_frames, rank_recordings
+            frames = getattr(attempt,f"{identity.clock}_frames")
+            progress = rank_frames(ranks,identity,frames)
+            if progress is None:
+                return False
+            records = self.population.metadata_snapshot(identity.kind,identity.entity_key,
+                clock=identity.clock,game_version=identity.game_version)
+            winners = rank_recordings(records,ranks,identity)
+            if any(row["player_id"]==player_id and row["strategy"]==attempt.strat_tag
+                   and row["step"]==progress["step"] and row["frames"]<=frames for row in winners):
+                return False
         self.population.accept_verified(attempt, self.replay, player_id=player_id,
             player_name=author, clock=identity.clock, game_version=identity.game_version,
             full_start=True)
+        return True

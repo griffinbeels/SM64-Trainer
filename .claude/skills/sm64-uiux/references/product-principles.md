@@ -79,6 +79,15 @@ must not reorganize the page.
 
 ## Novice and expert use
 
+- **Practice before configuration.** Useful defaults must let the player practice
+  immediately. Keep the ordinary flow to the fewest meaningful actions; infer
+  routine placement and selection instead of asking the player to manage them.
+  Put actions on the thing they affect, remember choices, and disclose tuning only
+  when needed. Before adding a visible control, explain which player decision
+  requires it; remove or combine it when a default or direct action serves that
+  goal. Judge simplicity through the whole flow, not by hiding essential actions.
+  Griffin requested this general UIUX rule during adaptive-ghost review,
+  2026-10-07; verbatim source is the task 0153 round-2 ledger.
 - Put the main practice action in the first viewport without setup menus.
 - Use the player's vocabulary. Explain "IGT", "segment", and unfamiliar modes
   in context rather than assuming prior knowledge.
@@ -101,6 +110,12 @@ Reject a concept or implementation that:
 - gives primary, secondary, destructive, and system actions equal visual weight;
 - uses decorative game art that reduces text clarity or control affordance;
 - ships inconsistent spacing, icon weight, typography, or interaction states.
+- uses explanatory prose as a substitute for a clear interactive affordance;
+- adds promotional subtitles or routine readiness labels that convey no useful state.
+
+The last two checks reflect Griffin's adaptive-ghost feedback, 2026-10-07,
+preserved in task 0153's round-4 ledger. Pending work, recording state and
+actionable problems still carry useful information.
 
 ## Accessibility floor
 

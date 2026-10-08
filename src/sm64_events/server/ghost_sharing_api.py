@@ -117,6 +117,14 @@ def _mount_race(router, session_of, sharing):
                 or body["target"] != session._read_target()):
             raise HTTPException(422, "The practice target changed; choose ghosts for the current target.")
         try:
+            if getattr(session,"_rivals",None) is not None:
+                from sm64_events.ghost.selection import checked_choice
+                from sm64_events.ghost.adaptive import MAX_RIVALS
+                selection = checked_choice(body["ghosts"])
+                count = len(selection["attempts"])+len(selection.get("imports",[]))
+                capacity = getattr(session._rivals,"library_limit",lambda _target:MAX_RIVALS+1)(body["target"])
+                if count>MAX_RIVALS or count+int(selection["pb"])>capacity:
+                    raise ValueError(f"Choose up to {MAX_RIVALS} rivals plus your personal best.")
             choice = await run_in_threadpool(sharing().prepare_race, body["ghosts"], body["target"])
         except (LookupError, ValueError, OSError) as error:
             raise HTTPException(422, str(error)) from error
@@ -131,7 +139,12 @@ def mount_collection_routes(router, session_of):
 
     @router.get("/ghost/library")
     def library():
-        return sharing().catalog()
+        result = sharing().catalog()
+        if getattr(session_of(),"_rivals",None) is not None:
+            from sm64_events.ghost.adaptive import MAX_RIVALS
+            result["max_race"] = getattr(session_of()._rivals,"library_limit",lambda:MAX_RIVALS+1)()
+            result["max_rivals"] = MAX_RIVALS
+        return result
 
     @router.post("/ghost/library/export")
     def export(body: dict):

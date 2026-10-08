@@ -56,6 +56,8 @@ def test_unavailable_pb_keeps_its_preference_and_capacity_counts_it_once():
     assert run('raceFits({pb:false,attempts:[],imports:[]},16)') is False
     assert run('raceFits({pb:true,attempts:Array.from({length:15},(_,i)=>i+1),imports:[]},16)') is True
     assert run('raceFits({pb:true,attempts:Array.from({length:16},(_,i)=>i+1),imports:[]},16)') is False
+    assert run('raceFits({pb:false,attempts:[1,2,3,4,5],imports:[]},5,4)') is False
+    assert run('raceFits({pb:true,attempts:[1,2,3,4],imports:[]},5,4)') is True
 
 
 def test_opening_section_is_independent_of_live_target_and_local_browse_is_fixed():

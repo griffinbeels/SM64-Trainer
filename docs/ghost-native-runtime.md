@@ -7,14 +7,15 @@ companion window are removed; older video-only recordings remain playable as
 replays but cannot supply ghost poses. See [session.py](../src/sm64_events/ghost/session.py) and
 [native_session.py](../src/sm64_events/ghost/native_session.py).
 
-The **Ghosts** checkboxes choose the local PB, other saved runs and imported
-ghosts for the current star or segment. The choice is stored per target and
-strategy without changing the input-comparison template. When PB is ticked but
-no PB or other ghost is selected, the active input template supplies the ghost.
-Local and imported recordings are qualified for native poses. A removed choice stays
-unavailable until the user chooses another recording. Selection updates include
-the target so a delayed request cannot choose ghosts for another practice target. See
-[selection.py](../src/sm64_events/ghost/selection.py).
+The **Your rivals** list automatically chooses compatible native recordings,
+with protected manual slots and a separate PB. Its local population, range,
+preparation/adoption and fresh-climb contracts live in
+[Adaptive rivals](adaptive-rivals.md). The existing Ghost Library still imports,
+exports and explicitly races saved recordings; those choices become protected
+rival slots. Selection updates include the current target, so delayed requests
+cannot choose ghosts for another practice target. The input-comparison template
+remains independent. The low-level legacy selection door supports up to 16
+ghosts; this adaptive pilot exposes four rivals plus PB.
 
 The source connects capture, archive publication, native playback, compositing
 and clean video recording. This describes that integration, not a successful
@@ -152,7 +153,7 @@ readable explanation. A bulk read binds one current definition snapshot.
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS7, still exported as `SM64GhostSourceV3` (the version argument must be 7); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP11: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension and global names/inputs/mode, name box and HUD input stack controls, whether the recording keeps the displayed picture, and [the ghost's path](#the-ghosts-path) | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC13: status 256, request 20052 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; names/inputs/mode, then name box style/opacity, the HUD input stack switch, `record_ghosts` and the eight path fields, appended after sound controls | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Ghost IPC | GIPC14: status 256, request 20080 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; appended preparation/activation generations, certified-start nonce and cancellation; status reserves hold separate prepared/active generations | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP7: header 160, record 1284, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP6 (1276), GCLIP5 (1268) and GCLIP4 (652) still load with unavailable pad; GCLIP5 also has nothing released, GCLIP4 also has no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Portable collection | `.sm64ghosts` manifest version 2 adds known-or-null `game_version` to new entries' identity. Version 1 remains readable; re-export retains legacy entries' omitted version field and original identity/credit | [portable.py](../src/sm64_events/ghost/portable.py) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |

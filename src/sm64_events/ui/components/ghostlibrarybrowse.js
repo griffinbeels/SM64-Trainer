@@ -107,7 +107,7 @@ export function LibraryBrowser({ctx}) {
   const available = ctx.visible.filter(row => row.available);
   const title = ctx.view === "race" ? "Choose ghosts to race" : ctx.view === "custom" ? "Choose your ghosts" : "Your ghost collection";
   return html`<h3 class="ghost-library-step-title" tabindex="-1">${title}</h3>
-    <p class="meta">${ctx.view === "race" ? `For ${ctx.openingName}. Up to ${ctx.catalog.max_race} ghosts, including the current PB slot.` : "Find a target, browse your bests, or choose recordings to share."}</p>
+    <p class="meta">${ctx.view === "race" ? `For ${ctx.openingName}. ${ctx.catalog.max_rivals ? `Up to ${ctx.catalog.max_rivals} rivals plus your PB.` : `Up to ${ctx.catalog.max_race} ghosts, including the current PB slot.`}` : "Find a target, browse your bests, or choose recordings to share."}</p>
     ${ctx.view === "race" && ctx.raceReason ? html`<p class="ghost-library-notice">${ctx.raceReason}</p>` : null}
     <${BrowserFilters} ctx=${ctx} />
     <div class="ghost-library-selection">

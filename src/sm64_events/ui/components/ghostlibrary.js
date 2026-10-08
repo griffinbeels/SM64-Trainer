@@ -2,6 +2,7 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { useGhostLibrary } from "../ghostlibraryflow.js";
+import { raceRecordingLimit } from "../ghostlibrary.js";
 import { Modal } from "./modal.js";
 import { ProgressLine } from "./states.js";
 import { readGhostLibrary, useUiLog } from "../uilog.js";
@@ -43,8 +44,8 @@ function LibraryFooter({ctx}) {
   const importing = ctx.page === "import" || ctx.page === "import-review";
   const count = importing ? ctx.importChosen.length : ctx.chosen.length;
   const cap = ctx.catalog?.max_export || 0;
-  const raceLimit = ctx.catalog.max_race - Number(ctx.choice.pb);
-  const raceOverflow = ctx.page === "browser" && ctx.view === "race" && ctx.raceCount + Number(ctx.choice.pb) > ctx.catalog.max_race;
+  const raceLimit = raceRecordingLimit(ctx.catalog, ctx.choice.pb);
+  const raceOverflow = ctx.page === "browser" && ctx.view === "race" && ctx.raceCount > raceLimit;
   return html`${back ? html`<button disabled=${ctx.busy} onclick=${() => {if (ctx.page === "name") ctx.setAuthor(ctx.rememberedAuthor); ctx.go(back);}}>Back</button>` : null}
     <span class="ghost-library-count">${["browser", "target-bests", "review", "import-review"].includes(ctx.page) ? `${count} selected` : ""}</span>
     ${raceOverflow ? html`<span class="meta">Choose at most ${countNoun(raceLimit, "recording")} with this PB choice.</span>` : null}

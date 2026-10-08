@@ -491,6 +491,34 @@ function practisedStrat(session) {
   return session?.target?.strat ?? null;
 }
 
+function GhostAppearance({controls, appearance, patch}) {
+  const values = heldValues(controls, appearance);
+  const {limits} = controls;
+  return html`<${GhostTuning} ...${values} limits=${limits}
+    volume=${{value: appearance.volume ?? controls.volume}} write=${patch} queue=${patch} />
+    <${GhostProximity} active=${true} value=${controls.proximity} range=${limits.proximity}
+      draft=${appearance.proximity} write=${patch} queue=${patch} />
+    <${GhostPathTune} active=${true} switches=${values.switches} tuning=${values.pathTuning}
+      ranges=${limits.path_tuning} draft=${appearance.path_tuning} queue=${patch} />`;
+}
+
+function GhostRacing({session, controls, held, on, write, queue, entityKey}) {
+  if (session?.rivals) return html`<${Rivals} session=${session} write=${write}
+    renderAppearance=${(appearance, patch) => html`<${GhostAppearance} controls=${controls}
+      appearance=${appearance} patch=${patch} />`} />`;
+  const values = heldValues(controls, held);
+  const {limits} = controls;
+  const recording = ghostRecordingOptions(controls.selection, held, practisedStrat(session));
+  return html`<${GhostRecording} recording=${recording} entityKey=${entityKey}
+      target=${session?.target} write=${write} />
+    ${on && html`<${GhostTuning} ...${values} limits=${limits}
+      volume=${{value: controls.volume, draft: held.volume}} write=${write} queue=${queue} />`}
+    <${GhostProximity} active=${on} value=${controls.proximity} range=${limits.proximity}
+      draft=${held.proximity} write=${write} queue=${queue} />
+    <${GhostPathTune} active=${on} switches=${values.switches} tuning=${values.pathTuning}
+      ranges=${limits.path_tuning} draft=${held.path_tuning} queue=${queue} />`;
+}
+
 /**
  * The row itself. `entityKey` is the hosting card's own key -- the control
  * refuses to speak for a session that names a different entity (see
@@ -511,9 +539,6 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   const held = draft || {};
   const on = held.enabled == null
     ? controls.enabled : Boolean(held.enabled) && controls.available;
-  const { limits } = controls;
-  const { opacity, nudge, switches, tint, nameBox, pathSource, pathTuning } = heldValues(controls, held);
-  const recording = ghostRecordingOptions(controls.selection, held, practisedStrat(session));
   const labelId = idFor(entityKey, "label");
   const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;
 
@@ -528,24 +553,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         ${controls.reasonText}
       </span>`}
     </div>
-    ${session?.rivals ? html`<${Rivals} session=${session} write=${write}
-      renderAppearance=${(appearance,patch)=>{
-        const values=heldValues(controls,appearance);
-        return html`<${GhostTuning} ...${values} limits=${limits}
-          volume=${{value:appearance.volume ?? controls.volume}} write=${patch} queue=${patch} />
-          <${GhostProximity} active=${true} value=${controls.proximity} range=${limits.proximity}
-            draft=${appearance.proximity} write=${patch} queue=${patch} />
-          <${GhostPathTune} active=${true} switches=${values.switches} tuning=${values.pathTuning}
-            ranges=${limits.path_tuning} draft=${appearance.path_tuning} queue=${patch} />`;
-      }} />` : html`<${GhostRecording} recording=${recording} entityKey=${entityKey}
-      target=${session?.target} write=${write} />`}
-    ${on && !session?.rivals && html`<${GhostTuning} opacity=${opacity} tint=${tint}
-      switches=${switches} nameBox=${nameBox} pathSource=${pathSource} limits=${limits}
-      volume=${{ value: controls.volume, draft: held.volume }}
-      nudge=${nudge} write=${write} queue=${queue} />`}
-    <${GhostProximity} active=${on && !session?.rivals} value=${controls.proximity} range=${limits.proximity}
-      draft=${held.proximity} write=${write} queue=${queue} />
-    <${GhostPathTune} active=${on && !session?.rivals} switches=${switches} tuning=${pathTuning}
-      ranges=${limits.path_tuning} draft=${held.path_tuning} queue=${queue} />
+    <${GhostRacing} session=${session} controls=${controls} held=${held} on=${on}
+      write=${write} queue=${queue} entityKey=${entityKey} />
   </div>`;
 }

@@ -1054,6 +1054,35 @@ identity>, ...]`, in a separate namespace from local `attempts`. Its shared
 are hidden by default; explicitly selected practice ghosts remain reachable.
 Collections never create local PBs, golds or input templates.
 
+The adaptive session adds `rivals` to the state: `{options, limits, rows, pb,
+strategy_name, status, generation, manual}`. Rows include immutable `id`, slot,
+player/name, strategy, rank/time, `pinned` and explicit `hue_degrees`.
+Unavailable chosen rows remain occupied with a readable reason. Local lineage,
+paths and playback objects never enter this payload. Native `window` adds
+`prepared_generation` and `active_generation`; preparation acknowledgement does
+not prove a roster is playing. [Adaptive contracts and local testing](adaptive-rivals.md).
+
+`PUT /api/ghost` also accepts `{target, rivals: {options}}`, or
+`{target, rivals: {action: "add", id, slot?}}`, or
+`{target, rivals: {action: "reset", slot}}`. Target identity must still match.
+Settings validates the entire draft before applying. Options contain `mode`
+(`adaptive`/`fixed`), `count` (1–4), `include_pb`, `strategy_only`, relative
+`min_ahead`/`max_ahead` (0–10, with the effective adaptive floor above PB) and
+absolute `min_step`/`max_step` (0–44). Minimum cannot exceed maximum.
+Library racing in an adaptive session accepts up to four explicit rivals plus
+the qualifying PB; the library publishes `max_race: 5` and `max_rivals: 4`.
+A historical PB without certified provenance occupies one of the four rival
+slots instead, so that library publishes `max_race: 4`.
+
+`GET /api/ghost/rivals/search?target=<JSON>&player=<prefix>&cursor=<JSON>`
+returns `{records, next_cursor}`. The current target JSON is bounded to 512
+characters, player input to 80 and cursor to 512. The provider checks a cursor
+array `[normalized_name, frames, immutable_id]`, and limits pages to 20.
+Empty player input returns no results. Explicit private imports can appear
+alongside certified population rows; they never acquire automatic certification.
+Changed targets or invalid queries return readable 422 errors. No cloud route
+or cloud authorization is implied by this loopback endpoint.
+
 | Collection route | Contract |
 |---|---|
 | `GET /api/saved-ghosts/{attempt_id}` | `{attempt_id, saved, available}` for the attempt drawer. Without a ghost session, reads return `saved: false, available: false`. |

@@ -1504,6 +1504,24 @@ many more recordings than the [[ghost set]] can race at once.
 - **Lives** — `src/sm64_events/ghost/portable.py` and `src/sm64_events/ghost/sharing.py`;
   `src/sm64_events/ui/components/ghostlibrary.js`
 
+### Rival slot
+
+One place in the adaptive [[ghost set]] for the current [[target]]. The trainer
+chooses a compatible recording above the saved [[personal best]], or protects
+the player's exact manual choice until they clear it. The slot keeps its colour when
+its recording changes; the separate [[PB ghost]] keeps its own colour.
+
+- **Lives** — `src/sm64_events/ghost/adaptive.py` and `src/sm64_events/ghost/rivals.py`
+
+### Climb profile
+
+A separate practice database with empty [[attempt]]s and [[personal best]]s,
+the original [[segment]] definitions and calibration, and a retained local
+[[ghost]] population. The launcher creates it to test progression without
+changing the original practice history.
+
+- **Lives** — `tools/ghost_climb.py` and `src/sm64_events/core/paths.py`
+
 ### Imported ghost
 
 A native [[ghost]] received in a [[ghost collection]], with the original

@@ -294,7 +294,8 @@ class GhostSession:
         resolve = resolve or world != self._world or self._resolved_at is None
         if resolve:
             self._source = self._resolve_source(target)
-            self._refresh_candidates(target)
+            if self._rivals is None:
+                self._refresh_candidates(target)
             self._world, self._resolved_at = world, monotonic()
         elif self._rivals is not None:
             answer = self._rivals.refresh(target,settings.native_controls(self._values),
@@ -448,6 +449,8 @@ class GhostSession:
         def remember():
             with self._lifecycle_lock:
                 saved.save(database, attempt_id, kind, key)
+                if self._rivals is not None:
+                    self._rivals.remember_saved(target, attempt)
                 self._selection.load(database)
                 choice = self._selection.chosen(target, self.library())
                 if attempt_id not in choice["attempts"] and len(choice["attempts"]) + choice["pb"] < MAX_GHOSTS:
@@ -470,6 +473,8 @@ class GhostSession:
                 if database is None:
                     return
                 saved.remove(database, attempt_id)
+                if self._rivals is not None:
+                    self._rivals.forget_saved(database.attempt(attempt_id))
                 self._selection.load(database)
                 self._selection.untick(attempt_id)
                 _remember(database, SELECTION_KEY, self._selection.stored())
@@ -491,10 +496,12 @@ class GhostSession:
         already the answer; with it unticked, no PB plays at all.
         """
         if self._rivals is not None:
+            from sm64_events.inputs.service import entity_key_of
+            kind,key = entity_key_of(attempt)
             async with self._lock:
                 def invalidate():
                     with self._lifecycle_lock:
-                        self._rivals.pb_changed()
+                        self._rivals.pb_changed({"kind":kind,"entity_key":key})
                 await asyncio.to_thread(invalidate)
         if saved:
             preserve = getattr(self._replay, "preserve_native", None)
@@ -537,7 +544,8 @@ class GhostSession:
             choices = self._selection.choose(self._target, changes["ghosts"])
             _remember(database, SELECTION_KEY, choices)
             if self._rivals is not None:
-                self._rivals.manual = True
+                ghosts,_,_ = self._chosen(self._target)
+                self._rivals.choose_library(self._target,ghosts,changes["ghosts"]["pb"])
         if "rivals" in changes and self._rivals is not None:
             self._rivals.apply(changes["rivals"])
 
@@ -572,6 +580,10 @@ class GhostSession:
         if "ghosts" in checked:
             if target is None or checked.pop("target") != target:
                 raise ValueError("The practice target changed. Choose a ghost for the current target.")
+            if self._rivals is not None:
+                count = len(checked["ghosts"]["attempts"])+len(checked["ghosts"].get("imports",[]))
+                if count>4 or count+int(checked["ghosts"]["pb"])>self._rivals.library_limit(target):
+                    raise ValueError("Choose up to four rivals; a historical PB may also need a rival slot.")
             offered = {ghost.attempt_id for ghost in
                        self.library().ghosts_for(target["kind"], target["entity_key"])}
             if any(number not in offered for number in checked["ghosts"]["attempts"]):
@@ -593,7 +605,10 @@ class GhostSession:
 
     def _reconcile(self) -> None:
         if self._native is not None:
-            self._native.reconcile(enabled=self._values["enabled"] and self._source.get("available", False),
+            # A pending unavailable roster must not disable the current race.
+            available = (self._rivals.identity is not None if self._rivals is not None
+                         else self._source.get("available",False))
+            self._native.reconcile(enabled=self._values["enabled"] and available,
                                    target=self._target, controls=settings.native_controls(self._values))
 
     def attempt_saved(self, attempt):

@@ -51,6 +51,7 @@ class Rivals:
         self.source_of = source_of
         self.options = checked_options({})
         self.pins = {}
+        self.local_choices = {}
         self.loaded_db = None
         self.target = None
         self.identity = None
@@ -59,6 +60,7 @@ class Rivals:
         self.generation = 0
         self.fingerprint = None
         self.pb_deadline = None
+        self.pb_deadlines = {}
         self.status = None
         self.manual = False
         self.preserve_slots = False
@@ -92,6 +94,9 @@ class Rivals:
         try:
             self.options = checked_options(stored.get("options",{}))
             pins = stored.get("pins",{})
+            self.local_choices = stored.get("local_choices",{})
+            if not isinstance(self.local_choices,dict) or len(self.local_choices)>512:
+                self.local_choices = {}
             if isinstance(pins,dict):
                 self.pins = {key:{slot:value for slot,value in choices.items()
                     if slot in {"0","1","2","3"} and isinstance(value,str) and len(value)==64}
@@ -103,9 +108,18 @@ class Rivals:
         self.fingerprint = self.prepared_key = None
         self.rows, self.pb = (),None
         self.manual = False
+        self.pb_deadlines = {}
 
-    def pb_changed(self):
-        self.pb_deadline = self.now()+PB_SETTLE_S
+    def pb_changed(self, target=None):
+        target = target or self.target
+        if target is None:
+            return
+        key = self._key(target)
+        deadline = self.now()+PB_SETTLE_S
+        self.pb_deadlines[key] = deadline
+        if self.target is None or self._key(self.target)!=key:
+            return
+        self.pb_deadline = deadline
         self.fingerprint = None
         self.prepared_key = None
         self.native.cancel_preparation()
@@ -113,12 +127,14 @@ class Rivals:
     def refresh(self, target, controls, *, enabled, sharing=None, force=False):
         self._load()
         changed_target = target != self.target
+        changed_entity = target is None or self.target is None or self._key(target)!=self._key(self.target)
         if changed_target:
             self.target = target
-            self.pb_deadline = None
             self.fingerprint = None
             self.rows, self.pb = (),None
             self.manual = False
+        self.pb_deadlines = {key:value for key,value in self.pb_deadlines.items() if value>self.now()}
+        self.pb_deadline = self.pb_deadlines.get(self._key(target)) if target else None
         identity = self.identity_for(target)
         self.identity = identity
         self.sharing = sharing
@@ -134,7 +150,8 @@ class Rivals:
         settled = self.pb_deadline is None or self.now()>=self.pb_deadline
         if not settled:
             self.status = "Updating rivals after the PB undo window."
-            return None
+            return ({"available":False,"reason":"pb_settling","reason_text":self.status,"ghosts":[]}
+                    if changed_entity else None)
         self.pb_deadline = None
         source = self.source_of()
         stamp = (id(self.loaded_db),identity,enabled,source,controls["hue_degrees"],getattr(self.population,"generation",None),
@@ -197,6 +214,24 @@ class Rivals:
 
     def _private_record(self, identity, target):
         """An explicit private import may be pinned, but never earns admission."""
+        local = self.local_choices.get(identity)
+        if isinstance(local,dict):
+            from sm64_events.ghost.pb import AttemptGhost, local_attempt_source
+            from sm64_events.inputs.service import entity_key_of
+            number = local.get("attempt_id")
+            attempt = self.tracker.db.attempt(number) if type(number) is int else None
+            if (attempt is None or local_attempt_source(attempt)!=local
+                    or entity_key_of(attempt)!=(target.kind,target.entity_key)
+                    or attempt.game_version not in (None,target.game_version)):
+                return None
+            frames = getattr(attempt,f"{target.clock}_frames")
+            progress = rank_frames(self.tracker.ranks,target,frames)
+            if progress is None:
+                return None
+            return {"id":identity,"player_id":"private:you","player_name":"You",
+                    "strategy":attempt.strat_tag or "Standard","frames":frames,
+                    "ghost":AttemptGhost(number,target.kind,target.entity_key,attempt.strat_tag,frames),
+                    "manual_only":True,"current_strategy":target.strategy,**progress}
         if self.sharing is None:
             return None
         try:
@@ -213,6 +248,77 @@ class Rivals:
         return {"id":ghost.id,"player_id":f"private:{ghost.author}","player_name":ghost.author,
                 "strategy":ghost.strat_tag or "Standard","frames":ghost.frames,"ghost":ghost,
                 "manual_only":True,"current_strategy":target.strategy,**progress}
+
+    def _remember_local(self, source):
+        from hashlib import sha256
+        identity = sha256(json.dumps(source,sort_keys=True).encode()).hexdigest()
+        self.local_choices[identity] = source
+        return identity
+
+    def remember_saved(self, target, attempt):
+        """Saving one run preserves other chosen slots, including hidden ones."""
+        from sm64_events.ghost.pb import local_attempt_source
+        self._load()
+        source = local_attempt_source(attempt)
+        if source is None:
+            return False
+        choices = self.pins.setdefault(self._key(target),{})
+        if any(self.local_choices.get(identity) == source for identity in choices.values()):
+            return True
+        rows = self.rows if target == self.target else [
+            {"slot":int(slot),"pinned":True} for slot in choices]
+        try:
+            slot = add_slot(rows,self.options["count"])
+        except ValueError:
+            return False
+        identity = self._remember_local(source)
+        if identity not in choices.values():
+            choices[str(slot)] = identity
+        self.preserve_slots = True
+        self.fingerprint = None
+        self._store()
+        return True
+
+    def forget_saved(self, attempt):
+        from sm64_events.ghost.pb import local_attempt_source
+        self._load()
+        source = local_attempt_source(attempt)
+        forgotten = {key for key,value in self.local_choices.items() if value == source}
+        self.pins = {key:{slot:identity for slot,identity in choices.items() if identity not in forgotten}
+                     for key,choices in self.pins.items()}
+        self.preserve_slots = True
+        self.fingerprint = None
+        self._store()
+
+    def choose_library(self, target, ghosts, include_pb):
+        """Explicit library choices become protected slots in the same roster."""
+        from sm64_events.ghost.pb import local_attempt_source
+        self._load()
+        identity = self.identity_for(target)
+        basis = saved_pb_basis(self.tracker.db,self.tracker.ranks,identity) if identity else None
+        if sum(not getattr(ghost,"pb",False) or basis is None for ghost in ghosts)>MAX_RIVALS:
+            raise ValueError("Choose up to four rivals; this historical PB also needs a rival slot.")
+        self.target, self.identity = target,identity
+        choices = {}
+        for ghost in ghosts:
+            if getattr(ghost,"pb",False) and basis is not None:
+                continue
+            identity = getattr(ghost,"import_id",None)
+            if identity is None:
+                from sm64_events.ghost.pb import attempt_id_of
+                source = local_attempt_source(self.tracker.db.attempt(attempt_id_of(ghost.origin)))
+                if source is None:
+                    continue
+                identity = self._remember_local(source)
+            choices[str(len(choices))] = identity
+        self.pins[self._key(target)] = choices
+        self.options = {**self.options,"include_pb":include_pb,"count":max(self.options["count"],len(choices))}
+        self.apply({})
+
+    def library_limit(self, target=None):
+        identity = self.identity_for(target or self.target)
+        basis = saved_pb_basis(self.tracker.db,self.tracker.ranks,identity) if identity else None
+        return MAX_RIVALS + int(basis is not None)
 
     def checked(self, body, target):
         if not isinstance(body,dict) or set(body)-{"options","action","id","slot"}:
@@ -234,11 +340,14 @@ class Rivals:
                     raise ValueError("Choose the rival to reset.")
                 result.update(action=action,slot=slot)
             else:
+                identity = body.get("id")
+                if not isinstance(identity,str) or len(identity)!=64 or any(char not in "0123456789abcdef" for char in identity):
+                    raise ValueError("Choose a saved ghost identity.")
                 try:
-                    row = self.population.get(body.get("id"))
+                    row = self.population.get(identity)
                     ranked = rank_recordings([row],self.tracker.ranks,self.identity)
                 except LookupError:
-                    row = self._private_record(body.get("id"),self.identity)
+                    row = self._private_record(identity,self.identity)
                     ranked = (row,) if row else ()
                 if not ranked:
                     raise ValueError("That ghost is not compatible with this target.")
@@ -261,5 +370,11 @@ class Rivals:
         self.manual = False
         self.preserve_slots = "options" not in body
         self.fingerprint = None
+        self._store()
+
+    def _store(self):
         if self.tracker.db is not None:
-            self.tracker.db.set_state(STATE_KEY,{"version":1,"options":self.options,"pins":self.pins})
+            used = {identity for values in self.pins.values() for identity in values.values()}
+            self.local_choices = {key:value for key,value in self.local_choices.items() if key in used}
+            self.tracker.db.set_state(STATE_KEY,{"version":1,"options":self.options,"pins":self.pins,
+                                               "local_choices":self.local_choices})

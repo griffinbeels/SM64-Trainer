@@ -228,6 +228,9 @@ lockstep.
 
 ## Where the deep facts live (authoritative homes)
 
+- **Adaptive rivals**: [selection, preparation and local climb testing](adaptive-rivals.md)
+  own the saved-PB range, protected manual slots, certified full-start adoption
+  and bounded local population. Remote community access remains a separate provider.
 - **Ghost Library discovery and sharing**: [native ghost contracts](ghost-native-runtime.md#names-inputs-and-collections)
   describe the contextual guided flows, historical bests and recording availability;
   [collection API](api.md#ghosts--native-playback) owns staged import, version

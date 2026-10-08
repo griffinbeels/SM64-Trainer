@@ -92,7 +92,12 @@ export function raceSelection(rows, candidates, target, currentPb, defaultPb = t
   return raceChoice(recordings, target, pb);
 }
 
-export function raceFits(choice, cap) {
-  const slots = choice.attempts.length + choice.imports.length + Number(choice.pb);
-  return slots > 0 && slots <= cap;
+export function raceRecordingLimit(catalog, pb) {
+  return Math.min(catalog.max_rivals ?? catalog.max_race, catalog.max_race - Number(pb));
+}
+
+export function raceFits(choice, cap, maxRivals = cap) {
+  const rivals = choice.attempts.length + choice.imports.length;
+  const slots = rivals + Number(choice.pb);
+  return slots > 0 && slots <= cap && rivals <= maxRivals;
 }

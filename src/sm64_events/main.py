@@ -433,6 +433,16 @@ def _comparison_services(replay, service, broadcaster, codec, replay_cfg):
     return compare, compilation
 
 
+def _local_ghost_population(service):
+    from pathlib import Path
+    import os
+    from sm64_events.ghost.population import LocalPopulation
+    root = Path(os.environ.get("SM64_GHOST_POPULATION") or data_root()/"data"/"ghost_population")
+    if not root.is_absolute():
+        root = root.resolve()
+    return LocalPopulation(root, definitions=lambda: service.db.segment_defs() if service.db else [])
+
+
 def build(*, recorder_lock=None):
     configure_logging()
     migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
@@ -501,13 +511,7 @@ def build(*, recorder_lock=None):
                     on_gap=ghost_capture_gap, on_snapshot=note_ghost_snapshot)
     inputs.bind(poller)
     service.observed_game_version = lambda:poller.observed_game_version
-    from pathlib import Path
-    import os
-    from sm64_events.ghost.population import LocalPopulation
-    population_root = Path(os.environ.get("SM64_GHOST_POPULATION") or data_root()/"data"/"ghost_population")
-    if not population_root.is_absolute():
-        population_root = population_root.resolve()
-    population = LocalPopulation(population_root,definitions=lambda:service.db.segment_defs() if service.db else [])
+    population = _local_ghost_population(service)
     # One session owns native ghost preferences and the practice target.
     ghost = GhostSession(tracker=service, inputs=inputs.get_service,
                          replay=replay, broadcaster=broadcaster,

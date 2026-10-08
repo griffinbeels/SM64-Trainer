@@ -135,6 +135,8 @@ class LocalPopulation:
             PRAGMA user_version=1;
         """)
         self._verified = {}
+        self._generation_stamp = None
+        self._generation_value = None
 
     def close(self):
         with self._lock:
@@ -151,7 +153,11 @@ class LocalPopulation:
     @property
     def generation(self):
         with self._lock:
-            return tuple(self._db.execute("SELECT COUNT(*),MAX(rowid) FROM recordings").fetchone())
+            stamp = self._db.execute("PRAGMA data_version").fetchone()[0]
+            if stamp != self._generation_stamp:
+                self._generation_value = tuple(self._db.execute("SELECT COUNT(*),MAX(rowid) FROM recordings").fetchone())
+                self._generation_stamp = stamp
+            return self._generation_value
 
     def _row(self, stored):
         row = json.loads(stored["document"])
@@ -282,6 +288,7 @@ class LocalPopulation:
                     (document["id"], document["player_id"], _normalize_player(document["player_name"]),
                      target.get("signature") or f"star:{key}", kind, document["clock"], document["game_version"],
                      document["frames"], digest, size, canonical(document).decode()))
+                self._generation_stamp = None
             except BaseException:
                 if created and not present:
                     destination.unlink(missing_ok=True)

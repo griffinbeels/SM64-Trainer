@@ -48,7 +48,7 @@ function selectionData(state, fixed, chosen, rows) {
   const {catalog, selected, preview} = state;
   const choice = raceSelection(chosen, rows, fixed.raceTarget, fixed.selection.pb, fixed.selection.ghosts?.pb ?? true);
   const raceCount = choice.attempts.length + choice.imports.length;
-  const fitsRace = raceFits(choice, catalog?.max_race || 0);
+  const fitsRace = raceFits(choice, catalog?.max_race || 0,catalog?.max_rivals);
   const exportFits = chosen.length > 0 && chosen.length <= (catalog?.max_export || 0);
   const importRows = preview?.ghosts || [];
   const importChosen = importRows.filter(row => selected.has(row.id || row.import_id) && row.importable && !row.duplicate);
