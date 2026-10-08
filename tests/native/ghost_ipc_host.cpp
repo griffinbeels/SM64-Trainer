@@ -639,6 +639,22 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         page.wait([](const gipc_status& s){return s.ack_revision==18 && s.prepared_generation==104;},
             "context rebuild acknowledges readiness again after the missed start");
         check(page.status().active_generation!=104,"lost model readiness cannot turn a consumed start into late activation");
+        // A move-clock arm may be certified before any playable origin exists.
+        // Select its ready roster while drawing is off, then begin that same
+        // roster when the clock resolves, even if a newer roster is now ready.
+        r.revision=19;r.prepare_generation=105;r.activate_generation=r.activate_start=0;r.play_enabled=0;
+        set_clip(r.clips[0],2,argv[4],argv[5],207);page.send(r);
+        page.wait([](const gipc_status& s){return s.prepared_generation==105;},"roster prepared before move clock readiness");
+        const unsigned before_certificate=commands.load();
+        r.revision=20;r.activate_generation=105;r.activate_start=5;page.send(r);
+        page.wait([](const gipc_status& s){return s.ack_revision==20;},"certificate-only activation consumed without playback");
+        check(commands.load()==before_certificate,"certificate-only activation never configures a playable origin");
+        r.revision=21;r.prepare_generation=106;r.activate_generation=r.activate_start=0;
+        set_clip(r.clips[0],1,argv[1],argv[2],48);page.send(r);
+        page.wait([](const gipc_status& s){return s.prepared_generation==106;},"new roster prepares during the clock wait");
+        r.revision=22;r.play_enabled=1;page.send(r);
+        page.wait([](const gipc_status& s){return s.active_generation==105;},"clock readiness plays the already selected generation");
+        check(last_command().clips[0].clip_id[0]==2,"clock resolution cannot swap in a newer prepared roster");
         ghost_ipc::rom(false);page.stopped();
         check(!page.status().prepared_generation && !page.status().active_generation,"ROM closure invalidates both generation acknowledgements");
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");
