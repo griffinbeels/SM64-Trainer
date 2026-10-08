@@ -5,6 +5,7 @@ Examples (from the checkout containing this tool):
   uv run python tools/ghost_climb.py --prepare --launch
   uv run python tools/ghost_climb.py --launch --profile C:/absolute/profile
   uv run python tools/ghost_climb.py --simulate-wild-blue --launch
+  uv run python tools/ghost_climb.py --simulate-fresh --launch
 
 Seeding uses already committed clips and a read-only consistent database copy.
 --certify-source-version is an explicit developer declaration for old recordings
@@ -34,6 +35,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from sm64_events.core.paths import bundled_rank_standards, bundled_sheet_ladders, candidate_server_ports  # noqa: E402
 from sm64_events.core.events import Event  # noqa: E402
+from sm64_events.ghost.adaptive import MAX_RIVALS, MAX_STEP, checked_options  # noqa: E402
 from sm64_events.ghost.clip import check_manifest, read_clip  # noqa: E402
 from sm64_events.ghost.pb import local_attempt_source  # noqa: E402
 from sm64_events.ghost.population import LocalPopulation  # noqa: E402
@@ -144,11 +146,11 @@ def _simulation_donors(database, source, version):
     return result
 
 
-def _simulated_record(provider, donor, *, player_id, name, version, baseline=False):
+def _simulated_record(provider, donor, *, player_id, name, version, baseline=False, target=None, clock="igt"):
     attempt, path, digest = donor
     document = {"player_id": player_id, "player_name": name,
-        "target": describe(WILD_BLUE["kind"], WILD_BLUE["entity_key"], WILD_BLUE["strat"], ()),
-        "frames": attempt.igt_frames, "clock": "igt", "game_version": version,
+        "target": target or describe(WILD_BLUE["kind"], WILD_BLUE["entity_key"], WILD_BLUE["strat"], ()),
+        "frames": attempt.igt_frames if clock == "igt" else attempt.rta_frames, "clock": clock, "game_version": version,
         "sha256": digest, "recorded_utc": attempt.started_utc,
         "source": local_attempt_source(attempt), "source_attempt_id": attempt.id,
         "source_valid": attempt.valid, "source_game_version": attempt.game_version,
@@ -215,6 +217,90 @@ def simulate_wild_blue(source_root, profiles_root, *, source_version="us"):
         document.update(simulation=simulation, recordings=[{
             "id": row["id"], "player_name": row["player_name"], "frames": row["frames"],
             "sha256": row["sha256"], "source_attempt_id": row["source_attempt_id"]} for row in (tester, *opponents)])
+        atomic_json(profile / "climb-profile.json", document)
+        atomic_json(population / "developer-simulation.json", simulation)
+    finally:
+        database.close()
+        provider.close()
+    return document
+
+
+def _fresh_simulation_donors(database, source, version):
+    """Retain each playable target/strategy/time once, with its original clock."""
+    replay, ranks = _SeedReplay(database, source, None), _seed_standards(source)
+    definitions = database.segment_defs()
+    donors, hashes = {}, set()
+    for attempt in database.attempts():
+        if (attempt.outcome != "success" or attempt.cleared or attempt.valid is False
+                or pb_blocked_by(attempt) or attempt.game_version not in (None, version)):
+            continue
+        kind, key = entity_key_of(attempt)
+        clock = ranks.clock_for(entity_key(attempt.course_id, attempt.star_id, attempt.segment_id))
+        frames = attempt.igt_frames if clock == "igt" else attempt.rta_frames
+        if type(frames) is not int or frames <= 0:
+            continue
+        found = replay.find_native(attempt.id)
+        if found is None:
+            continue
+        target = describe(kind, key, attempt.strat_tag, definitions)
+        path = found[0]
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        read_clip(path, digest)
+        group = kind, key, target["strat"], clock
+        timing = (*group, frames)
+        if timing in donors or (*group, digest) in hashes:
+            continue
+        donors[timing] = ((attempt, path, digest), target, clock)
+        hashes.add((*group, digest))
+    groups = {}
+    for timing in donors:
+        group = timing[:3]
+        groups[group] = groups.get(group, 0) + 1
+    full = [group for group, count in groups.items() if count >= MAX_RIVALS]
+    if not full:
+        raise ValueError(f"A full fresh simulation needs {MAX_RIVALS} distinct saved ghosts for one target and strategy.")
+    wild_blue = WILD_BLUE["kind"], WILD_BLUE["entity_key"], WILD_BLUE["strat"]
+    initial = wild_blue if wild_blue in full else max(full, key=lambda group: groups[group])
+    ordered = sorted(donors, key=lambda timing: (timing[:3] != initial, timing[:4], -timing[4]))
+    return [donors[timing] for timing in ordered], dict(zip(("kind", "entity_key", "strat"), initial, strict=True))
+
+
+def simulate_fresh(source_root, profiles_root, *, source_version="us"):
+    """Zero practice, no PB and independent gtest opponents from exact saved clips.
+
+    Fixed full-rank selection belongs only to this developer stress-test profile.
+    The normal beginner range may contain none of the player's advanced samples.
+    """
+    source, profiles = map(_absolute, (source_root, profiles_root))
+    if source_version not in ("us", "jp"):
+        raise ValueError("Choose the simulation's source ROM explicitly.")
+    if profiles == source or source.is_relative_to(profiles):
+        raise ValueError("Simulations need a separate profile directory.")
+    with source_snapshot(source) as original:
+        donors, initial = _fresh_simulation_donors(original, source, source_version)
+        document = _fresh_profile(source, profiles / "unused", profiles, original)
+    profile = Path(document["profile"])
+    population = profile / "data" / "ghost_population"
+    document["population"] = str(population)
+    database = Database(profile / "data" / "tracker.db")
+    provider = LocalPopulation(population, database.segment_defs)
+    try:
+        opponents = [_simulated_record(provider, donor, player_id=f"simulated:{uuid4().hex}",
+            name=f"gtest{index}", version=source_version, target=target, clock=clock)
+            for index, (donor, target, clock) in enumerate(donors, start=1)]
+        simulation = {"version": 1, "label": "Developer simulation · Fresh tester",
+            "scenario_root": str(profile), "target": initial, "game_version": source_version,
+            "zero_practice": True}
+        options = checked_options({"mode": "fixed", "count": MAX_RIVALS, "include_pb": True,
+                                   "min_step": 0, "max_step": MAX_STEP})
+        database.set_state("ghost_player_id", document["player_id"])
+        database.set_state(SIMULATION_KEY, simulation)
+        database.set_state("ghost_rivals_v1", {"version": 3, "options": options, "pins": {},
+                                             "scopes": {}, "local_choices": {}})
+        document.update(simulation=simulation, recordings=[{
+            "id": row["id"], "player_name": row["player_name"], "frames": row["frames"],
+            "target": row["target"], "clock": row["clock"], "sha256": row["sha256"],
+            "source_attempt_id": row["source_attempt_id"]} for row in opponents])
         atomic_json(profile / "climb-profile.json", document)
         atomic_json(population / "developer-simulation.json", simulation)
     finally:
@@ -360,23 +446,27 @@ def main():
     parser.add_argument("--player-name", default="You")
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--simulate-wild-blue", action="store_true", help="Fresh simulated tester and exact Wild Blue recordings; original history stays untouched.")
+    parser.add_argument("--simulate-fresh", action="store_true", help="Zero practice and four rivals from renamed saved ghosts; original history stays untouched.")
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--port", type=int, default=8070)
     args = parser.parse_args()
     source = _absolute(args.source_root)
     population = args.population or source / "data" / "ghost_population"
     profiles = args.profiles or source / ".iteration" / "ghost-climb" / "profiles"
-    if not (args.seed or args.prepare or args.launch or args.simulate_wild_blue):
-        parser.error("Choose --seed, --prepare, --simulate-wild-blue or --launch.")
-    if args.simulate_wild_blue and (args.seed or args.prepare or args.population or args.profile):
-        parser.error("The Wild Blue simulation creates its own fresh profile and population.")
+    simulation = args.simulate_wild_blue or args.simulate_fresh
+    if not (args.seed or args.prepare or args.launch or simulation):
+        parser.error("Choose --seed, --prepare, --simulate-fresh, --simulate-wild-blue or --launch.")
+    if simulation and (args.seed or args.prepare or args.population or args.profile
+                       or (args.simulate_wild_blue and args.simulate_fresh)):
+        parser.error("Choose one simulation; it creates its own fresh profile and population.")
     try:
         if args.seed:
             print(json.dumps(seed_population(source, population, source_version=args.certify_source_version,
                                             player_name=args.player_name), indent=2))
         profile = args.profile
-        if args.simulate_wild_blue:
-            document = simulate_wild_blue(source, profiles, source_version=args.certify_source_version or "us")
+        if simulation:
+            simulate = simulate_fresh if args.simulate_fresh else simulate_wild_blue
+            document = simulate(source, profiles, source_version=args.certify_source_version or "us")
             profile = Path(document["profile"])
             print(json.dumps(document, indent=2))
         if args.prepare:

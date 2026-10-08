@@ -1527,9 +1527,11 @@ choices, and every [[ghost]] keeps its recorded [[strategy]] label.
 
 A separate practice database with its own player identity, the original
 [[segment]] definitions and calibration, and a local [[ghost]] population.
-The Wild Blue developer simulation starts at the slowest real donor recording
-and credits faster unchanged clips to simulated opponents. Generic profiles can
-start empty. The launcher tests progression without changing original history.
+The default developer simulation starts with zero practice and no
+[[personal best]], with unchanged saved clips credited to `gtest` opponents.
+It presets four [[rival slot]]s across all [[rank]]s. The earlier seeded Wild Blue
+experiment remains available explicitly. The launcher tests progression without
+changing original history.
 
 - **Lives** — `tools/ghost_climb.py` and `src/sm64_events/core/paths.py`
 

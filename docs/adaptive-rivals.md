@@ -85,8 +85,8 @@ authorize every request.
 ## Test a fresh climb
 
 Close the other trainer, then run `run-ghost-climb.bat` from this checkout.
-It builds the native bundle, creates an isolated Wild Blue tester with named
-opponents copied from your real Standard recordings, and opens port 8070.
+It builds the native bundle, creates an isolated tester with no practice history
+or PB, copies usable saved ghosts as `gtest1`, `gtest2`, etc., and opens port 8070.
 Open that address in the
 browser. Install the source build's capture layer through Setup with Project64
 closed if Setup requires installation, then open the practice ROM. Source builds
@@ -94,11 +94,13 @@ can refresh their own prior layer but do not automatically replace another
 installer's layer. A competing recorder makes the launcher refuse to start.
 
 Each ordinary launch creates a new profile with the same definitions and
-calibration, its own player identity, and one starting PB at the slowest playable
-Wild Blue recording. Every opponent retains its original timing and pose bytes.
-The tester can race that starting clip through a marked portable PB reference.
-Your first played/saved PB supersedes the reference. The card displays
-`Developer simulation · Wild Blue`; these records never establish community
+calibration and its own player identity. Sessions, events, attempts and PBs start
+empty. Each usable target/strategy/time is represented once, with an independent
+fictional opponent identity and unchanged timing and pose bytes. Choose
+Shoot into the Wild Blue → Standard in the Target picker to race the eleven
+sample ghosts there. Other practiced targets and strategies also have samples.
+Your own PB slot appears after you play and save a PB. The card displays
+`Developer simulation · Fresh tester`; these records never establish community
 authentication. Your original practice database, recordings and PBs stay intact.
 To repeat an existing profile, use:
 
@@ -106,11 +108,22 @@ To repeat an existing profile, use:
 .\run-ghost-climb.bat --profile "C:\absolute\profile"
 ```
 
-The reported sample set contains eleven distinct playable times, 10"66–11"23.
-Starting at 11"23 selects two rivals inside the default range: 11"06 and 11"03.
-Four is the capacity; available recordings determine the actual count. Saving
-11"03 brings faster Gold ghosts into range. Search `Simulated` to choose a
-specific opponent manually. A fresh double-click restarts the climb independently.
+The reported Wild Blue sample set contains eleven distinct playable times,
+10"66–11"23. This maximum-rival tester starts with four rivals and a fixed range
+covering all ranks, so advanced source ghosts are available before you have a
+PB. Normal production defaults are unchanged. Saving a PB narrows eligibility
+to faster compatible ghosts; fewer than four may remain near the fastest sample.
+Use the existing settings cog to switch to Follow my progress when testing its
+normal one-to-five-subdivision range. Search `gtest` to choose an opponent
+manually. A fresh double-click creates another empty identity; resuming retains
+the tester's new practice history.
+If the empty card's rank banner is folded, expand its attempts chevron to reach
+the existing Strategy/Overall tabs. The ghost roster remains visible while folded.
+
+The earlier seeded Wild Blue experiment remains available explicitly through
+`tools/ghost_climb.py --simulate-wild-blue --launch`. It starts with a portable
+PB at the slowest source recording and named `Simulated` opponents. Existing
+profiles still resume through `--profile`.
 
 The generic empty-profile/retained-population workflow remains available through
 `tools/ghost_climb.py --seed --prepare --launch`. For historical clips lacking

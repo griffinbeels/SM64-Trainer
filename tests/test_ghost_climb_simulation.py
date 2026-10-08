@@ -1,16 +1,22 @@
 """The developer climb copies exact clips into independent tester profiles."""
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from ghost_native_fixture import attempt, frame, producer
 from sm64_events.ghost.clip import STAR_CLOCK, attempt_origin, write_clip
 from sm64_events.ghost.population import LocalPopulation
+from sm64_events.ghost.rivals import Rivals
 from sm64_events.storage.db import Database
 from sm64_events.tracking.projection import Attempt, replay
-from tools.ghost_climb import SIMULATION_KEY, WILD_BLUE, launch_profile, simulate_wild_blue
+from tests.test_ghost_adaptive import Standards, attempt as played_attempt
+from tests.test_ghost_rivals import Native
+from tools import ghost_climb
+from tools.ghost_climb import SIMULATION_KEY, WILD_BLUE, launch_profile, simulate_fresh, simulate_wild_blue
 
 
 def donors(tmp_path, timings=(337, 332, 331, 329, 326, 323, 321, 320)):
@@ -122,9 +128,109 @@ def test_simulated_profile_launch_holds_reservation_without_touching_real_profil
     assert calls == [True] and reservation.closed
 
 
-def test_launcher_defaults_to_the_named_simulation():
+def test_launcher_defaults_to_zero_practice_and_can_resume_existing_profiles():
     launcher = Path(__file__).resolve().parents[1] / "run-ghost-climb.bat"
     text = launcher.read_text(encoding="utf-8")
-    assert "--simulate-wild-blue --launch" in text
+    assert "--simulate-fresh --launch" in text
     assert 'if /i "%~1"=="--profile"' in text and 'ghost_climb.py --launch %*' in text
     assert "--seed --prepare --launch" not in text
+
+
+def test_fresh_simulation_has_no_practice_or_pb_and_preserves_source(tmp_path):
+    source = donors(tmp_path)
+    before = file_hashes(source)
+    document = simulate_fresh(source, tmp_path / "profiles")
+    profile = Path(document["profile"])
+    database = Database(profile / "data" / "tracker.db")
+    provider = LocalPopulation(document["population"])
+    try:
+        assert database.sessions() == [] and database.events() == []
+        assert database.attempts() == [] and database.pbs() == []
+        assert database.get_state("ghost_player_id", None) == document["player_id"]
+        marker = database.get_state(SIMULATION_KEY, None)
+        assert marker == document["simulation"] and marker["zero_practice"]
+        assert "baseline" not in marker
+        rows = provider.metadata_snapshot("star", "2-2", clock="igt", game_version="us")
+        assert {row["player_name"] for row in rows} == {f"gtest{n}" for n in range(1, 9)}
+        assert len({row["player_id"] for row in rows}) == 8
+        assert all(row["player_id"] != document["player_id"] and not row["manual_only"] for row in rows)
+        assert sorted(row["frames"] for row in rows) == [320, 321, 323, 326, 329, 331, 332, 337]
+        for row in rows:
+            copied, _ = provider.resolve(row["ghost"], WILD_BLUE)
+            original = source / "replays" / "native" / f"attempt_{row['source_attempt_id']}.ghost"
+            assert copied.read_bytes() == original.read_bytes()
+            assert row["simulated"] and row["source_valid"] is None and row["source_game_version"] is None
+    finally:
+        database.close()
+        provider.close()
+    after = file_hashes(source)
+    assert all(after.get(name) == digest for name, digest in before.items())
+    assert set(after) - set(before) <= {Path("data/tracker.db-wal"), Path("data/tracker.db-shm")}
+    second = simulate_fresh(source, tmp_path / "profiles")
+    assert second["profile"] != document["profile"] and second["player_id"] != document["player_id"]
+
+
+def test_zero_practice_gets_four_distinct_rivals_and_earned_pb_adds_fifth(tmp_path):
+    source = donors(tmp_path)
+    document = simulate_fresh(source, tmp_path / "profiles")
+    database = Database(Path(document["profile"]) / "data" / "tracker.db")
+    provider, native = LocalPopulation(document["population"]), Native()
+    tracker = SimpleNamespace(db=database, ranks=Standards())
+    rivals = Rivals(tracker, provider, native, lambda: "us")
+    controls = {"hue_degrees": 250}
+    try:
+        rivals.refresh(WILD_BLUE, controls, enabled=True)
+        assert rivals.pb is None and len(rivals.rows) == 4
+        ghosts = native.preparations[-1][1]
+        assert len(ghosts) == len({ghost.origin for ghost in ghosts}) == 4
+        assert len({ghost.hue_degrees for ghost in ghosts}) == 4
+        assert len({provider.resolve(ghost, WILD_BLUE)[0] for ghost in ghosts}) == 4
+        assert rivals.payload()["scope"] == "strategy"
+        # Simulate the first played/saved result only AFTER verifying empty state.
+        origin = attempt()
+        sid = database.insert_session(origin.started_utc)
+        played = played_attempt(1, frames=400, session_id=sid, course_id=2, star_id=2, game_version="us")
+        database.upsert_attempt(played)
+        database.insert_pb(2, 2, "Standard", "igt", 400, played.id, played.ended_utc, game_version="us")
+        rivals.refresh(WILD_BLUE, controls, enabled=True, force=True)
+        ghosts = native.preparations[-1][1]
+        assert len(rivals.rows) == 4 and rivals.pb["attempt_id"] == played.id
+        assert len(ghosts) == 5 and ghosts[0].pb and ghosts[0].origin == "attempt:1"
+    finally:
+        database.close()
+        provider.close()
+
+
+def test_fresh_population_keeps_other_strategies_targets_and_clock(tmp_path, monkeypatch):
+    source = donors(tmp_path)
+    database = Database(source / "data" / "tracker.db")
+    origin = database.attempt(100)
+    for number, star, strategy, rta in ((300, 2, "Other", 900), (301, 3, "Standard", 700)):
+        row = replace(origin, id=number, star_id=star, strat_tag=strategy, rta_frames=rta)
+        database.upsert_attempt(row)
+        path = source / "replays" / "native" / f"attempt_{number}.ghost"
+        manifest = {**write_clip(path, [frame(n, elapsed=n-1, action=0x0c400201+number) for n in (1, 2, 3)],
+            producer(), clock_kind=STAR_CLOCK), "attempt_id": row.id, "session_id": row.session_id,
+            **attempt_origin(row), "target": {"kind": "star", "entity_key": f"2-{star}", "strat": strategy}}
+        path.with_suffix(".json").write_text(json.dumps(manifest), encoding="utf-8")
+    database.close()
+    ranks = SimpleNamespace(clock_for=lambda key: "rta" if key == "star:2:3" else "igt")
+    monkeypatch.setattr(ghost_climb, "_seed_standards", lambda _: ranks)
+    document = simulate_fresh(source, tmp_path / "profiles")
+    provider = LocalPopulation(document["population"])
+    try:
+        other = provider.metadata_snapshot("star", "2-2", clock="igt", game_version="us", strategy="Other")
+        assert len(other) == 1 and other[0]["frames"] == 337
+        rta = provider.metadata_snapshot("star", "2-3", clock="rta", game_version="us")
+        assert len(rta) == 1 and rta[0]["frames"] == 700
+        for row in (*other, *rta):
+            provider.resolve(row["ghost"], row["target"])
+    finally:
+        provider.close()
+
+
+def test_fresh_simulation_refuses_a_partial_roster_before_creating_profile(tmp_path):
+    source = donors(tmp_path, timings=(337, 332, 331))
+    with pytest.raises(ValueError, match="four|4 distinct"):
+        simulate_fresh(source, tmp_path / "profiles")
+    assert not (tmp_path / "profiles").exists()
