@@ -203,13 +203,13 @@ class NativeGhost:
             raise ValueError("ghost roster generation must be a positive uint64")
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
         identity = (target["kind"], target["entity_key"]) if target else None
-        roster_target = (*identity, target.get("strat")) if target else None
+        roster_target = (*identity, target.get("strat"), target.get("scope", "strategy")) if target else None
         with self._control_lock:
             if self._adaptive_generation and generation < self._adaptive_generation:
                 raise ValueError("ghost roster generation must not move backward")
             if source is not self._source or roster_target != self._roster_target:
                 # Revocation precedes potentially slow file validation. An
-                # active race belongs to its exact practice strategy.
+                # active race belongs to its exact practice strategy and scope.
                 self._revoke_roster()
                 self._source, self._sent = source, None
             self._target = identity
@@ -300,7 +300,7 @@ class NativeGhost:
         (`ghost/settings.py::native_controls`); the target adds the rest."""
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
         identity = (target["kind"], target["entity_key"]) if target else None
-        roster_target = (*identity, target.get("strat")) if target else None
+        roster_target = (*identity, target.get("strat"), target.get("scope", "strategy")) if target else None
         with self._control_lock:
             if self._adaptive_generation:
                 if source is not self._source:
@@ -501,8 +501,8 @@ class NativeGhost:
         self._stop()
         self._asset = self._selected_asset = None
         self._asset_hues = {}
-        # Strategy changes share the tracker origin. Returning to a strategy
-        # during that same settled start must not adopt its prepared roster.
+        # Strategy and scope changes share the tracker origin. Returning to
+        # either during that same settled start cannot adopt its prepared roster.
         self._last_full_start, self._start_sequence = last_start, sequence
 
     def stop(self):

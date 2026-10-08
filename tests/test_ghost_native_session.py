@@ -94,10 +94,13 @@ def test_adaptive_preparation_is_ready_before_a_certified_start_and_never_late(t
     native.stop()
 
 
-def test_new_preparation_and_switch_off_preserve_the_certified_start_gate(tmp_path):
+@pytest.mark.parametrize("scope", [None, "strategy", "overall"])
+def test_new_preparation_and_switch_off_preserve_the_certified_start_gate(tmp_path, scope):
     session, source, _ = native_session(tmp_path)
     native = session._native
     target = {"kind": "star", "entity_key": "24-1", "strat": "10 coin"}
+    if scope is not None:
+        target["scope"] = scope
     ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
     controls = settings.native_controls(settings.defaults())
     origin = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
@@ -109,6 +112,8 @@ def test_new_preparation_and_switch_off_preserve_the_certified_start_gate(tmp_pa
     native.note()
     assert source.commands[-1]["activate_generation"] == 1
     selected = native._selected_asset
+    # Missing scope and explicit Strategy have the same native owner.
+    target = {**target, "scope": scope or "strategy"}
     native.prepare(target, [ghost], controls, 2)
     native.reconcile(enabled=True, target=target, controls={**controls, "opacity": .7})
     assert source.commands[-1]["prepare_generation"] == 2 and source.commands[-1]["activate_generation"] == 0
@@ -125,11 +130,15 @@ def test_new_preparation_and_switch_off_preserve_the_certified_start_gate(tmp_pa
 
 
 @pytest.mark.parametrize("reconcile_first", [False, True])
-def test_strategy_swap_revokes_the_active_roster_and_return_waits_for_a_new_start(tmp_path, monkeypatch, reconcile_first):
+@pytest.mark.parametrize(("ownership_field", "other_value"), [
+    ("strat", "Single jump ending"), ("scope", "overall"),
+])
+def test_strategy_or_scope_swap_revokes_the_active_roster_and_return_waits_for_a_new_start(
+        tmp_path, monkeypatch, reconcile_first, ownership_field, other_value):
     session, source, _ = native_session(tmp_path)
     native = session._native
     standard = {"kind": "star", "entity_key": "2-2", "strat": "Standard"}
-    alternate = {**standard, "strat": "Single jump ending"}
+    alternate = {**standard, ownership_field: other_value}
     controls = settings.native_controls(settings.defaults())
     ghosts = [SimpleNamespace(id=index, origin=f"attempt:{index}", frames=30, pb=True)
               for index in range(1, 3)]
@@ -185,6 +194,40 @@ def test_strategy_swap_revokes_the_active_roster_and_return_waits_for_a_new_star
     assert source.commands[-1]["activate_generation"] == 4 and source.commands[-1]["enabled"]
     assert source.commands[-1]["activate_start"] == 3
     assert native._selected_asset[0][1]["clip_id"] == manifests[1]["clip_id"]
+    native.stop()
+
+
+@pytest.mark.parametrize("reconcile_first", [False, True])
+def test_scope_round_trip_with_identical_clips_never_reuses_the_same_start(tmp_path, reconcile_first):
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    target = {"kind": "star", "entity_key": "2-2", "strat": "Standard"}
+    ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
+    controls = settings.native_controls(settings.defaults())
+    origin = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+              "utc": "2026-09-21T08:00:00+00:00", "full_start_token": (1, 9), "full_start_now": True}
+    native._origin_of = lambda kind, entity_key: origin
+    served = source.snapshot_status
+    generations = {"prepared_generation": 1, "active_generation": 1}
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
+    native.prepare(target, [ghost], controls, 1)
+    native.note()
+    assert source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 1
+    for generation, scope in enumerate(("overall", "strategy"), 2):
+        target = {**target, "scope": scope}
+        if reconcile_first:
+            native.reconcile(enabled=True, target=target, controls=controls)
+            assert source.commands[-1] == {"enabled": False}
+        native.prepare(target, [ghost], controls, generation)
+        native.reconcile(enabled=True, target=target, controls=controls)
+        generations["prepared_generation"] = generation
+        native.note()
+        assert not source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 0
+        assert native._selected_asset is None
+    origin = {**origin, "arm_id": 10, "full_start_token": (1, 10)}
+    native.note()
+    assert source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 3
+    assert source.commands[-1]["activate_start"] == 2
     native.stop()
 
 
