@@ -1,8 +1,9 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-REM User-owned launch: a fresh practice profile, preserving the real history.
-REM Optional arguments pass to ghost_climb.py, for example --player-name Griff.
+REM User-owned launch: a new simulated tester races exact Wild Blue recordings.
+REM Actual timings and original practice history stay unchanged.
+REM Resume an existing tester: run-ghost-climb.bat --profile "C:\absolute\profile"
 if not exist ".venv\Scripts\python.exe" (
   echo Run run-test-server.bat once to prepare this checkout's dependencies.
   pause
@@ -14,7 +15,11 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" tools\ghost_climb.py --seed --prepare --launch %*
+if /i "%~1"=="--profile" (
+  ".venv\Scripts\python.exe" tools\ghost_climb.py --launch %*
+) else (
+  ".venv\Scripts\python.exe" tools\ghost_climb.py --simulate-wild-blue --launch %*
+)
 if errorlevel 1 (
   echo Close the other trainer and check the message above before trying again.
   pause
