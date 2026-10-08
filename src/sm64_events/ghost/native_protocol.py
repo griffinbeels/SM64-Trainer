@@ -59,6 +59,8 @@ class Request(C.LittleEndianStructure):
         ("path_enabled", U32), ("path_buttons", U32), ("path_source", U32), ("path_clip", U32),
         ("path_ahead_ms", U32), ("path_width", C.c_float), ("path_opacity", C.c_float),
         ("path_spacing_ms", U32),
+        ("prepare_generation", U64), ("activate_generation", U64), ("activate_start", U64),
+        ("cancel_preparation", U32),
     ]
 
 
@@ -84,7 +86,8 @@ class Status(C.LittleEndianStructure):
         ("playback_state", U32), ("playback_reason", U32),
         ("displayed", U32), ("clips_requested", U32), ("clips_prepared", U32),
         ("clips_visible", U32), ("particles_dropped", U32),
-        ("hook_gl_queries", U32), ("hook_micros", U32), *HOOK_STAGES, ("reserved", C.c_ubyte * 16),
+        ("hook_gl_queries", U32), ("hook_micros", U32), *HOOK_STAGES,
+        ("prepared_generation", U64), ("active_generation", U64),
     ]
 
 

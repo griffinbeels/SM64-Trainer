@@ -50,6 +50,107 @@ def native_session(tmp_path, *, asset=True):
     return session, source, tracker
 
 
+def test_adaptive_preparation_is_ready_before_a_certified_start_and_never_late(tmp_path, monkeypatch):
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    target = {"kind": "star", "entity_key": "24-1", "strat": "10 coin"}
+    ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True, hue_degrees=48)
+    controls = settings.native_controls(settings.defaults())
+    origin = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+              "utc": "2026-09-21T08:00:00+00:00", "full_start_token": ("star", 1, 9),
+              "full_start_now": True}
+    native._origin_of = lambda *_: origin
+    served = source.snapshot_status
+    generations = {"prepared_generation": 0, "active_generation": 0}
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
+    answer = native.prepare(target, [ghost], controls, 7)
+    assert answer["available"] and answer["generation"] == 7
+    prepared = source.commands[-1]
+    assert not prepared["enabled"] and "origin" not in prepared
+    assert prepared["prepare_generation"] == 7 and prepared["activate_generation"] == 0
+    assert prepared["clips"][0]["hue_degrees"] == 48
+    native.reconcile(enabled=True, target=target, controls={**controls, "opacity": .7})
+    assert source.commands[-1]["prepare_generation"] == 7
+    assert source.commands[-1]["opacity"] == .7
+    # The poll entry point must not consult a clip, a template or the disk.
+    monkeypatch.setattr(native, "resolve", lambda *_: pytest.fail("poll resolved assets"))
+    monkeypatch.setattr(native, "_fingerprint", lambda *_: pytest.fail("poll inspected files"))
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 0
+    generations["prepared_generation"] = 7
+    native.note()  # readiness arrived after this start was already consumed
+    assert source.commands[-1]["activate_generation"] == 0
+    # A load/rebase is never a start, even with a different clock and arm.
+    origin = {**origin, "frame": 120, "arm_id": 10, "full_start_now": False,
+              "full_start_token": ("star", 1, 10)}
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 0
+    origin = {**origin, "arm_id": 11, "full_start_now": True, "full_start_token": ("star", 1, 11)}
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 7
+    assert source.commands[-1]["activate_start"] == 2
+    assert native.state()["prepared_generation"] == 7
+    assert native.state()["active_generation"] == 0  # native adoption is its own acknowledgement
+    native.stop()
+
+
+def test_new_preparation_and_switch_off_preserve_the_certified_start_gate(tmp_path):
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    target = {"kind": "star", "entity_key": "24-1", "strat": "10 coin"}
+    ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
+    controls = settings.native_controls(settings.defaults())
+    origin = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+              "utc": "2026-09-21T08:00:00+00:00", "full_start_token": (1, 9), "full_start_now": True}
+    native._origin_of = lambda *_: origin
+    served = source.snapshot_status
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), "prepared_generation": 1}
+    native.prepare(target, [ghost], controls, 1)
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 1
+    native.prepare(target, [ghost], controls, 2)
+    native.reconcile(enabled=True, target=target, controls=controls)
+    assert source.commands[-1]["prepare_generation"] == 2 and source.commands[-1]["activate_generation"] == 0
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), "prepared_generation": 2}
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 0
+    native.reconcile(enabled=False, target=target, controls=controls)
+    assert source.commands[-1] == {"enabled": False}
+    native.reconcile(enabled=True, target=target, controls=controls)
+    assert source.commands[-1]["prepare_generation"] == 2 and source.commands[-1]["activate_generation"] == 0
+    native.stop()
+
+
+def test_cancel_preparation_invalidates_obsolete_readiness_but_retains_the_active_race(tmp_path):
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    target = {"kind": "star", "entity_key": "24-1", "strat": "10 coin"}
+    ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
+    controls = settings.native_controls(settings.defaults())
+    origin = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+              "utc": "2026-09-21T08:00:00+00:00", "full_start_token": (1, 9), "full_start_now": True}
+    native._origin_of = lambda *_: origin
+    served = source.snapshot_status
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), "prepared_generation": 1, "active_generation": 1}
+    native.prepare(target, [ghost], controls, 1)
+    native.note()
+    native.prepare(target, [ghost], controls, 2)
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), "prepared_generation": 2, "active_generation": 1}
+    native.cancel_preparation()
+    cancel = source.commands[-1]
+    assert cancel["enabled"] and cancel["cancel_preparation"]
+    assert cancel["prepare_generation"] == 2 and cancel["activate_generation"] == 0
+    assert cancel["clips"] == []
+    assert native.state()["prepared_generation"] == 0 and native.state()["active_generation"] == 1
+    origin = {**origin, "full_start_token": (1, 10), "arm_id": 10}
+    native.note()
+    assert source.commands[-1]["cancel_preparation"] and source.commands[-1]["activate_generation"] == 0
+    native.prepare(target, [ghost], controls, 3)
+    assert "cancel_preparation" not in source.commands[-1]
+    assert source.commands[-1]["prepare_generation"] == 3 and source.commands[-1]["activate_generation"] == 0
+    native.stop()
+
+
 def test_native_switch_uses_saved_poses_and_preserves_controls(tmp_path):
     session, source, _ = native_session(tmp_path)
 

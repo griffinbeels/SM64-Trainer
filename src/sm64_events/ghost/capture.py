@@ -353,6 +353,9 @@ class NativeCapture:
                              playback_state=status.playback_state,
                              playback_reason=status.playback_reason,
                              displayed=bool(status.displayed),
+                             prepared_generation=status.prepared_generation,
+                             active_generation=status.active_generation,
+                             clips_prepared=status.clips_prepared,
                              refused_batches=self._refused, refused_reason=self._refused_reason,
                              hook_gl_queries=status.hook_gl_queries, hook_micros=status.hook_micros,
                              hook_cost=self._hook_summary)

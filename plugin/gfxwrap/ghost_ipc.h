@@ -5,12 +5,12 @@
 #include "ghost_origin.h"
 #include "ghost_tuning.h"
 #include <stddef.h>
-#define GIPC_VERSION 13u
-#define GIPC_MAGIC "SM64GI13"
+#define GIPC_VERSION 14u
+#define GIPC_MAGIC "SM64GI14"
 #define GIPC_SLOTS 512u
 #define GIPC_PATH_CHARS 520u
 #define GIPC_LEASE_MS 3000u
-#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v13_"
+#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v14_"
 #define GIPC_GHOSTS GP_GHOSTS
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
@@ -71,6 +71,11 @@ typedef struct gipc_request {
     uint32_t path_enabled, path_buttons, path_source, path_clip, path_ahead_ms;
     float path_width, path_opacity;
     uint32_t path_spacing_ms;
+    /* Adaptive clips[] is prepared independently from the displayed set.
+     * Activation names a readiness acknowledgment observed BEFORE a certified
+     * start. An unready activation is consumed, never applied after later IO. */
+    uint64_t prepare_generation, activate_generation, activate_start;
+    uint32_t cancel_preparation;
 } gipc_request;
 typedef struct gipc_status {
     char magic[8];
@@ -97,7 +102,7 @@ typedef struct gipc_status {
     uint32_t hook_state_micros, hook_copy_micros, hook_draw_micros, hook_draw_max_micros, hook_restore_micros;
     uint32_t hook_hud_micros, hook_hud_draws, hook_layer_passes;
     uint32_t hook_query_micros, hook_error_reads, hook_ghosts;
-    uint8_t reserved[16];
+    uint64_t prepared_generation, active_generation;
 } gipc_status;
 typedef struct gipc_page {
     gipc_status status;
@@ -109,7 +114,7 @@ typedef struct gipc_page {
 #ifdef __cplusplus
 static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
 static_assert(sizeof(gipc_clip) == 1160, "ghost clip entry bytes");
-static_assert(sizeof(gipc_request) == 20052, "ghost request bytes");
+static_assert(sizeof(gipc_request) == 20080, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
 static_assert(offsetof(gipc_page, records) == 20480, "ghost ring offset");
 namespace ghost_ipc {

@@ -8,6 +8,7 @@
 #include "ghost_path.h"
 #include <windows.h>
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cwchar>
@@ -61,6 +62,14 @@ bool same_rom(const gipc_request &a, const gipc_request &b) {
     return a.rom_generation == b.rom_generation
         && !std::memcmp(a.rom_path, b.rom_path, sizeof(a.rom_path));
 }
+bool same_assets(const gipc_request &a, const gipc_request &b) {
+    if (a.clip_count != b.clip_count) return false;
+    for (uint32_t i = 0; i < a.clip_count; ++i)
+        if (std::memcmp(a.clips[i].clip_id, b.clips[i].clip_id, 16)
+                || std::memcmp(a.clips[i].clip_sha256, b.clips[i].clip_sha256, 32)
+                || std::memcmp(a.clips[i].clip_path, b.clips[i].clip_path, sizeof(a.clips[i].clip_path))) return false;
+    return true;
+}
 bool same_command(gipc_request a, gipc_request b) {
     a.heartbeat = b.heartbeat = 0;
     return !std::memcmp(&a, &b, sizeof(a));
@@ -73,20 +82,27 @@ bool same_controls(gipc_request a, gipc_request b) {
     std::memset(a.clips, 0, sizeof(a.clips)); std::memset(b.clips, 0, sizeof(b.clips));
     // Which ghost is the fastest belongs to the set, like its clips.
     a.path_clip = b.path_clip = 0;
+    a.prepare_generation = b.prepare_generation = 0;
+    a.activate_generation = b.activate_generation = 0;
+    a.activate_start = b.activate_start = 0;
+    a.cancel_preparation = b.cancel_preparation = 0;
     return !std::memcmp(&a, &b, sizeof(a));
 }
 bool valid_set(const gipc_request &r) {
-    if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count)
+    if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count && !r.prepare_generation)
+            || (r.activate_generation && r.activate_generation != r.prepare_generation)
+            || (!!r.activate_generation != !!r.activate_start)
+            || r.cancel_preparation > 1 || (r.cancel_preparation && (!r.prepare_generation || r.activate_generation))
             || r.shadow_enabled > 1 || r.occlusion_fade > 1 || r.sound_fade > 1
             || !(r.volume >= 0 && r.volume <= 1) || r.names_enabled>1 || r.inputs_enabled>1
             || r.input_mode>GP_INPUT_VALUES || r.name_background>GP_NAME_WHITE
             || !(r.name_background_opacity >= 0 && r.name_background_opacity <= 1)
             || r.hud_inputs_enabled>1 || r.record_ghosts>1
-            || !ghost_path::valid_request(r, r.play_enabled != 0, r.clip_count)) return false;
+            || !ghost_path::valid_request(r, r.play_enabled && r.clip_count, r.clip_count)) return false;
     for (uint32_t i = 0; i < r.clip_count; ++i) {
         const auto &clip = r.clips[i];
         if (clip.hue_degrees > 359 || clip.reserved || !ghost_annotation::valid_label(clip.label)) return false;
-        if (!r.play_enabled) continue;
+        if (!r.play_enabled && !r.prepare_generation) continue;
         uint8_t any = 0; for (auto byte : clip.clip_id) any |= byte;
         if (!any) return false;
         for (uint32_t j = 0; j < i; ++j)
@@ -157,6 +173,11 @@ struct Session {
     std::vector<Asset> assets;
     gipc_request applied_request{};
     gp_request applied_command{};
+    gipc_request staged_request{}, active_roster{};
+    uint64_t prepared_generation = 0, active_generation = 0, activation_start = 0;
+    uint64_t activation_generation = 0;
+    uint64_t active_native_revision = 0;
+    uint32_t staged_reason = GIPC_OK;
     ghost_origin::Ledger origins;
     go_marker resolved_marker{};
     go_origin resolved_origin{};
@@ -179,6 +200,7 @@ struct Session {
         return nullptr;
     }
     void forget_prepared() {
+        prepared_generation = 0;
         bool reread = false;
         for (auto &asset : assets) { asset.prepared = false; reread |= asset.bytes.empty(); }
         if (reread) attempted = 0; // this revision loads again, from disk
@@ -218,6 +240,29 @@ struct Session {
         for (uint32_t i = 0; i < r.clip_count; ++i) { auto *asset = find(r.clips[i]); count += asset && asset->prepared; }
         return count;
     }
+    uint64_t retained_bytes() const {
+        uint64_t bytes = 0;
+        for (const auto &asset : assets) bytes += asset.bytes.capacity();
+        return bytes;
+    }
+    int prepare_assets(const gipc_request &r) {
+        for (uint32_t i = 0; i < r.clip_count; ++i) {
+            auto *asset = find(r.clips[i]);
+            if (!asset || asset->bytes.empty()) { if (!asset || !asset->prepared) return GP_BUSY; continue; }
+            if (asset->prepared) continue;
+            if (r.prepare_generation) {
+                gp_status status{};
+                if (play->status(&status, sizeof(status)) != GP_OK) return GP_BUSY;
+                const uint64_t copy = uint64_t(asset->header.record_count) * (sizeof(gclip_frame) + sizeof(uint32_t));
+                if (status.resident_clip_bytes + retained_bytes() + copy > GP_CLIP_BUDGET) return GP_BUDGET;
+            }
+            const int result = play->prepare_clip(&asset->header, asset->frames());
+            if (result != GP_OK) return result;
+            asset->prepared = true;
+            std::vector<uint8_t>().swap(asset->bytes);
+        }
+        return GP_OK;
+    }
     bool needs_load(const gipc_request &r) {
         if (!rom_ready || !same_rom(r, loaded)) return true;
         for (uint32_t i = 0; i < r.clip_count; ++i) {
@@ -234,6 +279,14 @@ struct Session {
             for (uint32_t k = 0; k < r.clip_count && !listed; ++k)
                 listed = !std::memcmp(assets[i].id, r.clips[k].clip_id, 16)
                     && !std::memcmp(assets[i].sha256, r.clips[k].clip_sha256, 32);
+            // A prepared future roster must coexist with the whole active
+            // roster until a certified start explicitly adopts it.
+            for (uint32_t k = 0; staged_request.prepare_generation && k < active_roster.clip_count && !listed; ++k)
+                listed = !std::memcmp(assets[i].id, active_roster.clips[k].clip_id, 16)
+                    && !std::memcmp(assets[i].sha256, active_roster.clips[k].clip_sha256, 32);
+            for (uint32_t k = 0; staged_request.prepare_generation && k < staged_request.clip_count && !listed; ++k)
+                listed = !std::memcmp(assets[i].id, staged_request.clips[k].clip_id, 16)
+                    && !std::memcmp(assets[i].sha256, staged_request.clips[k].clip_sha256, 32);
             if (listed) { ++i; continue; }
             play->release_clip(assets[i].id);
             assets.erase(assets.begin() + static_cast<ptrdiff_t>(i));
@@ -333,12 +386,16 @@ struct Session {
         forget_prepared();
         origins.clear();
         have_origin = false;
+        prepared_generation = active_generation = activation_start = active_native_revision = 0;
+        activation_generation = 0;
+        staged_request = active_roster = {};
         reason = why; state = why ? GIPC_REFUSED : GIPC_PASSIVE;
         if (why == GIPC_NO_ROM) {
             clear_rom();
         }
     }
-    bool demand(const gipc_request &r, uint32_t generation) {
+    bool demand(const gipc_request &incoming, uint32_t generation) {
+        auto r = incoming;
         const uint32_t now = GetTickCount(), current_rom = opened.load(std::memory_order_acquire);
         const bool identity = r.token && r.revision && r.owner_pid && r.generation == generation;
         const bool changed = !same_owner(r, previous);
@@ -358,7 +415,7 @@ struct Session {
                 || r.star_action_count > 8 || r.tint_enabled > 1 || !valid_set(r)
                 || r.proximity_enabled > 1 || !std::isfinite(r.proximity_distance)
                 || r.proximity_distance < 0 || r.proximity_distance > GP_PROXIMITY_MAX
-                || (r.play_enabled && !r.model_id))) {
+                || ((r.play_enabled || r.prepare_generation) && !r.model_id))) {
             revoke(GIPC_PROTOCOL); previous = r; return false;
         }
         const go_marker empty_origin{};
@@ -405,6 +462,59 @@ struct Session {
         if (awaiting_configuration && stats.configuration != prior_configuration) {
             awaiting_configuration = false; configuration = stats.configuration;
         }
+        if (r.prepare_generation) {
+            if (r.cancel_preparation) {
+                prepared_generation = 0; staged_request = {}; staged_reason = GIPC_OK;
+            } else {
+                const bool ready_before = prepared_generation == r.prepare_generation;
+                const bool activate = r.activate_generation
+                    && (r.prepare_generation != activation_generation || r.activate_start > activation_start);
+                if (activate) { activation_start = r.activate_start; activation_generation = r.prepare_generation; }
+                if (staged_request.prepare_generation && r.prepare_generation < staged_request.prepare_generation) {
+                    reason = GIPC_PROTOCOL; state = GIPC_REFUSED; previous = incoming; return false;
+                }
+                if (r.prepare_generation == staged_request.prepare_generation && !same_assets(r, staged_request)) {
+                    reason = GIPC_PROTOCOL; state = GIPC_REFUSED; previous = incoming; return false;
+                }
+                if (r.prepare_generation != staged_request.prepare_generation) { prepared_generation = 0; staged_reason = GIPC_OK; }
+                staged_request = r;
+                if (active_generation == r.prepare_generation) active_roster = r; // appearance controls, same immutable assets
+                release_unlisted(r);
+                if (r.clip_count && needs_load(r) && attempted != r.revision) {
+                    attempted = r.revision; loaded = r;
+                    state = applied ? GIPC_READY : GIPC_PREPARING;
+                    previous = incoming;
+                    return true;
+                }
+                if (configuration && (!r.clip_count || !needs_load(r))) {
+                    const int model = r.clip_count ? model_ready(r) : GP_OK;
+                    const int clips = prepare_assets(r);
+                    if (clips == GP_BUDGET) staged_reason = GIPC_BUDGET;
+                    else if (clips < 0 && clips != GP_BUSY) staged_reason = GIPC_CLIP;
+                    else if (model < 0 && model != GP_BUSY) staged_reason = GIPC_MODEL;
+                    if (model == GP_OK && clips == GP_OK && prepared_count(r) == r.clip_count) {
+                        prepared_generation = r.prepare_generation; staged_reason = GIPC_OK;
+                    } else prepared_generation = 0;
+                }
+                if (activate) {
+                    // Readiness must predate this activation command. Finishing
+                    // IO after a missed start never activates a roster mid-run.
+                    if (ready_before && r.activate_generation == prepared_generation) {
+                        active_generation = prepared_generation;
+                        active_roster = r;
+                        active_native_revision = 0;
+                    }
+                }
+            }
+            r.clip_count = active_roster.clip_count;
+            std::memcpy(r.clips, active_roster.clips, sizeof(r.clips));
+            r.path_clip = active_roster.path_clip;
+            r.play_enabled = r.play_enabled && active_generation && r.clip_count;
+        } else {
+            staged_request = active_roster = {};
+            prepared_generation = active_generation = activation_start = active_native_revision = 0;
+            activation_generation = 0;
+        }
         if(r.play_enabled) {
             if(!suspend_applied(r)) {withdraw();state=GIPC_REFUSED;reason=GIPC_PROTOCOL;previous=r;return false;}
             release_unlisted(r);
@@ -435,7 +545,8 @@ struct Session {
             if (applied) play->withdraw();
             // Nothing listed to draw: its clips' storage is released, not kept
             // for a later switch-on (which reads the files again).
-            release_all();
+            if (!incoming.prepare_generation) release_all();
+            else release_unlisted(r);
             recovery.clear();have_origin=false;
             applied = 0;
         } else if (!needs_load(r) && configuration) {
@@ -443,15 +554,7 @@ struct Session {
             // applied, marked suspended: the renderer hides it, and a state
             // load it resolves brings it back on the load frame.
             const int model = model_ready(r);
-            int clip = GP_OK;
-            for (uint32_t i = 0; i < r.clip_count; ++i) {
-                auto *asset = find(r.clips[i]);
-                if (asset->prepared) continue;
-                const int result = play->prepare_clip(&asset->header, asset->frames());
-                asset->prepared = result == GP_OK;
-                if (asset->prepared) std::vector<uint8_t>().swap(asset->bytes); // playback holds its copy
-                if (result != GP_OK && (clip == GP_OK || result == GP_INVALID)) clip = result;
-            }
+            const int clip = prepare_assets(r);
             // The old command may keep drawing only while it means the same thing.
             if ((model != GP_OK || clip != GP_OK) && applied != r.revision) {
                 if (!keep_applied(r)) withdraw();
@@ -515,6 +618,7 @@ struct Session {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
                     } else {
                         applied = r.revision; applied_request = r; applied_command=command;state = GIPC_READY;
+                        if (active_generation && !active_native_revision) active_native_revision = command.revision;
                     }
                 } else state = GIPC_READY;
             } else {
@@ -527,7 +631,11 @@ struct Session {
                     failed = r.revision;
             }
         }
-        previous = r; return false;
+        if (incoming.prepare_generation && !incoming.cancel_preparation && prepared_generation != incoming.prepare_generation) {
+            reason = staged_reason;
+            if (!applied) state = staged_reason ? GIPC_REFUSED : GIPC_PREPARING;
+        }
+        previous = incoming; return false;
     }
     void load_assets() {
         // A retained command may still draw unchanged clips during this IO.
@@ -538,15 +646,45 @@ struct Session {
         for (uint32_t i = 0; i < loaded.clip_count; ++i) {
             const auto &clip = loaded.clips[i];
             Asset *known = find(clip);
-            if (known && (known->prepared || !known->bytes.empty())) continue;
+            if (known && (known->prepared || !known->bytes.empty())) {
+                if (loaded.prepare_generation && !known->prepared && prepare_assets(loaded) == GP_BUSY) {
+                    attempted = 0; return;
+                }
+                continue;
+            }
             Asset asset;
             std::memcpy(asset.id, clip.clip_id, 16); std::memcpy(asset.sha256, clip.clip_sha256, 32);
             // Memory running out while reading or upgrading is room, not a bad file.
             bool memory = false;
+            const uint32_t file_maximum = sizeof(gclip_header) + GCLIP_MAX_RECORDS * sizeof(gclip_frame);
+            uint32_t maximum = file_maximum;
+            uint64_t resident = 0;
+            if (loaded.prepare_generation) {
+                gp_status status{};
+                if (play->status(&status, sizeof(status)) != GP_OK) { attempted = 0; return; }
+                resident = status.resident_clip_bytes;
+                const uint64_t held = resident + retained_bytes();
+                maximum = held < GP_CLIP_BUDGET ? static_cast<uint32_t>((std::min)(uint64_t(file_maximum), GP_CLIP_BUDGET - held)) : 0;
+            }
             if (!ghost_assets::read(clip.clip_path, GIPC_PATH_CHARS,
-                    sizeof(gclip_header) + GCLIP_MAX_RECORDS * sizeof(gclip_frame), asset.bytes, &memory)
-                    || !ghost_assets::clip(asset.bytes, clip.clip_sha256, clip.clip_id, asset.header, &memory)) {
-                failed = loaded.revision; reason = memory ? GIPC_BUDGET : GIPC_FILE; state = GIPC_REFUSED; return;
+                    maximum, asset.bytes, &memory)) {
+                failed = loaded.revision; reason = memory || maximum < file_maximum ? GIPC_BUDGET : GIPC_FILE;
+                if (loaded.prepare_generation) staged_reason = reason;
+                state = GIPC_REFUSED; return;
+            }
+            if (loaded.prepare_generation && asset.bytes.size() >= sizeof(gclip_header)) {
+                gclip_header header{}; std::memcpy(&header, asset.bytes.data(), sizeof(header));
+                const bool upgrades = header.version >= 4 && header.version < GCLIP_VERSION
+                    && header.record_count <= GCLIP_MAX_RECORDS && header.record_bytes < sizeof(gclip_frame);
+                const uint64_t scratch = upgrades ? sizeof(header) + uint64_t(header.record_count) * sizeof(gclip_frame) : 0;
+                if (resident + retained_bytes() + asset.bytes.capacity() + scratch > GP_CLIP_BUDGET) {
+                    failed = loaded.revision; reason = staged_reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
+                }
+            }
+            if (!ghost_assets::clip(asset.bytes, clip.clip_sha256, clip.clip_id, asset.header, &memory)) {
+                failed = loaded.revision; reason = memory ? GIPC_BUDGET : GIPC_FILE;
+                if (loaded.prepare_generation) staged_reason = reason;
+                state = GIPC_REFUSED; return;
             }
             // Retained files are bounded like their resident playback copies.
             total += asset.bytes.size();
@@ -554,12 +692,21 @@ struct Session {
                 failed = loaded.revision; reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
             }
             // A copy playback lost is read back into its own entry.
-            if (known) { known->header = asset.header; known->bytes.swap(asset.bytes); continue; }
+            if (known) { known->header = asset.header; known->bytes.swap(asset.bytes); }
             // Out of memory in PJ64's 2 GiB is a refusal of this set, never a
             // throw into the worker's last-resort handler (which revokes all).
-            try { assets.push_back(std::move(asset)); }
+            try { if (!known) assets.push_back(std::move(asset)); }
             catch (const std::bad_alloc &) {
                 failed = loaded.revision; reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
+            }
+            if (loaded.prepare_generation) {
+                const int prepared = prepare_assets(loaded);
+                if (prepared == GP_BUSY || prepared == GP_DEFERRED) { attempted = 0; return; }
+                if (prepared != GP_OK) {
+                    failed = loaded.revision; reason = staged_reason = prepared == GP_BUDGET ? GIPC_BUDGET : GIPC_CLIP;
+                    state = GIPC_REFUSED; return;
+                }
+                total = retained_bytes();
             }
         }
         restore_cache(loaded);
@@ -600,16 +747,21 @@ struct Session {
         s.rom_generation = opened.load(std::memory_order_acquire); s.rom_open = s.rom_generation != 0;
         s.configuration = configuration; s.epoch = stats.epoch;
         s.particles_dropped = stats.particles_dropped;
-        static_assert(sizeof(gs_hook_cost) == offsetof(gipc_status, reserved) - offsetof(gipc_status, hook_gl_queries),
+        static_assert(sizeof(gs_hook_cost) == offsetof(gipc_status, prepared_generation) - offsetof(gipc_status, hook_gl_queries),
                       "the status page carries the whole hook cost, in order");
         std::memcpy(&s.hook_gl_queries, &stats.hooks, sizeof(stats.hooks));
         s.state = state; s.reason = reason; s.ack_token = r.token; s.ack_revision = r.revision;
         gp_status playback{};
         s.displayed = 0;
-        s.clips_requested = r.play_enabled ? r.clip_count : 0;
-        s.clips_prepared = r.play_enabled ? prepared_count(r) : 0;
+        s.clips_requested = r.play_enabled || r.prepare_generation ? r.clip_count : 0;
+        s.clips_prepared = r.play_enabled || r.prepare_generation ? prepared_count(r) : 0;
+        s.prepared_generation = prepared_generation;
+        s.active_generation = active_generation && !active_roster.clip_count ? active_generation : 0;
         s.clips_visible = 0;
         if (play->status(&playback, sizeof(playback)) == GP_OK) {
+            if (active_generation && active_native_revision && playback.model_state == GP_MODEL_RENDER_OWNED && playback.owner_token == r.token
+                    && playback.revision >= active_native_revision && playback.clips_active == active_roster.clip_count)
+                s.active_generation = active_generation;
             s.playback_state = playback.model_state; s.playback_reason = playback.decision;
             s.displayed = state == GIPC_READY && applied == r.revision
                 && playback.owner_token == r.token && playback.revision != 0
@@ -727,6 +879,7 @@ DWORD WINAPI worker(void *argument) {
                             view.page->status.state = GIPC_CLOSED;
                             view.page->status.rom_open = 0;
                             view.page->status.rom_generation = 0;
+                            view.page->status.prepared_generation = view.page->status.active_generation = 0;
                             break;
                         }
                     }
