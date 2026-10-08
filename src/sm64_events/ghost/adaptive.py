@@ -1,0 +1,275 @@
+"""Pure selection of certified rivals against the current Overall rank.
+
+The population provider owns admission, clip validation and storage. This
+module consumes bounded metadata snapshots; it never opens clips or fetches
+them. Manual choices occupy stable slots independently of automatic ranges.
+"""
+from __future__ import annotations
+
+from contextlib import nullcontext
+from dataclasses import dataclass
+from itertools import islice
+
+from sm64_events.ghost.native_session import ghost_hue
+from sm64_events.ranks import classify, curves, scoring
+from sm64_events.ranks.calibration import resolve_curve
+from sm64_events.ranks.standards import entity_key
+
+MAX_RIVALS = 4
+MAX_CANDIDATES = 16384
+MAX_AHEAD = 10
+MAX_STEP = scoring.progression_key(classify.RANK_NAMES[0], scoring.DIVISION_NUMERALS[-1])
+PB_HUE_DEGREES = 250
+DEFAULT_OPTIONS = {
+    "mode": "adaptive", "count": MAX_RIVALS, "include_pb": True,
+    "strategy_only": False, "min_ahead": 1, "max_ahead": 5,
+    "min_step": 0, "max_step": MAX_STEP,
+}
+
+
+@dataclass(frozen=True)
+class PracticeIdentity:
+    kind: str
+    entity_key: str
+    clock: str
+    game_version: str
+    strategy: str | None
+    signature: str | None = None
+
+
+def rank_entity_key(identity: PracticeIdentity) -> str:
+    """Adapt the ghost key through the rank store's canonical key builder."""
+    if identity.kind == "segment":
+        return entity_key(None, None, int(identity.entity_key))
+    if identity.kind == "star":
+        course, star = map(int, identity.entity_key.split("-"))
+        return entity_key(course, star)
+    raise ValueError("A rival belongs to a star or segment.")
+
+
+def _read_context(ranks):
+    return ranks.read_context() if hasattr(ranks, "read_context") else nullcontext()
+
+
+def _progress(curve, frames):
+    result = curves.progress_for_time(curve, classify.display_cs(frames))
+    if result is None:
+        return None
+    return {"tier": result["tier"], "division": result["division"],
+            "step": scoring.progression_key(result["tier"], result["division"])}
+
+
+def rank_frames(ranks, identity: PracticeIdentity, frames: int) -> dict | None:
+    """Grade one saved basis using the same complete curve as population rows."""
+    if ranks is None or type(frames) is not int or frames <= 0 or identity.game_version not in ("us", "jp"):
+        return None
+    with _read_context(ranks):
+        key = rank_entity_key(identity)
+        if ranks.clock_for(key) != identity.clock:
+            return None
+        return _progress(resolve_curve(ranks, key, identity.game_version), frames)
+
+
+def checked_options(value: dict) -> dict:
+    """Validate the complete settings draft without changing its caller."""
+    if not isinstance(value, dict) or set(value) - DEFAULT_OPTIONS.keys():
+        raise ValueError("Choose valid rival settings.")
+    result = DEFAULT_OPTIONS | value
+    if result["mode"] not in ("adaptive", "fixed"):
+        raise ValueError("Choose how the rival range follows your practice.")
+    for key in ("include_pb", "strategy_only"):
+        if type(result[key]) is not bool:
+            raise ValueError("Choose valid rival settings.")
+    limits = {"count": (1, MAX_RIVALS), "min_ahead": (0, MAX_AHEAD), "max_ahead": (0, MAX_AHEAD),
+              "min_step": (0, MAX_STEP), "max_step": (0, MAX_STEP)}
+    for key, (low, high) in limits.items():
+        if type(result[key]) is not int or not low <= result[key] <= high:
+            raise ValueError("Choose a rival range within the available ranks.")
+    if result["min_ahead"] > result["max_ahead"] or result["min_step"] > result["max_step"]:
+        raise ValueError("Minimum rank cannot exceed maximum rank.")
+    return result
+
+
+def _bounded(rows):
+    result = tuple(islice(rows, MAX_CANDIDATES + 1))
+    if len(result) > MAX_CANDIDATES:
+        raise ValueError("This rival metadata snapshot exceeds its limit.")
+    return result
+
+
+def _compatible(row, identity):
+    return (isinstance(row, dict) and row.get("certified") is True and row.get("valid") is True
+            and row.get("full_start") is True
+            and (row.get("kind"), row.get("entity_key"), row.get("clock"), row.get("game_version"))
+            == (identity.kind, identity.entity_key, identity.clock, identity.game_version)
+            and (identity.kind != "segment" or identity.signature is not None
+                 and row.get("signature") == identity.signature)
+            and type(row.get("frames")) is int and 0 < row["frames"] <= 30 * 60 * 60 * 24
+            and all(isinstance(row.get(key), str) and row[key].strip()
+                    for key in ("id", "player_id", "player_name", "strategy"))
+            and row.get("ghost") is not None)
+
+
+def rank_recordings(rows, ranks, identity: PracticeIdentity) -> tuple[dict, ...]:
+    """Regrade certified metadata; ignore claimed ranks and uncertified imports."""
+    rows = _bounded(rows)
+    if ranks is None or identity.game_version not in ("us", "jp"):
+        return ()
+    with _read_context(ranks):
+        key = rank_entity_key(identity)
+        if ranks.clock_for(key) != identity.clock:
+            return ()
+        curve = resolve_curve(ranks, key, identity.game_version)
+        revision = getattr(ranks, "calibration_revision", None)
+        result = {}
+        for row in rows:
+            if not _compatible(row, identity):
+                continue
+            progress = _progress(curve, row["frames"])
+            if progress is not None:
+                result.setdefault(row["id"], {**row, **progress, "calibration_revision": revision,
+                                              "current_strategy": identity.strategy})
+    return tuple(result[key] for key in sorted(result))
+
+
+def _checked_pins(pins):
+    if not isinstance(pins, dict) or any(key not in {str(slot) for slot in range(MAX_RIVALS)}
+                                        or not isinstance(value, str) or not value for key, value in pins.items()):
+        raise ValueError("Choose a rival for an available slot.")
+    if len(set(pins.values())) != len(pins):
+        raise ValueError("Each rival can occupy one chosen slot.")
+    return pins
+
+
+def _ranked_row(row):
+    return (isinstance(row, dict) and (row.get("manual_only") is True
+            or row.get("certified") is True and row.get("valid") is True and row.get("full_start") is True)
+            and isinstance(row.get("id"), str)
+            and type(row.get("frames")) is int and row["frames"] > 0
+            and type(row.get("step")) is int and 0 <= row["step"] <= MAX_STEP
+            and row.get("ghost") is not None)
+
+
+def _range(pb, options):
+    if options["mode"] == "fixed":
+        return options["min_step"], options["max_step"]
+    if pb is None:
+        return 0, scoring.DIVISIONS_PER_TIER - 1
+    if not _valid_basis(pb):
+        raise ValueError("The rival range needs a valid saved personal best.")
+    return (min(MAX_STEP, pb["step"] + max(1, options["min_ahead"])),
+            min(MAX_STEP, pb["step"] + max(1, options["max_ahead"])))
+
+
+def _valid_basis(pb):
+    return (isinstance(pb, dict) and type(pb.get("step")) is int and 0 <= pb["step"] <= MAX_STEP
+            and type(pb.get("frames")) is int and pb["frames"] > 0)
+
+
+def _same_as_pb(row, pb):
+    if pb is None:
+        return False
+    if pb.get("id") == row["id"]:
+        return True
+    origin = getattr(pb.get("ghost"), "origin", None)
+    return origin is not None and origin == getattr(row.get("ghost"), "origin", None)
+
+
+def _placed(row, slot, pinned):
+    return {**row, "slot": slot, "pinned": pinned,
+            "hue_degrees": ghost_hue(PB_HUE_DEGREES, slot + 1)}
+
+
+def _missing_pin(identity, slot):
+    return _placed({"id": identity, "player_name": "Chosen rival", "strategy": None,
+                    "frames": None, "tier": None, "division": None, "step": None,
+                    "ghost": None, "available": False,
+                    "reason_text": "This chosen rival is unavailable. Reset or replace it."}, slot, True)
+
+
+def _eligible_auto(row, pb, options, low, high, strategy):
+    return (row.get("manual_only") is not True and low <= row["step"] <= high
+            and (options["mode"] == "fixed" or pb is None or row["frames"] < pb["frames"])
+            and (not options["strategy_only"] or row.get("strategy") == strategy))
+
+
+def _automatic(rows, count, low, high, players):
+    """One best per player/strategy/subdivision, spread across the range."""
+    winners = {}
+    for row in rows:
+        key = row["player_id"], row["strategy"], row["step"]
+        current = winners.get(key)
+        if current is None or (row["frames"], row["id"]) < (current["frames"], current["id"]):
+            winners[key] = row
+    remaining = list(winners.values())
+    picked = []
+    count = min(count, len(remaining))
+    for index in range(count):
+        goal = low if count == 1 else low + (high - low) * index / (count - 1)
+        row = min(remaining, key=lambda item: (abs(item["step"] - goal), item["player_id"] in players,
+                                              item["step"], item["frames"], item["id"]))
+        picked.append(row)
+        players.add(row["player_id"])
+        remaining.remove(row)
+    return sorted(picked, key=lambda row: (row["step"], row["frames"], row["id"]))
+
+
+def select_rivals(rows, pb, options, pins: dict[str, str], previous=()) -> tuple[dict, ...]:
+    """Choose visible slots; caller retains hidden pins and owns PB playback.
+
+    Pass the previous roster when changing one manual choice, to preserve its
+    other compatible automatic slots. Omit it when the saved basis/range changes.
+    Missing chosen recordings remain occupied rather than silently replaced.
+    """
+    options, pins = checked_options(options), _checked_pins(pins)
+    candidates = {row["id"]: row for row in _bounded(rows) if _ranked_row(row)}
+    previous = tuple(row for row in _bounded(previous) if _ranked_row(row))
+    low, high = _range(pb, options)
+    strategy = pb.get("current_strategy") if pb else None
+    if strategy is None:
+        strategy = next((row.get("current_strategy") for row in candidates.values()
+                         if row.get("current_strategy") is not None), None)
+    used = {row["id"] for row in candidates.values()
+            if options["include_pb"] and _same_as_pb(row, pb)}
+    result = {}
+    for slot in range(options["count"]):
+        identity = pins.get(str(slot))
+        if identity is not None:
+            row = candidates.get(identity)
+            result[slot] = _placed(row, slot, True) if row is not None and identity not in used else _missing_pin(identity, slot)
+            used.add(identity)
+    for old in previous:
+        slot = old.get("slot")
+        row = candidates.get(old["id"])
+        if (not old.get("pinned") and type(slot) is int and 0 <= slot < options["count"] and slot not in result
+                and row is not None and row["id"] not in used
+                and _eligible_auto(row, pb, options, low, high, strategy)):
+            result[slot] = _placed(row, slot, False)
+            used.add(row["id"])
+    available = [row for row in candidates.values() if row["id"] not in used
+                 and _eligible_auto(row, pb, options, low, high, strategy)]
+    players = {row["player_id"] for row in result.values() if row.get("player_id") is not None}
+    automatic = iter(_automatic(available, options["count"] - len(result), low, high, players))
+    for slot in range(options["count"]):
+        if slot not in result and (row := next(automatic, None)) is not None:
+            result[slot] = _placed(row, slot, False)
+    return tuple(result[slot] for slot in sorted(result))
+
+
+def add_slot(roster, count: int, replacement_slot: int | None = None) -> int:
+    """Add uses a vacancy or slowest automatic slot; direct replacement is explicit."""
+    if type(count) is not int or not 1 <= count <= MAX_RIVALS:
+        raise ValueError("Choose how many rivals to show.")
+    if replacement_slot is not None:
+        if type(replacement_slot) is not int or not 0 <= replacement_slot < count:
+            raise ValueError("Choose a visible rival to replace.")
+        return replacement_slot
+    rows = {row["slot"]: row for row in _bounded(roster)
+            if type(row.get("slot")) is int and 0 <= row["slot"] < count}
+    empty = next((slot for slot in range(count) if slot not in rows), None)
+    if empty is not None:
+        return empty
+    automatic = [row for row in rows.values() if not row.get("pinned") and type(row.get("frames")) is int]
+    if not automatic:
+        raise ValueError("Every rival is chosen by you. Select a rival to replace it.")
+    return min(automatic, key=lambda row: (-row["frames"], row["slot"]))["slot"]

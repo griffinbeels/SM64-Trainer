@@ -84,6 +84,77 @@ def current_pb_ghost(db, kind: str, entity_key: str, strat: str | None) -> Attem
                         strat_tag=row.get("strat_tag"), frames=row["frames"], pb=True)
 
 
+def eligible_attempt(attempt, identity) -> bool:
+    """A current local save may anchor rivals only with judged complete evidence.
+
+    This deliberately differs from legacy manual PB playback. Unknown validity,
+    ROM or star timing remains privately playable but cannot seed automatic
+    selection. A 100-coin star reattributed from the segment engine retains that
+    engine's known clock span instead of pretending it began at a star reset.
+    """
+    from sm64_events.inputs.service import entity_key_of
+    from sm64_events.tracking.caveats import save_state_run
+
+    if (identity.game_version not in ("us", "jp") or attempt is None or getattr(attempt, "valid", None) is not True
+            or attempt.outcome != "success" or attempt.cleared or save_state_run(attempt)
+            or getattr(attempt, "game_version", None) != identity.game_version
+            or not getattr(attempt, "strat_tag", None)
+            or entity_key_of(attempt) != (identity.kind, identity.entity_key)):
+        return False
+    start, end = getattr(attempt, "native_clock_frame", None), getattr(attempt, "closed_frame", None)
+    frames = getattr(attempt, f"{identity.clock}_frames", None)
+    if (type(start) is not int or type(end) is not int or start < 0 or end < start
+            or not getattr(attempt, "native_clock_utc", None) or type(frames) is not int or frames <= 0):
+        return False
+    native_kind = getattr(attempt, "native_clock_kind", None)
+    if identity.kind == "segment":
+        return native_kind == "segment"
+    if native_kind == "segment":
+        return 1 <= attempt.course_id <= 15 and attempt.star_id == 6
+    return native_kind == "star" and getattr(attempt, "timed_at", None) == "xcam"
+
+
+def saved_pb_basis(db, ranks, identity) -> dict | None:
+    """Best current saved strategy slot, on the canonical clock and explicit ROM.
+
+    Resolve latest slots BEFORE strict filtering and comparison. A deliberately
+    slower save replaces its predecessor; an undo reveals the predecessor through
+    the existing database visibility rules. Historical minima never participate.
+    The rank basis survives expired pose files; the native provider decides
+    whether its separate PB playback copy can still be prepared.
+    """
+    from sm64_events.ghost.adaptive import rank_frames
+    from sm64_events.inputs.service import entity_key_of
+    from sm64_events.tracking.views import latest_pbs_by_strategy
+    from types import SimpleNamespace
+
+    if db is None or ranks is None or identity.game_version not in ("us", "jp"):
+        return None
+    choices = []
+    for row in latest_pbs_by_strategy(db.pbs()).values():
+        if (row["timer_mode"] != identity.clock or row.get("game_version") != identity.game_version
+                or not row.get("strat_tag") or type(row.get("frames")) is not int or row["frames"] <= 0
+                or type(row.get("attempt_id")) is not int):
+            continue
+        target = SimpleNamespace(segment_id=row["segment_id"], course_id=row["course_id"], star_id=row["star_id"])
+        if entity_key_of(target) != (identity.kind, identity.entity_key):
+            continue
+        attempt = db.attempt(row["attempt_id"])
+        if eligible_attempt(attempt, identity):
+            choices.append(row)
+    if not choices:
+        return None
+    row = min(choices, key=lambda item: (item["frames"], -item["id"]))
+    progress = rank_frames(ranks, identity, row["frames"])
+    if progress is None:
+        return None
+    ghost = AttemptGhost(row["attempt_id"], identity.kind, identity.entity_key,
+                         row["strat_tag"], row["frames"], pb=True)
+    return {"frames": row["frames"], **progress, "attempt_id": row["attempt_id"],
+            "pb_id": row["id"], "strategy": row["strat_tag"], "current_strategy": identity.strategy,
+            "ghost": ghost}
+
+
 class GhostLibrary:
     """Every ghost a target can race, as the ghost sees them: his PB, his saved
     ghosts (`ghost/saved.py`), and the runs his templates were marked from.
