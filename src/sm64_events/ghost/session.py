@@ -48,7 +48,7 @@ SAFETY_RESOLVE_S = 45.0
 #: The PUT fields that change what the resolve answers: the settings rows
 #: marked `resolves` (the switch) and the ticked ghost set. Every
 #: other setting rides the native command and never needs one.
-RESOLVING_CHANGES = frozenset({*settings.resolving(), "ghosts"})
+RESOLVING_CHANGES = frozenset({*settings.resolving(), "ghosts", "rivals"})
 
 # The two "no ghost" cases the source resolver cannot speak for, in the same
 # shape it answers in. Every one of these is read straight to the player, so it
@@ -68,7 +68,7 @@ NO_RECORDINGS = {
 
 #: What a client may send to PUT /api/ghost: every registry row, plus the
 #: ticked ghost set and the target it is for.
-SETTABLE = (*settings.BY_NAME, "ghosts", "target")
+SETTABLE = (*settings.BY_NAME, "ghosts", "target", "rivals")
 
 
 def template_store(inputs):
@@ -94,8 +94,15 @@ def validate_changes(changes: dict) -> dict:
         if not isinstance(changes.get("target"), dict):
             raise ValueError("Choose a ghost for the current practice target.")
         checked["target"] = dict(changes["target"])
-    elif "target" in changes:
+    elif "target" in changes and "rivals" not in changes:
         raise ValueError("The ghost target follows the current practice target.")
+    if "rivals" in changes:
+        if "ghosts" in changes:
+            raise ValueError("Choose rivals or a library ghost set in one request.")
+        if not isinstance(changes["rivals"],dict) or not isinstance(changes.get("target"),dict):
+            raise ValueError("Choose rivals for the current practice target.")
+        checked["rivals"] = dict(changes["rivals"])
+        checked["target"] = dict(changes["target"])
     return checked
 
 
@@ -104,7 +111,8 @@ class GhostSession:
     app's lifespan, read and written through `GET/PUT /api/ghost`."""
 
     def __init__(self, *, tracker, inputs, replay, broadcaster,
-                 period_s: float = WATCH_PERIOD_S, native=None, portable=None):
+                 period_s: float = WATCH_PERIOD_S, native=None, portable=None,
+                 population=None, version_of=None):
         self._tracker = tracker
         self._inputs = inputs
         self._replay = replay
@@ -112,6 +120,16 @@ class GhostSession:
         self._period_s = period_s
         self._native = native
         self._portable = portable
+        self._rivals = None
+        self._population_recorder = None
+        self._population = population
+        self._population_closed = False
+        if population is not None and native is not None:
+            from sm64_events.ghost.rivals import Rivals
+            from sm64_events.ghost.rival_recording import PopulationRecorder
+            self._rivals = Rivals(tracker,population,native,version_of or (lambda:None),
+                source_of=lambda:id(getattr(getattr(replay,"recorder",None),"ghost_capture",None)))
+            self._population_recorder = PopulationRecorder(population,replay,tracker,self._attempt_identity)
         self._native_answer = {}
         # When the last resolve ran, and what the world it read looked like
         # (`_world`): a change there is itself the event that re-resolves.
@@ -150,7 +168,8 @@ class GhostSession:
                               "pb": dict(self._pb) if self._pb else None,
                               "candidates": [dict(row) for row in self._candidates]},
                 "source": dict(self._source),
-                "window": self._window_state()}
+                "window": self._window_state(),
+                **({"rivals":self._rivals.payload()} if self._rivals else {})}
 
     def _playing(self) -> list:
         """Which ticked ghosts Only Mario draws, in order, with the colour each
@@ -176,6 +195,8 @@ class GhostSession:
         if self._task is not None:
             return
         self._closing = False
+        if self._population_recorder is not None:
+            self._population_recorder.start()
         try:
             await self.refresh(resolve=True, publish=False)
         except Exception:  # noqa: BLE001 - the ghost may never stop the trainer booting
@@ -185,6 +206,8 @@ class GhostSession:
     async def stop(self) -> None:
         """Join the watch and revoke native playback."""
         self._closing = True
+        if self._population_recorder is not None:
+            await self._population_recorder.stop()
         task, self._task = self._task, None
         if task is not None:
             task.cancel()
@@ -198,6 +221,9 @@ class GhostSession:
         with self._lifecycle_lock:
             if self._native is not None:
                 self._native.stop()
+            if self._population is not None and not self._population_closed:
+                self._population.close()
+                self._population_closed = True
 
     async def _watch(self) -> None:
         while True:
@@ -270,6 +296,12 @@ class GhostSession:
             self._source = self._resolve_source(target)
             self._refresh_candidates(target)
             self._world, self._resolved_at = world, monotonic()
+        elif self._rivals is not None:
+            answer = self._rivals.refresh(target,settings.native_controls(self._values),
+                enabled=self._values["enabled"],sharing=self._sharing())
+            if answer is not None:
+                self._native_answer = answer
+                self._source = {**NO_TARGET,**answer}
         try:
             self._reconcile()
         except Exception:  # noqa: BLE001 - renderer failure must not stop practice
@@ -315,6 +347,12 @@ class GhostSession:
 
 
     def _resolve_source(self, target: dict | None) -> dict:
+        if self._rivals is not None and not self._rivals.manual:
+            answer = self._rivals.refresh(target,settings.native_controls(self._values),
+                enabled=self._values["enabled"],sharing=self._sharing(),force=True)
+            if answer is not None:
+                self._native_answer = answer
+            return {**NO_TARGET,**self._native_answer}
         ghosts, self._missing, unticked = self._chosen(target)
         if self._native is None:
             self._native_answer = dict(NO_TARGET if target is None else NO_RECORDINGS)
@@ -452,6 +490,12 @@ class GhostSession:
         derived, so the new save (or after an undo, the previous one) is
         already the answer; with it unticked, no PB plays at all.
         """
+        if self._rivals is not None:
+            async with self._lock:
+                def invalidate():
+                    with self._lifecycle_lock:
+                        self._rivals.pb_changed()
+                await asyncio.to_thread(invalidate)
         if saved:
             preserve = getattr(self._replay, "preserve_native", None)
             if preserve is not None:
@@ -492,6 +536,10 @@ class GhostSession:
         if "ghosts" in changes:
             choices = self._selection.choose(self._target, changes["ghosts"])
             _remember(database, SELECTION_KEY, choices)
+            if self._rivals is not None:
+                self._rivals.manual = True
+        if "rivals" in changes and self._rivals is not None:
+            self._rivals.apply(changes["rivals"])
 
     async def update(self, changes: dict | None = None, **named) -> dict:
         """Apply what a client asked for, or refuse the whole request with the
@@ -515,6 +563,12 @@ class GhostSession:
         return body
 
     def _queue_update(self, checked, target):
+        if "rivals" in checked:
+            if self._rivals is None:
+                raise ValueError("Adaptive rivals are unavailable in this window.")
+            checked["rivals"] = self._rivals.checked(checked["rivals"],target)
+            if checked.pop("target") != target:
+                raise ValueError("The practice target changed. Choose rivals for the current target.")
         if "ghosts" in checked:
             if target is None or checked.pop("target") != target:
                 raise ValueError("The practice target changed. Choose a ghost for the current target.")
@@ -541,6 +595,26 @@ class GhostSession:
         if self._native is not None:
             self._native.reconcile(enabled=self._values["enabled"] and self._source.get("available", False),
                                    target=self._target, controls=settings.native_controls(self._values))
+
+    def attempt_saved(self, attempt):
+        if self._population_recorder is not None:
+            self._population_recorder.enqueue(attempt)
+
+    def _attempt_identity(self, attempt):
+        from sm64_events.inputs.service import entity_key_of
+        from sm64_events.ghost.pb import eligible_attempt
+        kind,key = entity_key_of(attempt)
+        if attempt.game_version not in ("us","jp"):
+            return None
+        identity = self._rivals.identity_for({"kind":kind,"entity_key":key,"strat":attempt.strat_tag},
+                                             version=attempt.game_version)
+        return identity if identity is not None and eligible_attempt(attempt,identity) else None
+
+    async def search_rivals(self, target, player, cursor=None):
+        if self._rivals is None:
+            raise ValueError("Adaptive rivals are unavailable in this window.")
+        async with self._lock:
+            return await asyncio.to_thread(self._rivals.search,target,player,cursor)
 
 
     # -- the wire -------------------------------------------------------------

@@ -170,6 +170,7 @@ class Poller:
         #: until a header is read (or when the backend has none), then
         #: True/False. The recorder's capture gate reads it (main.py).
         self.practice_rom: bool | None = None
+        self.observed_game_version: str | None = None
         self._rom_name: str | None = None
         self._rom_identified_at = float("-inf")
         self.on_gap = on_gap
@@ -483,6 +484,7 @@ class Poller:
                      "practice tooling on" if practice else
                      "not a practice ROM; tracking and replay stay off")
         self.practice_rom, self._rom_name = practice, identity["name"]
+        self.observed_game_version = identity["region"] if practice else None
         return practice
 
     async def _left_practice_rom(self, curr) -> bool:

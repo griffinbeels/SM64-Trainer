@@ -3214,6 +3214,15 @@ class SegmentEngine:
                 "start_frame": arm.start_frame, "started_utc": arm.started_utc,
                 "frame": frame, "utc": utc}
 
+    def native_rival_start(self, sid: int):
+        """Certify a fresh complete arm, never its save-state continuation."""
+        arm = self._armed.get(sid)
+        origin = self.native_ghost_origin(sid)
+        if (arm is None or origin is None or arm.anchor_type == "state_loaded"
+                or arm.ghost_origin is not None):
+            return None
+        return ("segment",sid,arm.session_id,origin["arm_id"])
+
     def _ghost_starts_here(self, arm, d) -> bool:
         """Whether this arm's own clock is where the segment's ghost starts.
 

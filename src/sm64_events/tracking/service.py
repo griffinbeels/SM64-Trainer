@@ -141,6 +141,8 @@ class TrackerService:
         self.broadcaster = broadcaster
         self.ranks = ranks            # RankStandards | None
         self.on_segment_definitions_changed = None
+        self.on_attempt_saved = None
+        self.observed_game_version = None
         # The game version SETTING (core/modes.py) as last applied through
         # `set_game_version` -- main.py applies the persisted one at boot.
         # What it RESOLVES to lives on the standards store as
@@ -341,6 +343,10 @@ class TrackerService:
         session). An attempt's id is the journal id of its first event, so a
         caller that journals a single-event attempt — `import_times` — learns
         the attempt's id from this and nowhere else."""
+        if event.frame > 0 and self.observed_game_version is not None:
+            version = self.observed_game_version()
+            if version in ("us","jp"):
+                event = dataclasses.replace(event,payload={**event.payload,"game_version":version})
         if event.type == "stage_changed":
             # The world NODE the player is standing in, stamped BEFORE the
             # broadcast because the browser MERGES this payload into its held
@@ -583,6 +589,11 @@ class TrackerService:
                 return jid
         for attempt in closed:
             self.db.upsert_attempt(attempt)
+            if self.on_attempt_saved is not None:
+                try:
+                    self.on_attempt_saved(attempt)
+                except Exception:  # noqa: BLE001 -- optional queue cannot stop tracking
+                    log.exception("ghost population could not enqueue attempt %s",attempt.id)
             self._update_replay_history([attempt])
             # The derived event's journal row carries the CURRENT session_id,
             # which for a cross-session abandon differs from the attempt's own
@@ -757,6 +768,19 @@ class TrackerService:
         origin = self._projector.native_ghost_origin(kind, entity_key)
         return (origin if origin is not None
                 and origin["session_id"] == self.session_id else None)
+
+    def native_rival_origin(self, kind: str, entity_key: str, *, frame=None) -> dict | None:
+        """A playback owner plus a distinct certified full-start marker.
+
+        Merely selecting a target midway, restoring a state or rebasing its
+        clock never certifies adopting newly prepared rivals.
+        """
+        origin = self.native_ghost_origin(kind,entity_key)
+        if origin is None:
+            return None
+        token = self._projector.native_rival_start(kind,entity_key)
+        return {**origin,"full_start_token":token,
+                "full_start_now":token is not None and frame == origin["frame"]}
 
     def _require_db(self) -> Database:
         if self.db is None or self.session_id is None:

@@ -1190,6 +1190,23 @@ class Projector:
     def armed_route_id(self):
         return self._runs.armed_route_id()
 
+    def native_rival_start(self, kind: str, entity_key: str):
+        """The immutable full-start identity; a restore keeps only playback."""
+        origin = self.native_ghost_origin(kind,entity_key)
+        if origin is None:
+            return None
+        if kind == "segment":
+            return self._segments.native_rival_start(int(entity_key))
+        engines = [sid for sid,entity in self._hundred_coin_engine_ids.items()
+                   if entity == self.target[1:] and sid in self._segments.armed_ids()]
+        if engines:
+            return self._segments.native_rival_start(engines[0]) if len(engines)==1 else None
+        first = self._clock_origin if self._clock_origin is not None else self._open
+        if (not _native_star_origin_known(first) or first.type != "practice_reset"
+                or first is not self._open):
+            return None
+        return (kind,entity_key,origin["session_id"],origin["arm_id"])
+
     def active_route_id(self):
         """The route_id of the most recent route_selected — replay-derived,
         restart-safe (mirrors armed_route_id()). None = no active route."""
@@ -1708,7 +1725,7 @@ class Projector:
                             a.id, self.strat_by_segment.get(a.segment_id)),
                         cleared=a.id in self._cleared,
                         cleared_reason=self._cleared.get(a.id))
-        a = replace(a, **self._segment_validity(ev, a, hc))
+        a = replace(a, game_version=ev.payload.get("game_version"), **self._segment_validity(ev, a, hc))
         a = self._auto_ignored(a)
         return a
 
@@ -2913,6 +2930,8 @@ class Projector:
             jumps_total=self._jumps_total,
             jumps_dustless=self._jumps_dustless,
             timed_at=timed_at,
+            game_version=(first.payload.get("game_version")
+                          if first.payload.get("game_version") == close.payload.get("game_version") else None),
             native_clock_frame=first.frame if native_origin_known else None,
             native_clock_utc=first.wall_time_utc if native_origin_known else None,
             native_clock_kind="star" if native_origin_known else None,

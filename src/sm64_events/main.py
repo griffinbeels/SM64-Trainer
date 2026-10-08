@@ -13,6 +13,7 @@ from sm64_events.core.paths import (
     compare_cache_dir,
     compilations_dir,
     db_path,
+    data_root,
     instance_lock_path,
     is_frozen,
     migrate_legacy_data_dir,
@@ -291,7 +292,7 @@ def _build_tracker(broadcaster):
 
 
 
-def _build_replay(replay_cfg, layout, service):
+def _build_replay(replay_cfg, layout, service, *, recorder_lock=None):
     from sm64_events.replay.encoder import pick_video_codec
     # Per-process loopback is PRIMARY: a replay must carry the game and
     # nothing else — no Discord call, no music (user report 2026-07-30).
@@ -336,6 +337,15 @@ def _build_replay(replay_cfg, layout, service):
         ghost_capture_factory = lambda **kwargs: NativeCapture(
             layout, sound_player=SoundPlayerProcess(), **kwargs)
 
+    recorder_options = {}
+    if recorder_lock is not None:
+        from sm64_events.core.recorder_lock import acquire_recorder_lock
+        reservation = [recorder_lock]
+
+        def reserve_capture():
+            return reservation.pop() if reservation else acquire_recorder_lock()
+
+        recorder_options["recorder_lock_factory"] = reserve_capture
     recorder = ReplayRecorder(
         cfg=replay_cfg,
         window_finder=find_window,
@@ -350,7 +360,7 @@ def _build_replay(replay_cfg, layout, service):
             rate=replay_cfg.audio_rate, pid=pid),
         codec=codec,
         video_sink_factory=video_sink_factory,
-        ghost_capture_factory=ghost_capture_factory)
+        ghost_capture_factory=ghost_capture_factory, **recorder_options)
     replay = _replay_service(replay_cfg, recorder, codec, service)
     return replay, codec
 
@@ -423,7 +433,7 @@ def _comparison_services(replay, service, broadcaster, codec, replay_cfg):
     return compare, compilation
 
 
-def build():
+def build(*, recorder_lock=None):
     configure_logging()
     migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
     # Capture threads contend with encode/server threads for the GIL; the
@@ -449,7 +459,8 @@ def build():
     # are on disk whatever the recorder does, and their filenames are the only
     # index to them.
     service.saved_clip_ids = lambda among=None: saved_attempt_ids(replay_cfg.save_root, among=among)
-    replay, codec = _build_replay(replay_cfg, layout, service)
+    replay, codec = (_build_replay(replay_cfg, layout, service) if recorder_lock is None
+                     else _build_replay(replay_cfg, layout, service, recorder_lock=recorder_lock))
     compare, compilation = _comparison_services(replay, service, broadcaster, codec, replay_cfg)
     # NO target gate. This passed `target_active=lambda: service.target is not
     # None` (task 0087) until 2026-08-06, which made the recorder blind exactly
@@ -473,10 +484,12 @@ def build():
     from sm64_events.server.inputruntime import InputRuntime
     inputs = InputRuntime(service, memory, layout, replay)
     from sm64_events.ghost.native_session import NativeGhost
+    ghost_frame = {"frame":None}
     native_ghost = NativeGhost(replay, supported=layout.version == "us",
-                               origin_of=service.native_ghost_origin)
+        origin_of=lambda kind,key:service.native_rival_origin(kind,key,frame=ghost_frame["frame"]))
 
     def note_ghost_snapshot(snapshot):
+        ghost_frame["frame"] = snapshot.global_timer
         native_ghost.note(snapshot)
 
     async def ghost_capture_gap(reason):
@@ -487,10 +500,20 @@ def build():
                     reader=reader, detector_factory=detector_stream,
                     on_gap=ghost_capture_gap, on_snapshot=note_ghost_snapshot)
     inputs.bind(poller)
+    service.observed_game_version = lambda:poller.observed_game_version
+    from pathlib import Path
+    import os
+    from sm64_events.ghost.population import LocalPopulation
+    population_root = Path(os.environ.get("SM64_GHOST_POPULATION") or data_root()/"data"/"ghost_population")
+    if not population_root.is_absolute():
+        population_root = population_root.resolve()
+    population = LocalPopulation(population_root,definitions=lambda:service.db.segment_defs() if service.db else [])
     # One session owns native ghost preferences and the practice target.
     ghost = GhostSession(tracker=service, inputs=inputs.get_service,
                          replay=replay, broadcaster=broadcaster,
-                         native=native_ghost)
+                         native=native_ghost,population=population,
+                         version_of=lambda:poller.observed_game_version)
+    service.on_attempt_saved = ghost.attempt_saved
     _ghost_follows_pb(service, ghost)
     if replay is not None:
         # A real run on vanilla SM64, another hack or another game records
@@ -551,7 +574,7 @@ def _build_stale_natives() -> None:
     print("  " + ", ".join(f"{name} {state}" for name, state in states.items()))
 
 
-def run() -> None:
+def run(*, recorder_lock=None) -> None:
     """THE canonical launch (`uv run python -m sm64_events.main`).
 
     timeout_graceful_shutdown is the load-bearing argument: browsers hold
@@ -585,7 +608,8 @@ def run() -> None:
         wait_port_free()
         wait_lock_free(instance_lock_path())
     import uvicorn
-    uvicorn.run(get_app(), host="127.0.0.1", port=server_port(),
+    app = build(recorder_lock=recorder_lock) if recorder_lock is not None else get_app()
+    uvicorn.run(app, host="127.0.0.1", port=server_port(),
                 timeout_graceful_shutdown=3)
 
 
