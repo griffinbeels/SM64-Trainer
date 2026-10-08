@@ -44,7 +44,7 @@ import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { AddTime } from "./addtime.js";
-import { GhostSwitch } from "./ghostswitch.js";
+import { GhostSettings, GhostSwitch } from "./ghostswitch.js";
 import { GoalPlate, useEntryGoals } from "./goalplate.js";
 import { useTargetPick } from "../target.js";
 
@@ -66,6 +66,7 @@ function LogPreferenceSwitch({ label, description, checked, onChange }) {
 
 export function PracticeLogSettings({ ui, t }) {
   const [anchor, setAnchor] = useState(null);
+  const [ghostSettings, setGhostSettings] = useState(false);
   const rootRef = useRef(null);
   const triggerRef = useRef(null);
   const panelRef = useRef(null);
@@ -134,7 +135,13 @@ export function PracticeLogSettings({ ui, t }) {
       </div>
       <div class="log-settings-option"><span>Sort attempts</span><${SortControl} ui=${ui} /></div>
       <div class="log-settings-option"><span>Visible stats</span><${StatMenuTrigger} t=${t} withinSettings=${true} /></div>
+      <div class="log-settings-option"><span>Ghost Overlay</span>
+        <button type="button" onclick=${() => { dismiss(true); setGhostSettings(true); }}>
+          <${Icon} name="settings" size=${18} />Ghost settings
+        </button>
+      </div>
     </div>`}
+    ${ghostSettings && html`<${GhostSettings} t=${t} onClose=${() => setGhostSettings(false)} />`}
   </span>`;
 }
 

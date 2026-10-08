@@ -38,8 +38,9 @@ import { holdRepeat } from "../holdrepeat.js";
 import { GhostProximity } from "./ghostproximity.js";
 import { GhostLibraryButton } from "./ghostlibrary.js";
 import { Rivals } from "./rivals.js";
-import { clampNudge, clampOpacity, ghostControls, ghostPathTuning, ghostRecordingOptions,
-         ghostOption, ghostTargetKey, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
+import { Modal } from "./modal.js";
+import { clampNudge, clampOpacity, ghostAppearanceControls, ghostControls, ghostPathTuning, ghostRecordingOptions,
+         ghostOption, ghostTargetKey, hueText, mergeGhostAppearance, newestGhostSession, nudgeLimit, SWITCH_LABELS,
          nudgeSeconds, nudgeText, opacityText, pathTuningText, shownTint,
          NUDGE_STEP, PATH_SOURCE_LABELS, PATH_TUNING_LABELS } from "../ghostsession.js";
 
@@ -419,7 +420,7 @@ function GhostRecording({ recording, entityKey, target, write }) {
  * action that does not apply rather than to disable it.
  */
 function GhostTuning({ opacity, tint, switches, nameBox, pathSource, volume, nudge, limits,
-                      write, queue }) {
+                      write, queue, timing = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
@@ -439,7 +440,7 @@ function GhostTuning({ opacity, tint, switches, nameBox, pathSource, volume, nud
       <${GhostVolume} volume=${volume.value} draft=${volume.draft} range=${limits.volume}
         queue=${queue} />
     ${switches.slice(sound).map(control)}
-    <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
+    ${timing && html`<div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
       <span class="ghost-field-name">Timing</span>
       <button type="button" class="ghost-step"
           title="Show the ghost one game frame further ahead of you"
@@ -454,7 +455,7 @@ function GhostTuning({ opacity, tint, switches, nameBox, pathSource, volume, nud
       ${nudge !== 0 && html`<button type="button" class="ghost-reset"
           title="Put the ghost back in step with your own run"
           onclick=${() => queue({ nudge_frames: 0 })}>Reset</button>`}
-    </div>
+    </div>`}
   </div>`;
 }
 
@@ -491,15 +492,61 @@ function practisedStrat(session) {
   return session?.target?.strat ?? null;
 }
 
-function GhostAppearance({controls, appearance, patch}) {
+function GhostAppearance({controls, appearance, patch, timing = true}) {
   const values = heldValues(controls, appearance);
   const {limits} = controls;
   return html`<${GhostTuning} ...${values} limits=${limits}
-    volume=${{value: appearance.volume ?? controls.volume}} write=${patch} queue=${patch} />
+    volume=${{value: appearance.volume ?? controls.volume}} write=${patch} queue=${patch} timing=${timing} />
     <${GhostProximity} active=${true} value=${controls.proximity} range=${limits.proximity}
       draft=${appearance.proximity} write=${patch} queue=${patch} />
     <${GhostPathTune} active=${true} switches=${values.switches} tuning=${values.pathTuning}
       ranges=${limits.path_tuning} draft=${appearance.path_tuning} queue=${patch} />`;
+}
+
+/** A second entry to the same controls, reading the session only while open. */
+export function GhostSettings({t, onClose}) {
+  const {session, reachable, write} = useGhostSession(t);
+  const [appearance, setAppearance] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const controls = ghostAppearanceControls(session);
+  const available = reachable && controls && session.source?.reason !== "no_session";
+  const identity = JSON.stringify(session?.target);
+  const timingTarget = useRef(identity);
+  useEffect(() => {
+    setAppearance(previous => {
+      const preferences = {...previous};
+      delete preferences.nudge_frames;
+      return preferences;
+    });
+  }, [identity]);
+  const patch = body => setAppearance(previous => {
+    const changes = typeof body === "function" ? body(previous) : body;
+    if (changes.nudge_frames != null) timingTarget.current = identity;
+    return mergeGhostAppearance(previous, changes);
+  });
+  const save = async () => {
+    const body = {...appearance};
+    if (timingTarget.current !== identity) delete body.nudge_frames;
+    if (!Object.keys(body).length) { onClose(); return; }
+    setSaving(true);
+    setError(null);
+    const result = await write(body);
+    setSaving(false);
+    if (result.applied) onClose();
+    else setError(result.error);
+  };
+  return html`<${Modal} title="Ghost Overlay settings" icon="settings"
+    onClose=${saving ? null : onClose}
+    footer=${html`<button type="button" disabled=${saving} onclick=${onClose}>Cancel</button>
+      <button type="button" class="primary-button" disabled=${saving || !available}
+        onclick=${save}>${saving ? "Saving…" : "Done"}</button>`}>
+    ${available ? html`<${GhostAppearance} controls=${controls} appearance=${appearance} patch=${patch}
+      timing=${Boolean(ghostTargetKey(session.target))} />`
+      : html`<p>${!reachable ? "Ghost settings are unavailable. Close this window and try again."
+        : session ? "Ghost settings are unavailable while the trainer is disconnected." : "Loading ghost settings…"}</p>`}
+    ${error && html`<p class="error" role="alert">${error}</p>`}
+  <//>`;
 }
 
 function GhostRacing({session, controls, held, on, write, queue, entityKey}) {

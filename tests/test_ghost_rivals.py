@@ -15,10 +15,71 @@ from sm64_events.ghost.pb import AttemptGhost
 from sm64_events.ghost.adaptive import PracticeIdentity
 from sm64_events.server.ghost_api import create_ghost_router
 from sm64_events.storage.db import Database
+from sm64_events.core.events import Event
+from sm64_events.server.broadcaster import Broadcaster
+from sm64_events.tracking.service import TrackerService
+from sm64_events.ghost.adaptive import rank_frames
+from datetime import datetime, timezone
 from tests.test_ghost_adaptive import Standards, recording, basis, attempt
 
 TARGET = {"kind":"star","entity_key":"2-1","strat":"Standard"}
 CONTROLS = {"hue_degrees":250}
+
+
+def test_scoped_clear_then_delete_previous_session_refreshes_real_pb_and_roster(tmp_path):
+    """Actual journal wipes preserve prior PBs, then reset the adaptive baseline."""
+    db = Database(tmp_path / "reset.db")
+    service = TrackerService(db, Broadcaster(), Standards())
+    service.observed_game_version = lambda: "us"
+    population, native = Population(), Native()
+    population.rows = []
+    identity = PracticeIdentity("star", "2-1", "igt", "us", "Standard")
+    for frames in range(500, 1200, 10):
+        progress = rank_frames(service.ranks, identity, frames)
+        if progress and progress["step"] > 5:
+            population.rows.append(recording(f"{frames:064x}", frames=frames))
+    rivals = Rivals(service, population, native, lambda: "us")
+    snapshots = []
+
+    async def changed(_attempt, _saved):
+        rivals.pb_changed()
+        rivals.refresh(TARGET, CONTROLS, enabled=True)
+        snapshots.append((rivals.pb, tuple(row["id"] for row in rivals.rows)))
+
+    async def finish(frame, frames):
+        now = datetime.now(timezone.utc)
+        await service.publish(Event(type="practice_reset", frame=frame, timestamp_utc=now,
+                                    payload={"igt_frames_before": 0}))
+        await service.publish(Event(type="star_collected", frame=frame+frames, timestamp_utc=now,
+                                    payload={"course_id":2, "star_id":1, "igt_frames":frames,
+                                             "igt_timed_at":"xcam"}))
+        played = next(row for row in db.attempts() if row.igt_frames == frames)
+        await service.save_pb(played.id, "igt")
+        return played
+
+    async def scenario():
+        await service.start()
+        await service.set_target(2, 1, "Standard")
+        old = await finish(100, 1200)
+        await service.new_session()
+        await finish(2000, 900)
+        service.on_pb_changed = changed
+        rivals.refresh(TARGET, CONTROLS, enabled=True)
+        assert rivals.pb["frames"] == 900 and rivals.rows
+        before = tuple(row["id"] for row in rivals.rows)
+        await service.wipe_data("all", scope="session")
+        assert rivals.pb["frames"] == 1200 and rivals.rows
+        assert tuple(row["id"] for row in rivals.rows) != before
+        assert [row.id for row in db.attempts()] == [old.id]
+        await service.delete_session(old.session_id)
+        assert rivals.pb is None and rivals.rows == ()
+        assert native.preparations[-1][1] == []
+        assert len(snapshots) == 2 and population.rows
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        db.close()
 
 
 class Population:

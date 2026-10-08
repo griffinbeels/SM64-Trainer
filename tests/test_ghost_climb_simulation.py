@@ -153,6 +153,7 @@ def test_fresh_simulation_has_no_practice_or_pb_and_preserves_source(tmp_path):
         marker = database.get_state(SIMULATION_KEY, None)
         assert marker == document["simulation"] and marker["zero_practice"]
         assert "baseline" not in marker
+        assert database.get_state("ghost_rivals_v1", {})["options"]["mode"] == "adaptive"
         rows = provider.metadata_snapshot("star", "2-2", clock="igt", game_version="us")
         assert {row["player_name"] for row in rows} == {f"gtest{n}" for n in range(1, 9)}
         assert len({row["player_id"] for row in rows}) == 8
@@ -173,7 +174,7 @@ def test_fresh_simulation_has_no_practice_or_pb_and_preserves_source(tmp_path):
     assert second["profile"] != document["profile"] and second["player_id"] != document["player_id"]
 
 
-def test_zero_practice_gets_four_distinct_rivals_and_earned_pb_adds_fifth(tmp_path):
+def test_explicit_full_range_stress_test_gets_four_rivals_and_pb_adds_fifth(tmp_path):
     source = donors(tmp_path)
     document = simulate_fresh(source, tmp_path / "profiles")
     database = Database(Path(document["profile"]) / "data" / "tracker.db")
@@ -182,6 +183,9 @@ def test_zero_practice_gets_four_distinct_rivals_and_earned_pb_adds_fifth(tmp_pa
     rivals = Rivals(tracker, provider, native, lambda: "us")
     controls = {"hue_degrees": 250}
     try:
+        rivals.refresh(WILD_BLUE, controls, enabled=True)
+        assert rivals.pb is None and rivals.rows == ()
+        rivals.apply(rivals.checked({"options": {"mode": "fixed", "min_step": 0, "max_step": 44}}, WILD_BLUE))
         rivals.refresh(WILD_BLUE, controls, enabled=True)
         assert rivals.pb is None and len(rivals.rows) == 4
         ghosts = native.preparations[-1][1]

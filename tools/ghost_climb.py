@@ -36,7 +36,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from sm64_events.core.paths import bundled_rank_standards, bundled_sheet_ladders, candidate_server_ports  # noqa: E402
 from sm64_events.core.events import Event  # noqa: E402
-from sm64_events.ghost.adaptive import MAX_RIVALS, MAX_STEP, checked_options  # noqa: E402
+from sm64_events.ghost.adaptive import MAX_RIVALS, checked_options  # noqa: E402
 from sm64_events.ghost.clip import check_manifest, read_clip  # noqa: E402
 from sm64_events.ghost.pb import local_attempt_source  # noqa: E402
 from sm64_events.ghost.padfill import with_track_pads  # noqa: E402
@@ -288,8 +288,8 @@ def simulate_fresh(source_root, profiles_root, *, source_version="us"):
 def _simulate_fresh(source_root, profiles_root, *, source_version, inputs_directory):
     """Zero practice, no PB and independent gtest opponents from exact saved clips.
 
-    Fixed full-rank selection belongs only to this developer stress-test profile.
-    The normal beginner range may contain none of the player's advanced samples.
+    Use normal adaptive selection. Advanced-only samples can leave the beginner
+    range empty; a full-roster stress test explicitly chooses a fixed range.
     """
     source, profiles = map(_absolute, (source_root, profiles_root))
     if source_version not in ("us", "jp"):
@@ -311,8 +311,7 @@ def _simulate_fresh(source_root, profiles_root, *, source_version, inputs_direct
         simulation = {"version": 1, "label": "Developer simulation · Fresh tester",
             "scenario_root": str(profile), "target": initial, "game_version": source_version,
             "zero_practice": True}
-        options = checked_options({"mode": "fixed", "count": MAX_RIVALS, "include_pb": True,
-                                   "min_step": 0, "max_step": MAX_STEP})
+        options = checked_options({"mode": "adaptive", "count": MAX_RIVALS, "include_pb": True})
         database.set_state("ghost_player_id", document["player_id"])
         database.set_state(SIMULATION_KEY, simulation)
         database.set_state("ghost_rivals_v1", {"version": 3, "options": options, "pins": {},
@@ -555,7 +554,7 @@ def main():
     parser.add_argument("--player-name", default="You")
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--simulate-wild-blue", action="store_true", help="Fresh simulated tester and exact Wild Blue recordings; original history stays untouched.")
-    parser.add_argument("--simulate-fresh", action="store_true", help="Zero practice and four rivals from renamed saved ghosts; original history stays untouched.")
+    parser.add_argument("--simulate-fresh", action="store_true", help="Zero practice with renamed saved ghosts and adaptive matchmaking; original history stays untouched.")
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--port", type=int, default=8070)
     args = parser.parse_args()

@@ -104,8 +104,9 @@ fictional opponent identity and unchanged recorded timing and poses. Older
 clips receive their own proven input-track pads on a derived playback copy,
 using the normal calibrated join. Original clips remain untouched; captured
 pads are never replaced, and absent or unproven inputs remain unknown. Choose
-Shoot into the Wild Blue → Standard in the Target picker to race the eleven
-sample ghosts there. Other practiced targets and strategies also have samples.
+Shoot into the Wild Blue → Standard in the Target picker to use the eleven
+sample ghosts there when their ranks match your range. Other practiced targets
+and strategies also have samples.
 Your own PB slot appears after you play and save a PB. The card displays
 `Developer simulation · Fresh tester`; these records never establish community
 authentication. Your original practice database, recordings and PBs stay intact.
@@ -116,21 +117,25 @@ To repeat an existing profile, use:
 ```
 
 The reported Wild Blue sample set contains eleven distinct playable times,
-10"66–11"23. This maximum-rival tester starts with four rivals and a fixed range
-covering all ranks, so advanced source ghosts are available before you have a
-PB. Normal production defaults are unchanged. Saving a PB narrows eligibility
-to faster compatible ghosts; fewer than four may remain near the fastest sample.
-Use the existing settings cog to switch to Follow my progress when testing its
-normal one-to-five-subdivision range. Search `gtest` to choose an opponent
+10"66–11"23. New testers use Follow my progress with up to four rivals plus PB.
+Without a PB, the range starts one to five subdivisions above Capless 5. These
+advanced samples do not fill that beginner range; an empty roster is correct.
+Saving or clearing a PB immediately recomputes the range and roster. For a
+four-rival rendering stress test, choose Choose ranks in Rival settings and
+expand the fixed range to cover the samples. An explicit fixed range continues
+to apply after a reset. Search `gtest` to choose an opponent
 manually. A fresh double-click creates another empty identity; resuming retains
 the tester's new practice history.
-The full-range developer fixture retires automatic opponents you have beaten,
+The developer fixture retires automatic opponents you have beaten,
 even within the same subdivision, while preserving explicit chosen rivals.
 This fixture rule does not redefine production fixed-rank settings.
 Resuming an older fresh tester upgrades its input copies before recording starts.
 Its identity, sessions, attempts, PBs, credits and chosen rival slots survive;
 the old immutable population remains available beside the replacement pool.
 Paths defaults off for new profiles. Explicit appearance preferences still win.
+Practice log settings → Ghost settings opens the shared appearance, sound and
+path controls directly. Rival settings also retains Appearance and sound.
+Both dialogs keep changes local until Done; Cancel leaves preferences unchanged.
 If the empty card's rank banner is folded, expand its attempts chevron to reach
 the existing Strategy/Overall tabs. The ghost roster remains visible while folded.
 

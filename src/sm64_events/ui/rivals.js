@@ -2,8 +2,7 @@
 export function endpoint(options, pb, name, limits) {
   const last = limits.last_step;
   if (options.mode === "fixed") return options[name === "min" ? "min_step" : "max_step"];
-  if (pb == null) return null;
-  return Math.min(last, pb.step + options[name === "min" ? "min_ahead" : "max_ahead"]);
+  return Math.min(last, (pb?.step ?? 0) + Math.max(1, options[name === "min" ? "min_ahead" : "max_ahead"]));
 }
 
 export function rangeDraft(options, pb, limits) {

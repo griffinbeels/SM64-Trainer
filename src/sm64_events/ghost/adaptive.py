@@ -185,12 +185,12 @@ def _ranked_row(row):
 def _range(pb, options):
     if options["mode"] == "fixed":
         return options["min_step"], options["max_step"]
-    if pb is None:
-        return 0, scoring.DIVISIONS_PER_TIER - 1
-    if not _valid_basis(pb):
+    if pb is not None and not _valid_basis(pb):
         raise ValueError("The rival range needs a valid saved personal best.")
-    return (min(MAX_STEP, pb["step"] + max(1, options["min_ahead"])),
-            min(MAX_STEP, pb["step"] + max(1, options["max_ahead"])))
+    # No saved PB starts at the floor; it does not override the chosen range.
+    step = pb["step"] if pb is not None else 0
+    return (min(MAX_STEP, step + max(1, options["min_ahead"])),
+            min(MAX_STEP, step + max(1, options["max_ahead"])))
 
 
 def _valid_basis(pb):

@@ -254,7 +254,10 @@ def test_overall_cross_strategy_cap_still_requires_a_faster_comparable_time():
 
 def test_no_pb_begins_at_the_floor_and_fixed_range_can_include_slower_runs():
     rows = [ranked(step) for step in range(12)]
-    assert all(row["step"] <= 4 for row in select_rivals(rows, None, {}, {}))
+    result = select_rivals(rows, None, {}, {})
+    assert result and all(1 <= row["step"] <= 5 for row in result)
+    narrowed = select_rivals(rows, None, {"min_ahead": 2, "max_ahead": 2}, {})
+    assert [row["step"] for row in narrowed] == [2]
     result = select_rivals([ranked(9, frames=2000)], basis(9, 1900),
                            {"mode": "fixed", "min_step": 9, "max_step": 9}, {})
     assert result[0]["frames"] == 2000

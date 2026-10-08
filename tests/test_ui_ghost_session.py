@@ -48,6 +48,26 @@ def controls(session, entity_key="star:8:1"):
                     f"{json.dumps(entity_key)})")
 
 
+def test_global_appearance_without_target_does_not_enable_a_practice_card():
+    body = session(target=None)
+    appearance = run_node("ghostAppearanceControls",
+                          f"ghostAppearanceControls({json.dumps(body)})")
+    assert appearance["opacity"] == body["opacity"]
+    assert appearance["tint"]["hue"] == body["tint"]["hue_degrees"]
+    assert controls(body)["known"] is False
+
+
+def test_modal_appearance_draft_keeps_nested_gestures_until_done():
+    draft = run_node("mergeGhostAppearance", """(() => {
+        let value = mergeGhostAppearance({}, {tint: {hue_degrees: 180}});
+        value = mergeGhostAppearance(value, {tint: {enabled: false}});
+        value = mergeGhostAppearance(value, {proximity: {extra_distance: 300}});
+        return mergeGhostAppearance(value, pending => ({proximity: {enabled: false}}));
+    })()""")
+    assert draft == {"tint": {"hue_degrees": 180, "enabled": False},
+                     "proximity": {"extra_distance": 300, "enabled": False}}
+
+
 def test_pose_only_ghost_is_available_without_video_metadata():
     result = controls(session(source={"available": True}))
     assert result["available"] and result["canToggle"]

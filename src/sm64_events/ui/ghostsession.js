@@ -319,6 +319,28 @@ function ghostReason(session, source) {
   return session.enabled ? session.window?.reason || null : null;
 }
 
+/** Appearance preferences also exist before a practice target is selected. */
+export function ghostAppearanceControls(session) {
+  if (!session || typeof session !== "object") return null;
+  const limits = ghostLimits(session);
+  return {
+    ...limitedValues(session, limits),
+    volume: typeof session.volume === "number" ? session.volume : null,
+    limits,
+    proximity: session.proximity || null,
+  };
+}
+
+/** Keep successive edits to one preference together until the modal commits. */
+export function mergeGhostAppearance(previous, patch) {
+  const changes = typeof patch === "function" ? patch(previous) : patch;
+  const next = {...previous, ...changes};
+  for (const key of ["tint", "proximity", "path_tuning"]) {
+    if (changes[key]) next[key] = {...previous[key], ...changes[key]};
+  }
+  return next;
+}
+
 export function ghostControls(session, entityKey) {
   const waiting = {
     known: false, available: false, enabled: false, canToggle: false,
@@ -340,7 +362,6 @@ export function ghostControls(session, entityKey) {
   const source = session.source || {};
   const available = Boolean(source.available);
   const enabled = Boolean(session.enabled) && available;
-  const limits = ghostLimits(session);
   return {
     known: true,
     available,
@@ -348,10 +369,7 @@ export function ghostControls(session, entityKey) {
     canToggle: available,
     reasonText: ghostReason(session, source),
     showsTuning: enabled,
-    ...limitedValues(session, limits),
-    volume: typeof session.volume === "number" ? session.volume : null,
-    limits,
-    proximity: session.proximity || null,
+    ...ghostAppearanceControls(session),
     selection: session.selection || null,
   };
 }

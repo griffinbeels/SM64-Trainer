@@ -5,6 +5,7 @@ import {Modal} from "./modal.js";
 import {RankIcon} from "./rankicon.js";
 import {RivalRankStepper} from "./rivalrank.js";
 import {endpoint, rangeDraft, stepRange} from "../rivals.js";
+import {mergeGhostAppearance} from "../ghostsession.js";
 
 const html = htm.bind(h);
 
@@ -16,7 +17,7 @@ export function RivalSettings({rivals, onClose, onSave, renderAppearance}) {
   const [error, setError] = useState(null);
   const change = (name, delta) => setDraft(value=>stepRange(value,pb,limits,name,delta));
   const adaptive = draft.mode === "adaptive";
-  const patch = body => setAppearance(previous=>({...previous,...(typeof body === "function" ? body(previous) : body)}));
+  const patch = body => setAppearance(previous=>mergeGhostAppearance(previous,body));
   const save = async () => {
     setSaving(true); setError(null);
     const result = await onSave(draft,appearance);
@@ -46,7 +47,7 @@ export function RivalSettings({rivals, onClose, onSave, renderAppearance}) {
           canIncrease=${stepRange(draft,pb,limits,name,1)[key] !== draft[key]} change=${delta=>change(name,delta)} />`;
       })}
     </div>
-    ${adaptive && !pb && html`<p class="rival-empty">Save a personal best for ${rivals.strategy_name || "this strategy"} to set ranks above it.</p>`}
+    ${adaptive && !pb && html`<p class="rival-empty">Starting above Capless 5. Your first personal best will move this range.</p>`}
     ${adaptive && pb && html`<div class="rival-pb-context">${pb.step === limits.last_step ? "Your PB" : "Above your PB"}
       <span class="rank-icon-slot" style="--icon-size:32px"><${RankIcon} tier=${pb.tier} division=${pb.division} size=${32} /></span>
     </div>`}

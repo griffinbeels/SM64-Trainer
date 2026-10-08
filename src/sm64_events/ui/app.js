@@ -119,7 +119,7 @@ function Sidebar({ t, tab, setTab, openSettings }) {
       </div>`)}
     </div>
     <div class="sidebar-footer">
-      <button type="button" class="nav-item settings-link" onclick=${openSettings}>
+      <button type="button" class="nav-item settings-link" aria-label="Settings" onclick=${openSettings}>
         <${Icon} name="settings" size=${21} /><span>Settings</span>
       </button>
       <${ConnectionStatus} t=${t} />
