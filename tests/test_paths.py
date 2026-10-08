@@ -3,9 +3,30 @@
 historical layout), %LOCALAPPDATA% when frozen into an exe."""
 import sys
 from pathlib import Path
+import pytest
 
 from sm64_events.core import paths
 from sm64_events.core.paths import compare_cache_dir, db_path
+
+
+def test_isolated_practice_override_keeps_installation_metadata_shared(monkeypatch, tmp_path):
+    monkeypatch.setenv("SM64_PRACTICE_ROOT", str(tmp_path / "profile"))
+    monkeypatch.setenv("SM64_GHOST_POPULATION", str(tmp_path / "population"))
+    monkeypatch.setenv("SM64_MAINTAINER", "1")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "user"))
+    assert paths.data_root() == tmp_path / "profile"
+    assert paths.replays_root() == tmp_path / "profile" / "replays"
+    assert paths.ghost_population_root() == tmp_path / "population"
+    assert paths.capture_layer_settings_path() == tmp_path / "user" / "SM64Trainer" / "data" / "capture_layer.json"
+    assert paths.shared_defaults_root() is None
+
+
+@pytest.mark.parametrize("name", ["SM64_PRACTICE_ROOT", "SM64_GHOST_POPULATION"])
+@pytest.mark.parametrize("value", ["", "relative/profile"])
+def test_runtime_overrides_refuse_relative_or_empty_locations(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match="absolute"):
+        (paths.data_root if name == "SM64_PRACTICE_ROOT" else paths.ghost_population_root)()
 
 
 def test_source_paths_match_historical_relative_layout(monkeypatch):
