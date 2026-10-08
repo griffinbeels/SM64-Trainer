@@ -130,7 +130,7 @@ def local_attempt_source(attempt) -> dict | None:
 
 
 def saved_pb_basis(db, ranks, identity) -> dict | None:
-    """The current strategy's saved PB, graded exactly as Practice grades it.
+    """The current strategy's saved PB, graded on the selected Practice scope.
 
     Resolve the latest visible slot through the canonical practice lookup. A
     deliberately slower save replaces its predecessor; an undo reveals the
@@ -170,7 +170,7 @@ def saved_pb_basis(db, ranks, identity) -> dict | None:
                              row["strat_tag"], row["frames"], pb=True)
     return {"frames": row["frames"], **progress, "attempt_id": row["attempt_id"],
             "pb_id": row["id"], "strategy": row["strat_tag"], "current_strategy": identity.strategy,
-            "game_version": row.get("game_version"), "source": source, "ghost": ghost}
+            "game_version": row.get("game_version"), "source": source, "ghost": ghost, "scope": identity.scope}
 
 
 class GhostLibrary:

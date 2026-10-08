@@ -1,4 +1,4 @@
-"""Pure selection of certified rivals against the current strategy rank.
+"""Pure selection of certified rivals against the selected practice rank.
 
 The population provider owns admission, clip validation and storage. This
 module consumes bounded metadata snapshots; it never opens clips or fetches
@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from itertools import islice
 
 from sm64_events.ghost.native_session import ghost_hue
-from sm64_events.ranks import classify, scoring
+from sm64_events.ranks import classify, curves, scoring
+from sm64_events.ranks.calibration import resolve_curve
 from sm64_events.ranks.standards import entity_key
 
 MAX_RIVALS = 4
@@ -25,6 +26,13 @@ DEFAULT_OPTIONS = {
     "min_step": 0, "max_step": MAX_STEP,
 }
 _IDENTITY_VERSION = object()
+MATCH_SCOPES = ("strategy", "overall")
+
+
+def _checked_scope(scope):
+    if scope not in MATCH_SCOPES:
+        raise ValueError("Choose Strategy or Overall ghosts.")
+    return scope
 
 
 @dataclass(frozen=True)
@@ -35,6 +43,10 @@ class PracticeIdentity:
     game_version: str
     strategy: str | None
     signature: str | None = None
+    scope: str = "strategy"
+
+    def __post_init__(self):
+        _checked_scope(self.scope)
 
 
 def rank_entity_key(identity: PracticeIdentity) -> str:
@@ -51,29 +63,38 @@ def _read_context(ranks):
     return ranks.read_context() if hasattr(ranks, "read_context") else nullcontext()
 
 
-def _progress(ladder, frames):
-    if not ladder:
+def _rank_model(ranks, key, identity, version):
+    return (resolve_curve(ranks, key, version) if identity.scope == "overall"
+            else ranks.ladder_cs(key, identity.strategy, version))
+
+
+def _progress(model, frames, scope):
+    if not model:
         return None
-    result = scoring.progress_for_time(ladder, classify.display_cs(frames))
+    result = (curves.progress_for_time(model, classify.display_cs(frames)) if scope == "overall"
+              else scoring.progress_for_time(model, classify.display_cs(frames)))
+    if result is None:
+        return None
     return {"tier": result["tier"], "division": result["division"],
             "step": scoring.progression_key(result["tier"], result["division"])}
 
 
 def rank_frames(ranks, identity: PracticeIdentity, frames: int, *, version=_IDENTITY_VERSION) -> dict | None:
-    """Grade the practice strategy; saved times may name their original ROM.
+    """Grade the selected scope; saved times may name their original ROM.
 
     Omitting version grades a recording on the observed ROM. Explicit None is
     the existing legacy saved-time rule: follow the store's grading version.
     """
     version = identity.game_version if version is _IDENTITY_VERSION else version
-    if (ranks is None or type(frames) is not int or frames <= 0 or not identity.strategy
+    if (ranks is None or type(frames) is not int or frames <= 0
+            or identity.scope == "strategy" and not identity.strategy
             or identity.game_version not in ("us", "jp") or version not in (None, "us", "jp")):
         return None
     with _read_context(ranks):
         key = rank_entity_key(identity)
         if ranks.clock_for(key) != identity.clock:
             return None
-        return _progress(ranks.ladder_cs(key, identity.strategy, version), frames)
+        return _progress(_rank_model(ranks, key, identity, version), frames, identity.scope)
 
 
 def checked_options(value: dict) -> dict:
@@ -109,7 +130,7 @@ def _bounded(rows):
 def _compatible(row, identity):
     return (isinstance(row, dict) and row.get("certified") is True and row.get("valid") is True
             and row.get("full_start") is True
-            and row.get("strategy") == identity.strategy
+            and (identity.scope == "overall" or row.get("strategy") == identity.strategy)
             and (row.get("kind"), row.get("entity_key"), row.get("clock"), row.get("game_version"))
             == (identity.kind, identity.entity_key, identity.clock, identity.game_version)
             and (identity.kind != "segment" or identity.signature is not None
@@ -123,22 +144,23 @@ def _compatible(row, identity):
 def rank_recordings(rows, ranks, identity: PracticeIdentity) -> tuple[dict, ...]:
     """Regrade certified metadata; ignore claimed ranks and uncertified imports."""
     rows = _bounded(rows)
-    if ranks is None or not identity.strategy or identity.game_version not in ("us", "jp"):
+    if (ranks is None or identity.scope == "strategy" and not identity.strategy
+            or identity.game_version not in ("us", "jp")):
         return ()
     with _read_context(ranks):
         key = rank_entity_key(identity)
         if ranks.clock_for(key) != identity.clock:
             return ()
-        ladder = ranks.ladder_cs(key, identity.strategy, identity.game_version)
+        model = _rank_model(ranks, key, identity, identity.game_version)
         revision = getattr(ranks, "calibration_revision", None)
         result = {}
         for row in rows:
             if not _compatible(row, identity):
                 continue
-            progress = _progress(ladder, row["frames"])
+            progress = _progress(model, row["frames"], identity.scope)
             if progress is not None:
                 result.setdefault(row["id"], {**row, **progress, "calibration_revision": revision,
-                                              "current_strategy": identity.strategy})
+                                              "current_strategy": identity.strategy, "scope": identity.scope})
     return tuple(result[key] for key in sorted(result))
 
 
@@ -202,15 +224,15 @@ def _missing_pin(identity, slot):
                     "reason_text": "This chosen rival is unavailable. Reset or replace it."}, slot, True)
 
 
-def _eligible_auto(row, pb, options, low, high, strategy):
-    # Different ROMs have different timing standards. A higher strategy step
+def _eligible_auto(row, pb, options, low, high, strategy, scope):
+    # Different ROMs have different timing standards. A higher rank step
     # proves progress without comparing their raw clocks. At the capped final
     # step, a faster time only proves progress on the same ROM (or legacy PB).
     progresses = (pb is None or row["step"] > pb["step"]
                   or pb.get("game_version") in (None, row.get("game_version")) and row["frames"] < pb["frames"])
     return (row.get("manual_only") is not True and low <= row["step"] <= high
             and (options["mode"] == "fixed" or progresses)
-            and row.get("strategy") == strategy)
+            and (scope == "overall" or row.get("strategy") == strategy))
 
 
 def _automatic(rows, count, low, high, players):
@@ -234,22 +256,25 @@ def _automatic(rows, count, low, high, players):
     return sorted(picked, key=lambda row: (row["step"], row["frames"], row["id"]))
 
 
-def select_rivals(rows, pb, options, pins: dict[str, str], previous=()) -> tuple[dict, ...]:
+def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope="strategy") -> tuple[dict, ...]:
     """Choose visible slots; caller retains hidden pins and owns PB playback.
 
     Pass the previous roster when changing one manual choice, to preserve its
     other compatible automatic slots. Omit it when the saved basis/range changes.
     Missing chosen recordings remain occupied rather than silently replaced.
+    Overall permits other strategies, while every row keeps its recorded label.
     """
+    scope = _checked_scope(scope)
     options, pins = checked_options(options), _checked_pins(pins)
-    candidates = {row["id"]: row for row in _bounded(rows) if _ranked_row(row)}
+    candidates = {row["id"]: row for row in _bounded(rows) if _ranked_row(row) and row.get("scope", scope) == scope}
     previous = tuple(row for row in _bounded(previous) if _ranked_row(row))
     low, high = _range(pb, options)
     strategy = pb.get("current_strategy") if pb else None
     if strategy is None:
         strategy = next((row.get("current_strategy") for row in candidates.values()
                          if row.get("current_strategy") is not None), None)
-    candidates = {key: row for key, row in candidates.items() if strategy is not None and row.get("strategy") == strategy}
+    if scope == "strategy":
+        candidates = {key: row for key, row in candidates.items() if strategy is not None and row.get("strategy") == strategy}
     used = {row["id"] for row in candidates.values()
             if options["include_pb"] and _same_as_pb(row, pb)}
     result = {}
@@ -264,11 +289,11 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=()) -> tuple
         row = candidates.get(old["id"])
         if (not old.get("pinned") and type(slot) is int and 0 <= slot < options["count"] and slot not in result
                 and row is not None and row["id"] not in used
-                and _eligible_auto(row, pb, options, low, high, strategy)):
+                and _eligible_auto(row, pb, options, low, high, strategy, scope)):
             result[slot] = _placed(row, slot, False)
             used.add(row["id"])
     available = [row for row in candidates.values() if row["id"] not in used
-                 and _eligible_auto(row, pb, options, low, high, strategy)]
+                 and _eligible_auto(row, pb, options, low, high, strategy, scope)]
     players = {row["player_id"] for row in result.values() if row.get("player_id") is not None}
     automatic = iter(_automatic(available, options["count"] - len(result), low, high, players))
     for slot in range(options["count"]):

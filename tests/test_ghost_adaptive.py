@@ -45,6 +45,10 @@ class Standards:
     def clock_for(self, _key):
         return self.clock
 
+    def overall_curve(self, key, version=None):
+        self.requests.append((key, None, version))
+        return self.curves[version or self.grading_version]
+
 
 def recording(identity="one", frames=600, **values):
     return {"id": identity, "player_id": f"player:{identity}", "player_name": identity,
@@ -98,6 +102,56 @@ def test_current_strategy_and_exact_displayed_frames_grade_every_row():
     assert rank_frames(store, replace(IDENTITY, strategy=None), 630) is None
 
 
+def test_scope_preserves_default_identity_and_grades_the_same_recording_on_its_canonical_model():
+    assert IDENTITY.scope == "strategy"
+    overall = replace(IDENTITY, scope="overall")
+    store = Standards()
+    strategy, = rank_recordings([recording(frames=630)], store, IDENTITY)
+    entity, = rank_recordings([recording(frames=630)], store, overall)
+    assert (strategy["tier"], strategy["division"], strategy["step"]) == ("Gold", "II", 18)
+    assert (entity["tier"], entity["division"], entity["step"]) == ("Gold", "I", 19)
+    assert strategy["scope"] == "strategy" and entity["scope"] == "overall"
+    assert store.requests == [("star:2:1", "Standard", "us"), ("star:2:1", None, "us")]
+    store.grading_version = "jp"
+    assert rank_frames(store, overall, 630, version=None) != rank_frames(store, overall, 630)
+    assert rank_frames(store, replace(overall, strategy=None), 630) is not None
+
+
+def test_overall_broadens_strategy_candidates_but_preserves_recorded_labels_and_pins():
+    overall = replace(IDENTITY, scope="overall")
+    records = [recording("standard", 630), recording("alternative", 630, strategy="Other")]
+    strategy = rank_recordings(records, Standards(), IDENTITY)
+    entity = rank_recordings(records, Standards(), overall)
+    assert [row["id"] for row in strategy] == ["standard"]
+    assert {row["strategy"] for row in entity} == {"Standard", "Other"}
+    pb = basis(18, 660)
+    assert {row["id"] for row in select_rivals(entity, pb, {}, {}, scope="overall")} == {"standard", "alternative"}
+    assert select_rivals(entity, pb, {}, {}) == ()  # stale Overall grades cannot enter Strategy
+    private = ranked(30, "private", strategy="Other", manual_only=True, certified=False, scope="overall")
+    selected, = select_rivals([private], pb, {}, {"0": "private"}, scope="overall")
+    assert selected["pinned"] and selected["strategy"] == "Other"
+    assert select_rivals([private], pb, {}, {}, scope="overall") == ()
+    unavailable, = select_rivals([private], pb, {}, {"0": "private"})
+    assert unavailable["ghost"] is None
+
+
+@pytest.mark.parametrize("bad", [
+    {"certified": False}, {"valid": None}, {"full_start": False}, {"game_version": None},
+    {"game_version": "jp"}, {"clock": "rta"}, {"kind": "segment"}, {"entity_key": "2-2"},
+    {"strategy": None}, {"frames": True}, {"frames": 0}, {"ghost": None},
+])
+def test_overall_scope_keeps_provenance_rom_clock_and_target_refusals(bad):
+    assert rank_recordings([recording(**({"strategy": "Other"} | bad))], Standards(), replace(IDENTITY, scope="overall")) == ()
+
+
+@pytest.mark.parametrize("scope", [None, "all", "Strategy", True, []])
+def test_invalid_matching_scope_is_refused(scope):
+    with pytest.raises(ValueError, match="Strategy or Overall"):
+        replace(IDENTITY, scope=scope)
+    with pytest.raises(ValueError, match="Strategy or Overall"):
+        select_rivals([], None, {}, {}, scope=scope)
+
+
 @pytest.mark.parametrize("bad", [
     {"certified": None}, {"certified": False}, {"certified": 1},
     {"valid": None}, {"valid": False}, {"valid": 1},
@@ -122,8 +176,9 @@ def test_explicit_rom_and_canonical_clock_never_fall_back():
     assert rank_recordings([recording()], store, replace(IDENTITY, game_version=None)) == ()
 
 
-def test_segment_binding_requires_the_semantic_definition_and_clock():
-    identity = PracticeIdentity("segment", "12", "rta", "us", "Standard", SIGNATURE)
+@pytest.mark.parametrize("scope", ["strategy", "overall"])
+def test_segment_binding_requires_the_semantic_definition_and_clock(scope):
+    identity = PracticeIdentity("segment", "12", "rta", "us", "Standard", SIGNATURE, scope)
     row = recording(kind="segment", entity_key="12", clock="rta", signature=SIGNATURE)
     assert rank_recordings([row], Standards("rta"), identity)[0]["step"] == 20
     assert rank_recordings([{**row, "signature": "cd" * 32}], Standards("rta"), identity) == ()
@@ -186,6 +241,15 @@ def test_foreign_region_anchor_compares_strategy_steps_and_never_claims_faster_c
     capped = ranked(44, "different-clock", 99, game_version="us")
     assert select_rivals([capped], basis(44, 100, game_version="jp"), {}, {}) == ()
     assert select_rivals([capped], basis(44, 100, game_version="us"), {}, {})[0]["id"] == "different-clock"
+
+
+def test_overall_cross_strategy_cap_still_requires_a_faster_comparable_time():
+    rows = [ranked(44, "faster", 99, strategy="Other", scope="overall"),
+            ranked(44, "slower", 101, strategy="Third", scope="overall")]
+    pb = basis(44, 100, game_version="us")
+    assert [row["id"] for row in select_rivals(rows, pb, {}, {}, scope="overall")] == ["faster"]
+    assert select_rivals(rows, {**pb, "game_version": "jp"}, {}, {}, scope="overall") == ()
+    assert select_rivals(rows, pb, {}, {}) == ()
 
 
 def test_no_pb_begins_at_the_floor_and_fixed_range_can_include_slower_runs():
@@ -334,6 +398,33 @@ def test_latest_saved_strategy_slots_are_resolved_before_comparing_or_undoing(tm
         assert (result["attempt_id"], result["frames"], result["step"]) == (1, 600, 20)
         assert result["ghost"].pb and result["ghost"].origin == "attempt:1"
         assert result["source"] == {"session_id": 1, "attempt_id": 1, "started_utc": runs[0].started_utc}
+    finally:
+        database.close()
+
+
+def test_overall_scope_changes_pb_grade_without_changing_current_strategy_saved_owner(tmp_path):
+    database = Database(tmp_path / "scope-pb.db")
+    runs = [attempt(1, 630, game_version=None), attempt(2, 540, strat_tag="Other")]
+    store = Standards()
+    overall_identity = replace(IDENTITY, scope="overall")
+    try:
+        database.replace_attempts(runs)
+        for run in runs:
+            save(database, run)
+        strategy = saved_pb_basis(database, store, IDENTITY)
+        overall = saved_pb_basis(database, store, overall_identity)
+        assert strategy["attempt_id"] == overall["attempt_id"] == 1
+        assert strategy["step"] == 18 and overall["step"] == 19
+        assert overall["scope"] == "overall" and overall["strategy"] == "Standard"
+        assert overall["ghost"].origin == strategy["ghost"].origin == "attempt:1"
+        store.grading_version = "jp"
+        legacy = saved_pb_basis(database, store, overall_identity)
+        assert {key: legacy[key] for key in ("tier", "division", "step")} == rank_frames(store, overall_identity, 630, version=None)
+        database.insert_pb(2, 1, "Standard", "igt", 300, None, "2026-10-08T00:00:00Z",
+                           imported_from="Other ROM", game_version="jp")
+        imported = saved_pb_basis(database, store, overall_identity)
+        assert imported["ghost"] is None and imported["source"] is None
+        assert {key: imported[key] for key in ("tier", "division", "step")} == rank_frames(store, overall_identity, 300, version="jp")
     finally:
         database.close()
 
