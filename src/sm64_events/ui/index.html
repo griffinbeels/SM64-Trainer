@@ -9393,6 +9393,49 @@
   .sov-check { display: flex; align-items: center; gap: 8px; font-size: .82rem; cursor: pointer; }
   .sov-check input { min-height: 0; margin: 0; accent-color: var(--gold); }
   .sov-reset { justify-self: start; }
+/* Rival controls share the practice card's width and the app's rank artwork. */
+.rivals { container-type:inline-size; width:100%; color:var(--text); }
+.rivals-header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin:16px 0 8px; }
+.rivals-header h3 { margin:0; font-size:18px; }
+.rivals-header > div { display:flex; gap:8px; align-items:center; }
+.rival-roster, .rival-player-results { list-style:none; margin:0; padding:0; }
+.rival-row { position:relative; border-bottom:1px solid var(--border); }
+.rival-hit { position:absolute; inset:3px 0; width:100%; background:transparent; border:0; border-radius:8px; z-index:0; }
+.rival-hit:hover { background:rgba(140,180,220,.07); }
+.rival-hit:focus-visible { outline:2px solid var(--focus,#86c5ff); outline-offset:1px; }
+.rival-content { position:relative; z-index:1; pointer-events:none; display:grid; grid-template-columns:16px minmax(0,1fr) auto 76px 34px; align-items:center; gap:14px; padding:16px 8px; min-height:90px; }
+.rival-color { width:14px; height:14px; border-radius:50%; background:hsl(var(--rival-hue) 78% 72%); }
+.rival-name-line { display:flex; align-items:center; gap:8px; }
+.rival-name-line strong { overflow-wrap:anywhere; font-size:16px; }
+.rival-identity small { display:block; margin-top:4px; color:var(--muted); font-size:13px; }
+.rival-reset { pointer-events:auto; flex:none; width:32px; min-height:32px; padding:5px; }
+.rival-time { font-variant-numeric:tabular-nums; white-space:nowrap; text-align:right; font-size:17px; }
+.rival-swap { justify-self:center; font-size:23px; color:var(--muted); }
+.rival-status { border-left:3px solid var(--gold,#f7c633); padding:10px 12px; margin:8px 0; background:rgba(140,180,220,.08); }
+.rival-empty { color:var(--muted); margin:16px 0; }
+.rival-dialog-host .modal { position:absolute; left:var(--rival-dialog-x,50%); top:var(--rival-dialog-y,50%); transform:translate(-50%,-50%); width:min(640px,calc(100vw - 32px)); max-height:calc(100vh - 32px); }
+.rival-dialog-host .modal-body { overflow-y:auto; }
+.rival-settings-top { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.rival-settings-top label { display:flex; flex-direction:column; gap:6px; color:var(--muted); }
+.rival-settings-top select { width:100%; }
+.rival-check { display:flex; align-items:center; gap:8px; margin:18px 0; }
+.rival-range { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:24px 0 16px; }
+.rival-rank-field { text-align:center; color:var(--muted); }
+.rival-rank-stepper { display:flex; justify-content:center; align-items:center; gap:8px; min-height:80px; }
+.rival-rank-stepper > span { display:flex; align-items:center; justify-content:center; min-width:114px; }
+.rival-rank-field small { display:block; font-variant-numeric:tabular-nums; }
+.rival-pb-context { display:flex; align-items:center; gap:14px; min-height:50px; }
+.rival-appearance { margin-top:20px; border-top:1px solid var(--border); padding-top:16px; }
+.rival-appearance .ghost-tune { margin-top:16px; }
+.rival-search { width:100%; margin-bottom:12px; }
+.rival-player-result { display:grid; grid-template-columns:minmax(0,1fr) auto 76px auto; gap:16px; align-items:center; padding:16px 0; border-bottom:1px solid var(--border); }
+.rival-player-result small { display:block; color:var(--muted); margin-top:5px; }
+.rival-player-result select { display:block; max-width:100%; margin-top:6px; }
+@container (max-width:540px) {
+  .rival-content { grid-template-columns:14px minmax(0,1fr) auto 68px 24px; gap:9px; padding:14px 4px; }
+  .rivals-header { gap:8px; }
+  .rivals-header .primary-button { padding:7px 10px; }
+}
 </style></head>
 <body>
 <div id="app"></div>

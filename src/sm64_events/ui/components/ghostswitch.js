@@ -37,6 +37,7 @@ import { getJSON, send } from "../api.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { GhostProximity } from "./ghostproximity.js";
 import { GhostLibraryButton } from "./ghostlibrary.js";
+import { Rivals } from "./rivals.js";
 import { clampNudge, clampOpacity, ghostControls, ghostPathTuning, ghostRecordingOptions,
          ghostOption, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
          nudgeSeconds, nudgeText, opacityText, pathTuningText, shownTint,
@@ -527,15 +528,24 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         ${controls.reasonText}
       </span>`}
     </div>
-    <${GhostRecording} recording=${recording} entityKey=${entityKey}
-      target=${session?.target} write=${write} />
-    ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint}
+    ${session?.rivals ? html`<${Rivals} session=${session} write=${write}
+      renderAppearance=${(appearance,patch)=>{
+        const values=heldValues(controls,appearance);
+        return html`<${GhostTuning} ...${values} limits=${limits}
+          volume=${{value:appearance.volume ?? controls.volume}} write=${patch} queue=${patch} />
+          <${GhostProximity} active=${true} value=${controls.proximity} range=${limits.proximity}
+            draft=${appearance.proximity} write=${patch} queue=${patch} />
+          <${GhostPathTune} active=${true} switches=${values.switches} tuning=${values.pathTuning}
+            ranges=${limits.path_tuning} draft=${appearance.path_tuning} queue=${patch} />`;
+      }} />` : html`<${GhostRecording} recording=${recording} entityKey=${entityKey}
+      target=${session?.target} write=${write} />`}
+    ${on && !session?.rivals && html`<${GhostTuning} opacity=${opacity} tint=${tint}
       switches=${switches} nameBox=${nameBox} pathSource=${pathSource} limits=${limits}
       volume=${{ value: controls.volume, draft: held.volume }}
       nudge=${nudge} write=${write} queue=${queue} />`}
-    <${GhostProximity} active=${on} value=${controls.proximity} range=${limits.proximity}
+    <${GhostProximity} active=${on && !session?.rivals} value=${controls.proximity} range=${limits.proximity}
       draft=${held.proximity} write=${write} queue=${queue} />
-    <${GhostPathTune} active=${on} switches=${switches} tuning=${pathTuning}
+    <${GhostPathTune} active=${on && !session?.rivals} switches=${switches} tuning=${pathTuning}
       ranges=${limits.path_tuning} draft=${held.path_tuning} queue=${queue} />
   </div>`;
 }
