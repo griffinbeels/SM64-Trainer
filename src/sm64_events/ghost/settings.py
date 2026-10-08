@@ -28,7 +28,8 @@ from sm64_events.ghost.native_layout import (
 )
 
 #: First-use preferences follow his accepted native ghost screenshot of
-#: 2026-10-06. Existing stored choices win; tests check their valid ranges
+#: 2026-10-06, with Paths off as requested on 2026-10-08. Existing stored
+#: choices win; tests check their valid ranges
 #: and persistence rather than pinning these tuning values.
 DEFAULT_OPACITY = 1.0
 #: The slider's own floor: a ghost at zero is a control that looks broken. The
@@ -365,7 +366,7 @@ ROWS = (
     # button idea disabled by default but toggleable (i want to test this and
     # see if it's useful)."* His accepted screenshot now has the presses on.
     # The native session names its anchor recording in each command (`path_clip`).
-    switch("path_enabled", "ghost_path", True, "The ghost's path is either shown or hidden.", "path_enabled"),
+    switch("path_enabled", "ghost_path", False, "The ghost's path is either shown or hidden.", "path_enabled"),
     switch("path_buttons", "ghost_path_buttons", True,
            "Button presses on the path are either shown or hidden.", "path_buttons"),
     Setting("path_source", DEFAULT_PATH_SOURCE, checked_path_source, key="ghost_path_source",

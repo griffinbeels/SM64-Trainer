@@ -59,6 +59,19 @@ def test_a_session_with_no_target_says_why(tmp_path):
     assert body["target"] is None and not body["window"]["visible"]
 
 
+def test_disconnect_pb_invalidation_refreshes_rivals_without_an_attempt(tmp_path, monkeypatch):
+    session, _, _, _ = a_session(tmp_path)
+    notified, resolved = [], []
+    session._rivals = SimpleNamespace(pb_changed=lambda target: notified.append(target))
+
+    async def refresh(*, resolve):
+        resolved.append(resolve)
+
+    monkeypatch.setattr(session, "refresh", refresh)
+    asyncio.run(session.pb_changed(None, False))
+    assert notified == [None] and resolved == [True]
+
+
 def test_a_recorded_template_resolves_to_native_poses(tmp_path):
     session, _, _, store = a_session(tmp_path)
     marked = mark(store)

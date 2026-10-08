@@ -470,15 +470,7 @@ class NativeGhost:
         elif ready and not visible and status.get("playback_reason") == GP_WRONG_SCENE:
             reason = "Ghost is in another area."
         elif self._requested and not ready:
-            if self._owner_suspended:
-                reason = "Waiting for the next attempt or a saved state."
-            elif status.get("reason") == 10:
-                reason = "Waiting for this attempt's recorded clock."
-            elif not self._enabled and status.get("available"):
-                reason = "Waiting for the next attempt."
-            elif status.get("state") == 3:
-                reason = "Preparing Mario..."
-            elif status.get("state") == 5:
+            if status.get("state") == 5 and status.get("reason") != 10:
                 reason = {4: "Open the US practice ROM to show Mario.",
                           5: "This practice ROM does not provide the required Mario poses.",
                           6: "The saved Mario poses could not be loaded.",
@@ -487,6 +479,14 @@ class NativeGhost:
                           NATIVE_BUDGET_REASON: budget_reason(len(self._selected_asset or ())),
                           11: "The game ROM could not be read for Mario. Reopen the game with the Trainer graphics plugin."}.get(
                               status.get("reason"), "Mario playback is unavailable; try switching it off and on.")
+            elif self._owner_suspended:
+                reason = "Waiting for the next attempt or a saved state."
+            elif status.get("reason") == 10:
+                reason = "Waiting for this attempt's recorded clock."
+            elif status.get("state") == 3:
+                reason = "Preparing Mario..."
+            elif not self._enabled and status.get("available"):
+                reason = "Waiting for the next attempt."
             else:
                 reason = RECONNECTING_REASON if self._reconnecting() else START_GAME_REASON
         result = {"running": ready, "visible": visible, "backend": "native", "reason": reason}

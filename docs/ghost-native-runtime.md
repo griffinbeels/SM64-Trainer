@@ -17,6 +17,13 @@ cannot choose ghosts for another practice target. The input-comparison template
 remains independent. The low-level legacy selection door supports up to 16
 ghosts; this adaptive pilot exposes four rivals plus PB.
 
+The file reader accepts local drive-absolute paths within the IPC's bound,
+normalizes them and internally uses Windows' extended-length syntax. PJ64 1.6
+does not opt into long paths; a normal `CreateFileW` can refuse a valid clip
+past 260 characters even when Python reads it. The manifest-less x86 reader
+test covers that host boundary, short paths and existing file refusals.
+Native preparation errors remain visible while waiting for an attempt.
+
 The source connects capture, archive publication, native playback, compositing
 and clean video recording. This describes that integration, not a successful
 release build or live acceptance result. New native recordings are required;
@@ -30,7 +37,8 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 visibility 100%, colour enabled at +250 degrees, shadow and names enabled,
 inputs over the ghost disabled, corner inputs and front-of-Mario fading enabled,
 black name boxes at 60%, sound fading enabled at 30% volume, and ghosts in
-recording disabled. The path is enabled with button presses and the average
+recording disabled. Paths default off following the October 8 correction;
+when enabled, the path uses button presses and the average
 of ghosts, looking 3 seconds ahead at width 20, strength 80% and arrow spacing
 0.05 seconds. Near-player fading is enabled with 300 units of extra distance;
 timing starts with the player. Saved preferences override these defaults.

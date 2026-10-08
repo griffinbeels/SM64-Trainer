@@ -1,4 +1,4 @@
-"""The app's desired roster, PB settle window and bounded admission lifecycle."""
+"""The app's desired roster, immediate PB changes and bounded admission lifecycle."""
 import asyncio
 import json
 import threading
@@ -65,7 +65,7 @@ def controller(tmp_path, monkeypatch):
     tracker = SimpleNamespace(db=Database(tmp_path/"practice.db"),ranks=Standards())
     native, population, clock = Native(),Population(),[0.0]
     monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=10,frames=1200))
-    rivals = Rivals(tracker,population,native,lambda:"us",now=lambda:clock[0])
+    rivals = Rivals(tracker,population,native,lambda:"us")
     rivals.options.update(mode="fixed",min_step=0,max_step=44)
     rivals.refresh(TARGET,CONTROLS,enabled=True)
     # The first refresh loads defaults from the fresh database.
@@ -81,20 +81,22 @@ def test_forced_reads_do_not_reprepare_identical_rosters(tmp_path,monkeypatch):
     assert (len(native.preparations),rivals.generation)==before
 
 
-def test_pb_undo_cancels_pending_and_survives_target_and_strategy_switch(tmp_path,monkeypatch):
+def test_pb_and_undo_recompute_immediately_without_repreparing_unchanged_clips(tmp_path,monkeypatch):
     rivals,_,native,_,clock = controller(tmp_path,monkeypatch)
     rivals.pb_changed()
-    assert native.canceled==1
-    before = len(native.preparations)
+    assert native.canceled==0
+    before = len(native.preparations),rivals.generation
+    monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=9,frames=1300))
+    rivals.refresh(TARGET,CONTROLS,enabled=True)
+    assert rivals.pb["frames"]==1300 and clock[0]==0
+    assert (len(native.preparations),rivals.generation)==before
+    rivals.pb_changed()
+    rivals.refresh(TARGET,CONTROLS,enabled=True)
+    assert (len(native.preparations),rivals.generation)==before
     rivals.refresh({**TARGET,"strat":"Different"},CONTROLS,enabled=True,force=True)
     rivals.refresh({**TARGET,"entity_key":"2-2"},CONTROLS,enabled=True,force=True)
-    after_other = len(native.preparations)
     rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
-    assert after_other==before+1 and len(native.preparations)==after_other
-    monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=9,frames=1300))
-    clock[0]=5.1
-    rivals.refresh(TARGET,CONTROLS,enabled=True)
-    assert rivals.pb["frames"]==1300 and rivals.pb_deadline is None
+    assert rivals.pb["frames"]==1300 and len(native.preparations)>before[0]
 
 
 def test_hidden_duplicate_pin_refused_without_mutation(tmp_path,monkeypatch):
@@ -145,6 +147,7 @@ def test_overlay_off_does_not_prepare_clip_bytes(tmp_path,monkeypatch):
     count=len(native.preparations)
     rivals.refresh(TARGET,CONTROLS,enabled=False)
     assert len(native.preparations)==count
+    assert rivals.payload()["status"] is None
     rivals.refresh(TARGET,CONTROLS,enabled=True)
     assert len(native.preparations)==count+1
 
@@ -153,12 +156,12 @@ def test_wire_omits_private_playback_and_local_lineage():
     assert wire({"id":"one","source":{"attempt_id":1},"ghost":object(),"path":"private","manifest":{}})=={"id":"one"}
 
 
-def test_settling_a_different_star_never_reuses_previous_available_source(tmp_path,monkeypatch):
+def test_pb_on_a_different_star_resolves_that_star_immediately(tmp_path,monkeypatch):
     rivals,_,_,_,_ = controller(tmp_path,monkeypatch)
     other={**TARGET,"entity_key":"2-2"}
     rivals.pb_changed(other)
     answer=rivals.refresh(other,CONTROLS,enabled=True)
-    assert answer["available"] is False and answer["ghosts"]==[]
+    assert answer["available"] is False and answer["ghosts"]==[] and answer["reason"]=="no_rivals"
 
 
 def test_private_local_choices_restore_and_reset_without_certification(tmp_path,monkeypatch):
@@ -214,20 +217,59 @@ def test_saving_with_all_visible_pins_keeps_them_and_does_not_leak_a_local_refer
 
 
 @pytest.mark.parametrize("occupied", [1,4])
-def test_saved_run_respects_persisted_pins_while_strategy_change_is_settling(tmp_path,monkeypatch,occupied):
+def test_saved_run_respects_persisted_pins_after_strategy_change(tmp_path,monkeypatch,occupied):
     rivals,tracker,_,population,_ = controller(tmp_path,monkeypatch)
     protected = {str(slot):population.rows[slot]["id"] for slot in range(occupied)}
     rivals.pins[rivals._key(TARGET)] = dict(protected)
     rivals.pb_changed(TARGET)
     target = {**TARGET,"strat":"Different"}
     rivals.refresh(target,CONTROLS,enabled=True)
-    assert not rivals.rows and rivals.pb_deadline is not None
+    assert not rivals.rows and rivals.target==target
     run = attempt(strat_tag="Different")
     tracker.db.upsert_attempt(run)
     assert rivals.remember_saved(target,run)
     choices = rivals.pins[rivals._key(target)]
     assert len(choices)==1
     assert rivals.pins[rivals._key(TARGET)]==protected
+
+
+def test_pending_requires_native_readiness_and_clears_on_adoption(tmp_path,monkeypatch):
+    rivals,_,native,_,_ = controller(tmp_path,monkeypatch)
+    assert rivals.payload()["status"] is None
+    native.state=lambda:{"prepared_generation":rivals.generation,"active_generation":0}
+    assert rivals.payload()["status"]=="Updates on your next attempt."
+    native.state=lambda:{"prepared_generation":rivals.generation,"active_generation":rivals.generation}
+    assert rivals.payload()["status"] is None
+    before=rivals.generation,len(native.preparations)
+    rivals.pb_changed()
+    rivals.refresh(TARGET,CONTROLS,enabled=True)
+    assert (rivals.generation,len(native.preparations))==before and rivals.payload()["status"] is None
+
+
+def test_automatic_rivals_exclude_own_runs_but_preserve_explicit_choices(tmp_path,monkeypatch):
+    rivals,tracker,_,population,_=controller(tmp_path,monkeypatch)
+    tracker.db.set_state("ghost_player_id",population.rows[0]["player_id"])
+    rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
+    assert all(row["player_id"]!=population.rows[0]["player_id"] for row in rivals.rows)
+    rivals.pins[rivals._key(TARGET)]={"0":population.rows[0]["id"]}
+    rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
+    assert rivals.rows[0]["id"]==population.rows[0]["id"] and rivals.rows[0]["pinned"]
+
+
+def test_fresh_full_range_climb_retires_beaten_times_including_same_rank(tmp_path,monkeypatch):
+    rivals,_,native,population,clock=controller(tmp_path,monkeypatch)
+    monkeypatch.setattr(rivals,"_simulation",lambda:{"zero_practice":True})
+    monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=20,frames=640))
+    rivals.pb_changed()
+    before=rivals.generation
+    rivals.refresh(TARGET,CONTROLS,enabled=True)
+    assert clock[0]==0 and rivals.generation==before+1
+    assert [row["frames"] for row in rivals.rows]==[620]
+    assert native.preparations[-1][-1]==rivals.generation
+    # Fixed production ranges still allow the chosen absolute rank range.
+    monkeypatch.setattr(rivals,"_simulation",lambda:None)
+    rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
+    assert len(rivals.rows)==4 and any(row["frames"]>=640 for row in rivals.rows)
 
 
 def test_reopening_preserves_referenced_local_choices_across_many_targets(tmp_path,monkeypatch):

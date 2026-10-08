@@ -577,6 +577,20 @@ def test_unready_renderer_does_not_publish_a_stale_area_reason(tmp_path, status,
     asyncio.run(check())
 
 
+@pytest.mark.parametrize("suspended", [False, True])
+def test_failed_roster_preparation_is_visible_before_the_first_attempt(tmp_path, suspended):
+    session, source, _ = native_session(tmp_path)
+    session._native._source = source
+    session._native._enabled = False
+    session._native._requested = True
+    session._native._owner_suspended = suspended
+    source.snapshot_status = lambda **_: {"available": True, "state": 5, "reason": 6}
+    assert session._native.state()["reason"] == "The saved Mario poses could not be loaded."
+    source.snapshot_status = lambda **_: {"available": True, "state": 3}
+    assert session._native.state()["reason"] == (
+        "Waiting for the next attempt or a saved state." if suspended else "Preparing Mario...")
+
+
 def test_poll_markers_rebase_and_disarm_without_frame_pacing_or_file_reads(tmp_path):
     session, source, _ = native_session(tmp_path)
     origin = {"kind": "segment", "session_id": 1, "arm_id": 99,

@@ -1,6 +1,5 @@
 """Desired rival rosters and saved preferences; native preparation owns adoption."""
 import json
-from time import monotonic
 
 from sm64_events.ghost.adaptive import (
     PracticeIdentity, add_slot, checked_options, rank_frames, rank_recordings, select_rivals,
@@ -11,7 +10,6 @@ from sm64_events.ghost.sharing_targets import describe
 from sm64_events.ranks.standards import entity_key
 
 STATE_KEY = "ghost_rivals_v1"
-PB_SETTLE_S = 5.0
 LIMITS = {"last_step":MAX_STEP, "max_ahead":MAX_AHEAD, "counts":list(range(1,MAX_RIVALS+1))}
 
 
@@ -56,9 +54,9 @@ class RivalProvider:
 
 
 class Rivals:
-    def __init__(self, tracker, population, native, version_of, *, now=monotonic, source_of=lambda:None):
+    def __init__(self, tracker, population, native, version_of, *, source_of=lambda:None):
         self.tracker, self.population, self.native = tracker, population, native
-        self.version_of, self.now = version_of, now
+        self.version_of = version_of
         self.source_of = source_of
         self.options = checked_options({})
         self.pins = {}
@@ -71,8 +69,6 @@ class Rivals:
         self.pb = None
         self.generation = 0
         self.fingerprint = None
-        self.pb_deadline = None
-        self.pb_deadlines = {}
         self.status = None
         self.manual = False
         self.preserve_slots = False
@@ -123,7 +119,7 @@ class Rivals:
         return json.dumps([target["kind"],target["entity_key"],target.get("strat") or "Standard"],separators=(",",":"))
 
     def _entity_key(self, target):
-        """The PB undo window covers this entity even while changing strategy."""
+        """The entity owns its scope independently of the current strategy."""
         return json.dumps([target["kind"],target["entity_key"]],separators=(",",":"))
 
     def _migrate_pins(self, target):
@@ -227,34 +223,26 @@ class Rivals:
         self.fingerprint = self.prepared_key = None
         self.rows, self.pb = (),None
         self.manual = False
-        self.pb_deadlines = {}
 
     def pb_changed(self, target=None):
         target = target or self.target
         if target is None:
             return
-        key = self._entity_key(target)
-        deadline = self.now()+PB_SETTLE_S
-        self.pb_deadlines[key] = deadline
-        if self.target is None or self._entity_key(self.target)!=key:
+        if self.target is None or self._entity_key(self.target)!=self._entity_key(target):
             return
-        self.pb_deadline = deadline
+        # The saved PB is authoritative, including Undo. Recompute now, but
+        # retain an unchanged active/pending roster rather than canceling it.
         self.fingerprint = None
-        self.prepared_key = None
-        self.native.cancel_preparation()
 
     def refresh(self, target, controls, *, enabled, sharing=None, force=False):
         self._load()
         changed_target = target != self.target
-        changed_entity = target is None or self.target is None or self._entity_key(target)!=self._entity_key(self.target)
         if changed_target:
             self.target = target
             self.fingerprint = None
             self.rows, self.pb = (),None
             self.manual = False
-        self.pb_deadlines = {key:value for key,value in self.pb_deadlines.items() if value>self.now()}
-        self.pb_deadline = self.pb_deadlines.get(self._entity_key(target)) if target else None
-        changed_scope = self._update_identity(target,controls,changed_target)
+        self._update_identity(target,controls,changed_target)
         identity = self.identity
         self.sharing = sharing
         if self.manual:
@@ -267,12 +255,6 @@ class Rivals:
             return {"available":False,"reason":"unknown_rom" if target else "no_target",
                     "reason_text":self.status,"ghosts":[]}
         self._migrate_pins(target)
-        settled = self.pb_deadline is None or self.now()>=self.pb_deadline
-        if not settled:
-            self.status = "Updating rivals after the PB undo window."
-            return ({"available":False,"reason":"pb_settling","reason_text":self.status,"ghosts":[]}
-                    if changed_entity or changed_scope else None)
-        self.pb_deadline = None
         source = self.source_of()
         stamp = (id(self.loaded_db),identity,enabled,source,controls["hue_degrees"],getattr(self.population,"generation",None),
                  getattr(self.tracker.ranks,"calibration_revision",None),
@@ -286,6 +268,15 @@ class Rivals:
                 strategy=identity.strategy if identity.scope=="strategy" else None)
             ranked = rank_recordings(records,self.tracker.ranks,identity)
             pins = self.pins.get(self._key(target),{})
+            own_player = self.tracker.db.get_state("ghost_player_id",None)
+            simulation = self._simulation()
+            fresh_climb = simulation and simulation.get("zero_practice") is True
+            # Explicit chosen rivals remain choices. Automatic slots never
+            # use our own runs. The full-range developer climb also retires
+            # beaten timings, including ones within the same subdivision.
+            ranked = tuple(row for row in ranked if row["id"] in pins.values() or (
+                row["player_id"] != own_player and (
+                    not fresh_climb or not pb or row["frames"] < pb["frames"])))
             private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
             self.rows = select_rivals((*ranked,*private),pb,self.options,pins,
                                       self.rows if self.preserve_slots else (),scope=identity.scope)
@@ -305,7 +296,8 @@ class Rivals:
             self.native.set_portable(RivalProvider(self.population,sharing))
             answer = self.native.prepare(self.native_target(target),ghosts,controls,self.generation) if enabled else None
             self._pb_playback(answer)
-            self.status = "Updates on your next attempt." if ghosts else None
+            self.status = ("Updates on your next attempt."
+                           if enabled and ghosts and answer and answer.get("available") else None)
             return (answer if ghosts else None) or {"available":bool(ghosts),"reason":None if ghosts else "no_rivals",
                               "reason_text":None if ghosts else "No compatible ghosts in this range yet.","ghosts":[]}
         return None
@@ -320,7 +312,7 @@ class Rivals:
 
     def payload(self):
         native = self.native.state()
-        if native.get("active_generation")==self.generation and self.pb_deadline is None:
+        if native.get("active_generation")==self.generation:
             self.status = None
         simulation = self._simulation()
         return {"options":dict(self.options),"limits":dict(LIMITS),"scope":self.scope_for(self.target),
@@ -328,7 +320,8 @@ class Rivals:
                 "rows":[wire(row) for row in self.rows],
                 "pb":wire(self.pb) if self.pb else None,
                 "strategy_name":self.target.get("strat") or "Standard" if self.target else None,
-                "status":self.status,"generation":self.generation,"manual":self.manual}
+                "status":self.status if native.get("prepared_generation")==self.generation else None,
+                "generation":self.generation,"manual":self.manual}
 
     def search(self, target, player, cursor=None, *, scope=None):
         identity = self.identity_for(target)

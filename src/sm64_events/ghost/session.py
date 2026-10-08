@@ -504,14 +504,17 @@ class GhostSession:
         already the answer; with it unticked, no PB plays at all.
         """
         if self._rivals is not None:
-            from sm64_events.inputs.service import entity_key_of
-            kind,key = entity_key_of(attempt)
+            target = None  # Disconnect invalidation refreshes the current owner.
+            if attempt is not None:
+                from sm64_events.inputs.service import entity_key_of
+                kind,key = entity_key_of(attempt)
+                target = {"kind":kind,"entity_key":key}
             async with self._lock:
                 def invalidate():
                     with self._lifecycle_lock:
-                        self._rivals.pb_changed({"kind":kind,"entity_key":key})
+                        self._rivals.pb_changed(target)
                 await asyncio.to_thread(invalidate)
-        if saved:
+        if saved and attempt is not None:
             preserve = getattr(self._replay, "preserve_native", None)
             if preserve is not None:
                 try:

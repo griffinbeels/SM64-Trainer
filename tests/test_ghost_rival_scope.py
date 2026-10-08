@@ -118,12 +118,12 @@ def test_saved_legacy_pb_keeps_owner_and_changes_only_its_scoring_scope(tmp_path
         tracker.db.close()
 
 
-def test_scope_switch_during_pb_settle_reconciles_the_new_native_owner(tmp_path,monkeypatch):
+def test_scope_switch_after_pb_change_reconciles_the_new_native_owner(tmp_path,monkeypatch):
     from sm64_events.ghost.session import GhostSession
     rivals,tracker,_,_,_=controller(tmp_path,monkeypatch)
     rivals.pb_changed()
     answer=switch(rivals,'overall')
-    assert answer['reason']=='pb_settling' and rivals.pb is None
+    assert answer is not None and answer.get('reason')!='pb_settling' and rivals.pb is not None
     commands=[]
     session=GhostSession(tracker=tracker,inputs=None,replay=None,broadcaster=None,
         native=SimpleNamespace(reconcile=lambda **body:commands.append(body),state=lambda:{}))

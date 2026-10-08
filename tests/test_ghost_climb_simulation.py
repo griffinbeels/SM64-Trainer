@@ -9,6 +9,8 @@ import pytest
 
 from ghost_native_fixture import attempt, frame, producer
 from sm64_events.ghost.clip import STAR_CLOCK, attempt_origin, write_clip
+from sm64_events.ghost.clip import read_clip
+from sm64_events.ghost.settings import defaults
 from sm64_events.ghost.population import LocalPopulation
 from sm64_events.ghost.rivals import Rivals
 from sm64_events.storage.db import Database
@@ -145,6 +147,7 @@ def test_fresh_simulation_has_no_practice_or_pb_and_preserves_source(tmp_path):
     provider = LocalPopulation(document["population"])
     try:
         assert database.sessions() == [] and database.events() == []
+        assert defaults()["path_enabled"] is False
         assert database.attempts() == [] and database.pbs() == []
         assert database.get_state("ghost_player_id", None) == document["player_id"]
         marker = database.get_state(SIMULATION_KEY, None)
@@ -234,3 +237,80 @@ def test_fresh_simulation_refuses_a_partial_roster_before_creating_profile(tmp_p
     with pytest.raises(ValueError, match="four|4 distinct"):
         simulate_fresh(source, tmp_path / "profiles")
     assert not (tmp_path / "profiles").exists()
+
+
+def input_donors(tmp_path):
+    from tests.test_ghost_padfill import action_at
+    source=donors(tmp_path)
+    database=Database(source/"data/tracker.db")
+    row=replace(database.attempt(100),closed_frame=140)
+    database.upsert_attempt(row)
+    database.close()
+    path=source/"replays/native/attempt_100.ghost"
+    manifest=json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    recorded=write_clip(path,[frame(n,timer=100+n,elapsed=n-1,action=action_at(100+n))
+                              for n in range(1,41)],producer(),clock_kind=STAR_CLOCK)
+    path.with_suffix(".json").write_text(json.dumps({**manifest,**recorded,**attempt_origin(row)}),encoding="utf-8")
+    return source
+
+
+def test_simulation_carries_proven_inputs_without_modifying_original_or_faking_gaps(tmp_path,monkeypatch):
+    from tests.test_ghost_padfill import track, pad_at
+    source=input_donors(tmp_path)
+    before=file_hashes(source)
+    held=[row for row in track(range(101,141)) if row[0]!=110]
+    monkeypatch.setattr(ghost_climb,"track_for_attempt",lambda _store,attempt,_span:held if attempt.id==100 else [])
+    document=simulate_fresh(source,tmp_path/"profiles")
+    provider=LocalPopulation(document["population"])
+    try:
+        row=next(row for row in provider.metadata_snapshot("star","2-2",clock="igt",game_version="us")
+                 if row["source_attempt_id"]==100)
+        path,manifest=provider.resolve(row["ghost"],WILD_BLUE)
+        played=read_clip(path,manifest["sha256"])
+        original=read_clip(source/"replays/native/attempt_100.ghost")
+        assert row["sha256"]!=row["source_sha256"] and row["source_sha256"]==before[Path("replays/native/attempt_100.ghost")]
+        assert played.clip_id==original.clip_id
+        assert [frame.global_timer for frame in played.frames if frame.pad is None]==[110]
+        assert all(frame.pad==pad_at(frame.global_timer) for frame in played.frames if frame.pad is not None)
+        assert all(file_hashes(source).get(name)==digest for name,digest in before.items())
+    finally:
+        provider.close()
+
+
+def test_existing_fresh_tester_upgrade_keeps_practice_identity_pins_and_original_pool(tmp_path,monkeypatch):
+    from tests.test_ghost_padfill import track
+    source=input_donors(tmp_path)
+    document=simulate_fresh(source,tmp_path/"profiles")
+    document.pop("input_enrichment_version")  # previous tester setup, without embedded pads
+    profile=Path(document["profile"])
+    old_pool=file_hashes(Path(document["population"])/"clips")
+    database=Database(profile/"data/tracker.db")
+    played=played_attempt(1,frames=400,course_id=2,star_id=2)
+    database.upsert_attempt(played)
+    database.insert_pb(2,2,"Standard","igt",400,played.id,played.ended_utc,game_version="us")
+    before=database.attempts(),database.pbs()
+    old_id=document["recordings"][0]["id"]
+    settings=database.get_state("ghost_rivals_v1",{})
+    settings["pins"]={json.dumps(["star","2-2","Standard"],separators=(",",":")):{"0":old_id}}
+    database.set_state("ghost_rivals_v1",settings)
+    database.close()
+    monkeypatch.setattr(ghost_climb,"track_for_attempt",lambda _store,attempt,_span:track(range(101,141)) if attempt.id==100 else [])
+    upgraded=ghost_climb.upgrade_simulation_inputs(profile,document)
+    assert upgraded["profile"]==document["profile"] and upgraded["player_id"]==document["player_id"]
+    assert upgraded["population"]!=document["population"] and upgraded["input_enrichment_version"]==1
+    assert file_hashes(Path(document["population"])/"clips")==old_pool
+    database=Database(profile/"data/tracker.db")
+    provider=LocalPopulation(upgraded["population"])
+    try:
+        assert (database.attempts(),database.pbs())==before
+        new_id=upgraded["recordings"][0]["id"]
+        assert new_id!=old_id
+        assert database.get_state("ghost_rivals_v1",{})["pins"]=={next(iter(settings["pins"])):{"0":new_id}}
+        row=provider.get(new_id)
+        assert row["player_name"]=="gtest1" and row["player_id"]!=document["player_id"]
+        path,manifest=provider.resolve(row["ghost"],WILD_BLUE)
+        assert all(frame.pad is not None for frame in read_clip(path,manifest["sha256"]).frames)
+        assert ghost_climb.upgrade_simulation_inputs(profile,upgraded)==upgraded
+    finally:
+        database.close()
+        provider.close()

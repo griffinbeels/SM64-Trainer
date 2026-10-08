@@ -23,6 +23,8 @@ undone PB. Without a saved basis, selection starts at the bottom tier.
 The default range is one to five subdivisions above that basis. The floor stays
 above the PB until the final subdivision. At the ceiling, only faster runs in
 that subdivision qualify. Fixed mode selects an absolute rank range.
+Automatic opponents exclude your own recordings; the separate PB slot remains.
+An explicit chosen rival can still name one of your other recordings.
 In Strategy, every automatic, searched or manually selected rival belongs to
 the strategy selected for practice. Overall broadens that pool without changing
 the practice strategy. The choice is remembered per star or segment; Strategy
@@ -45,9 +47,11 @@ recordings across fresh profiles; exported credits never establish that lineage.
 Historical local PBs remain eligible for the separate PB slot. Community
 admission still requires complete validated run evidence and an explicit ROM.
 
-A PB save or undo cancels obsolete pending preparation and opens a five-second
-settle window for that target. Target or strategy changes cannot bypass it.
-The session reads the final saved state when the window expires. File validation,
+A PB save or undo immediately reads the authoritative saved state. There is no
+confidence debounce. An unchanged set retains its acknowledged preparation;
+an actual changed set supersedes the pending generation. The updates message
+appears only when the renderer has prepared that set and has not adopted it.
+Disabled or unavailable ghosts do not promise a pending update. File validation,
 rank selection and preparation run outside the game poll loop. Native playback
 retains the current roster during same-strategy updates until an acknowledged
 replacement can adopt at a certified full start. Changing strategy immediately
@@ -96,7 +100,10 @@ installer's layer. A competing recorder makes the launcher refuse to start.
 Each ordinary launch creates a new profile with the same definitions and
 calibration and its own player identity. Sessions, events, attempts and PBs start
 empty. Each usable target/strategy/time is represented once, with an independent
-fictional opponent identity and unchanged timing and pose bytes. Choose
+fictional opponent identity and unchanged recorded timing and poses. Older
+clips receive their own proven input-track pads on a derived playback copy,
+using the normal calibrated join. Original clips remain untouched; captured
+pads are never replaced, and absent or unproven inputs remain unknown. Choose
 Shoot into the Wild Blue → Standard in the Target picker to race the eleven
 sample ghosts there. Other practiced targets and strategies also have samples.
 Your own PB slot appears after you play and save a PB. The card displays
@@ -117,6 +124,13 @@ Use the existing settings cog to switch to Follow my progress when testing its
 normal one-to-five-subdivision range. Search `gtest` to choose an opponent
 manually. A fresh double-click creates another empty identity; resuming retains
 the tester's new practice history.
+The full-range developer fixture retires automatic opponents you have beaten,
+even within the same subdivision, while preserving explicit chosen rivals.
+This fixture rule does not redefine production fixed-rank settings.
+Resuming an older fresh tester upgrades its input copies before recording starts.
+Its identity, sessions, attempts, PBs, credits and chosen rival slots survive;
+the old immutable population remains available beside the replacement pool.
+Paths defaults off for new profiles. Explicit appearance preferences still win.
 If the empty card's rank banner is folded, expand its attempts chevron to reach
 the existing Strategy/Overall tabs. The ghost roster remains visible while folded.
 
@@ -137,7 +151,7 @@ declare the source ROM when seeding. Use this only when that declaration is true
 It still rejects invalid/incomplete attempts and does not certify private
 imports. New recordings from this build carry the observed opening/closing ROM.
 
-Try one, two and four rivals plus PB; save a PB, undo one within five seconds,
+Try one, two and four rivals plus PB; save a PB, undo one immediately,
 restart from the full beginning and repeat a climb. Check frame pacing, first-load
 audio, readability and overlap during actual gameplay. Unit tests and compiled
 witnesses cannot establish those live observations.

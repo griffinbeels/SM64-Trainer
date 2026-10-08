@@ -4,6 +4,7 @@
 #include <bcrypt.h>
 #include <cstring>
 #include <new>
+#include <string>
 #pragma comment(lib, "bcrypt.lib")
 namespace ghost_assets {
 bool read(const uint16_t *path, uint32_t capacity, uint32_t maximum,
@@ -15,7 +16,22 @@ bool read(const uint16_t *path, uint32_t capacity, uint32_t maximum,
     if (!length || length == capacity) return false;
     // Local absolute disk paths only. Never execute a URI or open a named pipe.
     if (length < 3 || path[1] != ':' || (path[2] != '\\' && path[2] != '/')) return false;
-    HANDLE file = CreateFileW(reinterpret_cast<const wchar_t *>(path), GENERIC_READ,
+    // PJ64 1.6 is not longPathAware. The IPC accepts longer paths than MAX_PATH;
+    // normalize approved drive-absolute paths before entering the Win32 namespace.
+    std::wstring disk_path;
+    try {
+        disk_path.resize(length + 1);
+        const DWORD count = GetFullPathNameW(reinterpret_cast<const wchar_t *>(path),
+            length + 1, &disk_path[0], nullptr);
+        if (!count || count > length) return false;
+        disk_path.resize(count);
+        for (wchar_t &part : disk_path) if (part == L'/') part = L'\\';
+        disk_path.insert(0, L"\\\\?\\");
+    } catch (const std::bad_alloc &) {
+        if (out_of_memory) *out_of_memory = true;
+        return false;
+    }
+    HANDLE file = CreateFileW(disk_path.c_str(), GENERIC_READ,
         FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER size{};

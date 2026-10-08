@@ -52,6 +52,19 @@ def test_every_shipped_default_is_valid():
         assert row.check(row.default) == row.default
 
 
+def test_paths_default_off_while_explicit_saved_choice_wins():
+    row=settings.BY_NAME["path_enabled"]
+    class Database:
+        def __init__(self,state):
+            self.state=state
+        def get_state(self,key,default):
+            return self.state.get(key,default)
+    assert settings.defaults()["path_enabled"] is False
+    assert row.read(Database({})) is False
+    assert row.read(Database({row.key:True})) is True
+    assert row.read(Database({row.key:False})) is False
+
+
 def test_retired_view_is_not_loaded_or_written():
     """Retiring a renderer leaves saved preferences in their original keys."""
     class Database:
