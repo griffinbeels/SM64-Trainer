@@ -345,14 +345,15 @@ class NativeGhost:
         try:
             origin = (self._origin_of(*self._target)
                       if self._target and self._origin_of and self._requested else None)
-            if self._adaptive_generation and not self._preparation_canceled and origin is not None:
+            if self._adaptive_generation and origin is not None:
                 token = origin.get("full_start_token")
                 if origin.get("full_start_now") and token is not None and token != self._last_full_start:
                     # Consume even while unready: the later status update may
                     # never turn this start into a mid-run roster change.
                     self._last_full_start = token
                     self._start_sequence += 1
-                    status = self._source.snapshot_status(blocking=False) if self._source is not None else None
+                    status = (self._source.snapshot_status(blocking=False)
+                              if self._source is not None and not self._preparation_canceled else None)
                     if status is not None and status.get("available") and status.get("prepared_generation") == self._adaptive_generation:
                         self._activate_generation = self._adaptive_generation
                         self._activate_start = self._start_sequence

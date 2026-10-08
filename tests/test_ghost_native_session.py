@@ -148,6 +148,12 @@ def test_cancel_preparation_invalidates_obsolete_readiness_but_retains_the_activ
     native.prepare(target, [ghost], controls, 3)
     assert "cancel_preparation" not in source.commands[-1]
     assert source.commands[-1]["prepare_generation"] == 3 and source.commands[-1]["activate_generation"] == 0
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), "prepared_generation": 3, "active_generation": 1}
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 0  # frozen canceled start stays consumed
+    origin = {**origin, "full_start_token": (1, 11), "arm_id": 11}
+    native.note()
+    assert source.commands[-1]["activate_generation"] == 3
     native.stop()
 
 
