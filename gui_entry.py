@@ -5,6 +5,9 @@ import sys
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == '--beta-self-check':
+        from sm64_events.desktop.beta_probe import main as beta_self_check
+        return beta_self_check(sys.argv[2:])
     # Resolve/reject packaged identity before any worker or desktop imports can
     # resolve paths or ports. No environment variable can select the channel.
     from sm64_events.core.build_channel import current_build
