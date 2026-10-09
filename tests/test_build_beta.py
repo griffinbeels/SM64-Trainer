@@ -90,6 +90,44 @@ def test_artifact_refuses_missing_asset_and_different_build_configuration(artifa
         build_beta.validate_artifact(folder, build)
 
 
+@pytest.mark.parametrize("relative,content", [
+    ("_internal/numpy/f2py/tests/src/assumed_shape/.f2py_f2cmap", b'dict(real=dict(rk="double"))\r\n'),
+    ("_internal/numpy/f2py/tests/src/f2cmap/.f2py_f2cmap",
+     b"dict(real=dict(real32='float', real64='double'), integer=dict(int64='long_long'))\r\n"),
+])
+def test_vendor_hidden_exception_requires_exact_path_and_bytes(artifact, relative, content):
+    folder, build = artifact
+    vendor = folder / relative
+    vendor.parent.mkdir(parents=True)
+    vendor.write_bytes(content)
+    build_beta.validate_artifact(folder, build)
+    vendor.write_bytes(content + b"x")
+    with pytest.raises(RuntimeError, match="unexpected"):
+        build_beta.validate_artifact(folder, build)
+    vendor.write_bytes(content)
+    neighbour = vendor.with_name(".private-neighbour")
+    neighbour.write_bytes(content)
+    with pytest.raises(RuntimeError, match="unexpected"):
+        build_beta.validate_artifact(folder, build)
+    neighbour.unlink()
+    misplaced = folder / ".f2py_f2cmap"
+    misplaced.write_bytes(content)
+    with pytest.raises(RuntimeError, match="unexpected"):
+        build_beta.validate_artifact(folder, build)
+
+
+def test_builder_reexec_relays_failure_diagnostics(monkeypatch, tmp_path, capsys):
+    config = tmp_path / "public-config.json"
+    config.write_text(json.dumps(metadata()))
+    monkeypatch.setattr(build_beta, "needs_reexec", lambda env: True)
+    monkeypatch.setattr(build_beta, "_source_date_epoch", lambda: "315532800")
+    monkeypatch.setattr(build_beta.subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=2, stdout="prerequisites checked\n", stderr="artifact refused\n"))
+    assert build_beta.main(["--config", str(config)]) == 2
+    output = capsys.readouterr()
+    assert "prerequisites checked" in output.out and "artifact refused" in output.err
+
+
 def test_builder_requires_ffmpeg_instead_of_silent_replay_fallback(monkeypatch):
     monkeypatch.setattr(build_beta.shutil, "which", lambda name: None)
     with pytest.raises(RuntimeError, match="FFmpeg is required"):

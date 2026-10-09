@@ -36,6 +36,14 @@ _FORBIDDEN_DIRS = {"replays", "logs", "replay_buffer", "ghost_population",
                    "community_cache", "compare_cache"}
 _FORBIDDEN_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".gho", ".ghost", ".ghc1",
                        ".sm64ghosts", ".mp4", ".mkv"}
+# PyInstaller's NumPy collection includes these two immutable vendor fixtures.
+# Exempt their exact bytes only from the hidden-name guard; private guards remain.
+_VENDOR_HIDDEN = {
+    "_internal/numpy/f2py/tests/src/assumed_shape/.f2py_f2cmap":
+        "cdfb8e4a19aea2dcdc2c84039d515a011c2f33aea22eb398ce9aae2060db88a5",
+    "_internal/numpy/f2py/tests/src/f2cmap/.f2py_f2cmap":
+        "7f0b33ca669685c58edbdeaee538475b9c8c02416107a12d1d6aaaa5cf450152",
+}
 README = """SM64 Trainer Beta - private test build
 
 Extract the complete ZIP into a writable folder. Keep SM64TrainerBeta.exe and
@@ -105,8 +113,12 @@ def validate_artifact(folder: Path, build: BuildChannel) -> None:
         relative = path.relative_to(folder)
         lowered = {part.lower() for part in relative.parts}
         name = path.name.lower()
-        if (path.is_symlink() or lowered & _FORBIDDEN_DIRS
-                or any(part.startswith(".") for part in relative.parts)
+        vendor_hash = _VENDOR_HIDDEN.get(relative.as_posix())
+        known_vendor = (vendor_hash is not None and path.is_file() and 0 < path.stat().st_size <= 4096
+                        and hashlib.sha256(path.read_bytes()).hexdigest() == vendor_hash)
+        if (path.is_symlink() or not path.resolve().is_relative_to(folder.resolve())
+                or lowered & _FORBIDDEN_DIRS
+                or any(part.startswith(".") for part in relative.parts) and not known_vendor
                 or name in _FORBIDDEN_NAMES or path.suffix.lower() in _FORBIDDEN_SUFFIXES
                 or name.startswith("sm64trainersetup") or name == "sm64trainer.exe"):
             raise RuntimeError("beta artifact contains an unexpected private or public-release file")
@@ -145,8 +157,11 @@ def main(argv: list[str] | None = None) -> int:
         if not args.check and needs_reexec(os.environ):
             env = {**os.environ, "PYTHONHASHSEED": "1", "SOURCE_DATE_EPOCH": _source_date_epoch()}
             command = [sys.executable, str(Path(__file__).resolve()), *(argv if argv is not None else sys.argv[1:])]
-            return subprocess.run(command, env=env, cwd=REPO,
-                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode
+            result = subprocess.run(command, env=env, cwd=REPO, capture_output=True, text=True,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            sys.stdout.write(result.stdout)
+            sys.stderr.write(result.stderr)
+            return result.returncode
         ffmpeg = check_prerequisites(args.ffmpeg)
         if args.check:
             print("Private beta prerequisites verified; no build was run.")

@@ -90,6 +90,9 @@ receipt. The artifact gate checks required UI/seed/native/FFmpeg/config files,
 rejects private data, hidden files and public executables, tests ZIP integrity
 and hashes the complete archive. It writes `README-BETA.txt` into the folder.
 Neither the public bootstrap nor release publishing is called.
+The hidden-file check permits only two exact-path, SHA-256-pinned NumPy fixtures
+included by dependency collection. Modified bytes or the same name elsewhere
+remain rejected; all private-data and path-containment checks still apply.
 
 ## Tester handoff and acceptance
 
