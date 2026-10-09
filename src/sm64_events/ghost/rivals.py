@@ -581,6 +581,14 @@ class Rivals:
             choices.pop(str(body["slot"]),None)
         elif body.get("action")=="add":
             choices[str(body["slot"])]=body["id"]
+            owner = self.community.owner()
+            if owner:
+                try:
+                    row = self.population.get(body["id"])
+                except (LookupError,ValueError):
+                    row = {}
+                if row.get("provenance") == "community-unverified":
+                    self.remote_choices[body["id"]] = owner
         self.manual = False
         self.preserve_slots = "options" not in body
         self.fingerprint = None

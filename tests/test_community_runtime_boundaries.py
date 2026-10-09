@@ -96,7 +96,8 @@ def test_pool_requests_lease_remote_pins_and_preserve_private_choices():
     assert pins == before
 
 
-def test_chosen_remote_pin_is_requested_after_cache_and_controller_restart(tmp_path, monkeypatch):
+@pytest.mark.parametrize("enabled", [True, False])
+def test_chosen_remote_pin_is_requested_after_cache_and_controller_restart(tmp_path, monkeypatch, enabled):
     from sm64_events.ghost.rivals import Rivals
     rivals, tracker, native, local, _ = controller(tmp_path, monkeypatch)
     local.close = lambda: None
@@ -112,8 +113,11 @@ def test_chosen_remote_pin_is_requested_after_cache_and_controller_restart(tmp_p
     rivals.community = CommunityRivals(cloud, population)
     try:
         rivals.apply(rivals.checked({"action": "add", "id": metadata["id"]}, TARGET))
-        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
-        assert cloud.pools[-1][1]["pinned_ids"] == (metadata["id"],)
+        rivals.refresh(TARGET, CONTROLS, enabled=enabled, force=True)
+        if enabled:
+            assert cloud.pools[-1][1]["pinned_ids"] == (metadata["id"],)
+        else:
+            assert not cloud.pools
         population.close()
         restored_population = CachedPopulation(local, root=root, account=account)
         with pytest.raises(LookupError):
