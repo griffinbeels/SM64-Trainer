@@ -48,6 +48,7 @@ struct Layout {
     // the given shade on a dialog box (the game's own boxes draw no shadow).
     void character(uint8_t c,float x,float y,float scale=0.75f,float shade=1,bool shadow=true) {
         if(c==0x9e)return;
+        if(c==underscore) {c=0x9f;y-=4*scale;} // preserve the ROM stroke, move only its baseline
         const float u=float(c%32)*8,v=float(c/32)*16;
         if(shadow)quad(x+scale,y-scale,8*scale,16*scale,u,v,8,16,0,0.65f);
         quad(x,y,8*scale,16*scale,u,v,8,16,shade);

@@ -66,6 +66,30 @@ player's name for an imported ghost. Credit is presentation metadata; changing
 it never changes clip identity or restarts playback. Input and label metadata
 travel inside the pose through depth sorting and inherit its visibility.
 
+Full imported credits stay unchanged in the web list and collection metadata.
+The native display accepts the ROM-backed Latin letters, digits and supported
+punctuation. An underscore reuses the game's hyphen stroke lowered four font
+pixels; no replacement font or guessed Unicode glyph is bundled. An unsupported
+name becomes `RIVAL n`, where `n` is its one-based rival slot, so the web list's
+full name and colour remain its identity legend. Legacy callers without a slot
+use non-PB roster order. PB insertion never renumbers those rivals.
+
+The native label field has 63 UTF-8 bytes plus its terminator. Longer legacy
+ASCII credits receive a visible `...` on that field alone; their stored credit
+and collection identity remain intact. The renderer also fits labels by actual
+glyph width, adding `...` when necessary. Its corner leaves 92 HUD pixels with
+two-digit stick values and 83 at three-digit extremes. The measured longest
+Sheet name, `SullyLikesBigChungus` (20 characters), occupies 49.5 HUD pixels.
+Twenty wide Latin letters occupy 80 pixels; twenty plus signs need shortening
+at the narrower corner. The account name bound does not rewrite legacy credits.
+
+`tests/test_ghost_labels.py` checks real portable imports through native
+preparation, exact credit preservation and slot-based fallback. The CPU witness
+in `tests/test_ghost_annotation.py` compiles the actual glyph and layout code,
+checks Python/native character support parity, canonical underscore texels and
+both corner widths. These checks do not establish in-game visual acceptance;
+the wrapper and renderer must be rebuilt before observing the new glyph there.
+
 The input display reads `gc_pad` from the ghost's selected **recorded occurrence**,
 even when a missing body pose is bridged from an earlier occurrence. Raw signed
 stick X/Y and held buttons are captured beside that pose, from the existing

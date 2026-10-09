@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+import string
 import threading
 
 from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
-from sm64_events.ghost.native_layout import GP_WRONG_SCENE, LABEL_BYTES
+from sm64_events.ghost.native_layout import GHOSTS, GP_WRONG_SCENE, LABEL_BYTES
 from sm64_events.ghost.pb import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
@@ -64,18 +65,26 @@ def fastest_clip(assets) -> int:
     return min(timed)[1] if timed else 0
 
 
-def ghost_label(ghost) -> str:
-    """Credit belongs to the selected source, independently of cached poses."""
-    if getattr(ghost, "import_id", None):
-        author = getattr(ghost, "author", None)
-        label = " ".join(author.split()) if isinstance(author, str) else ""
-        label = "".join(char for char in label if ord(char) >= 32 and ord(char) != 127)
-        label = label or "UNCREDITED"
-    else:
-        label = "YOUR PB" if getattr(ghost, "pb", False) else "YOUR RUN"
-    # Portable credits remain intact in the library. The billboard has a
-    # bounded wire field, shortened only at a complete UTF-8 character.
-    return label.encode("utf-8", errors="replace")[:LABEL_BYTES - 1].decode("utf-8", errors="ignore")
+# Matches the real ROM-backed glyph mapping; the native CPU witness checks parity.
+LABEL_CHARACTERS = frozenset(string.ascii_letters + string.digits + "' .^|<>,_-()+&:!%?~$")
+
+
+def ghost_label(ghost, number=1) -> str:
+    """Display labels never replace the source credit or stable identity."""
+    if getattr(ghost, "pb", False):
+        return "YOUR PB"
+    if not getattr(ghost, "import_id", None):
+        return "YOUR RUN"
+    slot = getattr(ghost, "rival_slot", None)
+    if type(slot) is int and 0 <= slot < GHOSTS:
+        number = slot + 1
+    author = getattr(ghost, "author", None)
+    label = " ".join(author.split()) if isinstance(author, str) else ""
+    if not label or any(char not in LABEL_CHARACTERS for char in label):
+        return f"RIVAL {number}"
+    # Legacy portable credits remain intact in metadata. Mark wire shortening;
+    # the native layout still fits the display to its actual pixel budget.
+    return label if len(label) < LABEL_BYTES else label[:LABEL_BYTES - 4] + "..."
 
 
 class NativeGhost:
@@ -159,10 +168,13 @@ class NativeGhost:
                 result = {**result, "reason": "selected_template_missing", "reason_text": MISSING_REASON}
             return {**result, "ghosts": []}
         answers, assets, clip_ids = [], [], set()
+        rival_number = 0
         for template in ghosts:
+            if not getattr(template, "pb", False):
+                rival_number += 1
             result, asset = self._resolve_template(target, template)
             result = {**result, "import_id": getattr(template, "import_id", None),
-                      "author": getattr(template, "author", None), "label": ghost_label(template)}
+                      "author": getattr(template, "author", None), "label": ghost_label(template, rival_number)}
             if asset is not None:
                 clip_id = asset[1]["clip_id"]
                 if clip_id in clip_ids:

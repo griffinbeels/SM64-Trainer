@@ -8,6 +8,7 @@ import sys
 
 import pytest
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.ghost.native_session import LABEL_CHARACTERS
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,3 +33,4 @@ def test_native_annotations(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert report["ok"] and report["checks"] > 50
+    assert {chr(c) for c in report["label_characters"]} == LABEL_CHARACTERS

@@ -21,6 +21,46 @@ int main(int argc,char** argv) {
         std::memset(label,0,64);std::memcpy(label,"Zo\xc3\xab",4);check(valid_label(label),"valid UTF-8 author accepted");
         check(glyph(0xeb)==glyph('?'),"unsupported Unicode gets the actual dialogue question-mark glyph");
         check(glyph('/')==glyph('?'),"US dialogue's slash spacing control cannot silently hide author text");
+        check(supported('_') && glyph('_')!=glyph('?'),"underscore is a readable glyph, never a question mark");
+        check(!supported('/') && !supported(0x30ac) && supported('?'),"unsupported credit is distinguishable from a literal question mark");
+        // The underscore reuses the ROM hyphen's exact texels and advance. Its
+        // lowered baseline works at both stack and world label scales.
+        for(float scale:{0.5f,0.75f})for(bool shadow:{false,true}) {
+            Mesh dash,under;
+            Layout d{dash,{0,0,0,1},1,1,1},u{under,{0,0,0,1},1,1,1};
+            d.character(glyph('-'),0,0,scale,1,shadow);u.character(glyph('_'),0,0,scale,1,shadow);
+            check(dash.count==under.count && advance(glyph('_'))==advance(glyph('-')),"underscore keeps canonical stroke size and advance");
+            for(unsigned i=0;i<dash.count;++i)
+                check(dash.vertices[i].uv[0]==under.vertices[i].uv[0] && dash.vertices[i].uv[1]==under.vertices[i].uv[1]
+                      && dash.vertices[i].clip[0]==under.vertices[i].clip[0]
+                      && std::fabs(dash.vertices[i].clip[1]-under.vertices[i].clip[1]-4*scale)<1e-6f,
+                      "underscore keeps the original atlas coordinates and moves only the baseline");
+        }
+        // Use the actual stack column calculation: two-digit controls leave
+        // 92 HUD pixels; three-digit extremes leave 83. Full 20-character
+        // names fit by pixels, or visibly end in an ellipsis when wider.
+        for(unsigned digits:{2u,3u}) {
+            const float left=std::fmax(stack::buttons_x,stack::digits_start(digits)+stack::digits_width(digits)+3);
+            const float limit=stack::column_width-(left-usamune::letter_x)-2;
+            check(limit==(digits==2?92.0f:83.0f),"normal and three-digit corner budgets follow the live layout");
+            uint8_t chars[64]{};unsigned width=0;
+            check(Layout::fitted("SullyLikesBigChungus",stack::scale,limit,chars,width)==20 && width==99,
+                  "the longest measured Sheet credit fits both real corner widths");
+            check(Layout::fitted("WaterproofTeabag_",stack::scale,limit,chars,width)==17 && chars[16]==underscore,
+                  "a real Sheet underscore stays intact at both corner widths");
+            check(Layout::fitted("WWWWWWWWWWWWWWWWWWWW",stack::scale,limit,chars,width)==20 && width==160,
+                  "twenty wide letters still fit the three-digit corner");
+            const unsigned n=Layout::fitted("++++++++++++++++++++",stack::scale,limit,chars,width);
+            check(width*stack::scale<=limit && (digits==2?n==20:
+                  n<=20 && chars[n-1]==glyph('.') && chars[n-2]==glyph('.') && chars[n-3]==glyph('.')),
+                  "wide punctuation is cut by pixels and visibly marked at the narrower corner");
+            char legacy[64]{};std::memset(legacy,'W',63);
+            const unsigned shortened=Layout::fitted(legacy,stack::scale,limit,chars,width);
+            check(shortened<63 && width*stack::scale<=limit && chars[shortened-1]==glyph('.'),
+                  "legacy long credits retain a bounded, visibly shortened display");
+            check(Layout::fitted("RIVAL 4",stack::scale,limit,chars,width)==7 && width*stack::scale<=limit,
+                  "the slot fallback is fully readable at both corner widths");
+        }
         label[0]=char(0xc0);label[1]=char(0xaf);label[2]=0;label[3]=0;
         check(!valid_label(label),"overlong UTF-8 refused");
         std::memset(label,0,64);label[0]='\n';check(!valid_label(label),"control injection refused");
@@ -223,7 +263,12 @@ int main(int argc,char** argv) {
             }
             cartridge=true;
         }
-        std::printf("{\"ok\":true,\"checks\":%u,\"rom\":%s,\"capacity\":%u,\"maximum\":%u}\n",checks,cartridge?"true":"false",max_vertices,maximum);
+        std::printf("{\"ok\":true,\"checks\":%u,\"rom\":%s,\"capacity\":%u,\"maximum\":%u,\"label_characters\":[",
+                    checks,cartridge?"true":"false",max_vertices,maximum);
+        bool first=true;for(uint32_t c=32;c<=126;++c)if(supported(c)) {
+            std::printf("%s%u",first?"":",",c);first=false;
+        }
+        std::puts("]}");
         return 0;
     }catch(const std::exception& e) {std::fprintf(stderr,"annotation witness failed: %s\n",e.what());return 1;}
 }
