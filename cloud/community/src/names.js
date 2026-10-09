@@ -2,9 +2,12 @@ import data from "./casefold.json" with {type:"json"};
 import {requireThat} from "./errors.js";
 export function fold(value) { return [...value.normalize("NFKC")].map(c=>data.map[c]??c).join("").trim(); }
 export function checkedName(value) {
-  requireThat(typeof value==="string" && value.trim() && new TextEncoder().encode(value).length<=128 &&
-    !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value),"invalid_name","Use a name of up to128 UTF-8 bytes without hidden controls.");
+  requireThat(typeof value==="string" && value.trim() &&
+    !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value),"invalid_name","Use a bounded name without hidden controls.");
+  requireThat(new TextEncoder().encode(value).length<=128,"invalid_name","Name input is too long. Use at most 20 normalized characters and 63 UTF-8 bytes.");
   const name=value.normalize("NFKC").trim(), key=fold(name);
+  requireThat([...name].length<=20,"invalid_name","Use a name of at most 20 characters after normalization.");
+  requireThat(new TextEncoder().encode(name).length<=63,"invalid_name","Use a name of at most 63 UTF-8 bytes after normalization.");
   requireThat(key && new TextEncoder().encode(key).length<=256 &&
     !["admin","administrator","moderator","sm64 trainer","deleted"].includes(key),"invalid_name","This name is unavailable.");
   return {name,key};
