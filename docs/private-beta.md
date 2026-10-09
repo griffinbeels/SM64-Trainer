@@ -123,6 +123,10 @@ This receipt does not prove desktop interaction, native playback or provider
 login. Test visible beta identity/build, normal/helper entry points and installed
 recording dependencies separately with a disposable beta profile. Verify the real
 registered desktop login return and staging exchange independently.
+An agent's Python test launcher can replace `sys.executable` through
+`__PYVENV_LAUNCHER__`. Remove that launcher override in the owned probe parent
+before launching the frozen EXE; otherwise its identity check can fail even
+with valid beta metadata. Do not inspect or print environment values.
 Do not use the maintainer's running trainer, Project64 or live recording for
 agent verification. Unit tests and disposable ZIP fixtures do not substitute for
 these frozen-artifact and deployed-service receipts.
