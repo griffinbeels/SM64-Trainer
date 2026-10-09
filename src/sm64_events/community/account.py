@@ -5,7 +5,7 @@ import secrets
 import threading
 import time
 from urllib.parse import urlencode
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -35,7 +35,7 @@ async def bounded_request(http, method, url, *, limit=2 << 20, **kwargs):
         try:
             candidate = result.json().get("error", {}).get("code")
             if candidate in {"not_invited", "rename_required", "suspended", "deleted", "unauthorized",
-                             "name_unavailable", "policy_required", "rate_limited", "budget_exhausted",
+                             "name_unavailable", "policy_required", "consent_required", "rate_limited", "budget_exhausted",
                              "unsupported_identity", "not_found", "grant_expired"}:
                 code = candidate
         except (ValueError, AttributeError, TypeError):
@@ -96,14 +96,21 @@ class CommunityAccount:
         self._profile = None
         self._provider = None
         self._policies = {}
+        self._policies_until = 0
         self._error = None
 
     def snapshot(self):
         with self._lock:
-            return {"enabled": self.config.enabled, "authenticated": bool(self._access),
+            snapshot = {"enabled": self.config.enabled, "authenticated": bool(self._access),
                     "status": "signed_out", "sharing": False, "terms_version": None,
                     "privacy_version": None, **(self._profile or {}), "provider": self._provider,
                     **self._policies, **({"error": self._error} if self._error else {})}
+            if snapshot["status"] == "active" and any(
+                    snapshot.get(kind + "_version_current") is not None and
+                    snapshot.get(kind + "_version") != snapshot[kind + "_version_current"]
+                    for kind in ("terms", "privacy")):
+                snapshot["status"] = "consent_required"
+            return snapshot
 
     def policy_snapshot(self):
         with self._lock:
@@ -114,6 +121,8 @@ class CommunityAccount:
             raise CommunityError("disabled", "Community accounts are unavailable in this build.")
 
     async def _public_config(self):
+        if self._policies_until > time.monotonic():
+            return
         value = await self.request_json("GET", "/v1/config", authenticated=False)
         # Public config has service-owned limits/auth/catalog fields. Copy only
         # the policy fields understood by the local UI.
@@ -128,6 +137,7 @@ class CommunityAccount:
                 output[kind + "_url"] = self.config.public_url + href if href.startswith("/") else href
         with self._lock:
             self._policies = output
+            self._policies_until = time.monotonic() + 60
 
     async def begin_sign_in(self, provider):
         self._enabled()
@@ -234,8 +244,13 @@ class CommunityAccount:
         return self._access
 
     async def request_json(self, method, path, *, authenticated=True, http=None, **kwargs):
+        headers = dict(kwargs.pop("headers", {}) or {})
+        if method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+            if not any(str(key).lower() == "idempotency-key" for key in headers):
+                headers["Idempotency-Key"] = str(uuid4())
         response = await self.request_bytes(method, path, authenticated=authenticated, http=http,
-                                            limit=1 << 20, **kwargs)
+                                            limit=4 << 20 if method.upper() == "GET" and path == "/v1/catalog" else 1 << 20,
+                                            headers=headers, **kwargs)
         try:
             value = json.loads(response)
         except (ValueError, UnicodeDecodeError, RecursionError):
@@ -248,17 +263,28 @@ class CommunityAccount:
         self._enabled()
         if not isinstance(path, str) or not path.startswith("/v1/") or "?" in path or "#" in path or ".." in path:
             raise CommunityError("invalid_route")
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", **dict(kwargs.pop("headers", {}) or {})}
         if authenticated:
             headers["Authorization"] = "Bearer " + await self._bearer()
         if "content" in kwargs:
             headers["Content-Type"] = "application/octet-stream"
-        result = await bounded_request(http or self._http, method, self.config.public_url + path,
-                                       limit=limit, headers=headers, **kwargs)
+        epoch = self._epoch
+        try:
+            result = await bounded_request(http or self._http, method, self.config.public_url + path,
+                                           limit=limit, headers=headers, **kwargs)
+        except CommunityError as error:
+            with self._lock:
+                if authenticated and epoch == self._epoch:
+                    self._error = error.code
+                    status = "consent_required" if error.code in ("policy_required", "consent_required") else error.code
+                    if status in ("rename_required", "consent_required", "suspended", "deleted", "not_invited") and self._profile:
+                        self._profile = {**self._profile, "status": status}
+            raise
         return result.content
 
     async def refresh(self):
         epoch = self._epoch
+        await self._public_config()
         value = _profile(await self.request_json("GET", "/v1/account"))
         with self._lock:
             if epoch != self._epoch:

@@ -285,7 +285,7 @@ def test_retries_are_finite_and_bad_assets_never_become_ready(tmp_path):
         attempts.clear()
         with pytest.raises(CommunityError):
             await sync._json("POST", "/v1/uploads", json={})
-        assert len(attempts) == 1
+        assert len(attempts) == 3
         account.request_json = original
         async def corrupt(*args, **kwargs):
             return b"malformed"
@@ -294,4 +294,61 @@ def test_retries_are_finite_and_bad_assets_never_become_ready(tmp_path):
             await sync._asset("1" * 64)
         assert not population.is_ready("1" * 64)
         assert not list(tmp_path.glob("*.ghost"))
+    asyncio.run(scenario())
+
+
+def test_mutation_retry_reuses_key_but_new_operation_gets_new_key(tmp_path):
+    async def scenario():
+        account = Account()
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, population)
+        calls = []
+        async def intermittent(method, path, **kwargs):
+            calls.append(kwargs["headers"]["Idempotency-Key"])
+            if len(calls) in (1, 2):
+                raise CommunityError("network_unavailable")
+            return {"v": 1}
+        account.request_json = intermittent
+        await sync._json("POST", "/v1/uploads", json={"fixture": True})
+        assert len(calls) == 3 and len(set(calls)) == 1
+        await sync._json("POST", "/v1/uploads", json={"fixture": True})
+        assert calls[-1] != calls[0]
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("version", [True, False, 1.0, "1", 2])
+def test_catalog_and_pages_refuse_noninteger_protocol_version(version):
+    with pytest.raises(CommunityError):
+        checked_catalog({**catalog(), "v": version})
+    with pytest.raises(CommunityError):
+        checked_page({**page(), "v": version})
+
+
+def test_actual_export_catalog_fits_route_bound_and_generation_digest():
+    import json
+    import os
+    from pathlib import Path
+    import httpx
+    from sm64_events.community import CommunityAccount
+    from sm64_events.ghost.sharing_targets import canonical
+    from test_community_account import config, Store
+    path = os.environ.get("SM64_COMMUNITY_CATALOG_FIXTURE")
+    if not path:
+        pytest.skip("The optional current rank-export fixture is supplied by the integration runner.")
+    data = Path(path).read_bytes()
+    value = json.loads(data)
+    assert 1 << 20 < len(data) <= 4 << 20
+    assert hashlib.sha256(canonical(value["entries"])).hexdigest() == value["generation"]
+    generation, entries = checked_catalog(value)
+    assert generation == value["generation"] and entries
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request:
+                httpx.Response(200, content=data, headers={"Content-Type": "application/json"}))) as http:
+            account = CommunityAccount(config(), http=http, token_store=Store())
+            account._access, account._expires = "fixture", 10**20
+            parsed = await account.request_json("GET", "/v1/catalog")
+            assert parsed["generation"] == generation
+            with pytest.raises(CommunityError) as found:
+                await account.request_json("GET", "/v1/account/export")
+            assert found.value.code == "response_too_large"
     asyncio.run(scenario())

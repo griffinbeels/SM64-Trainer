@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 import threading
 import time
+from uuid import uuid4
 
 from sm64_events.ghost.sharing_targets import canonical, checked_target
 
@@ -34,7 +35,7 @@ def _cutoffs(rows):
 
 
 def checked_catalog(value):
-    if (not isinstance(value, dict) or set(value) != {"v", "generation", "entries"} or value["v"] != 1
+    if (not isinstance(value, dict) or set(value) != {"v", "generation", "entries"} or type(value["v"]) is not int or value["v"] != 1
             or not isinstance(value["generation"], str) or not 1 <= len(value["generation"]) <= 128
             or not isinstance(value["entries"], list) or len(value["entries"]) > 4096):
         raise CommunityError("invalid_catalog")
@@ -89,7 +90,7 @@ def frame_band(cutoffs, windows):
 
 
 def checked_page(value, *, generation=None):
-    if (not isinstance(value, dict) or set(value) != {"v", "recordings", "coverage", "next_cursor"} or value["v"] != 1
+    if (not isinstance(value, dict) or set(value) != {"v", "recordings", "coverage", "next_cursor"} or type(value["v"]) is not int or value["v"] != 1
             or not isinstance(value["recordings"], list) or len(value["recordings"]) > MAX_PAGE
             or value["next_cursor"] is not None and (not isinstance(value["next_cursor"], str) or not 1 <= len(value["next_cursor"]) <= 2048)):
         raise CommunityError("invalid_response")
@@ -218,11 +219,16 @@ class CommunitySync:
             return False
 
     async def _json(self, method, path, **kwargs):
+        headers = dict(kwargs.pop("headers", {}) or {})
+        if method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+            if not any(str(key).lower() == "idempotency-key" for key in headers):
+                headers["Idempotency-Key"] = str(uuid4())
         for index in range(3):
             try:
-                return await self.account.request_json(method, path, http=self._http, **kwargs)
+                return await self.account.request_json(method, path, http=self._http, headers=headers, **kwargs)
             except CommunityError as error:
-                if method != "GET" or index == 2 or error.code != "network_unavailable" and error.status not in (429, 502, 503, 504):
+                replay_safe = method.upper() == "GET" or any(str(key).lower() == "idempotency-key" for key in headers)
+                if not replay_safe or index == 2 or error.code != "network_unavailable" and error.status not in (429, 502, 503, 504):
                     raise
                 await asyncio.sleep((0.2, 0.5)[index])
 

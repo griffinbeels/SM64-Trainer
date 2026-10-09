@@ -241,3 +241,60 @@ def test_short_lived_exchange_rotates_without_recursive_auth_lock():
             assert result["provider"] == "email" and len(tokens) == 2
             assert account._inflight is None
     asyncio.run(scenario())
+
+
+def test_mutation_keys_are_uuid_per_operation_and_explicit_replay_is_stable():
+    from uuid import UUID
+    async def scenario():
+        requests = []
+        def respond(request):
+            requests.append(request)
+            return httpx.Response(200, json=profile())
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            account = CommunityAccount(config(), http=http, token_store=Store())
+            account._access, account._expires = "fixture", 10**20
+            await account.rename("One")
+            await account.rename("Two")
+            first, second = [request.headers["idempotency-key"] for request in requests]
+            assert str(UUID(first)) == first and first != second
+            explicit = "22222222-2222-4222-8222-222222222222"
+            for _ in range(2):
+                await account.request_json("PUT", "/v1/account/name", json={"name": "Replay"},
+                                           headers={"idempotency-key": explicit})
+            assert [request.headers["idempotency-key"] for request in requests[-2:]] == [explicit, explicit]
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("code,status", [("rename_required", "rename_required"), ("policy_required", "consent_required"),
+    ("consent_required", "consent_required"), ("suspended", "suspended"), ("deleted", "deleted")])
+def test_authenticated_refusal_updates_cached_account_gate(code, status):
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request:
+                httpx.Response(403, json={"v": 1, "error": {"code": code, "message": "remote input"}}))) as http:
+            account = CommunityAccount(config(), http=http, token_store=Store())
+            account._access, account._expires = "fixture", 10**20
+            account._profile = {key: value for key, value in profile().items() if key != "v"}
+            with pytest.raises(CommunityError):
+                await account.request_json("GET", "/v1/catalog")
+            assert account.snapshot()["status"] == status
+            assert "remote input" not in repr(account.snapshot())
+    asyncio.run(scenario())
+
+
+def test_policy_refresh_is_throttled_and_new_versions_require_consent():
+    async def scenario():
+        calls = []
+        def respond(request):
+            calls.append(request.url.path)
+            return httpx.Response(200, json=profile() if request.url.path == "/v1/account" else
+                {"v": 1, "terms_version": "t2", "privacy_version": "p1", "terms_url": "https://ghosts.example/policies#terms"})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            account = CommunityAccount(config(), http=http, token_store=Store())
+            account._access, account._expires = "fixture", 10**20
+            assert (await account.refresh())["status"] == "consent_required"
+            assert (await account.refresh())["status"] == "consent_required"
+            assert calls == ["/v1/config", "/v1/account", "/v1/account"]
+            account._policies_until = 0
+            await account.refresh()
+            assert calls.count("/v1/config") == 2
+    asyncio.run(scenario())
