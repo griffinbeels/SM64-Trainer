@@ -1,6 +1,6 @@
 # Set up an operator-only cloud test
 
-This guide matches protocol v1 and the service at parent commit `72370159`.
+This guide matches protocol v1 and the service under `cloud/community`.
 Use Discord and Google first. Email signup/recovery can follow later. Creating
 accounts/resources, enabling R2 billing, setting remote secrets, applying remote
 migrations and deploying are operator actions; this guide does not perform them.
