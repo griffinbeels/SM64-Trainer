@@ -2,6 +2,9 @@ import {ServiceError,requireThat,fail,sha256,canonical} from "./errors.js";
 import {LIMITS} from "./config.js";
 import {checkedName} from "./names.js";
 const sec=()=>Math.floor(Date.now()/1000);
+// Identical bytes can legitimately have different strategy/timing metadata.
+// Deduplication and publication must agree on the full immutable identity.
+const recordingID=r=>sha256(canonical([r.uid,r.target_key,r.clock,r.rom,r.strategy,r.frames,r.raw_sha256]));
 export class Store {
   constructor(db,cfg) {this.db=db;this.cfg=cfg;}
   sql(sql,...values) {return this.db.prepare(sql).bind(...values);}
@@ -93,7 +96,8 @@ export class Store {
     this.active(a);requireThat(a.sharing,"sharing_disabled","Enable sharing before uploading.",403);
     const old=await this.one("SELECT * FROM grants WHERE uid=? AND request_key=?",a.uid,key);
     if(old) {requireThat(old.request_digest===digest,"idempotency_conflict","Upload key already binds different data.",409);return this.grantResponse(old);}
-    const already=await this.one("SELECT r.id FROM recordings r JOIN assets x ON x.key=r.asset_key WHERE r.uid=? AND r.raw_sha256=? AND r.published=1 AND x.state='stored'",a.uid,input.raw_sha256);
+    const recordingId=await recordingID({...input,uid:a.uid,target_key:grading.key});
+    const already=await this.one("SELECT r.id FROM recordings r JOIN assets x ON x.key=r.asset_key WHERE r.id=? AND r.generation=? AND r.published=1 AND x.state='stored' AND EXISTS(SELECT 1 FROM winners w WHERE w.recording_id=r.id)",recordingId,catalog.generation);
     if(already) return {disposition:"already_present",recording_id:already.id};
     const winner=await this.one("SELECT frames FROM winners WHERE uid=? AND target_key=? AND clock=? AND rom=? AND strategy=? AND generation=? AND step=?",
       a.uid,grading.key,input.clock,input.rom,input.strategy,catalog.generation,grading.step);
@@ -148,13 +152,16 @@ export class Store {
   }
   async publish(g) {
     requireThat(!(await this.one('SELECT migration_generation FROM settings WHERE id=1')).migration_generation,'generation_changed','A catalog migration is in progress.',409);
-    const id=await sha256(canonical([g.uid,g.target_key,g.clock,g.rom,g.strategy,g.frames,g.raw_sha256]));
+    const id=await recordingID(g);
     const predicate="EXISTS(SELECT 1 FROM grants WHERE id=? AND state='stored') AND "+
       "EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1 AND status='active' AND sharing=1 AND terms_version=? AND privacy_version=?) AND "+
       "(SELECT generation FROM settings WHERE id=1)=? AND (SELECT migration_generation FROM settings WHERE id=1) IS NULL AND NOT EXISTS(SELECT 1 FROM winners WHERE uid=? AND target_key=? AND clock=? AND rom=? AND strategy=? AND generation=? AND step=? AND frames<=?)";
     try {await this.tx(predicate,
       [g.id,g.uid,this.cfg.terms,this.cfg.privacy,g.generation,g.uid,g.target_key,g.clock,g.rom,g.strategy,g.generation,g.step,g.frames],[
-      this.sql("INSERT INTO recordings(id,uid,asset_key,target_key,target_json,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,generation,step,overall_step,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      // Withdrawal can leave the immutable recording row while R2 collection
+      // is pending. Re-sharing relinks only that withdrawn identity to newly
+      // validated bytes; its retired asset remains charged until collection.
+      this.sql("INSERT INTO recordings(id,uid,asset_key,target_key,target_json,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,generation,step,overall_step,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET asset_key=excluded.asset_key,encoded_sha256=excluded.encoded_sha256,encoded_bytes=excluded.encoded_bytes,generation=excluded.generation,step=excluded.step,overall_step=excluded.overall_step,published=1 WHERE recordings.published=0",
         id,g.uid,g.asset_key,g.target_key,g.target_json,g.clock,g.rom,g.strategy,g.frames,g.raw_sha256,g.raw_bytes,g.encoded_sha256,g.encoded_bytes,g.generation,g.step,g.overall_step,sec()),
       this.sql("INSERT INTO winners VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(uid,target_key,clock,rom,strategy,generation,step) DO UPDATE SET recording_id=excluded.recording_id,frames=excluded.frames WHERE excluded.frames<winners.frames",
         g.uid,g.target_key,g.clock,g.rom,g.strategy,g.generation,g.step,id,g.frames),

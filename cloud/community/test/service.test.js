@@ -13,7 +13,7 @@ import {deflateSync} from 'node:zlib';
 import {config,LIMITS} from '../src/config.js';
 import {canonical} from '../src/errors.js';
 import {environment,alice,bob,catalog,target,nativeClip,ghc1,upload,digest} from './fixtures.js';
-function harness(env){const errors=[],service=createService({auth:async r=>({issuer:config(env).issuer,sub:r.headers.get('authorization')==='Bearer bob'?bob:alice}),adminAuth:async r=>{if(r.headers.get('cf-access-jwt-assertion')!=='test-access')throw Error('No access');return 'admin@example.invalid';},catalog:async()=>catalog,onError:e=>errors.push(e)});const caches=new Map(),ctx={exports:{MetadataCache:({props})=>({async fetch(){const key=canonical(props);if(!caches.has(key)){const {store}=await import('../src/store.js').then(({Store})=>({store:new Store(env.DB,config(env))}));caches.set(key,await store.candidates(props.query));}return Response.json(caches.get(key));}}),AssetCache:({props})=>({async fetch(){const key=canonical(props);if(!caches.has(key))caches.set(key,(await env.GHOSTS.get(props.key))?.body);return new Response(caches.get(key));}})}};
+function harness(env,model=catalog){const errors=[],service=createService({auth:async r=>({issuer:config(env).issuer,sub:r.headers.get('authorization')==='Bearer bob'?bob:alice}),adminAuth:async r=>{if(r.headers.get('cf-access-jwt-assertion')!=='test-access')throw Error('No access');return 'admin@example.invalid';},catalog:async()=>model,onError:e=>errors.push(e)});const caches=new Map(),ctx={exports:{MetadataCache:({props})=>({async fetch(){const key=canonical(props);if(!caches.has(key)){const {store}=await import('../src/store.js').then(({Store})=>({store:new Store(env.DB,config(env))}));caches.set(key,await store.candidates(props.query));}return Response.json(caches.get(key));}}),AssetCache:({props})=>({async fetch(){const key=canonical(props);if(!caches.has(key))caches.set(key,(await env.GHOSTS.get(props.key))?.body);return new Response(caches.get(key));}})}};
   return {errors,caches,async call(path,{method='GET',body,headers={},user='alice',bytes}={}){const r=new Request('https://community.example.invalid'+path,{method,headers:{authorization:'Bearer '+user,...(body?{'content-type':'application/json','idempotency-key':crypto.randomUUID()}:{}),...(bytes?{'content-type':'application/octet-stream'}:{}),...headers},body:body?JSON.stringify(body):bytes});const response=await service.fetch(r,env,ctx);const json=response.headers.get('content-type')?.includes('json')?await response.json():null;return {response,json};}};}
 async function published(h,opts={}){const fixture=upload(nativeClip({marker:opts.marker||1}),opts.frames||100),admission=await h.call('/v1/uploads',{method:'POST',body:fixture.body,user:opts.user||'alice'});assert.equal(admission.response.status,200,JSON.stringify(admission.json));const result=await h.call('/v1/uploads/'+admission.json.upload_id,{method:'PUT',bytes:fixture.bytes,user:opts.user||'alice'});assert.equal(result.response.status,200,JSON.stringify(result.json));return {...fixture,...result.json};}
 const pool='/v1/pool?'+new URLSearchParams({target:JSON.stringify(target),clock:'igt',rom:'us',scope:'strategy',strategy:'Standard',min_step:'0',max_step:'2',base_step:'1'});
@@ -185,5 +185,62 @@ test('hosted provider start accepts Twitch only with the registered native reque
     assert.equal((await start('unregistered')).status,400);
     native.searchParams.set('redirect_uri','https://attacker.example/callback');
     assert.equal((await start('twitch',native.href)).status,400);
+  }finally{env.DB.close();}
+});
+test('one clip can publish independent strategy and timing identities without duplicate admission',async()=>{
+  const {env,store}=await environment(),entries=structuredClone(catalog.entries);
+  entries[0].strategies.push({name:'Alternate',cutoffs:structuredClone(entries[0].strategies[0].cutoffs)});
+  const model={v:1,generation:digest(canonical(entries)),entries},h=harness(env,model),f=upload();
+  await store.sql('UPDATE settings SET generation=? WHERE id=1',model.generation).run();
+  try{
+    const send=async(strategy,frames)=>{
+      const body={...f.body,strategy,frames,generation:model.generation},admission=await h.call('/v1/uploads',{method:'POST',body});
+      assert.equal(admission.response.status,200,JSON.stringify(admission.json));
+      if(admission.json.disposition!=='upload')return admission.json;
+      const result=await h.call('/v1/uploads/'+admission.json.upload_id,{method:'PUT',bytes:f.bytes});
+      assert.equal(result.response.status,200,JSON.stringify(result.json));return result.json;
+    };
+    const first=await send('Standard',100),alternate=await send('Alternate',100);
+    assert.equal(first.disposition,'published');assert.equal(alternate.disposition,'published');
+    assert.notEqual(first.recording_id,alternate.recording_id);
+    assert.equal((await h.call('/v1/recordings/'+alternate.recording_id)).json.strategy,'Alternate');
+    const changed=new URL(pool,'https://community.example.invalid');changed.searchParams.set('strategy','Alternate');
+    assert.deepEqual((await h.call(changed.pathname+changed.search)).json.recordings.map(r=>r.id),[alternate.recording_id]);
+    const faster=await send('Standard',90);
+    assert.equal(faster.disposition,'published');assert.notEqual(first.recording_id,faster.recording_id);
+    assert.equal((await h.call('/v1/recordings/'+faster.recording_id)).json.frames,90);
+    assert.equal((await send('Standard',90)).disposition,'already_present');
+    assert.equal((await send('Standard',100)).disposition,'not_faster');
+    assert.equal((await send('Alternate',110)).disposition,'not_faster');
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM winners')).n,2);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM assets')).n,3);
+  }finally{env.DB.close();}
+});
+test('withdrawn immutable recording can be shared again and retired bytes remain charged until collection',async()=>{
+  const {env,store}=await environment(),h=harness(env);
+  try{
+    const first=await published(h),previous=await store.one('SELECT asset_key FROM recordings WHERE id=?',first.recording_id);
+    assert.equal((await h.call(pool,{user:'bob'})).json.recordings.length,1);
+    assert.deepEqual(Buffer.from(await (await h.call('/v1/recordings/'+first.recording_id+'/asset',{user:'bob'})).response.arrayBuffer()),first.bytes);
+    await h.call('/v1/account/withdraw',{method:'POST',body:{confirmation:'WITHDRAW MY GHOSTS'}});
+    assert.equal((await h.call('/v1/recordings/'+first.recording_id,{user:'bob'})).response.status,404);
+    assert.equal((await h.call('/v1/account/sharing',{method:'PUT',body:{enabled:true}})).response.status,200);
+    const admission=await h.call('/v1/uploads',{method:'POST',body:first.body});
+    assert.equal(admission.json.disposition,'upload');
+    const shared=await h.call('/v1/uploads/'+admission.json.upload_id,{method:'PUT',bytes:first.bytes});
+    assert.equal(shared.response.status,200,JSON.stringify(shared.json));assert.equal(shared.json.disposition,'published');
+    assert.equal(shared.json.recording_id,first.recording_id);
+    assert.notEqual((await store.one('SELECT asset_key FROM recordings WHERE id=?',first.recording_id)).asset_key,previous.asset_key);
+    assert.deepEqual((await h.call(pool,{user:'bob'})).json.recordings.map(r=>r.id),[first.recording_id]);
+    assert.deepEqual(Buffer.from(await (await h.call('/v1/recordings/'+first.recording_id+'/asset',{user:'bob'})).response.arrayBuffer()),first.bytes);
+    assert.equal((await store.one('SELECT bytes_used FROM storage_budget')).bytes_used,first.bytes.length*2);
+    assert.equal((await h.call('/v1/uploads',{method:'POST',body:first.body})).json.disposition,'already_present');
+    for(const frames of [100,110])assert.equal((await h.call('/v1/uploads',{method:'POST',body:upload(nativeClip({marker:frames}),frames).body})).json.disposition,'not_faster');
+    await store.sql('UPDATE assets SET created_at=0 WHERE key=?',previous.asset_key).run();
+    assert.equal((await reconcile(env)).deleted,1);
+    assert.equal((await store.one('SELECT bytes_used FROM storage_budget')).bytes_used,first.bytes.length);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM winners')).n,1);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM assets')).n,1);
+    assert.equal((await h.call('/v1/recordings/'+first.recording_id,{user:'bob'})).response.status,200);
   }finally{env.DB.close();}
 });
