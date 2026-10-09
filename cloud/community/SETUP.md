@@ -329,6 +329,15 @@ Record evidence from the actual staging service and packaged beta:
 Only after these gates pass, invite friend Auth UUIDs through the same audited
 endpoint and distribute the privately reviewed cloud-enabled ZIP/checksum.
 
+An accepted Cron configuration is not evidence that maintenance ran. Use a
+disposable identity and charged asset to observe the real outbox becoming complete,
+managed Auth returning 404, the R2 object disappearing, and physical charges
+reaching zero. Administrative QA cleanup cannot substitute for that result.
+Cloudflare documents up to 15 minutes for trigger propagation and up to 30 minutes
+for a new Worker's events to appear in Past Cron Events; a calibrated real-time
+tail and actual outbox changes distinguish delivery from delayed analytics.
+[Cron propagation and event history](https://developers.cloudflare.com/workers/configuration/cron-triggers/).
+
 ## Email later, costs and shutdown
 
 Discord/Google can be exercised before email delivery. For friend email/password
