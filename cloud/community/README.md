@@ -32,6 +32,12 @@ databases need a reviewed incremental migration. Fill D1/R2 bindings and public
 vars in wrangler.jsonc for one owned HTTPS service origin. Supply actual operator
 name/contact and published policy URL on that same origin. Keep SERVICE_ENABLED
 false until policies, providers, admission, secrets and staging gates pass.
+The implemented /policies page renders required operator/contact and policy
+versions with HTML escaping. Point POLICY_URL at that same-origin route and
+review its Terms/Privacy before enabling. It states the actual public fields,
+native runtime/input data, providers, opt-in, moderation, withdrawal/copy limits,
+asynchronous deletion and minimal retained tombstone/audit records; it makes no
+compliance, age or jurisdiction promise.
 
 | Field | Meaning |
 | --- | --- |
@@ -114,6 +120,10 @@ deletes remain charged until confirmed physical deletion. Pins: four recordings,
 seven-day leases. Collection prevents new pins after deleting-state admission.
 Cron runs every 15 minutes and collects at most 20 assets per invocation; monitor
 backlog. Expired pins/receipts/quota history/terminal grants prune in bounded batches.
+Indexed pruning handles up to 400 expired receipts and 200 terminal grants per
+tick (38,400/19,200 per day), above their configured admission ceilings. Outages
+and exhausted Free D1 capacity can still create backlog; monitor it. Publication
+and admission are transactionally fenced while a catalog migration is active.
 
 Limits in src/config.js: 64 MiB/account retained; 10,000,000,000 global physical+
 reserved bytes; 24 MiB/account/day and 256 MiB/global/day uploads; 500 account and

@@ -16,12 +16,13 @@ export function config(env) {
     clientID: env.OAUTH_CLIENT_ID, callback: env.NATIVE_CALLBACK,
     publishableKey: env.SUPABASE_PUBLISHABLE_KEY, terms: env.TERMS_VERSION, privacy: env.PRIVACY_VERSION,
     enabled: env.SERVICE_ENABLED === "true", operator: env.OPERATOR_NAME, contact: env.OPERATOR_CONTACT, policyURL: env.POLICY_URL,
-    identityAdminConfigured:typeof env.SUPABASE_SECRET_KEY==='string'&&env.SUPABASE_SECRET_KEY.length>=16&&!env.SUPABASE_SECRET_KEY.startsWith('REPLACE')
+    identityAdminConfigured:typeof env.SUPABASE_SECRET_KEY==='string'&&env.SUPABASE_SECRET_KEY.length>=16&&!env.SUPABASE_SECRET_KEY.startsWith('REPLACE'),
+    paginationConfigured:typeof env.CURSOR_SECRET==='string'&&env.CURSOR_SECRET.length>=32
   };
 }
 export function ready(cfg) {
   requireThat(cfg.enabled && cfg.operator?.trim() && cfg.contact?.trim() && cfg.policyURL?.startsWith("https://") &&
-    cfg.clientID && !cfg.clientID.startsWith("REPLACE") && cfg.publishableKey && !cfg.publishableKey.startsWith("REPLACE")&&cfg.identityAdminConfigured,
+    cfg.clientID && !cfg.clientID.startsWith("REPLACE") && cfg.publishableKey && !cfg.publishableKey.startsWith("REPLACE")&&cfg.identityAdminConfigured&&cfg.paginationConfigured&&typeof cfg.terms==='string'&&cfg.terms.trim()&&typeof cfg.privacy==='string'&&cfg.privacy.trim(),
     "service_disabled", "The private beta is not configured.",503);
   requireThat(cfg.callback==="http://127.0.0.1:8072/api/community/auth/callback","configuration","The beta callback is not registered.",503);
 }

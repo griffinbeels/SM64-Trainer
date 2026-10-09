@@ -70,10 +70,10 @@ export class Store {
     requireThat(typeof input.sharing==="boolean" && input.terms_version===this.cfg.terms && input.privacy_version===this.cfg.privacy &&
       (input.sheet_runner===null || (typeof input.sheet_runner==="string" && input.sheet_runner.length<=128)),
       "invalid_profile","Accept current policies and provide a valid name.");
-    const response={...this.publicAccount({...a,...input,name:named.name,status:"active",sheet_verified:0})};
+    const response={...this.publicAccount({...a,...input,name:named.name,status:"active",sheet_verified:input.sheet_runner===a.sheet_runner?a.sheet_verified:0})};
     await this.tx("EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1 AND status IN ('new','active','rename_required'))",[a.uid],[
-      this.sql("UPDATE accounts SET name=?,name_key=?,status='active',sharing=?,terms_version=?,privacy_version=?,sheet_runner=?,sheet_verified=0,updated_at=? WHERE uid=?",
-        named.name,named.key,Number(input.sharing),input.terms_version,input.privacy_version,input.sheet_runner,sec(),a.uid),
+      this.sql("UPDATE accounts SET name=?,name_key=?,status='active',sharing=?,terms_version=?,privacy_version=?,sheet_verified=CASE WHEN sheet_runner IS ? THEN sheet_verified ELSE 0 END,sheet_runner=?,updated_at=? WHERE uid=?",
+        named.name,named.key,Number(input.sharing),input.terms_version,input.privacy_version,input.sheet_runner,input.sheet_runner,sec(),a.uid),
       this.sql("UPDATE settings SET global_epoch=global_epoch+1 WHERE id=1"),
       this.receiptSQL(a.uid,"profile",key,digest,response)],"name_unavailable","This name is already held or the account changed.");
     return response;
@@ -102,7 +102,7 @@ export class Store {
     await this.tx(
       "EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1 AND status='active' AND sharing=1 AND terms_version=? AND privacy_version=? AND pending<? AND bytes_used+bytes_reserved+?<=?) AND "+
       "(SELECT bytes_used+bytes_reserved FROM storage_budget WHERE id=1)+?<=? AND "+
-      "(SELECT generation FROM settings WHERE id=1)=?",
+      "(SELECT generation FROM settings WHERE id=1)=? AND (SELECT migration_generation FROM settings WHERE id=1) IS NULL",
       [a.uid,this.cfg.terms,this.cfg.privacy,LIMITS.pending_uploads,input.encoded_bytes,LIMITS.retained_bytes,
        input.encoded_bytes,LIMITS.global_bytes,catalog.generation],[
       this.sql("UPDATE accounts SET bytes_reserved=bytes_reserved+?,pending=pending+1 WHERE uid=?",input.encoded_bytes,a.uid),
@@ -124,7 +124,7 @@ export class Store {
     if(g.state==="complete"||g.state==="stored") return g;
     await this.tx("EXISTS(SELECT 1 FROM grants WHERE id=? AND uid=? AND state='pending' AND expires_at>?) AND "+
       "EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1 AND status='active' AND sharing=1 AND terms_version=? AND privacy_version=?) AND "+
-      "(SELECT generation FROM settings WHERE id=1)=?",
+      "(SELECT generation FROM settings WHERE id=1)=? AND (SELECT migration_generation FROM settings WHERE id=1) IS NULL",
       [id,a.uid,sec(),a.uid,this.cfg.terms,this.cfg.privacy,g.generation],
       [this.sql("UPDATE grants SET state='receiving' WHERE id=?",id)],"upload_unavailable","Upload grant changed or was already consumed.");
     return {...g,state:"receiving"};
@@ -145,10 +145,11 @@ export class Store {
       this.sql("UPDATE grants SET state='stored' WHERE id=?",g.id)]);
   }
   async publish(g) {
+    requireThat(!(await this.one('SELECT migration_generation FROM settings WHERE id=1')).migration_generation,'generation_changed','A catalog migration is in progress.',409);
     const id=await sha256(canonical([g.uid,g.target_key,g.clock,g.rom,g.strategy,g.frames,g.raw_sha256]));
     const predicate="EXISTS(SELECT 1 FROM grants WHERE id=? AND state='stored') AND "+
       "EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1 AND status='active' AND sharing=1 AND terms_version=? AND privacy_version=?) AND "+
-      "(SELECT generation FROM settings WHERE id=1)=? AND NOT EXISTS(SELECT 1 FROM winners WHERE uid=? AND target_key=? AND clock=? AND rom=? AND strategy=? AND generation=? AND step=? AND frames<=?)";
+      "(SELECT generation FROM settings WHERE id=1)=? AND (SELECT migration_generation FROM settings WHERE id=1) IS NULL AND NOT EXISTS(SELECT 1 FROM winners WHERE uid=? AND target_key=? AND clock=? AND rom=? AND strategy=? AND generation=? AND step=? AND frames<=?)";
     try {await this.tx(predicate,
       [g.id,g.uid,this.cfg.terms,this.cfg.privacy,g.generation,g.uid,g.target_key,g.clock,g.rom,g.strategy,g.generation,g.step,g.frames],[
       this.sql("INSERT INTO recordings(id,uid,asset_key,target_key,target_json,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,generation,step,overall_step,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -160,6 +161,7 @@ export class Store {
       return {disposition:"published",recording_id:id};
     } catch(error) {
       if(!(error instanceof ServiceError)||error.code!=="conflict") throw error;
+      requireThat(!(await this.one('SELECT migration_generation FROM settings WHERE id=1')).migration_generation,'generation_changed','A catalog migration is in progress.',409);
       // Keep physical losing bytes charged until reconciler proves R2 deletion.
       await this.sql("UPDATE grants SET state='complete',disposition='not_faster' WHERE id=? AND state='stored'",g.id).run();
       return {disposition:"not_faster"};
@@ -258,7 +260,7 @@ export class Store {
     const now=sec();
     await this.tx("EXISTS(SELECT 1 FROM accounts WHERE uid=? AND name_key=?) AND EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1 AND status IN ('new','active','rename_required')) AND ?!=?",
       [body.expected_owner,named.key,body.destination_uid,body.expected_owner,body.destination_uid],[
-      this.sql("UPDATE accounts SET name=NULL,name_key=NULL,status='rename_required',sheet_runner=NULL,sheet_verified=0,updated_at=? WHERE uid=?",now,body.expected_owner),
+      this.sql("UPDATE accounts SET name=NULL,name_key=NULL,status=CASE WHEN status IN ('suspended','deleted') THEN status ELSE 'rename_required' END,sheet_runner=NULL,sheet_verified=0,updated_at=? WHERE uid=?",now,body.expected_owner),
       this.sql("UPDATE accounts SET name=?,name_key=?,status=CASE WHEN terms_version IS NULL THEN 'new' ELSE 'active' END,sheet_runner=?,sheet_verified=?,updated_at=? WHERE uid=?",
         named.name,named.key,body.transfer_sheet?before.sheet_runner:null,body.transfer_sheet?before.sheet_verified:0,now,body.destination_uid),
       this.sql("UPDATE settings SET global_epoch=global_epoch+1 WHERE id=1"),

@@ -7,12 +7,13 @@ import {validateGHC1} from './codec.js';
 import {prefixRange} from './names.js';
 import {encodeCursor,decodeCursor} from './cursors.js';
 import {nativeAuthorize} from './portal-contract.js';
+import {policies} from './policies.js';
 const now=()=>Math.floor(Date.now()/1000);
 async function mutation(r,s,uid,route,body){const key=r.headers.get('idempotency-key');requireThat(uuid(key),'idempotency_required','Use a UUID Idempotency-Key.');const digest=await sha256(canonical(body));return {key,digest,previous:await s.receipt(uid,route,key,digest)};}
 function queryTarget(t){try{return JSON.parse(t);}catch{fail(400,'invalid_target','Invalid portable target.');}}
 function intQuery(u,k){const t=u.searchParams.get(k);requireThat(/^(0|[1-9]\d{0,2})$/.test(t||''));return Number(t);}
 function freshConfirmation(v,phrase){requireThat(v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).length===2&&v.phrase===phrase&&integer(v.issued_at,now()-300,now()+30),'confirmation_required','Use a fresh confirmation for this exact action.');}
-async function portalHTML(env,r){const u=new URL(r.url);u.pathname='/index.html';u.search='';const response=await env.ASSETS.fetch(new Request(u));return new Response(response.body,{status:response.status,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'private, no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' "+new URL(env.SUPABASE_URL).origin+"; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"}});}
+async function portalHTML(env,r){const u=new URL(r.url);u.pathname='/index.html';u.search='';const response=await env.ASSETS.fetch(new Request(u));return new Response(response.body,{status:response.status,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'private, no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self' "+new URL(env.SUPABASE_URL).origin+"; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"}});}
 export function createService({auth=authenticate,adminAuth=authenticateAdmin,catalog=catalogFor,onError=()=>{}}={}){
  return {async fetch(request,env,ctx){try{
   const url=new URL(request.url),cfg=config(env),origin=request.headers.get('origin');
@@ -21,6 +22,7 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
   if(env.BURST){const result=await env.BURST.limit({key:request.headers.get('cf-connecting-ip')||'unknown'});requireThat(result.success,'burst_limit','Slow down and retry.',429);}
   ready(cfg);
   requireThat(new URL(cfg.policyURL).origin===url.origin,'configuration','Policies must be hosted on this service origin.',503);
+  if(url.pathname==='/policies'&&request.method==='GET'){exactQuery(url,[]);return policies(cfg);}
   if(url.pathname==='/v1/config'&&request.method==='GET'){
     exactQuery(url,[]);const model=await catalog(env);
     return json({protocol:1,limits:LIMITS,terms_version:cfg.terms,privacy_version:cfg.privacy,terms_url:cfg.policyURL+'#terms',privacy_url:cfg.policyURL+'#privacy',operator_name:cfg.operator,operator_contact:cfg.contact,generation:model.generation,auth:{supabase_url:cfg.supabaseURL,publishable_key:cfg.publishableKey,client_id:cfg.clientID,native_callback:cfg.callback,authorization_ui_url:url.origin+'/auth/authorize',authorization_start_url:url.origin+'/auth/start'}});

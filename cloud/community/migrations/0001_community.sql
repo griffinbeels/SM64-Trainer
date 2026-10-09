@@ -17,6 +17,7 @@ CREATE TABLE quotas (
  uploaded INTEGER NOT NULL DEFAULT 0 CHECK(uploaded>=0 AND uploaded<=upload_limit),
  class_a INTEGER NOT NULL DEFAULT 0 CHECK(class_a>=0 AND class_a<=20000),
  class_b INTEGER NOT NULL DEFAULT 0 CHECK(class_b>=0 AND class_b<=200000), PRIMARY KEY(owner,day));
+CREATE INDEX quotas_expiry ON quotas(day,owner);
 CREATE TABLE storage_budget (
  id INTEGER PRIMARY KEY CHECK(id=1), bytes_used INTEGER NOT NULL DEFAULT 0 CHECK(bytes_used>=0),
  bytes_reserved INTEGER NOT NULL DEFAULT 0 CHECK(bytes_reserved>=0));
@@ -32,6 +33,7 @@ CREATE TABLE grants (
  expires_at INTEGER NOT NULL, asset_key TEXT NOT NULL UNIQUE, recording_id TEXT, disposition TEXT,
  created_at INTEGER NOT NULL, UNIQUE(uid,request_key));
 CREATE INDEX grants_expiry ON grants(state,expires_at);
+CREATE INDEX grants_terminal_expiry ON grants(state,created_at,id);
 CREATE TABLE assets (
  key TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES accounts(uid), raw_sha256 TEXT NOT NULL,
  encoded_sha256 TEXT NOT NULL, encoded_bytes INTEGER NOT NULL, state TEXT NOT NULL CHECK(state IN ('stored','deleting')),
@@ -58,6 +60,7 @@ CREATE INDEX pins_expiry ON pins(expires_at,recording_id);
 CREATE TABLE mutation_receipts (
  uid TEXT NOT NULL, route TEXT NOT NULL, request_key TEXT NOT NULL, digest TEXT NOT NULL,
  response_json TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(uid,route,request_key));
+CREATE INDEX receipts_expiry ON mutation_receipts(created_at,uid,route,request_key);
 CREATE TABLE admin_audit (
  id TEXT PRIMARY KEY, actor TEXT NOT NULL, action TEXT NOT NULL, subject TEXT NOT NULL,
  reason TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL, created_at INTEGER NOT NULL);

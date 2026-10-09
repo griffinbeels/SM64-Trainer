@@ -1,6 +1,8 @@
 """Headless, fully intercepted portal fixture; no provider/network or live service."""
 import asyncio
 import json
+import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from playwright.async_api import async_playwright
@@ -12,6 +14,11 @@ CONFIG = {'v': 1, 'terms_url': ORIGIN + '/policies#terms', 'auth': {
     'client_id': 'client-fixture', 'native_callback': 'http://127.0.0.1:8072/api/community/auth/callback'}}
 
 async def main():
+    result=subprocess.run(['C:/Program Files/nodejs/node.exe', 'test/portal-response.js'], cwd=ROOT,
+        capture_output=True, text=True, encoding='utf-8', timeout=20,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' else 0)
+    assert result.returncode==0, result.stderr[-1000:]
+    actual_portal=json.loads(result.stdout)
     async with async_playwright() as p:
         browser = await p.chromium.launch(channel='chrome', headless=True)
         try:
@@ -32,6 +39,10 @@ async def main():
                     raise AssertionError('Unexpected outbound origin')
                 if u.path == '/v1/config':
                     return await request_route.fulfill(status=200, content_type='application/json', body=json.dumps(CONFIG))
+                if u.path == '/auth/authorize':
+                    return await request_route.fulfill(status=200, headers=actual_portal['headers'], body=actual_portal['html'])
+                if u.path == '/policies':
+                    return await request_route.fulfill(status=200, headers=actual_portal['policy']['headers'], body=actual_portal['policy']['html'])
                 paths = {'/auth/authorize': 'index.html', '/portal.js': 'portal.js', '/portal.css': 'portal.css',
                          '/google-g.png': 'google-g.png', '/discord-clyde-white.svg': 'discord-clyde-white.svg', '/google-sans.ttf': 'google-sans.ttf'}
                 path = ROOT / 'public' / paths[u.path]
@@ -59,8 +70,14 @@ async def main():
             assert provider['provider'] == ['google']
             assert provider['scopes'] == ['openid email profile']
             assert provider['redirect_to'] == [ORIGIN + '/auth/callback']
+            await page.goto(ORIGIN+'/policies')
+            await page.get_by_role('heading', name='Community ghosts private beta', exact=True).wait_for()
+            assert await page.get_by_role('heading', name='Terms', exact=True).is_visible()
+            assert await page.get_by_role('heading', name='Privacy notice', exact=True).is_visible()
+            assert 'Fixture operator' in await page.locator('main').inner_text()
+            await page.screenshot(path=str(ROOT/'.wrangler'/'policy-smoke.png'))
             assert not errors, errors
-            print('Portal browser fixture: zero console/page errors; all intercepted requests 200; email login visible; official local assets/font; equal provider geometry; Google dispatch and callback origin checked. Screenshot .wrangler/portal-smoke.png')
+            print('Portal/policies browser fixture with production response CSP: zero console/page errors; all intercepted requests 200; login/assets/font/provider geometry/Google callback and operator-configured Terms/Privacy reachable. Screenshots .wrangler/portal-smoke.png and policy-smoke.png')
             await context.close()
         finally:
             await browser.close()
