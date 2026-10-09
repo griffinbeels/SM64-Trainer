@@ -195,7 +195,7 @@ def modal_text(page):
 
 def capture_widths(page, name):
     """Private screenshots are fixture evidence, never a live auth receipt."""
-    folder = REPO / ".iteration" / "adaptive-ghosts" / "round18-community-ui"
+    folder = REPO / ".iteration" / "adaptive-ghosts" / "round19-community-ui"
     folder.mkdir(parents=True, exist_ok=True)
     for width in WIDTHS:
         page.set_viewport(width, 1000)
@@ -255,7 +255,7 @@ def test_sign_in_uses_packaged_official_assets_and_offline_escape(monkeypatch, t
 
 
 @pytest.mark.parametrize("status", ["new", "consent_required"])
-def test_profile_keeps_import_and_sharing_off_and_posts_exact_body(monkeypatch, tmp_path, status):
+def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_path, status):
     account = FixtureAccount(status)
     with community_app(monkeypatch, tmp_path, account) as (base, _):
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
@@ -266,6 +266,8 @@ def test_profile_keeps_import_and_sharing_off_and_posts_exact_body(monkeypatch, 
             assert page.evaluate("""Array.from(document.querySelectorAll(
                 '.community-form input[type=checkbox]')).every(box => !box.checked)""")
             assert page.evaluate("document.querySelector('.community-form button[type=submit]').disabled")
+            assert ("shared automatically" if status == "new" else "sharing stays off") in modal_text(page)
+            assert not page.evaluate("Array.from(document.querySelectorAll('.community-check')).some(label => label.innerText.includes('Automatically share'))")
             page.click(".community-sheet .search-select-trigger")
             page.wait_for(".community-sheet .search-menu-option")
             chosen = page.evaluate("document.querySelector('.community-sheet .search-menu-option').dataset.value")
@@ -276,14 +278,14 @@ def test_profile_keeps_import_and_sharing_off_and_posts_exact_body(monkeypatch, 
             assert page.evaluate("""Array.from(document.querySelectorAll(
                 '.community-form input[type=checkbox]')).every(box => !box.checked)""")
             capture_widths(page, f"profile-defaults-{status}")
-            # Consent alone enables saving; import and sharing remain unselected.
+            # Consent enables the disclosed default; import stays unselected.
             consent = ".community-form > .community-check:last-of-type input"
             page.click(consent)
             page.wait_for(".community-form button[type=submit]:not([disabled])")
             page.click(".community-form button[type=submit]")
             wait_until(page, "!document.querySelector('.modal-body')", "profile completion")
             assert ("profile", chosen, {"terms_version": "t1", "privacy_version": "p1",
-                                       "sharing": False, "sheet_runner": chosen}) in account.calls
+                                       "sharing": status == "new", "sheet_runner": chosen}) in account.calls
             assert not page.count(".modal-body"), "Unchecked Sheet import unexpectedly kept its flow open"
             assert page.problems() == []
 
@@ -316,8 +318,7 @@ def test_renewing_consent_preserves_sharing_and_sheet_identity(monkeypatch, tmp_
             page.wait_for('.practice-page')
             open_account(page)
             page.wait_for('.community-form')
-            sharing = '.community-form > .community-check input'
-            assert page.evaluate(f'document.querySelector({json.dumps(sharing)}).checked')
+            assert 'shared automatically' in modal_text(page)
             assert not page.evaluate("document.querySelector('.community-sheet input[type=checkbox]').checked")
             page.click('.community-form > .community-check:last-of-type input')
             page.wait_for('.community-form button[type=submit]:not([disabled])')
@@ -372,6 +373,57 @@ def test_settings_use_registered_name_sharing_and_sign_out_routes(monkeypatch, t
             click_text(page, "Sign out")
             wait_until(page, "!document.querySelector('.modal-body')", "sign-out")
             assert ("sign_out",) in account.calls
+            assert page.problems() == []
+
+
+def test_sharing_opt_out_explains_effect_and_cancel_preserves_choice(monkeypatch, tmp_path):
+    account = FixtureAccount("active")
+    account.update(sharing=True)
+    with community_app(monkeypatch, tmp_path, account) as (base, _):
+        with get_driver().launch(headless=True, viewport=(850, 1000)) as page:
+            page.goto(base)
+            page.wait_for(".practice-page")
+            open_account(page)
+            page.wait_for(".community-privacy")
+            page.click(".community-check input[type=checkbox]")
+            assert "won't receive your new ghosts" in modal_text(page)
+            assert "Existing shared ghosts stay available" in modal_text(page)
+            capture_widths(page, "sharing-off-pending")
+            assert account.state["sharing"] is True
+            page.click(".modal-close")
+            wait_until(page, "!document.querySelector('.modal-body')", "cancelled settings")
+            assert not any(call[0] == "sharing" for call in account.calls)
+            open_account(page)
+            page.wait_for(".community-privacy")
+            assert page.evaluate("document.querySelector('.community-check input').checked")
+            page.click(".community-check input[type=checkbox]")
+            click_text(page, "Done")
+            wait_until(page, "!document.querySelector('.modal-body')", "saved opt-out")
+            assert ("sharing", False) in account.calls
+            assert account.state["sharing"] is False
+            assert page.problems() == []
+
+
+def test_profile_bounds_normalized_name_before_submission(monkeypatch, tmp_path):
+    account = FixtureAccount("new")
+    with community_app(monkeypatch, tmp_path, account) as (base, _):
+        with get_driver().launch(headless=True, viewport=(850, 1000)) as page:
+            page.goto(base)
+            page.wait_for(".practice-page")
+            open_account(page)
+            page.wait_for(".community-form")
+            page.click(".community-form > .community-check:last-of-type input")
+            set_name(page, "a" * 21)
+            assert "20 characters or fewer" in modal_text(page)
+            assert page.evaluate("document.querySelector('.community-form button[type=submit]').disabled")
+            set_name(page, "ﬃ" * 7)
+            assert page.evaluate("document.querySelector('.community-form button[type=submit]').disabled")
+            set_name(page, "SullyLikesBigChungus")
+            page.wait_for(".community-form button[type=submit]:not([disabled])")
+            capture_widths(page, "longest-library-name")
+            page.click(".community-form button[type=submit]")
+            wait_until(page, "!document.querySelector('.modal-body')", "valid 20-character name")
+            assert any(call[:2] == ("profile", "SullyLikesBigChungus") for call in account.calls)
             assert page.problems() == []
 
 

@@ -26,6 +26,7 @@ from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_F
                                            read_metadata)  # noqa: E402
 from build_exe import COLLECT, SEP, _source_date_epoch, app_args, needs_reexec  # noqa: E402
 from make_manifest import build_zip  # noqa: E402
+from beta_ghosts import ApprovedCollection, COLLECTION_NAME, matches, review_collection  # noqa: E402
 
 DIST = REPO / "dist" / "private-beta"
 WORK = REPO / "build" / "private-beta"
@@ -56,6 +57,8 @@ affect the public trainer's next emulator launch.
 
 Use your invited staging account for community testing. Signing in and sharing
 are optional; practice works offline. Sheet imports start unchecked.
+New accounts share their best ghosts automatically after consent. You can turn
+sharing off in Settings; existing shared ghosts can be removed there too.
 Public app updates are disabled. Replace the entire extracted application
 folder with a new beta ZIP when provided; your separate beta profile survives.
 Never replace the _internal folder while this beta is running.
@@ -91,7 +94,7 @@ def beta_args(ffmpeg: str, metadata_path: Path, *, dist: Path = DIST,
                     distpath=dist, workpath=work / "pyinstaller", specpath=work / "spec")
 
 
-def validate_artifact(folder: Path, build: BuildChannel) -> None:
+def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedCollection | None = None) -> None:
     """Refuse incomplete or contaminated outputs before producing a friend ZIP."""
     if build.channel != "beta":
         raise RuntimeError("private artifact requires a beta build")
@@ -116,17 +119,28 @@ def validate_artifact(folder: Path, build: BuildChannel) -> None:
         vendor_hash = _VENDOR_HIDDEN.get(relative.as_posix())
         known_vendor = (vendor_hash is not None and path.is_file() and 0 < path.stat().st_size <= 4096
                         and hashlib.sha256(path.read_bytes()).hexdigest() == vendor_hash)
+        reviewed_ghosts = (ghosts is not None and relative.as_posix() == COLLECTION_NAME
+                          and matches(path, ghosts))
         if (path.is_symlink() or not path.resolve().is_relative_to(folder.resolve())
                 or lowered & _FORBIDDEN_DIRS
                 or any(part.startswith(".") for part in relative.parts) and not known_vendor
-                or name in _FORBIDDEN_NAMES or path.suffix.lower() in _FORBIDDEN_SUFFIXES
+                or name in _FORBIDDEN_NAMES or path.suffix.lower() in _FORBIDDEN_SUFFIXES and not reviewed_ghosts
                 or name.startswith("sm64trainersetup") or name == "sm64trainer.exe"):
             raise RuntimeError("beta artifact contains an unexpected private or public-release file")
 
 
-def package_beta(folder: Path, build: BuildChannel, destination: Path) -> Path:
-    validate_artifact(folder, build)
+def package_beta(folder: Path, build: BuildChannel, destination: Path, *, ghosts: ApprovedCollection | None = None) -> Path:
+    if ghosts is not None:
+        if not matches(ghosts.source, ghosts):
+            raise RuntimeError("The approved ghost collection changed before packaging.")
+        shutil.copyfile(ghosts.source, folder / COLLECTION_NAME)
+    validate_artifact(folder, build, ghosts=ghosts)
     readme = README
+    if ghosts is not None:
+        readme += (f"\nIncluded: {ghosts.count} legitimate recordings credited to griffman1212.\n"
+                   f"In Ghost Library, choose Import and select {COLLECTION_NAME} beside this file.\n"
+                   "Importing adds ghosts to race; it does not change your PBs or upload them.\n"
+                   "Some historical recordings have unknown ROM or inputs; these remain unknown.\n")
     if not build.community_url:
         readme = ('OFFLINE BETA: community sign-in and downloads are not configured in this ZIP.\n'
                   'Use it to test local practice, imported ghosts and beta profile isolation.\n\n') + readme
@@ -148,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, required=True,
                         help="explicit public beta metadata (not an environment file)")
     parser.add_argument("--ffmpeg", help="existing ffmpeg.exe; defaults to PATH")
+    parser.add_argument("--ghosts", type=Path, help="explicit curated griffman1212 collection to include")
     parser.add_argument("--check", action="store_true", help="check prerequisites without building")
     args = parser.parse_args(argv)
     try:
@@ -163,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(result.stderr)
             return result.returncode
         ffmpeg = check_prerequisites(args.ffmpeg)
+        ghosts = review_collection(args.ghosts) if args.ghosts is not None else None
         if args.check:
             print("Private beta prerequisites verified; no build was run.")
             return 0
@@ -171,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         metadata.write_text(json.dumps(build.metadata(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
         import PyInstaller.__main__ as pyi
         pyi.run(beta_args(ffmpeg, metadata))
-        archive = package_beta(DIST / BETA_APP_DIR, build, DIST)
+        archive = package_beta(DIST / BETA_APP_DIR, build, DIST, ghosts=ghosts)
         print(f"Private beta ZIP: {archive}\nSHA-256: {archive}.sha256")
         return 0
     except (OSError, RuntimeError, ValueError) as failure:

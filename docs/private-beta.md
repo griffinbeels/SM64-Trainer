@@ -10,6 +10,8 @@ A private beta is a complete app ZIP distributed directly to invited testers.
 It does not create a GitHub release or use the public app's updater/bootstrap.
 The [community protocol](community-protocol.md) owns its account and sharing
 contracts. A successful local build does not establish deployed login or sharing.
+Follow [the staging account guide](../cloud/community/SETUP.md) to configure
+Cloudflare, Supabase, Discord and Google before creating a cloud-enabled ZIP.
 
 ## Build identity and data
 
@@ -79,6 +81,20 @@ python tools/build_beta.py --config C:/private/public-beta-config.json --check
 python tools/build_beta.py --config C:/private/public-beta-config.json --ffmpeg D:/ffmpeg/bin/ffmpeg.exe
 ```
 
+To include Griffin's reviewed portable recordings, add
+`--ghosts C:/private/griffman1212.sm64ghosts`. The builder validates all clip
+hashes, metadata and targets, requires successful non-practice recordings
+credited to `griffman1212`, and pins the approved file's SHA-256. Only that exact
+root-level collection is exempt from the private-recording guard. Additional
+collections, altered bytes, raw databases and recording folders remain refused.
+Human provenance comes from the maintainer's source audit; structural validation
+cannot certify how a recording was played.
+
+Testers import this collection through Ghost Library → Import. It adds local
+ghosts to race without changing PBs or publishing imported recordings. It is
+not a simulated population or automatic cloud enrollment. Historical unknown
+ROM versions and inputs remain unknown.
+
 The first command is a read-only prerequisite check. The second builds only the
 windowed directory application using the same assets/dependency collection as
 the stable builder. Outputs are isolated under `dist/private-beta/`; PyInstaller
@@ -100,7 +116,11 @@ Send the ZIP and checksum receipt through the chosen private distribution path.
 Testers extract the whole ZIP into a writable folder and keep the EXE and entire
 `_internal` folder together. Running the beta does not install the public app.
 Practice remains available offline; community access requires an invited staging
-account and the applicable consent. Sharing and Sheet imports begin unchecked.
+account and the applicable consent. New accounts disclose automatic sharing
+before consent and enable it on completion; existing choices survive renewal.
+Sheet imports begin unchecked. Settings allows sharing to be disabled and
+explains that existing published ghosts remain until explicitly removed.
+Account names allow at most20 normalized Unicode characters and63 UTF-8 bytes.
 
 To replace a beta, close it and replace the entire extracted application folder
 with the next beta ZIP. Its separate LocalAppData profile survives. Never replace

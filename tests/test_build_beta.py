@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import build_beta
 from sm64_events.core.build_channel import parse_metadata
 from test_beta_channel import metadata
+from beta_ghosts import COLLECTION_NAME, review_collection
 
 
 @pytest.fixture
@@ -88,6 +89,50 @@ def test_artifact_refuses_missing_asset_and_different_build_configuration(artifa
     (folder / "_internal" / "ffmpeg.exe").unlink()
     with pytest.raises(RuntimeError, match="ffmpeg"):
         build_beta.validate_artifact(folder, build)
+
+
+def approved_collection(tmp_path, *, author="griffman1212"):
+    from test_ghost_sharing import recording
+    from sm64_events.ghost.portable import make_entry, write_package
+    source, original = recording(tmp_path)
+    entry = make_entry(source, author=author, target=original["target"], frames=original["frames"],
+                       clock=original["clock"], recorded_utc=original["recorded_utc"], practice=False,
+                       outcome="success", game_version=None)
+    collection = tmp_path / "reviewed.sm64ghosts"
+    write_package(collection, [(entry, source)])
+    return collection
+
+
+def test_only_explicit_reviewed_ghosts_can_travel_with_beta(artifact, tmp_path):
+    from test_ghost_sharing import provider
+    folder, build = artifact
+    source = approved_collection(tmp_path)
+    approved = review_collection(source)
+    archive = build_beta.package_beta(folder, build, tmp_path / "output", ghosts=approved)
+    with zipfile.ZipFile(archive) as zipped:
+        assert zipped.read(COLLECTION_NAME) == source.read_bytes()
+        assert b"1 legitimate recordings credited to griffman1212" in zipped.read("README-BETA.txt")
+    sharing = provider(tmp_path)
+    assert sharing.import_file(folder / COLLECTION_NAME)["imported"] == 1
+    assert sharing.imports_for("star", "2-1")[0].author == "griffman1212"
+    assert sharing.database.writes == []
+    with pytest.raises(RuntimeError, match="unexpected"):
+        build_beta.validate_artifact(folder, build)
+    (folder / "other.sm64ghosts").write_bytes(source.read_bytes())
+    with pytest.raises(RuntimeError, match="unexpected"):
+        build_beta.validate_artifact(folder, build, ghosts=approved)
+
+
+def test_curated_collection_rejects_wrong_author_and_changed_bytes(artifact, tmp_path):
+    source = approved_collection(tmp_path, author="gtest1")
+    with pytest.raises(ValueError, match="griffman1212"):
+        review_collection(source)
+    source = approved_collection(tmp_path)
+    approved = review_collection(source)
+    source.write_bytes(source.read_bytes() + b"changed")
+    folder, build = artifact
+    with pytest.raises(RuntimeError, match="changed"):
+        build_beta.package_beta(folder, build, tmp_path / "output", ghosts=approved)
 
 
 @pytest.mark.parametrize("relative,content", [

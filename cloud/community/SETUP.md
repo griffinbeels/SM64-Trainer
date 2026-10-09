@@ -222,7 +222,7 @@ Each command creates and deploys a version. Keep `SERVICE_ENABLED` false for
 both; a missing secret also keeps readiness closed. To hold the new version
 instead, use `wrangler versions secret put` and review it before deployment.
 Review the implemented `/policies` page during the controlled test window. It
-discloses default-selected optional sharing, separate policy acknowledgement,
+discloses automatic sharing on new-account completion, the Settings opt-out, separate policy acknowledgement,
 native timing/input/runtime metadata, unverified provenance, withdrawal/copy
 limits and asynchronous deletion. Missing operator/contact remains fail-closed.
 

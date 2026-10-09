@@ -11,6 +11,7 @@ import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 
 from .config import CommunityError
+from .names import checked_name
 from .vault import RefreshTokenStore
 
 
@@ -296,6 +297,7 @@ class CommunityAccount:
         return self.snapshot()
 
     async def complete_profile(self, name, *, terms_version, privacy_version, sharing=False, sheet_runner=None):
+        name = checked_name(name)
         if type(sharing) is not bool:
             raise CommunityError("invalid_profile")
         epoch = self._epoch
@@ -308,6 +310,7 @@ class CommunityAccount:
         return self.snapshot()
 
     async def rename(self, name):
+        name = checked_name(name)
         epoch = self._epoch
         value = _profile(await self.request_json("PUT", "/v1/account/name", json={"name": name}))
         with self._lock:

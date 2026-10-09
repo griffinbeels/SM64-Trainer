@@ -142,6 +142,22 @@ def test_forced_reads_do_not_reprepare_identical_rosters(tmp_path,monkeypatch):
     assert (len(native.preparations),rivals.generation)==before
 
 
+def test_same_clip_and_colour_moving_slot_refreshes_native_name(tmp_path, monkeypatch):
+    rivals, tracker, native, _, _ = controller(tmp_path, monkeypatch)
+    try:
+        before = len(native.preparations)
+        chosen = [dict(row) for row in rivals.rows]
+        assert chosen
+        chosen[0]["slot"] = (chosen[0]["slot"] + 1) % 4
+        monkeypatch.setattr(module, "select_rivals", lambda *_args, **_kwargs: chosen)
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+        assert len(native.preparations) == before + 1
+        ghosts = native.preparations[-1][1]
+        assert ghosts[0].rival_slot == chosen[0]["slot"]
+    finally:
+        tracker.db.close()
+
+
 @pytest.mark.parametrize("available", [True, False])
 def test_unchanged_pb_refresh_retains_playback_and_reason(tmp_path, monkeypatch, available):
     rivals, _, native, _, _ = controller(tmp_path, monkeypatch)

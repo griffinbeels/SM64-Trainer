@@ -19,9 +19,10 @@ def wire(row):
 
 
 class ColoredGhost:
-    def __init__(self, ghost, hue):
+    def __init__(self, ghost, hue, rival_slot=None):
         self.ghost = ghost
         self.hue_degrees = hue
+        self.rival_slot = rival_slot
 
     def __getattr__(self, name):
         return getattr(self.ghost, name)
@@ -307,12 +308,12 @@ class Rivals:
             self.rows = self.community.stage(desired, self.rows)
             self.preserve_slots = False
             self.pb = pb
-            ghosts = [ColoredGhost(row["ghost"],row["hue_degrees"]) for row in self.rows if row.get("ghost") is not None]
+            ghosts = [ColoredGhost(row["ghost"],row["hue_degrees"],row["slot"]) for row in self.rows if row.get("ghost") is not None]
             if pb and self.options["include_pb"] and pb.get("ghost") is not None:
                 ghosts.insert(0,ColoredGhost(pb["ghost"],controls["hue_degrees"]))
                 self.pb = {**pb,"hue_degrees":controls["hue_degrees"]}
             prepared_key = (id(self.loaded_db),identity,enabled,source,
-                            tuple((ghost.origin,ghost.hue_degrees) for ghost in ghosts))
+                            tuple((ghost.origin,ghost.hue_degrees,ghost.rival_slot) for ghost in ghosts))
             self.fingerprint = stamp
             if prepared_key == self.prepared_key:
                 self._pb_playback(self.prepared_answer)

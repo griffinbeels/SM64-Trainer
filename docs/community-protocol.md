@@ -5,6 +5,18 @@ managed Supabase Auth. Public player names are mutable; the verified Auth
 issuer/subject owns data. A valid login does not prove honest emulator play.
 No ROMs, videos, passwords or complete practice histories are uploaded.
 
+New-account signup explains automatic sharing before explicit policy acknowledgement.
+Completing signup enables sharing; Settings can disable future uploads or withdraw
+existing shared ghosts. Consent renewal preserves the existing sharing choice.
+The local API's omitted-sharing default remains off; the UI submits its disclosed
+choice explicitly. Sheet time imports remain optional and unchecked.
+
+Account names allow20 Unicode code points and63 UTF-8 bytes after NFKC normalization.
+The October8 Library snapshot contains454 names; its longest is
+SullyLikesBigChungus at20 characters/20 bytes. Native labels use the original
+credit when drawable and a colour-linked numbered rival label otherwise; account
+identity and full web credits remain unchanged. See the native runtime contract.
+
 ## Authentication and build configuration
 
 Use Supabase's maintained OAuth 2.1 server with one registered **public** beta

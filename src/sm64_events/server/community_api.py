@@ -3,7 +3,9 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from ..community.names import checked_name
 
 
 class _Body(BaseModel):
@@ -18,16 +20,24 @@ class Cancel(_Body):
     attempt_id: str = Field(min_length=1, max_length=128)
 
 
-class Profile(_Body):
+class _Named(_Body):
     name: str = Field(min_length=1, max_length=128)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value):
+        return checked_name(value)
+
+
+class Profile(_Named):
     terms_version: str = Field(min_length=1, max_length=80)
     privacy_version: str = Field(min_length=1, max_length=80)
     sharing: bool = False
     sheet_runner: str | None = Field(default=None, max_length=128)
 
 
-class Rename(_Body):
-    name: str = Field(min_length=1, max_length=128)
+class Rename(_Named):
+    pass
 
 
 class Sharing(_Body):

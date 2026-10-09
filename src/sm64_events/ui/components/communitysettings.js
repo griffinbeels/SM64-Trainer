@@ -3,6 +3,7 @@ import { useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { downloadAccountData } from "../community.js";
+import { normalizedPlayerName, playerNameError } from "../communityname.js";
 
 const html = htm.bind(h);
 
@@ -11,7 +12,7 @@ export function CommunitySettings({ account, busy, run, refresh, onClose }) {
   const [sharing, setSharing] = useState(account.sharing === true);
   const [confirm, setConfirm] = useState(null);
   async function save() {
-    if (name.trim() !== account.name) await send("PUT", "/api/community/account/name", { name: name.trim() });
+    if (normalizedPlayerName(name) !== account.name) await send("PUT", "/api/community/account/name", { name: normalizedPlayerName(name) });
     if (sharing !== account.sharing) await send("PUT", "/api/community/account/sharing", { enabled: sharing });
     await refresh(); onClose();
   }
@@ -31,9 +32,13 @@ export function CommunitySettings({ account, busy, run, refresh, onClose }) {
   return html`<div class="community-form">
     <label>Player name<input type="text" value=${name} disabled=${busy} maxlength="128"
       oninput=${event => setName(event.target.value)} autocomplete="nickname" /></label>
+    <small class=${name && playerNameError(name) ? "community-error" : "muted"}>
+      ${name && playerNameError(name) || "20 characters maximum."}</small>
     <label class="community-check"><input type="checkbox" checked=${sharing} disabled=${busy}
       onchange=${event => setSharing(event.target.checked)} /><span>Automatically share my best ghosts</span></label>
-    <div class="community-actions"><button class="primary-button" disabled=${busy || !name.trim()}
+    ${!sharing && html`<p class="muted" role="status">Other players won't receive your new ghosts or be able to learn from those runs.
+      Existing shared ghosts stay available until you remove them below.</p>`}
+    <div class="community-actions"><button class="primary-button" disabled=${busy || !!playerNameError(name)}
       onclick=${() => run(save)}>Done</button></div>
     <details class="community-privacy"><summary>Privacy and account</summary>
       <div class="community-actions">
