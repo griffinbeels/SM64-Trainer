@@ -142,7 +142,7 @@ class CommunityAccount:
 
     async def begin_sign_in(self, provider):
         self._enabled()
-        if provider not in ("discord", "google", "email"):
+        if provider not in ("discord", "google", "twitch", "email"):
             raise CommunityError("invalid_provider")
         await self._public_config()
         attempt, state, verifier = secrets.token_urlsafe(24), secrets.token_urlsafe(32), secrets.token_urlsafe(64)

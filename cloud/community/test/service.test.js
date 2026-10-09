@@ -172,3 +172,18 @@ test('name API reports each claim limit clearly and leaves the current account u
     assert.equal(result.response.status,200);assert.equal(result.json.name,'界'.repeat(20));
   }finally{env.DB.close();}
 });
+test('hosted provider start accepts Twitch only with the registered native request',async()=>{
+  const {env}=await environment();
+  try{
+    env.ASSETS={fetch:async()=>new Response('<main>Provider login</main>')};
+    const native=new URL(env.SUPABASE_URL+'/auth/v1/oauth/authorize');
+    native.search=new URLSearchParams({client_id:env.OAUTH_CLIENT_ID,redirect_uri:env.NATIVE_CALLBACK,
+      response_type:'code',code_challenge_method:'S256',code_challenge:'a'.repeat(43),state:'b'.repeat(32),scope:'openid email profile'});
+    const start=(provider,value=native.href)=>createService().fetch(new Request('https://community.example.invalid/auth/start?'+
+      new URLSearchParams({provider,native_authorize:value})),env,{});
+    for(const provider of ['discord','google','twitch','email'])assert.equal((await start(provider)).status,200);
+    assert.equal((await start('unregistered')).status,400);
+    native.searchParams.set('redirect_uri','https://attacker.example/callback');
+    assert.equal((await start('twitch',native.href)).status,400);
+  }finally{env.DB.close();}
+});

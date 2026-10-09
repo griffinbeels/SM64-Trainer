@@ -1,7 +1,7 @@
 # Set up an operator-only cloud test
 
 This guide matches protocol v1 and the service under `cloud/community`.
-Use Discord and Google first. Email signup/recovery can follow later. Creating
+Use Discord, Google and Twitch first. Email signup/recovery can follow later. Creating
 accounts/resources, enabling R2 billing, setting remote secrets, applying remote
 migrations and deploying are operator actions; this guide does not perform them.
 
@@ -120,7 +120,7 @@ desktop service access.
 [JWT signing keys](https://supabase.com/docs/guides/auth/signing-keys),
 [OAuth access-token claims](https://supabase.com/docs/guides/auth/oauth-server/oauth-flows).
 
-## 4. Add Discord and Google
+## 4. Add Discord, Google and Twitch
 
 For Discord, create an application in the
 [Discord Developer Portal](https://discord.com/developers/applications). Under
@@ -138,6 +138,16 @@ provider Client ID/Secret into Supabase's Google provider and enable it. Configu
 only `openid`, email and profile access. Review the real application's name/logo,
 policy links and provider warnings before inviting friends.
 [Official Supabase Google instructions](https://supabase.com/docs/guides/auth/social-login/auth-google).
+
+For Twitch, register an application in the
+[Twitch Developer Console](https://dev.twitch.tv/console/apps) with the same
+**Supabase provider callback**. The developer account needs verified email and
+2FA. Generate a Client Secret, then enter the application's Client ID/Secret in
+Supabase's Twitch provider and enable it. Supabase handles the provider exchange;
+no Twitch secret or provider token belongs in the desktop package. No streaming,
+chat, moderation or channel-management permissions are required for sign-in.
+[Official Supabase Twitch instructions](https://supabase.com/docs/guides/auth/social-login/auth-twitch),
+[Twitch application registration](https://dev.twitch.tv/docs/authentication/register-app/).
 
 Start in Google's Testing state. Current Google guidance exempts basic identity
 scopes (`openid`, `email`, `profile`) from the usual test-user allowlist
@@ -294,7 +304,7 @@ Never add service secrets to this config or the archive.
 
 Record evidence from the actual staging service and packaged beta:
 
-- Discord and Google sign-in, provider hints, policy acknowledgement, consent,
+- Discord, Google and Twitch sign-in, provider hints, policy acknowledgement, consent,
   code/state return to port 8072, refresh and sign-out. Browser tokens never
   return to native. Reject wrong state/client/redirect and ID tokens.
 - Unknown-user and revoked-user admission; Access denial and operator allowlist;

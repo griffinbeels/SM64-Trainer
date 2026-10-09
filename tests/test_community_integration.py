@@ -42,7 +42,8 @@ class Account:
         self.status = 'new'
 
 
-def test_hosted_oauth_return_reaches_state_validation_without_opening_other_routes():
+@pytest.mark.parametrize("provider", ["discord", "google", "twitch"])
+def test_hosted_oauth_return_reaches_state_validation_without_opening_other_routes(provider):
     account = Account()
     app = FastAPI()
     app.include_router(create_community_router(account))
@@ -50,7 +51,8 @@ def test_hosted_oauth_return_reaches_state_validation_without_opening_other_rout
     navigation = {'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document'}
     with TestClient(app, base_url='http://127.0.0.1:8072') as client:
         token = client.get('/api/local-access').json()['request_token']
-        assert client.post('/api/community/auth/start', json={'provider': 'google'}, headers={HEADER: token}).status_code == 200
+        assert client.post('/api/community/auth/start', json={'provider': provider}, headers={HEADER: token}).status_code == 200
+        assert client.post('/api/community/auth/start', json={'provider': 'unregistered'}, headers={HEADER: token}).status_code == 422
         assert client.get('/api/local-access', headers=navigation).status_code == 403
         wrong = client.get('/api/community/auth/callback?code=one&state=wrong', headers=navigation)
         assert wrong.status_code == 400 and 'Sensitive' not in wrong.text

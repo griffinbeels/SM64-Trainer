@@ -25,7 +25,7 @@ async function boot(){
   const u=new URL(location.href);
   if(u.pathname==='/auth/start'){
     const authorize=nativeAuthorize(u.searchParams.get('native_authorize'),{supabaseURL:cfg.auth.supabase_url,clientID:cfg.auth.client_id,callback:cfg.auth.native_callback}),parsed=new URL(authorize),provider=u.searchParams.get('provider');
-    if(!['discord','google','email'].includes(provider))throw Error('Unsupported provider');save({provider,state:parsed.searchParams.get('state'),expires:Date.now()+300000});location.replace(authorize);return;
+    if(!['discord','google','twitch','email'].includes(provider))throw Error('Unsupported provider');save({provider,state:parsed.searchParams.get('state'),expires:Date.now()+300000});location.replace(authorize);return;
   }
   // Password recovery can complete without a live native OAuth attempt. Supabase
   // still requires the original browser's PKCE verifier; no implicit token URL.
@@ -36,12 +36,12 @@ async function boot(){
     if(u.pathname==='/auth/recovery'){$('recovery').hidden=false;message('Choose a new password.');bindRecovery();return;}
     if(!attempt){message('Email confirmed. Return to the trainer and start sign-in again.');return;}
   }
-  action('discord',()=>social('discord'));action('google',()=>social('google'));
+  action('discord',()=>social('discord'));action('google',()=>social('google'));action('twitch',()=>social('twitch'));
   $('email-form').addEventListener('submit',async e=>{e.preventDefault();try{const {error}=await client.auth.signInWithPassword({email:$('email').value,password:$('password').value});$('password').value='';if(error)message('Email sign-in failed.');else await signedIn();}catch{message('Email sign-in failed.');}});
   action('signup',async()=>{const {error}=await client.auth.signUp({email:$('email').value,password:$('password').value,options:{emailRedirectTo:location.origin+'/auth/callback'}});$('password').value='';message(error?'Email signup failed.':'Confirm your email, then return to the trainer.');});
   action('recover',async()=>{const {error}=await client.auth.resetPasswordForEmail($('email').value,{redirectTo:location.origin+'/auth/recovery'});message(error?'Recovery could not start.':'If the address is registered, a recovery message will arrive.');});
   action('approve',()=>decision(true));action('deny',()=>decision(false));
-  if(['discord','google'].includes(attempt.provider)&&!attempt.providerStarted){attempt={...attempt,providerStarted:true};save(attempt);await social(attempt.provider);return;}
+  if(['discord','google','twitch'].includes(attempt.provider)&&!attempt.providerStarted){attempt={...attempt,providerStarted:true};save(attempt);await social(attempt.provider);return;}
   await signedIn();
 }
 function bindRecovery(){$('password-form').addEventListener('submit',async e=>{e.preventDefault();const {error}=await client.auth.updateUser({password:$('new-password').value});$('new-password').value='';message(error?'Password could not be saved.':'Password updated. Return to the trainer and sign in again.');});}

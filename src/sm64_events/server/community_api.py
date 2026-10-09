@@ -13,7 +13,7 @@ class _Body(BaseModel):
 
 
 class SignIn(_Body):
-    provider: Literal["discord", "google", "email"]
+    provider: Literal["discord", "google", "twitch", "email"]
 
 
 class Cancel(_Body):

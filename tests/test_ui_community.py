@@ -239,13 +239,15 @@ def test_sign_in_uses_packaged_official_assets_and_offline_escape(monkeypatch, t
             open_account(page)
             page.wait_for(".community-provider.community-discord:not([disabled])")
             page.wait_for(".community-provider.community-google:not([disabled])")
+            page.wait_for(".community-provider.community-twitch:not([disabled])")
             wait_until(page, """Array.from(document.querySelectorAll(
                 '.community-providers img')).every(img => img.complete && img.naturalWidth > 0)""",
                        "the provider artwork to load")
             assets = page.evaluate("""Array.from(document.querySelectorAll(
                 '.community-providers img')).map(img => new URL(img.src).pathname)""")
             assert assets == ["/ui/assets/community/discord-clyde-white.svg",
-                              "/ui/assets/community/google-g.png"]
+                              "/ui/assets/community/google-g.png",
+                              "/ui/assets/community/twitch-glitch-white.svg"]
             assert "Continue with email" in modal_text(page)
             capture_widths(page, "providers")
             click_text(page, "Practice offline")
@@ -461,15 +463,16 @@ def test_privacy_actions_use_owner_routes_and_explicit_confirmation(monkeypatch,
             assert page.problems() == []
 
 
-def test_cancelling_sign_in_posts_the_exact_pending_attempt(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["discord", "google", "twitch"])
+def test_cancelling_sign_in_posts_the_exact_pending_attempt(monkeypatch, tmp_path, provider):
     account = FixtureAccount()
     with community_app(monkeypatch, tmp_path, account) as (base, _):
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
             page.goto(base)
             page.wait_for(".practice-page")
             open_account(page)
-            page.wait_for(".community-provider.community-discord:not([disabled])")
-            page.click(".community-provider.community-discord")
+            page.wait_for(f".community-provider.community-{provider}:not([disabled])")
+            page.click(f".community-provider.community-{provider}")
             wait_until(page, "document.querySelector('.modal-body')?.innerText.includes('Finish signing in')",
                        "the cancellable sign-in screen")
             click_text(page, "Cancel")
@@ -478,5 +481,6 @@ def test_cancelling_sign_in_posts_the_exact_pending_attempt(monkeypatch, tmp_pat
             while ("cancel", "fixture-attempt") not in account.calls:
                 assert time.monotonic() < deadline, "Cancel did not invalidate the pending attempt"
                 page.wait_ms(50)
+            assert ("begin", provider) in account.calls
             assert not account.snapshot()["authenticated"]
             assert page.problems() == []

@@ -28,7 +28,7 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
     return json({protocol:1,limits:LIMITS,terms_version:cfg.terms,privacy_version:cfg.privacy,terms_url:cfg.policyURL+'#terms',privacy_url:cfg.policyURL+'#privacy',operator_name:cfg.operator,operator_contact:cfg.contact,generation:model.generation,auth:{supabase_url:cfg.supabaseURL,publishable_key:cfg.publishableKey,client_id:cfg.clientID,native_callback:cfg.callback,authorization_ui_url:url.origin+'/auth/authorize',authorization_start_url:url.origin+'/auth/start'}});
   }
   if(url.pathname==='/auth/start'&&request.method==='GET'){
-    exactQuery(url,['provider','native_authorize'],['provider','native_authorize']);requireThat(['discord','google','email'].includes(url.searchParams.get('provider')));nativeAuthorize(url.searchParams.get('native_authorize'),cfg);return portalHTML(env,request);
+    exactQuery(url,['provider','native_authorize'],['provider','native_authorize']);requireThat(['discord','google','twitch','email'].includes(url.searchParams.get('provider')));nativeAuthorize(url.searchParams.get('native_authorize'),cfg);return portalHTML(env,request);
   }
   if(['/auth/authorize','/auth/callback','/auth/recovery'].includes(url.pathname)&&request.method==='GET'){
     exactQuery(url,url.pathname==='/auth/authorize'?['authorization_id']:['code','error','error_code','error_description']);return portalHTML(env,request);

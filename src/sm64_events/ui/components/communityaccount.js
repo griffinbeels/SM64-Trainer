@@ -22,6 +22,9 @@ function ProviderChoices({enabled, busy, start, close}) {
       <button class="community-provider community-google" disabled=${busy || !enabled} onClick=${() => start('google')}>
         <img src="/ui/assets/community/google-g.png" alt="" />Continue with Google
       </button>
+      <button class="community-provider community-twitch" disabled=${busy || !enabled} onClick=${() => start('twitch')}>
+        <img src="/ui/assets/community/twitch-glitch-white.svg" alt="" />Continue with Twitch
+      </button>
     </div>
     <div class="community-center"><button class="link" disabled=${busy || !enabled} onClick=${() => start('email')}>Continue with email</button></div>
     <div class="community-center"><button disabled=${busy} onClick=${close}>Practice offline</button></div>

@@ -75,7 +75,8 @@ def test_policy_rejection_refreshes_current_versions_once_before_renewal():
     asyncio.run(scenario())
 
 
-def test_pkce_portal_code_exchange_one_use_and_profile_defaults():
+@pytest.mark.parametrize("provider", ["discord", "google", "twitch", "email"])
+def test_pkce_portal_code_exchange_one_use_and_profile_defaults(provider):
     async def scenario():
         requests = []
         def respond(request):
@@ -89,10 +90,10 @@ def test_pkce_portal_code_exchange_one_use_and_profile_defaults():
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
             store = Store()
             account = CommunityAccount(config(), http=http, token_store=store)
-            begin = await account.begin_sign_in("google")
+            begin = await account.begin_sign_in(provider)
             outer = parse_qs(urlsplit(begin["url"]).query)
             assert urlsplit(begin["url"]).path == "/auth/start"
-            assert outer["provider"] == ["google"]
+            assert outer["provider"] == [provider]
             native_url = outer["native_authorize"][0]
             params = parse_qs(urlsplit(native_url).query)
             assert params["code_challenge_method"] == ["S256"]
@@ -101,7 +102,7 @@ def test_pkce_portal_code_exchange_one_use_and_profile_defaults():
             with pytest.raises(CommunityError):
                 await account.complete_sign_in(begin['attempt_id'], 'code', 'wrong-state')
             signed = await account.complete_sign_in(begin["attempt_id"], "code", params["state"][0])
-            assert signed["uid"] == UID and signed["provider"] == "google"
+            assert signed["uid"] == UID and signed["provider"] == provider
             assert "private-access" not in repr(signed) and "rotated" not in repr(signed)
             post = next(request for request in requests if request.url.path.endswith("/token"))
             body = parse_qs(post.content.decode())
