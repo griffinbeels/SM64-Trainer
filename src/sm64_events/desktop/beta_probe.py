@@ -26,6 +26,7 @@ _ASSETS = (
         "components/communityaccount.js", "components/communityprofile.js",
         "components/communitysettings.js", "components/importflow.js",
         "assets/community/discord-clyde-white.svg", "assets/community/google-g.png",
+        "assets/community/twitch-glitch-white.svg",
         "assets/community/google-sans.ttf", "assets/community/google-sans-OFL.txt",
     )),
 )

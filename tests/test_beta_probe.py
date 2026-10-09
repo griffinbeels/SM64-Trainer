@@ -71,7 +71,7 @@ def test_complete_fixture_has_bounded_token_free_receipt_and_no_profile_writes(r
     assert "helper execution" in report["not_exercised"]
 
 
-@pytest.mark.parametrize("problem", ["public-profile", "public-port", "updates", "native", "native-resolver", "shared-metadata", "asset", "helper"])
+@pytest.mark.parametrize("problem", ["public-profile", "public-port", "updates", "native", "native-resolver", "shared-metadata", "asset", "twitch-asset", "helper"])
 def test_missing_or_incorrect_frozen_contract_fails(runtime, problem):
     if problem == "public-profile":
         runtime.paths.data_root = lambda: runtime.local_appdata / "SM64Trainer"
@@ -87,6 +87,8 @@ def test_missing_or_incorrect_frozen_contract_fails(runtime, problem):
         runtime.paths.capture_layer_settings_path = lambda: runtime.local_appdata / BETA_APP_DIR / "capture_layer.json"
     elif problem == "asset":
         (runtime.bundle / "sm64_events/ui/assets/community/google-g.png").unlink()
+    elif problem == "twitch-asset":
+        (runtime.bundle / "sm64_events/ui/assets/community/twitch-glitch-white.svg").unlink()
 
     def load(name):
         if problem == "helper" and name.endswith("process_worker"):
