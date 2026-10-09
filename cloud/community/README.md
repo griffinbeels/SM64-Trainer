@@ -2,7 +2,8 @@
 
 One Worker, D1 metadata, private immutable R2 assets and maintained Supabase Auth
 implement [protocol v1](../../docs/community-protocol.md). This checkout is disabled
-with placeholders. No resources have been provisioned or deployed. Login proves
+with placeholders. Actual beta bindings and provisioning receipts are private
+operator artifacts; this portable config does not describe their live state. Login proves
 account ownership. Recordings remain **community-unverified**. Structural native
 checks cannot attest honest play, ROM identity, full start, or 100-coin completion.
 
@@ -141,7 +142,7 @@ Downloads conservatively count Class B even when cached. Application limits do
 not guarantee a spending cap, monthly storage averaging, D1 capacity or a $5 bill.
 D1 guard/index/counter/maintenance writes and loopback Worker requests have costs.
 Free D1 can exhaust before the application cap. Measure actual rows/CPU and lower
-operator budgets accordingly; do not upgrade the approved Free pilot implicitly.
+operator budgets accordingly; never change the approved billing plan implicitly.
 
 Kill switches: SERVICE_ENABLED=false disables the public gateway. Changing
 settings.enabled to zero denies new user/admin tickets. Maintenance can still

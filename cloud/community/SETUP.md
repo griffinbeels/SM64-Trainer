@@ -33,7 +33,10 @@ as hidden, below-normal two-core jobs and serialize heavy jobs with other agents
 
 ## 2. Create staging accounts and storage
 
-Use a separate **Supabase Free project** and keep **Cloudflare Workers Free**.
+Use a separate **Supabase Free project**. Choose the explicitly approved Workers
+plan and a measured CPU limit. Griffin approved **Workers Paid** for the current
+private beta; its deployment uses a **100 ms** per-invocation CPU limit. This
+is a resource bound, not a monthly spending cap.
 Supabase Free includes social providers and OAuth 2.1 Server, currently 50,000
 MAUs and two active projects; projects can pause after one inactive week. OAuth
 Server is still beta and has no separate charge; its users count toward MAUs.
@@ -142,7 +145,8 @@ policy links and provider warnings before inviting friends.
 For Twitch, register an application in the
 [Twitch Developer Console](https://dev.twitch.tv/console/apps) with the same
 **Supabase provider callback**. The developer account needs verified email and
-2FA. Generate a Client Secret, then enter the application's Client ID/Secret in
+2FA. Set the application's Client Type to **Confidential**. Under Applications >
+Manage, choose **New Secret**, then enter the application's Client ID/Secret in
 Supabase's Twitch provider and enable it. Supabase handles the provider exchange;
 no Twitch secret or provider token belongs in the desktop package. No streaming,
 chat, moderation or channel-management permissions are required for sign-in.
@@ -339,7 +343,7 @@ monthly free tier includes 10 GB-month, 1M Class A and 10M Class B operations;
 excess usage is billable. Other applications share account allowances. These are
 not a $5 or other spending cap; application quotas and billing alerts cannot
 prove a zero bill. Measure this pilot's actual usage and lower its budgets when
-needed; remain on the approved Free Worker pilot unless an upgrade is authorized.
+needed; never change the operator's approved plan implicitly.
 [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/),
 [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/),
 [D1 limits](https://developers.cloudflare.com/d1/platform/limits/),

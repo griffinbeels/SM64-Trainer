@@ -113,6 +113,8 @@ def _request(route, state, markup):
     parsed = urlparse(route.request.url)
     if parsed.path == "/":
         route.fulfill(body=markup, content_type="text/html")
+    elif parsed.path == "/api/local-access":
+        route.fulfill(json={"request_token": "rivals-fixture-capability"})
     elif parsed.path == "/api/ghost/rivals/search":
         query = parse_qs(parsed.query, keep_blank_values=True)
         state["requests"].append(query)
@@ -120,6 +122,7 @@ def _request(route, state, markup):
         assert query["scope"][0] == state["session"]["rivals"]["scope"]
         _search(route, query, state)
     elif parsed.path == "/api/ghost" and route.request.method == "PUT":
+        assert route.request.headers.get("x-sm64-request-token") == "rivals-fixture-capability"
         _write(route, state)
     elif parsed.path.startswith("/ui/"):
         path = (UI / parsed.path[4:]).resolve()
@@ -197,8 +200,9 @@ def test_fresh_profile_can_open_rank_settings_without_a_personal_best(fixture):
     page.wait_for_function("document.querySelectorAll('.rival-row').length === 4")
     panel = settings(page)
     assert panel.get_by_role("group", name="Minimum rank").count() == 1
-    assert panel.get_by_text("Save a personal best for Standard to set ranks above it.").is_visible()
-    assert panel.locator('.rival-rank .hat').count()==0
+    assert panel.get_by_text("Starting above Capless 5. Your first personal best will move this range.").is_visible()
+    assert panel.locator('.rival-rank .hat').count() == 2
+    assert panel.locator('.rival-rank').evaluate_all("nodes => nodes.map(n => n.dataset.displayedStep)") == ["1", "5"]
     assert panel.get_by_role("button", name="Cancel").is_visible()
     assert state["errors"] == []
 
