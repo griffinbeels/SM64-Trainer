@@ -350,3 +350,114 @@ def test_actual_export_catalog_fits_route_bound_and_generation_digest():
                 await account.request_json("GET", "/v1/account/export")
             assert found.value.code == "response_too_large"
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("next_owner", [UID, "22222222-2222-4222-8222-222222222222"])
+def test_pool_refreshes_after_sign_out_and_account_return(tmp_path, next_owner):
+    async def scenario():
+        account = Account()
+        account.pages = [page([recording()]), page([recording()])]
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, population)
+        try:
+            await sync._pool(IDENTITY, [(1, 500)], ())
+            assert population.coverage(IDENTITY)["complete"]
+            account.state.update(authenticated=False, status="signed_out", uid=None)
+            assert not population.coverage(IDENTITY)["complete"]
+            account.state.update(authenticated=True, status="active", uid=next_owner)
+            await sync._pool(IDENTITY, [(1, 500)], ())
+            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 2
+            assert population.coverage(IDENTITY)["complete"]
+        finally:
+            population.close()
+    asyncio.run(scenario())
+
+
+def test_unavailable_asset_does_not_requery_ready_rivals_in_a_loop(tmp_path):
+    from sm64_events.ghost.community_rivals import CommunityRivals
+    async def scenario():
+        account = Account()
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, population)
+        rows = [recording(f"{index:064x}") for index in range(1, 5)]
+        for row in rows[:3]:
+            population.store_asset(row, codec.encode(native()), native())
+        population.remember_page(IDENTITY, checked_page(page(rows)))
+        original = account.request_json
+        async def respond(method, path, **kwargs):
+            if path == "/v1/recordings/" + rows[-1]["id"]:
+                account.calls.append((method, path, kwargs))
+                raise CommunityError("not_found", status=404)
+            return await original(method, path, **kwargs)
+        account.request_json = respond
+        staging = CommunityRivals(sync, population)
+        desired = tuple({**row, "slot": index} for index, row in enumerate(rows))
+        await sync.start()
+        try:
+            for _ in range(6):
+                staging.stage(desired, ())
+                await asyncio.sleep(0)
+            metadata_reads = [call[1] for call in account.calls if call[1].startswith("/v1/recordings/")]
+            assert metadata_reads == ["/v1/recordings/" + rows[-1]["id"]]
+            assert sync.last_error and not population.is_ready(rows[-1]["id"])
+            assert all(population.is_ready(row["id"]) for row in rows[:3])
+        finally:
+            await sync.stop()
+            population.close()
+    asyncio.run(scenario())
+
+
+def test_existing_pool_remains_throttled_while_its_coverage_is_current(tmp_path):
+    async def scenario():
+        account = Account()
+        response = page([recording()])
+        response["coverage"].update(min_step=1, max_step=2, base_step=1)
+        account.pages = [response]
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, population)
+        try:
+            for _ in range(6):
+                await sync._pool(IDENTITY, [(1, 500)], ())
+            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 1
+            assert population.coverage(IDENTITY)["complete"]
+        finally:
+            population.close()
+    asyncio.run(scenario())
+
+
+def test_failed_asset_does_not_block_another_and_recovers_after_cooldown(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from sm64_events.community import sync as sync_module
+    now = [time.monotonic()]
+    monkeypatch.setattr(sync_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    async def scenario():
+        account = Account()
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, population)
+        first, second = "1" * 64, "2" * 64
+        original = account.request_json
+        unavailable = [True]
+        async def respond(method, path, **kwargs):
+            if path == "/v1/recordings/" + first and unavailable[0]:
+                account.calls.append((method, path, kwargs))
+                raise CommunityError("not_found", status=404)
+            return await original(method, path, **kwargs)
+        account.request_json = respond
+        try:
+            with pytest.raises(CommunityError):
+                await sync._assets((first, second))
+            assert population.is_ready(second) and not population.is_ready(first)
+            before = len(account.calls)
+            assert sync.request_assets((first, second)) and not sync._queue
+            await sync._assets((first, second))
+            assert len(account.calls) == before
+            now[0] += sync_module.ASSET_RETRY_S
+            unavailable[0] = False
+            await sync._assets((first, second))
+            assert all(population.is_ready(identifier) for identifier in (first, second))
+            assert not sync._asset_retry
+        finally:
+            await sync.stop()
+            population.close()
+        assert not sync.request_assets((first, second))
+    asyncio.run(scenario())

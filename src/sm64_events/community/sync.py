@@ -17,6 +17,7 @@ from .config import CommunityError
 MAX_QUEUE = 32
 MAX_PAGE = 256
 MAX_PAGES = 4
+ASSET_RETRY_S = 30
 
 
 def _prepare_source(source):
@@ -122,6 +123,7 @@ class CommunitySync:
         self.account, self.population, self._http = account, population, http
         self._lock = threading.RLock()
         self._queue, self._recent = OrderedDict(), OrderedDict()
+        self._asset_retry = OrderedDict()
         self._loop = self._wake = self._task = None
         self._closing = False
         self._catalog, self._catalog_generation, self._catalog_until = {}, None, 0
@@ -205,6 +207,15 @@ class CommunitySync:
                 checked_hash(identifier)
         except (ValueError, TypeError):
             return False
+        owner = self.account.snapshot().get("uid")
+        with self._lock:
+            if self._closing:
+                return False
+            identifiers = tuple(identifier for identifier in identifiers
+                if self._asset_retry.get((owner, identifier), 0) <= time.monotonic())
+        identifiers = tuple(identifier for identifier in identifiers if not self.population.is_ready(identifier))
+        if not identifiers:
+            return True
         return self._enqueue(("assets",), ("assets", identifiers))
 
     def offer_source(self, source):
@@ -274,8 +285,14 @@ class CommunitySync:
         await self._catalog_ready()
         key, query = self._query(identity)
         minimum, maximum, base = frame_band(self._catalog[key], windows)
-        canonical_key = (key, minimum, maximum, base, self._catalog_generation, pins)
-        if self._recent.get(canonical_key, 0) > time.monotonic():
+        canonical_key = (owner, key, minimum, maximum, base, self._catalog_generation, pins)
+        coverage = self.population.coverage(identity)
+        covered = (coverage.get("generation") == self._catalog_generation
+            and coverage.get("min_step") == minimum and coverage.get("max_step") == maximum
+            and coverage.get("base_step") == base)
+        # Authentication changes clear the population view. An old request
+        # throttle must never prevent refilling that newly empty account view.
+        if covered and self._recent.get(canonical_key, 0) > time.monotonic():
             return
         query.update(min_step=minimum, max_step=maximum, base_step=base)
         combined = None
@@ -361,6 +378,35 @@ class CommunitySync:
             return
         await self._cpu(lambda: self.population.store_asset(row, encoded, raw, owner=owner))
 
+    async def _assets(self, identifiers):
+        """Try missing assets independently, without hot-looping failed IDs."""
+        owner = self.account.snapshot().get("uid")
+        failed = False
+        for identifier in identifiers:
+            snapshot = self.account.snapshot()
+            if self._closing or snapshot.get("uid") != owner or snapshot.get("status") != "active":
+                return
+            if self.population.is_ready(identifier):
+                continue
+            key = (owner, identifier)
+            with self._lock:
+                if self._asset_retry.get(key, 0) > time.monotonic():
+                    continue
+            try:
+                await self._asset(identifier)
+            except (CommunityError, ValueError, OSError):
+                failed = True
+                with self._lock:
+                    self._asset_retry[key] = time.monotonic() + ASSET_RETRY_S
+                    self._asset_retry.move_to_end(key)
+                    while len(self._asset_retry) > MAX_QUEUE:
+                        self._asset_retry.popitem(last=False)
+            else:
+                with self._lock:
+                    self._asset_retry.pop(key, None)
+        if failed:
+            raise CommunityError("asset_unavailable")
+
     async def _offer(self, source):
         snapshot = self.account.snapshot()
         if snapshot.get("status") != "active" or not snapshot.get("sharing") or snapshot.get("uid") != source["owner"]:
@@ -429,8 +475,7 @@ class CommunitySync:
                     if operation[0] == "pool":
                         await self._pool(*operation[1:])
                     elif operation[0] == "assets":
-                        for identifier in operation[1]:
-                            await self._asset(identifier)
+                        await self._assets(operation[1])
                     else:
                         await self._offer(operation[1])
                     self.last_error = None
