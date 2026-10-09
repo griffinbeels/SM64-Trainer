@@ -36,6 +36,47 @@ def token(refresh="rotated"):
     return {"access_token": "private-access", "refresh_token": refresh, "token_type": "Bearer", "expires_in": 3600}
 
 
+def test_compressed_service_and_token_responses_decode_once_through_sign_in():
+    """CDN compression must survive the same bounded dispatch used by Authlib."""
+    import gzip
+    import json
+
+    async def scenario():
+        def respond(request):
+            if request.url.path == "/v1/config":
+                body = {"v": 1, "terms_version": "t1", "privacy_version": "p1"}
+            elif request.url.path.endswith("/token"):
+                body = token()
+            else:
+                body = profile()
+            compressed = gzip.compress(json.dumps(body).encode())
+            return httpx.Response(200, headers={"Content-Encoding": "gzip", "Content-Type": "application/json",
+                "Content-Length": str(len(compressed))}, content=compressed)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            account = CommunityAccount(config(), http=http, token_store=Store())
+            begin = await account.begin_sign_in("twitch")
+            native = parse_qs(urlsplit(begin["url"]).query)["native_authorize"][0]
+            state = parse_qs(urlsplit(native).query)["state"][0]
+            assert (await account.complete_sign_in(begin["attempt_id"], "code", state))["status"] == "active"
+    asyncio.run(scenario())
+
+
+def test_compression_cannot_bypass_decoded_response_byte_bound():
+    import gzip
+    from sm64_events.community.account import bounded_request
+
+    async def scenario():
+        compressed = gzip.compress(b"x" * 1024)
+        def respond(_request):
+            return httpx.Response(200, headers={"Content-Encoding": "gzip"}, content=compressed)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            with pytest.raises(CommunityError) as failure:
+                await bounded_request(http, "GET", "https://ghosts.example/v1/config", limit=128)
+            assert failure.value.code == "response_too_large"
+    asyncio.run(scenario())
+
+
 def test_config_and_disabled_snapshot_need_no_vault_or_network():
     account = CommunityAccount(CommunityConfig(), token_store=Store())
     assert account.snapshot()["enabled"] is False

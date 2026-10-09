@@ -25,7 +25,12 @@ async def bounded_request(http, method, url, *, limit=2 << 20, **kwargs):
                 if len(data) + len(part) > limit:
                     raise CommunityError("response_too_large")
                 data.extend(part)
-            result = httpx.Response(response.status_code, headers=response.headers,
+            # aiter_bytes() already decodes HTTP compression. Reusing the wire
+            # encoding header would make Response decode the clear bytes again.
+            headers = response.headers.copy()
+            for name in ("content-encoding", "content-length", "transfer-encoding"):
+                headers.pop(name, None)
+            result = httpx.Response(response.status_code, headers=headers,
                                     content=bytes(data), request=response.request)
     except (httpx.HTTPError, OSError):
         raise CommunityError("network_unavailable") from None
