@@ -316,11 +316,12 @@ Record evidence from the actual staging service and packaged beta:
 - Real eligible upload/download, fastest-winner races, immutable hashes, warmed
   metadata/asset revocation, pins and interrupted multipart recovery.
 - Complete cold/warm authenticated HTTP admission/upload CPU, including JWT,
-  decode/hash, D1 and R2. Free Workers allows **10 ms CPU per invocation**;
-  local elapsed time and compression benchmarks do not prove the deployed fit.
+  decode/hash, D1 and R2. This beta uses the explicitly authorized Workers Paid
+  plan with a configured **100 ms CPU limit per invocation**. Local elapsed time
+  and compression benchmarks do not prove deployed CPU use or a spending cap.
 - Actual D1 row/index writes, reads and query count for both HTTP and scheduled
-  regrade/recovery/collection. Free D1 allows **50 queries per Worker invocation**;
-  lower bounded maintenance work if necessary instead of silently upgrading.
+  regrade/recovery/collection. Keep maintenance batches within the configured
+  account's limits. A successful small pilot does not prove full-load capacity.
 - Withdrawal and deletion, including queued Supabase identity deletion, eventual
   R2 cleanup, retries/accounting and absence of secret logs. Downloaded copies
   cannot be recalled. Recordings remain community-unverified.

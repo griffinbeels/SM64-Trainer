@@ -11,7 +11,7 @@ It does not create a GitHub release or use the public app's updater/bootstrap.
 The [community protocol](community-protocol.md) owns its account and sharing
 contracts. A successful local build does not establish deployed login or sharing.
 Follow [the staging account guide](../cloud/community/SETUP.md) to configure
-Cloudflare, Supabase, Discord and Google before creating a cloud-enabled ZIP.
+Cloudflare, Supabase, Discord, Google and Twitch before creating a cloud-enabled ZIP.
 
 ## Build identity and data
 
