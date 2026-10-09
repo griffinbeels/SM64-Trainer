@@ -1,5 +1,7 @@
 """Desired rival rosters and saved preferences; native preparation owns adoption."""
 import json
+from itertools import islice
+from uuid import UUID
 
 from sm64_events.ghost.adaptive import (
     PracticeIdentity, add_slot, checked_options, rank_frames, rank_recordings, select_rivals,
@@ -10,6 +12,7 @@ from sm64_events.ghost.sharing_targets import describe
 from sm64_events.ranks.standards import entity_key
 
 STATE_KEY = "ghost_rivals_v1"
+MAX_REMOTE_CHOICES = 1024
 LIMITS = {"last_step":MAX_STEP, "max_ahead":MAX_AHEAD, "counts":list(range(1,MAX_RIVALS+1))}
 
 
@@ -63,6 +66,7 @@ class Rivals:
         self.pins = {}
         self.scopes = {}
         self.local_choices = {}
+        self.remote_choices = {}
         self.loaded_db = None
         self.target = None
         self.identity = None
@@ -203,7 +207,7 @@ class Rivals:
         if database is None or database is self.loaded_db:
             return
         stored = database.get_state(STATE_KEY,{})
-        self.pins, self.local_choices, self.scopes = {},{},{}
+        self.pins, self.local_choices, self.remote_choices, self.scopes = {},{},{},{}
         try:
             self.options = checked_options(stored.get("options",{}))
             pins = stored.get("pins",{})
@@ -221,6 +225,17 @@ class Rivals:
                     for key,choices in pins.items() if isinstance(key,str) and isinstance(choices,dict)}
             used = {identity for choices in self.pins.values() for identity in choices.values()}
             self.local_choices = {key:value for key,value in self.local_choices.items() if key in used}
+            # Older opaque IDs are private until live metadata proves otherwise.
+            remote = stored.get("remote_choices", {}) if stored.get("version") == 4 else {}
+            if isinstance(remote,dict):
+                for identity,owner in islice(remote.items(), MAX_REMOTE_CHOICES):
+                    if identity not in used or identity in self.local_choices:
+                        continue
+                    try:
+                        if str(UUID(owner)) == owner:
+                            self.remote_choices[identity] = owner
+                    except (ValueError,TypeError,AttributeError):
+                        continue
         except (ValueError,AttributeError):
             self.options = checked_options({})
             self.pins = {}
@@ -341,7 +356,14 @@ class Rivals:
     def _request_community(self, enabled, identity, target):
         if enabled and self.community.sync is not None:
             basis = saved_pb_basis(self.tracker.db, self.tracker.ranks, identity)
-            self.community.request(self.tracker.ranks, identity, basis, self.options, self.pins.get(self._key(target), {}))
+            pins = self.pins.get(self._key(target), {})
+            owner = self.community.owner()
+            known = tuple(value for value in pins.values() if owner and self.remote_choices.get(value) == owner
+                          and self._private_record(value,identity) is None)
+            remote = self.community.request(self.tracker.ranks, identity, basis, self.options, pins, known_remote=known)
+            if owner and any(self.remote_choices.get(value) != owner for value in remote):
+                self.remote_choices.update((value,owner) for value in remote if value not in self.local_choices)
+                self._store()
 
     def _owned_players(self):
         own = self.tracker.db.get_state('ghost_player_id', None)
@@ -568,5 +590,9 @@ class Rivals:
         if self.tracker.db is not None:
             used = {identity for values in self.pins.values() for identity in values.values()}
             self.local_choices = {key:value for key,value in self.local_choices.items() if key in used}
-            self.tracker.db.set_state(STATE_KEY,{"version":3,"options":self.options,"pins":self.pins,"scopes":self.scopes,
-                                               "local_choices":self.local_choices})
+            self.remote_choices = {key:value for key,value in self.remote_choices.items()
+                if key in used and key not in self.local_choices}
+            while len(self.remote_choices) > MAX_REMOTE_CHOICES:
+                self.remote_choices.pop(next(iter(self.remote_choices)))
+            self.tracker.db.set_state(STATE_KEY,{"version":4,"options":self.options,"pins":self.pins,"scopes":self.scopes,
+                                               "local_choices":self.local_choices,"remote_choices":self.remote_choices})

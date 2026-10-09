@@ -319,6 +319,9 @@ class CommunitySync:
         if pins or self._pins_leased:
             await self._json("PUT", "/v1/pins", json={"recording_ids": list(pins)})
             self._pins_leased = bool(pins)
+        # Chosen rivals may sit outside every automatic rank band. Renew their
+        # publication gates with this existing refresh, or fetch them on restart.
+        await self._assets(pins, renew=True, identity_key=key, owner=owner)
 
     async def search(self, identity, prefix, *, cursor=None):
         if self._closing:
@@ -357,12 +360,14 @@ class CommunitySync:
         task.add_done_callback(self._local_jobs.discard)
         return await asyncio.shield(task)
 
-    async def _asset(self, identifier):
+    async def _asset(self, identifier, *, identity_key=None):
         owner = self.account.snapshot().get("uid")
         value = await self._json("GET", "/v1/recordings/" + identifier)
         row = checked_metadata({key: item for key, item in value.items() if key != "v"})
         if row["id"] != identifier:
             raise CommunityError("identity_mismatch")
+        if identity_key is not None:
+            self._check_identity([row], identity_key)
         if self._closing or self.account.snapshot().get("uid") != owner:
             return
         if self.population.is_ready(identifier):
@@ -378,22 +383,22 @@ class CommunitySync:
             return
         await self._cpu(lambda: self.population.store_asset(row, encoded, raw, owner=owner))
 
-    async def _assets(self, identifiers):
-        """Try missing assets independently, without hot-looping failed IDs."""
-        owner = self.account.snapshot().get("uid")
+    async def _assets(self, identifiers, *, renew=False, identity_key=None, owner=None):
+        """Try bounded IDs independently, without hot-looping failed gates."""
+        owner = owner or self.account.snapshot().get("uid")
         failed = False
         for identifier in identifiers:
             snapshot = self.account.snapshot()
             if self._closing or snapshot.get("uid") != owner or snapshot.get("status") != "active":
                 return
-            if self.population.is_ready(identifier):
+            if not renew and self.population.is_ready(identifier):
                 continue
             key = (owner, identifier)
             with self._lock:
                 if self._asset_retry.get(key, 0) > time.monotonic():
                     continue
             try:
-                await self._asset(identifier)
+                await self._asset(identifier, identity_key=identity_key)
             except (CommunityError, ValueError, OSError):
                 failed = True
                 with self._lock:

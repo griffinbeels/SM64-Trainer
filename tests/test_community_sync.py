@@ -407,6 +407,125 @@ def test_unavailable_asset_does_not_requery_ready_rivals_in_a_loop(tmp_path):
     asyncio.run(scenario())
 
 
+def test_active_manual_pin_outside_pool_renews_before_metadata_expiry(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from sm64_events.community import cache as cache_module, sync as sync_module
+    now = [time.monotonic()]
+    clock = SimpleNamespace(monotonic=lambda: now[0])
+    monkeypatch.setattr(cache_module, "time", clock)
+    monkeypatch.setattr(sync_module, "time", clock)
+
+    async def scenario():
+        account = Account()
+        empty = page()
+        empty["coverage"].update(min_step=1, base_step=1)
+        account.pages = [empty, empty, empty]
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, population)
+        pin = recording("f" * 64, frames=700)
+        pin["step"] = 0  # This chosen rival is outside the automatic 1–2 band.
+        original = account.request_json
+
+        async def respond(method, path, **kwargs):
+            if path == "/v1/recordings/" + pin["id"]:
+                account.calls.append((method, path, kwargs))
+                return {"v": 1, **pin}
+            return await original(method, path, **kwargs)
+
+        account.request_json = respond
+        population.store_asset(pin, codec.encode(native()), native())
+        try:
+            start = now[0]
+            for elapsed in (0, 120, 240):
+                now[0] = start + elapsed
+                await sync._pool(IDENTITY, [(1, 500)], (pin["id"],))
+                await sync._pool(IDENTITY, [(1, 500)], (pin["id"],))
+            now[0] = start + cache_module.TTL + 1
+            row = population.get(pin["id"])
+            path, _ = population.resolve(row["ghost"], TARGET)
+            assert path.is_file()
+            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 3
+            assert len([call for call in account.calls if call[1] == "/v1/recordings/" + pin["id"]]) == 3
+            assert not any(call[1].endswith("/asset") for call in account.calls)
+        finally:
+            population.close()
+    asyncio.run(scenario())
+
+
+def test_pinned_asset_reloads_once_after_memory_only_cache_restart(tmp_path):
+    async def scenario():
+        account = Account()
+        identifier = "f" * 64
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        population.store_asset(recording(identifier), codec.encode(native()), native())
+        population.close()
+        restored = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, restored)
+        empty = page()
+        empty["coverage"].update(min_step=1, base_step=1)
+        account.pages = [empty]
+        try:
+            assert not restored.is_ready(identifier)
+            await sync._pool(IDENTITY, [(1, 500)], (identifier,))
+            assert restored.is_ready(identifier)
+            row = restored.get(identifier)
+            path, _ = restored.resolve(row["ghost"], TARGET)
+            assert path.is_file()
+            await sync._pool(IDENTITY, [(1, 500)], (identifier,))
+            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 1
+            assert len([call for call in account.calls if call[1].endswith("/asset")]) == 1
+        finally:
+            restored.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["target", "clock", "rom", "strategy", "owner", "closing"])
+def test_pin_metadata_refresh_refuses_mismatched_identity_and_late_publication(tmp_path, change):
+    async def scenario():
+        account = Account()
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, population)
+        identifier = "f" * 64
+        row = recording(identifier)
+        if change == "target":
+            row["target"]["entity_key"] = "2-1"
+        elif change == "clock":
+            row["clock"] = "rta"
+        elif change == "rom":
+            row["game_version"] = "jp"
+        elif change == "strategy":
+            row["strategy"] = row["target"]["strat"] = "Other"
+        original = account.request_json
+
+        async def respond(method, path, **kwargs):
+            if path == "/v1/recordings/" + identifier:
+                account.calls.append((method, path, kwargs))
+                if change == "owner":
+                    account.state["uid"] = "22222222-2222-4222-8222-222222222222"
+                elif change == "closing":
+                    sync._closing = True
+                return {"v": 1, **row}
+            return await original(method, path, **kwargs)
+
+        account.request_json = respond
+        empty = page()
+        empty["coverage"].update(min_step=1, base_step=1)
+        account.pages = [empty]
+        try:
+            if change in ("owner", "closing"):
+                await sync._pool(IDENTITY, [(1, 500)], (identifier,))
+            else:
+                with pytest.raises(CommunityError) as found:
+                    await sync._pool(IDENTITY, [(1, 500)], (identifier,))
+                assert found.value.code == "asset_unavailable"
+            assert not population.is_ready(identifier)
+            assert not any(call[1].endswith("/asset") for call in account.calls)
+            assert not list(tmp_path.glob("*.ghost"))
+        finally:
+            population.close()
+    asyncio.run(scenario())
+
+
 def test_existing_pool_remains_throttled_while_its_coverage_is_current(tmp_path):
     async def scenario():
         account = Account()

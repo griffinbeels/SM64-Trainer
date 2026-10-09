@@ -96,6 +96,101 @@ def test_pool_requests_lease_remote_pins_and_preserve_private_choices():
     assert pins == before
 
 
+def test_chosen_remote_pin_is_requested_after_cache_and_controller_restart(tmp_path, monkeypatch):
+    from sm64_events.ghost.rivals import Rivals
+    rivals, tracker, native, local, _ = controller(tmp_path, monkeypatch)
+    local.close = lambda: None
+    account = Account()
+    cloud = Cloud()
+    cloud.account = account
+    root = tmp_path / "cache"
+    population = CachedPopulation(local, root=root, account=account)
+    metadata = remote_recording("f" * 64, frames=1800)
+    metadata["target"] = dict(TARGET)
+    population.renew_metadata(metadata)
+    rivals.population = population
+    rivals.community = CommunityRivals(cloud, population)
+    try:
+        rivals.apply(rivals.checked({"action": "add", "id": metadata["id"]}, TARGET))
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+        assert cloud.pools[-1][1]["pinned_ids"] == (metadata["id"],)
+        population.close()
+        restored_population = CachedPopulation(local, root=root, account=account)
+        with pytest.raises(LookupError):
+            restored_population.get(metadata["id"])
+        restored = Rivals(tracker, restored_population, native, lambda: "us", community=cloud)
+        restored.refresh(TARGET, CONTROLS, enabled=True)
+        assert restored.pins[restored._key(TARGET)] == rivals.pins[rivals._key(TARGET)]
+        assert cloud.pools[-1][1]["pinned_ids"] == (metadata["id"],)
+        assert not restored_population.is_ready(metadata["id"])
+    finally:
+        population.close()
+        if 'restored_population' in locals():
+            restored_population.close()
+        tracker.db.close()
+
+
+@pytest.mark.parametrize("change", ["legacy", "owner", "signed_out", "private_import", "local", "invalid"])
+def test_persisted_remote_provenance_never_promotes_private_or_other_account_choices(tmp_path, monkeypatch, change):
+    from sm64_events.ghost.rivals import Rivals, STATE_KEY
+    rivals, tracker, native, population, _ = controller(tmp_path, monkeypatch)
+    account = Account()
+    population.coverage = lambda _: {"complete": True}
+    identifier = "f" * 64 if change != "invalid" else "g" * 64
+    cloud = Cloud()
+    cloud.account = account
+    state = {"version": 4, "options": rivals.options, "pins": {rivals._key(TARGET): {"0": identifier}},
+             "remote_choices": {identifier: account.state["uid"]}}
+    sharing = None
+    if change == "legacy":
+        state["version"] = 3
+    elif change == "owner":
+        account.state["uid"] = "22222222-2222-4222-8222-222222222222"
+    elif change == "signed_out":
+        account.state.update(status="signed_out", authenticated=False)
+    elif change == "local":
+        population.rows.append(recording(identifier, frames=1800))
+    elif change == "private_import":
+        ghost = SimpleNamespace(id=identifier, kind=TARGET["kind"], entity_key=TARGET["entity_key"],
+            strat_tag=TARGET["strat"], author="Private Runner", frames=1800, origin="import:" + identifier)
+        sharing = SimpleNamespace(generation=0, get=lambda _: ghost,
+            portable_entry=lambda _: {"clock": "igt", "game_version": "us"})
+    try:
+        tracker.db.set_state(STATE_KEY, state)
+        restored = Rivals(tracker, population, native, lambda: "us", community=cloud)
+        restored.refresh(TARGET, CONTROLS, enabled=True, sharing=sharing)
+        assert cloud.pools and cloud.pools[-1][1]["pinned_ids"] == ()
+        if change in ("legacy", "invalid"):
+            assert restored.remote_choices == {}
+    finally:
+        tracker.db.close()
+
+
+def test_remote_choice_state_is_versioned_bounded_and_pruned_with_pins(tmp_path, monkeypatch):
+    from sm64_events.ghost import rivals as module
+    rivals, tracker, native, population, _ = controller(tmp_path, monkeypatch)
+    owner = Account().state["uid"]
+    identifiers = [f"{index:064x}" for index in range(module.MAX_REMOTE_CHOICES + 5)]
+    pins = {f"target:{index}": {"0": identifier} for index, identifier in enumerate(identifiers)}
+    tracker.db.set_state(module.STATE_KEY, {"version": 4, "pins": pins,
+        "remote_choices": {identifier: owner for identifier in identifiers}})
+    try:
+        restored = module.Rivals(tracker, population, native, lambda: "us")
+        restored._load()
+        assert len(restored.remote_choices) == module.MAX_REMOTE_CHOICES
+        survivor = identifiers[-1]
+        restored.remote_choices[survivor] = owner
+        restored._store()
+        assert len(restored.remote_choices) == module.MAX_REMOTE_CHOICES
+        assert survivor in restored.remote_choices and identifiers[0] not in restored.remote_choices
+        restored.pins = {"target:0": {"0": survivor}}
+        restored._store()
+        state = tracker.db.get_state(module.STATE_KEY, {})
+        assert state["version"] == 4 and state["remote_choices"] == {survivor: owner}
+    finally:
+        tracker.db.close()
+
+
 @pytest.mark.parametrize("status", ["signed_out", "active", "consent_required", "not_invited"])
 def test_local_search_survives_account_gates_and_remote_outages(tmp_path, monkeypatch, status):
     rivals, tracker, _, _, _ = controller(tmp_path, monkeypatch)

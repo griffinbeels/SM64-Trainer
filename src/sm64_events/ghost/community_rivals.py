@@ -1,7 +1,10 @@
 """Cached rank-band requests and download staging, outside native playback."""
 from time import monotonic
+from uuid import UUID
 
+from sm64_events.ghost.adaptive import MAX_RIVALS
 from sm64_events.ghost.community_catalog import match_windows
+from sm64_events.ghost.portable import checked_hash
 
 
 class CommunityRivals:
@@ -11,25 +14,49 @@ class CommunityRivals:
         self.next_request = 0
         self.downloading = False
 
-    def request(self, ranks, identity, pb, options, pins):
+    def owner(self):
+        snapshot = self.sync.account.snapshot() if self.sync is not None else {}
+        owner = snapshot.get('uid')
+        if not snapshot.get('authenticated') or snapshot.get('status') != 'active':
+            return None
+        try:
+            return owner if str(UUID(owner)) == owner else None
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    def request(self, ranks, identity, pb, options, pins, *, known_remote=()):
         if self.sync is None:
-            return
-        key = (identity, getattr(ranks, 'calibration_revision', None),
+            return ()
+        key = (self.owner(), identity, getattr(ranks, 'calibration_revision', None),
                pb.get('step') if pb else None, tuple(sorted(options.items())), tuple(sorted(pins.items())))
         if key != self.key:
             self.key, self.windows = key, match_windows(ranks, identity, pb, options)
             self.next_request = 0
         if self.windows and monotonic() >= self.next_request:
-            self.sync.request_pool(identity, frame_windows=self.windows, pinned_ids=self.remote_pins(pins))
+            remote = self.remote_pins(pins, known_remote=known_remote)
+            self.sync.request_pool(identity, frame_windows=self.windows, pinned_ids=remote)
             self.next_request = monotonic() + 5
+            return remote
+        return ()
 
-    def remote_pins(self, pins):
-        """Private choices stay local; only community IDs need a server lease."""
+    def remote_pins(self, pins, *, known_remote=()):
+        """Fresh remote provenance or owner-scoped saved provenance permits IO."""
+        known = set(known_remote)
         result = []
         for identifier in pins.values():
+            if len(result) >= MAX_RIVALS:
+                break
+            if identifier in result:
+                continue
+            try:
+                checked_hash(identifier)
+            except (ValueError, TypeError):
+                continue
             try:
                 row = self.population.get(identifier)
             except (LookupError, ValueError):
+                if identifier in known:
+                    result.append(identifier)
                 continue
             if row.get('provenance') == 'community-unverified':
                 result.append(identifier)
