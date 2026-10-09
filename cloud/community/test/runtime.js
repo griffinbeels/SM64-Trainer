@@ -4,6 +4,8 @@ import {readFileSync} from 'node:fs';
 import {Miniflare,convertV4MiniflareOptions,Response as MFResponse} from 'miniflare';
 import {generateKeyPair,exportJWK,SignJWT} from 'jose';
 import {alice,nativeClip,upload} from './fixtures.js';
+import {Store} from '../src/store.js';
+import {config} from '../src/config.js';
 const model=JSON.parse(readFileSync(new URL('../catalog.json',import.meta.url),'utf8'));
 const entry=model.entries.find(e=>e.target.kind==='star'&&e.target.entity_key==='1-0'&&e.clock==='igt'&&e.game_version==='us');
 assert(entry);
@@ -41,6 +43,18 @@ try{
   const quota=await db.prepare("SELECT ops FROM quotas WHERE owner='*'").first();assert.equal(quota.ops,6);
   await call('/v1/account/withdraw',{method:'POST',body:{confirmation:'WITHDRAW MY GHOSTS'}});
   const denied=await mf.dispatchFetch('https://community.example.invalid/v1/recordings/'+id+'/asset',{headers:{authorization:'Bearer '+token}});assert.equal(denied.status,404);
+  const fresh='30000000-0000-4000-8000-000000000001';
+  await db.prepare("UPDATE quotas SET ops=ops_limit WHERE owner='*'").run();
+  const store=new Store(db,config(bindings));
+  await assert.rejects(store.ticket(fresh),e=>e.code==='budget_exhausted');
+  assert.equal(await db.prepare('SELECT owner FROM quotas WHERE owner=?').bind(fresh).first(),null);
+  const freshToken=await new SignJWT({role:'authenticated',client_id:clientID}).setProtectedHeader({alg:'ES256',kid:jwk.kid}).setIssuer(issuer).setAudience('authenticated').setSubject(fresh).setIssuedAt().setExpirationTime('5m').sign(privateKey);
+  const unknown=await mf.dispatchFetch('https://community.example.invalid/v1/account',{headers:{authorization:'Bearer '+freshToken}});
+  assert.equal(unknown.status,200);assert.equal((await unknown.json()).status,'not_invited');
+  const unknownRoute=await mf.dispatchFetch('https://community.example.invalid/v1/catalog',{headers:{authorization:'Bearer '+freshToken}});
+  assert.equal(unknownRoute.status,403);
+  assert.equal(await db.prepare('SELECT uid FROM accounts WHERE uid=?').bind(fresh).first(),null);
+  assert.equal(await db.prepare('SELECT owner FROM quotas WHERE owner=?').bind(fresh).first(),null);
   assert.equal(jwksCalls,1);
-  console.log('Local workerd: real jose fixed JWKS, D1 migration/guards/quotas, GHC1 zlib admission, R2 multipart, private exported asset gate and withdrawal passed.');
+  console.log('Local workerd: real jose fixed JWKS, D1 rollback/no retained unknown-identity rows, GHC1 zlib admission, R2 multipart, private exported asset gate and withdrawal passed.');
 }finally{await mf.dispose();}

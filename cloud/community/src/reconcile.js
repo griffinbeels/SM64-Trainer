@@ -26,15 +26,19 @@ export async function reconcile(env,{limit=20}={}){
     }else await s.release(g);
   }
   for(const g of await s.rows("SELECT * FROM grants WHERE state='stored' LIMIT ?",limit))await publish(g);
-  const assets=await s.rows("SELECT x.* FROM assets x WHERE x.state='deleting' OR (x.created_at<? AND NOT EXISTS(SELECT 1 FROM winners w JOIN recordings r ON r.id=w.recording_id WHERE r.asset_key=x.key) AND NOT EXISTS(SELECT 1 FROM pins p JOIN recordings r ON r.id=p.recording_id WHERE r.asset_key=x.key AND p.expires_at>?)) LIMIT ?",now-900,now,limit);
+  // Expired pins can outlive one bounded prune. Keep their FK references until
+  // later ticks drain them; never delete R2 first and then fail the D1 delete.
+  const assets=await s.rows("SELECT x.* FROM assets x WHERE x.state='deleting' OR (x.created_at<? AND NOT EXISTS(SELECT 1 FROM winners w JOIN recordings r ON r.id=w.recording_id WHERE r.asset_key=x.key) AND NOT EXISTS(SELECT 1 FROM pins p JOIN recordings r ON r.id=p.recording_id WHERE r.asset_key=x.key)) LIMIT ?",now-900,limit);
   let deleted=0;
   for(const a of assets){
-    try{await s.tx("EXISTS(SELECT 1 FROM assets WHERE key=?) AND NOT EXISTS(SELECT 1 FROM winners w JOIN recordings r ON r.id=w.recording_id WHERE r.asset_key=?) AND NOT EXISTS(SELECT 1 FROM pins p JOIN recordings r ON r.id=p.recording_id WHERE r.asset_key=? AND p.expires_at>?)",[a.key,a.key,a.key,now],[s.sql("UPDATE assets SET state='deleting' WHERE key=?",a.key)]);}catch(e){if(e instanceof ServiceError)continue;throw e;}
+    try{await s.tx("EXISTS(SELECT 1 FROM assets WHERE key=?) AND NOT EXISTS(SELECT 1 FROM winners w JOIN recordings r ON r.id=w.recording_id WHERE r.asset_key=?) AND NOT EXISTS(SELECT 1 FROM pins p JOIN recordings r ON r.id=p.recording_id WHERE r.asset_key=?)",[a.key,a.key,a.key],[s.sql("UPDATE assets SET state='deleting' WHERE key=?",a.key)]);}catch(e){if(e instanceof ServiceError)continue;throw e;}
     await s.ticket(a.uid,{classA:1,maintenance:true});
     await env.GHOSTS.delete(a.key);
     await s.tx("EXISTS(SELECT 1 FROM assets WHERE key=? AND state='deleting')",[a.key],[s.sql('DELETE FROM recordings WHERE asset_key=?',a.key),s.sql('DELETE FROM assets WHERE key=?',a.key),s.sql('UPDATE accounts SET bytes_used=bytes_used-? WHERE uid=?',a.encoded_bytes,a.uid),s.sql('UPDATE storage_budget SET bytes_used=bytes_used-? WHERE id=1',a.encoded_bytes)]);deleted++;
   }
-  await s.sql('DELETE FROM quotas WHERE rowid IN (SELECT rowid FROM quotas WHERE day<? LIMIT ?)',new Date(Date.now()-7*86400000).toISOString().slice(0,10),limit*5).run();
+  // Each successful ticket can create at most one owner row plus the single
+  // global row/day. 400 * 96 exceeds the 30,001/day maximum; rejects add none.
+  await s.sql('DELETE FROM quotas WHERE rowid IN (SELECT rowid FROM quotas WHERE day<? LIMIT 400)',new Date(Date.now()-7*86400000).toISOString().slice(0,10)).run();
   // At 96 cron ticks/day, 400 expired receipts and 200 terminal grants per
   // tick drain above the 30,000 ticket/day maximum creation rates. Indexed
   // selection bounds work even when no rows have expired; monitor outages.

@@ -21,12 +21,14 @@ export class Store {
   async account(identity) {
     requireThat(identity.issuer===this.cfg.issuer,"invalid_issuer","This identity provider is not configured.",401);
     const uid=identity.sub;
-    await this.sql("INSERT INTO accounts(uid,issuer,subject,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(issuer,subject) DO NOTHING",
-      uid,identity.issuer,identity.sub,sec(),sec()).run();
-    return this.one("SELECT * FROM accounts WHERE uid=?",uid);
+    // Only an Access-admin invitation persists a new identity. Ordinary valid
+    // JWTs can inspect an ephemeral profile without increasing retained rows.
+    return await this.one("SELECT * FROM accounts WHERE uid=? AND issuer=?",uid,identity.issuer)||
+      {uid,issuer:identity.issuer,subject:uid,ephemeral:true,invited:0,status:"new",name:null,
+        sharing:0,terms_version:null,privacy_version:null,sheet_runner:null,sheet_verified:0};
   }
   publicAccount(a) {
-    return {uid:a.uid,name:a.name,status:(!a.invited&&a.status!=="deleted"?"not_invited":a.status),sharing:Boolean(a.sharing),
+    return {uid:a.uid,name:a.name,status:(!a.invited&&!["deleted","suspended"].includes(a.status)?"not_invited":a.status),sharing:Boolean(a.sharing),
       terms_version:a.terms_version,privacy_version:a.privacy_version,sheet_runner:a.sheet_runner,sheet_verified:Boolean(a.sheet_verified)};
   }
   active(a,profile=false) {
@@ -40,18 +42,18 @@ export class Store {
   }
   async ticket(uid,{uploadBytes=0,classA=0,classB=0,maintenance=false}={}) {
     const day=new Date().toISOString().slice(0,10);
-    // Every protected call consumes an exact account and global ticket, even cache hits.
+    // Every admitted call consumes an exact account and global ticket, even cache hits.
     // Asset downloads conservatively consume a Class B ticket even on cache hits.
     const statements=[
       this.sql("INSERT INTO quotas(owner,day,ops_limit,upload_limit) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",uid,day,LIMITS.account_ops_day,LIMITS.upload_bytes_day),
-      this.sql("INSERT INTO quotas(owner,day,ops_limit,upload_limit) VALUES('*',?,?,?) ON CONFLICT DO NOTHING",day,LIMITS.global_ops_day,LIMITS.global_upload_bytes_day)];
-    await this.db.batch(statements);
-    try {
-      // One SQLite statement updates both rows atomically. A CHECK failure on
-      // either row rolls back BOTH, without two extra assertion-table writes.
-      await this.sql("UPDATE quotas SET ops=CASE WHEN (SELECT enabled FROM settings WHERE id=1)=1 OR ?=1 THEN ops+1 ELSE ops_limit+1 END,"+
+      this.sql("INSERT INTO quotas(owner,day,ops_limit,upload_limit) VALUES('*',?,?,?) ON CONFLICT DO NOTHING",day,LIMITS.global_ops_day,LIMITS.global_upload_bytes_day),
+      this.sql("UPDATE quotas SET ops=CASE WHEN (SELECT enabled FROM settings WHERE id=1)=1 OR ?=1 THEN ops+1 ELSE ops_limit+1 END,"+
         "uploaded=uploaded+?,class_a=class_a+?,class_b=class_b+? WHERE (owner=? OR owner='*') AND day=?",
-        Number(maintenance),uploadBytes,classA,classB,uid,day).run();
+        Number(maintenance),uploadBytes,classA,classB,uid,day)];
+    try {
+      // D1 batch rolls back both counters AND newly inserted quota rows when
+      // either CHECK fails. Denied new identities cannot grow quota history.
+      await this.db.batch(statements);
     } catch(error) {
       if(/CHECK constraint failed/.test(String(error))) fail(429,"budget_exhausted","The community daily budget is exhausted.");
       throw error;

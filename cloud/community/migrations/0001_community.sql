@@ -48,6 +48,7 @@ CREATE INDEX pool_strategy ON recordings(target_key,clock,rom,generation,strateg
 CREATE INDEX pool_overall ON recordings(target_key,clock,rom,generation,overall_step,frames,id);
 CREATE INDEX recording_owner ON recordings(uid,published,id);
 CREATE INDEX recording_search ON recordings(uid,target_key,clock,rom,generation,id);
+CREATE INDEX recording_asset ON recordings(asset_key,id);
 CREATE TABLE winners (
  uid TEXT NOT NULL REFERENCES accounts(uid), target_key TEXT NOT NULL, clock TEXT NOT NULL, rom TEXT NOT NULL,
  strategy TEXT NOT NULL, generation TEXT NOT NULL, step INTEGER NOT NULL, recording_id TEXT NOT NULL REFERENCES recordings(id),
@@ -57,6 +58,7 @@ CREATE TABLE pins (
  uid TEXT NOT NULL REFERENCES accounts(uid), recording_id TEXT NOT NULL REFERENCES recordings(id),
  expires_at INTEGER NOT NULL, PRIMARY KEY(uid,recording_id));
 CREATE INDEX pins_expiry ON pins(expires_at,recording_id);
+CREATE INDEX pins_recording ON pins(recording_id);
 CREATE TABLE mutation_receipts (
  uid TEXT NOT NULL, route TEXT NOT NULL, request_key TEXT NOT NULL, digest TEXT NOT NULL,
  response_json TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(uid,route,request_key));

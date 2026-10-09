@@ -30,7 +30,7 @@ export async function environment(){
   env.SUPABASE_SECRET_KEY='fixture-service-only-not-real';
   env.DB.sqlite.prepare('UPDATE settings SET generation=? WHERE id=1').run(catalog.generation);
   const store=new Store(env.DB,config(env));const accounts=[];
-  for(const [subject,name]of [[alice,'Alice'],[bob,'Bob']]){const a=await store.account({issuer:config(env).issuer,sub:subject});env.DB.sqlite.prepare("UPDATE accounts SET invited=1,status='active',name=?,name_key=?,sharing=1,terms_version='test-1',privacy_version='test-1' WHERE uid=?").run(name,name.toLowerCase(),a.uid);accounts.push(await store.one('SELECT * FROM accounts WHERE uid=?',a.uid));}
+  for(const [subject,name]of [[alice,'Alice'],[bob,'Bob']]){await store.sql("INSERT INTO accounts(uid,issuer,subject,invited,status,name,name_key,sharing,terms_version,privacy_version,created_at,updated_at) VALUES(?,?,?,1,'active',?,?,1,'test-1','test-1',0,0)",subject,config(env).issuer,subject,name,name.toLowerCase()).run();accounts.push(await store.account({issuer:config(env).issuer,sub:subject}));}
   return {env,store,accounts};
 }
 export function nativeClip({version=7,count=300,marker=1}={}){

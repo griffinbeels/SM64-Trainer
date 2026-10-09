@@ -48,6 +48,14 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
     fail(404,'not_found','Route not found.');
   }
   const identity=await auth(request,cfg),a=await s.account(identity);
+  if(!a.invited||['deleted','suspended'].includes(a.status)){
+    if(url.pathname==='/v1/account'&&request.method==='GET'){exactQuery(url,[]);return json(s.publicAccount(a));}
+    // Persisted owners retain export/removal after invitation revocation or
+    // suspension. Unknown identities have no owned data and must add no rows.
+    const ownData=(url.pathname==='/v1/account/export'&&request.method==='GET')||
+      (['/v1/account/withdraw','/v1/account/delete'].includes(url.pathname)&&request.method==='POST');
+    if(a.ephemeral||!ownData)s.active(a,true);
+  }
   await s.ticket(a.uid,{classB:url.pathname.endsWith('/asset')?1:0});
   if(url.pathname==='/v1/account'&&request.method==='GET'){exactQuery(url,[]);return json(s.publicAccount(a));}
   if(url.pathname==='/v1/account'&&request.method==='PUT'){

@@ -94,8 +94,14 @@ always exposes truncation, including the fourth page. Never infer absence from i
 
 ## Visibility, quotas and recovery
 
-All protected gateway calls, including admin/cache hits, consume exact account
-and global D1 tickets. One checked atomic UPDATE advances both daily rows.
+Admitted user/admin gateway calls, including cache hits, consume exact account and
+global D1 tickets. One atomic batch inserts and advances both daily rows;
+failed tickets roll back new rows as well as both counters. Ordinary Auth
+identities only look up accounts; Access-admin invitation creates them. Unknown,
+uninvited, suspended and deleted identities may read their status without
+persistent writes. Unknown identities fail other calls before quota admission.
+Persisted owners retain budgeted export/removal after revocation or suspension;
+other denied calls fail before quota admission.
 Admission additionally consumes daily bytes/operations and reserves account/global
 storage in a guarded batch. Consumed daily bytes/operations never refund. Strictly
 faster owned-slot publication wins; equal frames keep the prior winner. Publication
@@ -117,11 +123,14 @@ abort uses another. Persist multipart intent before any part write. Abort fences
 expired receiving work before refund. A completed object instead becomes charged
 physical storage and resumes publication. Losers/replaced/pinned assets and failed
 deletes remain charged until confirmed physical deletion. Pins: four recordings,
-seven-day leases. Collection prevents new pins after deleting-state admission.
+seven-day leases. Collection prevents new pins after deleting-state admission
+and waits for all remaining pin references, including expired prune backlog.
 Cron runs every 15 minutes and collects at most 20 assets per invocation; monitor
 backlog. Expired pins/receipts/quota history/terminal grants prune in bounded batches.
-Indexed pruning handles up to 400 expired receipts and 200 terminal grants per
-tick (38,400/19,200 per day), above their configured admission ceilings. Outages
+Indexed pruning handles up to 400 expired quota rows, 400 receipts and 200
+terminal grants per tick (38,400/38,400/19,200 per day), above their configured
+admission ceilings. Quota days older than seven days expire; admission creates
+at most 30,001 rows per day including its global row. Outages
 and exhausted Free D1 capacity can still create backlog; monitor it. Publication
 and admission are transactionally fenced while a catalog migration is active.
 

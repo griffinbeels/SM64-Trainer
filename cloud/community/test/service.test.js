@@ -45,3 +45,103 @@ test('reclaim preserves suspension and consent renewal preserves unchanged sheet
 test('catalog migration fences admission and every old-grant publication',async()=>{const {env,store,accounts}=await environment(),h=harness(env);try{await published(h);const fixture=upload(nativeClip({marker:9}),90),admitted=await h.call('/v1/uploads',{method:'POST',body:fixture.body});const g=await store.beginUpload(accounts[0],admitted.json.upload_id);await store.stored(g);const entries=structuredClone(catalog.entries);entries[0].overall_cutoffs[2].frames=110;const model={v:1,generation:digest(canonical(entries)),entries};assert.equal((await regrade(env,{model,limit:1})).complete,false);await assert.rejects(store.publish(g),e=>e.code==='generation_changed');assert.equal((await store.one('SELECT state FROM grants WHERE id=?',g.id)).state,'stored');assert.equal((await h.call('/v1/uploads',{method:'POST',body:upload(nativeClip({marker:8}),80).body})).response.status,429);assert.equal((await regrade(env,{model,limit:1})).complete,true);assert.equal((await store.publish(g)).disposition,'not_faster');assert.equal((await store.one('SELECT COUNT(*) AS n FROM winners WHERE generation!=?',model.generation)).n,0);}finally{env.DB.close();}});
 test('same-origin policies are reachable, escaped and fail closed on missing operator',async()=>{const {env}=await environment();try{env.OPERATOR_NAME='<script>bad</script>';env.OPERATOR_CONTACT='"<&contact';const service=createService(),response=await service.fetch(new Request('https://community.example.invalid/policies'),env,{}),html=await response.text();assert.equal(response.status,200);assert(html.includes('&lt;script&gt;bad&lt;/script&gt;'));assert(html.includes('&quot;&lt;&amp;contact'));assert(!html.includes('<script>'));assert(html.includes('id="terms"')&&html.includes('id="privacy"')&&html.includes('QPC'));env.OPERATOR_CONTACT='';assert.equal((await service.fetch(new Request('https://community.example.invalid/policies'),env,{})).status,503);}finally{env.DB.close();}});
 test('indexed expired receipt pruning is bounded above the daily creation rate',async()=>{const {env,store}=await environment();try{for(let i=0;i<401;i++)await store.sql('INSERT INTO mutation_receipts VALUES(?,?,?,?,?,?)',alice,'fixture',String(i),'digest','{}',0).run();await reconcile(env);assert.equal((await store.one('SELECT COUNT(*) AS n FROM mutation_receipts')).n,1);const plan=await store.rows('EXPLAIN QUERY PLAN SELECT rowid FROM mutation_receipts WHERE created_at<? LIMIT 400',1);assert(plan.some(p=>p.detail.includes('receipts_expiry')));}finally{env.DB.close();}});
+test('exhausted ticket rolls back a fresh owner row as well as both counters',async()=>{
+  const {env,store}=await environment(),fresh='30000000-0000-4000-8000-000000000001';
+  try{
+    await store.ticket(alice);
+    await store.sql("UPDATE quotas SET ops=ops_limit WHERE owner='*'").run();
+    await assert.rejects(store.ticket(fresh),e=>e.code==='budget_exhausted');
+    assert.equal(await store.one('SELECT * FROM quotas WHERE owner=?',fresh),null);
+    assert.equal((await store.one("SELECT ops FROM quotas WHERE owner='*'")).ops,LIMITS.global_ops_day);
+    assert.equal((await store.one('SELECT ops FROM quotas WHERE owner=?',alice)).ops,1);
+  }finally{env.DB.close();}
+});
+test('unknown Auth UUID status and denied routes persist no account or quota rows',async()=>{
+  const {env,store}=await environment(),fresh='30000000-0000-4000-8000-000000000002';
+  const service=createService({auth:async()=>({issuer:config(env).issuer,sub:fresh}),catalog:async()=>catalog});
+  try{
+    await store.ticket(alice);
+    for(const exhausted of [false,true]){
+      await store.sql("UPDATE quotas SET ops=? WHERE owner='*'",exhausted?LIMITS.global_ops_day:1).run();
+      const profile=await service.fetch(new Request('https://community.example.invalid/v1/account'),env,{});
+      assert.equal(profile.status,200);
+      assert.deepEqual(await profile.json(),{v:1,uid:fresh,name:null,status:'not_invited',sharing:false,terms_version:null,privacy_version:null,sheet_runner:null,sheet_verified:false});
+      for(const [path,method]of [['/v1/catalog','GET'],['/v1/account/export','GET'],['/v1/account','PUT'],['/v1/account/delete','POST']]){
+        const response=await service.fetch(new Request('https://community.example.invalid'+path,{method}),env,{});
+        assert.equal(response.status,403);assert.equal((await response.json()).error.code,'not_invited');
+      }
+      assert.equal(await store.one('SELECT * FROM accounts WHERE uid=?',fresh),null);
+      assert.equal(await store.one('SELECT * FROM quotas WHERE owner=?',fresh),null);
+      assert.equal((await store.one('SELECT COUNT(*) AS n FROM accounts')).n,2);
+      assert.equal((await store.one('SELECT COUNT(*) AS n FROM quotas')).n,2);
+      assert.equal((await store.one("SELECT ops FROM quotas WHERE owner='*'")).ops,exhausted?LIMITS.global_ops_day:1);
+    }
+    const h=harness(env),body={subject:fresh,invited:true,reason:'Fixture reviewed invitation',confirmation:{phrase:'CHANGE INVITATION',issued_at:Math.floor(Date.now()/1000)}};
+    await store.sql("UPDATE quotas SET ops=1 WHERE owner='*'").run();
+    assert.equal((await h.call('/v1/admin/invites',{method:'POST',body,headers:{'cf-access-jwt-assertion':'test-access'}})).response.status,200);
+    assert.equal((await store.one('SELECT invited FROM accounts WHERE uid=?',fresh)).invited,1);
+    const invited=await service.fetch(new Request('https://community.example.invalid/v1/account'),env,{});
+    assert.equal((await invited.json()).status,'new');
+  }finally{env.DB.close();}
+});
+test('persisted suspended owners retain status, export and removal after invitation revocation',async()=>{
+  const {env,store}=await environment(),h=harness(env);
+  try{
+    const recording=await published(h);
+    await store.sql("UPDATE accounts SET invited=0,status='suspended' WHERE uid=?",alice).run();
+    const before=(await store.one("SELECT ops FROM quotas WHERE owner='*'")).ops;
+    assert.equal((await h.call('/v1/account')).json.status,'suspended');
+    assert.equal((await store.one("SELECT ops FROM quotas WHERE owner='*'")).ops,before);
+    assert.equal((await h.call('/v1/account/name',{method:'PUT',body:{name:'Bypass'}})).json.error.code,'suspended');
+    assert.equal((await h.call('/v1/account/export')).json.recordings[0].id,recording.recording_id);
+    assert.equal((await h.call('/v1/account/withdraw',{method:'POST',body:{confirmation:'WITHDRAW MY GHOSTS'}})).response.status,200);
+    assert.equal((await h.call('/v1/account/delete',{method:'POST',body:{confirmation:'DELETE MY ACCOUNT'}})).response.status,200);
+    assert.equal((await h.call('/v1/account')).json.status,'deleted');
+    assert.equal((await store.one('SELECT state FROM deletion_outbox WHERE uid=?',alice)).state,'pending');
+  }finally{env.DB.close();}
+});
+test('indexed quota pruning drains 400 expired rows per tick and preserves the current day',async()=>{
+  const {env,store}=await environment();
+  try{
+    await store.ticket(alice);
+    for(let i=0;i<401;i++)await store.sql('INSERT INTO quotas(owner,day,ops_limit,upload_limit) VALUES(?,?,?,?)','expired-'+i,'2000-01-01',LIMITS.account_ops_day,LIMITS.upload_bytes_day).run();
+    await reconcile(env);
+    assert.equal((await store.one("SELECT COUNT(*) AS n FROM quotas WHERE day='2000-01-01'")).n,1);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM quotas WHERE day=?',new Date().toISOString().slice(0,10))).n,2);
+    const plan=await store.rows('EXPLAIN QUERY PLAN SELECT rowid FROM quotas WHERE day<? LIMIT 400','2001-01-01');
+    assert(plan.some(p=>p.detail.includes('quotas_expiry')));
+    assert(400*24*4>LIMITS.global_ops_day+1);
+    await reconcile(env);
+    assert.equal((await store.one("SELECT COUNT(*) AS n FROM quotas WHERE day='2000-01-01'")).n,0);
+  }finally{env.DB.close();}
+});
+test('expired pin backlog defers physical collection until every FK reference drains',async()=>{
+  const {env,store}=await environment(),h=harness(env);
+  try{
+    const old=await published(h);
+    await published(h,{marker:2,frames:90});
+    const asset=(await store.one('SELECT asset_key FROM recordings WHERE id=?',old.recording_id)).asset_key;
+    for(let i=0;i<101;i++){
+      const uid='40000000-0000-4000-8000-'+String(i).padStart(12,'0');
+      await store.sql('INSERT INTO accounts(uid,issuer,subject,created_at,updated_at) VALUES(?,?,?,0,0)',uid,config(env).issuer,uid).run();
+      await store.sql('INSERT INTO pins VALUES(?,?,0)',uid,old.recording_id).run();
+    }
+    await store.sql('UPDATE assets SET created_at=0').run();
+    await store.sql('INSERT INTO mutation_receipts VALUES(?,?,?,?,?,0)',alice,'expired','fixture','digest','{}').run();
+    const charged=(await store.one('SELECT bytes_used FROM storage_budget')).bytes_used;
+    assert.equal((await reconcile(env)).deleted,0);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM pins')).n,1);
+    assert.equal((await store.one("SELECT COUNT(*) AS n FROM mutation_receipts WHERE route='expired'")).n,0);
+    assert.equal((await store.one('SELECT state FROM assets WHERE key=?',asset)).state,'stored');
+    assert.equal((await store.one('SELECT bytes_used FROM storage_budget')).bytes_used,charged);
+    assert(env.GHOSTS.objects.has(asset));
+    const plan=await store.rows('EXPLAIN QUERY PLAN SELECT 1 FROM pins p JOIN recordings r ON r.id=p.recording_id WHERE r.asset_key=?',asset);
+    assert(plan.some(p=>p.detail.includes('pins_recording')));
+    assert(plan.some(p=>p.detail.includes('recording_asset')));
+    assert.equal((await reconcile(env)).deleted,1);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM pins')).n,0);
+    assert.equal(await store.one('SELECT id FROM recordings WHERE id=?',old.recording_id),null);
+    assert(!env.GHOSTS.objects.has(asset));
+    assert.equal((await store.one('SELECT bytes_used FROM storage_budget')).bytes_used,charged-old.body.encoded_bytes);
+  }finally{env.DB.close();}
+});
