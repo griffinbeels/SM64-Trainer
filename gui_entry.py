@@ -5,6 +5,10 @@ import sys
 
 
 def main():
+    # Resolve/reject packaged identity before any worker or desktop imports can
+    # resolve paths or ports. No environment variable can select the channel.
+    from sm64_events.core.build_channel import current_build
+    current_build()
     # Workers must bypass desktop imports, migrations and instance takeover.
     from sm64_events.library.background import WORKER_FLAG
     if len(sys.argv) > 1 and sys.argv[1] == WORKER_FLAG:

@@ -19,14 +19,16 @@ import shutil
 import sys
 from pathlib import Path
 
+from sm64_events.core import build_channel
+
 log = logging.getLogger("sm64.paths")
 
 # Filesystem identifier (exe name, data dir, locks) — no space, for CLI/path
 # friendliness. APP_DISPLAY_NAME is the human-readable name shown in the window
 # title, the tray, and dialogs.
-APP_DIR_NAME = "SM64Trainer"
+APP_DIR_NAME = build_channel.current_build().app_dir_name
 LEGACY_APP_DIR_NAME = "sm64_tracker"   # pre-1.0.2 data dir; migrated on startup
-APP_DISPLAY_NAME = "SM64 Trainer"
+APP_DISPLAY_NAME = build_channel.current_build().display_name
 
 
 def is_frozen() -> bool:
@@ -38,7 +40,11 @@ def installer_identity() -> dict:
     the frozen app, or this source checkout by its folder."""
     if is_frozen():
         from sm64_events.core.version import __version__
-        return {"kind": "frozen", "version": __version__}
+        identity = {"kind": "frozen", "version": __version__}
+        build = build_channel.current_build()
+        if build.channel == "beta":
+            identity.update(channel=build.channel, build_id=build.build_id)
+        return identity
     return {"kind": "checkout", "path": str(Path(__file__).resolve().parents[3])}
 
 
@@ -63,11 +69,15 @@ def server_port() -> int:
     canonical 8064 (the port external consumers/overlays expect); running from
     source (dev) uses 8065, so a dev server and a built exe can never collide
     on one port (single-instance takeover, bind conflicts). SM64_PORT
-    overrides either."""
+    overrides stable builds. A packaged beta binds its registered callback
+    port and ignores inherited port overrides."""
+    build = build_channel.current_build()
+    if build.channel == "beta":
+        return build.default_port  # Exact registered OAuth callback; no inherited public port.
     override = os.environ.get("SM64_PORT")
     if override:
         return int(override)
-    return 8064 if is_frozen() else 8065
+    return build.default_port if is_frozen() else build_channel.SOURCE_PORT
 
 
 def candidate_server_ports() -> tuple[int, ...]:
@@ -84,7 +94,8 @@ def candidate_server_ports() -> tuple[int, ...]:
     literal is a tool that probes the wrong world. Ordered so the port this
     process would itself bind is tried first.
     """
-    ordered = [server_port(), 8066, 8065, 8064]
+    ordered = [server_port(), 8066, build_channel.SOURCE_PORT,
+               build_channel.STABLE_PORT, build_channel.BETA_PORT]
     seen: list[int] = []
     for port in ordered:
         if port not in seen:
@@ -100,6 +111,8 @@ def data_root() -> Path:
     as before. Frozen: ``%LOCALAPPDATA%\\SM64Trainer``. An absolute
     ``SM64_PRACTICE_ROOT`` selects an isolated profile before either default.
     """
+    if build_channel.current_build().channel == "beta":
+        return user_data_root()
     isolated = practice_root()
     if isolated is not None:
         return isolated
@@ -120,18 +133,28 @@ def _absolute_override(name: str) -> Path | None:
 
 def practice_root() -> Path | None:
     """Explicit isolated practice profile; never redirects installation metadata."""
+    if build_channel.current_build().channel == "beta":
+        return None
     return _absolute_override("SM64_PRACTICE_ROOT")
 
 
 def ghost_population_root() -> Path:
     """The local population can survive a fresh practice profile."""
+    if build_channel.current_build().channel == "beta":
+        return data_root() / "data" / "ghost_population"
     return _absolute_override("SM64_GHOST_POPULATION") or data_root() / "data" / "ghost_population"
 
 
 def user_data_root() -> Path:
-    """Windows-user state shared by source checkouts and the installed app."""
+    """Windows-user practice state for this build channel."""
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / APP_DIR_NAME
+    return Path(base) / build_channel.current_build().app_dir_name
+
+
+def shared_installation_root() -> Path:
+    """The unchanged machine installation record, shared across build channels."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(base) / build_channel.STABLE_APP_DIR
 
 
 def migrate_legacy_data_dir() -> None:
@@ -140,7 +163,8 @@ def migrate_legacy_data_dir() -> None:
     / settings carry over after the SM64Trainer rename. Frozen only; idempotent;
     NEVER destroys data — if the new dir already holds data, the legacy dir is
     left untouched. Call before any data path is read/created."""
-    if not is_frozen() or practice_root() is not None:
+    if (build_channel.current_build().channel != "stable"
+            or not is_frozen() or practice_root() is not None):
         return
     base = Path(os.environ.get("LOCALAPPDATA") or str(
         Path.home() / "AppData" / "Local"))
@@ -230,7 +254,7 @@ def mode_settings_path() -> Path:
 def capture_layer_settings_path() -> Path:
     # Project64 and its registry selection are shared across worktrees.
     # Only this installation record is shared; practice data stays local.
-    return user_data_root() / "data" / "capture_layer.json"
+    return shared_installation_root() / "data" / "capture_layer.json"
 
 
 def migrate_capture_layer_settings() -> None:

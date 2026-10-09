@@ -39,6 +39,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from sm64_events.core import build_channel
 from sm64_events.core.paths import is_frozen, update_state_path
 from sm64_events.core.release_feed import (ReleaseNotes, http_get, is_newer,
                                            missed_releases, notes_from_release,
@@ -182,6 +183,8 @@ class UpdateService:
                  state_path: "Path | None" = None,
                  frozen: "bool | None" = None,
                  retry_delays: "tuple[float, ...]" = RETRY_DELAYS_S):
+        self._build = build_channel.current_build()
+        self._enabled = self._build.updates_enabled
         self.current = current_version
         self.repo = repo
         self._http = http
@@ -210,6 +213,8 @@ class UpdateService:
             return None
 
     def skip(self, version: str) -> None:
+        if not self._enabled:
+            return
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         self._state_path.write_text(json.dumps({"skipped": version}))
 
@@ -258,6 +263,8 @@ class UpdateService:
             return None   # fresh/damaged record -> plan refetches everything
 
     def _check(self, force: bool) -> "UpdateInfo | None":
+        if not self._enabled:
+            return None
         fake = self._fake()
         if fake is not None:
             return fake
@@ -291,6 +298,16 @@ class UpdateService:
         return self._cache
 
     def status(self, force: bool = False) -> dict:
+        if not self._enabled:
+            return {
+                "current": self.current, "frozen": self._frozen,
+                "channel": self._build.channel, "build_id": self._build.build_id,
+                "updates_enabled": False,
+                "disabled_reason": "Private beta updates are provided as a new ZIP.",
+                "update_available": False, "latest": None, "notes": "", "html_url": "",
+                "skipped": None, "writable": False, "state": "disabled", "progress": 0.0,
+                "attempt": 0, "attempts": 0, "download_bytes": None, "releases": [],
+            }
         info = self._check(force)
         fake = bool(os.environ.get("SM64_UPDATE_FAKE"))
         if self._writable is None and self._frozen and info is not None and not fake:
@@ -320,6 +337,8 @@ class UpdateService:
 
     # --- apply (off-thread; UI polls status for progress) ---
     def begin_apply(self, on_success) -> dict:
+        if not self._enabled:
+            return {"state": "error", "error": "public updates are disabled for this private beta"}
         info = self._check(force=False)
         if not self._frozen or info is None or self._plan is None:
             return {"state": "error", "error": "no update available"}
@@ -421,7 +440,7 @@ class UpdateService:
         installer file + its .old sibling on whatever path the bootstrap
         handed us via --cleanup-bootstrap. Bounded retries: the previous
         process may still be exiting and holding locks."""
-        if not self._frozen:
+        if not self._enabled or not self._frozen:
             return
         root = self._exe.parent
 

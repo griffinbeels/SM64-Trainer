@@ -366,14 +366,14 @@ INVARIANTS = (
     ),
     SingleSource(
         concept="the server's TCP port",
-        owners=frozenset({"paths.py"}),
-        tokens=("8064", "8065"),
+        owners=frozenset({"build_channel.py"}),
+        tokens=("8064", "8065", "8072"),
         files=python_sources(),
-        why="core/paths.py::server_port() answers it for everyone — SM64_PORT "
-            "override, else 8064 frozen / 8065 from source, so a dev server and "
-            "a built exe can never collide. A second literal anywhere is a "
-            "component that binds or probes the wrong one in one of those two "
-            "worlds. (Both numbers appear in PROSE in relaunch.py and "
+        why="core/build_channel.py owns channel port defaults; "
+            "core/paths.py::server_port() resolves them for every consumer. "
+            "Stable retains SM64_PORT overrides, while beta uses its exact "
+            "registered callback port. A second literal is a component binding "
+            "or probing the wrong channel. (Ports appear in PROSE in relaunch.py and "
             "single_instance.py, which is why this scans code, not text.)",
     ),
     SingleSource(
@@ -683,6 +683,7 @@ def test_library_never_reconstructs_overall_from_strategy_ladders():
 
 
 @pytest.mark.parametrize("concept,relative,source", [
+    ("the server's TCP port", "core/paths.py", "PORT = 8072"),
     ("turning a TIME into a rank", "tracking/marelo.py", "score_for(curve, time)"),
     ("turning a TIME into a rank", "library/curves.py", "score_for(curve, time)"),
     ("binding a raw compiled scorer for pure fitting", "library/ratings.py", "score_evaluator(curve)"),

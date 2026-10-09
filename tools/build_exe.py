@@ -41,16 +41,20 @@ def needs_reexec(environ) -> bool:
 def _source_date_epoch() -> str:
     try:
         out = subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=REPO,
-                             capture_output=True, text=True, check=True)
+                             capture_output=True, text=True, check=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return out.stdout.strip() or "315532800"
     except Exception:
         return "315532800"    # 1980-01-01, matches the zip timestamp floor
 
 
-def app_args(ffmpeg: "str | None") -> list[str]:
+def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
+             metadata_path: "Path | None" = None,
+             distpath: "Path | None" = None, workpath: "Path | None" = None,
+             specpath: "Path | None" = None) -> list[str]:
     argv = [
         str(REPO / "gui_entry.py"),
-        "--name", "SM64Trainer",
+        "--name", name,
         "--windowed", "--clean", "--noconfirm",     # onedir: no --onefile
         "--paths", str(REPO / "src"),
         "--icon", str(REPO / "assets" / "ukiki.ico"),
@@ -122,6 +126,12 @@ def app_args(ffmpeg: "str | None") -> list[str]:
         argv += ["--collect-all", pkg]
     if ffmpeg:
         argv += ["--add-binary", f"{ffmpeg}{SEP}."]
+    if metadata_path is not None:
+        argv += ["--add-data", f"{metadata_path}{SEP}."]
+    for option, path in (("--distpath", distpath), ("--workpath", workpath),
+                         ("--specpath", specpath)):
+        if path is not None:
+            argv += [option, str(path)]
     return argv
 
 
