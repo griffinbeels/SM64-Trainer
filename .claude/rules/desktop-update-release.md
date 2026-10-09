@@ -7,9 +7,11 @@ paths:
   - "src/sm64_events/core/release_feed.py"
   - "src/sm64_events/core/relaunch.py"
   - "src/sm64_events/core/version.py"
+  - "src/sm64_events/core/build_channel.py"
   - "gui_entry.py"
   - "bootstrap_entry.py"
   - "tools/build_exe.py"
+  - "tools/build_beta.py"
   - "tools/make_manifest.py"
   - "tools/release.py"
   - "tools/rthook_comtypes.py"
@@ -19,6 +21,7 @@ paths:
 
 | To change... | Edit |
 |---|---|
+| Private beta identity, profile, port and public service settings | `core/build_channel.py` is the packaged authority; `tools/build_beta.py` builds an app-only ZIP and checksum. See `docs/private-beta.md`. All public service fields empty means an offline beta; partial configuration fails. |
 | Full-process restart primitives | `core/relaunch.py` — `server_alive`/`port_in_use`/`wait_port_free`/`spawn_replacement`; backs the one-click restart + the `SM64_RESTART` handoff (waits on real port bindability AND `instance_lock.wait_lock_free`, scrubs PyInstaller `_MEIPASS2`/`_PYI_*`) |
 | Desktop GUI shell (window, tray, single-instance, server runner) | `desktop/` — additive wrapper over the SAME server/UI: `app.py` (composition + native takeover dialog + restart/quit wiring + `_repair_interrupted_update`), `server_runner.py` (uvicorn in a thread), `single_instance.py`, `window.py` (resizable pywebview + geometry), `tray.py`; entry `python -m sm64_events.desktop` / `gui_entry.py`. The desktop shell adds ONLY native chrome — it must never fork or special-case the UI (browser↔GUI parity) |
 | One-command build (app + installer) | `tools/build_exe.py` (+ `tools/rthook_comtypes.py`, `assets/ukiki.ico`) — `--mode app` = PyInstaller **onedir** `dist/SM64Trainer/` (auto-bundles ffmpeg from PATH); `--mode bootstrap` = tiny onefile `dist/SM64TrainerSetup.exe` (entry `bootstrap_entry.py`); default `all`. Re-execs itself with `PYTHONHASHSEED=1` + `SOURCE_DATE_EPOCH=<HEAD %ct>` so unchanged files hash identically across releases (keeps update deltas small) |

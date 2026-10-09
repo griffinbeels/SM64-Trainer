@@ -64,7 +64,11 @@ def test_friend_zip_contains_complete_folder_and_matches_sha_receipt(artifact, t
 
 
 @pytest.mark.parametrize("path", ["tracker.db", "replays/attempt_1.mp4", "logs/debug.log",
-                                 ".private/config", "SM64TrainerSetup.exe", "SM64Trainer.exe"])
+                                 ".private/config", "SM64TrainerSetup.exe", "SM64Trainer.exe",
+                                 "recording.ghost", "asset.ghc1", "export.sm64ghosts", "ui_log.jsonl",
+                                 "library_adoptions.json", "tracker_mode.json",
+                                 "ghost_population/manifest.json", "community_cache/index.json",
+                                 "compare_cache/private.json"])
 def test_artifact_refuses_private_data_hidden_files_and_public_executables(artifact, path):
     folder, build = artifact
     extra = folder / path

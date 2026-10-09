@@ -9436,6 +9436,28 @@
   .rivals-header { gap:8px; }
   .rivals-header .primary-button { padding:7px 10px; }
 }
+@font-face {font-family:"Community Google Sans";src:url('/ui/assets/community/google-sans.ttf') format('truetype');font-weight:500;font-display:swap;}
+.community-join {max-width:380px;margin:auto;}
+.community-providers {display:grid;gap:12px;margin:24px 0;}
+.community-provider {display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:54px;border-radius:8px;}
+.community-provider img {width:20px;height:20px;object-fit:contain;}
+.community-discord {background:#5865f2;color:#fff;border-color:#5865f2;}
+.community-discord:hover {background:#4752c4;color:#fff;}
+.community-google {background:#fff;border:1px solid #747775;color:#1f1f1f;font:500 14px/20px "Community Google Sans",Arial,sans-serif;}
+.community-google:hover {background:#f2f2f2;color:#1f1f1f;}
+.community-form {display:grid;gap:18px;}
+.community-form>label:not(.community-check) {display:grid;gap:8px;}
+.community-form input[type=text] {width:100%;min-height:46px;box-sizing:border-box;}
+.community-sheet {border:1px solid var(--border);padding:16px;border-radius:8px;display:grid;gap:12px;}
+.community-check {display:flex;align-items:flex-start;gap:12px;line-height:1.5;}
+.community-check input {width:20px;height:20px;flex-shrink:0;}
+.community-check small {display:block;color:var(--muted);}
+.community-actions {display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;margin-top:18px;}
+.community-actions button {min-height:44px;}
+.community-center {text-align:center;margin:18px 0;}
+.community-error {color:var(--danger,#ffaaaa);}
+.community-privacy {border-top:1px solid var(--border);padding-top:18px;margin-top:18px;}
+.community-privacy .community-actions {justify-content:flex-start;}
 </style></head>
 <body>
 <div id="app"></div>

@@ -14,7 +14,7 @@
 import { createContext, h } from "preact";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { send } from "../api.js";
+import { send, localFetch } from "../api.js";
 import { AttemptDrawer } from "./attemptdrawer.js";
 import { displayName, sectionPbByStrat } from "../entitysection.js";
 import { celebrationsEnabled } from "../celebrations.js";
@@ -433,7 +433,7 @@ export function useGraphPick(rows, visible, setVisible) {
     if (idx >= visible) setVisible(Math.ceil((idx + 1) / 10) * 10);
     let openReplay = false;
     try {
-      openReplay = (await fetch(`/api/replay/saved/${attemptId}`,
+      openReplay = (await localFetch(`/api/replay/saved/${attemptId}`,
                                 { method: "HEAD" })).ok;
     } catch { /* probe is best-effort: still scroll + flash */ }
     setFocus({ id: attemptId, nonce: ++pickNonce.current, openReplay });

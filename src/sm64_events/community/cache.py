@@ -6,7 +6,7 @@ from pathlib import Path
 import threading
 import time
 import unicodedata
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sm64_events.ghost.clip import blink_frames, decode_clip
 from sm64_events.ghost.portable import checked_author, checked_hash
@@ -77,8 +77,11 @@ class CachedPopulation:
         for suffix in (".ghost", ".ghc1", ".part"):
             for path in self.root.glob("*" + suffix):
                 try:
-                    checked_hash(path.stem)
-                except ValueError:
+                    pieces = path.stem.split('.')
+                    checked_hash(pieces[0])
+                    if len(pieces) > 1 and (suffix != '.part' or len(pieces) != 2 or UUID(pieces[1]).hex != pieces[1]):
+                        raise ValueError()
+                except (ValueError, AttributeError):
                     continue
                 if path.is_file() and not path.is_symlink():
                     path.unlink(missing_ok=True)
@@ -144,7 +147,7 @@ class CachedPopulation:
             if not self._active():
                 return local
             rows = []
-            for identity, (metadata, expiry) in self._rows.items():
+            for metadata, expiry in self._rows.values():
                 if expiry <= time.monotonic():
                     continue
                 try:
@@ -209,7 +212,9 @@ class CachedPopulation:
             if not item or item[1] <= time.monotonic():
                 return {"complete": False, "min_step": None, "max_step": None, "base_step": None, "generation": None}
             result = dict(item[0]["coverage"])
-            result["complete"] = result["complete"] and all(self._ready(row["id"]) for row in item[0]["recordings"])
+            result["complete"] = result["complete"] and all(
+                row['id'] in self._rows and self._rows[row['id']][1] > time.monotonic()
+                for row in item[0]['recordings'])
             return result
 
     def remember_page(self, identity, page, *, prefix=None, cursor=None):
@@ -240,35 +245,43 @@ class CachedPopulation:
                     self._rows.popitem(last=False)
                 self._generation += 1
 
-    def store_asset(self, row, encoded, raw):
-        """Called only after background hash/codec validation; no network here."""
+    def store_asset(self, row, encoded, raw, *, owner=None):
+        """Prepare on the owned IO worker; lock only the final cache publication."""
         row = checked_metadata(row)
         if (len(raw) != row["raw_bytes"] or len(encoded) != row["encoded_bytes"]
                 or hashlib.sha256(raw).hexdigest() != row["raw_sha256"]
                 or hashlib.sha256(encoded).hexdigest() != row["encoded_sha256"]):
             raise CommunityError("asset_mismatch")
         clip = decode_clip(raw)
+        blinks = blink_frames(clip)
+        expected_owner = owner or (self.account.snapshot().get('uid') if self.account else None)
+        staged = []
+        try:
+            for suffix, content in ((".ghc1", encoded), (".ghost", raw)):
+                temporary = self.root / (row['id'] + '.' + uuid4().hex + '.part')
+                staged.append((temporary, self.root / (row['id'] + suffix)))
+                with temporary.open('xb') as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            self._publish_asset(row, clip, blinks, staged, expected_owner)
+        finally:
+            for temporary, _ in staged:
+                temporary.unlink(missing_ok=True)
+
+    def _publish_asset(self, row, clip, blinks, staged, owner):
         with self._lock:
-            if not self._active():
+            if not self._active() or self._owner != owner:
                 return
             identifier = row["id"]
-            for suffix, content in ((".ghc1", encoded), (".ghost", raw)):
-                temporary = self.root / (identifier + ".part")
-                destination = self.root / (identifier + suffix)
-                if temporary.is_symlink() or destination.is_symlink():
+            for temporary, destination in staged:
+                if destination.is_symlink():
                     raise CommunityError("unsafe_cache")
-                try:
-                    with temporary.open("wb") as stream:
-                        stream.write(content)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.replace(temporary, destination)
-                finally:
-                    temporary.unlink(missing_ok=True)
+                os.replace(temporary, destination)
             path = self.root / (identifier + ".ghost")
             stamp = path.stat()
-            self._assets[identifier] = {"raw": len(raw), "encoded": len(encoded), "stamp": (stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns),
-                "clip_id": clip.clip_id, "records": len(clip.frames), "blink_frames": blink_frames(clip)}
+            self._assets[identifier] = {"raw": row['raw_bytes'], "encoded": row['encoded_bytes'], "stamp": (stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns),
+                "clip_id": clip.clip_id, "records": len(clip.frames), "blink_frames": blinks}
             self._assets.move_to_end(identifier)
             self._rows[identifier] = row, time.monotonic() + TTL
             while (sum(item["raw"] for item in self._assets.values()) > CACHE_RAW or

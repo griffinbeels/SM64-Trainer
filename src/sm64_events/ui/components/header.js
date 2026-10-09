@@ -17,6 +17,8 @@ import { celebrationsEnabled, setCelebrationsEnabled,
 import { SetupModal } from "./setupmodal.js";
 import { StreamOverlayDesigner } from "./streamoverlay.js";
 import { EMU, N64 } from "../platform.js";
+import { CommunityAccountModal } from "./communityaccount.js";
+import { useCommunityAccount } from "../community.js";
 
 const html = htm.bind(h);
 
@@ -122,8 +124,11 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const [setupManual, setSetupManual] = useState(false);
   const [setupWarning, setSetupWarning] = useState(null);
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const community = useCommunityAccount();
+  const [communitySetupReady, setCommunitySetupReady] = useState(false);
   useEffect(() => {
     send("GET", "/api/setup").then((setup) => {
+      setCommunitySetupReady(!!setup.onboarding?.completed_at || !!setup.emu?.installation_verified);
       setSetupWarning(setup.emu?.rom?.warning || (setup.onboarding?.limited
         && setup.onboarding.platform === EMU ? "JP tracking isn't supported yet; support is planned for a later patch." : null));
       if (!seenSetupPrompt() && shouldOfferSetup(setup)) { closeSettings(); setSetupOpen(true); }
@@ -139,7 +144,17 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
     closeSettings();
     setTab?.("Practice");
     t.refresh();
+    setCommunitySetupReady(true);
   };
+
+  useEffect(() => {
+    if (setupOpen || !community.account.enabled || !communitySetupReady || community.account.authenticated) return;
+    try {
+      if (sessionStorage.getItem('sm64.communityPrompt') === '1') return;
+      sessionStorage.setItem('sm64.communityPrompt', '1');
+    } catch { /* Private browsing still allows this session's account prompt. */ }
+    closeSettings(); community.setOpen(true);
+  }, [community.account.enabled, communitySetupReady, setupOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -370,6 +385,17 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
         <${ImportSection} onDone=${t.refresh} />
 
         <section class="settings-section">
+          <div class="settings-section-head">
+            <div><h3>Community</h3><p>${community.account.name || 'Race and share ghosts with other players.'}</p></div>
+            <button type="button" onclick=${() => {
+              closeSettings();
+              if (community.account.enabled && community.account.authenticated) community.refreshRemote().catch(() => {});
+              community.setOpen(true);
+            }}><${Icon} name="shield" />${community.account.authenticated ? 'Account' : 'Sign in'}</button>
+          </div>
+        </section>
+
+        <section class="settings-section">
           <h3>Display</h3>
           <label class="settings-field">
             <span>Star icons</span>
@@ -521,5 +547,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
     <${RunScopeWarning} t=${t} pending=${pendingScope} onDone=${resolveScope} />
     ${overlayOpen && html`<${StreamOverlayDesigner} onClose=${() => setOverlayOpen(false)} />`}
     ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
+    ${community.open && !setupOpen && html`<${CommunityAccountModal} community=${community}
+      onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh} />`}
   </header>`;
 }

@@ -30,9 +30,12 @@ from make_manifest import build_zip  # noqa: E402
 DIST = REPO / "dist" / "private-beta"
 WORK = REPO / "build" / "private-beta"
 _FORBIDDEN_NAMES = {"tracker.db", "tracker.lock", "server.pid", "window.json",
-                    "update_state.json", "capture_layer.json", "replay_settings.json"}
-_FORBIDDEN_DIRS = {"replays", "logs", "replay_buffer"}
-_FORBIDDEN_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".gho", ".mp4", ".mkv"}
+                    "update_state.json", "capture_layer.json", "replay_settings.json",
+                    "ui_log.jsonl", "library_adoptions.json", "tracker_mode.json"}
+_FORBIDDEN_DIRS = {"replays", "logs", "replay_buffer", "ghost_population",
+                   "community_cache", "compare_cache"}
+_FORBIDDEN_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".gho", ".ghost", ".ghc1",
+                       ".sm64ghosts", ".mp4", ".mkv"}
 README = """SM64 Trainer Beta - private test build
 
 Extract the complete ZIP into a writable folder. Keep SM64TrainerBeta.exe and
@@ -111,7 +114,11 @@ def validate_artifact(folder: Path, build: BuildChannel) -> None:
 
 def package_beta(folder: Path, build: BuildChannel, destination: Path) -> Path:
     validate_artifact(folder, build)
-    (folder / "README-BETA.txt").write_text(README, encoding="utf-8")
+    readme = README
+    if not build.community_url:
+        readme = ('OFFLINE BETA: community sign-in and downloads are not configured in this ZIP.\n'
+                  'Use it to test local practice, imported ghosts and beta profile isolation.\n\n') + readme
+    (folder / "README-BETA.txt").write_text(readme, encoding="utf-8")
     destination.mkdir(parents=True, exist_ok=True)
     archive = destination / f"{BETA_APP_DIR}-{build.build_id}.zip"
     build_zip(folder, archive)

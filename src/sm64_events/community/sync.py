@@ -19,6 +19,15 @@ MAX_PAGE = 256
 MAX_PAGES = 4
 
 
+def _prepare_source(source):
+    """Bound and revalidate the immutable local recording before encoding."""
+    with Path(source['path']).open('rb') as stream:
+        raw = stream.read(codec.MAX_RAW + 1)
+    if len(raw) > codec.MAX_RAW or hashlib.sha256(raw).hexdigest() != source['raw_sha256']:
+        raise CommunityError('source_changed')
+    return raw, codec.encode(raw)
+
+
 def _cutoffs(rows):
     if not isinstance(rows, list) or not 1 <= len(rows) <= 256:
         raise CommunityError("invalid_catalog")
@@ -118,6 +127,7 @@ class CommunitySync:
         self._catalog, self._catalog_generation, self._catalog_until = {}, None, 0
         self._local_jobs = set()
         self._search_task = None
+        self._pins_leased = False
         self.last_error = None
 
     async def start(self):
@@ -286,11 +296,12 @@ class CommunitySync:
         if self._closing or self.account.snapshot().get("uid") != owner:
             return
         self.population.remember_page(identity, combined)
-        if pins:
-            await self._json("PUT", "/v1/pins", json={"recording_ids": list(pins)})
         self._recent[canonical_key] = time.monotonic() + 120
         while len(self._recent) > MAX_QUEUE:
             self._recent.popitem(last=False)
+        if pins or self._pins_leased:
+            await self._json("PUT", "/v1/pins", json={"recording_ids": list(pins)})
+            self._pins_leased = bool(pins)
 
     async def search(self, identity, prefix, *, cursor=None):
         if self._closing:
@@ -348,7 +359,7 @@ class CommunitySync:
         raw = await self._cpu(lambda data: codec.decode(data, raw_sha256=row["raw_sha256"]), encoded)
         if self._closing or self.account.snapshot().get("uid") != owner:
             return
-        self.population.store_asset(row, encoded, raw)
+        await self._cpu(lambda: self.population.store_asset(row, encoded, raw, owner=owner))
 
     async def _offer(self, source):
         snapshot = self.account.snapshot()
@@ -371,14 +382,7 @@ class CommunitySync:
                 return
             for queue_key, _ in candidates:
                 self._queue.pop(queue_key, None)
-        def prepare():
-            path = Path(source["path"])
-            with path.open("rb") as stream:
-                raw = stream.read(codec.MAX_RAW + 1)
-            if len(raw) > codec.MAX_RAW or hashlib.sha256(raw).hexdigest() != source["raw_sha256"]:
-                raise CommunityError("source_changed")
-            return raw, codec.encode(raw)
-        raw, encoded = await self._cpu(prepare)
+        raw, encoded = await self._cpu(_prepare_source, source)
         if self._closing:
             return
         body = {"target": source["target"], "clock": source["clock"], "rom": source["game_version"],

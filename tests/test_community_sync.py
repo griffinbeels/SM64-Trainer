@@ -108,7 +108,7 @@ def test_cache_only_metadata_unready_visibility_ready_tamper_and_owner_change(tm
     assert rows[0]["id"] == "local" and rows[1]["id"] == row["id"]
     assert "certified" not in rows[1]
     assert not population.is_ready(row["id"])
-    assert not population.coverage(IDENTITY)["complete"]
+    assert population.coverage(IDENTITY)["complete"]  # Membership is known before selected bytes download.
     with pytest.raises(LookupError):
         population.resolve(rows[1]["ghost"], {"kind": "star", "entity_key": "1-0", "strat": "Standard"})
     population.store_asset(row, codec.encode(native()), native())
@@ -228,15 +228,15 @@ def test_stop_joins_owned_cpu_helper_before_provider_teardown(tmp_path):
         account = Account()
         population = CachedPopulation(Local(), root=tmp_path, account=account)
         sync = CommunitySync(account, population)
-        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        entered, release, finished = asyncio.Event(), threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
         def helper():
-            entered.set()
+            loop.call_soon_threadsafe(entered.set)
             assert release.wait(2)
             finished.set()
             return b"fixture"
         task = asyncio.create_task(sync._cpu(helper))
-        while not entered.is_set():
-            await asyncio.sleep(0.001)
+        await asyncio.wait_for(entered.wait(), 2)
         task.cancel()
         release.set()
         await sync.stop()
@@ -326,24 +326,22 @@ def test_catalog_and_pages_refuse_noninteger_protocol_version(version):
 
 def test_actual_export_catalog_fits_route_bound_and_generation_digest():
     import json
-    import os
     from pathlib import Path
     import httpx
     from sm64_events.community import CommunityAccount
     from sm64_events.ghost.sharing_targets import canonical
     from test_community_account import config, Store
-    path = os.environ.get("SM64_COMMUNITY_CATALOG_FIXTURE")
-    if not path:
-        pytest.skip("The optional current rank-export fixture is supplied by the integration runner.")
+    path = Path(__file__).resolve().parents[1] / 'cloud/community/catalog.json'
     data = Path(path).read_bytes()
     value = json.loads(data)
-    assert 1 << 20 < len(data) <= 4 << 20
+    assert 0 < len(data) <= 4 << 20
     assert hashlib.sha256(canonical(value["entries"])).hexdigest() == value["generation"]
     generation, entries = checked_catalog(value)
     assert generation == value["generation"] and entries
     async def scenario():
+        bounded_body = data + b' ' * max(0, (1 << 20) + 1 - len(data))
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request:
-                httpx.Response(200, content=data, headers={"Content-Type": "application/json"}))) as http:
+                httpx.Response(200, content=bounded_body, headers={"Content-Type": "application/json"}))) as http:
             account = CommunityAccount(config(), http=http, token_store=Store())
             account._access, account._expires = "fixture", 10**20
             parsed = await account.request_json("GET", "/v1/catalog")

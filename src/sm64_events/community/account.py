@@ -165,12 +165,13 @@ class CommunityAccount:
     async def complete_sign_in(self, attempt_id, code, state):
         self._enabled()
         with self._lock:
-            pending, self._attempt = self._attempt, None  # consume even a wrong callback
+            pending = self._attempt
             if (not pending or not isinstance(state, str) or not isinstance(attempt_id, str)
                     or not secrets.compare_digest(pending[0], attempt_id)
                     or not secrets.compare_digest(pending[1], state) or pending[3] <= time.monotonic()
                     or not isinstance(code, str) or not 1 <= len(code) <= 4096):
                 raise CommunityError("invalid_callback", "That sign-in attempt expired or was canceled.")
+            self._attempt = None  # Only the matching, current callback consumes its one-use attempt.
             self._inflight = pending
         try:
             async with self._auth_lock:
@@ -178,7 +179,7 @@ class CommunityAccount:
                     try:
                         token = await oauth.fetch_token(self.config.supabase_url + "/auth/v1/oauth/token",
                                                         code=code, code_verifier=pending[2])
-                    except Exception:
+                    except Exception:  # noqa: BLE001 -- provider/library failures may embed OAuth credentials
                         raise CommunityError("sign_in_failed") from None
                 await self._install(token, epoch=pending[5])
                 self._provider = pending[4]
@@ -225,7 +226,7 @@ class CommunityAccount:
             try:
                 token = await oauth.refresh_token(self.config.supabase_url + "/auth/v1/oauth/token",
                                                   refresh_token=refresh)
-            except Exception:
+            except Exception:  # noqa: BLE001 -- provider/library failures may embed refresh credentials
                 self._access = None
                 raise CommunityError("refresh_failed") from None
         await self._install(token, epoch=epoch)
@@ -277,6 +278,8 @@ class CommunityAccount:
                 if authenticated and epoch == self._epoch:
                     self._error = error.code
                     status = "consent_required" if error.code in ("policy_required", "consent_required") else error.code
+                    if status == 'consent_required':
+                        self._policies_until = 0  # Fetch the new public policy once at this gate transition.
                     if status in ("rename_required", "consent_required", "suspended", "deleted", "not_invited") and self._profile:
                         self._profile = {**self._profile, "status": status}
             raise

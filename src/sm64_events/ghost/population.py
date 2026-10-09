@@ -271,6 +271,21 @@ class LocalPopulation:
         validate = lambda: _admission(replay.attempt(current.id), clock, game_version, full_start) == before
         return self._publish_record(document, source, validate)
 
+    def qualified_source(self, attempt, replay, *, clock, game_version, full_start=False):
+        """Offer committed native bytes independently of local rank-bin retention."""
+        current = replay.attempt(attempt.id)
+        before = _admission(current, clock, game_version, full_start)
+        if _admission(attempt, clock, game_version, full_start) != before:
+            raise ValueError('This attempt changed before community admission.')
+        source, digest = _preserved_asset(replay, current)
+        if _admission(replay.attempt(current.id), clock, game_version, full_start) != before:
+            raise ValueError('This attempt changed during community admission.')
+        kind, key = entity_key_of(current)
+        return {'target': describe(kind, key, current.strat_tag, self._defs()),
+                'clock': clock, 'game_version': game_version, 'strategy': current.strat_tag,
+                'frames': before.frames, 'path': str(source), 'raw_sha256': digest,
+                'full_start': True, 'valid': True}
+
     def _publish_record(self, document, source, validate):
         """Publish only after immutable bytes and the latest owner agree."""
         digest, target, kind = document["sha256"], document["target"], document["target"]["kind"]

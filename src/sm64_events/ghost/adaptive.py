@@ -127,8 +127,14 @@ def _bounded(rows):
     return result
 
 
+def _admitted(row):
+    """Community structural validation carries no honest-gameplay certificate."""
+    return (row.get('certified') is True or row.get('provenance') == 'community-unverified'
+            and row.get('structurally_valid') is True)
+
+
 def _compatible(row, identity):
-    return (isinstance(row, dict) and row.get("certified") is True and row.get("valid") is True
+    return (isinstance(row, dict) and _admitted(row) and row.get("valid") is True
             and row.get("full_start") is True
             and (identity.scope == "overall" or row.get("strategy") == identity.strategy)
             and (row.get("kind"), row.get("entity_key"), row.get("clock"), row.get("game_version"))
@@ -175,7 +181,7 @@ def _checked_pins(pins):
 
 def _ranked_row(row):
     return (isinstance(row, dict) and (row.get("manual_only") is True
-            or row.get("certified") is True and row.get("valid") is True and row.get("full_start") is True)
+            or _admitted(row) and row.get("valid") is True and row.get("full_start") is True)
             and isinstance(row.get("id"), str)
             and type(row.get("frames")) is int and row["frames"] > 0
             and type(row.get("step")) is int and 0 <= row["step"] <= MAX_STEP
@@ -256,7 +262,7 @@ def _automatic(rows, count, low, high, players):
     return sorted(picked, key=lambda row: (row["step"], row["frames"], row["id"]))
 
 
-def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope="strategy") -> tuple[dict, ...]:
+def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope="strategy", allow_same_rank=True) -> tuple[dict, ...]:
     """Choose visible slots; caller retains hidden pins and owns PB playback.
 
     Pass the previous roster when changing one manual choice, to preserve its
@@ -294,7 +300,7 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
             used.add(row["id"])
     available = [row for row in candidates.values() if row["id"] not in used
                  and _eligible_auto(row, pb, options, low, high, strategy, scope)]
-    if (options["mode"] == "adaptive" and pb is not None and not available
+    if (allow_same_rank and options["mode"] == "adaptive" and pb is not None and not available
             and not any(not row["pinned"] for row in result.values())):
         # An empty higher-rank pool can still offer progress within the PB's
         # subdivision. Keep strict faster/comparable timing and chosen slots.

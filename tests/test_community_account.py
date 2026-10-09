@@ -50,6 +50,31 @@ def test_config_and_disabled_snapshot_need_no_vault_or_network():
                         publishable_key="public", oauth_client_id="client")
 
 
+def test_policy_rejection_refreshes_current_versions_once_before_renewal():
+    async def scenario():
+        versions = ['t1', 't2']
+        reads = []
+        def respond(request):
+            if request.url.path == '/v1/config':
+                reads.append(request.url.path)
+                return httpx.Response(200, json={'v': 1, 'terms_version': versions.pop(0),
+                    'privacy_version': 'p1', 'terms_url': 'https://ghosts.example/terms'})
+            if request.url.path == '/v1/pool':
+                return httpx.Response(403, json={'v': 1, 'error': {'code': 'policy_required'}})
+            return httpx.Response(200, json=profile())
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            account = CommunityAccount(config(), http=http, token_store=Store())
+            account._access, account._expires = 'fixture', 10**20
+            assert (await account.refresh())['status'] == 'active'
+            with pytest.raises(CommunityError):
+                await account.request_json('GET', '/v1/pool')
+            assert account.snapshot()['status'] == 'consent_required'
+            assert (await account.refresh())['terms_version_current'] == 't2'
+            await account.refresh()
+            assert len(reads) == 2
+    asyncio.run(scenario())
+
+
 def test_pkce_portal_code_exchange_one_use_and_profile_defaults():
     async def scenario():
         requests = []
@@ -73,6 +98,8 @@ def test_pkce_portal_code_exchange_one_use_and_profile_defaults():
             assert params["code_challenge_method"] == ["S256"]
             assert params["response_type"] == ["code"]
             assert "access_token" not in native_url and "refresh_token" not in native_url
+            with pytest.raises(CommunityError):
+                await account.complete_sign_in(begin['attempt_id'], 'code', 'wrong-state')
             signed = await account.complete_sign_in(begin["attempt_id"], "code", params["state"][0])
             assert signed["uid"] == UID and signed["provider"] == "google"
             assert "private-access" not in repr(signed) and "rotated" not in repr(signed)

@@ -208,27 +208,27 @@ def test_asset_publication_keeps_loop_live_joins_fsync_and_rechecks_owner(tmp_pa
     population = CachedPopulation(local, root=tmp_path, account=account)
     sync = CommunitySync(account, population)
     identifier = "1" * 64
-    entered, release, flushed = threading.Event(), threading.Event(), threading.Event()
+    entered, release, flushed = asyncio.Event(), threading.Event(), threading.Event()
+    event_loop = None
     thread_ids = []
     real_fsync = cache_module.os.fsync
     def delayed_fsync(descriptor):
         thread_ids.append(threading.get_ident())
-        entered.set()
+        event_loop.call_soon_threadsafe(entered.set)
         if not release.wait(2):
             raise TimeoutError("Fictional cache fsync release did not arrive")
         real_fsync(descriptor)
         flushed.set()
     monkeypatch.setattr(cache_module.os, "fsync", delayed_fsync)
     async def scenario():
+        nonlocal event_loop
+        event_loop = asyncio.get_running_loop()
         loop_thread = threading.get_ident()
         await sync.start()
         sync.request_assets((identifier,))
         stopping = None
         try:
-            async def wait_entered():
-                while not entered.is_set():
-                    await asyncio.sleep(.001)
-            await asyncio.wait_for(wait_entered(), 1)
+            await asyncio.wait_for(entered.wait(), 1)
             assert thread_ids and all(value != loop_thread for value in thread_ids)
             # These heartbeats happen while the real cache publication is held.
             for _ in range(5):
@@ -244,8 +244,8 @@ def test_asset_publication_keeps_loop_live_joins_fsync_and_rechecks_owner(tmp_pa
             release.set()
             await asyncio.wait_for(stopping, 1)
             assert flushed.is_set()
-            assert population.is_ready(identifier) is (owner_change == "same")
-            assert bool(list(tmp_path.glob("*.ghost"))) is (owner_change == "same")
+            assert (population.is_ready(identifier), bool(list(tmp_path.glob('*.ghost')))) == (
+                owner_change == 'same', owner_change == 'same')
             assert not list(tmp_path.glob("*.part"))
         finally:
             release.set()

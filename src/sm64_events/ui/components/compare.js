@@ -6,7 +6,7 @@
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { getJSON, send } from "../api.js";
+import { getJSON, send, localFetch } from "../api.js";
 import { useSyncController, VideoStage, WorkArea } from "./videosync.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
@@ -202,7 +202,7 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
       name: file.name, filename: file.name });
     setJob({ state: "running", progress: 0, message: "uploading" });
     let r;
-    try { r = await fetch(`/api/compare/upload?${q}`, { method: "POST", body: file }); }
+    try { r = await localFetch(`/api/compare/upload?${q}`, { method: "POST", body: file }); }
     catch (e) { setJob({ state: "error", message: String(e) }); return; }
     if (!r.ok) { setJob({ state: "error", message: `upload failed (${r.status})` }); return; }
     const { job_id } = await r.json();

@@ -131,8 +131,8 @@ def test_worker_snapshot_is_bounded_and_revision_checked(tmp_path, monkeypatch):
         bg._read_prepared(path, {"sheet_revision": "new"})
 
 
-@pytest.mark.parametrize("worker", [False, True])
-def test_frozen_runtime_hook_only_initializes_com_for_the_app(tmp_path, monkeypatch, worker):
+@pytest.mark.parametrize("flag", [None, bg.WORKER_FLAG, "--beta-self-check"])
+def test_frozen_runtime_hook_only_initializes_com_for_the_app(tmp_path, monkeypatch, flag):
     import runpy
     import tempfile
     from types import SimpleNamespace
@@ -149,10 +149,10 @@ def test_frozen_runtime_hook_only_initializes_com_for_the_app(tmp_path, monkeypa
     monkeypatch.delenv("COMTYPES_GEN_DIR", raising=False)
     monkeypatch.setattr(tempfile, "mkdtemp", make_temp)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "argv", ["trainer.exe", bg.WORKER_FLAG] if worker else ["trainer.exe"])
+    monkeypatch.setattr(sys, "argv", ["trainer.exe", flag] if flag else ["trainer.exe"])
     runpy.run_path(str(hook))
-    assert bool(created) is not worker
-    assert client.gen_dir == (None if worker else str(tmp_path))
+    assert bool(created) is (flag is None)
+    assert client.gen_dir == (str(tmp_path) if flag is None else None)
 
 
 # ---- the parent's apply: the fit off the loop, staging and publishing on it ----

@@ -6,12 +6,13 @@ import htm from "htm";
 import { Modal } from "./modal.js";
 import { SaveGhostButton } from "./saveghost.js";
 import { templatesChanged, useTemplateRevision } from "../inputpreferences.js";
+import { localFetch } from "../api.js";
 
 const html = htm.bind(h);
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 async function request(url, body, method = "POST") {
-  const response = await fetch(url, body === undefined ? undefined : {
+  const response = await localFetch(url, body === undefined ? undefined : {
     method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   if (!response.ok) {

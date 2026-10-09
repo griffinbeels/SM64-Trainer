@@ -1,5 +1,11 @@
 # Private Windows beta builds
 
+An offline beta may leave all four public community configuration fields empty.
+It retains a separate beta profile and disables public updates. Mixed empty and
+configured fields are refused. An offline artifact proves packaging and local
+practice only; community testing needs the configured service and provider checks
+below. Do not package placeholder service addresses.
+
 A private beta is a complete app ZIP distributed directly to invited testers.
 It does not create a GitHub release or use the public app's updater/bootstrap.
 The [community protocol](community-protocol.md) owns its account and sharing
@@ -97,10 +103,23 @@ To replace a beta, close it and replace the entire extracted application folder
 with the next beta ZIP. Its separate LocalAppData profile survives. Never replace
 individual runtime files while the application is running.
 
-Before handoff, check the produced frozen application with a disposable beta
-profile: visible beta identity/build, separate data, public updates disabled,
-working normal/helper entry points and installed recording dependencies. Verify
-the real registered desktop login return and staging exchange independently.
+Before handoff, run the packaged executable's maintainer probe against a fresh
+absolute report path outside any application profile:
+
+```powershell
+./SM64TrainerBeta.exe --beta-self-check C:/private/receipts/beta-check.json
+```
+
+The report's parent directory must exist. This beta-only entry point exits before
+opening the desktop, server, recorder or helper processes. It checks the packaged
+build identity, profile/port isolation, disabled updates, required assets, native
+PE headers and community imports. It emits no credentials and does not create a
+practice profile. Source and stable execution refuse this probe.
+
+This receipt does not prove desktop interaction, native playback or provider
+login. Test visible beta identity/build, normal/helper entry points and installed
+recording dependencies separately with a disposable beta profile. Verify the real
+registered desktop login return and staging exchange independently.
 Do not use the maintainer's running trainer, Project64 or live recording for
 agent verification. Unit tests and disposable ZIP fixtures do not substitute for
 these frozen-artifact and deployed-service receipts.

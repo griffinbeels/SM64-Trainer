@@ -1535,6 +1535,34 @@ changing original history.
 
 - **Lives** — `tools/ghost_climb.py` and `src/sm64_events/core/paths.py`
 
+### Community ghost
+
+A [[ghost]] shared by an authenticated, invited player. The service keeps that
+player's fastest full-start recording for each [[subdivision]], [[strategy]],
+[[target]], clock and ROM version. Structural validation checks the recording;
+it does not certify that gameplay was legitimate. Sharing begins unchecked.
+
+- **Lives** — `cloud/community/` and `src/sm64_events/community/`
+
+### Rival pool
+
+The bounded metadata list for a [[target]], ROM, clock, [[ghost matching scope]]
+and rank range. The cloud can reuse it across players. The trainer selects
+[[rival slot]]s locally and downloads only their recordings. A complete membership
+scan and downloaded playback bytes are separate states.
+
+- **Lives** — `src/sm64_events/community/sync.py` and `src/sm64_events/community/cache.py`
+
+### Private beta
+
+A complete test application ZIP sent directly to friends. Its packaged identity
+selects separate practice data and disables public updates. An offline beta has
+no configured community service. A configured beta requires its invited staging
+accounts. Project64 and the recorder remain shared machine resources.
+
+- **Lives** — `src/sm64_events/core/build_channel.py` and `tools/build_beta.py`;
+  `docs/private-beta.md`
+
 ### Imported ghost
 
 A native [[ghost]] received in a [[ghost collection]], with the original

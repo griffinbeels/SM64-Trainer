@@ -7,9 +7,10 @@ log = logging.getLogger("sm64.ghost")
 
 
 class PopulationRecorder:
-    def __init__(self, population, replay, tracker, identity_of, *, capacity=32):
+    def __init__(self, population, replay, tracker, identity_of, *, capacity=32, community=None):
         self.population, self.replay, self.tracker = population, replay, tracker
         self.identity_of = identity_of
+        self.community = community
         self.queue = asyncio.Queue(maxsize=capacity)
         self.task = None
         self.job = None
@@ -79,6 +80,11 @@ class PopulationRecorder:
             player_id = str(uuid4())
             database.set_state("ghost_player_id", player_id)
         author = database.get_state(AUTHOR_KEY, "") or "You"
+        cloud = self.community.account.snapshot() if self.community is not None else {}
+        if cloud.get('status') == 'active' and cloud.get('sharing'):
+            source = self.population.qualified_source(attempt, self.replay,
+                clock=identity.clock, game_version=identity.game_version, full_start=True)
+            self.community.offer_source(source)
         ranks = getattr(self.tracker,"ranks",None)
         if ranks is not None:
             from sm64_events.ghost.adaptive import rank_frames, rank_recordings

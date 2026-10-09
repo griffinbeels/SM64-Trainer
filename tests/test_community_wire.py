@@ -71,6 +71,8 @@ def _case(raw, encoded=None, **overrides):
         "grant": {"raw_bytes": len(raw), "encoded_bytes": len(encoded),
             "raw_sha256": hashlib.sha256(raw).hexdigest(),
             "encoded_sha256": hashlib.sha256(encoded).hexdigest(), "frames": 100,
+            # Independent native fixture starts in Whomp's (level24, course2).
+            "target": {"kind": "star", "entity_key": '2-6' if struct.unpack_from('<I', raw, 112)[0] == 2 else '2-1'},
             **overrides}}
 
 
@@ -153,7 +155,8 @@ const service = [4,5,6,7].map(version => {
     }
   }
   const encoded=ghc1(raw), grant={raw_bytes:raw.length,encoded_bytes:encoded.length,
-    raw_sha256:digest(raw),encoded_sha256:digest(encoded),frames:100};
+    raw_sha256:digest(raw),encoded_sha256:digest(encoded),frames:100,
+    target:{kind:'star',entity_key:'1-0'}};
   return {version,raw:raw.toString('base64'),encoded:encoded.toString('base64'),
     ...accepted({encoded:encoded.toString('base64'),grant})};
 });
@@ -202,7 +205,7 @@ def wire():
 def test_python_native_bytes_survive_real_worker_codec(version, clock, wire):
     python, _, result = wire
     case, actual = python[f"{version}-{clock}"], result["python"][f"{version}-{clock}"]
-    assert actual["ok"], actual
+    assert actual["ok"], {key: actual.get(key) for key in ('code', 'status')}
     assert actual["metadata"] == {"version": version, "record_count": COUNT,
         "clock_kind": clock, "native_sha256": case["grant"]["raw_sha256"]}
     raw = base64.b64decode(case["raw"])
@@ -216,7 +219,7 @@ def test_python_native_bytes_survive_real_worker_codec(version, clock, wire):
 def test_independent_service_native_fixtures_decode_exactly_in_python(version, wire):
     _, _, result = wire
     item = next(item for item in result["service"] if item["version"] == version)
-    assert item["ok"], item
+    assert item["ok"], {key: item.get(key) for key in ('code', 'status')}
     raw = base64.b64decode(item["raw"])
     assert codec.decode(base64.b64decode(item["encoded"]),
         raw_sha256=item["metadata"]["native_sha256"]) == raw

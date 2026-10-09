@@ -112,7 +112,7 @@ class GhostSession:
 
     def __init__(self, *, tracker, inputs, replay, broadcaster,
                  period_s: float = WATCH_PERIOD_S, native=None, portable=None,
-                 population=None, version_of=None):
+                 population=None, version_of=None, community=None):
         self._tracker = tracker
         self._inputs = inputs
         self._replay = replay
@@ -123,13 +123,14 @@ class GhostSession:
         self._rivals = None
         self._population_recorder = None
         self._population = population
+        self._community = community
         self._population_closed = False
         if population is not None and native is not None:
             from sm64_events.ghost.rivals import Rivals
             from sm64_events.ghost.rival_recording import PopulationRecorder
             self._rivals = Rivals(tracker,population,native,version_of or (lambda:None),
-                source_of=lambda:id(getattr(getattr(replay,"recorder",None),"ghost_capture",None)))
-            self._population_recorder = PopulationRecorder(population,replay,tracker,self._attempt_identity)
+                source_of=lambda:id(getattr(getattr(replay,"recorder",None),"ghost_capture",None)), community=community)
+            self._population_recorder = PopulationRecorder(population,replay,tracker,self._attempt_identity,community=community)
         self._native_answer = {}
         # When the last resolve ran, and what the world it read looked like
         # (`_world`): a change there is itself the event that re-resolves.
@@ -213,6 +214,12 @@ class GhostSession:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+        if self._community is not None:
+            for close in (self._community.stop, self._community.account.close):
+                try:
+                    await close()
+                except Exception:  # noqa: BLE001 -- auth failure text must never reach logs
+                    log.warning('Community shutdown did not finish cleanly; continuing native cleanup.')
         await asyncio.to_thread(self._finish_stop)
 
     def _finish_stop(self):
@@ -649,6 +656,17 @@ class GhostSession:
     async def search_rivals(self, target, player, cursor=None, *, scope=None):
         if self._rivals is None:
             raise ValueError("Adaptive rivals are unavailable in this window.")
+        async with self._lock:
+            identity = self._rivals.identity_for(target)
+            if target != self._rivals.target or identity is None or scope is not None and scope != identity.scope:
+                raise ValueError('The practice target or ghost view changed. Search in the current view.')
+        if (self._community is not None and not isinstance(cursor, list)
+                and self._community.account.snapshot().get('status') == 'active'):
+            from sm64_events.community.config import CommunityError
+            try:
+                await self._community.search(identity, player, cursor=cursor)
+            except CommunityError:
+                pass  # Local/imported ghosts remain searchable while community IO is unavailable.
         async with self._lock:
             return await asyncio.to_thread(self._rivals.search,target,player,cursor,scope=scope)
 

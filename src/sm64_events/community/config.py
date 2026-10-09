@@ -1,8 +1,9 @@
 """Public build configuration; credentials never belong in packaged settings."""
 from dataclasses import dataclass
 from urllib.parse import urlsplit
+from sm64_events.core.build_channel import BETA_PORT
 
-CALLBACK = "http://127.0.0.1:8072/api/community/auth/callback"
+CALLBACK = f"http://127.0.0.1:{BETA_PORT}/api/community/auth/callback"
 
 
 def checked_url(value, *, local=False):

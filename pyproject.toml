@@ -18,12 +18,14 @@ dependencies = [
     "pywebview>=5.0",
     "pystray>=0.19",
     "yt-dlp>=2025.1.1",
+    "httpx>=0.27",
+    "Authlib>=1.6.5",
 ]
 
 [dependency-groups]
 profiling = ["psutil>=6", "py-spy>=0.4"]
 dev = ["pytest>=8.0", "pytest-xdist>=3.8", "pytest-testmon>=2.1",
-       "pytest-rerunfailures>=15.0", "httpx>=0.27",
+       "pytest-rerunfailures>=15.0",
        "pyinstaller>=6.0", "playwright>=1.49"]
 
 # playwright is declared HERE, not inherited from uilab, and that is on purpose.

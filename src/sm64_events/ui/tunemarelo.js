@@ -1,3 +1,4 @@
+import { localFetch } from "/ui/api.js";
 // src/sm64_events/ui/tunemarelo.js — the overall rank-up tuning inspector,
 // served at /ui/tunemarelo.html.
 //
@@ -203,7 +204,7 @@ function Inspector() {
   async function saveToRepo() {
     setStatus({ kind: "busy", text: "Saving..." });
     try {
-      const response = await fetch("/api/tuning/marelo", {
+      const response = await localFetch("/api/tuning/marelo", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ values }),
       });

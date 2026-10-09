@@ -76,6 +76,14 @@ including cache hits. Burst limits shed traffic before expensive operations.
 | `POST /v1/admin/reclaim` | Guarded `{name,expected_owner,destination_uid,transfer_sheet:bool,reason,confirmation}`; audited atomic conditional name transfer, displaced owner forced to rename, both owners retain all data. |
 
 The service owns details of cursors, epoch keys, reservations and reconciliation.
+Authenticated mutations carry a UUID `Idempotency-Key`. Retries of one logical
+operation reuse that key; another operation uses a new key. Account mutation
+replays must report current account state rather than reviving an obsolete claim.
+Public owner identifiers are the Auth UUID under the configured, fixed issuer.
+Catalog exports omit disabled or ambiguously bound segments, using the existing
+portable binding rules. Responses have a four-MiB catalog limit and a one-MiB
+limit for other JSON. Fixed rank ranges can span all 45 subdivisions; indexed
+pages and bounded pagination expose incomplete coverage explicitly.
 Keep response identity names above consistent; extensions require this contract
 to change before dependent writers. Model cutoffs are exported from existing
 rank derivations, not manually restated in a second ranking implementation.

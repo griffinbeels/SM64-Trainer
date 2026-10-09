@@ -87,6 +87,10 @@ def parse_metadata(value: object) -> BuildChannel:
         return build
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", build.build_id):
         raise ValueError("beta build_id must be a short filename-safe identifier")
+    if not any(fields[name] for name in _PUBLIC_FIELDS):
+        return build  # An explicitly offline beta still has isolated paths and no public updates.
+    if not all(fields[name] for name in _PUBLIC_FIELDS):
+        raise ValueError('community beta requires all four public service fields')
     _https_origin(build.community_url, "community_url")
     _https_origin(build.supabase_url, "supabase_url")
     if not re.fullmatch(r"sb_publishable_[A-Za-z0-9_-]{1,256}", build.supabase_publishable_key):

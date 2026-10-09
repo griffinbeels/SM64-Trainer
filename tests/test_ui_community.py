@@ -307,6 +307,27 @@ def test_forced_rename_can_practice_offline_without_changing_owned_data(monkeypa
             assert page.problems() == []
 
 
+def test_renewing_consent_preserves_sharing_and_sheet_identity(monkeypatch, tmp_path):
+    account = FixtureAccount('consent_required')
+    account.update(sharing=True, sheet_runner='Existing runner')
+    with community_app(monkeypatch, tmp_path, account) as (base, _):
+        with get_driver().launch(headless=True, viewport=(850, 1000)) as page:
+            page.goto(base)
+            page.wait_for('.practice-page')
+            open_account(page)
+            page.wait_for('.community-form')
+            sharing = '.community-form > .community-check input'
+            assert page.evaluate(f'document.querySelector({json.dumps(sharing)}).checked')
+            assert not page.evaluate("document.querySelector('.community-sheet input[type=checkbox]').checked")
+            page.click('.community-form > .community-check:last-of-type input')
+            page.wait_for('.community-form button[type=submit]:not([disabled])')
+            page.click('.community-form button[type=submit]')
+            wait_until(page, "!document.querySelector('.modal-body')", 'renewed consent')
+            assert ('profile', 'Fixture runner', {'terms_version': 't1', 'privacy_version': 'p1',
+                    'sharing': True, 'sheet_runner': 'Existing runner'}) in account.calls
+            assert page.problems() == []
+
+
 def test_sign_in_stays_pending_until_slow_remote_profile_is_ready(monkeypatch, tmp_path):
     account = FixtureAccount(slow_profile=True)
     with community_app(monkeypatch, tmp_path, account) as (base, _):
@@ -376,14 +397,14 @@ def test_privacy_actions_use_owner_routes_and_explicit_confirmation(monkeypatch,
             assert not any(call[:3] == ("remote", "POST", "/v1/account/withdraw") for call in account.calls)
             click_text(page, "Remove shared ghosts")
             page.wait_for(".community-privacy")
-            assert ("remote", "POST", "/v1/account/withdraw", {"confirmation": "WITHDRAW"}) in account.calls
+            assert ("remote", "POST", "/v1/account/withdraw", {"confirmation": "WITHDRAW MY GHOSTS"}) in account.calls
             page.click(".community-privacy summary")
             click_text(page, "Delete account")
             page.wait_for(".community-form h3")
             assert not any(call[:3] == ("remote", "POST", "/v1/account/delete") for call in account.calls)
             click_text(page, "Delete account")
             page.wait_for(".community-providers")
-            assert ("remote", "POST", "/v1/account/delete", {"confirmation": "DELETE"}) in account.calls
+            assert ("remote", "POST", "/v1/account/delete", {"confirmation": "DELETE MY ACCOUNT"}) in account.calls
             assert ("sign_out",) in account.calls
             assert page.problems() == []
 

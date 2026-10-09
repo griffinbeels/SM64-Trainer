@@ -8,6 +8,7 @@ import sys
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
 from sm64_events.core.logging_setup import configure_logging
+from sm64_events.core.build_channel import current_build
 from sm64_events.core.paths import (
     bundled_ffmpeg,
     compare_cache_dir,
@@ -382,7 +383,8 @@ def _build_capture_layer(poller, replay):
         dll_source=bundled_plugin_dll,
         renderer_source=bundled_renderer_dll,
         gpu_observation=GpuSetupProbe(lambda: replay.recorder.status() if replay else {}),
-        auto_refresh=True, installer=installer_identity())
+        auto_refresh=current_build().channel == 'stable',
+        installer=installer_identity())
     from sm64_events.core.setup_runtime import SetupRuntime
     setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay)
     if not capture_layer.auto_refresh:
@@ -434,13 +436,27 @@ def _comparison_services(replay, service, broadcaster, codec, replay_cfg):
 
 
 def _local_ghost_population(service):
-    from pathlib import Path
-    import os
+    from sm64_events.core.paths import ghost_population_root
     from sm64_events.ghost.population import LocalPopulation
-    root = Path(os.environ.get("SM64_GHOST_POPULATION") or data_root()/"data"/"ghost_population")
-    if not root.is_absolute():
-        root = root.resolve()
+    root = ghost_population_root()
     return LocalPopulation(root, definitions=lambda: service.db.segment_defs() if service.db else [])
+
+
+def _community_population(service):
+    """The beta's public configuration creates one cache and IO worker."""
+    from sm64_events.community import CommunityAccount, CommunityConfig, CachedPopulation, CommunitySync
+    from sm64_events.core.build_channel import current_build
+    build = current_build()
+    if build.channel != 'beta' or not build.community_url:
+        return _local_ghost_population(service), None, None
+    config = CommunityConfig(public_url=build.community_url, supabase_url=build.supabase_url,
+        publishable_key=build.supabase_publishable_key, oauth_client_id=build.oauth_client_id,
+        channel=build.channel, enabled=True)
+    account = CommunityAccount(config)
+    population = CachedPopulation(_local_ghost_population(service),
+        root=data_root()/'data'/'community_cache', account=account,
+        definitions=lambda: service.db.segment_defs() if service.db else [])
+    return population, account, CommunitySync(account, population)
 
 
 def build(*, recorder_lock=None):
@@ -511,12 +527,12 @@ def build(*, recorder_lock=None):
                     on_gap=ghost_capture_gap, on_snapshot=note_ghost_snapshot)
     inputs.bind(poller)
     service.observed_game_version = lambda:poller.observed_game_version
-    population = _local_ghost_population(service)
+    population, community_account, community_sync = _community_population(service)
     # One session owns native ghost preferences and the practice target.
     ghost = GhostSession(tracker=service, inputs=inputs.get_service,
                          replay=replay, broadcaster=broadcaster,
                          native=native_ghost,population=population,
-                         version_of=lambda:poller.observed_game_version)
+                         version_of=lambda:poller.observed_game_version, community=community_sync)
     service.on_attempt_saved = ghost.attempt_saved
     _ghost_follows_pb(service, ghost)
     if replay is not None:
@@ -531,7 +547,8 @@ def build(*, recorder_lock=None):
                       updater=updater, compare=compare, compilation=compilation,
                       db_retry=db_retry, capture_layer=capture_layer,
                       setup_observer=setup_observer, ghost=ghost,
-                      refresh_library_on_start=True)
+                      refresh_library_on_start=True, community_account=community_account,
+                      community_sync=community_sync, protect_local_api=True, local_port=server_port())
 
 
 _app = None

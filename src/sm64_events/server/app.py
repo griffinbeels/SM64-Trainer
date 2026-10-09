@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from sm64_events.core import diagnostics, uilog
 from sm64_events.core.events import Event
+from sm64_events.core.build_channel import current_build
 from sm64_events.core.paths import (data_root, diagnostics_dir, is_frozen,
                                     logs_dir, pidfile_path, server_port)
 from sm64_events.core.perfmon import PerfMonitor
@@ -364,10 +365,11 @@ def _start_app_replay(replay) -> None:
 
 def _create_lifespan(poller, service, replay, monitor, db_retry,
                      refresh_library_on_start, on_db_attached=None, capture_layer=None,
-                     ghost=None):
+                     ghost=None, community_account=None, community_sync=None):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await _start_app_service(service)
+        community_task = _restore_community_background(community_account, community_sync)
         if ghost is not None:
             await ghost.start()
         reattach_task = None
@@ -389,8 +391,8 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
                 _refresh_library_quietly(app.state.library, app.state.library_overrides,
                                          app.state.adoptions, service))
         yield
-        if ghost is not None:
-            await ghost.stop()          # revoke native playback before recording ends
+        await _stop_community_restore(community_task)
+        await _stop_community_and_ghost(ghost, community_account, community_sync)
         if refresh_task is not None:
             refresh_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -422,6 +424,38 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
         with suppress(Exception):
             pidfile_path().unlink()
     return lifespan
+
+
+async def _start_community(account, sync):
+    """Restore credentials off startup; failure leaves local practice usable."""
+    try:
+        await account.restore()
+    except Exception:  # noqa: BLE001 -- never log authentication exception text
+        log.info('Community account could not be restored; practice remains offline.')
+    if sync is not None:
+        await sync.start()
+
+
+def _restore_community_background(account, sync):
+    return asyncio.create_task(_start_community(account, sync), name='community-restore') if account is not None else None
+
+
+async def _stop_community_restore(task):
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _stop_community_and_ghost(ghost, account, sync):
+    """A cloud teardown failure must not skip recorder/poller cleanup."""
+    callbacks = [ghost.stop] if ghost is not None else [
+        getattr(sync, 'stop', None), getattr(account, 'close', None)]
+    for callback in callbacks:
+        if callback is not None:
+            try:
+                await callback()
+            except Exception:  # noqa: BLE001 -- do not log authentication details
+                log.warning('Ghost/community cleanup failed; continuing app shutdown.')
 
 
 async def _close_capture_layer(layer):
@@ -728,6 +762,7 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
                          if hasattr(poller, "input_storage_health") else None)
         storage_unavailable = tracking is not None and tracking["state"] != "running"
         return {
+            "channel": current_build().channel,
             "status": "error" if (unavailable or storage_unavailable
                                    or (input_storage or {}).get("error")) else "ok",
             "polling": polling,
@@ -816,7 +851,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
                setup_observer=None, on_db_attached=None,
                library_path=None, refresh_library_on_start=False,
-               library_bundled_path=None, ghost=None) -> FastAPI:
+               library_bundled_path=None, ghost=None, protect_local_api=False,
+               local_port=None, community_account=None, community_sync=None) -> FastAPI:
     # `library_bundled_path` overrides the BUNDLED snapshot the library falls
     # back to (None = the shipped one). Since round 33 every fitted star row
     # in the library becomes a sheet-fitted rank standard at load, so a test
@@ -846,7 +882,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     monitor = _create_monitor(poller, replay)
     lifespan = _create_lifespan(poller, service, replay, monitor, db_retry,
                                 refresh_library_on_start, on_db_attached, capture_layer,
-                                ghost)
+                                ghost, community_account, community_sync)
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
     _mount_ui_routes(app, broadcaster)
     _mount_library_routes(app, service, library_path, library_bundled_path,
@@ -856,7 +892,11 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                            compilation, updater, mode_path, setup_observer)
     from sm64_events.server.ghost_api import mount_ghost_routes
     mount_ghost_routes(app, session=ghost)
+    from sm64_events.server.community_api import create_community_router
+    app.include_router(create_community_router(community_account))
     _mount_controls(app, poller, replay)
     _mount_diagnostics(app, poller, broadcaster, service, monitor)
     _mount_events(app, poller, broadcaster, debug_hooks)
+    from sm64_events.server.local_access import mount_local_access
+    mount_local_access(app, port=local_port or server_port(), protected=protect_local_api)
     return app

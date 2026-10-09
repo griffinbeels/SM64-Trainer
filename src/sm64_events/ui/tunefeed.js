@@ -1,3 +1,4 @@
+import { localFetch } from "/ui/api.js";
 // src/sm64_events/ui/tunefeed.js — the feed & disclosure inspector, served at
 // /ui/tunefeed.html.
 //
@@ -121,7 +122,7 @@ function Inspector() {
   async function saveToRepo() {
     setStatus({ kind: "busy", text: "Saving..." });
     try {
-      const response = await fetch("/api/tuning/feed", {
+      const response = await localFetch("/api/tuning/feed", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ values }),
       });

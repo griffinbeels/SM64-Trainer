@@ -1,3 +1,4 @@
+import { localFetch } from "/ui/api.js";
 // src/sm64_events/ui/tune.js — the climb tuning inspector, served at
 // /ui/tune.html.
 //
@@ -226,7 +227,7 @@ function Inspector() {
   async function saveToRepo() {
     setStatus({ kind: "busy", text: "Saving..." });
     try {
-      const response = await fetch("/api/tuning/climb", {
+      const response = await localFetch("/api/tuning/climb", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ values }),
       });

@@ -54,7 +54,7 @@ class RivalProvider:
 
 
 class Rivals:
-    def __init__(self, tracker, population, native, version_of, *, source_of=lambda:None):
+    def __init__(self, tracker, population, native, version_of, *, source_of=lambda:None, community=None):
         self.tracker, self.population, self.native = tracker, population, native
         self.version_of = version_of
         self.source_of = source_of
@@ -75,6 +75,8 @@ class Rivals:
         self.prepared_key = None
         self.prepared_answer = None
         self.sharing = None
+        from sm64_events.ghost.community_rivals import CommunityRivals
+        self.community = CommunityRivals(community, population)
 
     def identity_for(self, target, *, version=None):
         ranks = self.tracker.ranks
@@ -101,15 +103,16 @@ class Rivals:
 
     def _update_identity(self, target, controls, changed_target):
         identity = self.identity_for(target)
-        changed_scope = self.identity is not None and identity is not None and self.identity.scope!=identity.scope
-        if changed_scope:
+        changed_identity = self.identity != identity
+        if changed_identity:
             self.rows, self.pb = (),None
             self.fingerprint = self.prepared_key = None
             self.manual = False
+            self.community.downloading = False
         self.identity = identity
-        if changed_target or changed_scope:
+        if changed_target or changed_identity:
             self.native.reconcile(enabled=False,target=self.native_target(target),controls=controls)
-        return changed_scope
+        return changed_identity
 
     def _key(self, target):
         if self.scope_for(target)=="overall":
@@ -274,6 +277,7 @@ class Rivals:
             return {"available":False,"reason":"unknown_rom" if target else "no_target",
                     "reason_text":self.status,"ghosts":[]}
         self._migrate_pins(target)
+        self._request_community(enabled, identity, target)
         source = self.source_of()
         stamp = (id(self.loaded_db),identity,enabled,source,controls["hue_degrees"],getattr(self.population,"generation",None),
                  getattr(self.tracker.ranks,"calibration_revision",None),
@@ -287,18 +291,20 @@ class Rivals:
                 strategy=identity.strategy if identity.scope=="strategy" else None)
             ranked = rank_recordings(records,self.tracker.ranks,identity)
             pins = self.pins.get(self._key(target),{})
-            own_player = self.tracker.db.get_state("ghost_player_id",None)
+            owners = self._owned_players()
             simulation = self._simulation()
             fresh_climb = simulation and simulation.get("zero_practice") is True
             # Explicit chosen rivals remain choices. Automatic slots never
             # use our own runs. The full-range developer climb also retires
             # beaten timings, including ones within the same subdivision.
             ranked = tuple(row for row in ranked if row["id"] in pins.values() or (
-                row["player_id"] != own_player and (
+                row["player_id"] not in owners and (
                     not fresh_climb or not pb or row["frames"] < pb["frames"])))
             private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
-            self.rows = select_rivals((*ranked,*private),pb,self.options,pins,
-                                      self.rows if self.preserve_slots else (),scope=identity.scope)
+            desired = select_rivals((*ranked,*private),pb,self.options,pins,
+                                    self.rows if self.preserve_slots else (),scope=identity.scope,
+                                    allow_same_rank=self.community.complete(identity))
+            self.rows = self.community.stage(desired, self.rows)
             self.preserve_slots = False
             self.pb = pb
             ghosts = [ColoredGhost(row["ghost"],row["hue_degrees"]) for row in self.rows if row.get("ghost") is not None]
@@ -331,6 +337,15 @@ class Rivals:
                 self.pb = {**self.pb,"available":playback["available"],
                            "reason_text":playback.get("reason_text")}
 
+    def _request_community(self, enabled, identity, target):
+        if enabled and self.community.sync is not None:
+            basis = saved_pb_basis(self.tracker.db, self.tracker.ranks, identity)
+            self.community.request(self.tracker.ranks, identity, basis, self.options, self.pins.get(self._key(target), {}))
+
+    def _owned_players(self):
+        own = self.tracker.db.get_state('ghost_player_id', None)
+        return self.population.owned_player_ids(own) if hasattr(self.population, 'owned_player_ids') else {own}
+
     def payload(self):
         native = self.native.state()
         if native.get("active_generation")==self.generation:
@@ -341,7 +356,9 @@ class Rivals:
                 "rows":[wire(row) for row in self.rows],
                 "pb":wire(self.pb) if self.pb else None,
                 "strategy_name":self.target.get("strat") or "Standard" if self.target else None,
-                "status":self.status if native.get("prepared_generation")==self.generation else None,
+                "coverage": self.community.coverage(self.identity) if self.identity is not None else None,
+                "status": self.community.status(self.identity) or (
+                    self.status if native.get("prepared_generation")==self.generation else None),
                 "generation":self.generation,"manual":self.manual}
 
     def search(self, target, player, cursor=None, *, scope=None):

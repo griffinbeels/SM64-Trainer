@@ -1,0 +1,137 @@
+"""Entry-point contracts around community IO; all data and accounts are fixtures."""
+import logging
+from dataclasses import replace
+from types import SimpleNamespace
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from test_ghost_adaptive import IDENTITY, Standards, recording
+from test_ghost_population import recorded
+from sm64_events.ghost.adaptive import checked_options, rank_frames, rank_recordings
+from sm64_events.ghost.community_catalog import match_windows, model_cutoffs
+from sm64_events.ghost.community_rivals import CommunityRivals
+from sm64_events.ghost.population import LocalPopulation
+from sm64_events.ghost.rival_recording import PopulationRecorder
+from sm64_events.server.community_api import create_community_router
+from sm64_events.server.local_access import HEADER, OAuthAccessFilter, mount_local_access
+
+
+class Account:
+    def __init__(self):
+        self.status = 'signed_out'
+        self.cancelled = []
+        self.pending = None
+
+    def snapshot(self):
+        return {'enabled': True, 'authenticated': self.status != 'signed_out', 'status': self.status}
+
+    async def begin_sign_in(self, provider):
+        self.pending = 'attempt', 'expected-state'
+        return {'attempt_id': 'attempt', 'url': 'https://community.example/auth/start'}
+
+    def cancel_sign_in(self, identifier):
+        self.cancelled.append(identifier)
+        self.pending = None
+
+    async def complete_sign_in(self, identifier, code, state):
+        if self.pending != (identifier, state):
+            raise ValueError('Sensitive provider details must not be forwarded.')
+        self.pending = None
+        self.status = 'new'
+
+
+def test_hosted_oauth_return_reaches_state_validation_without_opening_other_routes():
+    account = Account()
+    app = FastAPI()
+    app.include_router(create_community_router(account))
+    mount_local_access(app, port=8072)
+    navigation = {'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document'}
+    with TestClient(app, base_url='http://127.0.0.1:8072') as client:
+        token = client.get('/api/local-access').json()['request_token']
+        assert client.post('/api/community/auth/start', json={'provider': 'google'}, headers={HEADER: token}).status_code == 200
+        assert client.get('/api/local-access', headers=navigation).status_code == 403
+        wrong = client.get('/api/community/auth/callback?code=one&state=wrong', headers=navigation)
+        assert wrong.status_code == 400 and 'Sensitive' not in wrong.text
+        assert account.status == 'signed_out' and account.pending
+        assert client.get('/api/community/auth/callback?code=one&state=expected-state', headers={**navigation, 'Host': 'attacker.example:8072'}).status_code == 403
+        result = client.get('/api/community/auth/callback?code=one&state=expected-state', headers=navigation)
+        assert result.status_code == 200 and result.headers['cache-control'] == 'no-store'
+        assert 'expected-state' not in result.text and account.status == 'new'
+        assert client.get('/api/community/auth/callback?code=one&state=expected-state', headers=navigation).status_code == 400
+
+
+def test_oauth_access_log_drops_return_query_before_formatting():
+    record = logging.LogRecord('uvicorn.access', logging.INFO, '', 0, '%s - "%s %s HTTP/%s" %d',
+                               ('loopback', 'GET', '/api/community/auth/callback?code=secret-code&state=private-state', '1.1', 200), None)
+    assert OAuthAccessFilter().filter(record)
+    assert 'secret-code' not in record.getMessage() and 'private-state' not in record.getMessage()
+
+
+@pytest.mark.parametrize('scope', ['strategy', 'overall'])
+def test_catalog_bins_have_the_same_integer_boundaries_as_native_rank_selection(scope):
+    ranks = Standards()
+    identity = replace(IDENTITY, scope=scope)
+    model = ranks.overall_curve('star:2:1', 'us') if scope == 'overall' else ranks.ladder_cs('star:2:1', 'Standard', 'us')
+    bins = model_cutoffs(model, scope)
+    for row in bins:
+        assert rank_frames(ranks, identity, row['frames'])['step'] >= row['step']
+        if row['frames'] < 100000:
+            assert rank_frames(ranks, identity, row['frames'] + 1)['step'] < row['step']
+    pb = {**rank_frames(ranks, identity, 600), 'frames': 600}
+    windows = match_windows(ranks, identity, pb, checked_options({}))
+    assert any(low <= 600 <= high for low, high in windows)
+
+
+def test_remote_structural_validation_preserves_unverified_provenance():
+    row = recording('remote', certified=False, provenance='community-unverified', structurally_valid=True)
+    ranked = rank_recordings([row], Standards(), IDENTITY)
+    assert len(ranked) == 1 and ranked[0]['certified'] is False
+    assert ranked[0]['provenance'] == 'community-unverified'
+    assert not rank_recordings([{**row, 'structurally_valid': False}], Standards(), IDENTITY)
+
+
+def test_downloads_do_not_displace_playable_rivals_or_hold_up_private_choices():
+    class Sync:
+        requested = None
+        def request_assets(self, values): self.requested = values
+    sync = Sync()
+    population = SimpleNamespace(is_ready=lambda key: key == 'old')
+    staging = CommunityRivals(sync, population)
+    old = {'id': 'old', 'slot': 0, 'provenance': 'community-unverified'}
+    new = {'id': 'new', 'slot': 0, 'provenance': 'community-unverified'}
+    private = {'id': 'private', 'slot': 1, 'manual_only': True}
+    assert staging.stage((new, private), (old,)) == (old, private)
+    assert sync.requested == ('new',) and staging.downloading
+    population.is_ready = lambda key: True
+    assert staging.stage((new, private), (old,)) == (new, private)
+    assert not staging.downloading
+
+
+def test_cloud_offer_precedes_independent_local_winner_skip(tmp_path):
+    run, replay, path = recorded(tmp_path)
+    original = path.read_bytes()
+    population = LocalPopulation(tmp_path / 'population')
+    population.accept_verified(run, replay, player_id='local', player_name='You', clock='igt', game_version='us', full_start=True)
+    class Database:
+        def get_state(self, key, default): return 'local' if key == 'ghost_player_id' else default
+    class Sync:
+        account = SimpleNamespace(snapshot=lambda: {'sharing': True, 'status': 'active'})
+        offers = []
+        def offer_source(self, value): self.offers.append(value)
+    sync = Sync()
+    recorder = PopulationRecorder(population, replay, SimpleNamespace(db=Database(), ranks=Standards()), lambda run: IDENTITY, community=sync)
+    assert recorder._admit(run) is False
+    assert len(sync.offers) == 1 and sync.offers[0]['frames'] == run.igt_frames
+    assert path.read_bytes() == original
+    population.close()
+
+
+def test_offline_beta_is_explicit_and_partial_cloud_configuration_is_refused():
+    from sm64_events.core.build_channel import parse_metadata
+    value = {'schema': 1, 'channel': 'beta', 'build_id': 'local-test'}
+    build = parse_metadata(value)
+    assert build.channel == 'beta' and not build.community_url and not build.updates_enabled
+    with pytest.raises(ValueError, match='all four'):
+        parse_metadata({**value, 'community_url': 'https://community.example'})
