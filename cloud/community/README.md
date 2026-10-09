@@ -179,10 +179,11 @@ proof of Free Workers' 10-ms CPU fit. Measure D1 rows read/written including
 indexes for pools/search/publishing/recovery/identity deletion at proposed load.
 Exercise races/crash recovery against actual staging D1/R2; warm global named
 cache exports and verify withdrawal/name revocation. Complete real Discord,
-Google, email signup/recovery and consent through packaged beta desktop callback.
+Google, Twitch and consent through the packaged beta desktop callback. Email
+signup/recovery needs a separately configured and exercised delivery service.
 Check wrong state/client/redirect, ID-token rejection, Access admission/reclaim,
 automatic Auth deletion, operator/policies, native timestamps/runtime disclosures
-and absence of secret logs. Keep disabled until evidence exists. Local fixtures
+and absence of secret logs. Keep friend access closed until evidence exists. Local fixtures
 do not prove real providers, cross-datacenter cache behavior or deployed CPU.
 
 ## Opened primary sources and unchanged assets
