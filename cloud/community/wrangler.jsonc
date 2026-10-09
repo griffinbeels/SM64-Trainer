@@ -1,0 +1,67 @@
+{
+  "name": "sm64-community-beta",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-08",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "cache": {"enabled": false},
+  "exports": {
+    "default": {"type":"worker","cache":{"enabled":false}},
+    "MetadataCache": {"type":"worker","cache":{"enabled":true}},
+    "AssetCache": {"type":"worker","cache":{"enabled":true}}
+  },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/auth/*"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "community",
+      "database_id": "REPLACE_WITH_APPROVED_STAGING_D1_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "GHOSTS",
+      "bucket_name": "replace-with-approved-private-staging-bucket"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "BURST",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/15 * * * *"
+    ]
+  },
+  "vars": {
+    "SERVICE_ENABLED": "false",
+    "SUPABASE_URL": "https://REPLACE.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "REPLACE_PUBLIC_KEY",
+    "OAUTH_CLIENT_ID": "REPLACE_PUBLIC_CLIENT_ID",
+    "NATIVE_CALLBACK": "http://127.0.0.1:8072/api/community/auth/callback",
+    "ACCESS_ISSUER": "https://REPLACE.cloudflareaccess.com",
+    "ACCESS_AUD": "REPLACE_ACCESS_APP_AUD",
+    "ADMIN_EMAILS": "",
+    "TERMS_VERSION": "beta-1",
+    "PRIVACY_VERSION": "beta-1",
+    "OPERATOR_NAME": "",
+    "OPERATOR_CONTACT": "",
+    "POLICY_URL": "",
+    "CATALOG_GENERATION": ""
+  }
+}

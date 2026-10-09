@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SM64 Trainer Beta sign in</title><link rel="stylesheet" href="/portal.css"></head><body><main>
+<h1>SM64 Trainer Beta</h1><p id="status" role="status">Loading your sign-in request…</p>
+<section id="login" hidden><p>Your login proves ownership of your account. Community recordings remain unverified.</p>
+<button id="discord" class="provider discord" type="button"><img src="/discord-clyde-white.svg" alt="">Continue with Discord</button><button id="google" class="provider google" type="button"><img src="/google-g.png" alt="">Continue with Google</button>
+<form id="email-form"><label>Email <input id="email" type="email" autocomplete="email" required maxlength="254"></label><label>Password <input id="password" type="password" autocomplete="current-password" minlength="8" maxlength="256" required></label>
+<button type="submit">Sign in with email</button><button id="signup" type="button">Create email account</button><button id="recover" type="button">Recover password</button></form></section>
+<section id="consent" hidden><h2>Allow this trainer to sign in?</h2><p id="permissions"></p><p>Only a one-use authorization code returns to the trainer. Your browser login stays with the managed authentication service.</p><button id="approve" type="button">Allow sign in</button><button id="deny" type="button">Cancel</button></section>
+<section id="recovery" hidden><form id="password-form"><label>New password <input id="new-password" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></label><button type="submit">Save password</button></form></section>
+<p><a id="policy">Terms and privacy notice</a></p></main><script type="module" src="/portal.js"></script></body></html>

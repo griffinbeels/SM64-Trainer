@@ -1,0 +1,5 @@
+node_modules/
+.wrangler/
+public/portal.js
+.dev.vars
+coverage/
