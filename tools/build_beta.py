@@ -1,4 +1,4 @@
-"""Build a private app-only ZIP; never invoke bootstrap, releases or GitHub.
+"""Build a self-contained private beta installer; never invoke releases or GitHub.
 
     python tools/build_beta.py --config <public-beta-config.json> [--ffmpeg <exe>]
     python tools/build_beta.py --config <public-beta-config.json> --check
@@ -27,9 +27,11 @@ from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_F
 from build_exe import COLLECT, SEP, _source_date_epoch, app_args, needs_reexec  # noqa: E402
 from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import ApprovedCollection, COLLECTION_NAME, matches, review_collection  # noqa: E402
+from sm64_events.bootstrap.beta_payload import append_payload  # noqa: E402
 
 DIST = REPO / "dist" / "private-beta"
 WORK = REPO / "build" / "private-beta"
+SEED_DESCRIPTOR = "beta-ghost-seed.json"
 _FORBIDDEN_NAMES = {"tracker.db", "tracker.lock", "server.pid", "window.json",
                     "update_state.json", "capture_layer.json", "replay_settings.json",
                     "ui_log.jsonl", "library_adoptions.json", "tracker_mode.json"}
@@ -59,8 +61,9 @@ Use your invited staging account for community testing. Signing in and sharing
 are optional; practice works offline. Sheet imports start unchecked.
 New accounts share their best ghosts automatically after consent. You can turn
 sharing off in Settings; existing shared ghosts can be removed there too.
-Public app updates are disabled. Replace the entire extracted application
-folder with a new beta ZIP when provided; your separate beta profile survives.
+Public app updates are disabled. Run the next private installer when provided;
+your separate beta profile survives. Portable ZIP users can replace the whole
+extracted application folder instead.
 Never replace the _internal folder while this beta is running.
 """
 
@@ -94,6 +97,14 @@ def beta_args(ffmpeg: str, metadata_path: Path, *, dist: Path = DIST,
                     distpath=dist, workpath=work / "pyinstaller", specpath=work / "spec")
 
 
+def installer_args(*, work: Path = WORK) -> list[str]:
+    """Small offline stub; the app ZIP is appended after PyInstaller completes."""
+    return [str(REPO / "beta_installer_entry.py"), "--name", "SM64TrainerBetaSetup",
+            "--onefile", "--windowed", "--clean", "--noconfirm", "--paths", str(REPO / "src"),
+            "--icon", str(REPO / "assets" / "ukiki.ico"), "--distpath", str(work / "installer"),
+            "--workpath", str(work / "installer-work"), "--specpath", str(work / "installer-spec")]
+
+
 def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedCollection | None = None) -> None:
     """Refuse incomplete or contaminated outputs before producing a friend ZIP."""
     if build.channel != "beta":
@@ -112,6 +123,13 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
             raise RuntimeError(f"beta artifact is missing: {path.relative_to(folder)}")
     if read_metadata(internal / CONFIG_FILENAME) != build:
         raise RuntimeError("packaged beta metadata does not match the requested build")
+    if ghosts is not None:
+        descriptor = internal / SEED_DESCRIPTOR
+        expected = {"schema": 1, "file": COLLECTION_NAME, "author": "griffman1212",
+                    "sha256": ghosts.sha256, "count": ghosts.count}
+        if (not descriptor.is_file() or descriptor.stat().st_size > 4096
+                or json.loads(descriptor.read_text(encoding="utf-8")) != expected):
+            raise RuntimeError("packaged beta ghost seed does not match the reviewed collection")
     for path in folder.rglob("*"):
         relative = path.relative_to(folder)
         lowered = {part.lower() for part in relative.parts}
@@ -134,12 +152,15 @@ def package_beta(folder: Path, build: BuildChannel, destination: Path, *, ghosts
         if not matches(ghosts.source, ghosts):
             raise RuntimeError("The approved ghost collection changed before packaging.")
         shutil.copyfile(ghosts.source, folder / COLLECTION_NAME)
+        (folder / "_internal" / SEED_DESCRIPTOR).write_text(json.dumps({
+            "schema": 1, "file": COLLECTION_NAME, "author": "griffman1212",
+            "sha256": ghosts.sha256, "count": ghosts.count}, sort_keys=True) + "\n", encoding="utf-8")
     validate_artifact(folder, build, ghosts=ghosts)
     readme = README
     if ghosts is not None:
         readme += (f"\nIncluded: {ghosts.count} legitimate recordings credited to griffman1212.\n"
-                   f"In Ghost Library, choose Import and select {COLLECTION_NAME} beside this file.\n"
-                   "Importing adds ghosts to race; it does not change your PBs or upload them.\n"
+                   "These recordings are available automatically as local rivals.\n"
+                   "They do not change your PBs or upload as your own recordings.\n"
                    "Some historical recordings have unknown ROM or inputs; these remain unknown.\n")
     if not build.community_url:
         readme = ('OFFLINE BETA: community sign-in and downloads are not configured in this ZIP.\n'
@@ -157,10 +178,18 @@ def package_beta(folder: Path, build: BuildChannel, destination: Path, *, ghosts
     return archive
 
 
+def package_installer(stub: Path, archive: Path, build: BuildChannel, destination: Path) -> Path:
+    destination.mkdir(parents=True, exist_ok=True)
+    executable = destination / f"{BETA_APP_DIR}-{build.build_id}.exe"
+    digest = append_payload(stub, archive, executable)
+    executable.with_suffix(".exe.sha256").write_text(f"{digest}  {executable.name}\n", encoding="utf-8")
+    return executable
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True,
-                        help="explicit public beta metadata (not an environment file)")
+                        help="explicit packaged beta settings (not an environment file)")
     parser.add_argument("--ffmpeg", help="existing ffmpeg.exe; defaults to PATH")
     parser.add_argument("--ghosts", type=Path, help="explicit curated griffman1212 collection to include")
     parser.add_argument("--check", action="store_true", help="check prerequisites without building")
@@ -188,7 +217,9 @@ def main(argv: list[str] | None = None) -> int:
         import PyInstaller.__main__ as pyi
         pyi.run(beta_args(ffmpeg, metadata))
         archive = package_beta(DIST / BETA_APP_DIR, build, DIST, ghosts=ghosts)
-        print(f"Private beta ZIP: {archive}\nSHA-256: {archive}.sha256")
+        pyi.run(installer_args())
+        executable = package_installer(WORK / "installer" / "SM64TrainerBetaSetup.exe", archive, build, DIST)
+        print(f"Private beta installer: {executable}\nSHA-256: {executable}.sha256\nPortable ZIP: {archive}")
         return 0
     except (OSError, RuntimeError, ValueError) as failure:
         # Config errors deliberately do not echo submitted values.

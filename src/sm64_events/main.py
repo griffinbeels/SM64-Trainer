@@ -438,8 +438,11 @@ def _comparison_services(replay, service, broadcaster, codec, replay_cfg):
 def _local_ghost_population(service):
     from sm64_events.core.paths import ghost_population_root
     from sm64_events.ghost.population import LocalPopulation
+    from sm64_events.ghost.bundled_beta import with_bundled_beta
     root = ghost_population_root()
-    return LocalPopulation(root, definitions=lambda: service.db.segment_defs() if service.db else [])
+    definitions = lambda: service.db.segment_defs() if service.db else []
+    local = LocalPopulation(root, definitions=definitions)
+    return with_bundled_beta(local, cache=data_root() / 'data' / 'bundled_ghosts', definitions=definitions)
 
 
 def _community_population(service):
@@ -451,7 +454,8 @@ def _community_population(service):
         return _local_ghost_population(service), None, None
     config = CommunityConfig(public_url=build.community_url, supabase_url=build.supabase_url,
         publishable_key=build.supabase_publishable_key, oauth_client_id=build.oauth_client_id,
-        channel=build.channel, enabled=True)
+        channel=build.channel, enabled=True,
+        **({'friend_invitation': build.friend_invitation} if build.friend_invitation else {}))
     account = CommunityAccount(config)
     population = CachedPopulation(_local_ghost_population(service),
         root=data_root()/'data'/'community_cache', account=account,

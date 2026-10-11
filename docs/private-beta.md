@@ -6,12 +6,15 @@ configured fields are refused. An offline artifact proves packaging and local
 practice only; community testing needs the configured service and provider checks
 below. Do not package placeholder service addresses.
 
-A private beta is a complete app ZIP distributed directly to invited testers.
-It does not create a GitHub release or use the public app's updater/bootstrap.
+A private beta is one complete installer EXE distributed directly to a tester.
+It contains the application, native plugins, FFmpeg and reviewed author ghosts.
+It installs once without downloading application files, creates a separate beta
+shortcut and opens the shared setup/account flow. It does not create a GitHub
+release or use the public app's updater/bootstrap.
 The [community protocol](community-protocol.md) owns its account and sharing
 contracts. A successful local build does not establish deployed login or sharing.
 Follow [the staging account guide](../cloud/community/SETUP.md) to configure
-Cloudflare, Supabase, Discord, Google and Twitch before creating a cloud-enabled ZIP.
+Cloudflare, Supabase, Discord, Google and Twitch before creating a cloud-enabled installer.
 
 ## Build identity and data
 
@@ -74,7 +77,14 @@ Only HTTPS origins without user information, query strings or fragments are
 accepted. The Supabase value must be a publishable key; secret keys and arbitrary
 extra fields are rejected. Use a registered public beta OAuth client with exact
 callback `http://127.0.0.1:8072/api/community/auth/callback`. No service credentials,
-tokens, personal data or developer environment files belong in this JSON.
+account tokens, personal data or developer environment files belong in this JSON.
+
+An optional `friend_invitation` field holds a 43-character base64url one-use beta
+invitation. It binds to one authenticated account at the service, with a server
+expiry. It is carried by the private build so the friend can sign in without a
+second invitation step. It is not a Cloudflare or Supabase operator credential.
+Give each friend a separately registered invitation/build; do not publish the
+capability or include its value in diagnostics or build receipts.
 
 ```powershell
 python tools/build_beta.py --config C:/private/public-beta-config.json --check
@@ -90,19 +100,37 @@ collections, altered bytes, raw databases and recording folders remain refused.
 Human provenance comes from the maintainer's source audit; structural validation
 cannot certify how a recording was played.
 
-Testers import this collection through Ghost Library → Import. It adds local
-ghosts to race without changing PBs or publishing imported recordings. It is
-not a simulated population or automatic cloud enrollment. Historical unknown
-ROM versions and inputs remain unknown.
+The builder writes an immutable SHA-256/count/author descriptor for this exact
+collection. A frozen beta reads its bounded metadata as an additional local
+population, so these ghosts become available automatically. Only selected clips
+are extracted/decoded into a separate 64 MiB cache; the app does not bulk import
+all recordings on first launch or write practice/PB entries. It never publishes
+historical author recordings as the tester's own runs. The local provider keeps
+`source_status=bundled-author-recording`, `certified=false`, `full_start=null`
+and the original `recorded_game_version` (including unknown). A current-ROM
+query supplies playback compatibility context, not a new recording certificate.
+Known mismatching ROMs stay excluded. Structural packaging checks cannot prove
+honest gameplay. Controller frames without captured inputs remain unknown.
 
-The first command is a read-only prerequisite check. The second builds only the
+The first command is a read-only prerequisite check. The second builds the
 windowed directory application using the same assets/dependency collection as
 the stable builder. Outputs are isolated under `dist/private-beta/`; PyInstaller
 work/config/spec files stay under `build/private-beta/`. The release version is
 unchanged. The public build identifier distinguishes private test artifacts.
 
-Successful packaging produces `SM64TrainerBeta-<build_id>.zip` and its `.sha256`
-receipt. The artifact gate checks required UI/seed/native/FFmpeg/config files,
+Successful packaging produces `SM64TrainerBeta-<build_id>.exe` and its `.sha256`
+receipt, plus a portable ZIP and checksum as an alternative. A small PyInstaller
+stub carries the verified app ZIP as an appended payload. The application is
+extracted into `%LOCALAPPDATA%/Programs/SM64TrainerBeta` once; normal launches
+use the installed app, so the full runtime is not unpacked every time.
+The installer streams SHA-256 verification before changing program files,
+rejects unsafe Windows ZIP paths/aliases/links, bounds files and expanded size,
+and stages a sibling directory before the atomic swap. A kernel lock serializes
+installers; a journal restores the previous installation after interruption.
+Rerunning the same installer reuses a complete existing installation. The app's
+separate practice profile survives repair and replacement.
+
+The artifact gate checks required UI/seed/native/FFmpeg/config files,
 rejects private data, hidden files and public executables, tests ZIP integrity
 and hashes the complete archive. It writes `README-BETA.txt` into the folder.
 Neither the public bootstrap nor release publishing is called.
@@ -112,9 +140,23 @@ remain rejected; all private-data and path-containment checks still apply.
 
 ## Tester handoff and acceptance
 
-Send the ZIP and checksum receipt through the chosen private distribution path.
-Testers extract the whole ZIP into a writable folder and keep the EXE and entire
-`_internal` folder together. Running the beta does not install the public app.
+Send the installer EXE and checksum receipt through the private distribution
+path. The tester double-clicks that one file, signs in, and follows the existing
+Project64/Usamune setup. The beta shortcut opens subsequent sessions. The trainer
+includes its renderer/wrapper/encoder DLLs and installs the renderer and wrapper
+through the existing explicit setup action, while Project64 is closed. The tester
+supplies their supported Project64 and practice ROM; those files are not bundled.
+Actual ROM and moving game/input/picture evidence still gates completion.
+
+If Windows lacks WebView2 or a usable .NET engine, the beta opens the same local
+UI in the default modern browser automatically. Its tray owns Show and Quit;
+closing a browser tab does not quit the recorder. No runtime download blocks
+offline practice. Stable desktop behavior remains unchanged. Microsoft's
+[WebView2 distribution guide](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)
+describes the per-user/per-machine registry detection used by this fallback.
+
+Portable users may still extract the whole ZIP into a writable folder and keep
+the EXE and `_internal` folder together. Running the beta does not install the public app.
 Practice remains available offline; community access requires an invited staging
 account and the applicable consent. New accounts disclose automatic sharing
 before consent and enable it on completion; existing choices survive renewal.
@@ -122,9 +164,9 @@ Sheet imports begin unchecked. Settings allows sharing to be disabled and
 explains that existing published ghosts remain until explicitly removed.
 Account names allow at most20 normalized Unicode characters and63 UTF-8 bytes.
 
-To replace a beta, close it and replace the entire extracted application folder
-with the next beta ZIP. Its separate LocalAppData profile survives. Never replace
-individual runtime files while the application is running.
+To replace a beta, close it and run the next private installer. Portable users
+replace the entire extracted folder instead. The separate LocalAppData profile
+survives. Never replace individual runtime files while the app is running.
 
 Before handoff, run the packaged executable's maintainer probe against a fresh
 absolute report path outside any application profile:

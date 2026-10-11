@@ -1,6 +1,7 @@
 """Packaged beta authority protects public profile/update side effects."""
 import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -18,6 +19,19 @@ def metadata():
         "supabase_publishable_key": "sb_publishable_testpublickey",
         "oauth_client_id": "11111111-2222-4333-8444-555555555555",
     }
+
+
+def test_private_friend_invitation_is_bounded_and_not_exposed_in_repr():
+    capability = "a" * 43
+    build = build_channel.parse_metadata({**metadata(), "friend_invitation": capability})
+    assert build.friend_invitation == capability and build.metadata()["friend_invitation"] == capability
+    assert capability not in repr(build)
+    for invalid in ("a" * 42, "a" * 44, "=" * 43, 123):
+        with pytest.raises(ValueError) as failure:
+            build_channel.parse_metadata({**metadata(), "friend_invitation": invalid})
+        assert str(invalid) not in str(failure.value)
+    with pytest.raises(ValueError):
+        build_channel.parse_metadata({"schema": 1, "channel": "stable", "friend_invitation": capability})
 
 
 @pytest.fixture
@@ -109,6 +123,20 @@ def test_beta_never_migrates_or_changes_public_data(beta, monkeypatch, tmp_path)
     assert (tmp_path / "sm64_tracker" / "data" / "tracker.db").read_bytes() == b"sm64_tracker"
     assert (tmp_path / "SM64Trainer" / "data" / "tracker.db").read_bytes() == b"SM64Trainer"
     assert not (tmp_path / "SM64TrainerBeta").exists()
+
+
+def test_configured_community_beta_without_optional_invitation_constructs(beta, monkeypatch, tmp_path):
+    from sm64_events import community, main
+    local, cached, sync = object(), object(), object()
+    monkeypatch.setattr(main, "_local_ghost_population", lambda _service: local)
+    monkeypatch.setattr(main, "data_root", lambda: tmp_path)
+    monkeypatch.setattr(community, "CommunityAccount", lambda config: SimpleNamespace(config=config))
+    monkeypatch.setattr(community, "CachedPopulation", lambda *args, **kwargs: cached)
+    monkeypatch.setattr(community, "CommunitySync", lambda *args, **kwargs: sync)
+    population, account, worker = main._community_population(SimpleNamespace(db=None))
+    assert population is cached and worker is sync
+    assert account.config.enabled and account.config.public_url == beta.community_url
+    assert getattr(account.config, "friend_invitation", None) is None
 
 
 def test_beta_update_http_entry_points_have_no_network_files_threads_or_restart(beta, monkeypatch, tmp_path):
