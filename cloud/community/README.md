@@ -212,11 +212,10 @@ operator budgets accordingly; never change the approved billing plan implicitly.
 60 seconds for the pre-auth burst limit, and 300 seconds for storage/grant denials.
 The burst binding is per location and eventually consistent; exact D1 counters
 provide the accounting bound. [Cloudflare rate-limit binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/).
-Eight hours with a two-minute pool lease, four manual metadata renewals each ten
-minutes and an hourly catalog lease uses 440 calls (55/hour) before login,
-search, pin renewals and uploads. At 15-minute manual metadata renewals this is
-376 calls (47/hour). Keep the 500/day cap and make client renewal deliberate;
-outages must retain last-good playback and avoid retrying daily denials.
+The [client cadence fixture](../../docs/community-protocol.md) records the actual
+eight-hour request count with four chosen rivals and twenty uploads against the
+500/day account limit. Additional searches, target changes and failures consume
+budget. Outages retain last-good playback and avoid retrying daily denials.
 
 Kill switches: SERVICE_ENABLED=false disables the public gateway. Changing
 settings.enabled to zero denies new user/admin tickets. Maintenance can still

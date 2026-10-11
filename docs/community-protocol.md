@@ -54,8 +54,11 @@ checks; local fixtures do not prove them.
 existing behavior. Beta: `SM64TrainerBeta`, display `SM64 Trainer Beta`, separate
 LocalAppData profile, port8072, public updates disabled, no stable-data migration.
 Global recorder ownership and shared emulator installation metadata stay shared.
-Packaged metadata may contain only public community URL, Supabase project URL,
-publishable key and OAuth client ID; no service credentials or tokens.
+Packaged metadata contains public community URL, Supabase project URL,
+publishable key and OAuth client ID. A private friend build may also carry one
+single-use invitation capability. It is not an operator credential and is sent
+only after authenticated login; snapshots and diagnostics omit it. Keep that
+build private. No provider secrets or account refresh/access tokens are packaged.
 
 ## HTTP contracts
 
@@ -63,13 +66,17 @@ All `/v1` account/ghost responses are JSON with `v:1`; failures have a bounded
 `error:{code,message}`. Unknown fields/parameters, invalid types and unsupported
 versions fail. Remote authenticated responses are `Cache-Control: private,
 no-store`; private internal cached entries use only validated canonical keys.
-Every resource access reserves an exact account/global daily budget ticket,
-including cache hits. Burst limits shed traffic before expensive operations.
+Admitted account/ghost access reserves an exact account/global daily budget
+ticket, including cache hits. A separate fixed daily entry gate also bounds
+authenticated lookups before admission; its limits and rejected-request costs
+are specified in the [service contract](../cloud/community/README.md).
+Burst limits shed traffic before expensive operations.
 
 | Route | Contract |
 | --- | --- |
 | `GET /v1/config` | Public config:protocol/limits/policy versions, auth public fields, canonical catalog generation. No secrets. |
 | `GET /v1/account` | Token-free profile:uid,name,status (`new`,`active`,`rename_required`,`suspended`,`deleted`,`not_invited`),sharing,terms_version,privacy_version,sheet_runner,sheet_verified. |
+| `POST /v1/account/invitation` | Authenticated `{token}` one-use friend capability, stored as SHA-256 only; expiry, revocation and atomic membership cap apply. Same admitted owner can retry; an operator-revoked account cannot re-invite itself. Invalid/unavailable capability returns403 `invite_unavailable`. |
 | `PUT /v1/account` | Initial profile `{name,sharing,terms_version,privacy_version,sheet_runner:null|string}`; server requires current policies and invitation. No client owner/status/verification fields. |
 | `PUT /v1/account/name` | `{name}`; supports forced rename, retains data and consent. |
 | `PUT /v1/account/sharing` | `{enabled:bool}`; opt-out stops uploads; withdrawal is separate. |
@@ -158,6 +165,52 @@ synchronous `request_pool(identity,*,frame_windows,pinned_ids=())`,
 coalescing queue. Pool requests map frame windows to canonical server bins;
 cache keys never contain exact PB or unrelated local rank integers. Stop has
 bounded cancellation and joins owned work before replay/provider teardown.
+
+Automatic pool metadata refreshes at most every 120 seconds per canonical
+request. Chosen-rival metadata refreshes every ten minutes; its hard publication
+lease also expires after ten minutes offline. Logout and local withdrawal still
+clear the account view immediately. A fresh visibility response can reuse
+validated cached bytes only when both stored hashes match. Pin retention leases
+renew once per day or when their owner/IDs change; the server lease lasts seven
+days. Static catalog data stays cached for an hour, with `generation_changed`
+invalidating that lease before the next operation.
+
+The actual client cadence test covers eight hours with four chosen rivals,
+twenty two-call uploads and eight deliberate account-panel refreshes: 493
+ticketed Worker operations against the 500/day account limit. Public config
+reads and provider OAuth calls do not consume that account ticket. The UI's
+ten-second status polling reads local cached state. Additional searches,
+account-panel opens, target changes and failures consume the remaining budget;
+the test does not promise unlimited interaction under a fixed daily quota.
+
+HTTP streams have byte bounds and total deadlines (180 seconds for selected
+ghost assets, 120 seconds otherwise), in addition to idle read timeouts.
+Transient connection errors receive at most three immediate attempts with
+jitter. Rate limiting and exhaustion trigger an account-scoped cooldown using
+bounded `Retry-After`; they do not repeat three immediate requests. The worker
+retains at most 32 transiently failed source offers, coalesces each canonical
+bin to its fastest pending source and retries without another PB event. Grant
+and publication retries keep their mutation keys until the grant expires or
+catalog generation changes. An expired upload grant replaces its grant key
+before retry.
+
+Only a completed, certified own run with sharing enabled at attempt enqueue
+creates a durable upload intent. Its account UID and consent generation are
+captured before queue or preservation delay. The local outbox stores at most
+256 intents / 1 MiB of metadata and immutable retry keys, never tokens or another
+copy of the ghost. Normal app close preserves intents. Startup/login retries
+the same owner's fastest eligible run per canonical subdivision, admitting at
+most eight recovered winners per minute. Historical, imported and bundled
+recordings are never assigned to a new account.
+
+Explicit logout or disabling sharing durably cancels pending intents and blocks
+older qualification/recovery jobs. Disabling sharing takes effect locally before
+its remote call completes. Deleted or changed clips, unsupported catalog
+identities, capacity eviction or failed local storage can prevent retry; local
+PB/playback remains separate. One serial contribution task runs beside the
+practice IO task. Initial pool/assets run first, and a blocked upload does not
+delay later rival downloads. Their shared catalog refresh is deduplicated and
+retains its one-hour lease.
 
 Source offer is a dict: `{target,clock,game_version,strategy,frames,path,raw_sha256,
 full_start:true,valid:true}` prepared by existing native qualification off-thread.

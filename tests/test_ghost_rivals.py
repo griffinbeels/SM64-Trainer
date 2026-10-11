@@ -72,8 +72,9 @@ def test_scoped_clear_then_delete_previous_session_refreshes_real_pb_and_roster(
         assert tuple(row["id"] for row in rivals.rows) != before
         assert [row.id for row in db.attempts()] == [old.id]
         await service.delete_session(old.session_id)
-        assert rivals.pb is None and rivals.rows == ()
-        assert native.preparations[-1][1] == []
+        assert rivals.pb is None and len(rivals.rows) == 4
+        assert [row["frames"] for row in rivals.rows] == [500, 510, 520, 530]
+        assert len(native.preparations[-1][1]) == 4
         assert len(snapshots) == 2 and population.rows
 
     try:
@@ -133,6 +134,42 @@ def controller(tmp_path, monkeypatch):
     rivals.options.update(mode="fixed",min_step=0,max_step=44)
     rivals.refresh(TARGET,CONTROLS,enabled=True)
     return rivals,tracker,native,population,clock
+
+
+@pytest.mark.parametrize("cloud_active", [False, True])
+def test_complete_historical_bundle_falls_back_offline_and_remains_manually_selectable(tmp_path, monkeypatch, cloud_active):
+    class Bundle(Population):
+        def __init__(self):
+            self.rows = [recording(f"{number:064x}", frames=600 + number * 20,
+                source_status="bundled-author-recording", player_id="bundled:griffman1212",
+                structurally_valid=True, certified=False, full_start=None, recorded_game_version=None)
+                for number in range(1, 6)]
+
+        def get(self, identifier):
+            return {**super().get(identifier), "game_version": None}
+
+        def coverage(self, _identity):
+            return {"complete": False, "generation": None}
+
+    tracker = SimpleNamespace(db=Database(tmp_path / "bundle.db"), ranks=Standards())
+    ghost = AttemptGhost(1, "star", "2-1", "Standard", 100, pb=True)
+    monkeypatch.setattr(module, "saved_pb_basis", lambda *_args: basis(step=44, frames=100, ghost=ghost))
+    native, population = Native(), Bundle()
+    sync = SimpleNamespace(account=SimpleNamespace(snapshot=lambda: {
+        "authenticated": True, "status": "active", "uid": "11111111-1111-4111-8111-111111111111"}),
+        last_error="network_unavailable", request_pool=lambda *_args, **_kwargs: None) if cloud_active else None
+    rivals = Rivals(tracker, population, native, lambda: "us", community=sync)
+    try:
+        rivals.refresh(TARGET, CONTROLS, enabled=True)
+        assert [row["frames"] for row in rivals.rows] == [620, 640, 660, 680]
+        prepared = native.preparations[-1][1]
+        assert len(prepared) == 5 and prepared[0].ghost is ghost
+        last = population.rows[-1]
+        checked = rivals.checked({"action": "add", "id": last["id"], "slot": 0}, TARGET)
+        assert checked == {"action": "add", "id": last["id"], "slot": 0}
+        assert population.get(last["id"])["game_version"] is None
+    finally:
+        tracker.db.close()
 
 
 def test_forced_reads_do_not_reprepare_identical_rosters(tmp_path,monkeypatch):

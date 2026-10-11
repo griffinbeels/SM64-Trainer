@@ -6,7 +6,7 @@ paths, logging, desktop imports or updater work can use stable defaults.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 import json
 from pathlib import Path
@@ -23,7 +23,7 @@ STABLE_PORT = 8064
 SOURCE_PORT = 8065
 BETA_PORT = 8072
 _PUBLIC_FIELDS = {"community_url", "supabase_url", "supabase_publishable_key", "oauth_client_id"}
-_FIELDS = {"schema", "channel", "build_id", *_PUBLIC_FIELDS}
+_FIELDS = {"schema", "channel", "build_id", "friend_invitation", *_PUBLIC_FIELDS}
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ class BuildChannel:
     supabase_url: str = ""
     supabase_publishable_key: str = ""
     oauth_client_id: str = ""
+    friend_invitation: str = field(default="", repr=False)
 
     @property
     def app_dir_name(self) -> str:
@@ -52,8 +53,15 @@ class BuildChannel:
         return self.channel == "stable"
 
     def metadata(self) -> dict:
-        """The complete public build file; no arbitrary extras are propagated."""
-        return {"schema": CONFIG_SCHEMA, **asdict(self)}
+        """Packaged settings, including an optional one-use private invitation.
+
+        This serialization is for the installer only. Diagnostics expose named
+        public fields directly; they must never serialize this capability.
+        """
+        value = {"schema": CONFIG_SCHEMA, **asdict(self)}
+        if not self.friend_invitation:
+            value.pop("friend_invitation")
+        return value
 
 
 def _https_origin(value: str, field: str) -> None:
@@ -82,11 +90,15 @@ def parse_metadata(value: object) -> BuildChannel:
         raise ValueError("build metadata fields must be bounded strings")
     build = BuildChannel(**fields)
     if build.channel == "stable":
-        if any(fields[name] for name in _PUBLIC_FIELDS):
+        if any(fields[name] for name in _PUBLIC_FIELDS) or build.friend_invitation:
             raise ValueError("stable build cannot carry private-beta service configuration")
         return build
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", build.build_id):
         raise ValueError("beta build_id must be a short filename-safe identifier")
+    if build.friend_invitation and not re.fullmatch(r"[A-Za-z0-9_-]{43}", build.friend_invitation):
+        raise ValueError("beta friend invitation must be a bounded one-use capability")
+    if build.friend_invitation and not all(fields[name] for name in _PUBLIC_FIELDS):
+        raise ValueError("beta friend invitation requires complete community configuration")
     if not any(fields[name] for name in _PUBLIC_FIELDS):
         return build  # An explicitly offline beta still has isolated paths and no public updates.
     if not all(fields[name] for name in _PUBLIC_FIELDS):

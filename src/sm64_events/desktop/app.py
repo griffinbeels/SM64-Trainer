@@ -5,13 +5,14 @@ window, with one-click restart. Runnable from source as
 import ctypes
 import logging
 import os
+import threading
 
 from sm64_events.core.logging_setup import configure_logging
 from sm64_events.core.paths import (APP_DISPLAY_NAME, data_root,
                                     instance_lock_path,
                                     migrate_legacy_data_dir, server_port)
 from sm64_events.core.relaunch import spawn_replacement, wait_port_free
-from sm64_events.desktop import single_instance, tray, window
+from sm64_events.desktop import beta_runtime, single_instance, tray, window
 from sm64_events.desktop.closeguard import ASK_PAGE_JS, CloseGuard, compression_active
 from sm64_events.storage.instance_lock import wait_lock_free
 from sm64_events.desktop.server_runner import ServerRunner
@@ -88,11 +89,13 @@ def main() -> None:
         return
 
     state = {"quit": False, "tray": None}
+    stopped = threading.Event()
 
     def quit_all():
         if state["quit"]:
             return
         state["quit"] = True
+        stopped.set()
         if state.get("guard") is not None:
             state["guard"].quitting = True   # the windows destroyed below are not asked
         runner.stop()
@@ -113,6 +116,18 @@ def main() -> None:
     app.state.request_shutdown = quit_all
     app.state.request_restart = do_restart
 
+    # A fresh beta machine can lack WebView2 or a usable Python.NET engine.
+    # The same server/onboarding remains usable through the default browser.
+    if beta_runtime.run_if_needed(url=f"http://127.0.0.1:{server_port()}/", tray=tray,
+                                  state=state, stopped=stopped, quit_all=quit_all, error=_error):
+        quit_all()
+        return
+
+    _run_native_desktop(state, quit_all)
+    quit_all()      # idempotent backstop for the normal close path
+
+
+def _run_native_desktop(state, quit_all):
     def ask_page() -> bool:
         win.show()   # a tray Quit can arrive with the window hidden
         return win.evaluate_js(ASK_PAGE_JS) is True
@@ -127,7 +142,6 @@ def main() -> None:
     tray.start(state["tray"])
 
     window.run()    # blocks until the window closes
-    quit_all()      # idempotent backstop for the normal close path
 
 
 def _windows():

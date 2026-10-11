@@ -1,5 +1,7 @@
 """Public-client OAuth and cached account state, independent of the game loop."""
 import asyncio
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 import secrets
 import threading
@@ -15,11 +17,23 @@ from .names import checked_name
 from .vault import RefreshTokenStore
 
 
-async def bounded_request(http, method, url, *, limit=2 << 20, **kwargs):
+def _retry_after(value):
+    """A bounded delay is safe to retain; never retain a response description."""
+    try:
+        delay = float(value) if str(value).strip().isdigit() else (
+            parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        return min(3600, max(1, delay))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+async def bounded_request(http, method, url, *, limit=2 << 20, deadline=120, **kwargs):
     """Bound actual streamed bytes; never surface an HTTP exception's token URL."""
     try:
         kwargs.pop("follow_redirects", None)
-        async with http.stream(method, url, follow_redirects=False, **kwargs) as response:
+        # httpx read timeouts reset for every chunk. A drip-fed response must
+        # also have an overall deadline so it cannot occupy the IO worker forever.
+        async with asyncio.timeout(deadline), http.stream(method, url, follow_redirects=False, **kwargs) as response:
             data = bytearray()
             async for part in response.aiter_bytes():
                 if len(data) + len(part) > limit:
@@ -32,7 +46,7 @@ async def bounded_request(http, method, url, *, limit=2 << 20, **kwargs):
                 headers.pop(name, None)
             result = httpx.Response(response.status_code, headers=headers,
                                     content=bytes(data), request=response.request)
-    except (httpx.HTTPError, OSError):
+    except (httpx.HTTPError, OSError, TimeoutError):
         raise CommunityError("network_unavailable") from None
     if not 200 <= result.status_code < 300:
         # Codes are allowlisted. Server descriptions and request representations
@@ -42,11 +56,12 @@ async def bounded_request(http, method, url, *, limit=2 << 20, **kwargs):
             candidate = result.json().get("error", {}).get("code")
             if candidate in {"not_invited", "rename_required", "suspended", "deleted", "unauthorized",
                              "name_unavailable", "policy_required", "consent_required", "rate_limited", "budget_exhausted",
-                             "unsupported_identity", "not_found", "grant_expired"}:
+                             "unsupported_identity", "not_found", "grant_expired", "upload_expired", "invite_unavailable", "generation_changed"}:
                 code = candidate
         except (ValueError, AttributeError, TypeError):
             pass
-        raise CommunityError(code, status=result.status_code)
+        raise CommunityError(code, status=result.status_code,
+                             retry_after=_retry_after(result.headers.get("Retry-After")))
     return result
 
 
@@ -100,10 +115,13 @@ class CommunityAccount:
         self._access = None
         self._expires = 0
         self._profile = None
+        self._sharing_disabled = False
+        self._sharing_epoch = 0
         self._provider = None
         self._policies = {}
         self._policies_until = 0
         self._error = None
+        self.on_contribution_cancel = None
 
     def snapshot(self):
         with self._lock:
@@ -111,6 +129,8 @@ class CommunityAccount:
                     "status": "signed_out", "sharing": False, "terms_version": None,
                     "privacy_version": None, **(self._profile or {}), "provider": self._provider,
                     **self._policies, **({"error": self._error} if self._error else {})}
+            if self._sharing_disabled:
+                snapshot["sharing"] = False
             if snapshot["status"] == "active" and any(
                     snapshot.get(kind + "_version_current") is not None and
                     snapshot.get(kind + "_version") != snapshot[kind + "_version_current"]
@@ -295,6 +315,12 @@ class CommunityAccount:
         epoch = self._epoch
         await self._public_config()
         value = _profile(await self.request_json("GET", "/v1/account"))
+        if value["status"] == "not_invited" and self.config.friend_invitation:
+            # The one-use build capability is submitted only after real OAuth
+            # authentication. It never enters snapshots, URLs or log messages.
+            await self.request_json("POST", "/v1/account/invitation",
+                                    json={"token": self.config.friend_invitation})
+            value = _profile(await self.request_json("GET", "/v1/account"))
         with self._lock:
             if epoch != self._epoch:
                 raise CommunityError("canceled")
@@ -327,20 +353,38 @@ class CommunityAccount:
     async def set_sharing(self, enabled):
         if type(enabled) is not bool:
             raise CommunityError("invalid_profile")
-        epoch = self._epoch
+        with self._lock:
+            epoch = self._epoch
+            self._sharing_epoch += 1
+            sharing_epoch = self._sharing_epoch
+        if not enabled:
+            with self._lock:
+                self._sharing_disabled = True
+                owner = (self._profile or {}).get("uid")
+                if self._profile is not None:
+                    self._profile = {**self._profile, "sharing": False}
+            if self.on_contribution_cancel is not None:
+                await self.on_contribution_cancel(owner)
+        if epoch != self._epoch or sharing_epoch != self._sharing_epoch:
+            raise CommunityError("canceled")
         value = _profile(await self.request_json("PUT", "/v1/account/sharing", json={"enabled": enabled}))
         with self._lock:
-            if epoch != self._epoch:
+            if epoch != self._epoch or sharing_epoch != self._sharing_epoch:
                 raise CommunityError("canceled")
             self._profile = value
+            self._sharing_disabled = not enabled
         return self.snapshot()
 
     async def sign_out(self):
+        owner = self.snapshot().get("uid")
         with self._lock:
             self._epoch += 1
             self._attempt = self._inflight = self._access = self._profile = self._provider = None
+            self._sharing_disabled = False
             self._expires = 0
             self._store.clear()
+        if self.on_contribution_cancel is not None:
+            await self.on_contribution_cancel(owner)
         return self.snapshot()
 
     async def close(self):

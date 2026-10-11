@@ -35,6 +35,8 @@ _NATIVES = (
     ("SM64GpuEncoderV1.dll", 0x8664),
 )
 _IMPORTS = (
+    ("sm64_events.ghost.bundled_beta", ("BundledPopulation", "with_bundled_beta")),
+    ("sm64_events.desktop.beta_runtime", ("run_if_needed",)),
     ("sm64_events.community.account", ("CommunityAccount",)),
     ("sm64_events.community.sync", ("CommunitySync",)),
     ("sm64_events.community.codec", ("encode", "decode")),

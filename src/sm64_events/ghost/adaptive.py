@@ -127,15 +127,23 @@ def _bounded(rows):
     return result
 
 
+def _bundled(row):
+    """Only the pinned beta provider assigns this separate historical source."""
+    return (row.get("source_status") == "bundled-author-recording"
+            and row.get("structurally_valid") is True and row.get("certified") is False
+            and row.get("full_start") is None
+            and row.get("recorded_game_version") in (None, "us", "jp"))
+
+
 def _admitted(row):
     """Community structural validation carries no honest-gameplay certificate."""
-    return (row.get('certified') is True or row.get('provenance') == 'community-unverified'
+    return (_bundled(row) or row.get('certified') is True or row.get('provenance') == 'community-unverified'
             and row.get('structurally_valid') is True)
 
 
 def _compatible(row, identity):
     return (isinstance(row, dict) and _admitted(row) and row.get("valid") is True
-            and row.get("full_start") is True
+            and (row.get("full_start") is True or _bundled(row))
             and (identity.scope == "overall" or row.get("strategy") == identity.strategy)
             and (row.get("kind"), row.get("entity_key"), row.get("clock"), row.get("game_version"))
             == (identity.kind, identity.entity_key, identity.clock, identity.game_version)
@@ -181,7 +189,7 @@ def _checked_pins(pins):
 
 def _ranked_row(row):
     return (isinstance(row, dict) and (row.get("manual_only") is True
-            or _admitted(row) and row.get("valid") is True and row.get("full_start") is True)
+            or _admitted(row) and row.get("valid") is True and (row.get("full_start") is True or _bundled(row)))
             and isinstance(row.get("id"), str)
             and type(row.get("frames")) is int and row["frames"] > 0
             and type(row.get("step")) is int and 0 <= row["step"] <= MAX_STEP
@@ -236,7 +244,8 @@ def _eligible_auto(row, pb, options, low, high, strategy, scope):
     # step, a faster time only proves progress on the same ROM (or legacy PB).
     progresses = (pb is None or row["step"] > pb["step"]
                   or pb.get("game_version") in (None, row.get("game_version")) and row["frames"] < pb["frames"])
-    return (row.get("manual_only") is not True and low <= row["step"] <= high
+    return (row.get("manual_only") is not True and row.get("beaten_in_simulation") is not True
+            and low <= row["step"] <= high
             and (options["mode"] == "fixed" or progresses)
             and (scope == "overall" or row.get("strategy") == strategy))
 
@@ -262,12 +271,14 @@ def _automatic(rows, count, low, high, players):
     return sorted(picked, key=lambda row: (row["step"], row["frames"], row["id"]))
 
 
-def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope="strategy", allow_same_rank=True) -> tuple[dict, ...]:
+def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope="strategy", allow_fastest=True) -> tuple[dict, ...]:
     """Choose visible slots; caller retains hidden pins and owns PB playback.
 
     Pass the previous roster when changing one manual choice, to preserve its
     other compatible automatic slots. Omit it when the saved basis/range changes.
-    Missing chosen recordings remain occupied rather than silently replaced.
+    An empty completed range uses the fastest available compatible recordings,
+    including recordings already beaten by the PB. Missing chosen recordings
+    remain occupied rather than silently replaced.
     Overall permits other strategies, while every row keeps its recorded label.
     """
     scope = _checked_scope(scope)
@@ -300,15 +311,24 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
             used.add(row["id"])
     available = [row for row in candidates.values() if row["id"] not in used
                  and _eligible_auto(row, pb, options, low, high, strategy, scope)]
-    if (allow_same_rank and options["mode"] == "adaptive" and pb is not None and not available
-            and not any(not row["pinned"] for row in result.values())):
-        # An empty higher-rank pool can still offer progress within the PB's
-        # subdivision. Keep strict faster/comparable timing and chosen slots.
-        low = high = pb["step"]
-        available = [row for row in candidates.values() if row["id"] not in used
-                     and _eligible_auto(row, pb, options, low, high, strategy, scope)]
     players = {row["player_id"] for row in result.values() if row.get("player_id") is not None}
-    automatic = iter(_automatic(available, options["count"] - len(result), low, high, players))
+    if (not available
+            and not any(not row["pinned"] for row in result.values())):
+        # Remote fallback requires complete coverage. Pinned bundled snapshots
+        # are complete locally and remain available through a cloud outage.
+        # Keep provenance/ROM/scope and PB refusals; only the range relaxes.
+        available = [row for row in candidates.values() if row["id"] not in used
+                     and row.get("manual_only") is not True and (allow_fastest or _bundled(row))]
+        winners = {}
+        for row in available:
+            key = row["player_id"], row["strategy"], row["step"]
+            old = winners.get(key)
+            if old is None or (row["frames"], row["id"]) < (old["frames"], old["id"]):
+                winners[key] = row
+        automatic = iter(sorted(winners.values(), key=lambda row: (row["frames"], row["id"]))
+                         [:options["count"] - len(result)])
+    else:
+        automatic = iter(_automatic(available, options["count"] - len(result), low, high, players))
     for slot in range(options["count"]):
         if slot not in result and (row := next(automatic, None)) is not None:
             result[slot] = _placed(row, slot, False)

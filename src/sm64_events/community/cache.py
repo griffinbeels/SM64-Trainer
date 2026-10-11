@@ -20,7 +20,7 @@ MAX_METADATA = 1024
 MAX_POOLS = 32
 CACHE_ENCODED = 16 << 20
 CACHE_RAW = 32 << 20
-TTL = 300
+TTL = 600  # Publication leases expire after ten minutes even when the network is down.
 
 
 def value_of(identity, name, default=None):
@@ -139,7 +139,10 @@ class CachedPopulation:
 
     def _ready(self, identity):
         stored = self._rows.get(identity)
-        return bool(stored and stored[1] > time.monotonic() and identity in self._assets)
+        asset = self._assets.get(identity)
+        return bool(stored and stored[1] > time.monotonic() and asset
+                    and (stored[0]["raw_sha256"], stored[0]["encoded_sha256"])
+                    == (asset["raw_sha256"], asset["encoded_sha256"]))
 
     def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None):
         local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version, strategy=strategy)
@@ -186,17 +189,26 @@ class CachedPopulation:
         if type(limit) is not int or not 1 <= limit <= 20:
             raise ValueError("Choose a search page of 1 to 20 records.")
         if isinstance(cursor, list):
-            return self.local.search(identity, prefix, cursor=cursor, limit=limit)
+            local_cursor = None if cursor == ["community-local-start"] else cursor
+            return self.local.search(identity, prefix, cursor=local_cursor, limit=limit)
         key = (self.identity_key(identity), self._prefix(prefix), cursor)
         with self._lock:
             found = self._searches.get(key) if self._active() else None
             if found and found[1] > time.monotonic():
                 remote = [self._row(row) for row in found[0]["recordings"][:limit]]
-                local = self.local.search(identity, prefix, limit=limit)
+                coverage = dict(found[0]["coverage"])
+                remote_cursor = found[0]["next_cursor"]
+                if remote_cursor is not None:
+                    # Finish remote pages once, then continue the local index.
+                    return {"records": remote, "next_cursor": remote_cursor, "coverage": coverage}
+                if len(remote) == limit:
+                    local = self.local.search(identity, prefix, limit=1)
+                    return {"records": remote, "coverage": coverage,
+                            "next_cursor": ["community-local-start"] if local["records"] else None}
+                local = self.local.search(identity, prefix, limit=limit - len(remote))
                 seen = {row["id"] for row in remote}
                 records = remote + [row for row in local["records"] if row["id"] not in seen]
-                return {"records": records[:limit],
-                        "next_cursor": found[0]["next_cursor"], "coverage": dict(found[0]["coverage"])}
+                return {"records": records, "next_cursor": local.get("next_cursor"), "coverage": coverage}
         # Remote cursors never enter the local SQLite cursor contract.
         return self.local.search(identity, prefix, cursor=cursor if isinstance(cursor, list) else None, limit=limit)
 
@@ -281,6 +293,7 @@ class CachedPopulation:
             path = self.root / (identifier + ".ghost")
             stamp = path.stat()
             self._assets[identifier] = {"raw": row['raw_bytes'], "encoded": row['encoded_bytes'], "stamp": (stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns),
+                "raw_sha256": row["raw_sha256"], "encoded_sha256": row["encoded_sha256"],
                 "clip_id": clip.clip_id, "records": len(clip.frames), "blink_frames": blinks}
             self._assets.move_to_end(identifier)
             self._rows[identifier] = row, time.monotonic() + TTL
