@@ -380,12 +380,16 @@ def verify_candidate(directory: Path, *, app: Path | None = None) -> Path:
     return record_verification(directory, record, frozen=frozen, checks=checks)
 
 
-def publication_preflight(directory: Path) -> dict:
+def publication_preflight(directory: Path, *, approval: Path | None = None) -> dict:
     """Public publication reuses gates and never rebuilds prepared artifacts."""
-    from release_candidate import verify_artifacts, digest
+    from release_candidate import verify_artifacts, digest, require_approval, write_once
+    from release_lineage import verify_publication
     record = verify_artifacts(directory, expected_assets=[p.name for p in release_assets(directory)])
     if record["distribution"] != "public":
         raise ValueError("private QA candidates must never be uploaded to GitHub")
+    if approval is None:
+        raise ValueError("public publication requires exact candidate and stored-profile compatibility QA")
+    approved_digest = require_approval(directory, approval)
     verification = json.loads((directory / "candidate-verification.json").read_text(encoding="utf-8"))
     if not verification.get("draft_ready") or verification.get("candidate_sha256") != digest(directory / "candidate.json"):
         raise ValueError("candidate has not passed final verification")
@@ -396,6 +400,9 @@ def publication_preflight(directory: Path) -> dict:
     if record["channel"] == "stable" and _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"]) != "main":
         raise ValueError("stable publication requires integrated main")
     _run(["gh", "auth", "status"], capture_output=True)
+    lineage = verify_publication(record, json.loads(approval.read_text(encoding="utf-8")), _run)
+    lineage.update(candidate_sha256=approved_digest, approval_sha256=digest(approval))
+    write_once(directory / "candidate-lineage.json", lineage)
     _verify_or_run_gate()
     _require_full_run()
     return record
@@ -404,27 +411,32 @@ def publication_preflight(directory: Path) -> dict:
 def draft_candidate(directory: Path, *, notes_file: Path, approval: Path) -> None:
     """Upload six assets to a draft, then verify actual downloaded draft bytes."""
     from release_candidate import require_approval, write_once, digest
+    from release_lineage import REPOSITORY, verify_draft
     require_approval(directory, approval)
-    record = publication_preflight(directory)
+    record = publication_preflight(directory, approval=approval)
     tag = "v" + record["version"]
     body = compose_release_body(SETUP_HEADER.read_text(encoding="utf-8"), notes_file.read_text(encoding="utf-8"))
     body_file = directory / "release-body.md"
     body_file.write_text(body, encoding="utf-8")
-    existing = subprocess.run(["gh", "release", "view", tag, "--json", "isDraft"],
+    existing = subprocess.run(["gh", "release", "view", tag, "--repo", REPOSITORY, "--json", "isDraft"],
                               cwd=REPO, capture_output=True, text=True,
-                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=60)
     if existing.returncode == 0:
         if not json.loads(existing.stdout).get("isDraft"):
             raise ValueError("a published release with this version already exists")
+        verify_draft(record, _run)
         # No clobber: resumed drafts must contain the same immutable bytes.
     else:
+        if not re.search(r"\bHTTP 404\b", existing.stderr or ""):
+            raise ValueError("draft discovery failed; existing assets cannot be changed safely")
         flags = ["--prerelease"] if record["channel"] == "beta" else []
         _run(["gh", "release", "create", tag, *[str(p) for p in release_assets(directory)],
-              "--draft", "--target", record["source_commit"], "--title", tag,
+              "--repo", REPOSITORY, "--draft", "--target", record["source_commit"], "--title", tag,
               "--notes-file", str(body_file), *flags])
+    verify_draft(record, _run)
     import tempfile
     with tempfile.TemporaryDirectory(prefix="sm64-draft-check-") as temporary:
-        _run(["gh", "release", "download", tag, "--dir", temporary])
+        _run(["gh", "release", "download", tag, "--repo", REPOSITORY, "--dir", temporary])
         for asset in release_assets(directory):
             if not (Path(temporary) / asset.name).is_file() or digest(Path(temporary) / asset.name) != digest(asset):
                 raise ValueError("draft assets do not match the verified candidate")
@@ -434,8 +446,9 @@ def draft_candidate(directory: Path, *, notes_file: Path, approval: Path) -> Non
 
 def publish_candidate(directory: Path, *, approval: Path) -> None:
     from release_candidate import require_approval, digest
+    from release_lineage import REPOSITORY, verify_draft, bind_publication_tag
     require_approval(directory, approval)
-    record = publication_preflight(directory)
+    record = publication_preflight(directory, approval=approval)
     receipt = json.loads((directory / "draft-upload.json").read_text(encoding="utf-8"))
     if not receipt.get("assets_verified") or receipt.get("candidate_sha256") != digest(directory / "candidate.json"):
         raise ValueError("draft upload has not passed asset verification")
@@ -443,11 +456,15 @@ def publish_candidate(directory: Path, *, approval: Path) -> None:
     # receipt must not become public. No rebuild or replacement upload occurs.
     import tempfile
     with tempfile.TemporaryDirectory(prefix="sm64-publish-check-") as temporary:
-        _run(["gh", "release", "download", "v" + record["version"], "--dir", temporary])
+        _run(["gh", "release", "download", "v" + record["version"], "--repo", REPOSITORY, "--dir", temporary])
         for asset in release_assets(directory):
             if digest(Path(temporary) / asset.name) != digest(asset):
                 raise ValueError("draft asset changed before publication")
+    verify_draft(record, _run)
+    _assert_build_source(record["source_commit"], record["uv_lock_sha256"])
+    bind_publication_tag(record, _run)
     _run(["gh", "release", "edit", "v" + record["version"], "--draft=false",
+          "--repo", REPOSITORY,
           "--prerelease=" + ("true" if record["channel"] == "beta" else "false")])
 
 

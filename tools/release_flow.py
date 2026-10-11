@@ -7,6 +7,7 @@ unless the operator subsequently runs release.py's explicit draft/publish phase.
 from __future__ import annotations
 
 import argparse
+import ast
 from pathlib import Path
 import subprocess
 import tomllib
@@ -43,13 +44,33 @@ def _version_only(path: str, before: str, after: str, version: str) -> bool:
 def _approved_source_changes(source: str, version: str) -> None:
     changed = release._capture(["git", "diff", "--name-only", source, "HEAD"]).splitlines()
     allowed = {"src/sm64_events/core/version.py", "pyproject.toml", "uv.lock"}
-    if set(changed) - allowed:
+    root_guides = {"AGENTS.md", "CLAUDE.md", "README.md"}
+    harmless = {name for name in changed if (name.startswith("docs/") and name.endswith(".md"))
+                or name in root_guides or name.startswith("tests/")
+                or name == "tools/release_lineage.py"}
+    tooling = {"tools/release.py", "tools/release_flow.py"}
+    if set(changed) - allowed - harmless - tooling:
         raise ValueError("product source changed after beta approval; prepare and test a new beta")
     for name in changed:
+        if name in harmless:
+            continue
         before = release._capture(["git", "show", f"{source}:{name}"])
         after = release._capture(["git", "show", f"HEAD:{name}"])
-        if not _version_only(name, before, after, version):
+        valid = _publication_only(name, before, after) if name in tooling else _version_only(name, before, after, version)
+        if not valid:
             raise ValueError("product dependencies or configuration changed after beta approval; test a new beta")
+
+
+def _publication_only(path: str, before: str, after: str) -> bool:
+    allowed = ({"publication_preflight", "draft_candidate", "publish_candidate"} if path == "tools/release.py"
+               else {"_approved_source_changes", "_publication_only"})
+    def normalized(text):
+        module = ast.parse(text)
+        module.body = [node for node in module.body
+                       if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in allowed)
+                       and not (isinstance(node, ast.Import) and len(node.names) == 1 and node.names[0].name == "ast")]
+        return ast.dump(module, include_attributes=False)
+    return normalized(before) == normalized(after)
 
 
 def promotion_source(candidate: Path, approval: Path, stable_version: str, config: Path) -> str:

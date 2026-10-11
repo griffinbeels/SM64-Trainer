@@ -1,7 +1,8 @@
 # Beta-to-production pipeline
 
-Status: approved for implementation, October 11, 2026. Prepare a private candidate
-for manual QA; public publication remains a separate release action.
+Status: Round34 implementation available, October 11, 2026. Prepare and verify a
+private candidate before friend testing. Human gameplay acceptance, public
+enrollment and public publication remain separate, explicit later gates.
 Implementation approval: event:042e8c5a19555fd43c256bfb8a1b9835693f103b3cd724bee09f184965c184a7.
 Current human source: event:7c38b72652f2f19bd8ba8e0c7671f43354b12f55e365dfcd26c52fd5507f906c.
 This supersedes the two-installation Round32 proposal, whose original source
@@ -14,8 +15,8 @@ Keep **one installation, shortcut, account and local profile**. Add a Settings
 toggle, **Receive beta updates**, default off. Beta and Stable identify release
 types, not different installed programs or data directories. Add a thin
 release coordinator over the existing packaging and release tools. Its two
-operator actions should be **Ship beta** and **Release approved beta**. These
-are proposed actions, not commands available today.
+operator actions are **Ship beta** and **Release approved beta**, implemented
+by `tools/release_flow.py` over the shared `tools/release.py` phases.
 
 ```mermaid
 flowchart LR
@@ -49,34 +50,104 @@ client/native pair. Offline users keep practicing.
 Use the existing updater interaction. There is no channel picker, second installer
 or beta-only account onboarding in the eventual public application.
 
-## What exists, and what needs building
+## Implemented responsibilities
 
-| Responsibility | Existing implementation | Required addition |
+| Responsibility | Owning implementation | Round34 behavior |
 |---|---|---|
-| Build beta | `tools/build_beta.py`: existing separate private friend installer and package checks | Build future beta payloads for the normal application identity; retain immutable candidate/source/check receipts |
-| Build application | `tools/build_exe.py`, shared with beta | Make essential payload checks equally strict for both channels |
-| Incremental update | `src/sm64_events/core/updater.py`, `src/sm64_events/core/update_plan.py`, `src/sm64_events/core/update_apply.py` | Eligible-release selection, strict prerelease ordering and beta setting; retain one manifest/download/apply implementation |
-| Publish release | `tools/release.py`: stable gates and six official assets | Candidate-aware Beta prerelease / Stable publication, final package checks and forward lineage |
-| Verify source | Existing local merge check and GitHub `full.yml` | Associate packaged runtime checks and tester feedback with the candidate |
-| Cloud release | Worker, D1 migrations, R2, managed Auth and catalog | Explicit staging/production binding records and compatible rollout gates |
+| Build beta | `tools/release_flow.py`, `tools/release.py`, `tools/build_beta.py` | New normal-identity payloads with immutable receipts; retain the legacy isolated builder |
+| Build application | `tools/build_exe.py` | Complete essential payload, staged runtime version, exact manifest binding and source recheck |
+| Incremental update | `core/updater.py`, `core/update_plan.py`, `core/update_apply.py`, `core/release_contract.py` | Shared prerelease ordering, eligible selection, default-off beta setting, safe application and forward floor |
+| Publish release | `tools/release.py`, `tools/release_lineage.py` | Explicit draft/publish phases, six downloaded asset digests, resolved tag ancestry and profile QA |
+| Verify source | Local merge check and GitHub `full.yml` | Exact candidate source plus immutable frozen checks and human acceptance |
+| Cloud release | Worker, D1 migrations, R2, managed Auth and catalog | Separate operator rollout; bounded public revision fingerprints in candidate receipts |
 
-Today beta update checks are disabled. Sending the next installer is the current
-fallback. Stable community configuration is also not implemented: stable metadata
-rejects community fields, `main.py` enables community only for beta, and native
-OAuth callbacks are fixed to port 8072. These are implementation gaps, not steps
-an operator can accomplish by renaming the beta EXE.
+Before Round34, legacy beta update checks were disabled, stable metadata rejected
+community fields, and beta OAuth was tied to 8072. New schema2 builds explicitly
+declare `installation="normal"`: stable and beta share the normal profile,
+account namespace, port 8064, public community configuration and enabled updater.
+Schema1 standalone beta keeps its historical isolated identity and disabled
+updater. Renaming its EXE does not migrate that identity.
 
-Current `build_channel.py` couples the beta label to a separate executable,
-profile, port and disabled updater. Refactor release type away from application
-identity. Future beta and stable payloads use `SM64Trainer.exe`, its normal profile
-and port 8064, plus the same permanent community configuration. The opted-in
-setting changes eligible releases, not authentication authority or data ownership.
+`build_channel.py` now separates release type from application identity. New
+beta and stable payloads use `SM64Trainer.exe`, its normal profile and port 8064,
+plus the same permanent community configuration. The opted-in setting changes
+eligible releases, not authentication authority or data ownership.
 
-The coordinator should reuse preparation and publication phases exposed by
-`tools/release.py`. The current script builds and proceeds directly to
-commit/tag/publish; calling it unchanged cannot insert final package review,
-draft verification or publication recovery. Extend those phases in their owning
-tool rather than copying its release operations into a second implementation.
+The coordinator delegates to `tools/release.py` for preparation and verification.
+Draft upload and publication use its separate explicit phases. The former direct
+version-only publishing command is refused; its build-only `--dry-run` remains
+available and restores source bytes even after a failed build.
+
+## Operator commands
+
+From a clean committed Windows checkout with matching native DLLs, use the
+project Python environment. These examples use placeholder input paths:
+
+```powershell
+python tools/release_flow.py ship-beta 1.10.0-beta.1 dist/private-beta/1.10.0-beta.1 --config PRIVATE_CONFIG.json --ghosts GRIFFMAN_COLLECTION.sm64ghosts --ffmpeg FFMPEG.exe --service-provenance PUBLIC_REVISIONS.json
+python tools/release.py --phase verify --candidate dist/private-beta/1.10.0-beta.1
+```
+
+`--check` on Ship beta checks prerequisites without building. Preparation does
+not mutate the tracked version, tag, push, deploy or publish. PyInstaller embeds
+a staged version hook and metadata; the frozen runtime self-check must prove the
+target version, normal identity, port and updater baseline. Preparation rechecks
+HEAD, working-tree status and `uv.lock` before writing the candidate record.
+
+Private output includes `SM64Trainer-VERSION-private.exe`, its checksum and an
+immutable private-installer receipt. The EXE contains the complete application,
+the reviewed legitimate Griffin collection and optional one-use friend invite.
+Its normal double-click installs, creates the shortcut and launches onboarding.
+Fake ghosts, provider/admin secrets and source profile data are refused. The
+six official assets also exist for verification, but private candidates can
+never enter GitHub draft/publish phases.
+
+For hidden maintainer verification, run the actual private EXE with
+`--install-self-check ABSOLUTE_RECEIPT.json`. It installs and repairs its embedded
+payload in a temporary folder, checks sample practice preservation and stale-file
+removal, then removes that temporary tree. It makes no network call, shortcut,
+profile copy or app launch. Run the packaged application with
+`--beta-self-check ABSOLUTE_RECEIPT.json` to verify every required asset, native PE
+header and helper import alongside normal beta identity. It starts no GUI,
+server, recorder or helper. These probes do not establish gameplay or OAuth
+acceptance. A hidden runner must remove Python launcher/module overrides for
+frozen EXEs; otherwise its environment can replace the reported executable.
+
+After the exact beta is accepted, build a separate stable candidate:
+
+```powershell
+python tools/release_flow.py release-approved-beta 1.10.0 dist/stable/1.10.0 --beta-candidate ACCEPTED_BETA_DIRECTORY --approval BETA_QA.json --config PUBLIC_CONFIG.json --ghosts GRIFFMAN_COLLECTION.sm64ghosts --ffmpeg FFMPEG.exe --service-provenance PUBLIC_REVISIONS.json
+python tools/release.py --phase draft --candidate dist/stable/1.10.0 --approval STABLE_QA.json --notes-file NOTES.md
+python tools/release.py --phase publish --candidate dist/stable/1.10.0 --approval STABLE_QA.json
+```
+
+For a publicly approved beta, Ship beta's `--public` creates a public candidate
+without an invitation; draft/publish use the same shared phases. Every QA file
+binds `candidate_sha256` and requires `approved=true`, `manual_qa=true` and a named
+reviewer. Public publication additionally requires a `profile_compatibility`
+mapping keyed by each discovered predecessor version. Each entry contains that
+predecessor's actual `source_commit` and `compatible=true`, attested after profile
+upgrade QA. This declaration is human evidence, not an automatic schema proof.
+
+The publisher resolves actual remote Git tag commits, including annotated tags,
+and requires those product heads to be ancestors of the candidate. It checks the
+closest lower release and last production release when they differ. Beta advances
+the combined head; stable advances the stable head, allowing final production to
+catch up while a next-version beta remains ahead. Missing discovery, truncated
+history, unknown tag source or absent profile QA blocks publication. Drafts must
+match the exact candidate version, source and prerelease type. An existing tag's
+commit is checked because GitHub ignores `target_commitish` for existing tags;
+the final phase binds a missing tag before publishing.
+[GitHub's release API](https://docs.github.com/en/rest/releases/releases#create-a-release).
+
+The accepted beta must remain an ancestor of stable source. Runtime source,
+dependencies and configuration changes require a new beta. Only the product's
+own version fields may change in `version.py`, `pyproject.toml` and `uv.lock`.
+Documentation, tests and isolated publication-tool changes may follow QA;
+packaging/preparation/runtime-hook behavior must remain unchanged. Six official
+draft assets are re-downloaded and hashed before publication; resumed drafts
+never replace immutable bytes. The permanent public installer asset remains
+`SM64Trainer.exe`.
 
 ## Choose the furthest-forward eligible release
 
@@ -117,9 +188,9 @@ release on an older feature line cannot receive a higher target version merely
 because it was uploaded later. Intended removal or correction of a beta feature
 is an explicit reviewed change, not an accidental fallback to old code.
 
-Today's comparator is inadequate: `1.9.0-beta.2` becomes `(1,9,0,2)`, which
-incorrectly outranks final `1.9.0`. Share a correct selector and ordering contract
-between the running app, bootstrap repair and release tools.
+The pre-Round34 comparator incorrectly treated `1.9.0-beta.2` as `(1,9,0,2)` and
+outranked final `1.9.0`. `core/release_contract.py` now owns strict shared ordering
+for the running app, bootstrap repair and release tools.
 
 ## Ship beta
 
@@ -172,10 +243,10 @@ beta updates is a preference, not an authorization bypass for restricted service
    integration differences against the candidate. Product changes require another
    beta candidate; a merge commit identity alone is not a behavior change.
 3. Preserve the existing clean-main, merge-check and GitHub full-run release
-   gates. Today's full-run gate covers the integrated HEAD before `release.py`
-   bumps version files and creates the release commit. Record the final version
-   bump and channel/configuration changes as explicit differences from the accepted
-   candidate; do not describe the final versioned SHA as already full-run verified.
+   gates. Publication requires the final candidate's exact clean source HEAD and
+   green full run; it never rebuilds the prepared artifacts. Record final version
+   and channel/configuration changes as explicit differences from the accepted
+   candidate; do not claim a different SHA was already full-run verified.
 4. Build the final Stable version from reviewed beta code, using the same normal
    application identity, profile, OAuth callback and community configuration.
    Verify upgrades from both the last production version and the accepted beta,
@@ -277,10 +348,12 @@ ordinary update requiring a higher version. If beta is now off and the only
 forward repair is a beta, explain that recovery option and require its explicit
 selection rather than silently changing the preference or downgrading.
 
-Today's bootstrap always installs production `/latest` and does not enforce an
-installed-version floor. This repair behavior needs changing before unified beta
-updates ship. Withdrawing a broken ahead beta therefore also requires a forward
-repair candidate; a production installer alone cannot guarantee a safe repair.
+The pre-Round34 bootstrap always installed production `/latest` without a floor.
+It now shares release discovery/selection, reads validated installed manifest and
+profile floor, rechecks that floor inside the swap lock, and reconstructs a
+verified complete tree. An existing unidentifiable installation is preserved
+with an explained recovery refusal. Withdrawing a broken ahead beta still
+requires a forward repair candidate; production alone cannot guarantee one.
 
 Restore previous compatible Worker code when possible. Do not automatically
 downgrade a migrated profile or restore an old database over newer player data.
