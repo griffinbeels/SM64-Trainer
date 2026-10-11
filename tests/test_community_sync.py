@@ -268,6 +268,28 @@ def test_search_pagination_identity_and_typed_cursor(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("remote_count", [0, 3, 20])
+def test_authenticated_terminal_remote_search_retains_every_local_seed_page(tmp_path, remote_count):
+    class LocalSeeds(Local):
+        def search(self, _identity, _prefix, *, cursor=None, limit=20):
+            offset = cursor[1] if cursor else 0
+            records = [{"id": f"seed-{number}"} for number in range(offset, min(27, offset + limit))]
+            return {"records": records, "next_cursor": ["griffman1212", offset + limit, "1" * 64]
+                    if offset + limit < 27 else None}
+
+    account = Account()
+    population = CachedPopulation(LocalSeeds(), root=tmp_path, account=account)
+    remote = [recording(f"{number:064x}") for number in range(1, remote_count + 1)]
+    population.remember_page(IDENTITY, checked_page(page(remote)), prefix="griffman1212")
+    answer = population.search(IDENTITY, "griffman1212")
+    seen = [row["id"] for row in answer["records"]]
+    while answer["next_cursor"] is not None:
+        answer = population.search(IDENTITY, "griffman1212", cursor=answer["next_cursor"])
+        seen.extend(row["id"] for row in answer["records"])
+    assert seen == [row["id"] for row in remote] + [f"seed-{number}" for number in range(27)]
+    assert not account.calls
+
+
 def test_retries_are_finite_and_bad_assets_never_become_ready(tmp_path):
     async def scenario():
         account = Account()
@@ -630,6 +652,27 @@ def cadence_transport(calls, encoded):
             body = {"v": 1}
         return httpx.Response(200, json=body)
     return httpx.MockTransport(respond)
+
+
+def test_another_account_pending_faster_run_cannot_discard_current_offer(tmp_path):
+    async def scenario():
+        account = Account()
+        sync = CommunitySync(account, CachedPopulation(Local(), root=tmp_path / "cache", account=account))
+        source = {"target": TARGET, "clock": "igt", "game_version": "us", "strategy": "Standard",
+            "frames": 3, "path": tmp_path / "old.ghost", "raw_sha256": hashlib.sha256(native()).hexdigest(),
+            "full_start": True, "valid": True}
+        source["path"].write_bytes(native())
+        assert sync.offer_source(source)
+        old_key, old_operation = sync._queue.popitem()
+        sync._offer_retry[old_key] = old_operation, time.monotonic() + 30, 1
+        account.state["uid"] = "22222222-2222-4222-8222-222222222222"
+        path = tmp_path / "current.ghost"
+        path.write_bytes(native(4))
+        assert sync.offer_source({**source, "frames": 4, "path": path, "raw_sha256": hashlib.sha256(native(4)).hexdigest()})
+        _, operation = sync._queue.popitem()
+        await sync._offer(operation[1])
+        assert [url for _method, url, _kwargs in account.calls][-2:] == ["/v1/uploads", "/v1/uploads/grant-1"]
+    asyncio.run(scenario())
 
 
 def test_eight_hours_with_four_chosen_rivals_and_twenty_uploads_fits_account_budget(tmp_path, monkeypatch):

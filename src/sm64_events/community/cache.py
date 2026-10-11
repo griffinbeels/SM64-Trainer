@@ -189,17 +189,26 @@ class CachedPopulation:
         if type(limit) is not int or not 1 <= limit <= 20:
             raise ValueError("Choose a search page of 1 to 20 records.")
         if isinstance(cursor, list):
-            return self.local.search(identity, prefix, cursor=cursor, limit=limit)
+            local_cursor = None if cursor == ["community-local-start"] else cursor
+            return self.local.search(identity, prefix, cursor=local_cursor, limit=limit)
         key = (self.identity_key(identity), self._prefix(prefix), cursor)
         with self._lock:
             found = self._searches.get(key) if self._active() else None
             if found and found[1] > time.monotonic():
                 remote = [self._row(row) for row in found[0]["recordings"][:limit]]
-                local = self.local.search(identity, prefix, limit=limit)
+                coverage = dict(found[0]["coverage"])
+                remote_cursor = found[0]["next_cursor"]
+                if remote_cursor is not None:
+                    # Finish remote pages once, then continue the local index.
+                    return {"records": remote, "next_cursor": remote_cursor, "coverage": coverage}
+                if len(remote) == limit:
+                    local = self.local.search(identity, prefix, limit=1)
+                    return {"records": remote, "coverage": coverage,
+                            "next_cursor": ["community-local-start"] if local["records"] else None}
+                local = self.local.search(identity, prefix, limit=limit - len(remote))
                 seen = {row["id"] for row in remote}
                 records = remote + [row for row in local["records"] if row["id"] not in seen]
-                return {"records": records[:limit],
-                        "next_cursor": found[0]["next_cursor"], "coverage": dict(found[0]["coverage"])}
+                return {"records": records, "next_cursor": local.get("next_cursor"), "coverage": coverage}
         # Remote cursors never enter the local SQLite cursor contract.
         return self.local.search(identity, prefix, cursor=cursor if isinstance(cursor, list) else None, limit=limit)
 

@@ -471,6 +471,7 @@ class CommunitySync:
             # all other bins. A source is independent of local ladder admission.
             candidates = [(queue_key, item[1]) for queue_key, item in (
                 *self._queue.items(), *((retry_key, retry[0]) for retry_key, retry in self._offer_retry.items())) if item[0] == "offer"
+                and item[1]["owner"] == source["owner"]
                 and target_key(item[1]["target"]) == key[:2] and item[1]["clock"] == source["clock"]
                 and item[1]["game_version"] == source["game_version"] and item[1]["strategy"] == source["strategy"]
                 and frame_band(cutoffs, [(item[1]["frames"], item[1]["frames"])])[0] == step]
