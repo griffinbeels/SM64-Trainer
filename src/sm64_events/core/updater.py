@@ -409,7 +409,7 @@ class UpdateService:
             if not exe_dir_writable(self._exe.parent):
                 return {"state": "error", "error": "exe folder not writable"}
             # Preferences may have changed since the popup was displayed.
-            if info.prerelease and not self.beta_preferences()["receive_beta_updates"]:
+            if not self._eligible_apply(info, repair=repair):
                 return {"state": "error", "error": "beta updates are disabled"}
             self._state = "downloading"
             self._error = ""
@@ -420,6 +420,11 @@ class UpdateService:
             args=(info, self._plan, self._manifest_text, on_success, can_apply),
             daemon=True, name="update-apply").start()
         return {"state": "downloading"}
+
+    def _eligible_apply(self, info, *, repair: bool) -> bool:
+        preferences = self.beta_preferences()
+        return (not info.prerelease or preferences["receive_beta_updates"] or
+                (repair and version_key(info.version) == version_key(preferences["installed_version"])))
 
     def _run_apply(self, info, plan, manifest_text, on_success, can_apply=None) -> None:
         """Attempt the update up to `self._attempts` times, sleeping
@@ -476,7 +481,7 @@ class UpdateService:
             (staging / INSTALLED_MANIFEST).write_text(manifest_text)
             if can_apply and (reason := can_apply()):
                 raise _UnsafeApply(reason)
-            if info.prerelease and not self.beta_preferences()["receive_beta_updates"]:
+            if not self._eligible_apply(info, repair=self._repair):
                 raise _UnsafeApply("Beta updates were disabled during download.")
             self._state = "installing"
             apply_plan(root, staging,

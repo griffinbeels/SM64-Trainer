@@ -26,7 +26,7 @@ import urllib.error
 from dataclasses import dataclass
 
 from sm64_events.core.update_plan import PATCH_NOTES_MARKER
-from sm64_events.core.release_contract import is_forward, version_key
+from sm64_events.core.release_contract import WITHDRAWN_MARKER, is_forward, version_key
 
 log = logging.getLogger("sm64.releases")
 
@@ -136,12 +136,35 @@ class ReleaseFeed:
             # independent stable fallback, not a misleading partial beta head.
             log.info("release history unavailable", exc_info=True)
             self.last_error = "Update check unavailable. Check your connection and try again."
-            rows = []
+            rows = [row for row in rows if self._restricted(row)]
         if isinstance(latest, dict):
             # Stable /latest can lead the list's CDN immediately after publish.
-            rows = [row for row in rows if row.get("tag_name") != latest.get("tag_name")]
+            # It can also lag a withdrawal. Restrictive signals win a conflict;
+            # a stale stable fallback must not resurrect a withdrawn candidate.
+            try:
+                key = version_key(latest.get("tag_name"))
+                matching = [row for row in rows if self._same_version(row, key)]
+                if any(self._restricted(row) for row in matching):
+                    latest = {**latest, "withdrawn": True}
+                rows = [row for row in rows if not self._same_version(row, key)]
+            except ValueError:
+                # Invalid latest metadata never removes valid list candidates.
+                log.info("latest release does not identify a valid version")
             rows.append(latest)
         return rows
+
+    @staticmethod
+    def _restricted(row):
+        body = row.get("body")
+        return (row.get("withdrawn", False) is not False or row.get("draft", False) is not False or
+                (isinstance(body, str) and WITHDRAWN_MARKER in body))
+
+    @staticmethod
+    def _same_version(row, key):
+        try:
+            return version_key(row.get("tag_name")) == key
+        except ValueError:
+            return False
 
 
 def strip_body(body: str) -> str:

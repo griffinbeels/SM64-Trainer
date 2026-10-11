@@ -260,3 +260,74 @@ def test_restart_failure_reports_installed_files_and_requires_relaunch(tmp_path)
     assert svc.status()["files_changed"] is True
     assert svc._exe.read_bytes() == b"NEW"
     assert "Relaunch" in svc.begin_apply(lambda: None)["error"]
+
+
+def test_old_cleanup_cannot_erase_a_new_updates_recovery(tmp_path, monkeypatch):
+    from sm64_events.core import update_apply
+    root, first, second = tmp_path / "app", tmp_path / "first", tmp_path / "second"
+    for path in (root, first, second):
+        path.mkdir()
+    (root / "SM64Trainer.exe").write_bytes(b"V1")
+    (first / "SM64Trainer.exe").write_bytes(b"V2")
+    (second / "SM64Trainer.exe").write_bytes(b"V3")
+    apply_plan(root, first, replace=["SM64Trainer.exe"], delete=[])
+    assert confirm_startup(root)
+    reached_cleanup, resume_cleanup, applied = threading.Event(), threading.Event(), threading.Event()
+    failures = []
+    rmtree = update_apply.shutil.rmtree
+
+    def delayed_cleanup(path, **kwargs):
+        reached_cleanup.set()
+        assert resume_cleanup.wait(3)
+        return rmtree(path, **kwargs)
+
+    monkeypatch.setattr(update_apply.shutil, "rmtree", delayed_cleanup)
+    sweep = threading.Thread(target=lambda: sweep_backup(root, attempts=1))
+
+    def update():
+        try:
+            apply_plan(root, second, replace=["SM64Trainer.exe"], delete=[])
+            applied.set()
+        except Exception as error:
+            failures.append(error)
+
+    swap = threading.Thread(target=update)
+    sweep.start()
+    assert reached_cleanup.wait(3)
+    swap.start()
+    assert not applied.wait(.04)
+    resume_cleanup.set()
+    sweep.join(3); swap.join(3)
+    assert not sweep.is_alive() and not swap.is_alive() and not failures
+    assert applied.is_set()
+    assert (root / BACKUP_DIR / "SM64Trainer.exe").read_bytes() == b"V2"
+    assert update_apply.read_journal(root)["state"] == "done"
+    assert not update_apply.read_journal(root).get("healthy_startup")
+
+
+def test_explicit_repair_of_installed_beta_keeps_beta_opt_out(tmp_path):
+    tag = "v1.9.0-beta.2"
+    routes = _fake_release(tmp_path / "release", tag, {"SM64Trainer.exe": b"REPAIRED"})
+    routes[LATEST] = json.dumps(release("v1.8.5")).encode()
+    routes[RELEASES] = json.dumps([release("v1.9.0-beta.3"), release(tag)]).encode()
+    svc = service(tmp_path, routes, current=tag[1:])
+    assert svc.beta_preferences()["receive_beta_updates"] is False
+    assert svc.status()["update_available"] is False
+    assert svc.status(force=True, repair=True)["latest"] == tag[1:]
+    finished = threading.Event()
+    assert svc.begin_apply(finished.set, repair=True)["state"] == "downloading"
+    assert finished.wait(3)
+    assert svc._exe.read_bytes() == b"REPAIRED"
+    assert svc.beta_preferences()["receive_beta_updates"] is False
+
+
+@pytest.mark.parametrize("flag", [{"withdrawn": True}, {"draft": True},
+                                {"body": "<!-- sm64-withdrawn -->"}])
+def test_stale_latest_cannot_resurrect_a_withdrawn_list_release(flag):
+    http = feed_http([release("v1.1.0", **flag), release("v1.0.1")], latest="v1.1.0")
+    assert check_for_update("1.0.0", http=http).version == "1.0.1"
+
+
+def test_partial_history_cannot_discard_an_observed_withdrawal():
+    rows = [release("v1.1.0", withdrawn=True)] + [release("v1.0.0")] * 99
+    assert check_for_update("1.0.0", http=feed_http(rows, latest="v1.1.0")) is None
