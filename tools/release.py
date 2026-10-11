@@ -239,6 +239,12 @@ def _capture(cmd: list[str]) -> str:
                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
 
 
+def _assert_build_source(source: str, lock_digest: str) -> None:
+    if (_capture(["git", "rev-parse", "HEAD"]) != source or _capture(["git", "status", "--porcelain"])
+            or sha256_file(UV_LOCK) != lock_digest):
+        raise ValueError("source or dependencies changed during preparation; discard this candidate and rebuild")
+
+
 def _package_private_installer(destination, zip_path, manifest_path, version, record, work):
     import shutil
     from sm64_events.bootstrap.beta_payload import append_payload
@@ -288,6 +294,7 @@ def prepare_candidate(version: str, destination: Path, *, config: Path,
     if _capture(["git", "status", "--porcelain"]):
         raise ValueError("candidate requires a clean committed source tree")
     source = source_revision(REPO)
+    lock_digest = sha256_file(UV_LOCK)
     destination.mkdir(parents=True, exist_ok=True)
     work = destination / ".work"
     _run([sys.executable, str(REPO / "tools" / "build_exe.py"), "--mode", "all",
@@ -308,6 +315,7 @@ def prepare_candidate(version: str, destination: Path, *, config: Path,
     shutil.copyfile(work / "dist" / "SM64TrainerSetup.exe", destination / BOOTSTRAP_ASSET)
     for artifact in (zip_path, manifest_path, destination / BOOTSTRAP_ASSET):
         write_sha(artifact)
+    _assert_build_source(source, lock_digest)
     record = record_candidate(destination, version=version, build=build,
         artifacts=release_assets(destination), source_commit=source, lock=UV_LOCK, app=app,
         version_hook=work / "build" / "rthook_release_version.py", private=private,

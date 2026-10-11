@@ -9,11 +9,47 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import subprocess
+import tomllib
 
 import release
 from release_candidate import public_fingerprint, read_record, require_approval
 from sm64_events.core.build_channel import read_metadata
 from sm64_events.core.release_contract import version_key
+
+
+def _version_only(path: str, before: str, after: str, version: str) -> bool:
+    """Allow the product's own version field; preserve every dependency/config field."""
+    if path.endswith("version.py"):
+        return release.bump_version_py(before, version) == after
+    old, new = tomllib.loads(before), tomllib.loads(after)
+    if path == "pyproject.toml":
+        old_project, new_project = old["project"], new["project"]
+        if new_project.get("version") != version:
+            return False
+        new_project["version"] = old_project["version"]
+    else:
+        def own_package(value):
+            own = [item for item in value["package"] if item.get("name") == "sm64-events"]
+            if len(own) != 1:
+                raise ValueError("dependency lock must contain exactly one product package")
+            return own[0]
+        old_package, new_package = own_package(old), own_package(new)
+        if new_package.get("version") != version:
+            return False
+        new_package["version"] = old_package["version"]
+    return old == new
+
+
+def _approved_source_changes(source: str, version: str) -> None:
+    changed = release._capture(["git", "diff", "--name-only", source, "HEAD"]).splitlines()
+    allowed = {"src/sm64_events/core/version.py", "pyproject.toml", "uv.lock"}
+    if set(changed) - allowed:
+        raise ValueError("product source changed after beta approval; prepare and test a new beta")
+    for name in changed:
+        before = release._capture(["git", "show", f"{source}:{name}"])
+        after = release._capture(["git", "show", f"HEAD:{name}"])
+        if not _version_only(name, before, after, version):
+            raise ValueError("product dependencies or configuration changed after beta approval; test a new beta")
 
 
 def promotion_source(candidate: Path, approval: Path, stable_version: str, config: Path) -> str:
@@ -29,10 +65,7 @@ def promotion_source(candidate: Path, approval: Path, stable_version: str, confi
         raise ValueError("promotion cannot change the approved public community configuration")
     # A merge commit is fine; product code changing after beta QA is not.
     release._run(["git", "merge-base", "--is-ancestor", original["source_commit"], "HEAD"], capture_output=True)
-    changed = release._capture(["git", "diff", "--name-only", original["source_commit"], "HEAD"]).splitlines()
-    allowed = {"src/sm64_events/core/version.py", "pyproject.toml", "uv.lock"}
-    if set(changed) - allowed:
-        raise ValueError("product source changed after beta approval; prepare and test a new beta")
+    _approved_source_changes(original["source_commit"], stable_version)
     return approved
 
 

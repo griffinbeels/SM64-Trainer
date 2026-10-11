@@ -11,7 +11,7 @@ import sys
 from typing import Callable
 
 from sm64_events.core.build_channel import (
-    BETA_APP_DIR, BETA_PORT, CONFIG_FILENAME, STABLE_APP_DIR, BuildChannel, read_metadata,
+    BETA_APP_DIR, CONFIG_FILENAME, STABLE_APP_DIR, BuildChannel, read_metadata,
 )
 
 FLAG = "--beta-self-check"
@@ -73,11 +73,14 @@ def _production_runtime():
     from sm64_events.core import paths
 
     def update_status():
-        # Beta's existing service gates status before network or file reads.
+        # Read actual build policy without a feed check or profile mutation.
+        # A synthetic invalid baseline plus frozen=False keeps construction
+        # inert; beta_preferences reads the packaged update identity only.
         from sm64_events.core.updater import UpdateService
         def no_http(*args, **kwargs):
             raise RuntimeError("network is forbidden in the beta self-check")
-        return UpdateService(current_version="self-check", frozen=True, http=no_http).status()
+        service = UpdateService(current_version="self-check", frozen=False, http=no_http)
+        return {**service.beta_preferences(), "state": "idle" if build.updates_enabled else "disabled"}
 
     return ProbeRuntime(build, Path(sys._MEIPASS), Path(sys.executable),
                         _local_appdata(), paths, update_status)
@@ -126,21 +129,26 @@ def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
         return report
     build, bundle, paths = runtime.build, runtime.bundle, runtime.paths
     if not check("frozen_beta_identity", lambda: build.channel == "beta"
-                 and runtime.executable.name == BETA_APP_DIR + ".exe"):
+                 and runtime.executable.name == build.app_dir_name + ".exe"):
         return report
     if not check("packaged_metadata", lambda: read_metadata(bundle / CONFIG_FILENAME) == build):
         return report
     report.update(channel=build.channel, build_id=build.build_id,
                   community_mode="configured" if build.community_url else "offline",
-                  profile_directory=BETA_APP_DIR, port=BETA_PORT)
-    expected = (runtime.local_appdata / BETA_APP_DIR).resolve()
-    check("isolated_profile", lambda: paths.data_root().resolve() == expected
+                  installation=build.installation, profile_directory=build.app_dir_name,
+                  port=build.default_port, updates_enabled=build.updates_enabled)
+    expected = (runtime.local_appdata / build.app_dir_name).resolve()
+    check("isolated_profile" if build.legacy_beta else "normal_profile", lambda: paths.data_root().resolve() == expected
           and paths.practice_root() is None
-          and paths.APP_DIR_NAME == BETA_APP_DIR
+          and paths.APP_DIR_NAME == build.app_dir_name
           and paths.APP_DISPLAY_NAME == build.display_name)
-    check("beta_port", lambda: paths.server_port() == BETA_PORT)
-    check("public_updates_disabled", lambda: not build.updates_enabled
-          and runtime.update_status().get("state") == "disabled")
+    check("beta_port" if build.legacy_beta else "normal_port", lambda: paths.server_port() == build.default_port)
+    if build.legacy_beta:
+        check("public_updates_disabled", lambda: not build.updates_enabled
+              and runtime.update_status().get("state") == "disabled")
+    else:
+        check("public_updates_enabled", lambda: build.updates_enabled
+              and runtime.update_status().get("updates_enabled") is True)
     check("shared_install_metadata", lambda: paths.capture_layer_settings_path().resolve()
           == (runtime.local_appdata / STABLE_APP_DIR / "data/capture_layer.json").resolve())
     for relative in _ASSETS:

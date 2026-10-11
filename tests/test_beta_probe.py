@@ -1,5 +1,6 @@
 """Frozen self-check contracts; disposable files, no packaged app or workers."""
 import builtins
+from dataclasses import replace
 import json
 import struct
 import sys
@@ -69,6 +70,44 @@ def test_complete_fixture_has_bounded_token_free_receipt_and_no_profile_writes(r
     assert runtime.build.supabase_publishable_key not in text
     assert runtime.build.community_url not in text
     assert "helper execution" in report["not_exercised"]
+
+
+@pytest.fixture
+def normal_runtime(runtime):
+    build = replace(runtime.build, installation="normal")
+    (runtime.bundle / "build-channel.json").write_text(json.dumps(build.metadata()), encoding="utf-8")
+    runtime.paths.APP_DIR_NAME = build.app_dir_name
+    runtime.paths.APP_DISPLAY_NAME = build.display_name
+    runtime.paths.data_root = lambda: runtime.local_appdata / build.app_dir_name
+    runtime.paths.server_port = lambda: build.default_port
+    return replace(runtime, build=build, executable=runtime.executable.with_name("SM64Trainer.exe"),
+                   update_status=lambda: {"updates_enabled": True, "state": "idle"})
+
+
+def test_normal_beta_verifies_every_asset_native_import_and_shared_runtime_identity(normal_runtime):
+    report = probe.collect_report(fixture=normal_runtime, importer=importer)
+    assert report["ok"] and report["installation"] == "normal"
+    assert report["profile_directory"] == "SM64Trainer" and report["port"] == 8064
+    assert report["updates_enabled"] is True
+    checked = {row["name"] for row in report["checks"] if row["ok"]}
+    assert {"normal_profile", "normal_port", "public_updates_enabled"} <= checked
+    assert all("asset:" + name in checked for name in probe._ASSETS)
+    assert all("native:" + name in checked for name, _ in probe._NATIVES)
+    assert all("import:" + name in checked for name, _ in probe._IMPORTS)
+    assert not normal_runtime.local_appdata.exists()
+
+
+@pytest.mark.parametrize("fault", ["legacy_exe", "legacy_profile", "legacy_port", "disabled_updates"])
+def test_normal_beta_refuses_legacy_runtime_leaks(normal_runtime, fault):
+    if fault == "legacy_exe":
+        normal_runtime = replace(normal_runtime, executable=normal_runtime.executable.with_name("SM64TrainerBeta.exe"))
+    elif fault == "legacy_profile":
+        normal_runtime.paths.data_root = lambda: normal_runtime.local_appdata / BETA_APP_DIR
+    elif fault == "legacy_port":
+        normal_runtime.paths.server_port = lambda: BETA_PORT
+    else:
+        normal_runtime = replace(normal_runtime, update_status=lambda: {"updates_enabled": False})
+    assert not probe.collect_report(fixture=normal_runtime, importer=importer)["ok"]
 
 
 @pytest.mark.parametrize("problem", ["public-profile", "public-port", "updates", "native", "native-resolver", "shared-metadata", "asset", "twitch-asset", "helper"])

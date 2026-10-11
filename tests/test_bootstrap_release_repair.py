@@ -36,7 +36,7 @@ def routes(tmp_path, version, releases):
 
     def http(request):
         calls.append(request.full_url)
-        if "/releases?per_page=100&page=1" in request.full_url:
+        if "/releases?per_page=100" in request.full_url:
             return _Resp(json.dumps(releases).encode())
         return _Resp(values[request.full_url])
     return http, calls
@@ -135,6 +135,7 @@ def test_failed_rollback_keeps_backup_and_next_installer_recovers_it(tmp_path, c
     archive = tmp_path / "payload.zip"
     archive.write_bytes(_zip_bytes(_app_files(b"NEW")))
     manifest = make_manifest(archive, "2.0.0")
+    (target / boot.INSTALLED_MANIFEST).write_text(manifest)
     real = boot.os.replace
 
     def fail(source, destination):
@@ -211,3 +212,93 @@ def test_older_installer_download_cannot_replace_a_concurrently_finished_newer_i
     assert "newer application was installed" in ui.errors[0]
     assert json.loads((target / boot.INSTALLED_MANIFEST).read_text())["version"] == "3.0.0"
     assert read_policy(policy)["installed_version"] == "3.0.0"
+
+
+def test_release_list_outage_still_allows_independent_forward_stable_repair(tmp_path, context):
+    target, policy = context
+    write_policy(policy, installed_version="1.9.1", receive_beta_updates=True)
+    network, _ = routes(tmp_path, "2.0.0", [])
+
+    def http(request):
+        if request.full_url.endswith("/releases/latest"):
+            return _Resp(json.dumps(release("2.0.0")).encode())
+        if "/releases?" in request.full_url:
+            raise OSError("list unavailable")
+        return network(request)
+    assert boot.run_install(http=http, ui=_UI(), install_dir=target, policy_path=policy)
+    assert read_policy(policy)["installed_version"] == "2.0.0"
+
+
+def test_stale_latest_cannot_resurrect_a_withdrawn_list_release(tmp_path, context):
+    target, policy = context
+    withdrawn = {**release("2.0.0"), "body": "<!-- sm64-withdrawn -->"}
+    downloaded = []
+
+    def http(request):
+        if request.full_url.endswith("/releases/latest"):
+            return _Resp(json.dumps(release("2.0.0")).encode())
+        if "/releases?" in request.full_url:
+            return _Resp(json.dumps([withdrawn]).encode())
+        downloaded.append(request.full_url)
+        pytest.fail("withdrawn installer payload was downloaded")
+    assert not boot.run_install(http=http, ui=_UI(), install_dir=target, policy_path=policy)
+    assert downloaded == []
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("manifest", [None, "corrupt"])
+@pytest.mark.parametrize("saved_policy", [None, "corrupt", '{"installed_version":"invalid"}'])
+def test_unidentified_existing_app_preserves_program_and_data_without_download(
+        tmp_path, context, manifest, saved_policy):
+    target, policy = context
+    target.mkdir(parents=True)
+    (target / boot.APP_EXE).write_bytes(b"UNKNOWN-AHEAD-BETA")
+    if manifest is not None:
+        (target / boot.INSTALLED_MANIFEST).write_text(manifest)
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    history = policy.parent / "tracker.db"
+    history.write_bytes(b"PRACTICE")
+    if saved_policy is not None:
+        policy.write_text(saved_policy)
+    ui = _UI()
+    assert not boot.run_install(http=lambda _: pytest.fail("unknown floor reached network"), ui=ui,
+                                install_dir=target, policy_path=policy)
+    assert "version could not be established" in ui.errors[0]
+    assert (target / boot.APP_EXE).read_bytes() == b"UNKNOWN-AHEAD-BETA"
+    assert history.read_bytes() == b"PRACTICE"
+
+
+def test_offline_self_check_repairs_embedded_payload_without_shortcuts_launch_or_profile_access(tmp_path, monkeypatch):
+    from sm64_events.core.build_channel import BuildChannel
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "user"))
+    for name in ("create_desktop_shortcut", "launch_app", "beta_profile_migration_available"):
+        monkeypatch.setattr(boot, name, lambda *_: pytest.fail("self-check activated a user resource"))
+    archive = tmp_path / "payload.zip"
+    files = _app_files(b"OFFLINE")
+    files["_internal/build-channel.json"] = json.dumps(BuildChannel(
+        channel="beta", build_id="offline", installation="normal").metadata()).encode()
+    files["_internal/release-version.json"] = json.dumps({"schema": 1, "version": "1.10.0-beta.1"}).encode()
+    archive.write_bytes(_zip_bytes(files))
+    manifest = make_manifest(archive, "1.10.0-beta.1")
+    with zipfile.ZipFile(archive, "a") as zipped:
+        zipped.writestr(boot.OFFLINE_OFFER, json.dumps({"schema": 1, "version": "1.10.0-beta.1", "manifest": manifest}))
+    stub = tmp_path / "stub.exe"
+    stub.write_bytes(b"MZ-stub")
+    installer = tmp_path / "private.exe"
+    append_payload(stub, archive, installer)
+    receipt = tmp_path / "receipt.json"
+    assert boot.install_self_check(installer, receipt) == 0
+    report = json.loads(receipt.read_text())
+    assert report["ok"] and report["profile_preserved"] and report["same_version_repair"] and report["stale_removed"]
+    assert report["version"] == "1.10.0-beta.1" and report["port"] == 8064 and report["updates_enabled"]
+    assert not list(tmp_path.glob("sm64-install-check-*")) and not (tmp_path / "user").exists()
+
+
+def test_install_self_check_cli_refuses_source_and_profile_receipt_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert boot.main(["--install-self-check", str(tmp_path / "receipt.json")]) == 2
+    for name in ("SM64Trainer", "SM64TrainerBeta", "sm64_tracker", "Programs/SM64Trainer"):
+        root = tmp_path / name
+        root.mkdir(parents=True, exist_ok=True)
+        assert boot.install_self_check(tmp_path / "nonexistent.exe", root / "receipt.json") == 2
+        assert not (root / "receipt.json").exists()

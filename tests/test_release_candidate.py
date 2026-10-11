@@ -173,3 +173,67 @@ def test_private_installer_payload_and_offer_are_bound_to_same_candidate(tmp_pat
     receipt = release.verify_candidate(directory, app=app)
     assert json.loads(receipt.read_text())["draft_ready"] is False
     assert (directory / "SM64Trainer-1.10.0-beta.1-private.exe").is_file()
+
+
+@pytest.mark.parametrize("change", ["version_only", "project_dependency", "lock_dependency", "runtime_code"])
+def test_promotion_accepts_only_own_version_fields_in_actual_committed_source(tmp_path, monkeypatch, change):
+    repo = tmp_path / "source"
+    repo.mkdir()
+    monkeypatch.setattr(release, "REPO", repo)
+    version = repo / "src/sm64_events/core/version.py"
+    version.parent.mkdir(parents=True)
+    version.write_text('__version__ = "1.9.1"\n')
+    project = repo / "pyproject.toml"
+    project.write_text('[project]\nname = "sm64-events"\nversion = "1.9.1"\ndependencies = ["fastapi>=0.115"]\n')
+    lock = repo / "uv.lock"
+    lock.write_text('[[package]]\nname = "sm64-events"\nversion = "1.9.1"\n'
+                    '[[package]]\nname = "fastapi"\nversion = "0.115.0"\n')
+    for args in (["init", "-q"], ["config", "core.longpaths", "true"], ["config", "user.name", "Disposable QA"],
+                 ["config", "user.email", "qa@example.invalid"], ["add", "src", "pyproject.toml", "uv.lock"],
+                 ["commit", "-qm", "approved beta source"]):
+        release._run(["git", *args], capture_output=True)
+    source = release._capture(["git", "rev-parse", "HEAD"])
+    build = BuildChannel(channel="stable", build_id="stable", installation="normal")
+    directory = tmp_path / "candidate"
+    directory.mkdir()
+    candidate.write_once(directory / candidate.RECORD, {
+        "schema": 1, "version": "1.10.0-beta.1", "installation": "normal", "distribution": "public",
+        "channel": "beta", "source_commit": source, "public_config_sha256": candidate.public_fingerprint(build)})
+    approval = tmp_path / "approval.json"
+    approval.write_text(json.dumps({"approved": True, "manual_qa": True, "reviewer": "griff",
+                                   "candidate_sha256": candidate.digest(directory / candidate.RECORD)}))
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(build.metadata()))
+    for path in (version, project, lock):
+        path.write_text(path.read_text().replace("1.9.1", "1.10.0"))
+    if change == "project_dependency":
+        project.write_text(project.read_text().replace("fastapi>=0.115", "fastapi>=0.120"))
+    elif change == "lock_dependency":
+        lock.write_text(lock.read_text().replace("0.115.0", "0.120.0"))
+    elif change == "runtime_code":
+        version.write_text(version.read_text() + 'print("changed runtime")\n')
+    release._run(["git", "add", "src", "pyproject.toml", "uv.lock"], capture_output=True)
+    release._run(["git", "commit", "-qm", "stable preparation"], capture_output=True)
+    if change == "version_only":
+        assert release_flow.promotion_source(directory, approval, "1.10.0", config) == candidate.digest(directory / candidate.RECORD)
+    else:
+        with pytest.raises(ValueError, match="dependencies or configuration changed"):
+            release_flow.promotion_source(directory, approval, "1.10.0", config)
+
+
+@pytest.mark.parametrize("changed", ["head", "working_tree", "lock", None])
+def test_candidate_provenance_requires_source_still_unchanged_after_long_build(tmp_path, monkeypatch, changed):
+    lock = tmp_path / "uv.lock"
+    lock.write_bytes(b"ORIGINAL")
+    lock_digest = candidate.digest(lock)
+    monkeypatch.setattr(release, "UV_LOCK", lock)
+    monkeypatch.setattr(release, "_capture", lambda command:
+                        ("b" * 40 if changed == "head" else "a" * 40) if command[1] == "rev-parse"
+                        else " M src/product.py" if changed == "working_tree" else "")
+    if changed == "lock":
+        lock.write_bytes(b"CHANGED")
+    if changed is None:
+        release._assert_build_source("a" * 40, lock_digest)
+    else:
+        with pytest.raises(ValueError, match="changed during preparation"):
+            release._assert_build_source("a" * 40, lock_digest)

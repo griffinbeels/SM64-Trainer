@@ -75,17 +75,13 @@ def fetch_text(http, url: str) -> str:
 
 
 def published_releases(http, repo: str = DEFAULT_REPO) -> list[dict]:
-    """Bounded listing includes prereleases; /latest only returns stable."""
-    result = []
-    for page in range(1, 11):
-        url = f"{GITHUB_API}/repos/{repo}/releases?per_page=100&page={page}"
-        values = json.loads(fetch_text(http, url))
-        if not isinstance(values, list) or len(values) > 100:
-            raise RuntimeError("release listing is invalid")
-        result.extend(value for value in values if isinstance(value, dict))
-        if len(values) < 100:
-            return result
-    raise RuntimeError("release listing exceeds its limit; retry with a current installer")
+    """Use the app's bounded discovery and independent stable fallback."""
+    from sm64_events.core.release_feed import ReleaseFeed
+    feed = ReleaseFeed(http=http, repo=repo, api_base=GITHUB_API)
+    values = feed.releases()
+    if not values and feed.last_error:
+        raise RuntimeError(feed.last_error)
+    return values
 
 
 def default_policy_path() -> Path:
@@ -94,7 +90,7 @@ def default_policy_path() -> Path:
 
 
 def repair_floor(target: Path, policy: Path | None) -> str:
-    current = "0.0.0"
+    current = None
     manifest = target / INSTALLED_MANIFEST
     try:
         if manifest.is_file() and not manifest.is_symlink() and manifest.stat().st_size <= MAX_TEXT_BYTES:
@@ -103,6 +99,13 @@ def repair_floor(target: Path, policy: Path | None) -> str:
             current = value.version
     except (OSError, ValueError, UnicodeError):
         pass  # The independently recorded floor still survives damaged program files.
+    saved = read_policy(policy).get("installed_version") if policy is not None else None
+    if current is None and saved is None and target.exists():
+        if not target.is_dir() or any(target.iterdir()):
+            raise RuntimeError("The existing application's version could not be established. "
+                               "Its program and practice data were preserved. Contact support "
+                               "for a verified recovery version before replacing it.")
+    current = current or saved or "0.0.0"
     return installed_floor(policy, current) if policy is not None else current
 
 
@@ -399,13 +402,13 @@ def _network_offer(http, ui, repo, floor, receive_beta, temporary):
 def run_install(*, http, ui, repo: str = DEFAULT_REPO,
                 install_dir: "Path | None" = None,
                 own_path: "Path | None" = None,
-                policy_path: "Path | None" = None) -> bool:
+                policy_path: "Path | None" = None, activate: bool = True) -> bool:
     """The whole install: release -> download+verify zip -> swap in ->
     shortcut -> launch. Returns False after ui.error() on any failure."""
     target = install_dir or default_install_dir()
     policy = policy_path or default_policy_path()
     try:
-        if (beta_profile_migration_available()
+        if (activate and beta_profile_migration_available()
                 and callable(getattr(ui, "confirm_profile_migration", None))
                 and ui.confirm_profile_migration()):
             try:
@@ -433,16 +436,59 @@ def run_install(*, http, ui, repo: str = DEFAULT_REPO,
             exe = install_tree(zip_path, manifest_text, target, offered_version=tag, embedded=embedded,
                                policy_path=policy)
             record_installed(policy, parse_manifest(manifest_text).version)
-        if not create_desktop_shortcut(exe):
-            ui.status("Note: could not create the Desktop shortcut — "
-                      f"the app is installed at {exe}")
-        ui.status("Starting SM64 Trainer…")
-        launch_app(exe, own_path)
+        if activate:
+            if not create_desktop_shortcut(exe):
+                ui.status("Note: could not create the Desktop shortcut — "
+                          f"the app is installed at {exe}")
+            ui.status("Starting SM64 Trainer…")
+            launch_app(exe, own_path)
         ui.done(exe)
         return True
     except Exception as err:
         ui.error(str(err))
         return False
+
+
+def install_self_check(own_path: Path, receipt: Path) -> int:
+    """Exercise this EXE's included install without activating a user resource."""
+    if not receipt.is_absolute() or receipt.suffix.lower() != ".json" or not receipt.parent.is_dir():
+        return 2
+    receipt = receipt.resolve()
+    base = default_policy_path().parents[2]
+    if (any(receipt.is_relative_to(base / name) for name in ("SM64Trainer", "SM64TrainerBeta", "sm64_tracker"))
+            or receipt.is_relative_to(default_install_dir())):
+        return 2
+    report = {"schema": 1, "kind": "offline-install-self-check", "ok": False}
+    try:
+        with tempfile.TemporaryDirectory(prefix="sm64-install-check-", dir=receipt.parent) as temporary:
+            root = Path(temporary)
+            target, policy = root / "Programs/SM64Trainer", root / "profile/data/update_state.json"
+            policy.parent.mkdir(parents=True)
+            history = policy.parent / "tracker.db"
+            history.write_bytes(b"MAINTAINER-PROBE-PRACTICE")
+            def no_http(_request):
+                raise RuntimeError("network is forbidden in the offline install self-check")
+            okay = run_install(http=no_http, ui=ConsoleUI(), own_path=own_path,
+                               install_dir=target, policy_path=policy, activate=False)
+            if okay:
+                (target / APP_EXE).write_bytes(b"MAINTAINER-PROBE-CORRUPT")
+                (target / "obsolete-probe.dll").write_bytes(b"OBSOLETE")
+                okay = run_install(http=no_http, ui=ConsoleUI(), own_path=own_path,
+                                   install_dir=target, policy_path=policy, activate=False)
+            if okay:
+                from sm64_events.core.build_channel import CONFIG_FILENAME, read_metadata
+                build = read_metadata(target / "_internal" / CONFIG_FILENAME)
+                manifest = parse_manifest((target / INSTALLED_MANIFEST).read_text(encoding="utf-8"))
+                report.update(version=manifest.version, installation=build.installation,
+                              installed_files=len(manifest.files),
+                              profile_preserved=history.read_bytes() == b"MAINTAINER-PROBE-PRACTICE",
+                              same_version_repair=True, stale_removed=not (target / "obsolete-probe.dll").exists(),
+                              updates_enabled=build.updates_enabled, port=build.default_port)
+                report["ok"] = build.installation == "normal" and report["profile_preserved"] and report["stale_removed"]
+    except (OSError, ValueError, RuntimeError, zipfile.BadZipFile):
+        pass  # No submitted metadata or private invitation enters the receipt.
+    receipt.write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return 0 if report["ok"] else 2
 
 
 class ConsoleUI:
@@ -535,6 +581,10 @@ def main(argv: "list[str] | None" = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     silent = "--silent" in args
     own_path = Path(sys.executable) if getattr(sys, "frozen", False) else None
+    if args and args[0] == "--install-self-check":
+        if len(args) != 2 or own_path is None:
+            return 2
+        return install_self_check(own_path, Path(args[1]))
     if silent:
         ui = ConsoleUI(allow_beta_repair="--allow-beta-repair" in args,
                        migrate_beta_profile="--migrate-beta-profile" in args)
