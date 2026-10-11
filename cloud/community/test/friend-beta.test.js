@@ -27,6 +27,69 @@ async function published(h,{uid=alice,marker=1,frames=100,strategy='Standard'}={
   const result=await h.call('/v1/uploads/'+grant.json.upload_id,{uid,method:'PUT',bytes:f.bytes});assert.equal(result.response.status,200,JSON.stringify(result.json)+String(h.errors));return result.json;
 }
 
+test('all authenticated account lookups share a fixed entry budget without unknown UID rows',async()=>{
+  const {env,store}=await environment(),h=harness(env),day=new Date().toISOString().slice(0,10);
+  try{
+    await store.sql('UPDATE auth_entry_budget SET day=?,ops=?',day,LIMITS.global_ops_day-1).run();
+    const prepare=env.DB.prepare.bind(env.DB),queries=[];
+    env.DB.prepare=sql=>{queries.push(sql);return prepare(sql);};
+    const results=await Promise.all([third,fourth].map(uid=>h.call('/v1/account',{uid})));
+    assert.deepEqual(results.map(result=>result.response.status).sort(),[200,429]);
+    assert.equal(results.find(result=>result.response.status===200).json.status,'not_invited');
+    assert.equal(queries.filter(sql=>sql.startsWith('SELECT * FROM accounts')).length,1);
+    assert.equal((await store.one('SELECT ops FROM auth_entry_budget')).ops,LIMITS.global_ops_day);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM auth_entry_budget')).n,1);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM accounts')).n,2);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM quotas')).n,0);
+    assert.deepEqual(h.errors,[]);
+  }finally{env.DB.close();}
+});
+test('entry exhaustion blocks invitation claims and retries before account or capability reads',async()=>{
+  const {env,store}=await environment(),h=harness(env),day=new Date().toISOString().slice(0,10);
+  try{
+    await invite(store);await invite(store,'B'.repeat(43));
+    assert.equal((await h.call('/v1/account/invitation',{uid:third,method:'POST',body:{token}})).response.status,200);
+    const accounts=await store.rows('SELECT * FROM accounts ORDER BY uid'),invites=await store.rows('SELECT * FROM beta_invitations ORDER BY token_sha256');
+    const epochs=await store.one('SELECT global_epoch FROM settings');
+    await store.sql('UPDATE auth_entry_budget SET day=?,ops=?',day,LIMITS.global_ops_day).run();
+    const prepare=env.DB.prepare.bind(env.DB),queries=[];
+    env.DB.prepare=sql=>{queries.push(sql);return prepare(sql);};
+    for(const [path,options] of [
+      ['/v1/account',{uid:fourth}],
+      ['/v1/account',{uid:alice}],
+      ['/v1/account/invitation',{uid:fourth,method:'POST',body:{token:'B'.repeat(43)}}],
+      ['/v1/account/invitation',{uid:third,method:'POST',body:{token}}],
+      ['/v1/catalog',{uid:fourth}],
+      ['/v1/unsupported-route',{uid:fourth}]
+    ]){
+      const result=await h.call(path,options);
+      assert.equal(result.response.status,429,path);assert.equal(result.json.error.code,'budget_exhausted');
+      assert(Number(result.response.headers.get('retry-after'))>=1&&Number(result.response.headers.get('retry-after'))<=86400);
+    }
+    assert.equal(queries.length,6);assert(queries.every(sql=>sql.startsWith('UPDATE auth_entry_budget')));
+    assert.deepEqual(await store.rows('SELECT * FROM accounts ORDER BY uid'),accounts);
+    assert.deepEqual(await store.rows('SELECT * FROM beta_invitations ORDER BY token_sha256'),invites);
+    assert.deepEqual(await store.one('SELECT global_epoch FROM settings'),epochs);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM quotas')).n,0);
+    assert.equal((await store.one('SELECT ops FROM auth_entry_budget')).ops,LIMITS.global_ops_day);
+    assert.deepEqual(h.errors,[]);
+  }finally{env.DB.close();}
+});
+test('entry rollover retains one row and admitted calls keep their existing daily tickets',async()=>{
+  const {env,store}=await environment(),h=harness(env),day=new Date().toISOString().slice(0,10);
+  try{
+    await store.sql("UPDATE auth_entry_budget SET day='2000-01-01',ops=?",LIMITS.global_ops_day).run();
+    assert.equal((await h.call('/v1/account')).response.status,200);
+    assert.deepEqual({...await store.one('SELECT day,ops FROM auth_entry_budget')},{day,ops:1});
+    assert.deepEqual((await store.rows('SELECT owner,ops FROM quotas ORDER BY owner')).map(row=>[row.owner,row.ops]),[['*',1],[alice,1]]);
+    await store.sql('UPDATE quotas SET ops=ops_limit WHERE owner=?',alice).run();
+    assert.equal((await h.call('/v1/account')).response.status,429);
+    assert.equal((await store.one('SELECT ops FROM auth_entry_budget')).ops,2);
+    assert.equal((await store.one("SELECT ops FROM quotas WHERE owner='*'")).ops,1);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM auth_entry_budget')).n,1);
+    assert.deepEqual(h.errors,[]);
+  }finally{env.DB.close();}
+});
 test('one-use invitations atomically bind one authenticated UID and repeat safely',async()=>{
   const {env,store}=await environment(),h=harness(env);
   try{

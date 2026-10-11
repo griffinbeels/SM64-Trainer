@@ -23,7 +23,7 @@ const mf=new Miniflare(options);
 try{
   await mf.ready;
   const db=await mf.getD1Database('DB');
-  for(const migration of ['0001_community.sql','0002_friend_beta.sql'])for(const sql of readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8').split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
+  for(const migration of ['0001_community.sql','0002_friend_beta.sql','0003_auth_entry_budget.sql'])for(const sql of readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8').split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
   await db.prepare('UPDATE settings SET generation=? WHERE id=1').bind(model.generation).run();
   await db.prepare("INSERT INTO accounts(uid,issuer,subject,invited,status,name,name_key,sharing,terms_version,privacy_version,created_at,updated_at) VALUES(?,?,?,1,'active','Runtime','runtime',1,'test-1','test-1',0,0)").bind(alice,issuer,alice).run();
   async function call(path,{method='GET',body,bytes}={}){

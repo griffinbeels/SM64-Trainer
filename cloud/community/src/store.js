@@ -63,6 +63,18 @@ export class Store {
       'invite_unavailable','This invitation is unavailable.',403);
     return this.publicAccount(await this.account(identity));
   }
+  async authEntryTicket() {
+    const day=new Date().toISOString().slice(0,10);
+    try {
+      // Count before reading an account. Unknown callers cannot create quota
+      // dimensions, and changing UID or route cannot bypass this fixed row.
+      const result=await this.sql('UPDATE auth_entry_budget SET day=MAX(day,?),ops=CASE WHEN day<? THEN 1 ELSE ops+1 END WHERE id=1',day,day).run();
+      requireThat(result.meta?.changes===1,'configuration','Account entry is unavailable.',503);
+    } catch(error) {
+      if(/CHECK constraint failed/.test(String(error)))fail(429,'budget_exhausted','The community daily budget is exhausted.');
+      throw error;
+    }
+  }
   async ticket(uid,{uploadBytes=0,classA=0,classB=0,maintenance=false}={}) {
     const day=new Date().toISOString().slice(0,10);
     if(maintenance){
