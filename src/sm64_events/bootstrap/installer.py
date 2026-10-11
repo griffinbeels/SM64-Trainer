@@ -93,7 +93,7 @@ def default_policy_path() -> Path:
     return Path(base) / "SM64Trainer" / "data" / "update_state.json"
 
 
-def repair_floor(target: Path, policy: Path) -> str:
+def repair_floor(target: Path, policy: Path | None) -> str:
     current = "0.0.0"
     manifest = target / INSTALLED_MANIFEST
     try:
@@ -103,7 +103,7 @@ def repair_floor(target: Path, policy: Path) -> str:
             current = value.version
     except (OSError, ValueError, UnicodeError):
         pass  # The independently recorded floor still survives damaged program files.
-    return installed_floor(policy, current)
+    return installed_floor(policy, current) if policy is not None else current
 
 
 def choose_repair(releases, floor: str, receive_beta: bool, ui) -> dict:
@@ -257,7 +257,8 @@ def _extract_verified_tree(zip_path, manifest, fresh, embedded):
 
 
 def install_tree(zip_path: Path, manifest_text: str, install_dir: Path, *,
-                 offered_version: str | None = None, embedded: bool = False) -> Path:
+                 offered_version: str | None = None, embedded: bool = False,
+                 policy_path: Path | None = None) -> Path:
     """Extract to a temp sibling then atomically swap directories, so a
     failed download/extract can never break an existing install. Raises
     RuntimeError when the current install is locked (app running)."""
@@ -277,6 +278,10 @@ def install_tree(zip_path: Path, manifest_text: str, install_dir: Path, *,
         moved_aside = False
         try:
             _extract_verified_tree(zip_path, manifest, fresh, embedded)
+            # Another installer can finish while this one downloads. Recheck
+            # the current files and profile floor under this transaction lock.
+            if version_key(manifest.version) < version_key(repair_floor(install_dir, policy_path)):
+                raise RuntimeError("a newer application was installed while downloading; use its repair version")
             (fresh / INSTALLED_MANIFEST).write_text(manifest_text, encoding="utf-8")
             _write_journal(journal, {"schema": 1, "staging": fresh.name,
                                      "previous": old.name, "version": manifest.version,
@@ -425,7 +430,8 @@ def run_install(*, http, ui, repo: str = DEFAULT_REPO,
             else:
                 tag, manifest_text, zip_path = _network_offer(http, ui, repo, floor, receive_beta, td)
             ui.status("Installing…")
-            exe = install_tree(zip_path, manifest_text, target, offered_version=tag, embedded=embedded)
+            exe = install_tree(zip_path, manifest_text, target, offered_version=tag, embedded=embedded,
+                               policy_path=policy)
             record_installed(policy, parse_manifest(manifest_text).version)
         if not create_desktop_shortcut(exe):
             ui.status("Note: could not create the Desktop shortcut — "

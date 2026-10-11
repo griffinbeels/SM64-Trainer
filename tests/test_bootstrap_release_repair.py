@@ -191,3 +191,23 @@ def test_profile_copy_is_only_called_after_explicit_opt_in(tmp_path, context, mo
     ui.confirm_profile_migration = lambda: True
     assert boot.run_install(http=http, ui=ui, install_dir=target, policy_path=policy)
     assert copied == [{"confirmed": True}]
+
+
+def test_older_installer_download_cannot_replace_a_concurrently_finished_newer_install(tmp_path, context):
+    target, policy = context
+    old_http, _ = routes(tmp_path, "2.0.0", [release("2.0.0")])
+    newer_dir = tmp_path / "newer"
+    newer_dir.mkdir()
+    new_http, _ = routes(newer_dir, "3.0.0", [release("3.0.0")])
+    installed_newer = []
+
+    def interleaved_http(request):
+        if request.full_url == "https://dl/full.zip" and not installed_newer:
+            assert boot.run_install(http=new_http, ui=_UI(), install_dir=target, policy_path=policy)
+            installed_newer.append(True)
+        return old_http(request)
+    ui = _UI()
+    assert not boot.run_install(http=interleaved_http, ui=ui, install_dir=target, policy_path=policy)
+    assert "newer application was installed" in ui.errors[0]
+    assert json.loads((target / boot.INSTALLED_MANIFEST).read_text())["version"] == "3.0.0"
+    assert read_policy(policy)["installed_version"] == "3.0.0"
