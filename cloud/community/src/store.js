@@ -53,13 +53,18 @@ export class Store {
     requireThat(!['deleted','suspended'].includes(prior.status),'account_unavailable','This account cannot use an invitation.',403);
     requireThat(prior.ephemeral||prior.invited,'invite_unavailable','This invitation is unavailable.',403);
     const invitation=await this.one('SELECT * FROM beta_invitations WHERE token_sha256=?',digest);
-    requireThat(invitation&&!invitation.revoked&&invitation.expires_at>now&&(!invitation.claimed_uid||invitation.claimed_uid===uid),'invite_unavailable','This invitation is unavailable.',403);
-    await this.tx("(SELECT enabled FROM settings WHERE id=1)=1 AND EXISTS(SELECT 1 FROM beta_invitations WHERE token_sha256=? AND revoked=0 AND expires_at>? AND (claimed_uid IS NULL OR claimed_uid=?)) AND "+
-      "NOT EXISTS(SELECT 1 FROM accounts WHERE uid=? AND (invited=0 OR status IN ('deleted','suspended'))) AND "+
-      "(EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1) OR (SELECT COUNT(*) FROM accounts)<(SELECT max_members FROM beta_admission WHERE id=1))",[digest,now,uid,uid,uid],[
-      this.sql("INSERT INTO accounts(uid,issuer,subject,invited,created_at,updated_at) VALUES(?,?,?,1,?,?) ON CONFLICT(uid) DO UPDATE SET invited=1,updated_at=excluded.updated_at",uid,this.cfg.issuer,uid,now,now),
-      this.sql('UPDATE beta_invitations SET claimed_uid=?,claimed_at=COALESCE(claimed_at,?) WHERE token_sha256=?',uid,now,digest),
-      this.sql('UPDATE settings SET global_epoch=global_epoch+1 WHERE id=1')],
+    requireThat(invitation&&!invitation.revoked&&(invitation.expires_at>now||invitation.reusable===1&&invitation.expires_at===0)&&
+      (invitation.reusable===1||!invitation.claimed_uid||invitation.claimed_uid===uid),'invite_unavailable','This invitation is unavailable.',403);
+    await this.tx("(SELECT enabled FROM settings WHERE id=1)=1 AND EXISTS(SELECT 1 FROM beta_invitations WHERE token_sha256=? AND revoked=0 AND "+
+      "(expires_at>? OR (reusable=1 AND expires_at=0)) AND (reusable=1 OR claimed_uid IS NULL OR claimed_uid=?)) AND "+
+      "NOT EXISTS(SELECT 1 FROM accounts WHERE uid=? AND (issuer!=? OR invited=0 OR status IN ('deleted','suspended'))) AND "+
+      "((SELECT uncapped FROM beta_admission WHERE id=1)=1 OR EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1) OR "+
+      "(SELECT COUNT(*) FROM accounts)<(SELECT max_members FROM beta_admission WHERE id=1))",[digest,now,uid,uid,this.cfg.issuer,uid],[
+      // The epoch predicate and insert share one serialized transaction. Two
+      // first joins for the same UID increment once, without resetting a profile.
+      this.sql('UPDATE settings SET global_epoch=global_epoch+1 WHERE id=1 AND NOT EXISTS(SELECT 1 FROM accounts WHERE uid=?)',uid),
+      this.sql("INSERT INTO accounts(uid,issuer,subject,invited,created_at,updated_at) VALUES(?,?,?,1,?,?) ON CONFLICT(uid) DO NOTHING",uid,this.cfg.issuer,uid,now,now),
+      this.sql('UPDATE beta_invitations SET claimed_uid=?,claimed_at=? WHERE token_sha256=? AND reusable=0 AND claimed_uid IS NULL',uid,now,digest)],
       'invite_unavailable','This invitation is unavailable.',403);
     return this.publicAccount(await this.account(identity));
   }
@@ -314,7 +319,8 @@ export class Store {
   async invite(subject,invited,actor,reason,confirmation,receipt) {
     requireThat(confirmation==="CHANGE INVITATION","confirmation_required","Confirm invitation change.");
     const uid=subject.toLowerCase(),now=sec();
-    await this.tx("EXISTS(SELECT 1 FROM accounts WHERE uid=?) OR (SELECT COUNT(*) FROM accounts)<(SELECT max_members FROM beta_admission WHERE id=1)",[uid],[
+    await this.tx("(SELECT uncapped FROM beta_admission WHERE id=1)=1 OR EXISTS(SELECT 1 FROM accounts WHERE uid=?) OR "+
+      "(SELECT COUNT(*) FROM accounts)<(SELECT max_members FROM beta_admission WHERE id=1)",[uid],[
       this.sql("INSERT INTO accounts(uid,issuer,subject,invited,created_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(uid) DO UPDATE SET invited=excluded.invited,updated_at=excluded.updated_at",
         uid,this.cfg.issuer,subject.toLowerCase(),Number(invited),now,now),
       this.sql("UPDATE settings SET global_epoch=global_epoch+1 WHERE id=1"),

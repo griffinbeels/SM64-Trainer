@@ -11,7 +11,7 @@ export const target={kind:'star',entity_key:'1-0',name:'Fixture star'};
 const entries=[{target,clock:'igt',game_version:'us',strategies:[{name:'Standard',cutoffs:[{step:0,frames:1000},{step:1,frames:200},{step:2,frames:50}]}],overall_cutoffs:[{step:0,frames:1000},{step:1,frames:200},{step:2,frames:50}]}];
 export const catalog={v:1,generation:digest(canonical(entries)),entries};
 export class LocalD1{
-  constructor(){this.sqlite=new DatabaseSync(':memory:');for(const migration of ['0001_community.sql','0002_friend_beta.sql','0003_auth_entry_budget.sql'])this.sqlite.exec(readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8'));}
+  constructor(){this.sqlite=new DatabaseSync(':memory:');for(const migration of ['0001_community.sql','0002_friend_beta.sql','0003_auth_entry_budget.sql','0004_reusable_beta_invitation.sql'])this.sqlite.exec(readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8'));}
   prepare(sql){const db=this.sqlite;let args=[];const query={bind(...v){args=v;return query;},async first(){return db.prepare(sql).get(...args)||null;},async all(){return {results:db.prepare(sql).all(...args)};},execute(){const result=db.prepare(sql).run(...args);return {success:true,meta:{changes:result.changes}};},async run(){return query.execute();}};return query;}
   async batch(statements){this.sqlite.exec('BEGIN IMMEDIATE');try{const results=statements.map(s=>s.execute());this.sqlite.exec('COMMIT');return results;}catch(e){this.sqlite.exec('ROLLBACK');throw e;}}
   close(){this.sqlite.close();}
