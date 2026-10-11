@@ -24,7 +24,7 @@ export class Store {
   async account(identity) {
     requireThat(identity.issuer===this.cfg.issuer,"invalid_issuer","This identity provider is not configured.",401);
     const uid=identity.sub;
-    // Only an Access-admin invitation persists a new identity. Ordinary valid
+    // Only an operator invitation persists a new identity. Ordinary valid
     // JWTs can inspect an ephemeral profile without increasing retained rows.
     return await this.one("SELECT * FROM accounts WHERE uid=? AND issuer=?",uid,identity.issuer)||
       {uid,issuer:identity.issuer,subject:uid,ephemeral:true,invited:0,status:"new",name:null,
@@ -43,8 +43,37 @@ export class Store {
     if(!profile) requireThat(a.terms_version===this.cfg.terms && a.privacy_version===this.cfg.privacy,
       "consent_required","Accept the current policies.",403);
   }
+  // Only authenticated UID ownership or an immutable operator publisher list
+  // grants visibility. Renaming an account can never imitate an approved author.
+  visibleOwners(a) {return this.cfg.sharedPublishers===null?null:[...new Set([a.uid,...this.cfg.sharedPublishers])].sort();}
+  async redeem(identity,token) {
+    requireThat(typeof token==='string'&&/^[A-Za-z0-9_-]{43}$/.test(token),'invite_unavailable','This invitation is unavailable.',403);
+    const digest=await sha256(token),uid=identity.sub,now=sec();
+    const prior=await this.account(identity);
+    requireThat(!['deleted','suspended'].includes(prior.status),'account_unavailable','This account cannot use an invitation.',403);
+    const invitation=await this.one('SELECT * FROM beta_invitations WHERE token_sha256=?',digest);
+    requireThat(invitation&&!invitation.revoked&&invitation.expires_at>now&&(!invitation.claimed_uid||invitation.claimed_uid===uid),'invite_unavailable','This invitation is unavailable.',403);
+    await this.tx("(SELECT enabled FROM settings WHERE id=1)=1 AND EXISTS(SELECT 1 FROM beta_invitations WHERE token_sha256=? AND revoked=0 AND expires_at>? AND (claimed_uid IS NULL OR claimed_uid=?)) AND "+
+      "NOT EXISTS(SELECT 1 FROM accounts WHERE uid=? AND status IN ('deleted','suspended')) AND "+
+      "(EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1) OR (SELECT COUNT(*) FROM accounts)<(SELECT max_members FROM beta_admission WHERE id=1))",[digest,now,uid,uid,uid],[
+      this.sql("INSERT INTO accounts(uid,issuer,subject,invited,created_at,updated_at) VALUES(?,?,?,1,?,?) ON CONFLICT(uid) DO UPDATE SET invited=1,updated_at=excluded.updated_at",uid,this.cfg.issuer,uid,now,now),
+      this.sql('UPDATE beta_invitations SET claimed_uid=?,claimed_at=COALESCE(claimed_at,?) WHERE token_sha256=?',uid,now,digest),
+      this.sql('UPDATE settings SET global_epoch=global_epoch+1 WHERE id=1')],
+      'invite_unavailable','This invitation is unavailable.',403);
+    return this.publicAccount(await this.account(identity));
+  }
   async ticket(uid,{uploadBytes=0,classA=0,classB=0,maintenance=false}={}) {
     const day=new Date().toISOString().slice(0,10);
+    if(maintenance){
+      // Collection must retain its own bounded capacity after normal admission
+      // is disabled or a player deliberately spends their entire daily allowance.
+      requireThat(uploadBytes===0&&Number.isSafeInteger(classA)&&classA>=0&&Number.isSafeInteger(classB)&&classB>=0);
+      try{await this.db.batch([
+        this.sql('INSERT INTO maintenance_quotas(day) VALUES(?) ON CONFLICT DO NOTHING',day),
+        this.sql('UPDATE maintenance_quotas SET ops=ops+1,class_a=class_a+?,class_b=class_b+? WHERE day=?',classA,classB,day)]);
+      }catch(error){if(/CHECK constraint failed/.test(String(error)))fail(429,'maintenance_budget_exhausted','Maintenance will retry later.');throw error;}
+      return;
+    }
     // Every admitted call consumes an exact account and global ticket, even cache hits.
     // Asset downloads conservatively consume a Class B ticket even on cache hits.
     const statements=[
@@ -189,9 +218,10 @@ export class Store {
   }
   async recording(a,id) {
     this.active(a);
+    const owners=this.visibleOwners(a),ownerSQL=owners===null?'':' AND r.uid IN ('+owners.map(()=>'?').join(',')+')';
     const r=await this.one("SELECT r.*,a.name,a.status,x.state AS asset_state FROM recordings r JOIN accounts a ON a.uid=r.uid JOIN assets x ON x.key=r.asset_key "+
       "WHERE r.id=? AND r.published=1 AND a.invited=1 AND a.status IN ('active','rename_required') AND x.state='stored' AND "+
-      "(EXISTS(SELECT 1 FROM winners w WHERE w.recording_id=r.id) OR EXISTS(SELECT 1 FROM pins p WHERE p.recording_id=r.id AND p.uid=? AND p.expires_at>?))",id,a.uid,sec());
+      "(EXISTS(SELECT 1 FROM winners w WHERE w.recording_id=r.id) OR EXISTS(SELECT 1 FROM pins p WHERE p.recording_id=r.id AND p.uid=? AND p.expires_at>?))"+ownerSQL,id,a.uid,sec(),...(owners||[]));
     requireThat(r,"not_found","Recording unavailable.",404);return r;
   }
   async candidates(query) {
@@ -202,12 +232,28 @@ export class Store {
     if(query.scope==="strategy") values.push(query.strategy);
     if(query.prefix) values.push(query.prefix.start,query.prefix.end);
     if(query.after) values.push(query.after[0],query.after[0],query.after[1],query.after[1],query.after[2]);
+    if(query.visibleOwners)values.push(...query.visibleOwners);
     values.push(query.pageSize+1);
     return this.rows("SELECT r.*,a.name,a.status,"+column+" AS response_step FROM recordings r JOIN accounts a ON a.uid=r.uid "+
       "WHERE r.target_key=? AND r.clock=? AND r.rom=? AND r.generation=? AND "+column+" BETWEEN ? AND ?"+
       strategySQL+(query.prefix?" AND a.name_key>=? AND a.name_key<?":"")+cursorSQL+
       " AND r.published=1 AND a.invited=1 AND a.status IN ('active','rename_required') AND EXISTS(SELECT 1 FROM winners w WHERE w.recording_id=r.id)"+
+      (query.visibleOwners?' AND r.uid IN ('+query.visibleOwners.map(()=>'?').join(',')+')':'')+
       " ORDER BY "+column+",r.frames,r.id LIMIT ?",...values);
+  }
+  async poolCandidates(query) {
+    const rows=await this.candidates(query);
+    if(rows.length||query.after)return rows;
+    const column=query.scope==='strategy'?'r.step':'r.overall_step',strategySQL=query.scope==='strategy'?' AND r.strategy=?':'',
+      values=[query.key,query.clock,query.rom,query.generation];
+    if(query.scope==='strategy')values.push(query.strategy);
+    if(query.visibleOwners)values.push(...query.visibleOwners);
+    values.push(4);
+    return this.rows("SELECT r.*,a.name,a.status,"+column+" AS response_step FROM recordings r JOIN accounts a ON a.uid=r.uid "+
+      "WHERE r.target_key=? AND r.clock=? AND r.rom=? AND r.generation=?"+strategySQL+
+      " AND r.published=1 AND a.invited=1 AND a.status IN ('active','rename_required') AND EXISTS(SELECT 1 FROM winners w WHERE w.recording_id=r.id)"+
+      (query.visibleOwners?' AND r.uid IN ('+query.visibleOwners.map(()=>'?').join(',')+')':'')+
+      ' ORDER BY r.frames,r.id LIMIT ?',...values);
   }
   async searchCandidates(query) {
     // Bound name-index exploration independently of returned rows. A prefix
@@ -215,6 +261,7 @@ export class Store {
     const after=query.after,values=[query.prefix.start,query.prefix.end];
     let suffix="";
     if(after){suffix=" AND (name_key>? OR (name_key=? AND uid>=?))";values.push(after[0],after[0],after[1]);}
+    if(query.visibleOwners){suffix+=' AND uid IN ('+query.visibleOwners.map(()=>'?').join(',')+')';values.push(...query.visibleOwners);}
     const names=await this.rows("SELECT name_key,uid FROM accounts INDEXED BY account_names WHERE name_key>=? AND name_key<? AND invited=1 AND status IN ('active','rename_required')"+suffix+" ORDER BY name_key,uid LIMIT 65",...values);
     const scanned=names.slice(0,64),column=query.scope==="strategy"?"r.step":"r.overall_step";
     if(!scanned.length)return {rows:[],more:false,after:null};
@@ -254,7 +301,7 @@ export class Store {
   async invite(subject,invited,actor,reason,confirmation,receipt) {
     requireThat(confirmation==="CHANGE INVITATION","confirmation_required","Confirm invitation change.");
     const uid=subject.toLowerCase(),now=sec();
-    await this.tx("1",[],[
+    await this.tx("EXISTS(SELECT 1 FROM accounts WHERE uid=?) OR (SELECT COUNT(*) FROM accounts)<(SELECT max_members FROM beta_admission WHERE id=1)",[uid],[
       this.sql("INSERT INTO accounts(uid,issuer,subject,invited,created_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(uid) DO UPDATE SET invited=excluded.invited,updated_at=excluded.updated_at",
         uid,this.cfg.issuer,subject.toLowerCase(),Number(invited),now,now),
       this.sql("UPDATE settings SET global_epoch=global_epoch+1 WHERE id=1"),

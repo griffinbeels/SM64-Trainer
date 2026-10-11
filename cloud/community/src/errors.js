@@ -5,10 +5,10 @@ export function fail(status, code, message) { throw new ServiceError(status, cod
 export function requireThat(ok, code = "invalid_request", message = "Invalid request.", status = 400) {
   if (!ok) fail(status, code, message);
 }
-export function json(value, status = 200) {
+export function json(value, status = 200, headers = {}) {
   return Response.json({v: 1, ...value}, {status, headers: {
     "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer"
+    "Referrer-Policy": "no-referrer", ...headers
   }});
 }
 export async function boundedBody(request, limit, expected) {

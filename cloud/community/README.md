@@ -28,8 +28,9 @@ Never use remote storage for local checks.
 Explicit approval is required before resource/account changes. Keep R2 public
 access, r2.dev and custom-domain object access disabled. Only the default Worker
 gets a public route. MetadataCache and AssetCache are private loopback exports.
-Apply migrations/0001_community.sql to a new staging D1 database; populated
-databases need a reviewed incremental migration. Fill D1/R2 bindings and public
+Apply migrations in order to a new staging D1 database. An existing 0001 database
+gets only migrations/0002_friend_beta.sql; never replace its initial schema.
+Fill D1/R2 bindings and public
 vars in wrangler.jsonc for one owned HTTPS service origin. Supply actual operator
 name/contact and published policy URL on that same origin. Keep SERVICE_ENABLED
 false until policies, providers, admission, secrets and staging gates pass.
@@ -48,6 +49,7 @@ compliance, age or jurisdiction promise.
 | ACCESS_ISSUER / ACCESS_AUD / ADMIN_EMAILS | Fixed Access app and explicit operator email allowlist. Protect /v1/admin/* with Access. |
 | CURSOR_SECRET | Independently generated server secret, at least 32 characters. |
 | SUPABASE_SECRET_KEY | Server-only admin/service-role credential used solely for Auth identity deletion. |
+| BETA_SHARED_PUBLISHERS | Optional JSON array of at most eight immutable Auth UUIDs. Friend beta uses Griffin's verified UID; `[]` allows only the caller's own recordings. Unset enables the general community policy. Display names never approve authors. |
 
 Supply server credentials through Wrangler's secret input mechanism. Never
 commit them, put them in literal shell arguments, public assets/config or desktop
@@ -63,11 +65,38 @@ PKCE authorize URL and retains the provider hint. Only code+state return to nati
 Browser sessions stay on the hosted origin; no browser tokens are forwarded.
 
 On an empty DB, initialize settings.generation with the validated catalog digest
-or let the first scheduled regrade initialize it. A catalog rollout admits one
+or let the first maintenance regrade initialize it. A catalog rollout admits one
 migration, regrades 20 retained recordings per invocation, then retires former
 generation winners. During rollout, generation_changed blocks new cloud pool/
 admission requests while local playback remains available. Finish an admitted
 migration before replacing its catalog again.
+
+## Private friend invitation
+
+An installer can carry a fresh 32-byte base64url capability (43 characters).
+The operator stores only its SHA256 in beta_invitations with an expiry. After
+provider login, POST /v1/account/invitation accepts exactly `{token}`. A guarded
+D1 transaction binds it to that authenticated UID once, creates the admitted
+account and invalidates visibility caches. Retries by the same UID succeed while
+the invitation remains valid. Other identities cannot reuse it. The user still
+must claim a name and accept the current policies before ghost APIs work.
+The capability is neither an Auth credential nor a Cloudflare/Supabase key.
+Do not log it or ship the same capability to multiple friends. Whoever redeems
+an unclaimed installer first owns its invitation; revoke/reissue a lost installer.
+Invalid, expired, revoked and other-UID use returns 403 invite_unavailable.
+
+beta_admission.max_members defaults to eight, with a hard schema maximum of 64.
+The cap counts retained accounts, including tombstones, so revocation cannot
+reopen an unlimited account-creation loop. Operator-created invitations respect
+the same cap. Disabled D1 admission, deleted and suspended accounts cannot redeem.
+Register/revoke capabilities through reviewed operator management; there is no
+anonymous signup or public invitation-issuance endpoint.
+
+Friend beta stores tester contributions under their real UID but serves only
+approved shared publishers plus the viewer's own ghosts. The gate covers pool,
+search, metadata, asset access and pins. The viewer/allowlist also binds private
+cached query and cursor identities. Curated local ghosts use a separate trusted
+manifest and do not become cloud-certified recordings.
 
 ## Catalog and wire details
 
@@ -92,13 +121,18 @@ Pool pages scan 256 indexed rows across at most 45 inclusive subdivisions, with
 four pages maximum. Search returns 20 rows and scans at most 64 indexed names per
 page; an empty page can be incomplete with a next cursor. coverage.complete=false
 always exposes truncation, including the fourth page. Never infer absence from it.
+An empty first automatic-pool page returns at most four fastest compatible
+eligible recordings using the same envelope. It retains target, clock, ROM,
+generation, strategy/overall and publisher restrictions. Continued pages and
+manual searches do not use this fallback. No unsupported ROM is relabeled.
+Stale upload generations return 409 generation_changed before storage admission.
 
 ## Visibility, quotas and recovery
 
 Admitted user/admin gateway calls, including cache hits, consume exact account and
 global D1 tickets. One atomic batch inserts and advances both daily rows;
 failed tickets roll back new rows as well as both counters. Ordinary Auth
-identities only look up accounts; Access-admin invitation creates them. Unknown,
+identities only look up accounts; operator or one-use installer invitations create them. Unknown,
 uninvited, suspended and deleted identities may read their status without
 persistent writes. Unknown identities fail other calls before quota admission.
 Persisted owners retain budgeted export/removal after revocation or suspension;
@@ -126,7 +160,8 @@ physical storage and resumes publication. Losers/replaced/pinned assets and fail
 deletes remain charged until confirmed physical deletion. Pins: four recordings,
 seven-day leases. Collection prevents new pins after deleting-state admission
 and waits for all remaining pin references, including expired prune backlog.
-Cron runs every 15 minutes and collects at most 20 assets per invocation; monitor
+The internal MaintenanceAlarm Durable Object runs every 15 minutes and collects
+at most 20 assets per invocation; monitor
 backlog. Expired pins/receipts/quota history/terminal grants prune in bounded batches.
 Indexed pruning handles up to 400 expired quota rows, 400 receipts and 200
 terminal grants per tick (38,400/38,400/19,200 per day), above their configured
@@ -134,6 +169,24 @@ admission ceilings. Quota days older than seven days expire; admission creates
 at most 30,001 rows per day including its global row. Outages
 and exhausted Free D1 capacity can still create backlog; monitor it. Publication
 and admission are transactionally fenced while a catalog migration is active.
+
+Successful admitted gateway requests arm one fixed durable object if no alarm
+exists. There is no public endpoint to choose a job, clock or resource. The alarm
+schedules its next tick before external IO, then independently runs identity
+deletion, catalog regrade and storage reconciliation. Persisted diagnostics contain
+fixed outcome labels and timestamps, never provider errors. Individual failed
+storage intents remain charged, receive a 15-minute retry and do not block other
+due objects. Cron may remain an operator fallback; disable it when using only
+alarms. Deploy the MAINTENANCE binding and friend-beta-maintenance-v1 SQLite DO
+migration together.
+
+Maintenance R2 work has separate exact UTC daily counters: 10,000 intents,
+6,000 Class A and 6,000 Class B tickets. Exhausted player/global admission quotas
+cannot starve cleanup. Exhausted maintenance allowance postpones IO and retains
+charges. Stages handle at most 20 identities/recordings/assets per tick; provider
+deletion has a ten-second deadline per identity. Fixed cadence is 96 ticks/day
+even while idle. Alarms are at-least-once, so storage/state transitions remain
+idempotent. [Cloudflare alarm behavior](https://developers.cloudflare.com/durable-objects/api/alarms/).
 
 Limits in src/config.js: 64 MiB/account retained; 10,000,000,000 global physical+
 reserved bytes; 24 MiB/account/day and 256 MiB/global/day uploads; 500 account and
@@ -144,10 +197,20 @@ D1 guard/index/counter/maintenance writes and loopback Worker requests have cost
 Free D1 can exhaust before the application cap. Measure actual rows/CPU and lower
 operator budgets accordingly; never change the approved billing plan implicitly.
 
+429 responses supply Retry-After: UTC midnight for daily ticket exhaustion,
+60 seconds for the pre-auth burst limit, and 300 seconds for storage/grant denials.
+The burst binding is per location and eventually consistent; exact D1 counters
+provide the accounting bound. [Cloudflare rate-limit binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/).
+Eight hours with a two-minute pool lease, four manual metadata renewals each ten
+minutes and an hourly catalog lease uses 440 calls (55/hour) before login,
+search, pin renewals and uploads. At 15-minute manual metadata renewals this is
+376 calls (47/hour). Keep the 500/day cap and make client renewal deliberate;
+outages must retain last-good playback and avoid retrying daily denials.
+
 Kill switches: SERVICE_ENABLED=false disables the public gateway. Changing
 settings.enabled to zero denies new user/admin tickets. Maintenance can still
-process already charged storage/deletions within quotas. Access revocation stops
-admin admission. Disable the cron/Worker in the operator console to stop scheduled
+process already charged storage/deletions within its reserved quotas. Access revocation stops
+admin admission. Disable the scheduler/Worker in the operator console to stop scheduled
 outbound work. Billing alerts observe spending; they do not cap it.
 
 ## Administrator and account deletion
@@ -160,7 +223,7 @@ batch includes audit and receipt; displaced owners must rename and retain all
 recording ownership. Submitted roles/raw SQL/bucket keys never confer authority.
 
 Deletion tombstones visibility and queues Auth identity removal atomically;
-identity_deletion=pending describes asynchronous work. Cron uses maintained
+identity_deletion=pending describes asynchronous work. Maintenance uses maintained
 Supabase admin.deleteUser(uid), server-only secret, no persistent SDK session,
 ten-second request deadline and 20 due identities maximum. Only deleted local
 accounts qualify. Documented user_not_found counts as already deleted. Failures

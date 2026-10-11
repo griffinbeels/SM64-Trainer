@@ -8,6 +8,7 @@ import {prefixRange} from './names.js';
 import {encodeCursor,decodeCursor} from './cursors.js';
 import {nativeAuthorize} from './portal-contract.js';
 import {policies} from './policies.js';
+import {armMaintenance} from './maintenance.js';
 const now=()=>Math.floor(Date.now()/1000);
 async function mutation(r,s,uid,route,body){const key=r.headers.get('idempotency-key');requireThat(uuid(key),'idempotency_required','Use a UUID Idempotency-Key.');const digest=await sha256(canonical(body));return {key,digest,previous:await s.receipt(uid,route,key,digest)};}
 function queryTarget(t){try{return JSON.parse(t);}catch{fail(400,'invalid_target','Invalid portable target.');}}
@@ -48,6 +49,11 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
     fail(404,'not_found','Route not found.');
   }
   const identity=await auth(request,cfg),a=await s.account(identity);
+  if(url.pathname==='/v1/account/invitation'&&request.method==='POST'){
+    exactQuery(url,[]);const body=await readJSON(request,['token']);
+    if(a.invited)await s.ticket(a.uid);
+    const account=await s.redeem(identity,body.token);armMaintenance(env,ctx);return json(account);
+  }
   if(!a.invited||['deleted','suspended'].includes(a.status)){
     if(url.pathname==='/v1/account'&&request.method==='GET'){exactQuery(url,[]);return json(s.publicAccount(a));}
     // Persisted owners retain export/removal after invitation revocation or
@@ -57,6 +63,7 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
     if(a.ephemeral||!ownData)s.active(a,true);
   }
   await s.ticket(a.uid,{classB:url.pathname.endsWith('/asset')?1:0});
+  armMaintenance(env,ctx);
   if(url.pathname==='/v1/account'&&request.method==='GET'){exactQuery(url,[]);return json(s.publicAccount(a));}
   if(url.pathname==='/v1/account'&&request.method==='PUT'){
     exactQuery(url,[]);const b=await readJSON(request,['name','sharing','terms_version','privacy_version','sheet_runner']),m=await mutation(request,s,a.uid,'profile',b);if(m.previous)return json(s.publicAccount(await s.one('SELECT * FROM accounts WHERE uid=?',a.uid)));return json(await s.profile(a,b,m.key,m.digest));
@@ -84,11 +91,11 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
     const cutoffs=scope==='overall'?entry.overall_cutoffs:strat.cutoffs,minStep=search&&!url.searchParams.has('min_step')?cutoffs[0].step:intQuery(url,'min_step'),maxStep=search&&!url.searchParams.has('max_step')?cutoffs.at(-1).step:intQuery(url,'max_step'),baseStep=search&&!url.searchParams.has('base_step')?minStep:intQuery(url,'base_step');
     requireThat(minStep<=baseStep&&baseStep<=maxStep&&minStep>=cutoffs[0].step&&maxStep<=cutoffs.at(-1).step&&(search||maxStep-minStep+1<=LIMITS.max_band),'invalid_band','Choose a bounded canonical band.');
     const gate=await s.gates(a,key);requireThat(gate.generation===model.generation,'generation_changed','Catalog changed.',409);const prefix=search?prefixRange(url.searchParams.get('prefix')):null;
-    const identity={key,clock,rom,scope,strategy:strategy||null,minStep,maxStep,baseStep,generation:model.generation,globalEpoch:gate.global_epoch,scopeEpoch:gate.scope_epoch,...(prefix?{prefix}:{})};let page=0,after=null;
+    const visibleOwners=s.visibleOwners(a),identity={key,clock,rom,scope,strategy:strategy||null,minStep,maxStep,baseStep,generation:model.generation,globalEpoch:gate.global_epoch,scopeEpoch:gate.scope_epoch,...(prefix?{prefix}:{}),...(visibleOwners?{visibleOwners}:{})};let page=0,after=null;
     if(url.searchParams.has('cursor')){const c=await decodeCursor(env.CURSOR_SECRET,url.searchParams.get('cursor'),identity);page=c.page;after=c.after;}
     const query={...identity,prefix,after,pageSize:search?LIMITS.search_rows:LIMITS.page_rows};let rows,searchPage;
     if(search){searchPage=await s.searchCandidates(query);rows=searchPage.rows;}
-    else if(ctx?.exports?.MetadataCache){const response=await ctx.exports.MetadataCache({props:{query}}).fetch(new Request('https://internal.community/pool'));requireThat(response.ok,'cache_unavailable','Candidate cache unavailable.',503);rows=await response.json();}else rows=await s.candidates(query);
+    else if(ctx?.exports?.MetadataCache){const response=await ctx.exports.MetadataCache({props:{query}}).fetch(new Request('https://internal.community/pool'));requireThat(response.ok,'cache_unavailable','Candidate cache unavailable.',503);rows=await response.json();}else rows=await s.poolCandidates(query);
     const more=search?searchPage.more:rows.length>query.pageSize;rows=rows.slice(0,query.pageSize);const next=more&&page<3?await encodeCursor(env.CURSOR_SECRET,identity,search?searchPage.after:[rows.at(-1).response_step,rows.at(-1).frames,rows.at(-1).id],page+1):null;
     return json({recordings:rows.map(r=>s.metadata(r)),coverage:{complete:!more,min_step:minStep,max_step:maxStep,base_step:baseStep,generation:model.generation},next_cursor:next});
   }
@@ -100,7 +107,7 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
     requireThat(response.ok,'asset_missing','Recording unavailable.',404);return new Response(response.body,{headers:{'Content-Type':'application/octet-stream','Content-Length':String(r.encoded_bytes),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','ETag':'"'+r.encoded_sha256+'"'}});
   }
   if(url.pathname==='/v1/uploads'&&request.method==='POST'){
-    exactQuery(url,[]);const b=await readJSON(request,['target','clock','rom','strategy','frames','raw_sha256','raw_bytes','encoded_sha256','encoded_bytes','codec','generation']);requireThat(integer(b.frames,1,2592000)&&hex64(b.raw_sha256)&&hex64(b.encoded_sha256)&&integer(b.raw_bytes,812,LIMITS.raw_bytes)&&integer(b.encoded_bytes,189,LIMITS.encoded_bytes)&&b.codec==='ghc1'&&b.generation===model.generation);
+    exactQuery(url,[]);const b=await readJSON(request,['target','clock','rom','strategy','frames','raw_sha256','raw_bytes','encoded_sha256','encoded_bytes','codec','generation']);requireThat(integer(b.frames,1,2592000)&&hex64(b.raw_sha256)&&hex64(b.encoded_sha256)&&integer(b.raw_bytes,812,LIMITS.raw_bytes)&&integer(b.encoded_bytes,189,LIMITS.encoded_bytes)&&b.codec==='ghc1'&&hex64(b.generation));requireThat(b.generation===model.generation,'generation_changed','Catalog changed.',409);
     const found=lookup(model,b.target,b.clock,b.rom,b.strategy),key=request.headers.get('idempotency-key');requireThat(uuid(key),'idempotency_required','Use a UUID Idempotency-Key.');return json(await s.admit(a,b,model,key,await sha256(canonical(b)),{...found,step:grade(found.strat.cutoffs,b.frames),overallStep:grade(found.entry.overall_cutoffs,b.frames)}));
   }
   const um=/^\/v1\/uploads\/([0-9a-f-]{36})$/.exec(url.pathname);
@@ -119,5 +126,5 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
     exactQuery(url,[]);const b=await readJSON(request,['recording_ids']);requireThat(Array.isArray(b.recording_ids)&&b.recording_ids.length<=4&&b.recording_ids.every(hex64)&&new Set(b.recording_ids).size===b.recording_ids.length);const m=await mutation(request,s,a.uid,'pins',b);if(m.previous)return json(m.previous);return json(await s.pins(a,b.recording_ids,m.key,m.digest));
   }
   fail(404,'not_found','Route not found.');
- }catch(error){if(error instanceof ServiceError)return json({error:{code:error.code,message:error.message}},error.status);onError(error);return json({error:{code:'service_error',message:'The community service is temporarily unavailable.'}},503);}}};
+ }catch(error){if(error instanceof ServiceError){const retry=error.status===429?(['budget_exhausted','maintenance_budget_exhausted'].includes(error.code)?86400-now()%86400:error.code==='burst_limit'?60:LIMITS.grant_seconds):null;return json({error:{code:error.code,message:error.message}},error.status,retry?{'Retry-After':String(retry)}:{});}onError(error);return json({error:{code:'service_error',message:'The community service is temporarily unavailable.'}},503);}}};
 }
