@@ -1,10 +1,9 @@
-import re
-
 from sm64_events.core.version import __version__
+from sm64_events.core.release_contract import version_key
 
 
 def test_version_is_semver():
-    assert re.fullmatch(r"\d+\.\d+\.\d+", __version__), __version__
+    assert version_key(__version__)
 
 
 # --- new-format release fixtures (real zip + manifest, network-free) ---
@@ -76,6 +75,12 @@ def _sha_line(data: bytes, name: str) -> bytes:
 
 def _fake_release(tmp_path, tag: str, files: dict[str, bytes]) -> dict:
     """Build a real zip+manifest for `files` and return an http routes dict."""
+    files = {"_internal/python314.dll": b"PYTHON",
+             "_internal/ffmpeg.exe": b"FFMPEG",
+             "_internal/sm64_events/ui/index.html": b"UI",
+             **{f"_internal/sm64_events/data/plugin/{name}": b"NATIVE" for name in
+                ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")},
+             **files}
     src = tmp_path / f"src-{tag}"
     for rel, content in files.items():
         p = src.joinpath(*rel.split("/"))
@@ -162,9 +167,7 @@ def test_check_still_offers_when_release_history_is_unavailable(tmp_path):
 
 
 def test_check_ignores_history_newer_than_the_offered_release(tmp_path):
-    """GitHub's 'latest' is the most RECENT publish, not the highest version.
-    A backport published last would otherwise stack notes for a version this
-    update does not install."""
+    """Incomplete newer feed entries do not become offers or patch notes."""
     routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"X"})
     routes[RELEASES] = _json.dumps([
         {"tag_name": "v3.0.0", "body": "not installed by this update",

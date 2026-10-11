@@ -76,9 +76,14 @@ def _safe_path(path: str) -> bool:
     if any(ch in _BAD_PATH_CHARS for ch in path):
         return False
     segments = path.split("/")
-    if segments[0] in _RESERVED_FIRST_SEGMENTS:
+    if segments[0].casefold() in _RESERVED_FIRST_SEGMENTS:
         return False
-    return all(seg not in ("", ".", "..") for seg in segments)
+    # Windows aliases trailing dots/spaces and device names, independently of
+    # case. Reject those aliases before paths reach the journal or live tree.
+    devices = {"con", "prn", "aux", "nul", *(f"com{n}" for n in range(1, 10)),
+               *(f"lpt{n}" for n in range(1, 10))}
+    return all(seg not in ("", ".", "..") and seg == seg.rstrip(". ")
+               and seg.split(".", 1)[0].casefold() not in devices for seg in segments)
 
 
 def parse_manifest(text: str) -> Manifest:
@@ -113,7 +118,7 @@ def parse_manifest(text: str) -> Manifest:
                              f"{entry.zip_method}")
         entries.append(entry)
     paths = [entry.path for entry in entries]
-    if len(paths) != len(set(paths)):
+    if len(paths) != len({path.casefold() for path in paths}):
         raise ValueError("manifest lists a path more than once")
     return Manifest(version=str(doc.get("version", "")), files=tuple(entries))
 
