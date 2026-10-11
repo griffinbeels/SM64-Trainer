@@ -37,6 +37,13 @@ def test_opt_out_keeps_forward_floor_then_production_promotes_beta():
     assert select_release([release("1.9.3"), final], "1.10.0-beta.2") == final
 
 
+def test_opted_out_beta_repairs_only_its_exact_installed_version():
+    installed = release("1.10.0-beta.2")
+    rows = [release("1.10.0-beta.3"), installed, release("1.10.0-beta.1")]
+    assert select_release(rows, "1.10.0-beta.2") is None
+    assert select_release(rows, "1.10.0-beta.2", allow_same=True) == installed
+
+
 def test_dates_cannot_make_old_feature_line_win():
     older = release("1.9.9", published_at="2030-01-01")
     newer = release("1.10.0", published_at="2020-01-01")

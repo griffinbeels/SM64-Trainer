@@ -126,7 +126,9 @@ def select_release(releases, installed: str, *, include_beta: bool = False,
     selected, highest = None, None
     for release in releases:
         candidate = release_version(release)
-        if candidate is None or (candidate.prerelease and not include_beta):
+        if candidate is None:
+            continue
+        if candidate.prerelease and not include_beta and not (allow_same and candidate == floor):
             continue
         if candidate < floor or (candidate == floor and not allow_same):
             continue
