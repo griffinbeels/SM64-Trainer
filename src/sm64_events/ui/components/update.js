@@ -83,6 +83,63 @@ function NotesStack({ releases, fallback }) {
   </div>`;
 }
 
+function UpdateFailure({ st, t, onClose }) {
+  const attempt = st.attempt || 1;
+  const unchanged = attempt > 1
+    ? `Tried ${attempt} times. Your current version is unchanged.`
+    : "Your current version is unchanged.";
+  const detail = st.files_changed
+    ? "App files were installed, but the app could not restart. Open the installer to repair it."
+    : unchanged;
+  return html`<div class="update-error">
+    <${Icon} name="close" size=${18} />
+    <span><b>${st.repair ? "Repair failed" : "Update failed"}</b>${detail}</span>
+  </div>
+  ${st.error && html`<p role="alert">${st.error}</p>`}
+  <div class="modal-actions">
+    ${!st.files_changed && html`<button class="primary-button" onclick=${() => t.applyUpdate()}>
+      <${Icon} name="updates" size=${16} /> Try again
+    </button>`}
+    <button onclick=${onClose}>Close</button>
+    <a class="btnlink" href=${st.html_url} target="_blank">Download from GitHub</a>
+  </div>`;
+}
+
+function UpdateProgress({ st }) {
+  const pct = Math.round((st.progress || 0) * 100);
+  const retrying = (st.attempt || 1) > 1
+    ? `Connection interrupted — retrying (attempt ${st.attempt} of ${st.attempts || 1}).`
+    : "";
+  return html`<div class="update-installing">
+    <b>Installing update…</b><span>The app will restart automatically when it is ready.</span>
+    ${retrying && html`<span class="update-retrying">${retrying}</span>`}
+  </div>
+  <div class="progress" role="progressbar" aria-label="Update progress"
+      aria-valuemin="0" aria-valuemax="100" aria-valuenow=${pct}>
+    <div class="progress-bar" style=${{ width: pct + "%" }}></div>
+  </div>`;
+}
+
+function UpdateOffer({ st, t, onSkip, onLater }) {
+  return html`${st.download_bytes != null && html`<div class="update-size">
+    <${Icon} name="download" size=${15} />${(st.download_bytes / 1048576).toFixed(1)} MB download
+  </div>`}
+  <div class="modal-actions">
+    ${st.writable ? html`<button class="primary-button" onclick=${() => t.applyUpdate()}>
+      <${Icon} name="updates" size=${16} /> ${st.repair ? "Repair now" : "Update now"}
+    </button>` : html`<a class="btnlink" href=${st.html_url} target="_blank">Download from GitHub</a>`}
+    ${!st.repair && html`<button onclick=${onSkip}>Skip this version</button>`}
+    <button onclick=${onLater}>Later</button>
+  </div>`;
+}
+
+function UpdateActions({ applying, st, t, onClose, onSkip, onLater }) {
+  if (!applying) return html`<${UpdateOffer} st=${st} t=${t} onSkip=${onSkip} onLater=${onLater} />`;
+  return st.state === "error"
+    ? html`<${UpdateFailure} st=${st} t=${t} onClose=${onClose} />`
+    : html`<${UpdateProgress} st=${st} />`;
+}
+
 export function UpdatePopup({ t }) {
   const st = t.update;
   const applying = t.updateApplying;
@@ -97,23 +154,7 @@ export function UpdatePopup({ t }) {
   const onSkip = () => { t.skipUpdate(st.latest); setDismissed(true); };
   const onLater = () => { setDismissed(true); t.setUpdateForced(false); };
   const onClose = () => { t.setUpdateApplying(false); t.setUpdateForced(false); setDismissed(true); };
-  const pct = Math.round((st.progress || 0) * 100);
   const missed = (st.releases || []).length;
-  // The server retries a failed install on its own (updater.RETRY_DELAYS_S),
-  // which restarts the progress bar. An unexplained bar snapping back to 0
-  // reads as a fault, so name the reason — without claiming the UPDATE failed,
-  // which is only true once every attempt is spent. Built as strings, never
-  // interpolated mid-sentence: htm eats the space either side of a `${}`.
-  const attempts = st.attempts || 1;
-  const retrying = (st.attempt || 1) > 1
-    ? `Connection interrupted — retrying (attempt ${st.attempt} of ${attempts}).`
-    : "";
-  const failedAfter = attempts > 1
-    ? `Tried ${attempts} times. Your current version is unchanged.`
-    : "Your current version is unchanged.";
-  const failureDetail = st.files_changed
-    ? "App files were installed, but the app could not restart. Open the installer to repair it."
-    : failedAfter;
   // Backdrop click / Esc mirror whichever dismiss action is visible: "Later"
   // on the normal offer, "Close" on a failed install, and NOTHING while an
   // install is actively in flight (no button is shown there either — closing
@@ -134,46 +175,7 @@ export function UpdatePopup({ t }) {
     <${NotesStack} releases=${st.releases} fallback=${st.notes} />
     <p class="update-release-link"><a href=${st.html_url} target="_blank">
       View release details on GitHub ↗</a></p>
-    ${applying
-      ? (st.state === "error"
-        ? html`
-          <div class="update-error">
-            <${Icon} name="close" size=${18} />
-            <span><b>${st.repair ? "Repair failed" : "Update failed"}</b>${failureDetail}</span>
-          </div>
-          ${st.error && html`<p role="alert">${st.error}</p>`}
-          <div class="modal-actions">
-            ${!st.files_changed && html`<button class="primary-button" onclick=${() => t.applyUpdate()}>
-              <${Icon} name="updates" size=${16} /> Try again
-            </button>`}
-            <button onclick=${onClose}>Close</button>
-            <a class="btnlink" href=${st.html_url}
-               target="_blank">Download from GitHub</a>
-          </div>`
-        : html`
-          <div class="update-installing">
-            <b>Installing update…</b>
-            <span>The app will restart automatically when it is ready.</span>
-            ${retrying ? html`<span class="update-retrying">${retrying}</span>` : ""}
-          </div>
-          <div class="progress" role="progressbar" aria-label="Update progress"
-              aria-valuemin="0" aria-valuemax="100" aria-valuenow=${pct}>
-            <div class="progress-bar"
-               style=${{ width: pct + "%" }}></div></div>`)
-      : html`
-        ${st.download_bytes != null
-          ? html`<div class="update-size"><${Icon} name="download" size=${15} />
-              ${(st.download_bytes / 1048576).toFixed(1)} MB download</div>`
-          : ""}
-        <div class="modal-actions">
-          ${st.writable
-            ? html`<button class="primary-button" onclick=${() => t.applyUpdate()}>
-                <${Icon} name="updates" size=${16} /> ${st.repair ? "Repair now" : "Update now"}
-              </button>`
-            : html`<a class="btnlink" href=${st.html_url}
-                      target="_blank">Download from GitHub</a>`}
-          ${!st.repair && html`<button onclick=${onSkip}>Skip this version</button>`}
-          <button onclick=${onLater}>Later</button>
-        </div>`}
+    <${UpdateActions} applying=${applying} st=${st} t=${t}
+      onClose=${onClose} onSkip=${onSkip} onLater=${onLater} />
   <//>`;
 }

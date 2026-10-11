@@ -363,6 +363,12 @@ def _start_app_replay(replay) -> None:
             log.exception("replay start failed - continuing without replay")
 
 
+def _prepare_startup_confirmation(app, updater, bootstrap_cleanup_path):
+    app.state.startup_maintenance = getattr(updater, "startup_maintenance", None)
+    app.state.startup_maintenance_lock = threading.Lock()
+    app.state.bootstrap_cleanup_path = bootstrap_cleanup_path
+
+
 def _create_lifespan(poller, service, replay, monitor, db_retry,
                      refresh_library_on_start, on_db_attached=None, capture_layer=None,
                      ghost=None, community_account=None, community_sync=None,
@@ -393,9 +399,7 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
                                          app.state.adoptions, service))
         # Lifespan finishes before uvicorn binds. Keep recovery backups until
         # the desktop readiness request reaches this server's healthy /health.
-        app.state.startup_maintenance = getattr(updater, "startup_maintenance", None)
-        app.state.startup_maintenance_lock = threading.Lock()
-        app.state.bootstrap_cleanup_path = bootstrap_cleanup_path
+        _prepare_startup_confirmation(app, updater, bootstrap_cleanup_path)
         yield
         await _stop_community_restore(community_task)
         await _stop_community_and_ghost(ghost, community_account, community_sync)

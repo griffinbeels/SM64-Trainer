@@ -369,7 +369,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
             your installed version until a newer public release.</p>
           ${t.update?.updates_enabled === false && html`<p class="settings-note">
             This older private beta needs the new installer to receive updates.</p>`}
-          ${t.update?.frozen && html`<div class="settings-actions">
+          ${t.update?.frozen && t.update.updates_enabled !== false && html`<div class="settings-actions">
             <button type="button" onclick=${t.repairUpdate}
                 disabled=${t.updateApplying || t.betaUpdatesBusy}>
               <${Icon} name="restart" />Repair installation

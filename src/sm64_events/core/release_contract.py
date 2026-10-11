@@ -45,7 +45,7 @@ class ReleaseVersion:
             return self.core < other.core
         if not self.prerelease or not other.prerelease:
             return bool(self.prerelease) and not other.prerelease
-        for left, right in zip(self.prerelease, other.prerelease):
+        for left, right in zip(self.prerelease, other.prerelease, strict=False):
             if left == right:
                 continue
             if left.isdigit() and right.isdigit():
