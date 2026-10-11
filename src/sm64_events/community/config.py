@@ -2,9 +2,10 @@
 from dataclasses import dataclass, field
 import re
 from urllib.parse import urlsplit
-from sm64_events.core.build_channel import BETA_PORT
+from sm64_events.core.build_channel import BETA_PORT, STABLE_PORT
 
-CALLBACK = f"http://127.0.0.1:{BETA_PORT}/api/community/auth/callback"
+CALLBACK = f"http://127.0.0.1:{STABLE_PORT}/api/community/auth/callback"
+LEGACY_CALLBACK = f"http://127.0.0.1:{BETA_PORT}/api/community/auth/callback"
 
 
 def checked_url(value, *, local=False):
@@ -41,8 +42,8 @@ class CommunityConfig:
             raise ValueError("Invalid private beta invitation.")
         if not isinstance(self.channel, str) or not 1 <= len(self.channel) <= 64:
             raise ValueError("Invalid community build channel.")
-        if self.callback_url != CALLBACK:
-            raise ValueError("The beta callback must match its registered loopback URI.")
+        if self.callback_url not in (CALLBACK, LEGACY_CALLBACK):
+            raise ValueError("The callback must match a registered loopback URI.")
         if self.enabled:
             object.__setattr__(self, "public_url", checked_url(self.public_url, local=self.allow_local_http))
             object.__setattr__(self, "supabase_url", checked_url(self.supabase_url, local=self.allow_local_http))

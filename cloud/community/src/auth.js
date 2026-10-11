@@ -13,7 +13,7 @@ export async function verifyUserToken(token, cfg, keys = remote(cfg.jwks)) {
   try { ({payload} = await jwtVerify(token, keys, {issuer: cfg.issuer, audience: "authenticated",
     algorithms: ["ES256","RS256"], requiredClaims: ["sub","exp","iat","client_id"], clockTolerance: 0})); }
   catch { fail(401, "invalid_token", "Sign in again."); }
-  requireThat(uuid(payload.sub) && payload.client_id === cfg.clientID &&
+  requireThat(uuid(payload.sub) && (cfg.nativeClients || [{client_id:cfg.clientID}]).some(pair=>pair.client_id===payload.client_id) &&
     payload.role === "authenticated" && payload.aud === "authenticated" &&
     Number.isFinite(payload.iat) && payload.iat <= Date.now()/1000 + 30, "invalid_token", "Sign in again.",401);
   return {sub: payload.sub.toLowerCase(), issuer: cfg.issuer};

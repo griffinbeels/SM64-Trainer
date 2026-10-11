@@ -69,10 +69,10 @@ def server_port() -> int:
     canonical 8064 (the port external consumers/overlays expect); running from
     source (dev) uses 8065, so a dev server and a built exe can never collide
     on one port (single-instance takeover, bind conflicts). SM64_PORT
-    overrides stable builds. A packaged beta binds its registered callback
-    port and ignores inherited port overrides."""
+    overrides offline builds. A packaged community build binds its registered
+    callback port and ignores inherited port overrides."""
     build = build_channel.current_build()
-    if build.channel == "beta":
+    if build.legacy_beta or (is_frozen() and build.community_enabled):
         return build.default_port  # Exact registered OAuth callback; no inherited public port.
     override = os.environ.get("SM64_PORT")
     if override:
@@ -111,7 +111,7 @@ def data_root() -> Path:
     as before. Frozen: ``%LOCALAPPDATA%\\SM64Trainer``. An absolute
     ``SM64_PRACTICE_ROOT`` selects an isolated profile before either default.
     """
-    if build_channel.current_build().channel == "beta":
+    if build_channel.current_build().legacy_beta:
         return user_data_root()
     isolated = practice_root()
     if isolated is not None:
@@ -133,14 +133,14 @@ def _absolute_override(name: str) -> Path | None:
 
 def practice_root() -> Path | None:
     """Explicit isolated practice profile; never redirects installation metadata."""
-    if build_channel.current_build().channel == "beta":
+    if build_channel.current_build().legacy_beta:
         return None
     return _absolute_override("SM64_PRACTICE_ROOT")
 
 
 def ghost_population_root() -> Path:
     """The local population can survive a fresh practice profile."""
-    if build_channel.current_build().channel == "beta":
+    if build_channel.current_build().legacy_beta:
         return data_root() / "data" / "ghost_population"
     return _absolute_override("SM64_GHOST_POPULATION") or data_root() / "data" / "ghost_population"
 
@@ -163,7 +163,7 @@ def migrate_legacy_data_dir() -> None:
     / settings carry over after the SM64Trainer rename. Frozen only; idempotent;
     NEVER destroys data — if the new dir already holds data, the legacy dir is
     left untouched. Call before any data path is read/created."""
-    if (build_channel.current_build().channel != "stable"
+    if (build_channel.current_build().legacy_beta
             or not is_frozen() or practice_root() is not None):
         return
     base = Path(os.environ.get("LOCALAPPDATA") or str(

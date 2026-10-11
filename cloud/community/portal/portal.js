@@ -1,11 +1,17 @@
 import {createClient} from '@supabase/supabase-js';
-import {nativeAuthorize} from '../src/portal-contract.js';
+import {nativeAuthorize,registeredNativeClient} from '../src/portal-contract.js';
 const $=id=>document.getElementById(id),message=t=>{$('status').textContent=t;},attemptKey='sm64-beta-oauth-attempt';
 let client,cfg,attempt,authorizationID;
 function save(v){sessionStorage.setItem(attemptKey,JSON.stringify(v));}
 function validAttempt(){let a;try{a=JSON.parse(sessionStorage.getItem(attemptKey));}catch{}if(!a||a.expires<Date.now())throw Error('Expired request');return a;}
+function attemptPair(){
+  // In-flight requests from the old private beta did not persist a pair. They
+  // are bound only to the deliberately preserved legacy primary configuration.
+  const clientID=attempt.clientID||cfg.auth.client_id,callback=attempt.callback||cfg.auth.native_callback;
+  return registeredNativeClient({nativeClients:cfg.auth.native_clients,clientID:cfg.auth.client_id,callback:cfg.auth.native_callback},clientID,callback);
+}
 function nativeRedirect(value){
-  const u=new URL(value);if(u.origin+u.pathname!==cfg.auth.native_callback||u.username||u.password||u.hash)throw Error('Invalid return');
+  const u=new URL(value);if(u.origin+u.pathname!==attemptPair().callback||u.username||u.password||u.hash)throw Error('Invalid return');
   for(const k of u.searchParams.keys())if(!['code','state','error','error_description','error_uri'].includes(k)||u.searchParams.getAll(k).length!==1)throw Error('Invalid return data');
   if(u.searchParams.get('state')!==attempt.state)throw Error('Invalid return state');sessionStorage.removeItem(attemptKey);location.replace(u.href);
 }
@@ -13,7 +19,7 @@ async function social(provider){save({...attempt,authorizationID});const {error}
 async function showConsent(){
   const {data,error}=await client.auth.oauth.getAuthorizationDetails(authorizationID);if(error||!data)throw Error('Authorization unavailable');
   if(!('authorization_id' in data)){nativeRedirect(data.redirect_url);return;}
-  if(data.client.id!==cfg.auth.client_id||data.redirect_uri!==cfg.auth.native_callback||data.scope.split(' ').filter(Boolean).some(s=>!['openid','email','profile'].includes(s)))throw Error('Unregistered request');
+  const pair=attemptPair();if(data.client.id!==pair.client_id||data.redirect_uri!==pair.callback||data.scope.split(' ').filter(Boolean).some(s=>!['openid','email','profile'].includes(s)))throw Error('Unregistered request');
   $('login').hidden=true;$('consent').hidden=false;$('permissions').textContent='Requested identity permissions: '+data.scope;message('Approve the trainer’s sign-in request.');
 }
 async function signedIn(){const {data,error}=await client.auth.getClaims();if(error||!data?.claims){$('login').hidden=false;message('Choose how to sign in.');return;}await showConsent();}
@@ -24,8 +30,8 @@ async function boot(){
   client=createClient(cfg.auth.supabase_url,cfg.auth.publishable_key,{auth:{flowType:'pkce',storage:localStorage,persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
   const u=new URL(location.href);
   if(u.pathname==='/auth/start'){
-    const authorize=nativeAuthorize(u.searchParams.get('native_authorize'),{supabaseURL:cfg.auth.supabase_url,clientID:cfg.auth.client_id,callback:cfg.auth.native_callback}),parsed=new URL(authorize),provider=u.searchParams.get('provider');
-    if(!['discord','google','twitch','email'].includes(provider))throw Error('Unsupported provider');save({provider,state:parsed.searchParams.get('state'),expires:Date.now()+300000});location.replace(authorize);return;
+    const authorize=nativeAuthorize(u.searchParams.get('native_authorize'),{supabaseURL:cfg.auth.supabase_url,clientID:cfg.auth.client_id,callback:cfg.auth.native_callback,nativeClients:cfg.auth.native_clients}),parsed=new URL(authorize),provider=u.searchParams.get('provider');
+    if(!['discord','google','twitch','email'].includes(provider))throw Error('Unsupported provider');save({provider,clientID:parsed.searchParams.get('client_id'),callback:parsed.searchParams.get('redirect_uri'),state:parsed.searchParams.get('state'),expires:Date.now()+300000});location.replace(authorize);return;
   }
   // Password recovery can complete without a live native OAuth attempt. Supabase
   // still requires the original browser's PKCE verifier; no implicit token URL.
