@@ -223,16 +223,18 @@ def test_minimum_is_next_subdivision_even_when_stored_offsets_are_zero():
     assert [row["id"] for row in result] == ["next"]
 
 
-def test_empty_adaptive_range_uses_only_faster_comparable_same_subdivision():
+def test_empty_range_uses_fastest_available_including_beaten_runs():
     rows = [ranked(19, "faster", 320), ranked(19, "equal", 321), ranked(19, "slower", 322),
-            ranked(18, "lower", 300), ranked(19, "foreign", 319, game_version="jp"),
+            ranked(18, "lower", 300),
             ranked(19, "private", 318, manual_only=True),
             ranked(19, "other-strategy", 317, strategy="Other")]
     pb = basis(19, 321, game_version="us")
-    selected, = select_rivals(rows, pb, {}, {})
-    assert selected["id"] == "faster" and not selected["pinned"]
-    assert select_rivals(rows, None, {}, {}) == ()
-    assert select_rivals(rows, pb, {"mode": "fixed", "min_step": 20, "max_step": 24}, {}) == ()
+    for options in ({}, {"mode": "fixed", "min_step": 20, "max_step": 24}):
+        selected = select_rivals(rows, pb, options, {})
+        assert [row["id"] for row in selected] == ["lower", "faster", "equal", "slower"]
+        assert all(not row["pinned"] for row in selected)
+    assert [row["id"] for row in select_rivals(rows, None, {}, {})] == ["lower", "faster", "equal", "slower"]
+    assert select_rivals(rows, pb, {}, {}, allow_fastest=False) == ()
 
 
 def test_range_opponents_take_priority_over_same_subdivision_fallback():
@@ -242,6 +244,41 @@ def test_range_opponents_take_priority_over_same_subdivision_fallback():
     previous = [{**higher, "slot": 1, "pinned": False}]
     rows = select_rivals([same, higher], pb, {}, {}, previous=previous)
     assert [(row["id"], row["slot"]) for row in rows] == [("higher", 1)]
+
+
+@pytest.mark.parametrize("scope", ["strategy", "overall"])
+def test_fastest_fallback_keeps_pb_separate_and_compatible_strategy_labels(scope):
+    identity = replace(IDENTITY, scope=scope)
+    ghost = AttemptGhost(7, "star", "2-1", "Standard", 300, pb=True)
+    rows = rank_recordings([
+        recording("own", 300, ghost=ghost), recording("available", 600),
+        recording("alternative", 610, strategy="Other"),
+        recording("other-rom", 590, game_version="jp"),
+        recording("old-untrusted", 580, game_version=None, certified=False),
+    ], Standards(), identity)
+    pb = {**rank_frames(Standards(), identity, 300), "frames": 300,
+          "ghost": ghost, "current_strategy": "Standard", "game_version": "us"}
+    chosen = select_rivals(rows, pb, {}, {}, scope=scope)
+    expected = ["available", "alternative"] if scope == "overall" else ["available"]
+    assert [row["id"] for row in chosen] == expected
+    assert pb["ghost"] is ghost and all(row["frames"] > pb["frames"] for row in chosen)
+    assert all(row["id"] not in ("own", "other-rom", "old-untrusted") for row in chosen)
+    assert [row["strategy"] for row in chosen] == (["Standard", "Other"] if scope == "overall" else ["Standard"])
+
+
+def test_pinned_beta_historical_source_preserves_missing_certificate_and_original_rom():
+    row = recording("bundled", 600, source_status="bundled-author-recording", structurally_valid=True,
+                    certified=False, full_start=None, recorded_game_version=None)
+    graded, = rank_recordings([row], Standards(), IDENTITY)
+    assert graded["certified"] is False and graded["recorded_game_version"] is None
+    assert graded["full_start"] is None
+    assert select_rivals([graded], basis(44, 100), {}, {})[0]["id"] == "bundled"
+    # Incomplete remote coverage cannot block a complete pinned local bundle.
+    remote = rank_recordings([recording("remote", 500)], Standards(), IDENTITY)[0]
+    assert [item["id"] for item in select_rivals([graded, remote], basis(44, 100), {}, {},
+                                               allow_fastest=False)] == ["bundled"]
+    for bad in ({"structurally_valid": False}, {"source_status": "import"}, {"recorded_game_version": "unknown"}):
+        assert rank_recordings([{**row, **bad}], Standards(), IDENTITY) == ()
 
 
 def test_same_subdivision_fallback_preserves_pins_and_winners():
@@ -271,7 +308,9 @@ def test_foreign_region_anchor_compares_strategy_steps_and_never_claims_faster_c
     row = ranked(21, "higher-rank", 200, game_version="us")
     assert select_rivals([row], basis(20, 100, game_version="jp"), {}, {})[0]["id"] == "higher-rank"
     capped = ranked(44, "different-clock", 99, game_version="us")
-    assert select_rivals([capped], basis(44, 100, game_version="jp"), {}, {}) == ()
+    # A fallback can still race a current-ROM ghost against an incomparable
+    # old PB; it does not claim that its raw time beats the other ROM's PB.
+    assert select_rivals([capped], basis(44, 100, game_version="jp"), {}, {})[0]["id"] == "different-clock"
     assert select_rivals([capped], basis(44, 100, game_version="us"), {}, {})[0]["id"] == "different-clock"
 
 
@@ -280,7 +319,7 @@ def test_overall_cross_strategy_cap_still_requires_a_faster_comparable_time():
             ranked(44, "slower", 101, strategy="Third", scope="overall")]
     pb = basis(44, 100, game_version="us")
     assert [row["id"] for row in select_rivals(rows, pb, {}, {}, scope="overall")] == ["faster"]
-    assert select_rivals(rows, {**pb, "game_version": "jp"}, {}, {}, scope="overall") == ()
+    assert [row["id"] for row in select_rivals(rows, {**pb, "game_version": "jp"}, {}, {}, scope="overall")] == ["faster", "slower"]
     assert select_rivals(rows, pb, {}, {}) == ()
 
 
@@ -299,7 +338,7 @@ def test_strategy_is_always_required_for_automatic_and_chosen_rivals():
     rows = [ranked(10, "standard"), ranked(11, "other", strategy="Other")]
     pb = basis(strategy="Other", current_strategy="Standard")
     assert [row["id"] for row in select_rivals(rows, pb, {"strategy_only": False}, {})] == ["standard"]
-    assert [row["id"] for row in select_rivals(rows, None, {"strategy_only": True}, {})] == []
+    assert [row["id"] for row in select_rivals(rows, None, {"strategy_only": True}, {})] == ["standard"]
     assert len(select_rivals([ranked(1)], None, {"strategy_only": True}, {})) == 1
     chosen, = select_rivals([rows[1]], pb, {}, {"0": "other"})
     assert chosen["ghost"] is None and chosen["available"] is False

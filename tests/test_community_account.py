@@ -27,6 +27,17 @@ def config(**kwargs):
         publishable_key="public", oauth_client_id="native-client", enabled=True, **kwargs)
 
 
+def test_configured_beta_build_without_private_invitation_is_valid():
+    from sm64_events.core.build_channel import parse_metadata
+    build = parse_metadata({"schema": 1, "channel": "beta", "build_id": "older-admitted-friend",
+        "community_url": "https://ghosts.example", "supabase_url": "https://project.supabase.co",
+        "supabase_publishable_key": "sb_publishable_fixture", "oauth_client_id": UID})
+    configured = CommunityConfig(public_url=build.community_url, supabase_url=build.supabase_url,
+        publishable_key=build.supabase_publishable_key, oauth_client_id=build.oauth_client_id,
+        friend_invitation=getattr(build, "friend_invitation", ""), enabled=True)
+    assert configured.enabled and configured.friend_invitation is None
+
+
 def profile(**kwargs):
     return {"v": 1, "uid": UID, "name": "Runner", "status": "active", "sharing": False,
         "terms_version": "t1", "privacy_version": "p1", "sheet_runner": None, "sheet_verified": False, **kwargs}
@@ -89,6 +100,72 @@ def test_config_and_disabled_snapshot_need_no_vault_or_network():
     with pytest.raises(ValueError):
         CommunityConfig(public_url="http://example.com", supabase_url="https://example.com", enabled=True,
                         publishable_key="public", oauth_client_id="client")
+
+
+def test_private_build_invitation_redeems_after_authenticated_profile_gate_only():
+    async def scenario():
+        invitation = "a" * 43
+        configured = config(friend_invitation=invitation)
+        assert invitation not in repr(configured)
+        calls, redeemed = [], [False]
+        def respond(request):
+            calls.append(request)
+            if request.url.path == "/v1/config":
+                return httpx.Response(200, json={"v": 1})
+            if request.url.path == "/v1/account/invitation":
+                import json
+                assert json.loads(request.content) == {"token": invitation}
+                assert request.headers["Authorization"] == "Bearer fixture"
+                redeemed[0] = True
+                return httpx.Response(200, json=profile(status="new"))
+            return httpx.Response(200, json=profile(status="new" if redeemed[0] else "not_invited"))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            account = CommunityAccount(configured, http=http, token_store=Store())
+            account._access, account._expires = "fixture", 10**20
+            assert (await account.refresh())["status"] == "new"
+            assert invitation not in repr(account.snapshot())
+            assert [request.url.path for request in calls] == ["/v1/config", "/v1/account", "/v1/account/invitation", "/v1/account"]
+            await account.refresh()
+            assert len([request for request in calls if request.url.path.endswith("/invitation")]) == 1
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("bad", ["a" * 42, "a" * 44, "!" * 43, True])
+def test_build_invitation_requires_the_exact_private_capability_encoding(bad):
+    with pytest.raises(ValueError, match="invitation"):
+        config(friend_invitation=bad)
+
+
+def test_stream_deadline_stops_a_drip_response_and_closes_the_stream():
+    from sm64_events.community.account import bounded_request
+    async def scenario():
+        closed = []
+        class Drip(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b"tiny first chunk"
+                await asyncio.Event().wait()
+            async def aclose(self):
+                closed.append(True)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request:
+                httpx.Response(200, stream=Drip()))) as http:
+            with pytest.raises(CommunityError) as found:
+                await bounded_request(http, "GET", "https://ghosts.example/secret-token-url", deadline=.03)
+            assert found.value.code == "network_unavailable" and "secret-token" not in str(found.value)
+            assert closed == [True]
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("header, expected", [("40", 40), ("9999999", 3600), ("nonsense", None), ("0", 1)])
+def test_rate_limit_retains_only_a_bounded_retry_delay(header, expected):
+    from sm64_events.community.account import bounded_request
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request:
+                httpx.Response(429, headers={"Retry-After": header}, json={"error": {"code": "rate_limited", "description": "private"}}))) as http:
+            with pytest.raises(CommunityError) as found:
+                await bounded_request(http, "GET", "https://ghosts.example/v1/pool")
+            assert found.value.retry_after == expected and found.value.status == 429
+            assert "private" not in str(found.value)
+    asyncio.run(scenario())
 
 
 def test_policy_rejection_refreshes_current_versions_once_before_renewal():

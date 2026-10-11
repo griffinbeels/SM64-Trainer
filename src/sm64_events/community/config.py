@@ -1,5 +1,6 @@
 """Public build configuration; credentials never belong in packaged settings."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import re
 from urllib.parse import urlsplit
 from sm64_events.core.build_channel import BETA_PORT
 
@@ -28,10 +29,16 @@ class CommunityConfig:
     enabled: bool = False
     allow_local_http: bool = False
     portal_url: str | None = None
+    friend_invitation: str | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if type(self.enabled) is not bool or type(self.allow_local_http) is not bool:
             raise ValueError("Community switches must be boolean.")
+        if self.friend_invitation == "":
+            object.__setattr__(self, "friend_invitation", None)
+        if self.friend_invitation is not None and (not isinstance(self.friend_invitation, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{43}", self.friend_invitation) is None):
+            raise ValueError("Invalid private beta invitation.")
         if not isinstance(self.channel, str) or not 1 <= len(self.channel) <= 64:
             raise ValueError("Invalid community build channel.")
         if self.callback_url != CALLBACK:
@@ -46,7 +53,8 @@ class CommunityConfig:
 
 class CommunityError(ValueError):
     """Safe local explanation: never include remote bodies, tokens or URLs."""
-    def __init__(self, code, message="Community access is temporarily unavailable.", *, status=None):
+    def __init__(self, code, message="Community access is temporarily unavailable.", *, status=None, retry_after=None):
         super().__init__(message)
         self.code, self.status = code, status
+        self.retry_after = retry_after
         self.public_message = message

@@ -159,6 +159,34 @@ coalescing queue. Pool requests map frame windows to canonical server bins;
 cache keys never contain exact PB or unrelated local rank integers. Stop has
 bounded cancellation and joins owned work before replay/provider teardown.
 
+Automatic pool metadata refreshes at most every 120 seconds per canonical
+request. Chosen-rival metadata refreshes every ten minutes; its hard publication
+lease also expires after ten minutes offline. Logout and local withdrawal still
+clear the account view immediately. A fresh visibility response can reuse
+validated cached bytes only when both stored hashes match. Pin retention leases
+renew once per day or when their owner/IDs change; the server lease lasts seven
+days. Static catalog data stays cached for an hour, with `generation_changed`
+invalidating that lease before the next operation.
+
+The actual client cadence test covers eight hours with four chosen rivals,
+twenty two-call uploads and eight deliberate account-panel refreshes: 493
+ticketed Worker operations against the 500/day account limit. Public config
+reads and provider OAuth calls do not consume that account ticket. The UI's
+ten-second status polling reads local cached state. Additional searches,
+account-panel opens, target changes and failures consume the remaining budget;
+the test does not promise unlimited interaction under a fixed daily quota.
+
+HTTP streams have byte bounds and total deadlines (180 seconds for selected
+ghost assets, 120 seconds otherwise), in addition to idle read timeouts.
+Transient connection errors receive at most three immediate attempts with
+jitter. Rate limiting and exhaustion trigger an account-scoped cooldown using
+bounded `Retry-After`; they do not repeat three immediate requests. The worker
+retains at most 32 transiently failed source offers, coalesces each canonical
+bin to its fastest pending source and retries without another PB event. Grant
+and publication retries keep their mutation keys until the grant expires or
+catalog generation changes. This retry queue is session-only and clears on
+shutdown; it never publishes after logout, account change or sharing opt-out.
+
 Source offer is a dict: `{target,clock,game_version,strategy,frames,path,raw_sha256,
 full_start:true,valid:true}` prepared by existing native qualification off-thread.
 Root offers before/independently of local-ladder same-bin skip. Native source

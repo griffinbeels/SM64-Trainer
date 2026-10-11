@@ -168,7 +168,11 @@ def test_other_strategy_library_refusal_does_not_persist_or_poison_the_session(t
     tracker.ranks=Standards()
     db.upsert_attempt(attempt(7,strat_tag='Other'))
     mark(store,entity_key='2-1',strat='Other')
-    session._rivals=Rivals(tracker,Population(),native,lambda:'us')
+    population = Population()
+    # This case exercises refusing a manual strategy change, not population
+    # playback. Its pure-selection row stubs have no native clip templates.
+    population.rows = []
+    session._rivals=Rivals(tracker,population,native,lambda:'us')
     async def check():
         before=await session.refresh()
         stored=db.get_state(SELECTION_KEY,None)

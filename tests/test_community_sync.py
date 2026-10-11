@@ -285,8 +285,13 @@ def test_retries_are_finite_and_bad_assets_never_become_ready(tmp_path):
         attempts.clear()
         with pytest.raises(CommunityError):
             await sync._json("POST", "/v1/uploads", json={})
+        assert not attempts  # The exhausted connection's cooldown covers every route.
+        sync._network_until = 0
+        with pytest.raises(CommunityError):
+            await sync._json("POST", "/v1/uploads", json={})
         assert len(attempts) == 3
         account.request_json = original
+        sync._network_until = 0
         async def corrupt(*args, **kwargs):
             return b"malformed"
         account.request_bytes = corrupt
@@ -419,7 +424,7 @@ def test_active_manual_pin_outside_pool_renews_before_metadata_expiry(tmp_path, 
         account = Account()
         empty = page()
         empty["coverage"].update(min_step=1, base_step=1)
-        account.pages = [empty, empty, empty]
+        account.pages = [empty, empty, empty, empty]
         population = CachedPopulation(Local(), root=tmp_path, account=account)
         sync = CommunitySync(account, population)
         pin = recording("f" * 64, frames=700)
@@ -440,15 +445,275 @@ def test_active_manual_pin_outside_pool_renews_before_metadata_expiry(tmp_path, 
                 now[0] = start + elapsed
                 await sync._pool(IDENTITY, [(1, 500)], (pin["id"],))
                 await sync._pool(IDENTITY, [(1, 500)], (pin["id"],))
-            now[0] = start + cache_module.TTL + 1
+            assert len([call for call in account.calls if call[1] == "/v1/recordings/" + pin["id"]]) == 1
+            now[0] = start + 600
+            await sync._pool(IDENTITY, [(1, 500)], (pin["id"],))
+            now[0] = start + 720
             row = population.get(pin["id"])
             path, _ = population.resolve(row["ghost"], TARGET)
             assert path.is_file()
-            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 3
-            assert len([call for call in account.calls if call[1] == "/v1/recordings/" + pin["id"]]) == 3
+            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 4
+            assert len([call for call in account.calls if call[1] == "/v1/recordings/" + pin["id"]]) == 2
             assert not any(call[1].endswith("/asset") for call in account.calls)
         finally:
             population.close()
+    asyncio.run(scenario())
+
+
+def test_rate_limit_has_one_attempt_and_owner_scoped_cooldown(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from sm64_events.community import sync as sync_module
+    now = [1000]
+    monkeypatch.setattr(sync_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    async def scenario():
+        account = Account()
+        sync = CommunitySync(account, CachedPopulation(Local(), root=tmp_path, account=account))
+        async def limited(method, path, **kwargs):
+            account.calls.append((method, path, kwargs))
+            raise CommunityError("rate_limited", status=429, retry_after=60)
+        account.request_json = limited
+        for _ in range(8):
+            with pytest.raises(CommunityError):
+                await sync._json("GET", "/v1/pool")
+        assert len(account.calls) == 1
+        now[0] += 60
+        with pytest.raises(CommunityError):
+            await sync._json("GET", "/v1/pool")
+        assert len(account.calls) == 2
+        account.state["uid"] = "22222222-2222-4222-8222-222222222222"
+        with pytest.raises(CommunityError):
+            await sync._json("GET", "/v1/pool")
+        assert len(account.calls) == 3
+    asyncio.run(scenario())
+
+
+def test_failed_publication_retries_without_another_pb_and_reuses_mutation_keys(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from sm64_events.community import sync as sync_module
+    now = [1000]
+    monkeypatch.setattr(sync_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(sync_module.random, "uniform", lambda low, high: low)
+    async def scenario():
+        raw = native()
+        path = tmp_path / "source.ghost"
+        path.write_bytes(raw)
+        account = Account()
+        original = account.request_json
+        publish_keys, grant_keys = [], []
+        async def respond(method, url, **kwargs):
+            if url == "/v1/uploads":
+                grant_keys.append(kwargs["headers"]["Idempotency-Key"])
+            if url == "/v1/uploads/grant-1":
+                publish_keys.append(kwargs["headers"]["Idempotency-Key"])
+                if len(publish_keys) == 1:
+                    raise CommunityError("request_failed", status=503, retry_after=30)
+            return await original(method, url, **kwargs)
+        account.request_json = respond
+        population = CachedPopulation(Local(), root=tmp_path / "cache", account=account)
+        sync = CommunitySync(account, population)
+        assert sync.offer_source({"target": TARGET, "clock": "igt", "game_version": "us", "strategy": "Standard",
+            "frames": 3, "path": path, "raw_sha256": hashlib.sha256(raw).hexdigest(), "full_start": True, "valid": True})
+        await sync.start()
+        try:
+            for _ in range(100):
+                if sync._offer_retry:
+                    break
+                await asyncio.sleep(.01)
+            assert sync._offer_retry and len(publish_keys) == 1
+            now[0] += 31
+            sync._wake.set()
+            for _ in range(100):
+                if len(publish_keys) == 2:
+                    break
+                await asyncio.sleep(.01)
+            assert len(publish_keys) == len(grant_keys) == 2
+            assert len(set(publish_keys)) == len(set(grant_keys)) == 1
+            assert not sync._offer_retry and sync.last_error is None
+        finally:
+            await sync.stop()
+    asyncio.run(scenario())
+
+
+def test_hard_publication_lease_expires_offline_even_when_asset_bytes_remain(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from sm64_events.community import cache as cache_module
+    now = [1000]
+    monkeypatch.setattr(cache_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    account = Account()
+    population = CachedPopulation(Local(), root=tmp_path, account=account)
+    row = recording()
+    population.store_asset(row, codec.encode(native()), native())
+    now[0] += 599
+    assert population.is_ready(row["id"])
+    now[0] += 1
+    assert not population.is_ready(row["id"])
+    assert (tmp_path / (row["id"] + ".ghost")).is_file()
+    assert population.metadata_snapshot("star", "1-0", clock="igt", game_version="us") == ({"id": "local"},)
+
+
+def test_same_clip_reclassified_during_retry_keeps_distinct_admission_identity(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from sm64_events.community import sync as sync_module
+    now = [1000]
+    monkeypatch.setattr(sync_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    async def scenario():
+        raw = native()
+        path = tmp_path / "source.ghost"
+        path.write_bytes(raw)
+        source = {"target": TARGET, "clock": "igt", "game_version": "us", "strategy": "Standard",
+            "frames": 3, "path": path, "raw_sha256": hashlib.sha256(raw).hexdigest(), "full_start": True, "valid": True}
+        account = Account()
+        original = account.request_json
+        admissions = {}
+        fail_first = [True]
+
+        async def respond(method, url, **kwargs):
+            if url == "/v1/catalog":
+                result = catalog()
+                result["entries"][0]["strategies"].append({"name": "Alternate", "cutoffs":
+                    result["entries"][0]["strategies"][0]["cutoffs"]})
+                return result
+            if url == "/v1/uploads":
+                key = kwargs["headers"]["Idempotency-Key"]
+                body = sync_module.canonical(kwargs["json"])
+                if key in admissions and admissions[key] != body:
+                    raise CommunityError("idempotency_conflict", status=409)
+                admissions[key] = body
+                if fail_first.pop() if fail_first else False:
+                    raise CommunityError("request_failed", status=503, retry_after=1)
+            return await original(method, url, **kwargs)
+
+        account.request_json = respond
+        sync = CommunitySync(account, CachedPopulation(Local(), root=tmp_path / "cache", account=account))
+        assert sync.offer_source(source)
+        key, operation = sync._queue.popitem()
+        with pytest.raises(CommunityError):
+            await sync._offer(operation[1])
+        sync._offer_retry[key] = operation, now[0] + 1, 1
+        assert sync.offer_source({**source, "target": {**TARGET, "strat": "Alternate"}, "strategy": "Alternate"})
+        assert key in sync._offer_retry
+        new_key, new_operation = sync._queue.popitem()
+        assert new_key != key and "mutation_keys" not in new_operation[1]
+        now[0] += 2
+        await sync._offer(new_operation[1])
+        await sync._offer(operation[1])
+        assert len(admissions) == 2
+        assert operation[1]["mutation_keys"]["grant"] != new_operation[1]["mutation_keys"]["grant"]
+    asyncio.run(scenario())
+
+
+def cadence_transport(calls, encoded):
+    import httpx
+    from test_community_account import profile
+    def respond(request):
+        path = request.url.path
+        calls.append((request.method, path))
+        if path == "/v1/config":
+            body = {"v": 1}
+        elif path == "/v1/account":
+            body = profile(sharing=True)
+        elif path == "/v1/catalog":
+            body = catalog()
+        elif path == "/v1/pool":
+            body = page()
+        elif path == "/v1/uploads":
+            body = {"v": 1, "disposition": "upload", "upload_id": "grant-1", "expires_at": int(time.time()) + 60}
+        elif path.startswith("/v1/uploads/"):
+            body = {"v": 1, "disposition": "published"}
+        elif path.endswith("/asset"):
+            return httpx.Response(200, content=encoded)
+        elif path.startswith("/v1/recordings/"):
+            body = {"v": 1, **recording(path.split("/")[-1])}
+        else:
+            assert path == "/v1/pins"
+            body = {"v": 1}
+        return httpx.Response(200, json=body)
+    return httpx.MockTransport(respond)
+
+
+def test_eight_hours_with_four_chosen_rivals_and_twenty_uploads_fits_account_budget(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from sm64_events.community import cache as cache_module, sync as sync_module
+    now = [1000]
+    clock = SimpleNamespace(monotonic=lambda: now[0])
+    monkeypatch.setattr(cache_module, "time", clock)
+    monkeypatch.setattr(sync_module, "time", clock)
+    async def scenario():
+        import httpx
+        from sm64_events.community import CommunityAccount
+        from test_community_account import config, profile, Store
+        calls = []
+        raw = native()
+        http = httpx.AsyncClient(transport=cadence_transport(calls, codec.encode(raw)))
+        account = CommunityAccount(config(), http=http, token_store=Store())
+        account._access, account._expires = "fixture", 10**20
+        account._profile = {key: value for key, value in profile(sharing=True).items() if key != "v"}
+        population = CachedPopulation(Local(), root=tmp_path / "cache", account=account)
+        sync = CommunitySync(account, population)
+        pins = tuple(f"{index:064x}" for index in range(1, 5))
+        source = tmp_path / "source.ghost"
+        source.write_bytes(raw)
+        for elapsed in range(0, 8 * 3600, 120):
+            now[0] = 1000 + elapsed
+            await sync._pool(IDENTITY, [(1, 1000)], pins)
+            if elapsed % 3600 == 0:
+                await account.refresh()  # Eight deliberate account-panel opens.
+            # The same IO-free request cadence used while the user plays must
+            # not multiply actual network calls while its coverage is fresh.
+            await sync._pool(IDENTITY, [(1, 1000)], pins)
+            if elapsed < 20 * 120:
+                await sync._offer({"target": TARGET, "clock": "igt", "game_version": "us", "strategy": "Standard",
+                    "frames": 3, "path": str(source), "raw_sha256": hashlib.sha256(raw).hexdigest(), "owner": UID})
+        assert len([call for call in calls if call[1] == "/v1/pool"]) == 240
+        assert len([call for call in calls if call[1] == "/v1/catalog"]) == 8
+        assert len([call for call in calls if call[1] == "/v1/pins"]) == 1
+        assert len([call for call in calls if call[1].startswith("/v1/recordings/") and not call[1].endswith("/asset")]) == 192
+        assert len([call for call in calls if call[1].endswith("/asset")]) == 4
+        assert len([call for call in calls if call[1].startswith("/v1/uploads")]) == 40
+        assert len([call for call in calls if call[1] == "/v1/account"]) == 8
+        # The public config route precedes authentication/ticketing in the
+        # service. OAuth provider calls never enter this Worker counter.
+        assert len([call for call in calls if call[1] != "/v1/config"]) == 493 < 500
+        await http.aclose()
+    asyncio.run(scenario())
+
+
+def test_new_catalog_generation_invalidates_hour_lease_before_retrying_pool(tmp_path):
+    async def scenario():
+        account = Account()
+        newer = page()
+        newer["coverage"]["generation"] = "g2"
+        account.pages = [newer, newer]
+        sync = CommunitySync(account, CachedPopulation(Local(), root=tmp_path, account=account))
+        with pytest.raises(CommunityError) as found:
+            await sync._pool(IDENTITY, [(1, 1000)], ())
+        assert found.value.code == "generation_changed" and sync._catalog_until == 0
+        original = account.request_json
+        async def refreshed(method, path, **kwargs):
+            if path == "/v1/catalog":
+                account.calls.append((method, path, kwargs))
+                return {**catalog(), "generation": "g2"}
+            return await original(method, path, **kwargs)
+        account.request_json = refreshed
+        await sync._pool(IDENTITY, [(1, 1000)], ())
+        assert sync._catalog_generation == "g2"
+        assert len([call for call in account.calls if call[1] == "/v1/catalog"]) == 2
+    asyncio.run(scenario())
+
+
+def test_fresh_metadata_can_reuse_validated_bytes_but_not_another_hash(tmp_path):
+    async def scenario():
+        account = Account()
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        row = recording()
+        population.store_asset(row, codec.encode(native()), native())
+        population.renew_metadata({**row, "raw_sha256": "f" * 64})
+        assert not population.is_ready(row["id"])
+        sync = CommunitySync(account, population)
+        await sync._asset(row["id"])
+        assert population.is_ready(row["id"])
+        assert not any(call[1].endswith("/asset") for call in account.calls)
     asyncio.run(scenario())
 
 

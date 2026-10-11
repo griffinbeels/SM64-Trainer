@@ -376,13 +376,13 @@ def test_incomplete_membership_cannot_prove_a_same_rank_fallback():
     staging = CommunityRivals(cloud, SimpleNamespace(coverage=lambda _identity: coverage))
     peer = ranked(10, "same-rank", frames=990)
     pb = basis(10, 1000)
-    assert select_rivals([peer], pb, {"count": 1}, {}, allow_same_rank=staging.complete(IDENTITY)) == ()
+    assert select_rivals([peer], pb, {"count": 1}, {}, allow_fastest=staging.complete(IDENTITY)) == ()
     coverage["complete"] = True
-    selected = select_rivals([peer], pb, {"count": 1}, {}, allow_same_rank=staging.complete(IDENTITY))
+    selected = select_rivals([peer], pb, {"count": 1}, {}, allow_fastest=staging.complete(IDENTITY))
     assert [row["id"] for row in selected] == [peer["id"]]
     coverage["complete"] = False
     chosen = select_rivals([peer], pb, {"count": 1}, {"0": peer["id"]},
-        allow_same_rank=staging.complete(IDENTITY))
+        allow_fastest=staging.complete(IDENTITY))
     assert chosen[0]["id"] == peer["id"] and chosen[0]["pinned"]
 
 

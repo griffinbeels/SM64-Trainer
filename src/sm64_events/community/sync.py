@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 import threading
 import time
+import random
 from uuid import uuid4
 
 from sm64_events.ghost.sharing_targets import canonical, checked_target
@@ -18,6 +19,9 @@ MAX_QUEUE = 32
 MAX_PAGE = 256
 MAX_PAGES = 4
 ASSET_RETRY_S = 30
+PIN_RENEW_S = 24 * 60 * 60  # Seven-day server leases; visibility metadata has its own bounded refresh.
+PIN_METADATA_RENEW_S = 600
+CATALOG_RENEW_S = 3600
 
 
 def _prepare_source(source):
@@ -107,7 +111,6 @@ def checked_page(value, *, generation=None):
     coverage = value["coverage"]
     if (not isinstance(coverage, dict) or set(coverage) != {"complete", "min_step", "max_step", "base_step", "generation"}
             or type(coverage["complete"]) is not bool or not isinstance(coverage["generation"], str)
-            or generation is not None and coverage["generation"] != generation
             or any(type(coverage[key]) is not int or not 0 <= coverage[key] <= 1000 for key in ("min_step", "max_step", "base_step"))
             or coverage["min_step"] > coverage["max_step"]
             or coverage["complete"] and value["next_cursor"] is not None):
@@ -115,6 +118,8 @@ def checked_page(value, *, generation=None):
     rows = [checked_metadata(row) for row in value["recordings"]]
     if any(row["generation"] != coverage["generation"] for row in rows) or len({row["id"] for row in rows}) != len(rows):
         raise CommunityError("invalid_response")
+    if generation is not None and coverage["generation"] != generation:
+        raise CommunityError("generation_changed")
     return {"recordings": rows, "coverage": dict(coverage), "next_cursor": value["next_cursor"]}
 
 
@@ -124,12 +129,16 @@ class CommunitySync:
         self._lock = threading.RLock()
         self._queue, self._recent = OrderedDict(), OrderedDict()
         self._asset_retry = OrderedDict()
+        self._offer_retry = OrderedDict()
+        self._network_owner, self._network_until, self._network_error = None, 0, None
         self._loop = self._wake = self._task = None
         self._closing = False
         self._catalog, self._catalog_generation, self._catalog_until = {}, None, 0
         self._local_jobs = set()
         self._search_task = None
         self._pins_leased = False
+        self._pin_key, self._pins_until = None, 0
+        self._pin_metadata_key, self._pin_metadata_until = None, 0
         self.last_error = None
 
     async def start(self):
@@ -146,6 +155,7 @@ class CommunitySync:
         with self._lock:
             self._closing = True
             self._queue.clear()
+            self._offer_retry.clear()
         tasks = [task for task in (self._task, self._search_task) if task and not task.done()]
         for task in tasks:
             task.cancel()
@@ -170,6 +180,12 @@ class CommunitySync:
         with self._lock:
             if self._closing:
                 return False
+            if operation[0] == "offer":
+                pending = self._offer_retry.pop(key, None)
+                if pending:
+                    for name in ("mutation_keys", "mutation_generation", "retry_count"):
+                        if name in pending[0][1]:
+                            operation[1][name] = pending[0][1][name]
             self._queue[key] = operation
             self._queue.move_to_end(key)
             while len(self._queue) > MAX_QUEUE:
@@ -233,13 +249,19 @@ class CommunitySync:
             if snapshot.get("status") != "active" or not snapshot.get("sharing"):
                 return False
             frozen = {**source, "target": target, "path": str(Path(source["path"]).resolve()), "owner": snapshot.get("uid")}
-            # Raw hash gives a bounded pending identity before catalog lookup;
-            # canonical subdivision coalescing occurs on the worker.
-            return self._enqueue(("offer", source["raw_sha256"]), ("offer", frozen))
+            # Reclassified runs can reuse bytes with a different admission body.
+            # Only the same owner and immutable admission identity share retries.
+            key = ("offer", frozen["owner"], canonical(target), source["clock"], source["game_version"],
+                   source["strategy"], source["frames"], source["raw_sha256"])
+            return self._enqueue(key, ("offer", frozen))
         except (ValueError, TypeError, OSError):
             return False
 
     async def _json(self, method, path, **kwargs):
+        owner = self.account.snapshot().get("uid")
+        if self._network_owner == owner and self._network_until > time.monotonic():
+            code, status = self._network_error
+            raise CommunityError(code, status=status, retry_after=self._network_until - time.monotonic())
         headers = dict(kwargs.pop("headers", {}) or {})
         if method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
             if not any(str(key).lower() == "idempotency-key" for key in headers):
@@ -248,10 +270,19 @@ class CommunitySync:
             try:
                 return await self.account.request_json(method, path, http=self._http, headers=headers, **kwargs)
             except CommunityError as error:
+                if error.code == "generation_changed":
+                    self._catalog_until = 0
                 replay_safe = method.upper() == "GET" or any(str(key).lower() == "idempotency-key" for key in headers)
-                if not replay_safe or index == 2 or error.code != "network_unavailable" and error.status not in (429, 502, 503, 504):
+                transient = error.code == "network_unavailable" or error.status in (429, 502, 503, 504)
+                cooldown = (error.status == 429 or error.code == "budget_exhausted"
+                            or transient and (error.retry_after is not None or index == 2))
+                if cooldown:
+                    delay = error.retry_after or (900 if error.code == "budget_exhausted" else 30)
+                    self._network_owner, self._network_until = owner, time.monotonic() + min(3600, max(1, delay))
+                    self._network_error = error.code, error.status
+                if not replay_safe or index == 2 or not transient or cooldown:
                     raise
-                await asyncio.sleep((0.2, 0.5)[index])
+                await asyncio.sleep(random.uniform(0.5, 1) * (1, 2)[index])
 
     async def _catalog_ready(self):
         if self._catalog_until > time.monotonic():
@@ -261,7 +292,7 @@ class CommunitySync:
         if generation != self._catalog_generation:
             self._recent.clear()
         self._catalog_generation, self._catalog = generation, catalog
-        self._catalog_until = time.monotonic() + 300
+        self._catalog_until = time.monotonic() + CATALOG_RENEW_S
 
     def _query(self, identity):
         key = self.population.identity_key(identity)
@@ -280,6 +311,15 @@ class CommunitySync:
             if row_key != key[:4] or key[4] == "strategy" and row["strategy"] != key[5]:
                 raise CommunityError("identity_mismatch")
 
+    async def _page(self, path, query):
+        value = await self._json("GET", path, params=query)
+        try:
+            return checked_page(value, generation=self._catalog_generation)
+        except CommunityError as error:
+            if error.code == "generation_changed":
+                self._catalog_until = 0
+            raise
+
     async def _pool(self, identity, windows, pins):
         owner = self.account.snapshot().get("uid")
         await self._catalog_ready()
@@ -297,7 +337,7 @@ class CommunitySync:
         query.update(min_step=minimum, max_step=maximum, base_step=base)
         combined = None
         for _ in range(MAX_PAGES):
-            page = checked_page(await self._json("GET", "/v1/pool", params=query), generation=self._catalog_generation)
+            page = await self._page("/v1/pool", query)
             self._check_identity(page["recordings"], key)
             if combined is None:
                 combined = page
@@ -316,12 +356,16 @@ class CommunitySync:
         self._recent[canonical_key] = time.monotonic() + 120
         while len(self._recent) > MAX_QUEUE:
             self._recent.popitem(last=False)
-        if pins or self._pins_leased:
+        pin_key = owner, pins
+        if (pins or self._pins_leased) and (pin_key != self._pin_key or time.monotonic() >= self._pins_until):
             await self._json("PUT", "/v1/pins", json={"recording_ids": list(pins)})
             self._pins_leased = bool(pins)
+            self._pin_key, self._pins_until = pin_key, time.monotonic() + PIN_RENEW_S
         # Chosen rivals may sit outside every automatic rank band. Renew their
         # publication gates with this existing refresh, or fetch them on restart.
-        await self._assets(pins, renew=True, identity_key=key, owner=owner)
+        if pin_key != self._pin_metadata_key or time.monotonic() >= self._pin_metadata_until:
+            await self._assets(pins, renew=True, identity_key=key, owner=owner)
+            self._pin_metadata_key, self._pin_metadata_until = pin_key, time.monotonic() + PIN_METADATA_RENEW_S
 
     async def search(self, identity, prefix, *, cursor=None):
         if self._closing:
@@ -342,7 +386,7 @@ class CommunitySync:
             query["prefix"] = prefix
             if cursor is not None:
                 query["cursor"] = cursor
-            page = checked_page(await self._json("GET", "/v1/search", params=query), generation=self._catalog_generation)
+            page = await self._page("/v1/search", query)
             if len(page["recordings"]) > 20:
                 raise CommunityError("invalid_response")
             self._check_identity(page["recordings"], key)
@@ -370,12 +414,12 @@ class CommunitySync:
             self._check_identity([row], identity_key)
         if self._closing or self.account.snapshot().get("uid") != owner:
             return
+        self.population.renew_metadata(row)
         if self.population.is_ready(identifier):
             # Renew the actual current publication gate, including a rename.
-            self.population.renew_metadata(row)
             return
         encoded = await self.account.request_bytes("GET", "/v1/recordings/" + identifier + "/asset",
-                                                  http=self._http, limit=codec.MAX_ENCODED)
+                                                  http=self._http, limit=codec.MAX_ENCODED, deadline=180)
         if len(encoded) != row["encoded_bytes"] or hashlib.sha256(encoded).hexdigest() != row["encoded_sha256"]:
             raise CommunityError("asset_mismatch")
         raw = await self._cpu(lambda data: codec.decode(data, raw_sha256=row["raw_sha256"]), encoded)
@@ -425,7 +469,8 @@ class CommunitySync:
         with self._lock:
             # Discard slower pending offers in this canonical bin, preserving
             # all other bins. A source is independent of local ladder admission.
-            candidates = [(queue_key, item[1]) for queue_key, item in self._queue.items() if item[0] == "offer"
+            candidates = [(queue_key, item[1]) for queue_key, item in (
+                *self._queue.items(), *((retry_key, retry[0]) for retry_key, retry in self._offer_retry.items())) if item[0] == "offer"
                 and target_key(item[1]["target"]) == key[:2] and item[1]["clock"] == source["clock"]
                 and item[1]["game_version"] == source["game_version"] and item[1]["strategy"] == source["strategy"]
                 and frame_band(cutoffs, [(item[1]["frames"], item[1]["frames"])])[0] == step]
@@ -433,6 +478,7 @@ class CommunitySync:
                 return
             for queue_key, _ in candidates:
                 self._queue.pop(queue_key, None)
+                self._offer_retry.pop(queue_key, None)
         raw, encoded = await self._cpu(_prepare_source, source)
         if self._closing:
             return
@@ -440,7 +486,12 @@ class CommunitySync:
             "strategy": source["strategy"], "frames": source["frames"], "raw_sha256": source["raw_sha256"],
             "raw_bytes": len(raw), "encoded_sha256": hashlib.sha256(encoded).hexdigest(), "encoded_bytes": len(encoded),
             "codec": "ghc1", "generation": self._catalog_generation}
-        grant = await self._json("POST", "/v1/uploads", json=body)
+        if source.get("mutation_generation") != self._catalog_generation:
+            source.pop("mutation_keys", None)
+            source["mutation_generation"] = self._catalog_generation
+        mutation_keys = source.setdefault("mutation_keys", {})
+        grant = await self._json("POST", "/v1/uploads", json=body,
+                                 headers={"Idempotency-Key": mutation_keys.setdefault("grant", str(uuid4()))})
         disposition = grant.get("disposition")
         if disposition in ("already_present", "not_faster"):
             return
@@ -461,19 +512,55 @@ class CommunitySync:
         snapshot = self.account.snapshot()
         if self._closing or not snapshot.get("sharing") or snapshot.get("uid") != source["owner"]:
             return
-        result = await self._json("PUT", "/v1/uploads/" + identifier, content=encoded)
+        result = await self._json("PUT", "/v1/uploads/" + identifier, content=encoded,
+                                 headers={"Idempotency-Key": mutation_keys.setdefault("publish", str(uuid4()))})
         if result.get("disposition") not in ("published", "already_present", "not_faster"):
             raise CommunityError("invalid_response")
 
+    def _retry_offer(self, key, operation, error):
+        if operation[0] != "offer" or not isinstance(error, CommunityError) or not (
+                error.code in ("network_unavailable", "budget_exhausted", "grant_expired", "generation_changed")
+                or error.status in (429, 502, 503, 504)):
+            return
+        source = operation[1]
+        snapshot = self.account.snapshot()
+        if snapshot.get("uid") != source["owner"] or not snapshot.get("sharing"):
+            return
+        tries = min(6, source.get("retry_count", 0) + 1)
+        source["retry_count"] = tries
+        if error.code == "grant_expired":
+            source.pop("mutation_keys", None)
+        delay = max(error.retry_after or 0, self._network_until - time.monotonic(),
+                    random.uniform(1, 1.25) * min(900, 30 * 2 ** (tries - 1)))
+        with self._lock:
+            self._offer_retry[key] = operation, time.monotonic() + delay, tries
+            while len(self._offer_retry) > MAX_QUEUE:
+                self._offer_retry.popitem(last=False)
+
     async def _run(self):
         while True:
-            await self._wake.wait()
+            with self._lock:
+                soonest = min((item[1] for item in self._offer_retry.values()), default=None)
+            try:
+                if soonest is None:
+                    await self._wake.wait()
+                else:
+                    await asyncio.wait_for(self._wake.wait(), max(0, soonest - time.monotonic()))
+            except TimeoutError:
+                pass
             self._wake.clear()
+            with self._lock:
+                for key, (operation, due, _tries) in tuple(self._offer_retry.items()):
+                    if due <= time.monotonic():
+                        self._offer_retry.pop(key)
+                        self._queue.setdefault(key, operation)
+                while len(self._queue) > MAX_QUEUE:
+                    self._queue.popitem(last=False)
             while True:
                 with self._lock:
                     if not self._queue:
                         break
-                    _, operation = self._queue.popitem(last=False)
+                    key, operation = self._queue.popitem(last=False)
                 if self.account.snapshot().get("status") != "active":
                     continue
                 try:
@@ -484,5 +571,8 @@ class CommunitySync:
                     else:
                         await self._offer(operation[1])
                     self.last_error = None
-                except (CommunityError, ValueError, OSError):
+                except (CommunityError, ValueError, OSError) as error:
                     self.last_error = "Community ghosts are temporarily unavailable."
+                    if isinstance(error, CommunityError) and error.code == "generation_changed":
+                        self._catalog_until = 0
+                    self._retry_offer(key, operation, error)

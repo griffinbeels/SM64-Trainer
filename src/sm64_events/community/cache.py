@@ -20,7 +20,7 @@ MAX_METADATA = 1024
 MAX_POOLS = 32
 CACHE_ENCODED = 16 << 20
 CACHE_RAW = 32 << 20
-TTL = 300
+TTL = 600  # Publication leases expire after ten minutes even when the network is down.
 
 
 def value_of(identity, name, default=None):
@@ -139,7 +139,10 @@ class CachedPopulation:
 
     def _ready(self, identity):
         stored = self._rows.get(identity)
-        return bool(stored and stored[1] > time.monotonic() and identity in self._assets)
+        asset = self._assets.get(identity)
+        return bool(stored and stored[1] > time.monotonic() and asset
+                    and (stored[0]["raw_sha256"], stored[0]["encoded_sha256"])
+                    == (asset["raw_sha256"], asset["encoded_sha256"]))
 
     def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None):
         local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version, strategy=strategy)
@@ -281,6 +284,7 @@ class CachedPopulation:
             path = self.root / (identifier + ".ghost")
             stamp = path.stat()
             self._assets[identifier] = {"raw": row['raw_bytes'], "encoded": row['encoded_bytes'], "stamp": (stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns),
+                "raw_sha256": row["raw_sha256"], "encoded_sha256": row["encoded_sha256"],
                 "clip_id": clip.clip_id, "records": len(clip.frames), "blink_frames": blinks}
             self._assets.move_to_end(identifier)
             self._rows[identifier] = row, time.monotonic() + TTL

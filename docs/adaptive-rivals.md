@@ -21,11 +21,15 @@ Undo resolves the surviving saved slot; historical minima cannot restore an
 undone PB. Without a saved basis, selection starts at the bottom tier.
 
 The default range is one to five subdivisions above that basis. The floor stays
-above the PB until the final subdivision. If that range has no automatic
-opponents, faster ghosts in the PB's own subdivision can fill automatic slots.
-Those times must use the same ROM as the PB, or its legacy unstamped ROM basis.
-At the ceiling, only faster runs in that subdivision qualify. Fixed mode selects
-an absolute rank range and does not use this fallback.
+above the PB until the final subdivision. When the completed compatible pool
+has no automatic opponents in the chosen range, the fastest available recordings
+fill automatic slots. They can be slower than the user's PB or outside its rank
+range. The separate PB still plays; chosen slots stay protected. This fallback
+also applies to an empty fixed range. Target, clock, current ROM and scope
+compatibility still apply; incomplete cloud membership cannot prove an empty
+range. The pinned author bundle is complete locally and can provide its own
+fastest fallback while cloud membership is unavailable. Higher-rank opponents
+take priority whenever the chosen range has any.
 Automatic opponents exclude your own recordings; the separate PB slot remains.
 An explicit chosen rival can still name one of your other recordings.
 In Strategy, every automatic, searched or manually selected rival belongs to
@@ -135,6 +139,7 @@ manually. A fresh double-click creates another empty identity; resuming retains
 the tester's new practice history.
 The developer fixture retires automatic opponents you have beaten,
 even within the same subdivision, while preserving explicit chosen rivals.
+After every opponent is beaten, it uses the same fastest-available fallback.
 This fixture rule does not redefine production fixed-rank settings.
 Resuming an older fresh tester upgrades its input copies before recording starts.
 Its identity, sessions, attempts, PBs, credits and chosen rival slots survive;

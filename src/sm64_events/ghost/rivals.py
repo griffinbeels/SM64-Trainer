@@ -272,6 +272,20 @@ class Rivals:
         self.fingerprint = self.prepared_key = None
         return True
 
+    def _ranked_population(self, identity, target, pb, pins):
+        records = self.population.metadata_snapshot(identity.kind,identity.entity_key,
+            clock=identity.clock,game_version=identity.game_version,
+            strategy=identity.strategy if identity.scope=="strategy" else None)
+        ranked = rank_recordings(records,self.tracker.ranks,identity)
+        owners = self._owned_players()
+        # Explicit choices survive; automatic slots exclude our own runs.
+        ranked = tuple(row for row in ranked if row["id"] in pins.values() or row["player_id"] not in owners)
+        simulation = self._simulation()
+        if simulation and simulation.get("zero_practice") is True and pb:
+            # Prefer unbeaten runs until the tester beats the whole population.
+            ranked = tuple({**row, "beaten_in_simulation": row["frames"] >= pb["frames"]} for row in ranked)
+        return ranked
+
     def refresh(self, target, controls, *, enabled, sharing=None, force=False):
         self._load()
         changed_target = target != self.target
@@ -302,24 +316,12 @@ class Rivals:
         if force or stamp != self.fingerprint:
             pb = saved_pb_basis(self.tracker.db,self.tracker.ranks,identity)
             pb = self._simulation_pb(pb,target)
-            records = self.population.metadata_snapshot(identity.kind,identity.entity_key,
-                clock=identity.clock,game_version=identity.game_version,
-                strategy=identity.strategy if identity.scope=="strategy" else None)
-            ranked = rank_recordings(records,self.tracker.ranks,identity)
             pins = self.pins.get(self._key(target),{})
-            owners = self._owned_players()
-            simulation = self._simulation()
-            fresh_climb = simulation and simulation.get("zero_practice") is True
-            # Explicit chosen rivals remain choices. Automatic slots never
-            # use our own runs. The full-range developer climb also retires
-            # beaten timings, including ones within the same subdivision.
-            ranked = tuple(row for row in ranked if row["id"] in pins.values() or (
-                row["player_id"] not in owners and (
-                    not fresh_climb or not pb or row["frames"] < pb["frames"])))
+            ranked = self._ranked_population(identity,target,pb,pins)
             private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
             desired = select_rivals((*ranked,*private),pb,self.options,pins,
                                     self.rows if self.preserve_slots else (),scope=identity.scope,
-                                    allow_same_rank=self.community.complete(identity))
+                                    allow_fastest=self.community.complete(identity))
             self.rows = self.community.stage(desired, self.rows)
             self.preserve_slots = False
             self.pb = pb
@@ -557,6 +559,13 @@ class Rivals:
                     raise ValueError("Choose a saved ghost identity.")
                 try:
                     row = self.population.get(identity)
+                    if row.get("source_status") == "bundled-author-recording" and row.get("game_version") is None:
+                        # The exact packaged recording keeps its historical ROM
+                        # unknown. Its trusted snapshot provides playback context.
+                        rows = self.population.metadata_snapshot(self.identity.kind, self.identity.entity_key,
+                            clock=self.identity.clock, game_version=self.identity.game_version,
+                            strategy=self.identity.strategy if self.identity.scope == "strategy" else None)
+                        row = next((item for item in rows if item["id"] == identity), row)
                     ranked = rank_recordings([row],self.tracker.ranks,self.identity)
                 except LookupError:
                     row = self._private_record(identity,self.identity)
