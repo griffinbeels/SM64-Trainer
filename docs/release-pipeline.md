@@ -96,7 +96,9 @@ HEAD, working-tree status and `uv.lock` before writing the candidate record.
 
 Private output includes `SM64Trainer-VERSION-private.exe`, its checksum and an
 immutable private-installer receipt. The EXE contains the complete application,
-the reviewed legitimate Griffin collection and optional one-use friend invite.
+the reviewed legitimate Griffin collection and a private friend invitation.
+The current invitation is reusable for any number of authenticated testers;
+admission does not bypass account quotas or publication restrictions.
 Its normal double-click installs, creates the shortcut and launches onboarding.
 Fake ghosts, provider/admin secrets and source profile data are refused. The
 six official assets also exist for verification, but private candidates can
