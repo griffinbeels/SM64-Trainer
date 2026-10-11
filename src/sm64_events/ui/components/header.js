@@ -125,6 +125,9 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const [setupWarning, setSetupWarning] = useState(null);
   const [overlayOpen, setOverlayOpen] = useState(false);
   const community = useCommunityAccount();
+  useEffect(() => {
+    if (community.account.authenticated) t.refreshUpdates?.(false);
+  }, [community.account.authenticated, t.refreshUpdates]);
   const [communitySetupReady, setCommunitySetupReady] = useState(false);
   useEffect(() => {
     send("GET", "/api/setup").then((setup) => {
@@ -338,7 +341,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
               <${Icon} name="restart" />
               ${restarting ? "Restarting…" : "Restart server"}
             </button>
-            <button type="button" onclick=${t.checkUpdates}>
+            <button type="button" onclick=${t.checkUpdates} disabled=${t.updateApplying || t.betaUpdatesBusy}>
               <${Icon} name="updates" />Check for updates
             </button>
             <button type="button" onclick=${debugReport} disabled=${reportBusy}
@@ -352,6 +355,26 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
           </div>
           ${t.updateMsg && html`<p class="settings-note">${t.updateMsg}</p>`}
           ${reportMsg && html`<p class="settings-note">${reportMsg}</p>`}
+        </section>
+
+        <section class="settings-section">
+          <h3>Updates</h3>
+          <label class="settings-field" for="receive-beta-updates">
+            <span>Receive beta updates</span>
+            <input id="receive-beta-updates" type="checkbox" checked=${!!t.update?.receive_beta_updates}
+                disabled=${!t.update || t.update.updates_enabled === false || t.betaUpdatesBusy || t.updateApplying}
+                onchange=${(event) => t.setBetaUpdates(event.target.checked)} />
+          </label>
+          <p class="settings-note">Try upcoming features. Turning this off keeps
+            your installed version until a newer public release.</p>
+          ${t.update?.updates_enabled === false && html`<p class="settings-note">
+            This older private beta needs the new installer to receive updates.</p>`}
+          ${t.update?.frozen && html`<div class="settings-actions">
+            <button type="button" onclick=${t.repairUpdate}
+                disabled=${t.updateApplying || t.betaUpdatesBusy}>
+              <${Icon} name="restart" />Repair installation
+            </button>
+          </div>`}
         </section>
 
         ${/* This is the same record feature/console-support edits from its

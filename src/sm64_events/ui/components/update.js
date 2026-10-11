@@ -96,7 +96,7 @@ export function UpdatePopup({ t }) {
 
   const onSkip = () => { t.skipUpdate(st.latest); setDismissed(true); };
   const onLater = () => { setDismissed(true); t.setUpdateForced(false); };
-  const onClose = () => { t.setUpdateApplying(false); setDismissed(true); };
+  const onClose = () => { t.setUpdateApplying(false); t.setUpdateForced(false); setDismissed(true); };
   const pct = Math.round((st.progress || 0) * 100);
   const missed = (st.releases || []).length;
   // The server retries a failed install on its own (updater.RETRY_DELAYS_S),
@@ -111,6 +111,9 @@ export function UpdatePopup({ t }) {
   const failedAfter = attempts > 1
     ? `Tried ${attempts} times. Your current version is unchanged.`
     : "Your current version is unchanged.";
+  const failureDetail = st.files_changed
+    ? "App files were installed, but the app could not restart. Open the installer to repair it."
+    : failedAfter;
   // Backdrop click / Esc mirror whichever dismiss action is visible: "Later"
   // on the normal offer, "Close" on a failed install, and NOTHING while an
   // install is actively in flight (no button is shown there either — closing
@@ -119,8 +122,8 @@ export function UpdatePopup({ t }) {
     ? (st.state === "error" ? onClose : undefined)
     : onLater;
 
-  return html`<${Modal} title=${`Update available · v${st.latest}`}
-      description="See what changed, then update when it is convenient."
+  return html`<${Modal} title=${`${st.repair ? "Repair installation" : "Update available"} · v${st.latest}`}
+      description=${st.repair ? "Replace missing or damaged app files. Your practice data stays in place." : undefined}
       icon="updates" size="large" onClose=${onBackdropDismiss}>
     <div class="update-summary">
       <span><small>Installed</small><b>v${st.current}</b></span>
@@ -136,12 +139,13 @@ export function UpdatePopup({ t }) {
         ? html`
           <div class="update-error">
             <${Icon} name="close" size=${18} />
-            <span><b>Update failed</b>${failedAfter}</span>
+            <span><b>${st.repair ? "Repair failed" : "Update failed"}</b>${failureDetail}</span>
           </div>
+          ${st.error && html`<p role="alert">${st.error}</p>`}
           <div class="modal-actions">
-            <button class="primary-button" onclick=${() => t.applyUpdate()}>
+            ${!st.files_changed && html`<button class="primary-button" onclick=${() => t.applyUpdate()}>
               <${Icon} name="updates" size=${16} /> Try again
-            </button>
+            </button>`}
             <button onclick=${onClose}>Close</button>
             <a class="btnlink" href=${st.html_url}
                target="_blank">Download from GitHub</a>
@@ -164,11 +168,11 @@ export function UpdatePopup({ t }) {
         <div class="modal-actions">
           ${st.writable
             ? html`<button class="primary-button" onclick=${() => t.applyUpdate()}>
-                <${Icon} name="updates" size=${16} /> Update now
+                <${Icon} name="updates" size=${16} /> ${st.repair ? "Repair now" : "Update now"}
               </button>`
             : html`<a class="btnlink" href=${st.html_url}
                       target="_blank">Download from GitHub</a>`}
-          <button onclick=${onSkip}>Skip this version</button>
+          ${!st.repair && html`<button onclick=${onSkip}>Skip this version</button>`}
           <button onclick=${onLater}>Later</button>
         </div>`}
   <//>`;

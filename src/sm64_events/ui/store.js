@@ -608,6 +608,7 @@ export function useTracker() {
   const [updateForced, setUpdateForced] = useState(false); // manual check found one -> show despite Skip/Later
   const [updateApplying, setUpdateApplying] = useState(false);
   const [updateMsg, setUpdateMsg] = useState("");          // transient header toast
+  const [betaUpdatesBusy, setBetaUpdatesBusy] = useState(false);
   // notice: a transient, app-wide "the server said no" line (app.js renders it).
   // Added for the practice-target refusal (2026-07-27) -- a rejected write that
   // rejects into a click handler leaves the button looking dead, and the server
@@ -631,9 +632,32 @@ export function useTracker() {
     const st = await fetchUpdate(true);                    // force=1 bypasses the server cache
     if (!st) setUpdateMsg("Check failed");
     else if (st.update_available) { setUpdateForced(true); setUpdateMsg(""); }
+    else if (st.error) setUpdateMsg(`Check failed: ${st.error}`);
     else if (!st.frozen) setUpdateMsg(`v${st.current} — updates run in the packaged app`);
     else setUpdateMsg(`Up to date · v${st.current}`);
   }, [fetchUpdate]);
+  const setBetaUpdates = useCallback(async (enabled) => {
+    setBetaUpdatesBusy(true);
+    setUpdateMsg("Checking…");
+    try {
+      const st = await send("PUT", "/api/update/preferences", { receive_beta_updates: enabled });
+      setUpdate(st);
+      setUpdateForced(!!st.update_available);
+      setUpdateMsg(st.update_available ? "" : st.error
+        ? `Update check failed: ${st.error}` : `Up to date · v${st.current}`);
+    } catch (error) {
+      setUpdateMsg(`Could not change beta updates: ${error.message}`);
+    } finally { setBetaUpdatesBusy(false); }
+  }, []);
+  const repairUpdate = useCallback(async () => {
+    setUpdateMsg("Checking…");
+    try {
+      const st = await getJSON("/api/update/status?force=1&repair=1");
+      setUpdate(st);
+      setUpdateForced(!!st.update_available);
+      setUpdateMsg(st.update_available ? "" : "No compatible repair is available. Keep this version and try again later.");
+    } catch (error) { setUpdateMsg(`Repair check failed: ${error.message}`); }
+  }, []);
   useEffect(() => {   // auto-clear the toast, but keep "Checking…" until the result lands
     if (!updateMsg || updateMsg === "Checking…") return;
     const id = setTimeout(() => setUpdateMsg(""), 5000);
@@ -642,7 +666,7 @@ export function useTracker() {
   const applyUpdate = useCallback(async () => {
     setUpdateApplying(true);
     try {
-      const res = await send("POST", "/api/update/apply");
+      const res = await send("POST", "/api/update/apply" + (update?.repair ? "?repair=1" : ""));
       if (!res || (res.state !== "downloading" && res.state !== "installing")) {
         // begin_apply refused WITHOUT starting the worker (re-check failed,
         // folder not writable): the service stays "idle", so the status poll
@@ -654,9 +678,9 @@ export function useTracker() {
       }
     } catch (e) {
       setUpdateApplying(false);
-      setUpdateMsg("Update could not start");
+      setUpdateMsg(`Update could not start: ${e.message}`);
     }
-  }, []);
+  }, [update?.repair]);
   useEffect(() => {   // poll progress while installing; the WS drop on restart ends the session
     if (!updateApplying) return;
     const id = setInterval(() => fetchUpdate(false), 700);
@@ -689,5 +713,6 @@ export function useTracker() {
            routes, activeRouteId, pickRoute,
            update, updateForced, setUpdateForced, updateApplying,
            setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate,
+           betaUpdatesBusy, setBetaUpdates, repairUpdate, refreshUpdates: fetchUpdate,
            notice, setNotice };
 }

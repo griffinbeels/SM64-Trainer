@@ -365,7 +365,8 @@ def _start_app_replay(replay) -> None:
 
 def _create_lifespan(poller, service, replay, monitor, db_retry,
                      refresh_library_on_start, on_db_attached=None, capture_layer=None,
-                     ghost=None, community_account=None, community_sync=None):
+                     ghost=None, community_account=None, community_sync=None,
+                     updater=None, bootstrap_cleanup_path=None):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await _start_app_service(service)
@@ -390,6 +391,11 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
             refresh_task = asyncio.create_task(
                 _refresh_library_quietly(app.state.library, app.state.library_overrides,
                                          app.state.adoptions, service))
+        # Lifespan finishes before uvicorn binds. Keep recovery backups until
+        # the desktop readiness request reaches this server's healthy /health.
+        app.state.startup_maintenance = getattr(updater, "startup_maintenance", None)
+        app.state.startup_maintenance_lock = threading.Lock()
+        app.state.bootstrap_cleanup_path = bootstrap_cleanup_path
         yield
         await _stop_community_restore(community_task)
         await _stop_community_and_ghost(ghost, community_account, community_sync)
@@ -643,7 +649,8 @@ def _mount_service_routes(app, service, mode_path) -> None:
 
 
 def _mount_optional_routes(app, replay, inputs, capture_layer, compare,
-                           compilation, updater, mode_path, setup_observer) -> None:
+                           compilation, updater, mode_path, setup_observer,
+                           poller=None) -> None:
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))
@@ -681,7 +688,20 @@ def _mount_optional_routes(app, replay, inputs, capture_layer, compare,
             _dispatch(getattr(app.state, "request_restart", None)
                       or _fallback_restart)
 
-        app.include_router(create_update_router(updater, _restart))
+        def can_apply():
+            if poller is not None and getattr(poller.memory, "attached", False):
+                if not poller.paused:
+                    return "Pause the trainer or close Project64 before updating."
+            if replay is not None and replay.compression_status().get("active"):
+                return "Wait for replay compression to finish before updating."
+            install_lock = getattr(capture_layer, "_install_lock", None)
+            if install_lock is not None:
+                if not install_lock.acquire(blocking=False):
+                    return "Wait for the Project64 plugin installation to finish before updating."
+                install_lock.release()
+            return None
+
+        app.include_router(create_update_router(updater, _restart, can_apply=can_apply))
 
 
 def _mount_controls(app, poller, replay) -> None:
@@ -761,7 +781,7 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
         input_storage = (poller.input_storage_health()
                          if hasattr(poller, "input_storage_health") else None)
         storage_unavailable = tracking is not None and tracking["state"] != "running"
-        return {
+        result = {
             "channel": current_build().channel,
             "status": "error" if (unavailable or storage_unavailable
                                    or (input_storage or {}).get("error")) else "ok",
@@ -789,6 +809,19 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
             "input_storage": input_storage,
             "tracking": tracking,
         }
+        if result["status"] == "ok":
+            lock = getattr(app.state, "startup_maintenance_lock", None)
+            if lock is not None:
+                with lock:
+                    maintenance = getattr(app.state, "startup_maintenance", None)
+                    if maintenance is not None:
+                        try:
+                            maintenance(bootstrap_path=app.state.bootstrap_cleanup_path)
+                        except Exception:
+                            log.exception("startup recovery confirmation failed; backups retained")
+                        else:
+                            app.state.startup_maintenance = None
+        return result
 
     @app.post("/api/diagnostics")
     def make_debug_report():
@@ -852,7 +885,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                setup_observer=None, on_db_attached=None,
                library_path=None, refresh_library_on_start=False,
                library_bundled_path=None, ghost=None, protect_local_api=False,
-               local_port=None, community_account=None, community_sync=None) -> FastAPI:
+               local_port=None, community_account=None, community_sync=None,
+               bootstrap_cleanup_path=None) -> FastAPI:
     # `library_bundled_path` overrides the BUNDLED snapshot the library falls
     # back to (None = the shipped one). Since round 33 every fitted star row
     # in the library becomes a sheet-fitted rank standard at load, so a test
@@ -882,14 +916,15 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     monitor = _create_monitor(poller, replay)
     lifespan = _create_lifespan(poller, service, replay, monitor, db_retry,
                                 refresh_library_on_start, on_db_attached, capture_layer,
-                                ghost, community_account, community_sync)
+                                ghost, community_account, community_sync,
+                                updater, bootstrap_cleanup_path)
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
     _mount_ui_routes(app, broadcaster)
     _mount_library_routes(app, service, library_path, library_bundled_path,
                           adoptions_path)
     _mount_service_routes(app, service, mode_path)
     _mount_optional_routes(app, replay, inputs, capture_layer, compare,
-                           compilation, updater, mode_path, setup_observer)
+                           compilation, updater, mode_path, setup_observer, poller)
     from sm64_events.server.ghost_api import mount_ghost_routes
     mount_ghost_routes(app, session=ghost)
     from sm64_events.server.community_api import create_community_router

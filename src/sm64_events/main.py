@@ -446,15 +446,15 @@ def _local_ghost_population(service):
 
 
 def _community_population(service):
-    """The beta's public configuration creates one cache and IO worker."""
+    """Packaged community configuration creates one cache and IO worker."""
     from sm64_events.community import CommunityAccount, CommunityConfig, CachedPopulation, CommunitySync
     from sm64_events.core.build_channel import current_build
     build = current_build()
-    if build.channel != 'beta' or not build.community_url:
+    if not build.community_enabled:
         return _local_ghost_population(service), None, None
     config = CommunityConfig(public_url=build.community_url, supabase_url=build.supabase_url,
         publishable_key=build.supabase_publishable_key, oauth_client_id=build.oauth_client_id,
-        channel=build.channel, enabled=True,
+        channel=build.account_namespace, callback_url=build.callback_url, enabled=True,
         **({'friend_invitation': build.friend_invitation} if build.friend_invitation else {}))
     account = CommunityAccount(config)
     population = CachedPopulation(_local_ghost_population(service),
@@ -544,11 +544,11 @@ def build(*, recorder_lock=None):
         # nothing; unknown (no header read yet) keeps the old behaviour.
         replay.recorder.set_capture_gate(lambda: poller.practice_rom is not False)
     updater = UpdateService(current_version=__version__)
-    updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     capture_layer, setup_observer = _build_capture_layer(poller, replay)
     return create_app(poller, broadcaster, service=service, replay=replay,
                       inputs=inputs.get_service, on_db_attached=inputs.attach,
-                      updater=updater, compare=compare, compilation=compilation,
+                      updater=updater, bootstrap_cleanup_path=_bootstrap_cleanup_arg(),
+                      compare=compare, compilation=compilation,
                       db_retry=db_retry, capture_layer=capture_layer,
                       setup_observer=setup_observer, ghost=ghost,
                       refresh_library_on_start=True, community_account=community_account,
