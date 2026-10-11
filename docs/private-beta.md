@@ -6,7 +6,7 @@ configured fields are refused. An offline artifact proves packaging and local
 practice only; community testing needs the configured service and provider checks
 below. Do not package placeholder service addresses.
 
-A private beta is one complete installer EXE distributed directly to a tester.
+A private beta is one complete installer EXE distributed directly to testers.
 It contains the application, native plugins, FFmpeg and reviewed author ghosts.
 It installs once without downloading application files, creates a separate beta
 shortcut and opens the shared setup/account flow. It does not create a GitHub
@@ -79,12 +79,15 @@ extra fields are rejected. Use a registered public beta OAuth client with exact
 callback `http://127.0.0.1:8072/api/community/auth/callback`. No service credentials,
 account tokens, personal data or developer environment files belong in this JSON.
 
-An optional `friend_invitation` field holds a 43-character base64url one-use beta
-invitation. It binds to one authenticated account at the service, with a server
-expiry. It is carried by the private build so the friend can sign in without a
-second invitation step. It is not a Cloudflare or Supabase operator credential.
-Give each friend a separately registered invitation/build; do not publish the
-capability or include its value in diagnostics or build receipts.
+An optional `friend_invitation` field holds a 43-character base64url beta join
+capability. The service controls whether it is reusable or single-use and whether
+it expires. The current tester build uses one reusable capability, valid until
+revoked, and explicit uncapped membership. Send the identical EXE to any number
+of people; each authenticates independently and receives a separate account.
+No invitation step or separate build is needed per tester. Request and storage
+quotas remain enforced. The capability is not a Cloudflare or Supabase operator
+credential; keep the build private and omit its value from diagnostics/receipts.
+Legacy single-use capabilities remain available for narrower operator workflows.
 
 ```powershell
 python tools/build_beta.py --config C:/private/public-beta-config.json --check

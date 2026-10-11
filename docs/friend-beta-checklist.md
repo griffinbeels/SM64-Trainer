@@ -1,6 +1,7 @@
-# Private ghost beta for a friend
+# Private ghost beta for testers
 
-Send the friend installer from `dist/private-beta/`. They open that one EXE.
+Send the same installer from `dist/private-beta/` to as many testers as you want.
+Each person opens that one EXE and uses their own account.
 It installs the application locally, creates **SM64 Trainer Beta**, and opens setup.
 Python, a source checkout and separate FFmpeg/plugin downloads are unnecessary.
 If Windows lacks the embedded-browser runtime, the same setup opens in their browser.
@@ -12,9 +13,11 @@ Close another running trainer before recording: both channels share one recorder
 and the selected emulator installation. Their beta practice history stays separate.
 
 Sign in with Discord, Google or Twitch, choose a player name, and accept the
-displayed policies. This build's invitation admits one authenticated account.
-Keep the installer private. Reusing that account works; another friend's account
-needs its own invitation/build. Google testing mode can require its test-user
+displayed policies. This build's reusable invitation admits independent accounts
+without a tester-count limit or calendar deadline, until the operator revokes it.
+Keep the installer private; no separate invitation or build is needed per person.
+Request and storage limits still apply to every account and the service.
+Google testing mode can require its test-user
 allowlist; Discord or Twitch avoids that Google-specific setup.
 
 The included library contains 180 legitimate recordings credited to
@@ -49,4 +52,4 @@ Maintainer security, quotas and setup details live in
 [community protocol](community-protocol.md), and [private builds](private-beta.md).
 Automated fixtures and managed OAuth probes do not certify native gameplay,
 human social-login completion or every machine configuration; those are the
-purpose of the friend's beta session.
+purpose of the testers' beta sessions.

@@ -72,27 +72,34 @@ generation winners. During rollout, generation_changed blocks new cloud pool/
 admission requests while local playback remains available. Finish an admitted
 migration before replacing its catalog again.
 
-## Private friend invitation
+## Private beta admission
 
 An installer can carry a fresh 32-byte base64url capability (43 characters).
-The operator stores only its SHA256 in beta_invitations with an expiry. After
-provider login, POST /v1/account/invitation accepts exactly `{token}`. A guarded
-D1 transaction binds it to that authenticated UID once, creates the admitted
-account and invalidates visibility caches. Retries by the same UID succeed while
-the invitation remains valid. Other identities cannot reuse it. The user still
-must claim a name and accept the current policies before ghost APIs work.
+The operator stores only its SHA256 in beta_invitations. After provider login,
+POST /v1/account/invitation accepts exactly `{token}`. A guarded D1 transaction
+creates the independent admitted account and invalidates visibility caches only
+on its first admission. Same-UID retries preserve the profile and visibility epoch.
+The user must still claim a name and accept current policies before ghost APIs work.
 The capability is neither an Auth credential nor a Cloudflare/Supabase key.
-Do not log it or ship the same capability to multiple friends. Whoever redeems
-an unclaimed installer first owns its invitation; revoke/reissue a lost installer.
-Invalid, expired, revoked and other-UID use returns 403 invite_unavailable.
+Keep distributed builds private and omit capabilities from logs and receipts.
 
-beta_admission.max_members defaults to eight, with a hard schema maximum of 64.
-The cap counts retained accounts, including tombstones, so revocation cannot
-reopen an unlimited account-creation loop. Operator-created invitations respect
-the same cap. Disabled D1 admission, revoked membership, deleted and suspended
-accounts cannot redeem; only the operator can restore an existing revoked member.
-Register/revoke capabilities through reviewed operator management; there is no
-anonymous signup or public invitation-issuance endpoint.
+Migration0004 adds two default-zero booleans without replacing existing data.
+Invitation `reusable=0` preserves finite expiry and a single claimed UID. `reusable=1`
+admits multiple authenticated UIDs without stamping claimed_uid/claimed_at;
+`expires_at=0` means valid until explicitly revoked. A positive expiry still applies.
+The current tester installer uses `reusable=1, expires_at=0`: the identical file works
+for every tester. Invalid, expired or revoked capabilities return403
+invite_unavailable. Revoking the shared capability stops new joins; existing
+memberships are controlled separately by operator invite/revoke.
+
+`beta_admission.uncapped=0` retains max_members (default eight, schema maximum64),
+counting retained accounts including tombstones. `uncapped=1` bypasses only the
+headcount check for both redemption and operator invitations; the current tester
+service uses that mode. Per-account/global entry, request, upload and storage
+budgets remain finite in either mode. Disabled admission, revoked membership,
+deleted/suspended accounts and foreign stored issuers cannot redeem. Only the
+operator can restore a revoked member. Register/revoke capabilities through
+reviewed operator management; there is no anonymous invitation-issuance endpoint.
 
 Friend beta stores tester contributions under their real UID but serves only
 approved shared publishers plus the viewer's own ghosts. The gate covers pool,
