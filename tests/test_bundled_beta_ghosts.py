@@ -120,7 +120,7 @@ def test_source_and_stable_builds_cannot_acquire_bundled_beta_trust(tmp_path, mo
     assert with_bundled_beta(local, cache=tmp_path, definitions=[]) is local
 
 
-def test_bundled_and_cloud_composition_can_admit_and_offer_the_testers_new_recording(tmp_path):
+def test_bundled_and_cloud_composition_can_admit_and_offer_the_testers_new_recording(tmp_path, monkeypatch):
     from sm64_events.community.cache import CachedPopulation
     from sm64_events.ghost.adaptive import PracticeIdentity
     from sm64_events.ghost.population import LocalPopulation
@@ -133,9 +133,24 @@ def test_bundled_and_cloud_composition_can_admit_and_offer_the_testers_new_recor
     population = CachedPopulation(bundled, root=tmp_path / "cloud-cache")
     database = Database(tmp_path / "practice.db")
     row, replay, original = recorded(tmp_path / "new-run")
-    offered = []
-    community = SimpleNamespace(account=SimpleNamespace(snapshot=lambda: {"status": "active", "sharing": True}),
-                                offer_source=offered.append)
+    offered, events = [], []
+    authenticated_uid = "c9a0a702-cab1-4c82-9c07-1077e6a8763e"
+    qualified_source = bundled.local.qualified_source
+
+    def contribution_context():
+        events.append("context")
+        return {"owner": authenticated_uid, "consent_epoch": 3}
+
+    def qualify(*args, **kwargs):
+        events.append("qualified")
+        return qualified_source(*args, **kwargs)
+
+    def remember_source(source, *, owner, consent_epoch):
+        events.append("remember")
+        offered.append((source, owner, consent_epoch))
+
+    monkeypatch.setattr(bundled.local, "qualified_source", qualify)
+    community = SimpleNamespace(contribution_context=contribution_context, remember_source=remember_source)
     identity = PracticeIdentity("star", "2-1", "igt", "us", "Standard")
     recorder = PopulationRecorder(population, replay, SimpleNamespace(db=database), lambda _attempt: identity,
                                   community=community)
@@ -149,7 +164,9 @@ def test_bundled_and_cloud_composition_can_admit_and_offer_the_testers_new_recor
     try:
         asyncio.run(scenario())
         assert recorder.accepted == 1 and recorder.refused == 0
-        assert len(offered) == 1 and offered[0]["raw_sha256"] == hashlib.sha256(original.read_bytes()).hexdigest()
+        assert events == ["context", "qualified", "remember"]
+        assert len(offered) == 1 and offered[0][1:] == (authenticated_uid, 3)
+        assert offered[0][0]["raw_sha256"] == hashlib.sha256(original.read_bytes()).hexdigest()
         records = population.metadata_snapshot("star", "2-1", clock="igt", game_version="us", strategy="Standard")
         assert len(records) == 1 and records[0]["certified"] is True and records[0]["full_start"] is True
         assert records[0]["player_id"] != "bundled:griffman1212"
