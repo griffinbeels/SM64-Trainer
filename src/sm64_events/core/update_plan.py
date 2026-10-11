@@ -123,6 +123,24 @@ def manifest_to_json(m: Manifest) -> str:
                        "files": [asdict(entry) for entry in m.files]}, indent=1)
 
 
+def validate_release_manifest(manifest: Manifest, offered_version: str) -> None:
+    """Bind verified package bytes to the offered release and boot essentials.
+
+    Lazy import keeps the shared selector/manifest dependency stdlib-only and
+    acyclic. This check is shared by in-app updates and external repair.
+    """
+    from sm64_events.core.release_contract import version_key
+    if version_key(manifest.version) != version_key(offered_version):
+        raise ValueError("manifest version does not match the offered release")
+    files = {entry.path for entry in manifest.files if entry.size > 0}
+    required = {"SM64Trainer.exe", "_internal/ffmpeg.exe",
+                "_internal/sm64_events/ui/index.html",
+                *(f"_internal/sm64_events/data/plugin/{name}" for name in
+                  ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll"))}
+    if not required <= files or not any(re.fullmatch(r"_internal/python[0-9]+\.dll", path) for path in files):
+        raise ValueError("manifest is missing essential application files")
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as f:
