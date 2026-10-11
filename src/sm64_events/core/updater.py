@@ -519,10 +519,11 @@ class UpdateService:
         if not self._enabled or not self._frozen:
             return
         root = self._exe.parent
+        # Confirm the journal belonging to this healthy launch before the
+        # background thread can be delayed behind another completed update.
+        confirm_startup(root)
 
         def work():
-            # Called by main only after the server has completed startup.
-            confirm_startup(root)
             sweep_backup(root, attempts=60)
             if bootstrap_path:
                 for leftover in (Path(bootstrap_path),

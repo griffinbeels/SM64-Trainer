@@ -321,6 +321,32 @@ def test_explicit_repair_of_installed_beta_keeps_beta_opt_out(tmp_path):
     assert svc.beta_preferences()["receive_beta_updates"] is False
 
 
+def test_delayed_startup_cleanup_cannot_confirm_a_later_update(tmp_path, monkeypatch):
+    from sm64_events.core import updater, update_apply
+    svc = service(tmp_path, {}, current="2.0.0")
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir(); second.mkdir()
+    (first / "SM64Trainer.exe").write_bytes(b"V2")
+    (second / "SM64Trainer.exe").write_bytes(b"V3")
+    apply_plan(svc._exe.parent, first, replace=["SM64Trainer.exe"], delete=[])
+    deferred = []
+
+    class DelayedThread:
+        def __init__(self, *, target, **kwargs):
+            deferred.append(target)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(updater.threading, "Thread", DelayedThread)
+    svc.startup_maintenance()
+    assert update_apply.read_journal(svc._exe.parent)["healthy_startup"]
+    apply_plan(svc._exe.parent, second, replace=["SM64Trainer.exe"], delete=[])
+    deferred[0]()
+    assert (svc._exe.parent / BACKUP_DIR / "SM64Trainer.exe").read_bytes() == b"V2"
+    assert not update_apply.read_journal(svc._exe.parent).get("healthy_startup")
+
+
 @pytest.mark.parametrize("flag", [{"withdrawn": True}, {"draft": True},
                                 {"body": "<!-- sm64-withdrawn -->"}])
 def test_stale_latest_cannot_resurrect_a_withdrawn_list_release(flag):
