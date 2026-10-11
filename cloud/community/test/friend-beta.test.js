@@ -60,6 +60,16 @@ test('invitations cannot reactivate deleted or suspended owners',async()=>{
     assert.equal((await store.one('SELECT claimed_uid FROM beta_invitations')).claimed_uid,null);
   }finally{env.DB.close();}}
 });
+test('a claimed installer cannot undo an operator membership revocation',async()=>{
+  const {env,store}=await environment(),h=harness(env);try{
+    await invite(store);assert.equal((await h.call('/v1/account/invitation',{uid:third,method:'POST',body:{token}})).response.status,200);
+    await store.sql('UPDATE accounts SET invited=0 WHERE uid=?',third).run();
+    const retry=await h.call('/v1/account/invitation',{uid:third,method:'POST',body:{token}});
+    assert.equal(retry.response.status,403);assert.equal(retry.json.error.code,'invite_unavailable');
+    assert.equal((await store.one('SELECT invited FROM accounts WHERE uid=?',third)).invited,0);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM accounts')).n,3);
+  }finally{env.DB.close();}
+});
 test('operator invitations respect the same lifetime member cap',async()=>{
   const {env,store}=await environment();try{
     await store.sql('UPDATE beta_admission SET max_members=2').run();
