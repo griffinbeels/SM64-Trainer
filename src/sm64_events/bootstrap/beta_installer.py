@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -19,6 +20,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 
 APP_EXE = BETA_APP_DIR + ".exe"
 RECEIPT = "beta-install.json"
+log = logging.getLogger("sm64.bootstrap")
 
 
 def default_install_dir() -> Path:
@@ -39,6 +41,20 @@ def _safe_sibling(target, name):
     if path.is_symlink() or not path.resolve().is_relative_to(target.parent.resolve()):
         raise ValueError("private installer recovery path is unsafe")
     return path
+
+
+def _complete_install(target, files, digest):
+    receipt = target / RECEIPT
+    if not receipt.is_file() or receipt.is_symlink() or receipt.stat().st_size > 4096:
+        return False
+    try:
+        previous = json.loads(receipt.read_text(encoding="utf-8"))
+        return (isinstance(previous, dict) and previous.get("payload_sha256") == digest
+                and all((target / name).is_file() for name in files)
+                and read_metadata(target / "_internal" / CONFIG_FILENAME).channel == "beta")
+    except ValueError:
+        log.info("Invalid installed beta receipt or metadata; repairing program files")
+        return False
 
 
 def _repair(target, journal):
@@ -104,12 +120,8 @@ def install(executable: Path, target: Path, ui) -> Path:
         _repair(target, journal)
         # Rerunning the same download launches the installed app without a full
         # extraction. A missing program file falls through to repair.
-        receipt = target / RECEIPT
-        if receipt.is_file() and not receipt.is_symlink() and receipt.stat().st_size <= 4096:
-            previous = json.loads(receipt.read_text(encoding="utf-8"))
-            if previous.get("payload_sha256") == digest and all((target / name).is_file() for name in files):
-                if read_metadata(target / "_internal" / CONFIG_FILENAME).channel == "beta":
-                    return target / APP_EXE
+        if _complete_install(target, files, digest):
+            return target / APP_EXE
         if shutil.disk_usage(target.parent).free < unpacked + (32 << 20):
             raise RuntimeError("There is not enough free disk space to install this beta.")
         staging = Path(tempfile.mkdtemp(prefix=".sm64-beta-new-", dir=target.parent))

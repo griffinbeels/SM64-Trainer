@@ -80,6 +80,20 @@ def test_bad_payload_never_replaces_working_install(tmp_path):
     assert "verification" in ui.errors[0]
 
 
+@pytest.mark.parametrize("broken", ["[]", "null", '"string"', "{broken"])
+def test_invalid_installed_receipt_is_repaired_without_escaping_the_installer(tmp_path, broken):
+    executable, _, _ = make_installer(tmp_path)
+    target = tmp_path / "programs" / "SM64TrainerBeta"
+    assert installer.run_install(executable, UI(), target=target, launch=False, shortcut=False)
+    (target / installer.RECEIPT).write_text(broken, encoding="utf-8")
+    ui = UI()
+    assert installer.run_install(executable, ui, target=target, launch=False, shortcut=False)
+    assert not ui.errors and ui.done_exe == target / installer.APP_EXE
+    assert (target / installer.APP_EXE).read_bytes() == b"application"
+    assert json.loads((target / installer.RECEIPT).read_text())["schema"] == 1
+    assert not list(target.parent.glob(".sm64-beta-new-*"))
+
+
 @pytest.mark.parametrize("path", ["../escaped.txt", "/absolute.txt", "C:/escaped.txt", "a\\b.txt",
                                    "a/./b", "NUL.txt", "a/CON/x", "trailing. /file", "a\x01b"])
 def test_unsafe_zip_paths_are_rejected_before_install(tmp_path, path):

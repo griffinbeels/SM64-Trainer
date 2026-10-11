@@ -1,5 +1,6 @@
 """Packaged legacy provenance stays separate from live practice certificates."""
 import hashlib
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -117,3 +118,42 @@ def test_source_and_stable_builds_cannot_acquire_bundled_beta_trust(tmp_path, mo
     monkeypatch.setattr(sys, "frozen", True)
     monkeypatch.setattr(build_channel, "current_build", lambda: SimpleNamespace(channel="stable"))
     assert with_bundled_beta(local, cache=tmp_path, definitions=[]) is local
+
+
+def test_bundled_and_cloud_composition_can_admit_and_offer_the_testers_new_recording(tmp_path):
+    from sm64_events.community.cache import CachedPopulation
+    from sm64_events.ghost.adaptive import PracticeIdentity
+    from sm64_events.ghost.population import LocalPopulation
+    from sm64_events.ghost.rival_recording import PopulationRecorder
+    from sm64_events.storage.db import Database
+    from test_ghost_population import recorded
+    (tmp_path / "seed").mkdir()
+    bundled, _, _, _ = provider(tmp_path / "seed")
+    bundled.local = LocalPopulation(tmp_path / "population")
+    population = CachedPopulation(bundled, root=tmp_path / "cloud-cache")
+    database = Database(tmp_path / "practice.db")
+    row, replay, original = recorded(tmp_path / "new-run")
+    offered = []
+    community = SimpleNamespace(account=SimpleNamespace(snapshot=lambda: {"status": "active", "sharing": True}),
+                                offer_source=offered.append)
+    identity = PracticeIdentity("star", "2-1", "igt", "us", "Standard")
+    recorder = PopulationRecorder(population, replay, SimpleNamespace(db=database), lambda _attempt: identity,
+                                  community=community)
+
+    async def scenario():
+        recorder.start()
+        recorder.enqueue(row)
+        await asyncio.wait_for(recorder.queue.join(), timeout=5)
+        await recorder.stop()
+
+    try:
+        asyncio.run(scenario())
+        assert recorder.accepted == 1 and recorder.refused == 0
+        assert len(offered) == 1 and offered[0]["raw_sha256"] == hashlib.sha256(original.read_bytes()).hexdigest()
+        records = population.metadata_snapshot("star", "2-1", clock="igt", game_version="us", strategy="Standard")
+        assert len(records) == 1 and records[0]["certified"] is True and records[0]["full_start"] is True
+        assert records[0]["player_id"] != "bundled:griffman1212"
+        assert database.attempts() == [] and database.pbs() == []
+    finally:
+        population.close()
+        database.close()

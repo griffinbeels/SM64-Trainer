@@ -227,5 +227,8 @@ class BundledPopulation:
     def accept_verified(self, *args, **kwargs):
         return self.local.accept_verified(*args, **kwargs)
 
+    def qualified_source(self, *args, **kwargs):
+        return self.local.qualified_source(*args, **kwargs)
+
     def close(self):
         self.local.close()
