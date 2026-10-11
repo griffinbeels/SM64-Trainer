@@ -191,8 +191,26 @@ bounded `Retry-After`; they do not repeat three immediate requests. The worker
 retains at most 32 transiently failed source offers, coalesces each canonical
 bin to its fastest pending source and retries without another PB event. Grant
 and publication retries keep their mutation keys until the grant expires or
-catalog generation changes. This retry queue is session-only and clears on
-shutdown; it never publishes after logout, account change or sharing opt-out.
+catalog generation changes. An expired upload grant replaces its grant key
+before retry.
+
+Only a completed, certified own run with sharing enabled at attempt enqueue
+creates a durable upload intent. Its account UID and consent generation are
+captured before queue or preservation delay. The local outbox stores at most
+256 intents / 1 MiB of metadata and immutable retry keys, never tokens or another
+copy of the ghost. Normal app close preserves intents. Startup/login retries
+the same owner's fastest eligible run per canonical subdivision, admitting at
+most eight recovered winners per minute. Historical, imported and bundled
+recordings are never assigned to a new account.
+
+Explicit logout or disabling sharing durably cancels pending intents and blocks
+older qualification/recovery jobs. Disabling sharing takes effect locally before
+its remote call completes. Deleted or changed clips, unsupported catalog
+identities, capacity eviction or failed local storage can prevent retry; local
+PB/playback remains separate. One serial contribution task runs beside the
+practice IO task. Initial pool/assets run first, and a blocked upload does not
+delay later rival downloads. Their shared catalog refresh is deduplicated and
+retains its one-hour lease.
 
 Source offer is a dict: `{target,clock,game_version,strategy,frames,path,raw_sha256,
 full_start:true,valid:true}` prepared by existing native qualification off-thread.
