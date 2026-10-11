@@ -29,7 +29,8 @@ Explicit approval is required before resource/account changes. Keep R2 public
 access, r2.dev and custom-domain object access disabled. Only the default Worker
 gets a public route. MetadataCache and AssetCache are private loopback exports.
 Apply migrations in order to a new staging D1 database. An existing 0001 database
-gets only migrations/0002_friend_beta.sql; never replace its initial schema.
+gets migrations/0002_friend_beta.sql and 0003_auth_entry_budget.sql; never replace
+its initial schema. An existing 0002 database receives only 0003.
 Fill D1/R2 bindings and public
 vars in wrangler.jsonc for one owned HTTPS service origin. Supply actual operator
 name/contact and published policy URL on that same origin. Keep SERVICE_ENABLED
@@ -133,9 +134,18 @@ Stale upload generations return 409 generation_changed before storage admission.
 Admitted user/admin gateway calls, including cache hits, consume exact account and
 global D1 tickets. One atomic batch inserts and advances both daily rows;
 failed tickets roll back new rows as well as both counters. Ordinary Auth
-identities only look up accounts; operator or one-use installer invitations create them. Unknown,
-uninvited, suspended and deleted identities may read their status without
-persistent writes. Unknown identities fail other calls before quota admission.
+identities only look up accounts; operator or one-use installer invitations create them.
+Before every non-admin authenticated account lookup, one server-owned
+auth_entry_budget row charges a shared 30,000-call UTC daily ceiling. Unknown
+UIDs, paths and submitted values never create quota dimensions. Its single atomic
+update resets on a new UTC day; exhaustion returns 429 budget_exhausted with
+Retry-After until the next day before account reads or invitation redemption.
+Admitted callers still consume their unchanged account/global tickets. Eight
+493-call practice days use 3,944 entry tickets. This bounds downstream D1 account
+and invitation work, not rejected Worker invocations or the budget-gate statement;
+the per-IP burst limiter remains the first request gate. Maintenance is independent.
+Unknown, uninvited, suspended and deleted identities may read their status without
+retaining identity/quota rows. Unknown identities fail other calls before owner quota admission.
 Persisted owners retain budgeted export/removal after revocation or suspension;
 other denied calls fail before quota admission.
 Admission additionally consumes daily bytes/operations and reserves account/global

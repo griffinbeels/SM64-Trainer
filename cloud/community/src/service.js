@@ -48,7 +48,9 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
     }
     fail(404,'not_found','Route not found.');
   }
-  const identity=await auth(request,cfg),a=await s.account(identity);
+  const identity=await auth(request,cfg);
+  await s.authEntryTicket();
+  const a=await s.account(identity);
   if(url.pathname==='/v1/account/invitation'&&request.method==='POST'){
     exactQuery(url,[]);const body=await readJSON(request,['token']);
     if(a.invited)await s.ticket(a.uid);
