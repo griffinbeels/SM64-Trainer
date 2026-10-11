@@ -107,10 +107,11 @@ def installer_args(*, work: Path = WORK) -> list[str]:
 
 def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedCollection | None = None) -> None:
     """Refuse incomplete or contaminated outputs before producing a friend ZIP."""
-    if build.channel != "beta":
+    if build.channel != "beta" and build.installation != "normal":
         raise RuntimeError("private artifact requires a beta build")
     internal = folder / "_internal"
-    required = [folder / f"{BETA_APP_DIR}.exe", internal / "ffmpeg.exe",
+    app_name = "SM64Trainer" if build.installation == "normal" else BETA_APP_DIR
+    required = [folder / f"{app_name}.exe", internal / "ffmpeg.exe",
                 internal / CONFIG_FILENAME, internal / "sm64_events" / "ui" / "index.html",
                 *[internal / "sm64_events" / "data" / "plugin" / name
                   for name in ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")],
@@ -121,6 +122,9 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
     for path in required:
         if not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError(f"beta artifact is missing: {path.relative_to(folder)}")
+    if build.installation == "normal" and not any(
+            path.is_file() and path.stat().st_size > 0 for path in internal.glob("python[0-9]*.dll")):
+        raise RuntimeError("normal artifact is missing the Python runtime DLL")
     if read_metadata(internal / CONFIG_FILENAME) != build:
         raise RuntimeError("packaged beta metadata does not match the requested build")
     if ghosts is not None:
@@ -143,7 +147,8 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
                 or lowered & _FORBIDDEN_DIRS
                 or any(part.startswith(".") for part in relative.parts) and not known_vendor
                 or name in _FORBIDDEN_NAMES or path.suffix.lower() in _FORBIDDEN_SUFFIXES and not reviewed_ghosts
-                or name.startswith("sm64trainersetup") or name == "sm64trainer.exe"):
+                or name.startswith("sm64trainersetup")
+                or name == "sm64trainer.exe" and build.installation != "normal"):
             raise RuntimeError("beta artifact contains an unexpected private or public-release file")
 
 
@@ -193,11 +198,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ffmpeg", help="existing ffmpeg.exe; defaults to PATH")
     parser.add_argument("--ghosts", type=Path, help="explicit curated griffman1212 collection to include")
     parser.add_argument("--check", action="store_true", help="check prerequisites without building")
+    parser.add_argument("--version", help="normal beta version, e.g. 1.10.0-beta.1")
+    parser.add_argument("--destination", type=Path, help="normal candidate directory (must be empty)")
     args = parser.parse_args(argv)
     try:
         build = read_metadata(args.config)
         if build.channel != "beta":
             raise ValueError("private beta builder requires channel beta")
+        if build.installation == "normal":
+            if not args.version or args.destination is None:
+                raise ValueError("normal beta requires --version and --destination")
+            from release import prepare_candidate
+            prepare_candidate(args.version, args.destination, config=args.config,
+                              ffmpeg=args.ffmpeg, ghosts=args.ghosts, private=True,
+                              check_only=args.check)
+            return 0
         if not args.check and needs_reexec(os.environ):
             env = {**os.environ, "PYTHONHASHSEED": "1", "SOURCE_DATE_EPOCH": _source_date_epoch()}
             command = [sys.executable, str(Path(__file__).resolve()), *(argv if argv is not None else sys.argv[1:])]

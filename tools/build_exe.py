@@ -16,6 +16,7 @@ commit time> so unchanged sources produce identical bytes across releases.
 ffmpeg is bundled automatically: --ffmpeg PATH wins, else the ffmpeg on
 PATH. Releases MUST bundle ffmpeg."""
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "src"))
 SEP = ";" if os.name == "nt" else ":"
 # Native/binary deps whose data files or submodules PyInstaller's auto
 # analysis can miss — collect everything for each.
@@ -50,6 +52,8 @@ def _source_date_epoch() -> str:
 
 def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
              metadata_path: "Path | None" = None,
+             version_hook: "Path | None" = None,
+             version_metadata: "Path | None" = None,
              distpath: "Path | None" = None, workpath: "Path | None" = None,
              specpath: "Path | None" = None) -> list[str]:
     argv = [
@@ -128,6 +132,10 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
         argv += ["--add-binary", f"{ffmpeg}{SEP}."]
     if metadata_path is not None:
         argv += ["--add-data", f"{metadata_path}{SEP}."]
+    if version_hook is not None:
+        argv += ["--runtime-hook", str(version_hook)]
+    if version_metadata is not None:
+        argv += ["--add-data", f"{version_metadata}{SEP}."]
     for option, path in (("--distpath", distpath), ("--workpath", workpath),
                          ("--specpath", specpath)):
         if path is not None:
@@ -135,14 +143,46 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
     return argv
 
 
-def bootstrap_args() -> list[str]:
-    return [
+def bootstrap_args(*, distpath: Path | None = None, workpath: Path | None = None,
+                   specpath: Path | None = None) -> list[str]:
+    argv = [
         str(REPO / "bootstrap_entry.py"),
         "--name", "SM64TrainerSetup",
         "--onefile", "--windowed", "--clean", "--noconfirm",
         "--paths", str(REPO / "src"),
         "--icon", str(REPO / "assets" / "ukiki.ico"),
     ]
+    for option, path in (("--distpath", distpath), ("--workpath", workpath), ("--specpath", specpath)):
+        if path is not None:
+            argv += [option, str(path)]
+    return argv
+
+
+def stage_version(work: Path, version: str) -> tuple[Path, Path]:
+    """Embed the candidate version without mutating tracked source or uv.lock."""
+    sys.path.insert(0, str(REPO / "src"))
+    from sm64_events.core.release_contract import version_key
+    if version.startswith(("v", "V")):
+        raise ValueError("build version must not contain a tag prefix")
+    version_key(version)
+    work.mkdir(parents=True, exist_ok=True)
+    hook, metadata = work / "rthook_release_version.py", work / "release-version.json"
+    metadata.write_text(json.dumps({"schema": 1, "version": version}, sort_keys=True) + "\n", encoding="utf-8")
+    hook.write_text(
+        "# Generated candidate runtime version, recorded in candidate provenance.\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "import sm64_events.core.version as _version\n"
+        f"_version.__version__ = {version!r}\n"
+        "if '--build-self-check' in sys.argv:\n"
+        "    from sm64_events.core.build_channel import current_build\n"
+        "    _build = current_build()\n"
+        "    _destination = Path(sys.argv[sys.argv.index('--build-self-check') + 1])\n"
+        "    _destination.write_text(json.dumps({'schema': 1, 'version': _version.__version__,\n"
+        "        'channel': _build.channel, 'installation': _build.installation,\n"
+        "        'port': _build.default_port, 'updates_enabled': _build.updates_enabled}, sort_keys=True), encoding='utf-8')\n"
+        "    os._exit(0)\n", encoding="utf-8")
+    return hook, metadata
 
 
 def main() -> int:
@@ -151,6 +191,10 @@ def main() -> int:
                     default="all")
     ap.add_argument("--ffmpeg",
                     help="ffmpeg.exe to bundle (default: the one on PATH)")
+    ap.add_argument("--version", help="exact embedded runtime version; source remains unchanged")
+    ap.add_argument("--config", type=Path, help="validated schema2 normal build configuration")
+    ap.add_argument("--distpath", type=Path)
+    ap.add_argument("--workpath", type=Path)
     args = ap.parse_args()
 
     if args.mode in ("app", "all"):
@@ -163,8 +207,8 @@ def main() -> int:
     if needs_reexec(os.environ):
         env = {**os.environ, "PYTHONHASHSEED": "1",
                "SOURCE_DATE_EPOCH": _source_date_epoch()}
-        return subprocess.run([sys.executable, __file__, *sys.argv[1:]],
-                              env=env).returncode
+        return subprocess.run([sys.executable, __file__, *sys.argv[1:]], env=env,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode
 
     import PyInstaller.__main__ as pyi
 
@@ -174,11 +218,9 @@ def main() -> int:
             print(f"ffmpeg not found: {ffmpeg}", file=sys.stderr)
             return 2
         if not ffmpeg:
-            print("WARNING: no ffmpeg found on PATH and --ffmpeg not given — "
-                  "building WITHOUT it; replay will use the in-process "
-                  "encoder. Install ffmpeg for a proper release.")
-        else:
-            print(f"bundling ffmpeg: {ffmpeg}")
+            print("Build refused: ffmpeg.exe is required for a complete application.", file=sys.stderr)
+            return 2
+        print(f"bundling ffmpeg: {ffmpeg}")
         # The three natives are build outputs, not tracked files: package
         # only ones built from THESE sources, or refuse (tools/build_natives.py).
         sys.path.insert(0, str(REPO / "tools"))
@@ -188,10 +230,24 @@ def main() -> int:
         except RuntimeError as failure:
             print(f"cannot package the natives: {failure}", file=sys.stderr)
             return 2
-        pyi.run(app_args(ffmpeg))
+        from sm64_events.core.build_channel import BuildChannel, CONFIG_FILENAME, read_metadata
+        work = args.workpath or REPO / "build" / "normal-release"
+        work.mkdir(parents=True, exist_ok=True)
+        build = read_metadata(args.config) if args.config else BuildChannel(installation="normal")
+        if build.installation != "normal":
+            raise ValueError("normal application builder requires schema2 installation normal")
+        metadata = work / CONFIG_FILENAME
+        metadata.write_text(json.dumps(build.metadata(), sort_keys=True) + "\n", encoding="utf-8")
+        from sm64_events.core.version import __version__
+        hook, version_metadata = stage_version(work, args.version or __version__)
+        pyi.run(app_args(ffmpeg, metadata_path=metadata, version_hook=hook,
+                         version_metadata=version_metadata, distpath=args.distpath,
+                         workpath=work / "app", specpath=work / "spec"))
         print("\nBuilt:", REPO / "dist" / "SM64Trainer")
     if args.mode in ("bootstrap", "all"):
-        pyi.run(bootstrap_args())
+        work = args.workpath or REPO / "build" / "normal-release"
+        pyi.run(bootstrap_args(distpath=args.distpath, workpath=work / "installer",
+                               specpath=work / "spec"))
         print("\nBuilt:", REPO / "dist" / "SM64TrainerSetup.exe")
     return 0
 

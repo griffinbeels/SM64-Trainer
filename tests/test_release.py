@@ -181,15 +181,19 @@ def test_the_dry_run_restore_is_byte_exact(tmp_path, monkeypatch):
     assert b"\r\n" not in lock.read_bytes(), "the restore must not retype line endings"
 
 
-def test_the_dry_run_branch_restores_before_returning():
-    """The call has to be ON the dry-run path, not merely defined."""
-    import inspect
-    source = inspect.getsource(release.main)
-    assert source.index("snapshot_version_files()") < source.index("bump_version_py("), (
-        "snapshot BEFORE the bump overwrites anything")
-    branch = source.index("if args.dry_run:")
-    assert "restore_version_files(originals)" in source[branch:branch + 300], (
-        "the dry-run branch must put them back before it returns")
+def test_the_dry_run_restores_source_even_when_build_fails(tmp_path, monkeypatch):
+    version, project, lock = (tmp_path / name for name in ("version.py", "pyproject.toml", "uv.lock"))
+    version.write_bytes(b'__version__ = "1.9.1"\r\n')
+    project.write_bytes(b'version = "1.9.1"\n')
+    lock.write_bytes(b'locked\r\n')
+    originals = {path: path.read_bytes() for path in (version, project, lock)}
+    monkeypatch.setattr(release, "VERSION_PY", version)
+    monkeypatch.setattr(release, "PYPROJECT", project)
+    monkeypatch.setattr(release, "UV_LOCK", lock)
+    monkeypatch.setattr(release, "_run", lambda *_args, **_kw: (_ for _ in ()).throw(RuntimeError("build failed")))
+    with pytest.raises(RuntimeError, match="build failed"):
+        release._legacy_dry_run("1.10.0-beta.1")
+    assert {path: path.read_bytes() for path in originals} == originals
 
 
 def test_a_release_stops_on_a_full_run_that_is_not_green(capsys):
@@ -209,7 +213,22 @@ def test_a_dry_run_reports_the_full_run_without_enforcing_it(capsys):
     assert "not enforced" in capsys.readouterr().out
 
 
-def test_the_full_run_gate_comes_before_anything_is_built():
-    import inspect
-    source = inspect.getsource(release.main)
-    assert source.index("_require_full_run(") < source.index('"tools/build_exe.py"')
+def test_the_full_run_gate_comes_before_anything_is_built(monkeypatch):
+    import sys
+    calls = []
+    monkeypatch.setattr(sys, "argv", ["release.py", "1.10.0-beta.1", "--dry-run"])
+    monkeypatch.setattr(release, "_preflight", lambda *_: calls.append("preflight"))
+    monkeypatch.setattr(release, "_verify_or_run_gate", lambda: calls.append("local gate"))
+    monkeypatch.setattr(release, "_require_full_run", lambda *_: calls.append("full run"))
+    monkeypatch.setattr(release, "_legacy_dry_run", lambda *_: calls.append("build") or 0)
+    assert release.main() == 0
+    assert calls == ["preflight", "local gate", "full run", "build"]
+
+
+def test_old_direct_publication_is_refused_before_side_effects(monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, "argv", ["release.py", "1.10.0"])
+    monkeypatch.setattr(release, "_run", lambda *_args, **_kw: pytest.fail("direct release invoked process"))
+    with pytest.raises(SystemExit) as result:
+        release.main()
+    assert result.value.code == 2
