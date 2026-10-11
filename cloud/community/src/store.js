@@ -51,10 +51,11 @@ export class Store {
     const digest=await sha256(token),uid=identity.sub,now=sec();
     const prior=await this.account(identity);
     requireThat(!['deleted','suspended'].includes(prior.status),'account_unavailable','This account cannot use an invitation.',403);
+    requireThat(prior.ephemeral||prior.invited,'invite_unavailable','This invitation is unavailable.',403);
     const invitation=await this.one('SELECT * FROM beta_invitations WHERE token_sha256=?',digest);
     requireThat(invitation&&!invitation.revoked&&invitation.expires_at>now&&(!invitation.claimed_uid||invitation.claimed_uid===uid),'invite_unavailable','This invitation is unavailable.',403);
     await this.tx("(SELECT enabled FROM settings WHERE id=1)=1 AND EXISTS(SELECT 1 FROM beta_invitations WHERE token_sha256=? AND revoked=0 AND expires_at>? AND (claimed_uid IS NULL OR claimed_uid=?)) AND "+
-      "NOT EXISTS(SELECT 1 FROM accounts WHERE uid=? AND status IN ('deleted','suspended')) AND "+
+      "NOT EXISTS(SELECT 1 FROM accounts WHERE uid=? AND (invited=0 OR status IN ('deleted','suspended'))) AND "+
       "(EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1) OR (SELECT COUNT(*) FROM accounts)<(SELECT max_members FROM beta_admission WHERE id=1))",[digest,now,uid,uid,uid],[
       this.sql("INSERT INTO accounts(uid,issuer,subject,invited,created_at,updated_at) VALUES(?,?,?,1,?,?) ON CONFLICT(uid) DO UPDATE SET invited=1,updated_at=excluded.updated_at",uid,this.cfg.issuer,uid,now,now),
       this.sql('UPDATE beta_invitations SET claimed_uid=?,claimed_at=COALESCE(claimed_at,?) WHERE token_sha256=?',uid,now,digest),

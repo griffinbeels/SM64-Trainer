@@ -88,7 +88,8 @@ Invalid, expired, revoked and other-UID use returns 403 invite_unavailable.
 beta_admission.max_members defaults to eight, with a hard schema maximum of 64.
 The cap counts retained accounts, including tombstones, so revocation cannot
 reopen an unlimited account-creation loop. Operator-created invitations respect
-the same cap. Disabled D1 admission, deleted and suspended accounts cannot redeem.
+the same cap. Disabled D1 admission, revoked membership, deleted and suspended
+accounts cannot redeem; only the operator can restore an existing revoked member.
 Register/revoke capabilities through reviewed operator management; there is no
 anonymous signup or public invitation-issuance endpoint.
 
