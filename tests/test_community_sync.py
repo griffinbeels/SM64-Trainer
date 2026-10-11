@@ -543,7 +543,7 @@ def test_failed_publication_retries_without_another_pb_and_reuses_mutation_keys(
                 await asyncio.sleep(.01)
             assert sync._offer_retry and len(publish_keys) == 1
             now[0] += 31
-            sync._wake.set()
+            sync._contribution_wake.set()
             for _ in range(100):
                 if len(publish_keys) == 2:
                     break

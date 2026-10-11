@@ -14,6 +14,7 @@ from sm64_events.ghost.sharing_targets import canonical, checked_target
 from . import codec
 from .cache import checked_metadata, target_key, value_of
 from .config import CommunityError
+from .outbox import SourceOutbox, checked_source, source_key
 
 MAX_QUEUE = 32
 MAX_PAGE = 256
@@ -31,6 +32,24 @@ def _prepare_source(source):
     if len(raw) > codec.MAX_RAW or hashlib.sha256(raw).hexdigest() != source['raw_sha256']:
         raise CommunityError('source_changed')
     return raw, codec.encode(raw)
+
+
+def _upload_identifier(grant):
+    if grant.get("disposition") in ("already_present", "not_faster"):
+        return None
+    if grant.get("disposition") != "upload" or set(grant) - {"v", "disposition", "upload_id", "expires_at", "recording_id"}:
+        raise CommunityError("invalid_response")
+    identifier = grant.get("upload_id")
+    if (not isinstance(identifier, str) or not 1 <= len(identifier) <= 128
+            or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in identifier)):
+        raise CommunityError("invalid_response")
+    try:
+        timestamp = grant["expires_at"]
+        if type(timestamp) is not int or datetime.fromtimestamp(timestamp, timezone.utc) <= datetime.now(timezone.utc):
+            raise ValueError()
+    except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+        raise CommunityError("grant_expired") from None
+    return identifier
 
 
 def _cutoffs(rows):
@@ -132,13 +151,20 @@ class CommunitySync:
         self._offer_retry = OrderedDict()
         self._network_owner, self._network_until, self._network_error = None, 0, None
         self._loop = self._wake = self._task = None
+        self._contribution_wake = self._contribution_task = self._practice_started = None
         self._closing = False
         self._catalog, self._catalog_generation, self._catalog_until = {}, None, 0
+        self._catalog_lock = asyncio.Lock()
         self._local_jobs = set()
         self._search_task = None
         self._pins_leased = False
         self._pin_key, self._pins_until = None, 0
         self._pin_metadata_key, self._pin_metadata_until = None, 0
+        self._outbox = SourceOutbox(population.root / "pending-contributions.json")
+        self._consent_epoch = 0
+        self._recovery_owner, self._recovery_until = None, 0
+        if hasattr(account, "on_contribution_cancel"):
+            account.on_contribution_cancel = self.cancel_contributions
         self.last_error = None
 
     async def start(self):
@@ -147,8 +173,12 @@ class CommunitySync:
         self._closing = False
         self._loop = asyncio.get_running_loop()
         self._wake = asyncio.Event()
+        self._contribution_wake = asyncio.Event()
+        self._practice_started = asyncio.Event()
         self._task = asyncio.create_task(self._run(), name="community-sync")
+        self._contribution_task = asyncio.create_task(self._run_contributions(), name="community-contributions")
         self._wake.set()
+        self._contribution_wake.set()
 
     async def stop(self):
         deadline = time.monotonic() + 5
@@ -156,7 +186,7 @@ class CommunitySync:
             self._closing = True
             self._queue.clear()
             self._offer_retry.clear()
-        tasks = [task for task in (self._task, self._search_task) if task and not task.done()]
+        tasks = [task for task in (self._task, self._contribution_task, self._search_task) if task and not task.done()]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -166,8 +196,8 @@ class CommunitySync:
                     task.exception()
             if pending:
                 raise CommunityError("shutdown_timeout", "Community processing is still finishing.")
-        # CPU helpers only read bounded local bytes or return decoded bytes.
-        # They never publish or mutate replay/provider state after cancellation.
+        # Helpers read bounded local bytes and write bounded retry metadata.
+        # Join them before releasing resources; HTTP publication stays on tasks.
         if self._local_jobs:
             try:
                 await asyncio.wait_for(asyncio.shield(asyncio.gather(*self._local_jobs, return_exceptions=True)),
@@ -175,6 +205,7 @@ class CommunitySync:
             except TimeoutError:
                 raise CommunityError("shutdown_timeout", "Community processing is still finishing.") from None
         self._task = self._wake = self._loop = self._search_task = None
+        self._contribution_task = self._contribution_wake = self._practice_started = None
 
     def _enqueue(self, key, operation):
         with self._lock:
@@ -190,7 +221,8 @@ class CommunitySync:
             self._queue.move_to_end(key)
             while len(self._queue) > MAX_QUEUE:
                 self._queue.popitem(last=False)
-            loop, wake = self._loop, self._wake
+            loop = self._loop
+            wake = self._contribution_wake if operation[0] == "offer" else self._wake
         if loop and wake and not loop.is_closed():
             loop.call_soon_threadsafe(wake.set)
         return True
@@ -234,28 +266,126 @@ class CommunitySync:
             return True
         return self._enqueue(("assets",), ("assets", identifiers))
 
-    def offer_source(self, source):
+    def _freeze_source(self, source):
         fields = {"target", "clock", "game_version", "strategy", "frames", "path", "raw_sha256", "full_start", "valid"}
         try:
             if (not isinstance(source, dict) or set(source) != fields or source["full_start"] is not True
                     or source["valid"] is not True or source["clock"] not in ("igt", "rta")
                     or source["game_version"] not in ("us", "jp") or type(source["frames"]) is not int
                     or not 1 <= source["frames"] <= 2592000 or not isinstance(source["strategy"], str)):
-                return False
+                return None
             from sm64_events.ghost.portable import checked_hash
             checked_hash(source["raw_sha256"])
             target = checked_target(source["target"])
             snapshot = self.account.snapshot()
             if snapshot.get("status") != "active" or not snapshot.get("sharing"):
-                return False
+                return None
             frozen = {**source, "target": target, "path": str(Path(source["path"]).resolve()), "owner": snapshot.get("uid")}
-            # Reclassified runs can reuse bytes with a different admission body.
-            # Only the same owner and immutable admission identity share retries.
-            key = ("offer", frozen["owner"], canonical(target), source["clock"], source["game_version"],
-                   source["strategy"], source["frames"], source["raw_sha256"])
-            return self._enqueue(key, ("offer", frozen))
+            return {**checked_source(frozen), "consent_epoch": self._consent_epoch}
         except (ValueError, TypeError, OSError):
+            return None
+
+    def offer_source(self, source):
+        frozen = self._freeze_source(source)
+        return self._enqueue(source_key(frozen), ("offer", frozen)) if frozen else False
+
+    def contribution_context(self):
+        """Capture attribution and consent before native qualification starts."""
+        with self._lock:
+            snapshot = self.account.snapshot()
+            if self._closing or snapshot.get("status") != "active" or not snapshot.get("sharing"):
+                return None
+            return {"owner": snapshot.get("uid"), "consent_epoch": self._consent_epoch}
+
+    def remember_source(self, source, *, owner, consent_epoch):
+        """Persist on the existing native admission worker, never a poll/UI path.
+
+        The owner was captured before qualification. A login/consent change
+        during preservation refuses attribution instead of assigning a new UID.
+        """
+        frozen = self._freeze_source(source)
+        if frozen is None or frozen["owner"] != owner:
             return False
+        frozen["consent_epoch"] = consent_epoch
+        if not self._source_active(frozen):
+            return False
+        try:
+            self._outbox.remember({key: value for key, value in frozen.items() if key != "consent_epoch"})
+        except (CommunityError, OSError):
+            self.last_error = "A community contribution could not be saved for retry."
+            return self._enqueue(source_key(frozen), ("offer", frozen))
+        if not self._source_active(frozen):
+            self._outbox.discard((frozen,))
+            return False
+        return self._enqueue(source_key(frozen), ("offer", frozen))
+
+    def _source_active(self, source):
+        snapshot = self.account.snapshot()
+        return (not self._closing and snapshot.get("status") == "active" and snapshot.get("sharing")
+                and snapshot.get("uid") == source["owner"]
+                and source.get("consent_epoch", self._consent_epoch) == self._consent_epoch)
+
+    async def cancel_contributions(self, owner):
+        with self._lock:
+            self._consent_epoch += 1
+            for mapping in (self._queue, self._offer_retry):
+                for key in tuple(mapping):
+                    if key[0] == "offer" and (owner is None or key[1] == owner):
+                        mapping.pop(key)
+        await self._cpu(self._outbox.clear if owner is None else lambda: self._outbox.discard(owner=owner))
+        self._recovery_until = 0
+
+    async def _recover_sources(self):
+        epoch = self._consent_epoch
+        if not self._outbox._loaded:
+            await self._cpu(self._outbox.load)
+        snapshot = self.account.snapshot()
+        owner = snapshot.get("uid")
+        if owner and snapshot.get("authenticated") and (not snapshot.get("sharing") or snapshot.get("status") == "deleted"):
+            await self.cancel_contributions(owner)
+            return
+        if snapshot.get("status") != "active" or not snapshot.get("sharing") or owner is None or epoch != self._consent_epoch:
+            return
+        if owner == self._recovery_owner and time.monotonic() < self._recovery_until:
+            return
+        self._recovery_owner, self._recovery_until = owner, time.monotonic() + 60
+        sources = await self._cpu(self._outbox.available, owner)
+        if not sources:
+            return
+        await self._catalog_ready()
+        if epoch != self._consent_epoch:
+            return
+        winners, retired = self._recovery_winners(sources)
+        await self._cpu(self._outbox.discard, retired)
+        queued = 0
+        for source in winners.values():
+            key = source_key(source)
+            with self._lock:
+                if key in self._queue or key in self._offer_retry:
+                    continue
+            source["consent_epoch"] = epoch
+            if self._source_active(source) and self._outbox.contains(source) and self._enqueue(key, ("offer", source)):
+                queued += 1
+            if queued == 8:
+                break
+
+    def _recovery_winners(self, sources):
+        winners, retired = {}, []
+        for source in sources:
+            key = (*target_key(source["target"]), source["clock"], source["game_version"], "strategy", source["strategy"])
+            cutoffs = self._catalog.get(key)
+            if not cutoffs:
+                retired.append(source)
+                continue
+            bin_key = key, frame_band(cutoffs, [(source["frames"], source["frames"])])[0]
+            previous = winners.get(bin_key)
+            if previous is None or (source["frames"], source["raw_sha256"]) < (previous["frames"], previous["raw_sha256"]):
+                if previous:
+                    retired.append(previous)
+                winners[bin_key] = source
+            else:
+                retired.append(source)
+        return winners, retired
 
     async def _json(self, method, path, **kwargs):
         owner = self.account.snapshot().get("uid")
@@ -287,12 +417,15 @@ class CommunitySync:
     async def _catalog_ready(self):
         if self._catalog_until > time.monotonic():
             return
-        value = await self._json("GET", "/v1/catalog")
-        generation, catalog = checked_catalog(value)
-        if generation != self._catalog_generation:
-            self._recent.clear()
-        self._catalog_generation, self._catalog = generation, catalog
-        self._catalog_until = time.monotonic() + CATALOG_RENEW_S
+        async with self._catalog_lock:
+            if self._catalog_until > time.monotonic():
+                return
+            value = await self._json("GET", "/v1/catalog")
+            generation, catalog = checked_catalog(value)
+            if generation != self._catalog_generation:
+                self._recent.clear()
+            self._catalog_generation, self._catalog = generation, catalog
+            self._catalog_until = time.monotonic() + CATALOG_RENEW_S
 
     def _query(self, identity):
         key = self.population.identity_key(identity)
@@ -457,8 +590,7 @@ class CommunitySync:
             raise CommunityError("asset_unavailable")
 
     async def _offer(self, source):
-        snapshot = self.account.snapshot()
-        if snapshot.get("status") != "active" or not snapshot.get("sharing") or snapshot.get("uid") != source["owner"]:
+        if not self._source_active(source):
             return
         await self._catalog_ready()
         key = (*target_key(source["target"]), source["clock"], source["game_version"], "strategy", source["strategy"])
@@ -481,7 +613,7 @@ class CommunitySync:
                 self._queue.pop(queue_key, None)
                 self._offer_retry.pop(queue_key, None)
         raw, encoded = await self._cpu(_prepare_source, source)
-        if self._closing:
+        if not self._source_active(source):
             return
         body = {"target": source["target"], "clock": source["clock"], "rom": source["game_version"],
             "strategy": source["strategy"], "frames": source["frames"], "raw_sha256": source["raw_sha256"],
@@ -491,45 +623,38 @@ class CommunitySync:
             source.pop("mutation_keys", None)
             source["mutation_generation"] = self._catalog_generation
         mutation_keys = source.setdefault("mutation_keys", {})
-        grant = await self._json("POST", "/v1/uploads", json=body,
-                                 headers={"Idempotency-Key": mutation_keys.setdefault("grant", str(uuid4()))})
-        disposition = grant.get("disposition")
-        if disposition in ("already_present", "not_faster"):
+        mutation_keys.setdefault("grant", str(uuid4()))
+        await self._cpu(self._outbox.update, source)
+        if not self._source_active(source):
             return
-        if disposition != "upload" or set(grant) - {"v", "disposition", "upload_id", "expires_at", "recording_id"}:
-            raise CommunityError("invalid_response")
-        identifier = grant.get("upload_id")
-        if not isinstance(identifier, str) or not 1 <= len(identifier) <= 128 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in identifier):
-            raise CommunityError("invalid_response")
-        try:
-            timestamp = grant["expires_at"]
-            if type(timestamp) is not int:
-                raise ValueError()
-            expires = datetime.fromtimestamp(timestamp, timezone.utc)
-            if expires <= datetime.now(timezone.utc):
-                raise ValueError()
-        except (ValueError, KeyError, TypeError, AttributeError):
-            raise CommunityError("grant_expired") from None
-        snapshot = self.account.snapshot()
-        if self._closing or not snapshot.get("sharing") or snapshot.get("uid") != source["owner"]:
+        grant = await self._json("POST", "/v1/uploads", json=body,
+                                 headers={"Idempotency-Key": mutation_keys["grant"]})
+        identifier = _upload_identifier(grant)
+        if identifier is None:
+            return
+        if not self._source_active(source):
+            return
+        mutation_keys.setdefault("publish", str(uuid4()))
+        await self._cpu(self._outbox.update, source)
+        if not self._source_active(source):
             return
         result = await self._json("PUT", "/v1/uploads/" + identifier, content=encoded,
-                                 headers={"Idempotency-Key": mutation_keys.setdefault("publish", str(uuid4()))})
+                                 headers={"Idempotency-Key": mutation_keys["publish"]})
         if result.get("disposition") not in ("published", "already_present", "not_faster"):
             raise CommunityError("invalid_response")
 
     def _retry_offer(self, key, operation, error):
         if operation[0] != "offer" or not isinstance(error, CommunityError) or not (
-                error.code in ("network_unavailable", "budget_exhausted", "grant_expired", "generation_changed")
+                error.code in ("network_unavailable", "budget_exhausted", "grant_expired", "upload_expired", "generation_changed")
                 or error.status in (429, 502, 503, 504)):
             return
         source = operation[1]
         snapshot = self.account.snapshot()
-        if snapshot.get("uid") != source["owner"] or not snapshot.get("sharing"):
+        if snapshot.get("uid") != source["owner"] or not self._source_active(source):
             return
         tries = min(6, source.get("retry_count", 0) + 1)
         source["retry_count"] = tries
-        if error.code == "grant_expired":
+        if error.code in ("grant_expired", "upload_expired"):
             source.pop("mutation_keys", None)
         delay = max(error.retry_after or 0, self._network_until - time.monotonic(),
                     random.uniform(1, 1.25) * min(900, 30 * 2 ** (tries - 1)))
@@ -538,18 +663,60 @@ class CommunitySync:
             while len(self._offer_retry) > MAX_QUEUE:
                 self._offer_retry.popitem(last=False)
 
+    def _take_operation(self, *, contribution):
+        with self._lock:
+            for key, operation in self._queue.items():
+                if (operation[0] == "offer") == contribution:
+                    self._queue.pop(key)
+                    return key, operation
+        return None
+
+    async def _failed_operation(self, key, operation, error):
+        self.last_error = "Community ghosts are temporarily unavailable."
+        if isinstance(error, CommunityError) and error.code == "generation_changed":
+            self._catalog_until = 0
+        self._retry_offer(key, operation, error)
+        if operation[0] == "offer" and (isinstance(error, OSError)
+                or isinstance(error, CommunityError) and error.code in ("source_changed", "invalid_source", "unsupported_identity")):
+            await self._cpu(self._outbox.discard, (operation[1],))
+
     async def _run(self):
+        """Practice requests never wait behind a contribution's HTTP transfer."""
+        while True:
+            await self._wake.wait()
+            self._wake.clear()
+            while (item := self._take_operation(contribution=False)) is not None:
+                key, operation = item
+                if self.account.snapshot().get("status") != "active":
+                    continue
+                try:
+                    if operation[0] == "pool":
+                        await self._pool(*operation[1:])
+                    else:
+                        await self._assets(operation[1])
+                    self.last_error = None
+                except (CommunityError, ValueError, OSError) as error:
+                    await self._failed_operation(key, operation, error)
+            self._practice_started.set()
+
+    async def _run_contributions(self):
+        """One serial recovery/upload task, sharing the existing owned loop."""
+        await self._practice_started.wait()
         while True:
             with self._lock:
                 soonest = min((item[1] for item in self._offer_retry.values()), default=None)
             try:
                 if soonest is None:
-                    await self._wake.wait()
+                    await asyncio.wait_for(self._contribution_wake.wait(), 5)
                 else:
-                    await asyncio.wait_for(self._wake.wait(), max(0, soonest - time.monotonic()))
+                    await asyncio.wait_for(self._contribution_wake.wait(), min(5, max(0, soonest - time.monotonic())))
             except TimeoutError:
                 pass
-            self._wake.clear()
+            self._contribution_wake.clear()
+            try:
+                await self._recover_sources()
+            except (CommunityError, ValueError, OSError):
+                self.last_error = "Community contributions are temporarily unavailable."
             with self._lock:
                 for key, (operation, due, _tries) in tuple(self._offer_retry.items()):
                     if due <= time.monotonic():
@@ -557,23 +724,14 @@ class CommunitySync:
                         self._queue.setdefault(key, operation)
                 while len(self._queue) > MAX_QUEUE:
                     self._queue.popitem(last=False)
-            while True:
-                with self._lock:
-                    if not self._queue:
-                        break
-                    key, operation = self._queue.popitem(last=False)
+            while (item := self._take_operation(contribution=True)) is not None:
+                key, operation = item
                 if self.account.snapshot().get("status") != "active":
                     continue
                 try:
-                    if operation[0] == "pool":
-                        await self._pool(*operation[1:])
-                    elif operation[0] == "assets":
-                        await self._assets(operation[1])
-                    else:
-                        await self._offer(operation[1])
+                    await self._offer(operation[1])
+                    if self._source_active(operation[1]):
+                        await self._cpu(self._outbox.discard, (operation[1],))
                     self.last_error = None
                 except (CommunityError, ValueError, OSError) as error:
-                    self.last_error = "Community ghosts are temporarily unavailable."
-                    if isinstance(error, CommunityError) and error.code == "generation_changed":
-                        self._catalog_until = 0
-                    self._retry_offer(key, operation, error)
+                    await self._failed_operation(key, operation, error)

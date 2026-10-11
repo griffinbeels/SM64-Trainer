@@ -4,6 +4,7 @@ import logging
 from contextlib import suppress
 
 log = logging.getLogger("sm64.ghost")
+_CURRENT_CONTRIBUTION = object()
 
 
 class PopulationRecorder:
@@ -24,7 +25,8 @@ class PopulationRecorder:
         if self.task is None or attempt.outcome != "success" or attempt.valid is not True or attempt.cleared:
             return
         try:
-            self.queue.put_nowait(attempt)
+            contribution = self.community.contribution_context() if self.community is not None else None
+            self.queue.put_nowait((attempt, contribution))
         except asyncio.QueueFull:
             self.dropped += 1
 
@@ -47,9 +49,9 @@ class PopulationRecorder:
 
     async def _run(self):
         while True:
-            attempt = await self.queue.get()
+            attempt, contribution = await self.queue.get()
             try:
-                self.job = asyncio.create_task(asyncio.to_thread(self._admit, attempt))
+                self.job = asyncio.create_task(asyncio.to_thread(self._admit, attempt, contribution))
                 accepted = await asyncio.shield(self.job)
                 if accepted:
                     self.accepted += 1
@@ -66,7 +68,7 @@ class PopulationRecorder:
                     self.job = None
                 self.queue.task_done()
 
-    def _admit(self, attempt):
+    def _admit(self, attempt, contribution=_CURRENT_CONTRIBUTION):
         from uuid import uuid4
         from sm64_events.ghost.library_preferences import AUTHOR_KEY
         database = self.tracker.db
@@ -80,11 +82,12 @@ class PopulationRecorder:
             player_id = str(uuid4())
             database.set_state("ghost_player_id", player_id)
         author = database.get_state(AUTHOR_KEY, "") or "You"
-        cloud = self.community.account.snapshot() if self.community is not None else {}
-        if cloud.get('status') == 'active' and cloud.get('sharing'):
+        if contribution is _CURRENT_CONTRIBUTION:
+            contribution = self.community.contribution_context() if self.community is not None else None
+        if contribution is not None:
             source = self.population.qualified_source(attempt, self.replay,
                 clock=identity.clock, game_version=identity.game_version, full_start=True)
-            self.community.offer_source(source)
+            self.community.remember_source(source, **contribution)
         ranks = getattr(self.tracker,"ranks",None)
         if ranks is not None:
             from sm64_events.ghost.adaptive import rank_frames, rank_recordings

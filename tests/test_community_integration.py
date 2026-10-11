@@ -119,9 +119,11 @@ def test_cloud_offer_precedes_independent_local_winner_skip(tmp_path):
     class Database:
         def get_state(self, key, default): return 'local' if key == 'ghost_player_id' else default
     class Sync:
-        account = SimpleNamespace(snapshot=lambda: {'sharing': True, 'status': 'active'})
         offers = []
-        def offer_source(self, value): self.offers.append(value)
+        def contribution_context(self): return {'owner': 'qualified-owner', 'consent_epoch': 0}
+        def remember_source(self, value, *, owner, consent_epoch):
+            assert owner == 'qualified-owner' and consent_epoch == 0
+            self.offers.append(value)
     sync = Sync()
     recorder = PopulationRecorder(population, replay, SimpleNamespace(db=Database(), ranks=Standards()), lambda run: IDENTITY, community=sync)
     assert recorder._admit(run) is False
