@@ -33,6 +33,8 @@
       "bucket_name": "replace-with-approved-private-staging-bucket"
     }
   ],
+  "durable_objects": {"bindings":[{"name":"MAINTENANCE","class_name":"MaintenanceAlarm"}]},
+  "migrations": [{"tag":"friend-beta-maintenance-v1","new_sqlite_classes":["MaintenanceAlarm"]}],
   "ratelimits": [
     {
       "name": "BURST",

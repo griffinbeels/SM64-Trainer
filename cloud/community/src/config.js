@@ -1,4 +1,4 @@
-import {requireThat} from "./errors.js";
+import {requireThat,uuid} from "./errors.js";
 export const LIMITS = Object.freeze({
   encoded_bytes: 2 * 1024 * 1024, raw_bytes: 16 * 1024 * 1024,
   retained_bytes: 64 * 1024 * 1024, global_bytes: 10 * 1000 * 1000 * 1000,
@@ -10,6 +10,12 @@ export function config(env) {
   const supabase = new URL(env.SUPABASE_URL);
   requireThat(supabase.protocol === "https:" && !supabase.username && !supabase.password &&
     supabase.pathname === "/" && !supabase.search && !supabase.hash, "configuration", "Service is unavailable.",503);
+  let sharedPublishers=null;
+  if(env.BETA_SHARED_PUBLISHERS!==undefined){
+    try{sharedPublishers=JSON.parse(env.BETA_SHARED_PUBLISHERS);}catch{requireThat(false,'configuration','Service is unavailable.',503);}
+    requireThat(Array.isArray(sharedPublishers)&&sharedPublishers.length<=8&&sharedPublishers.every(uuid)&&new Set(sharedPublishers).size===sharedPublishers.length,'configuration','Service is unavailable.',503);
+    sharedPublishers=sharedPublishers.map(id=>id.toLowerCase());
+  }
   return {
     supabaseURL: supabase.origin, issuer: supabase.origin + "/auth/v1",
     jwks: supabase.origin + "/auth/v1/.well-known/jwks.json",
@@ -17,7 +23,8 @@ export function config(env) {
     publishableKey: env.SUPABASE_PUBLISHABLE_KEY, terms: env.TERMS_VERSION, privacy: env.PRIVACY_VERSION,
     enabled: env.SERVICE_ENABLED === "true", operator: env.OPERATOR_NAME, contact: env.OPERATOR_CONTACT, policyURL: env.POLICY_URL,
     identityAdminConfigured:typeof env.SUPABASE_SECRET_KEY==='string'&&env.SUPABASE_SECRET_KEY.length>=16&&!env.SUPABASE_SECRET_KEY.startsWith('REPLACE'),
-    paginationConfigured:typeof env.CURSOR_SECRET==='string'&&env.CURSOR_SECRET.length>=32
+    paginationConfigured:typeof env.CURSOR_SECRET==='string'&&env.CURSOR_SECRET.length>=32,
+    sharedPublishers
   };
 }
 export function ready(cfg) {
