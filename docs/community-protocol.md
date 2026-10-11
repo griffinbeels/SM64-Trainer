@@ -54,8 +54,11 @@ checks; local fixtures do not prove them.
 existing behavior. Beta: `SM64TrainerBeta`, display `SM64 Trainer Beta`, separate
 LocalAppData profile, port8072, public updates disabled, no stable-data migration.
 Global recorder ownership and shared emulator installation metadata stay shared.
-Packaged metadata may contain only public community URL, Supabase project URL,
-publishable key and OAuth client ID; no service credentials or tokens.
+Packaged metadata contains public community URL, Supabase project URL,
+publishable key and OAuth client ID. A private friend build may also carry one
+single-use invitation capability. It is not an operator credential and is sent
+only after authenticated login; snapshots and diagnostics omit it. Keep that
+build private. No provider secrets or account refresh/access tokens are packaged.
 
 ## HTTP contracts
 
@@ -63,13 +66,17 @@ All `/v1` account/ghost responses are JSON with `v:1`; failures have a bounded
 `error:{code,message}`. Unknown fields/parameters, invalid types and unsupported
 versions fail. Remote authenticated responses are `Cache-Control: private,
 no-store`; private internal cached entries use only validated canonical keys.
-Every resource access reserves an exact account/global daily budget ticket,
-including cache hits. Burst limits shed traffic before expensive operations.
+Admitted account/ghost access reserves an exact account/global daily budget
+ticket, including cache hits. A separate fixed daily entry gate also bounds
+authenticated lookups before admission; its limits and rejected-request costs
+are specified in the [service contract](../cloud/community/README.md).
+Burst limits shed traffic before expensive operations.
 
 | Route | Contract |
 | --- | --- |
 | `GET /v1/config` | Public config:protocol/limits/policy versions, auth public fields, canonical catalog generation. No secrets. |
 | `GET /v1/account` | Token-free profile:uid,name,status (`new`,`active`,`rename_required`,`suspended`,`deleted`,`not_invited`),sharing,terms_version,privacy_version,sheet_runner,sheet_verified. |
+| `POST /v1/account/invitation` | Authenticated `{token}` one-use friend capability, stored as SHA-256 only; expiry, revocation and atomic membership cap apply. Same admitted owner can retry; an operator-revoked account cannot re-invite itself. Invalid/unavailable capability returns403 `invite_unavailable`. |
 | `PUT /v1/account` | Initial profile `{name,sharing,terms_version,privacy_version,sheet_runner:null|string}`; server requires current policies and invitation. No client owner/status/verification fields. |
 | `PUT /v1/account/name` | `{name}`; supports forced rename, retains data and consent. |
 | `PUT /v1/account/sharing` | `{enabled:bool}`; opt-out stops uploads; withdrawal is separate. |
