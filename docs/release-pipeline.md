@@ -110,7 +110,8 @@ payload in a temporary folder, checks sample practice preservation and stale-fil
 removal, then removes that temporary tree. It makes no network call, shortcut,
 profile copy or app launch. Run the packaged application with
 `--beta-self-check ABSOLUTE_RECEIPT.json` to verify every required asset, native PE
-header and helper import alongside normal beta identity. It starts no GUI,
+header and helper import alongside normal beta identity, and to load the shipped
+ranking policy the server reads first at startup. It starts no GUI,
 server, recorder or helper. These probes do not establish gameplay or OAuth
 acceptance. A hidden runner must remove Python launcher/module overrides for
 frozen EXEs; otherwise its environment can replace the reported executable.

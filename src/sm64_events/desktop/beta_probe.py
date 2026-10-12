@@ -21,6 +21,10 @@ _ASSETS = (
     "sheet_ladders.seed.json", "sheet_library.seed.json.gz", "library_overrides.json",
     "video_checks.seed.json.gz", "behaviours_us.tsv", "behaviours_jp.tsv",
     "symbols_us.tsv", "symbols_jp.tsv",
+    # Read relative to their modules, not through core/paths.py, so they live
+    # under the package path (round 38: beta.1 died without the policy).
+    "sm64_events/data/ranking_policy.json", "sm64_events/data/pad_glyphs_us.npz",
+    "sm64_events/data/pad_icons_us.npz", "sm64_events/data/oracle_glyphs_us.npz",
     *(_UI + name for name in (
         "index.html", "app.js", "api.js", "community.js", "components/header.js",
         "components/communityaccount.js", "components/communityprofile.js",
@@ -166,6 +170,13 @@ def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
           and Path(paths.bundled_ffmpeg()).resolve() == ffmpeg.resolve()
           and _file(bundle, "ffmpeg.exe") and _pe(ffmpeg, 0x8664, dll=False))
     check("x64_runtime", lambda: struct.calcsize("P") == 8)
+
+    def shipped_ranking_policy():
+        # The first thing create_app reads from the data folder; a pure JSON
+        # load with no service, profile or network. beta.1 failed exactly here.
+        from sm64_events.ranks.policy import RankingPolicy, _POLICY_PATH
+        return _POLICY_PATH.is_file() and bool(RankingPolicy().revision)
+    check("ranking_policy_loads", shipped_ranking_policy)
     # Import availability only; no service construction or helper invocation.
     load = importer or importlib.import_module
     for name, members in _IMPORTS:

@@ -25,6 +25,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
+DATA_DIR = REPO / "src" / "sm64_events" / "data"
 SEP = ";" if os.name == "nt" else ":"
 # Native/binary deps whose data files or submodules PyInstaller's auto
 # analysis can miss — collect everything for each.
@@ -125,6 +126,17 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
         # example links while dev does.
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'video_checks.seed.json.gz'}{SEP}.",
+        # EVERY top-level data file again, under its package path. Not every
+        # reader goes through core/paths.py: ranks/policy.py opens
+        # ranking_policy.json relative to its own module and the pad/oracle
+        # display readers use importlib.resources on sm64_events.data. Those
+        # resolve to <_MEIPASS>/sm64_events/data/<name> when frozen, so the
+        # root-only copies above left 1.10.0-beta.1 crashing at startup
+        # (FileNotFoundError in RankingPolicy; round 38). Shipping the folder
+        # under the package path makes a module-relative read work frozen
+        # with no per-file entry here. The plugin DLLs keep their own entries.
+        *(arg for file in sorted(DATA_DIR.iterdir()) if file.is_file()
+          for arg in ("--add-data", f"{file}{SEP}sm64_events/data")),
     ]
     for pkg in COLLECT:
         argv += ["--collect-all", pkg]
