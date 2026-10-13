@@ -774,6 +774,10 @@ class TrackerService:
 
         Merely selecting a target midway, restoring a state or rebasing its
         clock never certifies adopting newly prepared rivals.
+        `frames_since_start` counts the polled frames since the certified
+        start (0 at the start frame), so a roster prepared moments late can
+        still join that run (`ghost/native_session.py::LATE_JOIN_FRAMES`);
+        None without a certificate or a usable frame.
         """
         if self.db is None or self.session_id is None or self._tracking_dirty:
             return None
@@ -785,9 +789,14 @@ class TrackerService:
             return None
         waiting = ({"session_id":certificate["session_id"], "start_frame":certificate["start_frame"]}
                    if certificate else {})
+        since_start = (frame - certificate["start_frame"]
+                       if certificate is not None and type(frame) is int
+                       and type(certificate["start_frame"]) is int
+                       and frame >= certificate["start_frame"] else None)
         return {**(origin if origin is not None else waiting),"clock_ready":origin is not None,
                 "full_start_token":certificate["token"] if certificate else None,
-                "full_start_now":certificate is not None and frame == certificate["start_frame"]}
+                "full_start_now":certificate is not None and frame == certificate["start_frame"],
+                "frames_since_start":since_start}
 
     def _require_db(self) -> Database:
         if self.db is None or self.session_id is None:

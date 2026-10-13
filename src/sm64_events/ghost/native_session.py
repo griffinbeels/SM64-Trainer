@@ -15,6 +15,17 @@ from sm64_events.replay.capturecontrol import _kernel, _process_creation
 #: them stay as far apart on the colour wheel as the count allows.
 HUE_STEP_DEGREES = 137
 
+#: How late after a certified full start a roster may still join that run:
+#: two seconds at 30 fps, Mario's spawn fall. A PB's pose export can finish
+#: a second after the next run's spawn (2026-10-13, 13"73 Bomb Clip PB, reset
+#: 2.9 s later). His words: "We need to have the ghost ready to go ideally the
+#: second mario spawns and starts falling, but we have a bit of leeway here
+#: where we could have the ghosts spawn in during this animation, and that
+#: would be fine too (if it was delayed for whatever reason) -- we would just
+#: have to make sure we start them from the right spot." The renderer aligns a
+#: clip adopted mid-run to the attempt's elapsed clock (ghost_playback.cpp).
+LATE_JOIN_FRAMES = 60
+
 
 #: The renderer's GIPC_BUDGET: the chosen set does not fit the clip budget (or
 #: memory) together. The files are fine; fewer or shorter ghosts would show.
@@ -209,7 +220,8 @@ class NativeGhost:
         """Resolve and preload a roster off the poll loop, without adopting it.
 
         A certified start consumes one readiness snapshot in ``note``. A
-        preparation that finishes later waits for the next full start.
+        preparation that finishes later is adopted within ``LATE_JOIN_FRAMES``
+        of that run's start, else waits for the next full start.
         """
         if type(generation) is not int or not 0 < generation < 2**64:
             raise ValueError("ghost roster generation must be a positive uint64")
@@ -379,6 +391,19 @@ class NativeGhost:
                     self._start_sequence += 1
                     status = (self._source.snapshot_status(blocking=False)
                               if self._source is not None and not self._preparation_canceled else None)
+                    if status is not None and status.get("available") and status.get("prepared_generation") == self._adaptive_generation:
+                        self._activate_generation = self._adaptive_generation
+                        self._activate_start = self._start_sequence
+                        self._selected_asset = self._pending_asset
+                elif (token is not None and token == self._last_full_start
+                        and self._activate_generation != self._adaptive_generation
+                        and not self._preparation_canceled
+                        and type(origin.get("frames_since_start")) is int
+                        and origin["frames_since_start"] <= LATE_JOIN_FRAMES):
+                    # The roster became ready after this run's start was
+                    # consumed, but Mario is still falling in: join now. The
+                    # renderer aligns the clips to the attempt's elapsed clock.
+                    status = self._source.snapshot_status(blocking=False) if self._source is not None else None
                     if status is not None and status.get("available") and status.get("prepared_generation") == self._adaptive_generation:
                         self._activate_generation = self._adaptive_generation
                         self._activate_start = self._start_sequence

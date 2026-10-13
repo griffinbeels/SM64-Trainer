@@ -120,6 +120,29 @@ def test_move_rebases_preserve_one_start_and_restores_never_create_a_start():
     assert projector.native_rival_start("segment", "1") is None
 
 
+def test_rival_origin_counts_frames_since_the_certified_start(tmp_path):
+    """The late-join window (ghost/native_session.py::LATE_JOIN_FRAMES) reads
+    this count: 0 at the start frame, N frames later, None without a start."""
+    projector = selected_segment()
+    database = Database(tmp_path / "late.db")
+    service = TrackerService(database, Broadcaster())
+    service.session_id, service._projector = 1, projector
+    try:
+        at_start = service.native_rival_origin("segment", "1", frame=1000)
+        assert at_start["full_start_now"] and at_start["frames_since_start"] == 0
+        later = service.native_rival_origin("segment", "1", frame=1030)
+        assert not later["full_start_now"] and later["frames_since_start"] == 30
+        assert service.native_rival_origin("segment", "1", frame=None)["frames_since_start"] is None
+        # A clock behind the start is not a count of this run.
+        assert service.native_rival_origin("segment", "1", frame=999)["frames_since_start"] is None
+        # A restore gives a playback owner but no certificate, so no count.
+        projector.feed(row(20, "state_loaded", 1300, dict(LOADED), utc=LAST))
+        restored = service.native_rival_origin("segment", "1", frame=1330)
+        assert restored["full_start_token"] is None and restored["frames_since_start"] is None
+    finally:
+        database.close()
+
+
 def test_start_certificate_requires_the_selected_real_start_location():
     projector = mips_clip()
     projector.feed(door(5,29303))

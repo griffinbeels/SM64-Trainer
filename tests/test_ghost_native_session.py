@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from sm64_events.ghost import settings
-from sm64_events.ghost.native_session import NATIVE_BUDGET_REASON, NativeGhost, budget_reason
+from sm64_events.ghost.native_session import LATE_JOIN_FRAMES, NATIVE_BUDGET_REASON, NativeGhost, budget_reason
 from sm64_events.ghost.native_layout import GP_WRONG_SCENE
 from tests.test_ghost_session import a_session, mark
 from tests.test_ui_ghost_session import controls, run_node
@@ -78,7 +78,7 @@ def test_adaptive_preparation_is_ready_before_a_certified_start_and_never_late(t
     native.note()
     assert source.commands[-1]["activate_generation"] == 0
     generations["prepared_generation"] = 7
-    native.note()  # readiness arrived after this start was already consumed
+    native.note()  # readiness arrived after this start was already consumed; no elapsed count, so no late join
     assert source.commands[-1]["activate_generation"] == 0
     # A load/rebase is never a start, even with a different clock and arm.
     origin = {**origin, "frame": 120, "arm_id": 10, "full_start_now": False,
@@ -406,6 +406,94 @@ def test_late_readiness_does_not_adopt_when_an_uncertified_move_clock_resolves(t
               "utc": "2026-09-21T08:00:03+00:00"}
     native.note()
     assert source.commands[-1]["activate_generation"] == 0
+    native.stop()
+
+
+def late_join_session(tmp_path, monkeypatch):
+    """A start consumed while the roster is still unready, the shape of his
+    2026-10-13 PB: the pose export finished a second after the next spawn."""
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    target = {"kind": "star", "entity_key": "1-5", "strat": "Bomb Clip"}
+    ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
+    controls = settings.native_controls(settings.defaults())
+    origin = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+              "utc": "2026-09-21T08:00:00+00:00", "full_start_token": ("star", 1, 9),
+              "full_start_now": True, "frames_since_start": 0}
+    state = {"origin": origin}
+    native._origin_of = lambda *_: state["origin"]
+    served = source.snapshot_status
+    generations = {"prepared_generation": 0, "active_generation": 0}
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
+    native.prepare(target, [ghost], controls, 7)
+    native.reconcile(enabled=True, target=target, controls=controls)
+    native.note()  # the start is consumed while the roster is still unready
+    assert source.commands[-1]["activate_generation"] == 0
+    monkeypatch.setattr(native, "resolve", lambda *_: pytest.fail("poll resolved assets"))
+    monkeypatch.setattr(native, "_fingerprint", lambda *_: pytest.fail("poll inspected files"))
+    return native, source, state, generations
+
+
+@pytest.mark.parametrize("late", [30, LATE_JOIN_FRAMES])
+def test_a_roster_ready_during_the_spawn_fall_joins_the_run_it_missed(tmp_path, monkeypatch, late):
+    native, source, state, generations = late_join_session(tmp_path, monkeypatch)
+    generations["prepared_generation"] = 7
+    state["origin"] = {**state["origin"], "full_start_now": False, "frames_since_start": late}
+    native.note()
+    joined = source.commands[-1]
+    assert joined["enabled"] and joined["activate_generation"] == 7
+    assert joined["activate_start"] == 1  # the same start, not a second one
+    assert native._selected_asset[0][1]["clip_id"] == "ab" * 16
+    native.stop()
+
+
+def test_a_roster_ready_after_the_spawn_fall_waits_for_the_next_full_start(tmp_path, monkeypatch):
+    native, source, state, generations = late_join_session(tmp_path, monkeypatch)
+    generations["prepared_generation"] = 7
+    state["origin"] = {**state["origin"], "full_start_now": False,
+                       "frames_since_start": LATE_JOIN_FRAMES + 1}
+    native.note()
+    assert not source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 0
+    assert native._selected_asset is None
+    state["origin"] = {**state["origin"], "arm_id": 10, "full_start_token": ("star", 1, 10),
+                       "full_start_now": True, "frames_since_start": 0}
+    native.note()
+    assert source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 7
+    assert source.commands[-1]["activate_start"] == 2
+    native.stop()
+
+
+@pytest.mark.parametrize("consumed_first", [False, True])
+def test_a_different_runs_token_never_joins_late(tmp_path, monkeypatch, consumed_first):
+    """Only the start this session consumed may be joined late. A token it
+    never saw at its start frame (or before any start) waits for its own
+    certified full start."""
+    if consumed_first:
+        native, source, state, generations = late_join_session(tmp_path, monkeypatch)
+    else:
+        session, source, _ = native_session(tmp_path)
+        native = session._native
+        target = {"kind": "star", "entity_key": "1-5", "strat": "Bomb Clip"}
+        ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
+        controls = settings.native_controls(settings.defaults())
+        state = {"origin": {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+                            "utc": "2026-09-21T08:00:00+00:00", "full_start_token": ("star", 1, 9),
+                            "full_start_now": True, "frames_since_start": 0}}
+        native._origin_of = lambda *_: state["origin"]
+        served = source.snapshot_status
+        generations = {"prepared_generation": 0, "active_generation": 0}
+        source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
+        native.prepare(target, [ghost], controls, 7)
+        native.reconcile(enabled=True, target=target, controls=controls)
+    generations["prepared_generation"] = 7
+    state["origin"] = {**state["origin"], "arm_id": 10, "full_start_token": ("star", 1, 10),
+                       "full_start_now": False, "frames_since_start": 10}
+    native.note()
+    assert not source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 0
+    assert native._selected_asset is None
+    state["origin"] = {**state["origin"], "full_start_now": True, "frames_since_start": 0}
+    native.note()
+    assert source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 7
     native.stop()
 
 
