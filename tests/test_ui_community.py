@@ -565,6 +565,7 @@ def test_an_existing_account_signs_in_immediately_without_a_name_prompt(monkeypa
             account.update(authenticated=True, stored=True, status="active", provider="twitch", name="griffman1212",
                            terms_version="t1", privacy_version="p1")
             page.wait_for(".community-identity")
+            capture_widths(page, "account-summary")
             text = modal_text(page)
             assert "griffman1212" in text and "signed in with Twitch" in text
             assert not page.count(".community-form input[autocomplete=nickname][autofocus]")
