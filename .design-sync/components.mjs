@@ -117,6 +117,7 @@ export const COMPONENTS = [
       ["iconSize?", "number", "Pixel size the rank sprite draws itself at. A CSS variable alone only ever reserved its margin, never resized it."],
       ["nextStepMode?", "'classic' | 'always' | 'compact' | 'hidden' | 'hover'", "How the next-rung timesave is shown."],
       ["swapKey?", "string | null", "Changing this exchanges the old and new measurement with the shared MARELO route-swap animation."],
+      ["earnedTransition?", "Record<string, unknown> | null", "Fresh earned classification metadata; omitted for an ordinary measurement refresh."],
     ],
   },
 
@@ -136,6 +137,7 @@ export const COMPONENTS = [
       ["title?", "string | null", "Tooltip."],
       ["dimIdle?", "boolean", "Dim the cell when it is not the target."],
       ["rankBadge?", "boolean", "Draw the rank as a corner badge instead of an in-flow row."],
+      ["daily?", "{ today?: { frames?: number | null } | null } | null", "Daily Star payload for this cell; marks the daily target and shows its best time today."],
       ["onPick?", "() => void", "Called when the cell is chosen."],
       ["onEdit?", "() => void", "Called when the cell's edit affordance is used."],
       ["caveat?", "string | null", "Names a caveat on the result; renders the caveat mark."],

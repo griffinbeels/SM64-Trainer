@@ -248,14 +248,16 @@ def test_an_already_selected_lone_option_does_not_write_again(tmp_path):
         _place(service, 6, None, "castle", 90)
         _request(base, "/api/target", {"kind": "segment", "segment_id": lblj_id})
         before = len(_target_writes(service))
-        with get_driver().launch() as page:
-            _open_practice(page, base)
-            _wait_for_cells(page, 1)
-            _open_practice(page, base)
-            _wait_for_cells(page, 1)
-            result = _wait_for_target(page, {"kind": "segment", "segment_id": lblj_id})
-            _capture(page, base, tmp_path, "already-selected", result)
-            assert result["matched"]
+        # Reopen the app twice. Reloading one page while its first goal
+        # request is in flight records an intentional navigation abort as
+        # a browser error; each fresh mount still must leave targeting alone.
+        for visit in range(2):
+            with get_driver().launch() as page:
+                _open_practice(page, base)
+                _wait_for_cells(page, 1)
+                result = _wait_for_target(page, {"kind": "segment", "segment_id": lblj_id})
+                _capture(page, base, tmp_path, f"already-selected-{visit}", result)
+                assert result["matched"]
         assert len(_target_writes(service)) == before
 
 

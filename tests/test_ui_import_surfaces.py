@@ -170,7 +170,8 @@ def test_a_time_typed_by_hand_becomes_the_cards_personal_best(tmp_path):
                 return document.querySelector('.log-card .pbtag')?.textContent || '';
               })()
             """)
-            assert '0\'10"03' in landed, (
+            # PBs use the short display format, omitting zero minutes.
+            assert landed.strip() == '10"03', (
                 "the card does not show the time that was just saved — an "
                 "import that lands on a screen nobody sees did not happen")
 
