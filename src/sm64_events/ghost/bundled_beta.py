@@ -32,6 +32,12 @@ MAX_COLLECTION_BYTES = 128 << 20
 MAX_CACHE_BYTES = 64 << 20
 
 
+def _same_author(name):
+    """A display name spells the collection author, ignoring case, width and edges."""
+    return (isinstance(name, str)
+            and unicodedata.normalize("NFKC", name).casefold().strip() == unicodedata.normalize("NFKC", AUTHOR).casefold())
+
+
 def with_bundled_beta(local, *, cache, definitions):
     """Composition door; source/stable builds never acquire packaged seed trust."""
     from sm64_events.core.build_channel import current_build
@@ -135,9 +141,16 @@ class BundledPopulation:
         except (LookupError, ValueError):
             return False
 
-    def owned_player_ids(self, local_id):
+    def owned_player_ids(self, local_id, *, names=()):
+        """The wrapped layers' own recordings, plus every bundled row when the
+        player is this collection's author by any name they go by (export
+        credit or signed-in account). His rule (2026-10-13): the player never
+        fights their own ghosts as a rival; only the PB ghost is theirs."""
         method = getattr(self.local, "owned_player_ids", None)
-        return method(local_id) if method else frozenset((local_id,))
+        owned = set(method(local_id, names=names) if method else (local_id,))
+        if any(_same_author(name) for name in names):
+            owned.add(PLAYER_ID)
+        return frozenset(value for value in owned if value)
 
     def additional_owned_player_ids(self, local_id):
         return self.owned_player_ids(local_id)

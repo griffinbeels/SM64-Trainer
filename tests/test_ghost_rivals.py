@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from sm64_events.ghost import rivals as module
 from sm64_events.ghost.rival_recording import PopulationRecorder
+from sm64_events.ghost.bundled_beta import AUTHOR, PLAYER_ID, BundledPopulation
+from sm64_events.ghost.library_preferences import save_author
 from sm64_events.ghost.rivals import Rivals, wire
 from sm64_events.ghost.pb import AttemptGhost
 from sm64_events.ghost.adaptive import PracticeIdentity
@@ -521,3 +523,90 @@ def test_library_refuses_overflow_before_preservation(choice,capacity):
         response=client.post("/api/ghost/library/prepare-race",json={"target":TARGET,
             "ghosts":choice})
         assert response.status_code==422 and "four" in response.text.replace("4","four")
+
+
+# His rule (2026-10-13): "the player doesn't ever actually fight their own ghosts
+# as a rival (this would read as an error to most people)". Only the PB ghost is
+# theirs. The identities that count as "mine" are the local recorder id, the
+# signed-in account, and the bundled collection when the player is its author.
+UID = "11111111-1111-4111-8111-111111111111"
+
+
+class CloudPopulation(Population):
+    """The plain fake with the coverage answer the cloud wrapper gives."""
+
+    def coverage(self, _identity):
+        return {"complete": True, "generation": "g1"}
+
+
+class BundledRows(CloudPopulation):
+    """The bundled collection's rows under its real ownership rule, over no local recordings."""
+    owned_player_ids = BundledPopulation.owned_player_ids
+
+    def __init__(self):
+        self.local = SimpleNamespace()
+        self.rows = [recording(f"{number:064x}", frames=600 + number * 20, player_id=PLAYER_ID, player_name=AUTHOR,
+                               source_status="bundled-author-recording", structurally_valid=True, certified=False,
+                               full_start=None, recorded_game_version=None) for number in range(1, 6)]
+
+
+def signed_in(name, uid=UID):
+    return SimpleNamespace(account=SimpleNamespace(snapshot=lambda: {
+        "authenticated": True, "status": "active", "uid": uid, "name": name}),
+        last_error=None, request_pool=lambda *_args, **_kwargs: None, request_assets=lambda *_args, **_kwargs: None)
+
+
+def seated(tmp_path, monkeypatch, population, community=None, *, author=None):
+    tracker = SimpleNamespace(db=Database(tmp_path / "own.db"), ranks=Standards())
+    if author:
+        save_author(tracker.db, author)
+    monkeypatch.setattr(module, "saved_pb_basis", lambda *_args: basis(step=10, frames=1200))
+    rivals = Rivals(tracker, population, Native(), lambda: "us", community=community)
+    rivals.refresh(TARGET, CONTROLS, enabled=True)
+    rivals.options.update(mode="fixed", min_step=0, max_step=44)
+    rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+    return rivals, tracker
+
+
+def test_the_collection_author_never_races_their_own_bundled_recordings_unless_pinned(tmp_path, monkeypatch):
+    population = BundledRows()
+    rivals, tracker = seated(tmp_path, monkeypatch, population, signed_in("GriffMan1212"))
+    try:
+        assert rivals.rows == ()
+        last = population.rows[-1]
+        rivals.pins[rivals._key(TARGET)] = {"0": last["id"]}
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+        assert [(row["id"], row["player_id"], row["pinned"]) for row in rivals.rows] == [(last["id"], PLAYER_ID, True)]
+    finally:
+        tracker.db.close()
+
+
+def test_another_signed_in_player_races_the_bundled_author(tmp_path, monkeypatch):
+    population = BundledRows()
+    rivals, tracker = seated(tmp_path, monkeypatch, population, signed_in("gtest"))
+    try:
+        # One automatic seat per player, holding the author's run nearest above the PB.
+        assert [(row["frames"], row["player_id"]) for row in rivals.rows] == [(700, PLAYER_ID)]
+    finally:
+        tracker.db.close()
+
+
+def test_the_export_credit_alone_identifies_the_bundled_author_offline(tmp_path, monkeypatch):
+    population = BundledRows()
+    rivals, tracker = seated(tmp_path, monkeypatch, population, None, author="Griffman1212")
+    try:
+        assert rivals.rows == ()
+        assert rivals._owned_players() == {PLAYER_ID}
+    finally:
+        tracker.db.close()
+
+
+def test_a_community_recording_under_the_signed_in_account_is_never_an_automatic_rival(tmp_path, monkeypatch):
+    population = CloudPopulation()
+    population.rows[0] = {**population.rows[0], "player_id": UID}
+    rivals, tracker = seated(tmp_path, monkeypatch, population, signed_in("Runner"))
+    try:
+        assert rivals.rows and all(row["player_id"] != UID for row in rivals.rows)
+        assert UID in rivals._owned_players()
+    finally:
+        tracker.db.close()

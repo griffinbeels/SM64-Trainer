@@ -183,3 +183,20 @@ def test_a_bundled_recording_with_an_unknown_input_is_refused_with_the_reason(tm
     with pytest.raises(ValueError, match="not known on every frame"):
         value.resolve(row["ghost"], {"kind": "star", "entity_key": "2-1", "strat": "10 coin"})
     assert not list(root.glob("*.ghost"))
+
+
+def test_cloud_wrapper_forwards_the_players_names_to_the_bundled_collection(tmp_path):
+    """Composed as the beta runs it: cloud cache over the bundled collection over local recordings."""
+    from sm64_events.community.cache import CachedPopulation
+    from sm64_events.ghost.bundled_beta import PLAYER_ID
+    uid = "c9a0a702-cab1-4c82-9c07-1077e6a8763e"
+    bundled, _, _, _ = provider(tmp_path)
+    account = SimpleNamespace(snapshot=lambda: {"authenticated": True, "status": "active", "uid": uid, "name": "GriffMan1212"})
+    population = CachedPopulation(bundled, root=tmp_path / "cloud-cache", account=account)
+    try:
+        assert population.owned_player_ids("local") == {"local", uid}
+        assert population.owned_player_ids("local", names=("someone", " Griffman1212 ")) == {"local", uid, PLAYER_ID}
+        assert bundled.owned_player_ids("local", names=("gtest", None)) == {"local"}
+        assert bundled.owned_player_ids(None, names=(AUTHOR,)) == {PLAYER_ID}
+    finally:
+        population.close()

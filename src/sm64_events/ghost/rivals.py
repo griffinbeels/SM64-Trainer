@@ -7,6 +7,7 @@ from sm64_events.ghost.adaptive import (
     PracticeIdentity, add_slot, checked_options, rank_frames, rank_recordings, select_rivals,
     MAX_STEP, MAX_AHEAD, MAX_RIVALS,
 )
+from sm64_events.ghost.library_preferences import AUTHOR_KEY
 from sm64_events.ghost.pb import saved_pb_basis
 from sm64_events.ghost.sharing_targets import describe
 from sm64_events.ranks.standards import entity_key
@@ -368,8 +369,23 @@ class Rivals:
                 self._store()
 
     def _owned_players(self):
+        """Every player identity that is the current player's; none is an automatic rival.
+
+        The local recorder identity, the signed-in community account, and each
+        population layer's own answer (the bundled collection claims its rows
+        when the player goes by its author's name)."""
         own = self.tracker.db.get_state('ghost_player_id', None)
-        return self.population.owned_player_ids(own) if hasattr(self.population, 'owned_player_ids') else {own}
+        method = getattr(self.population, 'owned_player_ids', None)
+        owned = set(method(own, names=self._own_names()) if method else ())
+        owned.update((own, self.community.owner()))
+        return frozenset(value for value in owned if value)
+
+    def _own_names(self):
+        """The names the player goes by: the export credit and the signed-in account's name."""
+        names = [self.tracker.db.get_state(AUTHOR_KEY, None)]
+        if self.community.sync is not None:
+            names.append(self.community.sync.account.snapshot().get('name'))
+        return tuple(name for name in names if isinstance(name, str) and name.strip())
 
     def payload(self):
         native = self.native.state()

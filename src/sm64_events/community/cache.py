@@ -121,9 +121,13 @@ class CachedPopulation:
             self._active()
             return self.local.generation, self._generation, int(time.monotonic() // TTL)
 
-    def owned_player_ids(self, local_id):
+    def owned_player_ids(self, local_id, *, names=()):
+        """The signed-in account's uid, plus whatever the wrapped layers own."""
         snapshot = self.account.snapshot() if self.account else {}
-        return frozenset(value for value in (local_id, snapshot.get("uid") if snapshot.get("authenticated") else None) if value)
+        uid = snapshot.get("uid") if snapshot.get("authenticated") else None
+        method = getattr(self.local, "owned_player_ids", None)
+        inner = method(local_id, names=names) if method else ()
+        return frozenset(value for value in (local_id, uid, *inner) if value)
 
     def additional_owned_player_ids(self, local_id):
         return self.owned_player_ids(local_id)
