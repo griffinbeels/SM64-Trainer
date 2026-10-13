@@ -4,7 +4,7 @@ The responsive design was approved on October 13, 2026. The site launches alongs
 
 ## Preview
 
-Build from the repository root with `python tools/build_website.py --output .website-build`, then serve `.website-build/` with a static server. No frontend framework, package installation, analytics, site account, or service worker. Downloads, exact version, size, and upload date are rendered into HTML and work without JavaScript. JavaScript only opens a linked FAQ answer. Visitors never call the GitHub API.
+Build from the repository root with `python tools/build_website.py --output .website-build`, then serve `.website-build/` with a static server. No frontend framework, package installation, analytics, site account, or service worker. Downloads, exact version, size, and upload date are rendered into HTML and work without JavaScript. JavaScript localizes the displayed upload time and opens a linked FAQ answer; the UTC fallback stays available without JavaScript. Visitors never call the GitHub API.
 
 ## Deployment
 
