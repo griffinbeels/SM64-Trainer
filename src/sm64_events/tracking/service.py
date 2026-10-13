@@ -142,6 +142,10 @@ class TrackerService:
         self.ranks = ranks            # RankStandards | None
         self.on_segment_definitions_changed = None
         self.on_attempt_saved = None
+        # Told once per strategy reclassification (`_adopt_untagged`,
+        # `set_attempt_strat`) with the retagged attempts as stored now, so
+        # the ghost side can move each run to its new strategy.
+        self.on_attempts_reclassified = None
         self.observed_game_version = None
         # The game version SETTING (core/modes.py) as last applied through
         # `set_game_version` -- main.py applies the persisted one at boot.
@@ -1049,7 +1053,8 @@ class TrackerService:
     async def _adopt_untagged(self, db: Database, strat_tag: str, *,
                               course_id: int | None = None,
                               star_id: int | None = None,
-                              segment_id: int | None = None) -> dict | None:
+                              segment_id: int | None = None,
+                              into: list[int] | None = None) -> dict | None:
         """Picking a strategy claims every row of that star or segment that
         has none (task 0146, his words: "We should assume that the unassigned
         entries are the strategy we selected overall"). Rows he explicitly
@@ -1061,6 +1066,10 @@ class TrackerService:
         Ordinary writes run this BEFORE strat_set/target_set, so clients
         refreshing on that event already see the adopted rows. Sole automatic
         offers first require target_set acceptance; declined offers adopt none.
+
+        The adopted rows are announced through `on_attempts_reclassified`,
+        unless `into` collects them for a caller that announces one larger
+        reclassification itself (`set_attempt_strat`'s newest row).
         """
         ids = [a.id for a in db.attempts()
                if (a.segment_id, a.course_id, a.star_id)
@@ -1080,19 +1089,45 @@ class TrackerService:
         for attempt_id in ids:
             self._projector.override_strat(attempt_id, strat_tag)
         self._preserve_destination_pbs(classification)
+        if into is None:
+            self._announce_reclassified(db, ids)
+        else:
+            into.extend(ids)
         return classification
+
+    def _announce_reclassified(self, db: Database, ids: list[int]) -> None:
+        """Hand the reclassified attempts, re-read with their stored tag, to
+        `on_attempts_reclassified`. A run saved under one strategy and then
+        corrected must stop racing for the old one (his report 2026-10-13,
+        In the Deep Freeze: Standard, then TJ Strat). Like `on_attempt_saved`,
+        a failing listener never stops tracking."""
+        if self.on_attempts_reclassified is None:
+            return
+        attempts = [row for row in (db.attempt(attempt_id) for attempt_id in dict.fromkeys(ids))
+                    if row is not None]
+        if not attempts:
+            return
+        try:
+            self.on_attempts_reclassified(attempts)
+        except Exception:  # noqa: BLE001 -- the ghost side cannot stop tracking
+            log.exception("the ghost side could not follow reclassified attempts %s",
+                          [row.id for row in attempts])
 
     async def set_strat(self, course_id: int, star_id: int,
                         strat_tag: str | None,
                         timer_mode: str = "igt", *,
-                        save_adopted: bool = True) -> dict | None:
-        """Set a star's active strategy without touching the target."""
+                        save_adopted: bool = True,
+                        adopted_ids: list[int] | None = None) -> dict | None:
+        """Set a star's active strategy without touching the target.
+
+        `adopted_ids` collects the untagged rows the pick adopts instead of
+        announcing them (`_adopt_untagged`)."""
         db = self._require_db()
         self._validate_pb_clock(timer_mode)
         adoption = None
         if strat_tag:
             adoption = await self._adopt_untagged(
-                db, strat_tag, course_id=course_id, star_id=star_id)
+                db, strat_tag, course_id=course_id, star_id=star_id, into=adopted_ids)
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"course_id": course_id,
@@ -1110,7 +1145,8 @@ class TrackerService:
 
     async def set_strat_segment(self, segment_id: int,
                                 strat_tag: str | None, *,
-                                save_adopted: bool = True) -> dict | None:
+                                save_adopted: bool = True,
+                                adopted_ids: list[int] | None = None) -> dict | None:
         """Segment sibling of set_strat — same journaled shape, same
         registration, same target-changed republish. Kept in step with the
         star version deliberately: the practice UI drives both through one
@@ -1125,7 +1161,8 @@ class TrackerService:
         if all(d["id"] != segment_id for d in db.segment_defs()):
             raise LookupError(f"segment {segment_id} not found")
         if strat_tag:
-            adoption = await self._adopt_untagged(db, strat_tag, segment_id=segment_id)
+            adoption = await self._adopt_untagged(db, strat_tag, segment_id=segment_id,
+                                                  into=adopted_ids)
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"kind": "segment",
@@ -1269,13 +1306,18 @@ class TrackerService:
         self._projector.override_strat(attempt_id, strat_tag)
         # Newest-attempt exception (docstring above): the active strategy
         # follows a reclassified top-of-log row.
+        adopted: list[int] = []
         if strat_tag and newest:
             if attempt.segment_id is not None:
                 await self.set_strat_segment(attempt.segment_id, strat_tag,
-                                             save_adopted=False)
+                                             save_adopted=False, adopted_ids=adopted)
             else:
                 await self.set_strat(attempt.course_id, attempt.star_id,
-                                     strat_tag, timer_mode=timer_mode, save_adopted=False)
+                                     strat_tag, timer_mode=timer_mode, save_adopted=False,
+                                     adopted_ids=adopted)
+        # One announcement for this row and the pending rows it adopted.
+        self._announce_reclassified(
+            db, ([attempt_id] if strat_tag != attempt.strat_tag else []) + adopted)
         saved = await self._save_classified_best(
             classification if newest else None,
             "rta" if attempt.segment_id is not None else timer_mode)

@@ -679,6 +679,65 @@ class ReplayService:
             self._remember_native_preservation(self._native_preservation_key(attempt), older)
         return None, older
 
+    def retarget_native(self, attempt_id: int) -> bool:
+        """Carry this attempt's committed pose clips to its corrected strategy.
+
+        A committed manifest binds its clip to the attempt's target, strategy
+        included (`ghost/clip.py::check_manifest`). Reclassifying the run
+        (Standard, then TJ Strat; his report 2026-10-13) left `find_native`
+        refusing the clip it had committed, and a PB re-save re-exported from
+        the pose archive, which forgets after `ARCHIVE_RETENTION_S`. Only the
+        stored `strat` may differ: a manifest naming another kind or entity
+        is not this run's and stays untouched. True when a manifest changed.
+        """
+        with self._session_gate.use(), self._cut_lock(attempt_id):
+            return self._retarget_native(self._attempt(attempt_id))
+
+    def _retarget_native(self, attempt) -> bool:
+        """`retarget_native` for a caller already holding the attempt's cut lock."""
+        from sm64_events.ghost.clip import OlderPoseFormat, check_manifest
+        target = self._native_target(attempt)
+        root = self.cfg.save_root.resolve()
+        saved = self.find_saved(attempt.id)
+        # The committed clip, the saved video's sidecar copy of its manifest,
+        # and the pad-filled playback copy, which restates that manifest.
+        candidates = [(root / "native" / f"attempt_{attempt.id}.ghost", None),
+                      *([(saved.with_suffix(".ghost"), "native_ghost")] if saved is not None else []),
+                      (root / "native" / "inputs" / f"attempt_{attempt.id}.ghost", None)]
+        rewritten = False
+        for path, field in candidates:
+            meta = path.with_suffix(".json")
+            try:
+                if not meta.is_file() or not all(item.resolve().is_relative_to(root) for item in (path, meta)):
+                    continue
+                document = json.loads(meta.read_text(encoding="utf-8")) if field else _native_manifest(meta)
+                manifest = document.get(field) if field else document
+                stored = manifest.get("target") if isinstance(manifest, dict) else None
+                if not isinstance(stored, dict) or stored == target:
+                    continue
+                if {**stored, "strat": target["strat"]} != target:
+                    log.info("Pose clip %s names %s, not attempt %s's %s; left untouched",
+                             path.name, stored, attempt.id, target)
+                    continue
+                moved = {**manifest, "target": target}
+                try:
+                    check_manifest(path, moved, attempt=attempt, target=target)
+                except OlderPoseFormat:
+                    pass  # His committed older recording: its bytes stay, its strategy follows.
+                if field:
+                    touch = getattr(self.compressor, "touch", None)
+                    if touch is not None:
+                        touch(saved)  # A compression swap waits for the clip to go idle.
+                    atomic_json(meta, {**document, field: moved}, allow_nan=True)
+                else:
+                    atomic_json(meta, moved)
+                rewritten = True
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                log.info("Pose clip %s kept its strategy: %s", path.name, error)
+        with self._native_preservation_lock:
+            self._native_preservation_failures.pop(attempt.id, None)
+        return rewritten
+
     def native_with_inputs(self, attempt_id: int, found: tuple[Path, dict]) -> tuple[Path, dict]:
         """The copy of `find_native`'s clip the renderer plays and a collection
         exports: the attempt's input track fills the pads its capture never
@@ -1276,6 +1335,9 @@ class ReplayService:
         """
         with self._session_gate.use(), self._cut_lock(attempt_id), self._saving():
             existing, older = self._find_native(attempt_id)
+            if existing is None and older is None and self._retarget_native(self._attempt(attempt_id)):
+                # Committed under the run's earlier strategy: never re-export over it.
+                existing, older = self._find_native(attempt_id)
             if existing is not None:
                 path, manifest = existing
                 if wait_tail and manifest.get("tail_pending") and path.parent.name == "native":
@@ -1382,6 +1444,8 @@ class ReplayService:
         dest = dest_dir / slug_filename(a, c_name, s_name)
         m = json.loads(clip.with_suffix(".json").read_text())
         permanent = self.find_native(attempt_id)
+        if permanent is None and self._retarget_native(a):
+            permanent = self.find_native(attempt_id)
         ghost_path, ghost_manifest, ghost_reason = ((*permanent, None) if permanent else
                                                   self._preserve_ghost(a, clip.with_suffix(".ghost")))
         m["native_ghost"] = ({**ghost_manifest, "file": dest.with_suffix(".ghost").name}

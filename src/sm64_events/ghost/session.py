@@ -123,6 +123,7 @@ class GhostSession:
         self._rivals = None
         self._population_recorder = None
         self._tail_task = None
+        self._reclassify_tasks: set[asyncio.Task] = set()
         self._population = population
         self._community = community
         self._population_closed = False
@@ -220,6 +221,12 @@ class GhostSession:
             tail.cancel()
             with suppress(asyncio.CancelledError):
                 await tail
+        following = list(self._reclassify_tasks)
+        for task in following:
+            task.cancel()
+        for task in following:
+            with suppress(asyncio.CancelledError):
+                await task
         if self._community is not None:
             for close in (self._community.stop, self._community.account.close):
                 try:
@@ -672,6 +679,64 @@ class GhostSession:
     def attempt_saved(self, attempt):
         if self._population_recorder is not None:
             self._population_recorder.enqueue(attempt)
+
+    def attempts_reclassified(self, attempts):
+        """Runs he moved to another strategy, as stored now (the tracker's
+        `on_attempts_reclassified`, called on the event loop).
+
+        His report, 2026-10-13: a ghost saved as Standard and then corrected
+        to TJ Strat "should no longer appear for the old strategy". One task
+        per call, in this order: the committed pose clips follow the new
+        strategy (`ReplayService.retarget_native`); then the population files
+        each run under it, or drops it when un-labeled; then the PB ghost and
+        the picker re-resolve. The order matters: the population re-admits a
+        run through `find_native`, which refuses a clip still naming the old
+        strategy, so re-admission would otherwise last only as long as the
+        two-hour pose archive. Returns the task, or None.
+        """
+        attempts = list(attempts)
+        if not attempts or self._closing:
+            return None
+        task = asyncio.create_task(self._follow_reclassified(attempts), name="ghost-reclassified")
+        self._reclassify_tasks.add(task)
+        task.add_done_callback(self._reclassify_tasks.discard)
+        return task
+
+    async def _follow_reclassified(self, attempts) -> None:
+        """Retarget each run's committed clips off the loop, hand each run to
+        the population, then re-resolve."""
+        try:
+            retarget = getattr(self._replay, "retarget_native", None)
+            retargeted = []
+            for attempt in attempts if retarget is not None else ():
+                try:
+                    if await asyncio.to_thread(retarget, attempt.id):
+                        retargeted.append(attempt.id)
+                except Exception:  # noqa: BLE001 - the reclassification itself is saved
+                    log.exception("attempt %s pose clips could not follow its new strategy", attempt.id)
+            reclassify = getattr(self._population_recorder, "reclassify", None)
+            for attempt in attempts if reclassify is not None else ():
+                try:
+                    reclassify(attempt)
+                except Exception:  # noqa: BLE001 - one run must not stop the others following
+                    log.exception("ghost population could not reclassify attempt %s", attempt.id)
+            if self._rivals is not None:
+                from sm64_events.inputs.service import entity_key_of
+                targets = [{"kind": kind, "entity_key": key}
+                           for kind, key in map(entity_key_of, attempts)]
+                async with self._lock:
+                    def invalidate():
+                        with self._lifecycle_lock:
+                            for target in targets:
+                                self._rivals.pb_changed(target)
+                            # A PB refused while its clip still named the old
+                            # strategy plays again once the clip validates.
+                            for attempt_id in retargeted:
+                                self._rivals.pb_preserved(attempt_id)
+                    await asyncio.to_thread(invalidate)
+            await self.refresh(resolve=True)
+        except Exception:  # noqa: BLE001 - the next watch cycle re-resolves anyway
+            log.exception("the ghost could not follow reclassified attempts")
 
     def _attempt_identity(self, attempt):
         from sm64_events.inputs.service import entity_key_of

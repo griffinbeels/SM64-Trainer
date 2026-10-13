@@ -219,6 +219,13 @@ def _ghost_follows_pb(service, ghost):
     service.on_pb_changed = ghost.pb_changed
 
 
+def _ghost_follows_attempts(service, ghost):
+    """A finished run joins the ghost population; a reclassified one moves
+    to its new strategy there and in its committed pose clips."""
+    service.on_attempt_saved = ghost.attempt_saved
+    service.on_attempts_reclassified = ghost.attempts_reclassified
+
+
 def _build_tracker(broadcaster):
     global _instance_lock
     db_file = db_path()
@@ -537,7 +544,7 @@ def build(*, recorder_lock=None):
                          replay=replay, broadcaster=broadcaster,
                          native=native_ghost,population=population,
                          version_of=lambda:poller.observed_game_version, community=community_sync)
-    service.on_attempt_saved = ghost.attempt_saved
+    _ghost_follows_attempts(service, ghost)
     _ghost_follows_pb(service, ghost)
     if replay is not None:
         # A real run on vanilla SM64, another hack or another game records
