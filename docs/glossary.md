@@ -1591,6 +1591,32 @@ scan and downloaded playback bytes are separate states.
 
 - **Lives** — `src/sm64_events/community/sync.py` and `src/sm64_events/community/cache.py`
 
+### Ghost ceiling
+
+The slowest time a run may have and still become a rival or a shared [[ghost]]:
+its strategy's slowest named cutoff (the edge of the lowest named [[division]],
+Capless 4) plus 10%. A slower run makes no rival recording and is never
+offered to the cloud, and the player is not told (his rule, 2026-10-13:
+"Anything above that DOES NOT CREATE A GHOST ... We shouldn't tell the user
+that their ghost was ignored from the sharing system"). The trainer and the
+cloud apply the same integer rule. The player's own [[PB ghost]] is not capped.
+
+- **Lives** — `src/sm64_events/ghost/community_catalog.py` (trainer) and
+  `cloud/community/src/catalog.js` (cloud, applied in `store.js` admission)
+
+### Retraction
+
+Taking one shared run back out of the cloud under every strategy except the
+one it now belongs to, after the player changes that run's strategy (his rule,
+2026-10-13: "It should no longer appear for the old strategy"). The trainer
+drops its pending offers under the old strategy, keeps the request across a
+restart, and asks the cloud to unpublish those copies; the cloud's cleanup
+collects the bytes. Not account-wide withdrawal, which removes every shared
+[[ghost]].
+
+- **Lives** — `src/sm64_events/community/sync.py` (`retract_other_strategies`),
+  `src/sm64_events/community/outbox.py` and `cloud/community/src/store.js`
+
 ### Private beta
 
 A complete test application ZIP sent directly to friends. Its packaged identity

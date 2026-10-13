@@ -336,3 +336,47 @@ def test_a_pb_is_playable_before_its_dance_ends_and_the_dance_arrives_later(tmp_
         asyncio.run(check())
     finally:
         archive.close()
+
+
+def test_a_pb_slower_than_the_ghost_ceiling_is_still_the_playable_pb_ghost(tmp_path):
+    """His rule, 2026-10-13: "a super horrible slow ghost (if that's truly the
+    user's best PB) should still show up locally for the user. They just
+    definitely shouldn't be allowed to upload it." The ceiling belongs to
+    population admission only: it refuses the rival and the community offer,
+    never the PB ghost."""
+    from dataclasses import replace
+    from sm64_events.ghost.adaptive import PracticeIdentity
+    from sm64_events.ghost.population import LocalPopulation
+    from sm64_events.ghost.rival_recording import PopulationRecorder
+    from tests.test_ghost_population_bins import TJ_10_2, Community, Ladders
+
+    session, replay, row, archive, db, _store, capture = pb_world(tmp_path)
+    slow = replace(row, strat_tag="TJ Strat", game_version="us")
+    replay.tracker.db._attempts[:] = [slow]
+    session._tracker.strat_tag = slow.strat_tag
+    assert slow.igt_frames * 100 > 210 * 110  # Past 10-2 TJ Strat's ceiling of 231 frames.
+    population, community = LocalPopulation(tmp_path / "population"), Community()
+    recorder = PopulationRecorder(population, replay, SimpleNamespace(db=db, ranks=Ladders({"TJ Strat": TJ_10_2})),
+                                  lambda run: PracticeIdentity("star", "2-2", "igt", "us", run.strat_tag),
+                                  community=community)
+
+    async def check():
+        await session.update({"enabled": True})
+        assert recorder._admit(slow, community.contribution_context()) is False
+        save_pb(db, slow, strat=slow.strat_tag)
+        await session.pb_changed(slow, True)
+        session._native.note()
+        body = session.payload()
+        assert body["source"]["available"] and body["source"]["attempt_id"] == slow.id
+        assert body["selection"]["pb"]["attempt_id"] == slow.id and body["selection"]["pb"]["native_available"]
+        command = capture.commands[-1]
+        assert command["enabled"] and [clip["clip_path"][-len(f"attempt_{slow.id}.ghost"):]
+                                       for clip in command["clips"]] == [f"attempt_{slow.id}.ghost"]
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        archive.close()
+    assert population.snapshot_all() == () and community.offers == []
+    population.close()

@@ -94,6 +94,28 @@ def _admission(attempt, clock, game_version, full_start):
         "ended": attempt.ended_utc, "source": local_attempt_source(attempt), **attempt_origin(attempt)}), frames)
 
 
+def _playback_copy(replay, attempt, found):
+    """The bytes a rival and a community offer carry, and their digest."""
+    fill = getattr(replay, "native_with_inputs", None)
+    path, _manifest = fill(attempt.id, found) if fill is not None else found
+    source = Path(path)
+    with source.open("rb") as stream:
+        return source, hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def committed_digest(replay, attempt):
+    """The offered bytes' digest when this run's clip is already committed.
+
+    Never preserves: a run with no committed clip was never offered, so it has
+    nothing to retract. None when the clip is absent or no longer validates.
+    """
+    try:
+        found = replay.find_native(attempt.id)
+        return None if found is None else _playback_copy(replay, attempt, found)[1]
+    except (OSError, ValueError, LookupError):
+        return None
+
+
 def _preserved_asset(replay, attempt):
     kept = replay.preserve_native(attempt.id)
     if not kept.get("path"):
@@ -101,11 +123,7 @@ def _preserved_asset(replay, attempt):
     found = replay.find_native(attempt.id)  # the existing strict owner/hash validator
     if found is None:
         raise ValueError("This run's Mario recording could not be validated.")
-    fill = getattr(replay, "native_with_inputs", None)
-    path, _manifest = fill(attempt.id, found) if fill is not None else found
-    source = Path(path)
-    with source.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    source, digest = _playback_copy(replay, attempt, found)
     # His rule: a recording the input track could not complete never becomes
     # a rival here nor a community upload (ghost/clip.py::INCOMPLETE_INPUTS).
     require_complete_inputs(read_clip(source, digest))
@@ -182,6 +200,83 @@ class LocalPopulation:
                                     " ORDER BY frames,id LIMIT ?",
                                     (target, clock, game_version, *parameters, MAX_RECORDINGS)).fetchall()
         return tuple(self._row(row) for row in rows)
+
+    def snapshot_all(self):
+        """Every bindable row across targets, bounded; unbindable rows are skipped."""
+        with self._lock:
+            rows = self._db.execute("SELECT document FROM recordings ORDER BY target,clock,version,frames,id LIMIT ?",
+                                    (MAX_RECORDINGS,)).fetchall()
+        result = []
+        for row in rows:
+            try:
+                result.append(self._row(row))
+            except (LookupError, ValueError):
+                continue  # A disabled or ambiguous segment is left exactly as stored.
+        return tuple(result)
+
+    def rows_for_source(self, source):
+        """This run's rows by its local lineage: session, attempt number and start.
+
+        The full lineage, not the attempt number alone, because a fresh profile
+        reuses attempt numbers (`ghost/pb.py::local_attempt_source`).
+        """
+        if not isinstance(source, dict):
+            return ()
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id,sha256,json_extract(document,'$.target.strat') AS strategy FROM recordings "
+                "WHERE json_extract(document,'$.source.attempt_id')=? AND json_extract(document,'$.source.session_id')=? "
+                "AND json_extract(document,'$.source.started_utc')=? ORDER BY id LIMIT ?",
+                (source["attempt_id"], source["session_id"], source["started_utc"], MAX_RECORDINGS)).fetchall()
+        return tuple(dict(row) for row in rows)
+
+    def source_lineages(self):
+        """Every local lineage some row was admitted from, as
+        (session_id, attempt_id, started_utc); see `rows_for_source`."""
+        with self._lock:
+            rows = self._db.execute("SELECT DISTINCT json_extract(document,'$.source.session_id'),"
+                                    "json_extract(document,'$.source.attempt_id'),"
+                                    "json_extract(document,'$.source.started_utc') FROM recordings LIMIT ?",
+                                    (MAX_RECORDINGS,)).fetchall()
+        return {tuple(row) for row in rows if type(row[1]) is int}
+
+    def remove(self, ids):
+        """Delete rows; a clip goes only when no remaining row references its bytes.
+
+        Same discipline as `_publish_record`: one IMMEDIATE transaction under
+        the lock. A doomed clip is renamed inside it and restored on rollback,
+        so a row never outlives its bytes and committed removal leaves no clip.
+        """
+        ids = tuple(dict.fromkeys(checked_hash(identity) for identity in ids))
+        if not ids:
+            return 0
+        marks = ",".join("?" * len(ids))
+        staged = []
+        with self._lock:
+            try:
+                with self._db:
+                    self._db.execute("BEGIN IMMEDIATE")
+                    digests = sorted({row[0] for row in self._db.execute(
+                        f"SELECT sha256 FROM recordings WHERE id IN ({marks})", ids)})
+                    removed = self._db.execute(f"DELETE FROM recordings WHERE id IN ({marks})", ids).rowcount
+                    for digest in digests:
+                        if self._db.execute("SELECT 1 FROM recordings WHERE sha256=?", (digest,)).fetchone():
+                            continue
+                        clip = self.root / "clips" / f"{checked_hash(digest)}.ghost"
+                        if clip.exists():
+                            doomed = clip.with_name(clip.name + ".removing")
+                            os.replace(clip, doomed)
+                            staged.append((doomed, clip))
+                    self._generation_stamp = None
+            except BaseException:
+                for doomed, clip in staged:
+                    os.replace(doomed, clip)
+                raise
+            for doomed, _clip in staged:
+                doomed.unlink(missing_ok=True)
+            for digest in digests:
+                self._verified.pop(digest, None)
+        return removed
 
     def get(self, identity):
         with self._lock:
