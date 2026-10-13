@@ -1,7 +1,7 @@
 import {authenticate,authenticateAdmin} from './auth.js';
 import {config,ready,LIMITS} from './config.js';
 import {ServiceError,requireThat,json,readJSON,exactQuery,boundedBody,hex64,uuid,integer,canonical,sha256,fail} from './errors.js';
-import {catalogFor,lookup,grade,targetKey} from './catalog.js';
+import {catalogFor,lookup,grade,targetKey,aboveCeiling} from './catalog.js';
 import {Store} from './store.js';
 import {validateGHC1} from './codec.js';
 import {checkedName,prefixRange} from './names.js';
@@ -63,7 +63,7 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
     // Persisted owners retain export/removal after invitation revocation or
     // suspension. Unknown identities have no owned data and must add no rows.
     const ownData=(url.pathname==='/v1/account/export'&&request.method==='GET')||
-      (['/v1/account/withdraw','/v1/account/delete'].includes(url.pathname)&&request.method==='POST');
+      (['/v1/account/withdraw','/v1/account/delete','/v1/recordings/retract'].includes(url.pathname)&&request.method==='POST');
     if(a.ephemeral||!ownData)s.active(a,true);
   }
   await s.ticket(a.uid,{classB:url.pathname.endsWith('/asset')?1:0});
@@ -88,6 +88,12 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
   }
   if(['/v1/account/withdraw','/v1/account/delete'].includes(url.pathname)&&request.method==='POST'){
     exactQuery(url,[]);const deleting=url.pathname.endsWith('delete'),b=await readJSON(request,['confirmation']);requireThat(b.confirmation===(deleting?'DELETE MY ACCOUNT':'WITHDRAW MY GHOSTS'),'confirmation_required','Explicit confirmation required.');const m=await mutation(request,s,a.uid,deleting?'delete':'withdraw',b);if(m.previous)return json(m.previous);return json(await s.withdraw(a,m.key,m.digest,deleting));
+  }
+  if(url.pathname==='/v1/recordings/retract'&&request.method==='POST'){
+    // A reclassified run unpublishes its copies under every other strategy
+    // (all of them when keep_strategy is null). Owner-only, like withdrawal.
+    exactQuery(url,[]);const b=await readJSON(request,['raw_sha256','keep_strategy']);requireThat(hex64(b.raw_sha256)&&(b.keep_strategy===null||typeof b.keep_strategy==='string'&&b.keep_strategy.length>=1&&b.keep_strategy.length<=256));
+    const m=await mutation(request,s,a.uid,'retract',b);if(m.previous)return json(m.previous);return json(await s.retract(a,b.raw_sha256,b.keep_strategy,m.key,m.digest));
   }
   if(url.pathname==='/v1/account/export'&&request.method==='GET'){
     exactQuery(url,[]);const rows=await s.rows('SELECT id,target_json,clock,rom,strategy,frames,raw_sha256,raw_bytes,published,created_at FROM recordings WHERE uid=? ORDER BY id LIMIT 1001',a.uid);return json({account:s.publicAccount(a),recordings:rows.slice(0,1000).map(r=>({...r,target:JSON.parse(r.target_json),target_json:undefined})),complete:rows.length<=1000});
@@ -119,7 +125,7 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
   }
   if(url.pathname==='/v1/uploads'&&request.method==='POST'){
     exactQuery(url,[]);const b=await readJSON(request,['target','clock','rom','strategy','frames','raw_sha256','raw_bytes','encoded_sha256','encoded_bytes','codec','generation']);requireThat(integer(b.frames,1,2592000)&&hex64(b.raw_sha256)&&hex64(b.encoded_sha256)&&integer(b.raw_bytes,812,LIMITS.raw_bytes)&&integer(b.encoded_bytes,189,LIMITS.encoded_bytes)&&b.codec==='ghc1'&&hex64(b.generation));requireThat(b.generation===model.generation,'generation_changed','Catalog changed.',409);
-    const found=lookup(model,b.target,b.clock,b.rom,b.strategy),key=request.headers.get('idempotency-key');requireThat(uuid(key),'idempotency_required','Use a UUID Idempotency-Key.');return json(await s.admit(a,b,model,key,await sha256(canonical(b)),{...found,step:grade(found.strat.cutoffs,b.frames),overallStep:grade(found.entry.overall_cutoffs,b.frames)}));
+    const found=lookup(model,b.target,b.clock,b.rom,b.strategy),key=request.headers.get('idempotency-key');requireThat(uuid(key),'idempotency_required','Use a UUID Idempotency-Key.');return json(await s.admit(a,b,model,key,await sha256(canonical(b)),{...found,step:grade(found.strat.cutoffs,b.frames),overallStep:grade(found.entry.overall_cutoffs,b.frames),aboveCeiling:aboveCeiling(found.strat.cutoffs,b.frames)}));
   }
   const um=/^\/v1\/uploads\/([0-9a-f-]{36})$/.exec(url.pathname);
   if(um&&request.method==='PUT'){

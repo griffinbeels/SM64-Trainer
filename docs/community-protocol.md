@@ -92,9 +92,10 @@ Burst limits shed traffic before expensive operations.
 | `GET /v1/search` | Same target/clock/ROM/scope identity plus bounded Unicode player prefix and keyset cursor; at most20 rows. Indexed prefix range, no wildcard/substring SQL. |
 | `GET /v1/recordings/{id}` | Current metadata/publication gate, including explicit pins; recording IDs are immutable64-hex identities independent of public names. |
 | `GET /v1/recordings/{id}/asset` | Auth/status/visibility/owner publication gate before immutable compressed bytes; Content-Type application/octet-stream. |
-| `POST /v1/uploads` | Admission `{target,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,codec:"ghc1",generation}`. Server rejects unsupported catalog entries and derives UID/bin. Returns `upload_id,expires_at` or `already_present/not_faster`. |
+| `POST /v1/uploads` | Admission `{target,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,codec:"ghc1",generation}`. Server rejects unsupported catalog entries and derives UID/bin. Returns `upload_id,expires_at` or `already_present/not_faster`. Ghost ceiling: a run with `frames*100 > edge*110`, where `edge` is the strategy ladder's step-1 cutoff, answers `not_faster` before any upload budget, so deployed trainers skip it silently. |
 | `PUT /v1/uploads/{upload_id}` | Bounded streamed GHC1 bytes; grant binds exact hashes/lengths/identity/generation and is single-use/idempotent. Decode/native validation precede conditional winner publication. |
 | `PUT /v1/pins` | At most4 recording IDs; finite expiring leases preserve replaced winners subject to account/global physical-byte limits and publication visibility. |
+| `POST /v1/recordings/retract` | Owner-only `{raw_sha256,keep_strategy:string|null}`. Unpublishes the caller's recordings of those bytes under every other strategy (all when null), removes their winners and pins, expires their unfinished grants and bumps the affected scope epochs. Bytes are collected by reconciliation, as after withdrawal. Returns `{retracted:n}`. Persisted owners keep it after suspension, like withdrawal. |
 | `POST /v1/account/withdraw` | Explicitly confirmed withdrawal of own published ghosts; visibility changes before physical collection. |
 | `GET /v1/account/export` | Own bounded profile/ghost metadata export; never other account data or credentials. |
 | `POST /v1/account/delete` | Explicit confirmation; mark current status/visibility first, collect own objects through reconciliation. No raw SQL or arbitrary delete selectors. |
@@ -218,6 +219,14 @@ PB/playback remains separate. One serial contribution task runs beside the
 practice IO task. Initial pool/assets run first, and a blocked upload does not
 delay later rival downloads. Their shared catalog refresh is deduplicated and
 retains its one-hour lease.
+
+`retract_other_strategies(*,raw_sha256,keep_strategy)` runs when a run is
+reclassified, from any thread. It drops pending offers of those bytes under
+other strategies, refuses later ones, and saves one owner-bound retraction in
+`pending-retractions.json` (at most 256, the newest keep per clip). The
+contribution task sends it with a fixed Idempotency-Key and retries it like an
+offer; it survives restart and logout until its owner is active again. Signed
+out or sharing off, only local intents change. An older Worker's 404 drops it.
 
 Source offer is a dict: `{target,clock,game_version,strategy,frames,path,raw_sha256,
 full_start:true,valid:true}` prepared by existing native qualification off-thread.

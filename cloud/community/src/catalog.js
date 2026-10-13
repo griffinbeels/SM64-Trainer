@@ -40,6 +40,16 @@ export function grade(cutoffs, frames) {
   for (const cutoff of cutoffs) if (frames <= cutoff.frames) step = cutoff.step;
   return step;
 }
+// Griffin, 2026-10-13: "Maybe it's the capless 5 threshold plus 10%? ... Anything
+// above that DOES NOT CREATE A GHOST. ... we're not getting screwed by people
+// accidentally nuking our system with insanely massive database entries."
+// The edge is the strategy ladder's slowest named cutoff (step 1). The trainer
+// applies the identical integer rule before a run can become a ghost.
+export const GHOST_CEILING_PERCENT = 10;
+export function aboveCeiling(cutoffs, frames) {
+  const edge = cutoffs.find(c => c.step === 1);
+  return Boolean(edge) && frames * 100 > edge.frames * (100 + GHOST_CEILING_PERCENT);
+}
 export function lookup(catalog, target, clock, rom, strategy) {
   const key=targetKey(target);
   const entry=catalog.entries.find(e=>targetKey(e.target)===key && e.clock===clock && e.game_version===rom);

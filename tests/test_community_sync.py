@@ -906,3 +906,146 @@ def test_a_shared_recording_with_an_unknown_input_never_enters_the_cache(tmp_pat
         population.store_asset(row, encoded, raw)
     assert refused.value.code == "incomplete_inputs" and "not known on every frame" in str(refused.value)
     assert not population.is_ready(row["id"]) and not list(tmp_path.glob("*.ghost"))
+
+
+
+def _clip(tmp_path, strategy="Standard", frames=3):
+    raw = native()
+    path = tmp_path / "source.ghost"
+    path.write_bytes(raw)
+    return {"target": {**TARGET, "strat": strategy}, "clock": "igt", "game_version": "us", "strategy": strategy,
+            "frames": frames, "path": path, "raw_sha256": hashlib.sha256(raw).hexdigest(), "full_start": True, "valid": True}
+
+
+def _retraction_responses(account, answer):
+    """Route retraction POSTs to answer(call_number); everything else to the fake."""
+    from sm64_events.community import sync as sync_module
+    original, posts = account.request_json, []
+
+    async def respond(method, url, **kwargs):
+        if url != sync_module.RETRACT_ROUTE:
+            return await original(method, url, **kwargs)
+        posts.append((method, kwargs["json"], kwargs["headers"]["Idempotency-Key"]))
+        return answer(len(posts))
+    account.request_json = respond
+    return posts
+
+
+async def _until(condition):
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(.01)
+
+
+def test_reclassified_clip_drops_old_strategy_offers_and_keeps_the_new_one(tmp_path):
+    import json
+    account = Account()
+    sync = CommunitySync(account, CachedPopulation(Local(), root=tmp_path / "cache", account=account))
+    context = sync.contribution_context()
+    old, older, new = _clip(tmp_path), _clip(tmp_path, frames=4), _clip(tmp_path, "Alternate")
+    assert all(sync.remember_source(source, **context) for source in (old, older, new))
+    retry_key = next(key for key, operation in sync._queue.items() if operation[1]["frames"] == 3)
+    sync._offer_retry[retry_key] = sync._queue.pop(retry_key), 0, 1
+    assert sync.retract_other_strategies(raw_sha256=old["raw_sha256"], keep_strategy="Alternate")
+    assert [(operation[0], operation[1].get("strategy")) for operation in sync._queue.values()] == [
+        ("offer", "Alternate"), ("retract", None)]
+    assert not sync._offer_retry
+    saved = json.loads((tmp_path / "cache" / "pending-contributions.json").read_bytes())["offers"]
+    assert [row["strategy"] for row in saved] == ["Alternate"]
+    assert not sync.remember_source(old, **context)
+    assert sync.remember_source({**new, "frames": 2}, **context)
+
+
+def test_saved_retraction_is_sent_once_after_restart(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from uuid import UUID
+    from sm64_events.community import sync as sync_module
+    now = [1000]
+    monkeypatch.setattr(sync_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    raw_sha256 = hashlib.sha256(native()).hexdigest()
+
+    async def scenario():
+        account = Account()
+        posts = _retraction_responses(account, lambda _: {"v": 1, "retracted": 1})
+        root = tmp_path / "cache"
+        before_restart = CommunitySync(account, CachedPopulation(Local(), root=root, account=account))
+        assert before_restart.retract_other_strategies(raw_sha256=raw_sha256, keep_strategy="Alternate")
+        sync = CommunitySync(account, CachedPopulation(Local(), root=root, account=account))
+        await sync.start()
+        try:
+            await _until(lambda: posts and not json.loads((root / "pending-retractions.json").read_bytes())["retractions"])
+            now[0] += 61  # Past the recovery throttle: a row still saved would be sent again.
+            sync._contribution_wake.set()
+            await asyncio.sleep(.1)
+            assert [(method, body) for method, body, _ in posts] == [
+                ("POST", {"raw_sha256": raw_sha256, "keep_strategy": "Alternate"})]
+            assert str(UUID(posts[0][2])) == posts[0][2]
+            assert sync.last_error is None
+        finally:
+            await sync.stop()
+    asyncio.run(scenario())
+
+
+def test_retraction_retries_a_transient_failure_with_the_same_key(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from sm64_events.community import sync as sync_module
+    now = [1000]
+    monkeypatch.setattr(sync_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(sync_module.random, "uniform", lambda low, high: low)
+
+    def answer(number):
+        if number == 1:
+            raise CommunityError("request_failed", status=503, retry_after=30)
+        return {"v": 1, "retracted": 1}
+
+    async def scenario():
+        account = Account()
+        posts = _retraction_responses(account, answer)
+        sync = CommunitySync(account, CachedPopulation(Local(), root=tmp_path / "cache", account=account))
+        await sync.start()
+        try:
+            assert sync.retract_other_strategies(raw_sha256=hashlib.sha256(native()).hexdigest(), keep_strategy=None)
+            await _until(lambda: sync._offer_retry)
+            assert len(posts) == 1
+            now[0] += 31
+            sync._contribution_wake.set()
+            await _until(lambda: len(posts) == 2 and not sync._offer_retry)
+            assert len(posts) == 2 and posts[0] == posts[1] and posts[0][1]["keep_strategy"] is None
+        finally:
+            await sync.stop()
+    asyncio.run(scenario())
+
+
+def test_older_service_without_the_route_drops_the_retraction_quietly(tmp_path):
+    import json
+
+    def answer(_number):
+        raise CommunityError("not_found", status=404)
+
+    async def scenario():
+        account = Account()
+        posts = _retraction_responses(account, answer)
+        root = tmp_path / "cache"
+        sync = CommunitySync(account, CachedPopulation(Local(), root=root, account=account))
+        await sync.start()
+        try:
+            assert sync.retract_other_strategies(raw_sha256=hashlib.sha256(native()).hexdigest(), keep_strategy="Alternate")
+            await _until(lambda: posts and not json.loads((root / "pending-retractions.json").read_bytes())["retractions"])
+            await asyncio.sleep(.05)
+            assert len(posts) == 1 and not sync._offer_retry and sync.last_error is None
+        finally:
+            await sync.stop()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("state", [{"authenticated": False, "status": "signed_out", "uid": None, "sharing": False},
+                                   {"sharing": False}])
+def test_signed_out_or_sharing_off_retraction_sends_nothing(tmp_path, state):
+    account = Account()
+    account.state.update(state)
+    sync = CommunitySync(account, CachedPopulation(Local(), root=tmp_path / "cache", account=account))
+    assert sync.retract_other_strategies(raw_sha256=hashlib.sha256(native()).hexdigest(), keep_strategy=None) is False
+    assert not sync._queue and not account.calls
+    assert not (tmp_path / "cache" / "pending-retractions.json").exists()

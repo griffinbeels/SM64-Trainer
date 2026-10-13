@@ -3,6 +3,7 @@ import asyncio
 from collections import OrderedDict
 from datetime import datetime, timezone
 import hashlib
+import logging
 from pathlib import Path
 import threading
 import time
@@ -14,9 +15,14 @@ from sm64_events.ghost.sharing_targets import canonical, checked_target
 from . import codec
 from .cache import checked_metadata, target_key, value_of
 from .config import CommunityError
-from .outbox import SourceOutbox, checked_source, source_key
+from .outbox import RetractionOutbox, SourceOutbox, checked_source, checked_strategy, retraction_key, source_key
+
+logger = logging.getLogger(__name__)
 
 MAX_QUEUE = 32
+MAX_RETIRED = 256
+RETRACT_ROUTE = "/v1/recordings/retract"
+CONTRIBUTIONS = ("offer", "retract")  # Serial owner-bound work on the contribution task.
 MAX_PAGE = 256
 MAX_PAGES = 4
 ASSET_RETRY_S = 30
@@ -50,6 +56,12 @@ def _upload_identifier(grant):
     except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
         raise CommunityError("grant_expired") from None
     return identifier
+
+
+def _retryable(error):
+    return isinstance(error, CommunityError) and (
+        error.code in ("network_unavailable", "budget_exhausted", "grant_expired", "upload_expired", "generation_changed")
+        or error.status in (429, 502, 503, 504))
 
 
 def _cutoffs(rows):
@@ -161,6 +173,8 @@ class CommunitySync:
         self._pin_key, self._pins_until = None, 0
         self._pin_metadata_key, self._pin_metadata_until = None, 0
         self._outbox = SourceOutbox(population.root / "pending-contributions.json")
+        self._retractions = RetractionOutbox(population.root / "pending-retractions.json")
+        self._retired = OrderedDict()  # raw_sha256 -> the one strategy it may still be offered under
         self._consent_epoch = 0
         self._recovery_owner, self._recovery_until = None, 0
         if hasattr(account, "on_contribution_cancel"):
@@ -217,12 +231,14 @@ class CommunitySync:
                     for name in ("mutation_keys", "mutation_generation", "retry_count"):
                         if name in pending[0][1]:
                             operation[1][name] = pending[0][1][name]
+            elif operation[0] == "retract":
+                self._offer_retry.pop(key, None)  # A newer keep for this clip replaces the old one.
             self._queue[key] = operation
             self._queue.move_to_end(key)
             while len(self._queue) > MAX_QUEUE:
                 self._queue.popitem(last=False)
             loop = self._loop
-            wake = self._contribution_wake if operation[0] == "offer" else self._wake
+            wake = self._contribution_wake if operation[0] in CONTRIBUTIONS else self._wake
         if loop and wake and not loop.is_closed():
             loop.call_soon_threadsafe(wake.set)
         return True
@@ -319,10 +335,60 @@ class CommunitySync:
             return False
         return self._enqueue(source_key(frozen), ("offer", frozen))
 
+    def retract_other_strategies(self, *, raw_sha256, keep_strategy):
+        """Stop sharing this clip under every strategy but `keep_strategy`.
+
+        Safe on a worker thread, like remember_source. Pending offers of these
+        bytes under another strategy leave the queue, the retry map and the
+        outbox, and later ones are refused. Then one owner-bound retraction is
+        saved and queued for the copies already shared (every strategy when
+        `keep_strategy` is None). Signed out or sharing off: False, nothing sent.
+        """
+        from sm64_events.ghost.portable import checked_hash
+        try:
+            checked_hash(raw_sha256)
+            if keep_strategy is not None:
+                checked_strategy(keep_strategy)
+        except (ValueError, TypeError, CommunityError):
+            return False
+
+        def retired(operation):
+            return (operation[0] == "offer" and operation[1]["raw_sha256"] == raw_sha256
+                    and operation[1]["strategy"] != keep_strategy)
+        with self._lock:
+            if self._closing:
+                return False
+            self._retired.pop(raw_sha256, None)
+            self._retired[raw_sha256] = keep_strategy
+            while len(self._retired) > MAX_RETIRED:
+                self._retired.popitem(last=False)
+            for key, operation in tuple(self._queue.items()):
+                if retired(operation):
+                    self._queue.pop(key)
+            for key, (operation, _due, _tries) in tuple(self._offer_retry.items()):
+                if retired(operation):
+                    self._offer_retry.pop(key)
+        try:
+            self._outbox.retire(raw_sha256, keep_strategy)
+        except (CommunityError, OSError):
+            self.last_error = "A community contribution could not be updated."
+        snapshot = self.account.snapshot()
+        if snapshot.get("status") != "active" or not snapshot.get("sharing") or not snapshot.get("uid"):
+            return False
+        retraction = {"owner": snapshot["uid"], "raw_sha256": raw_sha256,
+                      "keep_strategy": keep_strategy, "key": str(uuid4())}
+        try:
+            self._retractions.remember(retraction)
+        except (CommunityError, OSError):
+            self.last_error = "A community retraction could not be saved for retry."
+        return self._enqueue(retraction_key(retraction), ("retract", retraction))
+
     def _source_active(self, source):
         snapshot = self.account.snapshot()
+        with self._lock:
+            kept = self._retired.get(source["raw_sha256"], source["strategy"])
         return (not self._closing and snapshot.get("status") == "active" and snapshot.get("sharing")
-                and snapshot.get("uid") == source["owner"]
+                and snapshot.get("uid") == source["owner"] and kept == source["strategy"]
                 and source.get("consent_epoch", self._consent_epoch) == self._consent_epoch)
 
     async def cancel_contributions(self, owner):
@@ -349,6 +415,12 @@ class CommunitySync:
         if owner == self._recovery_owner and time.monotonic() < self._recovery_until:
             return
         self._recovery_owner, self._recovery_until = owner, time.monotonic() + 60
+        for retraction in await self._cpu(self._retractions.pending, owner):
+            key = retraction_key(retraction)
+            with self._lock:
+                if key in self._queue or key in self._offer_retry:
+                    continue
+            self._enqueue(key, ("retract", retraction))
         sources = await self._cpu(self._outbox.available, owner)
         if not sources:
             return
@@ -643,18 +715,34 @@ class CommunitySync:
         if result.get("disposition") not in ("published", "already_present", "not_faster"):
             raise CommunityError("invalid_response")
 
+    async def _retract(self, retraction):
+        snapshot = self.account.snapshot()
+        if snapshot.get("uid") != retraction["owner"] or snapshot.get("status") != "active":
+            return  # The saved retraction waits for its owner's next active session.
+        body = {"raw_sha256": retraction["raw_sha256"], "keep_strategy": retraction["keep_strategy"]}
+        try:
+            value = await self._json("POST", RETRACT_ROUTE, json=body, headers={"Idempotency-Key": retraction["key"]})
+        except CommunityError as error:
+            if error.status != 404:
+                raise
+            # A service older than the route answers 404, like the names check.
+            logger.debug("The community service has no retraction route; one retraction was dropped.")
+        else:
+            if set(value) != {"v", "retracted"} or type(value["retracted"]) is not int or value["retracted"] < 0:
+                raise CommunityError("invalid_response")
+        await self._cpu(self._retractions.discard, retraction)
+
     def _retry_offer(self, key, operation, error):
-        if operation[0] != "offer" or not isinstance(error, CommunityError) or not (
-                error.code in ("network_unavailable", "budget_exhausted", "grant_expired", "upload_expired", "generation_changed")
-                or error.status in (429, 502, 503, 504)):
+        """Schedule a transiently failed contribution again without a new PB."""
+        if operation[0] not in CONTRIBUTIONS or not _retryable(error):
             return
         source = operation[1]
         snapshot = self.account.snapshot()
-        if snapshot.get("uid") != source["owner"] or not self._source_active(source):
+        if snapshot.get("uid") != source["owner"] or operation[0] == "offer" and not self._source_active(source):
             return
         tries = min(6, source.get("retry_count", 0) + 1)
         source["retry_count"] = tries
-        if error.code in ("grant_expired", "upload_expired"):
+        if operation[0] == "offer" and error.code in ("grant_expired", "upload_expired"):
             source.pop("mutation_keys", None)
         delay = max(error.retry_after or 0, self._network_until - time.monotonic(),
                     random.uniform(1, 1.25) * min(900, 30 * 2 ** (tries - 1)))
@@ -666,7 +754,7 @@ class CommunitySync:
     def _take_operation(self, *, contribution):
         with self._lock:
             for key, operation in self._queue.items():
-                if (operation[0] == "offer") == contribution:
+                if (operation[0] in CONTRIBUTIONS) == contribution:
                     self._queue.pop(key)
                     return key, operation
         return None
@@ -679,6 +767,11 @@ class CommunitySync:
         if operation[0] == "offer" and (isinstance(error, OSError)
                 or isinstance(error, CommunityError) and error.code in ("source_changed", "invalid_source", "unsupported_identity")):
             await self._cpu(self._outbox.discard, (operation[1],))
+        if operation[0] == "retract" and not _retryable(error):
+            try:
+                await self._cpu(self._retractions.discard, operation[1])
+            except (CommunityError, OSError):
+                pass  # A row left saved is only sent again; the server answers replays.
 
     async def _run(self):
         """Practice requests never wait behind a contribution's HTTP transfer."""
@@ -729,9 +822,12 @@ class CommunitySync:
                 if self.account.snapshot().get("status") != "active":
                     continue
                 try:
-                    await self._offer(operation[1])
-                    if self._source_active(operation[1]):
-                        await self._cpu(self._outbox.discard, (operation[1],))
+                    if operation[0] == "retract":
+                        await self._retract(operation[1])
+                    else:
+                        await self._offer(operation[1])
+                        if self._source_active(operation[1]):
+                            await self._cpu(self._outbox.discard, (operation[1],))
                     self.last_error = None
                 except (CommunityError, ValueError, OSError) as error:
                     await self._failed_operation(key, operation, error)

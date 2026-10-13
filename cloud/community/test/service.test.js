@@ -259,3 +259,59 @@ test('the policies link follows the host that served the request, and www redire
     const cfg=await (await service.fetch(new Request(host+'/v1/config'),env,{})).json();assert.equal(cfg.terms_url,host+'/policies#terms');assert.equal(cfg.privacy_url,host+'/policies#privacy');}
   const moved=await service.fetch(new Request('https://www.sm64trainer.app/auth/callback?code=x'),env,{});assert.equal(moved.status,301);assert.equal(moved.headers.get('location'),'https://sm64trainer.app/auth/callback?code=x');
   env.OPERATOR_CONTACT='';assert.equal((await service.fetch(new Request('https://sm64trainer.app/v1/config'),env,{})).status,503);}finally{env.DB.close();}});
+test('a run past the ghost ceiling is quietly refused and spends no upload budget',async()=>{
+  const {env,store}=await environment(),entries=structuredClone(catalog.entries);
+  entries[0].strategies[0].cutoffs=[{step:0,frames:100000},{step:1,frames:210},{step:2,frames:50}];
+  const model={v:1,generation:digest(canonical(entries)),entries},h=harness(env,model);
+  await store.sql('UPDATE settings SET generation=? WHERE id=1',model.generation).run();
+  try{
+    const admit=(frames,marker)=>h.call('/v1/uploads',{method:'POST',body:{...upload(nativeClip({marker}),frames).body,generation:model.generation}});
+    const spent=async()=>({...await store.one('SELECT COALESCE(SUM(uploaded),0) AS bytes,COALESCE(SUM(class_a),0) AS class_a FROM quotas')});
+    const before=await spent(),refused=await admit(232,1);
+    assert.equal(refused.response.status,200);assert.deepEqual(refused.json,{v:1,disposition:'not_faster'});
+    assert.deepEqual(await spent(),before);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM grants')).n,0);
+    assert.equal((await admit(231,2)).json.disposition,'upload');
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM grants')).n,1);
+  }finally{env.DB.close();}
+});
+test('retraction unpublishes one clip under other strategies and leaves every other identity',async()=>{
+  const {env,store}=await environment(),entries=structuredClone(catalog.entries);
+  entries[0].strategies.push({name:'TJ',cutoffs:structuredClone(entries[0].strategies[0].cutoffs)});
+  const model={v:1,generation:digest(canonical(entries)),entries},h=harness(env,model),f=upload();
+  await store.sql('UPDATE settings SET generation=? WHERE id=1',model.generation).run();
+  try{
+    const send=async(strategy,user='alice')=>{
+      const admission=await h.call('/v1/uploads',{method:'POST',body:{...f.body,strategy,generation:model.generation},user});
+      assert.equal(admission.json.disposition,'upload',JSON.stringify(admission.json));
+      const result=await h.call('/v1/uploads/'+admission.json.upload_id,{method:'PUT',bytes:f.bytes,user});
+      assert.equal(result.json.disposition,'published');return result.json.recording_id;
+    };
+    const standard=await send('Standard'),tj=await send('TJ'),bobs=await send('Standard','bob');
+    assert.equal((await h.call('/v1/pins',{method:'PUT',body:{recording_ids:[standard]},user:'bob'})).response.status,200);
+    const pending=await h.call('/v1/uploads',{method:'POST',body:{...f.body,strategy:'Standard',frames:90,generation:model.generation}});
+    assert.equal(pending.json.disposition,'upload');
+    const epoch=async()=>(await store.one("SELECT epoch FROM scope_epochs WHERE scope='star:1-0'")).epoch,before=await epoch();
+    const key=crypto.randomUUID(),body={raw_sha256:f.body.raw_sha256,keep_strategy:'TJ'};
+    const retract=(b=body,k=key,user='alice')=>h.call('/v1/recordings/retract',{method:'POST',body:b,headers:{'idempotency-key':k},user});
+    assert.equal((await retract({raw_sha256:'x',keep_strategy:'TJ'},crypto.randomUUID())).response.status,400);
+    const first=await retract();
+    assert.equal(first.response.status,200,JSON.stringify(first.json));assert.deepEqual(first.json,{v:1,retracted:1});
+    assert.equal(await epoch(),before+1);
+    assert.equal((await h.call('/v1/recordings/'+standard,{user:'bob'})).response.status,404);
+    assert.equal((await h.call('/v1/recordings/'+tj,{user:'bob'})).response.status,200);
+    assert.equal((await h.call('/v1/recordings/'+bobs)).response.status,200);
+    assert.deepEqual((await h.call(pool)).json.recordings.map(r=>r.id),[bobs]);
+    assert.equal((await store.one('SELECT COUNT(*) AS n FROM pins')).n,0);
+    assert.equal((await h.call('/v1/uploads/'+pending.json.upload_id,{method:'PUT',bytes:f.bytes})).response.status,409);
+    assert.deepEqual((await retract()).json,{v:1,retracted:1});assert.equal(await epoch(),before+1);
+    assert.equal((await retract({...body,keep_strategy:null})).response.status,409);
+    assert.deepEqual((await retract({...body,keep_strategy:null},crypto.randomUUID(),'bob')).json,{v:1,retracted:1});
+    assert.equal((await h.call('/v1/recordings/'+tj,{user:'bob'})).response.status,200);
+    assert.deepEqual((await retract({...body,keep_strategy:null},crypto.randomUUID())).json,{v:1,retracted:1});
+    assert.equal((await h.call('/v1/recordings/'+tj,{user:'bob'})).response.status,404);
+    await store.sql('UPDATE assets SET created_at=0').run();
+    assert.equal((await reconcile(env)).deleted,3);
+    assert.deepEqual({...await store.one('SELECT bytes_used,bytes_reserved FROM storage_budget')},{bytes_used:0,bytes_reserved:0});
+  }finally{env.DB.close();}
+});

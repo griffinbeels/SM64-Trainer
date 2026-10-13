@@ -141,6 +141,9 @@ export class Store {
   }
   async admit(a,input,catalog,key,digest,grading) {
     this.active(a);requireThat(a.sharing,"sharing_disabled","Enable sharing before uploading.",403);
+    // A run past the ghost ceiling never becomes a ghost. The answer is the
+    // quiet refusal every deployed trainer already accepts; no budget is spent.
+    if(grading.aboveCeiling) return {disposition:"not_faster"};
     const old=await this.one("SELECT * FROM grants WHERE uid=? AND request_key=?",a.uid,key);
     if(old) {requireThat(old.request_digest===digest,"idempotency_conflict","Upload key already binds different data.",409);return this.grantResponse(old);}
     const recordingId=await recordingID({...input,uid:a.uid,target_key:grading.key});
@@ -315,6 +318,27 @@ export class Store {
       ...(deleting?[this.sql("INSERT INTO deletion_outbox(uid,created_at) VALUES(?,?) ON CONFLICT DO NOTHING",a.uid,sec())]:[]),
       this.receiptSQL(a.uid,deleting?"delete":"withdraw",key,digest,response)]);
     return response;
+  }
+  async retract(a,rawSHA,keep,key,digest) {
+    requireThat(a.status!=="deleted","account_deleted","Account already deleted.",403);
+    // One selector for every statement: this owner's identities of these exact
+    // bytes under another strategy. `strategy IS NOT NULL` selects them all.
+    const own="uid=? AND raw_sha256=? AND strategy IS NOT ?",args=[a.uid,rawSHA,keep];
+    const live=own+" AND (published=1 OR EXISTS(SELECT 1 FROM winners w WHERE w.recording_id=recordings.id))";
+    await this.tx("EXISTS(SELECT 1 FROM accounts WHERE uid=? AND status!='deleted')",[a.uid],[
+      // The receipt counts live identities before the statements below retire them.
+      this.sql("INSERT INTO mutation_receipts VALUES(?,?,?,?,json_object('retracted',(SELECT COUNT(*) FROM recordings WHERE "+live+")),?)",a.uid,"retract",key,digest,...args,sec()),
+      this.sql("INSERT INTO scope_epochs(scope,epoch) SELECT DISTINCT target_key,1 FROM recordings WHERE "+live+" ON CONFLICT(scope) DO UPDATE SET epoch=epoch+1",...args),
+      this.sql("DELETE FROM pins WHERE recording_id IN (SELECT id FROM recordings WHERE "+own+")",...args),
+      this.sql("DELETE FROM winners WHERE recording_id IN (SELECT id FROM recordings WHERE "+own+")",...args),
+      this.sql("UPDATE recordings SET published=0 WHERE "+own+" AND published=1",...args),
+      // Unfinished grants for those identities can no longer publish later:
+      // pending ones expire into the reconciler's refund, and stored bytes end
+      // as a lost race whose asset the reconciler collects.
+      this.sql("UPDATE grants SET expires_at=MIN(expires_at,?) WHERE "+own+" AND state='pending'",sec(),...args),
+      this.sql("UPDATE grants SET state='complete',disposition='not_faster' WHERE "+own+" AND state='stored'",...args)]);
+    // Physical bytes stay charged until the reconciler proves R2 deletion.
+    return this.receipt(a.uid,"retract",key,digest);
   }
   async invite(subject,invited,actor,reason,confirmation,receipt) {
     requireThat(confirmation==="CHANGE INVITATION","confirmation_required","Confirm invitation change.");
