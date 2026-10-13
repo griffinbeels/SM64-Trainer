@@ -162,6 +162,21 @@ Workspace administrators can still block an OAuth app.
 Provider secrets stay in Supabase/provider consoles; none belong in the beta
 package, source, public Worker vars or this guide.
 
+## 4b. Custom domains
+
+The Worker serves any number of Cloudflare Custom Domains (one hostname per
+`routes` entry with `custom_domain: true`); its policies link and consent page
+follow the host that served the request, and a `www.` host answers a permanent
+redirect to the apex. Supabase Auth can sit behind its own hostname (the
+Custom Domain add-on, Pro plan): CNAME the hostname to the project domain,
+DNS-only, then initialize, reverify and activate it through the Management
+API or CLI, and add `https://<auth-host>/auth/v1/callback` to every provider
+**in addition to** the project callback before activating. The token issuer
+stays `https://<project-ref>.supabase.co/auth/v1` even with a custom domain
+active ([Supabase's own note](https://supabase.com/docs/guides/ai-tools/byo-mcp#use-a-custom-domain)),
+so the Worker's `SUPABASE_URL` keeps the project URL; only the desktop
+client's `supabase_url` and the provider callbacks move to the custom host.
+
 ## 5. Protect operator routes with Access
 
 Create a Cloudflare Zero Trust Free organization. Under Access controls >
