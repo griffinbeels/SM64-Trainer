@@ -174,7 +174,7 @@ class WebsiteBuildTests(unittest.TestCase):
         rendered = (self.output / "index.html").read_text(encoding="utf-8")
         url = "https://github.com/griffinbeels/SM64-Trainer/releases/download/v1.10.0/SM64Trainer.exe"
         self.assertEqual(rendered.count(f'href="{url}"'), 3)
-        self.assertIn("v1.10.0 · 12.0 MB · Uploaded ", rendered)
+        self.assertIn("v1.10.0 · 12.0 MB installer · Uploaded ", rendered)
         self.assertIn('<time data-release-upload datetime="2026-10-15T16:30:00Z">'
                       'Oct 15, 2026 at 16:30 UTC</time>', rendered)
         self.assertIn("Answer &amp; unchanged.", rendered)

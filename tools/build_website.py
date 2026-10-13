@@ -292,7 +292,7 @@ class _Template(HTMLParser):
             return "Downloads are temporarily unavailable. Please check the release history for updates."
         uploaded = datetime.fromisoformat(self.metadata["installer_uploaded_at"].replace("Z", "+00:00"))
         date = f"{uploaded:%b} {uploaded.day}, {uploaded:%Y at %H:%M} UTC"
-        text = f"{self.metadata['tag']} · {self.metadata['installer_size'] / 1_000_000:.1f} MB · Uploaded "
+        text = f"{self.metadata['tag']} · {self.metadata['installer_size'] / 1_000_000:.1f} MB installer · Uploaded "
         timestamp = html.escape(self.metadata["installer_uploaded_at"], quote=True)
         clock = f'<time data-release-upload datetime="{timestamp}">{html.escape(date)}</time> '
         return (html.escape(text) + clock + f'<a href="{html.escape(self.metadata["release_url"], quote=True)}" '
