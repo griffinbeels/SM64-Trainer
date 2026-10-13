@@ -19,7 +19,7 @@ import threading
 import unicodedata
 import zipfile
 
-from sm64_events.ghost.clip import blink_frames, read_clip
+from sm64_events.ghost.clip import blink_frames, read_clip, require_complete_inputs
 from sm64_events.ghost.portable import FORMAT, VERSION, MAX_ENTRIES, MAX_MANIFEST_BYTES, checked_entry, checked_hash
 from sm64_events.ghost.sharing import PortableGhost
 from sm64_events.ghost.sharing_targets import bind
@@ -188,7 +188,7 @@ class BundledPopulation:
                         temporary = Path(out.name)
                         with zipfile.ZipFile(self.collection) as archive, archive.open(raw["file"]) as source:
                             shutil.copyfileobj(source, out, 1 << 20)
-                    read_clip(temporary, raw["sha256"])
+                    require_complete_inputs(read_clip(temporary, raw["sha256"]))
                     os.replace(temporary, path)
                 finally:
                     if temporary:
@@ -197,7 +197,7 @@ class BundledPopulation:
             stamp = stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns
             known = self._ready.get(raw["sha256"])
             if known is None or known[0] != stamp:
-                clip = read_clip(path, raw["sha256"])
+                clip = require_complete_inputs(read_clip(path, raw["sha256"]))
                 result = {"clip_id": clip.clip_id, "sha256": raw["sha256"], "blink_frames": blink_frames(clip),
                           "pad_records": sum(frame.pad is not None for frame in clip.frames), "records": len(clip.frames)}
                 self._ready[raw["sha256"]] = stamp, result

@@ -9,13 +9,13 @@ from sm64_events.ghost.clip import encode_clip, frame_from_bytes
 from sm64_events.community import codec
 
 
-def native(count=3):
-    return encode_clip(tuple(frame_from_bytes(frame(index)) for index in range(1, count + 1)), producer(), clock_kind=1,
-                       clip_id="22222222-2222-4222-8222-222222222222")
+def native(count=3, pad=(0, 0, 0)):
+    return encode_clip(tuple(frame_from_bytes(frame(index, pad=pad)) for index in range(1, count + 1)), producer(),
+                       clock_kind=1, clip_id="22222222-2222-4222-8222-222222222222")
 
 
 def older(version):
-    raw = native()
+    raw = native(pad=None)  # formats before exact pad capture carry no pad block
     _, record, sample, sample_version = codec.FORMATS[f"SM64GHO{version}".encode()]
     header = bytearray(raw[:160])
     header[:8] = f"SM64GHO{version}".encode()

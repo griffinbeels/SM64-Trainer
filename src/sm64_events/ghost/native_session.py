@@ -5,7 +5,7 @@ from datetime import datetime
 import string
 import threading
 
-from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
+from sm64_events.ghost.clip import INCOMPLETE_INPUTS, OLDER_POSE_FORMAT_TEXT
 from sm64_events.ghost.native_layout import GHOSTS, GP_WRONG_SCENE, LABEL_BYTES
 from sm64_events.ghost.pb import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON
@@ -288,6 +288,14 @@ class NativeGhost:
         fill = getattr(self._replay, "native_with_inputs", None)
         asset = fill(attempt_id, found) if fill is not None else found
         files = tuple(dict.fromkeys((found[0], asset[0])))
+        # His rule: a playback copy with any unknown pad would draw "?", so it
+        # is not a ghost, PB or not. The asset's producer (the replay service's
+        # find_native / native_with_inputs) states the fact; an asset that does
+        # not state it is not played either (ghost/clip.py::INCOMPLETE_INPUTS).
+        if asset[1].get("inputs_complete") is not True:
+            result = {**answer, "reason": "incomplete_inputs", "reason_text": INCOMPLETE_INPUTS}
+            self._cached[attempt_id] = key, None, files, self._fingerprint(files), result
+            return result, None
         result = {**answer, "available": True, "reason": None, "reason_text": None,
                   "exactness": "native_pose", "blinks": asset[1]["blink_frames"]}
         self._cached[attempt_id] = key, asset, files, self._fingerprint(files), result

@@ -39,7 +39,7 @@ class Capture:
 def native_session(tmp_path, *, asset=True):
     session, _, tracker, store = a_session(tmp_path)
     source = Capture()
-    manifest = {"clip_id": "ab" * 16, "sha256": "cd" * 32, "blink_frames": 0}
+    manifest = {"clip_id": "ab" * 16, "sha256": "cd" * 32, "blink_frames": 0, "inputs_complete": True}
     replay = SimpleNamespace(recorder=SimpleNamespace(ghost_capture=source),
                              native_identity=lambda _: {"native_clock_frame": 100},
                              find_native=lambda _: (tmp_path / "run.ghost", manifest) if asset else None)
@@ -142,7 +142,7 @@ def test_strategy_or_scope_swap_revokes_the_active_roster_and_return_waits_for_a
     controls = settings.native_controls(settings.defaults())
     ghosts = [SimpleNamespace(id=index, origin=f"attempt:{index}", frames=30, pb=True)
               for index in range(1, 3)]
-    manifests = {index: {"clip_id": f"{index:02x}" * 16, "sha256": "cd" * 32, "blink_frames": 0}
+    manifests = {index: {"clip_id": f"{index:02x}" * 16, "sha256": "cd" * 32, "blink_frames": 0, "inputs_complete": True}
                  for index in range(1, 3)}
     native._replay.find_native = lambda attempt: (tmp_path / f"{attempt}.ghost", manifests[attempt])
     origin = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
@@ -369,7 +369,7 @@ def test_certificate_selects_a_ready_roster_before_the_move_clock_exists(tmp_pat
     # Another roster can become ready during the clock's 90-frame fallback.
     # The already certified start remains bound to its original choice.
     native._replay.find_native = lambda _: (tmp_path / "later.ghost", {
-        "clip_id": "ef" * 16, "sha256": "cd" * 32, "blink_frames": 0})
+        "clip_id": "ef" * 16, "sha256": "cd" * 32, "blink_frames": 0, "inputs_complete": True})
     later = SimpleNamespace(id=18, origin="attempt:8", frames=60, pb=True)
     native.prepare(target, [later], controls, 2)
     generations["prepared_generation"] = 2
@@ -1082,3 +1082,21 @@ def test_an_older_file_is_logged_once_not_on_every_lookup(tmp_path, caplog):
         assert caplog.text.count("preservation refused") == 1
     finally:
         archive.close()
+
+
+def test_an_asset_with_an_unknown_input_is_not_played_and_says_why(tmp_path):
+    """His rule (round 40): a playback copy that would draw "?" is not a ghost, PB included."""
+    session, source, _ = native_session(tmp_path)
+    replay = session._native._replay
+    replay.find_native = lambda _: (tmp_path / "run.ghost", {"clip_id": "ab" * 16, "sha256": "cd" * 32,
+                                                             "blink_frames": 0, "inputs_complete": False})
+
+    async def check():
+        await session.update({"enabled": True})
+        payload = session.payload()["source"]
+        assert not payload["available"] and payload["reason"] == "incomplete_inputs"
+        assert "not known on every frame" in payload["reason_text"]
+        assert not source.commands[-1]["enabled"]
+        await session.stop()
+
+    asyncio.run(check())

@@ -32,10 +32,10 @@ def matches(path: Path, approved: ApprovedCollection) -> bool:
 
 
 def _every_pad_known(extracted: Path, digest: str, verified: dict) -> bool:
-    """True when the validated clip carries a pad on each of its records."""
-    from sm64_events.ghost.clip import read_clip
-    _clip_id, _clock, _blinks, pad_records, _level = verified[digest]
-    return pad_records > 0 and pad_records == len(read_clip(extracted, digest).frames)
+    """The one completeness question (ghost/clip.py::inputs_complete), asked of the validated clip."""
+    from sm64_events.ghost.clip import inputs_complete, read_clip
+    assert digest in verified  # validate_package extracted and hash-checked it
+    return inputs_complete(read_clip(extracted, digest))
 
 
 def review_collection(source: Path) -> ApprovedCollection:
@@ -51,6 +51,12 @@ def review_collection(source: Path) -> ApprovedCollection:
                           for row in rows)
     if any(row["author"] != "griffman1212" or row["practice"] or row["outcome"] != "success" for row in rows):
         raise ValueError("The beta collection must contain successful griffman1212 recordings only.")
+    if with_inputs != len(rows):
+        # His rule (2026-10-12): "If it's not a perfectly recorded ghost, it
+        # doesn't belong in the system." A collection with one unknown frame
+        # does not ship.
+        raise ValueError(f"The beta collection must contain recordings with complete inputs only "
+                         f"({len(rows) - with_inputs} of {len(rows)} are incomplete).")
     approved = ApprovedCollection(source, digest, len(rows), with_inputs)
     if not matches(source, approved):
         raise ValueError("The reviewed ghost collection changed during validation.")

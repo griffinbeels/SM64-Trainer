@@ -210,8 +210,11 @@ def test_private_builder_refuses_stable_config_before_prerequisites(monkeypatch,
     assert build_beta.main(["--config", str(config), "--check"]) == 2
 
 
-def test_collection_review_counts_recordings_whose_every_input_is_known(tmp_path):
-    """Round 39: beta.2 shipped 160 of 180 recordings with no pads; the count is visible before a build."""
+def test_collection_review_refuses_any_recording_with_an_unknown_input(tmp_path):
+    """His rule (round 40): "If it's not a perfectly recorded ghost, it doesn't belong in the system."
+
+    beta.2 shipped 160 of 180 recordings with no pads; a collection with one
+    unknown frame now never becomes a build input."""
     from test_ghost_sharing import recording
     from sm64_events.ghost.portable import make_entry, write_package
     entries = []
@@ -223,5 +226,7 @@ def test_collection_review_counts_recordings_whose_every_input_is_known(tmp_path
                                    outcome="success", game_version=None), source))
     collection = tmp_path / "reviewed.sm64ghosts"
     write_package(collection, entries)
-    approved = review_collection(collection)
-    assert (approved.count, approved.with_inputs) == (2, 1)
+    with pytest.raises(ValueError, match=r"complete inputs only \(1 of 2"):
+        review_collection(collection)
+    approved = review_collection(approved_collection(tmp_path))
+    assert (approved.count, approved.with_inputs) == (1, 1)

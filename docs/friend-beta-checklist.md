@@ -20,8 +20,9 @@ Request and storage limits still apply to every account and the service.
 Google testing mode can require its test-user
 allowlist; Discord or Twitch avoids that Google-specific setup.
 
-The included library contains 180 legitimate recordings credited to
-**griffman1212**. They become local rivals automatically and work without cloud
+The included library contains legitimate recordings credited to
+**griffman1212**, only those whose controller input is known on every frame
+(the installer's README names the count). They become local rivals automatically and work without cloud
 downloads. They do not fill the tester's practice history or PBs. Historical
 unknown ROMs and controller inputs stay unknown; those clips are never submitted
 as certified new runs. New eligible tester runs upload under the tester's account.

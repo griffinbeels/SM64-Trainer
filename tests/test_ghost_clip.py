@@ -54,7 +54,7 @@ def test_pad_refuses_values_no_n64_pad_can_set(pad):
 
 
 def test_pad_validity_requires_zero_unknown_and_reserved_bytes():
-    stray = bytearray(frame())
+    stray = bytearray(frame(pad=None))
     struct.pack_into("<h", stray, PAD_AT, 1)
     with pytest.raises(ClipError, match="pad refusal"):
         frame_from_bytes(bytes(stray))
@@ -82,7 +82,7 @@ def as_gclip6(data: bytes) -> bytes:
 
 
 def test_gclip6_and_archived_gc7_rows_keep_poses_with_unknown_inputs(tmp_path):
-    current = encoded((frame(1, held=(0x13003174, 1, 12)), frame(2)))
+    current = encoded((frame(1, held=(0x13003174, 1, 12), pad=None), frame(2, pad=None)))
     saved = as_gclip6(current)
     clip = decode_clip(saved)
     assert clip.file_version == V6_VERSION and all(item.pad is None and item.playable for item in clip.frames)
@@ -105,7 +105,7 @@ def test_older_file_cannot_claim_new_pad_validity_as_exact_neutral():
 
 
 def test_manifest_counts_known_neutral_and_missing_pad_separately(tmp_path):
-    manifest = write_clip(tmp_path / "inputs.ghost", (frame(1, pad=(0, 0, 0)), frame(2), frame(3, pad=(10, 20, 1))),
+    manifest = write_clip(tmp_path / "inputs.ghost", (frame(1, pad=(0, 0, 0)), frame(2, pad=None), frame(3, pad=(10, 20, 1))),
                           producer(), clock_kind=STAR_CLOCK)
     assert manifest["pad_records"] == 2
 
@@ -407,7 +407,7 @@ def as_gclip5(data: bytes) -> bytes:
 def test_a_clip_saved_before_released_objects_still_loads():
     """His GCLIP5 ghosts, held Bob-ombs included, read as GCLIP6 with nothing
     released; so do the pose archive's GC6 rows."""
-    current = encoded((frame(1, held=(0x13003174, 1, 12)), frame(2)))
+    current = encoded((frame(1, held=(0x13003174, 1, 12), pad=None), frame(2, pad=None)))
     older = as_gclip5(current)
     assert len(older) == HEADER_BYTES + 2 * V5_RECORD_BYTES
     clip = decode_clip(older)

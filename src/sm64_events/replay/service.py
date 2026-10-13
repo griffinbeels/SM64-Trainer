@@ -647,7 +647,7 @@ class ReplayService:
         An older-format commit is recorded as this attempt's preservation
         refusal so the selector explains it, and callers must not replace it.
         """
-        from sm64_events.ghost.clip import OlderPoseFormat, blink_frames, check_manifest
+        from sm64_events.ghost.clip import OlderPoseFormat, blink_frames, check_manifest, inputs_complete
         attempt = self._attempt(attempt_id)
         older = None
         root = self.cfg.save_root.resolve()
@@ -666,7 +666,9 @@ class ReplayService:
                     manifest = manifest.get("native_ghost")
                 clip = check_manifest(path, manifest, attempt=attempt, target=self._native_target(attempt))
                 # By the current playback rule, including manifests written before it.
-                manifest = {**manifest, "blink_frames": blink_frames(clip)}
+                # `inputs_complete` is the stored clip's own truth; the playback copy
+                # (`native_with_inputs`) restates it after the input track fills pads.
+                manifest = {**manifest, "blink_frames": blink_frames(clip), "inputs_complete": inputs_complete(clip)}
                 self._remember_native_preservation(self._native_preservation_key(attempt), None)
                 return (path, manifest), None
             except OlderPoseFormat as error:

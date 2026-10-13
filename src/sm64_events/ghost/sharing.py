@@ -15,7 +15,7 @@ import tempfile
 import threading
 from uuid import uuid4
 
-from sm64_events.ghost.clip import blink_frames, read_clip
+from sm64_events.ghost.clip import INCOMPLETE_INPUTS, blink_frames, inputs_complete, read_clip, require_complete_inputs
 from sm64_events.ghost.portable import (MAX_ENTRIES, checked_author, checked_entry, checked_hash,
                                        _checked_recording_target, validate_package, write_package)
 from sm64_events.ghost.library_preferences import AUTHOR_KEY, shortcuts, save_author, save_shortcut, remove_shortcut
@@ -155,7 +155,7 @@ class GhostSharing:
         stamp = stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
         cached = self._verified.get(row["sha256"])
         if cached is None or cached[0] != stamp:
-            clip = read_clip(path, row["sha256"])
+            clip = require_complete_inputs(read_clip(path, row["sha256"]))
             value = dict(clip_id=clip.clip_id, sha256=row["sha256"], blink_frames=blink_frames(clip),
                          pad_records=sum(frame.pad is not None for frame in clip.frames), records=len(clip.frames))
             self._verified[row["sha256"]] = stamp, value
@@ -182,10 +182,31 @@ class GhostSharing:
                 result.append(self._import_row(row, bindings, self.root))
             return result
 
+    def _complete(self, path, digest):
+        """His rule, asked once per file state: an import with any unknown pad is not a ghost."""
+        try:
+            stat = path.stat()
+        except OSError:
+            return False
+        stamp = stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+        cache = self.__dict__.setdefault("_complete_cache", {})
+        known = cache.get(digest)
+        if known is None or known[0] != stamp:
+            try:
+                known = stamp, inputs_complete(read_clip(path, digest))
+            except (OSError, ValueError):
+                known = stamp, False
+            cache[digest] = known
+            if len(cache) > 512:
+                cache.pop(next(iter(cache)))
+        return known[1]
+
     def _import_row(self, row, bindings, folder):
         key, reason = bind(row["target"], index=bindings)
         if not reason and not (folder / f"{row['sha256']}.ghost").is_file():
             reason = "This imported recording was removed from disk."
+        if not reason and not self._complete(folder / f"{row['sha256']}.ghost", row["sha256"]):
+            reason = INCOMPLETE_INPUTS
         return {**row, "source": "import", "import_id": row["id"], "attempt_id": None,
                 "entity_key": key, "kind": row["target"]["kind"], "strat": row["target"].get("strat"),
                 "target_name": row["target"].get("name"), "game_version": row.get("game_version"),

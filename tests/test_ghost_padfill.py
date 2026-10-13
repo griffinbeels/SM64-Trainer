@@ -116,7 +116,7 @@ def test_a_track_that_does_not_line_up_with_the_clip_is_refused():
     with pytest.raises(PadFillRefused, match="does not line"):
         fill_pads(recorded(), late, producer())
     # Mario never changing action proves nothing about the alignment.
-    still = decode_clip(encode_clip([frame(n, action=IDLE) for n in range(1, 41)], producer(), clock_kind=1))
+    still = decode_clip(encode_clip([frame(n, action=IDLE, pad=None) for n in range(1, 41)], producer(), clock_kind=1))
     with pytest.raises(PadFillRefused, match="does not line"):
         fill_pads(still, track(range(101, 141), action=lambda _timer: IDLE), producer())
 
@@ -135,7 +135,7 @@ def native_run(tmp_path, count=40):
     service = make_service(tmp_path, [row], cov=(datetime.fromisoformat(row.started_utc) - timedelta(seconds=10),
                                                datetime.fromisoformat(row.ended_utc) + timedelta(seconds=10)))
     archive = PoseArchive(tmp_path / "poses.sqlite")
-    archive.ingest(producer(), tuple(frame(n, action=action_at(100 + n)) for n in range(1, count + 1)))
+    archive.ingest(producer(), tuple(frame(n, action=action_at(100 + n), pad=None) for n in range(1, count + 1)))
     service.recorder.pose_archive = archive
     service.preserve_native(row.id)
     return service, row, archive
@@ -200,5 +200,21 @@ def test_an_exported_collection_carries_the_filled_inputs(tmp_path):
         staging.mkdir()
         rows, verified = validate_package(result["path"], staging)
         assert rows[0]["sha256"] == played["sha256"] and verified[played["sha256"]][3] == 40
+    finally:
+        archive.close()
+
+
+def test_the_playback_copy_states_whether_every_input_is_known(tmp_path):
+    """His rule (round 40): the asset's producer says it, and every door asks it."""
+    service, row, archive = native_run(tmp_path)
+    try:
+        found = service.find_native(row.id)
+        assert found[1]["inputs_complete"] is False  # the stored clip has no pads
+        service.input_track = lambda run, span: track(range(101, 140))  # the last frame is missing
+        path, manifest = service.native_with_inputs(row.id, found)
+        assert path != found[0] and manifest["inputs_complete"] is False
+        service.input_track = lambda run, span: track(range(101, 141))
+        path, manifest = service.native_with_inputs(row.id, found)
+        assert manifest["inputs_complete"] is True and manifest["pad_records"] == 40
     finally:
         archive.close()

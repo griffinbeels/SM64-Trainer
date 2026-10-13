@@ -28,9 +28,9 @@ class Local:
         pass
 
 
-def provider(tmp_path, *, author=AUTHOR, game_version=None, definitions=()):
+def provider(tmp_path, *, author=AUTHOR, game_version=None, definitions=(), pad=(12, -34, 0x8000)):
     target = describe("segment", "3", "Standard", definitions) if definitions else None
-    source, row = recording(tmp_path, kind="segment" if definitions else "star", target=target, pad=None)
+    source, row = recording(tmp_path, kind="segment" if definitions else "star", target=target, pad=pad)
     row = make_entry(source, author=author, target=row["target"], frames=row["frames"], clock=row["clock"],
                      recorded_utc=row["recorded_utc"], practice=False, outcome="success", game_version=game_version)
     collection = tmp_path / COLLECTION
@@ -54,7 +54,7 @@ def test_metadata_is_immediate_but_selected_asset_is_extracted_lazily(tmp_path):
     assert row["player_name"] == AUTHOR and row["ghost"].pb is False and row["ghost"].attempt_id is None
     path, report = value.resolve(row["ghost"], {"kind": "star", "entity_key": "2-1", "strat": "10 coin"})
     assert path.read_bytes() == source.read_bytes()
-    assert report["pad_records"] == 1  # The first frame remains unknown; the second was recorded.
+    assert report["pad_records"] == report["records"] == 2  # every frame's pad is known
     assert value._rows[raw["id"]]["game_version"] is None
     assert len(list(root.glob("*.ghost"))) == 1
     assert not (tmp_path / "tracker.db").exists()
@@ -174,3 +174,12 @@ def test_bundled_and_cloud_composition_can_admit_and_offer_the_testers_new_recor
     finally:
         population.close()
         database.close()
+
+
+def test_a_bundled_recording_with_an_unknown_input_is_refused_with_the_reason(tmp_path):
+    """His rule (round 40): the review refuses such a collection; playback refuses it again."""
+    value, _raw, _source, root = provider(tmp_path, pad=None)
+    row, = value.metadata_snapshot("star", "2-1", clock="igt", game_version="us", strategy="10 coin")
+    with pytest.raises(ValueError, match="not known on every frame"):
+        value.resolve(row["ghost"], {"kind": "star", "entity_key": "2-1", "strat": "10 coin"})
+    assert not list(root.glob("*.ghost"))

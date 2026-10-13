@@ -16,7 +16,7 @@ from sm64_events.tracking.projection import Attempt
 from tools.ghost_climb import launch_profile, prepare_profile, seed_population
 
 
-def recorded(tmp_path, *, number=77, strategy="Standard", frames=2, game_version="us"):
+def recorded(tmp_path, *, number=77, strategy="Standard", frames=2, game_version="us", pad=(0, 0, 0)):
     origin = attempt()
     row = Attempt(id=number, session_id=9, course_id=2, star_id=1, strat_tag=strategy,
         anchor_type="practice_reset", anchor_frame=101, outcome="success", outcome_detail=None,
@@ -25,7 +25,7 @@ def recorded(tmp_path, *, number=77, strategy="Standard", frames=2, game_version
         **attempt_origin(origin))
     path = tmp_path / "replays" / "native" / f"attempt_{number}.ghost"
     target = {"kind": "star", "entity_key": "2-1", "strat": strategy}
-    manifest = {**write_clip(path, [frame(n, elapsed=n-1) for n in (1, 2, 3)], producer(), clock_kind=STAR_CLOCK),
+    manifest = {**write_clip(path, [frame(n, elapsed=n-1, pad=pad) for n in (1, 2, 3)], producer(), clock_kind=STAR_CLOCK),
                 "attempt_id": number, "session_id": 9, **attempt_origin(row), "target": target}
     path.with_suffix(".json").write_text(json.dumps(manifest), encoding="utf-8")
     class Replay:
@@ -264,3 +264,14 @@ def test_launch_refuses_competition_and_continuously_holds_reserved_capture(tmp_
     assert calls == ["ran"] and handle.closed
     import os
     assert os.environ["SM64_MAINTAINER"] == "1"
+
+
+def test_a_run_with_an_unknown_input_never_enters_the_population(tmp_path):
+    """His rule (round 40): "If it's not a perfectly recorded ghost, it doesn't belong in the system"."""
+    row, replay, _ = recorded(tmp_path / "unknown", pad=None)
+    provider = LocalPopulation(tmp_path / "population")
+    with pytest.raises(ValueError, match="not known on every frame"):
+        admit(provider, row, replay)
+    assert provider.metadata_snapshot("star", "2-1", clock="igt", game_version="us") == ()
+    with pytest.raises(ValueError, match="not known on every frame"):
+        provider.qualified_source(row, replay, clock="igt", game_version="us", full_start=True)

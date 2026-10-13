@@ -33,7 +33,7 @@ def donors(tmp_path, timings=(337, 332, 331, 329, 326, 323, 321, 320)):
             cleared=False, cleared_reason=None, valid=None, timed_at="xcam", **attempt_origin(origin))
         database.upsert_attempt(row)
         path = source / "replays" / "native" / f"attempt_{row.id}.ghost"
-        manifest = {**write_clip(path, [frame(n, elapsed=n-1, action=0x0c400201+index) for n in (1, 2, 3)],
+        manifest = {**write_clip(path, [frame(n, elapsed=n-1, action=0x0c400201+index, pad=None) for n in (1, 2, 3)],
             producer(), clock_kind=STAR_CLOCK), "attempt_id": row.id, "session_id": sid,
             **attempt_origin(row), "target": WILD_BLUE}
         path.with_suffix(".json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -216,7 +216,7 @@ def test_fresh_population_keeps_other_strategies_targets_and_clock(tmp_path, mon
         row = replace(origin, id=number, star_id=star, strat_tag=strategy, rta_frames=rta)
         database.upsert_attempt(row)
         path = source / "replays" / "native" / f"attempt_{number}.ghost"
-        manifest = {**write_clip(path, [frame(n, elapsed=n-1, action=0x0c400201+number) for n in (1, 2, 3)],
+        manifest = {**write_clip(path, [frame(n, elapsed=n-1, action=0x0c400201+number, pad=None) for n in (1, 2, 3)],
             producer(), clock_kind=STAR_CLOCK), "attempt_id": row.id, "session_id": row.session_id,
             **attempt_origin(row), "target": {"kind": "star", "entity_key": f"2-{star}", "strat": strategy}}
         path.with_suffix(".json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -252,7 +252,7 @@ def input_donors(tmp_path):
     database.close()
     path=source/"replays/native/attempt_100.ghost"
     manifest=json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-    recorded=write_clip(path,[frame(n,timer=100+n,elapsed=n-1,action=action_at(100+n))
+    recorded=write_clip(path,[frame(n,timer=100+n,elapsed=n-1,action=action_at(100+n),pad=None)
                               for n in range(1,41)],producer(),clock_kind=STAR_CLOCK)
     path.with_suffix(".json").write_text(json.dumps({**manifest,**recorded,**attempt_origin(row)}),encoding="utf-8")
     return source

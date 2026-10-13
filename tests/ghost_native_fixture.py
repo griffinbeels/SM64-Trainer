@@ -25,7 +25,10 @@ def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=
           epoch=5, qpc=None, level=24, area=1, elapsed=None, continuity=9,
           origin=1, clock_valid=None, refusal=None, transition=1, banked=0,
           shadow=False, sounds=None, overflow=False, action=None, pose_refusal=0, particles=None,
-          held=None, pad=None):
+          held=None, pad=(0, 0, 0)):
+    # A captured neutral pad by default: since 2026-10-12 a recording with
+    # any unknown pad is not a ghost, so the suite's clips are complete unless
+    # a test says `pad=None` to be about unknown inputs.
     raw_igt = sequence if igt is None else igt
     valid |= (32 if shadow else 0) | (64 if sounds is not None else 0) | (128 if particles is not None else 0) | (256 if held else 0)
     valid |= VALID_PAD if pad is not None else 0

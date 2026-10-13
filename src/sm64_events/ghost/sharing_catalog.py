@@ -97,7 +97,11 @@ def export_rows(sharing, selected, author, step):
                 if asset is None:
                     raise ValueError("Its saved Mario poses could not be validated.")
                 # The ghost as it plays here, inputs from its track included.
-                path, _manifest = sharing.replay.native_with_inputs(number, asset)
+                path, manifest = sharing.replay.native_with_inputs(number, asset)
+                # His rule: a copy with any unknown pad leaves as nothing, with the reason.
+                if manifest.get("inputs_complete") is not True:
+                    from sm64_events.ghost.clip import INCOMPLETE_INPUTS
+                    raise ValueError(INCOMPLETE_INPUTS)
                 entry = make_entry(path, author=author, target=row["target"], frames=row["frames"],
                                    clock=row["clock"], recorded_utc=row["recorded_utc"],
                                    practice=row["practice"], outcome=row["outcome"],

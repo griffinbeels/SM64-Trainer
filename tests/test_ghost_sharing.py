@@ -43,8 +43,9 @@ def recording(tmp_path, *, kind="star", pad=(12, -34, 0x8000), level=24, target=
 
 
 def provider(tmp_path, store=None):
+    # Like the real replay service, the playback copy states whether every pad is known.
     replay = SimpleNamespace(cfg=SimpleNamespace(save_root=tmp_path / "replays"),
-                             native_with_inputs=lambda _number, found: found)
+                             native_with_inputs=lambda _number, found: (found[0], {**found[1], "inputs_complete": True}))
     return GhostSharing(replay, store or Store())
 
 
@@ -298,12 +299,31 @@ def test_local_export_saves_recent_poses_and_reports_unavailable_selected_runs(t
     assert rows[0]["author"] == "My Name" and rows[0]["frames"] == 2
 
 
-def test_unknown_inputs_remain_unknown_in_collection(tmp_path):
+def test_an_import_with_an_unknown_input_is_kept_but_never_a_ghost(tmp_path):
+    """His rule (round 40): a recording that would draw "?" is unavailable, with the reason."""
+    from sm64_events.ghost.clip import INCOMPLETE_INPUTS
     path, row = recording(tmp_path, pad=None)
     source, _, _ = package(tmp_path, rows=[(row, path)])
     sharing = provider(tmp_path)
-    sharing.import_file(source)
-    ghost = sharing.get(row["id"])
-    imported, manifest = sharing.resolve(ghost, {"kind": "star", "entity_key": "2-1"})
-    assert read_clip(imported).frames[0].pad is None
-    assert manifest["pad_records"] == 1
+    assert sharing.import_file(source)["imported"] == 1
+    listed, = sharing.imported_rows()
+    assert listed["available"] is False and listed["reason"] == INCOMPLETE_INPUTS
+    with pytest.raises(ValueError, match="not known on every frame"):
+        sharing.resolve(sharing.get(row["id"]), {"kind": "star", "entity_key": "2-1"})
+
+
+def test_export_skips_a_run_whose_playback_copy_has_an_unknown_input(tmp_path):
+    """His rule (round 40): nothing with an unknown input leaves in a collection."""
+    from sm64_events.ghost.clip import INCOMPLETE_INPUTS
+    from sm64_events.ghost.sharing_catalog import export_rows
+    path, _ = recording(tmp_path)
+    run = attempt()
+    run.__dict__.update(course_id=2, star_id=1, segment_id=None, igt_frames=2, strat_tag="10 coin",
+                        outcome="success", anchor_type="practice_reset", valid=True, invalid_reason=None)
+    sharing = provider(tmp_path, Store(attempts=[run]))
+    sharing.replay.attempt = lambda number: run
+    sharing.replay.preserve_native = lambda number: {"path": str(path)}
+    sharing.replay.find_native = lambda _number: (path, {"sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+    sharing.replay.native_with_inputs = lambda _number, found: (found[0], {**found[1], "inputs_complete": False})
+    entries, skipped = export_rows(sharing, {"attempts": [77]}, "My Name", lambda *_: None)
+    assert entries == [] and skipped == [{"source": "local", "id": 77, "reason": INCOMPLETE_INPUTS}]

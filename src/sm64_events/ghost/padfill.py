@@ -43,7 +43,7 @@ import tempfile
 from types import SimpleNamespace
 from typing import NamedTuple
 
-from sm64_events.ghost.clip import RECORD_BYTES, SAMPLE_VERSION, VERSION, Clip, encode_clip, read_clip
+from sm64_events.ghost.clip import RECORD_BYTES, SAMPLE_VERSION, VERSION, Clip, encode_clip, inputs_complete, read_clip
 from sm64_events.ghost.native_layout import PAD_AT, RECORD_PREFIX_BYTES, VALID_ACTION, VALID_PAD
 from sm64_events.inputs.frame import valid_raw_stick
 from sm64_events.memory.addresses import BUTTON_VALID_MASK
@@ -128,30 +128,34 @@ def with_track_pads(found, attempt, track_of, directory: Path):
     join is refused. The copy keeps the clip's identity and gets its own hash.
     """
     path, manifest = found
+    # The manifest states whether every record carries a pad: his rule makes
+    # that the one fact every playback door asks (ghost/clip.py::INCOMPLETE_INPUTS).
+    unknown = (path, {**manifest, "inputs_complete": False})
     try:
         clip = read_clip(path, manifest["sha256"])
-        if all(record.pad is not None for record in clip.frames):
-            return found
+        if inputs_complete(clip):
+            return path, {**manifest, "inputs_complete": True}
         span = (clip.frames[0].global_timer, clip.frames[-1].global_timer)
         fill = fill_pads(clip, track_of(attempt, span), SimpleNamespace(**manifest["source"]))
     except (OSError, ValueError, LookupError, TypeError) as error:  # PadFillRefused included
         log.info("Ghost inputs for attempt %s stay unknown: %s", attempt.id, error)
-        return found
+        return unknown
     if fill is None:
-        return found
+        return unknown
     destination = Path(directory) / f"attempt_{int(attempt.id)}.ghost"
     digest = hashlib.sha256(fill.data).hexdigest()
     played = {**manifest, "file": destination.name, "sha256": digest, "bytes": len(fill.data),
               "version": VERSION, "record_bytes": RECORD_BYTES, "sample_version": SAMPLE_VERSION,
               "pad_records": fill.captured + fill.filled, "track_pad_records": fill.filled,
-              "source_sha256": manifest["sha256"]}
+              "source_sha256": manifest["sha256"],
+              "inputs_complete": fill.captured + fill.filled == len(clip.frames)}
     try:
         _replace(destination, fill.data)
         _replace(destination.with_suffix(".json"),
                  json.dumps(played, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     except OSError as error:
         log.info("Ghost inputs for attempt %s stay unknown: %s", attempt.id, error)
-        return found
+        return unknown
     return destination, played
 
 

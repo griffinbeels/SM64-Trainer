@@ -614,6 +614,26 @@ def pose_gaps(manifest) -> int:
     return int(manifest.get("invalid_records") or 0) + int(manifest.get("missing_occurrences") or 0)
 
 
+# His rule (2026-10-12): "we should remove ANY ghosts that don't have 100%
+# accuracy. Anything that reads as an error to the user is immediately
+# invalid. If it's not a perfectly recorded ghost, it doesn't belong in the
+# system." A record without a pad draws "?" in the input lanes. Every door a
+# recording enters the system through asks this one question.
+INCOMPLETE_INPUTS = "This recording's inputs are not known on every frame, so it cannot be a ghost."
+
+
+def inputs_complete(clip: Clip) -> bool:
+    """True when every record carries a controller pad (none would draw "?")."""
+    return all(frame.pad is not None for frame in clip.frames)
+
+
+def require_complete_inputs(clip: Clip) -> Clip:
+    """The clip itself, or ClipError(INCOMPLETE_INPUTS); callers never recount pads."""
+    if not inputs_complete(clip):
+        raise ClipError(INCOMPLETE_INPUTS)
+    return clip
+
+
 def blink_frames(clip: Clip) -> int:
     """Frames where playback draws no ghost, which the picker says out loud:
     refused rows it does not bridge, and occurrences that never arrived."""
@@ -685,6 +705,7 @@ def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | 
             "first_igt": first.igt, "last_igt": last.igt, "level": clip.level, "area": clip.area,
             "invalid_records": sum(not frame.playable for frame in clip.frames),
             "pad_records": sum(frame.pad is not None for frame in clip.frames),
+            "inputs_complete": inputs_complete(clip),
             "blink_frames": blink_frames(clip),
             "missing_occurrences": last.sequence - first.sequence + 1 - len(clip.frames),
             "tail_records": tail_records,

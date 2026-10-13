@@ -161,9 +161,12 @@ def test_complete_historical_bundle_falls_back_offline_and_remains_manually_sele
     rivals = Rivals(tracker, population, native, lambda: "us", community=sync)
     try:
         rivals.refresh(TARGET, CONTROLS, enabled=True)
-        assert [row["frames"] for row in rivals.rows] == [620, 640, 660, 680]
+        # One author in the bundle seats one automatic rival (his rule, round 39:
+        # "per rival group, there should be only unique players"); the rest stay
+        # manually selectable below.
+        assert [row["frames"] for row in rivals.rows] == [620]
         prepared = native.preparations[-1][1]
-        assert len(prepared) == 5 and prepared[0].ghost is ghost
+        assert len(prepared) == 2 and prepared[0].ghost is ghost
         last = population.rows[-1]
         checked = rivals.checked({"action": "add", "id": last["id"], "slot": 0}, TARGET)
         assert checked == {"action": "add", "id": last["id"], "slot": 0}

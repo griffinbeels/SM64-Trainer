@@ -888,3 +888,21 @@ def test_failed_asset_does_not_block_another_and_recovers_after_cooldown(tmp_pat
             population.close()
         assert not sync.request_assets((first, second))
     asyncio.run(scenario())
+
+
+def test_a_shared_recording_with_an_unknown_input_never_enters_the_cache(tmp_path):
+    """His rule (round 40): whatever the service holds, a "?" recording is not a ghost here."""
+    from ghost_native_fixture import frame, producer
+    from sm64_events.ghost.clip import encode_clip
+    from test_community_codec import frame_from_bytes
+    raw = encode_clip(tuple(frame_from_bytes(frame(index, pad=None if index == 2 else (0, 0, 0)))
+                            for index in range(1, 4)), producer(), clock_kind=1,
+                      clip_id="22222222-2222-4222-8222-222222222222")
+    encoded = codec.encode(raw)
+    row = {**recording(), "raw_sha256": hashlib.sha256(raw).hexdigest(), "raw_bytes": len(raw),
+           "encoded_sha256": hashlib.sha256(encoded).hexdigest(), "encoded_bytes": len(encoded)}
+    population = CachedPopulation(Local(), root=tmp_path, account=Account())
+    with pytest.raises(CommunityError) as refused:
+        population.store_asset(row, encoded, raw)
+    assert refused.value.code == "incomplete_inputs" and "not known on every frame" in str(refused.value)
+    assert not population.is_ready(row["id"]) and not list(tmp_path.glob("*.ghost"))

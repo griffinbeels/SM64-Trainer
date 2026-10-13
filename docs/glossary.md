@@ -1266,8 +1266,13 @@ The recorded [[attempt]] you race beside your current play. Its captured
 graphics pose is rebuilt through libsm64 inside GLideN64, using the live
 camera and terrain depth. Opacity and tint apply to the displayed ghost.
 Playback binds the exact recorded and live [[attempt]] origins and applies
-the [[nudge]]. Missing poses or clock identity have a readable refusal. The
-practice card's switch calls it Ghost Overlay.
+the [[nudge]]. Missing poses or clock identity have a readable refusal. A
+recording whose controller input is unknown on any frame is not a ghost at
+all: every door a recording enters through (bundled collection, rival
+admission, community upload and download, collection import and export, your
+own PB, saved and template ghosts) refuses it with one reason (his rule,
+2026-10-12: "If it's not a perfectly recorded ghost, it doesn't belong in the
+system"). The practice card's switch calls it Ghost Overlay.
 
 - **Lives** — `src/sm64_events/ghost/session.py` joins selection, settings and
   the [[target]]; `src/sm64_events/ghost/native_session.py` publishes native playback
@@ -1497,8 +1502,11 @@ creator credit, time, [[game version]], [[target]] and [[strategy]]. The **[[Gho
 Library** dialog opens with the originating [[target]] and currently raced
 recordings. Separate import and export flows preview the chosen recordings before
 confirmation. Export can choose each [[strategy]]'s best independently or use a
-saved search that resolves current results next time. Import selects all new
-recordings by default and supports a smaller selection. Collections can contain
+saved search that resolves current results next time; a run whose [[playback
+copy]] has an unknown input is skipped with that reason. Import selects all new
+recordings by default and supports a smaller selection; an imported recording
+with an unknown input is kept on disk but listed unavailable with the reason and
+never plays. Collections can contain
 many more recordings than the [[ghost set]] can race at once.
 
 - **Lives** — `src/sm64_events/ghost/portable.py` and `src/sm64_events/ghost/sharing.py`;
@@ -1592,10 +1600,13 @@ The copy of a local native recording that the game plays and a
 [[ghost collection]] exports, when the recording predates exact pad capture.
 Each record without a pad takes the [[input track]]'s pad at its own game
 [[frame]], so the [[ghost]]'s input display shows what you pressed. The saved
-recording itself never changes; a [[frame]] the track lacks stays unknown.
+recording itself never changes; a [[frame]] the track lacks stays unknown, and
+a copy with any unknown frame is not a [[ghost]]: its manifest says
+`inputs_complete`, and every playback, export and sharing door asks it.
 
 - **Lives** — `src/sm64_events/ghost/padfill.py` (written in an inputs
-  folder beside the saved native recordings)
+  folder beside the saved native recordings); the question itself is
+  `src/sm64_events/ghost/clip.py::inputs_complete`
 - **Not** — a [[polled fill]], which is the replay timeline's drawing of a
   sample with no picture.
 

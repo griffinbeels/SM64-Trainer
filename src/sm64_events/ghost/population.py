@@ -18,7 +18,7 @@ import tempfile
 import threading
 import unicodedata
 
-from sm64_events.ghost.clip import attempt_origin, blink_frames, read_clip
+from sm64_events.ghost.clip import attempt_origin, blink_frames, read_clip, require_complete_inputs
 from sm64_events.ghost.pb import local_attempt_source
 from sm64_events.ghost.portable import checked_author, checked_hash
 from sm64_events.ghost.sharing import PortableGhost
@@ -106,7 +106,9 @@ def _preserved_asset(replay, attempt):
     source = Path(path)
     with source.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    read_clip(source, digest)
+    # His rule: a recording the input track could not complete never becomes
+    # a rival here nor a community upload (ghost/clip.py::INCOMPLETE_INPUTS).
+    require_complete_inputs(read_clip(source, digest))
     return source, digest
 
 
