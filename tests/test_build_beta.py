@@ -208,3 +208,20 @@ def test_private_builder_refuses_stable_config_before_prerequisites(monkeypatch,
     config.write_text('{"schema":1,"channel":"stable"}')
     monkeypatch.setattr(build_beta, "check_prerequisites", lambda value: pytest.fail("accepted stable"))
     assert build_beta.main(["--config", str(config), "--check"]) == 2
+
+
+def test_collection_review_counts_recordings_whose_every_input_is_known(tmp_path):
+    """Round 39: beta.2 shipped 160 of 180 recordings with no pads; the count is visible before a build."""
+    from test_ghost_sharing import recording
+    from sm64_events.ghost.portable import make_entry, write_package
+    entries = []
+    for name, pad in (("known", (12, -34, 0x8000)), ("unknown", None)):
+        (tmp_path / name).mkdir()
+        source, original = recording(tmp_path / name, pad=pad)
+        entries.append((make_entry(source, author="griffman1212", target=original["target"], frames=original["frames"],
+                                   clock=original["clock"], recorded_utc=original["recorded_utc"], practice=False,
+                                   outcome="success", game_version=None), source))
+    collection = tmp_path / "reviewed.sm64ghosts"
+    write_package(collection, entries)
+    approved = review_collection(collection)
+    assert (approved.count, approved.with_inputs) == (2, 1)

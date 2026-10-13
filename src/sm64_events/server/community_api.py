@@ -1,11 +1,30 @@
 """Token-free local account controls; remote work stays outside game locks."""
+import asyncio
+import logging
 from typing import Literal
+import webbrowser
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..community.names import checked_name
+
+log = logging.getLogger("sm64.community")
+
+# The desktop shell asks the server to open the hosted sign-in page in the
+# user's default browser (round 39): the shell hands its own new windows to
+# the OS as URLs, so the UI's blank pre-opened tab became a Windows prompt for
+# an app to open an 'about' link. Module attribute so tests can observe it.
+open_in_browser = webbrowser.open
+
+
+def _open_browser(url: str) -> bool:
+    try:
+        return bool(open_in_browser(url))
+    except Exception:  # noqa: BLE001 -- the fallback link in the modal still works
+        log.warning("The default browser could not be opened for sign-in", exc_info=True)
+        return False
 
 
 class _Body(BaseModel):
@@ -14,6 +33,7 @@ class _Body(BaseModel):
 
 class SignIn(_Body):
     provider: Literal["discord", "google", "twitch", "email"]
+    open_browser: bool = False
 
 
 class Cancel(_Body):
@@ -96,7 +116,9 @@ def _mount_auth(router, require_account, pending):
             active.cancel_sign_in(pending["attempt_id"])
         result = await _call(lambda: active.begin_sign_in(body.provider))
         pending["attempt_id"] = result["attempt_id"]
-        return result
+        # Off the event loop: os.startfile can block while the browser launches.
+        opened = await asyncio.to_thread(_open_browser, result["url"]) if body.open_browser else False
+        return {**result, "opened": opened}
 
     @router.post("/auth/cancel")
     def cancel(body: Cancel):

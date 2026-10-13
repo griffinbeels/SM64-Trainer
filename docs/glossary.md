@@ -1508,7 +1508,10 @@ many more recordings than the [[ghost set]] can race at once.
 
 One place in the adaptive [[ghost set]] for the current [[target]] and [[ghost matching scope]]. The trainer
 chooses a compatible recording above the saved [[personal best]], or protects
-the player's exact manual choice until they clear it. The slot keeps its colour when
+the player's exact manual choice until they clear it. Automatic seats hold one
+recording per player: a rival group never shows the same player twice unless
+the player pinned both (his rule, 2026-10-12: "per rival group, there should
+be only unique players"). The slot keeps its colour when
 its recording changes; the separate [[PB ghost]] keeps its own colour.
 
 - **Lives** — `src/sm64_events/ghost/adaptive.py` and `src/sm64_events/ghost/rivals.py`

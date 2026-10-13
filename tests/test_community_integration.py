@@ -139,3 +139,30 @@ def test_offline_beta_is_explicit_and_partial_cloud_configuration_is_refused():
     assert build.channel == 'beta' and not build.community_url and not build.updates_enabled
     with pytest.raises(ValueError, match='all four'):
         parse_metadata({**value, 'community_url': 'https://community.example'})
+
+
+def test_desktop_shell_sign_in_opens_the_default_browser_through_the_server(monkeypatch):
+    """Round 39: the shell handed the UI's blank tab to Windows as an 'about' link."""
+    from sm64_events.server import community_api
+    opened = []
+    monkeypatch.setattr(community_api, "open_in_browser", lambda url: opened.append(url) or True)
+    account = Account()
+    app = FastAPI()
+    app.include_router(create_community_router(account))
+    mount_local_access(app, port=8072)
+    with TestClient(app, base_url='http://127.0.0.1:8072') as client:
+        token = client.get('/api/local-access').json()['request_token']
+        plain = client.post('/api/community/auth/start', json={'provider': 'discord'}, headers={HEADER: token})
+        assert plain.status_code == 200 and plain.json()['opened'] is False and opened == []
+        shell = client.post('/api/community/auth/start', json={'provider': 'discord', 'open_browser': True},
+                            headers={HEADER: token})
+        assert shell.status_code == 200 and shell.json()['opened'] is True
+        assert opened == ['https://community.example/auth/start']
+
+        def refuse(_url):
+            raise OSError('no browser')
+        monkeypatch.setattr(community_api, "open_in_browser", refuse)
+        failed = client.post('/api/community/auth/start', json={'provider': 'twitch', 'open_browser': True},
+                             headers={HEADER: token})
+        # The attempt still starts; the modal's own link remains the fallback.
+        assert failed.status_code == 200 and failed.json()['opened'] is False and failed.json()['attempt_id']

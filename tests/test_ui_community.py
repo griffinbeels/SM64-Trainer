@@ -484,3 +484,30 @@ def test_cancelling_sign_in_posts_the_exact_pending_attempt(monkeypatch, tmp_pat
             assert ("begin", provider) in account.calls
             assert not account.snapshot()["authenticated"]
             assert page.problems() == []
+
+
+def test_desktop_shell_sign_in_never_pre_opens_a_blank_window(monkeypatch, tmp_path):
+    """Round 39: pywebview hands window.open to the OS, which asked for an app for 'about:blank'."""
+    from sm64_events.server import community_api
+    opened = []
+    monkeypatch.setattr(community_api, "open_in_browser", lambda url: opened.append(url) or True)
+    account = FixtureAccount()
+    with community_app(monkeypatch, tmp_path, account) as (base, _):
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(base)
+            page.wait_for(".practice-page")
+            page.evaluate("(() => { window.pywebview = {platform: 'edgechromium'}; window.__windows = [];"
+                          " window.open = (url) => { window.__windows.push(url); return null; }; return true; })()")
+            open_account(page)
+            page.wait_for(".community-provider.community-discord:not([disabled])")
+            page.click(".community-provider.community-discord")
+            wait_until(page, "document.querySelector('.modal-body')?.innerText.includes('Finish signing in')",
+                       "the pending sign-in screen")
+            assert page.evaluate("window.__windows") == []
+            assert ("begin", "discord") in account.calls
+            deadline = time.monotonic() + default_wait_ms() / 1000
+            while opened != ["about:blank"]:
+                assert time.monotonic() < deadline, "The server never opened the default browser"
+                page.wait_ms(50)
+            assert page.count(".modal-body a[href='about:blank']") == 1  # the fallback link stays
+            assert page.problems() == []

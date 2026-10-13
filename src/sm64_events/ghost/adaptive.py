@@ -250,24 +250,33 @@ def _eligible_auto(row, pb, options, low, high, strategy, scope):
             and (scope == "overall" or row.get("strategy") == strategy))
 
 
+def _player(row):
+    """Who a recording belongs to; a recording without a player stands alone."""
+    return row["player_id"] if row.get("player_id") is not None else ("recording", row["id"])
+
+
 def _automatic(rows, count, low, high, players):
-    """One best per player/strategy/subdivision, spread across the range."""
+    """One seat per player, spread across the range.
+
+    His rule (round 39): "per rival group, there should be only unique
+    players." A player already seated (pinned or carried over) is never
+    seated again automatically; a one-author population fills one seat.
+    """
     winners = {}
     for row in rows:
-        key = row["player_id"], row["strategy"], row["step"]
+        key = _player(row), row["strategy"], row["step"]
         current = winners.get(key)
         if current is None or (row["frames"], row["id"]) < (current["frames"], current["id"]):
             winners[key] = row
-    remaining = list(winners.values())
+    remaining = [row for row in winners.values() if _player(row) not in players]
     picked = []
-    count = min(count, len(remaining))
+    count = min(count, len({_player(row) for row in remaining}))
     for index in range(count):
         goal = low if count == 1 else low + (high - low) * index / (count - 1)
-        row = min(remaining, key=lambda item: (abs(item["step"] - goal), item["player_id"] in players,
-                                              item["step"], item["frames"], item["id"]))
+        row = min(remaining, key=lambda item: (abs(item["step"] - goal), item["step"], item["frames"], item["id"]))
         picked.append(row)
-        players.add(row["player_id"])
-        remaining.remove(row)
+        players.add(_player(row))
+        remaining = [item for item in remaining if _player(item) != _player(row)]
     return sorted(picked, key=lambda row: (row["step"], row["frames"], row["id"]))
 
 
@@ -301,30 +310,33 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
             row = candidates.get(identity)
             result[slot] = _placed(row, slot, True) if row is not None and identity not in used else _missing_pin(identity, slot)
             used.add(identity)
-    for old in previous:
+    # Pinned choices are his and stay as chosen; every automatic seat below
+    # (carried over or new) belongs to a player not yet in the group.
+    players = {_player(row) for row in result.values() if row.get("ghost") is not None}
+    for old in sorted(previous, key=lambda item: item.get("slot") if type(item.get("slot")) is int else -1):
         slot = old.get("slot")
         row = candidates.get(old["id"])
         if (not old.get("pinned") and type(slot) is int and 0 <= slot < options["count"] and slot not in result
-                and row is not None and row["id"] not in used
+                and row is not None and row["id"] not in used and _player(row) not in players
                 and _eligible_auto(row, pb, options, low, high, strategy, scope)):
             result[slot] = _placed(row, slot, False)
             used.add(row["id"])
+            players.add(_player(row))
     available = [row for row in candidates.values() if row["id"] not in used
                  and _eligible_auto(row, pb, options, low, high, strategy, scope)]
-    players = {row["player_id"] for row in result.values() if row.get("player_id") is not None}
     if (not available
             and not any(not row["pinned"] for row in result.values())):
         # Remote fallback requires complete coverage. Pinned bundled snapshots
         # are complete locally and remain available through a cloud outage.
         # Keep provenance/ROM/scope and PB refusals; only the range relaxes.
         available = [row for row in candidates.values() if row["id"] not in used
-                     and row.get("manual_only") is not True and (allow_fastest or _bundled(row))]
+                     and row.get("manual_only") is not True
+                     and _player(row) not in players and (allow_fastest or _bundled(row))]
         winners = {}
         for row in available:
-            key = row["player_id"], row["strategy"], row["step"]
-            old = winners.get(key)
+            old = winners.get(_player(row))
             if old is None or (row["frames"], row["id"]) < (old["frames"], old["id"]):
-                winners[key] = row
+                winners[_player(row)] = row
         automatic = iter(sorted(winners.values(), key=lambda row: (row["frames"], row["id"]))
                          [:options["count"] - len(result)])
     else:

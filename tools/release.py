@@ -286,6 +286,8 @@ def prepare_candidate(version: str, destination: Path, *, config: Path,
         raise ValueError("public candidate cannot contain a private invitation")
     resolved_ffmpeg = check_prerequisites(ffmpeg)
     approved = review_collection(ghosts) if ghosts else None
+    if approved:
+        print(f"ghost collection: {approved.count} recordings, {approved.with_inputs} with every input known")
     if check_only:
         return None
     destination = destination.resolve()

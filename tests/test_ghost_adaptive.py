@@ -663,3 +663,23 @@ def test_segment_and_reattributed_star_keep_their_native_clock_contract(tmp_path
         assert result["ghost"].kind == "segment" and result["ghost"].entity_key == "3"
     finally:
         database.close()
+
+
+def test_a_player_takes_one_automatic_seat_per_rival_group():
+    """His rule (round 39): "per rival group, there should be only unique players"."""
+    same = [ranked(step, f"same-{step}", player_id="player:same") for step in range(10, 15)]
+    assert [row["id"] for row in select_rivals(same, basis(), {"count": 4}, {})] == ["same-10"]
+    mixed = same + [ranked(11, "other", player_id="player:other"), ranked(13, "third", player_id="player:third")]
+    assert [row["id"] for row in select_rivals(mixed, basis(), {"count": 4}, {})] == ["same-10", "other", "third"]
+    # A carried-over automatic seat counts as that player's seat; a second one is dropped.
+    previous = [{**same[2], "slot": 2, "pinned": False}, {**same[3], "slot": 3, "pinned": False}]
+    carried = select_rivals(mixed, basis(), {"count": 4}, {}, previous=previous)
+    assert [(row["id"], row["slot"]) for row in carried] == [("other", 0), ("third", 1), ("same-12", 2)]
+    # A pin is his explicit choice; it still occupies that player's seat.
+    pinned = select_rivals(mixed, basis(), {"count": 4}, {"0": "same-14"})
+    assert [row["id"] for row in pinned] == ["same-14", "other", "third"]
+    # The empty-range fallback keeps one fastest recording per player.
+    fastest = select_rivals([ranked(19, "a-slow", 330, player_id="p:a"), ranked(19, "a-fast", 320, player_id="p:a"),
+                             ranked(18, "a-other", 318, player_id="p:a"), ranked(18, "b", 325, player_id="p:b")],
+                            basis(19, 321), {}, {})
+    assert [row["id"] for row in fastest] == ["a-other", "b"]

@@ -24,12 +24,22 @@ export function useCommunityAccount() {
   return { account, open, setOpen, refresh, refreshRemote, setAccount };
 }
 
+export function insideDesktopShell() {
+  // pywebview injects this object into every page it hosts; a browser tab has none.
+  return typeof window !== "undefined" && Boolean(window.pywebview);
+}
+
 export async function beginCommunitySignIn(provider) {
-  // Open on the gesture so browser popup blocking does not add another step.
-  const popup = window.open("about:blank", "_blank");
+  // The desktop shell hands every new window to the OS as a URL, so a blank
+  // tab opened here became Windows asking for an app to open an 'about' link
+  // (round 39). Inside the shell the server opens the default browser itself.
+  // A browser tab still opens on the gesture so popup blocking cannot add a step.
+  const shell = insideDesktopShell();
+  const popup = shell ? null : window.open("about:blank", "_blank");
   if (popup) popup.opener = null;
   try {
-    const attempt = await send("POST", "/api/community/auth/start", { provider });
+    const attempt = await send("POST", "/api/community/auth/start",
+                               shell ? { provider, open_browser: true } : { provider });
     if (popup) popup.location.replace(attempt.url);
     return { ...attempt, popup };
   } catch (error) {
