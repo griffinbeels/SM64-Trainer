@@ -342,13 +342,13 @@ def test_a_pb_slower_than_the_ghost_ceiling_is_still_the_playable_pb_ghost(tmp_p
     """His rule, 2026-10-13: "a super horrible slow ghost (if that's truly the
     user's best PB) should still show up locally for the user. They just
     definitely shouldn't be allowed to upload it." The ceiling belongs to
-    population admission only: it refuses the rival and the community offer,
-    never the PB ghost."""
+    population admission only: the start backfill finds this saved PB, and
+    admission refuses the rival and the community offer, never the PB ghost."""
     from dataclasses import replace
     from sm64_events.ghost.adaptive import PracticeIdentity
     from sm64_events.ghost.population import LocalPopulation
     from sm64_events.ghost.rival_recording import PopulationRecorder
-    from tests.test_ghost_population_bins import TJ_10_2, Community, Ladders
+    from tests.test_ghost_population_bins import TJ_10_2, Community, Ladders, drain
 
     session, replay, row, archive, db, _store, capture = pb_world(tmp_path)
     slow = replace(row, strat_tag="TJ Strat", game_version="us")
@@ -362,9 +362,12 @@ def test_a_pb_slower_than_the_ghost_ceiling_is_still_the_playable_pb_ghost(tmp_p
 
     async def check():
         await session.update({"enabled": True})
-        assert recorder._admit(slow, community.contribution_context()) is False
         save_pb(db, slow, strat=slow.strat_tag)
-        await session.pb_changed(slow, True)
+        await session.pb_changed(slow, True)  # Commits the clip the backfill looks for.
+        assert (replay.cfg.save_root / "native" / f"attempt_{slow.id}.json").is_file()
+        # The worker backfills before its first job, so draining one unknown run orders it.
+        await drain(recorder, lambda: recorder.reclassify(replace(slow, id=999)))
+        assert recorder.backfilled == 1 and recorder.skipped == 1 and recorder.accepted == 0
         session._native.note()
         body = session.payload()
         assert body["source"]["available"] and body["source"]["attempt_id"] == slow.id

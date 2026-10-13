@@ -349,3 +349,30 @@ def test_start_prune_removes_rows_stored_before_the_ceiling_existed(tmp_path):
     assert recorder._prune() == 1
     assert rows(population) == [(PLAYER, "TJ Strat", 205)]
     population.close()
+
+
+def test_start_backfill_matches_rows_by_lineage_not_attempt_number(tmp_path):
+    """A fresh profile reuses attempt numbers: another run's row never hides this PB."""
+    root = tmp_path / "runs"
+    run = recorded(root, number=77, frames=2, strategy="Standard")
+    recorder, population = recorder_for(tmp_path, Replays(run, root=root / "replays"))
+    save_pb(recorder.tracker.db, run[0])
+    assert recorder._admit(run[0])
+    assert recorder._backfill_candidates() == ()
+    run[1].current = replace(run[0], session_id=10)  # This profile's attempt 77 is another run.
+    assert recorder._backfill_candidates() == (77,)
+    population.close()
+
+
+def test_start_prune_removes_rows_stored_past_the_ceiling(tmp_path):
+    """Rows admitted before the ceiling existed follow the same rule as the cloud."""
+    over = recorded(tmp_path / "over", number=77, frames=232, strategy="TJ Strat")
+    edge = recorded(tmp_path / "edge", number=78, frames=231, strategy="TJ Strat")
+    recorder, population = recorder_for(tmp_path, Replays(over, edge), ranks=Ladders({"TJ Strat": TJ_10_2}))
+    for (row, replay, _path), player in ((over, PLAYER), (edge, "other-player")):
+        population.accept_verified(row, replay, player_id=player, player_name="Name", clock="igt",
+                                   game_version="us", full_start=True)
+    assert recorder._prune() == 1
+    assert rows(population) == [("other-player", "TJ Strat", 231)]
+    assert clips(population) == [f"{digest(edge[2])}.ghost"]
+    population.close()
