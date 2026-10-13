@@ -9439,7 +9439,10 @@
 @font-face {font-family:"Community Google Sans";src:url('/ui/assets/community/google-sans.ttf') format('truetype');font-weight:500;font-display:swap;}
 .community-join {max-width:380px;margin:auto;}
 .community-providers {display:grid;gap:12px;margin:24px 0;}
-.community-provider {display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:54px;border-radius:8px;}
+/* Icon in a fixed column, label centered in the rest, a mirrored spacer so
+   the label's centre is the button's centre: every provider's icon sits on
+   one x (his nitpick, 2026-10-13: "clearly not aligned right now"). */
+.community-provider {display:grid;grid-template-columns:20px 1fr 20px;align-items:center;gap:12px;width:100%;min-height:54px;padding:0 20px;border-radius:8px;text-align:center;}
 .community-provider img {width:20px;height:20px;object-fit:contain;}
 .community-discord {background:#5865f2;color:#fff;border-color:#5865f2;}
 .community-discord:hover {background:#4752c4;color:#fff;}

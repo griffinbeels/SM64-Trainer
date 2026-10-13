@@ -254,6 +254,16 @@ def test_sign_in_is_the_first_step_with_discord_and_twitch_only(monkeypatch, tmp
                 '.community-providers img')).map(img => new URL(img.src).pathname)""")
             assert assets == ["/ui/assets/community/discord-clyde-white.svg",
                               "/ui/assets/community/twitch-glitch-white.svg"]
+            # His nitpick (round 43): every provider's icon sits on one x, and
+            # each label is centered on its own button, whatever its length.
+            geometry = page.evaluate("""Array.from(document.querySelectorAll('.community-provider')).map(button => {
+                const icon = button.querySelector('img').getBoundingClientRect(), box = button.getBoundingClientRect();
+                const range = document.createRange(); range.selectNodeContents(button);
+                const text = Array.from(range.getClientRects()).filter(r => r.width > icon.width + 1).pop();
+                return {icon: icon.left, centre: box.left + box.width / 2, text: text ? text.left + text.width / 2 : null};
+            })""")
+            assert len({round(g["icon"]) for g in geometry}) == 1, geometry
+            assert all(g["text"] is not None and abs(g["text"] - g["centre"]) <= 1 for g in geometry), geometry
             text = modal_text(page)
             assert "Continue with email" not in text and "Google" not in text and "Practice offline" not in text
             assert "Sign in" in page.evaluate("document.querySelector('.modal-heading h2')?.innerText || ''")
