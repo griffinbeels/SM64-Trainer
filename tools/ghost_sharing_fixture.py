@@ -101,8 +101,10 @@ class ScratchReplay:
         return (path, self.assets[number][1]) if path.exists() else None
 
     def native_with_inputs(self, number, found):
-        # These recordings already carry their pads: the playback copy is the clip itself.
-        return found
+        # These recordings already carry their pads: the playback copy is the
+        # clip itself, and like the real service the manifest says so.
+        path, manifest = found
+        return path, {**manifest, "inputs_complete": True}
 
 
 def foreign_collection(root):

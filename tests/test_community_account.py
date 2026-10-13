@@ -93,7 +93,7 @@ def test_config_and_disabled_snapshot_need_no_vault_or_network():
     assert account.snapshot()["enabled"] is False
     assert asyncio.run(account.restore())["status"] == "signed_out"
     with pytest.raises(CommunityError, match="unavailable"):
-        asyncio.run(account.begin_sign_in("google"))
+        asyncio.run(account.begin_sign_in("discord"))
     asyncio.run(account.close())
     with pytest.raises(ValueError):
         config(callback_url="http://127.0.0.1:8070/callback")
@@ -193,7 +193,7 @@ def test_policy_rejection_refreshes_current_versions_once_before_renewal():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("provider", ["discord", "google", "twitch", "email"])
+@pytest.mark.parametrize("provider", ["discord", "twitch"])
 def test_pkce_portal_code_exchange_one_use_and_profile_defaults(provider):
     async def scenario():
         requests = []
@@ -381,10 +381,10 @@ def test_short_lived_exchange_rotates_without_recursive_auth_lock():
             return httpx.Response(200, json=profile() if request.url.path == "/v1/account" else {"v": 1})
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
             account = CommunityAccount(config(), http=http, token_store=Store())
-            begin = await account.begin_sign_in("email")
+            begin = await account.begin_sign_in("twitch")
             state = account._attempt[1]
             result = await asyncio.wait_for(account.complete_sign_in(begin["attempt_id"], "fixture", state), 2)
-            assert result["provider"] == "email" and len(tokens) == 2
+            assert result["provider"] == "twitch" and len(tokens) == 2
             assert account._inflight is None
     asyncio.run(scenario())
 
@@ -399,8 +399,8 @@ def test_mutation_keys_are_uuid_per_operation_and_explicit_replay_is_stable():
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
             account = CommunityAccount(config(), http=http, token_store=Store())
             account._access, account._expires = "fixture", 10**20
-            await account.rename("One")
-            await account.rename("Two")
+            await account.rename("First")
+            await account.rename("Second")
             first, second = [request.headers["idempotency-key"] for request in requests]
             assert str(UUID(first)) == first and first != second
             explicit = "22222222-2222-4222-8222-222222222222"
@@ -443,4 +443,36 @@ def test_policy_refresh_is_throttled_and_new_versions_require_consent():
             account._policies_until = 0
             await account.refresh()
             assert calls.count("/v1/config") == 2
+    asyncio.run(scenario())
+
+
+def test_name_check_asks_the_service_and_degrades_when_it_has_no_check_yet():
+    """Round 41: the live availability check; an older service answers 404 and the claim decides."""
+    async def scenario():
+        seen = []
+        def respond(request):
+            seen.append(str(request.url))
+            if request.url.path == "/v1/names/check":
+                if request.url.params.get("name") == "Fresh":
+                    return httpx.Response(200, json={"v": 1, "name": "Fresh", "available": True})
+                if request.url.params.get("name") == "Taken":
+                    return httpx.Response(200, json={"v": 1, "name": "Taken", "available": False})
+                return httpx.Response(404, json={"error": {"code": "not_found"}})
+            if request.url.path == "/v1/config":
+                return httpx.Response(200, json={"v": 1, "terms_version": "t1", "privacy_version": "p1"})
+            if request.url.path.endswith("/token"):
+                return httpx.Response(200, json=token())
+            return httpx.Response(200, json=profile())
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            account = CommunityAccount(config(), http=http, token_store=Store())
+            begin = await account.begin_sign_in("twitch")
+            native = parse_qs(urlsplit(begin["url"]).query)["native_authorize"][0]
+            await account.complete_sign_in(begin["attempt_id"], "code", parse_qs(urlsplit(native).query)["state"][0])
+            assert await account.check_name("Fresh") == {"name": "Fresh", "available": True}
+            assert await account.check_name("Taken") == {"name": "Taken", "available": False}
+            assert await account.check_name("Older") == {"name": "Older", "available": None}
+            with pytest.raises(ValueError):
+                await account.check_name("abc")
+            assert not any("abc" in url for url in seen)
+            await account.close()
     asyncio.run(scenario())

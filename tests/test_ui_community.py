@@ -40,8 +40,10 @@ class FixtureAccount:
         self.reads = 0
         self.slow_profile = slow_profile
         self.uid = UID
+        self.taken = {"taken"}
         self.state = {
-            "enabled": True, "authenticated": status != "signed_out",
+            "enabled": True, "authenticated": status != "signed_out", "stored": status != "signed_out",
+            "provider": "twitch" if status != "signed_out" else None,
             "uid": UID, "status": status, "name": "Fixture runner",
             "sharing": False, "sheet_runner": None, "sheet_verified": False,
             "terms_version": "t1" if status == "active" else None,
@@ -88,6 +90,10 @@ class FixtureAccount:
         self.update(name=name, status="active")
         return self.snapshot()
 
+    async def check_name(self, name):
+        self.calls.append(("check", name))
+        return {"name": name, "available": name.lower() not in self.taken}
+
     async def set_sharing(self, enabled):
         self.calls.append(("sharing", enabled))
         self.update(sharing=enabled)
@@ -95,7 +101,7 @@ class FixtureAccount:
 
     async def sign_out(self):
         self.calls.append(("sign_out",))
-        self.update(authenticated=False, status="signed_out", name=None, sharing=False)
+        self.update(authenticated=False, stored=False, provider=None, status="signed_out", name=None, sharing=False)
         return self.snapshot()
 
     async def request_json(self, method, path, **kwargs):
@@ -229,16 +235,17 @@ def test_stable_initial_load_and_settings_have_no_browser_faults(monkeypatch, tm
             assert page.problems() == []
 
 
-def test_sign_in_uses_packaged_official_assets_and_offline_escape(monkeypatch, tmp_path):
+def test_sign_in_is_the_first_step_with_discord_and_twitch_only(monkeypatch, tmp_path):
+    """His decisions (round 41): Twitch or Discord only, and a configured build
+    with no account on this profile keeps the sign-in screen open: no Google,
+    no email, no "Practice offline", no close."""
     account = FixtureAccount()
     with community_app(monkeypatch, tmp_path, account) as (base, _):
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
             page.goto(base)
             page.wait_for(".practice-page")
-            # Setup-complete beta accounts may auto-open. Otherwise use Settings.
-            open_account(page)
+            # Nothing opened it: the account screen is the first step on its own.
             page.wait_for(".community-provider.community-discord:not([disabled])")
-            page.wait_for(".community-provider.community-google:not([disabled])")
             page.wait_for(".community-provider.community-twitch:not([disabled])")
             wait_until(page, """Array.from(document.querySelectorAll(
                 '.community-providers img')).every(img => img.complete && img.naturalWidth > 0)""",
@@ -246,12 +253,16 @@ def test_sign_in_uses_packaged_official_assets_and_offline_escape(monkeypatch, t
             assets = page.evaluate("""Array.from(document.querySelectorAll(
                 '.community-providers img')).map(img => new URL(img.src).pathname)""")
             assert assets == ["/ui/assets/community/discord-clyde-white.svg",
-                              "/ui/assets/community/google-g.png",
                               "/ui/assets/community/twitch-glitch-white.svg"]
-            assert "Continue with email" in modal_text(page)
+            text = modal_text(page)
+            assert "Continue with email" not in text and "Google" not in text and "Practice offline" not in text
+            assert "Sign in" in page.evaluate("document.querySelector('.modal-heading h2')?.innerText || ''")
+            assert page.count(".modal [aria-label='Close']") == 0
             capture_widths(page, "providers")
-            click_text(page, "Practice offline")
-            wait_until(page, "!document.querySelector('.modal-body')", "offline practice")
+            # Escape stays unreachable; the wizard waits behind the account step.
+            page.evaluate("(() => { document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); return true; })()")
+            page.wait_ms(100)
+            assert page.count(".community-providers") == 1 and page.count(".setup-progress") == 0
             assert not any(call[0] != "refresh" for call in account.calls)
             assert page.problems() == []
 
@@ -292,7 +303,9 @@ def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_
             assert page.problems() == []
 
 
-def test_forced_rename_can_practice_offline_without_changing_owned_data(monkeypatch, tmp_path):
+def test_forced_rename_can_sign_out_without_changing_owned_data(monkeypatch, tmp_path):
+    """Signing out of a forced rename returns to the sign-in step (round 41:
+    no practice without an account), never to an unsigned practice page."""
     account = FixtureAccount("rename_required")
     with community_app(monkeypatch, tmp_path, account) as (base, service):
         before = len(service.db.attempts())
@@ -301,13 +314,13 @@ def test_forced_rename_can_practice_offline_without_changing_owned_data(monkeypa
             page.wait_for(".community-form input[autocomplete=nickname]")
             assert "Your account and ghosts are still yours" in modal_text(page)
             capture_widths(page, "forced-rename")
-            click_text(page, "Practice offline")
-            wait_until(page, "!document.querySelector('.modal-body')", "offline escape from rename")
+            click_text(page, "Sign out")
+            page.wait_for(".community-provider.community-discord")
             assert account.uid == UID
             assert ("sign_out",) in account.calls
             assert not any(call[0] in {"rename", "profile", "remote"} for call in account.calls)
             assert len(service.db.attempts()) == before
-            assert page.count(".practice-page") == 1
+            assert page.count(".practice-page") == 1 and "Practice offline" not in modal_text(page)
             assert page.problems() == []
 
 
@@ -373,7 +386,7 @@ def test_settings_use_registered_name_sharing_and_sign_out_routes(monkeypatch, t
             open_account(page)
             page.wait_for(".community-privacy")
             click_text(page, "Sign out")
-            wait_until(page, "!document.querySelector('.modal-body')", "sign-out")
+            page.wait_for(".community-provider.community-discord")  # signed out: the sign-in step returns (round 41)
             assert ("sign_out",) in account.calls
             assert page.problems() == []
 
@@ -463,7 +476,7 @@ def test_privacy_actions_use_owner_routes_and_explicit_confirmation(monkeypatch,
             assert page.problems() == []
 
 
-@pytest.mark.parametrize("provider", ["discord", "google", "twitch"])
+@pytest.mark.parametrize("provider", ["discord", "twitch"])
 def test_cancelling_sign_in_posts_the_exact_pending_attempt(monkeypatch, tmp_path, provider):
     account = FixtureAccount()
     with community_app(monkeypatch, tmp_path, account) as (base, _):
@@ -510,4 +523,50 @@ def test_desktop_shell_sign_in_never_pre_opens_a_blank_window(monkeypatch, tmp_p
                 assert time.monotonic() < deadline, "The server never opened the default browser"
                 page.wait_ms(50)
             assert page.count(".modal-body a[href='about:blank']") == 1  # the fallback link stays
+            assert page.problems() == []
+
+
+def test_the_name_field_checks_validity_and_availability_as_you_type(monkeypatch, tmp_path):
+    """His ask (round 41): a responsive unique username check with a check mark or a cross."""
+    account = FixtureAccount("new")
+    with community_app(monkeypatch, tmp_path, account) as (base, _):
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(base)
+            page.wait_for(".community-form input[autocomplete=nickname]")
+            page.evaluate("(() => { const i = document.querySelector('.community-form input[autocomplete=nickname]');"
+                          " i.value = 'abc'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()")
+            wait_until(page, "document.querySelector('.community-name-state')?.dataset.state === 'invalid'", "the too-short cross")
+            assert "at least 4" in page.evaluate("document.querySelector('.community-name-state').innerText")
+            assert page.evaluate("document.querySelector('.community-form button[type=submit]').disabled")
+            page.evaluate("(() => { const i = document.querySelector('.community-form input[autocomplete=nickname]');"
+                          " i.value = 'taken'; i.dispatchEvent(new Event('input', {bubbles: true})); i.dispatchEvent(new Event('blur')); return true; })()")
+            wait_until(page, "document.querySelector('.community-name-state')?.dataset.state === 'taken'", "the taken cross")
+            assert ("check", "taken") in account.calls
+            assert page.evaluate("document.querySelector('.community-form button[type=submit]').disabled")
+            page.evaluate("(() => { const i = document.querySelector('.community-form input[autocomplete=nickname]');"
+                          " i.value = 'Fresh'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()")
+            wait_until(page, "document.querySelector('.community-name-state')?.dataset.state === 'available'", "the available check mark")
+            assert "Available" in page.evaluate("document.querySelector('.community-name-state').innerText")
+            page.evaluate("(() => { const boxes = document.querySelectorAll('.community-form .community-check input[type=checkbox]');"
+                          " const box = boxes[boxes.length - 1]; box.click(); return box.checked; })()")
+            wait_until(page, "!document.querySelector('.community-form button[type=submit]').disabled", "submit enabled for a valid free name")
+            assert page.problems() == []
+
+
+def test_an_existing_account_signs_in_immediately_without_a_name_prompt(monkeypatch, tmp_path):
+    """His rule (round 41): an existing account for that Twitch/Discord identity logs straight in."""
+    account = FixtureAccount()
+    with community_app(monkeypatch, tmp_path, account) as (base, _):
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(base)
+            page.wait_for(".community-provider.community-twitch:not([disabled])")
+            page.click(".community-provider.community-twitch")
+            wait_until(page, "document.querySelector('.modal-body')?.innerText.includes('Finish signing in')", "the pending screen")
+            account.update(authenticated=True, stored=True, status="active", provider="twitch", name="griffman1212",
+                           terms_version="t1", privacy_version="p1")
+            page.wait_for(".community-identity")
+            text = modal_text(page)
+            assert "griffman1212" in text and "signed in with Twitch" in text
+            assert not page.count(".community-form input[autocomplete=nickname][autofocus]")
+            assert ("begin", "twitch") in account.calls and not any(call[0] == "profile" for call in account.calls)
             assert page.problems() == []

@@ -3,9 +3,24 @@ import { useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { downloadAccountData } from "../community.js";
-import { normalizedPlayerName, playerNameError } from "../communityname.js";
+import { NAME_HINT, normalizedPlayerName, playerNameError } from "../communityname.js";
+import { ScopeChips } from "./rankpage.js";
 
 const html = htm.bind(h);
+
+const PROVIDER_NAMES = { discord: "Discord", twitch: "Twitch", google: "Google", email: "email" };
+
+// What the account is, at a glance, the moment you sign in (his ask, round
+// 41: "when you login, it should show your account's current rank + current
+// account information"). The chip row is the Rank tab's own, read from the
+// same summary endpoint, so the rank here can never differ from the tab.
+export function AccountSummary({ account }) {
+  const provider = PROVIDER_NAMES[account.provider] || null;
+  return html`<div class="community-summary">
+    <p class="community-identity"><b>${account.name}</b>${provider && html`<span class="muted">${" · "}signed in with ${provider}</span>`}</p>
+    <${ScopeChips} activeScopeId=${null} onPick=${() => {}} />
+  </div>`;
+}
 
 export function CommunitySettings({ account, busy, run, refresh, onClose }) {
   const [name, setName] = useState(account.name || "");
@@ -30,10 +45,11 @@ export function CommunitySettings({ account, busy, run, refresh, onClose }) {
         ${confirm === "DELETE" ? "Delete account" : "Remove shared ghosts"}</button></div>
   </div>`;
   return html`<div class="community-form">
+    <${AccountSummary} account=${account} />
     <label>Player name<input type="text" value=${name} disabled=${busy} maxlength="128"
       oninput=${event => setName(event.target.value)} autocomplete="nickname" /></label>
     <small class=${name && playerNameError(name) ? "community-error" : "muted"}>
-      ${name && playerNameError(name) || "20 characters maximum."}</small>
+      ${name && playerNameError(name) || NAME_HINT}</small>
     <label class="community-check"><input type="checkbox" checked=${sharing} disabled=${busy}
       onchange=${event => setSharing(event.target.checked)} /><span>Automatically share my best ghosts</span></label>
     ${!sharing && html`<p class="muted" role="status">Other players won't receive your new ghosts or be able to learn from those runs.

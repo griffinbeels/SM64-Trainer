@@ -12,13 +12,16 @@ Setup checks the actual running ROM, capture and movement before completing.
 Close another running trainer before recording: both channels share one recorder
 and the selected emulator installation. Their beta practice history stays separate.
 
-Sign in with Discord, Google or Twitch, choose a player name, and accept the
-displayed policies. This build's reusable invitation admits independent accounts
+Signing in is the first step: the trainer asks for a Discord or Twitch sign-in
+before anything else and offers no way around it. Choose a player name (4 to 20
+characters; the field checks validity and availability as you type) and accept
+the displayed policies. The same Discord or Twitch identity always returns to
+its own account. This build's reusable invitation admits independent accounts
 without a tester-count limit or calendar deadline, until the operator revokes it.
 Keep the installer private; no separate invitation or build is needed per person.
 Request and storage limits still apply to every account and the service.
-Google testing mode can require its test-user
-allowlist; Discord or Twitch avoids that Google-specific setup.
+Google and email sign-in are not offered (his decision, 2026-10-12: Discord and
+Twitch cover the SM64 speedrunning audience and keep one flow to handle).
 
 The included library contains legitimate recordings credited to
 **griffman1212**, only those whose controller input is known on every frame

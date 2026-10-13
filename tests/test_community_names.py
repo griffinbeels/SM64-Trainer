@@ -8,13 +8,14 @@ from sm64_events.community.names import checked_name
 from sm64_events.server.community_api import Profile, Rename, create_community_router
 
 
-@pytest.mark.parametrize("name", ["SullyLikesBigChungus", "a" * 20, "ガ" * 20, "😀" * 15 + "abc"])
+@pytest.mark.parametrize("name", ["SullyLikesBigChungus", "a" * 20, "ガ" * 20, "😀" * 15 + "abc", "abcd"])
 def test_supported_names_fit_both_limits(name):
     assert checked_name(name) == name
     assert Rename(name=name).name == name
 
 
-@pytest.mark.parametrize("name", ["a" * 21, "😀" * 15 + "abcd", "ﬃ" * 7, " ", "name\u200b", "line\u2028break", "\ud800"])
+# "abc" and " ab " sit below Speedrun.com's four-character minimum (round 41).
+@pytest.mark.parametrize("name", ["a" * 21, "😀" * 15 + "abcd", "ﬃ" * 7, " ", "abc", " ab ", "name\u200b", "line\u2028break", "\ud800"])
 def test_names_cannot_bypass_limits_or_insert_controls(name):
     with pytest.raises(ValueError):
         checked_name(name)

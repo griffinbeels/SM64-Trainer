@@ -4,7 +4,7 @@ import {ServiceError,requireThat,json,readJSON,exactQuery,boundedBody,hex64,uuid
 import {catalogFor,lookup,grade,targetKey} from './catalog.js';
 import {Store} from './store.js';
 import {validateGHC1} from './codec.js';
-import {prefixRange} from './names.js';
+import {checkedName,prefixRange} from './names.js';
 import {encodeCursor,decodeCursor} from './cursors.js';
 import {nativeAuthorize} from './portal-contract.js';
 import {policies} from './policies.js';
@@ -72,6 +72,13 @@ export function createService({auth=authenticate,adminAuth=authenticateAdmin,cat
   }
   if(url.pathname==='/v1/account/name'&&request.method==='PUT'){
     exactQuery(url,[]);const b=await readJSON(request,['name']),m=await mutation(request,s,a.uid,'name',b);if(m.previous)return json(s.publicAccount(await s.one('SELECT * FROM accounts WHERE uid=?',a.uid)));return json(await s.rename(a,b,m.key,m.digest));
+  }
+  if(url.pathname==='/v1/names/check'&&request.method==='GET'){
+    // The live name check while typing (round 41). The claim at PUT /v1/account
+    // stays the authority; this only answers "held by someone else right now?".
+    exactQuery(url,['name'],['name']);const named=checkedName(url.searchParams.get('name'));
+    const holder=await s.one('SELECT uid FROM accounts WHERE name_key=?',named.key);
+    return json({v:1,name:named.name,available:!holder||holder.uid===a.uid});
   }
   if(url.pathname==='/v1/account/sharing'&&request.method==='PUT'){
     exactQuery(url,[]);s.active(a);const b=await readJSON(request,['enabled']);requireThat(typeof b.enabled==='boolean');const m=await mutation(request,s,a.uid,'sharing',b);if(m.previous)return json(s.publicAccount(await s.one('SELECT * FROM accounts WHERE uid=?',a.uid)));const response=s.publicAccount({...a,sharing:Number(b.enabled)});

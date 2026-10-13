@@ -123,9 +123,18 @@ class CommunityAccount:
         self._error = None
         self.on_contribution_cancel = None
 
+    def _credentials_stored(self):
+        """A refresh token in the Credential Manager: this profile has an
+        account even while offline, so the sign-in gate must not reappear."""
+        try:
+            return bool(self._store.load())
+        except Exception:  # noqa: BLE001 -- a store failure reads as no stored account
+            return False
+
     def snapshot(self):
         with self._lock:
             snapshot = {"enabled": self.config.enabled, "authenticated": bool(self._access),
+                    "stored": self.config.enabled and self._credentials_stored(),
                     "status": "signed_out", "sharing": False, "terms_version": None,
                     "privacy_version": None, **(self._profile or {}), "provider": self._provider,
                     **self._policies, **({"error": self._error} if self._error else {})}
@@ -167,7 +176,9 @@ class CommunityAccount:
 
     async def begin_sign_in(self, provider):
         self._enabled()
-        if provider not in ("discord", "google", "twitch", "email"):
+        # His decision (round 41): Twitch or Discord only. Google and email are
+        # not offered; the hosted page still accepts them until it is redeployed.
+        if provider not in ("discord", "twitch"):
             raise CommunityError("invalid_provider")
         await self._public_config()
         attempt, state, verifier = secrets.token_urlsafe(24), secrets.token_urlsafe(32), secrets.token_urlsafe(64)
@@ -349,6 +360,20 @@ class CommunityAccount:
                 raise CommunityError("canceled")
             self._profile = value
         return self.snapshot()
+
+    async def check_name(self, name):
+        """Whether `name` is free for this account (round 41: the live check
+        while typing). `available` is None when the service does not offer the
+        check yet; the claim at submit stays the authority either way."""
+        from .names import checked_name
+        name = checked_name(name)
+        try:
+            value = await self.request_json("GET", "/v1/names/check", params={"name": name})
+        except CommunityError as error:
+            if error.status == 404:
+                return {"name": name, "available": None}
+            raise
+        return {"name": name, "available": value.get("available") is True}
 
     async def set_sharing(self, enabled):
         if type(enabled) is not bool:

@@ -21,7 +21,20 @@ export function useCommunityAccount() {
     }
   }, [account?.status]);
   const refreshRemote = () => send('POST', '/api/community/account/refresh').then(setAccount);
-  return { account, open, setOpen, refresh, refreshRemote, setAccount };
+  // Signing in is the first step (round 41): a configured build with no
+  // account on this profile, or an account still choosing a name or
+  // consenting, keeps the sign-in screen open. A stored account that is
+  // offline right now is not asked again; practice continues.
+  const required = accountRequired(account);
+  // While required, the screen is open whatever a close handler did; a
+  // sign-out from a forced rename lands back on the providers at once.
+  return { account, open: open || required, setOpen, refresh, refreshRemote, setAccount, required };
+}
+
+export function accountRequired(account) {
+  if (!account?.enabled) return false;
+  if (account.authenticated) return ["new", "rename_required", "consent_required"].includes(account.status);
+  return !account.stored;
 }
 
 export function insideDesktopShell() {

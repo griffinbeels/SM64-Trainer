@@ -11,23 +11,23 @@ import {ProgressLine} from './states.js';
 
 const html = htm.bind(h);
 
+// His decisions (round 41): Twitch or Discord only, and signing in is the
+// first step: a configured build offers no way to practice without an
+// account. An unconfigured build (source, offline beta) keeps the escape.
 function ProviderChoices({enabled, busy, start, close}) {
   return html`<div class="community-join">
-    <p>Sign in to race other players and share your ghosts.</p>
+    <p>${enabled ? "Sign in to start practicing, race other players and share your ghosts."
+                 : "Sign in to race other players and share your ghosts."}</p>
     ${!enabled && html`<p class="muted">Community ghosts are not configured in this build.</p>`}
     <div class="community-providers">
       <button class="community-provider community-discord" disabled=${busy || !enabled} onClick=${() => start('discord')}>
         <img src="/ui/assets/community/discord-clyde-white.svg" alt="" />Continue with Discord
       </button>
-      <button class="community-provider community-google" disabled=${busy || !enabled} onClick=${() => start('google')}>
-        <img src="/ui/assets/community/google-g.png" alt="" />Continue with Google
-      </button>
       <button class="community-provider community-twitch" disabled=${busy || !enabled} onClick=${() => start('twitch')}>
         <img src="/ui/assets/community/twitch-glitch-white.svg" alt="" />Continue with Twitch
       </button>
     </div>
-    <div class="community-center"><button class="link" disabled=${busy || !enabled} onClick=${() => start('email')}>Continue with email</button></div>
-    <div class="community-center"><button disabled=${busy} onClick=${close}>Practice offline</button></div>
+    ${!enabled && html`<div class="community-center"><button disabled=${busy} onClick=${close}>Practice offline</button></div>`}
   </div>`;
 }
 
@@ -79,23 +79,29 @@ export function CommunityAccountModal({community, onClose, onPracticeRefresh}) {
     },
     onDone: onPracticeRefresh,
   });
-  const forced = account.status === 'rename_required';
+  // Signing in is the first step (round 41): while this build has no account
+  // yet, or the account still needs a name or consent, the screen cannot be
+  // dismissed. A forced rename keeps its own sign-out escape below.
+  const rename = account.status === 'rename_required';
+  const forced = account.enabled && (community.required
+    || ['rename_required', 'new', 'consent_required'].includes(account.status));
   const save = (profile, importTimes) => actions.run(async () => {
     const sheetRunner = profile.sheet_runner;
-    await send('PUT', forced ? '/api/community/account/name' : '/api/community/account', forced ? {name: profile.name} : profile);
+    await send('PUT', rename ? '/api/community/account/name' : '/api/community/account', rename ? {name: profile.name} : profile);
     await refresh();
     if (importTimes && sheetRunner) {
       runner.current = sheetRunner; setImporting(true); flow.run();
     } else onClose();
   });
-  const title = forced ? 'Choose a new name' : importing ? 'Import your best times' :
-    !account.authenticated ? 'Community ghosts' : account.status === 'new' ? 'Choose your name' : 'Community account';
+  const title = rename ? 'Choose a new name' : importing ? 'Import your best times' :
+    !account.authenticated ? (account.enabled ? 'Sign in' : 'Community ghosts')
+    : account.status === 'new' ? 'Choose your name' : 'Community account';
   return html`<${Modal} title=${title} onClose=${forced || actions.busy || flow.phase === 'working' ? undefined : actions.close}>
     <${AccountContent} account=${account} refresh=${refresh} actions=${actions} importing=${importing} flow=${flow} save=${save} onClose=${onClose} />
     ${actions.error && html`<p class="community-error" role="alert">${actions.error}</p>`}
-    ${forced && html`<div class="community-center"><button disabled=${actions.busy} onClick=${() => actions.run(async () => {
+    ${rename && html`<div class="community-center"><button disabled=${actions.busy} onClick=${() => actions.run(async () => {
       await send('POST', '/api/community/auth/sign-out'); await refresh(); onClose();
-    })}>Practice offline</button></div>`}
+    })}>Sign out</button></div>`}
   <//>`;
 }
 

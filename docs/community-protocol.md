@@ -25,9 +25,15 @@ client, `token_endpoint_auth_method=none`, S256 PKCE and exact redirect
 Supabase's documented beta OAuth-server feature for the private beta, rather
 than inventing a password service or forwarding browser access tokens into the
 trainer. Native OAuth is through Authlib; the hosted login/consent page uses
-the maintained Supabase JS SDK for Discord, Google, Twitch and email/password/recovery.
-The provider hint is held by the hosted portal during authorization. Only the
-authorization code and matching one-use state return to the trainer.
+the maintained Supabase JS SDK for Discord and Twitch (Google and email remain
+on the hosted page until its next deployment; the trainer never offers them,
+his decision 2026-10-12). The provider hint is held by the hosted portal during
+authorization. Only the authorization code and matching one-use state return to
+the trainer. Signing in is the trainer's first step: a configured build keeps
+the sign-in screen open until the account is active, and a stored refresh token
+counts as an account while offline. The same provider identity always resolves
+to the same account; `GET /v1/names/check` answers whether a name is free before
+the claim, and the claim at `PUT /v1/account` stays the authority.
 
 The native client keeps state and code verifier in memory, expiring after five
 minutes; exchange happens off the game/selection path. Tokens do not appear in

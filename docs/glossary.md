@@ -1546,6 +1546,27 @@ changing original history.
 
 - **Lives** — `tools/ghost_climb.py` and `src/sm64_events/core/paths.py`
 
+### Sign-in step
+
+The first thing a configured build asks for: a Discord or Twitch sign-in,
+then a player name and consent. The account screen cannot be dismissed until
+the account is active, and the Project64 wizard waits behind it (his
+direction, 2026-10-12: "logging in is the first step for onboarding, and
+you're not allowed to continue unless you login in some way"). A stored
+refresh token counts as an account while offline, so practice never locks
+out on a bad connection; signing out returns to this step. Google and email
+are not offered. The same provider identity always returns to its own
+account. The name field checks validity while typing and availability after
+a pause or on blur (4 to 20 characters; a check or a cross), and the account
+screen shows the name, the provider and the Rank tab's own chip row.
+
+- **Lives** — `src/sm64_events/ui/community.js` (`accountRequired`),
+  `src/sm64_events/ui/components/communityaccount.js`,
+  `communityprofile.js` (`useNameCheck`), `communitysettings.js`
+  (`AccountSummary`); `src/sm64_events/community/account.py` (`stored`,
+  `check_name`); `cloud/community/src/service.js` (`/v1/names/check`)
+- **Not** — the Project64 setup wizard (`setupmodal.js`), which follows it.
+
 ### Community ghost
 
 A [[ghost]] shared by an authenticated, invited player. The service keeps that

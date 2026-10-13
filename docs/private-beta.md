@@ -14,7 +14,9 @@ release or use the public app's updater/bootstrap.
 The [community protocol](community-protocol.md) owns its account and sharing
 contracts. A successful local build does not establish deployed login or sharing.
 Follow [the staging account guide](../cloud/community/SETUP.md) to configure
-Cloudflare, Supabase, Discord, Google and Twitch before creating a cloud-enabled installer.
+Cloudflare, Supabase, Discord and Twitch before creating a cloud-enabled installer.
+The trainer offers Discord and Twitch only (his decision, 2026-10-12); the
+Google and email provider setup in that guide is history, not a requirement.
 
 ## Build identity and data
 

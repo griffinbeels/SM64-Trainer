@@ -244,3 +244,13 @@ test('withdrawn immutable recording can be shared again and retired bytes remain
     assert.equal((await h.call('/v1/recordings/'+first.recording_id,{user:'bob'})).response.status,200);
   }finally{env.DB.close();}
 });
+
+test('name check answers free, held and own names without claiming anything',async()=>{const {env}=await environment(),h=harness(env);try{
+  assert.deepEqual((await h.call('/v1/names/check?name=Fresh')).json,{v:1,name:'Fresh',available:true});
+  assert.deepEqual((await h.call('/v1/names/check?name=ALICE')).json,{v:1,name:'ALICE',available:true});
+  assert.deepEqual((await h.call('/v1/names/check?name=bob')).json,{v:1,name:'bob',available:false});
+  assert.equal((await h.call('/v1/names/check?name=bob',{headers:{authorization:'Bearer bob'}})).json.available,true);
+  assert.equal((await h.call('/v1/names/check')).response.status,400);
+  assert.equal((await h.call('/v1/names/check?name=admin')).json.error.code,'invalid_name');
+  assert.equal((await env.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM accounts WHERE name_key='fresh'").get()).n,0);
+}finally{env.DB.close();}});

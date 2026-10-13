@@ -41,8 +41,13 @@ class Account:
         self.pending = None
         self.status = 'new'
 
+    async def check_name(self, name):
+        from sm64_events.community.names import checked_name
+        name = checked_name(name)
+        return {'name': name, 'available': name.lower() != 'taken'}
 
-@pytest.mark.parametrize("provider", ["discord", "google", "twitch"])
+
+@pytest.mark.parametrize("provider", ["discord", "twitch"])
 def test_hosted_oauth_return_reaches_state_validation_without_opening_other_routes(provider):
     account = Account()
     app = FastAPI()
@@ -166,3 +171,19 @@ def test_desktop_shell_sign_in_opens_the_default_browser_through_the_server(monk
                              headers={HEADER: token})
         # The attempt still starts; the modal's own link remains the fallback.
         assert failed.status_code == 200 and failed.json()['opened'] is False and failed.json()['attempt_id']
+
+
+def test_name_check_route_answers_availability_for_the_signed_in_account():
+    account = Account()
+    account.status = 'new'
+    app = FastAPI()
+    app.include_router(create_community_router(account))
+    mount_local_access(app, port=8072)
+    with TestClient(app, base_url='http://127.0.0.1:8072') as client:
+        token = client.get('/api/local-access').json()['request_token']
+        free = client.get('/api/community/names/check', params={'name': 'Fresh'}, headers={HEADER: token})
+        assert free.status_code == 200 and free.json() == {'name': 'Fresh', 'available': True}
+        held = client.get('/api/community/names/check', params={'name': 'taken'}, headers={HEADER: token})
+        assert held.status_code == 200 and held.json()['available'] is False
+        assert client.get('/api/community/names/check', params={'name': 'abc'}, headers={HEADER: token}).status_code == 400
+        assert client.get('/api/community/names/check', headers={HEADER: token}).status_code == 422

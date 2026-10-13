@@ -4,7 +4,7 @@ import logging
 from typing import Literal
 import webbrowser
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -32,7 +32,8 @@ class _Body(BaseModel):
 
 
 class SignIn(_Body):
-    provider: Literal["discord", "google", "twitch", "email"]
+    # His decision (round 41): Twitch or Discord only.
+    provider: Literal["discord", "twitch"]
     open_browser: bool = False
 
 
@@ -144,6 +145,14 @@ def _mount_auth(router, require_account, pending):
                                      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'"})
 
 def _mount_account(router, require_account, pending):
+    @router.get("/names/check")
+    async def check_name(name: str = Query(min_length=1, max_length=128)):
+        """The live availability check while a name is typed (round 41).
+        `available` is None when the service has no check yet; the claim at
+        submit is the authority either way."""
+        active = require_account()
+        return await _call(lambda: active.check_name(name))
+
     @router.post("/account/refresh")
     async def refresh():
         active = require_account()
