@@ -1,0 +1,188 @@
+# SM64 Trainer website deployment
+
+The static website is served at **sm64trainer.app**. GitHub releases provide
+the downloads; Cloudflare Pages serves only the website's public files.
+Production HTML contains the exact installer link, version, upload date and
+release-notes link even when JavaScript is disabled. The browser does not call
+the GitHub API or receive a token.
+
+**auth.sm64trainer.app belongs to the existing community service.** Preserve
+that hostname, Worker, Supabase/provider redirects, policies and native localhost
+callback. Website setup requires no change to them.
+
+## Build and review locally
+
+Use Python 3.12 or newer from the repository checkout. The builder and its
+focused tests use the standard library. App dependencies and a running trainer
+or emulator are unnecessary.
+
+```powershell
+python -m unittest discover -s tests -p test_build_website.py -v
+$websiteBuild = Join-Path $env:TEMP ('sm64trainer-site-' + [guid]::NewGuid().ToString('N'))
+python tools/build_website.py --output $websiteBuild
+```
+
+Use a new output directory for every build. The builder validates releases
+before emitting deployable files. It copies only public assets and writes
+`release.json`; source documentation, policy files and credentials are excluded.
+Upload the generated directory, **never the source `website/` folder**.
+
+For an offline review, add `--releases-json <fixture-path>` with a JSON release
+object or list. Fixture mode makes no release requests and never waits between
+attempts. Live requests accept `--attempts` from 1 to 5 and `--retry-delay` from
+0 to 30 seconds; CI uses three attempts with a ten-second delay. A local
+`GITHUB_TOKEN` environment variable is optional. Do not put a token in arguments,
+fixtures, logs or generated files.
+
+| Exit | Meaning | Output and publishing |
+| --- | --- | --- |
+| `0`, status `ready` | Complete eligible production release | Static website ready for review and publishing. |
+| `3`, status `launch_hold` | No eligible community stable release | No deployable output; CI reports a launch hold. |
+| `2` | Invalid metadata, incomplete newest candidate, or failed discovery | No deployable output; CI fails validation. |
+| `0`, status `unavailable` | Explicit withdrawal refresh with no eligible release remaining | Static page removes direct installer links. |
+
+The launch policy is `website/release-policy.json`: stable **1.10.0 or later**.
+The pre-community public **1.9.1** and private **1.10.0-beta** builds cannot launch
+a page advertising public community ghosts. The highest eligible stable SemVer
+wins, independent of publication-date ordering. Drafts, prereleases, withdrawn
+releases and malformed tags are excluded. All six uploaded, positive-size
+assets must have unambiguous versioned HTTPS links to this repository:
+
+- `SM64Trainer.exe` and `SM64Trainer.exe.sha256`
+- `SM64Trainer-full.zip` and `SM64Trainer-full.zip.sha256`
+- `manifest.json` and `manifest.json.sha256`
+
+`SM64Trainer.exe` is the bootstrap installer. Its displayed size is the uploaded
+installer's size; it downloads the app payload during installation. Private
+tester installers are never website downloads. The withdrawal marker
+`<!-- sm64-withdrawn -->` is honored, matching the community release branch.
+An incomplete newer eligible stable release blocks deployment rather than
+silently selecting an older download.
+
+## One-time Cloudflare and GitHub settings
+
+Prepare the empty project and CI settings before launch. Keep deployment
+disabled and leave the apex DNS untouched until the matching community stable
+release is available.
+
+1. Use the **Direct Upload** Pages project `sm64-trainer` in the owning
+   Cloudflare account, with production branch `main`. Create it only if absent.
+   An empty project has no public deployment. GitHub Actions owns its builds and
+   uploads. A Direct Upload project cannot later switch to Pages Git integration
+   without a new project.
+2. In that account's **API Tokens**, create a custom API token with **Account /
+   Cloudflare Pages / Edit**, restricted to the owning account. This CI token
+   does not need DNS, Workers, D1, R2 or Supabase permissions. Do not copy the
+   machine's broad Wrangler OAuth credential.
+3. In `griffinbeels/SM64-Trainer`, open **Settings > Secrets and variables >
+   Actions**. Add these repository settings:
+
+   | Kind | Name | Value |
+   | --- | --- | --- |
+   | Variable | `WEBSITE_PAGES_PROJECT` | `sm64-trainer`, or the exact existing Pages project name |
+   | Variable | `WEBSITE_DEPLOY_ENABLED` | `false` while preparing; only literal `true` permits publishing |
+   | Secret | `CLOUDFLARE_ACCOUNT_ID` | Owning Cloudflare account ID |
+   | Secret | `CLOUDFLARE_API_TOKEN` | Scoped Pages Edit token |
+
+4. Land the approved website, builder and `.github/workflows/website.yml` on
+   `main` through the project's usual integration process. Production runs
+   always check out current `main`, including release-tag events.
+   `WEBSITE_SOURCE_SHA` records that checkout's actual commit in the build
+   metadata; a release event's tag commit does not identify the website source.
+5. Run **Actions > trainer website > Run workflow** with `retire_download`
+   unchecked. Before a matching stable release, expect a successful **launch
+   hold** and no website artifact. After a complete stable release, review the
+   static artifact and `release.json` while publishing remains disabled.
+6. At the approved community-release launch, set `WEBSITE_DEPLOY_ENABLED=true`
+   and run the workflow again. If settings are prepared beforehand, publication
+   of the complete matching stable release triggers the same workflow. Missing
+   secrets or a disabled gate produce a visible **setup hold**, retaining the
+   review artifact. They do not count as a deployment.
+
+GitHub's built-in `GITHUB_TOKEN` reads releases with `contents: read`; no separate
+GitHub personal token is needed. Setup checks receive only booleans indicating
+whether Cloudflare settings exist. Credential values go to the official
+deployment action. Cloudflare's [CI upload guide](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/)
+documents the Pages Edit permission and the two Cloudflare settings. The
+[Direct Upload guide](https://developers.cloudflare.com/pages/get-started/direct-upload/)
+covers project creation and deployment-mode choice.
+
+CI pins **Wrangler 4.149.0** and runs `pages deploy ... --force --branch=main`.
+In that version, the hidden `--force` option keeps deployment on Pages instead
+of delegating a new static project to Workers. This is a hosting choice, not an
+asset overwrite or deletion flag. Keep it when updating the CLI, and recheck
+its meaning against [the pinned Pages command source](https://github.com/cloudflare/workers-sdk/blob/wrangler%404.149.0/packages/wrangler/src/pages/deploy.ts).
+The local `pages project create` command can also delegate new projects when
+an agent runs it; use Cloudflare's Pages dashboard or Pages project API when
+preparing an empty Pages project.
+
+## Attach the public domain at launch
+
+After a ready website has deployed, open its Pages project **Custom domains >
+Set up a domain** and add **sm64trainer.app**. The zone must be active in the same
+Cloudflare account as the Pages project. Use the Pages domain setup flow so
+Cloudflare creates and validates its DNS record and certificate.
+
+Configure an exact **www.sm64trainer.app -> https://sm64trainer.app** permanent
+redirect, preserving path and query string. A wildcard redirect for every
+subdomain would break `auth.sm64trainer.app`. Domain settings belong to the
+operator; this workflow neither edits DNS nor attaches domains. See the
+[custom domain guide](https://developers.cloudflare.com/pages/configuration/custom-domains/)
+and [www redirect guide](https://developers.cloudflare.com/pages/how-to/www-redirect/).
+
+Verify the public page on desktop and mobile, with JavaScript disabled as well.
+Check all download buttons against the version and checksum links in
+`https://sm64trainer.app/release.json`. Confirm the installer URL identifies that
+exact GitHub tag and release notes open the same version. Confirm
+`https://auth.sm64trainer.app/v1/config` and `/policies` still respond, then check
+sign-in through the trainer's usual entry point.
+
+## Automatic updates and withdrawal
+
+The workflow runs for website/builder/asset-registry changes on `main`, matching
+pull requests, release `published`, `released`, `edited`, `deleted` and
+`unpublished` events, and manual dispatch. It has no recurring schedule.
+Pull requests test their merge commit and build an artifact. They receive no
+Cloudflare deployment settings and never publish. PR concurrency is separate
+from production, so a new PR cannot cancel a pending production refresh.
+Production runs discover current releases rather than trusting the triggering
+release as the download candidate. GitHub documents the [release event types](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#release).
+
+For a stable release at or above the community floor, deletion/unpublishing,
+or an edit adding the withdrawal marker, enables an explicit withdrawal refresh.
+An earlier complete community stable release can replace the withdrawn one.
+If none remains, CI can publish the `unavailable` page. Deleting an old 1.9.x
+release or changing a beta cannot launch the community website prematurely.
+
+After launch, a manual run with **retire_download=true** permits the same
+unavailable output when no eligible release remains. Leave it unchecked for
+ordinary builds and first-launch checks. It does not override invalid metadata
+or bless an incomplete release. Reconcile a missed event or failed lookup with
+a manual run and inspect its result.
+
+One production concurrency group covers checkout, build and upload. Running
+uploads are not canceled. GitHub may replace or reorder pending runs, so each
+checks out current `main` and fetches current releases after entering its slot.
+An older queued event therefore cannot restore its old tag or old website code.
+See [GitHub's concurrency behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+CI saves a review artifact, checks settings, then builds again into a new
+directory inside Wrangler's pre-command, after Wrangler installation and
+immediately before upload. A failed final build aborts upload. When present,
+the final publishing candidate is saved separately, including after an upload
+failure. Release/tag/body data is parsed from the event JSON, never interpolated
+into shell code.
+
+A release can still change between the last GitHub response and Cloudflare
+committing the upload. The services have no shared transaction. Follow-up
+release events and manual reconciliation correct that window; updates cannot
+be instantaneous during an upstream outage or missed event. The fifteen-minute
+job timeout bounds a run, not outage duration. Avoid rolling Pages back to an
+artifact containing withdrawn download links. Prefer a fresh validated build
+or an explicit unavailable refresh.
+
+The workflow uses the repository's current GitHub action majors (`checkout`,
+`setup-python`, `upload-artifact` v7) and the official
+[wrangler-action v4](https://github.com/cloudflare/wrangler-action). Logs and the
+job summary identify successful uploads. A green launch/setup hold means the
+public website was left alone.
