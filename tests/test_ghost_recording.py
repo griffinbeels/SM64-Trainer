@@ -117,7 +117,7 @@ def test_service_preservation_uses_authoritative_attempt_instead_of_video_span(t
         events_between=lambda *args: pytest.fail("native export inferred an endpoint from video events")))
     assert service._preserve_ghost(row, tmp_path / "clip.ghost")[1] == {"records": 3}
     assert seen[-1][0] == (row, tmp_path / "clip.ghost")
-    assert seen[-1][1] == {"target": {"kind": "star", "entity_key": "24-1", "strat": None}}
+    assert seen[-1][1] == {"target": {"kind": "star", "entity_key": "24-1", "strat": None}, "wait_tail": True}
     row.segment_id = "segment-one"
     service._preserve_ghost(row, tmp_path / "clip.ghost")
     assert seen[-1][0][0] is row and "end_frame" not in seen[-1][1]

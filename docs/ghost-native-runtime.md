@@ -1064,6 +1064,14 @@ Such a clip ends on the last clocked occurrence at most
 `closing_transition` says how many frames earlier; `check_manifest` binds the
 clip's last frame to `closed_frame` less that.
 
+The PB's export never waits for the dance (his rule, round 47: "Our local
+ghost PB should be IMMEDIATELY available on the next reset"): `pb_changed`
+commits the run with `wait_tail=False`, one look at the dance and a
+`tail_pending` manifest, and the session completes the dance afterwards by a
+default `preserve_native` over the same committed path (`_complete_tail`).
+Every other caller (population admission, sharing, saves) takes the default
+and so receives the finished clip, completing a pending one first.
+
 A star run closes at x-cam, the dance's first frame of the grab that completes
 it (the exit star for the 100-coin star), so export appends the dance tail for
 any attempt that is not a segment, and for a segment closed by a Bowser key

@@ -37,7 +37,7 @@ def test_pb_read_during_preservation_recovers_and_retains_playback(tmp_path, mon
     entered, release = threading.Event(), threading.Event()
     original = replay.preserve_native
 
-    def preserve(number):
+    def preserve(number, **_kwargs):
         entered.set()
         assert release.wait(5), "test did not release preservation"
         return original(number) if outcome != "missing" else {"native_ghost": None}

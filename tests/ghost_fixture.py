@@ -28,4 +28,4 @@ class FakeReplay:
             return None
         return self.saved_dir / f"attempt_{attempt_id}.ghost", {
             "clip_id": f"{attempt_id:032x}", "sha256": f"{attempt_id:064x}",
-            "blink_frames": 0}
+            "blink_frames": 0, "inputs_complete": True}  # a saved asset with every input known (round 40)

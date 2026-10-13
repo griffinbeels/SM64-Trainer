@@ -286,7 +286,12 @@ class PoseArchive:
                 self._db.close()  # the last close checkpoints the WAL into the file
                 self._db = None
 
-    def export_attempt(self, attempt, destination: Path, *, target: dict | None = None) -> dict:
+    def export_attempt(self, attempt, destination: Path, *, target: dict | None = None,
+                       wait_tail: bool = True) -> dict:
+        """The attempt's clip. ``wait_tail=False`` takes one look for the star
+        dance instead of waiting for it: the clip is ready the moment the run
+        closes, and ``tail_pending`` in the manifest says a later export over
+        the same path should complete the dance (his rule, round 47)."""
         origin = attempt_origin(attempt)
         start, end_frame = origin["native_clock_frame"], origin["closed_frame"]
         kind = CLOCK_KINDS[origin["native_clock_kind"]]
@@ -349,9 +354,11 @@ class PoseArchive:
         # before it: DANCE_ENTRY_FRAMES).
         dances = (close.live_action in TAIL_ACTIONS or getattr(attempt, "timed_at", None) == "xcam"
                   or getattr(attempt, "closed_by", None) == "key_grabbed")
-        tail = self._dance_tail(identity, last, close) if star_run and dances else []
+        tail, pending = (self._dance_tail(identity, last, close, wait=wait_tail)
+                         if star_run and dances else ([], False))
         manifest = write_clip(destination, tuple(row[0] for row in rows) + tuple(tail),
                               SimpleNamespace(**source), clock_kind=kind, tail_records=len(tail))
+        manifest["tail_pending"] = pending
         if transition:
             manifest["closing_transition"] = transition
         return {**manifest, "attempt_id": attempt.id, "session_id": attempt.session_id,
@@ -372,9 +379,11 @@ class PoseArchive:
                 return [(sequence, data)], end_frame - timer
         return ends, 0  # no clock close enough: the endpoint refuses as before
 
-    def _dance_tail(self, identity: int, after: int, close: Frame) -> list[bytes]:
+    def _dance_tail(self, identity: int, after: int, close: Frame, *, wait: bool = True) -> tuple[list[bytes], bool]:
         """Wait, bounded, for the recorder to capture the dance; outside the
-        lock between looks so capture keeps committing."""
+        lock between looks so capture keeps committing. Returns the tail and
+        whether it is still pending: with ``wait=False`` one look, pending while
+        the recorder is open and the dance has not ended; with the wait, never."""
         deadline = self._clock() + self.dance_wait_s
         seen, moved = -1, self._clock()
         while True:
@@ -387,8 +396,10 @@ class PoseArchive:
             now = self._clock()
             if len(candidates) != seen:
                 seen, moved = len(candidates), now
+            if not wait:
+                return tail, bool(recording and not ended)
             if ended or not recording or now >= deadline or now - moved >= self.dance_stall_s:
-                return tail
+                return tail, False
             self._sleep(0.1)
 
     def status(self) -> dict:

@@ -1310,7 +1310,9 @@ recording so the [[ghost]] celebrates instead of vanishing at its touch; it
 then fades out over half a second. For the [[100-coin star]] that is the
 [[exit star]] after it, so the [[ghost]] plays on through its 100-coin grab.
 A grab straight into the dance may close its [[attempt]] a [[frame]] before
-the dance's first, and still keeps it. When the recording stops before the
+the dance's first, and still keeps it. The [[PB ghost]] is committed before
+its dance is recorded and gains the tail afterwards, so it is ready on the
+very next [[reset]]. When the recording stops before the
 game's dance ends (a pause, [[reset]] or state load right after the grab), the
 [[ghost]] plays the rest of the dance by animation from its last recorded
 dance pose, to the [[frame]] the game's own dance ends on, then fades.
@@ -1519,7 +1521,11 @@ chooses a compatible recording above the saved [[personal best]], or protects
 the player's exact manual choice until they clear it. Automatic seats hold one
 recording per player: a rival group never shows the same player twice unless
 the player pinned both (his rule, 2026-10-12: "per rival group, there should
-be only unique players"). The slot keeps its colour when
+be only unique players"). Automatic seats never hold the player's own
+recordings: this install's player identity, the signed-in community account, and
+the bundled [[ghost collection]] when the player is its author by export credit
+or account name (his rule, 2026-10-13: "the player doesn't ever actually fight
+their own [[ghost]]s as a rival"). A pinned own recording still plays. The slot keeps its colour when
 its recording changes; the separate [[PB ghost]] keeps its own colour.
 
 - **Lives** — `src/sm64_events/ghost/adaptive.py` and `src/sm64_events/ghost/rivals.py`

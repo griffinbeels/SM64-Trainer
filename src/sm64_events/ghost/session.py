@@ -122,6 +122,7 @@ class GhostSession:
         self._portable = portable
         self._rivals = None
         self._population_recorder = None
+        self._tail_task = None
         self._population = population
         self._community = community
         self._population_closed = False
@@ -214,6 +215,11 @@ class GhostSession:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+        tail, self._tail_task = self._tail_task, None
+        if tail is not None:
+            tail.cancel()
+            with suppress(asyncio.CancelledError):
+                await tail
         if self._community is not None:
             for close in (self._community.stop, self._community.account.close):
                 try:
@@ -525,15 +531,39 @@ class GhostSession:
             preserve = getattr(self._replay, "preserve_native", None)
             if preserve is not None:
                 try:
-                    kept = await asyncio.to_thread(preserve, attempt.id)
+                    # The run itself, now; its star dance is completed afterwards
+                    # (his rule, round 47: ready on the very next reset).
+                    kept = await asyncio.to_thread(lambda: preserve(attempt.id, wait_tail=False))
                     if self._rivals is not None and isinstance(kept, dict) and kept.get("native_ghost"):
                         async with self._lock:
                             def committed():
                                 with self._lifecycle_lock:
                                     self._rivals.pb_preserved(attempt.id)
                             await asyncio.to_thread(committed)
+                    if isinstance(kept, dict) and (kept.get("native_ghost") or {}).get("tail_pending"):
+                        if self._tail_task is not None:
+                            self._tail_task.cancel()
+                        self._tail_task = asyncio.create_task(self._complete_tail(attempt.id, preserve),
+                                                              name="ghost-pb-tail")
                 except Exception:  # noqa: BLE001 - the PB itself is saved; say why in the picker
                     log.exception("PB %s Mario poses could not be kept", attempt.id)
+        await self.refresh(resolve=True)
+
+    async def _complete_tail(self, attempt_id, preserve) -> None:
+        """Finish the PB ghost's star dance after the run is already playable."""
+        try:
+            kept = await asyncio.to_thread(preserve, attempt_id)
+        except Exception:  # noqa: BLE001 - the playable PB stays as it is
+            log.exception("PB %s dance tail could not be completed", attempt_id)
+            return
+        if not (isinstance(kept, dict) and kept.get("native_ghost")) or kept["native_ghost"].get("tail_pending"):
+            return
+        if self._rivals is not None:
+            async with self._lock:
+                def committed():
+                    with self._lifecycle_lock:
+                        self._rivals.pb_preserved(attempt_id)
+                await asyncio.to_thread(committed)
         await self.refresh(resolve=True)
 
 

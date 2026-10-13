@@ -292,3 +292,47 @@ def test_a_missing_position_is_logged_but_a_held_one_is_not_called_a_blink(tmp_p
         assert answer["available"] and answer["blinks"] == 0
     finally:
         archive.close()
+
+
+def test_a_pb_is_playable_before_its_dance_ends_and_the_dance_arrives_later(tmp_path):
+    """Round 47: he beat his PB and reset 2.9 s later; the PB export waited for
+    the star dance and finished one second after the next spawn. Now the run
+    is playable the moment it closes, and the dance is completed afterwards."""
+    from test_ghost_archive import DANCE, IDLE, danced
+    from test_ghost_recording import native_service
+    from ghost_native_fixture import frame, producer
+
+    replay, row, archive = native_service(tmp_path, rows=tuple(danced(None, dance_rows=2)))
+    capture = Capture()
+    replay.recorder.ghost_capture = capture
+    db = Database(tmp_path / "tracker.db")
+    store = a_store(tmp_path)
+    tracker = FakeTracker(db=db, target=("star", row.course_id, row.star_id), strat_tag=row.strat_tag)
+    session = GhostSession(tracker=tracker, inputs=SimpleNamespace(templates=store), replay=replay,
+                           broadcaster=FakeBroadcaster(),
+                           native=NativeGhost(replay, origin_of=lambda *_: dict(ORIGIN)))
+
+    async def check():
+        await session.update({"enabled": True})
+        save_pb(db, row)
+        started = time.perf_counter()
+        await session.pb_changed(row, True)
+        elapsed = time.perf_counter() - started
+        body = session.payload()
+        assert body["source"]["available"] and body["source"]["attempt_id"] == row.id
+        _path, manifest = replay.find_native(row.id)
+        assert manifest["tail_pending"] is True and manifest["tail_records"] == 2
+        assert elapsed < 1.0, elapsed             # no dance wait on the PB's path
+        assert session._tail_task is not None
+        archive.ingest(producer(), tuple(frame(n, action=DANCE) for n in (6, 7, 8)) + (frame(9, action=IDLE),))
+        await asyncio.wait_for(session._tail_task, 10)
+        _path, finished = replay.find_native(row.id)
+        assert finished["tail_pending"] is False and finished["tail_records"] == 5
+        again = session.payload()
+        assert again["source"]["available"] and again["source"]["attempt_id"] == row.id
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        archive.close()

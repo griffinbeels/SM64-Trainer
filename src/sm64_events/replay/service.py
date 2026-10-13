@@ -1265,12 +1265,26 @@ class ReplayService:
             with self._save_guard:
                 self._active_saves -= 1
 
-    def preserve_native(self, attempt_id: int) -> dict:
-        """Commit poses for a template mark without extracting or encoding video."""
+    def preserve_native(self, attempt_id: int, *, wait_tail: bool = True) -> dict:
+        """Commit poses for a template mark without extracting or encoding video.
+
+        ``wait_tail=False`` commits the run the moment it closes, before its
+        star dance is recorded (his rule, round 47: the PB ghost is ready on
+        the very next reset); the manifest then says ``tail_pending``. A later
+        call with the default completes the dance over the same committed
+        path, so every other caller still receives the finished clip.
+        """
         with self._session_gate.use(), self._cut_lock(attempt_id), self._saving():
             existing, older = self._find_native(attempt_id)
             if existing is not None:
                 path, manifest = existing
+                if wait_tail and manifest.get("tail_pending") and path.parent.name == "native":
+                    attempt = self._attempt(attempt_id)
+                    completed, finished, reason = self._preserve_ghost(attempt, path, wait_tail=True)
+                    if completed is not None:
+                        atomic_json(path.with_suffix(".json"), finished)
+                        self._remember_native_preservation(self._native_preservation_key(attempt), None)
+                        return {"path": str(path), "native_ghost": finished, "native_ghost_reason": None}
                 return {"path": str(path), "native_ghost": manifest, "native_ghost_reason": None}
             if older is not None:  # Keep the committed older file byte-for-byte.
                 return {"path": None, "native_ghost": None, "native_ghost_reason": older}
@@ -1281,7 +1295,7 @@ class ReplayService:
                 raise ValueError("native ghost destination is outside the save root")
             attempt = self._attempt(attempt_id)
             identity = self._native_preservation_key(attempt)
-            path, manifest, reason = self._preserve_ghost(attempt, destination)
+            path, manifest, reason = self._preserve_ghost(attempt, destination, wait_tail=wait_tail)
             if path is not None:
                 # The JSON is the commit record. Orphan binary bytes are never discovered.
                 try:
@@ -1392,13 +1406,13 @@ class ReplayService:
         return {"path": str(dest), "truncated": m["truncated"],
                 "native_ghost": m["native_ghost"], "native_ghost_reason": ghost_reason}
 
-    def _preserve_ghost(self, attempt, path):
+    def _preserve_ghost(self, attempt, path, *, wait_tail: bool = True):
         from sm64_events.ghost.clip import ClipError
         archive = getattr(self.recorder, "pose_archive", None)
         if archive is None:
             return None, None, "This recording has no native Mario poses."
         try:
-            manifest = archive.export_attempt(attempt, path, target=self._native_target(attempt))
+            manifest = archive.export_attempt(attempt, path, target=self._native_target(attempt), wait_tail=wait_tail)
         except (ClipError, OSError, sqlite3.Error) as error:
             return None, None, str(error)
         from sm64_events.ghost.clip import pose_gaps

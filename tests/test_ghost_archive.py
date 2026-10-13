@@ -512,3 +512,25 @@ def test_a_close_further_than_a_level_load_from_any_clock_still_refuses(tmp_path
     with pytest.raises(ClipError, match="elapsed clock"):
         archive.export_attempt(attempt(end=last, end_utc=1800000002.0, kind="segment"), tmp_path / "far.ghost")
     archive.close()
+
+
+def test_an_immediate_export_keeps_the_dance_pending_and_a_later_one_completes_it(tmp_path):
+    """His rule (round 47): the PB ghost is ready the moment the run closes.
+    One look, no wait, while Mario is still dancing; the dance arrives later
+    over the same path."""
+    slept = []
+    archive = PoseArchive(tmp_path / "poses.sqlite", sleep=slept.append)
+    rows = danced(None, dance_rows=2)          # the dance has started and not ended
+    archive.ingest(producer(), tuple(rows))
+    row, path, target = attempt(), tmp_path / "ready.ghost", {"kind": "star"}
+    manifest = archive.export_attempt(row, path, target=target, wait_tail=False)
+    assert slept == [] and manifest["tail_pending"] is True and manifest["tail_records"] == 2
+    check_manifest(path, manifest, attempt=row, target=target)
+    archive.ingest(producer(), tuple(frame(n, action=DANCE) for n in (6, 7, 8)) + (frame(9, action=IDLE),))
+    finished = archive.export_attempt(row, path, target=target)
+    assert finished["tail_pending"] is False and finished["tail_records"] == 5
+    assert finished["sha256"] != manifest["sha256"]
+    clip = check_manifest(path, finished, attempt=row, target=target)
+    assert tuple(f.raw for f in clip.frames) == tuple(rows[:5]) + tuple(frame(n, action=DANCE) for n in (6, 7, 8))
+    # A waiting export never reports a pending tail, even when the dance ends by stall.
+    archive.close()
