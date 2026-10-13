@@ -160,11 +160,26 @@ ordinary builds and first-launch checks. It does not override invalid metadata
 or bless an incomplete release. Reconcile a missed event or failed lookup with
 a manual run and inspect its result.
 
-One production concurrency group covers checkout, build and upload. Running
-uploads are not canceled. GitHub may replace or reorder pending runs, so each
-checks out current `main` and fetches current releases after entering its slot.
+One production concurrency group covers checkout, build and upload. With
+`queue: max` and `cancel-in-progress: false`, GitHub keeps up to 100 pending runs
+without replacing a queued withdrawal when an ordinary website update arrives.
+Running uploads are not canceled. Pending runs enter their slots in FIFO order
+by the time they started waiting, which can differ from event dispatch order.
+Each checks out current `main` and fetches current releases after taking its slot.
 An older queued event therefore cannot restore its old tag or old website code.
+Additional runs are canceled when the 100-run queue is full. If a withdrawal is
+lost at that limit, run manual reconciliation with `retire_download=true` after
+the queue clears and verify the public page. PR groups remain separate and use
+the same queue setting; they cannot consume the production queue.
 See [GitHub's concurrency behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+The queue regression is a running normal deployment, then a pending withdrawal
+of the last stable release, then an ordinary website push. GitHub's default
+single-pending mode drops the withdrawal; the ordinary build returns a launch
+hold and cannot remove the old page's links. Keeping both pending runs lets the
+withdrawal publish an unavailable page before the ordinary launch hold. Local
+regression validation models the documented queue behavior and checks this
+workflow's actual configuration; it does not claim a live GitHub queue test.
 
 CI saves a review artifact, checks settings, then builds again into a new
 directory inside Wrangler's pre-command, after Wrangler installation and

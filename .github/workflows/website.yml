@@ -26,11 +26,12 @@ on:
         type: boolean
         default: false
 
-# Serialize checkout, discovery and upload. Pending runs reconstruct current
-# main and releases. Do not cancel uploads Cloudflare might be committing.
+# Preserve queued withdrawals when ordinary updates arrive during an upload.
+# Each queued run reconstructs current main and releases after taking its slot.
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('trainer-website-pr-{0}', github.event.pull_request.number) || 'trainer-website-production' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  queue: max
+  cancel-in-progress: false
 
 permissions:
   contents: read
