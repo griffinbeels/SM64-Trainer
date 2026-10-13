@@ -91,3 +91,6 @@ ds-bundle/
 # Offline local verification dependencies and evidence
 tools/verification/node_modules/
 .verification/
+
+# Generated Cloudflare static website output.
+.website-build/
