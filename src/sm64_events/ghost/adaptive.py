@@ -280,12 +280,48 @@ def _automatic(rows, count, low, high, players):
     return sorted(picked, key=lambda row: (row["step"], row["frames"], row["id"]))
 
 
+def _widened(candidates, taken, players, seats, high, strategy, scope, allow_fastest):
+    """Seats the range could not fill: upward first, then downward.
+
+    His rule (round 49): "(1) rivals within the user's default range ... (2)
+    keep expanding the max rank until the rival list is full, (3) if that
+    doesn't work, then expand downwards in the list." Upward takes the
+    nearest subdivision above the range first; downward takes the nearest
+    below first, including in-range runs that do not beat his PB. One seat
+    per player. Remote rows join only with complete pool coverage, so a
+    partial download never skips a nearer rival; bundled rows always may.
+    """
+    if seats <= 0:
+        return []
+
+    def open_row(row):
+        # A developer climb retires the runs it has already beaten; they stay retired here.
+        return (row["id"] not in taken and row.get("manual_only") is not True
+                and row.get("beaten_in_simulation") is not True
+                and (scope == "overall" or row.get("strategy") == strategy)
+                and (allow_fastest or _bundled(row)))
+
+    rows = [row for row in candidates.values() if open_row(row)]
+    above = sorted((row for row in rows if row["step"] > high),
+                   key=lambda row: (row["step"], -row["frames"], row["id"]))
+    below = sorted((row for row in rows if row["step"] <= high),
+                   key=lambda row: (-row["step"], row["frames"], row["id"]))
+    picked = []
+    for row in (*above, *below):
+        if len(picked) == seats:
+            break
+        if _player(row) not in players:
+            picked.append(row)
+            players.add(_player(row))
+    return picked
+
+
 def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope="strategy", allow_fastest=True) -> tuple[dict, ...]:
     """Choose visible slots; caller retains hidden pins and owns PB playback.
 
     Pass the previous roster when changing one manual choice, to preserve its
     other compatible automatic slots. Omit it when the saved basis/range changes.
-    An empty completed range uses the fastest available compatible recordings,
+    Seats the range cannot fill widen upward, then downward (`_widened`),
     including recordings already beaten by the PB. Missing chosen recordings
     remain occupied rather than silently replaced.
     Overall permits other strategies, while every row keeps its recorded label.
@@ -324,23 +360,10 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
             players.add(_player(row))
     available = [row for row in candidates.values() if row["id"] not in used
                  and _eligible_auto(row, pb, options, low, high, strategy, scope)]
-    if (not available
-            and not any(not row["pinned"] for row in result.values())):
-        # Remote fallback requires complete coverage. Pinned bundled snapshots
-        # are complete locally and remain available through a cloud outage.
-        # Keep provenance/ROM/scope and PB refusals; only the range relaxes.
-        available = [row for row in candidates.values() if row["id"] not in used
-                     and row.get("manual_only") is not True
-                     and _player(row) not in players and (allow_fastest or _bundled(row))]
-        winners = {}
-        for row in available:
-            old = winners.get(_player(row))
-            if old is None or (row["frames"], row["id"]) < (old["frames"], old["id"]):
-                winners[_player(row)] = row
-        automatic = iter(sorted(winners.values(), key=lambda row: (row["frames"], row["id"]))
-                         [:options["count"] - len(result)])
-    else:
-        automatic = iter(_automatic(available, options["count"] - len(result), low, high, players))
+    automatic = list(_automatic(available, options["count"] - len(result), low, high, players))
+    automatic += _widened(candidates, used | {row["id"] for row in automatic}, players,
+                          options["count"] - len(result) - len(automatic), high, strategy, scope, allow_fastest)
+    automatic = iter(sorted(automatic, key=lambda row: (row["step"], row["frames"], row["id"])))
     for slot in range(options["count"]):
         if slot not in result and (row := next(automatic, None)) is not None:
             result[slot] = _placed(row, slot, False)

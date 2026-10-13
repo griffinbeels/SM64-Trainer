@@ -219,8 +219,11 @@ def test_automatic_rivals_spread_across_the_next_five_subdivisions(count):
 
 def test_minimum_is_next_subdivision_even_when_stored_offsets_are_zero():
     rows = [ranked(9, "same", 1000), ranked(10, "next", 1700)]
-    result = select_rivals(rows, basis(), {"min_ahead": 0, "max_ahead": 0}, {})
+    result = select_rivals(rows, basis(), {"min_ahead": 0, "max_ahead": 0, "count": 1}, {})
     assert [row["id"] for row in result] == ["next"]
+    # A spare seat widens downward to his own subdivision (round 49).
+    result = select_rivals(rows, basis(), {"min_ahead": 0, "max_ahead": 0}, {})
+    assert [row["id"] for row in result] == ["same", "next"]
 
 
 def test_empty_range_uses_fastest_available_including_beaten_runs():
@@ -240,10 +243,11 @@ def test_empty_range_uses_fastest_available_including_beaten_runs():
 def test_range_opponents_take_priority_over_same_subdivision_fallback():
     same, higher = ranked(19, "same", 320), ranked(20, "higher", 310)
     pb = basis(19, 321, game_version="us")
-    assert [row["id"] for row in select_rivals([same, higher], pb, {}, {})] == ["higher"]
+    assert [row["id"] for row in select_rivals([same, higher], pb, {"count": 1}, {})] == ["higher"]
+    assert [row["id"] for row in select_rivals([same, higher], pb, {}, {})] == ["same", "higher"]
     previous = [{**higher, "slot": 1, "pinned": False}]
     rows = select_rivals([same, higher], pb, {}, {}, previous=previous)
-    assert [(row["id"], row["slot"]) for row in rows] == [("higher", 1)]
+    assert [(row["id"], row["slot"]) for row in rows] == [("same", 0), ("higher", 1)]
 
 
 @pytest.mark.parametrize("scope", ["strategy", "overall"])
@@ -259,8 +263,9 @@ def test_fastest_fallback_keeps_pb_separate_and_compatible_strategy_labels(scope
     pb = {**rank_frames(Standards(), identity, 300), "frames": 300,
           "ghost": ghost, "current_strategy": "Standard", "game_version": "us"}
     chosen = select_rivals(rows, pb, {}, {}, scope=scope)
-    expected = ["available", "alternative"] if scope == "overall" else ["available"]
-    assert [row["id"] for row in chosen] == expected
+    expected = {"available", "alternative"} if scope == "overall" else {"available"}
+    assert {row["id"] for row in chosen} == expected
+    chosen = sorted(chosen, key=lambda row: row["frames"])
     assert pb["ghost"] is ghost and all(row["frames"] > pb["frames"] for row in chosen)
     assert all(row["id"] not in ("own", "other-rom", "old-untrusted") for row in chosen)
     assert [row["strategy"] for row in chosen] == (["Standard", "Other"] if scope == "overall" else ["Standard"])
@@ -294,12 +299,16 @@ def test_same_subdivision_fallback_preserves_pins_and_winners():
 
 def test_ceiling_caps_both_endpoints_and_only_faster_final_recordings_qualify():
     rows = [ranked(43, "lower", 10), ranked(44, "equal", 100), ranked(44, "slower", 101), ranked(44, "faster", 99)]
-    result = select_rivals(rows, basis(44, 100), {}, {})
+    result = select_rivals(rows, basis(44, 100), {"count": 1}, {})
     assert [row["id"] for row in result] == ["faster"]
+    # Spare seats widen downward: his own final subdivision first, then below (round 49).
+    result = select_rivals(rows, basis(44, 100), {}, {})
+    assert [row["id"] for row in result] == ["lower", "faster", "equal", "slower"]
     # A genuinely lower same-ROM subdivision has a slower time; all of these
     # top-subdivision records then represent progress. The cap alone compares
     # times within the same final subdivision.
-    assert {row["id"] for row in select_rivals(rows, basis(43, 102), {}, {})} == {"faster", "equal", "slower"}
+    in_range = select_rivals(rows, basis(43, 102), {"count": 3}, {})
+    assert {row["id"] for row in in_range} == {"faster", "equal", "slower"}
 
 
 def test_foreign_region_anchor_compares_strategy_steps_and_never_claims_faster_ceiling_time():
@@ -318,7 +327,9 @@ def test_overall_cross_strategy_cap_still_requires_a_faster_comparable_time():
     rows = [ranked(44, "faster", 99, strategy="Other", scope="overall"),
             ranked(44, "slower", 101, strategy="Third", scope="overall")]
     pb = basis(44, 100, game_version="us")
-    assert [row["id"] for row in select_rivals(rows, pb, {}, {}, scope="overall")] == ["faster"]
+    assert [row["id"] for row in select_rivals(rows, pb, {"count": 1}, {}, scope="overall")] == ["faster"]
+    # The slower run fills a spare seat from below; it never displaces the faster one.
+    assert [row["id"] for row in select_rivals(rows, pb, {}, {}, scope="overall")] == ["faster", "slower"]
     assert [row["id"] for row in select_rivals(rows, {**pb, "game_version": "jp"}, {}, {}, scope="overall")] == ["faster", "slower"]
     assert select_rivals(rows, pb, {}, {}) == ()
 
@@ -328,7 +339,7 @@ def test_no_pb_begins_at_the_floor_and_fixed_range_can_include_slower_runs():
     result = select_rivals(rows, None, {}, {})
     assert result and all(1 <= row["step"] <= 5 for row in result)
     narrowed = select_rivals(rows, None, {"min_ahead": 2, "max_ahead": 2}, {})
-    assert [row["step"] for row in narrowed] == [2]
+    assert [row["step"] for row in narrowed] == [2, 3, 4, 5]  # the range, then upward
     result = select_rivals([ranked(9, frames=2000)], basis(9, 1900),
                            {"mode": "fixed", "min_step": 9, "max_step": 9}, {})
     assert result[0]["frames"] == 2000
@@ -356,9 +367,21 @@ def test_population_winner_is_per_stable_player_strategy_and_subdivision():
     assert {row["id"] for row in result} == {"fast", "other-player"}
 
 
-def test_sparse_ranges_never_substitute_an_outside_rank():
-    result = select_rivals([ranked(8), ranked(10), ranked(14), ranked(15)], basis(), {}, {})
-    assert [row["step"] for row in result] == [10, 14]
+def test_a_sparse_range_widens_upward_then_downward():
+    """His rule (round 49): "(1) rivals within the user's default range ...
+    (2) keep expanding the max rank until the rival list is full, (3) if that
+    doesn't work, then expand downwards in the list." PB at 9; range 10-14."""
+    rows = [ranked(8), ranked(10), ranked(14), ranked(15), ranked(20), ranked(5)]
+    assert [row["step"] for row in select_rivals(rows, basis(), {"count": 2}, {})] == [10, 14]
+    assert [row["step"] for row in select_rivals(rows, basis(), {"count": 3}, {})] == [10, 14, 15]
+    assert [row["step"] for row in select_rivals(rows, basis(), {}, {})] == [10, 14, 15, 20]
+    # Nothing above the range: the nearest below fills first.
+    low = [ranked(10), ranked(8), ranked(5), ranked(3)]
+    assert [row["step"] for row in select_rivals(low, basis(), {}, {})] == [3, 5, 8, 10]
+    assert [row["step"] for row in select_rivals(low, basis(), {"count": 3}, {})] == [5, 8, 10]
+    # Fixed ranges widen the same way.
+    fixed = {"mode": "fixed", "min_step": 14, "max_step": 14, "count": 3}
+    assert [row["step"] for row in select_rivals(rows, basis(), fixed, {})] == [14, 15, 20]
 
 
 def test_pins_override_the_automatic_range_and_hidden_choices_survive_count_changes():
@@ -678,8 +701,8 @@ def test_a_player_takes_one_automatic_seat_per_rival_group():
     # A pin is his explicit choice; it still occupies that player's seat.
     pinned = select_rivals(mixed, basis(), {"count": 4}, {"0": "same-14"})
     assert [row["id"] for row in pinned] == ["same-14", "other", "third"]
-    # The empty-range fallback keeps one fastest recording per player.
+    # Widening downward gives each player one seat, at their nearest subdivision.
     fastest = select_rivals([ranked(19, "a-slow", 330, player_id="p:a"), ranked(19, "a-fast", 320, player_id="p:a"),
                              ranked(18, "a-other", 318, player_id="p:a"), ranked(18, "b", 325, player_id="p:b")],
                             basis(19, 321), {}, {})
-    assert [row["id"] for row in fastest] == ["a-other", "b"]
+    assert [row["id"] for row in fastest] == ["b", "a-fast"]

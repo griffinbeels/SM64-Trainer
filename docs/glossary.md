@@ -1267,7 +1267,7 @@ graphics pose is rebuilt through libsm64 inside GLideN64, using the live
 camera and terrain depth. Opacity and tint apply to the displayed ghost.
 Playback binds the exact recorded and live [[attempt]] origins and applies
 the [[nudge]]. Missing poses or clock identity have a readable refusal. A
-recording whose controller input is unknown on any frame is not a ghost at
+recording whose controller input is unknown on any [[frame]] is not a ghost at
 all: every door a recording enters through (bundled collection, rival
 admission, community upload and download, collection import and export, your
 own PB, saved and template ghosts) refuses it with one reason (his rule,
@@ -1310,9 +1310,9 @@ recording so the [[ghost]] celebrates instead of vanishing at its touch; it
 then fades out over half a second. For the [[100-coin star]] that is the
 [[exit star]] after it, so the [[ghost]] plays on through its 100-coin grab.
 A grab straight into the dance may close its [[attempt]] a [[frame]] before
-the dance's first, and still keeps it. The [[PB ghost]] is committed before
-its dance is recorded and gains the tail afterwards, so it is ready on the
-very next [[reset]]. When the recording stops before the
+the dance's first, and still keeps it. The trainer commits the [[PB ghost]]
+before the [[recorder]] has the dance and adds the tail afterwards, so the
+[[PB ghost]] is ready on the very next [[reset]]. When the recording stops before the
 game's dance ends (a pause, [[reset]] or state load right after the grab), the
 [[ghost]] plays the rest of the dance by animation from its last recorded
 dance pose, to the [[frame]] the game's own dance ends on, then fades.
@@ -1504,11 +1504,11 @@ creator credit, time, [[game version]], [[target]] and [[strategy]]. The **[[Gho
 Library** dialog opens with the originating [[target]] and currently raced
 recordings. Separate import and export flows preview the chosen recordings before
 confirmation. Export can choose each [[strategy]]'s best independently or use a
-saved search that resolves current results next time; a run whose [[playback
-copy]] has an unknown input is skipped with that reason. Import selects all new
-recordings by default and supports a smaller selection; an imported recording
-with an unknown input is kept on disk but listed unavailable with the reason and
-never plays. Collections can contain
+saved search that resolves current results next time; export skips a [[run]]
+whose [[playback copy]] has an unknown input, with that reason. Import selects all new
+recordings by default and supports a smaller selection; import keeps a
+recording with an unknown input on disk, lists it unavailable with the reason,
+and never plays it. Collections can contain
 many more recordings than the [[ghost set]] can race at once.
 
 - **Lives** — `src/sm64_events/ghost/portable.py` and `src/sm64_events/ghost/sharing.py`;
@@ -1521,7 +1521,10 @@ chooses a compatible recording above the saved [[personal best]], or protects
 the player's exact manual choice until they clear it. Automatic seats hold one
 recording per player: a rival group never shows the same player twice unless
 the player pinned both (his rule, 2026-10-12: "per rival group, there should
-be only unique players"). Automatic seats never hold the player's own
+be only unique players"). Seats the range cannot fill widen upward, nearest
+subdivision first, then downward (his rule, round 49: "keep expanding the
+range upwards until the rival list is full ... then expand downwards"), in
+fixed ranges too. Automatic seats never hold the player's own
 recordings: this install's player identity, the signed-in community account, and
 the bundled [[ghost collection]] when the player is its author by export credit
 or account name (his rule, 2026-10-13: "the player doesn't ever actually fight
@@ -1555,8 +1558,8 @@ changing original history.
 ### Sign-in step
 
 The first thing a configured build asks for: a Discord or Twitch sign-in,
-then a player name and consent. The account screen cannot be dismissed until
-the account is active, and the Project64 wizard waits behind it (his
+then a player name and consent. The player cannot close the account screen
+until the account is active, and the Project64 wizard waits behind it (his
 direction, 2026-10-12: "logging in is the first step for onboarding, and
 you're not allowed to continue unless you login in some way"). A stored
 refresh token counts as an account while offline, so practice never locks
@@ -1564,19 +1567,20 @@ out on a bad connection; signing out returns to this step. Google and email
 are not offered. The same provider identity always returns to its own
 account. The name field checks validity while typing and availability after
 a pause or on blur (4 to 20 characters; a check or a cross), and the account
-screen shows the name, the provider and the Rank tab's own chip row.
+screen shows the name, the provider and the [[Rank tab]]'s own chip row.
 
-- **Lives** — `src/sm64_events/ui/community.js` (`accountRequired`),
+- **Lives** — `src/sm64_events/ui/community.js` (accountRequired),
   `src/sm64_events/ui/components/communityaccount.js`,
-  `communityprofile.js` (`useNameCheck`), `communitysettings.js`
-  (`AccountSummary`); `src/sm64_events/community/account.py` (`stored`,
-  `check_name`); `cloud/community/src/service.js` (`/v1/names/check`)
+  `src/sm64_events/ui/components/communityprofile.js` (useNameCheck),
+  `src/sm64_events/ui/components/communitysettings.js` (AccountSummary);
+  `src/sm64_events/community/account.py` (stored, check_name);
+  `cloud/community/src/service.js` (the names check route)
 - **Not** — the Project64 setup wizard (`setupmodal.js`), which follows it.
 
 ### Community ghost
 
 A [[ghost]] shared by an authenticated, invited player. The service keeps that
-player's fastest full-start recording for each [[subdivision]], [[strategy]],
+player's fastest full-start recording for each [[division]], [[strategy]],
 [[target]], clock and ROM version. Structural validation checks the recording;
 it does not certify that gameplay was legitimate. Sharing begins unchecked.
 
@@ -1585,7 +1589,7 @@ it does not certify that gameplay was legitimate. Sharing begins unchecked.
 ### Rival pool
 
 The bounded metadata list for a [[target]], ROM, clock, [[ghost matching scope]]
-and rank range. The cloud can reuse it across players. The trainer selects
+and [[rank]] range. The cloud can reuse it across players. The trainer selects
 [[rival slot]]s locally and downloads only their recordings. A complete membership
 scan and downloaded playback bytes are separate states.
 
@@ -1593,28 +1597,28 @@ scan and downloaded playback bytes are separate states.
 
 ### Ghost ceiling
 
-The slowest time a run may have and still become a rival or a shared [[ghost]]:
-its strategy's slowest named cutoff (the edge of the lowest named [[division]],
-Capless 4) plus 10%. A slower run makes no rival recording and is never
-offered to the cloud, and the player is not told (his rule, 2026-10-13:
-"Anything above that DOES NOT CREATE A GHOST ... We shouldn't tell the user
-that their ghost was ignored from the sharing system"). The trainer and the
-cloud apply the same integer rule. The player's own [[PB ghost]] is not capped.
+The slowest time a [[run]] may have and still fill a [[rival slot]] or become a
+shared [[ghost]]: its [[strategy]]'s slowest named cutoff (the edge of the
+lowest named [[division]], Capless 4) plus 10%. The trainer never makes a
+slower [[run]] a rival recording or offers it to the cloud, and tells the
+player nothing (his rule, 2026-10-13: "We shouldn't tell the user"). The
+trainer and the cloud apply the same integer rule. The player's own
+[[PB ghost]] has no ceiling.
 
 - **Lives** — `src/sm64_events/ghost/community_catalog.py` (trainer) and
-  `cloud/community/src/catalog.js` (cloud, applied in `store.js` admission)
+  `cloud/community/src/catalog.js` (cloud; the upload admission in
+  `cloud/community/src/store.js` applies it)
 
 ### Retraction
 
-Taking one shared run back out of the cloud under every strategy except the
-one it now belongs to, after the player changes that run's strategy (his rule,
-2026-10-13: "It should no longer appear for the old strategy"). The trainer
-drops its pending offers under the old strategy, keeps the request across a
-restart, and asks the cloud to unpublish those copies; the cloud's cleanup
-collects the bytes. Not account-wide withdrawal, which removes every shared
-[[ghost]].
+Taking one shared [[run]] back out of the cloud under every [[strategy]]
+except the one it now belongs to, after the player changes that [[run]]'s
+[[strategy]] (his rule, 2026-10-13, round 48). The trainer drops its pending
+offers under the old [[strategy]], keeps the request across a restart, and
+asks the cloud to unpublish those copies; the cloud's cleanup collects the
+bytes. Not account-wide withdrawal, which removes every shared [[ghost]].
 
-- **Lives** — `src/sm64_events/community/sync.py` (`retract_other_strategies`),
+- **Lives** — `src/sm64_events/community/sync.py` (retract_other_strategies),
   `src/sm64_events/community/outbox.py` and `cloud/community/src/store.js`
 
 ### Private beta
@@ -1622,7 +1626,7 @@ collects the bytes. Not account-wide withdrawal, which removes every shared
 A complete test application ZIP sent directly to friends. Its packaged identity
 selects separate practice data and disables public updates. An offline beta has
 no configured community service. A configured beta requires its invited staging
-accounts. Project64 and the recorder remain shared machine resources.
+accounts. Project64 and the [[recorder]] remain shared machine resources.
 
 - **Lives** — `src/sm64_events/core/build_channel.py` and `tools/build_beta.py`;
   `docs/private-beta.md`
@@ -1654,12 +1658,12 @@ The copy of a local native recording that the game plays and a
 Each record without a pad takes the [[input track]]'s pad at its own game
 [[frame]], so the [[ghost]]'s input display shows what you pressed. The saved
 recording itself never changes; a [[frame]] the track lacks stays unknown, and
-a copy with any unknown frame is not a [[ghost]]: its manifest says
+a copy with any unknown [[frame]] is not a [[ghost]]: its manifest says
 `inputs_complete`, and every playback, export and sharing door asks it.
 
 - **Lives** — `src/sm64_events/ghost/padfill.py` (written in an inputs
   folder beside the saved native recordings); the question itself is
-  `src/sm64_events/ghost/clip.py::inputs_complete`
+  inputs_complete in `src/sm64_events/ghost/clip.py`
 - **Not** — a [[polled fill]], which is the replay timeline's drawing of a
   sample with no picture.
 

@@ -184,7 +184,8 @@ def test_explicit_full_range_stress_test_gets_four_rivals_and_pb_adds_fifth(tmp_
     controls = {"hue_degrees": 250}
     try:
         rivals.refresh(WILD_BLUE, controls, enabled=True)
-        assert rivals.pb is None and rivals.rows == ()
+        # No PB: the floor range is empty, so it widens upward to a full house (round 49).
+        assert rivals.pb is None and len(rivals.rows) == 4
         rivals.apply(rivals.checked({"options": {"mode": "fixed", "min_step": 0, "max_step": 44}}, WILD_BLUE))
         rivals.refresh(WILD_BLUE, controls, enabled=True)
         assert rivals.pb is None and len(rivals.rows) == 4

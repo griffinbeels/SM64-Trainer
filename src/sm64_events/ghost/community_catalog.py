@@ -129,20 +129,18 @@ def export_catalog(ranks, definitions=()):
 
 
 def match_windows(ranks, identity, pb, options):
-    """Whole local rank bands plus the whole baseline bin; never the exact PB."""
+    """The whole ladder, never the exact PB.
+
+    The trainer seats rivals in the player's range first and widens upward,
+    then downward, until the list is full (his rule, round 49), so the pool
+    covers every bin. The cloud accepts a band of the whole ladder (45 bins).
+    """
     key = rank_entity_key(identity)
     with ranks.read_context():
         model = (resolve_curve(ranks, key, identity.game_version) if identity.scope == "overall"
                  else ranks.ladder_cs(key, identity.strategy, identity.game_version))
-        cutoffs = {row["step"]: row["frames"] for row in model_cutoffs(model, identity.scope)}
+        cutoffs = model_cutoffs(model, identity.scope)
     if not cutoffs:
         return ()
-    low, high = _range(pb, options)
-    base = pb["step"] if pb else 0
-    result = []
-    for first, last in ((low, high), (base, base)):
-        maximum = cutoffs.get(first)
-        next_frames = cutoffs.get(last + 1, 0)
-        if maximum is not None and next_frames < maximum:
-            result.append((next_frames + 1, maximum))
-    return tuple(result)
+    _range(pb, options)  # an invalid saved basis still refuses the request
+    return ((1, cutoffs[0]["frames"]),)

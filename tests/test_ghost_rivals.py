@@ -75,7 +75,8 @@ def test_scoped_clear_then_delete_previous_session_refreshes_real_pb_and_roster(
         assert [row.id for row in db.attempts()] == [old.id]
         await service.delete_session(old.session_id)
         assert rivals.pb is None and len(rivals.rows) == 4
-        assert [row["frames"] for row in rivals.rows] == [500, 510, 520, 530]
+        # No PB starts at the floor; the empty range widens upward, nearest first (round 49).
+        assert sorted(row["frames"] for row in rivals.rows) == [1160, 1170, 1180, 1190]
         assert len(native.preparations[-1][1]) == 4
         assert len(snapshots) == 2 and population.rows
 

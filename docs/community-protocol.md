@@ -88,7 +88,7 @@ Burst limits shed traffic before expensive operations.
 | `PUT /v1/account/name` | `{name}`; supports forced rename, retains data and consent. |
 | `PUT /v1/account/sharing` | `{enabled:bool}`; opt-out stops uploads; withdrawal is separate. |
 | `GET /v1/catalog` | Canonical supported portable targets, clocks/ROMs/strategies, generation and integer frame cutoffs. Server derives every published subdivision. |
-| `GET /v1/pool` | Validated target,clock,rom,scope,strategy (Strategy only),min_step,max_step,base_step,cursor. Bounded canonical band; includes baseline rung for faster same-rung fallback. Returns recordings,coverage/generation,next_cursor. Truncation is incomplete, never proof that higher ranks have no entries. |
+| `GET /v1/pool` | Validated target,clock,rom,scope,strategy (Strategy only),min_step,max_step,base_step,cursor. Bounded canonical band; the trainer asks for the whole ladder (at most 45 bins) so it can widen the rival range above, then below, until the list is full (round 49). Returns recordings,coverage/generation,next_cursor. Truncation is incomplete, never proof that higher ranks have no entries. |
 | `GET /v1/search` | Same target/clock/ROM/scope identity plus bounded Unicode player prefix and keyset cursor; at most20 rows. Indexed prefix range, no wildcard/substring SQL. |
 | `GET /v1/recordings/{id}` | Current metadata/publication gate, including explicit pins; recording IDs are immutable64-hex identities independent of public names. |
 | `GET /v1/recordings/{id}/asset` | Auth/status/visibility/owner publication gate before immutable compressed bytes; Content-Type application/octet-stream. |

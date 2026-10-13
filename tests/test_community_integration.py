@@ -187,3 +187,19 @@ def test_name_check_route_answers_availability_for_the_signed_in_account():
         assert held.status_code == 200 and held.json()['available'] is False
         assert client.get('/api/community/names/check', params={'name': 'abc'}, headers={HEADER: token}).status_code == 400
         assert client.get('/api/community/names/check', headers={HEADER: token}).status_code == 422
+
+
+@pytest.mark.parametrize('scope', ['strategy', 'overall'])
+def test_the_pool_request_covers_every_bin_so_the_range_can_widen(scope):
+    """His rule (round 49): the rival list widens above the range, then below,
+    until it is full, so the cloud pool must hold every bin; never the exact PB."""
+    from sm64_events.community.sync import frame_band
+    ranks = Standards()
+    identity = replace(IDENTITY, scope=scope)
+    model = ranks.overall_curve('star:2:1', 'us') if scope == 'overall' else ranks.ladder_cs('star:2:1', 'Standard', 'us')
+    cutoffs = [(row['step'], row['frames']) for row in model_cutoffs(model, scope)]
+    pb = {**rank_frames(ranks, identity, 600), 'frames': 600}
+    for basis in (pb, None):
+        windows = match_windows(ranks, identity, basis, checked_options({}))
+        assert frame_band(cutoffs, windows) == (cutoffs[0][0], cutoffs[-1][0], cutoffs[0][0])
+        assert all(600 not in window for window in windows)  # never the exact PB as a bound
