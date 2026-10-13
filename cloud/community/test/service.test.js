@@ -254,3 +254,8 @@ test('name check answers free, held and own names without claiming anything',asy
   assert.equal((await h.call('/v1/names/check?name=admin')).json.error.code,'invalid_name');
   assert.equal((await env.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM accounts WHERE name_key='fresh'").get()).n,0);
 }finally{env.DB.close();}});
+test('the policies link follows the host that served the request, and www redirects to the apex',async()=>{const {env}=await environment();try{const service=createService({catalog:async()=>({generation:'fixture',targets:[]})});
+  for(const host of ['https://community.example.invalid','https://sm64trainer.app']){const {status}=await service.fetch(new Request(host+'/policies'),env,{});assert.equal(status,200);
+    const cfg=await (await service.fetch(new Request(host+'/v1/config'),env,{})).json();assert.equal(cfg.terms_url,host+'/policies#terms');assert.equal(cfg.privacy_url,host+'/policies#privacy');}
+  const moved=await service.fetch(new Request('https://www.sm64trainer.app/auth/callback?code=x'),env,{});assert.equal(moved.status,301);assert.equal(moved.headers.get('location'),'https://sm64trainer.app/auth/callback?code=x');
+  env.OPERATOR_CONTACT='';assert.equal((await service.fetch(new Request('https://sm64trainer.app/v1/config'),env,{})).status,503);}finally{env.DB.close();}});

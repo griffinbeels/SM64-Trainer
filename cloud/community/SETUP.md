@@ -193,7 +193,6 @@ bindings in `wrangler.jsonc`:
 | `ACCESS_ISSUER`, `ACCESS_AUD`, `ADMIN_EMAILS` | Reviewed Access application and operator identities. |
 | `OPERATOR_NAME`, `OPERATOR_CONTACT` | Real accountable operator and reachable contact. |
 | `TERMS_VERSION`, `PRIVACY_VERSION` | Versions of the reviewed notices. |
-| `POLICY_URL` | `https://community-beta.example.com/policies` on the same service origin. |
 | `CATALOG_GENERATION` | Validated `catalog.json` digest, matching D1 settings. |
 
 Add the chosen Custom Domain in Worker Settings > Domains & Routes, or use its

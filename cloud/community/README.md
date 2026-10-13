@@ -36,8 +36,9 @@ vars in wrangler.jsonc for one owned HTTPS service origin. Supply actual operato
 name/contact and published policy URL on that same origin. Keep SERVICE_ENABLED
 false until policies, providers, admission, secrets and staging gates pass.
 The implemented /policies page renders required operator/contact and policy
-versions with HTML escaping. Point POLICY_URL at that same-origin route and
-review its Terms/Privacy before enabling. It states the actual public fields,
+versions with HTML escaping. The service links it at `/policies` on whichever
+host served the request, so every custom domain is first-party; review its
+Terms/Privacy before enabling. It states the actual public fields,
 native runtime/input data, providers, opt-in, moderation, withdrawal/copy limits,
 asynchronous deletion and minimal retained tombstone/audit records; it makes no
 compliance, age or jurisdiction promise.

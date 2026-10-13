@@ -17,12 +17,14 @@ function freshConfirmation(v,phrase){requireThat(v&&typeof v==='object'&&!Array.
 async function portalHTML(env,r){const u=new URL(r.url);u.pathname='/index.html';u.search='';const response=await env.ASSETS.fetch(new Request(u));return new Response(response.body,{status:response.status,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'private, no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self' "+new URL(env.SUPABASE_URL).origin+"; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"}});}
 export function createService({auth=authenticate,adminAuth=authenticateAdmin,catalog=catalogFor,onError=()=>{}}={}){
  return {async fetch(request,env,ctx){try{
-  const url=new URL(request.url),cfg=config(env),origin=request.headers.get('origin');
+  const url=new URL(request.url);
+  if(url.hostname.startsWith('www.')){return Response.redirect('https://'+url.hostname.slice(4)+url.pathname+url.search,301);}
+  const cfg=config(env),origin=request.headers.get('origin');
   requireThat(!origin||origin===url.origin,'origin_denied','Origin is not allowed.',403);
   requireThat(!url.username&&!url.password);
   if(env.BURST){const result=await env.BURST.limit({key:request.headers.get('cf-connecting-ip')||'unknown'});requireThat(result.success,'burst_limit','Slow down and retry.',429);}
   ready(cfg);
-  requireThat(new URL(cfg.policyURL).origin===url.origin,'configuration','Policies must be hosted on this service origin.',503);
+  cfg.policyURL=url.origin+'/policies';  // The policies page is this Worker's own route, on whichever host served the request.
   if(url.pathname==='/policies'&&request.method==='GET'){exactQuery(url,[]);return policies(cfg);}
   if(url.pathname==='/v1/config'&&request.method==='GET'){
     exactQuery(url,[]);const model=await catalog(env);

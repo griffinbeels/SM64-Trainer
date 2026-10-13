@@ -26,7 +26,7 @@ export class LocalR2{
   async delete(key){if(this.failDelete)throw Error('Simulated object deletion failure');this.objects.delete(key);}
 }
 export async function environment(){
-  const env={DB:new LocalD1(),GHOSTS:new LocalR2(),SERVICE_ENABLED:'true',SUPABASE_URL:'https://fixture.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public-fixture-only',OAUTH_CLIENT_ID:'client-fixture',NATIVE_CALLBACK:'http://127.0.0.1:8072/api/community/auth/callback',TERMS_VERSION:'test-1',PRIVACY_VERSION:'test-1',OPERATOR_NAME:'Fixture operator',OPERATOR_CONTACT:'fixture@example.invalid',POLICY_URL:'https://community.example.invalid/policies',CURSOR_SECRET:'fixture-only-not-a-real-secret-0123456789',CATALOG_GENERATION:catalog.generation};
+  const env={DB:new LocalD1(),GHOSTS:new LocalR2(),SERVICE_ENABLED:'true',SUPABASE_URL:'https://fixture.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public-fixture-only',OAUTH_CLIENT_ID:'client-fixture',NATIVE_CALLBACK:'http://127.0.0.1:8072/api/community/auth/callback',TERMS_VERSION:'test-1',PRIVACY_VERSION:'test-1',OPERATOR_NAME:'Fixture operator',OPERATOR_CONTACT:'fixture@example.invalid',CURSOR_SECRET:'fixture-only-not-a-real-secret-0123456789',CATALOG_GENERATION:catalog.generation};
   env.SUPABASE_SECRET_KEY='fixture-service-only-not-real';
   env.DB.sqlite.prepare('UPDATE settings SET generation=? WHERE id=1').run(catalog.generation);
   const store=new Store(env.DB,config(env));const accounts=[];
