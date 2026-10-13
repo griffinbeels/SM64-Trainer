@@ -193,6 +193,21 @@ class WebsiteBuildTests(unittest.TestCase):
         self.assertEqual(metadata["installer_uploaded_at"], "2026-10-15T16:30:00Z")
         self.assertEqual(len(metadata["build"]["source_sha256"]), 64)
 
+    def test_build_identity_uses_explicit_checkout_sha_only(self):
+        for index, source_sha in enumerate((None, "b" * 40, "not-a-commit")):
+            self.output = self.root / f"identity-{index}"
+            environment = {"GITHUB_SHA": "a" * 40}
+            if source_sha is not None:
+                environment["WEBSITE_SOURCE_SHA"] = source_sha
+            with mock.patch.dict(os.environ, environment, clear=True):
+                code, _ = self.run_cli(complete_release())
+            self.assertEqual(code, 0)
+            metadata = json.loads((self.output / "release.json").read_text(encoding="utf-8"))
+            if source_sha == "b" * 40:
+                self.assertEqual(metadata["build"]["commit"], source_sha)
+            else:
+                self.assertNotIn("commit", metadata["build"])
+
     def test_launch_hold_and_invalid_new_release_leave_existing_output_unchanged(self):
         self.output.mkdir()
         sentinel = self.output / "index.html"

@@ -350,7 +350,7 @@ def write_site(source: Path, output: Path, policy: dict, release: dict) -> dict:
                 "minimum_version": policy["minimum_version"], **release,
                 "build": {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
                           "source_sha256": digest.hexdigest()}}
-    commit = os.environ.get("GITHUB_SHA", "")
+    commit = os.environ.get("WEBSITE_SOURCE_SHA", "")
     if re.fullmatch(r"[0-9a-f]{40}", commit):
         metadata["build"]["commit"] = commit
     try:
