@@ -876,7 +876,10 @@ bootstrap installer (stdlib + tkinter, `bootstrap/installer.py`): the old
 onefile app self-updates INTO the bootstrap, which downloads the zip once,
 installs the folder, creates the shortcut, launches the app, and hands its
 own path over via `--cleanup-bootstrap` for deletion (a running exe can't
-delete itself). The asset must be published under that name **forever** so
+delete itself). The private offline installer (the same program with the
+zip embedded) is exempt: it is the file handed to testers and rerun for
+repair, so it never asks the app to delete it (round 42, 2026-10-12). The
+asset must be published under that name **forever** so
 a user who ignored updates for a year still migrates. It doubles as the
 new-user installer, preserving the "download SM64Trainer.exe, double-click"
 habit.
