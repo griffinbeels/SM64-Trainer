@@ -94,16 +94,17 @@ function ConsentSection({ account, sharing, consent, busy, policies, onConsent }
     ${!policies && html`<p class="community-error">The beta's policies are not available yet.</p>`}`;
 }
 
-export function CommunityProfile({ account, busy, onSave }) {
+// The form's state and its one submit rule: a name that is valid and free,
+// plus consent (or a forced rename, which carries the earlier consent).
+function useProfileForm(account, busy, onSave) {
   const rename = account.status === "rename_required";
   const renewing = account.status === "consent_required";
   const [name, setName] = useState(account.name || "");
   const [runner, setRunner] = useState(renewing ? account.sheet_runner || "" : "");
   const [importTimes, setImportTimes] = useState(false);
-  const sharing = renewing ? account.sharing === true : true;
   const [consent, setConsent] = useState(false);
+  const sharing = renewing ? account.sharing === true : true;
   const nameState = useNameCheck(name, { original: renewing ? account.name : null });
-  const groups = useSheetRunners(!rename);
   const policies = !account.policies_loading && account.terms_version_current && account.privacy_version_current;
   const valid = nameState.ok && (rename || consent && policies);
   const save = event => {
@@ -115,17 +116,26 @@ export function CommunityProfile({ account, busy, onSave }) {
         sheet_runner: runner || null }, importTimes);
     });
   };
-  return html`<form class="community-form" onsubmit=${save}>
-    ${rename && html`<p>Your previous name was reassigned. Your account and ghosts are still yours.</p>`}
-    <label>Player name<input autofocus type="text" value=${name} maxlength="128" required
-      disabled=${busy} oninput=${event => setName(event.target.value)} onblur=${nameState.blur}
-      autocomplete="nickname" aria-invalid=${["taken", "invalid"].includes(nameState.status)} /></label>
-    <${NameState} state=${nameState} />
-    ${!rename && html`<${SheetSection} groups=${groups} runner=${runner} importTimes=${importTimes} busy=${busy}
-      onPick=${value => { setRunner(value); setName(value); setImportTimes(false); }} onImport=${setImportTimes} />`}
-    ${!rename && html`<${ConsentSection} account=${account} sharing=${sharing} consent=${consent} busy=${busy}
-      policies=${policies} onConsent=${setConsent} />`}
-    <div class="community-actions"><button class="primary-button" type="submit" disabled=${!valid || busy}>
-      ${busy ? "Saving…" : rename ? "Save new name" : "Start practicing"}</button></div>
+  const pickRunner = value => { setRunner(value); setName(value); setImportTimes(false); };
+  return { rename, name, setName, runner, pickRunner, importTimes, setImportTimes, consent, setConsent,
+           sharing, nameState, policies, valid, save };
+}
+
+export function CommunityProfile({ account, busy, onSave }) {
+  const form = useProfileForm(account, busy, onSave);
+  const groups = useSheetRunners(!form.rename);
+  const label = form.rename ? "Save new name" : "Start practicing";
+  return html`<form class="community-form" onsubmit=${form.save}>
+    ${form.rename && html`<p>Your previous name was reassigned. Your account and ghosts are still yours.</p>`}
+    <label>Player name<input autofocus type="text" value=${form.name} maxlength="128" required
+      disabled=${busy} oninput=${event => form.setName(event.target.value)} onblur=${form.nameState.blur}
+      autocomplete="nickname" aria-invalid=${["taken", "invalid"].includes(form.nameState.status)} /></label>
+    <${NameState} state=${form.nameState} />
+    ${!form.rename && html`<${SheetSection} groups=${groups} runner=${form.runner} importTimes=${form.importTimes}
+      busy=${busy} onPick=${form.pickRunner} onImport=${form.setImportTimes} />
+    <${ConsentSection} account=${account} sharing=${form.sharing} consent=${form.consent} busy=${busy}
+      policies=${form.policies} onConsent=${form.setConsent} />`}
+    <div class="community-actions"><button class="primary-button" type="submit" disabled=${!form.valid || busy}>
+      ${busy ? "Saving…" : label}</button></div>
   </form>`;
 }
