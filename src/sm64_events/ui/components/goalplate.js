@@ -62,9 +62,9 @@ export function goalSourceLabel(goal) {
   const source = goal && goal.source;
   if (!source) return "";
   if (source.kind === "automatic" || source.kind === "division") {
-    const rank = source.tier ? `${capName(source.tier)} ${divisionDigit(source.division)}`
+    const rankLabel = source.tier ? `${capName(source.tier)} ${divisionDigit(source.division)}`
       : source.label;
-    return source.kind === "automatic" ? `Auto · ${rank}` : rank;
+    return source.kind === "automatic" ? `Auto · ${rankLabel}` : rankLabel;
   }
   // A typed time's own words are already the goal line; the source is Custom.
   if (source.kind === "time") return "Custom";
