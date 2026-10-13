@@ -171,9 +171,14 @@ def test_offline_normal_installer_contains_everything_and_never_uses_network(tmp
     stub.write_bytes(b"MZ-stub")
     installer = tmp_path / "private.exe"
     append_payload(stub, archive, installer)
+    launched = []
+    boot.launch_app = lambda exe, own: launched.append((exe, own))  # the context fixture restores it
     assert boot.run_install(http=lambda _: pytest.fail("offline installer used network"), ui=_UI(),
                             own_path=installer, install_dir=target, policy_path=policy)
     assert (target / boot.APP_EXE).read_bytes() == b"OFFLINE"
+    # The private installer is the file he hands to testers and reruns for
+    # repair (round 42): it never asks the app to delete it.
+    assert launched == [(target / boot.APP_EXE, None)] and installer.is_file()
     assert not (target / boot.OFFLINE_OFFER).exists()
     assert read_policy(policy)["installed_version"] == "1.10.0-beta.1"
     assert read_policy(policy)["receive_beta_updates"] is False

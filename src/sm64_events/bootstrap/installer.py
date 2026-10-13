@@ -441,7 +441,11 @@ def run_install(*, http, ui, repo: str = DEFAULT_REPO,
                 ui.status("Note: could not create the Desktop shortcut — "
                           f"the app is installed at {exe}")
             ui.status("Starting SM64 Trainer…")
-            launch_app(exe, own_path)
+            # A downloaded public bootstrap cleans itself up after the install.
+            # The private offline installer is the file he hands to testers and
+            # reruns for repair (round 42: "now SM64Trainer-1.10.0-beta.5-
+            # private.exe doesn't exist?"), so it stays where it is.
+            launch_app(exe, None if embedded else own_path)
         ui.done(exe)
         return True
     except Exception as err:
