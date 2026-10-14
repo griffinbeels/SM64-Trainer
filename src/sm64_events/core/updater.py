@@ -45,7 +45,8 @@ from sm64_events.core.release_feed import ReleaseFeed, ReleaseNotes, http_get, n
 from sm64_events.core.release_contract import release_assets, select_release, version_key
 from sm64_events.core.update_apply import (STAGING_DIR, apply_plan,
                                            confirm_startup, sweep_backup)
-from sm64_events.core.update_policy import installed_floor, read_policy, record_installed, write_policy
+from sm64_events.core.update_policy import (adopt_channel_default, installed_floor, read_policy,
+                                            record_installed, write_policy)
 from sm64_events.core.update_fetch import (RangeUnsupported, fetch_full_zip,
                                            fetch_plan, free_disk_ok)
 from sm64_events.core.update_plan import (INSTALLED_MANIFEST, MANIFEST_ASSET,
@@ -207,6 +208,10 @@ class UpdateService:
             except ValueError:
                 # Packaged diagnostic probes use a deliberately synthetic version.
                 pass
+            try:
+                adopt_channel_default(self._state_path, self._build.channel)
+            except (OSError, ValueError):
+                log.warning("beta update preference could not be recorded", exc_info=True)
 
     def beta_preferences(self) -> dict:
         policy = read_policy(self._state_path)
@@ -223,7 +228,7 @@ class UpdateService:
         with self._check_lock:
             if self._state in ("downloading", "installing"):
                 raise ValueError("wait for the current update to finish")
-            write_policy(self._state_path, receive_beta_updates=enabled)
+            write_policy(self._state_path, receive_beta_updates=enabled, beta_choice="player")
             self._cache = self._manifest = self._manifest_text = self._plan = None
             self._checked_at = 0.0
         return self.status(force=True)

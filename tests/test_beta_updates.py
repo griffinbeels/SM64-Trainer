@@ -357,3 +357,29 @@ def test_stale_latest_cannot_resurrect_a_withdrawn_list_release(flag):
 def test_partial_history_cannot_discard_an_observed_withdrawal():
     rows = [release("v1.1.0", withdrawn=True)] + [release("v1.0.0")] * 99
     assert check_for_update("1.0.0", http=feed_http(rows, latest="v1.1.0")) is None
+
+
+def test_a_beta_build_opts_its_install_into_beta_updates_once(tmp_path, monkeypatch):
+    """His rule (round 50): the beta build he sends a tester already receives
+    later betas and production; production builds stay opted out until the
+    player ticks Settings > Receive beta updates, and a player's own choice
+    is never overridden."""
+    from sm64_events.core import build_channel
+    from sm64_events.core.update_policy import adopt_channel_default
+    beta = build_channel.BuildChannel(channel="beta", build_id="tester-beta", installation="normal")
+    stable = build_channel.BuildChannel(channel="stable", build_id="", installation="normal")
+    routes = _fake_release(tmp_path / "release", "v1.9.0-beta.3", {"SM64Trainer.exe": b"BETA"})
+    routes[RELEASES] = json.dumps([release("v1.9.0-beta.3")]).encode()
+    routes[LATEST] = json.dumps(release("v1.0.0")).encode()
+    monkeypatch.setattr(build_channel, "current_build", lambda: beta)
+    svc = service(tmp_path, routes, current="1.9.0-beta.2")
+    assert svc.beta_preferences()["receive_beta_updates"] is True
+    assert svc.status()["latest"] == "1.9.0-beta.3"  # the next published beta reaches the tester
+    # Unticked once, a later start of the beta build keeps the player's choice.
+    svc.set_beta_updates(False)
+    assert adopt_channel_default(tmp_path / "profile/data/update_state.json", "beta")["receive_beta_updates"] is False
+    # A production build never opts anyone in.
+    other = tmp_path / "production"
+    other.mkdir()
+    monkeypatch.setattr(build_channel, "current_build", lambda: stable)
+    assert service(other, routes).beta_preferences()["receive_beta_updates"] is False
