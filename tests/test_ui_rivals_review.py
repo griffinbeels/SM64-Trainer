@@ -519,10 +519,27 @@ def test_failed_scope_swap_does_not_repeat_without_another_gesture(practice_scop
     assert len(state["errors"]) == 1 and "422 (Unprocessable Entity)" in state["errors"][0]
 
 
+def _pump_until(page, ready):
+    """Route handlers run while the page waits: pump until `ready()` holds (up to 5 s)."""
+    for _ in range(100):
+        if ready():
+            return True
+        page.wait_for_timeout(50)
+    return ready()
+
+
 def test_scope_change_closes_pending_picker_and_settings_drafts(fixture):
     page, state = fixture
-    for opener in (lambda: settings(page), lambda: page.get_by_role("button", name="Add Rival", exact=True).click()):
+    openers = ((lambda: settings(page), False),
+               (lambda: page.get_by_role("button", name="Add Rival", exact=True).click(), True))
+    for opener, searches in openers:
+        before = len(state["requests"])
         opener()
+        # The picker searches the scope it opened with. Under merge-check load
+        # that request can land after the scope below changes, and the fake
+        # server judges it by the new scope (2026-10-13), so let it land first.
+        if searches:
+            assert _pump_until(page, lambda seen=before: len(state["requests"]) > seen)
         updated = deepcopy(state["session"])
         updated["rivals"]["scope"] = "overall" if updated["rivals"]["scope"] == "strategy" else "strategy"
         state["session"] = updated
