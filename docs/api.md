@@ -77,6 +77,35 @@ never offered, so an unverified exe can never be applied. The exe swap uses
 the Windows rename-a-running-exe trick and restores the backup on failure —
 see `docs/architecture.md` → Self-update.
 
+## Local request capability (localhost only)
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/local-access` | `{request_token}`: the per-start capability every mutating request (POST, PUT, DELETE) carries as `X-SM64-Request-Token`. Served only to the exact loopback origin; it rotates on every server start (`server/local_access.py`). |
+
+## Community account (localhost only)
+
+The trainer's side of the community service (`server/community_api.py` over
+`community/account.py`). Present only in a build that configures the service;
+mutations need the local request capability above. Cloud protocol:
+`docs/community-protocol.md`.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/community/account` | The account as the trainer holds it: `{enabled, stored, authenticated, status, provider, sharing, terms_version, privacy_version, error, ...}` plus the profile when signed in; `stored` means a saved refresh credential exists (an offline start still counts as signed in). |
+| `POST /api/community/auth/start` `{provider, open_browser?}` | Begin Discord or Twitch sign-in; `open_browser` makes the server open the default browser (the desktop shell). Returns the authorize URL and `opened`. |
+| `POST /api/community/auth/cancel` `{attempt_id}` | Abandon a pending sign-in. |
+| `GET /api/community/auth/callback` | The OAuth return page; checks the one-use PKCE state and finishes the sign-in. |
+| `POST /api/community/auth/sign-out` | Forget the stored credential; the sign-in step returns. |
+| `POST /api/community/account/refresh` | Re-read the account from the cloud. |
+| `GET /api/community/names/check?name=` | `{name, available}`: whether a player name is free (`available: null` when the cloud cannot say). |
+| `PUT /api/community/account` `{name, terms_version, privacy_version, sharing, sheet_runner?}` | Create the account: name, consent and sharing. |
+| `PUT /api/community/account/name` `{name}` | Rename (required after a moderation rename). |
+| `PUT /api/community/account/sharing` `{enabled}` | Turn automatic sharing on or off. |
+| `GET /api/community/account/export` | Download everything the cloud holds for the account. |
+| `POST /api/community/account/withdraw` `{confirmation: "WITHDRAW"}` | Unpublish every shared ghost. |
+| `POST /api/community/account/delete` `{confirmation: "DELETE"}` | Delete the account and its cloud data. |
+
 ## Event schema
 
 Every WebSocket message is a versioned envelope:
