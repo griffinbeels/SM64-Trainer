@@ -6,7 +6,9 @@ on:
     paths:
       - "website/**"
       - "tools/build_website.py"
+      - "tools/preview_website.py"
       - "tests/test_build_website.py"
+      - "tests/test_preview_website.py"
       - "src/sm64_events/core/update_plan.py"
       - ".github/workflows/website.yml"
   pull_request:
@@ -14,7 +16,9 @@ on:
     paths:
       - "website/**"
       - "tools/build_website.py"
+      - "tools/preview_website.py"
       - "tests/test_build_website.py"
+      - "tests/test_preview_website.py"
       - "src/sm64_events/core/update_plan.py"
       - ".github/workflows/website.yml"
   release:
@@ -59,8 +63,23 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Test the website builder
-        run: python -m unittest discover -s tests -p test_build_website.py -v
+      - name: Test website release and review contracts
+        run: python -m unittest discover -s tests -p 'test_*website.py' -v
+
+      # Always render actual source, including before the first stable release.
+      # Sample output has inert downloads and is never a publishing candidate.
+      - name: Build offline review states
+        run: |
+          python tools/preview_website.py --output .website-preview/ready
+          python tools/preview_website.py --output .website-preview/unavailable --state unavailable
+
+      - name: Save isolated sample previews
+        uses: actions/upload-artifact@v7
+        with:
+          name: trainer-website-sample-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .website-preview/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Determine whether this is a withdrawal refresh
         id: policy
