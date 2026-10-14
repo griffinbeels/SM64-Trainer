@@ -12,8 +12,13 @@ Source review: feature/ghost-overlay at 297756ea.
 ## The repeatable loop
 
 Keep **one installation, shortcut, account and local profile**. Add a Settings
-toggle, **Receive beta updates**, default off. Beta and Stable identify release
-types, not different installed programs or data directories. Add a thin
+toggle, **Receive beta updates**. A production build leaves it off; a beta
+build turns it on once, the first time it opens, unless the player already
+chose (`core/update_policy.py::adopt_channel_default`, which records who chose
+in `beta_choice`). A tester installed from a beta therefore receives every
+published beta and, later, production, in the same installation. Beta and
+Stable identify release types, not different installed programs or data
+directories. Add a thin
 release coordinator over the existing packaging and release tools. Its two
 operator actions are **Ship beta** and **Release approved beta**, implemented
 by `tools/release_flow.py` over the shared `tools/release.py` phases.
