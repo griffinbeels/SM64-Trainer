@@ -63,17 +63,22 @@ def selection_session(pb=PB):
     return initial
 
 
-def problems_but_own_navigation(page):
-    """Page problems, less the pause poll this test's own `goto` cancels.
+# The page's timed GET polls (`pollJSON` in ui/store.js and ui/components/replay.js).
+POLLS = ("/api/pause", "/api/replay/status")
 
-    Each width reloads the page, and a timed GET /api/pause still in flight
-    from the previous load comes back net::ERR_ABORTED -- under a loaded full
-    run that is often (merge checks of 2026-09-28 and 09-29). The poll simply
-    runs again on the new page, so the abort is the test's doing; any other
-    failed request still counts."""
+
+def problems_but_own_navigation(page):
+    """Page problems, less the polls this test's own `goto` cancels.
+
+    Each width reloads the page, and a timed poll still in flight from the
+    previous load comes back net::ERR_ABORTED -- under a loaded full run that
+    is often (/api/pause in the merge checks of 2026-09-28 and 09-29,
+    /api/replay/status twice on 2026-10-13). The poll simply runs again on
+    the new page, so the abort is the test's doing; any other failed request
+    still counts."""
     return [problem for problem in page.problems()
             if not (problem.startswith("requestfailed: ")
-                    and problem.endswith("/api/pause (net::ERR_ABORTED)"))]
+                    and any(problem.endswith(f"{poll} (net::ERR_ABORTED)") for poll in POLLS))]
 
 
 def flip_off(page, state, owner, setting, writes):
