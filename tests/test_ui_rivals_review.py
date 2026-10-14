@@ -481,6 +481,13 @@ def test_rapid_practice_scope_changes_finish_on_latest_tab(practice_scopes):
     state["defer"] = True
     card.get_by_role("button", name="Overall", exact=True).click()
     page.wait_for_function("!document.querySelector('.ghost-row .rivals')")
+    # The write reaches the server one step after the click: every write first
+    # fetches the local request capability (ui/api.js localFetch). Pump the
+    # page's events until it arrives instead of assuming it already has.
+    for _ in range(100):
+        if state["pending"]:
+            break
+        page.wait_for_timeout(50)
     assert len(state["pending"]) == 1
     card.get_by_role("button", name="Strategy", exact=True).click()
     assert len(state["writes"]) == 1
