@@ -4,7 +4,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { downloadAccountData } from "../community.js";
 import { NAME_HINT, normalizedPlayerName, playerNameError } from "../communityname.js";
-import { ScopeChips } from "./rankpage.js";
+import { ScopeChips } from "./scopechips.js";
 
 const html = htm.bind(h);
 

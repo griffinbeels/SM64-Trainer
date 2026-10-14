@@ -40,7 +40,7 @@ Celebrations, the level-up climb, and the tuning inspector moved to `.claude/rul
 
 ## The runner page, its doors and the ▶ rows
 
-- `runnerpage.js` draws through rankpage.js's exported `ScopeChips`/`CoverageStrip`/`Breakdown` pointed at `GET /api/leaderboard/runner/{name}` (+ `/summary`), **never a second implementation**; differences are props (`source`, `readOnly` — no ✎, no `EntityDetail` click, tiles `.is-static` — and `variant="runner"`).
+- The scope chip row lives in `scopechips.js` (the account screen imports only it, never the Rank page). `runnerpage.js` draws through rankpage.js's exported `ScopeChips`/`CoverageStrip`/`Breakdown` pointed at `GET /api/leaderboard/runner/{name}` (+ `/summary`), **never a second implementation**; differences are props (`source`, `readOnly` — no ✎, no `EntityDetail` click, tiles `.is-static` — and `variant="runner"`).
 - No cycle: rankpage.js never imports runnerpage.js; `app.js` picks the mount (`openRunnerName`, cleared on leaving Rank; `setTab(name, {keepRunner})`) and passes `onOpenRunner`.
 - `LeaderboardCard` (between chips and MARELO card, `collapsible.js::Disclose`, closed per mount) OWNS the fetch (`useBoard`) so it opens onto loaded rows; tests and uilab stories open it through its real head (`OPEN_LEADERBOARD`). Your own row stays dead.
 - Doors: `librarytarget.js::RunnerName` (one component for `ExampleCard` and `PlainEntry`, never on the synthetic You row); lit coverage tiles (`onOpen`, distinct from `onToggle`) and breakdown names (`.rank-entity-link`, art inside the button; own rows pass `you:true`) fire `openLibrary({kind:"target", entity, runner, timeCs})`. Navigating text wears `.textlink`. Entries carry `data-runner`/`data-time-cs`. An unrun tile stays `.is-static`.
