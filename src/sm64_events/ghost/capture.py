@@ -293,14 +293,14 @@ class NativeCapture:
             channel_closed = self._close_channel()
             if not channel_closed:
                 errors.append(self._channel_cleanup_error or "native ghost channel cleanup pending")
-        except Exception as error:  # keep this owner available for retry
+        except Exception as error:  # noqa: BLE001 - retained for retry; an escape skips the sound child
             channel_closed = False
             errors.append(f"native ghost channel: {type(error).__name__}: {error}")
         if not self._sound_closed:
             try:
                 self._sound.stop()
                 self._sound_closed = True
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - an escape ends the retry loop, child alive
                 errors.append(f"ghost sound: {type(error).__name__}: {error}")
         self.cleanup_error = "; ".join(errors) or None
         if self.cleanup_error:

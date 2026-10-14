@@ -165,66 +165,12 @@ class NativeChannel:
         if retired:
             raise ValueError(f"native ghost clips are a list; retired keys: {retired}")
         enabled = bool(value.get("enabled", False))
-        generations = {}
-        for name in ("prepare_generation", "activate_generation", "activate_start"):
-            number = value.get(name, 0)
-            if type(number) is not int or not 0 <= number < 2**64:
-                raise ValueError(f"native ghost {name} is invalid")
-            generations[name] = number
-        if generations["activate_generation"] not in (0, generations["prepare_generation"]):
-            raise ValueError("native ghost activation must name its prepared generation")
-        preparing = generations["prepare_generation"] != 0
-        request.prepare_generation = generations["prepare_generation"]
-        request.activate_generation = generations["activate_generation"]
-        request.activate_start = generations["activate_start"]
-        request.cancel_preparation = int(_switch(value, "cancel_preparation", False))
-        if bool(request.activate_generation) != bool(request.activate_start):
-            raise ValueError("activation requires a certified start sequence")
-        if request.cancel_preparation and (not preparing or request.activate_generation):
-            raise ValueError("cancellation requires a staged generation without activation")
-        opacity, nudge = float(value.get("opacity", DEFAULT_OPACITY)), int(value.get("nudge", 0))
-        if not 0 <= opacity <= 1 or not -NUDGE_LIMIT_FRAMES <= nudge <= NUDGE_LIMIT_FRAMES:
-            raise ValueError("invalid native ghost opacity or timing nudge")
-        request.play_enabled, request.opacity, request.nudge = enabled, opacity, nudge
-        request.stop_at_star = bool(value.get("stop_at_star", True))
-        request.owner_suspended = bool(value.get("owner_suspended", False))
-        proximity = checked_proximity({
-            "enabled": value.get("proximity_enabled", DEFAULT_PROXIMITY["enabled"]),
-            "extra_distance": value.get("proximity_distance", DEFAULT_PROXIMITY["extra_distance"]),
-        })
-        request.proximity_enabled = proximity["enabled"]
-        request.proximity_distance = proximity["extra_distance"]
-        request.tint_enabled = bool(value.get("tint_enabled", DEFAULT_TINT["enabled"]))
-        request.volume = _volume(value)
-        for field, default in native_switches().items():
-            setattr(request, field, _switch(value, field, default))
-        _set_annotations(request, value)
-        mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
-        if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
-            raise ValueError("invalid native ghost seek")
-        request.mode, request.seek_igt, request.origin = mode, seek, P.Origin()
-        if enabled and mode == 0:
-            origin = value.get("origin", {})
-            if not isinstance(origin, dict):
-                raise ValueError("native ghost origin is missing")
-            for field, bits in (("kind", 32), ("configuration", 32), ("epoch", 32),
-                                ("global_timer", 32), ("session_id", 64), ("arm_id", 64)):
-                scalar = origin.get(field)
-                if type(scalar) is not int or not (0 if field == "global_timer" else 1) <= scalar < 2**bits:
-                    raise ValueError("native ghost origin identity is invalid")
-                setattr(request.origin, field, scalar)
-            instant = origin.get("utc")
-            if (request.origin.kind not in (1, 2) or type(instant) not in (int, float)
-                    or not math.isfinite(instant) or instant <= 0):
-                raise ValueError("native ghost origin timestamp is invalid")
-            request.origin.utc = instant
+        preparing = _set_generations(request, value)
+        request.play_enabled = enabled
+        _set_presentation(request, value)
+        _set_seek(request, value, enabled)
         if enabled or preparing:
-            model_id = value["model_id"]
-            if type(model_id) is not int or not 0 < model_id < 2**64:
-                raise ValueError("native ghost model identity is invalid")
-            request.model_id = model_id
-            units = P.path_units(value["rom_path"]) if value.get("rom_path") else ()
-            request.rom_path[:] = units + (0,) * (P.PATH_CHARS - len(units))
+            _set_model(request, value)
         if enabled or preparing or "clips" in value:
             _set_clips(request, value.get("clips"), enabled and not preparing)
         _set_path(request, value)
@@ -255,6 +201,87 @@ def _set_defaults(request) -> None:
         # Hue belongs to each selected clip, not to the request header.
         if field != "hue_degrees":
             setattr(request, field, default)
+
+
+def _set_generations(request, value: dict) -> bool:
+    """The staged and activated generations and any cancellation; returns
+    whether a generation is being prepared."""
+    generations = {}
+    for name in ("prepare_generation", "activate_generation", "activate_start"):
+        number = value.get(name, 0)
+        if type(number) is not int or not 0 <= number < 2**64:
+            raise ValueError(f"native ghost {name} is invalid")
+        generations[name] = number
+    if generations["activate_generation"] not in (0, generations["prepare_generation"]):
+        raise ValueError("native ghost activation must name its prepared generation")
+    preparing = generations["prepare_generation"] != 0
+    request.prepare_generation = generations["prepare_generation"]
+    request.activate_generation = generations["activate_generation"]
+    request.activate_start = generations["activate_start"]
+    request.cancel_preparation = int(_switch(value, "cancel_preparation", False))
+    if bool(request.activate_generation) != bool(request.activate_start):
+        raise ValueError("activation requires a certified start sequence")
+    if request.cancel_preparation and (not preparing or request.activate_generation):
+        raise ValueError("cancellation requires a staged generation without activation")
+    return preparing
+
+
+def _set_presentation(request, value: dict) -> None:
+    """How the ghosts look, sound and line up, each absent key its default."""
+    opacity, nudge = float(value.get("opacity", DEFAULT_OPACITY)), int(value.get("nudge", 0))
+    if not 0 <= opacity <= 1 or not -NUDGE_LIMIT_FRAMES <= nudge <= NUDGE_LIMIT_FRAMES:
+        raise ValueError("invalid native ghost opacity or timing nudge")
+    request.opacity, request.nudge = opacity, nudge
+    request.stop_at_star = bool(value.get("stop_at_star", True))
+    request.owner_suspended = bool(value.get("owner_suspended", False))
+    proximity = checked_proximity({
+        "enabled": value.get("proximity_enabled", DEFAULT_PROXIMITY["enabled"]),
+        "extra_distance": value.get("proximity_distance", DEFAULT_PROXIMITY["extra_distance"]),
+    })
+    request.proximity_enabled = proximity["enabled"]
+    request.proximity_distance = proximity["extra_distance"]
+    request.tint_enabled = bool(value.get("tint_enabled", DEFAULT_TINT["enabled"]))
+    request.volume = _volume(value)
+    for field, default in native_switches().items():
+        setattr(request, field, _switch(value, field, default))
+    _set_annotations(request, value)
+
+
+def _set_seek(request, value: dict, enabled: bool) -> None:
+    """The seek mode and point; enabled mode-0 playback also needs its origin."""
+    mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
+    if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
+        raise ValueError("invalid native ghost seek")
+    request.mode, request.seek_igt, request.origin = mode, seek, P.Origin()
+    if enabled and mode == 0:
+        _set_origin(request, value.get("origin", {}))
+
+
+def _set_origin(request, origin) -> None:
+    """The recorded start the playing ghosts are anchored to."""
+    if not isinstance(origin, dict):
+        raise ValueError("native ghost origin is missing")
+    for field, bits in (("kind", 32), ("configuration", 32), ("epoch", 32),
+                        ("global_timer", 32), ("session_id", 64), ("arm_id", 64)):
+        scalar = origin.get(field)
+        if type(scalar) is not int or not (0 if field == "global_timer" else 1) <= scalar < 2**bits:
+            raise ValueError("native ghost origin identity is invalid")
+        setattr(request.origin, field, scalar)
+    instant = origin.get("utc")
+    if (request.origin.kind not in (1, 2) or type(instant) not in (int, float)
+            or not math.isfinite(instant) or instant <= 0):
+        raise ValueError("native ghost origin timestamp is invalid")
+    request.origin.utc = instant
+
+
+def _set_model(request, value: dict) -> None:
+    """The model identity and ROM path that playing or preparing ghosts require."""
+    model_id = value["model_id"]
+    if type(model_id) is not int or not 0 < model_id < 2**64:
+        raise ValueError("native ghost model identity is invalid")
+    request.model_id = model_id
+    units = P.path_units(value["rom_path"]) if value.get("rom_path") else ()
+    request.rom_path[:] = units + (0,) * (P.PATH_CHARS - len(units))
 
 
 def _switch(value: dict, key: str, default: bool) -> bool:

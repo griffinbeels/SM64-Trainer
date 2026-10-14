@@ -101,10 +101,8 @@ def _https_origin(value: str, field: str) -> None:
         raise ValueError(f"{field} must be an HTTPS origin without credentials")
 
 
-def parse_metadata(value: object) -> BuildChannel:
-    """Validate a build file without echoing submitted values or secrets."""
-    if not isinstance(value, dict) or set(value) - _FIELDS:
-        raise ValueError("build metadata contains unsupported fields")
+def _check_identity(value: dict) -> None:
+    """The schema, installation identity and channel a build file declares."""
     if type(value.get("schema")) is not int or value["schema"] not in (LEGACY_SCHEMA, CONFIG_SCHEMA):
         raise ValueError("unsupported build metadata schema")
     if value["schema"] == LEGACY_SCHEMA and "installation" in value:
@@ -113,6 +111,28 @@ def parse_metadata(value: object) -> BuildChannel:
         raise ValueError("unified build metadata requires the normal installation identity")
     if value.get("channel") not in ("stable", "beta"):
         raise ValueError("unsupported build channel")
+
+
+def _check_community(build: BuildChannel) -> None:
+    """A build naming any public service field must name all four, each well formed."""
+    if not build.community_enabled:
+        raise ValueError('community requires all four public service fields')
+    _https_origin(build.community_url, "community_url")
+    _https_origin(build.supabase_url, "supabase_url")
+    if not re.fullmatch(r"sb_publishable_[A-Za-z0-9_-]{1,256}", build.supabase_publishable_key):
+        raise ValueError("beta requires a public Supabase publishable key")
+    try:
+        if str(UUID(build.oauth_client_id)) != build.oauth_client_id:
+            raise ValueError
+    except ValueError:
+        raise ValueError("beta oauth_client_id must be the registered client UUID") from None
+
+
+def parse_metadata(value: object) -> BuildChannel:
+    """Validate a build file without echoing submitted values or secrets."""
+    if not isinstance(value, dict) or set(value) - _FIELDS:
+        raise ValueError("build metadata contains unsupported fields")
+    _check_identity(value)
     fields = {name: value.get(name, "") for name in _FIELDS - {"schema", "installation"}}
     if any(not isinstance(item, str) or len(item) > 2048 for item in fields.values()):
         raise ValueError("build metadata fields must be bounded strings")
@@ -129,17 +149,7 @@ def parse_metadata(value: object) -> BuildChannel:
         raise ValueError("beta friend invitation requires complete community configuration")
     if not any(fields[name] for name in _PUBLIC_FIELDS):
         return build  # Offline builds keep their declared installation identity.
-    if not all(fields[name] for name in _PUBLIC_FIELDS):
-        raise ValueError('community requires all four public service fields')
-    _https_origin(build.community_url, "community_url")
-    _https_origin(build.supabase_url, "supabase_url")
-    if not re.fullmatch(r"sb_publishable_[A-Za-z0-9_-]{1,256}", build.supabase_publishable_key):
-        raise ValueError("beta requires a public Supabase publishable key")
-    try:
-        if str(UUID(build.oauth_client_id)) != build.oauth_client_id:
-            raise ValueError
-    except ValueError:
-        raise ValueError("beta oauth_client_id must be the registered client UUID") from None
+    _check_community(build)
     return build
 
 
