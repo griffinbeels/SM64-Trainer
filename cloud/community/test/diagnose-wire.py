@@ -37,7 +37,7 @@ for(const [name,c] of Object.entries(input)){
 }
 """
 result = subprocess.run(['C:/Program Files/nodejs/node.exe', '--input-type=module', '-e', code, str(service)],
-    input=json.dumps(cases), capture_output=True, text=True, encoding='utf-8', timeout=20,
+    input=json.dumps(cases), capture_output=True, text=True, encoding='utf-8', timeout=20, check=False,
     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
 print(result.stdout, end='')
 if result.returncode:

@@ -3,7 +3,7 @@ import {nativeAuthorize,registeredNativeClient} from '../src/portal-contract.js'
 const $=id=>document.getElementById(id),message=t=>{$('status').textContent=t;},attemptKey='sm64-beta-oauth-attempt';
 let client,cfg,attempt,authorizationID;
 function save(v){sessionStorage.setItem(attemptKey,JSON.stringify(v));}
-function validAttempt(){let a;try{a=JSON.parse(sessionStorage.getItem(attemptKey));}catch{}if(!a||a.expires<Date.now())throw Error('Expired request');return a;}
+function validAttempt(){let a;try{a=JSON.parse(sessionStorage.getItem(attemptKey));}catch{/* Corrupt or blocked storage is no attempt; the check below rejects it. */}if(!a||a.expires<Date.now())throw Error('Expired request');return a;}
 function attemptPair(){
   // In-flight requests from the old private beta did not persist a pair. They
   // are bound only to the deliberately preserved legacy primary configuration.
@@ -25,20 +25,27 @@ async function showConsent(){
 async function signedIn(){const {data,error}=await client.auth.getClaims();if(error||!data?.claims){$('login').hidden=false;message('Choose how to sign in.');return;}await showConsent();}
 async function decision(approved){const {data,error}=await client.auth.oauth[approved?'approveAuthorization':'denyAuthorization'](authorizationID,{skipBrowserRedirect:true});if(error||!data?.redirect_url)throw Error('Consent failed');nativeRedirect(data.redirect_url);}
 function action(id,fn){$(id).addEventListener('click',()=>Promise.resolve().then(fn).catch(()=>message('Sign-in could not finish. Return to the trainer and try again.')));}
+function startNative(u){
+  const authorize=nativeAuthorize(u.searchParams.get('native_authorize'),{supabaseURL:cfg.auth.supabase_url,clientID:cfg.auth.client_id,callback:cfg.auth.native_callback,nativeClients:cfg.auth.native_clients}),parsed=new URL(authorize),provider=u.searchParams.get('provider');
+  if(!['discord','google','twitch','email'].includes(provider))throw Error('Unsupported provider');save({provider,clientID:parsed.searchParams.get('client_id'),callback:parsed.searchParams.get('redirect_uri'),state:parsed.searchParams.get('state'),expires:Date.now()+300000});location.replace(authorize);
+}
+// Password recovery can complete without a live native OAuth attempt. Supabase
+// still requires the original browser's PKCE verifier; no implicit token URL.
+function resumeAttempt(u){
+  if(u.pathname!=='/auth/recovery'){try{attempt=validAttempt();authorizationID=u.searchParams.get('authorization_id')||attempt.authorizationID;}catch(e){if(u.pathname!=='/auth/callback')throw e;}}
+  if(u.pathname==='/auth/authorize'){if(!authorizationID||authorizationID.length>256)throw Error('Missing request');attempt={...attempt,authorizationID};save(attempt);}
+}
+async function exchangeReturn(u){
+  const code=u.searchParams.get('code');history.replaceState(null,'',u.pathname);if(!code||code.length>4096)throw Error('Invalid return');const {error}=await client.auth.exchangeCodeForSession(code);if(error)throw Error('Return failed');
+}
 async function boot(){
   cfg=await (await fetch('/v1/config',{cache:'no-store',credentials:'omit'})).json();if(cfg.error)throw Error('Unavailable');$('policy').href=cfg.terms_url;
   client=createClient(cfg.auth.supabase_url,cfg.auth.publishable_key,{auth:{flowType:'pkce',storage:localStorage,persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
   const u=new URL(location.href);
-  if(u.pathname==='/auth/start'){
-    const authorize=nativeAuthorize(u.searchParams.get('native_authorize'),{supabaseURL:cfg.auth.supabase_url,clientID:cfg.auth.client_id,callback:cfg.auth.native_callback,nativeClients:cfg.auth.native_clients}),parsed=new URL(authorize),provider=u.searchParams.get('provider');
-    if(!['discord','google','twitch','email'].includes(provider))throw Error('Unsupported provider');save({provider,clientID:parsed.searchParams.get('client_id'),callback:parsed.searchParams.get('redirect_uri'),state:parsed.searchParams.get('state'),expires:Date.now()+300000});location.replace(authorize);return;
-  }
-  // Password recovery can complete without a live native OAuth attempt. Supabase
-  // still requires the original browser's PKCE verifier; no implicit token URL.
-  if(u.pathname!=='/auth/recovery'){try{attempt=validAttempt();authorizationID=u.searchParams.get('authorization_id')||attempt.authorizationID;}catch(e){if(u.pathname!=='/auth/callback')throw e;}}
-  if(u.pathname==='/auth/authorize'){if(!authorizationID||authorizationID.length>256)throw Error('Missing request');attempt={...attempt,authorizationID};save(attempt);}
-  else if(u.pathname==='/auth/callback'||u.pathname==='/auth/recovery'){
-    const code=u.searchParams.get('code');history.replaceState(null,'',u.pathname);if(!code||code.length>4096)throw Error('Invalid return');const {error}=await client.auth.exchangeCodeForSession(code);if(error)throw Error('Return failed');
+  if(u.pathname==='/auth/start'){startNative(u);return;}
+  resumeAttempt(u);
+  if(u.pathname==='/auth/callback'||u.pathname==='/auth/recovery'){
+    await exchangeReturn(u);
     if(u.pathname==='/auth/recovery'){$('recovery').hidden=false;message('Choose a new password.');bindRecovery();return;}
     if(!attempt){message('Email confirmed. Return to the trainer and start sign-in again.');return;}
   }
