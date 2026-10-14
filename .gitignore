@@ -94,3 +94,6 @@ tools/verification/node_modules/
 
 # Generated Cloudflare static website output.
 .website-build/
+
+# Inert local/CI website review artifacts.
+.website-preview/

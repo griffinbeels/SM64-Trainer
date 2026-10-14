@@ -1654,4 +1654,4 @@ tool rather than trusting either figure.
 
 ## Public website and downloads
 
-The public website is a static presentation in `website/`. `tools/build_website.py` binds its download links and release details to validated GitHub release assets. The website shares the asset-name registry with the installer and updater; it does not run the trainer or store practice data. Community authentication stays with its existing service on `auth.sm64trainer.app`. Hosting and release-driven publishing belong to [the website deployment guide](website-deployment.md).
+The public website is a static presentation in `website/`. `tools/build_website.py` binds its download links and release details to validated GitHub release assets. The website shares the asset-name registry with the installer and updater; it does not run the trainer or store practice data. Community authentication stays with its existing service on `auth.sm64trainer.app`. Editing, screenshot provenance and safe local review belong to [the website maintenance guide](../website/README.md). Hosting and release-driven publishing belong to [the website deployment guide](website-deployment.md).

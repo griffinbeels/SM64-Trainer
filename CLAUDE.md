@@ -36,6 +36,7 @@ not in this map.
 | Import correctness | `uv run python tools/scorecard_parity.py`; successive runners must produce `+0.00` on every corresponding Scorecard tile |
 | Inspect one UI surface at supported widths | `uv run python tools/contact_sheet.py <selector>`; read UI rules for state-specific fixtures |
 | Why each lint rule exists | [docs/agent-maintainability.md](docs/agent-maintainability.md); `python tools/verify_lint.py` enforces them |
+| Public website: copy, screenshots, styling, offline preview | [website/README.md](website/README.md); [deployment runbook](docs/website-deployment.md) |
 | API consumer | [docs/api.md](docs/api.md): `GET /state`, `GET /health`, `/ws/events` |
 | Cross-cutting domain evidence | [docs/architecture.md](docs/architecture.md) |
 | Older probe commands, incidents and rejected approaches | [archived guide](docs/history/agent-guide-2026-09-05.md), historical evidence only |
@@ -113,9 +114,9 @@ inputs, failures, or unresolved concerns. Preserve actual native exit codes; in
 PowerShell never pipe test output into `Select-Object` or use `2>&1` on native
 commands.
 
-For UI changes, render and inspect the named surface with representative data
-at its supported widths (850px minimum, any height). Confirm the fixture reaches
-the changed state, count repeated elements, and use realistically long values.
+For Trainer UI changes (`src/sm64_events/ui/`), render and inspect the named
+surface with representative data at its supported widths (850px minimum, any
+height). Confirm the fixture reaches the changed state, count repeated elements, and use realistically long values.
 Read UI rules for `@container` layout gates, fixture-reach and surface contracts.
 Behavior judged by feel gets a tuning inspector and human verification.
 Prove new source-scan or layout guards by restoring the violation, seeing the
@@ -132,6 +133,9 @@ failure, then reverting it. Tests alone do not establish visual correctness.
 - Update the glossary for changed domain nouns, chain rules for moved value
   hops, the rule index for changed routes, architecture for cross-cutting facts,
   API docs for endpoints, and README for consumer-facing changes.
+- When a shipped feature changes public capabilities or UI pictured on the
+  website, assess its website impact through [website/README.md](website/README.md).
+  Update affected copy or screenshots where appropriate; unrelated fixes need no refresh.
 - Keep one authoritative home for each fact and link it elsewhere. Tracked
   references must resolve in a fresh clone; private working notes are not public
   evidence. Preserve incident detail on demand rather than appending it here.

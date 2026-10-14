@@ -1,6 +1,6 @@
 # SM64 Trainer website deployment
 
-The static website is served at **sm64trainer.app**. GitHub releases provide
+The public website uses **sm64trainer.app**. GitHub releases provide
 the downloads; Cloudflare Pages serves only the website's public files.
 Production HTML contains the exact installer link, version, upload date and
 release-notes link even when JavaScript is disabled. The browser does not call
@@ -10,16 +10,37 @@ the GitHub API or receive a token.
 that hostname, Worker, Supabase/provider redirects, policies and native localhost
 callback. Website setup requires no change to them.
 
-## Build and review locally
+## Current readiness — October 13, 2026
 
-Use Python 3.12 or newer from the repository checkout. The builder and its
-focused tests use the standard library. App dependencies and a running trainer
-or emulator are unnecessary.
+This is a dated operator-verified snapshot for the existing installation. Recheck
+current settings before changing them; it is not a template for a new account.
+
+| Item | Verified state |
+| --- | --- |
+| Pages project | `sm64-trainer`, Direct Upload, production branch `main` |
+| Apex domain | `sm64trainer.app` custom domain **Active**, with a saved proxied apex CNAME to `sm64-trainer.pages.dev` |
+| Production switch | `WEBSITE_DEPLOY_ENABLED=true` |
+| CI credentials | Repository secret names `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are present; no values belong in documentation |
+| Public app release | `1.9.1`, below the stable community floor in `website/release-policy.json` |
+| Public website deployment | None yet; the live builder returns a launch hold until an eligible stable community release exists |
+
+An Active domain and enabled switch do not establish that a website has been
+uploaded. The release gate still applies. The first eligible deployment is also
+the remaining end-to-end check of the stored CI credential's publishing access.
+Authentication remains on its existing service and hostname.
+
+## Production build and release validation
+
+For copy, screenshots and layout review, use the safe offline preview in
+[website/README.md](../website/README.md). CI never publishes its sample artifacts.
+The commands below validate real releases for an operator; they can return a
+launch hold and produce no directory. App dependencies and a running trainer or
+emulator are unnecessary.
 
 ```powershell
-python -m unittest discover -s tests -p test_build_website.py -v
+uv run --no-project --python 3.13 python -m unittest discover -s tests -p "test_*website.py" -v
 $websiteBuild = Join-Path $env:TEMP ('sm64trainer-site-' + [guid]::NewGuid().ToString('N'))
-python tools/build_website.py --output $websiteBuild
+uv run --no-project --python 3.13 python tools/build_website.py --output $websiteBuild
 ```
 
 Use a new output directory for every build. The builder validates releases
@@ -27,9 +48,10 @@ before emitting deployable files. It copies only public assets and writes
 `release.json`; source documentation, policy files and credentials are excluded.
 Upload the generated directory, **never the source `website/` folder**.
 
-For an offline review, add `--releases-json <fixture-path>` with a JSON release
-object or list. Fixture mode makes no release requests and never waits between
-attempts. Live requests accept `--attempts` from 1 to 5 and `--retry-delay` from
+For an explicitly offline production-builder fixture, add
+`--releases-json <fixture-path>` with a JSON release object or list. Prefer the
+safe preview helper for design review; never publish fixture-built output.
+Fixture mode makes no release requests and never waits between attempts. Live requests accept `--attempts` from 1 to 5 and `--retry-delay` from
 0 to 30 seconds; CI uses three attempts with a ten-second delay. A local
 `GITHUB_TOKEN` environment variable is optional. Do not put a token in arguments,
 fixtures, logs or generated files.
@@ -59,11 +81,13 @@ tester installers are never website downloads. The withdrawal marker
 An incomplete newer eligible stable release blocks deployment rather than
 silently selecting an older download.
 
-## One-time Cloudflare and GitHub settings
+## Set up a new environment
 
-Prepare the empty project and CI settings before launch. Keep deployment
-disabled and leave the apex DNS untouched until the matching community stable
-release is available.
+For the existing installation, start with the readiness snapshot above rather
+than repeating setup. For a new environment, prepare the empty project and CI
+settings with publishing disabled while access and content are reviewed. Domain
+preparation and file publishing are separate steps. Enabling the switch does not
+bypass the matching stable-release gate.
 
 1. Use the **Direct Upload** Pages project `sm64-trainer` in the owning
    Cloudflare account, with production branch `main`. Create it only if absent.
@@ -91,8 +115,10 @@ release is available.
    metadata; a release event's tag commit does not identify the website source.
 5. Run **Actions > trainer website > Run workflow** with `retire_download`
    unchecked. Before a matching stable release, expect a successful **launch
-   hold** and no website artifact. After a complete stable release, review the
-   static artifact and `release.json` while publishing remains disabled.
+   hold** and no production website candidate. Separate ready/unavailable sample
+   preview artifacts remain available for review, with `status: preview` and
+   disabled downloads. After a complete stable release, review the production
+   artifact and `release.json` while publishing remains disabled in a new environment.
 6. At the approved community-release launch, set `WEBSITE_DEPLOY_ENABLED=true`
    and run the workflow again. If settings are prepared beforehand, publication
    of the complete matching stable release triggers the same workflow. Missing
@@ -116,15 +142,24 @@ The local `pages project create` command can also delegate new projects when
 an agent runs it; use Cloudflare's Pages dashboard or Pages project API when
 preparing an empty Pages project.
 
-## Attach the public domain at launch
+## Custom domain preparation and launch checks
 
-After a ready website has deployed, open its Pages project **Custom domains >
-Set up a domain** and add **sm64trainer.app**. The zone must be active in the same
-Cloudflare account as the Pages project. Use the Pages domain setup flow so
-Cloudflare creates and validates its DNS record and certificate.
+The existing apex domain is already configured; see the dated snapshot. Do not
+remove or re-register it as part of a copy or screenshot change.
 
-Configure an exact **www.sm64trainer.app -> https://sm64trainer.app** permanent
-redirect, preserving path and query string. A wildcard redirect for every
+For a new environment, use the Pages project's **Custom domains > Set up a
+domain** flow. The apex zone must be active in the same Cloudflare account as
+the Pages project. Domain association, saved DNS, certificate verification and
+website upload are distinct observations. Inspect **DNS > Records** for the
+saved apex CNAME to the project's exact `*.pages.dev` hostname. A "Verifying"
+state alone does not prove that a record was saved.
+
+Cloudflare flattens apex CNAME records, so public CNAME queries can have no CNAME
+answer even when the record is configured. Verify A/AAAA resolution and the Pages
+domain status instead. See [CNAME flattening](https://developers.cloudflare.com/dns/cname-flattening/).
+
+If adding `www`, configure an exact **www.sm64trainer.app -> https://sm64trainer.app**
+permanent redirect, preserving path and query string. A wildcard redirect for every
 subdomain would break `auth.sm64trainer.app`. Domain settings belong to the
 operator; this workflow neither edits DNS nor attaches domains. See the
 [custom domain guide](https://developers.cloudflare.com/pages/configuration/custom-domains/)
@@ -181,8 +216,12 @@ withdrawal publish an unavailable page before the ordinary launch hold. Local
 regression validation models the documented queue behavior and checks this
 workflow's actual configuration; it does not claim a live GitHub queue test.
 
-CI saves a review artifact, checks settings, then builds again into a new
-directory inside Wrangler's pre-command, after Wrangler installation and
+CI tests the website tooling and creates separate ready/unavailable sample
+preview artifacts from the actual source. Those artifacts have disabled downloads
+and `status: preview`; the Cloudflare upload never consumes them.
+
+For a real eligible release, CI saves a production review artifact, checks
+settings, then builds again into a new directory inside Wrangler's pre-command, after Wrangler installation and
 immediately before upload. A failed final build aborts upload. When present,
 the final publishing candidate is saved separately, including after an upload
 failure. Release/tag/body data is parsed from the event JSON, never interpolated
