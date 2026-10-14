@@ -20,7 +20,9 @@ export default [
   {
     files: ["**/*.js", "**/*.mjs"],
     languageOptions: {
-      ecmaVersion: 2024,
+      // 2025: the community Worker imports its JSON tables with import
+      // attributes (`with {type: "json"}`), which 2024 cannot parse.
+      ecmaVersion: 2025,
       sourceType: "module",
       globals: {
         window: "readonly", document: "readonly", location: "readonly",

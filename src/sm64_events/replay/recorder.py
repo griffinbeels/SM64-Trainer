@@ -127,16 +127,7 @@ class ReplayRecorder:
         self._recorder_lock_factory = recorder_lock_factory
         self._rec_lock = None        # held handle while WE are the recorder
         self._capture_lock = threading.RLock()  # serialize attach vs teardown
-        # Never take _capture_lock from a recording-switch request: source
-        # startup and joins can block there. Revisions cancel an old startup
-        # even when Stop -> Start arrives before its constructor returns.
-        self._recording_control_lock = threading.Lock()
-        self._recording_enabled = cfg.recording_enabled
-        self._recording_revision = 0
-        self._capture_start_revision = None
-        self._capture_revision = None
-        self._capture_tearing_down = False
-        self._attach_wake = threading.Event()
+        self._configure_recording_control(cfg)
         self._scratch_ready = False
         self._configure_scratch(cfg, scratch_protection)
         self._lock_warned = False    # log the viewer-only notice once
@@ -209,19 +200,7 @@ class ReplayRecorder:
         self._capture_window: tuple[int, int] | None = None
         self._audio_mode: str = "none"
         self._status_coverage = None
-
-        # Automatic idle changes retention, not the paired capture lifetime.
-        # Shared fragments retain bounded pre-roll; legacy segments use their
-        # existing discard gate. These are plain attrs flipped from the
-        # poll thread (resume) and attach thread (pause) — ref/bool/float
-        # swaps are atomic in CPython, and both transitions are idempotent.
-        self.set_idle_after(cfg.pre_pad_s + cfg.post_pad_s)
-        self._last_player_active = time.monotonic()
-        self._idle = False
-        self._idle_since = None   # utc datetime while idle (the discard rule)
-        self._idle_dropped = 0
-        self._session_paused = False  # manual pause: outranks the input tap
-        self._session_paused_since = None
+        self._configure_idle(cfg)
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -303,6 +282,32 @@ class ReplayRecorder:
         self._audio_failures = 0
         self._audio_retry_at = 0.0
         self._audio_started_at = 0.0
+
+    def _configure_recording_control(self, cfg) -> None:
+        # Never take _capture_lock from a recording-switch request: source
+        # startup and joins can block there. Revisions cancel an old startup
+        # even when Stop -> Start arrives before its constructor returns.
+        self._recording_control_lock = threading.Lock()
+        self._recording_enabled = cfg.recording_enabled
+        self._recording_revision = 0
+        self._capture_start_revision = None
+        self._capture_revision = None
+        self._capture_tearing_down = False
+        self._attach_wake = threading.Event()
+
+    def _configure_idle(self, cfg) -> None:
+        # Automatic idle changes retention, not the paired capture lifetime.
+        # Shared fragments retain bounded pre-roll; legacy segments use their
+        # existing discard gate. These are plain attrs flipped from the
+        # poll thread (resume) and attach thread (pause) — ref/bool/float
+        # swaps are atomic in CPython, and both transitions are idempotent.
+        self.set_idle_after(cfg.pre_pad_s + cfg.post_pad_s)
+        self._last_player_active = time.monotonic()
+        self._idle = False
+        self._idle_since = None   # utc datetime while idle (the discard rule)
+        self._idle_dropped = 0
+        self._session_paused = False  # manual pause: outranks the input tap
+        self._session_paused_since = None
 
     def start(self) -> None:
         """Start attach retries; only the recorder owner may reset scratch."""

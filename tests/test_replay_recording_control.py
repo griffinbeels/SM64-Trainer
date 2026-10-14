@@ -134,7 +134,7 @@ def test_lifecycle_get_uses_cached_coverage_while_storage_lock_is_held(tmp_path,
     def request():
         try:
             result.append(client(svc).get("/api/replay/status"))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - the request thread hands any failure to the asserting thread
             failures.append(error)
         finally:
             done.set()
@@ -171,7 +171,7 @@ def test_running_get_returns_current_stop_state_after_its_coverage_wait(tmp_path
     def request():
         try:
             results.append(client(svc).get("/api/replay/status"))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - the request thread hands any failure to the asserting thread
             errors.append(error)
     caller = threading.Thread(target=request, name="owned-running-status", daemon=True)
     caller.start()
@@ -335,7 +335,7 @@ def test_settings_writes_serialize_with_the_recording_request(tmp_path, monkeypa
     def call(fn):
         try:
             fn()
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - the request thread hands any failure to the asserting thread
             errors.append(error)
     disable = threading.Thread(target=lambda: call(lambda: svc.set_recording_enabled(False)))
     storage = threading.Thread(target=lambda: call(lambda: svc.update_settings(None, 3 * 1024**3)))
@@ -353,18 +353,10 @@ def test_settings_writes_serialize_with_the_recording_request(tmp_path, monkeypa
     assert json.loads(svc.cfg.settings_path.read_text())["recording_enabled"] is False
 
 
-@pytest.mark.parametrize("work", ["limits", "history", "saved_scan"])
-def test_stop_put_does_not_queue_behind_storage_settings_work(tmp_path, work):
-    rec, *_ = make(tmp_path)
-    svc = service(tmp_path, rec)
-    entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
-    results, errors = [], []
-    def block():
-        entered.set()
-        if not release.wait(3):
-            raise AssertionError("test did not release owned settings storage")
-    original_limits = rec.ring.set_limits
+def block_storage_work(rec, svc, work, block):
+    """Make one stage of a storage-settings apply wait on `block`."""
     if work == "limits":
+        original_limits = rec.ring.set_limits
         def limits(*args):
             block()  # Before apply: live values still differ from durable desire.
             original_limits(*args)
@@ -377,15 +369,28 @@ def test_stop_put_does_not_queue_behind_storage_settings_work(tmp_path, work):
             block()
             return original_settings()
         svc.settings = settings
+
+
+@pytest.mark.parametrize("work", ["limits", "history", "saved_scan"])
+def test_stop_put_does_not_queue_behind_storage_settings_work(tmp_path, work):
+    rec, *_ = make(tmp_path)
+    svc = service(tmp_path, rec)
+    entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
+    results, errors = [], []
+    def block():
+        entered.set()
+        if not release.wait(3):
+            raise AssertionError("test did not release owned settings storage")
+    block_storage_work(rec, svc, work, block)
     def update():
         try:
             svc.update_settings(600, 3 * 1024**3, 1.0, 2.0, 25)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - the request thread hands any failure to the asserting thread
             errors.append(error)
     def stop():
         try:
             results.append(client(svc).put("/api/replay/recording", json={"enabled": False}))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - the request thread hands any failure to the asserting thread
             errors.append(error)
         finally:
             stopped.set()
@@ -431,7 +436,7 @@ def test_storage_settings_applies_stay_ordered_while_stop_bypasses_them(tmp_path
             queued.set()
         try:
             svc.update_settings(retention, cap)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - the request thread hands any failure to the asserting thread
             errors.append(error)
     first = threading.Thread(target=lambda: update(600, 3 * 1024**3), daemon=True)
     second = threading.Thread(target=lambda: update(None, 4 * 1024**3, True), daemon=True)

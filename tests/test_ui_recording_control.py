@@ -6,6 +6,37 @@ from playwright.sync_api import sync_playwright
 from test_ui_replay_picture_steps import PROJECT
 
 
+def open_recording_page(browser, state, settings, control, errors, responses):
+    """The real page over faked replay endpoints, recording every failure."""
+    page = browser.new_page(viewport={"width": 1500, "height": 1100})
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
+    page.on("response", lambda response: responses.append({"url": response.url, "status": response.status})
+            if "/api/" in response.url else None)
+    page.route("**/api/replay/status", lambda route: route.fulfill(json=state))
+    page.route("**/api/replay/settings", lambda route: route.fulfill(json=settings))
+    page.route("**/api/replay/recording", control)
+    page.route("**/api/replay/compression", lambda route: route.fulfill(json={"active": False, "jobs": []}))
+    return page
+
+
+def assert_off_panel_fits(page, panel, switch, tmp_path, width):
+    page.set_viewport_size({"width": width, "height": 1100})
+    # Enter through the real recording button at each supported
+    # shell layout; a resize screenshot can retain stale paint.
+    page.reload()
+    page.wait_for_selector(PROJECT.ready_selector)
+    page.locator(".recording-button:visible").click()
+    switch.get_by_role("button", name="Start recording").wait_for()
+    panel.screenshot(path=str(tmp_path / f"recording-off-{width}.png"), animations="disabled")
+    page.screenshot(path=str(tmp_path / f"recording-page-{width}.png"), animations="disabled")
+    box = panel.bounding_box()
+    assert box["x"] >= 0 and box["x"] + box["width"] <= width
+    assert switch.evaluate("el => el.scrollWidth <= el.clientWidth")
+    title = switch.locator("b").bounding_box()
+    assert title["x"] >= box["x"] and title["x"] + title["width"] <= box["x"] + box["width"]
+
+
 def test_manual_recording_control_waits_for_actual_stop_and_resume(tmp_path):
     state = {"enabled": True, "recording_enabled": True, "capture_state": "recording",
              "recording": True, "idle": False, "disk_bytes": 1000000,
@@ -24,15 +55,7 @@ def test_manual_recording_control_waits_for_actual_stop_and_resume(tmp_path):
     with PROJECT.open() as url, sync_playwright() as play:
         browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
         try:
-            page = browser.new_page(viewport={"width": 1500, "height": 1100})
-            page.on("pageerror", lambda error: errors.append(str(error)))
-            page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
-            page.on("response", lambda response: responses.append({"url": response.url, "status": response.status})
-                    if "/api/" in response.url else None)
-            page.route("**/api/replay/status", lambda route: route.fulfill(json=state))
-            page.route("**/api/replay/settings", lambda route: route.fulfill(json=settings))
-            page.route("**/api/replay/recording", control)
-            page.route("**/api/replay/compression", lambda route: route.fulfill(json={"active": False, "jobs": []}))
+            page = open_recording_page(browser, state, settings, control, errors, responses)
             page.goto(url)
             page.wait_for_selector(PROJECT.ready_selector)
             # Control: existing buffer settings are reachable before the new action.
@@ -51,20 +74,7 @@ def test_manual_recording_control_waits_for_actual_stop_and_resume(tmp_path):
             page.wait_for_function("document.querySelector('.recording-switch [role=status]').textContent === 'Recording off'")
             assert switch.get_by_role("button", name="Start recording").is_enabled()
             for width in (1500, 850):
-                page.set_viewport_size({"width": width, "height": 1100})
-                # Enter through the real recording button at each supported
-                # shell layout; a resize screenshot can retain stale paint.
-                page.reload()
-                page.wait_for_selector(PROJECT.ready_selector)
-                page.locator(".recording-button:visible").click()
-                switch.get_by_role("button", name="Start recording").wait_for()
-                panel.screenshot(path=str(tmp_path / f"recording-off-{width}.png"), animations="disabled")
-                page.screenshot(path=str(tmp_path / f"recording-page-{width}.png"), animations="disabled")
-                box = panel.bounding_box()
-                assert box["x"] >= 0 and box["x"] + box["width"] <= width
-                assert switch.evaluate("el => el.scrollWidth <= el.clientWidth")
-                title = switch.locator("b").bounding_box()
-                assert title["x"] >= box["x"] and title["x"] + title["width"] <= box["x"] + box["width"]
+                assert_off_panel_fits(page, panel, switch, tmp_path, width)
             state.update(capture_state="stopping", recovery={"state": "cleanup_pending", "error": "Audio capture is still closing"})
             page.wait_for_function("document.querySelector('.recording-switch [role=alert]')?.textContent === 'Audio capture is still closing'")
             assert not switch.get_by_role("button", name="Start recording").is_enabled()

@@ -3,7 +3,6 @@
 Native functions, DLL loading, channel/helper processes and all device boundaries
 are inert. Wire replies still pass the existing controller's real validation.
 """
-import ctypes as C
 from collections import deque
 import json
 import threading

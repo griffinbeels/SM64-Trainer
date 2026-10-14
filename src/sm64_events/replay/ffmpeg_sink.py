@@ -399,7 +399,9 @@ class FfmpegAvSink:
             try:
                 if proc.poll() is None or not _k32.CloseHandle(job):
                     pending.append((job, proc))
-            except Exception:
+            except (OSError, ctypes.ArgumentError):
+                # poll() fails as OSError; a handle ctypes cannot pass fails
+                # as ArgumentError. Either way the job stays owned.
                 pending.append((job, proc))
         self._jobs = pending
         if pending and require_closed:
