@@ -158,7 +158,7 @@ test('an empty rank pool returns at most four fastest compatible eligible ghosts
   }finally{env.DB.close();}
 });
 test('restricted authors gate cached pools, search, direct metadata, bytes and pins by UID',async()=>{
-  const {env,store}=await environment(),h=harness(env);try{
+  const {env}=await environment(),h=harness(env);try{
     const p=await published(h);env.BETA_SHARED_PUBLISHERS='[]';
     assert.equal((await h.call(pool(),{uid:bob})).json.recordings.length,0);
     assert.equal((await h.call(pool(),{uid:alice})).json.recordings.length,1);
