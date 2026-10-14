@@ -11,7 +11,7 @@ import zipfile
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 from sm64_events.bootstrap.beta_payload import checked_members  # noqa: E402
-from sm64_events.core.build_channel import CONFIG_FILENAME, parse_metadata  # noqa: E402
+from sm64_events.core.build_channel import CONFIG_FILENAME, STABLE_PORT, parse_metadata  # noqa: E402
 from sm64_events.core.release_contract import version_key  # noqa: E402
 from sm64_events.core.update_plan import parse_manifest, validate_release_manifest  # noqa: E402
 
@@ -173,7 +173,7 @@ def frozen_self_check(app: Path, directory: Path, record: dict) -> dict:
         raise ValueError("frozen runtime self-check did not complete")
     value = json.loads(output.read_text(encoding="utf-8"))
     expected = {"schema": 1, "version": record["version"], "channel": record["channel"],
-                "installation": "normal", "port": 8064, "updates_enabled": True}
+                "installation": "normal", "port": STABLE_PORT, "updates_enabled": True}
     if value != expected:
         raise ValueError("frozen runtime identity or update baseline disagrees")
     return {"result": value, "app_sha256": digest(app / "SM64Trainer.exe")}

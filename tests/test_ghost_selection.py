@@ -122,7 +122,8 @@ def test_candidates_validate_files_without_changing_the_native_selection(tmp_pat
         path = tmp_path / f"{number}.ghost"
         path.write_bytes(b"valid asset")
         path.with_suffix(".json").write_text("{}")
-        assets[number] = path, {"clip_id": f"{number:02x}" * 16, "sha256": "cd" * 32, "blink_frames": 0}
+        assets[number] = path, {"clip_id": f"{number:02x}" * 16, "sha256": "cd" * 32, "blink_frames": 0,
+                                "inputs_complete": True}  # every input known (round 40)
     replay = SimpleNamespace(recorder=SimpleNamespace(ghost_capture=capture),
                              native_identity=lambda _: {"native_clock_frame": 100},
                              find_native=lambda number: calls.append(number) or assets.get(number))
