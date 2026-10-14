@@ -10,6 +10,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { PICK_LANDS_MS, autoOpenKey, nextActivation }
   from "../../src/sm64_events/ui/components/practicelog.js";
 import { lastTargetPick, requestTarget } from "../../src/sm64_events/ui/target.js";
+import { stubLocalServer } from "./localserver.js";
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -108,7 +109,7 @@ test("a target the game chose with no rows stays closed and the last card stays 
 const fakeStore = () => ({ refresh: vi.fn(), setNotice: vi.fn() });
 
 test("the target door records an accepted pick, never a fill or a refusal", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })));
+  stubLocalServer(async () => ({ ok: true, status: 200, json: async () => ({}) }));
   expect(await requestTarget(fakeStore(), { course_id: 17, star_id: 0, strat_tag: null })).toBe(true);
   expect(lastTargetPick().key).toBe(KEYS.bowser);
   await requestTarget(fakeStore(), { kind: "segment", segment_id: 67 });
@@ -117,9 +118,9 @@ test("the target door records an accepted pick, never a fill or a refusal", asyn
   await requestTarget(fakeStore(), { course_id: 17, star_id: 0 }, { quiet: true });
   await requestTarget(fakeStore(), { course_id: 17, star_id: 0 }, { auto: true });
   expect(lastTargetPick()).toBe(picked);
-  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 409,
+  stubLocalServer(async () => ({ ok: false, status: 409,
     json: async () => ({ detail: "you can only practice what you are standing in" }),
-    text: async () => "you can only practice what you are standing in" })));
+    text: async () => "you can only practice what you are standing in" }));
   expect(await requestTarget(fakeStore(), { course_id: 1, star_id: 0 })).toBe(false);
   expect(lastTargetPick()).toBe(picked);
 });

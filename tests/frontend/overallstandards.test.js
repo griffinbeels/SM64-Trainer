@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { h } from "preact";
 import { OverallStandards } from "../../src/sm64_events/ui/components/overallstandards.js";
 import { SCORE_ANCHORS } from "../../src/sm64_events/ui/timecurve.js";
+import { stubLocalServer } from "./localserver.js";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -25,7 +26,7 @@ function fixture() {
   const states = { us: payload("us"), jp: payload("jp") };
   const requests = [];
   const controls = { failure: null };
-  vi.stubGlobal("fetch", vi.fn(async (path, options = {}) => {
+  stubLocalServer(async (path, options = {}) => {
     const url = new URL(path, "http://localhost");
     const version = url.searchParams.get("version") || "us";
     const state = states[version];
@@ -42,7 +43,7 @@ function fixture() {
       states[version] = payload(version);
     }
     return { ok: true, json: async () => ({ ok: true, calibration_revision: "saved" }) };
-  }));
+  });
   return { states, requests, controls };
 }
 
@@ -106,10 +107,10 @@ test("a rejected cutoff keeps its draft and shows the server explanation beside 
 test("switching versions drops a dirty cutoff draft and ignores a late previous-version fetch", async () => {
   const states = { us: payload("us"), jp: payload("jp") };
   let finishUS;
-  vi.stubGlobal("fetch", vi.fn((path) => {
+  stubLocalServer((path) => {
     if (path.includes("version=us")) return new Promise((resolve) => { finishUS = resolve; });
     return Promise.resolve({ ok: true, json: async () => states.jp });
-  }));
+  });
   const props = { entity: "star:2:4", version: "us" };
   const view = render(h(OverallStandards, props));
   fireEvent.click(view.getByRole("button", { name: /Overall Rank Standards/ }));

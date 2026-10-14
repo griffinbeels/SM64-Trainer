@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { h } from "preact";
 import { Builder } from "../../src/sm64_events/ui/components/segments.js";
 import { SegmentTimeline } from "../../src/sm64_events/ui/components/segmenttimeline.js";
+import { stubLocalServer } from "./localserver.js";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -32,7 +33,7 @@ function fixture({ canShare = true, delayCapability = false, failSave = false,
     return response({ ok: true, id: 91, message: saveMessage,
       scope: unconfirmedSave ? "personal" : new URL(path, "http://fixture").searchParams.get("scope") });
   };
-  vi.stubGlobal("fetch", vi.fn((url, options = {}) => {
+  stubLocalServer((url, options = {}) => {
     const method = options.method || "GET", path = String(url);
     if (path === "/api/segments/authoring") {
       capabilityRequests += 1;
@@ -54,7 +55,7 @@ function fixture({ canShare = true, delayCapability = false, failSave = false,
     if (/^\/api\/segments(?:\/\d+)?\?scope=/.test(path)) return saveResponse(path, method, options);
     unexpected.push(`${method} ${path}`);
     return response({ detail: `Unexpected fixture request: ${method} ${path}` }, false);
-  }));
+  });
   return { writes, unexpected, t: { view: { catalog: { courses: [] } }, feed: [],
     refresh: vi.fn(), setNotice: vi.fn() },
     finishCapability: () => finishCapability(), onSaved: vi.fn(async () => {}) };

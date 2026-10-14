@@ -3,19 +3,20 @@ import { h } from "preact";
 import { render, act, cleanup, waitFor } from "@testing-library/preact";
 import { afterEach, expect, test, vi } from "vitest";
 import { useReviewState } from "../../src/sm64_events/ui/reviewstate.js";
+import { stubLocalServer } from "./localserver.js";
 
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 
 test.each([false, true])("an expired review session recovers by retry or reopen (reopen=%s)", async reopen => {
   let hook, session = "a".repeat(32);
   const writes = [], saved = {template_offsets:{}, zoom:null, loop:null};
-  vi.stubGlobal("fetch", vi.fn(async (_url, options) => {
+  stubLocalServer(async (_url, options) => {
     if (!options) return {ok:true, headers:{get:() => session}, json:async () => saved};
     writes.push(options);
-    const valid = options.headers["X-Replay-Review-Edit"].startsWith(session);
+    const valid = new Headers(options.headers).get("X-Replay-Review-Edit").startsWith(session);
     return {ok:valid, status:valid ? 200 : 409,
       json:async () => ({detail:"review session changed; reopen the replay"})};
-  }));
+  });
   function Probe() { hook=useReviewState(reopen ? 917 : 916); return null; }
   let component=render(h(Probe));
   await waitFor(() => expect(hook.state).not.toBeNull());
@@ -29,7 +30,7 @@ test.each([false, true])("an expired review session recovers by retry or reopen 
   expect(writes).toHaveLength(1);
   await act(async () => { hook.change({zoom:{start:2,end:4}}); await hook.flush(); });
   expect(writes).toHaveLength(2);
-  expect(writes[1].headers["X-Replay-Review-Edit"]).toMatch(/^b{32}\//);
+  expect(new Headers(writes[1].headers).get("X-Replay-Review-Edit")).toMatch(/^b{32}\//);
   expect(hook.error).toBeNull();
   component.unmount();
 });
@@ -52,12 +53,12 @@ test("retry reloads preferences after the initial GET fails", async () => {
 test("a late first write cannot overwrite later edits; closing preserves queued state", async () => {
   let hook, release;
   const writes=[];
-  vi.stubGlobal("fetch",vi.fn(async (_url, options)=> {
+  stubLocalServer(async (_url, options)=> {
     if (!options) return {ok:true,json:async()=>({template_offsets:{},zoom:null,loop:null})};
     writes.push(JSON.parse(options.body));
     if (writes.length===1) await new Promise(resolve=>{release=resolve;});
     return {ok:true};
-  }));
+  });
   function Probe(){hook=useReviewState(912);return null;}
   const component=render(h(Probe));
   await waitFor(()=>expect(hook.state).not.toBeNull());
@@ -65,6 +66,9 @@ test("a late first write cannot overwrite later edits; closing preserves queued 
   const firstFlush = hook.flush();
   act(()=>hook.change({zoom:{start:2,end:4}}));
   expect(hook.flush()).toBe(firstFlush);
+  // A write reaches the server one step later, after its request token
+  // (ui/api.js localFetch); close while the server still holds the first.
+  await waitFor(()=>expect(release).toBeTypeOf("function"));
   component.unmount(); release();
   await firstFlush;
   await waitFor(()=>expect(writes).toHaveLength(2));

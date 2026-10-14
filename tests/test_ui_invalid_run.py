@@ -61,6 +61,17 @@ ROWS = """(() => Array.from(document.querySelectorAll('.attempt-table tr'))
       '.attempt-actions button.pb-invalid:not([disabled]) .caveat-chip'),
   })))()"""
 
+OPEN_SETTINGS = """document.querySelector(
+  'button.log-settings-trigger[aria-label="Practice log settings"]').click()"""
+SAVED_SWITCH = ('#practice-log-settings input[role="switch"]'
+                '[aria-label="Hide savestated entries"]')
+REVEAL_SAVED = f"""(() => {{
+  const input = document.querySelector('{SAVED_SWITCH}');
+  const before = input.checked;
+  input.click();
+  return before && !input.checked ? "was hiding" : `checked ${{before}} -> ${{input.checked}}`;
+}})()"""
+
 CARD_BOX = """(() => {
   const chip = document.querySelector('.attempt-result .caveat-chip[title^="A save state"]');
   const card = chip.closest('.log-card');
@@ -89,13 +100,14 @@ def test_save_state_practice_is_hidden_marked_and_never_gold():
                 rows = page.evaluate(ROWS)
                 assert not any(r["title"] and r["title"].startswith("A save state")
                                for r in rows), rows
-                assert page.evaluate("""(() => {
-                    const button = Array.from(document.querySelectorAll('.log-card button'))
-                      .find(b => b.textContent.trim() === 'show 1 hidden');
-                    if (!button) return false;
-                    button.click();
-                    return true;
-                })()""")
+                # The reveal is the Practice log settings switch, which starts
+                # on; the per-card "show N hidden" now covers only cleared and
+                # abandoned rows (b1cbeb78, 2026-10-05).
+                page.evaluate(OPEN_SETTINGS)
+                page.wait_for(SAVED_SWITCH)
+                revealed = page.evaluate(REVEAL_SAVED)
+                assert revealed == "was hiding", revealed
+                page.evaluate(OPEN_SETTINGS)  # the trigger toggles: close it again
                 page.wait_for('.attempt-result .caveat-chip[title^="A save state"]')
                 rows = page.evaluate(ROWS)
                 marked = [r for r in rows if r["title"]

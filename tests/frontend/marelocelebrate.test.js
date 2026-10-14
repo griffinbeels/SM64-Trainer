@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { h } from "preact";
 import { MareloCelebration, RankUpCelebration } from "../../src/sm64_events/ui/components/marelocelebrate.js";
 import { setCelebrationsEnabled } from "../../src/sm64_events/ui/celebrations.js";
+import { stubLocalServer } from "./localserver.js";
 
 afterEach(() => {
   cleanup(); vi.unstubAllGlobals(); localStorage.clear(); document.body.innerHTML = "";
@@ -11,10 +12,10 @@ afterEach(() => {
 
 function fixture() {
   const requests = [];
-  vi.stubGlobal("fetch", vi.fn(async (url, options) => {
+  stubLocalServer(async (url, options) => {
     requests.push({ url, body: JSON.parse(options.body) });
     return { ok: true, json: async () => ({ ok: true }) };
-  }));
+  });
   vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   const celebration = { from: { tier: "Diamond", division: "II" },
     to: { tier: "Master", division: "I" }, key: 34, calibration_revision: "earned-before-refresh" };
