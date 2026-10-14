@@ -52,34 +52,52 @@ def test_cli_refuses_a_clip_with_no_source_states_before_rendering(tmp_path, mon
     assert not (tmp_path / "output").exists()
 
 
-def test_replay_service_failure_does_not_silently_export_a_plain_track(monkeypatch, exporter):
-    def unavailable(*args, **kwargs):
-        raise urllib.error.HTTPError("http://unused", 503, "unavailable", None, None)
+# The replay request is a POST, so it first bootstraps the app's local request
+# capability (core/local_client.py, ae48b4e3), which only a loopback app serves.
+APP = "http://127.0.0.1:8065"
+TOKEN = "t" * 32
 
-    monkeypatch.setattr(exporter.urllib.request, "urlopen", unavailable)
+
+def replay_responds(monkeypatch, exporter, outcome):
+    """Grant the capability, then let `outcome` answer the replay POST alone."""
+    def urlopen(target, *args, **kwargs):
+        if target == f"{APP}/api/local-access":
+            return io.BytesIO(json.dumps({"request_token": TOKEN}).encode())
+        assert target.full_url == f"{APP}/api/attempts/1/replay"
+        assert target.get_header("X-sm64-request-token") == TOKEN
+        return outcome()
+
+    monkeypatch.setattr(exporter.urllib.request, "urlopen", urlopen)
+
+
+def test_replay_service_failure_does_not_silently_export_a_plain_track(monkeypatch, exporter):
+    def unavailable():
+        raise urllib.error.HTTPError(APP, 503, "unavailable", None, None)
+
+    replay_responds(monkeypatch, exporter, unavailable)
     with pytest.raises(SystemExit, match="could not load the replay"):
-        exporter.clip_view_from_server("http://unused", 1)
+        exporter.clip_view_from_server(APP, 1)
 
 
 @pytest.mark.parametrize("detail", ["no footage in the replay buffer", "no footage overlaps the requested span"])
 def test_expired_footage_still_allows_the_plain_track_export(monkeypatch, exporter, detail):
-    def expired(*args, **kwargs):
+    def expired():
         body = io.BytesIO(json.dumps({"detail": detail}).encode())
-        raise urllib.error.HTTPError("http://unused", 409, "conflict", None, body)
+        raise urllib.error.HTTPError(APP, 409, "conflict", None, body)
 
-    monkeypatch.setattr(exporter.urllib.request, "urlopen", expired)
-    assert exporter.clip_view_from_server("http://unused", 1) is None
+    replay_responds(monkeypatch, exporter, expired)
+    assert exporter.clip_view_from_server(APP, 1) is None
 
 
 @pytest.mark.parametrize("detail", ["no readable pictures at the requested start", "span too short to extract"])
 def test_extraction_errors_do_not_become_plain_track_fallback(monkeypatch, exporter, detail):
-    def failed(*args, **kwargs):
+    def failed():
         body = io.BytesIO(json.dumps({"detail": detail}).encode())
-        raise urllib.error.HTTPError("http://unused", 409, "conflict", None, body)
+        raise urllib.error.HTTPError(APP, 409, "conflict", None, body)
 
-    monkeypatch.setattr(exporter.urllib.request, "urlopen", failed)
+    replay_responds(monkeypatch, exporter, failed)
     with pytest.raises(SystemExit, match="could not load the replay"):
-        exporter.clip_view_from_server("http://unused", 1)
+        exporter.clip_view_from_server(APP, 1)
 
 
 def test_unknown_state_has_no_ink_even_when_the_inspector_draws_scaffolding(exporter):

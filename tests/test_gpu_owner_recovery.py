@@ -92,6 +92,8 @@ def channel(kernel, *, opened=True):
     owner.wake_event, owner.result_event = 304, 305
     owner._owns_mutex, owner._client_open = True, opened
     owner._pending, owner._bridge_pending = {1: 'retained'}, {2: 'retained'}
+    # The ghost copy lane's twin receipts (0fdf290a) share close()'s retain rule.
+    owner._twin_pending = {3: 'retained'}
     owner._header = NS(client_offset=0, nonce_lo=1, nonce_hi=2, epoch=3,
                        generation=4, owner_pid=88, owner_birth=99)
     owner._write = lambda *args: None
@@ -191,7 +193,7 @@ def test_channel_failed_notification_retains_view_until_retry_or_exact_process_e
     kernel.dead = True
     owner.close()
     assert owner._view is owner._map is owner._mutex is owner._process is None
-    assert not owner._pending and not owner._bridge_pending
+    assert not owner._pending and not owner._bridge_pending and not owner._twin_pending
 
 
 def test_channel_reader_mutex_is_not_closed_while_release_is_unproved():
@@ -202,10 +204,10 @@ def test_channel_reader_mutex_is_not_closed_while_release_is_unproved():
         owner.close()
     assert owner._owns_mutex and owner._mutex == 303
     assert not any(name == 'close' and value == 303 for name, value, _ in kernel.calls)
-    assert owner._pending and owner._bridge_pending
+    assert owner._pending and owner._bridge_pending and owner._twin_pending
     owner.close()
     assert not owner._owns_mutex and owner._mutex is None
-    assert not owner._pending and not owner._bridge_pending
+    assert not owner._pending and not owner._bridge_pending and not owner._twin_pending
 
 
 def test_supervisor_retries_same_request_before_releasing_control_and_done():
