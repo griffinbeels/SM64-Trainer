@@ -135,15 +135,19 @@ def _open_practice(page, base):
     page.wait_for(CELL_SELECTOR)
 
 
-def _wait_for_cells(page, count):
+def _wait_for_cells(page, count, *, active=None):
     result = page.evaluate(f"""return (async () => {{
       const deadline = Date.now() + 5000;
       const count = () => Array.from(document.querySelectorAll('{CELL_SELECTOR}'))
         .filter(cell => cell.getBoundingClientRect().width > 0).length;
+      const expectedActive = {json.dumps(active)};
+      const matches = () => count() === {count}
+        && (expectedActive === null || document.querySelectorAll(
+          '.stagebanner .active-star').length === expectedActive);
       while (Date.now() < deadline) {{
-        if (count() === {count}) {{
+        if (matches()) {{
           await new Promise(resolve => setTimeout(resolve, 60));
-          if (count() === {count}) return true;
+          if (matches()) return true;
         }}
         await new Promise(resolve => setTimeout(resolve, 30));
       }}
@@ -331,6 +335,10 @@ def test_castle_choice_survives_travel_but_not_a_newer_click_and_new_session_for
             result = _wait_for_target(page, expected)
             assert result["matched"], result
             if newer_pick:
+                # The API target can settle before the WebSocket refresh and
+                # selector exchange paint it. Two cells also describe the old
+                # Lobby row, so wait for its actual selection state as well.
+                _wait_for_cells(page, 2, active=0)
                 assert page.evaluate("document.querySelectorAll('.stagebanner .active-star').length") == 0
             label = "newer-click-blocks-castle-recall" if newer_pick else "session-castle-choice-restored"
             _capture(page, base, tmp_path, label, result)
