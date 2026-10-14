@@ -701,22 +701,29 @@ def settle_ghost_copy(saved: Path, work: Path | None = None) -> None:
         proof.unlink(missing_ok=True)
 
 
-def settle(saved: Path, work: Path | None = None) -> None:
-    """Repair a sidecar left at `adopting` by a crash: the file's own digest
-    says which side of the swap it is on."""
+def settle(saved: Path, work: Path | None = None) -> dict | None:
+    """Repair a sidecar left at `adopting` by a crash, or by a final sidecar
+    write Windows refused: the file's own digest says which side of the swap
+    it is on. Returns the finished block when the swap had happened, so the
+    caller closes the job exactly as after a clean `adopt`."""
     sidecar = saved.with_suffix(".json")
     if not sidecar.is_file():
-        return
+        return None
     meta = json.loads(sidecar.read_text(encoding="utf-8"))
     block = meta.get("media")
     if not isinstance(block, dict) or block.get("state") != "adopting":
-        return
+        return None
+    done = None
     if file_sha256(saved) == block.get("sha256"):
-        meta["media"] = {**block, "state": "compressed"}
-        proof_path(saved, work).unlink(missing_ok=True)
+        done = {**block, "state": "compressed",
+                "adopted_utc": datetime.now(timezone.utc).isoformat()}
+        meta["media"] = done
     else:
         meta.pop("media")
     atomic_json(sidecar, meta, allow_nan=True)
+    if done is not None:
+        proof_path(saved, work).unlink(missing_ok=True)
+    return done
 
 
 class SavedReplayCompressor:
@@ -910,8 +917,7 @@ class SavedReplayCompressor:
             if not (everything_idle or self._idle(saved)):
                 continue
             try:
-                settle(saved, self.work)
-                done = adopt(saved, self.work)
+                done = settle(saved, self.work) or adopt(saved, self.work)
             except (OSError, ValueError, KeyError) as failed:
                 log.warning("replay compression: could not adopt %s: %s", saved.name, failed)
                 continue

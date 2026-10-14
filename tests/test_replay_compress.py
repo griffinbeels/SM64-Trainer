@@ -247,6 +247,32 @@ def test_session_start_adopts_what_the_last_session_proved(saved):
         worker.stop()
 
 
+def test_a_refused_final_sidecar_write_still_closes_the_job(saved, monkeypatch):
+    """Windows refuses replacing a file another reader holds open. The merge
+    check caught the clip swapped and its last sidecar write refused while a
+    reader polled the sidecar (2026-10-13): the next pass repaired the sidecar
+    but left the job note, so the next start queued a finished clip again."""
+    worker = _worker(saved)
+    worker.enqueue(saved, attempt_id=42)
+    compress.shrink(_ffmpeg(), saved, codecs=CPU_ONLY, work=worker.work)
+    original = compress.file_sha256(saved)
+    real, refused = compress.atomic_json, []
+
+    def refuse_the_final_write(path, document, **kw):
+        if not refused and (document.get("media") or {}).get("state") == "compressed":
+            refused.append(path)
+            raise PermissionError(5, "Access is denied", str(path))
+        return real(path, document, **kw)
+
+    monkeypatch.setattr(compress, "atomic_json", refuse_the_final_write)
+    assert worker.adopt_ready() == [] and refused
+    assert compress.file_sha256(saved) != original     # the swap itself happened
+
+    assert [d["state"] for d in worker.adopt_ready()] == ["compressed"]
+    assert json.loads(saved.with_suffix(".json").read_text())["media"]["state"] == "compressed"
+    assert list(worker.work.iterdir()) == []
+
+
 def test_closing_the_app_swaps_what_is_proven_even_if_it_was_just_watched(saved):
     """His first clean close left both files in the folder: he had watched the
     clips inside the two quiet minutes, then closed (2026-09-19)."""

@@ -1,6 +1,5 @@
 """Player-facing beta preference, forward upgrades and repair boundaries."""
 import hashlib
-import io
 import json
 import threading
 import time
@@ -288,7 +287,7 @@ def test_old_cleanup_cannot_erase_a_new_updates_recovery(tmp_path, monkeypatch):
         try:
             apply_plan(root, second, replace=["SM64Trainer.exe"], delete=[])
             applied.set()
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - recorded for the main thread to assert
             failures.append(error)
 
     swap = threading.Thread(target=update)
