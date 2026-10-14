@@ -38,8 +38,9 @@ export class Store {
     if(a?.status==="deleted") fail(403,"deleted","This account has been deleted.");
     if(a?.status==="suspended") fail(403,"suspended","This account is suspended.");
     if(!a?.invited) fail(403,"not_invited","This account is not invited to the private beta.");
-    requireThat(a && a.invited && (a.status==="active" || (profile&&["new","rename_required"].includes(a.status))),
-      a?.status==="rename_required"?"rename_required":"account_unavailable","Your account is not admitted for this action.",403);
+    // From here the account exists and is invited.
+    requireThat(a.status==="active" || (profile&&["new","rename_required"].includes(a.status)),
+      a.status==="rename_required"?"rename_required":"account_unavailable","Your account is not admitted for this action.",403);
     if(!profile) requireThat(a.terms_version===this.cfg.terms && a.privacy_version===this.cfg.privacy,
       "consent_required","Accept the current policies.",403);
   }
