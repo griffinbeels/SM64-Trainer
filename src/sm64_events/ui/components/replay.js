@@ -359,29 +359,29 @@ export function RecordingDot() {
   </span>`;
 }
 
+/** What the switch's alert says: a stop whose cleanup is pending, else a capture error. */
+function recordingAlert(st) {
+  const cleanupError = st.recovery?.state === "cleanup_pending" ? st.recovery.error : null;
+  const captureError = st.capture_state === "error"
+    ? st.recovery?.error || st.frame_source_health?.error || st.publication_error : null;
+  return cleanupError || captureError;
+}
+
 function RecordingSwitch({st, onStatus, refresh}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const inFlight = useRef(false);
   const supported = typeof st.recording_enabled === "boolean";
-  const cleanupError = st.recovery?.state === "cleanup_pending" ? st.recovery.error : null;
-  const captureError = st.capture_state === "error"
-    ? st.recovery?.error || st.frame_source_health?.error || st.publication_error : null;
-  async function toggle() {
+  const problem = recordingAlert(st);
+  function toggle() {
     if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setError(null);
-    try {
-      const next = await send("PUT", "/api/replay/recording", {enabled: !st.recording_enabled});
-      onStatus(next);
-      refresh();
-    } catch (e) {
-      setError(`Could not change recording: ${String(e)}`);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
+    send("PUT", "/api/replay/recording", {enabled: !st.recording_enabled})
+      .then((next) => { onStatus(next); refresh(); })
+      .catch((e) => setError(`Could not change recording: ${String(e)}`))
+      .finally(() => { inFlight.current = false; setBusy(false); });
   }
   return html`<div class="recording-switch">
     <div><b>Gameplay recording</b><span role="status">${captureLabel(st)}</span></div>
@@ -391,7 +391,7 @@ function RecordingSwitch({st, onStatus, refresh}) {
       ? "Stops video, audio, recorded Mario poses and Only Mario ghosts. Practice tracking continues."
       : "Restart the trainer to enable these recording controls."}</p>
     ${error && html`<p role="alert">${error}</p>`}
-    ${(cleanupError || captureError) && html`<p role="alert">${cleanupError || captureError}</p>`}
+    ${problem && html`<p role="alert">${problem}</p>`}
   </div>`;
 }
 
