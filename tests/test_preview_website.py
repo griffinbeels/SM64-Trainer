@@ -4,6 +4,7 @@ from __future__ import annotations
 from html.parser import HTMLParser
 import json
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import threading
@@ -20,10 +21,13 @@ class Links(HTMLParser):
     def __init__(self, page):
         super().__init__()
         self.downloads = []
+        self.ids = set()
         self.feed(page)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        if "id" in attrs:
+            self.ids.add(attrs["id"])
         if tag == "a" and "download-link" in attrs.get("class", "").split():
             self.downloads.append(attrs)
 
@@ -47,9 +51,11 @@ class PreviewTests(unittest.TestCase):
                 self.assertTrue(metadata["preview"]["downloads_disabled"])
                 self.assertIn("sample release data", page)
                 self.assertIn('id="release-meta"', page)
-                links = Links(page).downloads
+                parsed = Links(page)
+                links = parsed.downloads
                 self.assertEqual(len(links), 3)
-                self.assertTrue(all(link["href"] == preview.DISABLED_URL
+                self.assertTrue(all(link["href"].startswith("#")
+                                    and link["href"][1:] in parsed.ids
                                     and link["aria-disabled"] == "true"
                                     and link["tabindex"] == "-1" for link in links))
                 if state == "ready":
@@ -87,6 +93,17 @@ class PreviewTests(unittest.TestCase):
                 server.shutdown()
                 worker.join(timeout=5)
                 self.assertFalse(worker.is_alive())
+
+    def test_real_template_hook_damage_fails_before_output(self):
+        damaged = Path(self.temp.name) / "damaged-source"
+        shutil.copytree(self.source, damaged)
+        page = (damaged / "index.html").read_bytes()
+        self.assertEqual(page.count(b'id="release-meta"'), 1)
+        (damaged / "index.html").write_bytes(
+            page.replace(b'id="release-meta"', b'id="broken-release-meta"'))
+        with self.assertRaises(builder.BuildError):
+            preview.build_preview(damaged, self.output)
+        self.assertFalse(self.output.exists())
 
     def test_existing_output_is_not_overwritten(self):
         preview.build_preview(self.source, self.output)

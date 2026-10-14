@@ -7,6 +7,7 @@ import fnmatch
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import re
 from urllib.parse import unquote, urlsplit
 
 import build_website as builder
@@ -34,13 +35,14 @@ def build_preview(source: Path, output: Path, state: str = "ready") -> dict:
     metadata = builder.write_site(source, output, policy, sample_release(policy, state))
     page = (output / "index.html").read_bytes().decode("utf-8")
     hook = f'href="{DISABLED_URL}"'
-    if page.count(hook) != 3 or page.count("<body>") != 1:
+    body_pattern = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
+    if page.count(hook) != 3 or len(body_pattern.findall(page)) != 1:
         raise builder.BuildError("Preview download controls or body are missing.")
     page = page.replace(hook, hook + ' aria-disabled="true" tabindex="-1"')
     notice = ('<div class="preview-note" id="preview-download-disabled" role="note">'
               f'Local preview &middot; {state} state &middot; sample release data '
               '&middot; downloads disabled</div>')
-    page = page.replace("<body>", "<body>\n  " + notice, 1)
+    page = body_pattern.sub(lambda match: match.group() + "\n  " + notice, page, count=1)
     (output / "index.html").write_bytes(page.encode("utf-8"))
     metadata["status"] = "preview"
     metadata["preview"] = {"rendered_state": state, "downloads_disabled": True}
