@@ -46,8 +46,9 @@ WATCH_PERIOD_S = 0.5
 #: it off nothing is drawn, and turning it on resolves at once.
 SAFETY_RESOLVE_S = 45.0
 #: The PUT fields that change what the resolve answers: the settings rows
-#: marked `resolves` (the switch) and the ticked ghost set. Every
-#: other setting rides the native command and never needs one.
+#: marked `resolves` (the switch), the ticked ghost set and the adaptive
+#: rival choices. Every other setting rides the native command and never
+#: needs one.
 RESOLVING_CHANGES = frozenset({*settings.resolving(), "ghosts", "rivals"})
 
 # The two "no ghost" cases the source resolver cannot speak for, in the same

@@ -134,15 +134,17 @@ PATH_MEASURE = """(() => {
 
 
 def test_the_path_nests_its_choices_and_tunes_from_the_published_ranges():
-    """Path (on at first) carries Path buttons and Path from beneath it, and a
+    """Path, when on, carries Path buttons and Path from beneath it, and a
     Tune path disclosure whose four sliders are the server's ranges; each
     writes the one thing it changed, and switching the path off takes all of
     them away (his ruling: omit what does not apply)."""
     from sm64_events.ghost import settings
     ranges = settings.limits()["path_tuning"]
     initial = ghost_session(enabled=True)
-    # This interaction probes a chosen configuration, independent of shipped defaults.
-    initial.update(path_buttons=False, path_source="fastest")
+    # This interaction probes a chosen configuration, independent of shipped
+    # defaults. Paths ship off since his 2026-10-08 request (74783ef3), so the
+    # probe turns the path on itself.
+    initial.update(path_enabled=True, path_buttons=False, path_source="fastest")
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
                              seed_editor_fixtures=True) as (base, state):
         with get_driver().launch() as page:

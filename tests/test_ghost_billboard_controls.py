@@ -43,10 +43,13 @@ class Collection:
 
 
 def asset(tmp_path, key):
+    """A playable clip. Its manifest states complete inputs, as every
+    playable one must (his rule, round 40: a recording with any unknown
+    input is not a ghost at any door; ghost/clip.py INCOMPLETE_INPUTS)."""
     path = tmp_path / f"{key}.ghost"
     path.write_bytes(b"validated recording")
     path.with_suffix(".json").write_text("{}", encoding="utf-8")
-    return path, {"clip_id": key * 16, "sha256": "cd" * 32, "blink_frames": 0}
+    return path, {"clip_id": key * 16, "sha256": "cd" * 32, "blink_frames": 0, "inputs_complete": True}
 
 
 def test_labels_follow_source_and_current_pb_membership_after_cached_resolution(tmp_path):
@@ -97,12 +100,20 @@ def test_same_clip_selected_as_local_and_imported_plays_once_with_first_credit(t
         assert answer["ghosts"][1]["reason_text"] == "Already shown by another selected ghost."
 
 
-def test_label_bound_preserves_utf8_character_boundaries_and_does_not_invent_credit():
-    other = imported(author="  A\nB  " + "é" * 90)
+def test_label_bound_keeps_the_credit_intact_and_does_not_invent_one():
+    """The native field is bounded; the credit itself never changes. Round 19
+    (2026-10-08, 90921b04): the renderer draws only the ROM's own glyphs, so
+    a credit it cannot draw, or no credit, shows its rival number instead of
+    a guessed or invented name."""
+    author = "  A\nB  " + "W" * 90
+    other = imported(author=author)
     label = ghost_label(other)
-    assert label.startswith("A B ") and len(label.encode("utf-8")) < LABEL_BYTES
-    assert label_bytes(label).decode("utf-8") == label
-    assert ghost_label(imported(author="")) == "UNCREDITED"
+    assert label.startswith("A B W") and label.endswith("...")
+    assert len(label_bytes(label)) == LABEL_BYTES - 1
+    assert label_bytes(label).split(b"\0", 1)[0].decode("ascii") == label
+    assert other.author == author
+    assert ghost_label(imported(author="  A\nB  " + "é" * 90)) == "RIVAL 1"
+    assert ghost_label(imported(author="")) == "RIVAL 1"
 
 
 @pytest.mark.parametrize("label", [None, 12, "a\0b", "a\nb", "x" * LABEL_BYTES, "\ud800"])

@@ -89,6 +89,7 @@ def attach_session_routes(app, state, record, job):
 
     @app.get("/api/ghost")
     def ghost_get():
+        time.sleep(state["session_delay_s"])  # a slow first answer, when a test asks for one
         return state["session"]
 
     @app.put("/api/ghost")
@@ -198,7 +199,7 @@ def attach_import_routes(app, state, record, job):
 
 
 @contextlib.contextmanager
-def serve_library(folder, *, catalog=None, target=None):
+def serve_library(folder, *, catalog=None, target=None, session_delay_s=0.0):
     """Shipping UI; fixture APIs record every sharing write and reject unknown calls.
 
     Content queries are intentionally exact. A new undocumented endpoint never
@@ -214,7 +215,8 @@ def serve_library(folder, *, catalog=None, target=None):
                             "candidates": [], "missing": []}
     state = {"catalog": catalog, "session": session, "calls": [], "target_writes": [],
              "writes": [], "previews": {}, "jobs": {}, "unmatched": [],
-             "preview_rows": preview_examples(), "stale_race": False}
+             "preview_rows": preview_examples(), "stale_race": False,
+             "session_delay_s": session_delay_s}
     original = ui_fixture.create_app
 
     def create_app(*args, **kwargs):
@@ -674,6 +676,23 @@ def test_empty_import_error_and_stale_race_keep_the_user_choices(tmp_path):
               .find(node=>node.textContent.includes("This Star's Personal Bests")).disabled""")
             assert "No" in page.evaluate("document.querySelector('.ghost-library').textContent")
             fits_and_shoot(page, 850, "empty-export")
+            assert_clean(page, state, base)
+
+
+def test_library_opened_before_the_ghost_session_answers_still_races_this_target(tmp_path):
+    """The library keeps the race target it opened with. Opened before the
+    card's first ghost-session read answered, it kept none, and "Choose
+    ghosts to race" stayed disabled for the whole visit (the merge check
+    under load, 2026-10-13). The door now opens once the session is known."""
+    with serve_library(tmp_path / "slow-session", session_delay_s=2.0) as (base, state):
+        with get_driver().launch() as page:
+            page.set_viewport(850, 1200)
+            page.goto(base)
+            page.wait_for(".ghost-library-button")
+            page.click(".ghost-library-button")
+            page_is(page, "home")
+            click_text(page, "Choose ghosts to race")
+            page_is(page, "browser")
             assert_clean(page, state, base)
 
 

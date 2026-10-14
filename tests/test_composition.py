@@ -403,12 +403,26 @@ def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
     hook()
     assert moment._counts == {} and caused._counts == {}
 def test_build_hands_every_snapshot_to_native_ghost_ownership(monkeypatch):
-    """Settled poll snapshots reach the native arm/rebase observer."""
+    """Settled poll snapshots reach the native arm/rebase observer, and the
+    snapshot's frame is the one the adaptive rival origin is read at
+    (8159b47e). The poller only ever hands real snapshots, so the sample
+    carries the `global_timer` every snapshot has."""
+    from types import SimpleNamespace
     from sm64_events.ghost.native_session import NativeGhost
+    from sm64_events.tracking.service import TrackerService
     main_mod = _stubbed_main(monkeypatch)
     captured = {}
     delivered = []
-    monkeypatch.setattr(NativeGhost, "note", lambda self, snapshot=None: delivered.append(("native", snapshot)))
+    owners = []
+    origins = []
+
+    def note(self, snapshot=None):
+        owners.append(self)
+        delivered.append(("native", snapshot))
+
+    monkeypatch.setattr(NativeGhost, "note", note)
+    monkeypatch.setattr(TrackerService, "native_rival_origin",
+                        lambda self, kind, key, *, frame=None: origins.append((kind, key, frame)))
     real_poller = main_mod.Poller
 
     def spy(memory, detectors, sink, **kw):
@@ -419,9 +433,11 @@ def test_build_hands_every_snapshot_to_native_ghost_ownership(monkeypatch):
     main_mod.build()
     note = captured.get("on_snapshot")
     assert note is not None, "the poller was built with no snapshot hook"
-    sample = object()
+    sample = SimpleNamespace(global_timer=4321)
     note(sample)
     assert delivered == [("native", sample)]
+    owners[0]._origin_of("star", "2-2")
+    assert origins == [("star", "2-2", 4321)]
 
 
 def test_build_mounts_every_ghost_door(monkeypatch):
@@ -496,6 +512,10 @@ def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     assert "/api/compare/view" in paths
     assert "/api/compilation" in paths
     from fastapi.testclient import TestClient
-    r = TestClient(app).get("/api/compare/view",
-                            params={"entity": "star:16:0", "strat": None})
+    from sm64_events.core.paths import server_port
+    # build() guards the loopback API (ae48b4e3): a request must name this
+    # server's own host, as the browser does, or it is refused before routing.
+    client = TestClient(app, base_url=f"http://127.0.0.1:{server_port()}")
+    r = client.get("/api/compare/view",
+                   params={"entity": "star:16:0", "strat": None})
     assert r.status_code == 503              # honest "not yet", never a 404

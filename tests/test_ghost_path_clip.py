@@ -39,8 +39,11 @@ def command_for(tmp_path, ghosts, *, playable=None):
     def find_native(attempt_id):
         if attempt_id not in playable:
             return None
+        # A playable clip states complete inputs (his rule, round 40;
+        # ghost/clip.py INCOMPLETE_INPUTS).
         return (tmp_path / f"{attempt_id}.ghost",
-                {"clip_id": f"{attempt_id:032x}", "sha256": "cd" * 32, "blink_frames": 0})
+                {"clip_id": f"{attempt_id:032x}", "sha256": "cd" * 32, "blink_frames": 0,
+                 "inputs_complete": True})
 
     replay = SimpleNamespace(recorder=SimpleNamespace(ghost_capture=capture),
                              native_identity=lambda attempt_id: {"attempt": attempt_id},

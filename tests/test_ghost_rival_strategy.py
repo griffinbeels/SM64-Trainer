@@ -162,7 +162,9 @@ def test_simulated_portable_baseline_yields_to_played_pb_and_undo_restores_it(tm
     try:
         source=rivals.refresh(target,CONTROLS,enabled=True)
         assert source['available'] and rivals.pb['ghost'].import_id
-        assert rivals.pb['step']==9 and len(rivals.rows)==2
+        # Round 49 (2026-10-13): the range above step 9 seats two rivals, and
+        # the remaining seats widen upward to the nearest subdivision above it.
+        assert rivals.pb['step']==9 and [row['step'] for row in rivals.rows]==[12,13,15,15]
         assert rivals.payload()['simulation']=='Developer simulation · Wild Blue'
         run=attempt(1000,frames=331,star_id=2)
         db.upsert_attempt(run)

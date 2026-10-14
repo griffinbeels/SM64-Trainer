@@ -79,6 +79,12 @@ function GhostLibrary(props) {
 
 export function GhostLibraryButton({t, entityKey, session, write}) {
   const [open, setOpen] = useState(false);
-  return html`<button type="button" class="ghost-library-button" onclick=${() => setOpen(true)}>Ghost Library · Import / Export</button>
+  // The library keeps the race target and playing ghosts it opens with
+  // (ghostlibraryflow.js), so it opens once the card's session has answered.
+  // Opened earlier, it kept no target and could not race this one at all.
+  const waiting = session == null;
+  return html`<button type="button" class="ghost-library-button" disabled=${waiting}
+    title=${waiting ? "Loading your ghosts…" : undefined}
+    onclick=${() => setOpen(true)}>Ghost Library · Import / Export</button>
     ${open ? html`<${GhostLibrary} t=${t} entityKey=${entityKey} session=${session} write=${write} onClose=${() => setOpen(false)} />` : null}`;
 }

@@ -133,7 +133,9 @@ def test_every_setting_put_resolves_exactly_when_its_row_says_so(tmp_path, clock
 
 
 def test_the_resolving_puts_are_registry_rows_and_the_ghost_set():
-    assert RESOLVING_CHANGES == settings.resolving() | {"ghosts"}
+    # "rivals" joined with the adaptive roster (8159b47e): a rival choice
+    # changes which ghosts play, exactly as the ticked ghost set does.
+    assert RESOLVING_CHANGES == settings.resolving() | {"ghosts", "rivals"}
     assert settings.resolving() <= set(settings.BY_NAME)
 
 
