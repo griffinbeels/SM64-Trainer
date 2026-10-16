@@ -5,7 +5,8 @@ import { getJSON, send } from "./api.js";
 export function useCommunityAccount() {
   const [account, setAccount] = useState({enabled: false, authenticated: false, status: 'signed_out'});
   const [loading, setLoading] = useState(true);
-  // Explicit open state belongs to Settings. Automatic sign-in/profile steps
+  // Explicit open state keeps Settings or a requested Sheet import visible.
+  // Automatic sign-in/profile steps
   // follow accountRequired and disappear as soon as an active account arrives.
   const [open, setOpen] = useState(false);
   const refresh = () => getJSON("/api/community/account").then(value => {
