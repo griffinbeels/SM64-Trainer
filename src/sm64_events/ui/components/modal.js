@@ -6,7 +6,7 @@
 // e.g. an active install, omits it deliberately). Clicks inside the panel
 // never dismiss (stopPropagation).
 import { h } from "preact";
-import { useEffect, useRef } from "preact/hooks";
+import { useLayoutEffect, useRef } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 
@@ -20,7 +20,8 @@ export function Modal({ title, description, icon = "practice", size = "medium",
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   if (titleId.current === null) titleId.current = `modal-title-${nextModalId++}`;
-  useEffect(() => {
+  // A visible dialog owns focus before its first painted frame.
+  useLayoutEffect(() => {
     const before = document.activeElement;
     const panel = panelRef.current;
     const focusable = () => panel
