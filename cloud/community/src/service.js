@@ -61,15 +61,18 @@ async function redeemInvitation({request,url,env,ctx,s,a,identity}){
   const account=await s.redeem(identity,body.token);armMaintenance(env,ctx);return json(account);
 }
 function readAccount({url,s,a}){exactQuery(url,[]);return json(s.publicAccount(a));}
+// An eligible public sign-in may only inspect or complete its initial profile.
+function publicProfileAccess(c){
+  const {request,url,s,a}=c;
+  if(url.pathname==='/v1/account'&&request.method==='GET')return readAccount(c);
+  if((url.pathname==='/v1/account'&&request.method==='PUT')||
+    (url.pathname==='/v1/names/check'&&request.method==='GET'))return null;
+  s.active(a);
+}
 // The gate for an uninvited, deleted or suspended account; it may read itself without a ticket.
 function lapsedAccess(c){
   const {request,url,s,a}=c;
-  if(a.ephemeral&&a.invited){
-    if(url.pathname==='/v1/account'&&request.method==='GET')return readAccount(c);
-    if((url.pathname==='/v1/account'&&request.method==='PUT')||
-      (url.pathname==='/v1/names/check'&&request.method==='GET'))return null;
-    s.active(a);
-  }
+  if(a.ephemeral&&a.invited)return publicProfileAccess(c);
   if(!a.invited||['deleted','suspended'].includes(a.status)){
     if(url.pathname==='/v1/account'&&request.method==='GET')return readAccount(c);
     // Persisted owners retain export/removal after invitation revocation or
