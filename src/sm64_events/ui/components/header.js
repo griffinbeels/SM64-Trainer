@@ -144,23 +144,21 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   useEffect(() => {
     if (community.account.authenticated) t.refreshUpdates?.(false);
   }, [community.account.authenticated, t.refreshUpdates]);
-  const [communitySetupReady, setCommunitySetupReady] = useState(false);
   // Signing in is the first step (round 41): the Project64 wizard waits
   // until the account screen is satisfied, then offers itself as before.
   const [setupOffer, setSetupOffer] = useState(false);
   useEffect(() => {
     send("GET", "/api/setup").then((setup) => {
-      setCommunitySetupReady(!!setup.onboarding?.completed_at || !!setup.emu?.installation_verified);
       setSetupWarning(setup.emu?.rom?.warning || (setup.onboarding?.limited
         && setup.onboarding.platform === EMU ? "JP tracking isn't supported yet; support is planned for a later patch." : null));
       if (!seenSetupPrompt() && shouldOfferSetup(setup)) setSetupOffer(true);
     }).catch(() => {});
   }, []);
   useEffect(() => {
-    if (!setupOffer || community.required || updateFirst) return;
+    if (!setupOffer || community.loading || community.open || updateFirst) return;
     setSetupOffer(false);
     closeSettings(); setSetupOpen(true);
-  }, [setupOffer, community.required, updateFirst]);
+  }, [setupOffer, community.loading, community.open, updateFirst]);
   const closeSetup = () => {
     setSetupOpen(false);
     rememberSetupPrompt();
@@ -171,17 +169,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
     closeSettings();
     setTab?.("Practice");
     t.refresh();
-    setCommunitySetupReady(true);
   };
-
-  useEffect(() => {
-    if (setupOpen || updateFirst || !community.account.enabled || !communitySetupReady || community.account.authenticated) return;
-    try {
-      if (sessionStorage.getItem('sm64.communityPrompt') === '1') return;
-      sessionStorage.setItem('sm64.communityPrompt', '1');
-    } catch { /* Private browsing still allows this session's account prompt. */ }
-    closeSettings(); community.setOpen(true);
-  }, [community.account.enabled, communitySetupReady, setupOpen, updateFirst]);
 
   useEffect(() => {
     if (!settingsOpen) return;

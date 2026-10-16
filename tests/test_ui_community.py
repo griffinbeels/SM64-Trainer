@@ -117,7 +117,7 @@ class FixtureAccount:
 
 
 @contextlib.contextmanager
-def community_app(monkeypatch, tmp_path, account=None):
+def community_app(monkeypatch, tmp_path, account=None, **fixture):
     """Inject only the account seam into the established offline app fixture."""
     listener = ui_fixture._bound_socket()
     port = listener.getsockname()[1]
@@ -131,7 +131,7 @@ def community_app(monkeypatch, tmp_path, account=None):
         with monkeypatch.context() as patch:
             patch.setattr(ui_fixture, "create_app", configured_app)
             patch.setattr(ui_fixture, "_bound_socket", lambda: listener)
-            with ui_fixture.serve_ui_live(tmp_path / "practice.db", seed=False) as result:
+            with ui_fixture.serve_ui_live(tmp_path / "practice.db", seed=False, **fixture) as result:
                 # The normal fixture seeds some controls through HTTP before it
                 # knows this protected server's capability. Seed public practice
                 # events through its existing direct service helper instead.
@@ -160,8 +160,6 @@ def click_text(page, label, scope=MODAL):
 
 
 def open_account(page):
-    # Stop a later onboarding effect racing this explicit settings interaction.
-    page.evaluate("sessionStorage.setItem('sm64.communityPrompt', '1')")
     if page.count(MODAL):
         return
     # A known-good app control precedes every manually opened account screen.
@@ -564,7 +562,7 @@ def test_the_name_field_checks_validity_and_availability_as_you_type(monkeypatch
 
 
 def test_an_existing_account_signs_in_immediately_without_a_name_prompt(monkeypatch, tmp_path):
-    """His rule (round 41): an existing account for that Twitch/Discord identity logs straight in."""
+    """An existing identity finishes sign-in without account editing (round 54)."""
     account = FixtureAccount()
     with community_app(monkeypatch, tmp_path, account) as (base, _):
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
@@ -574,10 +572,7 @@ def test_an_existing_account_signs_in_immediately_without_a_name_prompt(monkeypa
             wait_until(page, "document.querySelector('.modal-body')?.innerText.includes('Finish signing in')", "the pending screen")
             account.update(authenticated=True, stored=True, status="active", provider="twitch", name="griffman1212",
                            terms_version="t1", privacy_version="p1")
-            page.wait_for(".community-identity")
-            capture_widths(page, "account-summary")
-            text = modal_text(page)
-            assert "griffman1212" in text and "signed in with Twitch" in text
-            assert not page.count(".community-form input[autocomplete=nickname][autofocus]")
+            wait_until(page, "!document.querySelector('.modal')", "returning sign-in completion")
+            assert not page.count(".community-form")
             assert ("begin", "twitch") in account.calls and not any(call[0] == "profile" for call in account.calls)
             assert page.problems() == []

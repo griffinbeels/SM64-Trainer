@@ -1560,17 +1560,21 @@ changing original history.
 ### Sign-in step
 
 After the startup update check and any update offer, a configured build asks for
-a Discord or Twitch sign-in,
-then a player name and consent. The player cannot close the account screen
-until the account is active, and the Project64 wizard waits behind it (his
+a Discord or Twitch sign-in. A new account chooses a player name and acknowledges
+the policies once. A returning active account skips that form and account settings
+entirely. After either path, unfinished Project64 setup opens; a detected working
+installation skips setup. Setup waits until the account check settles. The player
+cannot close a required sign-in or profile step until the account is active (his
 direction, 2026-10-12: "logging in is the first step for onboarding, and
 you're not allowed to continue unless you login in some way"). A stored
 refresh token counts as an account while offline, so practice never locks
 out on a bad connection; signing out returns to this step. Google and email
 are not offered. The same provider identity always returns to its own
-account. The name field checks validity while typing and availability after
+account. New-account signup enables automatic [[ghost]] sharing, without a sharing
+toggle; Settings is where the player changes it. Returning login preserves a
+saved opt-out. The name field checks validity while typing and availability after
 a pause or on blur (4 to 20 characters; a check or a cross), and the account
-screen shows the name, the provider and the [[Rank tab]]'s own chip row.
+settings screen shows the name, the provider and the [[Rank tab]]'s own chip row.
 
 - **Lives** — `src/sm64_events/ui/community.js` (accountRequired),
   `src/sm64_events/ui/components/communityaccount.js`,

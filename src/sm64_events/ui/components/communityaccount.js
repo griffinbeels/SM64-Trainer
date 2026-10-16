@@ -87,11 +87,19 @@ export function CommunityAccountModal({community, onClose, onPracticeRefresh}) {
     || ['rename_required', 'new', 'consent_required'].includes(account.status));
   const save = (profile, importTimes) => actions.run(async () => {
     const sheetRunner = profile.sheet_runner;
-    await send('PUT', rename ? '/api/community/account/name' : '/api/community/account', rename ? {name: profile.name} : profile);
-    await refresh();
-    if (importTimes && sheetRunner) {
-      runner.current = sheetRunner; setImporting(true); flow.run();
-    } else onClose();
+    const importingTimes = importTimes && sheetRunner;
+    if (importingTimes) {
+      runner.current = sheetRunner; setImporting(true); community.setOpen(true);
+    }
+    try {
+      await send('PUT', rename ? '/api/community/account/name' : '/api/community/account', rename ? {name: profile.name} : profile);
+      await refresh();
+      if (importingTimes) flow.run();
+      else onClose();
+    } catch (error) {
+      if (importingTimes) { setImporting(false); community.setOpen(false); }
+      throw error;
+    }
   });
   const title = rename ? 'Choose a new name' : importing ? 'Import your best times' :
     !account.authenticated ? (account.enabled ? 'Sign in' : 'Community ghosts')
@@ -107,11 +115,19 @@ export function CommunityAccountModal({community, onClose, onPracticeRefresh}) {
 
 function AccountContent({account, refresh, actions, importing, flow, save, onClose}) {
   if (importing) return html`${flow.progress && html`<${ProgressLine} progress=${flow.progress.progress} message=${flow.progress.message} running=${flow.phase === 'working'} />`}<${ImportOutcome} flow=${flow} />
-      <div class="community-actions"><button disabled=${flow.phase === 'working'} onClick=${onClose}>Start practicing</button></div>`;
+      <div class="community-actions"><button disabled=${actions.busy || flow.phase === 'working'} onClick=${onClose}>Start practicing</button></div>`;
   if (actions.pending) return html`<p>Finish signing in in your browser.</p>
         ${!actions.pending.popup && html`<p><a href=${actions.pending.url} target="_blank" rel="noopener noreferrer">Open sign in</a></p>`}
         <button onClick=${actions.cancel}>Cancel</button>`;
   if (!account.authenticated) return html`<${ProviderChoices} enabled=${account.enabled} busy=${actions.busy} start=${actions.start} close=${actions.close} />`;
+  if (account.status === 'signed_out') return html`<p role="status">Loading your account…</p>
+    ${account.error && html`<p>Your account could not be loaded. Please try again.</p>`}
+      <button disabled=${actions.busy} onClick=${() => actions.run(async () => {
+        await send('POST', '/api/community/account/refresh'); await refresh();
+      })}>Retry</button>
+      <button disabled=${actions.busy} onClick=${() => actions.run(async () => {
+        await send('POST', '/api/community/auth/sign-out'); await refresh(); onClose();
+      })}>Sign out</button>`;
   if (['rename_required', 'new', 'consent_required'].includes(account.status)) return html`<${CommunityProfile} account=${account} busy=${actions.busy} onSave=${save} />`;
   if (account.status === 'active') return html`<${CommunitySettings} account=${account} busy=${actions.busy} run=${actions.run} refresh=${refresh} onClose=${onClose} />`;
   return html`<p>This beta account needs an invitation. Ask the person who sent you the build.</p>

@@ -10,9 +10,8 @@ const html = htm.bind(h);
 
 const PROVIDER_NAMES = { discord: "Discord", twitch: "Twitch", google: "Google", email: "email" };
 
-// What the account is, at a glance, the moment you sign in (his ask, round
-// 41: "when you login, it should show your account's current rank + current
-// account information"). The chip row is the Rank tab's own, read from the
+// Account details belong to Settings, never a returning sign-in step (round
+// 54). The chip row is the Rank tab's own, read from the
 // same summary endpoint, so the rank here can never differ from the tab.
 export function AccountSummary({ account }) {
   const provider = PROVIDER_NAMES[account.provider] || null;
