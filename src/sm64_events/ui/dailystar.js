@@ -51,8 +51,9 @@ function useLocalDate() {
   return date;
 }
 
-// `rev` is the store's attempt-completion counter, so today's best follows a
-// grab without a page reload.
+// `rev` is the store's `standingRev`, bumped only by the events that can move
+// a PB, a rank or today's attempts (store.js STANDING_ON), so today's best
+// follows a grab without a page reload and nothing else refetches it.
 export function useDailyStar(rev) {
   const date = useLocalDate();
   const [daily, setDaily] = useState(null);

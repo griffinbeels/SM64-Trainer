@@ -1,0 +1,52 @@
+import {requireThat,uuid} from "./errors.js";
+export const LIMITS = Object.freeze({
+  encoded_bytes: 2 * 1024 * 1024, raw_bytes: 16 * 1024 * 1024,
+  retained_bytes: 64 * 1024 * 1024, global_bytes: 10 * 1000 * 1000 * 1000,
+  upload_bytes_day: 24 * 1024 * 1024, global_upload_bytes_day: 256 * 1024 * 1024,
+  account_ops_day: 500, global_ops_day: 30000, pending_uploads: 2,
+  grant_seconds: 300, pin_seconds: 7 * 86400, page_rows: 256, search_rows: 20, max_band: 45
+});
+const CALLBACKS = new Set(['http://127.0.0.1:8064/api/community/auth/callback',
+  'http://127.0.0.1:8072/api/community/auth/callback']);
+function nativeClients(env) {
+  const primary={client_id:env.OAUTH_CLIENT_ID,callback:env.NATIVE_CALLBACK};
+  if(env.OAUTH_CLIENTS===undefined)return [primary];
+  let clients;
+  try{clients=JSON.parse(env.OAUTH_CLIENTS);}catch{requireThat(false,'configuration','Service is unavailable.',503);}
+  requireThat(Array.isArray(clients)&&clients.length>=1&&clients.length<=2&&
+    clients.every(pair=>pair&&typeof pair==='object'&&!Array.isArray(pair)&&
+      Object.keys(pair).length===2&&uuid(pair.client_id)&&CALLBACKS.has(pair.callback))&&
+    new Set(clients.map(pair=>pair.client_id)).size===clients.length&&
+    new Set(clients.map(pair=>pair.callback)).size===clients.length&&
+    clients.some(pair=>pair.client_id===primary.client_id&&pair.callback===primary.callback),
+    'configuration','Service is unavailable.',503);
+  return clients;
+}
+export function config(env) {
+  const supabase = new URL(env.SUPABASE_URL);
+  requireThat(supabase.protocol === "https:" && !supabase.username && !supabase.password &&
+    supabase.pathname === "/" && !supabase.search && !supabase.hash, "configuration", "Service is unavailable.",503);
+  let sharedPublishers=null;
+  if(env.BETA_SHARED_PUBLISHERS!==undefined){
+    try{sharedPublishers=JSON.parse(env.BETA_SHARED_PUBLISHERS);}catch{requireThat(false,'configuration','Service is unavailable.',503);}
+    requireThat(Array.isArray(sharedPublishers)&&sharedPublishers.length<=8&&sharedPublishers.every(uuid)&&new Set(sharedPublishers).size===sharedPublishers.length,'configuration','Service is unavailable.',503);
+    sharedPublishers=sharedPublishers.map(id=>id.toLowerCase());
+  }
+  return {
+    supabaseURL: supabase.origin, issuer: supabase.origin + "/auth/v1",
+    jwks: supabase.origin + "/auth/v1/.well-known/jwks.json",
+    clientID: env.OAUTH_CLIENT_ID, callback: env.NATIVE_CALLBACK, nativeClients:nativeClients(env),
+    publishableKey: env.SUPABASE_PUBLISHABLE_KEY, terms: env.TERMS_VERSION, privacy: env.PRIVACY_VERSION,
+    enabled: env.SERVICE_ENABLED === "true", publicBetaSignup: env.PUBLIC_BETA_SIGNUP === "true",
+    operator: env.OPERATOR_NAME, contact: env.OPERATOR_CONTACT,
+    identityAdminConfigured:typeof env.SUPABASE_SECRET_KEY==='string'&&env.SUPABASE_SECRET_KEY.length>=16&&!env.SUPABASE_SECRET_KEY.startsWith('REPLACE'),
+    paginationConfigured:typeof env.CURSOR_SECRET==='string'&&env.CURSOR_SECRET.length>=32,
+    sharedPublishers
+  };
+}
+export function ready(cfg) {
+  requireThat(cfg.enabled && cfg.operator?.trim() && cfg.contact?.trim() &&
+    cfg.clientID && !cfg.clientID.startsWith("REPLACE") && cfg.publishableKey && !cfg.publishableKey.startsWith("REPLACE")&&cfg.identityAdminConfigured&&cfg.paginationConfigured&&typeof cfg.terms==='string'&&cfg.terms.trim()&&typeof cfg.privacy==='string'&&cfg.privacy.trim(),
+    "service_disabled", "The private beta is not configured.",503);
+  requireThat(CALLBACKS.has(cfg.callback),"configuration","The callback is not registered.",503);
+}

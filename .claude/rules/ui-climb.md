@@ -29,6 +29,12 @@ Full detail, evidence and history: [docs/rules/ui-climb.md](../../docs/rules/ui-
 one-direction snap is a CSS-specificity problem described there) and
 `.claude/rules/ui-ranks.md` (icon registry, the banner this climbs on).
 
+**Not here: the PB row's GOLD!! and its one-shot arrival** (task 0147). It is
+a practice-log row effect, not a climb beat, and lives in
+`.claude/rules/pb-strategy.md`'s last row; its numbers are the "Personal best"
+group of `/ui/tunelog.html`, not this inspector. It honours the same
+Celebrations preference (`celebrationsEnabled()`) for the arrival only.
+
 **Anything judged by feel:** build the tuning inspector first, let the human
 tune it live, codify what he saves (`tuning-demo` skill; example `/ui/tune.html`).
 

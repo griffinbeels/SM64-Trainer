@@ -12,7 +12,7 @@
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { getJSON, send } from "../api.js";
+import { getJSON, send, localFetch } from "../api.js";
 import { iconSrcFromStem, parseEntityKey, parseStarId } from "../entities.js";
 import { Modal } from "./modal.js";
 
@@ -93,7 +93,7 @@ export function IconPicker({ identity, current, onDone }) {
     if (!file) return;
     setUploading(true); setErr(null);
     try {
-      const resp = await fetch(
+      const resp = await localFetch(
         `/api/icons/upload?name=${encodeURIComponent(file.name)}`,
         { method: "POST", body: file });
       if (!resp.ok) {

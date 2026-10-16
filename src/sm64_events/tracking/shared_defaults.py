@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 import tempfile
 import threading
 import uuid
@@ -19,7 +18,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
 from sm64_events.tracking.defaults import resolve_steps
 from sm64_events.tracking.routes import validate_route
 from sm64_events.tracking.segments import validate_definition
@@ -264,12 +263,17 @@ class SharedDefaultsStore:
     def _build_base(self) -> dict:
         # The isolated interpreter cannot reuse corpus modules imported from a
         # sibling worktree. Source checkout capability is checked by the server.
+        # Shared authoring is source-only. The empty frozen flag is never
+        # dispatched: refuse a frozen launch before starting any child.
+        command, env = python_child("tools.build_defaults_seed", "", ("--base",))
+        if env is None:
+            raise RuntimeError("Shared defaults authoring requires a source checkout.")
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONPATH"] = os.pathsep.join((str(self.root / "src"), env["PYTHONPATH"]))
         try:
             process = subprocess.run(
-                [sys.executable, "-X", "utf8",
-                 str(self.root / "tools" / "build_defaults_seed.py"), "--base"],
-                cwd=self.root, capture_output=True, text=True, encoding="utf-8",
-                timeout=30, check=True, **quiet_spawn_kwargs())
+                command, env=env, cwd=self.root, capture_output=True, text=True,
+                encoding="utf-8", timeout=30, check=True, **quiet_spawn_kwargs())
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(
                 "Cannot build the shared defaults corpus. Run "

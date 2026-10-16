@@ -1,5 +1,5 @@
 # tests/test_anchors.py
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -13,11 +13,17 @@ ACT_WALKING = 0x04000440  # not in PASSIVE_ACTIONS -> counts as "acted"
 ACT_QUICKSAND_DEATH = 0x00021312  # in DEATH_ACTIONS -> involuntary
 
 
+BOOT = datetime(2026, 6, 10, tzinfo=timezone.utc)
+
+
 def snap(timer: int, igt: int = 0, action: int = ACT_IDLE,
          level: int = 0, area: int = 0, warp_op: int = 0,
-         warp_timer: int = 0) -> GameSnapshot:
+         warp_timer: int = 0, wall: datetime | None = None) -> GameSnapshot:
+    # The wall clock runs with the game unless a test says otherwise: a frame
+    # counter that outruns it is a load (load_signature), so a fixed stamp
+    # would make every multi-frame step read as one.
     return GameSnapshot(
-        wall_time_utc=datetime(2026, 6, 10, tzinfo=timezone.utc),
+        wall_time_utc=wall or BOOT + timedelta(seconds=timer / 30),
         global_timer=timer, mario_action=action, mario_action_timer=0,
         num_stars=5, last_completed_course=1, last_completed_star=3,
         igt_overall=igt, curr_level=level, curr_area=area,
@@ -52,9 +58,14 @@ def test_igt_running_normally_is_silent():
     assert AnchorDetector().process(snap(1000, igt=500), snap(1001, igt=500)) == []
 
 
-def test_igt_drop_to_large_value_is_not_a_practice_reset():
-    # e.g. a Usamune timer-mode change; not a retry anchor
-    assert AnchorDetector().process(snap(1000, igt=500), snap(1001, igt=300)) == []
+def test_igt_drop_to_large_value_is_a_load_not_a_practice_reset():
+    """A counter that lands ABOVE the reset band, one frame after reading
+    500, was restored rather than restarted: no retry reaches 300 in a frame
+    (task 0144; this test said "silent" until then, and the TTC loop of
+    2026-08-28 was eleven of those silences)."""
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1001, igt=300))
+    found = [(e.type, e.payload["load_signature"]) for e in events]
+    assert found == [("state_loaded", "igt_rewound")]
 
 
 def test_backward_global_timer_emits_state_loaded():
@@ -88,8 +99,19 @@ def test_igt_drop_to_threshold_exactly_fires():
     assert len(events) == 1 and events[0].type == "practice_reset"
 
 
-def test_igt_drop_just_above_threshold_is_silent():
-    assert AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=31)) == []
+def test_igt_drop_just_above_threshold_is_a_load():
+    # two frames cannot climb a restarted counter to 31
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=31))
+    assert [e.type for e in events] == ["state_loaded"]
+
+
+def test_a_reset_hidden_in_a_poll_gap_is_not_a_load():
+    """Sixty frames between polls: a reset at the start of the gap and a climb
+    back to 40 look exactly like a backward jump from either end, so the rule
+    only claims a load the gap cannot explain."""
+    assert AnchorDetector().process(snap(1000, igt=500), snap(1060, igt=40)) == []
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1060, igt=63))
+    assert [e.type for e in events] == ["state_loaded"]
 
 
 def test_backward_jump_to_exactly_boot_max_is_state_loaded():
@@ -980,3 +1002,179 @@ def test_a_ride_the_reset_cancelled_is_a_real_reset():
         snap(1008, igt=0, level=5, area=1)])
     [anchor] = [e for e in events if e.type == "practice_reset"]
     assert anchor.payload["area_load"] is False
+
+
+# ---------------------------------------------------------------------------
+# Save-state loads the frame counter never sees (task 0144)
+# ---------------------------------------------------------------------------
+
+ACT_FORWARD_ROLLOUT = 0x010008A6
+ACT_STAR_DANCE_EXIT = 0x00001302
+
+
+def test_his_wf_load_is_journaled_as_a_state_load():
+    """Real pair, his 2026-09-23 WF session (picture ledger frames 19153 ->
+    19154): the star dance, then the frame counter ticks ONE while Usamune's
+    counter falls from 353 to the 181 he saved at, Mario in the saved rollout."""
+    events = AnchorDetector().process(
+        snap(19153, igt=353, action=ACT_STAR_DANCE_EXIT, level=24, area=1),
+        snap(19154, igt=181, action=ACT_FORWARD_ROLLOUT, level=24, area=1))
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.type == "state_loaded" and ev.frame == 19154
+    assert ev.payload | {"load_signature": "igt_rewound",
+                         "igt_frames_restored": 181, "igt_frames_before": 353,
+                         "loads_journaled": True, "area": 1,
+                         "area_load": False, "teleport": False} == ev.payload
+
+
+def test_the_ttc_loop_shape_is_a_load():
+    # 2026-08-28: 3645 at one grab, 3319 at the next, the frame counter
+    # monotonic the whole time -- the docstring's eleven unrecorded loads.
+    events = AnchorDetector().process(snap(165500, igt=3645),
+                                      snap(165501, igt=3319))
+    assert [e.payload["load_signature"] for e in events] == ["igt_rewound"]
+
+
+def test_a_counter_that_outruns_the_game_is_a_load():
+    events = AnchorDetector().process(snap(1000, igt=100), snap(1001, igt=400))
+    assert [e.payload["load_signature"] for e in events] == ["igt_skipped_ahead"]
+
+
+def test_read_skew_is_not_a_load():
+    # one sample's two reads straddling a frame, at each end
+    assert AnchorDetector().process(snap(1000, igt=100), snap(1001, igt=103)) == []
+
+
+def test_a_frame_counter_rewind_names_its_signature():
+    events = AnchorDetector().process(snap(5000, igt=900), snap(3000, igt=120))
+    assert events[0].payload["load_signature"] == "frame_counter_rewound"
+
+
+def test_a_wrap_from_the_u16_ceiling_is_not_a_load():
+    assert AnchorDetector().process(snap(1000, igt=65100), snap(1001, igt=40)) == []
+
+
+def test_every_anchor_says_loads_are_journaled():
+    reset = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
+    load = AnchorDetector().process(snap(5000, igt=900), snap(3000, igt=120))
+    assert reset[0].payload["loads_journaled"] is True
+    assert load[0].payload["loads_journaled"] is True
+
+
+def _trace(name):
+    import gzip
+    import json
+    from pathlib import Path
+    raw = (Path(__file__).parent / "fixtures" / "state_load_traces.json.gz").read_bytes()
+    return json.loads(gzip.decompress(raw))[name]
+
+
+def _run_trace(rows):
+    d, prev, out = AnchorDetector(), None, []
+    for frame, igt, action in rows:
+        curr = snap(frame, igt=igt, action=action, level=24, area=1)
+        if prev is not None:
+            out += [e for e in d.process(prev, curr) if e.type != "mario_acted"]
+        prev = curr
+    return out
+
+
+def test_his_real_wf_session_journals_exactly_its_sixteen_loads():
+    """Every drawn frame of the session the rule was measured on: the counter
+    was restored to 181 eight times and 177 eight times, and nothing else in
+    the trace is a load."""
+    loads = [e for e in _run_trace(_trace("wf_loads")) if e.type == "state_loaded"]
+    restored = sorted(e.payload["igt_frames_restored"] for e in loads)
+    assert restored == [177] * 8 + [181] * 8
+    assert {e.payload["load_signature"] for e in loads} == {"igt_rewound"}
+
+
+def test_his_real_resets_stay_resets():
+    """A window of ordinary play full of L-resets: every anchor is a
+    practice_reset and none is a load."""
+    events = _run_trace(_trace("resets_only"))
+    assert events and {e.type for e in events} == {"practice_reset"}
+
+
+def test_a_state_from_an_earlier_boot_is_a_load_too():
+    """His 2026-06-11 BitDW practice (journal ids 17831-17834): the console
+    reset, the game booted to frame 96, and a Project64 state saved in an
+    earlier boot put the counter at 1763 eight seconds later -- FORWARD, so
+    neither the rewind nor the Usamune readings could see it."""
+    events = AnchorDetector().process(
+        snap(96, igt=0, wall=BOOT),
+        snap(1763, igt=1386, wall=BOOT + timedelta(seconds=7.77)))
+    assert [(e.type, e.payload["load_signature"]) for e in events] == [
+        ("state_loaded", "frame_counter_skipped_ahead")]
+
+
+def test_the_frame_counter_keeping_pace_with_the_wall_is_not_a_load():
+    """A poll gap: ten minutes pass and the game ran through them. And a game
+    at double speed for a second is still inside the allowance."""
+    assert AnchorDetector().process(
+        snap(1000, igt=500, wall=BOOT),
+        snap(19000, igt=18500, wall=BOOT + timedelta(minutes=10))) == []
+    assert AnchorDetector().process(
+        snap(1000, igt=500, wall=BOOT),
+        snap(1060, igt=560, wall=BOOT + timedelta(seconds=1))) == []
+
+
+def test_a_forward_load_to_a_fresh_state_is_not_read_as_a_reset():
+    """A state saved in the first second of a course restores a counter
+    inside the reset band; the jump itself is what says it was a load."""
+    events = AnchorDetector().process(
+        snap(96, igt=400, wall=BOOT),
+        snap(1763, igt=5, wall=BOOT + timedelta(seconds=7.77)))
+    assert [e.type for e in events] == ["state_loaded"]
+
+
+# ---------------------------------------------------------------------------
+# A textbox the game opened is not the player acting (2026-09-28). Bowser
+# speaks the moment Mario lands in his arena, so every reset taken during the
+# speech read as acted and banked a reset row for a fight he could not yet
+# play: "technically I didn't have any inputs as a player (since it's just the
+# cutscene)... we just should hide all the bullshit resets". The shape is his
+# Bowser 3 intro, journal ids 6500-6504: respawn, land, speech, reset.
+# ---------------------------------------------------------------------------
+
+ACT_SPAWN_SPIN_AIRBORNE = 0x00001924
+ACT_READING_NPC_DIALOG = 0x20001306
+
+
+def test_a_reset_during_bowsers_intro_speech_is_not_acted():
+    events = run(AnchorDetector(), [
+        snap(61753, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1),
+        snap(61760, igt=7, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1),
+        snap(61790, igt=37, action=ACT_READING_NPC_DIALOG, level=34, area=1),
+        snap(63028, igt=67, action=ACT_READING_NPC_DIALOG, level=34, area=1),
+        snap(63029, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1)])
+    assert [e.type for e in events if e.type == "mario_acted"] == []
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["mario_acted"] is False
+
+
+def test_play_after_the_speech_still_counts_as_acting():
+    """Only the game's own hold is ignored: the first thing he does once
+    the speech ends is an act, and that is the one the journal names."""
+    events = run(AnchorDetector(), [
+        snap(61753, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1),
+        snap(61790, igt=37, action=ACT_READING_NPC_DIALOG, level=34, area=1),
+        snap(61950, igt=197, action=ACT_WALKING, level=34, area=1),
+        snap(62100, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE, level=34, area=1)])
+    [acted] = [e for e in events if e.type == "mario_acted"]
+    assert acted.payload["action"] == ACT_WALKING
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["mario_acted"] is True
+
+
+def test_every_no_control_action_in_the_registry_is_not_acting():
+    from sm64_events.memory.addresses import NO_CONTROL_ACTIONS
+    assert len(NO_CONTROL_ACTIONS) >= 4, "the textboxes and the intro"
+    for action in NO_CONTROL_ACTIONS:
+        events = run(AnchorDetector(), [
+            snap(1000, igt=40, action=ACT_IDLE),
+            snap(1001, igt=41, action=action),
+            snap(1003, igt=0, action=ACT_SPAWN_SPIN_AIRBORNE)])
+        [anchor] = [e for e in events if e.type == "practice_reset"]
+        assert anchor.payload["mario_acted"] is False, hex(action)

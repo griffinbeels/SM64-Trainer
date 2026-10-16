@@ -1,11 +1,16 @@
 # tools/release.py
-"""One-command release: bump -> tag -> build -> zip+manifest -> SHA-256 -> publish.
+"""Reusable release preparation, verification, draft upload and publication.
 
-    uv run python tools/release.py 1.1.0 [--notes-file NOTES.md] [--dry-run]
+    python tools/release_flow.py ship-beta VERSION DEST --config CONFIG
+    python tools/release.py --phase verify --candidate DEST
+    python tools/release.py --phase draft --candidate DEST --approval QA --notes-file NOTES
+    python tools/release.py --phase publish --candidate DEST --approval QA
 
 Refuses unless the tree is clean, you're on main, `gh` is authed, the local
 merge check passes, and the commit's full run on GitHub passed (it waits
-for one still running). Builds the onedir app + bootstrap installer via
+for one still running). The verification lane and tools/build_exe.py build
+the three natives from this commit and refuse a stale one
+(tools/build_natives.py). Builds the onedir app + bootstrap installer via
 tools/build_exe.py (ffmpeg must be on PATH so it gets bundled), zips the
 onedir tree, emits the per-file update manifest, and publishes SIX assets
 the incremental updater + bootstrap consume:
@@ -16,9 +21,10 @@ the incremental updater + bootstrap consume:
                                     load-bearing name old shipped updaters
                                     can install (their migration vehicle)
 
-Pure helpers (bump_*, sha256_file, valid_version, write_sha, release_assets)
-are unit-tested; the git/gh/build orchestration is exercised by cutting a
-real release."""
+Private preparation never tags, pushes, deploys or publishes. Draft and publish
+require exact human QA approval, source/verification gates and six downloaded
+asset digests. The old version-only --dry-run command remains build-only.
+"""
 import argparse
 import hashlib
 import json
@@ -54,7 +60,12 @@ UPLOAD_EXE = DIST / BOOTSTRAP_ASSET     # bootstrap copy under the asset name
 
 
 def valid_version(v: str) -> bool:
-    return bool(re.fullmatch(r"\d+\.\d+\.\d+", v))
+    from sm64_events.core.release_contract import version_key
+    try:
+        version_key(v)
+        return not v.startswith(("v", "V"))
+    except ValueError:
+        return False
 
 
 def bump_version_py(text: str, new: str) -> str:
@@ -218,12 +229,246 @@ def _require_full_run(dry_run: bool = False, gate=None) -> None:
 
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd))
+    kw.setdefault("creationflags", getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return subprocess.run(cmd, cwd=REPO, check=True, **kw)
 
 
 def _capture(cmd: list[str]) -> str:
     return subprocess.run(cmd, cwd=REPO, check=True,
-                          capture_output=True, text=True).stdout.strip()
+                          capture_output=True, text=True,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+
+
+def _assert_build_source(source: str, lock_digest: str) -> None:
+    if (_capture(["git", "rev-parse", "HEAD"]) != source or _capture(["git", "status", "--porcelain"])
+            or sha256_file(UV_LOCK) != lock_digest):
+        raise ValueError("source or dependencies changed during preparation; discard this candidate and rebuild")
+
+
+def _package_private_installer(destination, zip_path, manifest_path, version, record, work):
+    import shutil
+    from sm64_events.bootstrap.beta_payload import append_payload
+    from sm64_events.bootstrap.installer import OFFLINE_OFFER
+    offline = work / "offline.zip"
+    shutil.copyfile(zip_path, offline)
+    import zipfile
+    with zipfile.ZipFile(offline, "a", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(OFFLINE_OFFER, json.dumps({"schema": 1, "version": version,
+                          "manifest": manifest_path.read_text(encoding="utf-8")}, sort_keys=True))
+    private_exe = destination / f"SM64Trainer-{version}-private.exe"
+    append_payload(destination / BOOTSTRAP_ASSET, offline, private_exe)
+    write_sha(private_exe)
+    from release_candidate import write_once, digest
+    write_once(destination / "private-installer.json", {"schema": 1,
+        "candidate_sha256": digest(record), "version": version,
+        "installer": private_exe.name, "sha256": digest(private_exe)})
+
+
+def prepare_candidate(version: str, destination: Path, *, config: Path,
+                      ffmpeg: str | None = None, ghosts: Path | None = None,
+                      ghost_author: Path | None = None,
+                      private: bool = False, check_only: bool = False,
+                      service_provenance: dict | None = None, promoted_from: str | None = None) -> Path | None:
+    """Build pinned artifacts once. Never bump, tag, push, deploy or publish."""
+    from sm64_events.core.build_channel import read_metadata
+    from sm64_events.core.release_contract import version_key
+    from build_beta import check_prerequisites, validate_artifact, SEED_DESCRIPTOR
+    from beta_ghosts import review_collection, candidate_author, seed_descriptor, COLLECTION_NAME, matches
+    from make_manifest import build_zip, make_manifest
+    from release_candidate import record_candidate, source_revision
+    import shutil
+    if not valid_version(version):
+        raise ValueError("candidate requires an exact SemVer version")
+    build = read_metadata(config)
+    if (build.installation != "normal"
+            or bool(version_key(version).prerelease) != (build.channel == "beta")):
+        raise ValueError("candidate version requires matching normal stable/beta identity")
+    if build.friend_invitation and not private:
+        raise ValueError("public candidate cannot contain a private invitation")
+    author = candidate_author(ghost_author, ghosts, build, private=private)
+    resolved_ffmpeg = check_prerequisites(ffmpeg)
+    approved = review_collection(ghosts) if ghosts else None
+    if approved:
+        print(f"ghost collection: {approved.count} recordings, {approved.with_inputs} with every input known")
+    if check_only:
+        return None
+    destination = destination.resolve()
+    if destination.exists() and any(destination.iterdir()):
+        raise ValueError("candidate directory must be empty; verify an existing candidate instead of rebuilding it")
+    if _capture(["git", "status", "--porcelain"]):
+        raise ValueError("candidate requires a clean committed source tree")
+    source = source_revision(REPO)
+    lock_digest = sha256_file(UV_LOCK)
+    destination.mkdir(parents=True, exist_ok=True)
+    work = destination / ".work"
+    _run([sys.executable, str(REPO / "tools" / "build_exe.py"), "--mode", "all",
+          "--ffmpeg", resolved_ffmpeg, "--config", str(config.resolve()), "--version", version,
+          "--distpath", str(work / "dist"), "--workpath", str(work / "build")])
+    app = work / "dist" / "SM64Trainer"
+    if approved:
+        if not matches(approved.source, approved):
+            raise ValueError("approved ghost source changed during the build")
+        shutil.copyfile(approved.source, app / COLLECTION_NAME)
+        (app / "_internal" / SEED_DESCRIPTOR).write_text(
+            json.dumps(seed_descriptor(approved, author), sort_keys=True) + "\n", encoding="utf-8")
+    validate_artifact(app, build, ghosts=approved, ghost_author=author)
+    zip_path, manifest_path = destination / ZIP_ASSET, destination / MANIFEST_ASSET
+    build_zip(app, zip_path)
+    manifest_path.write_text(make_manifest(zip_path, version), encoding="utf-8")
+    shutil.copyfile(work / "dist" / "SM64TrainerSetup.exe", destination / BOOTSTRAP_ASSET)
+    for artifact in (zip_path, manifest_path, destination / BOOTSTRAP_ASSET):
+        write_sha(artifact)
+    _assert_build_source(source, lock_digest)
+    record = record_candidate(destination, version=version, build=build,
+        artifacts=release_assets(destination), source_commit=source, lock=UV_LOCK, app=app,
+        version_hook=work / "build" / "rthook_release_version.py", private=private,
+        service_provenance=service_provenance, promoted_from=promoted_from)
+    if private:
+        _package_private_installer(destination, zip_path, manifest_path, version, record, work)
+    verify_candidate(destination, app=app)
+    return record
+
+
+def verify_candidate(directory: Path, *, app: Path | None = None) -> Path:
+    """Recheck immutable artifacts and the actual embedded runtime baseline."""
+    from release_candidate import (verify_artifacts, frozen_self_check, record_verification,
+                                   digest, read_record)
+    record = verify_artifacts(directory, expected_assets=[p.name for p in release_assets(directory)])
+    checks = ["six artifact digests", "complete per-file manifest and ZIP ranges",
+              "normal identity and public configuration", "native provenance"]
+    import tempfile
+    import zipfile
+    if app is None:
+        from sm64_events.bootstrap.beta_payload import checked_members
+        with tempfile.TemporaryDirectory(prefix="sm64-candidate-check-") as temporary:
+            app = Path(temporary)
+            with zipfile.ZipFile(directory / ZIP_ASSET) as archive:
+                checked_members(archive)
+                archive.extractall(app)
+            frozen = frozen_self_check(app, directory, record)
+    else:
+        frozen = frozen_self_check(app, directory, record)
+    # Bind proof to the packaged executable too, not an arbitrary staging tree.
+    from sm64_events.core.update_plan import parse_manifest
+    manifest = parse_manifest((directory / MANIFEST_ASSET).read_text(encoding="utf-8"))
+    expected = next(e.sha256 for e in manifest.files if e.path == "SM64Trainer.exe")
+    if frozen["app_sha256"] != expected:
+        raise ValueError("frozen runtime proof was produced by a different executable")
+    private_receipt = directory / "private-installer.json"
+    if read_record(directory)["distribution"] == "private":
+        value = json.loads(private_receipt.read_text(encoding="utf-8"))
+        name = value.get("installer", "")
+        if (Path(name).name != name or value.get("candidate_sha256") != digest(directory / "candidate.json")
+                or digest(directory / name) != value.get("sha256")):
+            raise ValueError("private installer changed after candidate preparation")
+        from sm64_events.bootstrap.beta_payload import verify_payload
+        verify_payload(directory / name)
+        from sm64_events.bootstrap.installer import OFFLINE_OFFER
+        from sm64_events.bootstrap.beta_payload import checked_members
+        with zipfile.ZipFile(directory / name) as archive:
+            checked_members(archive)
+            offer = archive.getinfo(OFFLINE_OFFER)
+            if offer.file_size > 16 << 20 or json.loads(archive.read(offer)) != {
+                    "schema": 1, "version": record["version"],
+                    "manifest": (directory / MANIFEST_ASSET).read_text(encoding="utf-8")}:
+                raise ValueError("offline installer offer does not match the verified candidate")
+            if {m.filename for m in archive.infolist() if not m.is_dir()} != {e.path for e in manifest.files} | {OFFLINE_OFFER}:
+                raise ValueError("offline installer does not contain the complete candidate")
+            for entry in manifest.files:
+                with archive.open(entry.path) as source:
+                    if hashlib.file_digest(source, "sha256").hexdigest() != entry.sha256:
+                        raise ValueError("offline installer file disagrees with candidate manifest")
+        checks.append("checksummed complete offline installer")
+    checks.append("frozen runtime version and update baseline")
+    return record_verification(directory, record, frozen=frozen, checks=checks)
+
+
+def publication_preflight(directory: Path, *, approval: Path | None = None) -> dict:
+    """Public publication reuses gates and never rebuilds prepared artifacts."""
+    from release_candidate import verify_artifacts, digest, require_approval, write_once
+    from release_lineage import verify_publication
+    record = verify_artifacts(directory, expected_assets=[p.name for p in release_assets(directory)])
+    if record["distribution"] != "public":
+        raise ValueError("private QA candidates must never be uploaded to GitHub")
+    if approval is None:
+        raise ValueError("public publication requires exact candidate and stored-profile compatibility QA")
+    approved_digest = require_approval(directory, approval)
+    verification = json.loads((directory / "candidate-verification.json").read_text(encoding="utf-8"))
+    if not verification.get("draft_ready") or verification.get("candidate_sha256") != digest(directory / "candidate.json"):
+        raise ValueError("candidate has not passed final verification")
+    if _capture(["git", "status", "--porcelain"]) or _capture(["git", "rev-parse", "HEAD"]) != record["source_commit"]:
+        raise ValueError("publication requires the candidate's clean exact source commit")
+    if sha256_file(UV_LOCK) != record["uv_lock_sha256"]:
+        raise ValueError("dependency lock changed after candidate preparation")
+    if record["channel"] == "stable" and _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"]) != "main":
+        raise ValueError("stable publication requires integrated main")
+    _run(["gh", "auth", "status"], capture_output=True)
+    lineage = verify_publication(record, json.loads(approval.read_text(encoding="utf-8")), _run)
+    lineage.update(candidate_sha256=approved_digest, approval_sha256=digest(approval))
+    write_once(directory / "candidate-lineage.json", lineage)
+    _verify_or_run_gate()
+    _require_full_run()
+    return record
+
+
+def draft_candidate(directory: Path, *, notes_file: Path, approval: Path) -> None:
+    """Upload six assets to a draft, then verify actual downloaded draft bytes."""
+    from release_candidate import require_approval, write_once, digest
+    from release_lineage import REPOSITORY, verify_draft
+    require_approval(directory, approval)
+    record = publication_preflight(directory, approval=approval)
+    tag = "v" + record["version"]
+    body = compose_release_body(SETUP_HEADER.read_text(encoding="utf-8"), notes_file.read_text(encoding="utf-8"))
+    body_file = directory / "release-body.md"
+    body_file.write_text(body, encoding="utf-8")
+    existing = subprocess.run(["gh", "release", "view", tag, "--repo", REPOSITORY, "--json", "isDraft"],
+                              cwd=REPO, capture_output=True, text=True,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=60)
+    if existing.returncode == 0:
+        if not json.loads(existing.stdout).get("isDraft"):
+            raise ValueError("a published release with this version already exists")
+        verify_draft(record, _run)
+        # No clobber: resumed drafts must contain the same immutable bytes.
+    else:
+        if not re.search(r"\bHTTP 404\b", existing.stderr or ""):
+            raise ValueError("draft discovery failed; existing assets cannot be changed safely")
+        flags = ["--prerelease"] if record["channel"] == "beta" else []
+        _run(["gh", "release", "create", tag, *[str(p) for p in release_assets(directory)],
+              "--repo", REPOSITORY, "--draft", "--target", record["source_commit"], "--title", tag,
+              "--notes-file", str(body_file), *flags])
+    verify_draft(record, _run)
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="sm64-draft-check-") as temporary:
+        _run(["gh", "release", "download", tag, "--repo", REPOSITORY, "--dir", temporary])
+        for asset in release_assets(directory):
+            if not (Path(temporary) / asset.name).is_file() or digest(Path(temporary) / asset.name) != digest(asset):
+                raise ValueError("draft assets do not match the verified candidate")
+    write_once(directory / "draft-upload.json", {"schema": 1, "tag": tag,
+               "candidate_sha256": digest(directory / "candidate.json"), "assets_verified": True})
+
+
+def publish_candidate(directory: Path, *, approval: Path) -> None:
+    from release_candidate import require_approval, digest
+    from release_lineage import REPOSITORY, verify_draft, bind_publication_tag
+    require_approval(directory, approval)
+    record = publication_preflight(directory, approval=approval)
+    receipt = json.loads((directory / "draft-upload.json").read_text(encoding="utf-8"))
+    if not receipt.get("assets_verified") or receipt.get("candidate_sha256") != digest(directory / "candidate.json"):
+        raise ValueError("draft upload has not passed asset verification")
+    # Re-download on this final action: a modified draft after an earlier
+    # receipt must not become public. No rebuild or replacement upload occurs.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="sm64-publish-check-") as temporary:
+        _run(["gh", "release", "download", "v" + record["version"], "--repo", REPOSITORY, "--dir", temporary])
+        for asset in release_assets(directory):
+            if digest(Path(temporary) / asset.name) != digest(asset):
+                raise ValueError("draft asset changed before publication")
+    verify_draft(record, _run)
+    _assert_build_source(record["source_commit"], record["uv_lock_sha256"])
+    bind_publication_tag(record, _run)
+    _run(["gh", "release", "edit", "v" + record["version"], "--draft=false",
+          "--repo", REPOSITORY,
+          "--prerelease=" + ("true" if record["channel"] == "beta" else "false")])
 
 
 def _preflight(dry_run: bool = False) -> None:
@@ -247,81 +492,76 @@ def _preflight(dry_run: bool = False) -> None:
         sys.exit("refusing: `gh` is not authenticated (run `gh auth login`)")
 
 
+
+def _legacy_dry_run(version: str) -> int:
+    """Retain the old build-only command; restore source bytes on failure too."""
+    originals = snapshot_version_files()
+    try:
+        VERSION_PY.write_bytes(bump_version_py(VERSION_PY.read_bytes().decode("utf-8"), version).encode("utf-8"))
+        PYPROJECT.write_bytes(bump_pyproject(PYPROJECT.read_bytes().decode("utf-8"), version).encode("utf-8"))
+        _run(["uv", "run", "python", "tools/build_exe.py", "--mode", "all", "--version", version])
+        if not APP_EXE.is_file() or not BOOTSTRAP_BUILD.is_file():
+            raise RuntimeError("build did not produce the complete app and bootstrap")
+        import shutil
+        from make_manifest import build_zip, make_manifest
+        build_zip(APP_DIR, ZIP_PATH)
+        MANIFEST_PATH.write_text(make_manifest(ZIP_PATH, version), encoding="utf-8")
+        shutil.copyfile(BOOTSTRAP_BUILD, UPLOAD_EXE)
+        for artifact in (ZIP_PATH, MANIFEST_PATH, UPLOAD_EXE):
+            write_sha(artifact)
+        print("dry-run: built and checksummed; no commit, tag, push or release")
+        return 0
+    finally:
+        restore_version_files(originals)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("version", help="new version, e.g. 1.1.0")
+    ap.add_argument("version", nargs="?", help="new version, e.g. 1.10.0-beta.1")
+    ap.add_argument("--phase", choices=("prepare", "verify", "draft", "publish"),
+                    help="explicit reusable candidate phase; no rebuild on verify/draft/publish")
+    ap.add_argument("--candidate", type=Path)
+    ap.add_argument("--config", type=Path)
+    ap.add_argument("--ffmpeg")
+    ap.add_argument("--ghosts", type=Path)
+    ap.add_argument("--ghost-author", type=Path, help="reviewed author Auth issuer/subject binding JSON")
+    ap.add_argument("--private", action="store_true")
+    ap.add_argument("--approval", type=Path)
     ap.add_argument("--notes-file", help="markdown notes (default: gh auto-notes)")
     ap.add_argument("--dry-run", action="store_true",
                     help="build + checksum but do not commit/tag/push/publish")
     args = ap.parse_args()
+    if args.phase:
+        if args.dry_run:
+            ap.error("--dry-run is the legacy build-only path; candidate phases are explicit actions")
+        if args.candidate is None:
+            ap.error("--phase requires --candidate")
+        if args.phase == "prepare":
+            if args.config is None or args.version is None:
+                ap.error("prepare requires version and --config")
+            prepare_candidate(args.version, args.candidate, config=args.config,
+                              ffmpeg=args.ffmpeg, ghosts=args.ghosts, ghost_author=args.ghost_author, private=args.private)
+        elif args.phase == "verify":
+            verify_candidate(args.candidate)
+        elif args.phase == "draft":
+            if args.approval is None or args.notes_file is None:
+                ap.error("draft requires --approval and --notes-file")
+            draft_candidate(args.candidate, approval=args.approval, notes_file=Path(args.notes_file))
+        else:
+            if args.approval is None:
+                ap.error("publish requires --approval")
+            publish_candidate(args.candidate, approval=args.approval)
+        return 0
+    if args.version is None:
+        ap.error("version or --phase is required")
     if not valid_version(args.version):
         sys.exit(f"bad version {args.version!r} (want X.Y.Z)")
-    tag = f"v{args.version}"
-
-    _preflight(args.dry_run)
+    if not args.dry_run:
+        ap.error("use --phase prepare/verify/draft/publish or tools/release_flow.py; direct publication is retired")
+    _preflight(True)
     _verify_or_run_gate()
-    _require_full_run(args.dry_run)
-
-    originals = snapshot_version_files()
-    VERSION_PY.write_text(bump_version_py(VERSION_PY.read_text(), args.version))
-    PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), args.version))
-
-    # Build first so a broken build aborts BEFORE any tag/push.
-    _run(["uv", "run", "python", "tools/build_exe.py", "--mode", "all"])
-    if not APP_EXE.exists():
-        sys.exit("build did not produce dist/SM64Trainer/SM64Trainer.exe")
-    if not BOOTSTRAP_BUILD.exists():
-        sys.exit("build did not produce dist/SM64TrainerSetup.exe")
-    import shutil as _shutil
-
-    from make_manifest import build_zip, make_manifest
-    print("zipping onedir tree…")
-    build_zip(APP_DIR, ZIP_PATH)
-    MANIFEST_PATH.write_text(make_manifest(ZIP_PATH, args.version))
-    # The bootstrap is uploaded under the LOAD-BEARING name SM64Trainer.exe:
-    # already-shipped onefile updaters can only install that asset, and it
-    # migrates them to the onedir install (spec 2026-07-23).
-    _shutil.copy2(BOOTSTRAP_BUILD, UPLOAD_EXE)
-    for artifact in (ZIP_PATH, MANIFEST_PATH, UPLOAD_EXE):
-        write_sha(artifact)
-    print("assets ready:", ", ".join(a.name for a in release_assets(DIST)))
-
-    if args.dry_run:
-        restore_version_files(originals)
-        print("dry-run: built + checksummed, version files restored, "
-              "skipping commit/tag/publish")
-        return 0
-
-    # uv.lock records the editable package's OWN version, so the bump above
-    # regenerates it during the `uv run` build; stage it too or it's left dirty
-    # and the NEXT release's clean-tree preflight refuses.
-    _run(["git", "add", str(VERSION_PY), str(PYPROJECT), str(UV_LOCK)])
-    _run(["git", "commit", "-m", f"release: {tag}"])
-    # Annotated (-a) tag, NOT lightweight: `git push --follow-tags` only pushes
-    # ANNOTATED tags, so a lightweight `git tag v…` reaches main but never the
-    # remote, and `gh release create` then fails "tag … not pushed" (hit live
-    # on v1.0.0). Annotated → the one push below carries the tag with it.
-    _run(["git", "tag", "-a", tag, "-m", tag])
-    _run(["git", "push", "origin", "main", "--follow-tags"])
-
-    if args.notes_file:
-        # Prepend the standing first-time-setup header to the release PAGE;
-        # the in-app popup strips through PATCH_NOTES_MARKER so updaters see
-        # only the patch notes. Composed into dist/ (gitignored) to keep the
-        # tree clean.
-        body = compose_release_body(SETUP_HEADER.read_text(encoding="utf-8"),
-                                    Path(args.notes_file).read_text(
-                                        encoding="utf-8"))
-        body_file = DIST / "release_body.md"
-        body_file.write_text(body, encoding="utf-8")
-        notes = ["--notes-file", str(body_file)]
-    else:
-        notes = ["--generate-notes"]
-    _run(["gh", "release", "create", tag,
-          *[str(a) for a in release_assets(DIST)],
-          "--title", tag, *notes])
-    print(f"\nReleased {tag}. Users see the update popup on next launch.")
-    return 0
+    _require_full_run(True)
+    return _legacy_dry_run(args.version)
 
 
 if __name__ == "__main__":

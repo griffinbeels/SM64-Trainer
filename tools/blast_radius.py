@@ -9,8 +9,9 @@ The merge check runs this set instead of the whole suite. Griffin, 2026-09-21:
 BLAST RADIUS FOR OUR CHANGES." The whole suite runs on GitHub (tools/full_run.py).
 
 The diff is taken between this working tree (uncommitted and untracked files
-included) and the BASELINE: the newest ancestor of HEAD whose full run on main
-passed, else the merge-base with main. What a changed file selects:
+included) and the BASELINE: the ancestor of HEAD nearest to it whose full run
+passed, on any branch, else the merge-base with main. What a changed file
+selects:
 
   Python       pytest-testmon's rule on a recorded map: the tests that executed
                a code block no longer as it was (the baseline run's map, else
@@ -25,7 +26,9 @@ passed, else the merge-base with main. What a changed file selects:
                whole browser set
   test file    itself;  anything else: the tests and modules that name it
   last run     the tests that failed in this checkout's last run
-  runner/lock  (the global inputs below) every test that starts no browser
+  runner/lock  (the global inputs below) every test that starts no browser;
+               pyproject.toml only when its parsed settings changed, else it
+               is a file like any other: the tests that name it
 
 Past BROWSER_CAP browser files, only the startup canary and the pages that
 name the change run here (quickest first, up to the cap); the full run after
@@ -60,13 +63,15 @@ SHELL = {f"{UI}/index.html", f"{UI}/app.js"}   # every page loads these; never a
 # Inputs every test passes through. A change here re-checks everything that
 # starts no browser; the full run on GitHub covers the browser half.
 GLOBAL_INPUTS = {
-    "pyproject.toml", "uv.lock", "tests/conftest.py", "tests/skip_inventory.py",
+    "pyproject.toml", "uv.lock", "tests/conftest.py",
     "tools/run_tests.py", "tools/test_lanes.py", "tools/test_resources.py",
     "tools/test_job.py", "tools/test_activity.py",
 }
 # This module is not one: it changes WHICH tests run, never how any test
 # behaves, so its own guards (tests/test_blast_radius.py) are its radius and
-# the full run on GitHub covers the rest.
+# the full run on GitHub covers the rest. Nor is tests/skip_inventory.py: only
+# a whole-suite run reads it (conftest's session finish), which a merge check
+# never is, so the tests importing it are its radius (546 files -> 1).
 # A test that globs one of these ("*.md", "*.js") scans the whole kind, so
 # any file of it is in its radius. Data globs ("*.json") point at fixtures.
 SCANNED_SUFFIXES = {"md", "js", "css", "html", "toml"}
@@ -110,21 +115,34 @@ def plain_nodeid(name: str) -> str:
 
 def baseline(root: Path = ROOT, runs=None) -> tuple[str, str, int | None]:
     """(commit, how it was chosen, its full run's id or None). `runs` is the
-    green full runs on main, newest first, as (sha, run id); None asks GitHub."""
+    green full runs on any branch, newest first, as (sha, run id); None asks
+    GitHub. The baseline is the ancestor of HEAD fewest commits behind it:
+    being an ancestor is what makes the diff sound, and the nearest one is
+    the smallest diff. Creation order is not distance: a branch run
+    dispatched yesterday can sit nearer HEAD than main's run from today."""
     if runs is None:
         try:
-            from full_run import GhUnavailable, green_runs_on_main
-            runs = green_runs_on_main()
+            from full_run import GhUnavailable, green_runs
+            runs = green_runs()
         except (GhUnavailable, OSError, ValueError) as error:
             runs, unread = [], str(error).splitlines()[0][:60]
         else:
             unread = None
     else:
         unread = None
+    behind: dict[str, tuple[int, int]] = {}      # ancestor -> (commits behind HEAD, run id)
     for sha, run_id in runs:
-        if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", sha, "HEAD"],
-                          capture_output=True).returncode == 0:
-            return sha, f"newest ancestor with a green full run, {run_id}", run_id
+        if sha in behind or subprocess.run(
+                ["git", "-C", str(root), "merge-base", "--is-ancestor", sha, "HEAD"],
+                capture_output=True).returncode != 0:
+            continue
+        behind[sha] = (int(git("rev-list", "--count", f"{sha}..HEAD", root=root)), run_id)
+    if behind:
+        # min() keeps the first of a tie: the newest run, as listed.
+        sha = min(behind, key=lambda found: behind[found][0])
+        count, run_id = behind[sha]
+        return sha, (f"nearest ancestor with a green full run, {run_id}, "
+                     f"{count} commit{'' if count == 1 else 's'} back"), run_id
     base = git("merge-base", "HEAD", "main", root=root).strip()
     why = "merge-base with main: " + (f"could not list full runs ({unread})" if unread
                                      else "no ancestor of HEAD has a green full run")
@@ -638,7 +656,7 @@ def _route_changes(radius: Radius, root: Path, changed: dict[str, str], before, 
     sources = _SourceTexts(root)
     for path, status in sorted(changed.items()):
         suffix = Path(path).suffix.lstrip(".")
-        if path in GLOBAL_INPUTS:
+        if path in GLOBAL_INPUTS and _changes_settings(path, before, root):
             radius.pick_files("global", path, path, set(tests) - browser_files)
             radius.left_to_github.append(f"{path}: the browser half runs on GitHub")
         elif path.startswith("tests/") and is_test_module(Path(path)):
@@ -654,6 +672,19 @@ def _route_changes(radius: Radius, root: Path, changed: dict[str, str], before, 
             _named_file(radius, naming, sources, path, python_changes, ui_graph)
     for path, source in python_changes.items():
         _python(radius, coverage, tests, path, source)
+
+
+def _changes_settings(path: str, before, root: Path) -> bool:
+    """A global input changes how every test runs, except pyproject.toml when
+    its parsed settings are the same: a comment, spacing or line endings
+    (a comment-only edit selected 546 files, 2026-09-25)."""
+    if path != "pyproject.toml":
+        return True
+    import tomllib
+    try:
+        return tomllib.loads(before(path)) != tomllib.loads((root / path).read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return True
 
 
 class _SourceTexts:

@@ -19,18 +19,33 @@ import shutil
 import sys
 from pathlib import Path
 
+from sm64_events.core import build_channel
+
 log = logging.getLogger("sm64.paths")
 
 # Filesystem identifier (exe name, data dir, locks) — no space, for CLI/path
 # friendliness. APP_DISPLAY_NAME is the human-readable name shown in the window
 # title, the tray, and dialogs.
-APP_DIR_NAME = "SM64Trainer"
+APP_DIR_NAME = build_channel.current_build().app_dir_name
 LEGACY_APP_DIR_NAME = "sm64_tracker"   # pre-1.0.2 data dir; migrated on startup
-APP_DISPLAY_NAME = "SM64 Trainer"
+APP_DISPLAY_NAME = build_channel.current_build().display_name
 
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
+
+
+def installer_identity() -> dict:
+    """Who installs the capture layer from this process (core/plugin_ownership.py):
+    the frozen app, or this source checkout by its folder."""
+    if is_frozen():
+        from sm64_events.core.version import __version__
+        identity = {"kind": "frozen", "version": __version__}
+        build = build_channel.current_build()
+        if build.channel == "beta":
+            identity.update(channel=build.channel, build_id=build.build_id)
+        return identity
+    return {"kind": "checkout", "path": str(Path(__file__).resolve().parents[3])}
 
 
 def shared_defaults_root() -> Path | None:
@@ -39,7 +54,7 @@ def shared_defaults_root() -> Path | None:
     An installed build is always personal, even with an inherited development
     flag. Source location, rather than cwd, binds writes to the code being run.
     """
-    if is_frozen() or os.environ.get("SM64_MAINTAINER") != "1":
+    if is_frozen() or practice_root() is not None or os.environ.get("SM64_MAINTAINER") != "1":
         return None
     root = Path(__file__).resolve().parents[3]
     if not (root / ".git").exists():
@@ -54,11 +69,15 @@ def server_port() -> int:
     canonical 8064 (the port external consumers/overlays expect); running from
     source (dev) uses 8065, so a dev server and a built exe can never collide
     on one port (single-instance takeover, bind conflicts). SM64_PORT
-    overrides either."""
+    overrides offline builds. A packaged community build binds its registered
+    callback port and ignores inherited port overrides."""
+    build = build_channel.current_build()
+    if build.legacy_beta or (is_frozen() and build.community_enabled):
+        return build.default_port  # Exact registered OAuth callback; no inherited public port.
     override = os.environ.get("SM64_PORT")
     if override:
         return int(override)
-    return 8064 if is_frozen() else 8065
+    return build.default_port if is_frozen() else build_channel.SOURCE_PORT
 
 
 def candidate_server_ports() -> tuple[int, ...]:
@@ -75,7 +94,8 @@ def candidate_server_ports() -> tuple[int, ...]:
     literal is a tool that probes the wrong world. Ordered so the port this
     process would itself bind is tried first.
     """
-    ordered = [server_port(), 8066, 8065, 8064]
+    ordered = [server_port(), 8066, build_channel.SOURCE_PORT,
+               build_channel.STABLE_PORT, build_channel.BETA_PORT]
     seen: list[int] = []
     for port in ordered:
         if port not in seen:
@@ -88,17 +108,53 @@ def data_root() -> Path:
 
     Source: ``Path(".")`` — joins collapse the leading dot, so
     ``data_root()/"data"/"tracker.db" == Path("data")/"tracker.db"`` exactly
-    as before. Frozen: ``%LOCALAPPDATA%\\SM64Trainer``.
+    as before. Frozen: ``%LOCALAPPDATA%\\SM64Trainer``. An absolute
+    ``SM64_PRACTICE_ROOT`` selects an isolated profile before either default.
     """
+    if build_channel.current_build().legacy_beta:
+        return user_data_root()
+    isolated = practice_root()
+    if isolated is not None:
+        return isolated
     if is_frozen():
         return user_data_root()
     return Path(".")
 
 
+def _absolute_override(name: str) -> Path | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    path = Path(value)
+    if not value.strip() or not path.is_absolute():
+        raise ValueError(f"{name} must name an absolute directory")
+    return path.resolve()
+
+
+def practice_root() -> Path | None:
+    """Explicit isolated practice profile; never redirects installation metadata."""
+    if build_channel.current_build().legacy_beta:
+        return None
+    return _absolute_override("SM64_PRACTICE_ROOT")
+
+
+def ghost_population_root() -> Path:
+    """The local population can survive a fresh practice profile."""
+    if build_channel.current_build().legacy_beta:
+        return data_root() / "data" / "ghost_population"
+    return _absolute_override("SM64_GHOST_POPULATION") or data_root() / "data" / "ghost_population"
+
+
 def user_data_root() -> Path:
-    """Windows-user state shared by source checkouts and the installed app."""
+    """Windows-user practice state for this build channel."""
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / APP_DIR_NAME
+    return Path(base) / build_channel.current_build().app_dir_name
+
+
+def shared_installation_root() -> Path:
+    """The unchanged machine installation record, shared across build channels."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(base) / build_channel.STABLE_APP_DIR
 
 
 def migrate_legacy_data_dir() -> None:
@@ -107,7 +163,8 @@ def migrate_legacy_data_dir() -> None:
     / settings carry over after the SM64Trainer rename. Frozen only; idempotent;
     NEVER destroys data — if the new dir already holds data, the legacy dir is
     left untouched. Call before any data path is read/created."""
-    if not is_frozen():
+    if (build_channel.current_build().legacy_beta
+            or not is_frozen() or practice_root() is not None):
         return
     base = Path(os.environ.get("LOCALAPPDATA") or str(
         Path.home() / "AppData" / "Local"))
@@ -197,7 +254,7 @@ def mode_settings_path() -> Path:
 def capture_layer_settings_path() -> Path:
     # Project64 and its registry selection are shared across worktrees.
     # Only this installation record is shared; practice data stays local.
-    return user_data_root() / "data" / "capture_layer.json"
+    return shared_installation_root() / "data" / "capture_layer.json"
 
 
 def migrate_capture_layer_settings() -> None:

@@ -378,6 +378,9 @@
   .attempt-actions button.pb-blocked .caveat-chip {
     cursor: not-allowed; margin-left: .3rem;
   }
+  /* Save-as-PB on a run that was not valid (task 0144): still live, so
+     nothing is dimmed -- the chip is the whole difference. */
+  .attempt-actions button.pb-invalid .caveat-chip { margin-left: .3rem; }
   /* The mark beside a practice-log row's TIME keeps the glyph and drops the
      word at EVERY width, unlike the objective card's chip which only drops it
      under 793px. Two reasons, and the first is measured: at 1500px the two-
@@ -1137,6 +1140,15 @@
   }
   .needs-strat { border-color: #e0473e; color: #ff8880;
                  animation: needstrat 0.85s ease-in-out infinite; }
+  /* Reduced motion ends the pulse at once, and the pulse is what paints the
+     nudge: the picker's own rule (.log-card-strat-picker select) sets
+     `border: 0` and its own background, so the red glow and tint vanished.
+     Hold the pulse still on its resting frame instead. */
+  @media (prefers-reduced-motion: reduce) { .needs-strat { animation-play-state: paused; } }
+  /* An endless loop scrolled out of sight, marked by ui/offscreenloops.js:
+     frozen on its current frame until it comes back. */
+  [data-offscreen], [data-offscreen]::before, [data-offscreen]::after {
+    animation-play-state: paused !important; }
   /* progress-graph pick: one fading gold pulse lands the eye on the row */
   @keyframes rowflash { from { background: #3a321d; } to { background: transparent; } }
   .row-flash td { animation: rowflash 1.6s ease-out; }
@@ -3610,6 +3622,50 @@
   /* Practice-log controls, in the card they act on: sort in the heading,
      reset visibility in the footer (the old analysis toolbar is gone). */
   .attempts-tools { display: flex; align-items: center; gap: .7rem; }
+  .log-settings { display: inline-flex; }
+  .log-settings-trigger[aria-expanded="true"] { color: var(--text); background: #20364e; }
+  .log-settings-panel {
+    position: fixed; z-index: 35; width: 340px; max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px); overflow: auto; padding: .9rem;
+    border: 1px solid #3c536b; border-radius: 14px; background: #142438;
+    color: var(--text); box-shadow: 0 14px 40px rgba(0,0,0,.4);
+  }
+  .log-settings-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+  .log-settings-head > b { font-size: .95rem; }
+  .log-settings-preferences { margin-block: .5rem; }
+  .log-preference {
+    display: flex; align-items: center; justify-content: space-between; gap: .85rem;
+    padding-block: .85rem; cursor: pointer;
+  }
+  .log-preference + .log-preference { border-top: 1px solid #2b4057; }
+  .log-preference-copy { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+  .log-preference-copy > b { font-size: .86rem; font-weight: 600; }
+  .log-preference-copy > small { color: var(--muted); font-size: .76rem; line-height: 1.45; }
+  .log-preference-control { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
+  .log-preference-state { min-width: 1.6rem; color: var(--muted); font-size: .74rem; }
+  .log-preference-switch { position: relative; display: inline-flex; width: 42px; height: 26px; }
+  .log-preference-switch input {
+    position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0;
+    margin: 0; opacity: 0; cursor: pointer; z-index: 1;
+  }
+  .log-preference-track {
+    position: absolute; inset: 0; border: 1px solid #62758b; border-radius: 999px;
+    background: #394e65; transition: background-color .2s ease, border-color .2s ease;
+  }
+  .log-preference-track::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+    border-radius: 50%; background: #f7faff; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+    transition: transform .2s ease;
+  }
+  .log-preference-switch input:checked + .log-preference-track { background: #21895a; border-color: #45b77f; }
+  .log-preference-switch input:checked + .log-preference-track::after { transform: translateX(16px); }
+  .log-preference-switch input:focus-visible + .log-preference-track { outline: 2px solid #78b9ff; outline-offset: 3px; }
+  .log-settings-option {
+    display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+    border-top: 1px solid #2b4057; padding-top: .75rem; margin-top: .75rem; font-size: .85rem;
+  }
+  .log-settings-panel .stat-menu-label { display: inline; }
+  .log-settings-panel .stats-popover > .popover { max-height: calc(100dvh - 24px); overflow: auto; }
   /* Three controls ("N shown" / Stats / sort) need more width than the two
      this row used to have, and the row is kept to one line rather than left
      to wrap: `.log-list-card` is variable-height and does not clip (Task 7),
@@ -5267,7 +5323,7 @@
   .replay-sound:hover .replay-volume-popover, .replay-sound:focus-within .replay-volume-popover { display: flex; }
   .replay-volume { width: 80px; min-width: 0; padding: 0; margin: 0; border: 0; accent-color: var(--gold); }
   .replay-loop-row { padding-top: .45rem; border-top: 1px solid var(--border-soft); }
-  .replay-loop-row .is-active { color: var(--gold); border-color: var(--gold); }
+  .replay-loop-row .is-active, .replay-playback-options .is-active { color: var(--gold); border-color: var(--gold); }
   .replay-control-error { font-size: .75rem; color: var(--coral); }
   .replay-player:fullscreen {
     display: flex; flex-direction: column; align-items: center; padding: 12px;
@@ -5345,6 +5401,9 @@
     display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
     margin-top: .5rem;
   }
+  /* The ghost button's sentence goes to the end of the row, so saving never
+     splits the buttons around it. */
+  .attempt-drawer-tools .save-ghost-note { order: 10; flex-basis: 100%; }
   .attempt-drawer-tools .button-link {
     display: inline-flex; align-items: center; gap: .3rem;
     padding: .28rem .55rem; border: 1px solid #2d465e; border-radius: 7px;
@@ -5751,6 +5810,15 @@
   }
   .popover-heading { display: flex; align-items: center; justify-content: space-between; gap: .7rem; }
   .popover-heading > div { display: grid; gap: .08rem; }
+  .recording-switch {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+    gap: .35rem .7rem; margin: .65rem 0; padding-bottom: .65rem; white-space: normal;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .recording-switch > div { display: grid; gap: .12rem; min-width: 0; }
+  .recording-switch [role="status"] { color: var(--muted); font-size: .72rem; }
+  .recording-switch > p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .68rem; }
+  .recording-switch > p[role="alert"] { color: var(--danger, #ffb1b1); }
   .popover-note { margin: .25rem 0 .7rem; color: var(--muted); font-size: .68rem; }
   .buffer-usage { display: grid; gap: .4rem; margin-bottom: .7rem; }
   .buffer-usage > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
@@ -6476,6 +6544,7 @@
     .attempt-table td { display: block; width: auto; border: 0; padding: .12rem .2rem; }
     .attempt-result { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .attempt-delta { text-align: right; }
+    .pb-swap { justify-items: end; }
     .attempt-strategy { min-width: 0; }
     .attempt-actions { display: flex; justify-content: flex-end; }
     .attempt-strategy select { max-width: 104px; }
@@ -7075,6 +7144,21 @@
   }
   .goal-plate-trigger:hover .goal-plate-time,
   .goal-plate-trigger:focus-visible .goal-plate-time { text-decoration: underline; }
+  /* The WHOLE plate opens the picker (round 13: "click on the whole button
+     (not just the bottom half)"). The GOAL line's button keeps its own box
+     and stretches its hit area over the plate; what has an action of its own
+     (the PB time jumps to its row, "Undo break") sits above that layer, so
+     no control nests inside another. Hover and focus light the plate, the
+     thing that now answers the click. */
+  .goal-plate-trigger::after { content: ""; position: absolute; inset: -1px; border-radius: 8px; }
+  .goal-plate .pblink, .goal-plate-forgive { position: relative; z-index: 1; }
+  .goal-plate-trigger:focus-visible { outline: none; }
+  .log-card-head .goal-plate:has(.goal-plate-trigger:hover) {
+    background: rgba(26,45,69,.75); border-color: #496784;
+  }
+  .log-card-head .goal-plate:has(.goal-plate-trigger:focus-visible) {
+    outline: 2px solid #78b9ff; outline-offset: 2px;
+  }
   .goal-plate-word {
     flex: 0 0 2.6rem; font-size: 10px; font-weight: 800; letter-spacing: .08em; color: var(--gold);
   }
@@ -7084,6 +7168,9 @@
   .goal-plate-source {
     font-size: 11px; line-height: 1.3; color: var(--muted, #8aa0b6); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; min-width: 0; margin-left: auto;
+    /* The plate's line-height 1 made this box 11px for 13px of glyphs, and
+       the ellipsis clip cut their tails (the layout sweep's "clipped"). */
+    line-height: 1.25;
     /* Zero width, then grow: the source fills what the plate has left and
        never widens it, so the plate (and a stream crop of it) keeps one
        width whatever the goal came from. */
@@ -7112,8 +7199,11 @@
   .goal-plate:hover .goal-plate-forgive,
   .goal-plate-forgive:focus-visible { opacity: 1; }
   .goal-plate-forgive:hover { color: var(--gold); text-decoration: underline; }
+  /* Above everything in the plate, the PB time's own layer (z-index 1)
+     included: "when the goal animation plays, it should be ABOVE everything
+     else within that button" (round 13). */
   .goal-plate-party {
-    position: absolute; inset: -1px; border-radius: 8px; pointer-events: none;
+    position: absolute; inset: -1px; border-radius: 8px; pointer-events: none; z-index: 2;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     background: linear-gradient(135deg, #f7d154, #f0a92e 55%, #f7d154);
     color: #2a1a00; box-shadow: 0 0 18px rgba(240,189,50,.6);
@@ -7241,9 +7331,170 @@
      declaration on `.other-strat` would REPLACE this one while the class
      is on, and the fade would run in one direction only. A cleared row
      keeps its own stronger dim (`.cleared`, above) whatever its strategy. */
-  .attempt-table tr { transition: opacity var(--log-other-strat-fade, 240ms) ease; }
+  .attempt-table tr { transition: opacity var(--log-other-strat-fade, 240ms) ease,
+                                  --pb-lit var(--log-pb-fade, 700ms) ease,
+                                  --pb-tilt 260ms ease-out; }
   .attempt-table tr.other-strat:not(.cleared) { opacity: var(--log-other-strat-dim, 0.5); }
   @media (prefers-reduced-motion: reduce) { .attempt-table tr { transition: none; } }
+  /* ---- The PB row (task 0147, 2026-09-23) -------------------------------
+     The row that IS its strategy's current personal best: GOLD!! in holo
+     foil where 0.00s was, a gold wash fading left to right, a gold edge
+     ribbon. His ask: "not super distracting, but it should be OBVIOUS...
+     holographic, like a cool pokemon card". attemptlog.js::usePbRow decides
+     which row and when; every number here is a logtuning.js "Personal best"
+     row.
+
+     ONE registered number, --pb-lit (0 = an ordinary row, 1 = the PB),
+     drives the wash, the ribbon and the glow, so the crown arrives and
+     leaves as one transition: a faster PB or an Undo drains the old row
+     back to normal over the same --log-pb-fade it lit up with, riding the
+     row's one `transition` declaration above. The gradients sit on EVERY
+     row at zero strength rather than on `.is-pb`, because a gradient that
+     only exists while the class is on vanishes the instant it comes off --
+     a snap, not a drain. A PB row that MOUNTS lit does not fade in: a new
+     element has no before-state to transition from, which is exactly "do
+     not replay a celebration on arrival".
+
+     The arrival (`.pb-arrive`, one live pb_saved) sweeps one foil glint
+     across the row (--pb-sweep), overshoots the wash to --log-pb-flash and
+     settles, pops the word and twinkles three sparks. --pb-tilt is the
+     pointer's position across the PB row, so the holo moves like a tilted
+     card when he hovers it. */
+  @property --pb-lit { syntax: "<number>"; inherits: true; initial-value: 0; }
+  @property --pb-sweep { syntax: "<percentage>"; inherits: false; initial-value: -40%; }
+  @property --pb-tilt { syntax: "<percentage>"; inherits: true; initial-value: 0%; }
+  @property --pb-drift { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+  .attempt-table tr:not(.replay-row) {
+    background-image:
+      linear-gradient(100deg, transparent calc(var(--pb-sweep) - 9%),
+        rgb(255 205 80 / calc(var(--log-pb-glint, 0.45) * 0.45 * min(var(--pb-lit), 1))) calc(var(--pb-sweep) - 3%),
+        rgb(255 251 235 / calc(var(--log-pb-glint, 0.45) * min(var(--pb-lit), 1))) var(--pb-sweep),
+        rgb(255 205 80 / calc(var(--log-pb-glint, 0.45) * 0.45 * min(var(--pb-lit), 1))) calc(var(--pb-sweep) + 3%),
+        transparent calc(var(--pb-sweep) + 9%)),
+      linear-gradient(115deg, transparent 15%,
+        hsl(300 90% 78% / calc(var(--log-pb-row-holo, 0.06) * var(--pb-lit))) 38%,
+        hsl(190 90% 72% / calc(var(--log-pb-row-holo, 0.06) * var(--pb-lit))) 52%,
+        hsl(55 95% 70% / calc(var(--log-pb-row-holo, 0.06) * var(--pb-lit))) 64%,
+        transparent 85%),
+      linear-gradient(90deg,
+        rgb(255 215 95 / calc(var(--log-pb-tint, 0.14) * var(--pb-lit))),
+        rgb(255 215 95 / calc(var(--log-pb-tint, 0.14) * 0.35 * var(--pb-lit))) 55%,
+        rgb(255 215 95 / 0));
+    background-repeat: no-repeat;
+    background-size: 100% 100%, 250% 100%, 100% 100%;
+    background-position: 0 0, calc(50% + var(--pb-tilt) * 1.5) 0, 0 0;
+  }
+  .attempt-table tr:not(.replay-row) > td:first-child {
+    box-shadow: inset var(--log-pb-edge, 3px) 0 0 rgb(255 215 95 / calc(min(var(--pb-lit), 1)));
+  }
+  .attempt-table tr.is-pb { --pb-lit: 1; }
+  .attempt-table tr.pb-arrive {
+    animation: pbarrive var(--log-pb-arrive, 1400ms) cubic-bezier(.25, .1, .25, 1) both;
+  }
+  /* The arrival REPLACES the new-entry blink rather than stacking on it: an
+     automatic PB lands as a new row and is crowned a beat later, and three
+     gold pulses under a glint read as two things happening. */
+  .attempt-table tr.pb-arrive.row-new td { animation: none; }
+  @keyframes pbarrive {
+    0%   { --pb-lit: 0; --pb-sweep: -40%; }
+    35%  { --pb-lit: var(--log-pb-flash, 1.7); }
+    100% { --pb-lit: 1; --pb-sweep: 140%; }
+  }
+  /* The delta and GOLD!! share one grid cell and exchange SEQUENTIALLY
+     (ui-core: never a crossfade) -- the outgoing one reaches 0 before the
+     incoming one starts, in both directions, by swapping which side waits. */
+  .pb-swap { display: inline-grid; position: relative; vertical-align: middle; }
+  .pb-swap > .pb-swap-num, .pb-swap > .pb-gold { grid-area: 1 / 1; }
+  .pb-swap-num { transition: opacity var(--log-pb-swap, 220ms) ease var(--log-pb-swap, 220ms); }
+  .pb-gold {
+    display: inline-block; opacity: 0;
+    transition: opacity var(--log-pb-swap, 220ms) ease, translate var(--log-pb-save-fade, 400ms) ease;
+    font-size: 1.12em; font-weight: 800; letter-spacing: .04em; color: var(--gold);
+    background-image:
+      linear-gradient(100deg, hsl(0 0% 100% / 0) 0%,
+        hsl(320 100% 80% / var(--log-pb-holo, 0.6)) 26%,
+        hsl(190 100% 74% / var(--log-pb-holo, 0.6)) 36%,
+        hsl(95 90% 72% / var(--log-pb-holo, 0.6)) 45%,
+        hsl(0 0% 100% / 0) 58%, hsl(0 0% 100% / 0) 100%),
+      linear-gradient(100deg, #b8801c 0%, #ffd75f 14%, #fff3c4 24%, #ffcf4a 34%,
+        #e8a52c 48%, #ffe594 60%, #fff8dc 67%, #ffd75f 80%, #b8801c 100%);
+    background-size: 200% 100%;
+    background-position: calc(var(--pb-drift) + var(--pb-tilt)) 50%;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 calc(3px * var(--pb-lit)) rgb(255 196 64 / 0.5));
+    animation: pbdrift var(--log-pb-shimmer, 7000ms) linear infinite;
+  }
+  @keyframes pbdrift { from { --pb-drift: 0%; } to { --pb-drift: 200%; } }
+  /* Every row carries a .pb-gold at opacity 0; only a lit row's is seen, so
+     only it drifts. Each running drift recalculates style and repaints every
+     display frame (perf audit 2026-09-25, UI-4). The query waits for the
+     row's own glow, --pb-lit, to finish fading, so a word leaving never
+     freezes mid-fade, and a word crowned carries on from the same frame. */
+  @container style(--pb-lit: 0) { .pb-gold { animation-play-state: paused; } }
+  /* The seen word on a compositor layer of its own, so its drift repaints
+     the word's box rather than the row's tiles. Pixel-identical at 850 and
+     1500 at three drift phases; 23% -> 18% of a renderer core (2026-09-27). */
+  .attempt-table tr.is-pb .pb-gold { will-change: transform; }
+  tr.is-pb .pb-swap-num { opacity: 0; transition-delay: 0ms; }
+  tr.is-pb .pb-gold { opacity: 1; transition-delay: var(--log-pb-swap, 220ms); }
+  tr.pb-arrive .pb-gold {
+    animation: pbdrift var(--log-pb-shimmer, 7000ms) linear infinite,
+               pbpop var(--log-pb-pop-ms, 650ms) cubic-bezier(.3, .7, .4, 1) var(--log-pb-swap, 220ms) both;
+  }
+  @keyframes pbpop {
+    0%   { transform: scale(0.4); opacity: 0; }
+    55%  { transform: scale(var(--log-pb-pop, 1.3)); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .pb-spark {
+    position: absolute; font-style: normal; font-size: 12px; line-height: 1;
+    color: #fff8dc; pointer-events: none; opacity: 0;
+    text-shadow: 0 0 5px rgb(255 215 95 / .95);
+    animation: pbspark 900ms ease-out both;
+  }
+  .pb-spark:nth-of-type(1) { left: -11px; top: -9px; animation-delay: 380ms; }
+  .pb-spark:nth-of-type(2) { right: -12px; top: -6px; font-size: 9px; animation-delay: 520ms; }
+  .pb-spark:nth-of-type(3) { right: 10px; bottom: -10px; font-size: 10px; animation-delay: 660ms; }
+  @keyframes pbspark {
+    0%   { opacity: 0; transform: scale(0) rotate(0deg); }
+    40%  { opacity: var(--log-pb-sparkle, 1); transform: scale(1) rotate(60deg); }
+    100% { opacity: 0; transform: scale(.3) rotate(120deg); }
+  }
+  /* THE TIME SAVE, just left of GOLD!!: "Time Save: -0.30 (9 frames)" from
+     the save until the next attempt is logged (ui/pbcrown.js decides), then
+     it fades out and leaves the word alone. Out of flow, so it never moves a
+     column: it lives in the result column's empty stretch. It fades in
+     after the word has popped (--log-pb-save-delay), and @starting-style
+     gives a row that MOUNTS already carrying one -- an automatic save that
+     landed in the same refetch as its run -- the same fade in. */
+  .pb-save {
+    position: absolute; right: calc(100% + 12px); top: 50%;
+    white-space: nowrap; font-size: .86em; line-height: 1.1; font-weight: 700; color: #a3e0a3;
+    pointer-events: none; opacity: 0; transform: translate(8px, -50%);
+    transition: opacity var(--log-pb-save-fade, 400ms) ease,
+                transform var(--log-pb-save-fade, 400ms) ease;
+  }
+  .pb-save.is-shown {
+    opacity: 1; transform: translate(0, -50%);
+    transition-delay: var(--log-pb-save-delay, 900ms);
+  }
+  @starting-style { .pb-save.is-shown { opacity: 0; transform: translate(8px, -50%); } }
+  /* Where the row has no room beside the word (attemptlog.js measures it:
+     useTimeSaveFit), the Time Save sits UNDER GOLD!!, right-aligned to it,
+     and the word lifts to make room -- `translate`, not `transform`, so the
+     lift composes with the arrival's scale pop instead of fighting it. The
+     lift waits for the Time Save's own delay and settles as it leaves. */
+  .pb-swap.save-under .pb-save { right: 0; top: calc(50% + 11px); }
+  .pb-swap.save-under.has-save .pb-gold {
+    translate: 0 -6px;
+    transition-delay: var(--log-pb-swap, 220ms), var(--log-pb-save-delay, 900ms);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pb-gold, .attempt-table tr.pb-arrive, tr.pb-arrive .pb-gold { animation: none; }
+    .pb-swap-num, .pb-gold, .pb-save { transition: none; }
+    .pb-spark { display: none; }
+  }
   /* A STAR'S PIECES, inside its own card (round 22, 2026-08-08): "the
      subsection should appear WITHIN the star's practice log entry as a
      sub-entry... indented a bit so it's clear that it's owned by the parent
@@ -8720,6 +8971,341 @@
   }
   .score-detail-input.is-invalid { border-color: var(--coral); }
   .score-detail-hint { font-size: .66rem; color: var(--coral); }
+
+  /* ============================================================
+     The Ghost Overlay row (ui/components/ghostswitch.js)
+     ===================================================================
+     One row under the ACTIVE practice card's head, outside the fold, so it
+     is reachable whether or not the card's attempts are open -- a card only
+     auto-opens once it has recorded something, and the switch has to work
+     before the first attempt of a session.
+
+     No new visual language: the switch borrows the gold the card's own
+     `.log-card-active` border already uses for "this is what you are
+     practising", the step buttons are `.quiet-button`-shaped chips, and the
+     separator is the card's own `--border-soft`. Its 160ms ease is the SAME
+     transition `.log-card` declares for its selected/active states rather
+     than a second feel constant nobody tuned -- which is also why this
+     control gets no tuning inspector of its own.
+
+     Appended at the end of the stylesheet with the Scorecard block above it,
+     per the standing rule about converted blocks losing the cascade when
+     they sit where an older rule used to. */
+  .ghost-row {
+    display: flex; flex-direction: column; gap: .4rem;
+    padding: .45rem var(--log-head-pad-x, 14px) .55rem;
+    border-top: 1px solid var(--border-soft);
+  }
+  .ghost-row-head {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    row-gap: .3rem;
+  }
+  /* The switch itself. A full text reset, so it states its own `min-height`
+     and `display` -- the global `button` rule's 34px would otherwise set the
+     row's height from an invisible box (tests/test_ui_button_flex.py). */
+  .ghost-switch {
+    appearance: none; background: none; border: none; padding: 0;
+    margin: 0; font: inherit; cursor: pointer;
+    min-height: 0; display: inline-flex; align-items: center;
+    justify-content: flex-start; flex: 0 0 auto;
+  }
+  .ghost-switch-track {
+    width: 34px; height: 20px; border-radius: 999px;
+    background: rgba(9,22,36,.9); border: 1px solid var(--border);
+    display: block; position: relative;
+    transition: background 160ms ease, border-color 160ms ease;
+  }
+  .ghost-switch-knob {
+    position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--muted);
+    transition: transform 160ms ease, background 160ms ease;
+  }
+  .ghost-switch[aria-checked="true"] .ghost-switch-track {
+    background: color-mix(in srgb, var(--gold) 34%, rgba(9,22,36,.9));
+    border-color: var(--gold-soft);
+  }
+  .ghost-switch[aria-checked="true"] .ghost-switch-knob {
+    background: var(--gold-soft); transform: translateX(14px);
+  }
+  /* The SAME switch a size down, for the colour treatment inside the tuning
+     line: a second kind of toggle on one row would read as a different kind of
+     decision. Only the box shrinks -- the track, the knob, the gold, the
+     focus ring and the 160ms are all the rule above. */
+  .ghost-switch-sm .ghost-switch-track { width: 26px; height: 15px; }
+  .ghost-switch-sm .ghost-switch-knob { width: 11px; height: 11px; top: 1px; left: 1px; }
+  .ghost-switch-sm[aria-checked="true"] .ghost-switch-knob { transform: translateX(11px); }
+  .ghost-switch:hover:not(:disabled) .ghost-switch-track { border-color: var(--gold-soft); }
+  .ghost-switch:focus-visible { outline: none; }
+  .ghost-switch:focus-visible .ghost-switch-track {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  /* A switch that cannot be flipped stays READABLE -- both emphasised and
+     de-emphasised content must be legible -- and the sentence beside it is
+     what says why, never a hover. */
+  .ghost-switch:disabled { cursor: default; }
+  .ghost-switch:disabled .ghost-switch-track { opacity: .65; }
+  .ghost-label {
+    font-size: .72rem; font-weight: 700; letter-spacing: .02em;
+    color: var(--text); white-space: nowrap;
+  }
+  /* Dimmed, but NOT down to the reason's own colour: a name that matches the
+     sentence beside it stops reading as the control's name. */
+  .ghost-row:has(.ghost-switch:disabled) .ghost-label {
+    color: color-mix(in srgb, var(--text) 55%, var(--muted));
+  }
+  .ghost-why {
+    font-size: .68rem; color: var(--muted); line-height: 1.35;
+    flex: 1 1 18rem; min-width: 0;
+  }
+  /* Every field's NAME sits on one text baseline, so a switch with a setting
+     nested beneath it (Names, Inputs) reads on the same line as its
+     neighbours and the nested row hangs below. */
+  .ghost-tune {
+    display: flex; align-items: baseline; gap: .5rem 1rem; flex-wrap: wrap;
+  }
+  /* The two disclosures under the tuning line, Overlap fading and Tune path:
+     one look, so a second one reads as the same kind of thing. */
+  .ghost-proximity, .ghost-path-tune { font-size: .72rem; color: var(--muted); }
+  .ghost-proximity summary, .ghost-path-tune summary { width: fit-content; cursor: pointer; }
+  .ghost-proximity summary:focus-visible, .ghost-path-tune summary:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 3px;
+  }
+  .ghost-proximity-body, .ghost-path-tune-body {
+    margin: .5rem 0 0 1rem; display: flex; flex-wrap: wrap;
+    align-items: center; gap: .5rem 1rem;
+  }
+  .ghost-proximity-body .ghost-field { flex-wrap: wrap; }
+  .ghost-path-range { width: 100px; min-width: 0; accent-color: var(--gold); }
+  .ghost-proximity-help { margin: 0; flex-basis: 100%; max-width: 45rem; line-height: 1.5; }
+  .ghost-distance { width: 120px; min-width: 0; accent-color: var(--gold); }
+  .ghost-field { display: flex; align-items: center; gap: .35rem; }
+  /* The one fallback this row keeps instead of a breakpoint: if a longer
+     readout ever arrives, the timing group wraps within itself rather than
+     pushing the whole line past the card. */
+  .ghost-timing { flex-wrap: wrap; }
+  /* Tighter than a default field: its first item is a small switch, not text,
+     so the label sits closer to it without the two running together. */
+  .ghost-colour, .ghost-onoff { gap: .4rem; }
+  .ghost-input-controls, .ghost-name-controls, .ghost-path-controls { display: grid; gap: .4rem; }
+  .ghost-name-box { margin-left: 1rem; }
+  /* Path buttons and Path from hang beneath Path, the way the box hangs
+     beneath Names: they only mean something while the path shows. */
+  .ghost-path-options {
+    margin-left: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1rem;
+  }
+  .ghost-name-box-range { width: 70px; min-width: 0; accent-color: var(--gold); }
+  .ghost-name-box select, .ghost-path-source select {
+    background: #101f31; color: var(--text); border: 1px solid var(--border-soft);
+    border-radius: 5px; font: inherit; font-size: .68rem; padding: 1px .3rem;
+    min-height: 22px; cursor: pointer;
+  }
+  .ghost-name-box select:focus-visible, .ghost-path-source select:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  .ghost-name-box select:disabled, .ghost-path-source select:disabled {
+    cursor: default; opacity: .65;
+  }
+  .ghost-library { display: grid; gap: 16px; min-width: 0; container: ghost-library / inline-size; }
+  .ghost-library-controls { display: grid; gap: 16px; border: 0; min-width: 0; margin: 0; padding: 0; }
+  .ghost-library h3, .ghost-library p { margin: 0; }
+  .ghost-library-step-title { font-size: 1.3rem; line-height: 1.3; }
+  .ghost-library-step-title:focus { outline: none; }
+  .ghost-library-page-heading { display: grid; gap: 7px; }
+  .ghost-library-context { display: grid; gap: 10px; border-bottom: 1px solid var(--border); padding-bottom: 18px; }
+  .ghost-library-context > button { justify-self: start; }
+  .ghost-library-section-heading { display: grid; gap: 3px; }
+  .ghost-library-section-heading > span { color: var(--muted); font-size: .8rem; }
+  .ghost-library-section-heading strong { font-size: 1.1rem; overflow-wrap: anywhere; }
+  .ghost-library-task-choices { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
+  .ghost-library-task { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px 12px; text-align: left; padding: 20px; min-height: 120px; }
+  .ghost-library-task strong { font-size: 1.4rem; }
+  .ghost-library-task > span:first-of-type { grid-column: 1; color: var(--muted); line-height: 1.5; }
+  .ghost-library-task > span:last-child { grid-column: 2; grid-row: 1 / 3; color: var(--gold); font-size: 1.5rem; align-self: center; }
+  .ghost-library-home-links { display: flex; gap: 8px 18px; align-items: center; flex-wrap: wrap; }
+  .ghost-library-home-links button { background: transparent; color: var(--blue); }
+  .ghost-library-name { display: grid; gap: 8px; max-width: 520px; font-weight: 600; }
+  .ghost-library-name input { min-width: 0; }
+  .ghost-library-name-summary, .ghost-library-resume { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .ghost-library-name-summary button { margin-left: auto; }
+  .ghost-library-options { display: grid; gap: 10px; }
+  .ghost-library-options > button { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px 12px; padding: 16px; text-align: left; }
+  .ghost-library-options > button strong { font-size: 1rem; }
+  .ghost-library-options > button > span:first-of-type { grid-column: 1; color: var(--muted); }
+  .ghost-library-options > button > span:last-child { grid-column: 2; grid-row: 1 / 3; align-self: center; }
+  .ghost-library-shortcuts, .ghost-library-save-shortcut { display: grid; gap: 10px; border-top: 1px solid var(--border); padding-top: 16px; }
+  .ghost-library-shortcut { display: flex; gap: 10px; margin-left: 16px; }
+  .ghost-library-shortcut > button:first-child { flex: 1; justify-content: space-between; text-align: left; }
+  .ghost-library-shortcut > button:last-child { color: var(--muted); background: transparent; }
+  .ghost-library-save-shortcut label { display: grid; gap: 6px; }
+  .ghost-library-save-shortcut > button { justify-self: start; }
+  .ghost-library-review-meta { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; padding: 14px 0; border-block: 1px solid var(--border); }
+  .ghost-library-review-meta > div { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .ghost-library-review-meta > div > span { flex-basis: 100%; color: var(--muted); }
+  .ghost-library-review-meta strong { overflow-wrap: anywhere; }
+  .ghost-library-file { display: grid; gap: 12px; padding: 22px; border: 1px dashed var(--border); border-radius: 10px; }
+  .ghost-library-file button { justify-self: start; }
+  .ghost-library-import-modes { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ghost-library-import-modes .is-selected { border-color: var(--gold); background: rgba(255,204,60,.12); }
+  .ghost-library-import-explanation { display: grid; gap: 10px; padding-left: 16px; }
+  .ghost-library-import-explanation label { display: flex; gap: 8px; align-items: center; }
+  .ghost-library-notice { border-left: 3px solid var(--gold); padding: 10px 14px; background: rgba(255,204,60,.05); line-height: 1.5; }
+  .ghost-library-receipt-mark { color: var(--green); font-size: 2rem; }
+  .ghost-library-empty { padding: 24px 0; color: var(--muted); }
+  .ghost-library-best-group { padding: 8px 0; }
+  .ghost-library-best-group > h3 { padding: 8px 10px; font-size: 1rem; }
+  .ghost-library-strategies { margin-left: 16px; }
+  .ghost-library-best-label { color: var(--gold); font-size: .8rem; }
+  .ghost-library-filter-target { display: flex; flex-basis: 100%; align-items: center; gap: 10px; min-width: 0; }
+  .ghost-library-target-name { color: var(--muted); }
+  .ghost-library-toolbar, .ghost-library-filters, .ghost-library-selection,
+  .ghost-library-pagination { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ghost-library-author { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 200px; }
+  .ghost-library-author input { flex: 1; min-width: 0; }
+  .ghost-library-filters input[type=search] { flex: 1 1 250px; min-width: 0; }
+  .ghost-library-filters > label { display: inline-flex; align-items: center; gap: 7px; }
+  .ghost-library-filters input[type=checkbox] { margin: 0; }
+  .ghost-library-list { max-height: 430px; overflow: auto; min-width: 0; }
+  .ghost-library-row {
+    display: grid; grid-template-columns: 20px minmax(0,1fr) minmax(80px,160px) 140px;
+    gap: 10px; align-items: center; padding: 10px; border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .ghost-library-row:has(input:checked) { background: rgba(255,204,60,.08); }
+  .ghost-library-description { display: grid; gap: 3px; min-width: 0; }
+  .ghost-library-description strong, .ghost-library-description .meta, .ghost-library-creator {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ghost-library-description .ghost-library-reason { white-space: normal; overflow-wrap: anywhere; }
+  .ghost-library-row.is-unavailable { cursor: default; }
+  .ghost-library-row-mark { color: var(--muted); }
+  .ghost-library-time { text-align: right; font-variant-numeric: tabular-nums; }
+  .ghost-library-time small { display: block; color: var(--muted); font-size: .72rem; }
+  .ghost-library-count { margin-right: auto; }
+  .ghost-library-pagination { justify-content: center; }
+  .ghost-library-button { margin-left: auto; }
+  .ghost-library-filters select { background: #101f31; }
+  @container ghost-library (max-width: 650px) {
+    .ghost-library-row { grid-template-columns: 20px minmax(0,1fr) 130px; }
+    .ghost-library-creator { grid-column: 2; font-size: .8rem; color: var(--muted); }
+    .ghost-library-time { grid-column: 3; grid-row: 1 / 3; align-self: center; }
+    .ghost-library-row > input, .ghost-library-row-mark { grid-row: 1 / 3; }
+    .ghost-library-task { padding: 16px; }
+    .ghost-library-review-meta { grid-template-columns: minmax(0,1fr); }
+  }
+  .ghost-volume-range { width: 90px; min-width: 0; accent-color: var(--gold); }
+  .ghost-recording-row {
+    display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .75rem;
+    min-width: 0;
+  }
+  /* WHICH GHOSTS PLAY -- one pill per recording, his PB first. Pills wrap
+     rather than scroll: sixteen is the most that can play, and a hidden tick
+     is a ghost he cannot find to switch off. */
+  .ghost-recordings {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .4rem;
+    margin: 0; padding: 0; border: 0; min-width: 0; max-width: 100%;
+  }
+  .ghost-recordings > legend { float: left; padding: 0; margin-right: .35rem; }
+  .ghost-pick {
+    display: inline-flex; align-items: center; gap: .3rem; min-width: 0; max-width: 100%;
+    font-size: .68rem; color: var(--text); background: #101f31;
+    border: 1px solid var(--border-soft); border-radius: 999px;
+    padding: 1px .5rem 1px .3rem; cursor: pointer;
+  }
+  .ghost-pick:hover:not(.is-disabled) { border-color: var(--gold-soft); }
+  .ghost-pick:has(.ghost-pick-box:checked) {
+    border-color: var(--gold-soft); background: color-mix(in srgb, var(--gold) 12%, #101f31);
+  }
+  .ghost-pick:focus-within { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .ghost-pick.is-disabled { cursor: default; opacity: .6; }
+  .ghost-pick-box { margin: 0; accent-color: var(--gold); cursor: inherit; }
+  /* The colour this ghost is drawn in: his cap's red turned by its hue. */
+  .ghost-pick-hue {
+    flex: none; width: .6rem; height: .6rem; border-radius: 50%;
+    background: hsl(var(--ghost-hue) 85% 55%); box-shadow: 0 0 0 1px #0008;
+  }
+  .ghost-pick-name, .ghost-pick-why {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ghost-pick-why { color: var(--muted); }
+  /* Runs that can never play as Only Mario, folded into one line: quiet,
+     because there is nothing on this card to do about them. */
+  .ghost-picks-folded {
+    align-self: center; color: var(--muted); font-size: .72rem; cursor: help;
+  }
+  .ghost-pick-why::before { content: "— "; }
+  .ghost-field-name {
+    font-size: .66rem; color: var(--muted-2); text-transform: uppercase;
+    letter-spacing: .05em; white-space: nowrap;
+  }
+  .ghost-field-value {
+    font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* A fixed lane, so stepping the timing does not shuffle the two buttons
+     sideways under the pointer that is pressing one of them. */
+  .ghost-nudge-value { min-width: 6.5rem; text-align: center; }
+  .ghost-opacity {
+    width: 120px; min-width: 0; margin: 0; padding: 0; border: 0;
+    accent-color: var(--gold);
+  }
+  /* THE COLOUR WHEEL IS THE TRACK. The control answers "how far round the
+     wheel", which is a number nobody can picture, so the slider wears the
+     wheel itself and the position IS the answer -- no swatch to keep in sync
+     and nothing to decode. Drawn with `appearance: none` because a themed
+     range paints its own track over any background; the thumb is then ours
+     too, and it is the row's own text colour rather than a second accent. */
+  .ghost-hue {
+    appearance: none; -webkit-appearance: none;
+    width: 108px; min-width: 0; height: 12px; margin: 0; padding: 0;
+    border: 1px solid var(--border-soft); border-radius: 999px;
+    cursor: pointer;
+    background: linear-gradient(to right,
+      hsl(0 72% 55%), hsl(60 72% 55%), hsl(120 72% 55%), hsl(180 72% 55%),
+      hsl(240 72% 55%), hsl(300 72% 55%), hsl(360 72% 55%));
+  }
+  .ghost-hue::-webkit-slider-thumb {
+    appearance: none; -webkit-appearance: none;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--text); border: 1px solid rgba(3,10,18,.9);
+  }
+  .ghost-hue::-moz-range-thumb {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--text); border: 1px solid rgba(3,10,18,.9);
+  }
+  .ghost-hue:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .ghost-step, .ghost-reset {
+    min-height: 24px; padding: 0 .5rem; border-radius: 5px;
+    border: 1px solid var(--border-soft); background: rgba(9,22,36,.6);
+    color: var(--muted); font: inherit; font-size: .68rem; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: border-color 160ms ease, color 160ms ease;
+  }
+  .ghost-step:hover, .ghost-reset:hover {
+    border-color: var(--gold-soft); color: var(--text);
+  }
+  .ghost-step:focus-visible, .ghost-reset:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  /* NO WIDTH RULE, and that is measured rather than assumed. The tuning line
+     is its own flex row under the switch, and with the colour treatment on it
+     holds three groups: 203px (visibility) + 226px (colour) + 299px (timing)
+     with 16px gaps, so 760px. The card's pane gives the row 1187 / 887 / 717 /
+     667px at 1500 / 1200 / 900 / 850. All three therefore share one line down
+     to 1200px and the timing group takes a second line at 900 and 850 -- which
+     is what `flex-wrap: wrap` is here for, and why each group is its own flex
+     item rather than a run of loose controls: the wrap falls BETWEEN groups
+     and never inside one. With the colour switched off the wheel is gone
+     (610px) and it is one line everywhere. Numbers re-measured 2026-09-19 when
+     the colour group was added.
+
+     A breakpoint here would only stack a line that flexbox already stacks. A
+     first version gated on `@container (max-width: 760px)`; that threshold sat
+     between the 850 and 900 probe points, and `.claude/rules/ui-core.md`
+     requires a new container threshold below ~1180px to have its WINDOW
+     equivalent added to the sweep matrix -- which would change what every
+     other surface is measured at. */
+=======
   /* ---- Stream overlay designer (components/streamoverlay.js) -------------
      The preview frame is the real overlay page; everything here is the
      designer's own chrome around it. */
@@ -8807,6 +9393,81 @@
   .sov-check { display: flex; align-items: center; gap: 8px; font-size: .82rem; cursor: pointer; }
   .sov-check input { min-height: 0; margin: 0; accent-color: var(--gold); }
   .sov-reset { justify-self: start; }
+/* Rival controls share the practice card's width and the app's rank artwork. */
+.rivals { container-type:inline-size; width:100%; color:var(--text); }
+.rivals-header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin:16px 0 8px; }
+.rivals-header h3 { margin:0; font-size:18px; }
+.rivals-header > div { display:flex; gap:8px; align-items:center; }
+.rival-roster, .rival-player-results { list-style:none; margin:0; padding:0; }
+.rival-row { position:relative; border-bottom:1px solid var(--border); }
+.rival-hit { position:absolute; inset:3px 0; width:100%; background:transparent; border:0; border-radius:8px; z-index:0; }
+.rival-hit:hover { background:rgba(140,180,220,.07); }
+.rival-hit:focus-visible { outline:2px solid var(--focus,#86c5ff); outline-offset:1px; }
+.rival-content { position:relative; z-index:1; pointer-events:none; display:grid; grid-template-columns:16px minmax(0,1fr) auto 76px 34px; align-items:center; gap:14px; padding:16px 8px; min-height:90px; }
+.rival-color { width:14px; height:14px; border-radius:50%; background:hsl(var(--rival-hue) 78% 72%); }
+.rival-name-line { display:flex; align-items:center; gap:8px; }
+.rival-name-line strong { overflow-wrap:anywhere; font-size:16px; }
+.rival-identity small { display:block; margin-top:4px; color:var(--muted); font-size:13px; }
+.rival-reset { pointer-events:auto; flex:none; width:32px; min-height:32px; padding:5px; }
+.rival-time { font-variant-numeric:tabular-nums; white-space:nowrap; text-align:right; font-size:17px; }
+.rival-swap { justify-self:center; font-size:23px; color:var(--muted); }
+.rival-status { border-left:3px solid var(--gold,#f7c633); padding:10px 12px; margin:8px 0; background:rgba(140,180,220,.08); }
+.rival-empty { color:var(--muted); margin:16px 0; }
+.rival-dialog-host .modal { position:absolute; left:var(--rival-dialog-x,50%); top:var(--rival-dialog-y,50%); transform:translate(-50%,-50%); width:min(640px,calc(100vw - 32px)); max-height:calc(100vh - 32px); }
+.rival-dialog-host .modal-body { overflow-y:auto; }
+.rival-settings-top { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.rival-settings-top label { display:flex; flex-direction:column; gap:6px; color:var(--muted); }
+.rival-settings-top select { width:100%; }
+.rival-check { display:flex; align-items:center; gap:8px; margin:18px 0; }
+.rival-range { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:24px 0 16px; }
+.rival-rank-field { text-align:center; color:var(--muted); }
+.rival-rank-stepper { display:flex; justify-content:center; align-items:center; gap:8px; min-height:80px; }
+.rival-rank-stepper > span { display:flex; align-items:center; justify-content:center; min-width:114px; }
+.rival-rank-field small { display:block; font-variant-numeric:tabular-nums; }
+.rival-pb-context { display:flex; align-items:center; gap:14px; min-height:50px; }
+.rival-appearance { margin-top:20px; border-top:1px solid var(--border); padding-top:16px; }
+.rival-appearance .ghost-tune { margin-top:16px; }
+.rival-search { width:100%; margin-bottom:12px; }
+.rival-player-result { display:grid; grid-template-columns:minmax(0,1fr) auto 76px auto; gap:16px; align-items:center; padding:16px 0; border-bottom:1px solid var(--border); }
+.rival-player-result small { display:block; color:var(--muted); margin-top:5px; }
+.rival-player-result select { display:block; max-width:100%; margin-top:6px; }
+@container (max-width:540px) {
+  .rival-content { grid-template-columns:14px minmax(0,1fr) auto 68px 24px; gap:9px; padding:14px 4px; }
+  .rivals-header { gap:8px; }
+  .rivals-header .primary-button { padding:7px 10px; }
+}
+@font-face {font-family:"Community Google Sans";src:url('/ui/assets/community/google-sans.ttf') format('truetype');font-weight:500;font-display:swap;}
+.community-join {max-width:380px;margin:auto;}
+.community-providers {display:grid;gap:12px;margin:24px 0;}
+/* Icon in a fixed column, label centered in the rest, a mirrored spacer so
+   the label's centre is the button's centre: every provider's icon sits on
+   one x (his nitpick, 2026-10-13: "clearly not aligned right now"). */
+.community-provider {display:grid;grid-template-columns:20px 1fr 20px;align-items:center;gap:12px;width:100%;min-height:54px;padding:0 20px;border-radius:8px;text-align:center;}
+.community-provider img {width:20px;height:20px;object-fit:contain;}
+.community-discord {background:#5865f2;color:#fff;border-color:#5865f2;}
+.community-discord:hover {background:#4752c4;color:#fff;}
+.community-google {background:#fff;border:1px solid #747775;color:#1f1f1f;font:500 14px/20px "Community Google Sans",Arial,sans-serif;}
+.community-google:hover {background:#f2f2f2;color:#1f1f1f;}
+.community-twitch {background:#9146ff;color:#fff;border-color:#9146ff;}
+.community-twitch:hover {background:#772ce8;color:#fff;}
+.community-form {display:grid;gap:18px;}
+.community-form>label:not(.community-check) {display:grid;gap:8px;}
+.community-form input[type=text] {width:100%;min-height:46px;box-sizing:border-box;}
+.community-sheet {border:1px solid var(--border);padding:16px;border-radius:8px;display:grid;gap:12px;}
+.community-check {display:flex;align-items:flex-start;gap:12px;line-height:1.5;}
+.community-check input {width:20px;height:20px;flex-shrink:0;}
+.community-check small {display:block;color:var(--muted);}
+.community-actions {display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;margin-top:18px;}
+.community-actions button {min-height:44px;}
+.community-center {text-align:center;margin:18px 0;}
+.community-error {color:var(--danger,#ffaaaa);}
+.community-ok {color:var(--success,#8fd694);}
+.community-name-state {display:flex;align-items:center;gap:8px;min-height:20px;}
+.community-name-mark {display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;border:1px solid currentColor;font-size:12px;font-weight:700;flex-shrink:0;}
+.community-summary {display:grid;gap:12px;}
+.community-identity {margin:0;font-size:16px;}
+.community-privacy {border-top:1px solid var(--border);padding-top:18px;margin-top:18px;}
+.community-privacy .community-actions {justify-content:flex-start;}
 </style></head>
 <body>
 <div id="app"></div>

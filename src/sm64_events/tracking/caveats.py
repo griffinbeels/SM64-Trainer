@@ -37,6 +37,15 @@ differently is the divergent-duplication class this repo has a rule about:
     timed_at` carries it, stamped from the closing event's own payload, so it
     re-derives on every reproject with no backfill and no list of ids.
 
+  * `save_state` / `subarea_reset` / `no_reset` -- the RUN was not a valid
+    run (task 0144, projection caveat 21): a save state was loaded before its
+    finish, it opened on a reset inside a subarea rather than at the course
+    start, or nothing reset it at all. `Attempt.valid is False` with its
+    `invalid_reason`; an unjudged row (valid None, everything journaled
+    before rules 2) is marked only when its opening load proves save-state use. His
+    ruling originally allowed a manual save. On 2026-09-29 he excluded ANY
+    save-state run from PBs; the other two reasons remain manual choices.
+
 The severity ORDER lives here rather than in the browser, so the server sends
 one key and the client only has to draw it. `ui/components/marks.js` holds the
 glyph/wording/floor rule for each key and never has to choose between two;
@@ -50,7 +59,27 @@ from sm64_events.core.events import IGT_BEARING_EVENT_TYPES
 # order is by what the caveat CHANGES: a wrong quantity outranks an ungradeable
 # one, because a reader can still act on a number that is merely unranked and
 # cannot act on one that measures the wrong span.
-CAVEAT_SEVERITY = ("grab_timed", "old_clock", "unattributed")
+# Why a run is not a VALID run (projection caveat 21), worst first. A load
+# redoes part of the run for free, a subarea reset redoes everything before
+# the subarea, and no reset at all is a run that carried on from before.
+VALIDITY_CAVEATS = ("save_state", "subarea_reset", "no_reset")
+# Worst first: a run that is not a real attempt outranks a real run measured
+# at the wrong moment.
+CAVEAT_SEVERITY = VALIDITY_CAVEATS + ("grab_timed", "old_clock", "unattributed")
+
+
+def save_state_run(attempt) -> bool:
+    """Whether the journal proves this attempt used a save state.
+
+    The opening load is proof even in legacy history whose validity was never
+    judged. A separate segment starting AFTER a load has none of these marks
+    and remains comparable. Storage's PB SQL uses the same three facts; its
+    parity test exercises the real SQL against this predicate.
+    """
+    return attempt is not None and (
+        getattr(attempt, "anchor_type", None) == "state_loaded"
+        or getattr(attempt, "state_loads", 0) > 0
+        or getattr(attempt, "invalid_reason", None) == "save_state")
 
 
 def igt_seen_in(history) -> bool:
@@ -75,6 +104,10 @@ def caveats_for(pb_row, attempt, igt_seen: bool = False) -> list[str]:
     if pb_row is None:
         return []
     found = []
+    if save_state_run(attempt):
+        found.append("save_state")
+    elif attempt is not None and attempt.valid is False:
+        found.append(attempt.invalid_reason)
     if attempt is not None:
         # Two different rows wear this one mark, and keeping them apart is
         # what stopped a refusal from being wrong 669 times (2026-08-02):
@@ -146,10 +179,18 @@ def attempt_caveat(attempt) -> str | None:
     than about a run — `caveats_for` covers them on the PB badge, which is the
     surface that asserts a grade.
 
-    `old_clock` is deliberately absent rather than forgotten: it is the only
-    other key an attempt could carry on its own, it would land on segment rows
-    (rule 11's other half), and how many is unmeasured. One key here is a
-    stated scope, not a gap — add the second when its own count says it reads."""
+    Validity marks were added in task 0144; known save-state use also marks
+    legacy successes since 2026-09-29. `old_clock` stays absent: it would mark
+    segment rows (rule 11's other half), and how many is unmeasured."""
+    if save_state_run(attempt) and attempt.outcome == "success":
+        return "save_state"
+    if (attempt is not None and attempt.valid is False
+            and attempt.outcome == "success"):
+        # Validity is PROVEN the same way (a rules-2 judgement, never a guess
+        # about an old row), and it is on successes only: a failure has no
+        # time that could count, and a mark on every reset row would be the
+        # alarm fatigue the grab_timed measurement above rules out.
+        return attempt.invalid_reason
     return "grab_timed" if _proven_grab_timed(attempt) else None
 
 
@@ -191,7 +232,9 @@ def pb_blocked_by(attempt) -> str | None:
     refusing them would delete a legal record on an assumption nobody
     measured, and it is most of his history.
 
-    Segments are never blocked: `timed_at` is None for every non-star closure
-    (projection.py), and a segment has no x-cam to be legal about."""
+    Save-state runs are refused on both clocks, for stars and segments, even
+    when a legacy row predates the validity judgement (2026-09-29). A segment
+    has no x-cam to be legal about, but it can still have loaded a state."""
+    if save_state_run(attempt):
+        return "save_state"
     return "grab_timed" if _proven_grab_timed(attempt) else None
-

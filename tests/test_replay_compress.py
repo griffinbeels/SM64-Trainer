@@ -64,7 +64,21 @@ def _leftovers(clip):
     return sorted(p.name for p in clip.parent.iterdir() if ".compressed." in p.name)
 
 
-def test_shrink_then_adopt_changes_the_bytes_and_nothing_a_consumer_reads(saved):
+def test_shrink_then_adopt_changes_the_bytes_and_nothing_a_consumer_reads(saved, tmp_path):
+    from test_ghost_recording import native_service
+    from sm64_events.ghost.clip import check_manifest
+
+    service, row, archive = native_service(tmp_path / "native")
+    try:
+        ghost, manifest, reason = service._preserve_ghost(row, saved.with_suffix(".ghost"))
+        assert reason is None
+    finally:
+        archive.close()
+    native_bytes = ghost.read_bytes()
+    metadata = json.loads(saved.with_suffix(".json").read_text())
+    saved.with_suffix(".json").write_text(json.dumps({
+        **metadata, "native_ghost": manifest, "native_ghost_reason": None,
+    }))
     ff = _ffmpeg()
     before = compress.fingerprint(ff, saved)
     sidecar_before = json.loads(saved.with_suffix(".json").read_text())
@@ -85,6 +99,10 @@ def test_shrink_then_adopt_changes_the_bytes_and_nothing_a_consumer_reads(saved)
     sidecar_after = json.loads(saved.with_suffix(".json").read_text())
     assert {k: sidecar_after[k] for k in sidecar_before} == sidecar_before
     assert sidecar_after["media"]["original"]["sha256"] == before.sha256
+    assert ghost.read_bytes() == native_bytes
+    checked = check_manifest(ghost, sidecar_after["native_ghost"],
+                             attempt=row, target=manifest["target"])
+    assert checked.clip_id == manifest["clip_id"]
     assert _leftovers(saved) == []
 
 
@@ -229,6 +247,32 @@ def test_session_start_adopts_what_the_last_session_proved(saved):
         worker.stop()
 
 
+def test_a_refused_final_sidecar_write_still_closes_the_job(saved, monkeypatch):
+    """Windows refuses replacing a file another reader holds open. The merge
+    check caught the clip swapped and its last sidecar write refused while a
+    reader polled the sidecar (2026-10-13): the next pass repaired the sidecar
+    but left the job note, so the next start queued a finished clip again."""
+    worker = _worker(saved)
+    worker.enqueue(saved, attempt_id=42)
+    compress.shrink(_ffmpeg(), saved, codecs=CPU_ONLY, work=worker.work)
+    original = compress.file_sha256(saved)
+    real, refused = compress.atomic_json, []
+
+    def refuse_the_final_write(path, document, **kw):
+        if not refused and (document.get("media") or {}).get("state") == "compressed":
+            refused.append(path)
+            raise PermissionError(5, "Access is denied", str(path))
+        return real(path, document, **kw)
+
+    monkeypatch.setattr(compress, "atomic_json", refuse_the_final_write)
+    assert worker.adopt_ready() == [] and refused
+    assert compress.file_sha256(saved) != original     # the swap itself happened
+
+    assert [d["state"] for d in worker.adopt_ready()] == ["compressed"]
+    assert json.loads(saved.with_suffix(".json").read_text())["media"]["state"] == "compressed"
+    assert list(worker.work.iterdir()) == []
+
+
 def test_closing_the_app_swaps_what_is_proven_even_if_it_was_just_watched(saved):
     """His first clean close left both files in the folder: he had watched the
     clips inside the two quiet minutes, then closed (2026-09-19)."""
@@ -334,7 +378,8 @@ def test_a_proven_replay_someone_is_watching_is_not_a_reason_to_warn_at_close(sa
     assert worker.status()["jobs"][0]["stage"] == "done"
 
 
-def test_a_save_queues_its_clip_and_a_request_for_it_marks_it_in_use(tmp_path):
+@pytest.mark.parametrize("request_path", ["saved", "opened_before_save"])
+def test_a_save_queues_its_clip_and_a_request_for_it_marks_it_in_use(tmp_path, request_path):
     from test_replay_service import attempt, make_service
 
     class Recording:
@@ -351,8 +396,15 @@ def test_a_save_queues_its_clip_and_a_request_for_it_marks_it_in_use(tmp_path):
     svc = make_service(tmp_path, [attempt()])
     svc.compressor = Recording()
 
+    opened = svc.view(42)
     path = svc.save(42)["path"]
-    served = svc.saved_clip_path(42)
+    if request_path == "saved":
+        served = svc.saved_clip_path(42)
+    else:
+        name = opened["clip_url"].rsplit("/", 1)[-1]
+        assert not (svc.clips_dir / name).exists(), "Save must retire the temporary bytes"
+        with svc.read_clip(name) as served:
+            assert served.read_bytes() == b"mp4"
 
     assert [str(p) for p in svc.compressor.queued] == [path]
     # The progress list names the replay the way its filename does.

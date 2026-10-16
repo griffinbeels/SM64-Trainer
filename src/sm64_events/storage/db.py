@@ -753,6 +753,29 @@ MIGRATIONS = [
     """
     CREATE INDEX IF NOT EXISTS idx_input_chunks_ended ON input_chunks (ended_utc, started_utc);
     """,
+    # v38 -- retain observed native replay endpoints through the derived cache.
+    # Duration arithmetic cannot recover them, particularly after a segment's
+    # move-clock rebase. Existing rows stay unknown until journal projection.
+    """
+    ALTER TABLE attempts ADD COLUMN native_clock_frame INTEGER;
+    ALTER TABLE attempts ADD COLUMN native_clock_utc TEXT;
+    ALTER TABLE attempts ADD COLUMN native_clock_kind TEXT;
+    ALTER TABLE attempts ADD COLUMN closed_frame INTEGER;
+    """,
+    # v39 -- a VALID RUN (task 0144, projection caveat 21): whether an attempt
+    # ran from a full reset at the course start with no save-state load, the
+    # loads it ran through, where it opened, and the anchor before it (the
+    # replay's lead-in floor). A derived cache like every attempts column, so
+    # no backfill: the next projection fills them, NULL/0 meaning unjudged.
+    """
+    ALTER TABLE attempts ADD COLUMN valid INTEGER;
+    ALTER TABLE attempts ADD COLUMN invalid_reason TEXT;
+    ALTER TABLE attempts ADD COLUMN state_loads INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE attempts ADD COLUMN first_load_frame INTEGER;
+    ALTER TABLE attempts ADD COLUMN start_level INTEGER;
+    ALTER TABLE attempts ADD COLUMN start_area INTEGER;
+    ALTER TABLE attempts ADD COLUMN prev_anchor_utc TEXT;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -762,7 +785,17 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
                  "segment_id", "timed_by", "closed_by", "timed_at",
-                 "platform", "game_version")
+                 "platform", "game_version", "native_clock_frame",
+                 "native_clock_utc", "native_clock_kind", "closed_frame",
+                 "valid", "invalid_reason", "state_loads", "first_load_frame",
+                 "start_level", "start_area", "prev_anchor_utc")
+
+
+def _attempt_from_row(r) -> Attempt:
+    # SQLite has no boolean: `cleared` is 0/1 and `valid` 0/1/NULL.
+    return Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
+                      "cleared": bool(r["cleared"]),
+                      "valid": None if r["valid"] is None else bool(r["valid"])})
 
 
 class EventRow:
@@ -1113,7 +1146,11 @@ class Database:
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
                 a.segment_id, a.timed_by, a.closed_by, a.timed_at,
-                a.platform, a.game_version)
+                a.platform, a.game_version, a.native_clock_frame,
+                a.native_clock_utc, a.native_clock_kind, a.closed_frame,
+                None if a.valid is None else int(a.valid), a.invalid_reason,
+                a.state_loads, a.first_load_frame, a.start_level, a.start_area,
+                a.prev_anchor_utc)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock, self._conn:
@@ -1140,7 +1177,7 @@ class Database:
             r = self._conn.execute("SELECT * FROM attempts WHERE id = ?", (attempt_id,)).fetchone()
         if r is None:
             return None
-        return Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS}, "cleared": bool(r["cleared"])})
+        return _attempt_from_row(r)
 
     def attempts(self) -> list[Attempt]:
         # Chronological by JOURNAL id, not the raw `id` column (spec
@@ -1161,8 +1198,7 @@ class Database:
         # for free, with no second sort to remember downstream.
         with self._lock:
             rows = self._conn.execute("SELECT * FROM attempts").fetchall()
-            out = [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
-                              "cleared": bool(r["cleared"])}) for r in rows]
+            out = [_attempt_from_row(r) for r in rows]
         return sorted(out, key=lambda a: journal_id(a.id))
 
     def session_attempts(self, session_id: int) -> list[Attempt]:
@@ -1478,8 +1514,14 @@ class Database:
     # against the live db). One rowid lookup per candidate row instead gives
     # current_pb back for free — 4.5 us, and it is called once per route
     # candidate per view build.
+    # These save-state facts mirror caveats.save_state_run. Retain the saved
+    # row as history, but never grade it or select it as the current ghost;
+    # the preceding clean PB becomes current on the next read.
     _VISIBLE_PB = (" NOT EXISTS (SELECT 1 FROM attempts"
-                   " WHERE attempts.id = pbs.attempt_id AND attempts.cleared=1)")
+                   " WHERE attempts.id = pbs.attempt_id AND (attempts.cleared=1"
+                   " OR attempts.anchor_type='state_loaded'"
+                   " OR attempts.state_loads>0"
+                   " OR attempts.invalid_reason='save_state'))")
 
     def insert_pb(self, course_id: int | None, star_id: int | None,
                   strat_tag: str | None, timer_mode: str, frames: int,

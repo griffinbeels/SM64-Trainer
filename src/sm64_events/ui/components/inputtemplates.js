@@ -4,13 +4,15 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Modal } from "./modal.js";
+import { SaveGhostButton } from "./saveghost.js";
 import { templatesChanged, useTemplateRevision } from "../inputpreferences.js";
+import { localFetch } from "../api.js";
 
 const html = htm.bind(h);
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 async function request(url, body, method = "POST") {
-  const response = await fetch(url, body === undefined ? undefined : {
+  const response = await localFetch(url, body === undefined ? undefined : {
     method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -125,6 +127,7 @@ export function InputTemplates(props) {
   const { attemptId, data, mode, setMode, busy, error, notice, base, target, open, run } = model;
   return html`<div class="attempt-drawer-tools input-template-tools">
     <button onclick=${() => open("save")} disabled=${busy}>Save as template</button>
+    <${SaveGhostButton} attemptId=${attemptId} />
     <button onclick=${() => open("library")} disabled=${busy}>Templates</button>
     <button onclick=${() => open("import")} disabled=${busy}>Import inputs</button>
     <button disabled=${busy} onclick=${() => run(() => download(`${base}/document`,

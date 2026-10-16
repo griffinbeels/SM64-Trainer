@@ -30,6 +30,7 @@ not in this map.
 | Full run: the whole suite on GitHub for every push to main; gates releases | `uv run python tools/full_run.py status` (`wait`; `failures` prints failing tests, first error lines and the rerun command); a branch: `gh workflow run full.yml --ref <branch>` |
 | Test selection, shared machine budget, evidence reuse | [docs/testing.md](docs/testing.md) |
 | Run the app when authorized | `uv run python -m sm64_events.main` from repo root; data is cwd-relative |
+| The three native DLLs (wrapper, encoder, renderer) | Build outputs, never committed: `uv run python tools/build_natives.py` builds what is out of date; the launcher, wrap and release run it |
 | Read back live play and the rendered UI | `uv run python tools/what_happened.py`; `--list` names all journals |
 | New memory address live gate | `uv run python tools/verify_addresses.py` with PJ64 + ROM |
 | Per-ROM verification | `uv run python tools/sync_version.py --version us`; [runbook](docs/version-sync.md) |

@@ -1,25 +1,36 @@
 """One GPU request, helper and fragment run, owned by the recorder media worker."""
 
+from functools import lru_cache
+import hashlib
 import logging
 from pathlib import Path
 import sys
 import struct
 import time
 
+from sm64_events.core.childproc import python_child
 from sm64_events.core.paths import bundled_encoder_dll
-from sm64_events.replay.gpucapture import GpuCleanupError
+from sm64_events.replay.gpucapture import GpuBackendUnsupported, GpuCleanupError
 from sm64_events.replay import gpuchannel
 from sm64_events.replay.gpuinput import OfferDecoder, ChannelSelection
+from sm64_events.replay.ghostcopy import GhostCopyLane
 from sm64_events.replay.gpumedia import GpuMedia
 from sm64_events.replay.gpuaudio import GpuAudio
 from sm64_events.replay.gpudiagnostics import CaptureTimings, failure_snapshot
-from sm64_events.replay.gpuencoder import Result
+from sm64_events.replay.encoderstage import staged_encoder_dll
+from sm64_events.replay.gpuencoder import EncoderFailure, Result
 from sm64_events.replay.gpuencoder_abi import CODEC_STREAM_NAMES
 from sm64_events.replay.gpupublication import PublicationError, PublicationWriteError
 from sm64_events.replay.gpumediaworker import MediaWorker
-from sm64_events.replay.gpusettings import note_codec_unavailable, recording_codec
+from sm64_events.replay.gpusettings import (
+    backend_unsupported,
+    note_backend_unsupported,
+    note_codec_unavailable,
+    recording_codec,
+)
 from sm64_events.replay.gpuprocess.retirement import close_encoder
 from sm64_events.replay.gpuprocess.process_controller import Controller
+from sm64_events.replay.gpuprocess import process_worker
 from sm64_events.replay.media import MediaRun
 from sm64_events.replay.packetmux import NativeFormat
 from sm64_events.replay.ownedclose import CleanupPending
@@ -28,6 +39,36 @@ log = logging.getLogger("sm64.replay")
 
 # Distinct from None (stop) and from a successful open tuple.
 _RETRY_OTHER_CODEC = object()
+
+# Lease supervisor reasons (gpudemand.py) that mean the Project64 process is gone.
+_PRODUCER_GONE = frozenset({"producer_closed", "producer_pid_changed", "producer_identity_changed"})
+
+
+def retirement_line(snapshot, cancelled: bool) -> str:
+    """The one INFO line for a normal end of GPU recording, by its cause."""
+    if cancelled:
+        return "GPU recording stopped (recorder stop)"
+    if snapshot.reason in _PRODUCER_GONE:
+        return "Project64 closed; recording stopped"
+    if snapshot.reason == "rom_closed":
+        return "Project64 closed the ROM; recording stopped"
+    return f"GPU capture ended with its producer ({snapshot.reason}); reconnecting"
+
+
+@lru_cache(maxsize=4)
+def _sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def helper_launch():
+    """(command, identity, env) for the encoder helper.
+
+    A direct child either way (core/childproc.py): the installed exe with its
+    helper flag, or the base interpreter running the module, never the venv
+    launcher that would drop the no-busy-cursor flag."""
+    command, env = python_child(process_worker.__name__, process_worker.GPU_HELPER_FLAG)
+    entry = sys.executable if getattr(sys, "frozen", False) else process_worker.__file__
+    return command, {"entry": str(Path(entry).resolve()), "entry_sha256": _sha256(entry)}, env
 
 
 class CaptureSession:
@@ -48,6 +89,12 @@ class CaptureSession:
         )
         self.channel = self.controller = self.media = self.adapter = None
         self.codec = None  # set by the Open that actually succeeded
+        self.open_command = None  # that Open, which the ghost copy repeats
+        # The ghost copy lane: started on a switch-on edge, never retried
+        # within this session after it stops.
+        self.copy_lane = None
+        self._copy_wanted = self._copy_edge = False
+        self._copy_lanes = 0
         self.audio = self.archive = self.handoff = self.mux = None
         self.output = None
         self._output_joined = False
@@ -106,13 +153,19 @@ class CaptureSession:
     def _open_encoder(self):
         header = self.channel.header
         luid = (header.luid_high, header.luid_low)
+        # Before any helper starts: an adapter that can never open NVENC
+        # (not NVIDIA, a software adapter, a driver too old) is a verdict,
+        # not a fault to retry every 10-60 s forever (gpuadapter.py).
+        reason = backend_unsupported(luid)
+        if reason is not None:
+            raise GpuBackendUnsupported(reason)
         dll = bundled_encoder_dll()
         if dll is None:
             raise RuntimeError("this build carries no SM64GpuEncoderV1.dll; run tools/build_plugin.py")
+        dll = staged_encoder_dll(dll)  # never hold the shipped file open
+        command, identity, env = helper_launch()
         self.controller = self.controller_factory(
-            executable=Path(sys.executable),
-            helper=Path(__file__).resolve().parent / "gpuprocess/helper_bootstrap.py",
-            limits=self.settings.helper(),
+            command=command, identity=identity, env=env, limits=self.settings.helper(),
         )
         # ONE startup budget across both attempts. An adapter without an AV1
         # encoder refuses by codec before touching pixels, so the fallback
@@ -141,7 +194,23 @@ class CaptureSession:
             raise RuntimeError("encoder bootstrap admission refused")
         while self._continue():
             reply = self.controller.take_result()
+            if reply is None:
+                status = self.controller.status()
+                if status["fault"]:
+                    # Terminal fault publication can race the first queue read.
+                    # Consume its already-validated reply before discarding the
+                    # encoder result/status; never enqueue another Open here.
+                    reply = self.controller.take_result()
+                    if reply is None:
+                        failure = EncoderFailure(
+                            f"{status['fault']}; encoder result=unknown; native status=unavailable",
+                            worker_disposal_required=True,
+                        )
+                        failure.operation = "Open"
+                        raise failure
             if reply is not None:
+                if reply.request_id != request_id:
+                    raise RuntimeError("GPU encoder Open reply request mismatch")
                 if (
                     reply.request_id == request_id
                     and reply.metadata["result"] == Result.CODEC
@@ -153,14 +222,31 @@ class CaptureSession:
                     # session asks for the other one instead of failing.
                     return _RETRY_OTHER_CODEC
                 if (
-                    reply.request_id != request_id
-                    or reply.metadata["result"] != 0
+                    reply.request_id == request_id
+                    and reply.metadata["result"] == Result.CODEC
+                    and not reply.metadata["worker_disposal_required"]
+                ):
+                    # Refused by codec with nothing left to try: this adapter
+                    # has no codec the recorder can write.
+                    reason = "this GPU's video encoder offers neither AV1 nor H.264"
+                    note_backend_unsupported(luid, reason)
+                    raise GpuBackendUnsupported(reason)
+                if (
+                    reply.metadata["result"] != 0
                     or reply.metadata["error"]
                     or reply.metadata["worker_disposal_required"]
                 ):
-                    raise RuntimeError(
-                        reply.metadata["error"] or "GPU encoder Open failed"
+                    result = Result(reply.metadata["result"])
+                    status = reply.metadata.get("status")
+                    message = reply.metadata["error"] or "GPU encoder Open failed"
+                    failure = EncoderFailure(
+                        f"{message}; encoder result={int(result)}:{result.name}; "
+                        f"native status={'available' if status is not None else 'unavailable'}",
+                        result=result, status=status,
+                        worker_disposal_required=reply.metadata["worker_disposal_required"],
                     )
+                    failure.operation = "Open"
+                    raise failure
                 self.codec = CODEC_STREAM_NAMES[codec]
                 # Native has names/contexts ready but has captured no pixels yet.
                 # Cold AAC/filter/format preparation must finish before source
@@ -170,9 +256,6 @@ class CaptureSession:
                 self.handoff = self.owner.begin_audio()
                 self.channel.encoder_ready()
                 return command, request_id, reply
-            status = self.controller.status()
-            if status["fault"]:
-                raise RuntimeError(status["fault"])
             if not self._wait(deadline):
                 return None
         return None
@@ -239,18 +322,25 @@ class CaptureSession:
             defer_disposal=True,
         )
         command, request_id, reply = bootstrap
+        self.open_command = command
         self.adapter.attach_open(
             command, request_id, reply, initial_offers=offers, now=time.monotonic()
         )
         self.state = "recording"
+        # The codec actually opened, and what startup cost stage by stage, on
+        # EVERY run: the failure-only record made startup look slower than
+        # it is (audit 2026-09-25).
         log.info(
-            "GPU recording active: run=%s source=%s shape=%dx%d adapter=%s native=%s",
+            "GPU recording active: run=%s source=%s shape=%dx%d adapter=%s codec=%s "
+            "native=%s stages=%s",
             run.id,
             decoder.namespace,
             h.width,
             h.height,
             (h.luid_high, h.luid_low),
+            self.codec,
             reply.metadata.get("identity"),
+            self.timings.summary(),
         )
 
     def run(self):
@@ -267,11 +357,21 @@ class CaptureSession:
             while self._continue():
                 self.timings.measure("tick", self.tick)
                 self.owner.wait(self.settings.poll_s)
+        except gpuchannel.LayerVersionMismatch as exc:
+            # Project64 loaded a capture layer from another build (it was
+            # running when this build's refresh came). No retry can succeed
+            # until it restarts, which is when the refresh installs ours.
+            self.error = str(exc)[:512]
+            raise GpuBackendUnsupported(str(exc)) from exc
+        except GpuBackendUnsupported as exc:
+            self.error = str(exc)[:512]
+            raise  # A verdict about the adapter; GpuCapture routes it, unwrapped.
         except Exception as exc:
             self.error = str(exc)[:512]
-            log.info("GPU capture failure before cleanup: %s", failure_snapshot(
+            # Taken before cleanup; logged only if this is not a normal end.
+            before_cleanup = failure_snapshot(
                 exc, frontier=self.frontier, adapter=self.adapter, output=self.output,
-            ))
+            )
             retired = self.demand.reconcile_lifecycle()
             snapshot = self.demand.snapshot
             cancelled = (
@@ -284,8 +384,9 @@ class CaptureSession:
                 # Explicit producer/ROM retirement or recorder cancellation
                 # avoids retry penalties; channel closure alone never does.
                 # Cleanup below must still prove its own resource disposal.
-                log.info("GPU capture retired during media operation: %s", self.error)
+                log.info(retirement_line(snapshot, cancelled and not retired))
                 return
+            log.info("GPU capture failure before cleanup: %s", before_cleanup)
             # GpuCapture logs once at the owning boundary. Preserve the lease
             # supervisor's reason as well as the media symptom; native channel
             # closure can precede that supervisor's next bounded poll.
@@ -301,8 +402,10 @@ class CaptureSession:
             except Exception as exc:
                 raise GpuCleanupError("GPU capture cleanup unproved") from exc
             finally:
-                if self.error:
-                    log.info("GPU capture stage timings at stop: %s", self.timings.summary())
+                # Every stop, clean ones included: a failure-only record
+                # weights every startup and tick distribution toward failures.
+                log.info("GPU capture stage timings at stop: codec=%s error=%s %s",
+                         self.codec, self.error, self.timings.summary())
 
     def tick(self):
         now = time.monotonic()
@@ -320,7 +423,54 @@ class CaptureSession:
             self.timings.measure("heartbeat", self.adapter.heartbeat, self.frontier, now=now)
         self.timings.measure("media_drain", self.media.drain)
         self.timings.measure("media_age", self.media.check_age, now)
+        self.timings.measure("copy_lane", self._tick_copy_lane, now)
         self.timings.measure("report", self.owner.report, self)
+
+    def _tick_copy_lane(self, now):
+        """The ghost copy's whole tick. Nothing raised here reaches the clean
+        run: a lane exception becomes that lane's stop."""
+        lane = self.copy_lane
+        try:
+            # P3's owner method; an owner without it never wants a copy.
+            wanted = getattr(self.owner, "ghost_copy_wanted", None)
+            wanted = bool(wanted()) if wanted is not None else False
+            if wanted and not self._copy_wanted:
+                self._copy_edge = True
+            self._copy_wanted = wanted
+            if lane is not None and not lane.stopped:
+                if not wanted:
+                    lane.stop("Ghosts in recording was switched off")
+                lane.tick(now)
+            elif self._copy_edge and wanted:
+                self._copy_edge = False
+                self._start_copy_lane(now)
+        except Exception as exc:  # noqa: BLE001 - a lane fault stops only the lane.
+            lane = self.copy_lane
+            if lane is None or lane.stopped:
+                log.exception("Ghost copy tick failed")
+            else:
+                lane.stop(str(exc) or type(exc).__name__)
+
+    def _start_copy_lane(self, now):
+        h = self.channel.header
+        self._copy_lanes += 1
+        self.copy_lane = GhostCopyLane(
+            self.owner, self.channel, self.media, self.open_command,
+            codec=self.codec, width=h.even_width, height=h.even_height,
+            settings=self.settings, lane=self._copy_lanes,
+            controller_factory=self.controller_factory, launch=helper_launch,
+        )
+        self.copy_lane.start(now)
+
+    def _close_copy_lane(self):
+        # Before the clean helper retires and while the channel is open: the
+        # twin release and its key returns travel through this channel.
+        lane = self.copy_lane
+        if lane is not None and not lane.stopped:
+            try:
+                lane.close()
+            except Exception:  # noqa: BLE001 - never a clean retirement error.
+                log.exception("Ghost copy close failed")
 
     def _finish_media(self):
         if self.media is None:
@@ -397,6 +547,7 @@ class CaptureSession:
         operations = (
             lambda: self.demand.request_stop("GPU capture run ended"),
             lambda: self.owner.end_audio(self.handoff),
+            self._close_copy_lane,
             self._close_channel,
             self._finish_helper,
             self._finish_media,

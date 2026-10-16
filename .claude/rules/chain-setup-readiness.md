@@ -3,6 +3,7 @@ paths:
   - "src/sm64_events/core/capturelayer.py"
   - "src/sm64_events/core/capturelayer_win.py"
   - "src/sm64_events/core/plugin_installation.py"
+  - "src/sm64_events/core/plugin_ownership.py"
   - "tools/graphics_diagnostics.py"
   - "src/sm64_events/core/paths.py"
   - "src/sm64_events/core/setup_runtime.py"
@@ -24,6 +25,10 @@ paths:
   qualify an existing installation, independently of a consent timestamp. Its
   folder/installation record is shared per Windows user, while gameplay readiness
   and checkout-local completion are separate. A matching install suppresses first use.
+- **One reader per process:** `setup_runtime.py` attaches one `Pj64Memory` by the
+  target's pid and keeps it while that process runs (`alive()`); an observation is
+  one header read. A fresh reader per poll re-walked Project64's memory every
+  second (38 attaches in one minute of play, 2026-09-28).
 - **One clock:** server monotonic time bounds fresh evidence to three seconds;
   the browser separately acknowledges progress for about one second. Neither
   polling frequency nor persisted completion can establish current readiness.
@@ -34,11 +39,15 @@ paths:
   positive receipt plus live matching control/ROM and fresh game/neutral-input
   counters stands in for fresh pictures. This exception also needs
   game/input movement on the limited JP path; a live idle process is insufficient.
+  An unsupported adapter (`replay/gpuadapter.py`) holds no GPU lease, so the
+  recorder's `gpu_unsupported` status lets the desktop's written pictures
+  (`pictures_fed`) plus a live control page naming this Project64 and moving
+  game/input counters stand in instead.
 
 | # | hop | value is true here as | module | probe (reads it) | inject (forces it) | when the hop is broken, the probe shows | when the probe itself is broken, it shows |
 |---|-----|-----------------------|--------|------------------|--------------------|------------------------------------------|--------------------------------------------|
 | 1 | Plugin installation and movement | renderer + wrapper files (compared with the bundle by build id), the ini naming the renderer, selection, consent, producer PID and captured-picture receipts; the control page's `rom_open` is true only for a practice ROM (`rom_baseline` marks another cartridge) | `src/sm64_events/core/capturelayer.py` | GET /api/setup emu installation fields; `tests/test_capturelayer.py` | FakeRegistry, FakeProcesses and a fake GPU observation in that test | Missing/stale renderer or wrapper, an ini wrapping another plugin, wrong selection, or a producer that stops acknowledging | An unchanging fake observation cannot earn active status |
-| 2 | Runtime observation | actual ROM identity and fresh counters belonging to the selected process | `src/sm64_events/core/setup_runtime.py` | GET /api/setup emu target, rom and checks; `tests/test_onboarding.py` | Runtime fakes in that test vary PID, ROM, counters and recorder source | PJ64 without ROM, wrong PID, desktop fallback or stalled counters remain incomplete | A first counter observation or missing observer stays unverified |
+| 2 | Runtime observation | actual ROM identity and fresh counters belonging to the selected process | `src/sm64_events/core/setup_runtime.py` | GET /api/setup emu target, rom and checks; `tests/test_onboarding.py` | Runtime fakes in that test vary PID, ROM, counters and recorder source | PJ64 without ROM, wrong PID, desktop fallback (unless the adapter is unsupported) or stalled counters remain incomplete | A first counter observation or missing observer stays unverified |
 | 3 | Applicable readiness | verification.step, ready and limited | `src/sm64_events/core/onboarding.py` | `tests/test_onboarding.py` readiness cases | Remove one check at a time from observation() | A missing US check prevents completion; JP excludes unsupported tracking only | Making every check false still reports ready, so the probe missed its subject |
 | 4 | API and durable outcome | fresh verdict plus separate onboarding record | `src/sm64_events/server/setup_api.py` | GET /api/setup and completion response; `tests/test_onboarding.py` | Inject the observer; POST completion through TestClient | Premature finish returns 409 with no completion record | A test reads an old localStorage value instead of the server record |
 | 5 | Revealed page and feedback | current page/substep, review position, visible acknowledgment | `src/sm64_events/ui/setupflow.js`, `src/sm64_events/ui/components/setupmodal.js`, `src/sm64_events/ui/components/setupmotion.js`, `src/sm64_events/ui/components/setuppages.js` | `tests/test_ui_setup_modal.py` drives the real Header and modal and samples motion | serve_ui(capture_layer_status=..., setup_observer=...) with changing dictionaries | Future steps appear, Back auto-advances, or setup completes on header detection alone | Missing UI lab skips the render; syntax-only checks cannot prove paint or flow |
@@ -55,6 +64,28 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-09-28, hop 1: his server and Project64 started together. The boot
+  refresh found no Project64, Project64 then loaded both plugins (its log:
+  21:02:58.060), and the copy was refused; the rollback rewrote DLLs it had
+  never touched, which Project64 also held, and three tracebacks reached his
+  console. A held destination is now the same "not now" as a running
+  Project64 (`plugin_installation.in_use` before copying, `DestinationInUse`
+  when the copy's own open is refused): one INFO line, the refresh loop
+  retries, and `restore_on_failure` only rewrites files the block changed.
+  `test_a_refresh_waits_quietly_while_project64_holds_the_dlls` holds the
+  files as a loaded plugin does.
+- 2026-09-23, hop 1: every plugin rebuild needed a manual Install with PJ64
+  closed, and the frozen app then copied its OLDER bundle over it within two
+  seconds of PJ64 closing: all trainers share one overlay, and each read "the
+  installed DLL is mine" from the same hash. Installs now record their
+  installer (frozen app, or a checkout's folder) and build (link time, build
+  id); a trainer refreshes only an installer-like-it's install and never to
+  an older link time, and only frozen installs write the legacy
+  `installed_sha256` older apps trust (`core/plugin_ownership.py`). This
+  supersedes the source-checkouts-never-refresh rule below.
+  `test_only_an_installer_like_this_one_refreshes_its_install` and
+  `test_a_refresh_never_replaces_a_newer_build` cover the pairings.
 
 - 2026-09-17, hop 5: "Looks like it stalls on the 'setup checked' screen. It
   should automatically continue once we've successfully confirmed the setup."

@@ -6,7 +6,7 @@
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { getJSON, send } from "../api.js";
+import { getJSON, send, localFetch } from "../api.js";
 import { useSyncController, VideoStage, WorkArea } from "./videosync.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
@@ -202,7 +202,7 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
       name: file.name, filename: file.name });
     setJob({ state: "running", progress: 0, message: "uploading" });
     let r;
-    try { r = await fetch(`/api/compare/upload?${q}`, { method: "POST", body: file }); }
+    try { r = await localFetch(`/api/compare/upload?${q}`, { method: "POST", body: file }); }
     catch (e) { setJob({ state: "error", message: String(e) }); return; }
     if (!r.ok) { setJob({ state: "error", message: `upload failed (${r.status})` }); return; }
     const { job_id } = await r.json();
@@ -275,7 +275,14 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
 }
 
 // ---- transport -------------------------------------------------------------
-function Transport({ controller }) {
+// Compare stays mounted behind other tabs so loaded clips survive a visit
+// elsewhere; until 2026-09-27 they also kept PLAYING there, sound on, with
+// nothing on screen to stop them. The transport owns play and pause, so
+// leaving the tab is one more press of Pause (perf audit 2026-09-25).
+function Transport({ controller, active }) {
+  useEffect(() => {
+    if (!active && controller.playing) controller.pause();
+  }, [active]);
   return html`<div class="compare-transport">
     <button onclick=${() => controller.toStart()} title="Jump to beginning">
       <${Icon} name="restart" size=${16} /> Start
@@ -575,7 +582,7 @@ export function Compare({ t, intent, clearIntent, active }) {
       </section>
     </div>
     <section class="practice-card compare-transport-card" aria-label="Playback controls">
-      <${Transport} controller=${controller} />
+      <${Transport} controller=${controller} active=${active} />
     </section>
     <${StageFeed} view=${view} available=${availSet} attemptId=${attemptId} onPick=${pickRun} />
   </div>`;

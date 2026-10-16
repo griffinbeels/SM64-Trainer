@@ -14,13 +14,32 @@ class Channel:
         self.offer_values = []
         self.bridge_values = []
         self.acks = []
+        self.torn_grace = None
+        self.torn_status_reads = 0
+        # The producer's seqlock words (status, publication, bridge 0, bridge 1).
+        # None models a busy producer whose words move on every tick; a test
+        # holds a tuple to model a quiet one.
+        self.words = None
+        self.moves = 0
+        self.reads = dict(offers=0, bridges=0)
+
+    def tolerate_torn_status(self, grace):
+        self.torn_grace = grace
+
+    def change_words(self):
+        if self.words is not None:
+            return self.words
+        self.moves += 2
+        return (self.moves,) * 4
 
     def offers(self):
+        self.reads["offers"] += 1
         v = self.offer_values
         self.offer_values = []
         return v
 
     def bridges(self):
+        self.reads["bridges"] += 1
         v = self.bridge_values
         self.bridge_values = []
         return v
@@ -33,6 +52,7 @@ class Selection:
     def __init__(self, channel, q):
         self.client, self.media = channel, q
         self.certificate = None
+        self.frontier_reads = 0
         names = [[ord(x) for x in text] + [0] for text in ["tex-a", "tex-b"]]
         self.decoder = NS(
             header=NS(
@@ -56,6 +76,7 @@ class Selection:
         )
 
     def advance_frontier(self):
+        self.frontier_reads += 1
         if self.certificate is not None:
             self.media.frontier(self.certificate)
         return self.certificate
@@ -82,6 +103,7 @@ class Controller:
         return request_id
 
     def status(self):
+        self.samples = getattr(self, "samples", 0) + 1
         return dict(
             fault=self.fault,
             next_request_id=self.next,
@@ -390,6 +412,101 @@ def test_expired_pending_cannot_be_erased_by_a_late_success(late_kind):
     with pytest.raises(RuntimeError, match="age deadline"):
         a.pump(now=0.2)
     assert not ch.acks and q.closed and a.status()["fault"]
+
+
+def paths(a):
+    return dict(a.status(refresh=False)["pump_paths"])
+
+
+def test_quiet_producer_skips_slot_scans_until_a_word_moves():
+    a, ch, c, q, s = adapter()
+    ch.words = (2, 4, 0, 0)
+    a.pump(now=0.001)  # first sight of these words: one full scan
+    reads, frontier = dict(ch.reads), s.frontier_reads
+    for i in range(5):
+        a.pump(now=0.002 + i / 1000)
+    assert ch.reads == reads and s.frontier_reads == frontier
+    assert paths(a)["quiet"] == 5
+    ch.words = (4, 4, 0, 0)  # only the 60 Hz status moved
+    a.pump(now=0.01)
+    assert ch.reads == reads and s.frontier_reads == frontier + 1
+    a.pump(now=0.011)
+    assert s.frontier_reads == frontier + 1
+    ch.words = (4, 6, 0, 0)  # an offer or bridge was published or retired
+    a.pump(now=0.012)
+    assert ch.reads == {n: v + 1 for n, v in reads.items()}
+    ch.words = (4, 6, 2, 0)  # a bridge word alone still means a scan
+    a.pump(now=0.013)
+    assert ch.reads == {n: v + 2 for n, v in reads.items()}
+    q.abort("fixture complete")
+
+
+@pytest.mark.parametrize("words,path", [((5, 6, 0, 0), "status"), ((6, 7, 0, 0), "scan")])
+def test_an_odd_word_is_a_write_in_progress_and_never_quiet(words, path):
+    a, ch, c, q, s = adapter()
+    ch.words = words
+    a.pump(now=0.001)
+    before = paths(a)
+    for i in range(3):
+        a.pump(now=0.002 + i / 1000)
+    assert paths(a)[path] == before[path] + 3 and paths(a)["quiet"] == 0
+    q.abort("fixture complete")
+
+
+def test_queued_offers_and_helper_replies_force_a_scan():
+    a, ch, c, q, s = adapter(max_pending=1)
+    ch.words = (2, 2, 0, 0)
+    ch.offer_values = [(7, 1000, 20), (8, 1000.033, 190)]
+    a.pump(now=0.01)
+    assert a.status()["offers"] == 1
+    before = paths(a)
+    a.pump(now=0.011)  # the second offer waits for capacity: keep scanning
+    assert paths(a)["scan"] == before["scan"] + 1
+    q.abort("fixture complete")
+    a, ch, c, q, s = adapter()
+    first(a, ch)
+    ch.words = (2, 2, 0, 0)
+    a.pump(now=0.02)
+    a.pump(now=0.021)
+    bridges = ch.reads["bridges"]
+    c.deliver(keys=[receipt()])
+    a.pump(now=0.022)  # the reply retired custody: scan in the same tick
+    assert ch.reads["bridges"] == bridges + 1 and len(ch.acks) == 1
+    q.abort("fixture complete")
+
+
+def test_pending_item_hits_its_age_deadline_while_scans_are_skipped():
+    a, ch, c, q, s = adapter(max_age=0.1)
+    first(a, ch)
+    ch.words = (2, 2, 0, 0)
+    a.pump(now=0.02)
+    a.pump(now=0.05)
+    assert paths(a)["quiet"] == 1 and a.status()["pending"] == 1
+    with pytest.raises(RuntimeError, match="age deadline"):
+        a.pump(now=0.2)
+    assert q.closed and a.fault and not ch.acks
+
+
+def test_quiet_ticks_reuse_the_helper_sample_for_at_most_20_ms():
+    a, ch, c, q, s = adapter()
+    ch.words = (2, 2, 0, 0)
+    a.pump(now=0.001)
+    c.samples = 0
+    for now in (0.005, 0.010, 0.015, 0.0205):
+        a.pump(now=now)
+    assert c.samples == 0
+    c.fault = "helper broke while the screen was static"
+    with pytest.raises(RuntimeError, match="helper broke"):
+        a.pump(now=0.0215)
+    assert c.samples == 1 and q.closed
+
+
+def test_tick_opts_the_channel_into_the_torn_status_grace():
+    a, ch, c, q, s = adapter(max_age=1.5)
+    assert ch.torn_grace == 1.5
+    ch.torn_status_reads = 3
+    assert a.status()["torn_status_reads"] == 3
+    q.abort("fixture complete")
 
 
 def bootstrap():

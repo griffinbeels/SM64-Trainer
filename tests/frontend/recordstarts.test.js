@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { h } from "preact";
 import { SegmentTimeline } from "../../src/sm64_events/ui/components/segmenttimeline.js";
+import { stubLocalServer } from "./localserver.js";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -48,7 +49,7 @@ const response = (body) => ({ ok: true, status: 200, json: async () => body });
 
 function fixture({ holdSynthesis = false, holdBacktest = false } = {}) {
   const calls = { synthesis: [], backtest: [], lint: [], save: [] }, unexpected = [];
-  vi.stubGlobal("fetch", vi.fn((url, options = {}) => {
+  stubLocalServer((url, options = {}) => {
     const path = String(url), method = options.method || "GET";
     const body = options.body ? JSON.parse(options.body) : null;
     if (path === "/api/segments/authoring")
@@ -78,7 +79,7 @@ function fixture({ holdSynthesis = false, holdBacktest = false } = {}) {
     if (path === "/api/uilog") return Promise.resolve(response({ ok: true }));
     unexpected.push(`${method} ${path}`);
     return Promise.resolve({ ok: false, status: 404, json: async () => ({ detail: `Unexpected ${path}` }) });
-  }));
+  });
   const props = { t: { view: { catalog: { courses: [] } }, feed: [],
     refresh: vi.fn(), setNotice: vi.fn() }, onSaved: vi.fn(async () => {}), onCancel: vi.fn() };
   return { calls, unexpected, props };

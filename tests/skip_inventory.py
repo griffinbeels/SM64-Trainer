@@ -29,14 +29,33 @@ ALLOWED = (
     ("separately staged pinned LINK source",
      "The renderer-source witnesses compile against the pinned third-party "
      "tree. Lifts with SM64_LINK_WITNESS_SOURCE pointing at "
-     "tools/stage_link_witness.py's output.",
-     "tests/test_link_source_witness.py, tests/test_renderer_source.py"),
+     "tools/stage_link_witness.py's output. The inert drawer witness instead "
+     "reads pristine bytes from SM64_BUFFER_DRAWER_SOURCE or the verified "
+     "local build-cache archive; it never downloads them.",
+     "tests/test_link_source_witness.py, tests/test_renderer_source.py, "
+     "tests/test_renderer_buffer_fallback.py"),
     ("SM64_TEST_GPU",
      "The real-adapter GPU witnesses. Kept out of the gate on purpose "
      "(.claude/rules/native-plugin.md): they need the NVIDIA adapter and are "
      "timing-sensitive. Run by hand after a native contract change.",
      "tests/test_gpu_bridge.py, test_gpu_cadence.py, test_gpu_fidelity.py, "
      "test_gpu_selection.py"),
+    ("SM64_TEST_GHOST_",
+     "The hidden desktop OpenGL ghost witnesses require explicit hardware "
+     "admission and include GPU timing. Run them enabled after native ghost "
+     "changes, separately from the ordinary full suite; see docs/testing.md.",
+     "tests/test_ghost_compositor.py, test_ghost_presentation.py, "
+     "test_ghost_compositor_tint.py, test_ghost_occlusion.py, test_ghost_pipeline.py"),
+    ("set SM64_MODEL_ROM",
+     "The native model witness requires locally supplied copyrighted US ROM "
+     "bytes, which a fresh clone cannot include. Lifts with SM64_MODEL_ROM "
+     "and the documented pinned model seed; see docs/testing.md.",
+     "tests/test_native_model.py"),
+    ("SM64_GHOST_WITNESS_SOURCE",
+     "The ghost adapter compile witness requires a separately staged pinned "
+     "GLideN64 tree. Lifts by pointing SM64_GHOST_WITNESS_SOURCE at the source "
+     "retained by a current tools/build_renderer.py --keep-scratch build.",
+     "tests/test_ghost_pass.py"),
     ("no sync report for",
      "The layout-vs-report gate. data/version_sync/ is tracked but empty, so "
      "there is nothing to compare against yet. Lifts when a live "
@@ -93,6 +112,12 @@ RUNNER_ONLY = (
     ("nvenc not available",
      "An NVENC witness; a runner has no NVIDIA encoder.",
      "tests/test_replay_encoder.py"),
+    ("native not built in this checkout",
+     "The three natives are build outputs (tools/build_natives.py), and a "
+     "runner cannot build the renderer: its prebuilt libraries live only in "
+     "Griffin's build cache. Here the full lane builds them before the merge "
+     "check, so they are always present.",
+     "tests/test_bundled_natives.py, tests/test_encoder_stage.py"),
     ("no live journal reachable",
      "Reads this machine's own practice journal; a runner has none.",
      "tests/test_rekey.py"),

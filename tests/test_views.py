@@ -77,9 +77,9 @@ def test_view_groups_by_star_with_stats_and_pb_delta(tmp_path):
     outcomes = [a["outcome"] for a in sec["attempts"]]
     assert outcomes == ["success", "reset", "success"]
     last = sec["attempts"][-1]
-    assert last["igt"] == "0'11\"66" and last["pb_delta_frames"] == 7
+    assert last["igt"] == "11\"66" and last["pb_delta_frames"] == 7
     stats = {s["key"]: s for s in sec["stats"]}
-    assert stats["best"]["value"] == 343 and stats["best"]["display"] == "0'11\"43"
+    assert stats["best"]["value"] == 343 and stats["best"]["display"] == "11\"43"
     assert abs(stats["success_rate"]["value"] - 2 / 3) < 1e-9
     assert stats["success_rate"]["display"] == "67%"
 
@@ -395,7 +395,7 @@ def test_progress_groups_successes_by_session_with_pb_flags(tmp_path):
     assert [p["is_pb_igt"] for p in s1["points"]] == [True, False]
     assert all(p["is_pb_rta"] is False for p in s1["points"])
     p = s1["points"][0]
-    assert p["igt"] == "0'11\"43" and p["attempt_id"] == aid
+    assert p["igt"] == "11\"43" and p["attempt_id"] == aid
     assert p["t_utc"]            # close timestamp present
     assert s1["started_utc"]     # session metadata present
 
@@ -420,6 +420,23 @@ def test_progress_excludes_cleared_and_is_none_without_successes(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
     assert sec["progress"] is None
+
+
+def test_a_save_state_success_is_absent_from_progress_even_with_a_saved_pb(tmp_path):
+    from dataclasses import replace
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    attempts = db.attempts()
+    clean, partial = [a for a in attempts if a.outcome == "success"]
+    partial = replace(partial, anchor_type="state_loaded")
+    db.replace_attempts([partial if a.id == partial.id else a for a in attempts])
+    db.insert_pb(partial.course_id, partial.star_id, partial.strat_tag,
+                 "igt", partial.igt_frames, partial.id, partial.ended_utc)
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    points = sec["progress"]["sessions"][0]["points"]
+    assert [p["attempt_id"] for p in points] == [clean.id]
+    assert all(not p["is_pb_igt"] for p in points)
 
 
 def test_progress_superseded_pbs_stay_gold(tmp_path):
@@ -1616,7 +1633,7 @@ def test_rank_mode_average_grades_the_mean_not_the_pb(tmp_path):
     [sec] = view["stars"]
     assert view["rank_mode"] == "avg10"
     assert sec["rank"]["rank"] == "Diamond" and sec["rank"]["mode"] == "avg10"
-    assert sec["rank"]["basis"] == {"frames": 346, "display": "0'11\"53",
+    assert sec["rank"]["basis"] == {"frames": 346, "display": "11\"53",
                                     "count": 2, "window": 10}
     assert view["rank_by_star"]["2:2"]["rank"] == "Diamond"
     # per-attempt medals stay per-run: the 343f attempt still reads Mario
@@ -1778,6 +1795,9 @@ def test_valid_frames_filters_the_average_inputs():
         att(strat_tag=None),                # predates strat tagging
         att(igt_frames=None),               # no time on the igt clock
         att(rta_frames=0, igt_frames=0),    # rta race row; igt 0 is legal
+        att(anchor_type="state_loaded"),  # a known opening load, even if legacy
+        att(state_loads=1),                 # load during the run
+        att(invalid_reason="save_state"),  # persisted validity judgement
     ]
     assert valid_frames(history, "fast", "igt") == [343, 0]
     assert valid_frames(history, "fast", "rta") == [400, 400]

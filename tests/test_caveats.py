@@ -10,9 +10,9 @@ from dataclasses import replace
 
 import pytest
 
-from sm64_events.tracking.caveats import (CAVEAT_SEVERITY, attempt_caveat,
-                                          caveat_for, caveats_for,
-                                          pb_blocked_by)
+from sm64_events.tracking.caveats import (CAVEAT_SEVERITY, VALIDITY_CAVEATS,
+                                          attempt_caveat, caveat_for,
+                                          caveats_for, pb_blocked_by)
 from sm64_events.tracking.projection import Attempt
 
 BASE = Attempt(
@@ -110,6 +110,9 @@ def test_every_ranked_key_is_reachable_by_some_real_input(key):
                                     closed_by="star_collected"), True),
         "unattributed": (pb(strat_tag=None), replace(BASE, timed_at="xcam"),
                          False),
+        **{reason: (pb(), replace(BASE, timed_at="xcam", valid=False,
+                                  invalid_reason=reason), False)
+           for reason in VALIDITY_CAVEATS},
     }
     assert key in inputs, f"{key} is ranked but this test names no input for it"
     assert key in caveats_for(*inputs[key])
@@ -160,3 +163,43 @@ def test_no_pb_means_no_caveat():
     assert caveats_for(None, replace(BASE, timed_at="grab")) == []
     assert caveat_for(None, replace(BASE, timed_at="grab")) is None
 
+
+
+# --- a VALID run (task 0144, projection caveat 21) ---------------------------
+
+@pytest.mark.parametrize("reason", VALIDITY_CAVEATS)
+def test_an_invalid_success_is_marked_and_only_save_states_block(reason):
+    """2026-09-29 excludes save states from PBs. The earlier manual-choice
+    ruling still applies to subarea resets and runs without a fresh reset."""
+    row = replace(BASE, timed_at="xcam", valid=False, invalid_reason=reason)
+    assert attempt_caveat(row) == reason
+    assert pb_blocked_by(row) == ("save_state" if reason == "save_state" else None)
+    assert caveat_for(pb(), row) == reason
+
+
+@pytest.mark.parametrize("proof", [
+    {"anchor_type": "state_loaded"}, {"state_loads": 1},
+    {"invalid_reason": "save_state"},
+])
+def test_a_known_load_is_marked_and_blocked_even_without_a_validity_judgement(proof):
+    row = replace(BASE, timed_at="xcam", valid=None, **proof)
+    assert attempt_caveat(row) == "save_state"
+    assert caveat_for(pb(), row) == "save_state"
+    assert pb_blocked_by(row) == "save_state"
+
+
+def test_an_invalid_run_outranks_a_grab_timed_one():
+    row = replace(BASE, timed_at="grab", valid=False, invalid_reason="save_state")
+    assert attempt_caveat(row) == "save_state"
+    assert caveat_for(pb(), row) == "save_state"
+
+
+def test_validity_marks_only_judged_successes():
+    """An unjudged row (valid None -- everything journaled before the rules
+    that judge it) is never marked, and a failure carries no time that could
+    count, so it is not marked either."""
+    assert attempt_caveat(replace(BASE, timed_at="xcam", valid=None)) is None
+    assert attempt_caveat(replace(BASE, timed_at="xcam", valid=True)) is None
+    failed = replace(BASE, outcome="reset", timed_at=None, valid=False,
+                     invalid_reason="save_state")
+    assert attempt_caveat(failed) is None

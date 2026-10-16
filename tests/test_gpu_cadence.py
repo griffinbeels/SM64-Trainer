@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import time
 from types import SimpleNamespace as NS
 
@@ -28,6 +27,7 @@ from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.gpuinput import CapturedOffer, ChannelSelection
 from sm64_events.replay.gpumedia import GpuMedia
 from sm64_events.replay.gpumediaworker import MediaWorker
+from sm64_events.replay.gpucapture_session import helper_launch
 from sm64_events.replay.gpuprocess.process_controller import Controller
 from sm64_events.replay.gpuprocess.retirement import close_encoder
 from sm64_events.replay.gpusettings import GpuSettings
@@ -70,8 +70,8 @@ def cadence_host(tmp_path_factory):
     target = out / "cadence.exe"
     sources = [NATIVE / name for name in (
         "gpu_cadence_host.cpp", "gpu_delivery.cpp", "gpu_channel.cpp",
-        "gpu_delivery_context.cpp", "gpu_bridge.cpp", "source_snapshot.cpp",
-        "gl_snapshot.cpp", "gpu_selection.cpp", "renderer_boundary.cpp",
+        "gpu_render.cpp", "source_snapshot.cpp",
+        "gl_snapshot.cpp", "renderer_boundary.cpp",
         "context_lifetime.cpp", "stamp_adapter.cpp",
     )]
     inputs = [*sources, *sorted(NATIVE.glob("*.h"))]
@@ -183,9 +183,9 @@ class Pipeline:
     def open(self):
         self.client = self.native.start(1, encoder_ready=False)
         h = self.client.header
-        self.controller = Controller(executable=Path(sys.executable),
-            helper=ROOT / "src/sm64_events/replay/gpuprocess/helper_bootstrap.py",
-            limits=self.settings.helper())
+        command, identity, env = helper_launch()  # the recorder's own launch
+        self.controller = Controller(command=command, identity=identity, env=env,
+                                     limits=self.settings.helper())
         self.command = dict(op="Open", dll_path=str(ENCODER),
             adapter_luid=[h.luid_high, h.luid_low], names=list(self.client.texture_names),
             options=self.settings.encoder(h, ReplayConfig(), nominal_rate=30))
@@ -261,13 +261,21 @@ class Pipeline:
         evidence["native_status"] = self.native.command("status")
         fields = evidence["stream"].split()
         assert fields[:3] == ["stream", "done", str(self.frames * self.vi_per_picture)] and fields[4] == "0", evidence
+        pool_full = int(next(f.split("=", 1)[1] for f in fields if f.startswith("pool_full=")))
         if self.delay_s and not self.isolated:
-            assert int(fields[3]) > 0, "blocking control did not reach actual source capacity"
+            # One record slot always cycles (renderer-thread capture needs its
+            # callback every VI), so a stalled consumer fills the snapshot pool
+            # first: pool_full, or the record ring behind it.
+            assert int(fields[3]) + pool_full > 0, "blocking control did not reach actual source capacity"
             # Since round 48 a refusal is a counted missing picture, never a run
             # failure (docs/replay-gpu-runtime.md): the stall shows as refusals.
             assert evidence["terminal"] is None, evidence
             return None
-        assert fields[3:5] == ["0", "0"] and evidence["terminal"] is None, evidence
+        assert fields[3:5] == ["0", "0"] and pool_full == 0 and evidence["terminal"] is None, evidence
+        # Ticks with no channel news skipped the slot scans, and the recording
+        # below is still exact: the quiet path is live, not just unit-tested.
+        paths = evidence["pump_paths"] = self.adapter.status(refresh=False)["pump_paths"]
+        assert paths["quiet"] > 0 and paths["status"] > 0 and paths["scan"] > 0, paths
         assert self.media.seal(self.adapter.frontier) and self.media.finish(audio_drained=True)
         if self.sink is not None:
             self.sink.finish(timeout=3)

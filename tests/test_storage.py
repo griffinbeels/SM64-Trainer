@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from sm64_events.core.events import Event
 from sm64_events.storage.db import MIGRATIONS, Database
 
@@ -165,6 +167,32 @@ def test_a_pb_on_a_hidden_attempt_does_not_count(tmp_path):
     db.insert_pb(course_id=8, star_id=1, strat_tag=None, timer_mode="igt",
                  frames=400, attempt_id=None, saved_utc="2026-06-10T12:02:00Z")
     assert db.current_pb(8, 1, "igt")["frames"] == 400
+
+
+@pytest.mark.parametrize("proof", [
+    {"anchor_type": "state_loaded"}, {"state_loads": 1},
+    {"invalid_reason": "save_state"}, {},
+    {"valid": False, "invalid_reason": "subarea_reset"},
+])
+def test_pb_queries_match_save_state_policy_and_preserve_saved_history(tmp_path, proof):
+    from dataclasses import replace
+
+    from sm64_events.tracking.caveats import save_state_run
+
+    db = make_db(tmp_path)
+    clean = replace(_one_attempt(1), strat_tag="Standard", valid=True)
+    candidate = replace(clean, id=11, igt_frames=100, rta_frames=110, **proof)
+    db.replace_attempts([clean, candidate])
+    for a in (clean, candidate):
+        db.insert_pb(a.course_id, a.star_id, a.strat_tag, "igt", a.igt_frames,
+                     a.id, a.ended_utc)
+    excluded = save_state_run(candidate)
+    assert [r["attempt_id"] for r in db.pbs()] == ([clean.id] if excluded else [clean.id, 11])
+    expected_id = clean.id if excluded else 11
+    assert db.current_pb(clean.course_id, clean.star_id, "igt")["attempt_id"] == expected_id
+    assert db.current_pb(clean.course_id, clean.star_id, "igt",
+                         strat_tag="Standard")["attempt_id"] == expected_id
+    assert db._conn.execute("SELECT count(*) FROM pbs").fetchone()[0] == 2
 
 
 def test_sessions_returns_newest_first_with_attempt_counts(tmp_path):
@@ -1335,7 +1363,7 @@ def test_a_replay_review_database_gains_mains_v36_after_its_own_index(tmp_path):
     connection.commit()
     connection.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 37
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     columns = {row[1] for row in db._conn.execute("PRAGMA table_info(attempts)")}
     assert "game_version" in columns
     assert db._conn.execute(

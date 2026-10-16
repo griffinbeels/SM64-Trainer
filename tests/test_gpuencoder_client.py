@@ -3,10 +3,20 @@ import ctypes as C
 import threading
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1] / "src/sm64_events/data/plugin"
 from sm64_events.replay import gpuencoder_abi as a
 from sm64_events.replay.gpuencoder import EncoderClient, EncoderFailure, Result, _LIVE
 from sm64_events.replay.gpuencoder_options import from_replay_config, pod_options
+
+ROOT = Path()  # set per module: a placeholder file, since the loader here is a fake
+
+
+@pytest.fixture(autouse=True, scope="module")
+def placeholder_dll(tmp_path_factory):
+    """The client checks only that an absolute helper path exists; no built
+    helper is needed (the natives are build outputs, tools/build_natives.py)."""
+    global ROOT
+    ROOT = tmp_path_factory.mktemp("plugin")
+    (ROOT / "SM64GpuEncoderV1.dll").write_bytes(b"MZ")
 
 
 def options(codec=a.CODEC_H264):

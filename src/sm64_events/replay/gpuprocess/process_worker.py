@@ -1,4 +1,10 @@
-"""Sequential x64 helper. No GPU operation occurs before explicit Open."""
+"""Sequential x64 helper. No GPU operation occurs before explicit Open.
+
+The recorder starts it through core/childproc.py::python_child: from source as
+`python -m` this module, and in the installed app as the app's own exe with
+GPU_HELPER_FLAG, which gui_entry.py hands to `main`. The installed app had no
+such entry until 2026-09-27, so v1.9.1 refused to record at all.
+"""
 
 from pathlib import Path
 import ctypes as C
@@ -9,6 +15,10 @@ import logging
 log = logging.getLogger(__name__)
 from ..gpuencoder import EncoderClient, EncoderFailure, Result
 from .process_protocol import exact, uint, read_frame, frame, write_all, REQUEST, REPLY
+
+#: How the installed exe re-enters as this helper instead of as the app.
+#: Imported by gui_entry.py so the two cannot drift apart.
+GPU_HELPER_FLAG = "--gpu-helper"
 
 
 class Worker:
@@ -134,12 +144,24 @@ class Worker:
         self.packet = None
         error = None
         disposal = False
+        failure_status = None
         try:
             result = self._dispatch(command)
         except EncoderFailure as exc:
             result = exc.result if exc.result is not None else Result.STATE
             error = str(exc)[:512]
             disposal = exc.worker_disposal_required
+            if command.get("op") == "Open" and self.client is None:
+                # Constructor failure never assigns client. The exception can
+                # still carry its existing flat native ABI snapshot (quarantine).
+                failure_status = exc.status
+            if (command.get("op") == "Open" and result == Result.CODEC
+                    and not disposal and self.client is None):
+                # Refused by codec, and nothing was opened: an answer about
+                # the adapter, not a fault. The recorder asks THIS helper for
+                # the other codec, so it must not end here (until 2026-09-27
+                # it did, and no adapter without AV1 could ever record).
+                error = None
         except BaseException as exc:
             log.exception("GPU helper command or status failed")
             result = Result.STATE
@@ -152,6 +174,8 @@ class Worker:
             returned = []
             error = error or ("status failed: " + type(exc).__name__)
             disposal = True
+        if status is None and failure_status is not None:
+            status = failure_status
         payload = b""
         packet = None
         if self.packet is not None and result == Result.OK and not error:
@@ -202,3 +226,14 @@ def run(nonce, max_json, max_packet):
             or (request["command"]["op"] == "Close" and reply["result"] == 0)
         ):
             return
+
+
+def main(argv):
+    """argv after the module name or flag: nonce, max_json, max_packet."""
+    if len(argv) != 3:
+        raise SystemExit("nonce/max_json/max_packet required")
+    run(argv[0], int(argv[1]), int(argv[2]))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

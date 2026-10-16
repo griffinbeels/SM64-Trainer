@@ -2,8 +2,8 @@
 
 Profiling is opt-in and expires after at most five minutes. It does not restart
 the trainer, change the renderer, alter capture rates, or replace an active
-profile. Existing `perf_log.jsonl` remains a memory/resource monitor, not a CPU or
-GPU profiler. Capture tools run from the development environment.
+profile. Existing `perf_log.jsonl` is a resource and attribution monitor, not a
+sampling CPU or GPU profiler. Capture tools run from the development environment.
 
 Routine resource monitoring runs every minute using OS memory/process/handle
 probes. It does not walk the Python heap, enumerate DXGI adapters or scan replay
@@ -13,6 +13,33 @@ before launch; missing measurements stay null/unmeasured. `sampling.mode` and
 (excluding the final file write). Application gauges read cached recorder
 scalars; slow probes and persistence run outside the polling event loop, with
 one owned sample at a time and completion awaited on shutdown.
+
+Each minute's record also answers who used the CPU, from one query-only process
+snapshot (2026-09-27; it replaced a Toolhelp pass and costs less, 10.3 ms
+against 14.5-16.6 ms on a machine with 445 processes and 12,000 threads):
+
+- `cpu`: this server's CPU over the minute per thread name, in percent of one
+  core (`MainThread` is the event loop). `unattributed_pct` is CPU of threads
+  that exited during the minute. `os_threads` counts native threads too.
+- `children`: the whole process tree below the server, so the encoder helper
+  (a grandchild behind the venv launcher) is counted, one `members` row each.
+- `processes["Project64.exe"]`: its threads and CPU, and its address space.
+  Project64 1.6 is 32-bit, so `vm_largest_free_mib` (the biggest mapping it can
+  still make) and `vm_free_mib` below `vm_limit_mib` matter more than its RAM.
+  `vm_walk_ms` is the walk's own cost (about 2.5 us per region measured on
+  busy 32-bit apps; the audit counted ~1,100 regions in Project64).
+- `machine`: the top five processes by CPU, commit, hard faults and disk bytes
+  over the minute, plus CPU busy, DPC and interrupt shares of all CPUs.
+
+Between samples a heartbeat thread wakes once a second (2.7 ms of CPU per
+minute). When it wakes 0.5 s or more late, nothing in this server could run:
+the machine was starved or one of our threads held the interpreter. It then
+appends a `"kind": "stall"` line naming the busiest processes and this
+server's threads across the stall (`before`) and for 2 s after (`after`), at
+most once per 30 s; the minute record's `stalls` counts every one. A freeze
+inside Project64 alone does not delay this server, so it gets no stall line.
+`uv run python tools/analyze_perf_log.py` lists the stalls under the growth
+table.
 
 GPU capture status includes `frame_source_health.stage_timings`: fixed-size
 cold-start, tick, scheduling-gap and nested audio/adapter/media/report aggregates.
@@ -250,13 +277,20 @@ This protects external replacements, not release-version ordering or copies made
 by older applications still running the old installer implementation.
 
 The native wrapper logs lifecycle events and callbacks taking at least 20 ms,
-or callback gaps of at least 50 ms, at most once per five seconds per callback.
-Each stall names its total CPU wall time (`total_ms`), the gap since the previous
-call and their cumulative maxima; quiet summaries appear once per minute. These
-records run on the practice ROM only; any other cartridge forwards untimed. Gaps include pauses,
-and these measurements cannot time asynchronous rendering on the GPU.
-`dropped_records` reports lost diagnostics. A bounded, event-driven writer keeps
-file I/O off emulator callbacks and rotates the log at 1 MiB to `.log.1`.
+or callback gaps of at least 50 ms, at most once per five seconds per callback,
+except in the 15 s after a capture request, when every one is logged. Each stall
+names its total CPU wall time (`total_ms`), the gap since the previous call and
+its `begin_qpc`/`end_qpc`. Quiet summaries appear once per minute with that
+window's `window_calls`, `mean_ms`, `p99_ms` (0.1 ms steps), `max_ms` and
+`max_gap_ms`. These records run on the practice ROM only; any other cartridge
+forwards untimed. Gaps include pauses, and these measurements cannot time
+asynchronous rendering on the GPU. `dropped_records` reports lost diagnostics.
+A bounded, event-driven writer keeps file I/O off emulator callbacks and
+rotates the log at 4 MiB through `.log.1` and `.log.2`. Startup lines (ROM
+open, each capture's request and
+[preparation steps](replay-gpu-runtime.md#first-capture-freeze), and the watched stalls) are also
+copied to `sm64_trainer_gfx.activation.log`, which holds only the current
+Project64 process (the previous one moves to `.1`) and stops at 256 KB.
 Logging works with the trainer closed and does not request capture. Abrupt
 process exit can lose queued records; absent records are not proof of fast work.
 
@@ -269,8 +303,12 @@ regular UpdateScreen calls do not certify smooth physical presentation.
 ## Capture coordinator versus media sink
 
 The GPU runtime wrapper also emits `gpu_summary`, `gpu_summary_phase` and
-`gpu_summary_cadence` records every five seconds while capture is healthy. These
-are recent windows, separate from the cumulative `gpu_failure` diagnostics.
+`gpu_summary_cadence` records once a minute while capture is healthy, or at the
+next five-second boundary when the window needs attention: a refused picture,
+a busy client page, a source interval of 75 ms or more, or every snapshot slot
+held (`peak_pending` of `slots`; `peak_bridges` is the same for the two bridge
+slots). These are recent windows, separate from the cumulative `gpu_failure`
+diagnostics.
 Read a copied native log with `python tools/native_capture_report.py
 PATH_TO_LOG --output report.json`; this reader never contacts PJ64 or opens GPU
 objects. It retains at most 120 windows from the last 4 MiB. PID, epoch and QPC

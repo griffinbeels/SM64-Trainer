@@ -9,6 +9,9 @@ constexpr GLenum condition_satisfied = 0x911C, wait_failed = 0x911D;
 constexpr GLint rgba8 = 0x8058;
 bool __cdecl standalone_error_check() { return glGetError() == GL_NO_ERROR; }
 bool complete(GLenum value) { return value == already_signaled || value == condition_satisfied; }
+// Renderer-thread capture: the producer prepared the pool in its own context.
+// One context orders every use, so no fence, flush or worker thread is involved.
+bool one_context(HGLRC source, HGLRC worker) { return source && source == worker; }
 template<class T> bool load_proc(T &target, const char *name) {
     PROC p = wglGetProcAddress(name);
     const auto address = reinterpret_cast<uintptr_t>(p);
@@ -51,7 +54,32 @@ bool Pool::prepare(const Gl &api, HGLRC producer, unsigned w, unsigned h,
     unsigned disabled = 0;
     if (!enabled.compare_exchange_strong(disabled, preparing)) return false;
     const HGLRC current = wglGetCurrentContext();
-    if (!current || current == producer) { stop(); return false; }
+    if (!current) { stop(); return false; }
+    if (current == producer) {
+        // The producer prepares its own pool (renderer-thread capture): DSA
+        // storage touches no binding or unpack state, and nothing waits.
+        using Create = void (APIENTRY *)(GLenum, GLsizei, GLuint *);
+        using Storage = void (APIENTRY *)(GLuint, GLsizei, GLenum, GLsizei, GLsizei);
+        Create create_textures = nullptr; Storage storage = nullptr;
+        if (!api.copy_texture || !load_proc(create_textures, "glCreateTextures")
+            || !load_proc(storage, "glTextureStorage2D")) { stop(); return false; }
+        gl = api;
+        worker_context = source_context = current;
+        worker_thread = producer_thread = GetCurrentThreadId();
+        width = w; height = h; count = n; bytes = per_texture * n;
+        GLuint names[max_slots]{};
+        create_textures(GL_TEXTURE_2D, GLsizei(n), names);
+        bool created = true;
+        for (unsigned i = 0; i < n; ++i) {
+            slots[i].texture = names[i]; slots[i].producer_attached = true; slots[i].fence = nullptr;
+            if (names[i]) storage(names[i], 1, GLenum(rgba8), GLsizei(w), GLsizei(h));
+            else created = false;
+        }
+        if (!created) { stop(); destroy(); return false; }
+        unsigned pending = preparing;
+        if (!enabled.compare_exchange_strong(pending, ++epoch)) { destroy(); return false; }
+        return true;
+    }
     GLint max_size = 0;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_size);
     if (w > unsigned(max_size) || h > unsigned(max_size)) { stop(); return false; }
@@ -162,12 +190,14 @@ Result Pool::submit(unsigned expected_epoch, const Source &src, RestoreBindings 
 #ifdef SNAPSHOT_TEST_HOST
         if (submission_probe) submission_probe(3);
 #endif
-        slot.fence = gl.fence(sync_complete, 0);
-        // The other context cannot flush this producer's fence, even with FLUSH_COMMANDS_BIT.
+        // One context orders every later use of this texture; only a second
+        // context needs the fence (it cannot flush this producer's, either).
+        const bool single = one_context(source_context, worker_context);
+        slot.fence = single ? nullptr : gl.fence(sync_complete, 0);
 #ifdef SNAPSHOT_TEST_HOST
         if (submission_probe) submission_probe(4);
 #endif
-        glFlush();
+        if (!single) glFlush();
 #ifdef SNAPSHOT_TEST_HOST
         if (submission_probe) submission_probe(5);
 #endif
@@ -175,7 +205,7 @@ Result Pool::submit(unsigned expected_epoch, const Source &src, RestoreBindings 
         // while the renderer still exclusively owns this slot. Never let a worker
         // race a caller-side check and consume unchanged/stale texture contents.
         const bool source_ok = gl.end_capture();
-        if (!slot.fence || !source_ok) { poison(slot, tag); return Result::fault; }
+        if ((!single && !slot.fence) || !source_ok) { poison(slot, tag); return Result::fault; }
         slot.state.store(tag | queued);
         *out = {serial, i};
         submitted.fetch_add(1);
@@ -185,10 +215,18 @@ Result Pool::submit(unsigned expected_epoch, const Source &src, RestoreBindings 
     return Result::full;
 }
 Poll Pool::poll(Ticket ticket, Image *out) {
-    if (!worker() || !out || !ticket.serial || ticket.serial > (UINT64_MAX >> 3) ||
+    const bool single = one_context(source_context, worker_context);
+    if ((!single && !worker()) || !out || !ticket.serial || ticket.serial > (UINT64_MAX >> 3) ||
         ticket.slot >= count) return Poll::stale;
     auto &slot = slots[ticket.slot];
     const uint64_t tag = ticket.serial << 3;
+    if (single) { // no GL: repeatable, so the producer can sample what it just copied
+        const uint64_t state = slot.state.load();
+        if (state != (tag | queued) && state != (tag | borrowed)) return Poll::stale;
+        slot.state.store(tag | borrowed);
+        *out = {ticket, slot.texture, width, height, slot.occurrence, slot.qpc};
+        return Poll::ready;
+    }
     if (slot.state.load() != (tag | queued)) return Poll::stale;
     const GLenum result = gl.wait(slot.fence, 0, 0);
     if (result == wait_failed) { poison(slot, tag); return Poll::fault; }
@@ -202,11 +240,17 @@ Poll Pool::poll(Ticket ticket, Image *out) {
     return Poll::ready;
 }
 bool Pool::release(Ticket ticket) {
-    if (!worker() || !ticket.serial || ticket.serial > (UINT64_MAX >> 3) ||
+    const bool single = one_context(source_context, worker_context);
+    if ((!single && !worker()) || !ticket.serial || ticket.serial > (UINT64_MAX >> 3) ||
         ticket.slot >= count) return false;
     auto &slot = slots[ticket.slot];
     const uint64_t tag = ticket.serial << 3;
     if (slot.state.load() != (tag | borrowed)) return false;
+    if (single) { // later producer copies are ordered after every use
+        slot.completed_serial.store(ticket.serial);
+        slot.state.store(free);
+        return true;
+    }
     slot.fence = gl.fence(sync_complete, 0);
     glFlush();
     if (!slot.fence) { poison(slot, tag); return false; }
@@ -214,7 +258,7 @@ bool Pool::release(Ticket ticket) {
     return true;
 }
 void Pool::reap() {
-    if (!worker()) return;
+    if (one_context(source_context, worker_context) || !worker()) return;
     for (unsigned i = 0; i < count; ++i) {
         auto &slot = slots[i];
         const uint64_t state = slot.state.load();

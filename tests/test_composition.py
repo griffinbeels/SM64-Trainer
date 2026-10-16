@@ -26,6 +26,7 @@ def _isolate_machine(monkeypatch, tmp_path):
         def __init__(self, **kwargs):
             self.header = None
             self.auto_refresh = kwargs["auto_refresh"]
+            self.installer = kwargs["installer"]
             self.refresh_calls = 0
             self.refresh_threads = 0
             layers.append(self)
@@ -73,15 +74,21 @@ def _isolate_machine(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("frozen", [False, True])
-def test_only_packaged_builds_automatically_refresh_the_shared_plugin(
+def test_every_build_refreshes_only_as_its_own_installer(
         monkeypatch, _isolate_machine, frozen):
+    # The frozen app and each source checkout refresh the shared plugin by
+    # themselves, each only its own kind of install (core/plugin_ownership.py).
     from sm64_events.main import _build_capture_layer
 
     monkeypatch.setattr("sm64_events.core.paths.is_frozen", lambda: frozen)
     layer, _ = _build_capture_layer(None, None)
-    assert layer.auto_refresh is frozen
-    assert layer.refresh_calls == int(frozen)
-    assert layer.refresh_threads == int(frozen)
+    assert layer.auto_refresh is True
+    if frozen:
+        assert layer.installer["kind"] == "frozen" and layer.installer["version"]
+    else:
+        assert layer.installer == {"kind": "checkout", "path": str(Path(sm64_events.__file__).resolve().parents[2])}
+    assert layer.refresh_calls == 1
+    assert layer.refresh_threads == 1
     assert _isolate_machine == [layer]
 
 
@@ -252,6 +259,8 @@ def test_build_wires_the_pad_stamp_audit_into_replay(monkeypatch):
     assert replay is not None, "the replay service was not composed"
     assert replay.track_pads is not None, (
         "the pad-stamp audit was built but never wired into ReplayService")
+    assert replay.input_track is not None, (
+        "older native ghosts would show unknown inputs: no input track reaches ReplayService")
 
 
 @pytest.mark.parametrize("ffmpeg_works", [True, False])
@@ -393,6 +402,89 @@ def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
     caused._counts["switch_press"] = 2
     hook()
     assert moment._counts == {} and caused._counts == {}
+def test_build_hands_every_snapshot_to_native_ghost_ownership(monkeypatch):
+    """Settled poll snapshots reach the native arm/rebase observer, and the
+    snapshot's frame is the one the adaptive rival origin is read at
+    (8159b47e). The poller only ever hands real snapshots, so the sample
+    carries the `global_timer` every snapshot has."""
+    from types import SimpleNamespace
+    from sm64_events.ghost.native_session import NativeGhost
+    from sm64_events.tracking.service import TrackerService
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    delivered = []
+    owners = []
+    origins = []
+
+    def note(self, snapshot=None):
+        owners.append(self)
+        delivered.append(("native", snapshot))
+
+    monkeypatch.setattr(NativeGhost, "note", note)
+    monkeypatch.setattr(TrackerService, "native_rival_origin",
+                        lambda self, kind, key, *, frame=None: origins.append((kind, key, frame)))
+    real_poller = main_mod.Poller
+
+    def spy(memory, detectors, sink, **kw):
+        captured.update(kw)
+        return real_poller(memory, detectors, sink, **kw)
+
+    monkeypatch.setattr(main_mod, "Poller", spy)
+    main_mod.build()
+    note = captured.get("on_snapshot")
+    assert note is not None, "the poller was built with no snapshot hook"
+    sample = SimpleNamespace(global_timer=4321)
+    note(sample)
+    assert delivered == [("native", sample)]
+    owners[0]._origin_of("star", "2-2")
+    assert origins == [("star", "2-2", 4321)]
+
+
+def test_build_mounts_every_ghost_door(monkeypatch):
+    """Native preferences are reachable and retired video doors are absent."""
+    main_mod = _stubbed_main(monkeypatch)
+    app = main_mod.build()
+    paths = {r.path for r in app.routes}
+    assert "/api/ghost" in paths
+    assert not ({"/api/ghost/source", "/ws/ghost-clock"} & paths)
+
+
+def test_build_gives_the_app_the_native_ghost_session(monkeypatch):
+    from sm64_events.ghost.session import GhostSession
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    real_create = main_mod.create_app
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_create(*args, **kwargs)
+
+    monkeypatch.setattr(main_mod, "create_app", spy)
+    main_mod.build()
+    assert isinstance(captured.get("ghost"), GhostSession)
+
+
+def test_the_frozen_entry_point_runs_the_ghost_sound_player(monkeypatch):
+    """The ghost sound player is a child of THIS exe in a PyInstaller build,
+    re-entering through its own flag. Without the
+    dispatch the installed app would play no ghost sound at all."""
+    import importlib.util
+    import sys
+
+    from sm64_events.ghost.sound_player import SOUND_PLAYER_FLAG
+
+    entry = Path(sm64_events.__file__).resolve().parents[2] / "gui_entry.py"
+    spec = importlib.util.spec_from_file_location("ghost_sound_dispatch", entry)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    received = []
+    monkeypatch.setattr(sys, "argv", ["SM64Trainer.exe", SOUND_PLAYER_FLAG, "--pj64", "10", "--parent", "11"])
+    monkeypatch.setattr("sm64_events.ghost.sound_player.main", lambda argv: received.append(argv) or 0)
+    monkeypatch.setitem(sys.modules, "sm64_events.desktop.app", None)
+    assert module.main() == 0
+    assert received == [["--pj64", "10", "--parent", "11"]]
+
+
 def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     """A boot that loses the instance-lock race (the reload-handoff race,
     live 2026-07-30 and 2026-08-06) must still mount the compare and
@@ -420,6 +512,10 @@ def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     assert "/api/compare/view" in paths
     assert "/api/compilation" in paths
     from fastapi.testclient import TestClient
-    r = TestClient(app).get("/api/compare/view",
-                            params={"entity": "star:16:0", "strat": None})
+    from sm64_events.core.paths import server_port
+    # build() guards the loopback API (ae48b4e3): a request must name this
+    # server's own host, as the browser does, or it is refused before routing.
+    client = TestClient(app, base_url=f"http://127.0.0.1:{server_port()}")
+    r = client.get("/api/compare/view",
+                   params={"entity": "star:16:0", "strat": None})
     assert r.status_code == 503              # honest "not yet", never a 404

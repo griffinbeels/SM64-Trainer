@@ -130,7 +130,7 @@ struct Window {
     void release_dc(){if(dc){CHECK(ReleaseDC(hwnd,dc));dc=nullptr;}}
     ~Window(){if(rc)CHECK(wglDeleteContext(rc));release_dc();if(hwnd)CHECK(DestroyWindow(hwnd));}
 };
-void real(bool after,bool share_lists=false,bool anchor=false,bool production=false) {
+void real(bool after,bool share_lists=false,bool anchor=false) {
     WNDCLASSW cls{}; cls.style=CS_OWNDC;cls.lpfnWndProc=DefWindowProcW;
     cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"ContextLifetimeHidden";
     CHECK(RegisterClassW(&cls));
@@ -145,11 +145,9 @@ void real(bool after,bool share_lists=false,bool anchor=false,bool production=fa
         CHECK(wglMakeCurrent(source.dc,source.rc));const HGLRC original=source.rc;
         const int pixel_format=GetPixelFormat(source.dc);
         LARGE_INTEGER begin{},end{},frequency{};QueryPerformanceFrequency(&frequency);QueryPerformanceCounter(&begin);
-        if(production)CHECK(source_context::Publish(original,source.dc,31,pixel_format));
-        else CHECK(r.publish(original,31,pixel_format,anchor?create_source:nullptr,source.dc,core_attributes));
+        CHECK(r.publish(original,31,pixel_format,anchor?create_source:nullptr,source.dc,core_attributes));
         QueryPerformanceCounter(&end);
         if(anchor)printf("startup anchor creation us=%.3f; one hidden fixture sample\n",double(end.QuadPart-begin.QuadPart)*1000000.0/double(frequency.QuadPart));
-        const auto public_api=production?SM64ReplayContextV1(1,sizeof(rcl_api)):nullptr;
         unsigned char wanted[4*3*4];for(unsigned i=0;i<sizeof(wanted);++i)wanted[i]=static_cast<unsigned char>(i*37+11);
         GLuint texture=0;glGenTextures(1,&texture);glBindTexture(GL_TEXTURE_2D,texture);
         glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,4,3,0,GL_RGBA,GL_UNSIGNED_BYTE,wanted);glFlush();
@@ -160,7 +158,7 @@ void real(bool after,bool share_lists=false,bool anchor=false,bool production=fa
             auto create=reinterpret_cast<CreateContext>(wglGetProcAddress("wglCreateContextAttribsARB"));
             CHECK(reinterpret_cast<uintptr_t>(create)>3 && reinterpret_cast<uintptr_t>(create)!=UINTPTR_MAX);
             CHECK(wglMakeCurrent(nullptr,nullptr)); CHECK(wglDeleteContext(target.rc));target.rc=nullptr;
-            CHECK((production?public_api->acquire(reinterpret_cast<uintptr_t>(original),31,&lease):r.acquire(reinterpret_cast<uintptr_t>(original),31,&lease))==RCL_ACQUIRED);
+            CHECK(r.acquire(reinterpret_cast<uintptr_t>(original),31,&lease)==RCL_ACQUIRED);
             if(anchor)CHECK(lease.context!=reinterpret_cast<uintptr_t>(original));
             CHECK(lease.pixel_format==unsigned(pixel_format));acquired.set();go.wait();
             const int attributes[]={0x2091,4,0x2092,5,0x9126,1,0};
@@ -169,7 +167,7 @@ void real(bool after,bool share_lists=false,bool anchor=false,bool production=fa
                 creation_ok=wglShareLists(reinterpret_cast<HGLRC>(lease.context),target.rc)!=FALSE;}
             else {target.rc=create(target.dc,reinterpret_cast<HGLRC>(lease.context),attributes);creation_ok=target.rc!=nullptr;}
             const DWORD create_error=creation_ok?0:GetLastError();
-            const int released=production?public_api->release(lease.token):r.release(lease.token); // every creation outcome
+            const int released=r.release(lease.token); // every creation outcome
             if(!after&&!anchor&&!creation_ok){CHECK(create_error!=0);
                 printf("direct current-source sharing refused: error=%lu, share_lists=%u, released=%d\n",create_error,share_lists?1u:0u,released);}
             else CHECK(creation_ok);
@@ -183,13 +181,13 @@ void real(bool after,bool share_lists=false,bool anchor=false,bool production=fa
         });
         acquired.wait();
         if(!after){go.set();created.wait();}
-        const auto retirement=production?source_context::Revoke(original):r.revoke(original);CHECK(retirement.value);
+        const auto retirement=r.revoke(original);CHECK(retirement.value);
         CHECK(wglMakeCurrent(nullptr,nullptr));
         if(anchor)CHECK(wglDeleteContext(original));
-        CHECK((production?source_context::Retire(retirement):r.unbound(retirement,TRUE))==(after?RCL_DEFERRED:RCL_DELETED));
+        CHECK(r.unbound(retirement,TRUE)==(after?RCL_DEFERRED:RCL_DELETED));
         source.rc=nullptr;source.release_dc(); // original DC ownership remains here
         if(after){CHECK(deletes.load()==0);go.set();created.wait();}
-        CHECK(production||deletes.load()==1);verify.set();worker.join();CHECK(production?!public_api->health():!r.health());
+        CHECK(deletes.load()==1);verify.set();worker.join();CHECK(!r.health());
     }
     CHECK(UnregisterClassW(L"ContextLifetimeHidden",GetModuleHandleW(nullptr)));
     if(after||anchor)printf("real WGL shared texture survived source retirement: %s\n",after?"share after DC release":"hot attach via never-current anchor");
@@ -217,7 +215,6 @@ int main(int argc,char **argv) {
     else if(!strcmp(mode,"real_after"))real(true);else if(!strcmp(mode,"real_before"))real(false);
     else if(!strcmp(mode,"real_lists"))real(false,true);
     else if(!strcmp(mode,"real_anchor"))real(false,false,true);
-    else if(!strcmp(mode,"production_anchor"))real(false,false,true,true);
     else if(!strcmp(mode,"acquiring_before"))acquiring(1);else if(!strcmp(mode,"acquiring_after"))acquiring(2);
     else if(!strcmp(mode,"create_failure"))creation_failure();
     else if(!strcmp(mode,"abi")){CHECK(argc==3);abi(argv[2]);}else CHECK(false);

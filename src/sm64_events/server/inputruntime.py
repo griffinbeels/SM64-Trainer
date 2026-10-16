@@ -24,6 +24,7 @@ class InputRuntime:
         poller.input_storage_health = self.health
         if self.replay is not None:
             self.replay.track_pads = self.track_pads
+            self.replay.input_track = self.input_track
         if self.tracker.db is not None:
             self.attach(self.tracker.db)
 
@@ -32,7 +33,8 @@ class InputRuntime:
             return
         inputs = InputsService(db.inputs, db.input_templates, db.attempts,
                                version=self.layout.version,
-                               events=db.events_between, landmark_names=db.landmark_names)
+                               events=db.events_between, landmark_names=db.landmark_names,
+                               preserve_native=getattr(self.replay, "preserve_native", None))
         writer = sampler = None
         if self.layout.player1_controller is not None:
             writer = ChunkWriter(db.inputs, lambda: self.tracker.session_id)
@@ -57,6 +59,11 @@ class InputRuntime:
         track = track_for_attempt(self.db.inputs, attempt)
         return {number: (frame.stick_x, frame.stick_y, frame.buttons)
                 for number, frame in track} if track else {}
+
+    def input_track(self, attempt, span=None):
+        if self.db is None:
+            return []
+        return track_for_attempt(self.db.inputs, attempt, span)
 
     def retry(self):
         if self.writer is not None:

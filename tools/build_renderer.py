@@ -40,12 +40,27 @@ SHIPPED_RENDERER = REPO / "src" / "sm64_events" / "data" / "plugin" / "GLideN64_
 LABEL = "LINK v4.2 [SM64 Trainer]"
 OVERLAY_SOURCES = (
     "link_dispatch.h", "link_dispatch.cpp", "renderer_gl_state.h", "gl_snapshot.h",
-    "source_format.h", "practice_rom.h", "context_lifetime.h", "context_lifetime.cpp",
-    "renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp",
+    "source_format.h", "practice_rom.h", "renderer_context_profile.h", "context_lifetime.h", "context_lifetime.cpp",
+    "renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp", "source_descriptor3.h",
+    "ghost_ram.h", "ghost_capture.h", "ghost_capture.cpp", "ghost_root.h", "ghost_root.cpp", "ghost_pass.h", "ghost_pass.cpp",
+    "ghost_stream.h", "ghost_stream.cpp", "ghost_link.h", "ghost_link.cpp",
+    "ghost_particle_capture.h", "ghost_particle_capture.cpp", "ghost_particle_gl.h",
+    "ghost_particle_pose.h", "ghost_particle_pose.cpp",
+    "ghost_clock.h", "ghost_clock.cpp", "ghost_origin.h", "ghost_origin.cpp",
+    "ghost_pose.h", "ghost_pose.cpp", "ghost_scene.h", "ghost_compositor.h", "ghost_compositor.cpp", "ghost_compositor_gl.h",
+    "ghost_clip.h", "ghost_assets.h", "ghost_assets.cpp", "ghost_rom.h", "ghost_rom.cpp", "ghost_ipc.h", "ghost_ipc.cpp",
+    "ghost_draw.h", "ghost_draw.cpp", "ghost_playback.h", "ghost_playback.cpp",
+    "ghost_dispatch.h", "ghost_dispatch.cpp", "ghost_presentation.h", "ghost_presentation.cpp",
+    "ghost_audio.h", "ghost_audio.cpp",
 )
-OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_api.cpp", "context_lifetime.cpp")
-DEFINES = "SM64_REPLAY_GL_WITNESS;SM64_REPLAY_SOURCE;SM64_REPLAY_CONTEXT_LIFETIME;"
-RECIPE_VERSION = "2"
+OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_api.cpp", "context_lifetime.cpp",
+                   "ghost_capture.cpp", "ghost_root.cpp", "ghost_clock.cpp", "ghost_origin.cpp",
+                   "ghost_pass.cpp", "ghost_stream.cpp", "ghost_link.cpp", "ghost_particle_capture.cpp", "ghost_particle_pose.cpp",
+                   "ghost_pose.cpp", "ghost_compositor.cpp", "ghost_assets.cpp", "ghost_rom.cpp", "ghost_ipc.cpp",
+                   "ghost_draw.cpp", "ghost_playback.cpp", "ghost_dispatch.cpp", "ghost_presentation.cpp",
+                   "ghost_audio.cpp", "ghost_annotation_assets.cpp")
+DEFINES = "SM64_REPLAY_GL_WITNESS;SM64_REPLAY_SOURCE;SM64_REPLAY_CONTEXT_LIFETIME;SM64_GHOST_RENDERER;"
+RECIPE_VERSION = "3"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -77,6 +92,15 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def overlay_sources() -> tuple[str, ...]:
+    """OVERLAY_SOURCES plus every ghost source the staging tool copies by glob.
+    A header missing from the hand list (the shadow shader, the proximity and
+    occlusion rules) used to change the DLL without changing its id."""
+    extra = sorted(path.name for path in (REPO / "plugin" / "gfxwrap").glob("ghost_*")
+                   if path.suffix in (".h", ".cpp") and path.name not in OVERLAY_SOURCES)
+    return (*OVERLAY_SOURCES, *extra)
+
+
 def renderer_build_id() -> str:
     """Names everything the DLL is made of: the pinned upstream tree, the
     overlay sources, the staging tool, the label and this recipe. The static
@@ -84,8 +108,13 @@ def renderer_build_id() -> str:
     term. A wrapper-only edit does not change it."""
     digest = hashlib.sha256()
     digest.update(f"{witness.TREE_HASH}\0{LABEL}\0{RECIPE_VERSION}\0".encode())
+    digest.update(Path(__file__).read_bytes() + b"\0")
     digest.update((REPO / "tools" / "stage_link_witness.py").read_bytes() + b"\0")
-    for name in OVERLAY_SOURCES:
+    digest.update((REPO / "tools" / "stage_ghost_renderer.py").read_bytes() + b"\0")
+    digest.update((REPO / "tools" / "stage_ghost_presentation.py").read_bytes() + b"\0")
+    model = _load("renderer_model_build", REPO / "tools/build_model.py")
+    digest.update(model.component_hash().encode() + b"\0")
+    for name in overlay_sources():
         digest.update(name.encode() + b"\0" + (REPO / "plugin" / "gfxwrap" / name).read_bytes() + b"\0")
     return digest.hexdigest() + "-renderer"
 
@@ -145,7 +174,7 @@ def prebuilt_libraries(cache: Path) -> dict[str, Path]:
 # -- staging ----------------------------------------------------------------
 
 def stage(pristine: Path, staged: Path, libraries: dict[str, Path], build_id: str) -> None:
-    witness.overlay(pristine, staged, boundary=True, label=LABEL, context_lifetime=True)
+    witness.overlay(pristine, staged, boundary=True, label=LABEL, context_lifetime=True, ghost=True)
     gl = staged / witness.GL
     (gl / "renderer_build_identity.h").write_text(
         f'#define SM64_TRAINER_RENDERER_BUILD_ID "{build_id}"\n', encoding="ascii")
@@ -178,6 +207,23 @@ def stage(pristine: Path, staged: Path, libraries: dict[str, Path], build_id: st
     lib_dir.mkdir(parents=True)
     for name, path in libraries.items():
         shutil.copyfile(path, lib_dir / name)
+
+
+def stage_model_library(staged: Path, library: Path) -> None:
+    """Link the C component without leaking decomp types into renderer units."""
+    gl = staged / witness.GL
+    for header in ("model.h", "audio.h"):
+        shutil.copyfile(REPO / "renderer/model" / header, gl / header)
+    msvc = staged / "projects/msvc"
+    target = msvc / "bin/Win32/Release/lib/sm64_model.lib"
+    shutil.copyfile(library, target)
+    project = msvc / "GLideN64.vcxproj"
+    data = project.read_bytes()
+    anchor = b"<AdditionalDependencies>opengl32.lib;glu32.lib;winmm.lib;"
+    if data.count(anchor) != 1:
+        raise ValueError("model library link anchor is not unique")
+    data = data.replace(anchor, anchor + b"bin\\Win32\\Release\\lib\\sm64_model.lib;")
+    project.write_bytes(data)
 
 
 # -- building ---------------------------------------------------------------
@@ -231,6 +277,9 @@ def build_renderer(out_dir: Path, *, cache: Path | None = None, source: Path | N
         pristine = pristine_source(cache, scratch, source)
         staged = scratch / "staged"
         stage(pristine, staged, libraries, build_id)
+        model = _load("renderer_model_build", REPO / "tools/build_model.py")
+        library = model.build_model(scratch / "model", cache=cache.parent / "model", vcvars32=vcvars32)
+        stage_model_library(staged, library)
         built = msbuild(staged, vcvars32, scratch / "msbuild.log")
         if embedded_identity(built) != build_id:
             raise RuntimeError("the built renderer does not carry its own build id")

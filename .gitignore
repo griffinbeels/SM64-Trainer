@@ -92,6 +92,12 @@ ds-bundle/
 tools/verification/node_modules/
 .verification/
 
+# The bundled natives are BUILD OUTPUTS (tools/build_natives.py): the
+# launcher, wrap and release build them from these sources by embedded build
+# id. Committed, every native edit added a 12.5 MB renderer and parallel
+# branches conflicted on it (approved 2026-09-23).
+src/sm64_events/data/plugin/
+
 # Generated Cloudflare static website output.
 .website-build/
 

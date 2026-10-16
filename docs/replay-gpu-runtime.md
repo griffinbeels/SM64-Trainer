@@ -65,10 +65,13 @@ Component contracts live beside this page:
 | `sm64_trainer_gfx.dll` (label `SM64 Trainer v1.0`) | the capture wrapper Project64 selects; loads the renderer named by `sm64_trainer_gfx.ini` | `tools/build_plugin.py` | `-gpu-runtime` |
 | `SM64GpuEncoderV1.dll` | the 64-bit NVENC helper the server's isolated encoder process loads | `tools/build_plugin.py` | `-gpu-encoder` |
 
-All three live in `src/sm64_events/data/plugin/` and are packaged by
-`tools/build_exe.py`. Each carries an embedded build id naming the exact
-sources it came from; `tests/test_bundled_natives.py` fails when a bundled
-file and the tree disagree, and the setup screen compares an installed file
+All three are build outputs in `src/sm64_events/data/plugin/`, which git
+ignores, and are packaged by `tools/build_exe.py`. Each carries an embedded
+build id naming the exact sources it came from. `tools/build_natives.py`
+rebuilds whichever disagrees with the tree, from a shared cache keyed by that
+id when another checkout already built it; the server launched from a checkout
+(so `run-test-server.bat`), the full verification lane and release run it, and
+`tests/test_bundled_natives.py` fails when a built file and the tree disagree, and the setup screen compares an installed file
 with the bundled one by that id (`core/capturelayer.py::_files_match`), so a
 rebuild of unchanged sources never reads as "differs from this build". The
 setup screen installs the renderer and the wrapper together, writes the ini
@@ -96,18 +99,24 @@ cannot see a swap in game memory: the poller reads the header before the
 detectors whenever the timer goes back and at least every
 `PRACTICE_ROM_CHECK_S`, and re-offers a refused cartridge every
 `PRACTICE_ROM_RETRY_S`. `Pj64Memory.rom_header` remembers where it found the
-image, because Allocate_ROM releases the old image before allocating the next:
-a steady check is one 0x40-byte read (`tests/test_pj64_rom_header.py` drives
-that against a real process; `tests/test_poller.py` drives the whole swap cycle).
+image, for every reader of that process, because Allocate_ROM releases the old
+image before allocating the next, and looks first where Project64 1.6 keeps it
+(0x10000000 past RDRAM): a steady check, or a fresh reader, is one 0x40-byte
+read (`tests/test_pj64_rom_header.py` drives that against a real process;
+`tests/test_poller.py` drives the whole swap cycle).
 
 Updates: when the user clicks Update in the app, the new build restarts and
 `CaptureLayer.refresh_if_stale` (at boot and every two seconds) copies the
 new renderer and wrapper over the installed ones as soon as Project64 is
 closed, keeps the ini pointing at the renderer, and records the new hashes.
-It refreshes only an install the trainer made itself (the installed wrapper
-hash matches its receipt); a wrapper someone else copied in is left alone
-and the setup screen asks. The status field `automatic_update` tells the UI
-which case it is, and onboarding never reopens for an automatic update.
+A source checkout's server does the same for its own rebuilds. Each
+trainer refreshes only an install made by an installer like it -- the
+installed app's by the installed app, a checkout's only by that same
+checkout -- whose wrapper still matches its receipt, and never with an
+older build (by the DLLs' link times; `core/plugin_ownership.py`). A wrapper
+someone else copied in, another checkout's install or a newer build is left
+alone and the setup screen asks. The status field `automatic_update` tells
+the UI which case it is, and onboarding never reopens for an automatic update.
 
 ## Owners and data flow
 
@@ -145,8 +154,12 @@ still consume bandwidth and share the driver with the game. Unnoticeable live
 contention is a measured acceptance requirement, not a guarantee implied by the
 absence of explicit waits.
 
-The delivery worker owns context preparation, GPU fence polling, WGL/D3D transfer,
-orientation/crop and small selection samples. Only small samples, stamps and
+The renderer's own thread, in its own context and inside its capture
+callbacks, does every capture GPU step: the snapshot copy, the selection
+sample, the bridge copy into the helper's texture (with orientation and crop)
+and the key checks ([renderer-thread capture](#first-capture-freeze)). The
+delivery thread never touches the GPU: it picks up requests, reads the
+frontier between VIs, drains and checks deadlines. Only small samples, stamps and
 compressed packets reach Python. The helper owns synchronous native encoder and
 shared-key operations inside a private kill-on-close process job. Its independent
 watchdog can end a stalled helper without entering an emulation callback.
@@ -154,19 +167,45 @@ watchdog can end a stalled helper without entering an emulation callback.
 `GpuDemand` separately owns the capture lease. It never performs media or GPU
 operations. A stopped server's lease expires independently of Python's media
 worker. With no demand the native worker is passive and the renderer runs as
-the original single-context renderer: the never-current shared GL anchor the
-worker leases is published on the renderer thread at the first admitted
-capture surface (`EnsureAnchor`), once per context, never at ROM open. A
-direct or server-off session therefore creates no extra driver context
-(round 48). The cost moves to the first captured frame after a server
-attaches. Whether this or the same day's driver update ended the passive
-stutter is not isolated (see [what failed](#what-failed-and-why)).
+the original single-context renderer. With demand it still does: since
+2026-09-27 every capture GPU call runs on the renderer's own thread in its
+own context ([renderer-thread capture](#first-capture-freeze)), so no other
+thread in Project64 ever touches the GPU. Since 2026-09-28 the overlay
+publishes no shared context at all: round 48's never-current anchor
+(`EnsureAnchor`, and its `anchor_published` timing line) is gone, ContextV1
+stays exported for the wrapper's ABI check, and every lease is refused
+(`test_link_source_witness`, `test_context_lifetime`'s `abi` mode). Whether
+round 48's anchor move or the same day's driver update ended the passive
+stutter is not isolated (see [what failed](#what-failed-and-why)); with no
+anchor left, that question is moot for this design.
 
 The media worker's tick is a high-resolution waitable timer plus the native
 producer's own event (`tickwait.py`): a `threading.Event.wait(0.004)` sleeps
 15.5 ms on Windows, three of which per picture drained the eight-slot source
 pool on any short stall. Packet reservations shrink to the encoded size when
 the packet returns, and the pending budget admits every native slot at once.
+
+Most 4 ms ticks find nothing new: on a static screen the producer writes only
+its status, at up to 60 Hz. Each tick first loads the seqlock words it consumes
+(status, publication, both bridges; `Client.change_words`). Every native write
+holds its word odd and leaves it two higher, and every offer or bridge
+publish/retire also moves the publication word, so unchanged even words skip
+the offer and bridge scans; a status-only change reads just the status and its
+frontier. Age deadlines, helper replies and dispatch still run every tick, and a
+quiet tick reuses the encoder helper's health sample for at most 20 ms (a fault
+with a command in flight still arrives at once as its failed reply). On the real
+channel an idle tick fell from 50 to 3.4 µs and a status-only tick costs 13 µs
+(`test_idle_tick_costs_a_fraction_of_a_full_scan`); live, before this,
+`adapter_pump` was 42.7-49 ms/s at about 270 ticks/s (2026-09-25).
+
+A torn status is no news to the tick. Native holds the status word odd across
+its copy, so a writer preempted by a machine-wide stall tears every read until
+it runs again; three back-to-back reads used to end the run, which ended runs
+of 5.3 h, 30 min and 61 min on 2026-09-22, 09-23 and 09-25. Reads now yield
+between attempts, and the tick reuses the last good status until the status
+stays torn past the 2 s age deadline, which still ends a run whose writer died
+mid-copy. Setup still refuses a torn status at once. A survived episode logs
+one "status was torn" line.
 
 A true pause (F2, AFK) freezes the committed video end. Silence is padded only
 up to that end and stamped there, so it muxes at once instead of piling PCM
@@ -175,6 +214,40 @@ capacity, and is not counted stale. `tests/test_gpu_audio_pause.py` pins
 eight synthetic frozen seconds with no failure. With continuous real
 callbacks (proctap zeros) the PCM capacity (about 5.5 s) still ends the run
 explicitly; a typed paused-frontier seal remains the next step.
+
+A stall of the whole interpreter must not deadlock the two streams. PCM is
+written only up to the committed video end, and a video packet muxes only up to
+the audio end plus the 100 ms lead (`lead_ticks`). Callbacks are stamped at
+arrival, so a stop-the-world pause of the audio callback leaves a gap in the
+PCM timeline. When that gap was at least the lead, the next PCM block straddled
+the video end and the next picture sat past the audio end, and neither could
+move. The head picture then hit the 2 s "pending age limit" and recording
+stopped. That was every such failure in the live log from 2026-09-19 to
+2026-09-23 (14 of 14 came 1 to 3 s after the recorder's forced gen-2
+collection, `_gcwatch.py`, which pauses for 54 to 139 ms), and the picture
+ledger shows 30 fps feeds up to 2.0 s before each failure. PCM arrives in
+source order, so a waiting block proves the gap before it is final: the video
+gate now counts audio as covered up to that block's start
+(`PcmBuffer.head_ticks`). `test_an_interpreter_stall_does_not_deadlock_video_against_audio`
+drives 30 fps pictures and 10 ms callbacks through stalls of 50 to 500 ms;
+before the fix the 140, 300 and 500 ms cases failed with the live error.
+
+The same stall used to leave audio late for the rest of the recording. The
+first chunk after the stall opened the gap at its arrival time, the buffered
+chunks were laid out after it, and placement only moves forward, so audio
+stayed stamped late by the stall: 144 ms after a 140 ms stall, 504 ms after
+500 ms, adding up with every forced collection. A chunk cannot end after it
+arrived, so `AudioPlacement` now pulls back by dropping a chunk's oldest
+samples until it ends on arrival. It never moves a chunk earlier than audio
+already written, so nothing overlaps or reorders. It pulls back at once when
+a chunk is more than 50 ms late (the stall's backlog), and otherwise when
+every chunk in the last 0.5 s was more than one callback (10 ms) late. That
+second case covers what a burst leaves behind, and also a device clock that
+runs fast against the wall clock. The stall costs its own audio instead of
+shifting what follows. `test_a_callback_stall_does_not_leave_audio_late`
+ends within one callback after 140 and 500 ms stalls, and
+`test_ordinary_callback_jitter_is_never_trimmed` keeps 30 s of 0-20 ms
+delivery jitter whole.
 
 ## Startup, idle and failure
 
@@ -198,20 +271,44 @@ Helper Open also settles WHICH CODEC this adapter records in. The session asks
 for AV1 first — 32% of H.264's bytes at equal quality and faster to encode
 (measured 2026-09-20) — and the encoder checks `nvEncGetEncodeGUIDs` before it
 configures anything. An adapter without an AV1 encoder answers `GBDLL_CODEC`,
-typed apart from every real fault, and the session opens again asking for
-H.264 inside the SAME startup budget; `gpusettings.py` remembers the refusal
+typed apart from every real fault, and the session asks the SAME helper for
+H.264 inside the same startup budget; `gpusettings.py` remembers the refusal
 per adapter LUID, so only the first capture of a launch pays the extra round
-trip. The codec that actually opened is what `PacketFragmentMux` writes the
+trip. (Until 2026-09-27 the helper controller rejected result 16 as a
+malformed reply and the helper exited on the refusal, so this fallback never
+ran: an adapter without AV1 failed every attempt. A refusal by codec that
+opened nothing now leaves the helper running.) An adapter refusing H.264 too
+is an unsupported adapter, below. The codec that actually opened is what `PacketFragmentMux` writes the
 fragments as, so an `av01` track is never described as `avc1`.
 
 The lease supervisor allows five seconds from admitted request to ACTIVE. Helper
 Open uses its startup budget; ordinary native requests use the shorter call
-deadline. An unavailable backend ends the request explicitly. Transient failures
+deadline. An unavailable backend ends the request explicitly. An adapter that
+can never open the encoder is a verdict, not a failure: `gpuadapter.py` asks
+DXGI and the driver before any helper starts (not NVIDIA, a software adapter,
+an NVENC API older than the encoder's 13.0), and an H.264 refusal by codec
+answers the same way. `gpusettings.py` remembers it per adapter and driver
+version; the retry gate arms no cooldown and discovery declines that producer,
+so the recorder's next attach keeps the desktop grab
+(`sourcefactory.DesktopForUnsupportedGpu`, status `gpu_unsupported`) and setup
+accepts its written pictures. An NVIDIA GPU without NVENC hardware still
+fails as a driver error at session open, indistinguishable from a transient
+one without a native change, and keeps the retry gate. Transient failures
 retry only after proved cleanup, with 10/20/40/60-second capped delays. A short
 productive prefix or capability refresh does not waive the delay. Discovery,
 storage-maintenance and audio-worker faults have their own bounded retry delays.
 New process identity and observed normal ROM lifecycle permit a fresh request.
-Native reason9 (resources exhausted) is process-lifetime sticky: the user must
+Closing the ROM or Project64 is such a normal end, and its whole log is one
+INFO line ("Project64 closed the ROM; recording stopped" or "Project64
+closed; recording stopped"). The plugin revokes GPU capability a moment before
+it marks the ROM closed (`gfxwrap.c` RomClosed), so the lease supervisor reads
+the ROM before the capability and waits up to 120 ms for the ROM or process to
+close before calling a capability loss a fault (`gpudemand.CLOSING_GRACE_S`);
+until 2026-09-28 every close raised "GPU recording stopped" with a traceback.
+A Project64 that loaded a capture layer from another build (`LayerVersionMismatch`)
+is a verdict for that process, like an unsupported adapter: one WARNING and
+the desktop grab until it restarts. `tests/test_pj64_lifecycle.py` holds one
+case per open/close order. Native reason9 (resources exhausted) is process-lifetime sticky: the user must
 fully close and reopen Project64. A ROM reload/control generation change cannot
 prove recovery, so the retry gate retains that refusal for the same process birth.
 
@@ -268,8 +365,10 @@ from the existing renderer statistics API. Worker phase totals/peaks and their
 start QPCs describe sampling, bridge copies, credit returns and record retirement.
 The failure log carries the QPC frequency to align these with UTC. A delayed
 worker observes the refusal later; its observation time must not be mistaken for
-when the source ran out of room. The callback runs on the delivery worker before
-drain, uses the bounded logger, and never adds logging or waits to emulation.
+when the source ran out of room. The callback runs on whichever delivery thread
+saw the failure (the renderer's, for a GPU step) before drain; the bounded
+logger only try-locks its queue and drops the line on contention, so it never
+adds a wait to emulation.
 
 Automatic inactivity keeps the same healthy capture request, encoder and audio
 clock alive. Reset or movement resumes retention of the already-recorded tail;
@@ -319,6 +418,239 @@ and no pending failed cleanup; automatic idle is not a safe collection window.
 The existing five-minute backstop remains, so this is not a promise of zero
 Python scheduling pauses.
 
+## First capture freeze
+
+His report (2026-09-25): "a very brief visual stutter in the gameplay. It
+never happens again, just once towards the beginning of the session." Live,
+one UpdateScreen ran 153 ms inside the first capture's native preparation.
+
+**Cause (host-measured, 2026-09-27): NVIDIA's threaded optimization.**
+Project64 has no driver profile, and the global profile leaves "Threaded
+optimization" on auto. While it is engaged, the first time any other thread
+in the process uses the GPU (a GL context, or a D3D11 device, even one made
+on the renderer's own thread) the driver blocks the renderer for 150-270 ms,
+once per process. A scratch driver profile on a scratch executable (deleted
+afterwards; his Project64 settings were never touched) settled it, 8 fresh
+processes per arm: forced off, first captures ran 6.4-15.6 ms; forced on,
+193-231 ms; auto, 170-268 ms. Turning it off for Project64 is not the fix:
+the renderer's own draw calls then cost about 20 times the CPU (0.17 against
+0.009 ms for 800 calls, 1.1 against 0.045 ms for 6000).
+
+**Fix: [renderer-thread capture](glossary.md#renderer-thread-capture).**
+Project64 makes no second GL context and no D3D11 device. Every capture GPU
+call runs on the renderer's own thread, in its own context, inside the
+callbacks the renderer already makes: `gd_surface` on every VI drives
+`render_tick`, and `gd_capture` issues a picture's sample right after its
+copy. `plugin/gfxwrap/gpu_render.cpp` holds the three pieces:
+
+- the sample, one nearest blit whose source rectangle is shifted so every
+  output texel lands inside source pixel (8x, H-1-8y), read back into a buffer
+  without waiting and taken at a later VI;
+- the bridge: the helper creates the two keyed-mutex textures under the
+  channel's names, and the renderer imports them and writes a selected
+  picture with one flipped, even-cropped blit ([bridge](replay-gpu-bridge.md));
+- a state guard that hands the scissor test and pack state back exactly.
+
+The snapshot pool (`gl_snapshot.cpp`) is prepared in the renderer's own
+context when the producer's context is the current one: DSA storage, no fence
+or flush, and a poll that makes no GL call. `gl_snapshot.h` is an overlay
+header and did not change, so the renderer keeps its build id
+(`3833db66...-renderer`) and every non-practice ROM still runs the identical
+renderer DLL. Because the helper now creates the bridge textures, the channel
+wire became version 2 (`GC_CHANNEL_VERSION`, `gpuchannel.VERSION`, compared by
+`test_gpu_channel`); [the ghost copy](#the-ghost-copy) made it version 3. A trainer meeting a wrapper from another build fails
+with "the capture layer in Project64 speaks GPU channel version 1 and this
+trainer speaks version 2: they come from different builds. Close Project64 so
+the trainer can update the capture layer", and the setup screen's build-id
+check reports the same installed layer as differing from this build. The
+channel takes the client's decisions head first: once per VI it can find two,
+and a later offer in a lower slot is not out of order. Without that, the media-stall
+witness beside other GPU witnesses (ghost pipeline and compositor hosts, a second
+cadence run) ended 6 of 6 runs with "channel failed" (reason `0x20002719`,
+`GD_CHANNEL_FAILED`, detail `out_of_order`); with it, 8 of 8 passed under the same
+load. Contention on his machine (OBS, clip recorders) makes the same two-replies
+case, so this was a real way to end a recording, not a test artefact.
+
+The delivery thread keeps requests, drain and deadlines, and reads the
+frontier: the source's update transaction is open for the whole renderer
+callback, so the frontier can only be read between VIs. It never uses GL.
+Four rules follow from "the renderer calls back only on a VI":
+
+- The renderer calls back only on a VI whose record it could stage, so at
+  most seven pictures are held (one source slot always cycles) and omissions
+  behind an unpublished picture are released at once. Each VI offers at most
+  one picture and copies one; at 30 pictures on 60 VIs that is twice the
+  need, so a backlog drains at 30 pictures a second.
+- The picture captured just before a Project64 pause is offered after the
+  pause; the frontier holds at it meanwhile, and pictures do not age while
+  the renderer is silent.
+- GL names outlive their request until the renderer's next armed VI or its
+  context (see [long sessions](#long-sessions-and-inactive-play)).
+- A test renderer must keep calling back between pictures (the cadence host
+  runs a 60 Hz VI clock), or preparation never finishes.
+
+Host acceptance (2026-09-27, the stutter host: the real stamp adapter,
+delivery, channel and encoder helper against a hidden 60 Hz renderer at
+1600x1200, one fresh process per run, worst renderer VI): the
+worker-context build froze 164.9-272.7 ms at the first capture in 8 of 8;
+renderer-thread capture ran 9.5-15.0 ms in 8 of 8 (the first copy and sample
+into new textures: 6.8 and 4.7 ms in a traced run), second captures
+4.8-7.3 ms. Capture now costs the renderer about 0.35 ms per picture: the VI
+that carries a picture takes median 1.04-1.19 ms against 0.93-1.02 (p99
+1.69-2.70 against 1.53-2.21), and the VI after it, which takes the sample and
+copies the selected picture, 0.26-0.28 ms against 0.03-0.04. A synthetic game
+load (800 and 6000 draw calls a frame) put capture's share of the renderer
+thread at 0.45-0.52 and 1.30-1.58 ms against the old 0.31-0.34 and
+1.24-1.34 ms, while the game's own draw calls kept their threaded cost.
+
+Threaded optimization stays engaged once capture runs. The same stutter host,
+drawing 6000 calls per picture (8 fresh processes per build), timed those
+calls at 0.027-0.028 ms before the first capture and 0.034-0.038 ms during
+and after it; with the optimization forced off on a scratch profile (deleted
+afterwards) they took 0.94-0.98 ms. Under that load the first capture froze
+161-206 ms on the worker-context build and ran 10.5-13.1 ms here, and the
+intro before any capture peaked at 11.7-12.9 ms: there is no warm-up left to
+cost the intro anything.
+
+Rejected: the driver warm-up (2026-09-26 to 09-27), which kept the worker's
+context and paid the same freeze once in every practice-ROM boot intro; a
+D3D11 device on the renderer thread (274-408 ms, plus 100-122 ms to make it);
+exporting from D3D11 inside Project64 (118-481 ms); a second GL context on
+the renderer thread (25-84 ms, and 5-9 ms p99 per picture).
+
+**Readout (his next session, no action from him).** The
+[activation log](glossary.md#activation-log) keeps `rom_open_*`,
+`gpu_request`, `gpu_prepare` and every `callback_stall`
+in the 15 s after a request. `gpu_prepare` now reads `prepare_begin_qpc`,
+`snapshots_ms`, `sampler_ms`, `luid_ms`, `channel_ms`, `reader_qpc`,
+`import_begin_qpc`, `import_ms` and `end_qpc`, all renderer-thread steps, so a
+stall overlapping them is our own cost on his renderer (a few ms in the
+host). A stall of 100 ms or more near the first capture that overlaps none of
+them remains unattributed by this readout. Correlate other graphics activity;
+absence of a preparation overlap alone cannot name a component or thread.
+
+**Measured: Discord's graphics capture hook.** Discord injects
+into Project64 and, on the next present, runs
+`GLState::InitCapture` then `Using WGL_NV_DX_interop2` (a D3D11 device plus NV
+interop) inside SwapBuffers on the renderer thread: one UpdateScreen
+`callback_stall` of 25-120 ms, whenever Discord attaches (1.9 s to 33 s after
+launch). To identify it, compare the `Attach pid` and `InitCapture` lines of
+`%APPDATA%\discord\logs\discord_hook.log` (local time) with the activation
+log's `callback_stall`. Native QPC is the server's monotonic clock
+(QPC / 10^7); the `GPU recording active` line's stages carry both it and Unix
+time. Matched to the millisecond: 2026-09-24 34 ms, 09-25 65 ms, 09-28 120.8
+and 120.5 ms. On 09-29, its 111 ms initialization interval ended in the same
+millisecond as a 114.251 ms UpdateScreen stall; trainer GPU preparation had
+finished 31 seconds earlier. The 09-25 153 ms freeze came 2 s before Discord
+attached; it was ours and renderer-thread capture removed it. The hook logs
+identify capture initialization, but do not establish which Discord feature
+requested it. Discord's [revamped Overlay](https://discord.com/blog/player-release-q12025)
+operates independently of direct game hooking; the visible Overlay, Clips and
+screensharing must be distinguished before changing settings or claiming a fix.
+
+**Opt-in compatibility experiment.** Before launching Project64, set
+`SM64_TRAINER_GL_PROFILE=compatibility` in its launching environment to request
+the compatibility profile on supported practice ROMs. The unset/default value,
+unknown values and every non-practice ROM retain LINK's core-profile request.
+This preserves the GL version and existing context creation, renderer thread
+and capture bridge. The renderer must include the current
+`renderer_context_profile.h`; it participates in the renderer build identity.
+Changing this environment value after context creation has no effect on that
+context. Clear it before launching the baseline comparison.
+
+This tests whether the core profile contributes to Discord's
+`Binding shared texture failed 500` report. A legacy-state/core mismatch is a
+hypothesis, since Discord's final error check could observe an earlier error.
+Successful shared-texture binding does not prove cold capture initialization
+is fast. Compare fresh PIDs with Overlay enabled, preserving the actual
+Clips/screensharing conditions, and correlate both logs as above. The candidate
+needs native compilation, recording/ghost GPU witnesses and human live
+verification before it can be called compatible or a stutter fix.
+
+**Removed speculative overlay warm-up (2026-10-05).** The October 3 experiment
+made a D3D11 device inside Project64 to reduce a later overlay's initialization
+cost. Its synthetic host supplied a 250 ms load interval. The shipped trigger
+only saw six VIs without a display list; that did not establish a safe load
+interval. The live October 5 log records a 164.1 ms callback containing this
+initialization. Its `absorbed` flag counted the complete callback, including
+the injected initialization itself, so it did not prove existing loading slack.
+
+The device warm-up, trigger, and special exemption were removed. No shipped
+Project64 unit may create a D3D11 device or another GL context. The source guard
+in `tests/test_gpu_delivery.py` covers every shipped unit. Historical host
+results establish only the experiment's artificial conditions; they do not
+certify Discord's actual attach or resolve intermittent gameplay stutter.
+Current reports and the preserved source are in the private October 5 round.
+
+## The ghost copy
+
+With Ghosts in recording on, the clean recording never contains a ghost; a
+second recording of the displayed picture runs beside it in the same capture
+run (his decision, 2026-10-03, in
+[ghost-native-runtime.md](ghost-native-runtime.md#ghosts-in-the-recording)).
+The renderer keeps the displayed picture in its own display surface and names
+it through SourceV4's `query_display`. The delivery's **twin lane** records it
+through a second helper process with its own two textures. The twin never
+waits on or extends the clean picture's custody, and a twin fault stops only
+the twin: nothing in the lane can fail, quarantine or delay the clean capture.
+With the switch off there is no display copy, no twin pool and no twin helper.
+
+The channel (version 3) carries the lane in a 768-byte block at
+`twin_offset` (after the payloads; RAM only, always present): the client's
+request (`gc_twin_client`: READY with a strictly increasing lane once its
+helper created both `-copy-` textures named in the header, OFF otherwise), the
+producer's status (`gc_twin_status`: OFF, PREPARING, ACTIVE, STOPPED, a raw
+`GD_TWIN_*` reason, and `resolved_pts`, below which every selected picture has
+its twin outcome), two twin bridges and two twin receipts in the clean ones'
+shapes. Every entry has its own sequence word. The producer writes an OFF
+status with the channel's identity before the header, like the clean status.
+
+All twin GPU work is on the renderer's thread, like the clean work:
+
+1. **Start**, the render tick after a READY with a new lane while the clean
+   capture is ACTIVE: a twin snapshot pool with the clean pool's images and
+   size (refused if both pools together would pass the snapshot limit), an
+   import of the twin textures, then ACTIVE and `display_consumer(true)`.
+   A SourceV3 renderer stops the lane at once with `GD_TWIN_UNAVAILABLE`.
+2. **Capture**, in `gd_capture` after the clean copy and its sample:
+   `DISPLAY_VI` snapshots the display surface into the twin pool;
+   `SAME_AS_CLEAN` copies nothing (the clean snapshot stands for it); a full
+   twin pool is a missing twin picture. No sample is taken for the twin.
+3. **Decision**, right after the clean bridge copy succeeded and before the
+   clean image returns: a free twin texture (key 0 proven) receives the display
+   or clean snapshot and its bridge carries the clean decision's occurrence,
+   encode serial, PTS and duration. No free texture, a full key or a missing
+   twin picture counts `missed`; it is never retried. A twin copy fault stops the
+   lane with `GD_TWIN_BRIDGE_FAILED`.
+4. **Custody** mirrors the clean ledger: a twin receipt plus key 0 retires a
+   twin texture. Stopping, key 0 alone retires it.
+5. **Stop**, on OFF or a new lane: no new twin copies, STOPPED once every
+   twin texture came back, then this lane's names are deleted. A key held past
+   the picture deadline (`max_age_ms`) is `GD_TWIN_KEY_ABANDONED`: its names wait
+   for the epoch's GL retirement and no other lane starts in that capture run.
+
+Every twin GL step outside a picture's copy runs in a capture gateway of its
+own and drains its errors there. The source gateway records any GL error it
+finds at its end and then refuses every later capture, so an error left by a
+twin step would have ended the clean recording. The twin pool's copies drain
+their own errors the same way (`Snapshots::prepare(..., owns_errors)`).
+
+Renderer cost, measured 2026-10-03 with the cadence host (`SM64_CADENCE_TWIN=1`,
+`test_ghost_copy_native`): 60 VIs and 30 pictures a second at 1600x1200 through
+the real helper and media path, a ghost on every picture (the worst case: a
+display copy on every presentation), this host returning each twin texture at
+once. Over four paired runs of 660 VIs, the renderer's time per VI (the whole
+update, display copy and capture included) had a median of 811-838 us with the
+lane off and 940-1083 us with it on, a p99 of 1.96-4.87 ms off and 2.12-3.13 ms
+on, and a maximum of 8.5-11.6 ms either way; zero clean refusals, every clean
+picture decoded exactly, and 330 of 330 twin pictures copied. The GPU's power
+state moves these numbers more than the lane does (the same run measured 300 us
+medians while other GPU work held the clocks up), so read them as "about a
+tenth of a millisecond more per VI", not as a precise cost. Under that kind of
+outside load the existing 1600x1200 cadence witness refuses pictures on the
+base commit too (3-7 per run, the same on this design's commit), so a refusal
+there is not attributed to the lane without an interleaved base comparison.
+
 ## Accuracy and bounds
 
 The unchanged picture selector uses the same stride sample and source stamps.
@@ -327,8 +659,9 @@ times. The encoder receives monotonic 90kHz PTS; actual VFR held durations remai
 separate from nominal 30fps encoding metadata. Retained heartbeats encode a fresh
 packet from the retained input without another source GPU copy or shared acquire.
 
-The GPU shader combines the existing top-down orientation, floor-even top-left
-crop and opaque alpha. Existing quality choices and time-forced IDRs feed the
+The bridge blit applies the existing top-down orientation and floor-even
+top-left crop; alpha passes through, and the encoder does not read it. The
+selection sample forces alpha opaque. Existing quality choices and time-forced IDRs feed the
 encoder. `PacketFragmentMux` uses PyAV's `add_mux_stream` (PyAV17.1 or newer), so it
 does not decode or re-encode compressed video. The existing audio placement and
 pacing operate on real timed stereo PCM before AAC encoding and shared fragments.
@@ -384,9 +717,14 @@ eviction-driven identity pruning. Save/PB publication remains separately owned.
 ## Long sessions and inactive play
 
 Session length alone does not increase source/snapshot/bridge slot counts.
-The source and snapshot pools each have eight slots; the bridge has two.
-Texture and encoder resources are prepared for a request, reused per picture,
-and retired with that request. Logical texture-byte limits exclude opaque driver
+The source pool has eight slots, the snapshot pool seven (one source slot
+always cycles, so every VI still reaches the renderer callback that does the
+GPU work) and the bridge two. Texture and encoder resources are prepared for a
+request and reused per picture. The helper's encoder retires with the
+request; this process's GL names retire at the renderer's next armed VI (the
+next request's first), or with the renderer's context, because only the
+renderer's thread may delete them. Between requests Project64 therefore keeps
+one idle pool (about 60 MB at 1600x1200). Logical texture-byte limits exclude opaque driver
 and encoder allocations. A permanently unsafe native retirement quarantines
 one runtime pool and refuses subsequent requests in that PJ64 process instead
 of accumulating replacement pools. Closing PJ64 ends that process ownership.
@@ -396,7 +734,7 @@ of accumulating replacement pools. Closing PJ64 ends that process ownership.
 | Server absent | Passive lifecycle/lease control; the inactive delivery worker sleeps on events. Revocation is asynchronous. | No new capture after revocation; admitted work drains. An unsafe retirement stays quarantined until PJ64 exits. |
 | Playing with server | Input polling, source snapshots, selection, encoding, audio and fragment publication. | Fixed handoff queues; completed footage follows the configured recent-attempt window and byte/free-space budgets. Saved/PB files are separate. |
 | Motionless with game still advancing | Capture stays warm to preserve the first returning input and its picture; automatic idle changes retention. | Closed idle extents expire behind the pre-roll/GOP/AAC tail. Existing active history still follows normal budgets. |
-| PJ64 CPU paused | Input polling and control/media coordination continue. No advancing source boundary means no new source snapshot or selection. | Exact repeated input-read instants spool in bounded pending RAM; their compressed evidence grows with the pause. Game-menu pause can still animate and follows the preceding row. |
+| PJ64 CPU paused | Input polling and control/media coordination continue. No advancing source boundary means no new source snapshot or selection; the one or two pictures captured just before the pause wait for the next VI's renderer callback, so they are offered after resume and the frontier holds at them meanwhile. | Exact repeated input-read instants spool in bounded pending RAM; their compressed evidence grows with the pause. Game-menu pause can still animate and follows the preceding row. |
 | Explicit trainer pause | Demand is revoked and request-owned capture/media resources retire. | Resume starts a fresh request. Unproved cleanup retains its owner and prevents replacement. |
 | PJ64 closes or server shuts down | Revoke, drain, close the owned helper/audio/sink, then release storage ownership. | An unfinished owner remains explicit; shutdown does not declare cleanup successful merely because it was requested. |
 
@@ -442,6 +780,9 @@ source epoch to actual non-repeat pictures acknowledged by the mux and ledger.
 Encoder heartbeats cannot inflate this receipt.
 `automatic_idle` and `sessions_started` distinguish inactive retention from
 capture teardown and expose unexpected activation churn.
+`pump_paths` counts media ticks that skipped the channel (`quiet`), read only
+its status (`status`) or scanned offers and bridges (`scan`);
+`torn_status_reads` counts torn status reads the tick survived.
 Top-level `recording` is false when the GPU worker is preparing, unavailable or
 failed, even if the recorder still owns a waiting worker. `publication_error`
 retains the unavailable reason. `frame_source_health.publication` reports pending
@@ -463,14 +804,19 @@ tag0x20000000. These tags change no wire layout or capture operation.
 
 Use `tools/graphics_diagnostics.py --seconds 0 --output <new-folder>` to preserve
 read-only loaded paths and ControlV1 build identity. The wrapper writes
-`sm64_trainer_gfx.log` beside itself; an existing log can belong to an earlier
-build, so verify its PID/build/time before attribution.
+`sm64_trainer_gfx.log` (4 MiB, then `.1` and `.2`) and the startup-only
+`sm64_trainer_gfx.activation.log` beside itself ([profiling](profiling.md));
+an existing log can belong to an earlier build, so verify its PID/build/time
+before attribution.
 Never restart the user's applications to collect diagnostics.
 
 The current native encoder is NVIDIA NVENC. No CUDA Toolkit installation is
-required. Other GPU encoders and frozen-app helper dispatch remain unqualified;
-an unsupported GPU path must fail explicitly rather than run blocking capture
-on the emulation thread. The portable extension seam is the encoded packet and
+required. Other GPU encoders remain unqualified; an unsupported GPU keeps the
+desktop grab rather than run blocking capture on the emulation thread. The
+installed app starts its helper as itself with `--gpu-helper` (`gui_entry.py`);
+a source run starts the base interpreter on the helper module
+(`core/childproc.py::python_child`), so the helper is the server's direct
+child and keeps STARTF_FORCEOFFFEEDBACK. The portable extension seam is the encoded packet and
 exact custody contract, not a second timing model.
 
 ## What failed and why

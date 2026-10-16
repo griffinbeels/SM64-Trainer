@@ -1,0 +1,26 @@
+{
+  "name": "sm64-community-service",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "test:runtime": "wrangler deploy --dry-run --outdir .wrangler/dry-run && node test/runtime.js && node test/runtime.js --public-beta",
+    "catalog:check": "node scripts/validate-catalog.js",
+    "build": "node scripts/build.js",
+    "check": "npm run build && wrangler deploy --dry-run",
+    "dev": "npm run build && wrangler dev --local",
+    "migrate": "wrangler d1 migrations apply community --local"
+  },
+  "dependencies": {
+    "jose": "^6.1.3",
+    "@supabase/supabase-js": "^2.99.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12",
+    "wrangler": "^4.107.0"
+  }
+}

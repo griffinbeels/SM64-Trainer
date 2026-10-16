@@ -18,6 +18,9 @@ RUFF = "0.16.6"
 ESLINT = "9.39.5"
 BASELINE = ROOT / "tools/verification/lint-baseline.json"
 SUFFIXES = {".py", ".js", ".mjs"}
+# CreateProcessW permits 32,767 UTF-16 units including NUL. Leave headroom
+# for uvx's subordinate Ruff command while measuring the executable we launch.
+COMMAND_BUDGET = 30_000
 
 
 class Unavailable(RuntimeError):
@@ -34,6 +37,42 @@ def run(argv: list[str], root: Path = ROOT) -> subprocess.CompletedProcess:
                               timeout=60, **quiet_spawn_kwargs())
     except (OSError, subprocess.SubprocessError) as exc:
         raise Unavailable(str(exc)) from exc
+
+
+def command_units(argv: list[str]) -> int:
+    """Windows quoting, UTF-16 code units, and the terminating NUL."""
+    return len(subprocess.list2cmdline(argv).encode("utf-16-le")) // 2 + 1
+
+
+def argument_batches(command: list[str], files: list[str]) -> list[list[str]]:
+    """Validate the complete scope before any batch (including fixes) runs."""
+    executable = shutil.which(command[0])
+    if not executable:
+        raise Unavailable(f"missing executable: {command[0]}")
+    prefix = [executable, *command[1:]]
+    base = command_units(prefix)
+    if base > COMMAND_BUDGET:
+        raise Unavailable("linter options exceed the command-line budget")
+    batches, current, used = [], prefix.copy(), base
+    for name in files:
+        # A one-argument command's NUL has the same cost as the separator
+        # added here; quoting/escaping can cost more than len(name).
+        extra = command_units([name])
+        if base + extra > COMMAND_BUDGET:
+            raise Unavailable(f"single linter argument exceeds the command-line budget: {name[:120]}")
+        if used + extra > COMMAND_BUDGET:
+            batches.append(current)
+            current, used = prefix.copy(), base
+        current.append(name)
+        used += extra
+    if len(current) > len(prefix):
+        batches.append(current)
+    return batches
+
+
+def run_batches(command: list[str], files: list[str], root: Path):
+    for argv in argument_batches(command, files):
+        yield run(argv, root)
 
 
 def git(*args: str, root: Path = ROOT) -> str:
@@ -98,12 +137,13 @@ def lint(files: list[str], fix: bool = False, root: Path = ROOT) -> list[dict]:
         # Only import removal is approved here; Ruff's other safe fixes can
         # alter expressions. Never use --unsafe-fixes or whole-tree fixes.
         if fix:
-            fixed = run([*command, "--fix", "--fixable", "F401", *python], root)
-            parse_result(fixed)
-        for row in parse_result(run([*command, *python], root)):
-            findings.append({"path": Path(row["filename"]).resolve().relative_to(root.resolve()).as_posix(),
-                             "line": row["location"]["row"], "rule": row["code"],
-                             "message": row["message"]})
+            for fixed in run_batches([*command, "--fix", "--fixable", "F401"], python, root):
+                parse_result(fixed)
+        for result in run_batches(command, python, root):
+            for row in parse_result(result):
+                findings.append({"path": Path(row["filename"]).resolve().relative_to(root.resolve()).as_posix(),
+                                 "line": row["location"]["row"], "rule": row["code"],
+                                 "message": row["message"]})
     if javascript:
         package = root / "tools/verification/node_modules/eslint"
         try:
@@ -116,15 +156,15 @@ def lint(files: list[str], fix: bool = False, root: Path = ROOT) -> list[dict]:
                    str(root / "eslint.config.mjs"), "--no-warn-ignored", "--format", "json"]
         # No ESLint fixes are approved initially: existing rules include
         # suggestion fixes requiring semantic review.
-        result = run([*command, *javascript], root)
-        rows = parse_result(result)
-        if result.returncode == 1 and not any(row.get("messages") for row in rows):
-            raise Unavailable("ESLint failed without diagnostics")
-        for row in rows:
-            for message in row["messages"]:
-                findings.append({"path": Path(row["filePath"]).resolve().relative_to(root.resolve()).as_posix(),
-                                 "line": message.get("line", 1), "rule": message.get("ruleId") or "parse-error",
-                                 "message": message["message"]})
+        for result in run_batches(command, javascript, root):
+            rows = parse_result(result)
+            if result.returncode == 1 and not any(row.get("messages") for row in rows):
+                raise Unavailable("ESLint failed without diagnostics")
+            for row in rows:
+                for message in row["messages"]:
+                    findings.append({"path": Path(row["filePath"]).resolve().relative_to(root.resolve()).as_posix(),
+                                     "line": message.get("line", 1), "rule": message.get("ruleId") or "parse-error",
+                                     "message": message["message"]})
     return findings
 
 

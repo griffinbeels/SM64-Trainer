@@ -1,6 +1,7 @@
 // Review state belongs to the server's replay lifetime, not browser storage.
 import { useEffect, useState } from "preact/hooks";
 import { retainDraft, readDraft, acknowledgeDraft } from "./reviewdraft.js";
+import { localFetch } from "./api.js";
 
 const entries = new Map();
 const endpoint = id => `/api/attempts/${id}/replay/review-state`;
@@ -39,7 +40,7 @@ async function writePending(entry, id, notify) {
   while (entry.dirty) {
     const { state, edit } = takeWrite(entry);
     try {
-      const response = await fetch(endpoint(id), { method: "PUT", keepalive: true,
+      const response = await localFetch(endpoint(id), { method: "PUT", keepalive: true,
         headers: { "Content-Type": "application/json",
           ...(edit ? { "X-Replay-Review-Edit": edit } : {}) }, body: JSON.stringify(state) });
       if (!response.ok) throw await rejectedWrite(response);

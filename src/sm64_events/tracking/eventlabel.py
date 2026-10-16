@@ -72,7 +72,7 @@ the labelled STREAM, deciding what to show, not what CAN be shown.
 """
 from collections.abc import Callable
 
-from sm64_events.core.timefmt import format_igt
+from sm64_events.core.timefmt import format_igt_short
 from sm64_events.detectors.anchors import PAUSE_WARP_MIN_STREAK
 from sm64_events.detectors.counter_epoch import (COURSE_START_AREA,
                                                  LEVEL_LOAD_TAIL_FRAMES)
@@ -546,14 +546,14 @@ def _practice_reset(payload: dict) -> str:
     igt = payload.get("igt_frames_before")
     if igt is None:
         return "Reset the level"
-    return f"Reset the level after {format_igt(igt)}"
+    return f"Reset the level after {format_igt_short(igt)}"
 
 
 def _state_loaded(payload: dict) -> str:
     igt = payload.get("igt_frames_restored")
     if igt is None:
         return "Loaded a savestate"
-    return f"Loaded a savestate at {format_igt(igt)}"
+    return f"Loaded a savestate at {format_igt_short(igt)}"
 
 
 def _game_reset(payload: dict) -> str:

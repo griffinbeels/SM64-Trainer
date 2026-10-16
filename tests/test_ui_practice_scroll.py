@@ -21,6 +21,23 @@ def _emit(service, kind, frame, payload):
         timestamp_utc=datetime.now(timezone.utc), payload=payload)))
 
 
+def _until(page, expression, what):
+    """Poll up to the run's wait bound. The scroll back to the top is smooth
+    and follows the celebration hold, so a fixed pause read it mid-flight on
+    a loaded machine (scrollY 93, not 0: stress run 2026-09-23)."""
+    import time
+    from uilab.driver import default_wait_ms
+    deadline = time.monotonic() + default_wait_ms() / 1000
+    while not page.evaluate(expression):
+        assert time.monotonic() < deadline, f"timed out waiting until {what}"
+        page.wait_ms(50)
+
+
+def _at_top(page):
+    _until(page, "window.scrollY === 0", "the page scrolls back to the top")
+    assert page.evaluate("window.scrollY") == 0
+
+
 def _scroll_down(page):
     page.evaluate("window.scrollTo({top: 550, behavior: 'instant'})")
     page.wait_ms(150)
@@ -60,8 +77,7 @@ def test_success_on_different_entity_scrolls_viewport():
             viewport=(width, 800)) as page:
         page.goto(base + "/ui/index.html")
         page.wait_for(".log-card")
-        page.wait_ms(700)
-        assert page.evaluate("document.querySelectorAll('.log-card').length") >= 2
+        _until(page, "document.querySelectorAll('.log-card').length >= 2", "two log cards render")
 
         _scroll_down(page)
         _star_success(page, service, 4, 9000)
@@ -74,18 +90,18 @@ def test_success_on_different_entity_scrolls_viewport():
         page.wait_ms(1000)
         assert page.evaluate("window.scrollY") > 150
         _star_success(page, service, 3, 11000)
-        assert page.evaluate("window.scrollY") == 0
+        _at_top(page)
 
         _scroll_down(page)
         _star_success(page, service, 3, 12000)
         assert page.evaluate("window.scrollY") > 150
         _segment_success(page, service, 16000)
-        assert page.evaluate("window.scrollY") == 0
+        _at_top(page)
 
         _scroll_down(page)
         _segment_success(page, service, 17000)
         assert page.evaluate("window.scrollY") > 150
         page.emulate_motion(True)
         _segment_success(page, service, 18000, level=17, course=16)
-        assert page.evaluate("window.scrollY") == 0
+        _at_top(page)
         assert not page.problems(), page.problems()

@@ -1,3 +1,4 @@
+import { localFetch } from "/ui/api.js";
 // src/sm64_events/ui/tunefeed.js — the feed & disclosure inspector, served at
 // /ui/tunefeed.html.
 //
@@ -76,7 +77,7 @@ function Card({ card, open, onToggle }) {
       <div class="log-card-body">
         <table class="attempt-table"><tbody>
           ${[1, 2, 3, 4, 5].map((row) => html`<tr key=${row}>
-            <td>#${row}</td><td class="attempt-result">✓ 0'11"${30 + row}</td>
+            <td>#${row}</td><td class="attempt-result">✓ 11"${30 + row}</td>
             <td>Standard</td></tr>`)}
         </tbody></table>
       </div>
@@ -121,7 +122,7 @@ function Inspector() {
   async function saveToRepo() {
     setStatus({ kind: "busy", text: "Saving..." });
     try {
-      const response = await fetch("/api/tuning/feed", {
+      const response = await localFetch("/api/tuning/feed", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ values }),
       });

@@ -4,6 +4,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -12,6 +13,8 @@ from sm64_events.bootstrap.installer import (APP_EXE, create_desktop_shortcut,
                                              install_tree, latest_release,
                                              launch_app, run_install)
 from sm64_events.core.update_plan import INSTALLED_MANIFEST, ZIP_ASSET
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from make_manifest import make_manifest  # noqa: E402
 
 
 class _Resp(io.BytesIO):
@@ -31,6 +34,8 @@ class _Resp(io.BytesIO):
 def _http(routes):
     def opener(req):
         url = req.full_url if hasattr(req, "full_url") else req
+        if "/releases?" in url and LATEST in routes:
+            return _Resp(b"[" + routes[LATEST] + b"]")
         if url not in routes:
             raise OSError(f"unmapped url {url}")
         return _Resp(routes[url])
@@ -40,6 +45,7 @@ def _http(routes):
 def _release_json(tag, assets):
     return json.dumps({
         "tag_name": tag,
+        "draft": False, "prerelease": "-" in tag, "body": "",
         "assets": [{"name": n, "browser_download_url": u}
                    for n, u in assets.items()]}).encode()
 
@@ -91,17 +97,25 @@ def _zip_bytes(files):
     return buf.getvalue()
 
 
+def _app_files(exe):
+    return {APP_EXE: exe, "_internal/python313.dll": b"PYTHON", "_internal/ffmpeg.exe": b"FFMPEG",
+            "_internal/sm64_events/ui/index.html": b"UI", **{
+                "_internal/sm64_events/data/plugin/" + name: b"NATIVE" for name in
+                ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")}}
+
+
 def test_install_tree_fresh_and_overwrite(tmp_path):
     zp = tmp_path / "full.zip"
-    zp.write_bytes(_zip_bytes({APP_EXE: b"EXE-V1", "_internal/a.dll": b"A"}))
+    zp.write_bytes(_zip_bytes(_app_files(b"EXE-V1")))
     target = tmp_path / "Programs" / "SM64Trainer"
-    exe = install_tree(zp, '{"schema": 1}', target)
+    manifest = make_manifest(zp, "2.0.0")
+    exe = install_tree(zp, manifest, target)
     assert exe == target / APP_EXE
     assert exe.read_bytes() == b"EXE-V1"
-    assert (target / INSTALLED_MANIFEST).read_text() == '{"schema": 1}'
+    assert (target / INSTALLED_MANIFEST).read_text() == manifest
     # reinstall over an existing dir (repair path)
-    zp.write_bytes(_zip_bytes({APP_EXE: b"EXE-V2"}))
-    exe = install_tree(zp, '{"schema": 1}', target)
+    zp.write_bytes(_zip_bytes(_app_files(b"EXE-V2")))
+    exe = install_tree(zp, make_manifest(zp, "2.0.0"), target)
     assert exe.read_bytes() == b"EXE-V2"
     assert not target.with_name(target.name + ".old").exists()
     assert not target.with_name(target.name + ".new").exists()
@@ -173,8 +187,10 @@ class _UI:
 
 def test_run_install_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lad"))
-    blob = _zip_bytes({APP_EXE: b"EXE", "_internal/a.dll": b"A"})
-    manifest = '{"schema": 1, "version": "2.0.0", "files": []}'
+    blob = _zip_bytes(_app_files(b"EXE"))
+    archive = tmp_path / "source.zip"
+    archive.write_bytes(blob)
+    manifest = make_manifest(archive, "2.0.0")
     routes = {
         LATEST: _release_json("v2.0.0", FULL_ASSETS),
         "https://dl/full.zip": blob,
@@ -290,13 +306,13 @@ def test_install_tree_rejects_zip_without_exe(tmp_path):
     working install (M-3)."""
     import pytest
     target = tmp_path / "Programs" / "SM64Trainer"
-    good = _zip_bytes({APP_EXE: b"GOOD"})
+    good = _zip_bytes(_app_files(b"GOOD"))
     zp = tmp_path / "full.zip"
     zp.write_bytes(good)
-    install_tree(zp, '{"schema": 1}', target)
+    install_tree(zp, make_manifest(zp, "2.0.0"), target)
     zp.write_bytes(_zip_bytes({"_internal/only.dll": b"X"}))   # no exe
-    with pytest.raises(RuntimeError):
-        install_tree(zp, '{"schema": 1}', target)
+    with pytest.raises((RuntimeError, ValueError)):
+        install_tree(zp, make_manifest(zp, "2.0.0"), target)
     assert (target / APP_EXE).read_bytes() == b"GOOD"          # intact
 
 
@@ -306,9 +322,9 @@ def test_install_tree_restores_old_when_swap_fails(tmp_path, monkeypatch):
     import pytest
     target = tmp_path / "Programs" / "SM64Trainer"
     zp = tmp_path / "full.zip"
-    zp.write_bytes(_zip_bytes({APP_EXE: b"V1"}))
-    install_tree(zp, '{"schema": 1}', target)
-    zp.write_bytes(_zip_bytes({APP_EXE: b"V2"}))
+    zp.write_bytes(_zip_bytes(_app_files(b"V1")))
+    install_tree(zp, make_manifest(zp, "2.0.0"), target)
+    zp.write_bytes(_zip_bytes(_app_files(b"V2")))
     real = os.replace
 
     def fail_fresh_move(src, dst):
@@ -319,7 +335,7 @@ def test_install_tree_restores_old_when_swap_fails(tmp_path, monkeypatch):
     import sm64_events.bootstrap.installer as installer_mod
     monkeypatch.setattr(installer_mod.os, "replace", fail_fresh_move)
     with pytest.raises(RuntimeError):
-        install_tree(zp, '{"schema": 1}', target)
+        install_tree(zp, make_manifest(zp, "2.0.0"), target)
     monkeypatch.setattr(installer_mod.os, "replace", real)
     assert (target / APP_EXE).read_bytes() == b"V1"            # restored
 

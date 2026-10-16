@@ -20,6 +20,11 @@ _DELIVERY = dict(enumerate((
     "counter exhausted", "source image missing", "source record invalid",
     "source stamp count mismatch", "source stamp length mismatch",
     "source rejected by client", "source epoch changed", "source admission refused",
+    # The ghost copy's own reasons: only ever in the twin status, never the
+    # channel's terminal reason.
+    "ghost copy snapshot failed", "ghost copy texture import failed",
+    "ghost copy bridge failed", "ghost copy key abandoned",
+    "capture layer predates ghost copies",
 ), 10000))
 
 
@@ -44,6 +49,21 @@ def failure_snapshot(exc, *, frontier, adapter, output):
     """
     result = dict(observed_unix_s=time.time(), frontier=frontier,
                   error=str(exc)[:512])
+    from sm64_events.replay.gpuencoder import EncoderFailure, Result
+    if isinstance(exc, EncoderFailure):
+        code = exc.result
+        result["encoder_failure"] = dict(
+            operation=getattr(exc, "operation", None),
+            # The existing protocol can synthesize STATE/QUARANTINE for
+            # worker/controller faults. Do not call this a native return.
+            result_namespace="encoder_protocol",
+            result=int(code) if isinstance(code, int) else None,
+            result_name=(Result(code).name if isinstance(code, int) and code in Result._value2member_map_ else None),
+            native_status=exc.status,
+            native_status_state="available" if exc.status is not None else "unavailable",
+            worker_disposal_required=exc.worker_disposal_required,
+            status_error=exc.status_error,
+        )
     for name in ("state", "reason"):
         value = getattr(exc, name, None)
         if isinstance(value, int):
@@ -71,7 +91,7 @@ class CaptureTimings:
         self.stages = {name: [0, 0.0, 0.0, 0.0] for name in (
             "channel", "encoder", "sink_prepare", "first_offer", "media_setup", "tick", "between_ticks",
             "audio_drain", "adapter_pump", "heartbeat", "media_drain", "media_age", "report",
-            "mux_video", "mux_audio", "ledger_feed",
+            "mux_video", "mux_audio", "ledger_feed", "copy_lane",
         )}
         self.last_tick_end = None
 

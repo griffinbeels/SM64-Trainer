@@ -11,14 +11,18 @@ from __future__ import annotations
 
 import ctypes as C
 from dataclasses import dataclass
+import logging
 import os
 import platform
 import sys
 import threading
+import time
 
 from sm64_events.replay.gpudiagnostics import native_reason
 from sm64_events.replay.capturecontrol import _process_creation
 from sm64_events.replay.ownedclose import close_after_error, release, release_many
+
+log = logging.getLogger(__name__)
 
 U8, U16, U32, U64, I32, I64 = (
     C.c_uint8,
@@ -28,7 +32,16 @@ U8, U16, U32, U64, I32, I64 = (
     C.c_int32,
     C.c_int64,
 )
-VERSION, HEADER_BYTES, MAX_OFFERS, STAMP_BYTES = 1, 2048, 8, 2048
+# VERSION is gpu_channel.h's GC_CHANNEL_VERSION. 2: the encoder helper creates
+# the bridge textures (renderer-thread capture), so a version-1 wrapper and
+# this trainer cannot share a channel. 3 (2026-10-03): the ghost copy's twin
+# block follows the payloads and the header names its two twin textures.
+VERSION, HEADER_BYTES, MAX_OFFERS, STAMP_BYTES = 3, 2048, 8, 2048
+# The twin block: client, status, two bridges, two receipts, 128 bytes each.
+TWIN_BYTES = 768
+TWIN_CLIENT, TWIN_STATUS, TWIN_BRIDGES, TWIN_RECEIPTS = 0, 128, 256, 512
+TWIN_CLIENT_OFF, TWIN_CLIENT_READY = 0, 1
+TWIN_OFF, TWIN_PREPARING, TWIN_ACTIVE, TWIN_STOPPED = 0, 1, 2, 3
 MAX_MAP, MAX_PACKET, MAX_DIMENSION = 64 * 1024 * 1024, 4 * 1024 * 1024, 8192
 MAGIC = b"SM64GPC1"
 NAMESPACE = "Local\\SM64Trainer.GpuChannel.v1."
@@ -113,7 +126,10 @@ class Header(Wire):
             ("texture_names", (U16 * 128) * 2),
             ("publication_offset", U32),
             ("publication_bytes", U32),
-            ("reserved", U8 * 1208),
+            ("twin_offset", U32),
+            ("twin_bytes", U32),
+            ("twin_texture_names", (U16 * 128) * 2),
+            ("reserved", U8 * 688),
         ]
     )
 
@@ -247,12 +263,42 @@ class Publication(Wire):
     ]
 
 
+class TwinClientWire(Wire):
+    """gc_twin_client: READY once the twin helper created both textures."""
+
+    _fields_ = [
+        ("seq", U32),
+        ("state", U32),
+        ("lane", U64),
+        ("nonce_lo", U64),
+        ("nonce_hi", U64),
+        ("epoch", U32),
+        ("generation", U32),
+        ("reserved", U8 * 88),
+    ]
+
+
+class TwinStatusWire(Wire):
+    """gc_twin_status: resolved_pts says every selected picture at or before
+    it has its final twin outcome (a bridge or a miss)."""
+
+    _fields_ = (
+        [(n, U32) for n in ("seq", "state", "reason", "reserved0")]
+        + [(n, U64) for n in ("lane", "resolved_pts", "copied", "missed")]
+        + [("nonce_lo", U64), ("nonce_hi", U64), ("epoch", U32), ("generation", U32)]
+        + [("reserved", U8 * 56)]
+    )
+
+
 assert C.sizeof(Publication) == 128
 assert C.sizeof(ClientWire) == 128
+assert C.sizeof(TwinClientWire) == C.sizeof(TwinStatusWire) == 128
 assert [
     C.sizeof(t) for t in (Header, Status, OfferWire, Decision, BridgeWire, Receipt)
 ] == [2048, 256, 256, 128, 128, 128]
 assert Header.table.offset == 192 and Header.texture_names.offset == 320
+assert Header.twin_offset.offset == 840 and Header.twin_texture_names.offset == 848
+assert Header.reserved.offset == 1360
 
 
 class ProtocolError(ValueError):
@@ -262,6 +308,17 @@ class ProtocolError(ValueError):
 def _require(test, message):
     if not test:
         raise ProtocolError(message)
+
+
+class LayerVersionMismatch(ProtocolError):
+    """The installed capture layer and this trainer come from different builds."""
+
+    def __init__(self, found):
+        self.found = found
+        super().__init__(
+            f"the capture layer in Project64 speaks GPU channel version {found} and this "
+            f"trainer speaks version {VERSION}: they come from different builds. Close "
+            "Project64 so the trainer can update the capture layer")
 
 
 def _text(value):
@@ -277,14 +334,10 @@ def _text(value):
 
 
 def validate_header(h: Header, mapped_bytes: int):
-    _require(
-        h.seq
-        and not h.seq & 1
-        and bytes(h.magic) == MAGIC
-        and h.version == VERSION
-        and h.header_bytes == HEADER_BYTES,
-        "unsupported or incomplete header",
-    )
+    _require(h.seq and not h.seq & 1 and bytes(h.magic) == MAGIC, "unsupported or incomplete header")
+    if h.version != VERSION:
+        raise LayerVersionMismatch(h.version)
+    _require(h.header_bytes == HEADER_BYTES, "unsupported or incomplete header")
     _require(
         h.producer_pid
         and h.owner_pid
@@ -332,6 +385,9 @@ def validate_header(h: Header, mapped_bytes: int):
     _require(total_stamp <= STAMP_BYTES, "stamp budget")
     names = tuple(_text(n) for n in h.texture_names)
     _require(names[0] != names[1], "duplicate texture names")
+    twins = twin_texture_names(h)
+    _require(twins[0] != twins[1] and not set(twins) & set(names),
+             "duplicate twin texture names")
     sample = ((h.width + 7) // 8) * ((h.height + 7) // 8) * 4
     _require(h.sample_bytes == h.sample_capacity == sample, "sample capacity")
     expected = {
@@ -348,14 +404,24 @@ def validate_header(h: Header, mapped_bytes: int):
         "payload_offset": HEADER_BYTES + 256 + h.offer_count * 384 + 768,
         "payload_stride": (STAMP_BYTES + sample + 63) & ~63,
     }
+    # The twin block follows the last payload; present in every v3 channel.
+    expected["twin_offset"] = (
+        expected["payload_offset"] + h.offer_count * expected["payload_stride"]
+    )
+    expected["twin_bytes"] = TWIN_BYTES
     for key, value in expected.items():
         _require(getattr(h, key) == value, "noncanonical offset: " + key)
-    total = h.payload_offset + h.offer_count * h.payload_stride
+    total = h.twin_offset + TWIN_BYTES
     _require(
         h.total_bytes == total <= h.ram_budget <= MAX_MAP and total <= mapped_bytes,
         "mapping budget",
     )
     return names
+
+
+def twin_texture_names(h: Header):
+    """The ghost copy's two textures, which the twin helper creates."""
+    return tuple(_text(n) for n in h.twin_texture_names)
 
 
 def _kernel():
@@ -413,6 +479,16 @@ class Bridge:
     force_idr: bool
 
 
+@dataclass(frozen=True, slots=True)
+class TwinStatus:
+    state: int
+    reason: int
+    lane: int
+    resolved_pts: int
+    copied: int
+    missed: int
+
+
 class Client:
     """One serialized media-worker owner. No read or write waits for its peer.
 
@@ -453,6 +529,15 @@ class Client:
         ) = 0
         self._last_pts = None
         self._last_bridge_token = self._last_bridge_serial = 0
+        self._twin_lane = 0
+        self._twin_pending = {}
+        self._twin_seen = [0] * 2
+        self._last_twin_token = self._last_twin_serial = 0
+        self._last_twin_pts = None
+        # Setup refuses a torn status at once; the media tick opts into a grace.
+        self._status = self._torn_since = None
+        self._torn_grace = 0.0
+        self._torn_streak = self.torn_status_reads = 0
         lo, hi = nonce
         _require(
             type(lo) is int
@@ -480,6 +565,7 @@ class Client:
         h = self._stable(0, Header)
         _require(h is not None, "torn header")
         self.texture_names = validate_header(h, MAX_MAP)
+        self.twin_texture_names = twin_texture_names(h)
         _require(
             (h.nonce_lo, h.nonce_hi, h.generation) == (lo, hi, generation)
             and (epoch is None or h.epoch == epoch)
@@ -580,7 +666,9 @@ class Client:
         return U32.from_address(self._view + offset).value
 
     def _stable(self, offset, kind):
-        for _ in range(3):
+        for attempt in range(3):
+            if attempt:
+                time.sleep(0)  # let a preempted writer finish its copy
             seq = self._word(offset)
             if seq & 1:
                 continue
@@ -611,11 +699,47 @@ class Client:
             "immutable header changed",
         )
 
+    def tolerate_torn_status(self, grace):
+        """The media tick's policy: a torn status is no news for up to grace s.
+
+        Native rewrites the status at up to 60 Hz and holds its word odd across
+        the copy, so a writer preempted mid-copy (a machine-wide stall) tears
+        every read until it runs again. Three such reads used to end hours-long
+        runs. offers() and bridges() already defer a torn publication; status
+        now matches them. A writer that stays odd past grace still fails.
+        """
+        if not 0 < grace < 60:
+            raise ValueError("bounded torn-status grace required")
+        self._torn_grace = grace
+
+    def _torn(self):
+        now = time.monotonic()
+        if self._status is None or not self._torn_grace:
+            raise BlockingIOError("torn producer status")
+        if self._torn_since is None:
+            self._torn_since, self._torn_streak = now, 0
+        held = now - self._torn_since
+        if held > self._torn_grace:
+            raise BlockingIOError(
+                f"torn producer status for {held:.3f} s ({self._torn_streak} reads)"
+            )
+        self._torn_streak += 1
+        self.torn_status_reads += 1
+        return self._status
+
     def status(self):
         self._check()
         s = self._stable(self._header.status_offset, Status)
         if s is None:
-            raise BlockingIOError("torn producer status")
+            return self._torn()
+        if self._torn_since is not None:
+            log.info(
+                "GPU channel status was torn for %d reads over %.1f ms; "
+                "reused the last good status",
+                self._torn_streak,
+                (time.monotonic() - self._torn_since) * 1000,
+            )
+            self._torn_since = None
         self._identity(s)
         _require(
             not s.reserved0
@@ -625,7 +749,27 @@ class Client:
         )
         if s.state in {CLOSED, FAULT}:
             raise ChannelStopped(s.state, s.reason)
+        self._status = s
         return s
+
+    def change_words(self):
+        """One aligned U32 load per record the media tick reads: status,
+        publication, bridge 0, bridge 1.
+
+        Every producer write holds its word odd and leaves it two higher, and
+        each offer or bridge publish/retire also moves the publication word
+        (gpu_channel.cpp). An unchanged EVEN word therefore proves its record
+        unchanged, so the tick can skip the slot scans. Liveness and the
+        immutable header are still checked on every call.
+        """
+        self._check()
+        h, view = self._header, self._view
+        return (
+            U32.from_address(view + h.status_offset).value,
+            U32.from_address(view + h.publication_offset).value,
+            U32.from_address(view + h.bridge_offset).value,
+            U32.from_address(view + h.bridge_offset + 128).value,
+        )
 
     def _scan_offers(self):
         h = self._header
@@ -918,6 +1062,141 @@ class Client:
         self._write(h.receipt_offset + bridge.texture_index * 128, r)
         del self._bridge_pending[bridge.texture_index]
 
+    # The ghost copy's twin block. None of these calls reads or changes the
+    # clean records above: a twin fault never becomes a clean channel error.
+    def _twin_client(self, state, lane):
+        self._check()
+        if not self._client_open:
+            raise RuntimeError("channel client is not open")
+        h = self._header
+        self._write(
+            h.twin_offset + TWIN_CLIENT,
+            TwinClientWire(
+                state=state,
+                lane=lane,
+                nonce_lo=h.nonce_lo,
+                nonce_hi=h.nonce_hi,
+                epoch=h.epoch,
+                generation=h.generation,
+            ),
+        )
+
+    def twin_request(self, lane: int):
+        """READY: the twin helper opened both twin textures. Each READY names a
+        new, larger lane so the producer never mistakes it for an old one."""
+        _require(type(lane) is int and self._twin_lane < lane < 2**64, "twin lane")
+        self._twin_client(TWIN_CLIENT_READY, lane)
+        self._twin_lane = lane
+
+    def twin_release(self):
+        self._twin_client(TWIN_CLIENT_OFF, 0)
+
+    def twin_status(self) -> TwinStatus:
+        """A torn read raises BlockingIOError: no news this tick, never a stale
+        resolved_pts that could turn a published bridge into a miss."""
+        self._check()
+        s = self._stable(self._header.twin_offset + TWIN_STATUS, TwinStatusWire)
+        if s is None:
+            raise BlockingIOError("torn twin status")
+        if not s.seq:
+            return TwinStatus(TWIN_OFF, 0, 0, 0, 0, 0)  # never written
+        self._identity(s)
+        _require(
+            not s.reserved0
+            and not any(s.reserved)
+            and s.state in {TWIN_OFF, TWIN_PREPARING, TWIN_ACTIVE, TWIN_STOPPED},
+            "twin status fields",
+        )
+        return TwinStatus(s.state, s.reason, s.lane, s.resolved_pts, s.copied, s.missed)
+
+    def _twin_words(self):
+        base = self._header.twin_offset + TWIN_BRIDGES
+        return self._word(base), self._word(base + 128)
+
+    def _scan_twin_bridges(self):
+        result = []
+        base = self._header.twin_offset + TWIN_BRIDGES
+        for i in range(2):
+            b = self._stable(base + i * 128, BridgeWire)
+            if b is None:
+                return None
+            if not b.ready or b.token == self._twin_seen[i]:
+                continue
+            self._identity(b)
+            _require(
+                b.ready == 1
+                and b.token
+                and b.occurrence
+                and b.encode_serial
+                and b.nominal_duration
+                and b.texture_index == i
+                and not b.flags
+                and not any(b.reserved)
+                and b.pts + b.nominal_duration <= 2**63 - 1,
+                "twin bridge fields",
+            )
+            _require(i not in self._twin_pending, "unacknowledged twin bridge replacement")
+            result.append(
+                Bridge(i, b.token, b.occurrence, b.encode_serial, b.pts,
+                       b.nominal_duration, False)
+            )
+        return result
+
+    def twin_bridges(self) -> list[Bridge]:
+        """New twin bridges in token order. Tokens need not be contiguous: a
+        missed picture publishes nothing. Both slots come from one snapshot
+        (neither word moved during the scan), so a later bridge can never be
+        taken before an earlier one published into the other slot."""
+        self._check()
+        for _ in range(3):
+            before = self._twin_words()
+            if (before[0] | before[1]) & 1:
+                time.sleep(0)
+                continue
+            result = self._scan_twin_bridges()
+            if result is None or self._twin_words() != before:
+                continue
+            result.sort(key=lambda b: b.token)
+            token, serial, pts = (
+                self._last_twin_token, self._last_twin_serial, self._last_twin_pts,
+            )
+            for value in result:
+                _require(
+                    value.token > token
+                    and value.encode_serial > serial
+                    and (pts is None or value.pts > pts),
+                    "reordered twin bridge",
+                )
+                token, serial, pts = value.token, value.encode_serial, value.pts
+            for value in result:
+                self._twin_pending[value.texture_index] = value
+                self._twin_seen[value.texture_index] = value.token
+            self._last_twin_token, self._last_twin_serial = token, serial
+            self._last_twin_pts = pts
+            return result
+        raise BlockingIOError("torn twin bridge publication")
+
+    def acknowledge_twin_metadata(self, bridge: Bridge):
+        self._check()
+        _require(
+            self._twin_pending.get(bridge.texture_index) == bridge,
+            "stale or repeated twin metadata receipt",
+        )
+        h = self._header
+        r = Receipt(
+            accepted=1,
+            token=bridge.token,
+            occurrence=bridge.occurrence,
+            encode_serial=bridge.encode_serial,
+            nonce_lo=h.nonce_lo,
+            nonce_hi=h.nonce_hi,
+            epoch=h.epoch,
+            generation=h.generation,
+            texture_index=bridge.texture_index,
+        )
+        self._write(h.twin_offset + TWIN_RECEIPTS + bridge.texture_index * 128, r)
+        del self._twin_pending[bridge.texture_index]
+
     def close(self):
         if threading.current_thread() != self._thread:
             raise RuntimeError("channel close belongs to its serialized media worker")
@@ -959,6 +1238,7 @@ class Client:
             raise errors[0]
         self._pending.clear()
         self._bridge_pending.clear()
+        self._twin_pending.clear()
 
     def __enter__(self):
         return self

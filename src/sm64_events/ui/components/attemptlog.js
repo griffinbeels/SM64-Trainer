@@ -11,12 +11,14 @@
 //
 // Moved verbatim, comments included -- the evidence in them is the point.
 // No behaviour change.
-import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { createContext, h } from "preact";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { send } from "../api.js";
+import { send, localFetch } from "../api.js";
 import { AttemptDrawer } from "./attemptdrawer.js";
-import { displayName } from "../entitysection.js";
+import { displayName, sectionPbByStrat } from "../entitysection.js";
+import { celebrationsEnabled } from "../celebrations.js";
+import { timeSaveText } from "../pbcrown.js";
 import { StatMenu } from "./statmenu.js";
 import { RankIcon } from "./rankicon.js";
 import { StratPicker } from "./stratpicker.js";
@@ -27,12 +29,29 @@ import { PbAction, PbReplayNotice, usePbReplay } from "./pbreplay.js";
 
 const html = htm.bind(h);
 
+// `loaded`: a save state ended it (attempt rules 2) -- not a reset he chose.
 const OUTCOME_LABEL = { success: "✔", reset: "✘ reset",
+  loaded: "⟲ loaded save state",
   hard_reset: "✘ hard reset", abandoned: "– abandoned", death: "✘ death" };
 
 export const SORT_OPTIONS = [
   ["newest", "newest first"], ["oldest", "oldest first"],
   ["fastest", "fastest first"], ["slowest", "slowest first"]];
+
+// Removed rows have their own per-card reveal. The log's preferences apply
+// independently, including while removed rows are being shown.
+export function attemptHiddenByDefault(a) {
+  return Boolean(a.cleared || a.outcome === "abandoned");
+}
+
+// Shared by star/segment cards, the unassigned bucket and graph-pick membership.
+// Missing preferences retain the default: saved-state entries are hidden.
+export function attemptMatchesLogFilters(a, ui) {
+  const savestated = a.outcome === "loaded" || a.state_loads > 0
+    || a.anchor_type === "state_loaded" || a.invalid_reason === "save_state";
+  return !(ui.hideSavestates !== false && savestated)
+    && !(ui.hideResets && ["reset", "hard_reset", "death"].includes(a.outcome));
+}
 
 // Row time on the current clock: completion time for successes, how-far-in
 // for failures. Nulls sort last in both directions.
@@ -64,6 +83,148 @@ export function delta(frames) {
   const cls = frames > 0 ? "delta-up" : "delta-down";
   const sign = frames > 0 ? "+" : "";
   return html` <span class=${cls}>${sign}${(frames / 30).toFixed(2)}s</span>`;
+}
+
+// THE PB ROW (task 0147, 2026-09-23). The row that is its strategy's current
+// personal best says GOLD!! where its 0.00s used to be, in holo-foil gold, on
+// a gold-washed row -- his ask: "it should say "GOLD!!" -- it should have a
+// gold font color, and should be holographic, like a cool pokemon card. not
+// super distracting, but it should be OBVIOUS". The look lives in index.html's
+// "The PB row" block and its numbers in logtuning.js's "Personal best" group;
+// this decides WHICH row and WHEN, and owns the row's PB actions.
+const PB_WORD = "GOLD!!";
+const PB_TITLE = "Your personal best on this strategy";
+
+// What the live feed says about PBs (ui/pbcrown.js): `crowned`, the attempt
+// ids a pb_saved just crowned, and `timeSaves`, attempt id -> frames that save
+// beat the old PB by, standing until the next attempt is logged. PracticeLog
+// provides it once for every card, so no card or table between the page and
+// the row has to carry it.
+export const PbNews = createContext(null);
+
+// The delta and the word share one grid cell and swap SEQUENTIALLY (ui-core:
+// never a crossfade). The number that fades out is the one the row showed
+// BEFORE it became the PB -- the -0.43s it won by -- not the 0.00s it becomes,
+// so a live PB reads as "beat it by this much -> GOLD!!". Losing the crown (a
+// faster PB, an Undo) runs the same swap backwards.
+//
+// THE TIME SAVE sits just left of the word -- "Time Save: -0.30 (9 frames)",
+// his wording -- from the save until the next attempt is logged, then fades
+// out and leaves GOLD!! alone: "the intention is to inform the user about how
+// much they saved, but not for too long". It is positioned out of flow, so
+// neither its arrival nor its exit moves a column of the table. The element is
+// always there, holding the last margin it showed, so leaving is a fade of
+// text that is still present rather than a removal.
+function PbDelta({ frames, isPb, arriving, timeSave }) {
+  const before = useRef(frames);
+  if (!isPb) before.current = frames;
+  const lastSave = useRef(null);
+  if (timeSave) lastSave.current = timeSave;
+  const swapRef = useRef(null);
+  const under = useTimeSaveFit(swapRef, Boolean(timeSave));
+  return html`<span ref=${swapRef}
+      class=${`pb-swap${under ? " save-under" : ""}${timeSave ? " has-save" : ""}`}>
+    <span class="pb-swap-num" aria-hidden=${isPb ? "true" : undefined}>${
+      delta(isPb ? before.current : frames)}</span>
+    <span class="pb-gold" aria-hidden=${isPb ? undefined : "true"}>${PB_WORD}</span>
+    <span class=${`pb-save${timeSave ? " is-shown" : ""}`} aria-hidden=${timeSave ? undefined : "true"}>${
+      lastSave.current ? timeSaveText(lastSave.current) : ""}</span>
+    ${arriving ? html`<i class="pb-spark" aria-hidden="true">✦</i><i
+      class="pb-spark" aria-hidden="true">✦</i><i
+      class="pb-spark" aria-hidden="true">✦</i>` : ""}
+  </span>`;
+}
+
+// Beside GOLD!! when the row's own empty stretch holds the Time Save, UNDER it
+// (the word lifts to make room) when it does not. The stretch is whatever the
+// result cell leaves over: a narrow card, a caveat badge or the dust counts
+// all eat it, so no width threshold can answer this -- measured beside at
+// 1500/1100px, it overran the run's own time at 850px. Only the one row
+// showing a Time Save measures, and it re-measures as the row resizes.
+const TIME_SAVE_GAP_PX = 20;
+
+function useTimeSaveFit(swapRef, active) {
+  const [under, setUnder] = useState(false);
+  useLayoutEffect(() => {
+    const swap = swapRef.current;
+    const row = swap && swap.closest("tr");
+    const cell = row && row.querySelector(".attempt-result");
+    const save = swap && swap.querySelector(".pb-save");
+    if (!active || !cell || !save) return undefined;
+    const measure = () => {
+      const content = document.createRange();
+      content.selectNodeContents(cell);
+      const room = swap.getBoundingClientRect().left - content.getBoundingClientRect().right;
+      setUnder(room < save.offsetWidth + TIME_SAVE_GAP_PX);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [active]);
+  return under;
+}
+
+// The holo follows the pointer across the PB row -- the flat-screen version of
+// tilting a holo card. Written straight to the row's style, not component
+// state: a render per pointer move would redraw the whole row for one number.
+function tiltFoil(event) {
+  const box = event.currentTarget.getBoundingClientRect();
+  const across = (event.clientX - box.left) / Math.max(1, box.width);
+  event.currentTarget.style.setProperty("--pb-tilt", `${Math.round((0.5 - across) * 80)}%`);
+}
+function settleFoil(event) { event.currentTarget.style.removeProperty("--pb-tilt"); }
+
+// Everything a row knows about its PB: whether it IS the active strategy's PB
+// (the record the card's PB tag names -- entitysection.js::sectionPbByStrat --
+// so the GOLD!! row and the tag can never be two different runs), the one-shot
+// arrival, and Undo.
+//
+// The arrival plays once per crowning while the row IS the PB. `crowned` comes
+// from the live pb_saved broadcast, which lands before the refetch that paints
+// this row as the PB -- hence waiting for both. The Celebrations preference
+// silences the arrival only; the standing gold is information.
+function usePbRow(a, sec, t) {
+  const news = useContext(PbNews);
+  const pb = sec ? sectionPbByStrat(sec, t.clock) : null;
+  const isPb = Boolean(pb) && pb.attempt_id === a.id && !a.cleared;
+  const crowned = Boolean(news) && news.crowned.has(a.id);
+  const timeSave = isPb && news ? news.timeSaves.get(a.id) : undefined;
+  const [arriving, setArriving] = useState(false);
+  const crownPlayed = useRef(false);
+  useEffect(() => {
+    if (!crowned) { crownPlayed.current = false; return; }
+    if (!isPb || crownPlayed.current) return;
+    crownPlayed.current = true;
+    if (celebrationsEnabled()) setArriving(true);
+  }, [isPb, crowned]);
+  // Its own effect, for the reason AttemptRow's un-flash timer gives: a timer
+  // inside the effect above would be cancelled by the next crowned/isPb
+  // change. animationend normally ends it first; this is the backstop for
+  // reduced motion, where no animation runs to its end.
+  useEffect(() => {
+    if (!arriving) return undefined;
+    const timer = setTimeout(() => setArriving(false), 6000);
+    return () => clearTimeout(timer);
+  }, [arriving]);
+  const endArrival = (event) => {
+    if (event.target === event.currentTarget && event.animationName === "pbarrive") setArriving(false);
+  };
+  async function undo() {
+    await send("POST", "/api/pb/undo",
+      { attempt_id: a.id, timer_mode: a.segment_id != null ? "rta" : t.clock });
+    t.refresh();
+  }
+  return {
+    undo,
+    rowClass: `${isPb ? "is-pb" : ""} ${arriving ? "pb-arrive" : ""}`,
+    handlers: isPb
+      ? { onpointermove: tiltFoil, onpointerleave: settleFoil, onanimationend: endArrival } : {},
+    title: isPb ? PB_TITLE : undefined,
+    delta: html`<${PbDelta} frames=${a.pb_delta_frames} isPb=${isPb} arriving=${arriving}
+      timeSave=${timeSave} />`,
+  };
 }
 
 export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
@@ -121,11 +282,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // saves with "segments are RTA-only") — force rta whatever the view clock.
   const isSeg = a.segment_id != null;
   const pbReplay = usePbReplay(a.id, isSeg ? "rta" : t.clock, t.refresh);
-  async function undoPb() {
-    await send("POST", "/api/pb/undo",
-      { attempt_id: a.id, timer_mode: isSeg ? "rta" : t.clock });
-    t.refresh();
-  }
+  const pbRow = usePbRow(a, sec, t);
   const time = isSeg ? a.rta : (t.clock === "igt" ? a.igt : a.rta);
   const frames = isSeg ? a.rta_frames : (t.clock === "igt" ? a.igt_frames : a.rta_frames);
   const inTime = isSeg ? a.rta : a.igt; // failures: how-far-in on the section's clock
@@ -165,8 +322,8 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // snapping -- "the dimming should naturally animate to the correct
   // states" (2026-08-23). The server decides which rows are other
   // (`other_strat`, the same gate that withholds the button).
-  const row = html`<tr ref=${(el) => { rowRef.current = el; }}
-      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
+  const row = html`<tr ref=${(el) => { rowRef.current = el; }} ...${pbRow.handlers}
+      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""} ${pbRow.rowClass}">
     <td class="meta attempt-index">#${idx + 1}</td>
     <td class="attempt-medal">${a.rank
       ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />` : ""}</td>
@@ -184,7 +341,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
       ${a.cleared && a.cleared_reason
         ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}
     </td>
-    <td class="attempt-delta">${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
+    <td class="attempt-delta" title=${pbRow.title}>${a.outcome === "success" ? pbRow.delta : ""}</td>
     <td class="meta attempt-strategy">
       ${sec
         ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
@@ -207,7 +364,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
            with no entity, a row on another strategy, a card with no strategy
            picked -- draws nothing (the last two by his 2026-08-22 ruling:
            hide the button until the action is valid again). */""}
-      <${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay} undo=${undoPb} beat=${pbBeat} />
+      <${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay} undo=${pbRow.undo} beat=${pbBeat} />
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`
         : html` <button class="icon-button" onclick=${clear}
@@ -276,7 +433,7 @@ export function useGraphPick(rows, visible, setVisible) {
     if (idx >= visible) setVisible(Math.ceil((idx + 1) / 10) * 10);
     let openReplay = false;
     try {
-      openReplay = (await fetch(`/api/replay/saved/${attemptId}`,
+      openReplay = (await localFetch(`/api/replay/saved/${attemptId}`,
                                 { method: "HEAD" })).ok;
     } catch { /* probe is best-effort: still scroll + flash */ }
     setFocus({ id: attemptId, nonce: ++pickNonce.current, openReplay });
@@ -339,11 +496,10 @@ export function PbTag({ pb, mode, rows, pick, t, strat = null,
   const mark = showCaveat ? caveatOf(pb.caveat) : null;
   // `bare`: the goal plate draws its own "PB" label in a column beside
   // "GOAL", and states the clock once for both lines, so the tag is the time.
-  const shortDisplay = String(pb.display).replace(/^0'/, "");
   if (bare) return html`<span class="pbtag">${pick
     ? html`<a class="pblink" onclick=${jump}
-        title="jump to this PB in the list below">${shortDisplay}</a>`
-    : shortDisplay}${mark ? cardBadge(mark) : null}</span>`;
+        title="jump to this PB in the list below">${pb.display}</a>`
+    : pb.display}${mark ? cardBadge(mark) : null}</span>`;
   return html`<span class="pbtag">PB ${pick
     ? html`<a class="pblink" onclick=${jump}
         title="jump to this PB in the list below">${pb.display}</a>`
@@ -447,10 +603,27 @@ export function AttemptLogEmpty({ hasAttempts, manualTiming = false }) {
 // behavioural gain, since nothing between the trigger and the viewport
 // declares a transform/filter/perspective/contain that would trap a
 // `position: fixed` descendant back inside an ancestor's overflow anyway.
-export function StatMenuTrigger({ t }) {
+export function StatMenuTrigger({ t, withinSettings = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [anchor, setAnchor] = useState(null);
   const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (!menuOpen || !withinSettings || !menuRef.current) return undefined;
+    // The settings panel places this trigger lower than the old heading.
+    // Keep the fetched checklist on screen as its height settles.
+    const place = () => {
+      const box = buttonRef.current.getBoundingClientRect();
+      const height = menuRef.current.getBoundingClientRect().height;
+      const top = Math.max(12, Math.min(box.bottom + 6, window.innerHeight - height - 12));
+      setAnchor((current) => current && current.top !== top ? { ...current, top } : current);
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(menuRef.current);
+    return () => observer.disconnect();
+  }, [menuOpen, withinSettings]);
 
   const toggle = () => {
     if (!menuOpen && buttonRef.current) {
@@ -465,7 +638,7 @@ export function StatMenuTrigger({ t }) {
         onclick=${toggle} title="Choose which stats appear on the practice log">
       <${Icon} name="feed" size=${14} />${" "}<span class="stat-menu-label">Stats</span>
     </button>
-    ${menuOpen && anchor && html`<div class="stats-popover"
+    ${menuOpen && anchor && html`<div class="stats-popover" ref=${menuRef}
         style=${`top:${anchor.top}px; right:${anchor.right}px`}>
       <${StatMenu} t=${t} close=${() => setMenuOpen(false)} />
     </div>`}
@@ -473,7 +646,7 @@ export function StatMenuTrigger({ t }) {
 }
 
 // Practice-log controls live IN the log card they act on (2026-07-24 UX
-// pass): sort in the card heading, reset visibility in the footer. They used
+// pass); sort and visibility now live in the heading's settings panel. They used
 // to sit in an "analysis toolbar" under the charts, which read as controls
 // for the graphs.
 export function SortControl({ ui }) {
@@ -482,12 +655,4 @@ export function SortControl({ ui }) {
     <select value=${ui.sort} onchange=${(e) => ui.setSort(e.target.value)}>
       ${SORT_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
     </select></label>`;
-}
-
-export function ResetFilterToggle({ ui }) {
-  return html`<label class="reset-toggle" title="Hide reset attempts from the log">
-    <${Icon} name="eyeOff" size=${16} />
-    <input type="checkbox" checked=${ui.hideResets}
-           onchange=${(e) => ui.setHideResets(e.target.checked)} />
-    <span>Hide resets</span></label>`;
 }

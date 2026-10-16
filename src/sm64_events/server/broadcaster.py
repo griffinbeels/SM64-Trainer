@@ -12,6 +12,31 @@ from sm64_events.core.events import Event, to_wire
 log = logging.getLogger("sm64.events")
 
 
+def _log_line(wire: dict) -> str:
+    """What the log keeps of one published event: the whole wire form, except
+    for `ghost_changed`. That one restates the ghost session's full state --
+    ~2.9 KB, and 27% of the log's bytes (2026-09-23) -- every time any of it
+    moves, and the browser already has every field. The line keeps what a
+    reader of the log asks of it: which target, on or off, what
+    plays and why not."""
+    if wire.get("type") != "ghost_changed":
+        return json.dumps(wire)
+    body = wire.get("payload") or {}
+    target = body.get("target") or {}
+    source = body.get("source") or {}
+    selection = body.get("selection") or {}
+    summary = {
+        "seq": wire.get("seq"), "type": "ghost_changed",
+        "target": target.get("entity_key"), "strat": target.get("strat"),
+        "enabled": body.get("enabled"),
+        "available": source.get("available"), "reason": source.get("reason"),
+        "ghosts": selection.get("ghosts"),
+        "candidates": len(selection.get("candidates") or []),
+        "window": body.get("window"),
+    }
+    return json.dumps(summary)
+
+
 class Broadcaster:
     def __init__(self):
         self._clients: set = set()
@@ -30,7 +55,7 @@ class Broadcaster:
     async def publish(self, event: Event) -> int:
         self._seq += 1
         wire = to_wire(event, self._seq)
-        log.info("event %s", json.dumps(wire))
+        log.info("event %s", _log_line(wire))
         dead = []
         for ws in list(self._clients):
             try:

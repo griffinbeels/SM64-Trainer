@@ -49,10 +49,11 @@ The line of detections waiting behind the held [[target]] — first hooked,
 first held. Performing a [[segment]]'s own start deliberately (a course
 exit, a door [[moment]]) takes an empty hand and becomes a
 [[hooked target]]; a detection that fires while the hand already holds
-something waits its turn; when the front completes or dies, the oldest
-detection still alive takes over, and an empty queue leaves the hand
-neutral. A queued detection also takes a [[leftover target]], which is the
-one hand nobody chose. A [[segment]] that
+something waits its turn. When the front completes it stays in the hand as
+a [[leftover target]], so its [[ghost]] and its retries keep a [[target]]; when it
+dies (forfeited or expired), the oldest detection still alive takes over,
+and an empty queue leaves the hand neutral. A queued detection also takes
+a [[leftover target]], which is the one hand nobody chose. A [[segment]] that
 arms by mere presence — a pipe family on a course
 entry — never enters the queue, and neither does a [[subsection]] a
 [[star]] or another [[segment]] owns, whatever its clause shape: only your
@@ -70,8 +71,9 @@ A [[target]] a detection set: the front of the [[target queue]]. The trainer
 holds it until it completes, until you genuinely abandon it (an [[anchor]]
 landing inside a foreign course), or until its own staleness budget expires
 — walking back through a course to redo its start keeps the hold. A
-[[star]] grab takes the hand from a stale hooked one, never from one the
-matcher still holds armed — except a hooked [[subsection]], which yields
+[[star]] grab, or an automatic pick of a [[segment]] armed where you stand (the
+Bowser arena's fight), takes the hand from a stale hooked one, never from
+one the matcher still holds armed — except a hooked [[subsection]], which yields
 to its parent [[star]]'s grab armed or not; a PICKED one holds even
 through that grab, because explicit choices take priority.
 
@@ -82,8 +84,9 @@ through that grab, because explicit choices take priority.
 
 ### Leftover target
 
-The [[segment]] the trainer followed onto after you finished one somewhere
-else, still in the hand and no longer armed where you stand — neither a
+A finished [[segment]] still in the hand — one the trainer followed onto
+after you finished it somewhere else, or one you just completed while
+it was the [[hooked target]] — and no longer armed where you stand: neither a
 [[picked target]] nor a [[hooked target]], so nothing bounds it. A detection
 in the [[target queue]] displaces it: performing a [[segment]]'s own start
 here beats a guess about a place you have walked out of.
@@ -96,7 +99,10 @@ here beats a guess about a place you have walked out of.
 A [[target]] you clicked. Nothing detected may steal it, a [[star]] grab may
 not move it, choosing one empties the [[target queue]], and it retires only
 by the standing rules (walking into a course it is not practiced in, with
-its arm gone).
+its arm gone). A picked [[segment]] that finishes by entering a course (MIPS
+Clip into Dire, Dire Docks) leaves the hand empty there, and comes back the
+next time you arrive in the castle, unless you clicked something else
+meanwhile, so the trainer holds it ready before you start it again.
 
 - **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
   → the [[selector]]
@@ -283,21 +289,62 @@ own [[outcome]].
 
 ### Outcome
 
-How an [[attempt]] ended: you finished it, you died, or you abandoned it by
-leaving the area.
+How an [[attempt]] ended: you finished it, you [[reset]], you loaded a save
+state (a [[segment]]'s [[attempt]] only; a [[star]]'s [[attempt]] continues
+through the load), you died, or you abandoned it by leaving the area.
 
 - **Lives** — the outcome registry (`src/sm64_events/tracking/views.py`)
   → the marker shapes on the [[progress graph]]
 
 ### Anchor
 
-What opens an [[attempt]] — a practice [[reset]] or a state load. The
-[[projector]] discards an anchor you never moved after, so an idle [[reset]]
-never counts against your [[failure rate]]. The move the anchor INTERRUPTED
+What opens an [[attempt]] — a practice [[reset]] or a [[save-state load]]. A
+[[reset]] always ends the [[attempt]] before it and restarts the clock and the
+[[ghost]], but records a row only if you played since the last one: an idle
+[[reset]], one taken during a textbox or cutscene the game opened (Bowser's
+arena speech), and the zero Usamune takes as you arrive somewhere have no row,
+so none counts against your [[failure rate]]. The move the anchor INTERRUPTED
 belongs to the [[attempt]] it ended, so the anchor holds that action back until
-you leave it.
+you leave it. Since 2026-09-23 a [[save-state load]] opens an [[attempt]] only
+when none is open; otherwise the open one carries on through it.
 
 - **Lives** — the anchor detector (`src/sm64_events/detectors/anchors.py`)
+
+### Save-state load
+
+Loading a saved state, caught by whichever clock gives it away: the game's own
+[[frame]] counter going backward (Project64's savestate), or Usamune's timer
+jumping to a value no play can reach (the state Usamune loads itself). The
+[[practice log]] counts every load inside the [[attempt]] it happened in rather
+than starting a new one, so one row covers one [[reset]] and every load after
+it, and an [[attempt]] with a load in it is not a [[valid attempt]].
+
+- **Lives** — the anchor detector (`src/sm64_events/detectors/anchors.py`)
+  → the [[projector]] (`src/sm64_events/tracking/projection.py`)
+- **Not** — a [[reset]]. A [[reset]] starts the [[attempt]] over; a load puts
+  you back part-way through it.
+
+### Valid attempt
+
+An [[attempt]] whose time could stand as a real result. A [[star]] [[attempt]] is
+valid when a full [[reset]] at the course's own start opened it and no
+[[save-state load]] came before the finish; a [[segment]] [[attempt]] is valid when
+no load came between its own start and its finish. The [[practice log]] marks
+an [[attempt]] that is not valid with a [[caveat mark]] saying why, keeps its
+Save as PB button, and never saves it as an [[automatic PB]]. An [[attempt]]
+journaled before 2026-09-23 is not judged.
+
+- **Lives** — the [[projector]] (`src/sm64_events/tracking/projection.py`)
+  → the [[caveat mark]] and the Save as PB button in the [[practice log]]
+
+### Subarea reset
+
+A [[reset]] that lands inside a level's subarea — the volcano, the slide, the
+pyramid — rather than at the course's start. A [[star]] [[attempt]] it opens
+is not a [[valid attempt]]; a [[segment]] that starts in that subarea is,
+because the [[reset]] landed where it starts.
+
+- **Lives** — the [[projector]] (`src/sm64_events/tracking/projection.py`)
 
 ### Failure rate
 
@@ -321,7 +368,29 @@ its fastest eligible success as GOLD. Correcting the newest [[attempt]]'s
 use the displayed clock; [[segment]]s use RTA. Ties preserve the existing PB.
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
-  → the PB tag on the [[practice log]]
+  → the PB tag on the [[practice log]], and the gold GOLD!! row that marks
+  the [[attempt]] itself (`src/sm64_events/ui/components/attemptlog.js`)
+
+### Automatic PB
+
+A [[personal best]] the trainer saves by itself, as soon as a
+[[valid attempt]] on the [[active strategy]] beats that [[strategy]]'s best on
+the clock its [[ladder]] grades — [[in-game time]] for a [[star]],
+[[real time]] for a [[segment]]. It goes through the same door as the Save as PB button, so the
+[[PB ghost]] and the replay follow it and Undo works as usual. With no
+[[strategy]] selected nothing saves by itself.
+
+- **Lives** — the tracker service (`src/sm64_events/tracking/service.py`)
+
+### Time Save
+
+How much a new [[personal best]] beat the one it replaced, printed beside its
+GOLD!! in the [[practice log]] in seconds and in [[frame]]s. It stays until you
+log your next [[attempt]] of any kind, then fades out and leaves GOLD!! alone.
+The first save on a [[strategy]] replaced nothing, so it has none.
+
+- **Lives** — the practice log's PB news (`src/sm64_events/ui/pbcrown.js`)
+  → the PB row (`src/sm64_events/ui/components/attemptlog.js`)
 
 ### Imported time
 
@@ -797,7 +866,7 @@ picture's own state.
 - **Lives** -- `src/sm64_events/ui/components/inputtimelinemodel.js` (the
   merge of stamps and polled samples),
   `src/sm64_events/ui/components/inputtimelinelanes.js` (the drawing).
-- **Not** -- the template's ghost bars, which are another player's [[run]].
+- **Not** -- the template's own bars, which are another player's [[run]].
 
 ### Refused picture
 
@@ -854,6 +923,12 @@ goes further: it writes one encoded picture per row and files each write
 in the ledger's [[feed log]]) -- and the clip's own
 metadata keeps its slice of the rows after the recording buffer forgets
 the footage. Registering one more per-picture fact takes one line.
+A row stamped by the [[capture layer]] holds the pad (`pad`), what Mario was
+doing (`mario`: action, facing, speed) and, on pictures recorded from
+2026-09-19, where he stood (`mario_pos`: x, y, z in the game's world units,
+two decimals). A row leaves out any fact that was not captured or did not
+read as a real game state, so an older clip has no `mario_pos` and still
+loads unchanged.
 
 - **Lives** -- `src/sm64_events/replay/ledger.py`; the [[recorder]] feeds it
   (`src/sm64_events/replay/recorder.py`) and extraction reads it back
@@ -1004,12 +1079,15 @@ his ask: "redo our recording system so that the recording [[frame]]s ARE game
 [[frame]]s"): the wrapper Project64 selects (`SM64 Trainer v1.0`,
 `sm64_trainer_gfx.dll`) and the [[renderer]] it wraps. When the [[renderer]]
 finishes a picture the wrapper copies the game's own memory -- the [[frame]]
-counter, the pad, Mario, the running IGT -- and the [[renderer]] passes an owned
-GPU copy of the picture with that immutable stamp to a dedicated worker and the
-isolated [[encoder helper]]. The [[recorder]] retains exact source identity
+counter, the pad, Mario, the running IGT -- and the [[renderer]] takes an owned
+GPU copy of the picture with that immutable stamp, then samples it and hands the
+selected ones to the isolated [[encoder helper]], all on its own thread
+([[renderer-thread capture]]). The [[recorder]] retains exact source identity
 through shared media fragments without transferring full images through
 Python. A known GPU producer that cannot capture reports the failure; it does
-not silently switch to desktop timing. See [the current
+not silently switch to desktop timing. The one exception is an [[unsupported
+adapter]], which can never record this way: the [[recorder]] keeps the desktop
+grab for it and says why. See [the current
 runtime](replay-gpu-runtime.md) for ownership and limits.
 
 The [[frame map]] reads captured identity rather than guessing it from cadence.
@@ -1025,7 +1103,8 @@ itself once you close Project64, under the consent already given; onboarding
 never reopens for it (his rule, 2026-09-16).
 
 - **Lives** -- `plugin/gfxwrap/gfxwrap.c` (the wrapper), built by
-  `tools/build_plugin.py` into `src/sm64_events/data/plugin/` beside the
+  `tools/build_plugin.py` (through `tools/build_natives.py`, never committed)
+  into the git-ignored bundle folder (its BUNDLE constant in `tools/build_natives.py`) beside the
   [[renderer]] and the [[encoder helper]]; `src/sm64_events/core/capturelayer.py`
   installs and undoes it; `src/sm64_events/replay/sourcefactory.py` selects
   the [[recorder]]'s camera; `src/sm64_events/replay/gpucapture.py` owns the
@@ -1049,7 +1128,8 @@ user's existing GLideN64 settings carry over.
 - **Lives** -- `tools/build_renderer.py` builds it from the pin in
   `renderer/build-inputs.json` and the overlay in `plugin/gfxwrap/`
   (`renderer/README.md` has the provenance and credits) into
-  `src/sm64_events/data/plugin/`
+  the git-ignored bundle folder (its BUNDLE constant in `tools/build_natives.py`), a
+  build output that tool refreshes at launch
 - **Not** -- the graphics plugin the user had before; that one stays in the
   folder untouched, and "Remove Practice Replay" selects it again
 
@@ -1073,13 +1153,67 @@ the rule holds with no trainer open.
 ### Encoder helper
 
 The 64-bit NVENC DLL (`SM64GpuEncoderV1.dll`) the server's isolated encoder
-process loads to turn the [[renderer]]'s GPU pictures into H.264 packets
-without copying pixels through Python. Built by `tools/build_plugin.py`
+process loads to turn the [[renderer]]'s GPU pictures into AV1 or H.264
+packets without copying pixels through Python. Built by `tools/build_plugin.py`
 beside the wrapper; it carries the same native build id with its own suffix.
+The process is a direct child of the server: the installed app starts itself
+with `--gpu-helper`, and from source the server starts the base interpreter
+on the module, never the venv launcher (which drops the no-busy-pointer flag). The
+installed app had no such entry until 2026-09-27, so v1.9.1 never recorded.
 
 - **Lives** -- `plugin/gfxwrap/gpu_encoder_dll.cpp`,
   `plugin/gfxwrap/gpu_bridge_encoder.cpp`; loaded by
-  `src/sm64_events/replay/gpucapture_session.py`
+  `src/sm64_events/replay/gpuprocess/process_worker.py`, started by
+  `src/sm64_events/replay/gpucapture_session.py` through
+  `src/sm64_events/core/childproc.py`
+
+### Unsupported adapter
+
+A graphics adapter the [[capture layer]]'s GPU capture can never record on: not
+NVIDIA, a software adapter, an NVIDIA driver older than the [[encoder
+helper]]'s NVENC API, or an encoder offering neither AV1 nor H.264. Decided
+once per adapter and driver version, before any [[encoder helper]] starts
+where the facts allow. The [[recorder]] then keeps the desktop grab for that
+Project64, its status says why, and the [[setup screen]] accepts the desktop's
+written pictures. Until 2026-09-27 such a machine retried GPU capture every
+10-60 s forever and recorded nothing. A Project64 still running a [[capture
+layer]] from another build takes the same path until it restarts (2026-09-28).
+
+- **Lives** -- `src/sm64_events/replay/gpuadapter.py` (the facts),
+  `src/sm64_events/replay/gpusettings.py` (the per-process memo),
+  `src/sm64_events/replay/sourcefactory.py` (the desktop grab it keeps)
+- **Not** -- a transient GPU failure: an encoder that fails for any other
+  reason keeps retrying on the bounded backoff (`src/sm64_events/replay/gpuretry.py`).
+
+### Renderer-thread capture
+
+How the [[capture layer]] keeps every GPU call in Project64 on the
+[[renderer]]'s own thread (2026-09-27). NVIDIA's threaded optimization froze
+the [[renderer]] for 150-270 ms the first time any other thread in Project64
+used the GPU: the "very brief visual stutter" he saw once, as recording
+started. Now the [[renderer]] itself copies the picture, samples it and copies
+a selected picture into the [[encoder helper]]'s texture, inside the callback
+it already makes on every VI, and the helper creates those textures. The
+delivery worker only keeps time and books, without the GPU.
+
+- **Lives** -- `plugin/gfxwrap/gpu_render.cpp` (the sample, the copy into the
+  helper's texture, the GL state guard); `plugin/gfxwrap/gpu_delivery.cpp`
+  (render_tick, and which step runs on which thread); evidence in
+  [the runtime doc](replay-gpu-runtime.md#first-capture-freeze)
+- **Not** -- the driver warm-up it replaced (2026-09-26 to 09-27), which kept
+  the worker's context and paid the same freeze once in the boot intro
+
+### Activation log
+
+`sm64_trainer_gfx.activation.log`, beside the wrapper: this Project64
+process's startup lines only -- ROM open, each capture's request and
+preparation steps with their QPCs, and every slow
+callback in the 15 s after a capture request. The main log rotates, so these
+used to be gone within half an hour. The previous process's copy is `.1`.
+
+- **Lives** -- `plugin/gfxwrap/diagnostics.h` (activation_event picks the lines)
+- **Not** -- `sm64_trainer_gfx.log`, which keeps everything, rotating at 4 MiB
+  through `.1` and `.2`
 
 ### Oracle reader
 
@@ -1125,6 +1259,523 @@ delete the one you do not want instead of cropping it.
 
 - **Lives** — the overlay planner (`src/sm64_events/inputs/overlay.py`)
   → `tools/export_overlay.py`
+
+### Ghost
+
+The recorded [[attempt]] you race beside your current play. Its captured
+graphics pose is rebuilt through libsm64 inside GLideN64, using the live
+camera and terrain depth. Opacity and tint apply to the displayed ghost.
+Playback binds the exact recorded and live [[attempt]] origins and applies
+the [[nudge]]. Missing poses or clock identity have a readable refusal. A
+recording whose controller input is unknown on any [[frame]] is not a ghost at
+all: every door a recording enters through (bundled collection, rival
+admission, community upload and download, collection import and export, your
+own PB, saved and template ghosts) refuses it with one reason (his rule,
+2026-10-12: "If it's not a perfectly recorded ghost, it doesn't belong in the
+system"). The practice card's switch calls it Ghost Overlay.
+
+- **Lives** — `src/sm64_events/ghost/session.py` joins selection, settings and
+  the [[target]]; `src/sm64_events/ghost/native_session.py` publishes native playback
+- **Not** — the [[overlay layer]], which writes a video file for an editor.
+
+### Recorded shadow
+
+The round shadow the game actually drew under Mario on a recorded [[frame]],
+kept with that [[frame]]'s pose: its matrix, nine corners, fade and texture. A
+Mario-only [[ghost]] draws it under itself at its own opacity; the shadow
+switch turns every [[ghost]]'s shadow off for comparison. Where the game drew
+none, or capture cannot prove the shadow is Mario's, the recording keeps none
+and playback draws none.
+
+- **Lives** — `plugin/gfxwrap/ghost_root.cpp` captures it;
+  `plugin/gfxwrap/ghost_pose.cpp` places it for drawing
+
+### Pose refusal
+
+The one named check that kept Mario's pose off a recorded [[frame]] (for
+example `not_drawn_floor`, `animation_stale`, `body_mismatch`), stored with the
+[[frame]] so every hole in a [[ghost]] explains itself in the extraction audit.
+`not_drawn` on a [[frame]] that still has a pose means the game culled Mario (a
+[[star]]-spawn or dialog camera looked away) and the pose's root came from the
+last [[frame]] that drew him or from his own position and angles.
+
+- **Lives** — `plugin/gfxwrap/ghost_capture.h` (the refusal enum); decoded by
+  name in `src/sm64_events/ghost/clip.py`
+
+### Dance tail
+
+The recorded [[frame]]s after a [[star]] [[attempt]] closes, through the grab
+and dance of the [[star]] that completed it, kept on the end of its [[ghost]]
+recording so the [[ghost]] celebrates instead of vanishing at its touch; it
+then fades out over half a second. For the [[100-coin star]] that is the
+[[exit star]] after it, so the [[ghost]] plays on through its 100-coin grab.
+A grab straight into the dance may close its [[attempt]] a [[frame]] before
+the dance's first, and still keeps it. The trainer commits the [[PB ghost]]
+before the [[recorder]] has the dance and adds the tail afterwards, so the
+[[PB ghost]] is ready on the very next [[reset]]. When the recording stops before the
+game's dance ends (a pause, [[reset]] or state load right after the grab), the
+[[ghost]] plays the rest of the dance by animation from its last recorded
+dance pose, to the [[frame]] the game's own dance ends on, then fades.
+Display only: export keeps the [[attempt]]'s origin, closing [[frame]] and
+time as they were. Recordings saved before it have none and still end at the
+touch; [[segment]]s carry one only when a Bowser key or the grand [[star]]
+ends them (the grand [[star]]'s is its own cutscene, up to its flight).
+
+- **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
+  `plugin/gfxwrap/ghost_playback.cpp` draws, finishes and fades it;
+  `plugin/gfxwrap/ghost_tuning.h` holds the game's dance timings
+
+### Ghost defeat
+
+What a [[ghost]] still racing does when live Mario's [[x-cam]] dance, the dance of
+the grab that completes the [[attempt]], begins before the [[ghost]]'s own: it
+plays Mario's own dying animation where it stood, with dead eyes and his
+dying cry, through its last [[frame]], where he lies passed out, then fades out.
+On land he falls over; a [[ghost]] swimming drowns. A pause freezes it where it stands. A [[ghost]] whose own dance began first, or on the same
+[[frame]], keeps its [[dance tail]] instead, even when it grabbed later. Once
+per [[attempt]]; a state load back into the [[attempt]] brings the [[ghost]]s
+back.
+
+- **Lives** — `plugin/gfxwrap/ghost_playback.cpp` decides and draws it;
+  `plugin/gfxwrap/ghost_tuning.h` holds its animation, timing and sound
+- **Not** — the [[dance tail]]'s fade, which ends a [[ghost]] that won its
+  own race
+
+### Translucent world layer
+
+The game's water surfaces, and any other see-through world geometry, as they
+would fall over a [[ghost]] standing behind them. The [[renderer]] repeats each
+such game draw into the layer, keeping its color, how much it lets through and
+its nearest depth; the compositor then gives every [[ghost]] pixel behind that
+depth the same blend the game gave the scene there, so a submerged [[ghost]]
+takes the water's color. The game's own picture stays untouched. The [[renderer]]
+builds the layer only on a [[frame]] where playback has already chosen a
+[[ghost]] to draw, so a finished or hidden [[ghost]] costs nothing.
+
+- **Lives** — `plugin/gfxwrap/ghost_compositor.cpp`; the [[renderer]]'s
+  repeat is staged by `tools/stage_ghost_renderer.py`; which [[ghost]]s draw
+  on a [[frame]] is decided by the plan step in
+  `plugin/gfxwrap/ghost_playback.cpp`
+
+### Recorded particles
+
+The bubbles, splashes, water rings, droplets, dust, sparkles, lava flame,
+ground-pound mist, sand, leaves, snow, ground-pound and wall-bonk bursts, punch
+dirt and his knocked-off cap the game drew for Mario on a recorded [[frame]]: which of the ROM's particle pictures each
+one showed and where. A Mario-only [[ghost]] draws them with the ROM's own
+pictures, after its body. Another object's bubble, or a particle whose picture
+the ROM reader does not know, is never drawn.
+
+- **Lives** — `plugin/gfxwrap/ghost_particle_capture.cpp` records them;
+  `renderer/model/particles.c` reads the pictures; `plugin/gfxwrap/ghost_particle_pose.cpp`
+  places them
+
+### Player-first fade
+
+A Mario-only [[ghost]] fades wherever it would block the player. The parts of
+it that stand between the camera and live Mario, over his body on screen, keep
+only 15% of their opacity. Near the camera the whole body fades out, so it
+can never fill the screen. The fade leaves a [[ghost]] behind Mario, or away
+from him, untouched. Its [[recorded shadow]] and [[recorded particles]]
+follow the same rule. It
+combines with the [[overlap fade]] under one 15% floor: a [[ghost]] that overlaps
+Mario and stands in front of him still keeps 15%, not less. Only the camera
+fade may go below it. Its [[ghost sound events]] can follow it too. The card's **Fade in front of Mario** switch turns it off
+for comparison.
+
+- **Lives** — `plugin/gfxwrap/ghost_occlusion.h` (the rule and its tuning);
+  playback fills live Mario's region each frame
+- **Not** — the [[overlap fade]], which fades a whole [[ghost]] when its body
+  touches live Mario's, wherever the camera is.
+
+### Overlap fade
+
+A [[ghost]] whose body touches live Mario's fades as a whole, smoothly down to
+15% of its opacity when the two stand on the same spot, so it never vanishes
+on a pole, a ledge or a plank both Marios hold. It is back to full opacity
+once the bodies stop touching, plus any extra distance set on the practice
+card. Its [[ghost sound events]] can follow it too.
+
+- **Lives** — `plugin/gfxwrap/ghost_proximity.h`; the floor is shared with the
+  [[player-first fade]] in `plugin/gfxwrap/ghost_occlusion.h`
+- **Not** — the [[player-first fade]], which fades only the pixels in front of
+  live Mario and depends on the camera.
+
+### Held object (ghost)
+
+The object Mario holds on a recorded [[frame]] (a Bob-omb, a baby penguin,
+a cork box), recorded as what it is (its behaviour), its animation state,
+and where his hand drew it in that [[frame]]. Captured only when the game
+provably drew it from his hand in that [[frame]]. A [[ghost]] draws the kinds
+its model knows (the Bob-omb, the small penguin, King Bob-omb, Chuckya, the
+cork and crazy boxes) in his hand and leaves the others out. Once he throws
+or drops it, capture follows the same object where the game drew it, for up
+to 10 s, until it explodes, its slot holds another object, or he grabs it again.
+
+- **Lives** — `plugin/gfxwrap/ghost_capture.cpp` (capture); decoded in
+  `src/sm64_events/ghost/clip.py`; drawn by `renderer/model/held.c`
+
+### Ghost path
+
+Where a [[ghost]] goes, drawn in the game world just ahead of you as you
+play: a strip of the game's own chevrons on the floor where it ran, a thin line
+where it was in the air with dots on the floor beneath, coloured from grey
+(standing) to green (full speed) to white (faster than any normal move), and
+hidden behind walls like the [[ghost]]. It follows how far along its line you
+are, not where the [[ghost]] is, and only moves forward: falling behind still
+shows the next stretch from your feet, and coming back through a place shows
+the [[ghost]]'s later pass there. It is one line: the fastest [[ghost]]'s,
+or the average of them where they all ran together. New users start with
+the average path and button presses drawn where the [[ghost]] pressed them.
+
+- **Lives** — `plugin/gfxwrap/ghost_path.h` (what is drawn) and
+  `plugin/gfxwrap/ghost_playback.cpp` (which stretch); its settings rows in
+  `src/sm64_events/ghost/settings.py`
+
+### Ghost sound events
+
+The sound requests Mario issued on a recorded [[frame]] (up to eight, in
+order), kept with that [[frame]]'s pose so a [[ghost]] plays his jumps,
+landings and voice as it passes that [[frame]], through SM64's own sound
+engine at its set volume. Each [[ghost]] sounds from where it stands relative
+to the live camera (panned and distanced as the game does Mario) and fades by
+the inverse square of its distance from live Mario past 400 units, the chime
+of a [[star]] or cap grab included. Capture drops other objects' sounds, so a
+[[ghost]] plays no music. With the card's **Fade its sound** (beside Volume,
+on by default), a [[ghost]]'s sound also follows its [[overlap fade]] and
+[[player-first fade]], and while it overlaps him, a sound live Mario made on the same
+[[frame]] plays only once.
+
+They play from the [[ghost sound player]], so a recording only has them while
+[[ghosts in recording]] is on.
+
+- **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
+  `plugin/gfxwrap/ghost_audio.cpp` makes their sound; `plugin/gfxwrap/ghost_sound_fade.h`
+  owns how they fade with the picture
+
+### Ghost sound player
+
+The small trainer process that plays [[ghost sound events]] on the output
+Project64's own sound uses. The [[renderer]] still makes the sound and hands it
+over through shared memory; it plays outside Project64 because the [[recorder]]
+takes everything Project64 plays, and a [[ghost]]'s sound belongs in a
+recording only while [[ghosts in recording]] is on. Each open Project64 gets
+one, which ends with it or with the trainer.
+
+- **Lives** — `src/sm64_events/ghost/sound_player.py`; the shared ring is in
+  `plugin/gfxwrap/ghost_audio.h`
+
+### Ghost source
+
+The native poses a [[ghost]] plays, with their exact [[attempt]] origin.
+They come from a local recorded [[attempt]] or an [[imported ghost]]. Marking a
+newly recorded [[attempt]] preserves its poses independently of saved video.
+Older video-only recordings and input-file templates cannot supply them.
+Unavailable sources include a sentence explaining why.
+
+- **Lives** — `src/sm64_events/ghost/native_session.py` resolves playback;
+  `src/sm64_events/ghost/selection.py` qualifies the offered recordings
+
+### PB ghost
+
+The [[ghost]] ticked by default: the [[attempt]] behind your current [[personal best]]
+for the practised [[target]] and [[strategy]]. While you keep its box ticked, saving a
+PB makes that [[attempt]] the [[ghost]] at once (the trainer keeps its Mario poses before it
+cuts the video); undoing or hiding that PB falls back to the previous save.
+The trainer remembers an untick for that [[target]], so later PBs stay off. Derived from
+the saved PBs on every read, never stored, and never changes the input comparison.
+
+- **Lives** — `src/sm64_events/ghost/pb.py`
+
+### Ghost set
+
+Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any [[saved ghost]],
+[[imported ghost]] or [[template track]] [[attempt]] you tick, up to 16, each named by the time it achieved.
+The [[renderer]] draws them together, each tinted its own colour. Collections
+contain native poses. With the PB box ticked, no PB saved and nothing else ticked, your active
+[[template track]] plays.
+
+- **Lives** — `src/sm64_events/ghost/selection.py`
+
+### Ghost collection
+
+One `.sm64ghosts` file containing selected native [[ghost]] recordings, their
+creator credit, time, [[game version]], [[target]] and [[strategy]]. The **[[Ghost]]
+Library** dialog opens with the originating [[target]] and currently raced
+recordings. Separate import and export flows preview the chosen recordings before
+confirmation. Export can choose each [[strategy]]'s best independently or use a
+saved search that resolves current results next time; export skips a [[run]]
+whose [[playback copy]] has an unknown input, with that reason. Import selects all new
+recordings by default and supports a smaller selection; import keeps a
+recording with an unknown input on disk, lists it unavailable with the reason,
+and never plays it. Collections can contain
+many more recordings than the [[ghost set]] can race at once.
+
+- **Lives** — `src/sm64_events/ghost/portable.py` and `src/sm64_events/ghost/sharing.py`;
+  `src/sm64_events/ui/components/ghostlibrary.js`
+
+### Rival slot
+
+One place in the adaptive [[ghost set]] for the current [[target]] and [[ghost matching scope]]. The trainer
+chooses a compatible recording above the saved [[personal best]], or protects
+the player's exact manual choice until they clear it. Every seat, including
+manual choices and recordings waiting to download, holds one recording per
+player. A second choice from that player must replace their existing slot
+(round 52, 2026-10-15: "there's no way for someone to be racing two versions of me
+at the same time right?"). Seats the range cannot fill widen upward, nearest
+subdivision first, then downward (his rule, round 49: "keep expanding the
+range upwards until the rival list is full ... then expand downwards"), in
+fixed ranges too. Automatic seats never hold the player's own
+recordings: this install's player identity, the signed-in community account, and
+the bundled [[ghost collection]] when its reviewed author identity matches the
+signed-in account. Legacy collections without that identity retain export-credit
+matching (his rule, 2026-10-13: "the player doesn't ever actually fight
+their own [[ghost]]s as a rival"). A pinned own recording still plays. The slot keeps its colour when
+its recording changes; the separate [[PB ghost]] keeps its own colour.
+
+- **Lives** — `src/sm64_events/ghost/adaptive.py` and `src/sm64_events/ghost/rivals.py`
+
+### Ghost matching scope
+
+The [[Strategy]] or Overall choice on the practice card. [[Strategy]] restricts
+[[rival slot]]s to the current [[strategy]]; `Overall` admits other strategies
+and grades them on the [[Overall curve]]. Both use the current [[strategy]]'s saved
+[[personal best]] as their starting basis. Each choice remembers its own manual
+choices, and every [[ghost]] keeps its recorded [[strategy]] label.
+
+- **Lives** — `src/sm64_events/ghost/rivals.py` and `src/sm64_events/ui/components/practicelog.js`
+
+### Climb profile
+
+A separate practice database with its own player identity, the original
+[[segment]] definitions and calibration, and a local [[ghost]] population.
+The default developer simulation starts with zero practice and no
+[[personal best]], with unchanged saved clips credited to `gtest` opponents.
+It presets four [[rival slot]]s across all [[rank]]s. The earlier seeded Wild Blue
+experiment remains available explicitly. The launcher tests progression without
+changing original history.
+
+- **Lives** — `tools/ghost_climb.py` and `src/sm64_events/core/paths.py`
+
+### Sign-in step
+
+After the startup update check and any update offer, a configured build asks for
+a Discord or Twitch sign-in,
+then a player name and consent. The player cannot close the account screen
+until the account is active, and the Project64 wizard waits behind it (his
+direction, 2026-10-12: "logging in is the first step for onboarding, and
+you're not allowed to continue unless you login in some way"). A stored
+refresh token counts as an account while offline, so practice never locks
+out on a bad connection; signing out returns to this step. Google and email
+are not offered. The same provider identity always returns to its own
+account. The name field checks validity while typing and availability after
+a pause or on blur (4 to 20 characters; a check or a cross), and the account
+screen shows the name, the provider and the [[Rank tab]]'s own chip row.
+
+- **Lives** — `src/sm64_events/ui/community.js` (accountRequired),
+  `src/sm64_events/ui/components/communityaccount.js`,
+  `src/sm64_events/ui/components/communityprofile.js` (useNameCheck),
+  `src/sm64_events/ui/components/communitysettings.js` (AccountSummary);
+  `src/sm64_events/community/account.py` (stored, check_name);
+  `cloud/community/src/service.js` (the names check route)
+- **Not** — the Project64 setup wizard (`setupmodal.js`), which follows it.
+
+### Community ghost
+
+A [[ghost]] shared by an authenticated, invited player. The service keeps that
+player's fastest full-start recording for each [[division]], [[strategy]],
+[[target]], clock and ROM version. Structural validation checks the recording;
+it does not certify that gameplay was legitimate. Sharing begins unchecked.
+
+- **Lives** — `cloud/community/` and `src/sm64_events/community/`
+
+### Rival pool
+
+The bounded metadata list for a [[target]], ROM, clock, [[ghost matching scope]]
+and [[rank]] range. The cloud can reuse it across players. The trainer selects
+[[rival slot]]s locally and downloads only their recordings. A complete membership
+scan and downloaded playback bytes are separate states.
+
+- **Lives** — `src/sm64_events/community/sync.py` and `src/sm64_events/community/cache.py`
+
+### Ghost ceiling
+
+The slowest time a [[run]] may have and still fill a [[rival slot]] or become a
+shared [[ghost]]: its [[strategy]]'s slowest named cutoff (the edge of the
+lowest named [[division]], Capless 4) plus 10%. The trainer never makes a
+slower [[run]] a rival recording or offers it to the cloud, and tells the
+player nothing (his rule, 2026-10-13: "We shouldn't tell the user"). The
+trainer and the cloud apply the same integer rule. The player's own
+[[PB ghost]] has no ceiling.
+
+- **Lives** — `src/sm64_events/ghost/community_catalog.py` (trainer) and
+  `cloud/community/src/catalog.js` (cloud; the upload admission in
+  `cloud/community/src/store.js` applies it)
+
+### Retraction
+
+Taking one shared [[run]] back out of the cloud under every [[strategy]]
+except the one it now belongs to, after the player changes that [[run]]'s
+[[strategy]] (his rule, 2026-10-13, round 48). The trainer drops its pending
+offers under the old [[strategy]], keeps the request across a restart, and
+asks the cloud to unpublish those copies; the cloud's cleanup collects the
+bytes. Not account-wide withdrawal, which removes every shared [[ghost]].
+
+- **Lives** — `src/sm64_events/community/sync.py` (retract_other_strategies),
+  `src/sm64_events/community/outbox.py` and `cloud/community/src/store.js`
+
+### Private beta
+
+A test build sent directly to friends, rather than published as a download. A
+normal-identity private candidate uses the same installation and practice data as
+production, defaults to beta updates, and may carry a private friend invitation.
+The older standalone ZIP has a separate profile and no public updates. Project64
+and the [[recorder]] remain shared machine resources in both cases.
+
+- **Lives** — `src/sm64_events/core/build_channel.py`, `tools/release_flow.py` and `tools/build_beta.py`;
+  `docs/private-beta.md`
+
+### Public beta
+
+A published prerelease anyone can download from the beta page. Its installer
+starts new users on that beta in the normal installation, with future beta and
+production updates through the same app. It contains no private invitation; open
+signup is an explicit community-service setting. A player's saved update choice
+and practice data survive later releases.
+
+- **Lives** — `tools/release_flow.py`, `src/sm64_events/bootstrap/installer.py`,
+  `src/sm64_events/core/update_policy.py` and `tools/build_website.py`
+
+### Imported ghost
+
+A native [[ghost]] received in a [[ghost collection]], with the original
+exporter's credited name and [[strategy]]. Stored separately from local
+[[attempt]]s and [[personal best]]s; importing it never awards a PB or gold.
+[[Segment]] matching compares the actual definition and clock rather than
+another player's numeric ID. Unknown definitions stay unavailable with a
+reason. Re-export preserves the original creator's credit.
+
+- **Lives** — `src/sm64_events/ghost/sharing.py` and `src/sm64_events/ghost/sharing_targets.py`
+
+### Saved ghost
+
+An [[attempt]] you chose to race that is neither your [[personal best]] nor a
+[[template track]]. Its drawer's save button keeps its Mario poses and ticks it
+in the [[ghost set]]. Its native recording can carry exact pad evidence for
+the in-game input display; saving it never changes the input comparison.
+
+- **Lives** — `src/sm64_events/ghost/saved.py`
+
+### Playback copy
+
+The copy of a local native recording that the game plays and a
+[[ghost collection]] exports, when the recording predates exact pad capture.
+Each record without a pad takes the [[input track]]'s pad at its own game
+[[frame]], so the [[ghost]]'s input display shows what you pressed. The saved
+recording itself never changes; a [[frame]] the track lacks stays unknown, and
+a copy with any unknown [[frame]] is not a [[ghost]]: its manifest says
+`inputs_complete`, and every playback, export and sharing door asks it.
+
+- **Lives** — `src/sm64_events/ghost/padfill.py` (written in an inputs
+  folder beside the saved native recordings); the question itself is
+  inputs_complete in `src/sm64_events/ghost/clip.py`
+- **Not** — a [[polled fill]], which is the replay timeline's drawing of a
+  sample with no picture.
+
+
+### Game picture
+
+The part of Project64's window its [[renderer]] draws into. On 1.6 the client
+area also contains a status bar; the game picture excludes that strip. Native
+[[ghost]]s draw directly inside this picture.
+
+- **Lives** — the renderer's presentation surfaces;
+  `src/sm64_events/replay/video.py` owns recording-window geometry
+
+### Ghost clock
+
+The [[renderer]]'s clock that chooses a recorded [[ghost]] occurrence from the
+live [[attempt]] origin and its timing [[nudge]]. The tracker publishes settled
+arm, rebase and disarm markers; native playback advances from the game's own
+timer each occurrence. No browser timer socket drives it.
+
+- **Lives** — `plugin/gfxwrap/ghost_clock.h` and `plugin/gfxwrap/ghost_clock.cpp`, with
+  origin commands from `src/sm64_events/ghost/native_session.py`
+
+
+### Nudge
+
+How far ahead or behind the [[ghost]] plays, counted in game [[frame]]s.
+Positive shows a later recorded occurrence; negative shows an earlier one.
+It belongs to the practice [[target]] and returns to zero when that changes.
+
+- **Lives** — `src/sm64_events/ghost/session.py` holds it;
+  `src/sm64_events/ghost/native_session.py` publishes it;
+  `plugin/gfxwrap/ghost_playback.cpp` applies it
+
+
+
+### Ghost colour
+
+The colour shift applied to a [[ghost]]'s body and supported held objects,
+so you can distinguish it from live Mario. It starts enabled at
++250 degrees for new users. You can change the angle or disable the colour;
+saved preferences remain in effect. Each selected [[ghost]] gets its own hue.
+
+- **Lives** — `src/sm64_events/ghost/settings.py` owns the preference;
+  `plugin/gfxwrap/ghost_compositor.cpp` applies it; the practice card's
+  `src/sm64_events/ui/components/ghostswitch.js` provides the controls
+
+### Name box
+
+The box behind a [[ghost]]'s name in the game: SM64's own dialog box, the
+black one with white text that characters speak in, or the white one with
+black text that signs use, at the opacity you choose (none at zero). The name
+itself sits just over the top of the [[ghost]]'s body, so it crouches and dives
+with him.
+
+- **Lives** — its two rows in `src/sm64_events/ghost/settings.py`;
+  `plugin/gfxwrap/ghost_annotation_mesh.h` draws it
+
+### Corner inputs
+
+Every [[ghost]]'s inputs in the game's bottom left corner, one compact row
+each stacked above your own input display (on by default). A row keeps your
+display at half size, in the Stick or Values style you chose for yours in
+Usamune's menu: its numbers centred over yours, its buttons and name
+packed close beside them, and it hides whenever Usamune hides yours (its menu
+open or its display off). At most seven show, in the order you chose them, and a row stays up
+while that [[ghost]] is off screen.
+
+- **Lives** — its switch row in `src/sm64_events/ghost/settings.py`;
+  `plugin/gfxwrap/ghost_annotation_mesh.h` draws it
+
+### Ghosts in recording
+
+The switch on the [[ghost]] card (off by default) that also records a [[ghost copy]]
+of your play while it is on. Your own recording stays clean either way: no
+[[ghost]] picture and no [[ghost]] sound, so a PB is always clean. It applies to
+what the [[recorder]] takes from then on.
+
+- **Lives** — its switch row in `src/sm64_events/ghost/settings.py`
+
+### Ghost copy
+
+A second recording, made beside your clean one while [[ghosts in recording]] is
+on, that keeps what the game window showed: the [[ghost]] bodies hidden behind
+walls as you saw them, their names and [[corner inputs]], and their sound mixed
+with the game's. It holds the clean recording's pictures, one for one, at the
+same times, so the replay's button that shows the [[ghost]]s switches between
+the two without losing your place. Saving a replay keeps the copy beside it; nothing else
+(sharing or the saved list) ever reads it. It costs a
+second video encode and its own disk space only while the switch is on, and if
+anything goes wrong with it, only the copy stops.
+
+- **Lives** — `plugin/gfxwrap/ghost_presentation.cpp` (the picture the window
+  showed) and `plugin/gfxwrap/gpu_delivery.cpp` (its capture);
+  `src/sm64_events/replay/ghostcopy.py` (its encoder);
+  `src/sm64_events/replay/service.py` (cut, save and serve);
+  `src/sm64_events/ui/components/replay.js` (Show ghosts)
 
 ### Input document
 
@@ -1213,14 +1864,21 @@ just the level.
 
 ### Death
 
-Mario dying, which closes the open [[attempt]] with a losing [[outcome]].
+Mario dying, which closes the open [[attempt]] with a losing [[outcome]]. The
+game marks Mario dead three ways: health under one wedge, a dying animation,
+or a death warp already on its way. A finish he reaches while any of those
+holds — a pipe entered mid lava boost, a key grabbed during a void-out — is a
+death too ("finished_dead"), never a success.
 
-- **Lives** — the death detector (`src/sm64_events/detectors/death.py`)
+- **Lives** — the death detector and its alive check
+  (`src/sm64_events/detectors/death.py`)
 
 ### Reset
 
-Usamune restarting the game or loading a save state. A reset closes whatever
-[[attempt]] was open and may open the next one as an [[anchor]].
+Usamune restarting the level — the L button, or entering a course. A reset
+closes whatever [[attempt]] was open and may open the next one as an
+[[anchor]]. Since 2026-09-23 loading a save state is a [[save-state load]]
+instead, which closes nothing.
 
 - **Lives** — the anchor detector (`src/sm64_events/detectors/anchors.py`)
 
@@ -1773,7 +2431,10 @@ stand where you set it), each carrying its own [[personal best]], its
 [[caveat mark]] and its own [[attempt]]s. A [[subsection]] draws inside its
 parent's card rather than beside it, indented and folding with it, so the
 piece you just ran names the [[star]] it belongs to. It highlights the card
-for whatever you are practicing right now. A Bowser course's Reds/Pipe pair is
+for whatever you are practicing right now, and keeps one card open: the
+[[target]] you picked, or else the newest thing you played, so when the game
+moves the [[target]] for you the card you were reading stays open until the
+new [[target]] records its first [[attempt]]. A Bowser course's Reds/Pipe pair is
 the worked example: the reds [[star]] is a [[subsection]] of its paired
 pipe-entry [[segment]], so grabbing it draws its own card nested inside the
 movement's rather than beside it — never a toggle hiding either half.
@@ -1875,10 +2536,13 @@ history.
 
 The box in a [[practice log]] card's head holding its [[personal best]] over
 its [[Goal]], and under them one dot per success when that [[Goal]] asks for
-a streak or a count. Clicking the lower line picks a [[rank]] or a [[runner]] or a typed
+a streak or a count. Clicking anywhere on it but the PB time (which jumps to
+that [[personal best]]'s row in the log) picks a [[rank]] or a [[runner]] or a typed
 time, and that pick pins the [[target]] on the [[Scorecard]] too. The plate
 keeps one size whatever it says, so a stream crop of the top card never moves,
-and its [[Celebration]] plays inside it.
+and its [[Celebration]] plays inside it. A finished [[attempt]] celebrates only
+against the [[Goal]] the plate showed when it ended; a [[Goal]] it has replaced
+never fires again.
 
 - **Lives** — the plate and its picker (`src/sm64_events/ui/components/goalplate.js`)
   → the pb track of the [[practice log]] card
@@ -1911,8 +2575,9 @@ what ships.
 
 ### Poller
 
-The loop reading the emulator sixty times a second: take a [[snapshot]], hand
-consecutive pairs to every [[detector]], publish whatever they emit. It
+The loop reading the emulator: it looks at the pad 250 times a second, on its
+own high-resolution timer, and once per game [[frame]] takes a [[snapshot]],
+hands consecutive pairs to every [[detector]] and publishes whatever they emit. It
 serves only a [[practice ROM]]: it reads the cartridge header when it attaches,
 whenever the game timer goes back and at least once a second, so swapping ROMs
 in Project64 needs no restart.

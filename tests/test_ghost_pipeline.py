@@ -1,0 +1,223 @@
+"""Opt-in connected synthetic GPU proof; this is not a live GLideN64 benchmark."""
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+import pytest
+
+from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.ghost.native_layout import CLIP_VERSION, PLAYBACK_VERSION, SAMPLE_VERSION
+from sm64_events.memory.layout import US
+
+ROOT = Path(__file__).resolve().parents[1]
+SAVED_GCLIP4 = ROOT / "tests/fixtures/attempt_2549_whomps-fortress_shoot-into-the-wild-blue_0m10s66.ghost"
+COMPONENTS = Path(os.environ.get("SM64_GHOST_PIPELINE_ROOT", ROOT)).resolve()
+pytestmark = pytest.mark.skipif(os.environ.get("SM64_TEST_GHOST_PIPELINE") != "1",
+    reason="explicit hidden connected native GPU witness: set SM64_TEST_GHOST_PIPELINE=1")
+
+
+def tool(name):
+    spec = importlib.util.spec_from_file_location(f"pipeline_{name}", COMPONENTS / "tools" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def layout_module():
+    # A borrowed component tree must use its matching capture ABI. Keep the
+    # normal test checkout's imports and queued tests entirely unchanged.
+    path = COMPONENTS / "src/sm64_events/memory/ghost_layout.py"
+    spec = importlib.util.spec_from_file_location("pipeline_ghost_layout", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+# Driver queries per ghost frame on the live path: none. The renderer's
+# dispatch records every value a frame restores (docs: What a drawn ghost
+# asks the driver).
+RESIDUE_QUERIES = 0
+
+
+def retain_artifacts(paths, folder=""):
+    evidence = os.environ.get("SM64_GHOST_PIPELINE_EVIDENCE")
+    if evidence:
+        destination = Path(evidence) / folder
+        destination.mkdir(parents=True, exist_ok=True)
+        for path in paths:
+            shutil.copyfile(path, destination / path.name)
+
+
+@pytest.mark.parametrize("width,height", [(640, 480), (1600, 1200)])
+def test_connected_capture_model_gpu_pipeline(tmp_path, width, height):
+    if sys.platform != "win32":
+        pytest.skip("Win32 hidden WGL pipeline")
+    rom_name, seed_name = os.environ.get("SM64_MODEL_ROM"), os.environ.get("SM64_MODEL_SEED_DIR")
+    assert rom_name and seed_name, "explicit pipeline needs a local ROM and cached pinned model inputs"
+    rom, seed = Path(rom_name), Path(seed_name)
+    digest = hashlib.sha1(rom.read_bytes()).hexdigest()
+    assert digest == "9bef1128717f958171a4afac3ed78ee2bb4e86ce", "witness expects the verified big-endian US ROM"
+    inputs = json.loads((COMPONENTS / "renderer/model/inputs.json").read_text(encoding="utf-8"))
+    for item in inputs.values():
+        cached = seed / item["filename"]
+        assert cached.is_file() and hashlib.sha256(cached.read_bytes()).hexdigest() == item["sha256"], cached
+    builder, compiler = tool("build_model"), tool("build_plugin")
+    vcvars = compiler.find_vcvars32()
+    assert vcvars, "x86 MSVC toolchain required"
+    model_identity = builder.component_hash()
+    library = builder.build_model(tmp_path / "model", seed=seed, vcvars32=vcvars)
+    native = COMPONENTS / "plugin/gfxwrap"
+    sources = [native / f"{name}.cpp" for name in
+               ("ghost_capture", "ghost_root", "ghost_particle_capture", "ghost_clock", "ghost_origin", "ghost_stream",
+                "ghost_pass", "ghost_playback", "ghost_pose", "ghost_particle_pose", "ghost_compositor",
+                "ghost_presentation", "ghost_annotation_assets")]
+    host = ROOT / "tests/native/ghost_pipeline_host.cpp"
+    source_inputs = [*sources, host, Path(__file__), COMPONENTS / "tests/native/ghost_capture_host.cpp",
+                     COMPONENTS / "tests/native/ghost_root_fixture.h",
+                     COMPONENTS / "tests/native/ghost_compositor_host.cpp",
+                     COMPONENTS / "src/sm64_events/memory/ghost_layout.py"]
+    source_inputs += sorted(native.glob("ghost_*.h"))
+    receipt = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source_inputs}
+    target = tmp_path / "ghost_pipeline_host.exe"
+    compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy",
+        f"/I{native}", f"/I{COMPONENTS / 'renderer/model'}", f"/I{COMPONENTS / 'tests/native'}",
+        *(str(path) for path in sources), str(host), str(library), f"/Fe:{target}", f"/Fo{tmp_path}\\",
+        "/link", "/OPT:REF", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'",
+        *compiler.LIBS], tmp_path)
+    layout = tmp_path / "layout.bin"
+    layout.write_bytes(layout_module().GhostLayout.from_layout(US).to_bytes())
+    result = subprocess.run([str(target), str(layout), str(rom), str(tmp_path), str(SAVED_GCLIP4),
+                             str(width), str(height)], cwd=tmp_path,
+        capture_output=True, text=True, timeout=240, check=False, **quiet_spawn_kwargs())
+    (tmp_path / "pipeline-output.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
+    shape = f"{width}x{height}"
+    retain_artifacts([tmp_path / "pipeline-output.txt"], shape)
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest
+               for path, digest in receipt.items()), "source changed during witness construction/run"
+    assert builder.component_hash() == model_identity, "model source changed during witness"
+    report.update(source_sha256=receipt, rom_sha1=digest, model=model_identity,
+                  executable_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+                  library_sha256=hashlib.sha256(library.read_bytes()).hexdigest(),
+                  layout_sha256=hashlib.sha256(layout.read_bytes()).hexdigest(),
+                  fixture="Synthetic swizzled RDRAM and terrain, real source clock and native components, hidden WGL.",
+                  excludes="Live emulator, GLideN64 terrain/VI shader, video encoding, IPC transport.",
+                  timing="Capture through presentation clean/display copies and glFinish; swap measured separately.")
+    (tmp_path / "pipeline-report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    keep_evidence(tmp_path, shape)
+    assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
+    assert (report["width"], report["height"]) == (width, height)
+    assert (report["capture_version"], report["clip_version"], report["playback_version"]) == (
+        SAMPLE_VERSION, CLIP_VERSION, PLAYBACK_VERSION)
+    assert_scene_effects(report)  # the timing below runs with the player-first fade on
+    assert_saved_ghost_plays(report["saved_gclip4"])
+    assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
+    # Drawn vertices: the model's front faces under the camera (the game culls the rest).
+    assert report["vertices"] > 800 and report["silhouette_pixels"] > 1000
+    assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
+    assert report["pipeline_gpu_completed"]["samples"] == report["including_swap"]["samples"] == 180
+    print(f"Connected synthetic pipeline report ({shape}): {tmp_path / 'pipeline-report.json'}")
+    print(json.dumps({key: report[key] for key in
+                     ("pipeline_gpu_completed", "four_pipeline_gpu_completed", "blocking_swap",
+                      "including_swap", "gpu_renderer")}))
+    assert_stage_costs(report["stages"])
+    # A functional pass cannot disguise exceeding the requested whole-frame budget.
+    assert report["including_swap"]["over_budget"] == 0, report["including_swap"]
+    assert_full_ghost_set(report)
+
+
+def keep_evidence(tmp_path, shape):
+    """The report, the host's output and every image (as PNG) for the evidence folder."""
+    from PIL import Image
+    for path in tmp_path.glob("*.ppm"):
+        with Image.open(path) as image:
+            image.save(path.with_suffix(".png"))
+    retain_artifacts([tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
+                      *tmp_path.glob("*.png")], shape)
+
+
+def assert_stage_costs(stages):
+    """Each ghost frame's compositor stages, for 1, 4 and 16 ghosts, and its
+    driver queries: exactly the documented residue on every timed frame."""
+    print(json.dumps({"stages": stages}))
+    for ghosts in ("1", "4", "16"):
+        queries = stages[ghosts]["driver_queries"]
+        assert queries["p50"] == queries["max"] == RESIDUE_QUERIES, (ghosts, queries)
+        batch = stages[ghosts]["batch_us"]["p50"]
+        assert batch >= stages[ghosts]["draw_us"]["p50"] > 0, (ghosts, stages[ghosts])
+
+
+def assert_scene_effects(report):
+    """The recorded shadow, the water over a submerged ghost, his particles, the player-first fade,
+    the back faces the game culls and the ghost's path (with what it costs)."""
+    assert_recorded_shadow(report["shadow"])
+    assert_submerged(report["water"], report["particles"])
+    assert_player_first(report["occlusion"])
+    assert_culled(report["culling"])
+    assert_path_cost(report["path"])
+
+
+def assert_culled(culling):
+    """Drawing the culled back faces too changes nothing seen from outside him; with the camera's
+    near plane through his body it would show the inside of his far side (his Round 13 report)."""
+    print(json.dumps({"culling": culling}))
+    assert culling["outside_pixels_changed"] == 0 and culling["sliced_pixels_hidden"] > 100
+
+
+def assert_saved_ghost_plays(saved):
+    """His saved ghosts from before particles (GCLIP4) still load and draw natively."""
+    assert saved["records"] == 320 and saved["visible"] == 1 and saved["pixels"] > 300
+
+
+def assert_recorded_shadow(shadow):
+    """The captured shadow darkens only its decal, scales with opacity and hides behind terrain."""
+    assert shadow["captured"] and shadow["pixels"] > 300 and shadow["would_occlude"] > 50
+    assert shadow["outside_pixels_changed"] == shadow["switch_errors"] == shadow["darkening_errors"] == 0
+    assert shadow["alpha_errors"] == shadow["occlusion_errors"] == 0
+
+
+def assert_submerged(water, particles):
+    """Below the water plane the ghost takes the water's own blend; above it, nothing changes.
+    Its recorded particles (Mario's only) are drawn from the ROM's own frames."""
+    assert water["tinted"] > 300 and water["dry"] > 300
+    assert water["outside_pixels_changed"] == water["blend_errors"] == 0
+    assert particles["recorded"] == 5 and particles["pixels"] > 200
+    # His footage (attempt 2794, a ground pound) shows the stars flat yellow, 255,253,0.
+    assert particles["star_pixels"] > 30 and particles["star_rgb"][2] <= 10
+    assert min(particles["star_rgb"][:2]) >= 243
+
+
+def assert_player_first(occlusion):
+    """A ghost in front of live Mario fades over him only; behind him it is unchanged."""
+    assert occlusion["faded"] > 1000 and occlusion["outside_pixels_changed"] == occlusion["behind_errors"] == 0
+
+
+def assert_path_cost(path):
+    """The ghost's path drawn beside one ghost, live Mario running along it: the
+    same frames with it off and on (playback's choice, the compositor's stages,
+    the frame through GPU completion). It asks the driver nothing either way."""
+    print(json.dumps({"path": path}))
+    # The host asks for 1.5 s ahead; live Mario at the start: that and its 1 s fade at 30 Hz.
+    assert path["points"] >= (1500 + 1000) * 30 // 1000 and path["pixels"] > 1000
+    for side in ("off", "on"):
+        queries = path[side]["stages"]["driver_queries"]
+        assert queries["p50"] == queries["max"] == RESIDUE_QUERIES, (side, queries)
+        assert path[side]["pipeline_gpu_completed"]["samples"] == 180
+        assert path[side]["pipeline_gpu_completed"]["over_budget"] == 0, path[side]
+
+
+def assert_full_ghost_set(report):
+    """Sixteen prepared clips drawn in one batch, inside the same frame budget."""
+    multi = report["multi"]
+    assert multi["ghosts"] == multi["visible"] == 16 and multi["outside_pixels_changed"] == 0
+    assert multi["vertices"] > 16 * 800 and multi["silhouette_pixels"] > 2 * report["silhouette_pixels"]
+    assert multi["including_swap"]["samples"] == 180
+    print(json.dumps({"multi": {key: multi[key] for key in ("ghosts", "pipeline_gpu_completed", "including_swap")}}))
+    assert multi["including_swap"]["over_budget"] == 0, multi["including_swap"]

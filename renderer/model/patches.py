@@ -1,0 +1,344 @@
+"""Exact staging patches against inputs.json's pinned libsm64 source."""
+from pathlib import Path
+
+
+def replace(path: Path, old: str, new: str, count: int = 1) -> None:
+    """`count` is how many times the anchor must appear, all replaced: some
+    upstream code repeats a block verbatim (update_game_sound's two switches)."""
+    source = path.read_text(encoding="utf-8")
+    if source.count(old) != count:
+        raise ValueError(f"Model patch anchor in {path.name} appears {source.count(old)} times, "
+                         f"not {count}: {old[:70]}")
+    path.write_text(source.replace(old, new), encoding="utf-8", newline="\n")
+
+
+def _patch_audio(source: Path) -> None:
+    def edit(name, old, new, count=1):
+        replace(source / "src" / name, old, new, count)
+
+    # Audio engine tables: GCC alignment attributes in MSVC form.
+    edit("decomp/tools/convTypes.h", "uintptr_t offset __attribute__((aligned (8)));",
+         "__declspec(align(8)) uintptr_t offset;")
+    edit("decomp/tools/convTypes.h", "unsigned int len __attribute__((aligned (8)));",
+         "__declspec(align(8)) unsigned int len;")
+    edit("decomp/tools/convTypes.h", "struct seqFile{", "struct __declspec(align(16)) seqFile{")
+    edit("decomp/tools/convTypes.h", "} __attribute__((aligned (16)));", "};")
+    # Ghost sound gain (renderer/model/audio.c) on top of the engine's own
+    # camera-distance falloff; 1 for every source that is not a ghost.
+    edit("decomp/audio/external.c", "#define gCurrLevelNum 0",
+         "#define gCurrLevelNum 0\nextern float sa_source_gain(const float *x);")
+    edit("decomp/audio/external.c",
+         "    return (volumeRange * intensity * intensity + 1.0f - volumeRange) * gAudioVolume;",
+         "    return (volumeRange * intensity * intensity + 1.0f - volumeRange) * gAudioVolume\n"
+         "           * sa_source_gain(sSoundBanks[bank][soundIndex].x);")
+    # Every source here is a ghost, and every sound a ghost plays obeys one
+    # rule. Upstream plays the menu bank (Mario's star and cap grab
+    # SOUND_MENU_STAR_SOUND, falling into a pit, entering a pipe) and a moving
+    # sound at a constant frequency at volume 1, centred, so from a distant
+    # ghost they skipped its distance and overlap gain and its placement (his
+    # report, 2026-09-28). They take the voice bank's volume and pan instead
+    # (get_sound_volume keeps SOUND_NO_VOLUME_LOSS), with their own constant
+    # pitch. Both copies of update_game_sound's switch carry the block.
+    edit("decomp/audio/external.c",
+         "                            gSequencePlayers[SEQ_PLAYER_SFX].channels[channelIndex]->volume = 1.0f;\n"
+         "                            gSequencePlayers[SEQ_PLAYER_SFX].channels[channelIndex]->pan = 0.5f;\n",
+         "                            gSequencePlayers[SEQ_PLAYER_SFX].channels[channelIndex]->volume =\n"
+         "                                get_sound_volume(bank, soundIndex, VOLUME_RANGE_UNK1);\n"
+         "                            gSequencePlayers[SEQ_PLAYER_SFX].channels[channelIndex]->pan =\n"
+         "                                get_sound_pan(*sSoundBanks[bank][soundIndex].x,\n"
+         "                                              *sSoundBanks[bank][soundIndex].z);\n",
+         count=2)
+
+
+def _patch_metal_wings(source: Path) -> None:
+    def edit(name, old, new):
+        replace(source / "src" / name, old, new)
+
+    # Metal Mario with the wing cap draws mario_metal_cap_wings(_transparent)
+    # from segment-4 0x0400A090/0x0400B090 (32x64 each); upstream libsm64
+    # leaves them out (-99), which refused that combination outright.
+    edit("load_tex_data.h", "    mario_texture_metal_wings_half_1 = -99,\n    mario_texture_metal_wings_half_2,\n"
+         "    mario_texture_eyes_closed_unused1,",
+         "    mario_texture_metal_wings_half_1,\n    mario_texture_metal_wings_half_2,\n"
+         "    mario_texture_eyes_closed_unused1 = -99,")
+    edit("load_tex_data.h", "#define NUM_USED_TEXTURES 11", "#define NUM_USED_TEXTURES SG_ATLAS_CELLS")
+    # Held-object cells (13 on, sized by the generated held_cells.h) follow;
+    # assets.c loads them from their own ROM segments, so their offsets here
+    # are unused zeros.
+    edit("load_tex_data.h", "32912, 37008 };", "32912, 37008, 41104, 45200 };")
+    edit("load_tex_data.h", "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };",
+         "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, SG_HELD_CELL_WIDTHS };")
+    edit("load_tex_data.h", "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64 };",
+         "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64, 64, 64, SG_HELD_CELL_HEIGHTS };")
+    edit("load_tex_data.h", "#include <stdint.h>",
+         '#include <stdint.h>\n#include "model.h"\n#include "decomp/held/held_cells.h"')
+
+
+def _patch_held(source: Path) -> None:
+    def edit(name, old, new):
+        replace(source / "src" / name, old, new)
+
+    # Held objects' lists end in a branch (the box's shared faces): the call
+    # and the end it implies.
+    edit("gfx_macros.h", "#define gsSPDisplayList(dl) \\",
+         "#define gsSPBranchList(dl) \\\n    GFXCMD_SubDisplayList, \\\n    (intptr_t)dl, \\\n"
+         "    GFXCMD_EndDisplayList\n\n#define gsSPDisplayList(dl) \\")
+    # A held object without an animation (a box) keeps its parts' own
+    # transforms, as geo_process_held_object skips the globals for it.
+    edit("decomp/game/rendering_graph_node.c", "geo_set_animation_globals(&gMarioObject->header.gfx.animInfo, 1);",
+         "if (gMarioObject->header.gfx.animInfo.curAnim != NULL)\n"
+         "        geo_set_animation_globals(&gMarioObject->header.gfx.animInfo, 0);")
+    _patch_tiles(source)
+
+
+def _patch_tiles(source: Path) -> None:
+    def edit(name, old, new):
+        replace(source / "src" / name, old, new)
+
+    # The render tile's clamp, mask and size ride each textured triangle's
+    # material word (sg_tile in model.h), so the ghost samples inside the
+    # texture as the RDP does: most of Mips' coordinates run past its 32x32
+    # fur under G_TX_CLAMP, King Bob-omb's wrap on a 16-texel mask.
+    edit("gfx_adapter_commands.h", "    GFXCMD_EndDisplayList,", "    GFXCMD_EndDisplayList,\n    GFXCMD_SetTile,")
+    edit("gfx_macros.h",
+         "#define gsDPSetTile(fmt, siz, line, tmem, tile, palette, cmt, maskt, shiftt, cms, masks, shifts) (GFXCMD_None)",
+         "#define gsDPSetTile(fmt, siz, line, tmem, tile, palette, cmt, maskt, shiftt, cms, masks, shifts) \\\n"
+         "    GFXCMD_SetTile, tile, cmt, maskt, shiftt, cms, masks, shifts\n"
+         "#ifndef G_TX_CLAMP /* gbi.h values; the list units see only these macros */\n"
+         "#define G_TX_RENDERTILE 0\n#define G_TX_LOADTILE 7\n#define G_TX_NOMIRROR 0\n#define G_TX_WRAP 0\n"
+         "#define G_TX_MIRROR 1\n#define G_TX_CLAMP 2\n#define G_TX_NOMASK 0\n#define G_TX_NOLOD 0\n#endif")
+    edit("gfx_adapter.c", "                s_uls = (uint16_t)uls;",
+         "                s_uls = (uint16_t)uls; s_lrs = (uint16_t)ptr[-2]; s_lrt = (uint16_t)ptr[-1];")
+    edit("gfx_adapter.c", "            case GFXCMD_EndDisplayList:",
+         "            case GFXCMD_SetTile:\n            {\n"
+         "                const intptr_t tile = ptr[0];\n"
+         "                if (tile == 0) { /* G_TX_RENDERTILE */\n"
+         "                    s_cmt = ptr[1]; s_maskt = ptr[2]; s_shiftt = ptr[3];\n"
+         "                    s_cms = ptr[4]; s_masks = ptr[5]; s_shifts = ptr[6];\n"
+         "                }\n"
+         "                ptr += 7;\n                break;\n            }\n\n"
+         "            case GFXCMD_EndDisplayList:")
+    edit("gfx_adapter.c", "static void process_display_list( void *dl )", TILE_WORD + "static void process_display_list( void *dl )")
+    # gsSPLight(&lights.a, 2) loads the ambient beside the diffuse the vertex
+    # colour already carries; an optional mesh buffer keeps it per vertex.
+    edit("gfx_adapter.c", "                if( n == 1 )\n",
+         "                if (n == 2) {\n"
+         "                    const Light *ambient = (const Light *)l;\n"
+         "                    s_curAmbient[0] = ambient->l.col[0] / 255.0f;\n"
+         "                    s_curAmbient[1] = ambient->l.col[1] / 255.0f;\n"
+         "                    s_curAmbient[2] = ambient->l.col[2] / 255.0f;\n"
+         "                }\n"
+         "                if( n == 1 )\n")
+
+
+# sg_tile (model.h) for the current render tile: its atlas cell, and per axis
+# clamp, mask and size (log2) from gsDPSetTile and gsDPSetTileSize. Mirroring,
+# shifts, a mask or size past 64 texels, or a size that is not a power of two
+# are unsupported rather than approximated.
+TILE_WORD = """static float s_curAmbient[3], *s_ambientPtr;
+static intptr_t s_cms, s_cmt, s_masks, s_maskt, s_shifts, s_shiftt;
+static uint16_t s_lrs, s_lrt;
+static unsigned sg_log2(unsigned value)
+{
+    unsigned bits = 0;
+    while (bits < 7u && (1u << bits) < value) ++bits;
+    return (1u << bits) == value ? bits : 7u;
+}
+static uint32_t sg_tile_word(void)
+{
+    const unsigned width = s_lrs >= s_uls ? ((unsigned)(s_lrs - s_uls) >> 2) + 1u : 0u;
+    const unsigned height = s_lrt >= s_ult ? ((unsigned)(s_lrt - s_ult) >> 2) + 1u : 0u;
+    const unsigned ws = sg_log2(width), hs = sg_log2(height);
+    if (ws > 6u || hs > 6u || s_masks < 0 || s_masks > 6 || s_maskt < 0 || s_maskt > 6 || s_shifts || s_shiftt
+            || (s_cms & 1) || (s_cmt & 1) || s_textureIndex < 0 || s_textureIndex > (int)SG_TILE_CELL) {
+        s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;
+        return 0u;
+    }
+    /* G_TX_CLAMP is 2, G_TX_MIRROR 1. */
+    return SG_TILE_PRESENT | (uint32_t)s_textureIndex
+        | ((s_cms & 2) ? SG_TILE_S_CLAMP : 0u) | ((uint32_t)s_masks << SG_TILE_S_MASK_SHIFT) | (ws << SG_TILE_S_SIZE_SHIFT)
+        | ((s_cmt & 2) ? SG_TILE_T_CLAMP : 0u) | ((uint32_t)s_maskt << SG_TILE_T_MASK_SHIFT) | (hs << SG_TILE_T_SIZE_SHIFT);
+}
+/* A textured triangle's material carries its tile; the metal environment map
+ * (texgen) keeps none: the caller generates its coordinates in range. */
+static uint32_t sg_material_word(void)
+{
+    if (!s_textureOn) return SG_MATERIAL_SOLID;
+    if (s_texgen) return s_material | SG_MATERIAL_TEXGEN;
+    return s_material | (sg_tile_word() << SG_MATERIAL_TILE_SHIFT);
+}
+
+"""
+
+
+def patch(source: Path) -> None:
+    def edit(name, old, new):
+        replace(source / "src" / name, old, new)
+
+    # Terrain alignment is already captured in throw_matrix. Excluding its
+    # simulation-only routine avoids linking a fake floor query into the model.
+    edit("decomp/engine/math_util.c", "void mtxf_align_terrain_triangle(",
+         "#if 0 /* The pose API receives terrain alignment as a matrix. */\nvoid mtxf_align_terrain_triangle(")
+    edit("decomp/engine/math_util.c", "void mtxf_mul(Mat4 dest, Mat4 a, Mat4 b) {",
+         "#endif\nvoid mtxf_mul(Mat4 dest, Mat4 a, Mat4 b) {")
+    # Keep only the existing transform helpers referenced by the geo callback.
+    # The preceding object allocation/action loop is a physics dependency.
+    path = source / "src/decomp/game/object_stuff.c"
+    text = path.read_text(encoding="utf-8")
+    marker = "void create_transformation_from_matrices("
+    if text.count(marker) != 1:
+        raise ValueError("Object transform helper boundary changed")
+    path.write_text('#include "object_stuff.h"\n#include "../shim.h"\n'
+                    '#include "../include/object_fields.h"\n' + text[text.index(marker):],
+                    encoding="utf-8", newline="\n")
+    edit("libsm64.h", "#if defined(_WIN32)",
+         "#if defined(SM64_LIB_STATIC)\n#define SM64_LIB_FN\n#elif defined(_WIN32)")
+    edit("decomp/include/platform_info.h", "#define IS_BIG_ENDIAN (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)",
+         "#ifdef _WIN32\n#define IS_BIG_ENDIAN 0\n#else\n#define IS_BIG_ENDIAN (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)\n#endif")
+    edit("decomp/include/macros.h", "#else\n#define ALIGNED8\n", "#else\n#define ALIGNED8 __declspec(align(8))\n")
+    edit("decomp/include/macros.h", "#else\n#define ALIGNED16\n", "#else\n#define ALIGNED16 __declspec(align(16))\n")
+    edit("decomp/include/PR/libaudio.h", "u8 *offset __attribute__((aligned (8)));", "__declspec(align(8)) u8 *offset;")
+    edit("decomp/include/PR/libaudio.h", "s32 len __attribute__((aligned (8)));", "__declspec(align(8)) s32 len;")
+    edit("decomp/include/PR/libaudio.h", "} __attribute__((aligned (16))) ALSeqFile;", "} ALSeqFile;")
+    edit("decomp/include/PR/libaudio.h", "typedef struct\n{\n    unsigned short  revision;",
+         "typedef struct __declspec(align(16))\n{\n    unsigned short  revision;")
+    _patch_audio(source)
+    path = source / "src/gfx_adapter.h"
+    path.write_text(path.read_text(encoding="utf-8").replace("({})", "((void)0)"), encoding="utf-8", newline="\n")
+    edit("gfx_adapter_commands.h", "    GFXCMD_None = 0,", "    GFXCMD_None = 0,\n    GFXCMD_Material,\n    GFXCMD_GeometryMode,")
+    # Metal Mario's lists switch G_TEXTURE_GEN on and off; keep that bit.
+    # The words now reach the adapter, so the F3D (US) geometry-mode names
+    # need values here (gbi.h's non-F3DEX_GBI_2 branch).
+    edit("gfx_macros.h", "#define gsSPSetGeometryMode(word) (GFXCMD_None)",
+         "#ifndef G_TEXTURE_GEN\n#define G_ZBUFFER 0x00000001\n#define G_SHADE 0x00000004\n"
+         "#define G_TEXTURE_ENABLE 0x00000002\n#define G_SHADING_SMOOTH 0x00000200\n"
+         "#define G_CULL_FRONT 0x00001000\n#define G_CULL_BACK 0x00002000\n#define G_CULL_BOTH 0x00003000\n"
+         "#define G_FOG 0x00010000\n#define G_LIGHTING 0x00020000\n#define G_TEXTURE_GEN 0x00040000\n"
+         "#define G_TEXTURE_GEN_LINEAR 0x00080000\n#define G_LOD 0x00100000\n#endif\n"
+         "#define gsSPSetGeometryMode(word) GFXCMD_GeometryMode, 1, (word)")
+    edit("gfx_macros.h", "#define gsSPClearGeometryMode(word) (GFXCMD_None)",
+         "#define gsSPClearGeometryMode(word) GFXCMD_GeometryMode, 0, (word)")
+    edit("gfx_macros.h", '#include "gfx_adapter_commands.h"', '#include "gfx_adapter_commands.h"\n#include "model.h"')
+    _patch_metal_wings(source)
+    _patch_held(source)
+    edit("gfx_macros.h", "#define gsDPSetCombineMode(a, b) (GFXCMD_None)", """
+/* Token pasting retains the actual named combiner before its RDP expansion.
+ * Both cycles must map to the same supported behavior; unknown modes fail the
+ * build instead of silently losing their material semantics.
+ */
+#define SG_MODE_G_CC_SHADE SG_MATERIAL_SOLID
+#define SG_MODE_G_CC_SHADEFADEA SG_MATERIAL_SOLID
+#define SG_MODE_G_CC_BLENDRGBA SG_MATERIAL_ALPHA_MIX
+#define SG_MODE_G_CC_BLENDRGBFADEA SG_MATERIAL_ALPHA_MIX
+#define SG_MODE_G_CC_DECALRGBA SG_MATERIAL_DECAL_RGBA
+#define SG_MODE_G_CC_DECALFADEA SG_MATERIAL_DECAL_RGBA
+#define SG_MODE_G_CC_DECALFADE SG_MATERIAL_DECAL_RGB
+#define SG_MODE_G_CC_MODULATERGB SG_MATERIAL_MODULATE_RGB
+#define SG_MODE_G_CC_MODULATERGBFADEA SG_MATERIAL_MODULATE_RGB
+#define SG_MODE_G_CC_MODULATERGBA SG_MATERIAL_MODULATE_RGBA
+#define gsDPSetCombineMode(a, b) GFXCMD_Material, SG_MODE_##a, SG_MODE_##b
+""")
+    edit("decomp/game/mario_misc.c", '#include "../include/PR/ultratypes.h"',
+         '#include "../include/PR/ultratypes.h"\nextern const int16_t *sg_effective_head_rotation(void);')
+    edit("decomp/game/mario_misc.c",
+         "            vec3s_set(bodyState->headAngle, 0, 0, 0);\n            vec3s_set(rotNode->rotation, 0, 0, 0);",
+         "            const int16_t *head = sg_effective_head_rotation();\n"
+         "            rotNode->rotation[0] = head[0];\n            rotNode->rotation[1] = head[1];\n"
+         "            rotNode->rotation[2] = head[2];")
+    edit("decomp/game/rendering_graph_node.c", "void geo_process_root_hack_single_node(struct GraphNode *node)",
+         "void sg_traverse_frozen(struct GraphNode *node)")
+    path = source / "src/decomp/game/rendering_graph_node.c"
+    text = path.read_text(encoding="utf-8").replace("gDisplayListHead++", "NULL")
+    text += """
+void sg_traversal_reset(void) {
+    gCurGraphNodeRoot = NULL; gCurGraphNodeMasterList = NULL;
+    gCurGraphNodeCamFrustum = NULL; gCurGraphNodeCamera = NULL;
+    gCurGraphNodeObject = NULL; gCurGraphNodeHeldObject = NULL;
+    gDisplayListHeap = NULL; gDisplayListHead = NULL; gMatStackIndex = 0;
+}
+"""
+    path.write_text(text, encoding="utf-8", newline="\n")
+    edit("gfx_adapter.c", '#include "libsm64.h"', '#include "libsm64.h"\n#include "model.h"\n#include <math.h>')
+    edit("gfx_adapter.c", "static Mat4 s_curMatrix;", "static Mat4 s_curMatrix;\nstatic Mat4 s_normalMatrix;")
+    edit("gfx_adapter.c", "static struct SM64MarioGeometryBuffers *s_outBuffers;",
+         "static struct SM64MarioGeometryBuffers *s_outBuffers;\n"
+         "static struct SM64MarioGeometryBuffers s_model_output;\n"
+         "static uint32_t s_capacity, s_errors, s_material, s_texgen, s_cull;\nstatic uint32_t *s_materialPtr;")
+    edit("gfx_adapter.c", "            case GFXCMD_VertexData:",
+         "            case GFXCMD_Material: {\n"
+         "                uint32_t first = (uint32_t)*ptr++, second = (uint32_t)*ptr++;\n"
+         "                if (first != second || first > SG_MATERIAL_MODULATE_RGBA)\n"
+         "                    s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;\n"
+         "                s_material = first; break;\n            }\n"
+         "            case GFXCMD_GeometryMode: {\n"
+         "                intptr_t set = *ptr++, word = *ptr++;\n"
+         "                if (word & G_TEXTURE_GEN) s_texgen = set ? 1u : 0u;\n"
+         "                if (word & G_CULL_BACK) s_cull = set ? 1u : 0u;\n"
+         "                if (set && (word & G_CULL_FRONT)) s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;\n"
+         "                break;\n            }\n"
+         "            case GFXCMD_VertexData:")
+    edit("gfx_adapter.c", "                UNUSED intptr_t flag0 = *ptr++;",
+         "                UNUSED intptr_t flag0 = *ptr++;\n"
+         "                if (s_outBuffers->numTrianglesUsed >= s_capacity / 3) {\n"
+         "                    s_errors |= SG_MESH_TOO_SMALL; break;\n                }\n"
+         "                if (s_texgen && s_textureOn && (s_textureIndex != 0 || s_scaleS != 0x0F80 || s_scaleT != 0x07C0))\n"
+         "                    s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;\n"
+         "                s_materialPtr[0] = s_materialPtr[1] = s_materialPtr[2] =\n"
+         "                    sg_material_word() | (s_cull ? (uint32_t)SG_MATERIAL_CULL_BACK : 0u);\n"
+         "                s_materialPtr += 3;\n"
+         "                if (s_ambientPtr) {\n"
+         "                    for (int k = 0; k < 9; ++k) s_ambientPtr[k] = s_curAmbient[k % 3];\n"
+         "                    s_ambientPtr += 9;\n                }")
+    edit("gfx_adapter.c", "                s_textureIndex = (int)i;",
+         "                s_textureIndex = (int)i;\n"
+         "                if (s_textureIndex < 0 || s_textureIndex >= NUM_USED_TEXTURES) {\n"
+         "                    s_errors |= SG_MESH_UNSUPPORTED_MATERIAL; s_textureIndex = 0;\n                }")
+    path = source / "src/gfx_adapter.c"
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("mtxf_mul_vec3f_x( s_curMatrix, n", "mtxf_mul_vec3f_x( s_normalMatrix, n")
+    text = text.replace("// TODO normals arent correct under non-uniform scale. multiply by inverse/transpose",
+                        "// Inverse-transpose preserves normals under nonuniform scale.")
+    text = text.replace("    guMtxL2F( s_curMatrix, m );", "    guMtxL2F( s_curMatrix, m );\n    sg_normal_matrix();")
+    normal = """
+static void sg_normal_matrix(void) {
+    double a=s_curMatrix[0][0], b=s_curMatrix[0][1], c=s_curMatrix[0][2];
+    double d=s_curMatrix[1][0], e=s_curMatrix[1][1], f=s_curMatrix[1][2];
+    double g=s_curMatrix[2][0], h=s_curMatrix[2][1], i=s_curMatrix[2][2];
+    double det=a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g);
+    mtxf_identity(s_normalMatrix);
+    if (!(det > 1e-24 || det < -1e-24)) { s_errors |= SG_MESH_NONFINITE; return; }
+    s_normalMatrix[0][0]=(float)((e*i-f*h)/det);
+    s_normalMatrix[0][1]=(float)((f*g-d*i)/det);
+    s_normalMatrix[0][2]=(float)((d*h-e*g)/det);
+    s_normalMatrix[1][0]=(float)((c*h-b*i)/det);
+    s_normalMatrix[1][1]=(float)((a*i-c*g)/det);
+    s_normalMatrix[1][2]=(float)((b*g-a*h)/det);
+    s_normalMatrix[2][0]=(float)((b*f-c*e)/det);
+    s_normalMatrix[2][1]=(float)((c*d-a*f)/det);
+    s_normalMatrix[2][2]=(float)((a*e-b*d)/det);
+}
+"""
+    text = text.replace("void gSPMatrix(", normal + "\nvoid gSPMatrix(")
+    text += """
+void sg_geometry_bind(sg_mesh *mesh) {
+    s_model_output.position=mesh->position; s_model_output.normal=mesh->normal;
+    s_model_output.color=mesh->color; s_model_output.uv=mesh->uv;
+    s_capacity=mesh->vertex_capacity; s_errors=0;
+    s_materialPtr=mesh->material; s_material=SG_MATERIAL_SOLID; s_texgen=0;
+    s_cull=1; /* the game's RSP init leaves G_CULL_BACK on for every object */
+    s_textureOn=0; s_textureIndex=0; s_scaleS=s_scaleT=0; s_uls=s_ult=0;
+    s_texWidth=s_texHeight=64; s_curColor[0]=s_curColor[1]=s_curColor[2]=1;
+    s_ambientPtr=mesh->ambient; s_curAmbient[0]=s_curAmbient[1]=s_curAmbient[2]=0;
+    gfx_adapter_bind_output_buffers(&s_model_output);
+}
+uint32_t sg_geometry_errors(void) { return s_errors; }
+uint32_t sg_geometry_vertex_count(void) { return s_model_output.numTrianglesUsed * 3u; }
+float *sg_geometry_position(uint32_t vertex) { return s_model_output.position + 3u * vertex; }
+float *sg_geometry_normal(uint32_t vertex) { return s_model_output.normal + 3u * vertex; }
+void sg_geometry_reset(void) {
+    s_outBuffers=NULL; s_trianglePtr=s_colorPtr=s_normalPtr=s_uvPtr=NULL;
+    s_materialPtr=NULL; s_material=SG_MATERIAL_SOLID; s_texgen=0; s_cull=1; s_ambientPtr=NULL;
+    memset(&s_model_output,0,sizeof(s_model_output)); s_capacity=s_errors=0;
+}
+"""
+    path.write_text(text, encoding="utf-8", newline="\n")

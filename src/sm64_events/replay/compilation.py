@@ -24,7 +24,7 @@ from pathlib import Path
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.paths import bundled_ffmpeg
-from sm64_events.core.timefmt import format_igt
+from sm64_events.core.timefmt import format_igt_short
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.config import CLIP_MAXRATE, video_quality_args
 from sm64_events.replay.service import _slug
@@ -208,7 +208,7 @@ class CompilationService:
                 "clip_count": res.clip_count,
                 "skipped": plan.aged_out + res.skipped_runtime,
                 "no_finale": plan.no_finale or not res.finale_included,
-                "finale_time": (format_igt(plan.finale_frames)
+                "finale_time": (format_igt_short(plan.finale_frames)
                                 if plan.finale_frames is not None
                                 and res.finale_included else None)}
             job["progress"] = 1.0

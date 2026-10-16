@@ -12,3 +12,15 @@
 
 /release.json
   Cache-Control: public, max-age=0, must-revalidate
+
+/beta
+  Cache-Control: public, max-age=0, must-revalidate
+
+/beta/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/beta/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/beta/release.json
+  Cache-Control: public, max-age=0, must-revalidate

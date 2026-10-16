@@ -30,21 +30,29 @@ def source_build():
     return source, gl, build, vcvars, flags
 
 
-@pytest.mark.parametrize("mutation", [None, "observe_early", "drop_ticket"])
+@pytest.mark.parametrize("mutation", [None, "observe_early", "drop_ticket", "drop_before_update", "late_before_update"])
 def test_actual_source_command(tmp_path, source_build, mutation):
     source, gl, build, vcvars, flags = source_build
     common = (source / "common/CommonAPIImpl_common.cpp").read_bytes()
     command = common[common.index(b"class ProcessUpdateScreenCommand :"):common.index(b"class FBReadCommand :")]
     method = common[common.index(b"void PluginAPI::UpdateScreenCaptured"):common.index(b"void PluginAPI::_initiateGFX")]
     method = method[:method.rfind(b"#endif")]
-    api = (ROOT / "plugin/gfxwrap/link_source_api.cpp").read_bytes()
+    api = (gl / "link_source_api.cpp").read_bytes()
     update = api[api.index(b"void __cdecl update("):api.index(b"const rs_api api_v2")]
+    before = api[api.index(b'extern "C" void rs_before_update()'):
+                 api.index(b'#pragma comment(linker,"/EXPORT:SM64ReplaySourceV2')]
+    assert command.count(b"VI_UpdateScreen();") == command.count(b"rs_before_update();") == 1
     if mutation == "observe_early":
-        command = command.replace(b"\t\tVI_UpdateScreen();\n", b"")
+        command = command.replace(b"VI_UpdateScreen();", b"")
         command = command.replace(b"\t\treturn true;", b"\t\tVI_UpdateScreen();\n\t\treturn true;")
     elif mutation == "drop_ticket":
         command = command.replace(b"m_capture(request)", b"m_capture{0,0}")
-    (tmp_path / "source_update_command.inc").write_bytes(command + method + update)
+    elif mutation == "drop_before_update":
+        command = command.replace(b"rs_before_update();", b"")
+    elif mutation == "late_before_update":
+        command = command.replace(b"rs_before_update();", b"")
+        command = command.replace(b"VI_UpdateScreen();", b"VI_UpdateScreen();rs_before_update();")
+    (tmp_path / "source_update_command.inc").write_bytes(command + method + update + before)
     target = tmp_path / "source_host.exe"
     build._cl(vcvars, flags + ["/DRSPTHREAD", str(ROOT / "plugin/gfxwrap/renderer_boundary.cpp"),
         str(ROOT / "plugin/gfxwrap/renderer_source_host.cpp"), f"/I{tmp_path}",

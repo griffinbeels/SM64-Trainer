@@ -27,7 +27,7 @@ from sm64_events.core.landmark import landmark_group
 from sm64_events.core.modes import ModeConfig, effective_version
 from sm64_events.core.paths import bundled_defaults_seed, shared_defaults_root
 from sm64_events.core.recording_url import validate_recording_url
-from sm64_events.core.timefmt import format_igt
+from sm64_events.core.timefmt import format_igt_short
 from sm64_events.memory.addresses import course_name, node_label, star_name
 from sm64_events.ranks import scopes
 from sm64_events.ranks.classify import RANK_MODES
@@ -40,7 +40,8 @@ from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
 from sm64_events.tracking.prune import PRUNE_EVENT, prunable_ids
-from sm64_events.tracking.projection import (Projector, journal_id, replay,
+from sm64_events.tracking.projection import (ATTEMPT_RULES, Projector,
+                                             journal_id, replay,
                                              wipe_matches)
 from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
                                            merge_definitions,
@@ -140,6 +141,12 @@ class TrackerService:
         self.broadcaster = broadcaster
         self.ranks = ranks            # RankStandards | None
         self.on_segment_definitions_changed = None
+        self.on_attempt_saved = None
+        # Told once per strategy reclassification (`_adopt_untagged`,
+        # `set_attempt_strat`) with the retagged attempts as stored now, so
+        # the ghost side can move each run to its new strategy.
+        self.on_attempts_reclassified = None
+        self.observed_game_version = None
         # The game version SETTING (core/modes.py) as last applied through
         # `set_game_version` -- main.py applies the persisted one at boot.
         # What it RESOLVES to lives on the standards store as
@@ -161,6 +168,8 @@ class TrackerService:
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
+        # Automatic PB saves in flight (`_spawn_auto_pb`); a test awaits them.
+        self.auto_pb_tasks: set[asyncio.Task] = set()
         self._tracking_lock = asyncio.Lock()
         self._tracking_dirty = False
         self._tracking_error = None
@@ -171,12 +180,13 @@ class TrackerService:
         self._tracking_retry_delay = 0.25
         self._pending_gap = None
         self._gap_seq = None
-        # Zero-arg callable -> attempt ids with a saved replay clip, which the
-        # startup prune must never delete (tracking/prune.py). Injected by
-        # main.py because the clips live on the REPLAY side and the dependency
-        # only runs that way; left None here so the prune still protects saved
-        # PBs when nothing wired it (tests, a db-only harness).
-        self.saved_clip_ids: Callable[[], set[int]] | None = None
+        # (candidate attempt ids) -> those of them with a saved replay clip,
+        # which the startup prune must never delete (tracking/prune.py).
+        # Injected by main.py because the clips live on the REPLAY side and
+        # the dependency only runs that way; left None here so the prune
+        # still protects saved PBs when nothing wired it (tests, a db-only
+        # harness).
+        self.saved_clip_ids: Callable[[list[int]], set[int]] | None = None
 
     def _load_segment_defs(self) -> list[SegmentDef]:
         # inclusion list (the dataclass's own fields), NOT exclusion of
@@ -274,7 +284,8 @@ class TrackerService:
         self.session_id = self.db.insert_session(_iso(_now()))
         await self.publish(Event(type="session_started", frame=0,
                                  timestamp_utc=_now(),
-                                 payload={"session_id": self.session_id}))
+                                 payload={"session_id": self.session_id,
+                                          "attempt_rules": ATTEMPT_RULES}))
         # AFTER session_started, deliberately: that event is what closes an
         # attempt left in flight when the last session ended (the cross-session
         # abandon), and such a row belongs to the session that just ended, so
@@ -313,6 +324,10 @@ class TrackerService:
     # Optional async media preservation after the user's validated PB command.
     # The composition root owns recording; projection/replay never calls this.
     on_pb_saved = None
+    # The ghost follows the PB: awaited with (attempt, saved) as soon as a PB
+    # row is written or deleted, BEFORE the slow media save above. `attempt`
+    # is None after a reprojection, which may have removed PB rows in bulk.
+    on_pb_changed = None
     on_session_ended = None
     on_replay_history = None  # bounded metadata only; file expiry runs on recorder maintenance
 
@@ -332,6 +347,10 @@ class TrackerService:
         session). An attempt's id is the journal id of its first event, so a
         caller that journals a single-event attempt — `import_times` — learns
         the attempt's id from this and nowhere else."""
+        if event.frame > 0 and self.observed_game_version is not None:
+            version = self.observed_game_version()
+            if version in ("us","jp"):
+                event = dataclasses.replace(event,payload={**event.payload,"game_version":version})
         if event.type == "stage_changed":
             # The world NODE the player is standing in, stamped BEFORE the
             # broadcast because the browser MERGES this payload into its held
@@ -574,11 +593,19 @@ class TrackerService:
                 return jid
         for attempt in closed:
             self.db.upsert_attempt(attempt)
+            if self.on_attempt_saved is not None:
+                try:
+                    self.on_attempt_saved(attempt)
+                except Exception:  # noqa: BLE001 -- optional queue cannot stop tracking
+                    log.exception("ghost population could not enqueue attempt %s",attempt.id)
             self._update_replay_history([attempt])
             # The derived event's journal row carries the CURRENT session_id,
             # which for a cross-session abandon differs from the attempt's own
             # session_id — the payload's session_id is authoritative.
             await self.publish(self._attempt_completed_event(attempt, event))
+            mode = self._auto_pb_mode(attempt)
+            if mode is not None:
+                self._spawn_auto_pb(attempt.id, mode)
             if self._projector is not proj:
                 return jid
         self._update_replay_history()
@@ -638,13 +665,16 @@ class TrackerService:
                          "anchor_type": a.anchor_type, "outcome": a.outcome,
                          "outcome_detail": a.outcome_detail,
                          "igt_frames": a.igt_frames,
-                         "igt": format_igt(a.igt_frames) if a.igt_frames is not None else None,
+                         "igt": format_igt_short(a.igt_frames) if a.igt_frames is not None else None,
                          "rta_frames": a.rta_frames,
-                         "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
+                         "rta": format_igt_short(a.rta_frames) if a.rta_frames is not None else None,
                          "rollouts_total": a.rollouts_total,
                          "rollouts_dustless": a.rollouts_dustless,
                          "jumps_total": a.jumps_total,
                          "jumps_dustless": a.jumps_dustless,
+                         "valid": a.valid,
+                         "invalid_reason": a.invalid_reason,
+                         "state_loads": a.state_loads,
                      })
 
     def _segment_name(self, segment_id: int | None) -> str | None:
@@ -734,6 +764,43 @@ class TrackerService:
         armed_segment_ids: a plain view refresh reads the projector directly
         rather than depending on a missed segment_disarmed/armed notice."""
         return self._projector.armed_arms()
+
+    def native_ghost_origin(self, kind: str, entity_key: str) -> dict | None:
+        """Only the current, recovered session can certify a live origin."""
+        if self.db is None or self.session_id is None or self._tracking_dirty:
+            return None
+        origin = self._projector.native_ghost_origin(kind, entity_key)
+        return (origin if origin is not None
+                and origin["session_id"] == self.session_id else None)
+
+    def native_rival_origin(self, kind: str, entity_key: str, *, frame=None) -> dict | None:
+        """A playback owner plus a distinct certified full-start marker.
+
+        Merely selecting a target midway, restoring a state or rebasing its
+        clock never certifies adopting newly prepared rivals.
+        `frames_since_start` counts the polled frames since the certified
+        start (0 at the start frame), so a roster prepared moments late can
+        still join that run (`ghost/native_session.py::LATE_JOIN_FRAMES`);
+        None without a certificate or a usable frame.
+        """
+        if self.db is None or self.session_id is None or self._tracking_dirty:
+            return None
+        origin = self.native_ghost_origin(kind,entity_key)
+        certificate = self._projector.native_rival_start(kind,entity_key)
+        if certificate is not None and certificate["session_id"] != self.session_id:
+            certificate = None
+        if origin is None and certificate is None:
+            return None
+        waiting = ({"session_id":certificate["session_id"], "start_frame":certificate["start_frame"]}
+                   if certificate else {})
+        since_start = (frame - certificate["start_frame"]
+                       if certificate is not None and type(frame) is int
+                       and type(certificate["start_frame"]) is int
+                       and frame >= certificate["start_frame"] else None)
+        return {**(origin if origin is not None else waiting),"clock_ready":origin is not None,
+                "full_start_token":certificate["token"] if certificate else None,
+                "full_start_now":certificate is not None and frame == certificate["start_frame"],
+                "frames_since_start":since_start}
 
     def _require_db(self) -> Database:
         if self.db is None or self.session_id is None:
@@ -986,7 +1053,8 @@ class TrackerService:
     async def _adopt_untagged(self, db: Database, strat_tag: str, *,
                               course_id: int | None = None,
                               star_id: int | None = None,
-                              segment_id: int | None = None) -> dict | None:
+                              segment_id: int | None = None,
+                              into: list[int] | None = None) -> dict | None:
         """Picking a strategy claims every row of that star or segment that
         has none (task 0146, his words: "We should assume that the unassigned
         entries are the strategy we selected overall"). Rows he explicitly
@@ -998,6 +1066,10 @@ class TrackerService:
         Ordinary writes run this BEFORE strat_set/target_set, so clients
         refreshing on that event already see the adopted rows. Sole automatic
         offers first require target_set acceptance; declined offers adopt none.
+
+        The adopted rows are announced through `on_attempts_reclassified`,
+        unless `into` collects them for a caller that announces one larger
+        reclassification itself (`set_attempt_strat`'s newest row).
         """
         ids = [a.id for a in db.attempts()
                if (a.segment_id, a.course_id, a.star_id)
@@ -1017,19 +1089,45 @@ class TrackerService:
         for attempt_id in ids:
             self._projector.override_strat(attempt_id, strat_tag)
         self._preserve_destination_pbs(classification)
+        if into is None:
+            self._announce_reclassified(db, ids)
+        else:
+            into.extend(ids)
         return classification
+
+    def _announce_reclassified(self, db: Database, ids: list[int]) -> None:
+        """Hand the reclassified attempts, re-read with their stored tag, to
+        `on_attempts_reclassified`. A run saved under one strategy and then
+        corrected must stop racing for the old one (his report 2026-10-13,
+        In the Deep Freeze: Standard, then TJ Strat). Like `on_attempt_saved`,
+        a failing listener never stops tracking."""
+        if self.on_attempts_reclassified is None:
+            return
+        attempts = [row for row in (db.attempt(attempt_id) for attempt_id in dict.fromkeys(ids))
+                    if row is not None]
+        if not attempts:
+            return
+        try:
+            self.on_attempts_reclassified(attempts)
+        except Exception:  # noqa: BLE001 -- the ghost side cannot stop tracking
+            log.exception("the ghost side could not follow reclassified attempts %s",
+                          [row.id for row in attempts])
 
     async def set_strat(self, course_id: int, star_id: int,
                         strat_tag: str | None,
                         timer_mode: str = "igt", *,
-                        save_adopted: bool = True) -> dict | None:
-        """Set a star's active strategy without touching the target."""
+                        save_adopted: bool = True,
+                        adopted_ids: list[int] | None = None) -> dict | None:
+        """Set a star's active strategy without touching the target.
+
+        `adopted_ids` collects the untagged rows the pick adopts instead of
+        announcing them (`_adopt_untagged`)."""
         db = self._require_db()
         self._validate_pb_clock(timer_mode)
         adoption = None
         if strat_tag:
             adoption = await self._adopt_untagged(
-                db, strat_tag, course_id=course_id, star_id=star_id)
+                db, strat_tag, course_id=course_id, star_id=star_id, into=adopted_ids)
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"course_id": course_id,
@@ -1047,7 +1145,8 @@ class TrackerService:
 
     async def set_strat_segment(self, segment_id: int,
                                 strat_tag: str | None, *,
-                                save_adopted: bool = True) -> dict | None:
+                                save_adopted: bool = True,
+                                adopted_ids: list[int] | None = None) -> dict | None:
         """Segment sibling of set_strat — same journaled shape, same
         registration, same target-changed republish. Kept in step with the
         star version deliberately: the practice UI drives both through one
@@ -1062,7 +1161,8 @@ class TrackerService:
         if all(d["id"] != segment_id for d in db.segment_defs()):
             raise LookupError(f"segment {segment_id} not found")
         if strat_tag:
-            adoption = await self._adopt_untagged(db, strat_tag, segment_id=segment_id)
+            adoption = await self._adopt_untagged(db, strat_tag, segment_id=segment_id,
+                                                  into=adopted_ids)
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"kind": "segment",
@@ -1206,13 +1306,18 @@ class TrackerService:
         self._projector.override_strat(attempt_id, strat_tag)
         # Newest-attempt exception (docstring above): the active strategy
         # follows a reclassified top-of-log row.
+        adopted: list[int] = []
         if strat_tag and newest:
             if attempt.segment_id is not None:
                 await self.set_strat_segment(attempt.segment_id, strat_tag,
-                                             save_adopted=False)
+                                             save_adopted=False, adopted_ids=adopted)
             else:
                 await self.set_strat(attempt.course_id, attempt.star_id,
-                                     strat_tag, timer_mode=timer_mode, save_adopted=False)
+                                     strat_tag, timer_mode=timer_mode, save_adopted=False,
+                                     adopted_ids=adopted)
+        # One announcement for this row and the pending rows it adopted.
+        self._announce_reclassified(
+            db, ([attempt_id] if strat_tag != attempt.strat_tag else []) + adopted)
         saved = await self._save_classified_best(
             classification if newest else None,
             "rta" if attempt.segment_id is not None else timer_mode)
@@ -1284,14 +1389,18 @@ class TrackerService:
         if current and current["attempt_id"] == attempt.id:
             # Retagging an already-saved winner is an earned correction too;
             # announce it through the same door without inserting a duplicate.
-            return await self._publish_pb_saved(attempt, timer_mode, classification["before"])
+            return await self._publish_pb_saved(
+                attempt, timer_mode, classification["before"], auto=True,
+                previous_frames=prior["frames"] if prior else None)
         migrated = next((row for row in reversed(db.pbs())
                          if row["attempt_id"] == attempt.id and row["timer_mode"] == timer_mode
                          and row["strat_tag"] == attempt.strat_tag), None)
         if migrated:
             db.reassert_pb(migrated["id"])
-            return await self._publish_pb_saved(attempt, timer_mode, classification["before"])
-        return await self.save_pb(attempt.id, timer_mode,
+            return await self._publish_pb_saved(
+                attempt, timer_mode, classification["before"], auto=True,
+                previous_frames=prior["frames"] if prior else None)
+        return await self.save_pb(attempt.id, timer_mode, auto=True,
                                   classification=classification["before"])
 
     @staticmethod
@@ -2278,20 +2387,28 @@ class TrackerService:
         """
         db = self._require_db()
         protected = db.pb_attempt_ids()
+        stale = [a for a in db.attempts() if a.session_id != self.session_id]
+        # A clip can only spare an attempt the saved PBs alone would drop
+        # (`prunable_ids` never drops more for a larger protected set), so
+        # only those candidates' clips are validated -- each costs a full
+        # parse and hash, and all of them took 1.66 s of every start (09-25).
+        candidates = prunable_ids(stale, protected)
+        if not candidates:
+            return 0
+        clipped = set()
         if self.saved_clip_ids is not None:
             try:
-                protected |= self.saved_clip_ids()
+                clipped = self.saved_clip_ids(candidates)
             except OSError:
                 log.exception("saved-clip scan failed; skipping the attempt "
                               "prune rather than risk orphaning a clip")
                 return 0
-        stale = [a for a in db.attempts() if a.session_id != self.session_id]
-        doomed = prunable_ids(stale, protected)
+        doomed = prunable_ids(stale, protected | clipped)
         if not doomed:
             return 0
         log.info("pruning %d unlabelled attempt(s) left by previous sessions "
-                 "(%d attempt(s) protected by a saved PB or clip)",
-                 len(doomed), len(protected))
+                 "(%d kept by a saved PB, %d more by a saved clip)",
+                 len(doomed), len(protected), len(clipped - protected))
         await self.publish(Event(type=PRUNE_EVENT, frame=0,
                                  timestamp_utc=_now(),
                                  payload={"attempt_ids": doomed}))
@@ -2339,6 +2456,9 @@ class TrackerService:
             await self.publish(Event(type="target_changed", frame=0,
                                      timestamp_utc=_now(),
                                      payload=self.target_payload()))
+        # Hiding a run, a wipe and a session delete all remove PB rows and end
+        # here: the ghost re-reads which PB it follows rather than trailing it.
+        await self._pb_changed(None, saved=False)
 
     def pb_action(self, attempt, timer_mode: str) -> tuple[str | None, dict | None]:
         """`pbaction.pb_action` asked of the DATABASE for one attempt: the
@@ -2370,7 +2490,59 @@ class TrackerService:
     def _refusal(blocked, fallback: str) -> str:
         return blocked["reason"] if blocked else fallback
 
-    async def save_pb(self, attempt_id: int, timer_mode: str, *,
+    def _auto_pb_mode(self, attempt) -> str | None:
+        """The clock an AUTOMATIC PB saves this finished attempt on, or None
+        when it must stay a manual choice (task 0144, his decisions
+        2026-09-23).
+
+        Every condition is his: a VALID run (projection caveat 21 -- a full
+        reset at the course start and no save-state load; never an unjudged
+        pre-rules-2 row), on the clock the entity grades on (a star's IGT, a
+        segment's RTA; the other clock stays a manual Save), that BEATS its
+        strategy's current PB, and that the PB action resolver would offer
+        Save for -- which is where "only with an active strategy, and only a
+        run tagged with it" and every quantity gate (a grab-timed star) live,
+        so the automatic door and the button cannot disagree."""
+        if self.db is None or attempt.valid is not True:
+            return None
+        if attempt.outcome != "success" or attempt.cleared:
+            return None
+        mode = "rta" if attempt.segment_id is not None else "igt"
+        frames = attempt.igt_frames if mode == "igt" else attempt.rta_frames
+        if frames is None:
+            return None
+        action, _ = self.pb_action(attempt, mode)
+        if action != "save":
+            return None
+        current = self.db.current_pb(attempt.course_id, attempt.star_id, mode,
+                                     segment_id=attempt.segment_id,
+                                     strat_tag=attempt.strat_tag)
+        if current is not None and current["frames"] <= frames:
+            return None
+        return mode
+
+    def _spawn_auto_pb(self, attempt_id: int, mode: str) -> None:
+        """Save it OFF the tracking path. `save_pb` journals `pb_saved`
+        through `publish`, which takes the tracking lock this event still
+        holds, and then preserves the replay, which takes seconds -- awaited
+        here, either would stall the poll loop behind a video copy."""
+        task = asyncio.get_running_loop().create_task(
+            self._auto_save_pb(attempt_id, mode))
+        self.auto_pb_tasks.add(task)
+        task.add_done_callback(self.auto_pb_tasks.discard)
+
+    async def _auto_save_pb(self, attempt_id: int, mode: str) -> None:
+        try:
+            attempt = self._require_db().attempt(attempt_id)
+            # Asked again: a faster run may have saved while this waited.
+            if attempt is None or self._auto_pb_mode(attempt) != mode:
+                return
+            await self.save_pb(attempt_id, mode, auto=True)
+        except Exception:  # noqa: BLE001 - a missed auto-save leaves the manual Save
+            log.exception("automatic PB save failed for attempt %s", attempt_id)
+
+    async def save_pb(self, attempt_id: int, timer_mode: str,
+                      auto: bool = False, *,
                       classification: dict | None = None) -> dict:
         db = self._require_db()
         attempt = self._pb_attempt(attempt_id, timer_mode)
@@ -2390,24 +2562,38 @@ class TrackerService:
         frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         if frames is None:
             raise ValueError(f"attempt {attempt_id} has no {timer_mode} clock")
+        # The PB this save replaces, read before the insert: the practice log
+        # prints the difference as the row's Time Save (task 0147). The browser
+        # cannot recover it from the view -- an automatic save can land in the
+        # same refetch as the run itself, so the old PB is never on screen.
+        replaced = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
+                                 segment_id=attempt.segment_id,
+                                 strat_tag=attempt.strat_tag)
         db.insert_pb(course_id=attempt.course_id, star_id=attempt.star_id,
                      strat_tag=attempt.strat_tag, timer_mode=timer_mode,
                      frames=frames, attempt_id=attempt_id, saved_utc=_iso(_now()),
                      segment_id=attempt.segment_id)
-        return await self._publish_pb_saved(attempt, timer_mode, classification)
+        return await self._publish_pb_saved(
+            attempt, timer_mode, classification, auto=auto,
+            previous_frames=replaced["frames"] if replaced else None)
 
     async def _publish_pb_saved(self, attempt, timer_mode: str,
-                                classification: dict | None = None) -> dict:
+                                classification: dict | None = None, *,
+                                auto: bool = False, previous_frames: int | None = None) -> dict:
         attempt_id = attempt.id
         frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         payload = {"course_id": attempt.course_id, "star_id": attempt.star_id,
                    "segment_id": attempt.segment_id,
                    "strat_tag": attempt.strat_tag, "timer_mode": timer_mode,
-                   "frames": frames, "attempt_id": attempt_id}
+                   "frames": frames, "attempt_id": attempt_id,
+                   "previous_frames": previous_frames}
+        if auto:
+            payload["auto"] = True  # the practice log says who saved it
         if classification is not None:
             payload["classification"] = classification
         await self.publish(Event(type="pb_saved", frame=0,
                                  timestamp_utc=_now(), payload=payload))
+        await self._pb_changed(attempt, saved=True)
         if self.on_pb_saved is not None:
             payload = {**payload, "replay_save": await self.on_pb_saved(attempt_id)}
         return payload
@@ -2448,7 +2634,16 @@ class TrackerService:
                        restored["attempt_id"] if restored else None}
         await self.publish(Event(type="pb_undone", frame=0,
                                  timestamp_utc=_now(), payload=payload))
+        await self._pb_changed(attempt, saved=False)
         return payload
+
+    async def _pb_changed(self, attempt, *, saved: bool) -> None:
+        if self.on_pb_changed is None:
+            return
+        try:
+            await self.on_pb_changed(attempt, saved)
+        except Exception:  # noqa: BLE001 - the PB row is committed; the ghost is best effort
+            log.exception("the ghost could not follow PB attempt %s", getattr(attempt, "id", None))
 
     def recording_link(self, attempt_id: int) -> dict:
         """Public recording attached to this exact practice attempt."""
@@ -2743,7 +2938,8 @@ class TrackerService:
         await self.publish(Event(type="session_started", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"session_id": self.session_id,
-                                          "label": label}))
+                                          "label": label,
+                                          "attempt_rules": ATTEMPT_RULES}))
         return self.session_id
 
     async def continue_session(self, session_id: int) -> int:
@@ -2761,7 +2957,8 @@ class TrackerService:
         await self.publish(Event(type="session_started", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"session_id": session_id,
-                                          "resumed": True}))
+                                          "resumed": True,
+                                          "attempt_rules": ATTEMPT_RULES}))
         return session_id
 
     async def delete_session(self, session_id: int) -> None:

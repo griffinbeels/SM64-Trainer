@@ -7,6 +7,7 @@ import pytest
 from sm64_events.core.update_apply import (BACKUP_DIR, JOURNAL_NAME,
                                            apply_plan, read_journal,
                                            startup_repair, sweep_backup)
+from sm64_events.core.update_apply import confirm_startup
 
 
 def _tree(root: Path, files: dict[str, bytes]) -> Path:
@@ -125,6 +126,8 @@ def test_startup_repair_removes_placed_adds(tmp_path):
 def test_sweep_backup_removes_backup_and_done_journal(tmp_path):
     install, staging = _setup(tmp_path)
     apply_plan(install, staging, replace=["SM64Trainer.exe"], delete=[])
+    assert sweep_backup(install, attempts=1) is False
+    assert confirm_startup(install) is True
     assert sweep_backup(install, attempts=1) is True
     assert not (install / BACKUP_DIR).exists()
     assert read_journal(install) is None

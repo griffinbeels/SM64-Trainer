@@ -39,9 +39,12 @@ def test_drawer_opens_and_restarts_at_the_attempt_with_buffer_access(tmp_path):
           window.initialPlayPositions=[];
           HTMLMediaElement.prototype.play=function() {
             window.initialPlayPositions.push(this.currentTime);
-            // Let the real decoder present the initial picture, then hold it
-            // for inspection. The test never supplies an initial seek itself.
-            return play.call(this).then(()=>this.pause());
+            // Hold the first presented picture, regardless of when play()
+            // resolves. Waiting for its promise can let playback advance past
+            // the attempt start under load. Never supply a seek or select a
+            // particular picture here: the assertions must judge the player.
+            this.requestVideoFrameCallback(()=>this.pause());
+            return play.call(this);
           };
         })()""".replace("REPLAY",json.dumps(replay)).replace("INPUTS",json.dumps(inputs)))
         page.evaluate(STORY.setup)

@@ -4,17 +4,18 @@ import { cleanup, render, waitFor } from "@testing-library/preact";
 import { h } from "preact";
 import { useRef } from "preact/hooks";
 import { useStandardWrites } from "../../src/sm64_events/ui/standardwrites.js";
+import { stubLocalServer } from "./localserver.js";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 function fixture() {
   const requests = [];
-  vi.stubGlobal("fetch", vi.fn((path, options) => new Promise((resolve) => {
+  stubLocalServer((path, options) => new Promise((resolve) => {
     requests.push({ path, ...options, finish(error = null) {
       resolve({ ok: !error, status: error ? 409 : 200,
         json: async () => error ? { detail: error } : { ok: true } });
     } });
-  })));
+  }));
   let writes;
   function Editor({ entity = "star:2:4", load, changed }) {
     writes = useStandardWrites(entity, load, changed, useRef(0));

@@ -570,3 +570,33 @@ def test_usamune_timer_reports_candidates_that_reset_across_the_load():
 def test_usamune_timer_missing_without_curr_area():
     ctx = _ctx()
     assert AG._check_usamune_timer(ctx).status == "missing"
+
+
+# --- usamune_menu / usamune_input_display ------------------------------------
+
+def _usamune_flip(field: str, script, check):
+    clock = ScriptedClock()
+    memory = ScriptedMemory(clock)
+    memory.script("u8", getattr(US, field), script)
+    return check(FakeContext(memory, {field: getattr(US, field)}, clock=clock))
+
+
+def test_usamune_menu_is_verified_by_opening_and_closing_it():
+    # Closed, then open for a second, then closed again.
+    verdict = _usamune_flip("usamune_menu", lambda t: 1 if 1.0 <= t < 2.0 else 0, AG._check_usamune_menu)
+    assert verdict.status == "verified" and verdict.value == US.usamune_menu
+
+
+def test_usamune_menu_that_never_closes_or_never_moves_fails():
+    assert _usamune_flip("usamune_menu", lambda t: 1 if t >= 1.0 else 0,
+                         AG._check_usamune_menu).status == "failed"
+    assert _usamune_flip("usamune_menu", lambda t: 0, AG._check_usamune_menu).status == "failed"
+
+
+def test_usamune_input_display_is_verified_by_switching_it_off_and_on():
+    # On (2 = stick), off for a second, then on again: zero AND nonzero, ending nonzero then zero again.
+    verdict = _usamune_flip("usamune_input_display", lambda t: 0 if 1.0 <= t < 2.0 or t >= 3.0 else 2,
+                            AG._check_usamune_input_display)
+    assert verdict.status == "verified"
+    assert _usamune_flip("usamune_input_display", lambda t: 2,
+                         AG._check_usamune_input_display).status == "failed"

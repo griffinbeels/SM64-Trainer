@@ -77,6 +77,20 @@ marking a grab as a mistake (`attempt_cleared`) retroactively re-attributes
 every later failure to the previous valid practice target. Implemented in
 `tracking/projection.py`; semantics in its docstring.
 
+**How attempts are built is journaled per session (2026-09-23, task 0144).**
+Changing a projection rule re-derives every attempt ever recorded, and an
+attempt id is what a saved PB, a saved clip and a clear point at. So a rule
+that moves attempt BOUNDARIES is keyed to the events it was written for, not
+applied to history: `session_started` carries `attempt_rules`
+(`projection.ATTEMPT_RULES`), absent on every older session, and the projector
+switches per session. Rules 2 made save-state loads run through attempts and
+judged every attempt a valid attempt or not; replaying all seven journal
+snapshots on this machine with the old code and the new (5,343 attempts, 754
+PB rows) moved nothing — no attempt lost, gained or changed, every PB link and
+every finished run identical. The next rule that moves a boundary bumps the
+number the same way. A rule that only ADDS a fact (the replay lead-in floor)
+applies to history freely.
+
 ### Recovery boundaries
 
 `server/pollsupervisor.py` restarts an unexpectedly failed poll loop with fresh
@@ -214,6 +228,14 @@ lockstep.
 
 ## Where the deep facts live (authoritative homes)
 
+- **Adaptive rivals**: [selection, preparation and local climb testing](adaptive-rivals.md)
+  own the saved-PB range, protected manual slots, certified full-start adoption
+  and bounded local population. Remote community access remains a separate provider.
+- **Ghost Library discovery and sharing**: [native ghost contracts](ghost-native-runtime.md#names-inputs-and-collections)
+  describe the contextual guided flows, historical bests and recording availability;
+  [collection API](api.md#ghosts--native-playback) owns staged import, version
+  comparability, author credit and dynamic saved searches. The library works on
+  explicit user actions, outside the native frame loop.
 - **Addresses, per ROM version**: `memory/layout.py` — one row per RAM
   global, US pinned by `tests/test_layout_us.py`, JP filled through the sync
   loop (this file → "Two ROM versions"). **Meaning, provenance, traps**
@@ -634,6 +656,31 @@ Corollary that cost a round: the grab thread must make NO user32 calls at
 all — even a 1 Hz cached-handle re-query inherited the ~170 ms lock stall.
 A separate geometry thread owns every window query (`replay/video.py`).
 
+**What "the picture" is, and why it is not the client area.** PJ64 1.6 keeps a
+`msctls_statusbar32` docked along the bottom of its own client area and the
+renderer draws into the remainder. Live, 2026-09-19, per-monitor-aware: client
+`[18, 81, 2400, 1836]`, status bar `[18, 1883, 2400, 35]`, picture
+`[18, 81, 2400, 1802]`; unaware (PJ64's own space) client `1600x1224`, picture
+`1600x1201`. That remainder, floor-even cropped, is the size of every clip the
+capture layer records — `1600x1200` — which is the independent check on the
+rule. Native ghosts draw directly in the renderer's game picture. The
+desktop-grab recording fallback crops the whole client and keeps the strip.
+GLideN64 ships here with `frameBufferEmulation\aspect=1` (force 4:3), so the
+game image is inscribed 4:3 inside that rectangle; the black bands top and
+bottom of a clip are the GAME's own 8-of-240 scanline borders (40 rows of 1200,
+measured), which scale with the picture rather than with the window's shape.
+
+**Native Mario-only ghost.** The application uses libsm64's recorded graphics
+poses inside the owned GLideN64 renderer. `ghost/native_session.py` selects a
+validated saved clip and publishes the tracker's exact attempt origin; the
+native clock, frame selection and drawing run in the renderer. `ghost/capture.py`
+owns the leased IPC channel and recording worker. A separate display target
+blends Mario against live terrain depth while SourceV3 exposes clean game color
+for recording. Opacity and tint affect only Mario pixels. Poll callbacks skip
+contended control locks; neither Python nor IPC paces rendered ghost frames.
+See [native runtime contracts](ghost-native-runtime.md) for identity, timing,
+refusals and the remaining live verification boundary.
+
 **Hard real-time in CPython — why encoding left the process.** At 60 fps
 (16.7 ms/frame) and PortAudio callbacks (21 ms budget), every Python thread
 pays every other thread's latency through the GIL. Real offenders were
@@ -713,8 +760,10 @@ keep producers running. The resume
 signal must include the ANCHOR — igt reset / level entry — not just
 movement: Mario stands passive through post-load fade-ins, so
 movement-only resume opened 0-pre-pad clips ~2 s late on a frozen frame
-(`replay/activity.py`). Manual pause (POST /api/pause) outranks the idle
-gate and stops the poller too; AFK pause CANNOT stop the poller, because
+(`replay/activity.py`). A non-passive action counts only while the game
+visibly moves (IGT, action or action state changed): an AFK Mario parked
+in a star-dance exit read as active for 1.5 h on 2026-09-25. Manual pause
+(POST /api/pause) outranks the idle gate and stops the poller too; AFK pause CANNOT stop the poller, because
 the activity tap that detects the player's return rides it — the watchdog
 may sleep the system, never itself. Precedence and the reason wire format
 live in `server/app.py pause_state`; resume self-heals detectors through
@@ -741,7 +790,13 @@ instantly. Three compounding causes, each fixed:
    `_gcwatch._Gen2Collector` runs `gc.collect(2)` OPPORTUNISTICALLY while the
    recorder is idle (a stop-the-world pause is invisible when footage is
    discarded), with a 5-minute force backstop for never-idle sessions. The
-   glitch mitigation is intact; the leak is closed.
+   glitch mitigation is intact; the leak is closed. Since 2026-09-23 every
+   manual collection freezes its survivors, so the 5-minute backstop walks
+   only what was allocated since (about 1 ms, flat) instead of everything
+   since startup (54-177 ms live); cycles among frozen objects are reclaimed
+   by a full collection every 10 minutes while capture is retired and at
+   least hourly otherwise. Reasons and
+   measurements: `replay/_gcwatch.py`'s docstring.
 3. *Disk could fill, and a near-full volume thrashes everything.* The historical 20 GiB
    scratch cap with `retention_s=None` can be approached over long ACTIVE play
    (idle discards, so the ring only grows while recording). A full system disk
@@ -821,7 +876,10 @@ bootstrap installer (stdlib + tkinter, `bootstrap/installer.py`): the old
 onefile app self-updates INTO the bootstrap, which downloads the zip once,
 installs the folder, creates the shortcut, launches the app, and hands its
 own path over via `--cleanup-bootstrap` for deletion (a running exe can't
-delete itself). The asset must be published under that name **forever** so
+delete itself). The private offline installer (the same program with the
+zip embedded) is exempt: it is the file handed to testers and rerun for
+repair, so it never asks the app to delete it (round 42, 2026-10-12). The
+asset must be published under that name **forever** so
 a user who ignored updates for a year still migrates. It doubles as the
 new-user installer, preserving the "download SM64Trainer.exe, double-click"
 habit.

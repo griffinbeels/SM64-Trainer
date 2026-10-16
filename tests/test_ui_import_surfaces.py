@@ -343,8 +343,8 @@ def test_the_sheet_door_lists_every_held_row_by_name_under_its_reason(
                 "rows timing part of a star rather than the star (2)",
                 "rows the trainer has no target for (22)"], drawn
             assert drawn["groups"][0]["rows"] == [
-                "Hot-Foot-It into the Volcano — Inside the volcano — 0'08\"53",
-                "Hot-Foot-It into the Volcano — Volcano entry — 0'08\"06"], drawn
+                "Hot-Foot-It into the Volcano — Inside the volcano — 08\"53",
+                "Hot-Foot-It into the Volcano — Volcano entry — 08\"06"], drawn
             assert len(drawn["groups"][1]["rows"]) == 22, drawn
             # A CLASS of row, not one by position. This group is the sheet's
             # castle-movement rows, and the sheet is edited daily: between

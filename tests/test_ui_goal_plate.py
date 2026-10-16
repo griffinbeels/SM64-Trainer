@@ -60,12 +60,88 @@ def _wait(page, ms):
     page.evaluate(f"new Promise(r => setTimeout(r, {ms}))")
 
 
+# What a real pointer would hit at the middle of each part of the plate: the
+# browser's own hit test, so the button's stretched hit area counts.
+_HITS = f"""(() => {{ const p = {PLATE};
+    const owner = (hit) => !hit ? 'nothing' : hit.closest('.pblink') ? 'pb-time'
+      : hit.closest('.goal-plate-trigger') ? 'picker' : hit.closest('.goal-plate') ? 'plate' : 'outside';
+    const mid = (el) => {{ const r = el.getBoundingClientRect();
+      return owner(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }};
+    const box = p.getBoundingClientRect();
+    return {{ pb_word: mid(p.querySelector('.goal-plate-word.is-pb')),
+      pb_time: mid(p.querySelector('.pblink')),
+      clock: mid(p.querySelector('.goal-plate-clock')),
+      goal_time: mid(p.querySelector('.goal-plate-time')),
+      count_row: mid(p.querySelector('.goal-plate-count')),
+      top_left: owner(document.elementFromPoint(box.left + 3, box.top + 3)),
+      nested: [...p.querySelectorAll('.goal-plate-trigger *')]
+        .filter((el) => el.matches('a, button, input, select, textarea, [tabindex]')).length }}; }})()"""
+
+# A click where the browser's hit test lands, at the middle of `selector`.
+_CLICK_AT = """(() => {{ const r = {plate}.querySelector({selector}).getBoundingClientRect();
+    document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2).click(); }})()"""
+
+
+def _click_at(page, selector):
+    page.evaluate(_CLICK_AT.format(plate=PLATE, selector=json.dumps(selector)))
+
+
+def _picker_open(page):
+    return page.evaluate(f"!!{PLATE}.querySelector('.search-menu')")
+
+
+def _whole_plate(page):
+    """Round 13: what each part of the plate hits, and whether a click on the
+    PB half opens the picker and a second one closes it."""
+    hits = page.evaluate(_HITS)
+    _click_at(page, ".goal-plate-word.is-pb")
+    _wait(page, 800)
+    opens = _picker_open(page)
+    _click_at(page, ".goal-plate-word.is-pb")
+    _wait(page, 500)
+    return {"hits": hits, "pb_half_opens": opens, "pb_half_closes": not _picker_open(page)}
+
+
+def _pb_time_opens_picker(page):
+    _click_at(page, ".pblink")
+    _wait(page, 500)
+    return _picker_open(page)
+
+
+# While the celebration shows, what paints on top at the centre of the PB time
+# (which sits above the plate's click layer) and of the clock word: the
+# celebration must. It ignores the pointer, so it is hit-tested with pointer
+# events switched on for the probe.
+PARTY_ON_TOP = """(() => { const party = p.querySelector('.goal-plate-party');
+    if (!party) return null;
+    party.style.pointerEvents = 'auto';
+    const over = sel => { const el = p.querySelector(sel); if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return party.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); };
+    const out = { pb_time: over('.pblink'), clock: over('.goal-plate-clock') };
+    party.style.pointerEvents = '';
+    return out; })()"""
+
+
 def _plate(page):
     return page.evaluate(f"""(() => {{ const p = {PLATE};
         return p && {{ text: p.innerText.replace(/\\n/g, ' | '), width: p.offsetWidth,
           pips: p.querySelectorAll('.goal-pip').length,
           lit: p.querySelectorAll('.goal-pip.is-on').length,
-          party: !!p.querySelector('.goal-plate-party') }}; }})()""")
+          party: !!p.querySelector('.goal-plate-party'), party_on_top: {PARTY_ON_TOP} }}; }})()""")
+
+
+def _watch_celebration(page):
+    """Whether the celebration showed within 3 s, and what it painted over
+    the first time it did."""
+    party, on_top = False, None
+    for _ in range(20):
+        _wait(page, 150)
+        plate = _plate(page)
+        party = party or plate["party"]
+        if plate["party"] and on_top is None:
+            on_top = plate["party_on_top"]
+    return party, on_top
 
 
 @pytest.fixture(scope="module")
@@ -78,6 +154,7 @@ def seen():
                 page.goto(base)
                 _wait(page, 2500)
                 out["automatic"] = _plate(page)
+                out.update(_whole_plate(page))
                 out["automatic_api"] = _get(
                     base, f"/api/scorecard/entry_goals?scope=overall&keys={KEY}")["goals"][KEY]
                 # The Player tab: search, pick, and the Scorecard follows.
@@ -121,11 +198,7 @@ def seen():
                     _grab(service, next(frames), igt)
                     _wait(page, 1500)
                 _grab(service, next(frames), 338)             # the third in a row
-                party = False
-                for _ in range(20):
-                    _wait(page, 150)
-                    party = party or _plate(page)["party"]
-                out["celebrated"] = party
+                out["celebrated"], out["party_on_top"] = _watch_celebration(page)
                 _wait(page, 3200)
                 out["done"] = _plate(page)
                 # The longest source words the sheet can put there.
@@ -135,6 +208,8 @@ def seen():
                                            "count": 3, "streak": True}})
                 _wait(page, 1500)
                 out["long_source"] = _plate(page)
+                # Last: its jump may move the log's scope.
+                out["pb_time_opens"] = _pb_time_opens_picker(page)
     return out
 
 
@@ -144,12 +219,30 @@ def test_the_plate_draws_the_scorecards_own_goal(seen):
     assert "GOAL" in seen["automatic"]["text"] and "Auto" in seen["automatic"]["text"], seen["automatic"]
 
 
+def test_the_whole_plate_opens_the_picker_except_the_pb_time(seen):
+    """His round-13 ask: "click on the whole button (not just the bottom
+    half)". The PB time keeps its own jump to the PB's row, and no control
+    sits inside another."""
+    assert seen["hits"] == {"pb_word": "picker", "pb_time": "pb-time", "clock": "picker",
+                            "goal_time": "picker", "count_row": "picker",
+                            "top_left": "picker", "nested": 0}, seen["hits"]
+    assert seen["pb_half_opens"] and seen["pb_half_closes"], seen
+    assert not seen["pb_time_opens"], "the PB time opened the goal picker"
+
+
 def test_a_player_found_by_search_becomes_this_stars_pinned_goal(seen):
     name = seen["runner"]["runner"]
     assert any(hit.startswith(name) for hit in seen["search_hits"]), seen["search_hits"]
     assert name in seen["runner_plate"]["text"], seen["runner_plate"]
     tile = seen["runner_tile"]
     assert tile["goal_pinned"] is True and tile["goal_cs"] == seen["runner"]["cs"], tile
+
+
+def test_the_celebration_paints_over_everything_in_the_plate(seen):
+    """Round 13 follow-up: "when the goal animation plays, it should be ABOVE
+    everything else within that button". The PB time sits above the plate's
+    click layer so it keeps its own jump; the celebration must still cover it."""
+    assert seen["party_on_top"] == {"pb_time": True, "clock": True}, seen["party_on_top"]
 
 
 def test_a_streak_goal_counts_breaks_and_celebrates(seen):

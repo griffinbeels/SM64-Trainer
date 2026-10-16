@@ -143,6 +143,54 @@ bouncing off stale hooks read as star→segment ×8 / star→none ×3 in his rea
 journal and would have left grind failures unattributed (prune food); after
 the fix those shapes measure ZERO.
 
+**A stale hooked head also YIELDS to a fill naming a segment armed right
+now (2026-09-28, `_declines_fill`).** Live report: *"I just got a gold for
+Bowser 1, but the ghost wasn't available to be used. Once I triggered
+another successful attempt, THEN the ghost appeared."* The hand held the
+BitDW reds movement, hooked by the Bowser row's fill; he level-selected
+straight into the arena, which cancelled it without completing it. The
+arena row's fill for the armed fight (journal id 6424) was refused because a
+hooked head held its turn, and the arena's own arrival reset two frames
+later (6425) forfeited that head — an empty hand for the whole fight, so the
+ghost had no target, and any fight reset would have been dropped as
+untargeted. When the reset landed FIRST (his previous entry), the fill found
+an empty hand and won. The client does not re-offer when the hand empties,
+only on a new arrival, so the order decided the attempt. An ARMED head still
+refuses every fill, and an unarmed fill still loses to any hooked head.
+Measured with `tools/measure_target_queue.py --before HEAD` over the three
+journals on this machine: 3 / 4 / 48 differing readings, every one a Bowser
+fight taking the hand in its own arena (the reported episode, a Bowser 3 he
+had to tap himself at id 4452, and arena-to-arena warps where the previous
+fight held the hand until its budget expired); **0 attempt rows lost, gained
+or changed** across 3,812. Pinned for all three arenas in both orders by
+`tests/test_arena_fill_race.py`.
+
+**Only a game event sees a hooked head alive (2026-09-29,
+`_hold_hooked_head`).** Live report: *"the bowser stage doesn't immediately
+detect the Ghost? ... I clearly have a PB here, but I'm being told that the
+ghost overlay can't be found yet?"* The fill above now landed (journal id
+7423), and the hand emptied one event later anyway, BEFORE the arrival reset:
+an arrival from outside an area 1 (here the castle's upstairs) settles to
+area 1 two frames after the level change, which disarms the fight until the
+reset re-arms it on the same frame. Every request the app journals (a fill, a
+strategy pick, a PB save) carries frame 0, and the armed hold check counted
+it as a sighting, so the head's last alive frame read 0 and that settle
+expired it as 24,547 frames stale. Nothing re-offered: the arena row reacts
+to its own `heldStartsHere` flipping, and a 107 ms fill-then-empty never
+painted. Bowser 3 from LLL's volcano did the same on 2026-09-23 (id 2867;
+the page happened to re-offer). An armed sighting now needs a nonzero frame.
+**A request while the head is DISARMED still starts its clock at 0, on
+purpose**: an unarmed fill (the castle's lone route option) lasts until the
+next game event as it always has. Lengthening it measured 5 attempt rows lost
+in the primary journal and holds one place's lone option over the next
+one's, so it is a separate call. Measured over the three journals: 17 / 18 /
+22 differing readings (arena fights and Bowser-course fills kept through a
+settle, a strategy pick or a PB save, then held by the ordinary hooked-head
+rules), **0 attempt rows lost, gained or changed**; arena visits where the
+fight was armed after its fill and not in hand, 2 / 0 / 0 -> 0 / 0 / 0.
+Pinned by `tests/test_arena_fill_race.py` (his run event for event, and all
+three arenas) and `tests/test_target_queue.py::test_a_request_is_not_a_sighting_of_an_armed_head`.
+
 **Measured before shipping** (`tools/measure_target_queue.py` — replays
 every reachable journal under the shipped code at `2f19630` and the working
 tree, diffing every target reading and every attempt row): **0 rows lost,
@@ -404,6 +452,78 @@ travelling, and a warp that skips it used to bank a meaningless number.
 Recording nothing beats recording a wrong time — but it looks like a bug the
 first time it is seen, and the open question about how often a REAL entry
 misses its touch is in the detectors rule.
+
+## A reset always ends the run; only a played one records (2026-09-28)
+
+His rule, stated over the Bowser intros: *"we missed out on detecting resets
+when we should have detected it (or at least marked it as a different run,
+even if we don't show the reset in the practice log)... we just should hide
+all the bullshit resets where I clearly couldn't have done anything"*, and for
+the ghost, *"When we reset, ghost mario resets."* Two questions, answered in
+two places:
+
+- **Does the anchor end the run?** Every real anchor does, and the matcher
+  re-arms at it, which restarts the segment's clock and its ghost. Only an
+  echo (`_anchor_echo`) is invisible. The miss was echo shape 5: a reset during
+  Bowser's arena speech lands within a frame of a textbox, so it read as the
+  textbox's own zero. A reset RESPAWNS Mario and that zero never does
+  (`_respawned`). Measured over the three journals on this machine: 31
+  dialog-recent resets carried a spawn action, all followed by `spawned
+  kind=spawn`; the 47 intro zeroes the shape exists for never respawned.
+- **Does the closed attempt get a row?** Only if he played in it
+  (`SegmentEngine._unacted`; stars: `_close_by_reset`). New readings:
+  `segments.before_control` (his only act was a textbox the game opened, and
+  the reset interrupted it; the detector itself stopped counting those acts,
+  `addresses.NO_CONTROL_ACTIONS`), and the ARRIVAL's own zero (a Usamune menu
+  warp lands 1-6 frames before its counter zero, a course entry 42-59; the
+  zero's acted flag describes the level he left, so it banked "reset 00"06" on
+  opening Bowser 3).
+
+A reset during a course NPC's textbox can land on a poll that still reads
+the textbox, Mario's respawn reaching his action byte 0-2 frames later. The
+engine HOLDS a reset that only the textbox shape called an echo and lets the
+`spawned kind=spawn` that follows confirm it (`_confirm_held_reset`,
+`RESPAWN_CONFIRM_FRAMES`); the projector stamps the rows it closes with the
+reset, not the spawn (`close_event_of`), so a reattributed 100-coin reset
+keeps no in-game time rather than the spawn's 0. Over the three journals 13
+held resets were confirmed (100-coin engines in BoB, SSL, WF, CCM; the BitFS
+and BitS pipes) and 53 textbox zeroes with no respawn after them were dropped,
+the fresh-file intros among them. No row moved: those runs never finished.
+
+**Entering a level is never a reset, on any stage** (his follow-up the same
+night: "Need to make sure that this doesn't happen for ANY stage or any
+course / star"). Two readings do it: the arrival's own zero above, and a star
+attempt that closes on the frame it opened (one frame's two polls reading the
+same zero before the 2026-08-04 action latch; repo journal id 16243, a BitDW
+"Shig (Star)" reset in 0 frames). A teleporter's fade counts as no control
+too (`addresses.NO_CONTROL_ACTIONS`): its fade-in byte lingers for 100+ frames,
+so an L reset whose reload walks the area byte 1 -> 2 -> 1 banked a 22-frame
+"reset" off it (console-support journal id 20182, WDW).
+
+`tools/measure_entry_resets.py` is the guarantee he asked for ("These resets
+are worthless. We need to fix this everywhere"). Read from the journal rather
+than through these rules, it counts, per level and per star/segment, every
+logged reset closed by a level entry's own zero, by an anchor on its own start
+frame, or within 3 s of an anchor-started attempt with no act journaled after
+its first frame (sessions since `mario_acted` carried its action; older ones
+spent their one report on a re-read byte, task 0084). In-course area edges are
+NOT entries: an L reset's own reload walks the area byte before its zero, so
+that shape is what a real reset looks like. Shipped code (`c7b3857b`) vs now:
+live 9 -> 0 (Bowser 1-3 arenas, BitDW and BitFS segments -- including his
+"8 Red Coins (Pipe)" row at live id 7019), repo 4 -> 0, console-support
+3 -> 0. The zero-length reading also drops three SSL duplicate resets from
+July's journal (ids 322, 369, 397; he had already cleared one by hand).
+
+Replay-time: his history re-projects at the next start, no migration.
+Measured with `tools/measure_target_queue.py --before HEAD`: live journal 18
+rows lost and 3 gained (his Bowser 3 run 6071 -> 1516 frames, 3'22"36 ->
+0'50"53; his Bowser 2 run 1713 -> 1000; one Bowser 3 reset re-timed from its
+last intro reset; five phantom arrival resets and ten arena star resets gone);
+repo journal 1 lost (a phantom arrival); console-support 2 lost (a WF 100-coin
+engine's phantom arrival resets). A success's id moves to the reset that really
+started it, so a PB row naming the old id (his superseded 1713) points at an
+attempt that no longer exists. Pinned by `tests/test_bowser_intro.py`, each
+half mutation-proved.
 
 ## A failure only names what he chose, and winning ends everything
 

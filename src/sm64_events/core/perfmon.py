@@ -13,17 +13,33 @@ so even an unattended session names its own culprit.
 
 The log is size-capped (rotates to .prev) so the diagnostic can never be the
 thing that fills the disk. All sampling is best-effort: a probe failure logs
-and the loop continues; the server is never put at risk by its own monitor."""
+and the loop continues; the server is never put at risk by its own monitor.
+
+STALLS (2026-09-27): on 09-25 a machine-wide stall (Project64 frames up to
+3.5 s, a 4.8 s server GC, three failed recordings) left no trace of its
+cause, because every sample looked only at this server. Each minute's record
+now names this server's busiest threads, the whole helper tree, the
+machine's top CPU/memory/disk consumers and Project64's address-space
+headroom, from one process snapshot that is cheaper than the probe it
+replaced. Between samples a StallWatch heartbeat notices when this server
+could not run on time and writes a `"kind": "stall"` record naming who was
+busy across the stall and just after it."""
 import json
 import logging
 import os
+import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from sm64_events.core.procmem import (resource_alarms, sample,
-                                      top_type_growth)
+from sm64_events.core.procmem import (MachineSnapshot, address_space,
+                                      descendants, machine_snapshot,
+                                      machine_summary, named_processes,
+                                      native_thread_label, resource_alarms,
+                                      sample, system_memory, thread_cpu,
+                                      top_type_growth, tree_summary)
 
 log = logging.getLogger("sm64.procmem")
 
@@ -82,6 +98,8 @@ def perf_record(snap: dict, gauges: dict, *, uptime_s: float, t_utc: str,
         "gdi": snap.get("gdi_objects"),
         "user": snap.get("user_objects"),
         "threads": snap.get("threads"),
+        "os_threads": snap.get("os_threads"),
+        "cpu": snap.get("cpu"),
         "gc_counts": snap.get("gc", {}).get("counts"),
         "scratch_mib": (round(snap["scratch_bytes"] / _MiB, 1)
                         if "scratch_bytes" in snap else None),
@@ -89,6 +107,7 @@ def perf_record(snap: dict, gauges: dict, *, uptime_s: float, t_utc: str,
         "children": snap.get("children"),
         "gpu": snap.get("gpu"),
         "processes": snap.get("processes"),
+        "machine": snap.get("machine"),
         "gauges": gauges or {},
         "top_growers": top_growers,
         "top_types": top_types,
@@ -125,6 +144,88 @@ def write_perf_record(path: Path, record: dict, *,
         log.exception("perf log write failed (continuing)")
 
 
+class StallWatch:
+    """A heartbeat that notices when this server could not run on time.
+
+    A thread asks to wake every `period_s`. Waking `threshold_s` or more late
+    means nothing here ran for that long: the machine was starved (CPU,
+    paging, a driver) or one of our threads held the interpreter. Either way
+    `on_stall(late_s)` runs, at most once per `cooldown_s`, to record who was
+    busy. A stall at least period + threshold long (1.5 s) is always seen; a
+    shorter one only if it covers a wake. A freeze confined to Project64 (its
+    GPU work, say) does not delay this thread, so only the minute record
+    covers it.
+
+    Cost, measured 2026-09-27: 2.7 ms of CPU per minute at a 1 s period,
+    against 10.3 ms at 0.25 s (each wake is ~45 us of thread wake-up and
+    interpreter re-entry), which is why the period is not shorter."""
+
+    def __init__(self, on_stall: Callable[[float], object],
+                 stop: threading.Event, *, period_s: float = 1.0,
+                 threshold_s: float = 0.5, cooldown_s: float = 30.0,
+                 clock: Callable[[], float] = time.perf_counter):
+        self._on_stall = on_stall
+        self._stop = stop
+        self._period = period_s
+        self._threshold = threshold_s
+        self._cooldown = cooldown_s
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._count = 0
+        self._worst_s = 0.0
+        self._last_capture: float | None = None
+        self._thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        if not self.running:
+            self._thread = threading.Thread(target=self._run, daemon=True,
+                                            name="perf-stall-watch")
+            self._thread.start()
+
+    def join(self, timeout: float) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def _run(self) -> None:
+        due = self._clock() + self._period
+        while not self._stop.wait(max(0.0, due - self._clock())):
+            now = self._clock()
+            self.observe(now, now - due)
+            # From after the capture: its own seconds are not the next stall.
+            due = self._clock() + self._period
+
+    def observe(self, now: float, late_s: float) -> bool:
+        """Account one wake that came `late_s` after it was due; True when it
+        ran a capture."""
+        if late_s < self._threshold or self._stop.is_set():
+            return False
+        with self._lock:
+            self._count += 1
+            self._worst_s = max(self._worst_s, late_s)
+            if self._last_capture is not None \
+                    and now - self._last_capture < self._cooldown:
+                return False
+            self._last_capture = now
+        try:
+            self._on_stall(late_s)
+        except Exception:
+            log.exception("stall capture failed (continuing)")
+        return True
+
+    def take_counts(self) -> dict:
+        """Stalls seen since the last call, captured or not: {count,
+        worst_late_ms}. The minute record carries these."""
+        with self._lock:
+            out = {"count": self._count,
+                   "worst_late_ms": round(self._worst_s * 1000)}
+            self._count, self._worst_s = 0, 0.0
+        return out
+
+
 class PerfMonitor:
     """Samples every `interval_s`: logs an expanded `mem:` line + a top-growers
     line, fires each resource alarm once, and appends a perf_log.jsonl record.
@@ -139,7 +240,8 @@ class PerfMonitor:
                  self_pid: int | None = None,
                  max_log_bytes: int = 50 * 1024 * 1024,
                  watch_processes=("Project64.exe",),
-                 enabled: bool = True, deep: bool | None = None):
+                 enabled: bool = True, deep: bool | None = None,
+                 stall_watch: bool = True, stall_followup_s: float = 2.0):
         self._enabled = enabled    # SM64_PERFMON=0 -> run() is a no-op (zero
                                    # per-60s cost: no heap walk, no probes, no
                                    # log line) for audio-sensitive sessions
@@ -166,6 +268,17 @@ class PerfMonitor:
         self._fired: set[str] = set()    # alarm messages already warned
         self._t0 = time.monotonic()
         self.latest: dict = {}
+        # Snapshot state is shared by the minute worker and the stall watch.
+        self._state_lock = threading.Lock()
+        self._write_lock = threading.Lock()
+        self._minute_prev: MachineSnapshot | None = None
+        self._recent: deque = deque(maxlen=3)   # stall baselines, oldest first
+        self._tree_seen: frozenset = frozenset()  # (pid, created) of helpers
+        self._native_labels: dict = {}          # (tid, created) -> label
+        self._stop = threading.Event()
+        self._followup_s = stall_followup_s
+        self._stalls = (StallWatch(self._capture_stall, self._stop)
+                       if stall_watch else None)
 
     def _logpath(self) -> Path | None:
         """Resolve the perf-log path at use time (see __init__)."""
@@ -180,10 +293,112 @@ class PerfMonitor:
 
     def _collect(self) -> dict:
         """Routine sampling does not grow with heap size or retained files."""
-        return sample(self._scratch_dir if self._deep else None,
+        machine = machine_snapshot(thread_pids=(self._pid,))
+        if machine is None:  # off Windows: the stateless probes alone
+            return sample(self._scratch_dir if self._deep else None,
+                          count_objects=self._deep, resources=True,
+                          children_of=self._pid, histogram=self._deep,
+                          gpu=self._deep, processes=self._watch)
+        snap = sample(self._scratch_dir if self._deep else None,
                       count_objects=self._deep, resources=True,
-                      children_of=self._pid, histogram=self._deep, gpu=self._deep,
-                      processes=self._watch)
+                      histogram=self._deep, gpu=self._deep)
+        snap.update(self._machine_view(machine))
+        return snap
+
+    def _machine_view(self, machine: MachineSnapshot) -> dict:
+        """What one snapshot answers against the previous minute's: this
+        server's threads, its whole helper tree, the watched processes (with
+        Project64's address-space headroom) and the machine's top consumers."""
+        with self._state_lock:
+            prev, self._minute_prev = self._minute_prev, machine
+            self._recent.append(machine)
+            members = descendants(machine, self._pid, self._tree_seen)
+            self._tree_seen = frozenset((p.pid, p.created) for p in members)
+        watched = named_processes(machine, self._watch, prev)
+        for exe, slot in watched.items():
+            spaces = [address_space(p.pid, only_32bit=True)
+                      for p in machine.procs.values() if p.exe == exe]
+            spaces = [s for s in spaces if s]
+            if spaces:  # several instances: report the one closest to full
+                slot.update(min(spaces, key=lambda s: s["vm_largest_free_mib"]))
+        me = machine.procs.get(self._pid)
+        view = {"children": tree_summary(members, prev, machine),
+                "processes": watched,
+                "os_threads": me.threads if me is not None else None}
+        if prev is not None:
+            view["cpu"] = thread_cpu(prev, machine, self._pid, self._labeler())
+            view["machine"] = machine_summary(prev, machine)
+        return view
+
+    def _labeler(self) -> Callable[[int, int], str]:
+        """Thread names for thread_cpu: Python's own name for threads it
+        started, else a cached native label."""
+        python = {t.native_id: t.name for t in threading.enumerate()
+                  if t.native_id is not None}
+        cache = self._native_labels
+        if len(cache) > 256:  # pools churn native threads; bound the cache
+            cache.clear()
+
+        def label(tid: int, created: int) -> str:
+            if tid in python:
+                return python[tid]
+            name = cache.get((tid, created))  # the other thread may clear it
+            if name is None:
+                name = cache[(tid, created)] = native_thread_label(tid)
+            return name
+        return label
+
+    def _stall_baseline(self, stall_began: float) -> MachineSnapshot | None:
+        """The newest snapshot taken before the stall began (so the window
+        covers all of it), else the oldest one kept."""
+        with self._state_lock:
+            before = [s for s in self._recent if s.t <= stall_began]
+            return before[-1] if before else (self._recent[0]
+                                              if self._recent else None)
+
+    def _capture_stall(self, late_s: float) -> dict | None:
+        """Runs on the stall watch: who was busy across the stall (since the
+        last snapshot before it) and in the `stall_followup_s` right after."""
+        started = time.perf_counter()
+        now = machine_snapshot(thread_pids=(self._pid,))
+        if now is None:
+            return None
+        base = self._stall_baseline(now.t - late_s)
+        with self._state_lock:
+            self._recent.append(now)
+        record: dict = {"kind": "stall",
+                        "t_utc": datetime.now(timezone.utc).isoformat(),
+                        "uptime_s": round(time.monotonic() - self._t0, 1),
+                        "late_ms": round(late_s * 1000)}
+        if base is not None:
+            record["before"] = machine_summary(base, now)
+            record["before"]["self"] = thread_cpu(base, now, self._pid,
+                                                  self._labeler())
+        record["system"] = system_memory()
+        cost = time.perf_counter() - started
+        if self._followup_s > 0 and not self._stop.wait(self._followup_s):
+            resumed = time.perf_counter()
+            after = machine_snapshot(thread_pids=(self._pid,))
+            if after is not None:
+                record["after"] = machine_summary(now, after)
+                with self._state_lock:
+                    self._recent.append(after)
+            cost += time.perf_counter() - resumed
+        record["capture_ms"] = round(cost * 1000, 1)
+        top = (record.get("before") or {}).get("top_cpu") or []
+        log.warning("stall: this server could not run for %d ms; busiest over "
+                    "the %s s before: %s", record["late_ms"],
+                    (record.get("before") or {}).get("window_s", "?"),
+                    ", ".join(f"{r['exe']} {r['cpu_pct']}%" for r in top[:3])
+                    or "unmeasured")
+        self._persist(record)
+        return record
+
+    def _persist(self, record: dict) -> None:
+        path = self._logpath()
+        if path is not None:
+            with self._write_lock:  # the minute worker and the watch both append
+                write_perf_record(path, record, max_bytes=self._max_log_bytes)
 
     def _read_gauges(self) -> dict:
         try:
@@ -194,7 +409,7 @@ class PerfMonitor:
 
     def _tick(self, gauges=None) -> dict:
         """Collect and persist; run() supplies gauges read on their owner loop."""
-        started = time.monotonic()
+        started = time.perf_counter()  # monotonic() ticks in 15.6 ms steps here
         snap = self._collect()
         gvals = self._read_gauges() if gauges is None else gauges
 
@@ -204,25 +419,7 @@ class PerfMonitor:
 
         growers = top_type_growth(self._baseline_types, snap.get("types", {}),
                                   n=10)
-        child = snap.get("children") or {}
-        sysd = snap.get("system") or {}
-        gpu = snap.get("gpu") or {}
-        pj64 = sum(p.get("rss_bytes", 0)
-                   for p in (snap.get("processes") or {}).values())
-        log.info(
-            "mem: rss=%.0f MiB priv=%.0f MiB obj=%s thr=%d handles=%s gdi=%s "
-            "user=%s child=%.0f MiB(%d) gpu=%s pj64=%.0f MiB "
-            "sys_load=%s%% scratch=%s",
-            snap.get("rss_bytes", 0) / _MiB, snap.get("private_bytes", 0) / _MiB,
-            snap.get("objects", "unmeasured"), snap.get("threads", -1),
-            snap.get("handles", "?"), snap.get("gdi_objects", "?"),
-            snap.get("user_objects", "?"), child.get("rss_bytes", 0) / _MiB,
-            child.get("count", 0), _mib_reading(gpu.get("local_usage_bytes")),
-            pj64 / _MiB, sysd.get("load_pct", "?"),
-            _mib_reading(snap.get("scratch_bytes")))
-        if growers:
-            log.info("mem growers vs baseline: %s", ", ".join(
-                f"{g['type']} +{g['delta']}" for g in growers[:6]))
+        _log_sample(snap, growers)
 
         for msg in resource_alarms(self._baseline, snap):
             if msg not in self._fired:
@@ -233,10 +430,11 @@ class PerfMonitor:
             snap, gvals, uptime_s=time.monotonic() - self._t0,
             t_utc=datetime.now(timezone.utc).isoformat(), top_growers=growers)
         record["sampling"] = {"mode": "deep" if self._deep else "light",
-                              "collect_ms": round((time.monotonic() - started) * 1000, 3)}
-        path = self._logpath()
-        if path is not None:
-            write_perf_record(path, record, max_bytes=self._max_log_bytes)
+                              "collect_ms": round((time.perf_counter() - started) * 1000, 3)}
+        record["stalls"] = (self._stalls.take_counts()
+                            if self._stalls is not None and self._stalls.running
+                            else None)
+        self._persist(record)
 
         # /health surface: everything but the full top_types blob (kept small)
         self.latest = {k: v for k, v in record.items() if k != "top_types"}
@@ -249,11 +447,57 @@ class PerfMonitor:
                      "no perf_log.jsonl, zero overhead")
             return
         await _off_loop(start_new_session_log, self._logpath())
-        while True:
-            try:
-                # Only one sample can run at a time. The next iteration waits
-                # for completion; a slow disk cannot build a queue of probes.
-                await _off_loop(self._tick, self._read_gauges())
-            except Exception:
-                log.exception("perfmon tick failed (continuing)")
-            await asyncio.sleep(self._interval_s)
+        self._stop.clear()
+        if self._stalls is not None:
+            self._stalls.start()
+        try:
+            while True:
+                try:
+                    # Only one sample can run at a time. The next iteration waits
+                    # for completion; a slow disk cannot build a queue of probes.
+                    await _off_loop(self._tick, self._read_gauges())
+                except Exception:
+                    log.exception("perfmon tick failed (continuing)")
+                await asyncio.sleep(self._interval_s)
+        finally:
+            # The watch wakes on the event within a period, and a capture's
+            # follow-up wait ends with it; only an in-flight snapshot (~10 ms)
+            # can hold this join.
+            self._stop.set()
+            if self._stalls is not None:
+                self._stalls.join(1.0)
+
+
+def _log_sample(snap: dict, growers: list) -> None:
+    """The minute's human-readable log lines."""
+    child = snap.get("children") or {}
+    sysd = snap.get("system") or {}
+    gpu = snap.get("gpu") or {}
+    procs = (snap.get("processes") or {}).values()
+    pj64 = sum(p.get("rss_bytes", 0) for p in procs)
+    largest = [p["vm_largest_free_mib"] for p in procs
+               if "vm_largest_free_mib" in p]
+    log.info(
+        "mem: rss=%.0f MiB priv=%.0f MiB obj=%s thr=%d/%s handles=%s gdi=%s "
+        "user=%s child=%.0f MiB(%d) gpu=%s pj64=%.0f MiB pj64_vm_largest_free=%s "
+        "sys_load=%s%% scratch=%s",
+        snap.get("rss_bytes", 0) / _MiB, snap.get("private_bytes", 0) / _MiB,
+        snap.get("objects", "unmeasured"), snap.get("threads", -1),
+        snap.get("os_threads", "?"),
+        snap.get("handles", "?"), snap.get("gdi_objects", "?"),
+        snap.get("user_objects", "?"), child.get("rss_bytes", 0) / _MiB,
+        child.get("count", 0), _mib_reading(gpu.get("local_usage_bytes")),
+        pj64 / _MiB, f"{min(largest):.0f} MiB" if largest else "unmeasured",
+        sysd.get("load_pct", "?"), _mib_reading(snap.get("scratch_bytes")))
+    cpu, machine = snap.get("cpu") or {}, snap.get("machine") or {}
+    if cpu or machine:
+        log.info("cpu: server %s%% (%s); machine busy %s%%, top %s",
+                 cpu.get("process_pct", "?"),
+                 ", ".join(f"{k} {v}%" for k, v in
+                           list((cpu.get("threads") or {}).items())[:4]),
+                 machine.get("busy_pct", "?"),
+                 ", ".join(f"{r['exe']} {r['cpu_pct']}%"
+                           for r in (machine.get("top_cpu") or [])[:3]))
+    if growers:
+        log.info("mem growers vs baseline: %s", ", ".join(
+            f"{g['type']} +{g['delta']}" for g in growers[:6]))

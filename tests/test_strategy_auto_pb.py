@@ -83,6 +83,8 @@ def test_latest_correction_compares_destination_pb(tmp_path, frames, saved):
     assert current["attempt_id"] == (latest if saved else previous)
     assert len([e for e in sent if e.type == "pb_saved"]) == count + int(saved)
     assert bool(result) == saved
+    if saved:
+        assert result["previous_frames"] == 500 and result["auto"] is True
 
 
 @pytest.mark.parametrize("frames,wins", [(420, True), (500, False), (600, False)])
@@ -100,6 +102,9 @@ def test_reclassifying_saved_latest_preserves_destination_winner(tmp_path, frame
     assert db.current_pb(2, 2, "igt", strat_tag="Cannonless") is None
     assert len([e for e in sent if e.type == "pb_saved"]) == count + int(wins)
     assert len(db.pbs()) == 2
+    if wins:
+        gold = [e for e in sent if e.type == "pb_saved"][-1].payload
+        assert gold["previous_frames"] == 500 and gold["auto"] is True
     if not wins:
         asyncio.run(svc.set_attempt_strat(latest, "Cannonless"))
         assert db.current_pb(2, 2, "igt", strat_tag="Cannonless")["attempt_id"] == latest
@@ -119,7 +124,7 @@ def test_older_edit_does_not_bank_or_switch_strategy(tmp_path):
 
 
 def test_a_migrated_winner_saved_before_destination_does_not_duplicate(tmp_path):
-    db, svc, _ = make_rec(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.set_target(2, 2, "Slide Kick"))
     previous = completed(svc, 1000, 500)
     asyncio.run(svc.set_strat(2, 2, "Cannonless"))
@@ -130,6 +135,8 @@ def test_a_migrated_winner_saved_before_destination_does_not_duplicate(tmp_path)
     asyncio.run(svc.set_attempt_strat(latest, "Slide Kick"))
     assert len(db.pbs()) == 2
     assert db.current_pb(2, 2, "igt", strat_tag="Slide Kick")["attempt_id"] == latest
+    gold = [e for e in sent if e.type == "pb_saved"][-1].payload
+    assert gold["previous_frames"] == 500 and gold["auto"] is True
     asyncio.run(svc.undo_pb(latest, "igt"))
     assert db.current_pb(2, 2, "igt", strat_tag="Slide Kick")["attempt_id"] == previous
 

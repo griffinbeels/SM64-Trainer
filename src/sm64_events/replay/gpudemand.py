@@ -165,10 +165,12 @@ class GpuDemand:
             raise DemandFailure("producer_pid_changed", lifecycle=True)
         if status.state == C.CLOSED:
             raise DemandFailure("producer_closed", lifecycle=True)
-        if not status.capabilities & C.CAP_GPU:
-            raise DemandFailure("gpu_capture_unavailable")
+        # ROM before capability: closing the ROM revokes GPU capture too
+        # (gfxwrap.c RomClosed), and that is a normal end, not a fault.
         if not status.rom_open:
             raise DemandFailure("rom_closed", lifecycle=True)
+        if not status.capabilities & C.CAP_GPU:
+            raise DemandFailure("gpu_capture_unavailable")
 
     def _discover(self):
         while not self.stop_event.is_set():
@@ -186,9 +188,9 @@ class GpuDemand:
                     raise DemandFailure("producer_pid_changed", lifecycle=True)
                 if status.state == C.CLOSED:
                     raise DemandFailure("producer_closed", lifecycle=True)
-                if not status.capabilities & C.CAP_GPU:
-                    raise DemandFailure("gpu_capture_unavailable")
                 if status.rom_open:
+                    if not status.capabilities & C.CAP_GPU:
+                        raise DemandFailure("gpu_capture_unavailable")
                     admitted = True
                     return control
                 # A non-practice ROM is a real run: stay idle and say why.
@@ -218,9 +220,19 @@ class GpuDemand:
         ):
             raise DemandFailure("producer_identity_changed", lifecycle=True)
 
+    # Project64 revokes GPU capability a moment BEFORE it marks the ROM closed
+    # (gfxwrap.c RomClosed: wr_suspend, then control_rom), so a capability
+    # loss read while the ROM still shows open may be the first half of a
+    # normal ROM or Project64 close. Poll briefly for that lifecycle evidence
+    # before calling it a fault: the media side waits at most 250 ms for this
+    # classification (reconcile_lifecycle), after a poll of up to 100 ms.
+    CLOSING_GRACE_S = 0.12
+    CLOSING_POLL_S = 0.02
+
     def _monitor(self, control, request):
         started = last_renew = self._clock()
         acknowledged = active = False
+        capability_lost_at = None
         while not self.stop_event.is_set():
             now = self._clock()
             if not active and now - started >= self._setup_timeout:
@@ -230,7 +242,17 @@ class GpuDemand:
             except BlockingIOError:
                 status = None
             if status is not None:
-                self._check_identity(status, request.identity)
+                try:
+                    self._check_identity(status, request.identity)
+                except DemandFailure as failure:
+                    if str(failure) != "gpu_capture_unavailable":
+                        raise
+                    capability_lost_at = now if capability_lost_at is None else capability_lost_at
+                    if now - capability_lost_at >= self.CLOSING_GRACE_S:
+                        raise
+                    self.stop_event.wait(self.CLOSING_POLL_S)
+                    continue
+                capability_lost_at = None
                 if status.ack_token == request.identity.token:
                     acknowledged = True
                     if status.state not in (C.PREPARING, C.ACTIVE):

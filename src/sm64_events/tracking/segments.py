@@ -189,8 +189,10 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   no special case.
 - failure rows only on practice_reset/state_loaded (reset), death,
   game_reset (hard_reset); AFK closures (paused >= 150 frames) discard, and
-  so do no-op closures (acted_tracking true, mario_acted false — warp/reset
-  spam where Mario never moved; mirrors the star-side discard)
+  so do no-op closures (`SegmentEngine._unacted`: warp/reset spam where Mario
+  never moved, a reset during a textbox the game opened, and the arrival's
+  own zero; mirrors the star-side discard). A discarded closure still ENDS the
+  run: the anchor re-arms, restarting the clock and the ghost
 - rta_frames = close.frame - start_frame; a would-be-negative value on a
   SUCCESS discards the attempt (end before arm is a genuine anomaly —
   self-heal, domain rule 4), but failure closures record the row with
@@ -291,6 +293,20 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
         never split timing on a textbox in any level/circumstance (user rule
         2026-06-14).  Historical events (no key): .get() -> None -> out of
         window -> conservative close behaviour preserved.
+        EXCEPT a reset that RESPAWNED Mario (`_respawned`: a spawn action on
+        the anchor's own poll), 2026-09-28. Bowser speaks the moment Mario
+        lands in his arena, and a reset taken during the speech reloads the
+        level -- his reset, not the textbox's zero. Read as an echo, it was
+        invisible: the fight ran on from his first arrival, so his Bowser 3 run
+        read 3'22"36 for Usamune's 0'50"53 and the ghost never restarted.
+        Measured over the three journals on this machine: 31 dialog-recent
+        resets carried a spawn action, every one followed by `spawned
+        kind=spawn`; the 47 intro zeroes this shape was written for never
+        respawn. 13 more respawned on a LATER poll -- the anchor's own still
+        read the textbox (a course NPC's; the reload reaches the action byte 0
+        to 2 frames on) -- so the engine holds such a reset and lets the
+        `spawned` that follows confirm it (`_confirm_held_reset`); the 53 held
+        textbox zeroes with no respawn after them stay invisible.
     (6) in-level teleporter echo: ev.payload["teleport"] is True -- suppressed
         unconditionally.  The CCM broken bridge, the WDW corner warps and the
         HMC toxic-maze pads relocate Mario inside the SAME area, so no
@@ -340,12 +356,16 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           course_for_level,
                                           DOOR_ACTIONS, HUNDRED_COIN_STAR_COINS,
                                           LEVEL_CASTLE_INSIDE,
-                                          LEVEL_NAMES, node_key, node_label,
+                                          LEVEL_NAMES, NO_CONTROL_ACTIONS,
+                                          node_key, node_label,
                                           node_short_label,
-                                          region_for_node, star_count,
+                                          region_for_node, SPAWN_ACTIONS,
+                                          star_count,
                                           star_name, subarea_name,
                                           world_connections, world_regions)
 from sm64_events.core.landmark import instance_place, landmark_group, same_landmark
+from sm64_events.detectors.counter_epoch import LEVEL_LOAD_TAIL_FRAMES
+from sm64_events.detectors.death import FINISHED_DEAD, finished_dead
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.detectors.moment import (MOMENTS, effective_moment_kind,
                                           matches_moment_kind)
@@ -362,6 +382,9 @@ _MOMENT_KINDS = frozenset(m.kind for m in MOMENTS)
 _MOMENT_LABELS = {m.kind: m.label for m in MOMENTS}
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
+# Start clauses a practice reset returns Mario to: Usamune respawns at the
+# level's last entrance. A mid-area start (a door, a pole, a star) is not one.
+_RESET_RETURNS_TO = ("attempt_anchor", "level_enter", "area_enter", "spawned")
 
 _AFK_PAUSE_FRAMES = 150  # mirrors the star-side AFK discard (projection.py)
 
@@ -380,9 +403,8 @@ _DIALOG_ECHO_WINDOW = 30  # frames; the intro IGT re-init lands +1 frame after
 # control is regained (live journal 2026-06-14), but the recency is measured
 # from the last in-textbox/cutscene poll, which may be a few frames earlier when
 # polls are sparse — so allow ~1 s, same as the door window and for the same
-# reason. The intro spawn is fresh-file-only; no human meaningfully L-resets
-# within a second of a textbox, so an eaten borderline reset (segment stays
-# armed) is cheaper than the false ~1-frame reset on every textbox.
+# reason. He DOES reset during a textbox -- Bowser's intro speech -- and that
+# reset respawns Mario, which the window alone cannot see (`_respawned`).
 
 # Staleness budget for a LOOSE arm (spec 2026-07-28-multi-step-segments).
 # Loose matching removes every cancel rule that used to bound an arm, so
@@ -472,6 +494,67 @@ class MatchContext:
     # name. None = no catalogue in hand (bare test contexts) = key equality
     # only, byte-for-byte the pre-collapse behaviour.
     landmark_names: dict | None = None
+    # The attempt rules the event's session was journaled under
+    # (projection.py caveat 21). Under 2 a save-state load runs THROUGH a
+    # star's attempt -- a 100-coin engine times a star -- and a segment
+    # attempt it does end is said to have ended on a load, not a reset.
+    attempt_rules: int = 1
+
+
+def _anchor_outcome(ev, ctx) -> str:
+    """What an attempt closed by this anchor is called: `loaded` when a
+    save state ended it under attempt rules 2 -- his words, 2026-09-23: "it
+    shouldn't be a *real* reset, it should be a 'LOADED SAVE STATE'" -- and
+    `reset` for everything else, history included."""
+    if ev.type == "state_loaded" and ctx is not None and ctx.attempt_rules >= 2:
+        return "loaded"
+    return "reset"
+
+
+def _respawned(ev) -> bool:
+    """Did this reset reload the level? The game's textbox zero never does
+    that; his L reset does, even mid-textbox (shape 5's exception,
+    2026-09-28). Either Mario is already in a spawn action on the anchor's
+    own poll, or the engine held the anchor and saw him respawn
+    (`_ConfirmedReset`)."""
+    return (ev.type == "practice_reset"
+            and (ev.payload.get("action") in SPAWN_ACTIONS
+                 or bool(ev.payload.get(_RESPAWN_SEEN))))
+
+
+#: How late Mario's respawn may land after a reset taken during a textbox:
+#: the reload reaches his action byte on the same frame or up to two later
+#: (13 such resets over the three journals here, 2026-09-28: 12 at 0, 1 at 2).
+RESPAWN_CONFIRM_FRAMES = 3
+_RESPAWN_SEEN = "respawn_seen"   # engine-only payload key, never journaled
+
+
+class _ConfirmedReset:
+    """A reset held because it fell in a textbox, confirmed by Mario's
+    respawn: the journal row it was, read as `_respawned`."""
+    __slots__ = ("_row", "payload")
+
+    def __init__(self, row):
+        self._row = row
+        self.payload = {**row.payload, _RESPAWN_SEEN: True}
+
+    def __getattr__(self, name):
+        return getattr(self._row, name)
+
+
+def before_control(first_act: int | None, ev) -> bool:
+    """Was the anchor taken before the player could play since the last one?
+
+    His only "act" of the period was a textbox or cutscene the game put him
+    in (the anchor period's first `mario_acted` action), and the anchor
+    interrupted one. Bowser speaks the moment Mario lands in his arena, and
+    journals before 2026-09-28 counted that speech as acting, so every reset
+    during it would bank a row: "we just should hide all the bullshit resets
+    where I clearly couldn't have done anything". The detector no longer
+    counts it (addresses.NO_CONTROL_ACTIONS); this reads the same answer out
+    of history. Shared by the star closer and the segment engine."""
+    return (first_act in NO_CONTROL_ACTIONS
+            and ev.payload.get("prev_action") in NO_CONTROL_ACTIONS)
 
 
 @dataclass(frozen=True)
@@ -2893,6 +2976,22 @@ class _Arm:
     # change followed the start, and a "move" def times from the arm exactly
     # like a "trigger" one — Mario never stopped being able to move.
     clock_frame: int | None = None
+    # Paired source-event UTC, never the time an arm notice was delivered.
+    clock_utc: str | None = None
+    # A 100-coin proof arm may establish attribution after its true beginning
+    # was missed. Keep that scoring behavior, but do not claim a ghost origin.
+    native_origin_known: bool = True
+    # The ghost's clock owner when this arm continues a run through a save-state
+    # load: (arm_id, start_frame, started_utc, frame, utc) of the arm the run
+    # began on. None = this arm is its own owner. See `_continued_ghost`.
+    ghost_origin: tuple | None = None
+    # The observed cartridge at this arm's true start, never inferred at close.
+    game_version: str | None = None
+
+    def clock_origin(self, mode: str) -> tuple[int, str | None]:
+        if mode == "move" and self.clock_frame is not None:
+            return self.clock_frame, self.clock_utc
+        return self.start_frame, self.started_utc
 
 
 def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
@@ -2967,6 +3066,9 @@ class SegmentEngine:
         self._defs = [d for d in defs if d.enabled]
         self._def_by_id = {d.id: d for d in self._defs}
         self._armed: dict[int, _Arm] = {}
+        # The latest game frame an event or a settle carried: how far a "move"
+        # arm's zero window has run (`native_ghost_origin`).
+        self._now_frame: int | None = None
         # The 100-coin family, resolved ONCE: {def id: (its star, the index
         # of the waypoint that IS grabbing that star, or None when the grab
         # sits in the start triggers instead)}. Read by the two proof rules
@@ -3056,6 +3158,23 @@ class SegmentEngine:
         # arming class of bug. It gets the same measured staleness budget a
         # loose arm gets (budget_frames), applied to every mode for that reason.
         self._cancelled: dict[int, tuple] = {}
+        # The anchor period's first act as the detector reported it -- the
+        # (action, frame) of the first `mario_acted` since the last anchor, or
+        # None. `_unacted` needs WHAT it was and WHEN it came.
+        self._period_act: tuple | None = None
+        # A reset that only a textbox called an echo, waiting a few frames for
+        # Mario's respawn to say it was his (`_confirm_held_reset`), with the
+        # anchor period's first act as it stood when it landed.
+        self._held_reset: tuple | None = None
+        # This feed's confirmed reset and the attempts it closed, so the
+        # projector stamps those rows with the reset, not the spawn.
+        self._confirmed: tuple = (None, frozenset())
+
+    def close_event_of(self, attempt_id: int, default):
+        """The event an attempt this feed closed actually ended on: a held
+        reset confirmed on this event, else `default` (the event fed)."""
+        confirmed, ids = self._confirmed
+        return confirmed if attempt_id in ids else default
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
@@ -3076,6 +3195,85 @@ class SegmentEngine:
         """The def for an id, or None (a deleted or never-loaded definition —
         callers must not assume every armed/pending id still has one)."""
         return self._def_by_id.get(sid)
+
+    def native_ghost_origin(self, sid: int) -> dict | None:
+        """The currently armed clock's ownership, with no matching inference."""
+        arm, definition = self._armed.get(sid), self._def_by_id.get(sid)
+        if arm is None or definition is None:
+            return None
+        if arm.ghost_origin is not None:
+            arm_id, start_frame, started_utc, frame, utc = arm.ghost_origin
+            return {"kind": "segment", "session_id": arm.session_id, "arm_id": arm_id,
+                    "start_frame": start_frame, "started_utc": started_utc,
+                    "frame": frame, "utc": utc}
+        if not arm.native_origin_known or not self._ghost_starts_here(arm, definition):
+            return None
+        frame, utc = arm.clock_origin(definition.clock_start)
+        if utc is None:
+            return None
+        return {"kind": "segment", "session_id": arm.session_id,
+                "arm_id": arm.jid + SEGMENT_ATTEMPT_OFFSET * sid,
+                "start_frame": arm.start_frame, "started_utc": arm.started_utc,
+                "frame": frame, "utc": utc}
+
+    def native_rival_start(self, sid: int):
+        """Certify the fresh arm before its move clock becomes playable."""
+        arm, definition = self._armed.get(sid), self._def_by_id.get(sid)
+        if (arm is None or definition is None or not arm.native_origin_known
+                or arm.anchor_type == "state_loaded" or arm.ghost_origin is not None
+                or not self._ghost_starts_here(arm, definition, wait_for_clock=False)):
+            return None
+        return {"token": ("segment",sid,arm.session_id,arm.jid + SEGMENT_ATTEMPT_OFFSET * sid),
+                "session_id": arm.session_id, "start_frame": arm.start_frame}
+
+    def _ghost_starts_here(self, arm, d, *, wait_for_clock=True) -> bool:
+        """Whether this arm's own clock is where the segment's ghost starts.
+
+        His MIPS Clip (2026-09-24) starts when he opens the HMC door, mid-area
+        in the castle basement, and its clock (and its recorded ghost) from the
+        counter zero the door causes about 61 frames later. Two arms began
+        somewhere else and put the ghost there instead: a practice reset re-arms
+        the segment where Mario respawns (by the HMC exit, not the door), and
+        a "move" arm names its door frame until the zero lands, so the ghost
+        walked out 61 frames early and snapped back. The ghost waits for the
+        segment's own start instead: a reset re-arm starts it only when the
+        segment starts at the place a reset returns to (a level or area entry,
+        or the reset itself), and a "move" arm only once its zero lands or its
+        window runs out without one (then the arm frame is the clock, as the
+        attempt's timing does).
+        """
+        if arm.anchor_type in _ANCHOR_TYPES and not any(
+                clause.get("type") in _RESET_RETURNS_TO for clause in d.start_triggers):
+            return False
+        if wait_for_clock and d.clock_start == "move" and arm.clock_frame is None:
+            return (self._now_frame is not None
+                    and self._now_frame - arm.start_frame > CLOCK_START_WINDOW_FRAMES)
+        return True
+
+    def _continued_ghost(self, arm, d, ev) -> tuple | None:
+        """The ghost's clock owner for an arm a `state_loaded` re-arms.
+
+        A load at the arm position ends the attempt and re-arms the segment
+        at the load frame (a subsegment may start from a save state), but the
+        run the ghost follows goes on: his report, round 10 (2026-09-23), "The
+        ghost should start from the loaded save state position, but right now,
+        it incorrectly resets at the very absolute beginning". A new arm used to
+        hand the renderer a new origin at the load frame, a fresh clock at 0.
+        The load keeps the run's owner instead, and the renderer places the
+        loaded state on that run's timeline itself. A practice reset (any other
+        anchor) is a real restart and owns its own clock. Attempt rows are
+        untouched; only the ghost's marker carries over.
+        """
+        if arm is None or ev.type != "state_loaded":
+            return None
+        if arm.ghost_origin is not None:
+            return arm.ghost_origin
+        if not arm.native_origin_known or not self._ghost_starts_here(arm, d):
+            return None
+        frame, utc = arm.clock_origin(d.clock_start)
+        if utc is None:
+            return None
+        return (arm.jid + SEGMENT_ATTEMPT_OFFSET * d.id, arm.start_frame, arm.started_utc, frame, utc)
 
     def definitions(self) -> list[SegmentDef]:
         """Every loaded definition. The cross-definition rules
@@ -3120,6 +3318,7 @@ class SegmentEngine:
         expiry frame, off by however long the wait was.
         """
         notices: list[dict] = []
+        self._now_frame = frame
         self._flush_move(_FrameOnly(frame), notices)
         return notices
 
@@ -3157,14 +3356,20 @@ class SegmentEngine:
         """Returns (closed raw Attempts, notices). Closures before arming."""
         from sm64_events.tracking.projection import Attempt  # cycle-free at call time
         closed, notices = [], []
+        if ev.frame:  # 0 = a journal-only event, no game frame
+            self._now_frame = ev.frame
         if ev.type == "tracking_gap":
             self._capture_gap(ev, notices)
             return closed, notices
+        if ev.type == "mario_acted" and self._period_act is None:
+            self._period_act = (ev.payload.get("action"), ev.frame)
         # Where every armed def stood BEFORE this event, so the one place at
         # the bottom of this method can tell the browser about any step that
         # moved. See `_progress_notices` for why it is a diff and not an
         # append at each of the four sites that can move a cursor.
         progress_before = {sid: arm.progress for sid, arm in self._armed.items()}
+        self._confirmed = (None, frozenset())
+        closed.extend(self._confirm_held_reset(Attempt, ev, ctx, notices))
         self._prepare_position(ev, notices)
         self._prepare_capture_clock(ev)
         self._settle_area_entries(ev, notices)
@@ -3181,6 +3386,9 @@ class SegmentEngine:
         # second copy drifting out of sync; full shape taxonomy in the
         # module docstring and the method's own docstring.
         anchor_is_echo = self._anchor_echo(ev)
+        if (ev.type == "practice_reset" and anchor_is_echo
+                and not self._anchor_echo(ev, dialog=False)):
+            self._held_reset = (ev, self._period_act)
         for d in self._feed_defs(ev.type):
             closed.extend(self._feed_definition(
                 Attempt, d, ev, ctx, notices, anchor_is_echo))
@@ -3213,6 +3421,8 @@ class SegmentEngine:
         if ev.type == "key_grabbed" and ev.payload.get("which") == "grand":
             for d in [d for d in self._defs if d.id in self._armed]:
                 self._cancel_topologically(d, ev, notices)
+        if ev.type in _ANCHOR_TYPES or ev.type in ("game_reset", "session_started"):
+            self._period_act = None   # the detector starts a new period here
         self._progress_notices(progress_before, ev.frame, notices)
         return closed, notices
 
@@ -3227,6 +3437,7 @@ class SegmentEngine:
         self._last_igt_zero_frame = None
         self._banked_before_zero = 0
         self._settled_node = self._pending_move = None
+        self._period_act = self._held_reset = None
 
     def _prepare_position(self, ev, notices) -> None:
         # Drop spent deferred destination-subarea entries (_pending): once an
@@ -3329,7 +3540,8 @@ class SegmentEngine:
             if (d is not None and d.clock_start == "move"
                     and 0 <= ev.frame - arm.start_frame
                     <= CLOCK_START_WINDOW_FRAMES):
-                self._armed[def_id] = replace(arm, clock_frame=ev.frame)
+                self._armed[def_id] = replace(arm, clock_frame=ev.frame,
+                                                  clock_utc=ev.wall_time_utc)
 
     def _settle_area_entries(self, ev, notices) -> None:
         if ev.type == "area_changed":
@@ -3372,6 +3584,16 @@ class SegmentEngine:
 
     def _feed_definition(self, Attempt, d, ev, ctx, notices, anchor_is_echo):
         closed = []
+        if (ev.type == "state_loaded" and ctx is not None and ctx.attempt_rules >= 2
+                and hundred_coin_entity(d.start_triggers, d.waypoints) is not None):
+            # A 100-coin engine times a STAR, and under attempt rules 2 a
+            # load runs through a star's attempt instead of ending it
+            # (projection.py caveat 21). Round 10, his WF 100 Coins: every
+            # load read as a reset and re-armed the engine at the load, ten
+            # "reset" rows for one run he never reset. To this engine the
+            # load is now what an echo is -- invisible; the projector still
+            # counts it and marks the run invalid (`_segment_validity`).
+            anchor_is_echo = True
         arm = self._armed.get(d.id)
         start_clause = self._first_match(d.start_triggers, ev, ctx)
         starts = start_clause is not None
@@ -3482,6 +3704,7 @@ class SegmentEngine:
                 jid=ev.id, start_frame=ev.frame,
                 started_utc=ev.wall_time_utc, anchor_type=ev.type,
                 session_id=ev.session_id, level=ctx.level,
+                game_version=ev.payload.get("game_version"),
                 area=ctx.area, required_area=req,
                 deadline_frame=self._deadline_for(d, ev))
         else:
@@ -3515,12 +3738,15 @@ class SegmentEngine:
                 self._disarm(d, ev, notices)  # visible: no row for
                 # the discarded partial, same as every other no-row
                 # disarm on this branch
+            kept = None if fresh or loose_plain_refire else self._armed.get(d.id)
             self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
                                      started_utc=ev.wall_time_utc,
                                      anchor_type=ev.type,
                                      session_id=ev.session_id,
+                                     game_version=ev.payload.get("game_version"),
                                      level=ctx.level, area=ctx.area,
-                                     deadline_frame=self._deadline_for(d, ev))
+                                     deadline_frame=self._deadline_for(d, ev),
+                                     ghost_origin=self._continued_ghost(kept, d, ev))
             if fresh or loose_plain_refire:
                 notices.append({"event": "segment_armed",
                                 "segment_id": d.id, "name": d.name,
@@ -3564,6 +3790,7 @@ class SegmentEngine:
                     jid=ev.id, start_frame=ev.frame,
                     started_utc=ev.wall_time_utc, anchor_type=ev.type,
                     session_id=ev.session_id,
+                    game_version=ev.payload.get("game_version"),
                     level=(ctx.level if ctx.level is not None
                            else cancelled_arm.level),
                     area=(ctx.area if ctx.area is not None
@@ -3623,16 +3850,17 @@ class SegmentEngine:
                 return t
         return None
 
-    def _anchor_echo(self, ev) -> bool:
+    def _anchor_echo(self, ev, *, dialog: bool = True) -> bool:
         """True when a practice_reset/state_loaded is an INVOLUNTARY IGT-reset
         echo — a door crossing, the post-star save prompt, a textbox/cutscene
         time-stop, a paused-briefly transition co-frame, or an in-level
-        teleporter — rather than a real player reset. Moved verbatim out of `feed`'s per-event
-        `anchor_is_echo` local (spec 2026-07-23-default-routes-foundation) so
+        teleporter or an area load — rather than a real player reset. Moved
+        out of `feed`'s per-event `anchor_is_echo` local (spec
+        2026-07-23-default-routes-foundation) so
         the waypoint matcher (`_feed_waypoint`) shares the SAME echo
         definition instead of a second copy that could drift; the full
         shape-by-shape rationale lives in the module docstring's "load-echo
-        rule" section. Shapes (2a)/(2b)/(3)/(4)/(5)/(6) depend only on the event
+        rule" section. Shapes (2a)/(2b)/(3)/(4)/(5)/(6)/(7) depend only on the event
         payload + `_last_transition_frame` (an instance attribute), never on
         a per-def arm — shape (1), the arm-frame echo, is checked separately
         per def by its callers (`ev.frame == arm.start_frame`)."""
@@ -3666,9 +3894,13 @@ class SegmentEngine:
             # Skip segment (live journal 2026-06-14).  frames_since_dialog
             # bridges the gap exactly as frames_since_door does (2b); we never
             # split timing on a textbox in any level (user rule 2026-06-14).
-            or (ev.payload.get("frames_since_dialog") is not None
+            # A reset that RESPAWNED Mario is his, textbox or not: he
+            # pressed reset during Bowser's intro speech, the level reloaded,
+            # and the run (and its ghost) must start over (2026-09-28).
+            or (dialog and ev.payload.get("frames_since_dialog") is not None
                 and 0 <= ev.payload["frames_since_dialog"]
-                <= _DIALOG_ECHO_WINDOW)
+                <= _DIALOG_ECHO_WINDOW
+                and not _respawned(ev))
             # (6) in-level teleporter echo: the CCM broken bridge and the WDW
             # corner warps relocate Mario inside the SAME area, so no
             # transition fires for shape (3) to catch, and Usamune zeroes its
@@ -3678,7 +3910,74 @@ class SegmentEngine:
             # one must not rewind, re-arm or bank a row. Still an ANCHOR, so
             # `_zeroes_usamune_igt` moves the IGT basis and the segment's time
             # falls back to the rta delta rather than measuring from the warp.
-            or ev.payload.get("teleport", False))
+            or ev.payload.get("teleport", False)
+            # (7) area entry/exit can zero IGT on a later sampled frame than the
+            # area_changed event. The detector's recency-based classification
+            # preserves the original attempt across that sampling gap.
+            or ev.payload.get("area_load", False))
+
+    def _confirm_held_reset(self, Attempt, ev, ctx, notices) -> list:
+        """Replay a held textbox-time reset as the real one it was.
+
+        The respawn confirms it. A reset taken mid-textbox can land on a poll
+        where Mario's action byte still reads the textbox; the reload reaches
+        it on the same frame or up to two later, and `spawned` says so. His
+        rule, 2026-09-28: every reset splits the run, and "When we reset,
+        ghost mario resets" -- so the held reset closes and re-arms exactly
+        as it would have on its own poll. Anything else arriving first means
+        it was the textbox's own zero (the fresh-file intro's, which follows
+        `spawned kind=intro` instead), and it stays invisible. The reload's
+        own `mario_acted` on the same frames is waited through."""
+        if self._held_reset is None or not ev.frame:
+            return []
+        reset, act = self._held_reset
+        soon = (ev.session_id == reset.session_id
+                and 0 <= ev.frame - reset.frame <= RESPAWN_CONFIRM_FRAMES)
+        if ev.type == "mario_acted" and soon:
+            return []
+        self._held_reset = None
+        if not (soon and ev.type == "spawned"
+                and ev.payload.get("kind") == "spawn"):
+            return []
+        confirmed = _ConfirmedReset(reset)
+        current, self._period_act = self._period_act, act
+        closed = []
+        for d in self._feed_defs(confirmed.type):
+            closed.extend(self._feed_definition(
+                Attempt, d, confirmed, ctx, notices, False))
+        self._period_act = current
+        self._confirmed = (confirmed, frozenset(a.id for a in closed))
+        return closed
+
+    def _unacted(self, ev, arm) -> bool:
+        """Did this real anchor end an attempt he never PLAYED? Then it
+        records no row. It still ends the run: every caller re-arms at the
+        anchor, which restarts the clock and the ghost -- his split between
+        the two, 2026-09-28: "we don't count it as a reset (in terms of the
+        practice log...) but this SHOULD count as a reset for Ghost Mario".
+
+        Three readings of the journal, the last two new that day:
+        - the anchor's own `mario_acted` flag (no-op reset spam, 2026-06-12);
+        - `before_control`: his only act was the game's own textbox, and the
+          reset interrupted it (a Bowser intro);
+        - the ARRIVAL's own zero: a Usamune menu warp lands 1-6 frames
+          before its counter zero, a course entry 42-59 (measured over the
+          three journals on this machine, 2026-09-28), and the flag it
+          carries describes the level he LEFT -- no act reached the journal
+          since this arrival armed the segment. Opening Bowser 3 banked a
+          "reset 00"06" row that way: "I simply just opened the stage, there
+          was no reset".
+        Journals without `acted_tracking` keep every row, as before."""
+        if not ev.payload.get("acted_tracking", False):
+            return False
+        if not ev.payload.get("mario_acted", False):
+            return True
+        act = self._period_act
+        if before_control(act[0] if act else None, ev):
+            return True
+        return (arm.anchor_type in ("level_changed", "area_changed")
+                and (act is None or act[1] < arm.start_frame)
+                and 0 <= ev.frame - arm.start_frame <= LEVEL_LOAD_TAIL_FRAMES)
 
     def _arrived_by_a_real_move(self, ev) -> bool:
         """True when this anchor landed on the same frame as a LEGITIMATE
@@ -3804,10 +4103,8 @@ class SegmentEngine:
             # discard in projection._close_by_reset).
             afk = ev.payload.get("paused_frames_before", 0) \
                 >= _AFK_PAUSE_FRAMES
-            unacted = ev.payload.get("acted_tracking", False) \
-                and not ev.payload.get("mario_acted", False)
-            if not afk and not unacted:
-                a = self._close(Attempt, d, arm, ev, "reset", None)
+            if not afk and not self._unacted(ev, arm):
+                a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
                 if a:
                     closed.append(a)
             # Re-arm in place at the anchor frame instead of disarming.
@@ -3827,8 +4124,10 @@ class SegmentEngine:
                 started_utc=ev.wall_time_utc,
                 anchor_type=ev.type,
                 session_id=ev.session_id,
+                game_version=ev.payload.get("game_version"),
                 level=ctx.level if ctx.level is not None else arm.level,
                 area=ctx.area if ctx.area is not None else arm.area,
+                ghost_origin=self._continued_ghost(arm, d, ev),
             )
         elif ev.type == "death":
             a = self._close(Attempt, d, arm, ev, "death",
@@ -3957,23 +4256,26 @@ class SegmentEngine:
             # (mirrors the star-side discard in projection.py's
             # _close_by_reset) -- a true no-op anchor refire still records
             # nothing.
-            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+            # `anchor_is_echo` is this event's echo verdict for THIS def (a
+            # 100-coin engine also treats a rules-2 load as one); the event-
+            # level reading stays beside it, as before.
+            if (ev.frame == arm.start_frame or anchor_is_echo or self._anchor_echo(ev)
                     or self._arrived_by_a_real_move(ev)):
                 return closed
             afk = ev.payload.get("paused_frames_before", 0) \
                 >= _AFK_PAUSE_FRAMES
-            unacted = ev.payload.get("acted_tracking", False) \
-                and not ev.payload.get("mario_acted", False)
-            if not afk and not unacted:
-                a = self._close(Attempt, d, arm, ev, "reset", None)
+            if not afk and not self._unacted(ev, arm):
+                a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
                 if a:
                     closed.append(a)
             self._armed[d.id] = replace(
                 arm, progress=0, start_frame=ev.frame,
                 started_utc=ev.wall_time_utc, jid=ev.id,
                 anchor_type=ev.type, session_id=ev.session_id,
+                game_version=ev.payload.get("game_version"),
                 level=ctx.level if ctx.level is not None else arm.level,
-                area=ctx.area if ctx.area is not None else arm.area)
+                area=ctx.area if ctx.area is not None else arm.area,
+                ghost_origin=self._continued_ghost(arm, d, ev))
             return closed
         if not complete and self._matches(d.waypoints[arm.progress], ev, ctx):
             self._armed[d.id] = replace(arm, progress=arm.progress + 1)
@@ -4073,7 +4375,10 @@ class SegmentEngine:
             self._disarm(d, ev, notices)
             return closed
         if ev.type in _ANCHOR_TYPES:
-            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+            # `anchor_is_echo` is this event's echo verdict for THIS def (a
+            # 100-coin engine also treats a rules-2 load as one); the event-
+            # level reading stays beside it, as before.
+            if (ev.frame == arm.start_frame or anchor_is_echo or self._anchor_echo(ev)
                     or self._arrived_by_a_real_move(ev)):
                 return closed          # echo: invisible
             if not _at_arm_position(arm, ctx):
@@ -4088,16 +4393,18 @@ class SegmentEngine:
                 # untouched — position, start_frame, deadline — exactly like
                 # every other mid-route event this matcher already lets pass.
                 return closed
-            a = self._close(Attempt, d, arm, ev, "reset", None)
+            a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
             if a:
                 closed.append(a)
             self._armed[d.id] = replace(
                 arm, progress=0, start_frame=ev.frame,
                 started_utc=ev.wall_time_utc, jid=ev.id,
                 anchor_type=ev.type, session_id=ev.session_id,
+                game_version=ev.payload.get("game_version"),
                 deadline_frame=self._deadline_for(d, ev),
                 level=ctx.level if ctx.level is not None else arm.level,
-                area=ctx.area if ctx.area is not None else arm.area)
+                area=ctx.area if ctx.area is not None else arm.area,
+                ghost_origin=self._continued_ghost(arm, d, ev))
             return closed
         if not complete and self._matches(d.waypoints[arm.progress], ev, ctx):
             self._armed[d.id] = replace(arm, progress=arm.progress + 1)
@@ -4283,9 +4590,11 @@ class SegmentEngine:
         arm = _Arm(jid=ev.id, start_frame=ev.frame,
                    started_utc=ev.wall_time_utc, anchor_type=ev.type,
                    session_id=ev.session_id, level=ctx.level, area=ctx.area,
+                   game_version=ev.payload.get("game_version"),
                    progress=(star_index + 1 if is_the_grab
                              else len(d.waypoints)),
-                   deadline_frame=self._deadline_for(d, ev))
+                   deadline_frame=self._deadline_for(d, ev),
+                   native_origin_known=False)
         if is_the_grab:
             self._armed[d.id] = arm
             notices.append({"event": "segment_armed", "segment_id": d.id,
@@ -4304,6 +4613,13 @@ class SegmentEngine:
 
     def _close(self, Attempt, d, arm: _Arm, ev, outcome, detail, *,
                span_known: bool = True):
+        # A finish Mario reached already dead is a death, whichever end
+        # trigger it matched (his report 2026-09-28: a BitFS lava death flew
+        # on into the pipe and banked 0'48"26). Every success path funnels
+        # through here, so this is the one gate; detectors/death.py owns
+        # what dead means.
+        if outcome == "success" and finished_dead(ev.payload):
+            outcome, detail = "death", FINISHED_DEAD
         # A close event carrying Usamune's own IGT (star/key grab, pipe touch,
         # death) is used verbatim — pause-safe, display-tick aligned, and free
         # of the arm-frame alignment error the wall-frame delta carries; see
@@ -4335,9 +4651,7 @@ class SegmentEngine:
         # 0'04"23+ — the door animation and fade. A "move" def with no
         # rebase, and every "trigger" def, times from the arm exactly as
         # before this field existed.
-        clock_origin = (arm.clock_frame
-                        if d.clock_start == "move" and arm.clock_frame is not None
-                        else arm.start_frame)
+        clock_origin, clock_utc = arm.clock_origin(d.clock_start)
         # AN IGT LONGER THAN THE SPAN IT COVERS DID NOT START HERE (round 24,
         # 2026-08-09). The zero-frame test above is necessary and, since
         # 2026-08-02, no longer sufficient: the star clock CARRIES a leg across
@@ -4444,4 +4758,9 @@ class SegmentEngine:
             igt_frames=None, rta_frames=rta,
             started_utc=arm.started_utc, ended_utc=ev.wall_time_utc,
             cleared=False, cleared_reason=None, segment_id=d.id,
-            timed_by=timed_by, closed_by=ev.type)
+            timed_by=timed_by, closed_by=ev.type,
+            game_version=(arm.game_version if arm.game_version == ev.payload.get("game_version") else None),
+            native_clock_frame=(clock_origin if span_known and arm.native_origin_known else None),
+            native_clock_utc=(clock_utc if span_known and arm.native_origin_known else None),
+            native_clock_kind=("segment" if span_known and arm.native_origin_known else None),
+            closed_frame=ev.frame)

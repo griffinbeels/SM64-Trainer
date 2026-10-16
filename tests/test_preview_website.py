@@ -21,6 +21,7 @@ class Links(HTMLParser):
     def __init__(self, page):
         super().__init__()
         self.downloads = []
+        self.anchors = []
         self.ids = set()
         self.feed(page)
 
@@ -28,6 +29,8 @@ class Links(HTMLParser):
         attrs = dict(attrs)
         if "id" in attrs:
             self.ids.add(attrs["id"])
+        if tag == "a":
+            self.anchors.append(attrs)
         if tag == "a" and "download-link" in attrs.get("class", "").split():
             self.downloads.append(attrs)
 
@@ -40,7 +43,7 @@ class PreviewTests(unittest.TestCase):
         self.source = builder.ROOT / "website"
 
     def test_real_ready_and_unavailable_pages_are_inert_and_offline(self):
-        for state in ("ready", "unavailable"):
+        for state in ("ready", "unavailable", "beta-only"):
             with self.subTest(state=state), mock.patch.object(
                     builder, "fetch_releases", side_effect=AssertionError("network discovery")):
                 output = self.output / state
@@ -61,9 +64,18 @@ class PreviewTests(unittest.TestCase):
                 if state == "ready":
                     self.assertIn("data-release-upload", page)
                     self.assertIn("UTC", page)
-                else:
+                elif state == "unavailable":
                     self.assertIn("Downloads are temporarily unavailable", page)
                     self.assertNotIn("data-release-upload", page)
+                else:
+                    self.assertIn("community stable release is not available yet", page)
+                    self.assertNotIn("data-release-upload", page)
+                beta_page = (output / "beta/index.html").read_text(encoding="utf-8")
+                self.assertIn('href="https://sm64trainer.app/beta/"', beta_page)
+                self.assertIn("Try the Ghost<br>Overlay", beta_page)
+                self.assertEqual(len(Links(beta_page).downloads), 3)
+                self.assertTrue(all(link.get("aria-disabled") == "true" for link in Links(beta_page).downloads))
+                self.assertEqual(json.loads((output / "beta/release.json").read_bytes())["status"], "preview")
                 self.assertEqual((output / "assets/logo.png").read_bytes(),
                                  (self.source / "assets/logo.png").read_bytes())
                 self.assertFalse((output / "README.md").exists())
@@ -80,14 +92,14 @@ class PreviewTests(unittest.TestCase):
             worker.start()
             try:
                 self.assertEqual(server.server_address[0], "127.0.0.1")
-                for path in ("/", "/index.html", "/release.json"):
+                for path in ("/", "/index.html", "/release.json", "/beta/", "/beta/index.html", "/beta/release.json"):
                     with urlopen(f"http://127.0.0.1:{server.server_port}{path}", timeout=5) as response:
                         self.assertEqual(response.status, 200)
                         self.assertIn("connect-src 'none'",
                                       response.headers["Content-Security-Policy"])
                         self.assertEqual(response.headers["Cache-Control"],
                                          "public, max-age=0, must-revalidate")
-                        if path == "/release.json":
+                        if path.endswith("/release.json"):
                             self.assertEqual(json.load(response)["status"], "preview")
             finally:
                 server.shutdown()

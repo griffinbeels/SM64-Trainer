@@ -117,13 +117,19 @@ class _FixtureCaptureLayer:
 
     Status is fixed by default. A driven test can update the supplied overrides
     dictionary to represent an external action such as closing Project64.
-    Install/remove calls are recorded; tests own their outcomes explicitly.
+    Install/remove calls are recorded; tests own their outcomes explicitly:
+    `install_outcome` is the overrides a successful install applies, AT the
+    click. Applying them beforehand raced the page's own poll, which could
+    see the installed layer first and move past the Install button before
+    the test clicked it (merge checks, 2026-09-23).
     """
 
-    def __init__(self, status: LayerStatus, refuse: str | None = None, overrides=None):
+    def __init__(self, status: LayerStatus, refuse: str | None = None, overrides=None,
+                 install_outcome: dict | None = None):
         self._status = status
         self._overrides = overrides if overrides is not None else {}
         self._refuse = refuse
+        self._install_outcome = install_outcome
         self.installs: list[bool] = []
         self.uninstalls = 0
 
@@ -134,6 +140,8 @@ class _FixtureCaptureLayer:
         self.installs.append(consent)
         if self._refuse or not consent:
             raise LayerRefused(self._refuse or "consent is required")
+        if self._install_outcome:
+            self._overrides.update(self._install_outcome)
         return self.status()
 
     def uninstall(self) -> LayerStatus:
@@ -911,7 +919,9 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
             if sec.get("segment_id") == segment_id
             for a in sec.get("attempts", [])
             if a.get("outcome") == "success" and a.get("rta_frames") == 85]
-    if rows:
+    # A valid run under a picked strategy already saved itself (task 0144's
+    # automatic PB); only a row still offering Save needs the click.
+    if rows and rows[0].get("pb_action") == "save":
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "rta"})
     _run_coro(rearm())
 
@@ -1388,7 +1398,7 @@ def serve_ui(*args, **kwargs):
 
 
 def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer_refuse,
-                     bundled_library, setup_observer):
+                     bundled_library, setup_observer, capture_layer_install=None):
     # Today's Daily Star announcement starts dismissed, so it never covers a
     # page a test is driving (its backdrop intercepted clicks in the
     # frame-readout tests, 2026-09-24). tests/test_ui_daily_star.py clears it
@@ -1462,7 +1472,8 @@ def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer
     # install/uninstall state machine.
     capture_layer = _FixtureCaptureLayer(
         _fixture_capture_layer_status(**(capture_layer_status or {})),
-        refuse=capture_layer_refuse, overrides=capture_layer_status)
+        refuse=capture_layer_refuse, overrides=capture_layer_status,
+        install_outcome=capture_layer_install)
     if setup_observer is None:
         def setup_observer(layer):
             return {
@@ -1713,6 +1724,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               pad_journal: int = 0,
               capture_layer_status: dict | None = None,
               capture_layer_refuse: str | None = None,
+              capture_layer_install: dict | None = None,
               setup_observer=None,
               bundled_library: bool = True):
     """Yield the base URL of an offline instance; stop it on the way out.
@@ -1834,7 +1846,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     interrupted by a modal nobody asked this fixture for. A first-run test
     asks for `state="not_installed"`. `capture_layer_refuse` makes every
     install/uninstall attempt fail with that sentence, for driving the 409
-    path.
+    path. `capture_layer_install` is what a successful install changes in
+    `capture_layer_status`, applied when the page's Install request arrives.
     """
     refuse_outside_browser_modules("boot the UI fixture server")
     scratch = compare_cache_scratch = database = thread = listener = None
@@ -1861,7 +1874,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
         if pad_journal:
             _pad_journal(db_path, pad_journal)
         app, service = _fixture_runtime(database, Path(compare_cache_scratch.name),
-                                        capture_layer_status, capture_layer_refuse, bundled_library, setup_observer)
+                                        capture_layer_status, capture_layer_refuse, bundled_library, setup_observer,
+                                        capture_layer_install)
         _fixture_replay_routes(app, database)
         listener = _bound_socket()
         port = listener.getsockname()[1]

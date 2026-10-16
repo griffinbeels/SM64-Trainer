@@ -44,6 +44,7 @@ from sm64_events.sync.gates import Gate, Verdict, register
 POLL_INTERVAL_S = 1 / 60
 
 GLOBAL_TIMER_SAMPLE_SECONDS = 2.0
+GHOST_ADDRESS_SAMPLE_SECONDS = 2.0
 MARIO_STRUCT_EDGE_TIMEOUT_S = 10.0     # "stand still, then jump once"
 CURR_LEVEL_TIMEOUT_S = 60.0
 CURR_AREA_TIMEOUT_S = 60.0
@@ -237,6 +238,194 @@ register(Gate(
     proves="gMarioObject's candidate address holds a pointer into the object pool.",
     check=_check_mario_object,
 ))
+
+
+def _ghost_ram_pointer(pointer: int, size: int) -> bool:
+    """A bounded guest pointer, never a host address or segmented display list."""
+    return (pointer % 4 == 0 and A.KSEG0_BASE <= pointer
+            and pointer + size <= A.KSEG0_BASE + A.RDRAM_FULL_SIZE)
+
+
+def _check_current_area_pointer(ctx) -> Verdict:
+    candidate = ctx.candidate("current_area_pointer")
+    state, area_number = ctx.candidate("mario_struct"), ctx.candidate("curr_area")
+    if candidate is None or state is None or area_number is None:
+        return Verdict("missing", evidence="active Area pointer candidate/dependencies missing")
+    mem = ctx.raw()
+    pointer = mem.read_u32(candidate)
+    if not _ghost_ram_pointer(pointer, A.AREA_CAMERA_OFF + 4):
+        return Verdict("failed", evidence="active Area pointer is outside aligned RDRAM")
+    root = mem.read_u32(pointer + A.AREA_GRAPH_ROOT_OFF)
+    camera = mem.read_u32(pointer + A.AREA_CAMERA_OFF)
+    area = mem.read_s16(area_number)
+    if (not _ghost_ram_pointer(root, A.GRAPH_ROOT_AREA_OFF + 4)
+            or not _ghost_ram_pointer(camera, 0x6C)
+            or not 1 <= area <= 8
+            or mem.read_u32(state + A.MARIO_AREA_OFF) != pointer
+            or mem.read_u8(pointer + A.AREA_INDEX_OFF) != area
+            or not mem.read_u8(pointer + A.AREA_FLAGS_OFF) & 1
+            or mem.read_u16(root + A.GRAPH_NODE_TYPE_OFF) != 1
+            or not mem.read_u16(root + A.GRAPH_NODE_FLAGS_OFF) & 1
+            or mem.read_u8(root + A.GRAPH_ROOT_AREA_OFF) != area):
+        return Verdict("failed", evidence="Area, MarioState, active graph root and area index disagree")
+    return Verdict("verified", value=candidate,
+                   measured={"area": area, "pointer": pointer, "root": root},
+                   evidence="active Area agrees with MarioState.area and independent area/root identity; "
+                            "this gate does not certify rendered camera matrices")
+
+
+register(Gate(
+    id="address.current_area_pointer", feature="version", kind="address", auto=True,
+    needs=("address.mario_struct", "address.curr_area"),
+    instruction="Load a normal playable area; reads its active graph and Mario's Area pointer.",
+    proves="gCurrentArea's candidate points to the same active Area as MarioState and the area graph.",
+    check=_check_current_area_pointer,
+))
+
+
+def _check_area_update_counter(ctx) -> Verdict:
+    candidate = ctx.candidate("area_update_counter")
+    mario, pool = ctx.candidate("mario_object"), ctx.candidate("object_pool")
+    if candidate is None or mario is None or pool is None:
+        return Verdict("missing", evidence="area counter candidate/dependencies missing")
+    mem, start = ctx.raw(), ctx.now()
+    previous, advances, matches = None, 0, 0
+    while ctx.now() - start < GHOST_ADDRESS_SAMPLE_SECONDS:
+        obj = mem.read_u32(mario)
+        if not pool_contains(pool, obj, slot_size=A.OBJECT_SIZE, slots=A.OBJECT_COUNT):
+            return Verdict("failed", evidence="Mario object left the verified pool")
+        before = mem.read_u16(candidate)
+        rendered = mem.read_u16(obj + A.MARIO_GFX_ANIM_TIMER_OFF)
+        after = mem.read_u16(candidate)
+        if before == after == rendered:
+            matches += 1
+            if previous is not None and 0 < ((after - previous) & 0xFFFF) < 64:
+                advances += 1
+            previous = after
+        ctx.sleep(POLL_INTERVAL_S)
+    measured = {"matching_samples": matches, "matching_advances": advances}
+    if advances < 5:
+        return Verdict("failed", measured=measured,
+                       evidence="counter did not repeatedly advance with Mario's rendered animTimer")
+    return Verdict("verified", value=candidate, measured=measured,
+                   evidence="candidate advances and equals the independent gfx animation timer; "
+                            "pose/picture alignment still needs its renderer witness")
+
+
+register(Gate(
+    id="address.area_update_counter", feature="version", kind="address",
+    needs=("address.mario_object", "address.object_pool"),
+    timeout_s=GHOST_ADDRESS_SAMPLE_SECONDS + 5,
+    instruction="Keep Mario visible in a normal area, unpaused, for two seconds.",
+    proves="gAreaUpdateCounter's candidate advances with the actual graphics animation timer.",
+    check=_check_area_update_counter,
+))
+
+
+# --- the ghost sound ring: sound_code / sound_producer / sound_ring / sound_consumer
+
+SOUND_REQUEST_TIMEOUT_S = 20.0
+SOUND_REQUESTS_WANTED = 3
+MARIO_SOUND_SOURCE_OFF = 0x54  # gfx.cameraToObject, play_sound's source for Mario
+
+
+def sound_code_words(producer: int, ring: int) -> tuple[int, ...]:
+    """play_sound's 12 instruction words naming this producer and ring.
+
+    The same derivation the native reader checks (ghost_capture.cpp)."""
+    upper, lower = (lambda a: (a + 0x8000) >> 16), (lambda a: a & 0xFFFF)
+    return (0x3C060000 | upper(producer), 0x24C60000 | lower(producer), 0x90C20000,
+            0x3C0F0000 | upper(ring), 0x25EF0000 | lower(ring),
+            0x000270C0, 0x01CF1821, 0x24580001, 0xAC640000, 0xAC650004,
+            0x03E00008, 0xA0D80000)
+
+
+def _check_sound_code(ctx) -> Verdict:
+    code, producer, ring = (ctx.candidate(name) for name in ("sound_code", "sound_producer", "sound_ring"))
+    if code is None or producer is None or ring is None:
+        return Verdict("missing", evidence="play_sound or its ring candidates missing")
+    mem = ctx.raw()
+    actual = tuple(mem.read_u32(code + 4 * i) for i in range(12))
+    if actual != sound_code_words(producer, ring):
+        return Verdict("failed", measured={"words": [f"{word:08x}" for word in actual]},
+                       evidence="play_sound's instructions do not name this producer and ring")
+    return Verdict("verified", value=code,
+                   evidence="play_sound stores bits then source into 8-byte entries of this ring "
+                            "and publishes this u8 producer after both")
+
+
+def _observe_mario_sounds(ctx) -> tuple[str, dict]:
+    """Watch play_sound requests while he jumps; count Mario-sourced entries."""
+    producer, ring, consumer = (ctx.candidate(n) for n in ("sound_producer", "sound_ring", "sound_consumer"))
+    mario, pool = ctx.candidate("mario_object"), ctx.candidate("object_pool")
+    if None in (producer, ring, consumer, mario, pool):
+        return "missing", {}
+    mem, start = ctx.raw(), ctx.now()
+    previous = mem.read_u8(producer)
+    seen = {"advances": 0, "mario_requests": 0, "foreign_requests": 0, "consumer_caught_up": 0}
+    while ctx.now() - start < SOUND_REQUEST_TIMEOUT_S:
+        obj = mem.read_u32(mario)
+        if not pool_contains(pool, obj, slot_size=A.OBJECT_SIZE, slots=A.OBJECT_COUNT):
+            return "failed", seen | {"reason": "Mario object left the verified pool"}
+        current = mem.read_u8(producer)
+        issued = (current - previous) & 0xFF
+        if issued:
+            seen["advances"] += 1
+            for index in range(previous, previous + issued):
+                source = mem.read_u32(ring + 8 * (index & 0xFF) + 4)
+                bits = mem.read_u32(ring + 8 * (index & 0xFF))
+                if source == obj + MARIO_SOUND_SOURCE_OFF and bits:
+                    seen["mario_requests"] += 1
+                else:
+                    seen["foreign_requests"] += 1
+            previous = current
+        elif mem.read_u8(consumer) == current and seen["advances"]:
+            seen["consumer_caught_up"] += 1
+        if seen["mario_requests"] >= SOUND_REQUESTS_WANTED and seen["consumer_caught_up"]:
+            return "verified", seen
+        ctx.sleep(POLL_INTERVAL_S)
+    return "failed", seen
+
+
+def _sound_gate(name: str, proven: str):
+    def check(ctx) -> Verdict:
+        status, measured = _observe_mario_sounds(ctx)
+        if status == "missing":
+            return Verdict("missing", evidence="sound ring candidates or Mario object missing")
+        if status == "failed":
+            return Verdict("failed", measured=measured,
+                           evidence="never saw three Mario-sourced requests and the audio thread "
+                                    "consume them within the timeout")
+        return Verdict("verified", value=ctx.candidate(name), measured=measured, evidence=proven)
+    return check
+
+
+_check_sound_producer = _sound_gate(
+    "sound_producer", "the producer advanced as Mario made sounds")
+_check_sound_ring = _sound_gate(
+    "sound_ring", "each new entry's source was Mario's gfx.cameraToObject with nonzero bits")
+_check_sound_consumer = _sound_gate(
+    "sound_consumer", "the consumer reached the producer after Mario's requests")
+
+register(Gate(
+    id="address.sound_code", feature="version", kind="address", auto=True,
+    needs=("version.rom",),
+    instruction="No action needed — reads play_sound's instructions.",
+    proves="play_sound's code names exactly the candidate producer and ring (8-byte entries, "
+           "bits then source, producer published last).",
+    check=_check_sound_code,
+))
+for _field, _check, _proves in (
+        ("sound_producer", _check_sound_producer, "sSoundRequestCount advances with Mario's own sound requests."),
+        ("sound_ring", _check_sound_ring, "sSoundRequests entries carry Mario's sound bits and his source pointer."),
+        ("sound_consumer", _check_sound_consumer, "sNumProcessedSoundRequests catches up with the producer.")):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address",
+        needs=("address.sound_code", "address.mario_object", "address.object_pool"),
+        timeout_s=SOUND_REQUEST_TIMEOUT_S + 5,
+        instruction="Jump three times (each jump plays Mario's voice and a landing sound).",
+        proves=_proves, check=_check,
+    ))
 
 
 def _check_behaviour_base(ctx) -> Verdict:
@@ -850,6 +1039,59 @@ register(Gate(
     proves="candidates for Usamune's per-section counter -- DIAGNOSTICS ONLY, "
            "its terminal state is `candidate`; no shipped read depends on it.",
     check=_check_usamune_timer,
+))
+
+
+# --- usamune_menu / usamune_input_display ------------------------------------
+
+USAMUNE_HUD_TIMEOUT_S = 90.0
+
+
+def _seen_off_and_on(ctx, field: str, what: str) -> Verdict:
+    """The byte must read zero AND nonzero while the human flips the thing, and
+    zero again when it is closed or switched back: a constant byte, or one
+    that only ever moves, proves nothing."""
+    candidate = ctx.candidate(field)
+    if candidate is None:
+        return Verdict("missing", evidence=f"no candidate for {field}: it is read off "
+                                           "Usamune's HUD code, so a new ROM needs that read again")
+    seen, last = set(), None
+    start = ctx.now()
+    while ctx.now() - start < USAMUNE_HUD_TIMEOUT_S:
+        value = ctx.raw().read_u8(candidate)
+        seen.add(value != 0)
+        if last is not None and last != 0 and value == 0 and seen == {False, True}:
+            return Verdict("verified", value=candidate, measured={"on": True, "off": True},
+                           evidence=f"read 0 while {what} was off and nonzero while on, then 0 again")
+        last = value
+        ctx.sleep(POLL_INTERVAL_S)
+    return Verdict("failed", value=candidate,
+                   evidence=f"never saw it go nonzero and back to 0 while {what} was flipped")
+
+
+def _check_usamune_menu(ctx) -> Verdict:
+    return _seen_off_and_on(ctx, "usamune_menu", "Usamune's menu")
+
+
+def _check_usamune_input_display(ctx) -> Verdict:
+    return _seen_off_and_on(ctx, "usamune_input_display", "Usamune's input display")
+
+
+register(Gate(
+    id="address.usamune_menu", feature="controller input", kind="address",
+    needs=("version.rom",), timeout_s=USAMUNE_HUD_TIMEOUT_S + 10,
+    instruction="Open Usamune's practice menu, wait a moment, then close it.",
+    proves="the RAM byte that is nonzero exactly while Usamune's menu is open, when "
+           "it hides its own HUD and input display.",
+    check=_check_usamune_menu,
+))
+register(Gate(
+    id="address.usamune_input_display", feature="controller input", kind="address",
+    needs=("version.rom",), timeout_s=USAMUNE_HUD_TIMEOUT_S + 10,
+    instruction="In Usamune's menu, turn its input display off, close the menu, then "
+                "turn the display back on.",
+    proves="the RAM byte holding Usamune's input display setting, zero while it is off.",
+    check=_check_usamune_input_display,
 ))
 
 

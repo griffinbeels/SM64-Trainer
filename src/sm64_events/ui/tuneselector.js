@@ -1,3 +1,4 @@
+import { localFetch } from "/ui/api.js";
 // src/sm64_events/ui/tuneselector.js — the selector-exchange inspector, served
 // at /ui/tuneselector.html.
 //
@@ -113,7 +114,7 @@ function Inspector() {
   async function saveToRepo() {
     setStatus({ kind: "busy", text: "Saving..." });
     try {
-      const response = await fetch("/api/tuning/selector", {
+      const response = await localFetch("/api/tuning/selector", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ values }),
       });

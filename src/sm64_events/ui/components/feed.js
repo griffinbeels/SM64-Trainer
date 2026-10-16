@@ -1,6 +1,7 @@
 // src/sm64_events/ui/components/feed.js
 import { h } from "preact";
 import htm from "htm";
+import { dropEmptyMinutes } from "../format.js";
 import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
@@ -50,7 +51,7 @@ export function Feed({ t }) {
                 <div class="feed-event-main">
                   <div class="feed-event-title">
                     <b>${p.course_name} — ${p.star_name}</b>
-                    <strong>${p.igt}</strong>
+                    <strong>${dropEmptyMinutes(p.igt)}</strong>
                     <span class=${`src src-${p.igt_source}`}>${p.igt_source}</span>
                   </div>
                   <span class="feed-event-meta">${p.igt_frames}f · course ${p.course_id}

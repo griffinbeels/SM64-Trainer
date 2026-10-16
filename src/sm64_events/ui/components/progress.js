@@ -7,7 +7,7 @@
 // clickToPlace for the letterbox rationale).
 import { h } from "preact";
 import htm from "htm";
-import { fmtIgt } from "../format.js";
+import { fmtIgtShort } from "../format.js";
 import { rankColor } from "./ranks.js";
 
 const html = htm.bind(h);
@@ -98,7 +98,7 @@ export function Progress({ prog, clock, onPick }) {
         <line x1=${PADL} y1=${y(v)} x2=${W - PADR} y2=${y(v)}
               stroke=${i === 2 ? AXIS : GRID} />
         <text x=${PADL - 6} y=${y(v) + 3} fill=${TXT} font-size="9"
-              text-anchor="end">${fmtIgt(Math.round(v))}</text></g>`)}
+              text-anchor="end">${fmtIgtShort(Math.round(v))}</text></g>`)}
       ${placed.map((s, i) => html`<g>
         ${i > 0 && (() => {
           const gx = s.left - gap / 2;

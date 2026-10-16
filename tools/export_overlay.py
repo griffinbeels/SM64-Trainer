@@ -94,6 +94,9 @@ def clip_view_from_server(base: str, attempt_id: int) -> dict | None:
     request = urllib.request.Request(
         f"{base}/api/attempts/{attempt_id}/replay", method="POST")
     try:
+        from sm64_events.core.local_client import mutation_headers
+        for name, value in mutation_headers(base).items():
+            request.add_header(name, value)
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:

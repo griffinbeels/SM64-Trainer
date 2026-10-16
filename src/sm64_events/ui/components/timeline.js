@@ -3,7 +3,7 @@ import { h } from "preact";
 import { useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
-import { fmtIgt } from "../format.js";
+import { fmtIgtShort } from "../format.js";
 
 const html = htm.bind(h);
 
@@ -12,6 +12,7 @@ const html = htm.bind(h);
 const MARKERS = {
   success: { color: "#a3e0a3" },
   reset: { color: "#e0a3a3" },
+  loaded: { color: "#d9c48a" },
   death: { color: "#d96a6a" },
 };
 const ANNOT = "#8ab4f8"; // strategy annotation flags (spec §3)
@@ -101,7 +102,7 @@ export function Timeline({ tl, sec, t }) {
                 font-size="9" text-anchor="middle">${m.label}</text>
           <line x1=${x(m.frames)} y1="13" x2=${x(m.frames)} y2=${BAND + H - 4}
                 stroke=${ANNOT} stroke-width="1.2" stroke-dasharray="3,2">
-            <title>${m.label} · ${fmtIgt(m.frames)}</title></line></g>`)}
+            <title>${m.label} · ${fmtIgtShort(m.frames)}</title></line></g>`)}
         <g transform="translate(0 ${BAND})">
           <line x1=${PAD} y1=${MID} x2=${W - PAD} y2=${MID} stroke="#3a4150" />
           ${tl && tl.max_is_success && html`<line x1=${x(tl.max_frames)} y1=${MID - 7}
@@ -111,8 +112,8 @@ export function Timeline({ tl, sec, t }) {
         </g>
       </svg>
       <div class="meta" style="display:flex;justify-content:space-between">
-        <span>0'00"00</span>
-        <span>${tl ? `${tl.max_is_success ? "" : "~"}${tl.max_display}` : fmtIgt(axisMax)}</span>
+        <span>${fmtIgtShort(0)}</span>
+        <span>${tl ? `${tl.max_is_success ? "" : "~"}${tl.max_display}` : fmtIgtShort(axisMax)}</span>
       </div>
     </div>`}
     ${!showStrip && html`<div class="stable-empty compact">
@@ -120,7 +121,7 @@ export function Timeline({ tl, sec, t }) {
     </div>`}
     <div class="chips">
       ${markers.map((m, i) => html`<span class="chip" style="color:${ANNOT}">
-        ${fmtIgt(m.frames)} ${m.label}
+        ${fmtIgtShort(m.frames)} ${m.label}
         <span style="cursor:pointer;opacity:.6" title="delete marker"
               onclick=${() => save(markers.filter((_, j) => j !== i))}> ×</span></span>`)}
       ${form

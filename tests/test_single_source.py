@@ -135,12 +135,12 @@ INVARIANTS = (
         concept="a RAM address",
         owners=frozenset({"layout.py"}),
         # The 16-bit prefixes every global the tracker reads sits under --
-        # US 0x8032/0x8033/0x8036, the behaviour segment 0x800E, Usamune's
+        # US 0x8031 (play_sound)/0x8032/0x8033/0x8036, the behaviour segment 0x800E, Usamune's
         # expansion RAM 0x8041. Uppercase, as layout.py spells them (a token
         # must appear in its owner -- see test_every_ingredient_can_actually_
         # match_code); when JP rows land, add their prefixes here (0x8035 for
         # gMarioObject) so the guard grows with the layout.
-        tokens=("0x8032", "0x8033", "0x8036", "0x8041", "0x800E"),
+        tokens=("0x8031", "0x8032", "0x8033", "0x8036", "0x8041", "0x800E"),
         files=python_sources(),
         why="memory/layout.py holds every RAM address per ROM version "
             "(2026-08-15); a literal anywhere else is a US address baked "
@@ -366,14 +366,14 @@ INVARIANTS = (
     ),
     SingleSource(
         concept="the server's TCP port",
-        owners=frozenset({"paths.py"}),
-        tokens=("8064", "8065"),
+        owners=frozenset({"build_channel.py"}),
+        tokens=("8064", "8065", "8072"),
         files=python_sources(),
-        why="core/paths.py::server_port() answers it for everyone — SM64_PORT "
-            "override, else 8064 frozen / 8065 from source, so a dev server and "
-            "a built exe can never collide. A second literal anywhere is a "
-            "component that binds or probes the wrong one in one of those two "
-            "worlds. (Both numbers appear in PROSE in relaunch.py and "
+        why="core/build_channel.py owns channel port defaults; "
+            "core/paths.py::server_port() resolves them for every consumer. "
+            "Stable retains SM64_PORT overrides, while beta uses its exact "
+            "registered callback port. A second literal is a component binding "
+            "or probing the wrong channel. (Ports appear in PROSE in relaunch.py and "
             "single_instance.py, which is why this scans code, not text.)",
     ),
     SingleSource(
@@ -683,6 +683,7 @@ def test_library_never_reconstructs_overall_from_strategy_ladders():
 
 
 @pytest.mark.parametrize("concept,relative,source", [
+    ("the server's TCP port", "core/paths.py", "PORT = 8072"),
     ("turning a TIME into a rank", "tracking/marelo.py", "score_for(curve, time)"),
     ("turning a TIME into a rank", "library/curves.py", "score_for(curve, time)"),
     ("binding a raw compiled scorer for pure fitting", "library/ratings.py", "score_evaluator(curve)"),
@@ -943,3 +944,59 @@ def test_the_pbs_table_guard_can_still_fail():
     assert _PBS_SQL.search(real)
     assert not _PBS_SQL.search(prose)
     assert not _PBS_SQL.search('x = "INSERT INTO pbs_v2 (id) VALUES (1)"')
+
+
+# The interpreter a background Python child runs under is chosen in one place:
+# core/childproc.py::python_child. Exempt: relaunch.py (the update relaunch is
+# the user's own gesture restarting the app, not a background child) and
+# library/background.py (it already bypasses the launcher the same way).
+_INTERPRETER_DOORS = frozenset({"src/sm64_events/core/childproc.py",
+                                "src/sm64_events/core/relaunch.py",
+                                "src/sm64_events/library/background.py"})
+
+
+def _interpreter_heads(source: str) -> list[int]:
+    """Lines where `sys.executable` or `_base_executable` heads a command
+    line: element 0 of a list or tuple, or an `executable=` argument."""
+    import ast
+
+    def names_interpreter(node):
+        return any((isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                    and n.value.id == "sys" and n.attr in ("executable", "_base_executable"))
+                   or (isinstance(n, ast.Constant) and n.value == "_base_executable")
+                   for n in ast.walk(node))
+
+    heads = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.List, ast.Tuple)) and node.elts and names_interpreter(node.elts[0]):
+            heads.append(node.lineno)
+        elif isinstance(node, ast.keyword) and node.arg == "executable" and names_interpreter(node.value):
+            heads.append(node.value.lineno)
+    return heads
+
+
+def test_only_childproc_picks_a_background_python_childs_interpreter():
+    """From source, `sys.executable` is the venv's launcher, which starts the
+    real interpreter as ITS child and does not pass STARTF_FORCEOFFFEEDBACK
+    on: the child reads startup flags 0x100 where a direct start reads 0x180,
+    so the pointer shows the busy spinner on every capture start. The hop also
+    costs ~106 ms and hides the helper's memory a generation down (perf audit
+    2026-09-25). Both the encoder helper and the ghost overlay were started
+    that way. `python_child` starts the interpreter itself and keeps the venv's
+    packages for a child that needs them."""
+    offenders = {path.relative_to(REPO).as_posix(): lines
+                 for path in shipped_python()
+                 if path.relative_to(REPO).as_posix() not in _INTERPRETER_DOORS
+                 for lines in [_interpreter_heads(path.read_text(encoding="utf-8"))] if lines}
+    assert not offenders, (
+        f"{offenders} start a Python child from sys.executable. Build its "
+        "command with core/childproc.py::python_child instead.")
+
+
+def test_the_interpreter_guard_can_still_fail():
+    assert _interpreter_heads('cmd = [sys.executable, "-m", MODULE]\n')
+    assert _interpreter_heads("Controller(executable=Path(sys.executable), helper=h)\n")
+    assert _interpreter_heads('argv = (getattr(sys, "_base_executable", None), "-c", code)\n')
+    assert not _interpreter_heads('"""Never start [sys.executable, "-m", x]."""\n'
+                                  "# [sys.executable, '-m', x]\n"
+                                  "identity = {'executable': sys.executable}\n")

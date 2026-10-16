@@ -295,13 +295,24 @@ class DwmSurfaceVideoSource:
             self._stop.set()
             self._resync.set()   # geometry thread waits on this, not on _stop
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                raise RuntimeError("DWM capture thread cleanup pending")
             self._thread = None
         if self._geom_thread is not None:
             self._geom_thread.join(timeout=5)
+            if self._geom_thread.is_alive():
+                raise RuntimeError("DWM geometry thread cleanup pending")
             self._geom_thread = None
         if self._deliver_thread is not None:
-            self._queue.put(None)
+            import queue
+            if self._deliver_thread.is_alive():
+                try:
+                    self._queue.put_nowait(None)
+                except queue.Full as exc:
+                    raise RuntimeError("DWM delivery queue cleanup pending") from exc
             self._deliver_thread.join(timeout=5)
+            if self._deliver_thread.is_alive():
+                raise RuntimeError("DWM delivery thread cleanup pending")
             self._deliver_thread = None
 
 
@@ -553,10 +564,19 @@ class GdiBitBltVideoSource:
         if self._thread is not None:
             self._stop.set()
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                raise RuntimeError("GDI capture thread cleanup pending")
             self._thread = None
         if self._deliver_thread is not None:
-            self._queue.put(None)  # sentinel: drain and exit
+            import queue
+            if self._deliver_thread.is_alive():
+                try:
+                    self._queue.put_nowait(None)  # sentinel: drain and exit
+                except queue.Full as exc:
+                    raise RuntimeError("GDI delivery queue cleanup pending") from exc
             self._deliver_thread.join(timeout=5)
+            if self._deliver_thread.is_alive():
+                raise RuntimeError("GDI delivery thread cleanup pending")
             self._deliver_thread = None
 
 

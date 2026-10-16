@@ -55,3 +55,33 @@ def test_unregister():
     asyncio.run(b.publish(make_event()))
     assert ws.sent == []
     assert b.client_count == 0
+
+
+def test_ghost_changed_is_logged_as_one_short_line(caplog):
+    """The full session state is ~2.9 KB and was 27% of the log's bytes; the
+    log keeps what a reader asks of it, and the client still gets it all."""
+    import json
+    import logging
+    payload = {"enabled": True,
+               "target": {"kind": "star", "entity_key": "2-2", "strat": "Standard"},
+               "source": {"available": True, "reason": None, "reason_text": "x" * 2000},
+               "selection": {"ghosts": {"pb": True, "attempts": []},
+                             "candidates": [{"attempt_id": n} for n in range(5)]},
+               "window": {"running": True, "visible": True}}
+    ws = FakeWS()
+    b = Broadcaster()
+    b.register(ws)
+    with caplog.at_level(logging.INFO, logger="sm64.events"):
+        asyncio.run(b.publish(Event(type="ghost_changed", frame=0,
+                                    timestamp_utc=datetime(2026, 9, 23, tzinfo=timezone.utc),
+                                    payload=payload)))
+        asyncio.run(b.publish(make_event()))
+    ghost_line, star_line = [r.getMessage() for r in caplog.records]
+    logged = json.loads(ghost_line.removeprefix("event "))
+    assert logged == {"seq": 1, "type": "ghost_changed", "target": "2-2", "strat": "Standard",
+                      "enabled": True, "available": True, "reason": None,
+                      "ghosts": {"pb": True, "attempts": []}, "candidates": 5,
+                      "window": {"running": True, "visible": True}}
+    assert len(ghost_line) < 400
+    assert ws.sent[0]["payload"] == payload        # the client still gets everything
+    assert json.loads(star_line.removeprefix("event "))["type"] == "star_collected"

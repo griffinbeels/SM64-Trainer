@@ -2,13 +2,14 @@
 
 import logging
 from functools import partial
-import sys
 import threading
 import time
 
 from sm64_events.replay.capturecontrol import CaptureControl, CAP_GPU, CLOSED
 from sm64_events.replay.gpuaudio import PcmHandoff
+from sm64_events.replay.gpumediaworker import MediaWorker, NULL_LEDGER
 from sm64_events.replay.gpusettings import GpuSettings
+from sm64_events.replay.packetmux import NativeFormat
 from sm64_events.replay.pluginsource import table_for
 from sm64_events.replay.ownedclose import CleanupPending, CleanupRetrier, retain
 from sm64_events.replay.tickwait import TickWaiter
@@ -18,6 +19,16 @@ log = logging.getLogger("sm64.replay")
 
 class GpuCleanupError(RuntimeError):
     """An owned worker/resource may survive; recorder must retain scratch."""
+
+
+class GpuBackendUnsupported(RuntimeError):
+    """This Project64 process can never record through the GPU route: its
+    adapter cannot open the encoder (gpuadapter.py), or it loaded a capture
+    layer from another build (gpuchannel.LayerVersionMismatch).
+
+    A fact about that process, not a fault: no retry cooldown is armed, the
+    retry gate remembers it for the producer's birth, and the recorder keeps
+    the desktop grab (sourcefactory.py) until a new Project64 starts."""
 
 
 class GpuSink:
@@ -76,9 +87,12 @@ class GpuCapture:
         self._pause_check = lambda: False
         self._sessions_started = 0
         self._status = {"kind": "gpu", "state": "ready", "pending": 0}
+        self.unsupported = None
         self.error = None
         self.cleanup_error = None
         self.cfg = self.clock = self.ledger = self.publish = None
+        self._copy_wanted, self._copy_publish = (lambda: False), None
+        self._copy_timeline, self._copy_want_failed = (lambda: None), False
         self._on_stopped = None
         self.retry_gate, self.producer_identity = retry_gate, producer_identity
 
@@ -89,6 +103,45 @@ class GpuCapture:
             raise RuntimeError("GPU capture requires the exact picture feed")
         self.cfg, self.clock, self.ledger, self.publish = cfg, clock, ledger, publish
         return GpuSink(self)
+
+    def set_ghost_copy(self, *, wanted, publish, timeline):
+        """The recorder's ghost copy: whether Ghosts in recording wants one,
+        its archive (recorder.ghost_copies.create) and the ghost sound on the
+        wall clock (the process tap's GhostTimeline, None without one)."""
+        self._copy_wanted, self._copy_publish, self._copy_timeline = wanted, publish, timeline
+
+    def ghost_copy_wanted(self) -> bool:
+        """Asked every media tick; a failed question means no copy, logged once."""
+        try:
+            return bool(self._copy_wanted())
+        except Exception:  # noqa: BLE001 - clean records on whatever the question raised
+            if not self._copy_want_failed:
+                self._copy_want_failed = True
+                log.exception("ghost copy want-signal failed; no ghost copy")
+            return False
+
+    def ghost_timeline(self):
+        """The ghost sound to mix into the copy, or None on the device-wide
+        fallback tap (which already hears ghost sound in clean)."""
+        return self._copy_timeline()
+
+    def ghost_copy_sink(self, codec: str, width: int, height: int) -> MediaWorker:
+        """An unbound sink for one ghost copy: the clean sink's format and
+        bounds, no picture ledger, its own archive. It binds the clean run
+        (same origin) and keeps the clean pts; the archive starts at its
+        first picture (MediaWorker mid_run)."""
+        if self.cfg is None or self._copy_publish is None:
+            raise RuntimeError("ghost copy has no archive")
+        cfg, limits, publish = self.cfg, self.settings, self._copy_publish
+        return MediaWorker(
+            NativeFormat(codec, width, height, self.nominal_rate),
+            NULL_LEDGER,
+            lambda run: publish(run, (width, height)),
+            audio_rate=cfg.audio_rate, audio_bitrate=160000,
+            packet_limit=limits.packet_bytes, pcm_limit=limits.pcm_bytes,
+            max_bytes=limits.pending_bytes, max_blocks=limits.pcm_blocks,
+            max_age=limits.max_age, mid_run=True, name="replay-ghost-copy-sink",
+        )
 
     def set_idle_check(self, check):
         self._idle_check = check
@@ -120,8 +173,6 @@ class GpuCapture:
         # deliberately unused. It cannot create a second ledger/encoder stream.
         if self._worker is not None or self.cfg is None:
             raise RuntimeError("GPU capture needs one prepared source/sink pair")
-        if getattr(sys, "frozen", False):
-            raise RuntimeError("GPU helper executable is not bundled in this build")
         self._on_stopped = on_stopped
         self._worker = threading.Thread(
             target=self._run, name="replay-gpu-media", daemon=True
@@ -166,21 +217,33 @@ class GpuCapture:
                     raise RuntimeError(terminal.reason)
                 if self.want_capture():
                     break  # Source/ROM stopped: normal recorder discovery reattaches.
-        except Exception as exc:
-            if isinstance(exc, CleanupPending):
-                self._retry_cleanup(exc.owner.close, "control", exc)
-            if isinstance(exc, GpuCleanupError):
-                self.cleanup_error = exc
-            self.error = str(exc)[:512]
+        except GpuBackendUnsupported as exc:
+            # Ends this source without an error: discovery now declines this
+            # producer, so the recorder's next attach is the desktop grab.
+            self.unsupported = str(exc)[:512]
             if self.retry_gate is not None:
-                self.retry_gate.failed(self.producer_identity, self.error)
+                self.retry_gate.unsupported(self.producer_identity, self.unsupported)
+            log.warning("GPU recording unavailable for this Project64: %s", self.unsupported)
+        except Exception as exc:
+            self._failed(exc)
             log.exception("GPU recording stopped")
         finally:
             self.end_audio(self._pcm)
-            self._status = {"kind": "gpu", "state": "stopped", "error": self.error}
+            self._status = ({"kind": "gpu", "state": "unsupported", "error": None,
+                             "reason": self.unsupported} if self.unsupported else
+                            {"kind": "gpu", "state": "stopped", "error": self.error})
             self._done.set()
             if self._on_stopped is not None:
                 self._on_stopped()
+
+    def _failed(self, exc):
+        if isinstance(exc, CleanupPending):
+            self._retry_cleanup(exc.owner.close, "control", exc)
+        if isinstance(exc, GpuCleanupError):
+            self.cleanup_error = exc
+        self.error = str(exc)[:512]
+        if self.retry_gate is not None:
+            self.retry_gate.failed(self.producer_identity, self.error)
 
     def _run_session(self, demand, session_factory):
         """Keep one session and lease owned through startup, failure and close."""
@@ -423,6 +486,8 @@ def discover(
     except (FileNotFoundError, OSError, BlockingIOError):
         if identity is None:
             return None
+    if retry_gate is not None and retry_gate.unsupported_for(identity):
+        return None  # Its adapter cannot record: the desktop grab stays.
     return GpuCapture(
         expected_pid,
         layout,

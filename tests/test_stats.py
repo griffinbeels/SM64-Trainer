@@ -2,6 +2,7 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, registry_meta,
                                         selection_id)
 from sm64_events.tracking.projection import Attempt
+from dataclasses import replace
 
 
 def attempt(id=1, outcome="success", igt=300, rta=310, cleared=False,
@@ -40,6 +41,15 @@ def test_avg_lifetime_best_worst_count():
 
 def test_clock_selects_rta():
     assert compute_stat("best", SAMPLE, {}, clock="rta") == 310
+
+
+def test_save_state_runs_never_count_as_best_average_or_success():
+    clean = attempt(1, igt=600, rta=610)
+    partial = replace(attempt(2, igt=100, rta=110), anchor_type="state_loaded")
+    for clock, frames in (("igt", 600), ("rta", 610)):
+        for stat in ("best", "worst", "avg_lifetime", "avg_last_n"):
+            assert compute_stat(stat, [clean, partial], {"n": 10}, clock=clock) == frames
+    assert compute_stat("success_count", [clean, partial], {}, clock="igt") == 1
 
 
 def test_success_rate_default_failures():

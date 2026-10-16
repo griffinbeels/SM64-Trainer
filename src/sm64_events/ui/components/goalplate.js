@@ -38,15 +38,15 @@ export const fmtCs = (cs) => (cs == null ? "—" : fmtSeconds(cs / 100));
 export const goalScopeOf = (t) => (t.marelo && t.marelo.scope_id) || "overall";
 
 /** Every card's goal in ONE request, refetched whenever anything that can move
- *  a goal lands (`mareloRev` bumps on every refresh event, goal_changed
- *  included). Returns {key: EntryGoal}. */
+ *  a goal lands (`standingRev`: the store's STANDING_ON events, goal_changed
+ *  included, and a card's own write). Returns {key: EntryGoal}. */
 export function useEntryGoals(t, keys) {
   const [goals, setGoals] = useState({});
   const scope = goalScopeOf(t);
   const keyList = [...new Set(keys)].sort().join(",");
   // A card joining the list changes the identity too; keeping the goals
   // already on screen (rather than clearing) stops every plate blinking.
-  useIdentityFetch(`${scope}|${keyList}`, t.mareloRev, () => {
+  useIdentityFetch(`${scope}|${keyList}`, t.standingRev, () => {
     if (!keyList) { setGoals({}); return undefined; }
     let live = true;
     getJSON(`/api/scorecard/entry_goals?scope=${encodeURIComponent(scope)}`
@@ -109,8 +109,7 @@ function GoalProgress({ goal, goalKey, onChanged }) {
       onChanged();
     } catch { /* the next refresh shows the unchanged count */ }
   }
-  return html`<div class="goal-plate-row goal-plate-count"
-      title=${goal.streak ? `Best streak this session: ${progress.best}` : ""}>
+  return html`<div class="goal-plate-row goal-plate-count">
     ${pips
       ? html`<span class="goal-pips" aria-label=${`${done} of ${progress.needed}`}>
           ${Array.from({ length: progress.needed }, (_, index) => html`<i
@@ -131,20 +130,46 @@ function attemptCs(attempt, clock) {
   return frames == null ? null : csOfFrame(frames);
 }
 
-/** Fires when a FRESH finished attempt meets the goal the plate was holding.
- *  Never on mount or on a page load catching up on history (the glossary's
- *  Celebration rule): the first render only records which attempts exist. */
+// How many goals the plate remembers having shown. A fresh run is judged
+// within a second or two of ending, long before this many goals change.
+const SHOWN_GOALS_KEPT = 8;
+
+const utcMs = (text) => {
+  const ms = Date.parse(text || "");
+  return Number.isFinite(ms) ? ms : null;
+};
+
+/** The goal that was on screen when a run ended: the newest one the server
+ *  resolved before that moment (`resolved_utc` and `ended_utc` share the
+ *  server's clock). Null when the plate showed nothing that early -- that run
+ *  is history, not news. A run without an end time meets the goal on screen. */
+function goalShownAt(shown, endedUtc) {
+  const ended = utcMs(endedUtc);
+  if (ended == null) return shown.length ? shown[shown.length - 1].cs : null;
+  const on = shown.filter((entry) => entry.since == null || entry.since <= ended);
+  return on.length ? on[on.length - 1].cs : null;
+}
+
+/** Fires when a FRESH finished attempt meets the goal the plate showed when
+ *  that attempt ended. Never on mount or on a page load catching up on
+ *  history (the glossary's Celebration rule): the first render only records
+ *  which attempts exist. */
 export function useGoalCelebration(attempts, goal) {
   const seen = useRef(null);
-  // The goal an attempt is judged against is the one on screen BEFORE it
-  // landed. The goal fetch and the session fetch race; an automatic goal can
-  // step up before the attempt row arrives, so the looser of the last two
-  // goals shown is the one the player was chasing.
-  const held = useRef({ current: null, previous: null });
+  // Every goal time this plate has shown, oldest first, each stamped with
+  // the moment the server resolved it. Round 13 (2026-09-28): the plate kept
+  // "the looser of the last two goals" to survive the goal fetch racing the
+  // attempt row, and that looser goal never retired -- his 07"33 played
+  // GOAL! over a 07"53 his 07"00 PB had already replaced with 06"96. Judging
+  // by end time survives the race in either order and retires a goal the
+  // moment another one replaces it: "ONLY THE CURRENT ACTIVE GOAL".
+  const shown = useRef([]);
   const [party, setParty] = useState(null);
   const goalCs = goal ? goal.goal_cs : null;
-  if (goalCs !== held.current.current) {
-    held.current = { current: goalCs, previous: held.current.current };
+  const last = shown.current[shown.current.length - 1];
+  if (!last || last.cs !== goalCs) {
+    shown.current = [...shown.current,
+      { cs: goalCs, since: utcMs(goal && goal.resolved_utc) }].slice(-SHOWN_GOALS_KEPT);
   }
   const wasAchieved = useRef(goal ? goal.achieved : false);
   useEffect(() => {
@@ -156,13 +181,15 @@ export function useGoalCelebration(attempts, goal) {
     // COUNT, not on any single qualifying time -- that is the server's
     // `achieved`, which the goals fetch may deliver a beat after the row.
     if (goal && goal.count > 1) return;
-    const targets = [held.current.current, held.current.previous].filter((cs) => cs != null);
-    if (!fresh.length || !targets.length || !goal) return;
-    const chased = Math.max(...targets);
-    const hit = fresh.find((a) => a.outcome === "success" && !a.cleared
-      && attemptCs(a, goal.clock) != null && attemptCs(a, goal.clock) <= chased);
-    if (!hit || !celebrationsEnabled()) return;
-    setParty({ id: hit.id, beatenCs: chased, timeCs: attemptCs(hit, goal.clock) });
+    if (!fresh.length || !goal) return;
+    for (const attempt of fresh) {
+      const timeCs = attemptCs(attempt, goal.clock);
+      const chased = goalShownAt(shown.current, attempt.ended_utc);
+      if (attempt.outcome !== "success" || attempt.cleared || timeCs == null
+          || chased == null || timeCs > chased) continue;
+      if (celebrationsEnabled()) setParty({ id: attempt.id, beatenCs: chased, timeCs });
+      return;
+    }
   }, [attempts]);
   const achievedNow = !!(goal && goal.count > 1 && goal.achieved);
   useEffect(() => {
@@ -334,8 +361,20 @@ function plateSourceText(goal) {
   return [repeat, goalSourceLabel(goal)].filter(Boolean).join(" · ");
 }
 
+// The plate's one tooltip. The button's hit area covers the whole plate, so
+// what the source line and the count row used to say on hover lives here.
+function plateTitle(goal) {
+  const progress = goal && goal.progress;
+  return [goalSourceLabel(goal),
+    goal && goal.streak && progress ? `Best streak this session: ${progress.best}` : "",
+    "Pick the goal (pins it on the Scorecard too)"].filter(Boolean).join("\n");
+}
+
 /** The plate: the card's PB line (the existing PbTag, still a link) over the
- *  GOAL line, which opens the picker. */
+ *  GOAL line. The whole plate opens the picker (round 13: "click on the whole
+ *  button (not just the bottom half)"): the GOAL line's button stretches its
+ *  hit area over the plate (index.html), and the PB time and "Undo break"
+ *  sit above it with their own actions, so no control nests inside another. */
 export function GoalPlate({ goalKey, goal, pbTag, attempts, t, onChanged }) {
   const [open, setOpen] = useState(false);
   const party = useGoalCelebration(attempts, goal);
@@ -348,12 +387,12 @@ export function GoalPlate({ goalKey, goal, pbTag, attempts, t, onChanged }) {
     </div>
     <div class="goal-plate-row goal-plate-goal">
       <button type="button" class="goal-plate-trigger" aria-expanded=${open}
-          title="Pick the goal for this star (pins it on the Scorecard too)"
+          title=${plateTitle(goal)}
           onclick=${() => setOpen(!open)}>
         <span class="goal-plate-word">GOAL</span>
         <span class="goal-plate-time">${goalTimeLabel(goal)}</span>
         <span class="goal-plate-done ${achieved ? "" : "is-pending"}" aria-label=${achieved ? "achieved" : null}>✓</span>
-        <span class="goal-plate-source" title=${goalSourceLabel(goal)}>${plateSourceText(goal)}</span>
+        <span class="goal-plate-source">${plateSourceText(goal)}</span>
       </button>
       ${open ? html`<${GoalPicker} goalKey=${goalKey} t=${t} goal=${goal}
           onClose=${() => setOpen(false)} onSaved=${onChanged} />` : null}

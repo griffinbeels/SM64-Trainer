@@ -49,6 +49,7 @@ snapshot while the import itself reads a fresh fetch.
 """
 import re
 
+from sm64_events.core.timefmt import drop_empty_minutes
 from sm64_events.library.adoptions import sheet_strategy
 from sm64_events.library.audit import row_key
 from sm64_events.library.sheet import entry_version
@@ -86,7 +87,7 @@ def _sheet_time(centiseconds: int) -> str:
     what the sheet says, before any snap to the timer's displayable set."""
     minutes, rest = divmod(int(centiseconds), 6000)
     seconds, cents = divmod(rest, 100)
-    return f"{minutes}'{seconds:02d}\"{cents:02d}"
+    return drop_empty_minutes(f"{minutes}'{seconds:02d}\"{cents:02d}")
 
 
 def _held(target: dict, item: dict, entry: dict, reason: str,

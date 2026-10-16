@@ -178,6 +178,9 @@ def _post(server: str | None, version: str, gate_id: str,
         f"{server}/api/sync/verdict", data=body, method="PUT",
         headers={"Content-Type": "application/json"})
     try:
+        from sm64_events.core.local_client import mutation_headers
+        for name, value in mutation_headers(server).items():
+            request.add_header(name, value)
         urllib.request.urlopen(request, timeout=1.0)
     except (urllib.error.URLError, OSError, ValueError):
         pass

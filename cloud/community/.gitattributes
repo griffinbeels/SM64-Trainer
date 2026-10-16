@@ -1,0 +1,4 @@
+# Preserve unchanged generated/official source bytes and avoid enormous one-line diffs.
+catalog.json -text -diff
+src/casefold.json -text -diff
+public/google-sans-OFL.txt -text -diff

@@ -77,6 +77,23 @@ def format_igt(frames: int) -> str:
     return f"{mins}'{secs:02d}\"{cents:02d}"
 
 
+def drop_empty_minutes(text: str) -> str:
+    """The DISPLAY form of a timer reading: an empty minutes field is not
+    shown. His rule, 2026-09-24: "We should always prefer bare 11"43
+    whenever possible. If the time includes the minute digit, then we
+    include it if it's >=1 (e.g., 0'11"43 should be 11"43, while 1'11"43 is
+    correct)." `format_igt`'s `0'` stays only where the string is an
+    identifier (clip filenames, journaled event payloads);
+    tests/test_bare_times.py holds that list."""
+    return text[2:] if text.startswith("0'") else text
+
+
+def format_igt_short(frames: int) -> str:
+    """`format_igt` as a person reads it (`drop_empty_minutes`); the
+    Python twin of ui/format.js::fmtIgtShort."""
+    return drop_empty_minutes(format_igt(frames))
+
+
 def parse_igt(text: str) -> int:
     """A reading off Usamune's own screen back into game frames — the EXACT
     inverse of `format_igt`, and the canonical one (the format has one owner,

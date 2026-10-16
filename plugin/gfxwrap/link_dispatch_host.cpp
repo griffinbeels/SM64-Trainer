@@ -9,6 +9,8 @@
 unsigned char cartridge[0x40];
 u8 *HEADER = cartridge;
 unsigned logged=0;
+#ifdef SM64_REPLAY_CONTEXT_LIFETIME
+#endif
 void LOG(unsigned short, const char*, ...) { ++logged; } // fixture sink; upstream checked() stays intact
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"link witness line %d: %s\n",__LINE__,#x); ExitProcess(1); } } while(0)
 void check_bindings(GLuint read, GLuint texture, GLenum selector) {
@@ -72,9 +74,6 @@ int main(int argc, char **argv) {
         renderer::Identity none{}; snapshot::RestoreBindings unused{};
         CHECK(!replay_gl::CandidateBindings(&none,&unused));
         CHECK(replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN && !replay_gl::BeginCapture());
-#ifdef SM64_REPLAY_CONTEXT_LIFETIME
-        CHECK(!replay_gl::EnsureAnchor());
-#endif
         glBindTexture(GL_TEXTURE_2D,0); CHECK(glGetError()==GL_NO_ERROR);
         replay_gl::ContextLost(); CHECK(wglMakeCurrent(nullptr,nullptr)); CHECK(wglDeleteContext(context));
         CHECK(ReleaseDC(window,dc) && DestroyWindow(window));
@@ -89,24 +88,15 @@ int main(int argc, char **argv) {
     initGLFunctions(); check_bindings(0,0,GL_BACK);
 #ifdef SM64_REPLAY_CONTEXT_LIFETIME
     if (!unsupported) {
-        // The anchor is demand-gated: absent after context creation and
-        // dispatch qualification, present after EnsureAnchor, gone after loss.
+        // No shared anchor, ever (renderer-thread capture): ContextV1 stays
+        // exported for the wrapper's ABI check, and a qualified source still
+        // has nothing to lease.
         const rcl_api *contexts=SM64ReplayContextV1(RCL_ABI_V1,sizeof(rcl_api)); CHECK(contexts);
         renderer::Identity created{}; snapshot::RestoreBindings ignored{};
         CHECK(replay_gl::CandidateBindings(&created,&ignored));
         rcl_lease lease{};
         CHECK(contexts->acquire(created.context,created.context_generation,&lease)==RCL_UNAVAILABLE);
-        const bool anchored=replay_gl::EnsureAnchor();
-        if (!anchored) {
-            GLint mj=0,mn=0,pf=0; glGetIntegerv(0x821B,&mj); glGetIntegerv(0x821C,&mn); glGetIntegerv(0x9126,&pf);
-            fprintf(stderr,"anchor refused: error=%lu health=%u gl=%d.%d profile=%d pixel_format=%d current=%d\n",
-                contexts->error(),contexts->health(),mj,mn,pf,GetPixelFormat(dc),int(wglGetCurrentContext()==context));
-        }
-        CHECK(anchored && replay_gl::EnsureAnchor());
-        CHECK(contexts->acquire(created.context,created.context_generation,&lease)==RCL_ACQUIRED);
-        CHECK(lease.context && lease.context!=created.context && lease.context_generation==created.context_generation);
-        CHECK(contexts->release(lease.token)==RCL_RELEASED);
-        CHECK(glGetError()==GL_NO_ERROR);
+        CHECK(!contexts->health() && glGetError()==GL_NO_ERROR);
     }
 #endif
     if (unsupported) {
@@ -186,6 +176,20 @@ int main(int argc, char **argv) {
             replay_gl::ContextLost(); glEnable(0xFFFFFFFF);
             CHECK(!replay_gl::BeginCapture() && !replay_gl::EndCapture());
             CHECK(raw_error()==GL_INVALID_ENUM); // no inactive driver error read
+        } else if (std::strcmp(argv[1],"layer")==0) {
+            // Two errors inside the translucent layer drop the layer only: the
+            // flags are drained, and the replay source and ghost stay nominal.
+            CHECK(replay_gl::BeginLayer() && !replay_gl::BeginCapture());
+            glEnable(0xFFFFFFFF); glScissor(0,0,-1,1);
+            CHECK(!replay_gl::EndLayer() && !replay_gl::EndLayer());
+            CHECK(raw_error()==GL_NO_ERROR);
+            CHECK(replay_gl::CandidateBindings(&identity,&witness));
+            CHECK(replay_gl::BeginCapture() && replay_gl::EndCapture());
+            CHECK(replay_gl::BeginLayer() && replay_gl::EndLayer());
+            // An error the renderer left before the layer is not the layer's.
+            glEnable(0xFFFFFFFF);
+            CHECK(!replay_gl::BeginLayer() && !replay_gl::CandidateBindings(&identity,&witness));
+            CHECK(glGetError()==GL_INVALID_ENUM);
         } else if (std::strcmp(argv[1],"clean")==0) {
             CHECK(replay_gl::BeginCapture() && replay_gl::EndCapture());
             CHECK(replay_gl::CandidateBindings(&identity,&witness));
@@ -216,6 +220,79 @@ int main(int argc, char **argv) {
     cached.bind(graphics::Parameter(GL_READ_FRAMEBUFFER),graphics::ObjectHandle(fbos[0]));
     glDeleteFramebuffers(1,fbos); check_bindings(0,0,GL_FRONT);
     cached.reset(); textures.reset(); check_bindings(0,0,GL_FRONT);
+    // The raster state the ghost hooks read on every draw: the renderer's own
+    // dispatched binds, viewport and depth range, no driver query, and equal
+    // to what the driver holds.
+    {
+        replay_gl::RasterState raster{};
+        CHECK(replay_gl::Raster(&raster) && raster.draw_known && raster.depth_known && !raster.viewport_known
+            && raster.depth_range[0]==0.f && raster.depth_range[1]==1.f);
+        cached.bind(graphics::Parameter(GL_DRAW_FRAMEBUFFER),graphics::ObjectHandle(fbos[1]));
+        glViewport(3,5,70,90); g_glDepthRangef(0.25f,0.75f);
+        CHECK(replay_gl::Raster(&raster) && raster.draw_known && raster.draw_framebuffer==fbos[1]
+            && raster.viewport_known && raster.viewport[0]==3 && raster.viewport[1]==5 && raster.viewport[2]==70
+            && raster.viewport[3]==90 && raster.depth_range[0]==0.25f && raster.depth_range[1]==0.75f);
+        GLint draw=0,viewport[4]{};GLfloat range[2]{};
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);glGetIntegerv(GL_VIEWPORT,viewport);glGetFloatv(GL_DEPTH_RANGE,range);
+        CHECK(GLuint(draw)==raster.draw_framebuffer && viewport[0]==3 && viewport[3]==90 && range[1]==0.75f);
+        glDeleteFramebuffers(1,fbos+1); // deleting the bound draw FBO binds the default one
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);
+        CHECK(replay_gl::Raster(&raster) && raster.draw_framebuffer==0 && draw==0);
+        g_glDepthRangef(0.f,1.f); cached.reset();
+    }
+    // The rest of what a ghost frame restores: a fresh context's defaults,
+    // then GLideN64's own cached setters and direct calls, no driver query,
+    // and equal to what the driver holds.
+    {
+        replay_gl::RenderState render{}; bool on=false;
+        CHECK(replay_gl::Render(&render) && render.program==0 && render.vertex_array==0 && render.depth_func==GL_LESS
+            && render.depth_mask && render.blend[0]==GL_ONE && render.blend[1]==GL_ZERO && render.blend[2]==GL_ONE
+            && render.blend[3]==GL_ZERO && !render.scissor_known);
+        CHECK(replay_gl::Enabled(GL_DITHER,&on) && on && replay_gl::Enabled(GL_BLEND,&on) && !on);
+        CHECK(!replay_gl::Enabled(GL_LINE_SMOOTH,&on)); // untracked capability
+        const char* vs="#version 330 core\nvoid main(){gl_Position=vec4(0.0);}";
+        const char* fs="#version 330 core\nout vec4 c;void main(){c=vec4(1.0);}";
+        const GLuint v=glCreateShader(GL_VERTEX_SHADER),f=glCreateShader(GL_FRAGMENT_SHADER),program=glCreateProgram();
+        glShaderSource(v,1,&vs,nullptr);glShaderSource(f,1,&fs,nullptr);glCompileShader(v);glCompileShader(f);
+        glAttachShader(program,v);glAttachShader(program,f);glLinkProgram(program);
+        GLint linked=0;glGetProgramiv(program,GL_LINK_STATUS,&linked);CHECK(linked);
+        GLuint vao=0;glGenVertexArrays(1,&vao);
+        opengl::CachedUseProgram use;use.useProgram(graphics::ObjectHandle(program));
+        glBindVertexArray(vao); // the drawer binds its arrays directly
+        opengl::CachedDepthCompare depth;depth.setDepthCompare(graphics::Parameter(GL_LEQUAL));
+        opengl::CachedDepthMask mask;mask.setDepthMask(false);
+        opengl::CachedBlending blending;blending.setBlending(graphics::Parameter(GL_SRC_ALPHA),graphics::Parameter(GL_ONE_MINUS_SRC_ALPHA));
+        opengl::CachedScissor scissor;scissor.setScissor(1,2,30,40);
+        opengl::CachedEnable blend(graphics::Parameter(GL_BLEND)),depth_test(graphics::Parameter(GL_DEPTH_TEST));
+        blend.enable(true);depth_test.enable(true); // BLEND through glEnablei, DEPTH_TEST through glEnable
+        glDisable(GL_DITHER);
+        glActiveTexture(GL_TEXTURE0+2);GLuint texture=0;glGenTextures(1,&texture);glBindTexture(GL_TEXTURE_2D,texture);
+        CHECK(replay_gl::Render(&render) && render.program==program && render.vertex_array==vao && render.depth_func==GL_LEQUAL
+            && !render.depth_mask && render.blend[0]==GL_SRC_ALPHA && render.blend[1]==GL_ONE_MINUS_SRC_ALPHA
+            && render.blend[2]==GL_SRC_ALPHA && render.blend[3]==GL_ONE_MINUS_SRC_ALPHA && render.scissor_known
+            && render.scissor[0]==1 && render.scissor[1]==2 && render.scissor[2]==30 && render.scissor[3]==40);
+        GLint value=0,factors[4]{},box[4]{};GLboolean flag=GL_TRUE;
+        glGetIntegerv(GL_CURRENT_PROGRAM,&value);CHECK(GLuint(value)==render.program);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING,&value);CHECK(GLuint(value)==render.vertex_array);
+        glGetIntegerv(GL_DEPTH_FUNC,&value);CHECK(GLenum(value)==render.depth_func);
+        glGetBooleanv(GL_DEPTH_WRITEMASK,&flag);CHECK((flag!=GL_FALSE)==render.depth_mask);
+        const GLenum blend_names[4]={GL_BLEND_SRC_RGB,GL_BLEND_DST_RGB,GL_BLEND_SRC_ALPHA,GL_BLEND_DST_ALPHA};
+        for(unsigned i=0;i<4;++i){glGetIntegerv(blend_names[i],&factors[i]);CHECK(GLenum(factors[i])==render.blend[i]);}
+        glGetIntegerv(GL_SCISSOR_BOX,box);CHECK(box[0]==1 && box[1]==2 && box[2]==30 && box[3]==40);
+        for(GLenum cap:{GL_BLEND,GL_DEPTH_TEST,GL_DITHER,GL_CULL_FACE,GL_SCISSOR_TEST,GL_STENCIL_TEST,GL_FRAMEBUFFER_SRGB}) {
+            CHECK(replay_gl::Enabled(cap,&on) && on==(glIsEnabled(cap)!=GL_FALSE));
+        }
+        GLuint bound=0;unsigned unit=0;
+        CHECK(replay_gl::Texture2D(2,&bound) && bound==texture && replay_gl::ActiveUnit(&unit) && unit==2);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D,&value);CHECK(GLuint(value)==texture);
+        glDeleteVertexArrays(1,&vao); // deleting the bound array binds none
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING,&value);CHECK(replay_gl::Render(&render) && render.vertex_array==0 && value==0);
+        blend.enable(false);depth_test.enable(false);glEnable(GL_DITHER);mask.setDepthMask(true);
+        depth.setDepthCompare(graphics::Parameter(GL_LESS));blending.setBlending(graphics::Parameter(GL_ONE),graphics::Parameter(GL_ZERO));
+        use.useProgram(graphics::ObjectHandle(0));glDeleteProgram(program);glDeleteShader(v);glDeleteShader(f);
+        glBindTexture(GL_TEXTURE_2D,0);glDeleteTextures(1,&texture);glActiveTexture(GL_TEXTURE0+3);
+        CHECK(glGetError()==GL_NO_ERROR);
+    }
     CHECK(replay_gl::CandidateBindings(&identity,&witness));
     const auto old_identity=identity;
     replay_gl::DrawableChanged(); check_bindings(0,0,GL_FRONT);

@@ -11,7 +11,8 @@ const html = htm.bind(h);
 const stamp = seconds => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
 const markLabel = value => value == null ? "—" : stamp(value);
 
-export function PlaybackOptions({ video, media, fullscreen }) {
+// `ghosts` is present only when this replay has a ghost copy (replay.js).
+export function PlaybackOptions({ video, media, fullscreen, ghosts }) {
   return html`<div class="replay-playback-options">
       <label class="replay-speed" title="Playback speed"><${Icon} name="speed" size=${20} />
         <select value=${media.rate} aria-label="Playback speed"
@@ -32,6 +33,13 @@ export function PlaybackOptions({ video, media, fullscreen }) {
         value=${media.volume} aria-label="Volume" oninput=${e => {
           if (video) { video.volume = Number(e.currentTarget.value); video.muted = false; }
         }} /></div></div>
+      ${ghosts && html`<button class=${ghosts.shown ? "replay-ghosts is-active" : "replay-ghosts"}
+        aria-pressed=${ghosts.shown} disabled=${!!ghosts.unavailable}
+        title=${ghosts.unavailable || "Play the copy of this replay that has your ghosts in it"}
+        onclick=${event => {
+          ghosts.toggle();
+          if (event.detail > 0) focusReplay(video);
+        }}>Show ghosts</button>`}
       <button onclick=${fullscreen} title="Fullscreen review with timeline">Fullscreen</button>
     </div>`;
 }

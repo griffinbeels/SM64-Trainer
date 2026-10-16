@@ -27,10 +27,11 @@ def eventual(call, predicate=bool, timeout=2):
 
 
 class Fixture:
-    def __init__(self, *, rom=True, available=True):
+    def __init__(self, *, rom=True, available=True, unavailable_error=FileNotFoundError):
         self.status_value = C.CaptureStatus(77, 4, C.PASSIVE, 0, 0, 0, C.CAP_GPU,
                                              rom, 55, 1, "fixture")
         self.available = available
+        self.unavailable_error = unavailable_error
         self.calls = []
         self.requests = self.renews = self.closed = 0
         self.renew_ok = True
@@ -48,7 +49,7 @@ class Fixture:
     def control(self, _):
         self.log("discover")
         if not self.available:
-            raise FileNotFoundError("not installed yet")
+            raise self.unavailable_error("not discoverable yet")
         return self
 
     def status(self):
@@ -96,13 +97,14 @@ class Request:
             assert f.close_release.wait(2)
 
 
-def test_construction_and_status_are_passive_then_wait_for_producer_and_rom():
-    f = Fixture(rom=False, available=False)
+@pytest.mark.parametrize("unavailable_error", [FileNotFoundError, BlockingIOError])
+def test_construction_and_status_are_passive_then_wait_for_producer_and_rom(unavailable_error):
+    f = Fixture(rom=False, available=False, unavailable_error=unavailable_error)
     d = f.demand()
     assert d.snapshot.state == "new" and d.identity is None and not f.calls
     d.start()
     try:
-        eventual(lambda: f.calls)
+        eventual(lambda: sum(name == "discover" for name, _ in f.calls) >= 2)
         assert f.requests == 0
         f.available = True
         eventual(lambda: d.snapshot.state, lambda s: s == "waiting_rom")

@@ -44,7 +44,7 @@ Contract (the UI builds against ALL of this):
 - `active_route` ({id, name, segment_ids} or None) mirrors the route-scoped
   arm from service.active_route() — the projector's journal-derived
   active_route_id(), never a service-only field (see select_route)."""
-from sm64_events.core.timefmt import format_igt
+from sm64_events.core.timefmt import format_igt_short
 from sm64_events.links import star_links, ukikipedia_url
 from sm64_events.memory.addresses import (COURSE_BY_LEVEL, COURSE_NAMES,
                                           course_name, star_count, star_name)
@@ -61,7 +61,7 @@ from sm64_events.tracking.activestrat import (PIPE_FAMILY_SUFFIX,
                                               ActiveStrats,
                                               reds_pipe_segments)
 from sm64_events.tracking.caveats import (attempt_caveat, caveat_for,
-                                          igt_seen_in)
+                                          igt_seen_in, save_state_run)
 from sm64_events.tracking.pbaction import pb_action, pb_strat_gate
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             attributable_parent,
@@ -79,7 +79,7 @@ from sm64_events.tracking.segments import (arm_level, arms_ambiently,
 # The frame position comes from the section's clock extractor: star
 # sections pass igt (resets/deaths only have an IGT position), segment
 # sections pass rta (segments have no IGT).
-TIMELINE_OUTCOMES = frozenset({"success", "reset", "death"})
+TIMELINE_OUTCOMES = frozenset({"success", "reset", "loaded", "death"})
 
 
 def _timeline(history, frames_of) -> dict | None:
@@ -98,13 +98,13 @@ def _timeline(history, frames_of) -> dict | None:
         frames = frames_of(a)
         if frames is None:
             continue
-        points.append({"frames": frames, "igt": format_igt(frames),
+        points.append({"frames": frames, "igt": format_igt_short(frames),
                        "outcome": a.outcome, "attempt_id": a.id})
     if not points:
         return None
     succ = [p["frames"] for p in points if p["outcome"] == "success"]
     max_frames = max(succ) if succ else max(p["frames"] for p in points)
-    return {"max_frames": max_frames, "max_display": format_igt(max_frames),
+    return {"max_frames": max_frames, "max_display": format_igt_short(max_frames),
             "max_is_success": bool(succ), "points": points}
 
 
@@ -112,7 +112,7 @@ def _fmt(value, fmt):
     if value is None:
         return None
     if fmt == "time":
-        return format_igt(round(value))
+        return format_igt_short(round(value))
     if fmt == "percent":
         return f"{round(value * 100)}%"
     return str(value)
@@ -221,7 +221,7 @@ def _pb_row_json(row, attempt_by_id, igt_seen):
     if not row:
         return None
     return {"frames": row["frames"],
-            "display": format_igt(row["frames"]),
+            "display": format_igt_short(row["frames"]),
             "attempt_id": row["attempt_id"],
             "caveat": caveat_for(row, attempt_by_id.get(row["attempt_id"]),
                                  igt_seen)}
@@ -280,9 +280,9 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             "outcome": a.outcome, "outcome_detail": a.outcome_detail,
             "anchor_type": a.anchor_type, "strat_tag": a.strat_tag,
             "igt_frames": a.igt_frames,
-            "igt": format_igt(a.igt_frames) if a.igt_frames is not None else None,
+            "igt": format_igt_short(a.igt_frames) if a.igt_frames is not None else None,
             "rta_frames": a.rta_frames,
-            "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
+            "rta": format_igt_short(a.rta_frames) if a.rta_frames is not None else None,
             "pb_delta_frames": delta, "cleared": a.cleared,
             # This row belongs to a strategy OTHER than the one being
             # practised (an untagged row included), so the card dims it --
@@ -318,6 +318,13 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             # but every one of them still carries a time that measures the
             # wrong moment.
             "caveat": attempt_caveat(a),
+            # A VALID run (projection caveat 21): True/False once judged,
+            # null for every row journaled before the rules that judge it.
+            # `invalid_reason` is a caveats.py VALIDITY_CAVEATS key; the log
+            # draws it through `caveat` above and still offers Save.
+            "valid": a.valid,
+            "invalid_reason": a.invalid_reason,
+            "state_loads": a.state_loads,
             # A time he brought rather than played: a real row with every
             # row affordance, and provably no replay -- the one control the
             # log hides for it, rather than drawing a player for a run the
@@ -444,12 +451,13 @@ def _attempt_rank(a, frames, ranks, ek=None) -> dict | None:
 def valid_frames(history, strat, clock) -> list[int]:
     """Chronological times (frames) of the runs that count toward an average
     (average rank mode spec): successful, not cleared (manual purge or
-    auto-ignore), achieved WITH `strat`, with a real time on `clock` —
+    auto-ignore), no save-state use, achieved WITH `strat`, with a real time on `clock` —
     excluding the rta==0 reset-race junk rows (projection.py docstring).
     `history` is journal-id ordered, so the list is chronological."""
     out = []
     for a in history:
-        if a.outcome != "success" or a.cleared or a.strat_tag != strat:
+        if (a.outcome != "success" or a.cleared or a.strat_tag != strat
+                or save_state_run(a)):
             continue
         frames = a.igt_frames if clock == "igt" else a.rta_frames
         if frames is None or (clock == "rta" and frames == 0):
@@ -899,7 +907,7 @@ def build_entity_strategies(db, service, ek: str) -> dict:
                     score = round(graded["score"], 1)
         strategies.append({
             "name": name, "rank": rank, "division": division, "score": score,
-            "pb_display": format_igt(pb_row["frames"]) if pb_row else None,
+            "pb_display": format_igt_short(pb_row["frames"]) if pb_row else None,
             # The saved PB as a display-clock number (round 6): the Library's
             # linked rows grade the reader's PB against the ROW's own
             # displayed ladder client-side, and a formatted string cannot be
@@ -1000,7 +1008,7 @@ def _section_banner(ranks, ek, strat, basis, mode, pb_untagged=False) -> dict | 
            "mode": mode, "fitted": fitted}
     if mode != "pb":
         out["basis"] = {"frames": basis["frames"],
-                        "display": format_igt(basis["frames"]),
+                        "display": format_igt_short(basis["frames"]),
                         "count": basis["count"], "window": basis["window"]}
     return out
 
@@ -1110,15 +1118,16 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
     rank_clock = clock if rank_clock is None else rank_clock
     by_session: dict[int, list] = {}
     for a in attempts:
-        if a.outcome != "success" or a.cleared or frames_of(a) is None:
+        if (a.outcome != "success" or a.cleared or frames_of(a) is None
+                or save_state_run(a)):
             continue
         rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
         by_session.setdefault(a.session_id, []).append({
             "t_utc": a.ended_utc,
             "igt_frames": a.igt_frames,
             "rta_frames": a.rta_frames,
-            "igt": format_igt(a.igt_frames) if a.igt_frames is not None else None,
-            "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
+            "igt": format_igt_short(a.igt_frames) if a.igt_frames is not None else None,
+            "rta": format_igt_short(a.rta_frames) if a.rta_frames is not None else None,
             "attempt_id": a.id,
             "is_pb_igt": (a.id, "igt") in pb_ids,
             "is_pb_rta": (a.id, "rta") in pb_ids,

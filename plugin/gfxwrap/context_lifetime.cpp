@@ -113,21 +113,6 @@ uint32_t __cdecl health(){return registry.health();}
 uint32_t __cdecl error(){return registry.error();}
 const rcl_api api{sizeof(rcl_api),RCL_ABI_V1,RCL_CAP_NEVER_CURRENT_ANCHOR,0,acquire,release,health,error};
 }
-bool Publish(HGLRC c,HDC dc,uint32_t g,int p){
-    if(c!=wglGetCurrentContext() || dc!=wglGetCurrentDC())return false;
-    auto create=reinterpret_cast<Registry::Create>(wglGetProcAddress("wglCreateContextAttribsARB"));
-    const auto address=reinterpret_cast<uintptr_t>(create);
-    if(address<=3 || address==UINTPTR_MAX)return false;
-    GLint major=0,minor=0,profile=0;
-    glGetIntegerv(0x821B,&major);glGetIntegerv(0x821C,&minor); // source startup only
-    if(major<3 || (major==3 && minor<2))return false;
-    glGetIntegerv(0x9126,&profile);
-    if(profile!=1 && profile!=2)return false;
-    const int attributes[]={0x2091,major,0x2092,minor,0x9126,profile,0};
-    return registry.publish(c,g,p,create,dc,attributes);
-}
-rcl_token Revoke(HGLRC c){return registry.revoke(c);}
-int Retire(rcl_token t){return registry.unbound(t,TRUE);}
 }
 extern "C" const rcl_api *__cdecl SM64ReplayContextV1(uint32_t version,uint32_t bytes) {
     if (version!=RCL_ABI_V1 || bytes!=sizeof(rcl_api)) return nullptr;

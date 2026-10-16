@@ -60,7 +60,9 @@ def test_perf_stats_times_detector_compute_and_resets_max():
     the cumulative tick count does not."""
     p = Poller(StubMemory(), [EchoDetector()], RecordingBroadcaster(),
                reader=ScriptedReader([snap(1), snap(2), snap(3)]))
-    assert p.perf_stats() == {"tick_ms_ema": 0.0, "tick_ms_max": 0.0, "ticks": 0}
+    first = p.perf_stats()
+    assert (first["tick_ms_ema"], first["tick_ms_max"], first["ticks"]) == (0.0, 0.0, 0)
+    assert first["poll_hz"] == 0.0   # run() never ticked
     asyncio.run(p.tick())            # _prev None -> establishes, not timed
     asyncio.run(p.tick())            # _prev set -> detector compute timed
     s = p.perf_stats()

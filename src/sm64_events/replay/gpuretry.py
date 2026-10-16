@@ -4,7 +4,9 @@ Transient failures retry with capped exponential backoff after proved cleanup.
 A capability bit does not reset the backoff. No GPU/native lease work occurs
 while waiting, and a failed request is never resubmitted into its old epoch.
 Native resource exhaustion is an exception: it persists until a new producer
-process birth, even across an observed ROM reload.
+process birth, even across an observed ROM reload. So does an adapter that can
+never record (gpucapture.GpuBackendUnsupported), which is not a failure at all:
+it arms no cooldown, and discovery declines that producer from then on.
 """
 
 import threading
@@ -44,6 +46,8 @@ class RetryGate:
         self._reason = ""
         self._saw_closed = False
         self._exhausted_birth = None
+        self._unsupported_birth = None
+        self._unsupported_reason = None
 
     def observe(self, status):
         identity = producer_key(status)
@@ -74,6 +78,21 @@ class RetryGate:
                 # reload or a new request cannot prove those resources retired.
                 self._exhausted_birth = identity[:3]
 
+    def unsupported(self, identity, reason):
+        """This producer's adapter can never record: remember it for its birth."""
+        with self._lock:
+            if identity is None or identity != self._identity:
+                return
+            self._unsupported_birth = identity[:3]
+            self._unsupported_reason = str(reason)[:512]
+
+    def unsupported_for(self, identity):
+        """The reason this producer cannot record, or None."""
+        with self._lock:
+            if identity is not None and self._unsupported_birth == tuple(identity[:3]):
+                return self._unsupported_reason
+        return None
+
     def identity_for(self, pid):
         """A temporarily unreadable control page cannot select a raw fallback."""
         with self._lock:
@@ -94,6 +113,8 @@ class RetryGate:
 
     def wait(self, owner, identity):
         while owner.want_capture():
+            if self.unsupported_for(identity):
+                return False
             reason = self.blocked(identity)
             # This is the media worker, after its prior helper/lease were closed.
             # Revalidate even an unblocked cached identity before any request.

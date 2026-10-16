@@ -2,6 +2,7 @@
 #include "gpu_encoder_dll.h"
 #include "gpu_bridge_encoder.h"
 #include "gpu_encoder_lease.h"
+#include "gpu_encoder_open_receipt.h"
 #include <new>
 #include <cstring>
 static_assert(sizeof(void*)==8,"x64 worker DLL only");
@@ -15,7 +16,22 @@ struct Slot {
  Microsoft::WRL::ComPtr<IDXGIKeyedMutex> mutex;
  Microsoft::WRL::ComPtr<ID3D11Query> completion;
  GpuEncoderLease lease;
+ HANDLE share=nullptr; // the name this helper published (renderer-thread producers)
+ ~Slot(){if(share)CloseHandle(share);}
 };
+// The capture layer's renderer-thread producer has no D3D device (a D3D device
+// in Project64 freezes its renderer once; docs/replay-gpu-runtime.md), so it
+// imports textures this helper creates under the channel's names. An older
+// layer created them itself: open first, create only when nothing has the name.
+HRESULT create_named(ID3D11Device*device,const gbdll_config_v1&config,DXGI_FORMAT format,const wchar_t*name,Slot&slot){
+ D3D11_TEXTURE2D_DESC desc{};desc.Width=config.encoder.width;desc.Height=config.encoder.height;desc.MipLevels=1;desc.ArraySize=1;
+ desc.Format=format;desc.SampleDesc.Count=1;desc.Usage=D3D11_USAGE_DEFAULT;
+ desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
+ desc.MiscFlags=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+ HRESULT hr=device->CreateTexture2D(&desc,nullptr,&slot.texture);if(FAILED(hr))return hr;
+ Microsoft::WRL::ComPtr<IDXGIResource1> resource;hr=slot.texture.As(&resource);if(FAILED(hr))return hr;
+ return resource->CreateSharedHandle(nullptr,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,name,&slot.share);
+}
 struct Session {
  uint64_t token=0;DWORD owner=0;LUID adapter{};gbdll_state state=GBDLL_OPEN;
  uint32_t failure=GBDLL_OK;HRESULT hr=S_OK;uint64_t timeouts=0,last_pts=0;bool have_pts=false;
@@ -46,7 +62,7 @@ void status(Session&s,gbdll_status_v1*out) {
  for(unsigned i=0;i<GBDLL_SLOTS;++i){const auto&l=s.slots[i].lease;if(l.held)out->held_mask|=1u<<i;if(l.pending)out->pending_mask|=1u<<i;out->acquired+=l.acquired;out->released+=l.released;}
 }
 bool device_for_luid(LUID luid,ID3D11Device**device,ID3D11DeviceContext**context) {
- // Same exact-LUID import pattern as gpu_bridge::device_for_luid; no GL/WGL linkage.
+ // The producer's exact adapter LUID; no GL/WGL linkage.
  Microsoft::WRL::ComPtr<IDXGIFactory1> factory;if(FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))return false;
  for(unsigned i=0;i<32;++i){Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;if(factory->EnumAdapters1(i,&adapter)!=S_OK)break;
   DXGI_ADAPTER_DESC1 desc{};if(FAILED(adapter->GetDesc1(&desc))||(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE)||memcmp(&desc.AdapterLuid,&luid,sizeof(luid)))continue;
@@ -76,7 +92,30 @@ uint32_t finish(Session&s) {
  if(!s.encoder.close())return quarantine(s,GBDLL_ENCODER,E_FAIL);
  s.state=GBDLL_FINISHED;return GBDLL_OK;
 }
-uint32_t abandon_open(Session*s,uint32_t result){delete s;session=nullptr;return result;}
+uint32_t abandon_open(Session*s,uint32_t result,GpuOpenFailureStage stage,
+                      bool encoder_attempted=false,bool hr_available=false,HRESULT hr=S_OK) {
+ GpuOpenFailureReceipt receipt;receipt.result=result;receipt.stage=stage;
+ receipt.hresult_available=hr_available;receipt.hresult=uint32_t(hr);
+ if(encoder_attempted){
+  // prepare_failed has already run cleanup. These are the current owned fields,
+  // not a reconstructed full Status or necessarily the first NVENC failure.
+  receipt.encoder_state=s->encoder.state();receipt.encoder_error=s->encoder.error();receipt.nv_status=s->encoder.driver_error();
+  receipt.encoder_state_available=receipt.encoder_state!=GBENC_EMPTY;
+  receipt.encoder_error_available=receipt.encoder_error!=GBENC_OK;
+  receipt.nv_status_available=receipt.nv_status!=NV_ENC_SUCCESS;
+ }
+ char line[GPU_OPEN_FAILURE_LINE_BYTES];
+ return gpu_open_failed_retire(receipt,line,sizeof line,[](const char*text,size_t bytes){
+  const DWORD saved=GetLastError();const HANDLE pipe=GetStdHandle(STD_ERROR_HANDLE);
+  if(pipe&&pipe!=INVALID_HANDLE_VALUE&&GetFileType(pipe)==FILE_TYPE_PIPE){
+   DWORD written=0;WriteFile(pipe,text,DWORD(bytes),&written,nullptr);
+  }
+  // WriteFile can wait on backpressure. Only the failed helper Open writes;
+  // its existing independent stderr drain/watchdog owns bounded retirement.
+  // No retry, flush, or delivery claim; preserve the original failure/cleanup.
+  SetLastError(saved);
+ },[&]{delete s;session=nullptr;});
+}
 }
 extern "C" uint32_t GBENC_CALL SM64GpuEncoderAbiV1(gbdll_abi_v1*out){
  if(!out)return GBDLL_ARGUMENT;if(out->struct_size!=sizeof(*out)||out->version!=GBDLL_VERSION)return GBDLL_ABI;
@@ -93,23 +132,30 @@ extern "C" uint32_t GBENC_CALL SM64GpuEncoderOpenV1(const gbdll_config_v1*config
  Session*s=new(std::nothrow)Session;if(!s)return GBDLL_MEMORY;
  session=s;s->owner=GetCurrentThreadId();s->token=next_token++;s->adapter={config->adapter_low,config->adapter_high};
  try {
-  if(!device_for_luid(s->adapter,&s->device,&s->context))return abandon_open(s,GBDLL_ADAPTER);
-  Microsoft::WRL::ComPtr<ID3D11Device1> device1;if(FAILED(s->device.As(&device1)))return abandon_open(s,GBDLL_IMPORT);
+  if(!device_for_luid(s->adapter,&s->device,&s->context))return abandon_open(s,GBDLL_ADAPTER,GpuOpenFailureStage::adapter);
+  Microsoft::WRL::ComPtr<ID3D11Device1> device1;HRESULT hr=s->device.As(&device1);
+  if(FAILED(hr))return abandon_open(s,GBDLL_IMPORT,GpuOpenFailureStage::device_interface,false,true,hr);
   const DXGI_FORMAT format=config->encoder.input_format==GBENC_INPUT_RGBA8?DXGI_FORMAT_R8G8B8A8_UNORM:config->encoder.input_format==GBENC_INPUT_BGRA8?DXGI_FORMAT_B8G8R8A8_UNORM:DXGI_FORMAT_UNKNOWN;
-  if(format==DXGI_FORMAT_UNKNOWN)return abandon_open(s,GBDLL_FORMAT);
+  if(format==DXGI_FORMAT_UNKNOWN)return abandon_open(s,GBDLL_FORMAT,GpuOpenFailureStage::input_format);
   for(unsigned i=0;i<GBDLL_SLOTS;++i){auto&slot=s->slots[i];
-   if(FAILED(device1->OpenSharedResourceByName(reinterpret_cast<const wchar_t*>(config->names[i]),DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,IID_PPV_ARGS(&slot.texture))))return abandon_open(s,GBDLL_IMPORT);
+   const auto*name=reinterpret_cast<const wchar_t*>(config->names[i]);
+   hr=device1->OpenSharedResourceByName(name,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,IID_PPV_ARGS(&slot.texture));
+   if(FAILED(hr)){
+    hr=create_named(s->device.Get(),*config,format,name,slot);
+    if(FAILED(hr))return abandon_open(s,GBDLL_IMPORT,GpuOpenFailureStage::shared_texture,false,true,hr);
+   }
    D3D11_TEXTURE2D_DESC desc{};slot.texture->GetDesc(&desc);
    const UINT sharing=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-   if(desc.Width!=config->encoder.width||desc.Height!=config->encoder.height||desc.Format!=format||desc.MipLevels!=1||desc.ArraySize!=1||desc.SampleDesc.Count!=1||desc.SampleDesc.Quality!=0||desc.Usage!=D3D11_USAGE_DEFAULT||desc.CPUAccessFlags||(desc.MiscFlags&sharing)!=sharing)return abandon_open(s,GBDLL_FORMAT);
-   if(FAILED(slot.texture.As(&slot.mutex)))return abandon_open(s,GBDLL_IMPORT);
-   D3D11_QUERY_DESC query{D3D11_QUERY_EVENT,0};if(FAILED(s->device->CreateQuery(&query,&slot.completion)))return abandon_open(s,GBDLL_MEMORY);
+   if(desc.Width!=config->encoder.width||desc.Height!=config->encoder.height||desc.Format!=format||desc.MipLevels!=1||desc.ArraySize!=1||desc.SampleDesc.Count!=1||desc.SampleDesc.Quality!=0||desc.Usage!=D3D11_USAGE_DEFAULT||desc.CPUAccessFlags||(desc.MiscFlags&sharing)!=sharing)return abandon_open(s,GBDLL_FORMAT,GpuOpenFailureStage::texture_format);
+   hr=slot.texture.As(&slot.mutex);if(FAILED(hr))return abandon_open(s,GBDLL_IMPORT,GpuOpenFailureStage::keyed_mutex,false,true,hr);
+   D3D11_QUERY_DESC query{D3D11_QUERY_EVENT,0};hr=s->device->CreateQuery(&query,&slot.completion);
+   if(FAILED(hr))return abandon_open(s,GBDLL_MEMORY,GpuOpenFailureStage::completion_query,false,true,hr);
   }
   if(!s->encoder.prepare(s->device.Get(),s->context.Get(),config->encoder,config->sink)){
    if(s->encoder.state()==GBENC_QUARANTINED){*token=s->token;return quarantine(*s,GBDLL_ENCODER,E_FAIL);}
    // A codec this adapter does not offer is a fact about the hardware, not a
    // fault; the caller decides whether to ask for the other one.
-   return abandon_open(s,s->encoder.error()==GBENC_CODEC_UNAVAILABLE?GBDLL_CODEC:GBDLL_ENCODER);
+   return abandon_open(s,s->encoder.error()==GBENC_CODEC_UNAVAILABLE?GBDLL_CODEC:GBDLL_ENCODER,GpuOpenFailureStage::encoder_prepare,true);
   }
   *token=s->token;return GBDLL_OK;
  }catch(...){*token=s->token;return quarantine(*s,GBDLL_MEMORY,E_FAIL);}

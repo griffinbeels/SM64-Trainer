@@ -67,12 +67,35 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               "s8; vanilla races only"),
     LayoutRow("mario_object", "gMarioObject", None,
               "pointer to Mario's own object; its behaviour is bhvMario"),
+    LayoutRow("current_area_pointer", "gCurrentArea", None,
+              "VERIFY: pointer to the active Area and its persistent camera graph; "
+              "address.current_area_pointer checks independent area/root identity"),
+    LayoutRow("area_update_counter", "gAreaUpdateCounter", None,
+              "VERIFY: u16 render animation/blink phase; address.area_update_counter "
+              "compares Mario gfx animTimer during live motion"),
     LayoutRow("usamune_overall", None, "usamune_time",
               "u16 running leg counter; counter_epoch banks subarea resets"),
     LayoutRow("usamune_star_result", None, "usamune_time",
               "u16 written at the grab with the EXACT displayed time"),
     LayoutRow("usamune_timer", None, "usamune_time",
               "u32 SECTION counter (diagnostics only; resets per area)"),
+    LayoutRow("sound_code", "play_sound", None,
+              "the 48-byte play_sound leaf; the native reader matches its "
+              "instructions against sound_producer/sound_ring before reading sounds"),
+    LayoutRow("sound_producer", "sSoundRequestCount", None,
+              "u8 producer of the 256-entry sound request ring, published "
+              "after each entry's bits (+0) and source pointer (+4)"),
+    LayoutRow("sound_consumer", "sNumProcessedSoundRequests", None,
+              "u8 count the audio thread has consumed from the ring"),
+    LayoutRow("sound_ring", "sSoundRequests", None,
+              "256 x {u32 sound bits, u32 source}; Mario's source is his "
+              "object's gfx.cameraToObject (object + 0x54)"),
+    LayoutRow("usamune_menu", None, "usamune_hud",
+              "VERIFY: u8, nonzero while Usamune's practice menu is open: its HUD hook "
+              "(RAM 0x80410f14) then draws the menu instead of its HUD and input display"),
+    LayoutRow("usamune_input_display", None, "usamune_hud",
+              "VERIFY: u8 Usamune input display setting, 0 = off (2 = stick, else values); "
+              "its HUD path calls the display (RAM 0x80408848) only while nonzero"),
     LayoutRow("behaviour_base", None, "mario_object_behaviour",
               "RAM address of segment 0x13; = mario_object->behaviour "
               "minus bhvMario's segmented offset for this version"),
@@ -96,9 +119,17 @@ class Layout:
     hud_display: int | None = None
     hud_timer_running: int | None = None
     mario_object: int | None = None
+    current_area_pointer: int | None = None
+    area_update_counter: int | None = None
+    sound_code: int | None = None
+    sound_producer: int | None = None
+    sound_consumer: int | None = None
+    sound_ring: int | None = None
     usamune_overall: int | None = None
     usamune_star_result: int | None = None
     usamune_timer: int | None = None
+    usamune_menu: int | None = None
+    usamune_input_display: int | None = None
     behaviour_base: int | None = None
 
     def value(self, field: str) -> int | None:
@@ -144,9 +175,28 @@ US = Layout(
     hud_display=0x8033B260,         # +HUD_TIMER_OFF is the race timer; 0 under Usamune (trap)
     hud_timer_running=0x8033B25E,
     mario_object=0x80361158,        # STROOP MappingUS.map gMarioObject
+    current_area_pointer=0x8032DDCC, # VERIFY: STROOP MappingUS.map gCurrentArea;
+                                    # new ghost read, not yet live gate verified.
+    area_update_counter=0x8032DF08, # VERIFY: STROOP MappingUS.map gAreaUpdateCounter;
+                                    # u16, distinct from gGlobalTimer.
+    # STROOP MappingUS.map symbols; the retired audio feasibility probe
+    # (docs/history/ghost-audio-feasibility-20260922.md)
+    # found identical play_sound code in stock and Usamune (SHA256 1c8030b6...)
+    # naming exactly this producer and ring, 2026-09-22. Live gates
+    # address.sound_* all verified on Usamune US while he jumped, 2026-09-23
+    # (data/version_sync/us.json: 4 Mario requests seen, consumer caught up).
+    sound_code=0x8031EB00,
+    sound_producer=0x80332F44,
+    sound_consumer=0x80332F40,
+    sound_ring=0x80361498,
     usamune_overall=0x80417C72,     # tools/hunt_value.py + watch session 2026-06-10
     usamune_star_result=0x80417C74,
     usamune_timer=0x8033D5DC,       # section counter; diagnostics only
+    # VERIFY: read off Usamune's own code, 2026-10-02 (disassembly of its HUD
+    # hook at RAM 0x80410f14: `lbu 0x68d8(0x8041)` picks the menu path; the HUD
+    # path's `lbu 0xb(0x80417b4c)` gates `jal 0x80408848`, the input display).
+    usamune_menu=0x804168D8,
+    usamune_input_display=0x80417B57,
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
 

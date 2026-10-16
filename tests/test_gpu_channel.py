@@ -4,6 +4,7 @@ from __future__ import annotations
 import ctypes as C
 import importlib.util
 import json
+import math
 import mmap
 import os
 from pathlib import Path
@@ -11,8 +12,10 @@ import queue
 import secrets
 import struct
 import subprocess
+import statistics
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +30,26 @@ SOURCE = Path(__file__).resolve().parents[1] / "plugin/gfxwrap"
 from sm64_events.replay import gpuchannel as G
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows x86/x64 IPC witness")
+
+
+def test_channel_version_matches_the_native_wire():
+    """The wrapper (gpu_channel.h) and this trainer name one channel version."""
+    text = (SOURCE / "gpu_channel.h").read_text(encoding="utf-8")
+    line = next(row for row in text.splitlines() if row.startswith("#define GC_CHANNEL_VERSION "))
+    assert int(line.split()[2].rstrip("u")) == G.VERSION
+
+
+def test_a_capture_layer_from_another_build_is_named_not_garbled():
+    """A wrapper and trainer from different builds fail readably, before any
+    other header field is trusted (version 1 made its own bridge textures)."""
+    h = G.Header()
+    h.seq, h.version, h.header_bytes = 2, G.VERSION - 1, G.HEADER_BYTES
+    C.memmove(h.magic, G.MAGIC, len(G.MAGIC))
+    with pytest.raises(G.LayerVersionMismatch) as caught:
+        G.validate_header(h, G.MAX_MAP)
+    message = str(caught.value)
+    assert f"version {G.VERSION - 1}" in message and f"version {G.VERSION}" in message
+    assert "different builds" in message and "Close Project64" in message
 
 
 @pytest.fixture(scope="module")
@@ -172,7 +195,8 @@ def snapshot(client, offset, kind):
 
 @pytest.mark.parametrize(
     "width,height,sample_bytes,map_bytes",
-    [(640, 480, 19200, 176128), (641, 481, 19764, 180736)],
+    # Version 3 adds the 768-byte twin block after the last payload.
+    [(640, 480, 19200, 176896), (641, 481, 19764, 181504)],
 )
 def test_real_x86_offer_decision_bridge_and_capacity(
     native, width, height, sample_bytes, map_bytes
@@ -264,6 +288,82 @@ def test_real_x86_offer_decision_bridge_and_capacity(
         assert host.ask("publish 0 10 8 4")["result"] == "stale"
 
 
+def test_real_x86_twin_block_follows_the_payloads(native):
+    """Version 3: the native layout puts the ghost copy's 768-byte twin block
+    after the last payload, and names two twin textures of its own."""
+    with Host(native, 641, 481) as host, host.client() as client:
+        h = client.header
+        assert h.twin_offset == h.payload_offset + 8 * h.payload_stride
+        assert h.twin_offset % 64 == 0 and h.twin_bytes == G.TWIN_BYTES
+        assert h.total_bytes == host.info["total_bytes"] == h.twin_offset + 768
+        assert len({*client.texture_names, *client.twin_texture_names}) == 4
+
+
+def test_real_x86_twin_round_trip(native):
+    """The ghost copy's records through the real x86 producer: the client's
+    READY and OFF, the producer's status, twin bridges copied from clean
+    decisions in alternating slots, and receipts that let it retire them."""
+    with Host(native) as host, host.client() as client:
+        h = client.header
+        assert (host.info["twin_offset"], host.info["twin_bytes"],
+                host.info["twin_names_offset"]) == (h.twin_offset, G.TWIN_BYTES, 848)
+        assert client.twin_texture_names == ("Local\\SM64.GpuChannel.fixture.copy.a",
+                                             "Local\\SM64.GpuChannel.fixture.copy.b")
+        assert host.ask("twin_client")["result"] == "empty"
+        assert client.twin_status() == G.TwinStatus(G.TWIN_OFF, 0, 0, 0, 0, 0)  # A2
+        ok(host, "status 2")
+        client.twin_request(1)
+        assert (lambda r: (r["twin_state"], r["lane"]))(ok(host, "twin_client")) == (1, 1)
+        ok(host, "twin_status 2 0 1 0 0 0")
+        assert client.twin_status() == G.TwinStatus(G.TWIN_ACTIVE, 0, 1, 0, 0, 0)
+        for i in range(3):
+            ok(host, f"publish {i} {i + 1} {i + 1} 100")
+        decided = []
+        for serial, offer in enumerate(client.offers(), 1):
+            client.reply(offer, G.SELECTED, encode_serial=serial, pts=(serial - 1) * 3000,
+                         nominal_duration=3000, force_idr=serial == 1)
+            decided.append(ok(host, "take"))
+        ok(host, f"twin_bridge 0 1 {decided[0]['slot']}")
+        ok(host, f"twin_bridge 1 2 {decided[1]['slot']}")
+        first = client.twin_bridges()
+        assert [(b.texture_index, b.token, b.occurrence, b.encode_serial, b.pts,
+                 b.nominal_duration, b.force_idr) for b in first] == [
+            (0, 1, 1, 1, 0, 3000, False), (1, 2, 2, 2, 3000, 3000, False)]
+        assert host.ask(f"twin_bridge 0 3 {decided[2]['slot']}")["result"] == "busy"
+        for b in first:
+            client.acknowledge_twin_metadata(b)
+        receipts = {(r["slot"], r["token"]) for r in (ok(host, "twin_receipt"),
+                                                      ok(host, "twin_receipt"))}
+        assert receipts == {(0, 1), (1, 2)}
+        ok(host, "twin_key0 0 1")
+        ok(host, "twin_key0 1 2")
+        ok(host, f"twin_bridge 0 3 {decided[2]['slot']}")
+        (third,) = client.twin_bridges()
+        assert (third.texture_index, third.token, third.pts) == (0, 3, 6000)
+        client.acknowledge_twin_metadata(third)
+        assert (lambda r: (r["slot"], r["token"]))(ok(host, "twin_receipt")) == (0, 3)
+        ok(host, "twin_key0 0 3")
+        ok(host, "twin_status 2 0 1 6000 3 0")
+        assert client.twin_status() == G.TwinStatus(G.TWIN_ACTIVE, 0, 1, 6000, 3, 0)
+        client.twin_release()
+        assert (lambda r: (r["twin_state"], r["lane"]))(ok(host, "twin_client")) == (0, 0)
+        ok(host, "twin_status 3 10027 1 6000 3 0")
+        assert client.twin_status() == G.TwinStatus(G.TWIN_STOPPED, 10027, 1, 6000, 3, 0)
+
+
+def test_decisions_found_together_are_taken_in_offer_order(native):
+    """Renderer-thread capture takes decisions once per VI, so one pass can
+    find the client's replies to two offers. A later offer in a lower slot is
+    not out of order: the head's decision is taken first, then the next."""
+    with Host(native) as host, host.client() as client:
+        ok(host, "publish 3 1 1 100")
+        ok(host, "publish 0 2 2 100")
+        first, second = client.offers()
+        client.reply(first, G.SUPPRESSED, reason=5)
+        client.reply(second, G.SUPPRESSED, reason=5)
+        assert (ok(host, "take")["slot"], ok(host, "take")["slot"]) == (3, 0)
+
+
 def test_torn_invalid_stale_repeated_commands(native):
     with Host(native) as host, host.client() as client:
         ok(host, "publish 0 1 1 100")
@@ -342,6 +442,10 @@ def test_torn_invalid_stale_repeated_commands(native):
         "unterminated",
         "utf16",
         "backing_length",
+        "twin_names",
+        "twin_clean_name",
+        "twin_offset",
+        "twin_bytes",
     ],
 )
 def test_header_independent_native_and_python_refusals(native, mutation):
@@ -360,6 +464,8 @@ def test_header_independent_native_and_python_refusals(native, mutation):
             "packet_count": ("packet_count", 9),
             "packet_budget": ("packet_bytes", G.MAX_PACKET + 1),
             "backing_length": ("total_bytes", h.total_bytes + 64),
+            "twin_offset": ("twin_offset", h.twin_offset + 64),
+            "twin_bytes": ("twin_bytes", G.TWIN_BYTES - 1),
         }
         if mutation in scalar:
             setattr(h, *scalar[mutation])
@@ -375,6 +481,10 @@ def test_header_independent_native_and_python_refusals(native, mutation):
             h.texture_names[0] = (G.U16 * 128)(*([65] * 128))
         elif mutation == "utf16":
             h.texture_names[0][0] = 0xD800
+        elif mutation == "twin_names":
+            h.twin_texture_names[1] = h.twin_texture_names[0]
+        elif mutation == "twin_clean_name":
+            h.twin_texture_names[0] = h.texture_names[1]
         with pytest.raises(G.ProtocolError):
             G.validate_header(h, client.header.total_bytes)
         C.memmove(client._view, bytes(h), 2048)
@@ -708,6 +818,122 @@ def test_bridge_publication_race_and_order_refusal(native, monkeypatch):
         assert host.ask("bridge 0 3 0")["result"] == "busy"
 
 
+def encoder_over(client, *, max_age=2.0):
+    """The media tick's ChannelEncoder reading this real x86 producer."""
+    from sm64_events.replay.channelencoder import ChannelEncoder
+    from sm64_events.replay.gpuinput import ChannelSelection
+    from test_channelencoder import Controller
+    from test_gpumedia import media
+
+    q, h, control = media(), client.header, Controller()
+    decoder = SimpleNamespace(
+        namespace=q.namespace, header=h, timestamp=lambda qpc: qpc / h.qpc_frequency
+    )
+    a = ChannelEncoder(
+        ChannelSelection(client, decoder, q), control, max_pending=8, max_age=max_age
+    )
+    assert a.start(dict(
+        op="Open", adapter_luid=[h.luid_high, h.luid_low],
+        names=list(client.texture_names),
+        options=dict(width=h.even_width, height=h.even_height, input_format=h.format,
+                     max_packet_bytes=q.packet_limit),
+    ))
+    control.deliver()
+    a.pump(now=time.monotonic())
+    a.pump(now=time.monotonic())
+    return a, q
+
+
+def test_torn_status_is_no_news_to_the_tick_until_the_age_deadline(native):
+    # 2026-09-22/23/25: three runs of 30 min to 5.3 h ended on one torn read.
+    with Host(native) as host, host.client() as client:
+        ok(host, "status 2")
+        offset = client.header.status_offset
+        seq = client._word(offset)
+        poke(client, offset, seq + 1)  # the native writer is preempted mid-copy
+        with pytest.raises(BlockingIOError, match="torn producer status"):
+            client.status()  # setup still refuses a torn status at once
+        poke(client, offset, seq)
+        a, q = encoder_over(client, max_age=0.25)
+        try:
+            poke(client, offset, seq + 1)
+            until = time.monotonic() + 0.02
+            while time.monotonic() < until:
+                a.pump(now=time.monotonic())
+                time.sleep(0.004)
+            torn = a.status()["torn_status_reads"]
+            assert torn > 0 and not a.fault and not q.closed
+            poke(client, offset, seq + 2)  # the copy finishes
+            a.pump(now=time.monotonic())
+            a.pump(now=time.monotonic())
+            assert a.status()["torn_status_reads"] == torn and not a.fault
+            poke(client, offset, seq + 3)  # a writer that never finishes
+            with pytest.raises(BlockingIOError, match="torn producer status for"):
+                for _ in range(500):
+                    a.pump(now=time.monotonic())
+                    time.sleep(0.004)
+            assert a.fault and q.closed
+        finally:
+            poke(client, offset, seq + 4)
+            if not q.closed:
+                q.abort("fixture complete")
+
+
+def test_quiet_tick_reads_no_record_until_a_word_moves(native, monkeypatch):
+    with Host(native) as host, host.client() as client:
+        ok(host, "status 2")
+        a, q = encoder_over(client)
+        try:
+            reads = []
+            stable = client._stable
+
+            def counted(offset, kind):
+                reads.append(kind.__name__)
+                return stable(offset, kind)
+
+            monkeypatch.setattr(client, "_stable", counted)
+            for _ in range(20):
+                a.pump(now=time.monotonic())
+            assert reads == [] and a.status()["pump_paths"]["quiet"] >= 20
+            ok(host, "frontier 30000 20000 1 0")  # the 60 Hz status write
+            a.pump(now=time.monotonic())
+            assert reads == ["Status"] and a.frontier == math.nextafter(0.002, 0)
+            reads.clear()
+            publication = client.header.publication_offset
+            poke(client, publication, client._word(publication) + 2)
+            a.pump(now=time.monotonic())
+            assert reads.count("Publication") == 2 and reads.count("BridgeWire") == 2
+            reads.clear()
+            a.pump(now=time.monotonic())
+            assert reads == []
+        finally:
+            q.abort("fixture complete")
+
+
+def test_idle_tick_costs_a_fraction_of_a_full_scan(native):
+    """Microbenchmark on the real channel; live it was 0.22 ms a tick."""
+    with Host(native) as host, host.client() as client:
+        ok(host, "status 2")
+        a, q = encoder_over(client)
+        publication = client.header.publication_offset
+        try:
+            quiet, scan = [], []
+            for _ in range(300):
+                start = time.perf_counter()
+                a.pump(now=time.monotonic())
+                quiet.append(time.perf_counter() - start)
+                poke(client, publication, client._word(publication) + 2)
+                start = time.perf_counter()
+                a.pump(now=time.monotonic())
+                scan.append(time.perf_counter() - start)
+            idle, full = statistics.median(quiet), statistics.median(scan)
+            print(f"idle tick {idle * 1e6:.1f} us, full scan {full * 1e6:.1f} us")
+            assert a.status()["pump_paths"]["quiet"] >= 300
+            assert idle * 4 < full, (idle, full)
+        finally:
+            q.abort("fixture complete")
+
+
 def test_fresh_request_can_adopt_native_epoch_without_weakening_identity(native):
     with Host(native) as host:
         with pytest.raises(G.ProtocolError, match="stale session"):
@@ -721,3 +947,239 @@ def test_fresh_request_can_adopt_native_epoch_without_weakening_identity(native)
             poke(client, 32, 123)
             with pytest.raises(G.ProtocolError, match="immutable header"):
                 client.status()
+
+
+class TwinProducer:
+    """This process as the producer of a version-3 mapping laid out by the
+    I2 contract, so the twin client runs without the x86 host. Agreement with
+    the native layout is the Host tests' job; this one exercises the client."""
+
+    TWINS = ("Local\\SM64.GpuChannel.fixture.copy.a", "Local\\SM64.GpuChannel.fixture.copy.b")
+
+    def __init__(self, width=64, height=48):
+        k = self.k = G._kernel()
+        k.CreateFileMappingW.restype = C.c_void_p
+        k.CreateFileMappingW.argtypes = [C.c_void_p, C.c_void_p, G.U32, G.U32, G.U32,
+                                         C.c_wchar_p]
+        k.CreateEventW.restype = C.c_void_p
+        k.CreateEventW.argtypes = [C.c_void_p, C.c_int, C.c_int, C.c_wchar_p]
+        self.nonce = (secrets.randbits(64) | 1, secrets.randbits(64))
+        name = f"{G.NAMESPACE}{self.nonce[1]:016x}{self.nonce[0]:016x}"
+        pid = os.getpid()
+        birth = G.process_birth(pid)
+        h = self.h = G.Header(seq=2, version=G.VERSION, header_bytes=G.HEADER_BYTES)
+        C.memmove(h.magic, G.MAGIC, len(G.MAGIC))
+        h.producer_pid = h.owner_pid = pid
+        h.producer_birth = h.owner_birth = birth
+        h.nonce_lo, h.nonce_hi = self.nonce
+        h.epoch, h.generation, h.qpc_frequency = 7, 1, 10_000_000
+        h.width, h.height, h.even_width, h.even_height = width, height, width & ~1, height & ~1
+        h.format, h.sample_stride, h.luid_low, h.luid_high = 1, 8, 0x1234, -7
+        h.offer_count, h.bridge_count, h.table_count = 8, 2, 2
+        h.stamp_capacity = G.STAMP_BYTES
+        h.sample_bytes = h.sample_capacity = ((width + 7) // 8) * ((height + 7) // 8) * 4
+        h.packet_count, h.packet_bytes, h.pending_bytes = 8, 1 << 20, 4 << 20
+        h.ram_budget = G.MAX_MAP
+        h.table[0], h.table[1] = G.Field(0x100, 4), G.Field(0x200, 8)
+        base = G.HEADER_BYTES + 256 + 8 * 384
+        h.status_offset, h.status_bytes = G.HEADER_BYTES, 256
+        h.offer_offset, h.decision_offset = G.HEADER_BYTES + 256, G.HEADER_BYTES + 256 + 8 * 256
+        h.bridge_offset, h.receipt_offset = base, base + 256
+        h.client_offset, h.client_bytes = base + 512, 128
+        h.publication_offset, h.publication_bytes = base + 640, 128
+        h.payload_offset = base + 768
+        h.payload_stride = (G.STAMP_BYTES + h.sample_bytes + 63) & ~63
+        h.twin_offset = h.payload_offset + 8 * h.payload_stride
+        h.twin_bytes = G.TWIN_BYTES
+        h.total_bytes = h.twin_offset + G.TWIN_BYTES
+        for i, text in enumerate(("Local\\SM64.GpuChannel.fixture.a",
+                                  "Local\\SM64.GpuChannel.fixture.b")):
+            C.memmove(h.texture_names[i], text.encode("utf-16-le"), len(text) * 2)
+        for i, text in enumerate(self.TWINS):
+            C.memmove(h.twin_texture_names[i], text.encode("utf-16-le"), len(text) * 2)
+        G.validate_header(h, h.total_bytes)
+        self.map = k.CreateFileMappingW(C.c_void_p(-1), None, 0x04, 0, h.total_bytes, name)
+        assert self.map
+        self.view = k.MapViewOfFile(self.map, 0xF001F, 0, 0, h.total_bytes)
+        assert self.view
+        self.events = [k.CreateEventW(None, False, False, name + suffix)
+                       for suffix in (".client", ".producer")]
+        assert all(self.events)
+        C.memmove(self.view, bytes(h), G.HEADER_BYTES)
+        self.write(h.status_offset, G.Status(state=G.ACTIVE, **self.identity()))
+
+    def identity(self):
+        return dict(nonce_lo=self.h.nonce_lo, nonce_hi=self.h.nonce_hi,
+                    epoch=self.h.epoch, generation=self.h.generation)
+
+    def word(self, offset):
+        return G.U32.from_address(self.view + offset).value
+
+    def write(self, offset, value):
+        seq = self.word(offset)
+        G.U32.from_address(self.view + offset).value = seq + 1
+        C.memmove(self.view + offset + 4, bytes(value)[4:], C.sizeof(value) - 4)
+        G.U32.from_address(self.view + offset).value = seq + 2
+
+    def read(self, offset, kind):
+        return kind.from_buffer_copy(C.string_at(self.view + offset, C.sizeof(kind)))
+
+    def twin(self, part):
+        return self.h.twin_offset + part
+
+    def status(self, state, lane, resolved=0, copied=0, missed=0, reason=0):
+        self.write(self.twin(G.TWIN_STATUS), G.TwinStatusWire(
+            state=state, reason=reason, lane=lane, resolved_pts=resolved, copied=copied,
+            missed=missed, **self.identity()))
+
+    def bridge(self, slot, token, pts, *, serial=None, duration=3000, flags=0):
+        self.write(self.twin(G.TWIN_BRIDGES) + slot * 128, G.BridgeWire(
+            ready=1, token=token, occurrence=token + 100,
+            encode_serial=token if serial is None else serial, pts=pts,
+            nominal_duration=duration, texture_index=slot, flags=flags,
+            **self.identity()))
+
+    def client(self):
+        return G.Client(nonce=self.nonce, epoch=7, generation=1,
+                        producer_pid=os.getpid(), producer_birth=G.process_birth(os.getpid()))
+
+    def close(self):
+        self.k.UnmapViewOfFile(self.view)
+        for handle in (*self.events, self.map):
+            self.k.CloseHandle(handle)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+def test_twin_client_requests_lanes_and_reads_status():
+    with TwinProducer() as p, p.client() as client:
+        assert client.twin_texture_names == p.TWINS
+        assert client.twin_status() == G.TwinStatus(G.TWIN_OFF, 0, 0, 0, 0, 0)
+        p.status(G.TWIN_OFF, 0)  # contract A2: the producer's initial twin status
+        assert p.word(p.twin(G.TWIN_STATUS)) == 2
+        assert client.twin_status() == G.TwinStatus(G.TWIN_OFF, 0, 0, 0, 0, 0)
+        client.twin_request(1)
+        wire = p.read(p.twin(G.TWIN_CLIENT), G.TwinClientWire)
+        assert (wire.seq, wire.state, wire.lane, wire.nonce_lo, wire.nonce_hi,
+                wire.epoch, wire.generation) == (2, G.TWIN_CLIENT_READY, 1, *p.nonce, 7, 1)
+        with pytest.raises(G.ProtocolError, match="twin lane"):
+            client.twin_request(1)  # every READY names a new, larger lane
+        client.twin_release()
+        wire = p.read(p.twin(G.TWIN_CLIENT), G.TwinClientWire)
+        assert (wire.seq, wire.state, wire.lane) == (4, G.TWIN_CLIENT_OFF, 0)
+        client.twin_request(3)
+        assert p.read(p.twin(G.TWIN_CLIENT), G.TwinClientWire).lane == 3
+        p.status(G.TWIN_ACTIVE, 3, resolved=90000, copied=2, missed=1)
+        assert client.twin_status() == G.TwinStatus(G.TWIN_ACTIVE, 0, 3, 90000, 2, 1)
+        offset = p.twin(G.TWIN_STATUS)
+        seq = p.word(offset)
+        poke(client, offset, seq + 1)  # preempted mid-copy: no news, not stale news
+        with pytest.raises(BlockingIOError, match="torn twin status"):
+            client.twin_status()
+        poke(client, offset, seq)
+        bad = p.read(offset, G.TwinStatusWire)
+        bad.epoch = 8
+        p.write(offset, bad)
+        with pytest.raises(G.ProtocolError, match="stale message identity"):
+            client.twin_status()
+        bad.epoch, bad.reserved[3] = 7, 1
+        p.write(offset, bad)
+        with pytest.raises(G.ProtocolError, match="twin status fields"):
+            client.twin_status()
+
+
+def test_twin_bridges_come_in_token_order_and_receipts_land_in_their_slot():
+    with TwinProducer() as p, p.client() as client:
+        p.bridge(1, 4, 90000)
+        p.bridge(0, 5, 93000)
+        first = client.twin_bridges()
+        assert [(b.texture_index, b.token, b.pts) for b in first] == [(1, 4, 90000),
+                                                                     (0, 5, 93000)]
+        assert client.twin_bridges() == []
+        p.bridge(0, 6, 96000)
+        with pytest.raises(G.ProtocolError, match="unacknowledged twin bridge"):
+            client.twin_bridges()
+        client.acknowledge_twin_metadata(first[0])
+        receipt = p.read(p.twin(G.TWIN_RECEIPTS) + 128, G.Receipt)
+        assert (receipt.seq, receipt.accepted, receipt.token, receipt.occurrence,
+                receipt.encode_serial, receipt.texture_index) == (2, 1, 4, 104, 4, 1)
+        with pytest.raises(G.ProtocolError, match="stale or repeated twin"):
+            client.acknowledge_twin_metadata(first[0])
+        client.acknowledge_twin_metadata(first[1])
+        assert [b.token for b in client.twin_bridges()] == [6]
+        client.acknowledge_twin_metadata(G.Bridge(0, 6, 106, 6, 96000, 3000, False))
+        p.bridge(1, 7, 95000)  # a later token with an earlier picture
+        with pytest.raises(G.ProtocolError, match="reordered twin bridge"):
+            client.twin_bridges()
+
+
+def test_a_bridge_published_mid_scan_cannot_pass_an_earlier_one(monkeypatch):
+    """Twin bridges have no publication word: both slot words must hold still
+    across the scan, or slot 1's later bridge would be taken before slot 0's."""
+    with TwinProducer() as p, p.client() as client:
+        real, injected = C.string_at, []
+        # The client's own view, while it reads slot 1: slot 0 was already
+        # read empty and stable, so only the pair of words reveals the race.
+        slot1 = client._view + p.twin(G.TWIN_BRIDGES) + 128
+
+        def interleave(address, size):
+            value = real(address, size)
+            if not injected and address == slot1 and size == 128:
+                injected.append(True)
+                p.bridge(0, 1, 90000)
+                p.bridge(1, 2, 93000)
+            return value
+
+        monkeypatch.setattr(C, "string_at", interleave)
+        assert injected == [] and [b.token for b in client.twin_bridges()] == [1, 2]
+        assert injected == [True]
+
+
+def test_twin_bridge_refusals():
+    with TwinProducer() as p, p.client() as client:
+        p.bridge(0, 1, 90000, flags=1)  # twin bridges never carry the IDR flag
+        with pytest.raises(G.ProtocolError, match="twin bridge fields"):
+            client.twin_bridges()
+    with TwinProducer() as p, p.client() as client:
+        offset = p.twin(G.TWIN_BRIDGES) + 128
+        p.bridge(1, 1, 90000)
+        poke(client, offset, p.word(offset) + 1)  # a writer that never finishes
+        with pytest.raises(BlockingIOError, match="torn twin bridge"):
+            client.twin_bridges()
+        poke(client, offset, p.word(offset) + 1)
+        assert [b.token for b in client.twin_bridges()] == [1]
+
+
+def test_twin_calls_never_touch_the_clean_records():
+    with TwinProducer() as p, p.client() as client:
+        before = C.string_at(p.view, p.h.twin_offset)
+        client.twin_request(1)
+        p.bridge(0, 1, 90000)
+        client.acknowledge_twin_metadata(client.twin_bridges()[0])
+        client.twin_status()
+        client.twin_release()
+        assert C.string_at(p.view, p.h.twin_offset) == before
+
+
+@pytest.mark.parametrize("mutation", ["duplicate", "clean", "offset", "bytes", "total"])
+def test_header_refuses_a_twin_block_off_the_contract(mutation):
+    with TwinProducer() as p:
+        h = G.Header.from_buffer_copy(bytes(p.h))
+    if mutation == "duplicate":
+        h.twin_texture_names[1] = h.twin_texture_names[0]
+    elif mutation == "clean":
+        h.twin_texture_names[1] = h.texture_names[0]
+    elif mutation == "offset":
+        h.twin_offset += 64
+        h.total_bytes += 64
+    elif mutation == "bytes":
+        h.twin_bytes = 512
+        h.total_bytes -= 256
+    else:
+        h.total_bytes -= G.TWIN_BYTES  # a version-2 size with a version-3 header
+    with pytest.raises(G.ProtocolError):
+        G.validate_header(h, G.MAX_MAP)

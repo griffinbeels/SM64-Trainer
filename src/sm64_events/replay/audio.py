@@ -37,6 +37,7 @@ proctap API notes (installed 1.0.3):
 - Output is always float32, 48000 Hz, 2-channel (stereo), values in [-1, 1],
   delivered CONTINUOUSLY — silence arrives as zeros rather than as a gap,
   unlike device loopback, which delivers nothing while the endpoint idles."""
+from collections import deque
 import logging
 import threading
 import time
@@ -45,53 +46,9 @@ import numpy as np
 
 from sm64_events.replay._system_audio import AudioPump
 from sm64_events.replay.audiostop import stop_process_tap
+from sm64_events.replay.audioendpoint import device_name_hosting_pid
 
 log = logging.getLogger("sm64.replay")
-
-
-def device_name_hosting_pid(pid: int) -> str | None:
-    """FriendlyName of the active render endpoint whose session list contains
-    `pid`, else None. Pure Core Audio enumeration (pycaw/comtypes); the
-    session→device mapping persists even while the app is silent."""
-    try:
-        import comtypes
-        from comtypes import CLSCTX_ALL
-        from pycaw.api.audiopolicy import IAudioSessionControl2, IAudioSessionManager2
-        from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
-        from pycaw.constants import CLSID_MMDeviceEnumerator
-        from pycaw.pycaw import AudioUtilities
-
-        # This scan runs on watchdog/rescan threads that never touched COM —
-        # comtypes only auto-initializes the thread that first IMPORTS it, so
-        # the frozen exe logged 33x "CoInitialize has not been called"
-        # (2026-06-17) and the endpoint fallback silently never engaged.
-        # Deliberately never balanced with CoUninitialize: the threads are
-        # long-lived re-scanners, and uninitializing per call risks releasing
-        # COM wrappers after their apartment is gone.
-        try:
-            comtypes.CoInitialize()
-        except OSError:
-            pass  # already initialized on this thread in another mode — usable
-
-        devenum = comtypes.CoCreateInstance(
-            CLSID_MMDeviceEnumerator, IMMDeviceEnumerator,
-            comtypes.CLSCTX_INPROC_SERVER)
-        coll = devenum.EnumAudioEndpoints(0, 1)  # eRender, DEVICE_STATE_ACTIVE
-        for i in range(coll.GetCount()):
-            dev = coll.Item(i)
-            mgr = dev.Activate(IAudioSessionManager2._iid_, CLSCTX_ALL, None)
-            mgr = mgr.QueryInterface(IAudioSessionManager2)
-            sess_enum = mgr.GetSessionEnumerator()
-            for j in range(sess_enum.GetCount()):
-                ctl2 = sess_enum.GetSession(j).QueryInterface(IAudioSessionControl2)
-                try:
-                    if ctl2.GetProcessId() == pid:
-                        return AudioUtilities.CreateDevice(dev).FriendlyName
-                except Exception:
-                    continue
-    except Exception:
-        log.exception("audio session scan failed")
-    return None
 
 
 def pick_loopback_device(loopback_devices: list[dict], target_name: str | None,
@@ -237,6 +194,113 @@ class DeafStreamWatchdog:
                 raise RuntimeError("audio watchdog did not stop; source may still reopen")
 
 
+class GhostTimeline:
+    """The ghost sound player's samples on the wall clock, for the ghost copy.
+
+    The clean recording never hears the ghost: its tap feeds the game alone.
+    The ghost copy's sink asks for the ghost samples under each game block by
+    that block's own UTC stamp, so the two line up by when they were heard,
+    not by how many samples each tap happened to deliver.
+
+    A tap delivers its stream without holes, each chunk a little after its
+    last sample (callback jitter, or a stall's backlog). So the stream's start
+    is pinned by the least-delayed chunk of the last `ANCHOR_WINDOW_S`, and a
+    chunk sits where the count of samples since that start puts it: a stall
+    delays chunks but never moves them. A chunk within `SNAP_S` of the last
+    one's end follows on, so a moving minimum never opens an audible hole.
+    A chunk more than `HOLE_S` later than its count allows means the stream
+    skipped time, and `restart()` means a new tap: either begins a new
+    stream. Only the newest `most_s` seconds wait; anything older or never
+    heard reads as silence."""
+
+    ANCHOR_WINDOW_S = 1.0
+    SNAP_S = 0.005
+    HOLE_S = 0.2
+
+    def __init__(self, rate: int = 48000, most_s: float = 2.0):
+        self._rate = rate
+        self._size = int(rate * most_s)
+        self._ring = np.zeros((self._size, 2), dtype=np.float32)
+        self._first = self._end = None  # absolute sample indices held: [first, end)
+        self._lock = threading.Lock()
+        self._heard = 0
+        self._anchors = deque()  # (arrival, implied stream start), increasing starts
+
+    def restart(self) -> None:
+        """The next chunk opens a new stream; what was heard stays readable."""
+        with self._lock:
+            self._heard = 0
+            self._anchors.clear()
+
+    def feed(self, pcm_f32: np.ndarray, arrived_utc: float) -> None:
+        """One tap chunk (float32 stereo) that arrived at `arrived_utc`."""
+        data = np.asarray(pcm_f32, dtype=np.float32).reshape(-1, 2)
+        if not len(data):
+            return
+        with self._lock:
+            self._heard += len(data)
+            implied = arrived_utc - self._heard / self._rate
+            if self._anchors and implied - self._anchors[0][1] > self.HOLE_S:
+                self._heard, self._anchors = len(data), deque()
+                implied = arrived_utc - self._heard / self._rate
+            while self._anchors and self._anchors[-1][1] >= implied:
+                self._anchors.pop()
+            self._anchors.append((arrived_utc, implied))
+            while arrived_utc - self._anchors[0][0] > self.ANCHOR_WINDOW_S:
+                self._anchors.popleft()
+            end = round((self._anchors[0][1] + self._heard / self._rate) * self._rate)
+            start = end - len(data)
+            if self._end is not None and abs(start - self._end) <= self.SNAP_S * self._rate:
+                start = self._end
+            self._place(start, data)
+
+    def _place(self, start: int, data: np.ndarray) -> None:
+        if self._end is None or start >= self._end + self._size:
+            self._first = self._end = start  # nothing held is still within reach
+        elif start > self._end:
+            self._write(self._end, np.zeros((start - self._end, 2), dtype=np.float32))
+        top = max(start + len(data), self._end)
+        floor = top - self._size  # the oldest sample the ring can still hold
+        if start + len(data) <= floor:
+            return
+        if start < floor:
+            data, start = data[floor - start:], floor
+        self._write(start, data)
+        self._first = max(min(self._first, start), floor)
+        self._end = top
+
+    def _write(self, at: int, data: np.ndarray) -> None:
+        index = at % self._size
+        head = min(len(data), self._size - index)
+        self._ring[index:index + head] = data[:head]
+        self._ring[:len(data) - head] = data[head:]
+
+    def take(self, first_us: int, frames: int) -> np.ndarray:
+        """(frames, 2) float32 of ghost sound from UTC microsecond `first_us`,
+        zeros wherever no ghost sample is held."""
+        out = np.zeros((frames, 2), dtype=np.float32)
+        start = round(first_us * self._rate / 1_000_000)
+        with self._lock:
+            if self._end is None:
+                return out
+            low, high = max(start, self._first), min(start + frames, self._end)
+            if high > low:
+                index = low % self._size
+                head = min(high - low, self._size - index)
+                out[low - start:low - start + head] = self._ring[index:index + head]
+                out[low - start + head:high - start] = self._ring[:high - low - head]
+        return out
+
+
+def mix_ghost(game_s16: bytes, ghost_f32) -> bytes:
+    """The game's int16 stereo block plus the ghost's samples, saturated."""
+    game = np.frombuffer(game_s16, dtype=np.int16).reshape(-1, 2)
+    ghost = np.asarray(ghost_f32, dtype=np.float32).reshape(-1, 2)[:len(game)]
+    mixed = game.astype(np.float32)
+    mixed[:len(ghost)] += ghost * 32767.0
+    return np.clip(np.rint(mixed), -32768, 32767).astype(np.int16).tobytes()
+
+
 class ProcessAudioSource:
     """Per-process WASAPI loopback (proctap): captures ONLY the target
     process's render stream, so nothing else playing on the machine can
@@ -247,16 +311,29 @@ class ProcessAudioSource:
     proctap hands PCM to us on its own reader thread, not on a WASAPI
     real-time callback, but it still must not block: the same AudioPump
     stands between it and the recorder, so a wedged writer drops packets
-    instead of stalling the tap."""
+    instead of stalling the tap.
+
+    `extra_pid` names a second process to tap while it answers one: the
+    ghost sound player while Ghosts in recording is on (ghost/sound_player.py).
+    Its samples go to `ghost_timeline` for the ghost copy and never into this
+    source's own PCM: the clean recording is the game alone (his decision,
+    2026-10-03: "if someone gets an amazing PB, they will want the clean
+    recording 100% of the time"). It is followed every `EXTRA_EVERY_S`."""
 
     mode = "process"
+    EXTRA_EVERY_S = 0.25
 
-    def __init__(self, pid: int, rate: int = 48000):
+    def __init__(self, pid: int, rate: int = 48000, extra_pid=None):
         self._pid = pid
         self._rate = rate
         self._tap = None
         self._pump = None
         self._watchdog = None
+        self._extra_pid = extra_pid
+        self.ghost_timeline = GhostTimeline(rate)
+        self._extra_tap, self._extra_tapped = None, None
+        self._extra_stop = threading.Event()
+        self._extra_thread = None
 
     def _open_tap(self) -> None:
         """(Re)open the per-process tap feeding the existing pump. Raises on
@@ -269,8 +346,7 @@ class ProcessAudioSource:
             # pcm_bytes: raw float32 stereo 48kHz; num_frames is -1 (unused).
             # The pump speaks int16 — the one format on the wire to the sink —
             # so convert here, off both the recorder and the native drain.
-            pump_feed(f32_to_s16(
-                np.frombuffer(pcm_bytes, dtype=np.float32)).tobytes(), 0)
+            pump_feed(f32_to_s16(np.frombuffer(pcm_bytes, dtype=np.float32)).tobytes(), 0)
 
         # on_data is passed to __init__, not start(); start() takes no args.
         # proctap also queues every chunk into an internal 100-slot async
@@ -300,6 +376,43 @@ class ProcessAudioSource:
             self._pid, lambda: self._pump.last_loud_t,
             self._reopen, "process tap")
         self._watchdog.start()
+        if self._extra_pid is not None:
+            self._extra_stop.clear()
+            self._extra_thread = threading.Thread(
+                target=self._follow_extra, name="audio-extra-tap", daemon=True)
+            self._extra_thread.start()
+
+    def _follow_extra(self) -> None:
+        """Open, move or close the second tap to match `extra_pid()`."""
+        while not self._extra_stop.wait(self.EXTRA_EVERY_S):
+            try:
+                wanted = self._extra_pid()
+            except Exception:  # noqa: BLE001 - a failed question means: nothing to mix
+                wanted = None
+            if wanted == self._extra_tapped:
+                continue
+            self._close_extra()
+            if wanted is None:
+                continue
+            try:
+                import proctap
+                self.ghost_timeline.restart()  # a new tap's samples count from its own start
+                self._extra_tap = proctap.ProcessAudioCapture(pid=wanted, on_data=self._on_extra)
+                self._extra_tap.start()
+                self._extra_tapped = wanted
+                log.info("audio: tapping pid %d for the ghost copy", wanted)
+            except Exception:  # noqa: BLE001 - the game's own audio keeps recording
+                log.exception("audio: could not tap pid %d for the ghost copy", wanted)
+                self._close_extra()
+
+    def _on_extra(self, pcm_bytes: bytes, _frames: int) -> None:
+        self.ghost_timeline.feed(np.frombuffer(pcm_bytes, dtype=np.float32), time.time())
+
+    def _close_extra(self) -> None:
+        tap = self._extra_tap
+        if tap is not None:
+            stop_process_tap(tap)
+            self._extra_tap, self._extra_tapped = None, None
 
     def _reopen(self) -> None:
         self._close_tap()
@@ -316,6 +429,13 @@ class ProcessAudioSource:
                 raise RuntimeError("process-audio reader is not running")
 
     def stop(self) -> None:
+        if self._extra_thread is not None:
+            self._extra_stop.set()
+            self._extra_thread.join(timeout=5)
+            if self._extra_thread.is_alive():
+                raise RuntimeError("extra process-audio follower cleanup pending")
+            self._extra_thread = None
+        self._close_extra()
         if self._watchdog is not None:
             self._watchdog.stop()
             self._watchdog = None

@@ -1,0 +1,203 @@
+"""Choose a recorded ghost without changing the input comparison template."""
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from sm64_events.ghost import settings
+from sm64_events.ghost.native_session import NativeGhost
+from sm64_events.server.ghost_api import create_ghost_router
+from sm64_events.storage.db import Database
+from tests.ghost_fixture import FakeReplay, a_document
+from tests.test_ghost_native_session import Capture
+from tests.test_ghost_session import a_session, drive
+
+
+def save(store, attempt=7, *, kind="star", key="24-1", strat="10 coin", active=True):
+    return store.save(kind=kind, entity_key=key, strat_tag=strat,
+                      name=f"Run {attempt}", origin=f"attempt:{attempt}",
+                      document=a_document(), active=active)
+
+
+def run_of(template):
+    """The attempt a template was marked from: what a tick names."""
+    return int(template.origin.split(":")[1]) if hasattr(template, "origin") else template
+
+
+def ghosts(template, pb=True):
+    return {"pb": pb, "attempts": [] if template is None else [run_of(template)]}
+
+
+def select(session, template, **changes):
+    return asyncio.run(session.update(ghosts=ghosts(template), target=session._read_target(), **changes))
+
+
+def chosen_ids(body):
+    return body["selection"]["ghosts"]["attempts"]
+
+
+def test_choose_inactive_other_strategy_without_changing_input_template(tmp_path):
+    replay = FakeReplay(saved=(7, 8))
+    session, _, _, store = a_session(tmp_path, replay=replay)
+    comparison = save(store)
+    chosen = save(store, 8, strat="Other route", active=False)
+    body = select(session, chosen, enabled=True)
+    assert chosen_ids(body) == [run_of(chosen)]
+    assert body["source"]["attempt_id"] == 8
+    assert store.active_for("star", "24-1", "10 coin").id == comparison.id
+    assert {row["attempt_id"] for row in body["selection"]["candidates"]} == {run_of(comparison), run_of(chosen)}
+    assert next(row for row in body["selection"]["candidates"] if row["attempt_id"] == run_of(chosen))["strat"] == "Other route"
+    assert select(session, None)["source"]["attempt_id"] == 7
+
+
+def test_choice_is_restored_per_target_and_strategy_after_restart(tmp_path):
+    db = Database(tmp_path / "preferences.db")
+    session, _, tracker, store = a_session(tmp_path, db=db)
+    first = save(store)
+    second = save(store, 8, active=False)
+    segment = save(store, 9, kind="segment", key="31", strat=None)
+    select(session, second)
+    tracker.strat_tag = "Other route"
+    assert chosen_ids(drive(session)) == []
+    select(session, first)
+    tracker.target, tracker.strat_tag = ("segment", 31), None
+    select(session, segment)
+    tracker.target, tracker.strat_tag = ("star", 24, 1), "10 coin"
+    assert chosen_ids(drive(session)) == [run_of(second)]
+    restored, _, restored_tracker, _ = a_session(tmp_path, db=db, store=store)
+    assert chosen_ids(drive(restored)) == [run_of(second)]
+    restored_tracker.target, restored_tracker.strat_tag = ("segment", 31), None
+    assert chosen_ids(drive(restored)) == [run_of(segment)]
+    select(restored, None)
+    assert chosen_ids(drive(restored)) == []
+
+
+def test_deleted_choice_is_unavailable_instead_of_falling_back(tmp_path):
+    replay = FakeReplay(saved=(7, 8))
+    session, _, _, store = a_session(tmp_path, replay=replay)
+    save(store)
+    chosen = save(store, 8, active=False)  # a run no other list offers
+    select(session, chosen, enabled=True)
+    store.delete(chosen.id)
+    body = drive(session)
+    assert chosen_ids(body) == [run_of(chosen)]
+    assert body["source"]["reason"] == "selected_template_missing"
+    assert not body["source"]["available"]
+    assert run_of(chosen) not in [row["attempt_id"] for row in body["selection"]["candidates"]]
+
+
+@pytest.mark.parametrize("number", [True, False, 0, -1, 1.0, "1", [], {}])
+def test_bad_selection_is_rejected_atomically(tmp_path, number):
+    session, _, _, store = a_session(tmp_path)
+    save(store)
+    with pytest.raises(ValueError):
+        select(session, number, enabled=True, opacity=.2)
+    assert drive(session)["enabled"] is settings.defaults()["enabled"]
+
+
+def test_stale_or_foreign_selection_cannot_change_preferences(tmp_path):
+    session, _, tracker, store = a_session(tmp_path)
+    same = save(store)
+    foreign = save(store, 9, key="24-2")
+    with pytest.raises(ValueError, match="this star or segment"):
+        select(session, foreign, enabled=True)
+    with pytest.raises(ValueError, match="this star or segment"):
+        select(session, 999)
+    old_target = session._read_target()
+    tracker.strat_tag = "Other route"
+    with pytest.raises(ValueError, match="target changed"):
+        asyncio.run(session.update(ghosts=ghosts(same), target=old_target, enabled=True))
+    assert drive(session)["enabled"] is settings.defaults()["enabled"]
+    with pytest.raises(ValueError, match="current practice target"):
+        asyncio.run(session.update(ghosts=ghosts(same)))
+
+
+def test_candidates_validate_files_without_changing_the_native_selection(tmp_path):
+    session, _, _, store = a_session(tmp_path)
+    first, chosen, absent = save(store), save(store, 8, active=False), save(store, 9, active=False)
+    capture, calls, assets = Capture(), [], {}
+    for number in (7, 8):
+        path = tmp_path / f"{number}.ghost"
+        path.write_bytes(b"valid asset")
+        path.with_suffix(".json").write_text("{}")
+        assets[number] = path, {"clip_id": f"{number:02x}" * 16, "sha256": "cd" * 32, "blink_frames": 0,
+                                "inputs_complete": True}  # every input known (round 40)
+    replay = SimpleNamespace(recorder=SimpleNamespace(ghost_capture=capture),
+                             native_identity=lambda _: {"native_clock_frame": 100},
+                             find_native=lambda number: calls.append(number) or assets.get(number))
+    session._native = NativeGhost(replay, origin_of=lambda *_: {
+        "kind": "star", "session_id": 1, "arm_id": 9,
+        "frame": 100, "utc": "2026-09-21T08:00:00+00:00"})
+    body = select(session, chosen, enabled=True)
+    session._native.note()
+    assert [clip["clip_path"] for clip in capture.commands[-1]["clips"]] == [str(assets[8][0])]
+    rows = {row["attempt_id"]: row for row in body["selection"]["candidates"]}
+    assert rows[run_of(first)]["native_available"] and rows[run_of(chosen)]["native_available"]
+    assert not rows[run_of(absent)]["native_available"] and rows[run_of(absent)]["native_reason_text"]
+    for _ in range(10):
+        drive(session)
+    assert calls == [8, 9, 7]
+    # A renderer/model failure cannot relabel a validated saved file as invalid.
+    capture.snapshot_status = lambda **_: {
+        "available": True, "state": 5, "reason": 11,
+        "producer": SimpleNamespace(configuration=2, epoch=3)}
+    body = drive(session)
+    assert next(row for row in body["selection"]["candidates"] if row["attempt_id"] == run_of(chosen))["native_available"]
+    assert "game ROM" in body["window"]["reason"]
+
+
+def test_native_session_api_follows_same_choice_for_star_and_segment(tmp_path):
+    replay = FakeReplay(saved=(7, 8))
+    session, _, tracker, store = a_session(tmp_path, replay=replay)
+    save(store)
+    chosen = save(store, 8, active=False)
+    app = FastAPI()
+    app.include_router(create_ghost_router(session=session))
+    with TestClient(app) as client:
+        response = client.put("/api/ghost", json={"ghosts": ghosts(chosen), "target": session._read_target()})
+        assert response.status_code == 200 and response.json()["source"]["attempt_id"] == 8
+        store.delete(chosen.id)
+        session._world = None
+        answer = client.get("/api/ghost").json()
+        assert answer["source"]["reason"] == "selected_template_missing"
+        tracker.target, tracker.strat_tag = ("segment", 31), None
+        segment = save(store, 8, kind="segment", key="31", strat=None)
+        response = client.put("/api/ghost", json={"ghosts": ghosts(segment), "target": session._read_target()})
+        assert response.status_code == 200
+        answer = response.json()["source"]
+        assert answer["available"] and answer["attempt_id"] == 8
+
+
+def test_real_saved_pose_corruption_revokes_only_that_candidate(tmp_path):
+    from dataclasses import replace
+
+    from tests.test_ghost_recording import native_service
+
+    replay, row, archive = native_service(tmp_path)
+    try:
+        other = replace(row, id=row.id + 1)
+        replay.tracker.db._attempts.append(other)
+        replay.preserve_native(row.id)
+        replay.preserve_native(other.id)
+        session, _, _, store = a_session(tmp_path, target=("star", 2, 2),
+                                         strat=None, replay=replay)
+        kept = save(store, row.id, key="2-2", strat=None)
+        chosen = save(store, other.id, key="2-2", strat=None, active=False)
+        session._native = NativeGhost(replay)
+        body = select(session, chosen)
+        assert all(candidate["native_available"] for candidate in body["selection"]["candidates"])
+        path, _ = replay.find_native(other.id)
+        data = bytearray(path.read_bytes())
+        data[-1] ^= 1
+        path.write_bytes(data)
+        body = drive(session)
+        candidates = {candidate["attempt_id"]: candidate for candidate in body["selection"]["candidates"]}
+        assert not body["source"]["available"]
+        assert not candidates[run_of(chosen)]["native_available"]
+        assert candidates[run_of(chosen)]["native_reason_text"]
+        assert candidates[run_of(kept)]["native_available"]
+        assert chosen_ids(body) == [run_of(chosen)]
+    finally:
+        archive.close()

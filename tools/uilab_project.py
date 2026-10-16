@@ -852,13 +852,6 @@ PROJECT = Project(
     # sweep could see any of it. uilab's stale-exemption gate deletes each
     # row the moment its defect stops occurring.
     known_defects={
-        # The goal plate's 1000px gate adds these samples to the shared matrix.
-        # This is the existing overlap into the star art's transparent gap.
-        # Detail text records the measurement; uilab classifies by key only.
-        '1000x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1001x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1060x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1061x1000 [page] overlap :: span.starholder x span.starrank':
@@ -949,6 +942,17 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '1020x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        # 1000x1000/1001x1000: the goal plate's narrow rule (`@container
+        # (max-width: 1000px)`, 0dc293eb, 2026-09-23) added 1000 as a css
+        # threshold, so the matrix probes it; the rows were never taken, and
+        # the merge checks' blast radius did not reach this sweep until the
+        # round-13 full sweep (2026-09-28). The same long-owed star-cell
+        # overlap as every row here (`.starrank`'s -6px tuck into the art's
+        # transparent bottom margin), a new coordinate on an old defect.
+        '1000x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1001x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
     },
 )
 
@@ -1052,16 +1056,6 @@ BOWSER_PROJECT = dataclasses.replace(
         # identical, long-owed 7x2px overlap, at every viewport a cell
         # renders at all (both cells on this row share it; the probe
         # reports one row per colliding SELECTOR pair, not per cell).
-        # The goal plate's 1000px container gate adds these matrix edges;
-        # the selector keeps the same documented 26x2px icon-box overlap.
-        '1000x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1000x1000 [bowser-row] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1001x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1001x1000 [bowser-row] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1060x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1060x1000 [bowser-row] overlap :: span.starholder x span.starrank':
@@ -1177,6 +1171,21 @@ BOWSER_PROJECT = dataclasses.replace(
         '1020x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1020x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        # 1000x1000/1001x1000: the goal plate's narrow rule (`@container
+        # (max-width: 1000px)`, 0dc293eb, 2026-09-23) added 1000 as a css
+        # threshold, so the matrix probes it; the rows were never taken, and
+        # the merge checks' blast radius did not reach this sweep until the
+        # round-13 full sweep (2026-09-28). The same long-owed star-cell
+        # overlap as every row here (`.starrank`'s -6px tuck into the art's
+        # transparent bottom margin), a new coordinate on an old defect.
+        '1000x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1000x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1001x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1001x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
 
         # 860x1000/861x1000/979x1000/980x1000: PROJECT's own new rows again

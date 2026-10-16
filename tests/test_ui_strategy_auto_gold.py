@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from sm64_events.core.timefmt import format_igt
+from sm64_events.core.timefmt import format_igt_short
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
@@ -191,7 +191,7 @@ def test_classification_gold_and_earned_feedback(tmp_path, width):
             # Wait for its actual strategy/time, rather than editing that row.
             page.wait_for(f'{row_picker}:has(option[value="TJ Owlless"]:checked)')
             newest_time = CARD + " .attempt-table tr:first-child .attempt-result b"
-            assert page.evaluate(f'document.querySelector({json.dumps(newest_time)}).textContent') == format_igt(330)
+            assert page.evaluate(f'document.querySelector({json.dumps(newest_time)}).textContent') == format_igt_short(330)
             earned = trace.record(page, watch={"climb": f"{BANNER}.is-climbing", "swap": f"{BANNER}.is-swapping",
                                                 "name": f"{BANNER} .rank-banner-name"},
                                   trigger=lambda pg: pick(pg, row_picker, "Sideflip"), ms=9000)

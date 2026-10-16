@@ -1,0 +1,272 @@
+#ifndef SM64_TRAINER_MODEL_H
+#define SM64_TRAINER_MODEL_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct sg_model sg_model;
+
+enum sg_status {
+    SG_OK = 0, SG_INVALID_ARGUMENT = -1, SG_INVALID_ROM = -2,
+    SG_OUT_OF_MEMORY = -3, SG_BUSY = -4, SG_WRONG_THREAD = -5,
+    SG_INVALID_ANIMATION = -6, SG_CAPACITY = -7, SG_INVALID_GEOMETRY = -8,
+    SG_INVALID_MODEL = -9
+};
+
+enum sg_pose_fields {
+    SG_POSE_TRANSFORM = 1u, SG_POSE_ANIMATION = 2u, SG_POSE_BODY = 4u,
+    SG_POSE_HEAD_ROTATION = 8u, SG_POSE_REQUIRED = 15u,
+    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u, SG_POSE_HELD = 64u,
+    /* With SG_POSE_HELD: an object uses its own world transform (thrown,
+     * dropped, or ridden), TRS(held_position, held_angles). */
+    SG_POSE_HELD_RELEASED = 128u
+};
+
+/* Objects the model can draw with Mario (SG_POSE_HELD). */
+enum sg_held_kind {
+    SG_HELD_NONE = 0, SG_HELD_BOBOMB = 1, SG_HELD_PENGUIN = 2, SG_HELD_KING_BOBOMB = 3,
+    SG_HELD_CHUCKYA = 4, SG_HELD_BREAKABLE_BOX = 5, SG_HELD_MIPS = 6,
+    SG_HELD_HOOT = 7, SG_HELD_KOOPA_SHELL = 8, SG_HELD_UKIKI = 9, SG_HELD_KINDS = 10
+};
+
+/* A native C value, not a packed wire format. Angles are signed SM64 turns.
+ * position/angles are the DRAWN gfx transform. body_action is separate from
+ * MarioState action. head_rotation is the effective geo-node XYZ rotation,
+ * after camera/action rules. throw_matrix is the native row-major Mat4 layout
+ * (translation in elements 12..14), replacing position/angles when present.
+ * scale applies in both paths. Missing required fields are rejected.
+ */
+typedef struct sg_pose {
+    uint32_t fields;
+    uint32_t action;
+    uint32_t body_action;
+    uint32_t mario_flags;
+    uint32_t area_update_counter; /* Captured area clock, not global_timer. */
+    int32_t animation_id;
+    float position[3];
+    float scale[3];
+    float throw_matrix[16];
+    int16_t angles[3];
+    int16_t torso_angles[3];
+    int16_t head_angles[3];
+    int16_t head_rotation[3];
+    int16_t animation_frame;
+    int16_t anim_y_translation;
+    uint16_t model_state;
+    uint8_t cap_state, eye_state, hand_state, wing_flutter;
+    uint8_t punch_state, grab_position;
+    /* SG_POSE_HELD: the object in Mario's hand, appended to his mesh the way
+     * geo_process_held_object draws it: Mario's own root rows (his scale
+     * included) scaled by held_scale, at held_position (the HOLP). view is the
+     * look-at it is drawn under (sg_model_view), for its billboards; roll is
+     * that camera's roll. The mesh stays in world space. */
+    uint32_t held_kind;
+    int16_t held_animation_id, held_animation_frame, held_anim_y_translation;
+    uint16_t held_anim_state;
+    float held_position[3], held_scale[3];
+    float view[16];
+    int16_t roll;
+    /* The recorded frame's gGlobalTimer: the penguin's blink reads it. */
+    uint32_t held_global_timer;
+    /* SG_POSE_HELD_RELEASED: the object's own gfx angle. */
+    int16_t held_angles[3];
+} sg_pose;
+
+enum sg_mesh_errors {
+    SG_MESH_BAD_POSE = 1u, SG_MESH_BAD_ANIMATION = 2u,
+    SG_MESH_TOO_SMALL = 4u, SG_MESH_NONFINITE = 8u,
+    SG_MESH_SCRATCH_EXHAUSTED = 16u, SG_MESH_UNSUPPORTED_MATERIAL = 32u
+};
+
+/* Active display-list combiner, with game fade replaced by renderer opacity.
+ * ALPHA_MIX: mix(vertex RGB, texture RGB, texture alpha), opaque coverage.
+ * DECAL: texture RGB; MODULATE: vertex RGB * texture RGB.
+ * RGBA variants additionally use texture alpha for coverage; RGB ignores it.
+ */
+enum sg_material {
+    SG_MATERIAL_SOLID = 0, SG_MATERIAL_ALPHA_MIX = 1,
+    SG_MATERIAL_DECAL_RGBA = 2, SG_MATERIAL_DECAL_RGB = 3,
+    SG_MATERIAL_MODULATE_RGB = 4, SG_MATERIAL_MODULATE_RGBA = 5,
+    /* Flag on a material code: the triangle's texture coordinates are
+     * generated from its normal (G_TEXTURE_GEN, the metal cap's environment
+     * map), so the vertex uv is meaningless and the caller computes it under
+     * its own view. Only the 64x32 metal texture at scale 0x0F80/0x07C0 is
+     * admitted; anything else is SG_MESH_UNSUPPORTED_MATERIAL. */
+    SG_MATERIAL_TEXGEN = 0x100,
+    /* The code is the low byte. A textured, non-texgen triangle also carries
+     * its render tile (sg_tile) from bit SG_MATERIAL_TILE_SHIFT. */
+    SG_MATERIAL_CODE = 0xffu, SG_MATERIAL_TILE_SHIFT = 9,
+    /* Flag above the tile: the triangle's list left G_CULL_BACK on, so the
+     * game never draws its back (counter-clockwise, seen from outside, is its
+     * front). All of Mario but his cap's wings. */
+    SG_MATERIAL_CULL_BACK = 0x40000000
+};
+/* The render tile a material word carries (0: none). */
+static inline uint32_t sg_material_tile(uint32_t word) {
+    return (word & ~(uint32_t)SG_MATERIAL_CULL_BACK) >> SG_MATERIAL_TILE_SHIFT;
+}
+
+/* A render tile as gsDPSetTile and gsDPSetTileSize set it: the texture's atlas
+ * cell, and per axis (S across, T down) whether it clamps, its wrap mask and
+ * its size, both log2 texels (mask 0: no wrap). The RDP clamps a texel to the
+ * tile's size first, then wraps it by the mask. */
+enum sg_tile {
+    SG_TILE_CELL = 0x3fu,
+    SG_TILE_S_CLAMP = 1u << 6, SG_TILE_S_MASK_SHIFT = 7, SG_TILE_S_SIZE_SHIFT = 10,
+    SG_TILE_T_CLAMP = 1u << 13, SG_TILE_T_MASK_SHIFT = 14, SG_TILE_T_SIZE_SHIFT = 17,
+    SG_TILE_FIELD = 7u, SG_TILE_PRESENT = 1u << 20
+};
+
+/* The atlas is one 64-pixel cell per texture, left to right: Mario's in
+ * libsm64's MarioTextures order, metal (cell 0) ... wing tip, then the metal
+ * wing and wing tip (cells 11, 12); then held objects' (from 13, in the
+ * sg_held_kind order; the first cell of each is named here). */
+enum { SG_MARIO_ATLAS_CELLS = 13 };
+enum sg_atlas_cell {
+    SG_ATLAS_CELL_BOBOMB_LEFT = 13, SG_ATLAS_CELL_BOBOMB_RIGHT = 14,
+    SG_ATLAS_CELL_BOBOMB_EYES = 15, SG_ATLAS_CELL_BOBOMB_BLINK = 16,
+    SG_ATLAS_CELL_PENGUIN = 17, SG_ATLAS_CELL_KING_BOBOMB = 23, SG_ATLAS_CELL_CHUCKYA = 29,
+    SG_ATLAS_CELL_BREAKABLE_BOX = 33, SG_ATLAS_CELL_MIPS = 35,
+    SG_ATLAS_CELL_HOOT = 36, SG_ATLAS_CELL_KOOPA_SHELL = 39, SG_ATLAS_CELL_UKIKI = 41,
+    SG_ATLAS_CELL_UKIKI_CAP = 45, SG_ATLAS_CELLS = 46
+};
+/* Mario plus a held Ukiki with his stolen cap exceeds the old 3072 bound. */
+enum { SG_MODEL_MAX_VERTICES = 4096, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
+       SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = SG_ATLAS_CELLS * 64 * 64 * 4 };
+
+/* Arrays are caller-owned, nonoverlapping: 3 floats per vertex for position,
+ * normal and color; 2 floats per vertex for UV; one material per vertex, with
+ * all three vertices of a triangle agreeing. Failure clears vertex_count.
+ * Capacity is checked before each triangle is written. Hidden poses succeed
+ * with vertex_count=0. Material color/UV follow libsm64's atlas convention.
+ */
+typedef struct sg_mesh {
+    float *position, *normal, *color, *uv;
+    uint32_t *material;
+    uint32_t vertex_capacity;
+    uint32_t vertex_count;
+    uint32_t error_flags;
+    /* With SG_POSE_HELD, the held object's vertices run from here to
+     * vertex_count (Mario's come first); otherwise vertex_count. */
+    uint32_t held_first_vertex;
+    /* Optional (NULL: not written), 3 per vertex: the ambient colour of the
+     * light the vertex's list loaded, beside its diffuse in color. A held
+     * object's lights can share a diffuse colour with different ambients. */
+    float *ambient;
+} sg_mesh;
+
+/* Mario's particle models (bubble, splashes, water rings, droplet, dust,
+ * sparkles, lava flame, mist, sand, leaves, snow), one frame per executed US
+ * display list. Vertices are
+ * model-local triangles; uv lies inside rect, the frame's clamped atlas cell;
+ * rgba is the combiner's shade factor (white for decal frames). CUTOUT draws
+ * texels with alpha, BLEND blends texture alpha times vertex alpha. */
+enum { SG_PARTICLE_FRAMES = 80, SG_PARTICLE_MAX_VERTICES = 1024, SG_PARTICLE_CELLS = 64,
+       SG_PARTICLE_ATLAS_WIDTH = 512, SG_PARTICLE_ATLAS_HEIGHT = 256 };
+/* The game's layer: CUTOUT texture edge (alpha test at .5), BLEND
+ * translucent, OPAQUE opaque (alpha ignored). CUTOUT and OPAQUE write depth. */
+enum sg_particle_layer { SG_PARTICLE_CUTOUT = 1, SG_PARTICLE_BLEND = 2, SG_PARTICLE_OPAQUE = 3 };
+/* LIT: rgb is the game's lighting of normal (model space) by the list's own
+ * directional light (dir in view space, as F3D takes it) plus its ambient,
+ * computed at placement. MIX: rgb = mix(rgba, texture, texture alpha) (the
+ * cap's BLENDRGBFADEA) instead of texture times rgba. */
+enum sg_particle_vertex_mode { SG_PARTICLE_LIT = 1, SG_PARTICLE_MIX = 2 };
+typedef struct sg_particle_vertex {
+    float position[3], uv[2], rect[4], normal[3];
+    uint8_t rgba[4];
+    uint8_t mode, light_ambient[3], light_diffuse[3];
+    int8_t light_dir[3];
+} sg_particle_vertex;
+/* fade: the frame's alpha is the object's opacity (environment alpha set by
+ * the game's generated list), which the recording carries per particle. */
+typedef struct sg_particle_frame {
+    uint32_t display_list, layer, first_vertex, vertex_count, fade;
+} sg_particle_frame;
+typedef struct sg_particle_view {
+    const sg_particle_frame *frames;
+    const sg_particle_vertex *vertices;
+    const uint8_t *atlas_rgba;
+    uint32_t frame_count, vertex_count, atlas_width, atlas_height;
+} sg_particle_view;
+
+/* The lights Mario's own lists load (gsSPSetLights1: one directional light,
+ * direction in EYE space as F3D takes it, plus its ambient), read from the
+ * ROM. The mesh's vertex colour is the diffuse colour of the light its
+ * triangle was drawn under; each diffuse colour names exactly one light. */
+#define SG_BODY_LIGHTS 16
+typedef struct sg_body_light {
+    uint8_t diffuse[3], ambient[3];
+    int8_t direction[3];
+} sg_body_light;
+typedef struct sg_body_lights {
+    sg_body_light lights[SG_BODY_LIGHTS];
+    uint32_t count;
+} sg_body_lights;
+
+typedef struct sg_atlas_view {
+    const uint8_t *rgba;
+    uint32_t width, height, animation_count;
+} sg_atlas_view;
+
+/* Exactly one runtime may be open in a linked module. Calls are nonblocking:
+ * concurrent/reentrant operations return SG_BUSY. Operations belong to the
+ * current owner thread, with explicit detach/adopt for handoff. Open does
+ * bounded asset extraction and allocation; call
+ * it outside steady-state drawing. ROM bytes are not retained after open.
+ * Supported layout: 8 MiB big-endian US SM64 asset sections, structurally
+ * validated here; caller additionally establishes desired ROM/version identity.
+ */
+int32_t sg_model_open(const uint8_t *rom, size_t rom_bytes, sg_model **out);
+/* Validate only the bounded texture/animation assets, using temporary storage.
+ * No runtime binding, ownership gate, graph, or global rendering state is touched;
+ * this may run on the worker while an existing model belongs to the renderer. */
+int32_t sg_model_validate_rom(const uint8_t *rom, size_t rom_bytes);
+/* Ownership transfer only: no allocation, destruction, wait or graph mutation.
+ * Detach requires the current owner and leaves the runtime without an owner.
+ * Adopt claims a detached runtime for the calling thread; any existing owner,
+ * including the caller, returns SG_WRONG_THREAD. While detached, atlas/view/
+ * evaluate/close return SG_WRONG_THREAD. SG_BUSY and all other failures leave
+ * ownership unchanged. The caller must publish the handle through its own
+ * synchronized handoff; these operations do not publish or reclaim storage.
+ * Previously borrowed atlas pointers remain allocated until close, but the
+ * caller must finish their use before handing custody to a closing owner.
+ */
+int32_t sg_model_detach(sg_model *model);
+int32_t sg_model_adopt(sg_model *model);
+int32_t sg_model_get_atlas(sg_model *model, sg_atlas_view *out);
+/* Zero frames when the ROM's particle lists were not the supported ones;
+ * Mario's own model still opens. Same owner/lifetime rules as the atlas. */
+int32_t sg_model_get_particles(sg_model *model, sg_particle_view *out);
+/* Zero lights when the ROM's lists did not read as the supported ones (two
+ * lights with one diffuse colour, or none at all). Same owner rules. */
+int32_t sg_model_get_body_lights(sg_model *model, sg_body_lights *out);
+/* How many frames one of Mario's own animations has (its loopEnd): evaluate
+ * accepts animation_frame below it. For an animation the recording never
+ * played (a ghost's defeat), chosen by id. Same owner rules. */
+int32_t sg_model_get_animation_frames(sg_model *model, int32_t animation_id, int32_t *frames);
+/* The lights a held object's own lists load (its gdSPDefLights1 table), in
+ * the same form; none when two share both colours but not a direction. A
+ * vertex names its light by its diffuse (color) and ambient colours. */
+int32_t sg_model_get_held_lights(sg_model *model, uint32_t kind, sg_body_lights *out);
+int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out);
+/* Exact upstream SM64 look-at, including its sine table. Native Mat4 layout,
+ * translation at 12..14; no N64 quantization or projection is applied. Rejects
+ * nonfinite, coincident and vertical-degenerate camera pairs. Clears output on
+ * failure. The same owner-thread/lifetime rules apply as evaluate.
+ */
+int32_t sg_model_view(sg_model *model, const float position[3],
+    const float focus[3], int16_t roll, float out_matrix[16]);
+/* On success clears *model; a NULL *model is a successful no-op. Atlas pointers
+ * expire at close. A handle must not be reused or copied across close/reopen;
+ * foreign pointers are rejected before dereferencing.
+ */
+int32_t sg_model_close(sg_model **model);
+
+#ifdef __cplusplus
+}
+#endif
+#endif

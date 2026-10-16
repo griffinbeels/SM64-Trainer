@@ -1,5 +1,5 @@
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
@@ -17,6 +17,8 @@ import { celebrationsEnabled, setCelebrationsEnabled,
 import { SetupModal } from "./setupmodal.js";
 import { StreamOverlayDesigner } from "./streamoverlay.js";
 import { EMU, N64 } from "../platform.js";
+import { CommunityAccountModal } from "./communityaccount.js";
+import { useCommunityAccount } from "../community.js";
 
 const html = htm.bind(h);
 
@@ -56,6 +58,19 @@ function shouldOfferSetup(setup) {
 }
 
 const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];
+
+function OnboardingFlow({blocked, children}) {
+  const container = useRef(null);
+  const focus = useRef(null);
+  useEffect(() => {
+    if (blocked) return;
+    const target = focus.current?.isConnected ? focus.current
+      : container.current?.querySelector("[autofocus],button,input");
+    target?.focus();
+  }, [blocked]);
+  return html`<div ref=${container} hidden=${blocked} inert=${blocked}
+      onFocusCapture=${event => { focus.current = event.target; }}>${children}</div>`;
+}
 
 // The route IS the rank scope, so changing it mid-run would re-rate a run
 // against a plan it is not following. `store.js::pickRoute` refuses and returns
@@ -122,13 +137,30 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const [setupManual, setSetupManual] = useState(false);
   const [setupWarning, setSetupWarning] = useState(null);
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const community = useCommunityAccount();
+  const updateFirst = t.updateStartupPending || t.updateVisible;
+  const [onboardingStarted, setOnboardingStarted] = useState(false);
+  useEffect(() => { if (!updateFirst) setOnboardingStarted(true); }, [updateFirst]);
+  useEffect(() => {
+    if (community.account.authenticated) t.refreshUpdates?.(false);
+  }, [community.account.authenticated, t.refreshUpdates]);
+  const [communitySetupReady, setCommunitySetupReady] = useState(false);
+  // Signing in is the first step (round 41): the Project64 wizard waits
+  // until the account screen is satisfied, then offers itself as before.
+  const [setupOffer, setSetupOffer] = useState(false);
   useEffect(() => {
     send("GET", "/api/setup").then((setup) => {
+      setCommunitySetupReady(!!setup.onboarding?.completed_at || !!setup.emu?.installation_verified);
       setSetupWarning(setup.emu?.rom?.warning || (setup.onboarding?.limited
         && setup.onboarding.platform === EMU ? "JP tracking isn't supported yet; support is planned for a later patch." : null));
-      if (!seenSetupPrompt() && shouldOfferSetup(setup)) { closeSettings(); setSetupOpen(true); }
+      if (!seenSetupPrompt() && shouldOfferSetup(setup)) setSetupOffer(true);
     }).catch(() => {});
   }, []);
+  useEffect(() => {
+    if (!setupOffer || community.required || updateFirst) return;
+    setSetupOffer(false);
+    closeSettings(); setSetupOpen(true);
+  }, [setupOffer, community.required, updateFirst]);
   const closeSetup = () => {
     setSetupOpen(false);
     rememberSetupPrompt();
@@ -139,7 +171,17 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
     closeSettings();
     setTab?.("Practice");
     t.refresh();
+    setCommunitySetupReady(true);
   };
+
+  useEffect(() => {
+    if (setupOpen || updateFirst || !community.account.enabled || !communitySetupReady || community.account.authenticated) return;
+    try {
+      if (sessionStorage.getItem('sm64.communityPrompt') === '1') return;
+      sessionStorage.setItem('sm64.communityPrompt', '1');
+    } catch { /* Private browsing still allows this session's account prompt. */ }
+    closeSettings(); community.setOpen(true);
+  }, [community.account.enabled, communitySetupReady, setupOpen, updateFirst]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -323,7 +365,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
               <${Icon} name="restart" />
               ${restarting ? "Restarting…" : "Restart server"}
             </button>
-            <button type="button" onclick=${t.checkUpdates}>
+            <button type="button" onclick=${t.checkUpdates} disabled=${t.updateApplying || t.betaUpdatesBusy}>
               <${Icon} name="updates" />Check for updates
             </button>
             <button type="button" onclick=${debugReport} disabled=${reportBusy}
@@ -337,6 +379,26 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
           </div>
           ${t.updateMsg && html`<p class="settings-note">${t.updateMsg}</p>`}
           ${reportMsg && html`<p class="settings-note">${reportMsg}</p>`}
+        </section>
+
+        <section class="settings-section">
+          <h3>Updates</h3>
+          <label class="settings-field" for="receive-beta-updates">
+            <span>Receive beta updates</span>
+            <input id="receive-beta-updates" type="checkbox" checked=${!!t.update?.receive_beta_updates}
+                disabled=${!t.update || t.update.updates_enabled === false || t.betaUpdatesBusy || t.updateApplying}
+                onchange=${(event) => t.setBetaUpdates(event.target.checked)} />
+          </label>
+          <p class="settings-note">Try upcoming features. Turning this off keeps
+            your installed version until a newer public release.</p>
+          ${t.update?.updates_enabled === false && html`<p class="settings-note">
+            This older private beta needs the new installer to receive updates.</p>`}
+          ${t.update?.frozen && t.update.updates_enabled !== false && html`<div class="settings-actions">
+            <button type="button" onclick=${t.repairUpdate}
+                disabled=${t.updateApplying || t.betaUpdatesBusy}>
+              <${Icon} name="restart" />Repair installation
+            </button>
+          </div>`}
         </section>
 
         ${/* This is the same record feature/console-support edits from its
@@ -368,6 +430,17 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
              this once on their first day and should not have to scroll past
              every tuning link to find it. */""}
         <${ImportSection} onDone=${t.refresh} />
+
+        <section class="settings-section">
+          <div class="settings-section-head">
+            <div><h3>Community</h3><p>${community.account.name || 'Race and share ghosts with other players.'}</p></div>
+            <button type="button" onclick=${() => {
+              closeSettings();
+              if (community.account.enabled && community.account.authenticated) community.refreshRemote().catch(() => {});
+              community.setOpen(true);
+            }}><${Icon} name="shield" />${community.account.authenticated ? 'Account' : 'Sign in'}</button>
+          </div>
+        </section>
 
         <section class="settings-section">
           <h3>Display</h3>
@@ -520,6 +593,10 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
          copy of this question. */""}
     <${RunScopeWarning} t=${t} pending=${pendingScope} onDone=${resolveScope} />
     ${overlayOpen && html`<${StreamOverlayDesigner} onClose=${() => setOverlayOpen(false)} />`}
-    ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
+    ${onboardingStarted && html`<${OnboardingFlow} blocked=${updateFirst}>
+      ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
+      ${community.open && !setupOpen && html`<${CommunityAccountModal} community=${community}
+        onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh} />`}
+    <//>`}
   </header>`;
 }

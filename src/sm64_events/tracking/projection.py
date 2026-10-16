@@ -240,10 +240,38 @@ Caveats (hard-won — keep these current):
     none. SUCCESS is never gated — my own extension of his ruling for
     consistency with the 100-coin one, since he did not restate it for
     Bowser: completing a run is what completing a run always means here.
+
+21. Valid runs and save-state loads (task 0144, his decisions 2026-09-23).
+    A session's `session_started` carries `attempt_rules` (ATTEMPT_RULES);
+    a session journaled before that key existed is rules 1 and replays
+    exactly as it always has -- attempt ids, boundaries and every PB link
+    (proved over snapshots of his journals before shipping). Under rules 2:
+      * a `state_loaded` is no longer a boundary: "one practice-log entry
+        per full reset, running through every load to the finish". It
+        closes nothing, the open attempt counts it (`state_loads`,
+        `first_load_frame`), and with nothing open it opens an attempt
+        that can never be valid. Dust tricks before it stay with the run.
+        So does play before it: a reset that closes the attempt counts as
+        acted when he played anywhere in it, not only since the last load.
+      * every attempt is JUDGED: `valid` True/False and `invalid_reason`
+        (`save_state` | `subarea_reset` | `no_reset`, the keys
+        tracking/caveats.py words). A STAR is valid only from a full reset
+        at the course's own start -- the area its level entry landed in --
+        with no load before the finish. A SEGMENT is valid when no load
+        lands at its arm or before its finish (`_segment_validity`). A
+        separate segment with its own trigger AFTER a load remains valid.
+    Rules-1 attempts carry `valid` None: the old detector could not see a
+    load that left the frame counter alone, so nothing about them is known.
+    The replay lead-in floor, `prev_anchor_utc`, is filled under both.
 """
+from bisect import bisect_left
 from dataclasses import dataclass, replace
 
 from sm64_events.core.modes import platform_from_payload
+from sm64_events.detectors.anchors import FULL_RAM_LOADS
+from sm64_events.detectors.counter_epoch import (COURSE_START_AREA,
+                                                 LEVEL_LOAD_TAIL_FRAMES)
+from sm64_events.detectors.death import FINISHED_DEAD, finished_dead
 from sm64_events.memory.addresses import (CASTLE_LEVELS, LEVEL_CASTLE_INSIDE,
                                           course_for_level)
 # one-way import: segments.py pulls Attempt lazily at call time, so this
@@ -253,7 +281,7 @@ from sm64_events.tracking.prune import PRUNE_EVENT
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, arms_ambiently,
-    hooks_on_arm, hundred_coin_entity, origin_course, reachable_places,
+    before_control, hooks_on_arm, hundred_coin_entity, origin_course, reachable_places,
     attributable_parent, entity_parents, segment_origin,
     selector_start_areas, speaks_through_a_parent, stage_origin, time_bounds)
 
@@ -380,9 +408,51 @@ class Attempt:
 
 
     game_version: str | None = None  # Imported times retain their source ROM.
+    # Native replay joins source occurrences by these observed endpoints;
+    # neither IGT nor rta_frames can reconstruct a closing game frame.
+    native_clock_frame: int | None = None
+    native_clock_utc: str | None = None
+    native_clock_kind: str | None = None  # clock owner, including reattributed stars
+    closed_frame: int | None = None
+    # A VALID RUN (caveat 21, task 0144): True/False only for attempts opened
+    # under ATTEMPT_RULES 2, None -- never judged -- for every older row,
+    # because a load the old detector could not see may hide in any of them.
+    valid: bool | None = None
+    invalid_reason: str | None = None  # caveats.VALIDITY_CAVEATS key when valid is False
+    state_loads: int = 0               # save-state loads this attempt ran through
+    first_load_frame: int | None = None
+    start_level: int | None = None     # where the opening anchor landed
+    start_area: int | None = None
+    # The anchor journaled before this attempt's opening one: the replay's
+    # lead-in never reaches back past it (replay/service.py::_span).
+    prev_anchor_utc: str | None = None
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
+
+# Every way an attempt can end (caveat 4). `loaded` is a save state ending a
+# segment's attempt under attempt rules 2 (segments.py `_anchor_outcome`) --
+# his words, "it shouldn't be a *real* reset, it should be a 'LOADED SAVE
+# STATE'". The practice log draws each (`attemptlog.js` OUTCOME_LABEL; tests/
+# test_cross_language_parity.py keeps the two in step).
+OUTCOMES = ("success", "reset", "loaded", "hard_reset", "abandoned", "death")
+
+# The attempt rules a session's events are journaled under (caveat 21).
+# `session_started` carries it as `attempt_rules`; absent means 1.
+#   1 -- every anchor is a boundary; no attempt is judged valid or not.
+#   2 -- save-state loads are journaled whichever clock betrays them, run
+#        through attempts instead of splitting them, and every attempt is
+#        judged (valid / invalid_reason).
+ATTEMPT_RULES = 2
+
+
+def _native_star_origin_known(first) -> bool:
+    # Scoring opens a fallback span when attachment first sees an involuntary
+    # area/teleport reset. That proves this leg began, not the whole star.
+    return (first is not None and first.type in ANCHOR_EVENT_TYPES
+            and not first.payload.get("area_load")
+            and not first.payload.get("teleport"))
+
 
 # AFK rule (spec 2026-06-11): a reset/load arriving after >=5 s of pause (the
 # Usamune menu freezes IGT while gGlobalTimer keeps running) closes a run the
@@ -657,8 +727,9 @@ class Projector:
         self._hook_level: int | None = None
         self._hook_area: int | None = None
         # None = not yet sighted on the frame clock (a target_set journals
-        # frame 0, so a fill's own frame would fake an instant expiry); the
-        # first hold check baselines it.
+        # frame 0, so a fill's own frame would fake an instant expiry); a game
+        # event baselines it (`_hold_hooked_head` says where a request still
+        # does).
         self._hook_alive_frame: int | None = None
         # THE STAR OWNS THE HAND (round 21, superseding round 20's
         # family-take): a SUBSECTION is selected by CLICK only. Round 20
@@ -679,6 +750,18 @@ class Projector:
         # dropped once a new focus is committed (grab / set_target / segment
         # success). See caveat 13.
         self._suspended_star: tuple[int, int] | None = None
+        # His PICKED segment, set aside because it completed by entering a
+        # star stage (which leaves the hand empty in that stage, caveat 12).
+        # It returns to the hand the next time he is back in the castle, so
+        # it is selected -- and its ghost ready -- before he starts it
+        # again. MIPS Clip, 2026-09-24: "if I select the ghost, it should be
+        # ready for me the next time I start that segment -- that is, I
+        # reset (coming out of HMC), and then enter the HMC door." Dropped
+        # by any other click (`_picked_target` stops matching it).
+        self._suspended_pick: tuple | None = None
+        # The pick that came back, while it is still what the hand holds
+        # (see `_declines_fill`).
+        self._returned_pick: tuple | None = None
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
         # Arrival preference, distinct from the live target. Explicit picks
         # and successful play update it in journal order; sessions retain it.
@@ -687,47 +770,9 @@ class Projector:
         # and automatic singleton fills cannot teach a preference.
         self._reset_session_recall()
         self._castle_area_known = False
-        # Pre-seeded from the definitions' own default_strat (caveat 17), so
-        # every consumer of this dict — attempt stamping below, the strat_tag
-        # property, the view's section banner / segment_targets / target
-        # payload — gets the default without a call-site of its own. A
-        # journaled strat_set overwrites the entry; nothing is ever written to
-        # the journal on the user's behalf, so this re-derives identically on
-        # every replay.
-        self._seg_default_strat: dict[int, str] = {
-            d.id: d.default_strat for d in (segments or []) if d.default_strat}
-        self.strat_by_segment: dict[int, str | None] = dict(
-            self._seg_default_strat)
-        self._segments = SegmentEngine(segments or [])
-        # Validity bounds (spec 2026-07-23). Stars: "<course>:<star>" ->
-        # {min_frames, max_frames} from the time_filters ui_state KV.
-        # Segments: derived here from each def's close-phase time guards.
         self._time_filters = time_filters or {}
         self._touched = touched if touched is not None else set()
-        self._seg_bounds = {d.id: time_bounds(d.guards)
-                            for d in (segments or [])}
-        # def id -> the world node the segment is practiced FROM (None =
-        # anywhere); drives segment-target retirement on level_changed
-        # (caveat 12). `origin_overrides` is the ui_state KV a user sets when
-        # the derivation guesses wrong — threaded in like `time_filters` so
-        # the picker and this rule cannot disagree about where a segment is.
-        self._seg_origins = {
-            d.id: segment_origin(d.id, d.start_triggers, origin_overrides)
-            for d in (segments or [])}
-        # Every world node a definition can be STARTED in or WALKS THROUGH.
-        # The hand is held by this rather than by the origin alone since
-        # 2026-08-10: `origin_course` reads the castle, the hubs and the three
-        # Bowser arenas as one "course-less" bucket, so a target picked up in
-        # BitS survived into the Bowser 3 arena, where the fight is the only
-        # practicable thing and a fresh pick of that target would be refused
-        # outright by `practicable.py`. Setting it there was impossible and
-        # holding it there was fine -- two halves of the system disagreeing
-        # about one fact, which is what he named: *"we should be clearing out
-        # the hand in these cases, or we've defined things incorrectly."*
-        # `ui/stagecontext.js` compares the SAME set for the display half.
-        self._seg_places = {
-            d.id: reachable_places(d, self._seg_origins[d.id])
-            for d in (segments or [])}
+        self._initialize_segments(segments, origin_overrides)
         # {(course_id, 6)} whose whole course-visit span is timed by an
         # ENABLED engine (spec 2026-07-28-multi-step-segments, "the 100-coin
         # star IS the segment"): _close_by_grab reads this to suppress the
@@ -783,14 +828,84 @@ class Projector:
         self._active_route_id: int | None = None
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
+        # The open attempt's first mario_acted action, held beside the anchor
+        # it belongs to so a new anchor needs no clear (`before_control`).
+        self._first_act: tuple = (None, None)
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
         self._area: int | None = None    # gCurrAreaIndex per area_changed; None = unknown (legacy journals)
         self._open_castle = False        # open attempt was OPENED in a castle hub level; only meaningful while _open is set (the open site re-arms it)
         self._open_carried_igt = 0       # Usamune frames this attempt ran BEFORE its counter last restarted; only meaningful while _open is set (see _with_carried_igt)
+        self._init_valid_attempts()
         self._rollouts_total = 0
         self._rollouts_dustless = 0
         self._jumps_total = 0
         self._jumps_dustless = 0
+
+    def _initialize_segments(self, segments, origin_overrides) -> None:
+        """Index the matcher, strategy defaults and target bounds together."""
+        # Pre-seeded from the definitions' own default_strat (caveat 17), so
+        # every consumer of this dict — attempt stamping below, the strat_tag
+        # property, the view's section banner / segment_targets / target
+        # payload — gets the default without a call-site of its own. A
+        # journaled strat_set overwrites the entry; nothing is ever written to
+        # the journal on the user's behalf, so this re-derives identically on
+        # every replay.
+        self._seg_default_strat: dict[int, str] = {
+            d.id: d.default_strat for d in (segments or []) if d.default_strat}
+        self.strat_by_segment: dict[int, str | None] = dict(
+            self._seg_default_strat)
+        self._segments = SegmentEngine(segments or [])
+        # Validity bounds (spec 2026-07-23). Stars: "<course>:<star>" ->
+        # {min_frames, max_frames} from the time_filters ui_state KV.
+        # Segments: derived here from each def's close-phase time guards.
+        self._seg_bounds = {d.id: time_bounds(d.guards)
+                            for d in (segments or [])}
+        # def id -> the world node the segment is practiced FROM (None =
+        # anywhere); drives segment-target retirement on level_changed
+        # (caveat 12). `origin_overrides` is the ui_state KV a user sets when
+        # the derivation guesses wrong — threaded in like `time_filters` so
+        # the picker and this rule cannot disagree about where a segment is.
+        self._seg_origins = {
+            d.id: segment_origin(d.id, d.start_triggers, origin_overrides)
+            for d in (segments or [])}
+        # Every world node a definition can be STARTED in or WALKS THROUGH.
+        # The hand is held by this rather than by the origin alone since
+        # 2026-08-10: `origin_course` reads the castle, the hubs and the three
+        # Bowser arenas as one "course-less" bucket, so a target picked up in
+        # BitS survived into the Bowser 3 arena, where the fight is the only
+        # practicable thing and a fresh pick of that target would be refused
+        # outright by `practicable.py`. Setting it there was impossible and
+        # holding it there was fine -- two halves of the system disagreeing
+        # about one fact, which is what he named: *"we should be clearing out
+        # the hand in these cases, or we've defined things incorrectly."*
+        # `ui/stagecontext.js` compares the SAME set for the display half.
+        self._seg_places = {
+            d.id: reachable_places(d, self._seg_origins[d.id])
+            for d in (segments or [])}
+
+    def _init_valid_attempts(self) -> None:
+        """The state caveat 21 keeps (valid attempts, save-state loads)."""
+        # Which ATTEMPT_RULES the current session's
+        # `session_started` declared; 1 for every journal written before them.
+        self._rules = 1
+        self._open_judged = False        # the open attempt was opened under rules 2, so it can be judged
+        self._open_verdict: str | None = None  # why the open attempt did not start at the course start, or None
+        self._open_loads = 0             # save-state loads the open attempt ran through
+        self._open_acted_before_load = False  # he played before one of them
+        self._open_first_load_frame: int | None = None
+        self._open_prev_anchor_utc: str | None = None
+        self._open_level: int | None = None
+        self._entry_frame: int | None = None   # frame of the last level entry
+        self._entry_area: int | None = None    # the area that entry's own reset landed in
+        self._anchor_ids: list[int] = []       # every anchor, journal order -- the replay lead-in floor
+        self._anchor_utcs: list[str] = []
+        self._load_ids: list[int] = []         # rules-2 save-state loads, journal order
+        self._load_frames: list[int] = []      # ... and the frame each landed on
+        self._anchor_verdicts: dict[int, str | None] = {}  # rules-2 anchor id -> why a run opened there is not a course start
+        # The event the native ghost times from. Under rules 1 it is always
+        # `_open`; under rules 2 a load no longer opens an attempt, but the
+        # ghost still restarts its clock at one, exactly as before.
+        self._clock_origin = None
 
     @property
     def strat_tag(self) -> str | None:
@@ -922,17 +1037,44 @@ class Projector:
         silence past the def's own hold budget expires it. A disarm alone is
         deliberately NOT a pop: his worked example walks back through BitDW
         — which cancels the arm — to redo the Bowser 1 fight, and the trip
-        must not cost the selection."""
+        must not cost the selection.
+
+        Only a GAME event sees the head alive. Every request he makes through
+        the app (a fill's `target_set`, a `strat_set`, a `pb_saved`) is
+        journaled at frame 0, and counting one as a sighting put the head's
+        last alive frame at 0: the next disarm measured the whole session as
+        staleness and expired it on the spot. Live, 2026-09-29: the Bowser 2
+        arena's fill landed while the fight was armed, the arena's arrival
+        area settled two frames later (3 -> 1, as every arrival from outside
+        an area 1 does), which disarms the fight until the arrival reset
+        re-arms it, and the fill expired in between. The hand stayed empty
+        for the whole fight, so the ghost had no target ("Checking whether
+        this has a run..."). Bowser 3 did the same from LLL's volcano on
+        2026-09-23. A request while the head is DISARMED still starts its
+        clock at 0, so a fill for something not yet armed lasts until the
+        next game event, as it always has: lengthening that holds the
+        castle's lone route option over the next place's, which is a
+        separate call (measured in docs/rules/tracking-storage.md)."""
         if not (self._target_hooked and self.target
                 and self.target[0] == "segment"):
             return
         sid = self.target[1]
         if head_success:
-            self._drop_head()
+            # Completed: the hand is no longer HELD, but it is not emptied
+            # either -- the finished segment stays in it exactly as an
+            # empty-hand success follows onto its segment, and like that one
+            # it is a leftover the next detection in the queue displaces
+            # (`_settle_segment_target`). Round 10, his Bowser 3: dropping
+            # it left the hand empty after his first PB, so the ghost had no
+            # target ("Checking whether this has a run...") and every reset
+            # of the fight after it went unrecorded as untargeted, until his
+            # second PB -- won with the hand empty -- followed onto it.
+            self._target_hooked = False
             return
         arm = self._segments.armed_items().get(sid)
         if arm is not None:
-            self._hook_alive_frame = ev.frame
+            if ev.frame:
+                self._hook_alive_frame = ev.frame
             if arm.level is not None:
                 self._hook_level = arm.level
             if arm.area is not None:
@@ -1015,8 +1157,58 @@ class Projector:
                         "deadline_frame": arm.deadline_frame}
         return arms
 
+    def native_ghost_origin(self, kind: str, entity_key: str) -> dict | None:
+        """Read the selected live timing owner; a held target alone is not an arm.
+
+        Returned ``kind`` names the clock policy, which remains ``segment``
+        when a 100-coin engine attributes its eventual attempt to a star.
+        """
+        target = self.target
+        if target is None or target[0] != kind:
+            return None
+        if kind == "segment":
+            if entity_key != str(target[1]):
+                return None
+            return self._segments.native_ghost_origin(target[1])
+        if kind != "star" or entity_key != f"{target[1]}-{target[2]}":
+            return None
+        armed = self._segments.armed_ids()
+        engines = [sid for sid, entity in self._hundred_coin_engine_ids.items()
+                   if entity == target[1:] and sid in armed]
+        if engines:
+            return (self._segments.native_ghost_origin(engines[0])
+                    if len(engines) == 1 else None)
+        first = (self._clock_origin if self._open is not None
+                 and self._clock_origin is not None else self._open)
+        if not _native_star_origin_known(first):
+            return None
+        return {"kind": "star", "session_id": first.session_id,
+                "arm_id": first.id, "start_frame": first.frame,
+                "started_utc": first.wall_time_utc,
+                "frame": first.frame, "utc": first.wall_time_utc}
+
     def armed_route_id(self):
         return self._runs.armed_route_id()
+
+    def native_rival_start(self, kind: str, entity_key: str):
+        """The immutable full-start certificate, independent of clock readiness."""
+        target = self.target
+        if target is None or target[0] != kind:
+            return None
+        if kind == "segment":
+            return self._segments.native_rival_start(target[1]) if entity_key == str(target[1]) else None
+        if kind != "star" or entity_key != f"{target[1]}-{target[2]}":
+            return None
+        engines = [sid for sid,entity in self._hundred_coin_engine_ids.items()
+                   if entity == self.target[1:] and sid in self._segments.armed_ids()]
+        if engines:
+            return self._segments.native_rival_start(engines[0]) if len(engines)==1 else None
+        first = self._clock_origin if self._clock_origin is not None else self._open
+        if (not _native_star_origin_known(first) or first.type != "practice_reset"
+                or first is not self._open):
+            return None
+        return {"token": (kind,entity_key,first.session_id,first.id),
+                "session_id": first.session_id, "start_frame": first.frame}
 
     def active_route_id(self):
         """The route_id of the most recent route_selected — replay-derived,
@@ -1047,15 +1239,22 @@ class Projector:
             # memory or count as a grab — nothing happened in the game.
             return [self._imported_attempt(ev)]
         ev = self._corrected_event(ev)
+        if (ev.type == "mario_acted" and self._open is not None
+                and self._first_act[0] is not self._open):
+            self._first_act = (self._open, ev.payload.get("action"))
         prev_level = self._level  # _dispatch may move it (level_changed)
         self._pending_target_retire = None   # transient, one event only
         self._pending_grab_take = None       # transient, one event only
-        closed = self._dispatch(ev)
+        closed = self._project(ev)
+        self._return_the_suspended_pick(ev)
         self._remember_event(ev, closed)
         ctx = self._match_context(prev_level)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
+        held_pick = (self.target if self.target == self._picked_target
+                     and self.target and self.target[0] == "segment" else None)
         self._retire_pending_target()
         head_popped, hidden_exit_ids = self._apply_segment_closures(ev, seg_closed, closed)
+        self._set_aside_a_finished_pick(ev, seg_closed, held_pick)
         self._remember_star_choices(closed)
         self._remember_session_successes(ev, closed, hidden_exit_ids)
         self._suspend_star_for_segment()
@@ -1068,7 +1267,10 @@ class Projector:
         # row included (`hidden_exit_ids`); only what is RECORDED omits it.
         self._runs.feed(ev, closed, ctx)
         self.run_notices = self._runs.run_notices
-        if ev.type in BOUNDARY_EVENT_TYPES:
+        if (ev.type in BOUNDARY_EVENT_TYPES
+                and not (self._rules >= 2 and ev.type == "state_loaded")):
+            # A rules-2 load closes nothing, so the tricks before it still
+            # belong to the attempt it runs through (caveat 21).
             self._rollouts_total = self._rollouts_dustless = 0
             self._jumps_total = self._jumps_dustless = 0
         if hidden_exit_ids:
@@ -1156,6 +1358,12 @@ class Projector:
     def _restore_castle_choice(self, ev) -> None:
         if self._level != LEVEL_CASTLE_INSIDE or not self._castle_area_known:
             return
+        # Recall fills the return journey; a currently armed hooked segment
+        # already holds its turn, including an accepted arrival offer.
+        if (self._target_hooked and self.target is not None
+                and self.target[0] == "segment"
+                and self.target[1] in self.armed_segment_ids()):
+            return
         sid, explicit = self._castle_recall_choice()
         if sid is None or self.target == ("segment", sid):
             return
@@ -1183,6 +1391,7 @@ class Projector:
         self._level = self._area = self._num_stars = None
         self._last_star_grabbed = self._last_star_attempted = None
         self.target = self._picked_target = self._suspended_star = None
+        self._suspended_pick = self._returned_pick = None
         self._target_hooked = False
         self._target_queue.clear()
         self._hook_level = self._hook_area = self._hook_alive_frame = None
@@ -1253,8 +1462,75 @@ class Projector:
                            last_star_attempted=self._last_star_attempted,
                            route_segments=self._route_segments,
                            target_segment=target_seg,
+                           attempt_rules=self._rules,
                            landmark_names=(self._landmark_names()
                                            if self._landmark_names else None))
+
+    def _set_aside_a_finished_pick(self, ev, seg_closed, held_pick) -> None:
+        """His pick just finished by entering a star stage, which empties the
+        hand there (caveat 12, by the origin retire or the completion's own
+        clear -- whichever ran first). Keep it for his return to the castle
+        (`_suspended_pick`)."""
+        if (held_pick is not None and self.target is None
+                and ev.type == "level_changed"
+                and course_for_level(ev.payload["to"]) is not None
+                and any(a.segment_id == held_pick[1] and a.outcome == "success"
+                        and not a.cleared for a in seg_closed)):
+            self._suspended_pick = held_pick
+
+    def _return_the_suspended_pick(self, ev) -> None:
+        """His pick comes back with him (`_suspended_pick`): on arriving in
+        the castle, over anything he did not choose -- the stage's
+        auto-followed star, a leftover -- but never over another click or a
+        detection holding its turn. After `_dispatch` has settled the star
+        target for this level edge, before the matcher sees it."""
+        if (self._suspended_pick is not None and ev.type == "level_changed"
+                and ev.payload["to"] in CASTLE_LEVELS
+                and self._picked_target == self._suspended_pick
+                and self.target != self._picked_target
+                and not self._target_hooked):
+            # The same surviving played-success evidence that governs castle
+            # recall also defeats this dormant pick. Its own completion and
+            # later failed practice still leave the original retry intact.
+            latest, completion = self._latest_session_success()
+            if (completion > self._last_manual_target_id
+                    and latest != self._suspended_pick):
+                return
+            self.target = self._returned_pick = self._suspended_pick
+            self._suspended_pick = self._suspended_star = None
+
+    def _declines_fill(self, ev) -> bool:
+        """May this gestureless fill (`auto`) NOT take the hand?
+
+        A hooked head holds its turn (round 19). And a pick that just came
+        back (`_returned_pick`) is not an empty hand, though the page's
+        lone-option fill, deciding on the arrival that returned it, can
+        still see one: a fill for something not even armed is refused. The
+        arena row's fill, the one allowed to replace a held pick
+        (2026-08-05), offers the fight its own arrival armed.
+
+        A STALE hooked head yields to a fill naming a segment ARMED right
+        now, as it yields to a valid star grab (`_grab_may_take_the_hand`):
+        a run in progress here beats a disarmed detection carried in. Live,
+        2026-09-28: the hand held the BitDW reds hooked from a fill, he warped
+        straight into the Bowser 1 arena, the arena's fill for the armed
+        fight was refused, and the reds head forfeited on the arena's own
+        reset two frames later -- an empty hand for the whole fight, so the
+        ghost had nothing to play ("Checking whether this has a run...")
+        until the key grab followed onto the fight. The client re-offers only
+        on a new arrival, so the order the two writers happened to land in
+        decided the attempt."""
+        if self.target is not None and self._target_hooked:
+            armed = self._segments.armed_ids()
+            stale_head = (self.target[0] == "segment"
+                          and self.target[1] not in armed)
+            return not (stale_head and ev.payload.get("kind") == "segment"
+                        and ev.payload.get("segment_id") in armed)
+        return (self.target is not None and self.target == self._returned_pick
+                and self.target == self._picked_target
+                and ev.payload.get("kind") == "segment"
+                and ev.payload.get("segment_id") not in self._segments.armed_ids())
+
 
     def _declines_star_fill(self, ev) -> bool:
         # An automatic star offer fills an empty hand, never a newer pick.
@@ -1341,7 +1617,8 @@ class Projector:
                 # caveat 15's star-side bookkeeping above), so nothing to
                 # update on the way out.
                 continue
-            a = self._stamp_segment_attempt(ev, a, hc)
+            a = self._stamp_segment_attempt(
+                self._segments.close_event_of(a.id, ev), a, hc)
             if (hc is not None and a.outcome == "success"
                     and ev.type == "star_collected"
                     and ev.payload.get("star_id") != hc[1]):
@@ -1451,8 +1728,42 @@ class Projector:
                             a.id, self.strat_by_segment.get(a.segment_id)),
                         cleared=a.id in self._cleared,
                         cleared_reason=self._cleared.get(a.id))
+        # The engine compared the arm's observed ROM with this closing event.
+        # Reattribution to a 100-coin star must retain that same certificate.
+        a = replace(a, **self._segment_validity(ev, a, hc))
         a = self._auto_ignored(a)
         return a
+
+    def _segment_validity(self, ev, a, hc) -> dict:
+        """Caveat 21 for an engine-closed attempt. A segment is valid when no
+        save-state load happened at its start or before its finish. A load
+        re-arming an attempt-anchor definition still used a save state -- it
+        can land half-way through the fight (Bowser 2, journal 8023-8031,
+        2026-09-29). A separate segment whose own trigger occurs AFTER that
+        load remains valid. A 100-coin attempt is a STAR and takes the star's
+        rule: its start must be a full reset at the course start."""
+        arm_id = journal_id(a.id)
+        before = bisect_left(self._anchor_ids, arm_id)
+        out = {"prev_anchor_utc": self._anchor_utcs[before - 1] if before else None}
+        if self._rules < 2:
+            return out
+        lo = bisect_left(self._load_ids, arm_id)
+        hi = bisect_left(self._load_ids, ev.id)
+        loads = hi - lo
+        out.update(state_loads=loads,
+                   first_load_frame=self._load_frames[lo] if loads else None)
+        if loads:
+            reason = "save_state"
+        elif hc is not None:
+            # A star: its run starts at a level entry or a judged reset.
+            # Armed by anything else -- the 100-coin grab itself, which is
+            # how the engine picks up a run mid-course -- nothing reset it.
+            reason = (None if a.anchor_type == "level_changed"
+                      else self._anchor_verdicts.get(arm_id, "no_reset"))
+        else:
+            reason = None
+        out.update(valid=reason is None, invalid_reason=reason)
+        return out
 
     def _follow_segment_completion(self, ev, a, hc, raw_segment_id, held_pick, head_was_hooked) -> bool:
         head_popped = False
@@ -1493,8 +1804,9 @@ class Projector:
                 if raw_segment_id == held_pick:
                     if head_was_hooked:
                         head_popped = True
-                    elif entered_stage:
+                    if entered_stage:
                         self.target = None
+                        self._target_hooked = False
             else:
                 # An empty hand — or a star target, which the auto-follow
                 # has always moved — fills exactly as before the queue.
@@ -1634,13 +1946,89 @@ class Projector:
             self.target = None
             self._promote_or_neutral(ev.frame)
 
-    def _declines_automatic_target(self, payload: dict) -> bool:
+    def _project(self, ev) -> list[Attempt]:
+        """`_dispatch`, with caveat 21 around it: the rules-2 save-state load
+        (which closes nothing), and what every anchor records for judging the
+        attempt it opens. Kept OUTSIDE `_dispatch` so the rules-1 path is the
+        same code it always was."""
+        if ev.type in ANCHOR_EVENT_TYPES:
+            prev_anchor_utc = self._anchor_utcs[-1] if self._anchor_utcs else None
+            self._anchor_ids.append(ev.id)
+            self._anchor_utcs.append(ev.wall_time_utc)
+            if self._rules >= 2 and ev.type == "state_loaded":
+                return self._run_through_load(ev, prev_anchor_utc)
+            involuntary = ev.payload.get("area_load") or ev.payload.get("teleport")
+            # A run an involuntary anchor opens was opened by no reset: he
+            # walked on from the last one's finish (`no_reset`).
+            verdict = "no_reset" if involuntary else self._reset_verdict(ev)
+            self._anchor_verdicts[ev.id] = verdict
+            row = self._acted_through_loads(ev)
+            closed = self._dispatch(row)
+            if self._open is row:
+                self._opened(row, verdict, prev_anchor_utc)
+            return closed
+        closed = self._dispatch(ev)
+        if ev.type == "session_started":
+            # The session declares which attempt rules its events were
+            # journaled under (caveat 21); a session written before them
+            # declares nothing and replays exactly as it always has.
+            self._rules = ev.payload.get("attempt_rules", 1)
+        elif ev.type == "level_changed":
+            self._entry_frame, self._entry_area = ev.frame, None
+        return closed
+
+    def _acted_through_loads(self, ev):
+        """The reset closing a rules-2 attempt that ran through a load, seen
+        with the attempt's WHOLE activity. The detector's `mario_acted` means
+        "since the last anchor", and a load is an anchor to it (the segment
+        matcher needs exactly that), so "reset, play, load, reset without
+        moving" arrived unacted and the no-op discard threw away an attempt
+        he really played -- and its replay with it (review 2026-09-23)."""
+        if (self._rules >= 2 and ev.type == "practice_reset"
+                and self._open is not None and self._open_acted_before_load
+                and not ev.payload.get("mario_acted", True)):
+            return _CorrectedRow(ev, {**ev.payload, "mario_acted": True})
+        return ev
+
+    def _run_through_load(self, ev, prev_anchor_utc) -> list[Attempt]:
+        """A save-state load is not a retry (caveat 21, his ruling
+        2026-09-23): "one practice-log entry per full reset, running through
+        every load to the finish". It closes nothing; the open attempt counts
+        it, and with nothing open it opens one that can never be valid."""
+        self._load_ids.append(ev.id)
+        self._load_frames.append(ev.frame)
+        self._anchor_verdicts[ev.id] = "save_state"
+        if self._open is None:
+            self._open = ev
+            self._open_acted = False
+            self._open_castle = self._level in CASTLE_LEVELS
+            self._open_carried_igt = 0
+            self._opened(ev, "save_state", prev_anchor_utc)
+        if not self._open_loads:
+            self._open_first_load_frame = ev.frame
+        self._open_loads += 1
+        # He played before this load, whatever happens after it. The load's
+        # own `mario_acted` covers the stretch since the last anchor, which
+        # is this attempt's only when the attempt was already running.
+        self._open_acted_before_load = (
+            self._open_acted_before_load or self._open_acted
+            or (self._open is not ev and bool(ev.payload.get("mario_acted"))))
+        # A full-RAM restore puts the game's own clock at the saved state, so
+        # the native ghost restarts there -- backward or, onto a state from an
+        # earlier boot, forward (review 2026-09-23: after F7 forward the star
+        # ghost stayed on the pre-load reset until the next one).
+        if ev.payload.get("load_signature") in FULL_RAM_LOADS:
+            self._clock_origin = ev
+        return []
+
+    def _declines_automatic_target(self, ev) -> bool:
         """A sole offer can replace only the target/place its selector observed."""
+        payload = ev.payload
         if not payload.get("auto"):
             return False
         sole = payload.get("sole_selection")
         if sole is None:
-            return self.target is not None and self._target_hooked
+            return self._declines_fill(ev)
         expected = tuple(sole["target"]) if sole["target"] is not None else None
         level, area = sole["stage"]
         return (self.target != expected
@@ -1648,7 +2036,7 @@ class Projector:
                 or (area is not None and area != self._area))
 
     def _accept_target_offer(self, ev) -> bool:
-        if (self._declines_automatic_target(ev.payload)
+        if (self._declines_automatic_target(ev)
                 or (ev.payload.get("auto")
                     and ev.payload.get("sole_selection") is None
                     and self._declines_star_fill(ev))):
@@ -1660,6 +2048,7 @@ class Projector:
         closed = self._close(ev, outcome="abandoned", igt_frames=None)
         self.target = None
         self._target_hooked = False
+        self._picked_target = self._suspended_pick = self._returned_pick = None
         self._reset_session_recall()
         self._target_queue.clear()
         self._suspended_star = None
@@ -1951,6 +2340,66 @@ class Projector:
             return bool(p.get("dustless"))
         return bool(p.get("dustless")) or p.get("frames_late") == 1
 
+    def _opened(self, ev, verdict: str | None,
+                prev_anchor_utc: str | None) -> None:
+        """What an anchor that just opened an attempt records for judging it."""
+        # Judged only when the session says loads are journaled AND the
+        # anchor comes from the detector that journals them.
+        self._open_judged = (self._rules >= 2
+                             and bool(ev.payload.get("loads_journaled")))
+        self._open_verdict = verdict
+        self._open_loads = 0
+        self._open_first_load_frame = None
+        self._open_prev_anchor_utc = prev_anchor_utc
+        self._open_acted_before_load = False
+        self._open_level = self._level
+        self._clock_origin = None
+
+    #: Frames after a level entry within which Usamune's own entry zero
+    #: lands (the area byte settles for 44-47, `counter_epoch.
+    #: LEVEL_LOAD_TAIL_FRAMES` is 60) -- doubled, so a slow poll still counts
+    #: the entry's reset as the entry and not as a later retry.
+    ENTRY_RESET_WINDOW_FRAMES = 2 * LEVEL_LOAD_TAIL_FRAMES
+
+    def _reset_verdict(self, ev) -> str | None:
+        """Why a run opened by this anchor would NOT start at the course's own
+        start (caveat 21), or None when it does.
+
+        A COURSE START is area 1, where every course spawns Mario, or the area
+        the level entry itself landed in (its own counter zero carries it) --
+        THI has two paintings, and the small one lands on the tiny island,
+        area 2. Replayed over his journals, the entry-area-only reading marked
+        two huge-island THI runs as subarea resets; both areas are real
+        starts. A reset landing anywhere else is a SUBAREA reset -- "resetting inside the volcano means it's valid
+        for Inside the Volcano, but invalid for Elevator Tour" (task 0144).
+        Measured over his journals before shipping: 31 LLL, 34 CCM-slide and
+        58 THI resets landed outside area 1. The castle has no course start,
+        so no reset there is a subarea reset."""
+        if ev.type == "state_loaded":
+            return "save_state"
+        area = ev.payload.get("area")
+        if (self._entry_frame is not None and self._entry_area is None
+                and 0 <= ev.frame - self._entry_frame
+                <= self.ENTRY_RESET_WINDOW_FRAMES):
+            self._entry_area = area
+        if self._level is None or self._level in CASTLE_LEVELS or area is None:
+            return None
+        starts = {COURSE_START_AREA, self._entry_area}
+        return None if area in starts else "subarea_reset"
+
+    def _validity(self, first) -> tuple[bool | None, str | None]:
+        """`(valid, invalid_reason)` for the attempt `first` opened (caveat
+        21). Unjudged -- (None, None) -- for anything opened under rules 1."""
+        if first is self._open:
+            if not self._open_judged:
+                return None, None
+            reason = "save_state" if self._open_loads else self._open_verdict
+        else:  # the closing event itself: nothing opened this run
+            if self._rules < 2:
+                return None, None
+            reason = "no_reset"
+        return reason is None, reason
+
     def _unacted_open(self) -> bool:
         """No-behavior rule (spec §2): the open attempt came from an
         acted-tracking anchor and no mario_acted event arrived during it.
@@ -2004,10 +2453,19 @@ class Projector:
             # castle movement, not a star attempt (addendum): discard
             self._open = None
             return []
-        if self._unacted_open() or not ev.payload.get("mario_acted", True):
+        first_act = self._first_act[1] if self._first_act[0] is self._open else None
+        if (self._unacted_open() or not ev.payload.get("mario_acted", True)
+                or before_control(first_act, ev)
+                or (ev.frame and self._open is not None
+                    and ev.frame == self._open.frame)):
             # no-op reset spam: the player never acted, so the closed
             # attempt isn't a real attempt — drop it (anchor still opens
             # the next one). Old journals lack the key -> default True.
+            # Nor is one that closed on the frame it opened: no game frame
+            # ran between the two anchors (a course entry's zero read twice
+            # by one frame's two polls; his BitDW "Shig (Star)" row, repo
+            # journal id 16243, "reset" in 0 frames -- 2026-09-28, "Need
+            # to make sure that this doesn't happen for ANY stage").
             self._open = None
             return []
         igt = ev.payload.get("igt_frames_before") if ev.type == "practice_reset" else None
@@ -2015,6 +2473,11 @@ class Projector:
                            igt_frames=self._with_carried_igt(igt))
 
     def _close_by_grab(self, ev) -> list[Attempt]:
+        if finished_dead(ev.payload):
+            # Grabbed already dead: the attempt ends as the death it was. A
+            # death event journaled first has closed it, and one death is one
+            # row, so nothing open records nothing.
+            return self._close_by_death(ev) if self._open is not None else []
         grabbed = (ev.payload["course_id"], ev.payload["star_id"])
         first = self._open if self._open is not None else ev
         if grabbed[1] == 6 and grabbed in self._hundred_coin_engines:
@@ -2205,9 +2668,14 @@ class Projector:
         strat = self.strat_by_star.get(star_tgt) if star_tgt else None
         attempt = self._build(
             first=first, close=ev, outcome="death",
-            outcome_detail=ev.payload.get("cause"),
+            # A grab reached already dead (`_close_by_grab`) carries the whole
+            # star's time, so it takes no carried legs (tracking-storage rule)
+            outcome_detail=(ev.payload.get("cause") if ev.type == "death"
+                            else FINISHED_DEAD),
             course_id=course_id, star_id=star_id,
-            igt_frames=self._with_carried_igt(ev.payload.get("igt_frames")),
+            igt_frames=(self._with_carried_igt(ev.payload.get("igt_frames"))
+                        if ev.type == "death"
+                        else ev.payload.get("igt_frames")),
             strat=strat)
         self._open = None
         return [attempt]
@@ -2437,11 +2905,20 @@ class Projector:
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:
         is_anchored = first.type in ANCHOR_EVENT_TYPES
+        native_origin_known = _native_star_origin_known(first)
         timed_at = (close.payload.get("igt_timed_at")
                     if close.type == "star_collected" else None)
         rta = (close.frame - first.frame
                if is_anchored and close.frame >= first.frame else None)
+        valid, invalid_reason = self._validity(first)
+        opened_here = first is self._open
         return self._auto_ignored(Attempt(
+            valid=valid, invalid_reason=invalid_reason,
+            state_loads=self._open_loads if opened_here else 0,
+            first_load_frame=self._open_first_load_frame if opened_here else None,
+            start_level=self._open_level if opened_here and is_anchored else None,
+            start_area=first.payload.get("area") if is_anchored else None,
+            prev_anchor_utc=self._open_prev_anchor_utc if opened_here else None,
             id=first.id, session_id=first.session_id,
             course_id=course_id, star_id=star_id,
             strat_tag=self._strat_overrides.get(first.id, strat),
@@ -2458,6 +2935,12 @@ class Projector:
             jumps_total=self._jumps_total,
             jumps_dustless=self._jumps_dustless,
             timed_at=timed_at,
+            game_version=(first.payload.get("game_version")
+                          if first.payload.get("game_version") == close.payload.get("game_version") else None),
+            native_clock_frame=first.frame if native_origin_known else None,
+            native_clock_utc=first.wall_time_utc if native_origin_known else None,
+            native_clock_kind="star" if native_origin_known else None,
+            closed_frame=close.frame,
             platform=platform_from_payload(close.payload)))
 
     def _imported_attempt(self, ev) -> Attempt:

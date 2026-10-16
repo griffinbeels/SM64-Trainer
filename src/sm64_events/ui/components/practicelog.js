@@ -16,7 +16,7 @@
 // ONE card serves both kinds. That is rule 11 becoming structural rather
 // than an agreement between two hand-written sections that a test compares.
 import { h } from "preact";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { displayName, entityIdentity, entityKey, isSegment, isManualSegment,
          sectionClock, sectionPb, sectionPbByStrat,
@@ -32,19 +32,118 @@ import { useFeedMotion } from "./feedmotion.js";
 import { StratPicker } from "./stratpicker.js";
 import { StandardsPanel } from "./standards.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
-         ResetFilterToggle, StatMenuTrigger, comparator, ranksAreAtFloor,
-         showsEntityBanner, rankIdentity, PbTag }
+         StatMenuTrigger, comparator, ranksAreAtFloor,
+         showsEntityBanner, rankIdentity, PbTag, PbNews, attemptHiddenByDefault,
+         attemptMatchesLogFilters }
   from "./attemptlog.js";
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
 import { nestSubsections } from "../subsections.js";
+import { readPbNews, CROWN_MS } from "../pbcrown.js";
 import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { AddTime } from "./addtime.js";
+import { GhostSettings, GhostSwitch } from "./ghostswitch.js";
 import { GoalPlate, useEntryGoals } from "./goalplate.js";
+import { useTargetPick } from "../target.js";
 
 const html = htm.bind(h);
+
+function LogPreferenceSwitch({ label, description, checked, onChange }) {
+  return html`<label class="log-preference">
+    <span class="log-preference-copy"><b>${label}</b><small>${description}</small></span>
+    <span class="log-preference-control">
+      <span class="log-preference-state" aria-hidden="true">${checked ? "On" : "Off"}</span>
+      <span class="log-preference-switch">
+        <input type="checkbox" role="switch" checked=${checked}
+          aria-label=${label} onchange=${(e) => onChange(e.target.checked)} />
+        <span class="log-preference-track" aria-hidden="true"></span>
+      </span>
+    </span>
+  </label>`;
+}
+
+export function PracticeLogSettings({ ui, t }) {
+  const [anchor, setAnchor] = useState(null);
+  const [ghostSettings, setGhostSettings] = useState(false);
+  const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  const panelRef = useRef(null);
+  const open = Boolean(anchor);
+  const dismiss = (restoreFocus = false) => {
+    setAnchor(null);
+    if (restoreFocus) triggerRef.current?.focus({ preventScroll: true });
+  };
+  useLayoutEffect(() => {
+    if (!open || !panelRef.current) return;
+    const height = panelRef.current.getBoundingClientRect().height;
+    const top = Math.max(12, Math.min(anchor.top, window.innerHeight - height - 12));
+    // Measure while hidden. Preact batches layout-effect updates, so drawing
+    // the initial position would flash a clipped panel for one frame.
+    setAnchor({ ...anchor, top, ready: true });
+  }, [open]);
+  useEffect(() => {
+    if (!open) return undefined;
+    if (anchor.ready) panelRef.current?.querySelector("input")?.focus({ preventScroll: true });
+    const outside = (e) => {
+      if (!rootRef.current?.contains(e.target)) dismiss();
+    };
+    const escape = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      dismiss(true);
+    };
+    const resize = () => dismiss();
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    window.addEventListener("resize", resize);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", resize);
+    };
+  }, [open, anchor?.ready]);
+  const toggle = () => {
+    if (open) { dismiss(); return; }
+    const box = triggerRef.current.getBoundingClientRect();
+    setAnchor({ top: box.bottom + 8, ready: false,
+      right: Math.max(12, window.innerWidth - box.right) });
+  };
+  return html`<span class="log-settings" ref=${rootRef}>
+    <button ref=${triggerRef} type="button" class="icon-button log-settings-trigger"
+      aria-label="Practice log settings" title="Practice log settings"
+      aria-haspopup="dialog" aria-expanded=${open ? "true" : "false"}
+      aria-controls=${open ? "practice-log-settings" : undefined} onclick=${toggle}>
+      <${Icon} name="settings" size=${18} />
+    </button>
+    ${open && html`<div ref=${panelRef} id="practice-log-settings"
+      class="log-settings-panel" role="dialog" aria-label="Practice log settings"
+      style=${`top:${anchor.top}px;right:${anchor.right}px;visibility:${anchor.ready ? "visible" : "hidden"}`}>
+      <div class="log-settings-head"><b>Practice log settings</b>
+        <button type="button" class="icon-button" aria-label="Close practice log settings"
+          onclick=${() => dismiss(true)}><${Icon} name="close" size=${16} /></button>
+      </div>
+      <div class="log-settings-preferences">
+        <${LogPreferenceSwitch} label="Hide resets and deaths"
+          description="Keep failed resets and deaths out of the log."
+          checked=${Boolean(ui.hideResets)} onChange=${ui.setHideResets} />
+        <${LogPreferenceSwitch} label="Hide savestated entries"
+          description="Hide attempts started from or interrupted by a save state."
+          checked=${ui.hideSavestates !== false} onChange=${ui.setHideSavestates} />
+      </div>
+      <div class="log-settings-option"><span>Sort attempts</span><${SortControl} ui=${ui} /></div>
+      <div class="log-settings-option"><span>Visible stats</span><${StatMenuTrigger} t=${t} withinSettings=${true} /></div>
+      <div class="log-settings-option"><span>Ghost Overlay</span>
+        <button type="button" onclick=${() => { dismiss(true); setGhostSettings(true); }}>
+          <${Icon} name="settings" size=${18} />Ghost settings
+        </button>
+      </div>
+    </div>`}
+    ${ghostSettings && html`<${GhostSettings} t=${t} onClose=${() => setGhostSettings(false)} />`}
+  </span>`;
+}
 
 // How many entity cards render before "Show 5 more". Superseded rule, kept
 // legible rather than deleted outright: every shown card used to be OPEN by
@@ -55,6 +154,38 @@ const html = htm.bind(h);
 // own initiative (see `isCardOpen` below). An uncapped lifetime-scope view
 // therefore renders every entity COLLAPSED but one, not expanded.
 const CARDS_PER_PAGE = 5;
+
+// What the live feed says about PBs (ui/pbcrown.js): the attempt ids a
+// `pb_saved` just crowned, for the rows' one-shot arrival, and the Time Save
+// each standing crowning earned, until the next attempt is logged.
+// Absorb-first, like practice.js's new-entry blink: the feed this log mounts
+// onto is history, so a PB saved before it was showing is never celebrated,
+// and its Time Save never shown, on arrival.
+function usePbNews(t) {
+  const [crowned, setCrowned] = useState(() => new Set());
+  const [timeSaves, setTimeSaves] = useState(() => new Map());
+  const seen = useRef(null);
+  const saves = useRef(timeSaves);
+  useEffect(() => {
+    if (!seen.current) {
+      seen.current = new WeakSet(t.feed || []);
+      return;
+    }
+    const news = readPbNews(t.feed, seen.current, saves.current);
+    if (news.timeSaves !== saves.current) {
+      saves.current = news.timeSaves;
+      setTimeSaves(news.timeSaves);
+    }
+    if (news.crowned.length === 0) return;
+    setCrowned((prev) => new Set([...prev, ...news.crowned]));
+    setTimeout(() => setCrowned((prev) => {   // per-batch: an effect cleanup
+      const next = new Set(prev);             // would cancel this batch's
+      news.crowned.forEach((id) => next.delete(id));  // expiry when the next
+      return next;                            // event lands inside the window
+    }), CROWN_MS);
+  }, [t.feed]);
+  return useMemo(() => ({ crowned, timeSaves }), [crowned, timeSaves]);
+}
 
 // How many attempt rows one page of an OPEN card shows. Real pagination
 // (spec practice-log-entity-cards, amendment A8) -- "we should replace the
@@ -262,10 +393,19 @@ export function topEntityKey(view) {
 // screenshot that opened this round. A key that names no rendered card is
 // indistinguishable from "nothing qualifies", which is why it survived a
 // rule whose own tests were all green.
+//
+// Rule 1 holds only while the active entity LEADS (`activeLeads`, from
+// `nextActivation` below): he picked it, it was active when the page opened,
+// or it has since become the newest thing played. When the GAME moved the
+// target -- he walked into Bowser 1, a segment armed -- rule 2 keeps the card
+// he was reading open even if the new target has older rows, until its first
+// new row makes it the newest (round 13, 2026-09-28: "Even if we autoselect
+// the next star/segment... it shouldn't immediately expand the practice log,
+// because we don't have an entry yet").
 export function autoOpenKey(sections, activeKey = null, playedKeys = [],
-                             nestedKeys = []) {
+                             nestedKeys = [], activeLeads = true) {
   const rendered = sections || [];
-  if (activeKey != null) {
+  if (activeKey != null && activeLeads) {
     const active = rendered.find((sec) => entityKey(sec) === activeKey);
     // A NESTED active entity does not get the same second chance a
     // top-level one does. "Only once it has recorded something" (the rule
@@ -298,6 +438,42 @@ export function autoOpenKey(sections, activeKey = null, playedKeys = [],
     if (rendered.some((sec) => entityKey(sec) === key)) return key;
   }
   return null;
+}
+
+// How long after his pick is accepted its target may take to become the
+// active card (the view refetch, a celebration hold he released) and still
+// count as his pick. Far shorter than walking out of a course and back in,
+// which returns his picked star through the GAME, not a gesture.
+export const PICK_LANDS_MS = 5000;
+
+/** Whether the active entity LEADS the open slot (`autoOpenKey`'s rule 1):
+ *  `{key, since, leads}`. `pick` is the store's `targetPick` ({key, at}),
+ *  `now` ms, `newestPlayed` the newest played card on screen (rule 2 alone).
+ *   - The first active entity this log sees leads: nothing was being read
+ *     yet, so there is nothing to keep open.
+ *   - A new active entity leads when he picked it (a pick of that key
+ *     accepted within PICK_LANDS_MS); the game moving the target does not.
+ *   - Picking the entity that is already active makes it lead too.
+ *   - One the game chose leads once it is the newest thing played on screen:
+ *     its first new row. From then on it keeps the slot like a picked one.
+ *   - Nothing active (a castle, a transition) keeps the last activation, so
+ *     a blip back to the same entity is not a new one.
+ *  Pure, so node drives it (tests/frontend/logautoopen.test.js). */
+export function nextActivation(prev, activeKey, pick, now, newestPlayed = null) {
+  if (prev != null && activeKey == null) return prev;
+  const pickedThis = pick != null && activeKey != null && pick.key === activeKey;
+  let next = prev;
+  if (prev == null) next = { key: activeKey, since: now, leads: true };
+  else if (activeKey !== prev.key) {
+    next = { key: activeKey, since: now,
+             leads: pickedThis && now - pick.at <= PICK_LANDS_MS };
+  } else if (!prev.leads && pickedThis && pick.at >= prev.since) {
+    next = { ...prev, leads: true };
+  }
+  if (!next.leads && next.key != null && newestPlayed === next.key) {
+    next = { ...next, leads: true };
+  }
+  return next;
 }
 
 // `childKeys` (round 2026-08-10, reds-as-subsection): a [[subsection]]'s own
@@ -363,6 +539,15 @@ function classificationTransition(sec, t, rankMode, hasSeparateRank) {
   };
 }
 
+function rankViewFor(active, preferred, separate) {
+  return {rankMode: active ? preferred : effectiveRankDisplayMode(preferred, separate),
+    canChooseScope: active || separate,
+    strategyTitle: active ? "Show this strategy's rank and ghosts"
+      : "Show the rank for the strategy selected on this card",
+    overallTitle: active ? "Show overall rank and ghosts from any strategy" : separate
+      ? "Show this PB's overall rank" : "Strategy and overall use the same rank standards"};
+}
+
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
@@ -373,9 +558,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const [page, setPage] = useState(0);
   const ek = entityKey(sec);
   // A card remembers this preference by ENTITY, not by its current strategy:
-  // switching from Standard to Cannonless should keep showing whichever rank
-  // the player chose to watch here. A shared ladder temporarily forces the
-  // only honest reading (Overall) without erasing that remembered preference.
+  // switching from Standard to Cannonless keeps the player's chosen scope.
+  // Active practice also uses this choice for ghosts, even on a shared ladder.
   const [preferredRankMode, setPreferredRankMode] = useState(
     () => readRankDisplayMode(ek));
   // `forceOpen` exists for exactly one moment (Task 6 brief, Step 1): "so a
@@ -443,11 +627,10 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
       : (pb && pb.caveat === "unattributed" ? "unattributed" : null));
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
   const base = showHidden ? sec.attempts
-    : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
-  const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
+    : sec.attempts.filter((a) => !attemptHiddenByDefault(a));
+  const hidden = sec.attempts.filter(attemptHiddenByDefault);
   const rows = base
-    .filter((a) => !(ui.hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset")))
+    .filter((a) => attemptMatchesLogFilters(a, ui))
     .slice()
     .sort(comparator(ui.sort, clock));
   // A pick (this card's own PbTag jump, or a trend-graph dot in
@@ -496,25 +679,26 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // that one display has a genuinely different Overall measurement to offer;
   // it controls the two-button switch, never the number of banners painted.
   const hasSeparateRank = showsEntityBanner(sec);
-  const rankMode = effectiveRankDisplayMode(preferredRankMode, hasSeparateRank);
+  const {rankMode, canChooseScope, strategyTitle, overallTitle} =
+    rankViewFor(active, preferredRankMode, hasSeparateRank);
   const pickRankMode = (mode) => {
-    if (!hasSeparateRank || mode === rankMode) return;
+    if (!canChooseScope || mode === rankMode) return;
     writeRankDisplayMode(ek, mode);
     setPreferredRankMode(mode);
   };
+  const scopeLabel = active
+    ? "Rank and ghosts" : "Rank view";
   const rankModeButtons = html`<span class="rank-mode-buttons" role="group"
-      aria-label="Rank view">
-    ${hasSeparateRank && html`<button type="button"
+      aria-label=${scopeLabel}>
+    ${canChooseScope && html`<button type="button"
         class=${`rank-mode-button${rankMode === "strategy" ? " is-selected" : ""}`}
         aria-pressed=${rankMode === "strategy" ? "true" : "false"}
-        title="Show the rank for the strategy selected on this card"
+        title=${strategyTitle}
         onclick=${() => pickRankMode("strategy")}>Strategy</button>`}
     <button type="button"
         class=${`rank-mode-button${rankMode === "overall" ? " is-selected" : ""}`}
         aria-pressed=${rankMode === "overall" ? "true" : "false"}
-        title=${hasSeparateRank
-          ? "Show the best overall rank across this entity's strategies"
-          : "Strategy and overall use the same rank standards"}
+        title=${overallTitle}
         onclick=${() => pickRankMode("overall")}>Overall</button>
   </span>`;
   const shownBanner = rankMode === "strategy"
@@ -703,7 +887,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           <${Icon} name="chevron" size=${18} />
         </button>
       </div>
-    </div>
+    </div><${GhostSwitch} t=${t} entityKey=${ek} active=${active} scope=${rankMode} />
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
       ${inBody && ranksBlock}
@@ -834,11 +1018,10 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
   const [visible, setVisible] = useState(10);
   const unassigned = v.unassigned || [];
   const visibleAttempts = showHidden ? unassigned
-    : unassigned.filter((a) => !a.cleared && a.outcome !== "abandoned");
-  const hidden = unassigned.filter((a) => a.cleared || a.outcome === "abandoned");
+    : unassigned.filter((a) => !attemptHiddenByDefault(a));
+  const hidden = unassigned.filter(attemptHiddenByDefault);
   const rows = visibleAttempts
-    .filter((a) => !(ui.hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset")))
+    .filter((a) => attemptMatchesLogFilters(a, ui))
     .slice()
     .sort(comparator(ui.sort, t.clock));
   const shown = rows.slice(0, visible);
@@ -933,6 +1116,23 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * page rather than asserting on props). The real app never passes this prop
  * and keeps the enforced behaviour.
  */
+// Whether `.practice-page` (the container every `@container` rule on this card
+// measures) is at or under the Layout matrix's narrow threshold -- see
+// PracticeLog's own comment on why this one fact is read in JS.
+function usePageIsNarrow(pageRef) {
+  const [isNarrow, setIsNarrow] = useState(false);
+  useEffect(() => {
+    if (!pageRef.current || typeof ResizeObserver === "undefined") return undefined;
+    const container = pageRef.current.closest(".practice-page") || pageRef.current;
+    const measure = () => setIsNarrow(container.getBoundingClientRect().width <= NARROW_CONTAINER_PX);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+  return isNarrow;
+}
+
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
                               clearFocus, focusKey, onSelect, activeKey = null,
                               playedKeys = [], openTargetPicker = null,
@@ -997,16 +1197,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // physical relocation ever happens unless a cell is actually dialed to
   // "body").
   const pageRef = useRef(null);
-  const [isNarrow, setIsNarrow] = useState(false);
-  useEffect(() => {
-    if (!pageRef.current || typeof ResizeObserver === "undefined") return undefined;
-    const container = pageRef.current.closest(".practice-page") || pageRef.current;
-    const measure = () => setIsNarrow(container.getBoundingClientRect().width <= NARROW_CONTAINER_PX);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, []);
+  const isNarrow = usePageIsNarrow(pageRef);
   const logVars = useMemo(() => logTuningVars(logTuning()), []);
   const logClasses = useMemo(() => logTuningClasses(logTuning()), []);
   const tuning = logTuning();
@@ -1065,7 +1256,14 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // re-review 2026-08-10): a star whose only parent is disabled renders
   // top-level, not nested, and must not borrow the nested case's leniency.
   const nestedKeys = [...childrenOf.values()].flat().map(entityKey);
-  const topKey = autoOpenKey(openCandidates, activeKey, playedKeys, nestedKeys);
+  // Whether the active card may take the slot on its own: he picked it, or
+  // it has become the newest thing played (`nextActivation`).
+  const targetPick = useTargetPick();
+  const activation = useRef(null);
+  activation.current = nextActivation(activation.current, activeKey,
+    targetPick, Date.now(), autoOpenKey(openCandidates, null, playedKeys));
+  const topKey = autoOpenKey(openCandidates, activeKey, playedKeys, nestedKeys,
+    activation.current.leads);
   const goals = useEntryGoals(t, openCandidates.map((sec) => standardsIdentity(sec).entity));
   // ONE renderer, used for a top-level card and for a nested [[subsection]]
   // alike (round 22) -- his "These cards should work exactly the same way as
@@ -1103,6 +1301,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   };
   const listRef = useRef(null);
   useFeedMotion(listRef, [...page.map(entityKey), "unassigned"]);
+  const pbNews = usePbNews(t);
   return html`<section class="practice-card log-list-card ${logClasses}"
       style=${logVars} ref=${pageRef}>
     <div class="card-heading attempts-heading">
@@ -1115,9 +1314,6 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
              behind the number -- so the noun goes in the label rather than
              staying implied. */""}
         <span class="meta">${page.length} entities shown</span>
-        <${StatMenuTrigger} t=${t} />
-        <${SortControl} ui=${ui} />
-        <${ResetFilterToggle} ui=${ui} />
         ${/* The target picker's TRIGGER, re-homed here now that the card it
              used to live on (the Active Target card) is deleted (amendment
              A9). Griffin retired the feature outright, then gave it a home
@@ -1136,6 +1332,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
             title="Pick a star or segment to practice manually">
           <${Icon} name="target" size=${14} />${" "}<span class="stat-menu-label">Target</span>
         </button>`}
+        <${PracticeLogSettings} ui=${ui} t=${t} />
       </div>
     </div>
     ${/* THE FEED'S OWN MOTION. `.log-list` is the element every card is a
@@ -1144,11 +1341,11 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
          a layout effect. The unassigned bucket carries a feed key too: it is
          not an entity, but it is a card in this list and it gets pushed down
          like any other physical object in the space. */""}
-    <div class="log-list" ref=${listRef}>
+    <${PbNews.Provider} value=${pbNews}><div class="log-list" ref=${listRef}>
       ${page.map((sec) => cardFor(sec))}
       <${UnassignedLogCard} v=${v} t=${t} ui=${ui} freshIds=${freshIds}
         openCompare=${openCompare} />
-    </div>
+    </div></${PbNews.Provider}>
     ${sections.length > shown && html`<div class="log-list-footer">
       <button class="quiet-button"
           onclick=${() => setShown(shown + CARDS_PER_PAGE)}>

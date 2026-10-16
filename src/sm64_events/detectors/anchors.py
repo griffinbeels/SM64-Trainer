@@ -26,6 +26,38 @@ state_loaded — savestate / Usamune section-state load: gGlobalTimer jumps
   anchor (.claude/rules/hundred-coin.md). Which load mechanism leaves the
   timer alone is unmeasured; the journal shape is the fact.
 
+  SINCE 2026-09-23 (task 0144) THOSE LOADS ARE JOURNALED TOO, as a
+  `state_loaded` whose `load_signature` names the clock that gave it away
+  (`load_signature()` below is the rule, shared with
+  tools/score_state_loads.py):
+    - "frame_counter_rewound": gGlobalTimer went backward (the full-RAM
+      restore above, and the only shape journaled before this date);
+    - "frame_counter_skipped_ahead": gGlobalTimer went FORWARD further than
+      the wall clock allows -- a Project64 state from an earlier boot loaded
+      after a restart (FRAME_SPEEDUP_ALLOWANCE carries the measurement);
+    - "igt_rewound": gGlobalTimer ran on while Usamune's counter went
+      BACKWARD to a value no restart can reach -- above the reset band AND
+      above the frames that passed since the last poll (a restart plus a
+      climb back through a poll gap can never exceed those frames);
+    - "igt_skipped_ahead": the counter moved FORWARD by more than the game
+      frames that passed, which ordinary play cannot do.
+  Measured before it shipped, over every picture ledger on this machine (one
+  row per drawn game frame; 47,766 steps, 26.5 minutes of play): the rule
+  fired 16 times, all in his 2026-09-23 WF session, and all 16 are loads --
+  the counter landed on exactly 181 eight times and 177 eight times, Mario in
+  the same forward rollout each time, which no play can repeat. Zero hits
+  anywhere else and zero forward jumps anywhere. The journals agree from the
+  other side: 192 backward counter moves between two journal events with
+  nothing between them that restarts the counter (163 of them star grab to
+  star grab, the TTC loop above among them) -- loads that used to journal
+  nothing. A counter restored INTO the reset band (a state saved within its
+  first second) still reads as a practice_reset: nothing in these numbers
+  separates the two.
+
+  Every anchor this detector emits carries `loads_journaled: True`, the
+  statement that a load between two anchors cannot have gone unrecorded;
+  `tracking/projection.py` judges an attempt valid only under it.
+
 Both anchor payloads carry mario_acted: whether Mario entered any non-passive
   action since the last anchor. The tracking layer discards reset-closures of
   attempts where the player never acted (no-op reset spam, per user feedback).
@@ -239,7 +271,11 @@ mario_acted event: emitted once per anchor period at Mario's first
   journals land on one of those actions and 62 of 62 read as having acted,
   which is how a menu warp 92 seconds after a death banked a phantom 1.5 s
   reset row on the arrival ("The first time we enter a map should never be
-  considered a reset, because there's nothing to reset").
+  considered a reset, because there's nothing to reset"). Nor does a textbox
+  the game opened or the fresh-file intro (addresses.NO_CONTROL_ACTIONS,
+  2026-09-28): Bowser speaks the moment Mario lands in his arena, so every
+  reset he took during that speech read as acted and would have banked a
+  reset row for a fight he could not yet play.
 
 VERIFY (live gate): confirm with the human that a Usamune SECTION state
 load moves global_timer backward (full-RAM restore). If Usamune implements
@@ -255,6 +291,7 @@ from sm64_events.memory.addresses import (ACT_INTRO_CUTSCENE,
                                            CASTLE_LEVELS, DEATH_ACTIONS,
                                            DIALOG_ACTIONS, DOOR_ACTIONS,
                                            LEVEL_EXIT_ACTIONS,
+                                           NO_CONTROL_ACTIONS,
                                            PASSIVE_ACTIONS,
                                            SAVE_DIALOG_ACTIONS)
 
@@ -262,6 +299,27 @@ BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console
 NEAR_ZERO_IGT = 30     # 30 frames = 1 s at 30 fps; <= so exactly 1 s still counts
 IGT_WRAP_CEILING = 65000  # u16 wrap guard: 65535->0 looks like a reset without this
 PAUSE_WARP_MIN_STREAK = 5  # walked load echoes pause 0-3 frames, menu warps 13+
+# A snapshot is a dozen separate reads, so the frame counter and Usamune's
+# counter in ONE sample can straddle a game frame, and a comparison has two
+# ends (tools/verify_death_clock.py READ_SKEW_FRAMES is 1 per end). That is the
+# whole tolerance for "the counter moved further than the game did".
+LOAD_SKEW_FRAMES = 2
+# A Project64 state saved in an EARLIER boot of the game puts the frame counter
+# FORWARD when loaded after a restart (his 2026-06-11 BitDW practice: boot at
+# frame 96, F7 to a state at 1763 -- journal ids 17790 and 17834). The counter
+# can only outrun the wall clock that far by a load: a 30 fps game at up to
+# FRAME_SPEEDUP_ALLOWANCE times normal speed, plus FRAME_JUMP_SLACK frames of
+# poll jitter. Measured before shipping: the worst consecutive pair in every
+# picture ledger ran 2.65x (one frame in 11 ms), every journal's 99.9th
+# percentile under 2.8x, and the only pairs over this rule were those two loads.
+FRAME_SPEEDUP_ALLOWANCE = 4
+FRAME_JUMP_SLACK = 30
+GAME_FPS = 30
+# The load signatures that are Project64 restoring ALL of RAM -- the game's
+# own frame counter included, backward or forward. The detector checks them
+# before the reset band, and the projector re-clocks the native ghost at them
+# exactly as it always has for a rewind (tracking/projection.py).
+FULL_RAM_LOADS = frozenset({"frame_counter_rewound", "frame_counter_skipped_ahead"})
 # The pairing windows and the destination-area rule live in
 # `detectors/counter_epoch.py` since 2026-08-04 — igt_clock.py needs the SAME
 # answer to know whether the counter it is reading measures a whole star or one
@@ -272,6 +330,30 @@ AREA_LOAD_WINDOW = counter_epoch.AREA_LOAD_WINDOW
 TELEPORT_WINDOW = counter_epoch.TELEPORT_WINDOW
 COURSE_START_AREA = counter_epoch.COURSE_START_AREA
 # (live logs 2026-06-12; segments._MENU_PAUSE_FRAMES mirrors the same evidence)
+
+
+def load_signature(prev: GameSnapshot, curr: GameSnapshot) -> str | None:
+    """Which clock says a save state was just loaded, or None.
+
+    Pure over one snapshot pair so `tools/score_state_loads.py` scores the rule
+    the detector runs. A drop INTO the reset band is not a load here
+    (practice_reset owns it, and nothing separates the two), a drop from the
+    u16 ceiling is wraparound, and a backward frame counter into the boot range
+    is a console reset (GameResetDetector)."""
+    frames = curr.global_timer - prev.global_timer
+    if frames < 0:
+        return None if curr.global_timer < BOOT_TIMER_MAX else "frame_counter_rewound"
+    elapsed = (curr.wall_time_utc - prev.wall_time_utc).total_seconds()
+    if frames > (max(elapsed, 0.0) * GAME_FPS * FRAME_SPEEDUP_ALLOWANCE
+                 + FRAME_JUMP_SLACK):
+        return "frame_counter_skipped_ahead"
+    moved = curr.igt_overall - prev.igt_overall
+    if (moved < 0 and prev.igt_overall < IGT_WRAP_CEILING
+            and curr.igt_overall > max(NEAR_ZERO_IGT, frames + LOAD_SKEW_FRAMES)):
+        return "igt_rewound"
+    if moved > frames + LOAD_SKEW_FRAMES:
+        return "igt_skipped_ahead"
+    return None
 
 
 class AnchorDetector:
@@ -376,7 +458,12 @@ class AnchorDetector:
                              if self._last_door_frame is not None else None,
                          "frames_since_dialog":
                              (curr.global_timer - self._last_dialog_frame)
-                             if self._last_dialog_frame is not None else None})
+                             if self._last_dialog_frame is not None else None,
+                         # Where the warp landed, like every other anchor:
+                         # the projector judges a reset by the area it lands
+                         # in (a subarea reset is not a course start).
+                         "area": curr.curr_area, "prev_area": prev.curr_area,
+                         "loads_journaled": True})
             self._acted = False
             self._acted_reported = False
             self._anchor_action = curr.mario_action
@@ -401,7 +488,8 @@ class AnchorDetector:
         if (self._anchor_action is None
                 and curr.mario_action not in PASSIVE_ACTIONS
                 and curr.mario_action not in DEATH_ACTIONS
-                and curr.mario_action not in LEVEL_EXIT_ACTIONS):
+                and curr.mario_action not in LEVEL_EXIT_ACTIONS
+                and curr.mario_action not in NO_CONTROL_ACTIONS):
             self._acted = True
             if not self._acted_reported:
                 self._acted_reported = True
@@ -473,22 +561,14 @@ class AnchorDetector:
                     "frames_since_warp_op": frames_since_warp_op,
                     "area": curr.curr_area, "prev_area": prev.curr_area,
                     "area_load": self._is_area_load(curr),
-                    "teleport": self._is_teleport(curr)}
-        if curr.global_timer < prev.global_timer:
-            if curr.global_timer < BOOT_TIMER_MAX:
-                return []  # console reset — GameResetDetector owns this
-            return [Event(type="state_loaded", frame=curr.global_timer,
-                          timestamp_utc=curr.wall_time_utc,
-                          payload={"igt_frames_restored": curr.igt_overall,
-                                   "mario_acted": self._acted,
-                                   "paused_frames_before": self._pause_streak,
-                                   "acted_tracking": True,
-                                   "action": curr.mario_action,
-                                   "prev_action": prev.mario_action,
-                                   "save_pending": self._save_menu_seen,
-                                   "frames_since_door": frames_since_door,
-                                   "frames_since_dialog": frames_since_dialog,
-                                   **observed})]
+                    "teleport": self._is_teleport(curr),
+                    "loads_journaled": True}
+        if curr.global_timer < prev.global_timer and curr.global_timer < BOOT_TIMER_MAX:
+            return []  # console reset — GameResetDetector owns this
+        signature = load_signature(prev, curr)
+        if signature in FULL_RAM_LOADS:
+            return [self._state_loaded(prev, curr, signature, frames_since_door,
+                                       frames_since_dialog, observed)]
         if (curr.igt_overall < prev.igt_overall
                 and curr.igt_overall <= NEAR_ZERO_IGT
                 and prev.igt_overall < IGT_WRAP_CEILING):
@@ -504,4 +584,32 @@ class AnchorDetector:
                                    "frames_since_door": frames_since_door,
                                    "frames_since_dialog": frames_since_dialog,
                                    **observed})]
+        if signature is not None:
+            return [self._state_loaded(prev, curr, signature, frames_since_door,
+                                       frames_since_dialog, observed)]
         return []
+
+    def _state_loaded(self, prev, curr, signature, frames_since_door,
+                      frames_since_dialog, observed) -> Event:
+        # `igt_frames_before` is new with the signature (2026-09-23): a load
+        # the frame counter never saw is found only by comparing the two
+        # counter readings, so both belong in the row that says so.
+        return Event(type="state_loaded", frame=curr.global_timer,
+                     timestamp_utc=curr.wall_time_utc,
+                     payload={"igt_frames_restored": curr.igt_overall,
+                              "igt_frames_before": prev.igt_overall,
+                              "load_signature": signature,
+                              "mario_acted": self._acted,
+                              "paused_frames_before": self._pause_streak,
+                              "acted_tracking": True,
+                              "action": curr.mario_action,
+                              "prev_action": prev.mario_action,
+                              "save_pending": self._save_menu_seen,
+                              "frames_since_door": frames_since_door,
+                              "frames_since_dialog": frames_since_dialog,
+                              # A load RESTORES the counter; it is never the
+                              # level zeroing it, so neither involuntary
+                              # reading applies (and either would hide the
+                              # load from the segment matcher as an echo).
+                              **observed, "area_load": False,
+                              "teleport": False})

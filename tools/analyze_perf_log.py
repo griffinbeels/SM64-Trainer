@@ -28,6 +28,9 @@ _DIMS = [
     ("gpu_vram(ours)",
      lambda r: _nested(r, "gpu", "local_usage_bytes", div=_MiB), "MiB", 512),
     ("pj64_rss", lambda r: _proc_rss(r), "MiB", 512),
+    # address space, not RAM, is the 32-bit emulator's limit (2 GiB)
+    ("pj64_vm_used", lambda r: _proc_max(r, "vm_used_mib"), "MiB", 128),
+    ("os_threads", lambda r: r.get("os_threads"), "", 20),
     ("system_commit",
      lambda r: _nested(r, "system", "commit_bytes", div=_MiB), "MiB", 1024),
     ("py_objects", lambda r: r.get("objects"), "", 50_000),
@@ -58,18 +61,45 @@ def _proc_rss(rec: dict):
     return sum(p.get("rss_bytes", 0) for p in procs.values()) / _MiB
 
 
+def _proc_max(rec: dict, key: str):
+    """The largest `key` among the watched processes that report it."""
+    vals = [p[key] for p in (rec.get("processes") or {}).values() if key in p]
+    return max(vals) if vals else None
+
+
 def _series(records: list[dict], get) -> list[float]:
     return [v for v in (get(r) for r in records) if v is not None]
 
 
+def _stall_rows(stalls: list[dict]) -> list[dict]:
+    """One row per stall record: when, how long this server could not run,
+    and who was busiest across it."""
+    rows = []
+    for s in stalls:
+        before = s.get("before") or {}
+        rows.append({
+            "t_utc": s.get("t_utc"), "late_ms": s.get("late_ms"),
+            "busy_pct": before.get("busy_pct"),
+            "top_cpu": [f"{r['exe']} {r['cpu_pct']}%"
+                        for r in (before.get("top_cpu") or [])[:3]],
+            "top_hard_faults": [f"{r['exe']} {r['hard_faults']}"
+                                for r in (before.get("top_hard_faults") or [])[:2]],
+        })
+    return rows
+
+
 def analyze(records: list[dict]) -> dict:
     """Reduce a list of perf records to {duration_min, dimensions[], verdict,
-    top_type_growers[]}. Each dimension carries first/last/max/delta/growth_pct/
-    per_hour and a `significant` flag (delta past its floor). Pure."""
+    top_type_growers[], stalls[]}. Each dimension carries first/last/max/delta/
+    growth_pct/per_hour and a `significant` flag (delta past its floor).
+    `"kind": "stall"` lines are listed, not ranked. Pure."""
+    stalls = [r for r in records if r.get("kind") == "stall"]
+    records = [r for r in records if r.get("kind", "sample") == "sample"]
     if not records:
         return {"duration_min": 0.0, "dimensions": [], "verdict":
                 "no perf records - was data/perf_log.jsonl written? "
-                "run a session first", "top_type_growers": []}
+                "run a session first", "top_type_growers": [],
+                "stalls": _stall_rows(stalls)}
 
     up0 = records[0].get("uptime_s", 0.0)
     up1 = records[-1].get("uptime_s", 0.0)
@@ -117,7 +147,8 @@ def analyze(records: list[dict]) -> dict:
             "dimensions": sorted(dims, key=lambda d: (d["growth_pct"] or 0),
                                  reverse=True),
             "verdict": verdict,
-            "top_type_growers": records[-1].get("top_growers", [])}
+            "top_type_growers": records[-1].get("top_growers", []),
+            "stalls": _stall_rows(stalls)}
 
 
 def _fmt(report: dict) -> str:
@@ -137,6 +168,13 @@ def _fmt(report: dict) -> str:
         for g in growers[:10]:
             lines.append(f"  {g['type']:<40} +{g['delta']} "
                          f"({g['baseline']} -> {g['current']})")
+    if report["stalls"]:
+        lines += ["", "stalls (this server could not run; who was busy across it):"]
+        for s in report["stalls"]:
+            faults = (f"; hard faults {', '.join(s['top_hard_faults'])}"
+                      if s["top_hard_faults"] else "")
+            lines.append(f"  {s['t_utc']} {s['late_ms']} ms late, machine busy "
+                         f"{s['busy_pct']}%: {', '.join(s['top_cpu'])}{faults}")
     lines += ["", report["verdict"]]
     return "\n".join(lines)
 

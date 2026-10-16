@@ -8,12 +8,15 @@ import sys
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
 from sm64_events.core.logging_setup import configure_logging
+from sm64_events.core.build_channel import current_build
 from sm64_events.core.paths import (
     bundled_ffmpeg,
     compare_cache_dir,
     compilations_dir,
     db_path,
+    data_root,
     instance_lock_path,
+    is_frozen,
     migrate_legacy_data_dir,
     server_port,
 )
@@ -33,6 +36,7 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
+from sm64_events.ghost.session import GhostSession
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
@@ -210,6 +214,18 @@ def _replay_service(cfg, recorder, codec, tracker):
     return replay
 
 
+def _ghost_follows_pb(service, ghost):
+    """Preserve the new PB's native poses and follow it immediately."""
+    service.on_pb_changed = ghost.pb_changed
+
+
+def _ghost_follows_attempts(service, ghost):
+    """A finished run joins the ghost population; a reclassified one moves
+    to its new strategy there and in its committed pose clips."""
+    service.on_attempt_saved = ghost.attempt_saved
+    service.on_attempts_reclassified = ghost.attempts_reclassified
+
+
 def _build_tracker(broadcaster):
     global _instance_lock
     db_file = db_path()
@@ -284,7 +300,7 @@ def _build_tracker(broadcaster):
 
 
 
-def _build_replay(replay_cfg, layout, service):
+def _build_replay(replay_cfg, layout, service, *, recorder_lock=None):
     from sm64_events.replay.encoder import pick_video_codec
     # Per-process loopback is PRIMARY: a replay must carry the game and
     # nothing else — no Discord call, no music (user report 2026-07-30).
@@ -322,17 +338,37 @@ def _build_replay(replay_cfg, layout, service):
     codec = pick_video_codec(_ffmpeg if video_sink_factory is not None else None)
     from sm64_events.replay.sourcefactory import SourceFactory
     sources = SourceFactory(layout, replay_cfg, DwmSurfaceVideoSource)
+    ghost_capture_factory = None
+    if layout.version == "us":
+        from sm64_events.ghost.capture import NativeCapture
+        from sm64_events.ghost.sound_player import SoundPlayerProcess
+        ghost_capture_factory = lambda **kwargs: NativeCapture(
+            layout, sound_player=SoundPlayerProcess(), **kwargs)
 
+    recorder_options = {}
+    if recorder_lock is not None:
+        from sm64_events.core.recorder_lock import acquire_recorder_lock
+        reservation = [recorder_lock]
+
+        def reserve_capture():
+            return reservation.pop() if reservation else acquire_recorder_lock()
+
+        recorder_options["recorder_lock_factory"] = reserve_capture
     recorder = ReplayRecorder(
         cfg=replay_cfg,
         window_finder=find_window,
         video_factory=sources.create,
+        # The ghost sound player is tapped only while Ghosts in recording is
+        # on, for the ghost copy; the clean audio is the game alone
+        # (replay/audio.py GhostTimeline). `recorder` binds late.
         audio_factory=lambda pid: ProcessAudioSource(
-            pid=pid, rate=replay_cfg.audio_rate),
+            pid=pid, rate=replay_cfg.audio_rate,
+            extra_pid=lambda: recorder.ghost_sound_pid()),
         fallback_audio_factory=lambda pid: SystemAudioSource(
             rate=replay_cfg.audio_rate, pid=pid),
         codec=codec,
-        video_sink_factory=video_sink_factory)
+        video_sink_factory=video_sink_factory,
+        ghost_capture_factory=ghost_capture_factory, **recorder_options)
     replay = _replay_service(replay_cfg, recorder, codec, service)
     return replay, codec
 
@@ -346,7 +382,7 @@ def _build_capture_layer(poller, replay):
     from sm64_events.core.capturelayer import CaptureLayer, WinProcesses, WinRegistry
     from sm64_events.core.setup_gpu import GpuSetupProbe
     from sm64_events.core.paths import (bundled_plugin_dll, bundled_renderer_dll, capture_layer_settings_path,
-                                        is_frozen, migrate_capture_layer_settings)
+                                        installer_identity, migrate_capture_layer_settings)
     migrate_capture_layer_settings()
     capture_layer = CaptureLayer(
         registry=WinRegistry(), processes=WinProcesses(),
@@ -354,19 +390,20 @@ def _build_capture_layer(poller, replay):
         dll_source=bundled_plugin_dll,
         renderer_source=bundled_renderer_dll,
         gpu_observation=GpuSetupProbe(lambda: replay.recorder.status() if replay else {}),
-        auto_refresh=is_frozen())
+        auto_refresh=current_build().channel == 'stable',
+        installer=installer_identity())
     from sm64_events.core.setup_runtime import SetupRuntime
     setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay)
-    # Source checkouts can carry older DLLs than the user's active candidate.
-    # Only an explicit Install may replace that shared file from a worktree.
     if not capture_layer.auto_refresh:
         return capture_layer, setup_observer
     try:
-        # A packaged build carrying a different layer refreshes the installed DLL
-        # while Project64 is closed -- the packaged-release update path,
-        # under the consent already given; a running PJ64 holds its DLL and
-        # the setup screen says so instead. Check at boot and at the refresh
-        # loop's configured interval, independent of which app opens first.
+        # A build carrying a newer layer refreshes the installed DLL while
+        # Project64 is closed, under the consent already given -- but only an
+        # install by an installer like this one (the frozen app's, or this
+        # checkout's own) and never with an older build (plugin_ownership).
+        # A running PJ64 holds its DLL and the setup screen says so instead.
+        # Check at boot and at the refresh loop's interval, independent of
+        # which app opens first.
         if capture_layer.refresh_if_stale():
             logging.getLogger("sm64.replay").info(
                 "capture layer refreshed to this build's DLL (Project64 was closed)")
@@ -405,7 +442,35 @@ def _comparison_services(replay, service, broadcaster, codec, replay_cfg):
     return compare, compilation
 
 
-def build():
+def _local_ghost_population(service):
+    from sm64_events.core.paths import ghost_population_root
+    from sm64_events.ghost.population import LocalPopulation
+    from sm64_events.ghost.bundled_beta import with_bundled_beta
+    root = ghost_population_root()
+    definitions = lambda: service.db.segment_defs() if service.db else []
+    local = LocalPopulation(root, definitions=definitions)
+    return with_bundled_beta(local, cache=data_root() / 'data' / 'bundled_ghosts', definitions=definitions)
+
+
+def _community_population(service):
+    """Packaged community configuration creates one cache and IO worker."""
+    from sm64_events.community import CommunityAccount, CommunityConfig, CachedPopulation, CommunitySync
+    from sm64_events.core.build_channel import current_build
+    build = current_build()
+    if not build.community_enabled:
+        return _local_ghost_population(service), None, None
+    config = CommunityConfig(public_url=build.community_url, supabase_url=build.supabase_url,
+        publishable_key=build.supabase_publishable_key, oauth_client_id=build.oauth_client_id,
+        channel=build.account_namespace, callback_url=build.callback_url, enabled=True,
+        **({'friend_invitation': build.friend_invitation} if build.friend_invitation else {}))
+    account = CommunityAccount(config)
+    population = CachedPopulation(_local_ghost_population(service),
+        root=data_root()/'data'/'community_cache', account=account,
+        definitions=lambda: service.db.segment_defs() if service.db else [])
+    return population, account, CommunitySync(account, population)
+
+
+def build(*, recorder_lock=None):
     configure_logging()
     migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
     # Capture threads contend with encode/server threads for the GIL; the
@@ -430,8 +495,9 @@ def build():
     # Wired off the CONFIG, not off the ReplayService below: the clips he saved
     # are on disk whatever the recorder does, and their filenames are the only
     # index to them.
-    service.saved_clip_ids = lambda: saved_attempt_ids(replay_cfg.save_root)
-    replay, codec = _build_replay(replay_cfg, layout, service)
+    service.saved_clip_ids = lambda among=None: saved_attempt_ids(replay_cfg.save_root, among=among)
+    replay, codec = (_build_replay(replay_cfg, layout, service) if recorder_lock is None
+                     else _build_replay(replay_cfg, layout, service, recorder_lock=recorder_lock))
     compare, compilation = _comparison_services(replay, service, broadcaster, codec, replay_cfg)
     # NO target gate. This passed `target_active=lambda: service.target is not
     # None` (task 0087) until 2026-08-06, which made the recorder blind exactly
@@ -454,23 +520,46 @@ def build():
 
     from sm64_events.server.inputruntime import InputRuntime
     inputs = InputRuntime(service, memory, layout, replay)
+    from sm64_events.ghost.native_session import NativeGhost
+    ghost_frame = {"frame":None}
+    native_ghost = NativeGhost(replay, supported=layout.version == "us",
+        origin_of=lambda kind,key:service.native_rival_origin(kind,key,frame=ghost_frame["frame"]))
+
+    def note_ghost_snapshot(snapshot):
+        ghost_frame["frame"] = snapshot.global_timer
+        native_ghost.note(snapshot)
+
+    async def ghost_capture_gap(reason):
+        await service.capture_gap(reason)
+        native_ghost.note()
+
     poller = Poller(memory, detector_stream(), service, on_frame=service.settle_frame,
                     reader=reader, detector_factory=detector_stream,
-                    on_gap=service.capture_gap)
+                    on_gap=ghost_capture_gap, on_snapshot=note_ghost_snapshot)
     inputs.bind(poller)
+    service.observed_game_version = lambda:poller.observed_game_version
+    population, community_account, community_sync = _community_population(service)
+    # One session owns native ghost preferences and the practice target.
+    ghost = GhostSession(tracker=service, inputs=inputs.get_service,
+                         replay=replay, broadcaster=broadcaster,
+                         native=native_ghost,population=population,
+                         version_of=lambda:poller.observed_game_version, community=community_sync)
+    _ghost_follows_attempts(service, ghost)
+    _ghost_follows_pb(service, ghost)
     if replay is not None:
         # A real run on vanilla SM64, another hack or another game records
         # nothing; unknown (no header read yet) keeps the old behaviour.
         replay.recorder.set_capture_gate(lambda: poller.practice_rom is not False)
     updater = UpdateService(current_version=__version__)
-    updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     capture_layer, setup_observer = _build_capture_layer(poller, replay)
     return create_app(poller, broadcaster, service=service, replay=replay,
                       inputs=inputs.get_service, on_db_attached=inputs.attach,
-                      updater=updater, compare=compare, compilation=compilation,
+                      updater=updater, bootstrap_cleanup_path=_bootstrap_cleanup_arg(),
+                      compare=compare, compilation=compilation,
                       db_retry=db_retry, capture_layer=capture_layer,
-                      setup_observer=setup_observer,
-                      refresh_library_on_start=True)
+                      setup_observer=setup_observer, ghost=ghost,
+                      refresh_library_on_start=True, community_account=community_account,
+                      community_sync=community_sync, protect_local_api=True, local_port=server_port())
 
 
 _app = None
@@ -494,7 +583,30 @@ def __getattr__(name):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def run() -> None:
+def _build_stale_natives() -> None:
+    """From a checkout, bring the bundled natives up to these sources before
+    serving (tools/build_natives.py: a cache copy when another checkout built
+    them, else a compile). A frozen app ships its own; a failure only warns,
+    and the setup screen then reports the capture layer unavailable."""
+    import os
+    from pathlib import Path
+    tool = Path(__file__).resolve().parents[2] / "tools" / "build_natives.py"
+    if is_frozen() or os.environ.get("SM64_BUILD_NATIVES") == "0" or not tool.is_file():
+        return
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("build_natives", tool)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    print("Checking the capture layer and renderer against this checkout's sources...")
+    try:
+        states = module.ensure()
+    except Exception as failure:  # noqa: BLE001 - never stop the server over the bundle
+        print(f"  WARNING: the native bundle was not checked: {failure}")
+        return
+    print("  " + ", ".join(f"{name} {state}" for name, state in states.items()))
+
+
+def run(*, recorder_lock=None) -> None:
     """THE canonical launch (`uv run python -m sm64_events.main`).
 
     timeout_graceful_shutdown is the load-bearing argument: browsers hold
@@ -515,6 +627,7 @@ def run() -> None:
     30 s = drain wedged; neither = a new layer, instrument before fixing.
     """
     import os
+    _build_stale_natives()
     if os.environ.pop("SM64_RESTART", None):
         # A restart relaunch: the old process is exiting — wait for the
         # port, THEN the db instance lock. Both waits are needed: uvicorn
@@ -527,7 +640,8 @@ def run() -> None:
         wait_port_free()
         wait_lock_free(instance_lock_path())
     import uvicorn
-    uvicorn.run(get_app(), host="127.0.0.1", port=server_port(),
+    app = build(recorder_lock=recorder_lock) if recorder_lock is not None else get_app()
+    uvicorn.run(app, host="127.0.0.1", port=server_port(),
                 timeout_graceful_shutdown=3)
 
 

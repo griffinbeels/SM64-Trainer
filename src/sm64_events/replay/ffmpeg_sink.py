@@ -44,7 +44,7 @@ import numpy as np
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.replay.config import (
-    AUDIO_RESAMPLE_OPTIONS, RING_MAXRATE, forced_idr_args, fragment_mux_options,
+    AUDIO_RESAMPLE_OPTIONS, PICTURE_RESAMPLE_OPTIONS, RING_MAXRATE, forced_idr_args, fragment_mux_options,
     raw_picture_args, video_quality_args,
 )
 from sm64_events.replay.ring import SegmentInfo
@@ -119,8 +119,8 @@ if hasattr(ctypes, "windll"):
 
 def _assign_kill_on_close(proc) -> int | None:
     """Assign `proc` to a Windows Job Object whose last-handle-close kills its
-    members. We never close the returned handle: it dies WITH this process and
-    the OS then terminates ffmpeg. Returns the job handle to keep alive, or
+    members. Keep the returned handle until the child exits; if this process
+    dies first the OS closes it and terminates ffmpeg. Returns its handle, or
     None (logged) if assignment failed."""
     class _IO_COUNTERS(ctypes.Structure):
         _fields_ = [(n, ctypes.c_ulonglong) for n in (
@@ -367,6 +367,13 @@ class FfmpegAvSink:
         self._stop.set()
         if self._feeder is not None:
             self._feeder.join(timeout=10)
+            if self._feeder.is_alive():
+                # A blocked write cannot observe _stop. Abort only our exact
+                # child without first taking its mux lock or flushing stdin.
+                self._abort_proc()
+                self._feeder.join(timeout=5)
+                if self._feeder.is_alive():
+                    raise RuntimeError("ffmpeg feeder cleanup pending")
             self._feeder = None
         if not self._picture:
             # The CFR feed's audio pipe teardown flushes, and a flush waits
@@ -381,7 +388,24 @@ class FfmpegAvSink:
         self._stop_proc()
         for t in self._readers:
             t.join(timeout=10)
-        self._readers.clear()
+        self._readers = [t for t in self._readers if t.is_alive()]
+        if self._readers:
+            raise RuntimeError("ffmpeg readers cleanup pending")
+        self._close_jobs()
+
+    def _close_jobs(self, *, require_closed: bool = True) -> None:
+        pending = []
+        for job, proc in self._jobs:
+            try:
+                if proc.poll() is None or not _k32.CloseHandle(job):
+                    pending.append((job, proc))
+            except (OSError, ctypes.ArgumentError):
+                # poll() fails as OSError; a handle ctypes cannot pass fails
+                # as ArgumentError. Either way the job stays owned.
+                pending.append((job, proc))
+        self._jobs = pending
+        if pending and require_closed:
+            raise RuntimeError("ffmpeg child job ownership cleanup pending")
 
     # -- process management ----------------------------------------------------
     def _spawn(self, w: int, h: int, first_stamp: float | None = None) -> None:
@@ -451,7 +475,7 @@ class FfmpegAvSink:
             *(["-bsf:v", picture_duration_filter()] if self._picture else []),
             # audio: AAC, async-resampled to LOCK to the master (kills drift)
             "-c:a", "aac", "-b:a", "160k", "-ar", str(rate),
-            "-af", f"aresample={AUDIO_RESAMPLE_OPTIONS}",
+            "-af", f"aresample={PICTURE_RESAMPLE_OPTIONS if self._picture else AUDIO_RESAMPLE_OPTIONS}",
             *self._output_args(seg_s, pattern),
         ]
         self._proc = subprocess.Popen(
@@ -468,13 +492,7 @@ class FfmpegAvSink:
         # A job handle must outlive its child (closing it kills the child).
         # Children that already exited release theirs now, so a respawn
         # loop cannot accumulate one handle per spawn for the session.
-        kept = []
-        for old_job, old_proc in self._jobs:
-            if old_proc.poll() is None:
-                kept.append((old_job, old_proc))
-            else:
-                _k32.CloseHandle(old_job)
-        self._jobs = kept
+        self._close_jobs(require_closed=False)
         job = _assign_kill_on_close(self._proc)
         if job is not None:
             self._jobs.append((job, self._proc))
@@ -571,7 +589,6 @@ class FfmpegAvSink:
 
     def _stop_proc(self) -> None:
         proc = self._proc
-        self._proc = None
         if proc is None:
             return
         self._close_mux()
@@ -582,6 +599,14 @@ class FfmpegAvSink:
         except Exception:
             log.exception("ffmpeg shutdown failed - killing")
             proc.kill()
+            proc.wait(timeout=5)
+        self._proc = None  # Failed wait/kill retains the exact process for retry.
+
+    def _abort_proc(self) -> None:
+        proc = self._proc
+        if proc is not None:
+            proc.kill()
+            proc.wait(timeout=5)
 
     # -- audio named pipe ------------------------------------------------------
     def _open_audio_pipe(self) -> None:
@@ -668,6 +693,11 @@ class FfmpegAvSink:
                 pass
         if self._audio_thread is not None:
             self._audio_thread.join(timeout=5)
+            if self._audio_thread.is_alive():
+                self._abort_proc()
+                self._audio_thread.join(timeout=5)
+                if self._audio_thread.is_alive():
+                    raise RuntimeError("ffmpeg audio feeder cleanup pending")
             self._audio_thread = None
         h, self._pipe_handle = self._pipe_handle, None
         if h is not None:
@@ -901,9 +931,9 @@ class FfmpegAvSink:
         rate = self._cfg.audio_rate
         placement = AudioPlacement(rate, self._mux_audio_chunk)
 
-        def _put_at(buf: bytes, ends_at: float) -> None:
+        def _put_at(buf: bytes, ends_at: float, padding: bool = False) -> None:
             try:
-                placement.put_at(buf, ends_at)
+                (placement.pad_at if padding else placement.put_at)(buf, ends_at)
             except Exception:
                 if not broken[0]:
                     log.warning("audio mux failed: the child is gone -- the "
@@ -911,8 +941,11 @@ class FfmpegAvSink:
                 broken[0] = True
 
         pacer = AudioPacer(rate, _time.perf_counter,
-                           write=lambda buf: _put_at(buf, _time.time()),
-                           write_at=_put_at, idle_grace_s=0.05)
+                           write=lambda buf: _put_at(buf, _time.time(), padding=True),
+                           write_at=_put_at, idle_grace_s=0.05,
+                           # The pacer's clock is perf_counter; the stamps are wall time.
+                           missing=lambda bound: placement.missing(
+                               bound - _time.perf_counter() + _time.time()))
         while not self._stop.is_set():
             drained = False
             while True:

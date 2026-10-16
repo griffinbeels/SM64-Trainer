@@ -47,6 +47,20 @@ MARIO_NUM_STARS_OFF = 0xAA       # s16, total star count; live-verified 2026-06-
 # prints it on every live line beside the HUD's copy. Task 0110's 100-coin
 # engine reads it off the exit grab (`star_collected.coins`).
 MARIO_NUM_COINS_OFF = 0xA8
+# s16 health -- 0x880 full (8 wedges), one wedge per 0x100. Decomp include/
+# types.h puts it at 0xAE, three bytes past the live-verified numStars, with
+# numLives (s8) at 0xAD between them. The game's own test for "dead" is
+# `health < 0x100`: interact_star_or_key refuses a star or key below it, and
+# the ground actions turn it into a death action. It cannot climb back
+# (update_mario_health skips a Mario under 0x100) until the death exit writes
+# 0x100, so dead health sits in [0xF6, 0xFF]. 0 is the struct before a file
+# has loaded -- no Mario, not a dead one. VERIFY (live gate pending):
+# tools/verify_addresses.py checks it against gHudDisplay.wedges, which the
+# game rewrites as `health >> 8` every frame (level_update.c
+# update_hud_values). detectors/death.py::mario_alive is its one reader.
+MARIO_HEALTH_OFF = 0xAE
+MARIO_HEALTH_DEAD_BELOW = 0x100
+HUD_WEDGES_OFF = 0x6         # gHudDisplay + 0x6, s16: the power meter's wedges
 # The coin count that spawns a course's 100-coin star (star 6). Holding at
 # least this many at an exit grab proves the visit was a 100-coin run even
 # when a savestate loaded AFTER the star skipped its grab edge.
@@ -328,12 +342,35 @@ DEATH_ACTIONS = {
 # sDelayedWarpOp (s16; 0 = no warp pending): `layout.pending_warp_op`.
 # Op values (decomp level_update.h): 0x12 WARP_OP_DEATH is the NORMAL death
 # warp, pended ~48 frames AFTER the death action already fired our event —
-# deliberately not consumed (would double-count every death). Levels that
+# consumed only when NO death action is running (DEATH_WARP_CAUSES below),
+# which is how a lava death stops being invisible. Levels that
 # define a warp-floor node (TotWC's cloud exit) turn 0x13 into a non-death
 # exit; falling out of those would mislabel as death — characterize at the
 # live gate before excluding by level id.
 WARP_OP_WARP_FLOOR = 0x13  # void-out: resolves to the death node (or game
                            # over at 0 lives) unless the level has node 0xF3
+WARP_OP_DEATH = 0x12
+WARP_OP_GAME_OVER = 0x14   # replaces WARP_OP_DEATH / WARP_FLOOR at 0 lives
+# A death warp is PENDING: Mario is dead whatever he does next. level_trigger_
+# warp pends a new op only while none is pending, so the pipe or star exit he
+# reaches afterwards is dropped and the death warp fires instead -- the BitFS
+# row of 2026-09-28 (lava boost at 0 health, then the pipe, then the castle).
+DEATH_WARP_OPS = frozenset({WARP_OP_DEATH, WARP_OP_WARP_FLOOR,
+                            WARP_OP_GAME_OVER})
+# The deaths that pend WARP_OP_DEATH WITHOUT entering a DEATH_ACTION -> cause.
+# Every level_trigger_warp(m, WARP_OP_DEATH) in decomp (searched 2026-09-28):
+# the death actions' own handlers, plus these three and out-of-bounds (a NULL
+# floor, mario.c update_mario_geometry_inputs, in whatever action he was in).
+# A squish death pends the warp and enters ACT_DISAPPEARED on the same frame,
+# so its cause is read off the action BEFORE the edge too (detectors/death.py).
+ACT_LAVA_BOOST = 0x010208B7
+ACT_SQUISHED = 0x00020339
+ACT_CAUGHT_IN_WHIRLPOOL = 0x300222E3
+DEATH_WARP_CAUSES = {
+    ACT_LAVA_BOOST: "lava",
+    ACT_SQUISHED: "squished",
+    ACT_CAUGHT_IN_WHIRLPOOL: "whirlpool",
+}
 # The ops a WALKED warp pends -- Mario stepped through something the level
 # placed. Values from decomp level_update.h; each one read back off the
 # anchor payloads of every journal on this machine (2026-09-04, task 0117):
@@ -546,6 +583,7 @@ ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some
 # then KEEPS reading 0x1337 for well over a hundred frames, which is why
 # detectors/anchors.py keys on fade-out RECENCY rather than on the action.
 ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for in-level teleporters elsewhere
+ACT_TELEPORT_FADE_IN = 0x00001337   # the landing half; the byte lingers (above)
 # THE BIG BOO'S HAUNT CAGE — the one course entrance that fires neither of
 # the two actions above (his probe run, 2026-08-07: five entrances produced
 # clean touches, BBH produced nothing). The cage plays its own animation, and
@@ -621,6 +659,16 @@ ACT_READING_NPC_DIALOG = 0x20001306        # talking to an NPC
 ACT_WAITING_FOR_DIALOG = 0x0000130A        # dialog about to begin
 DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
                             ACT_READING_NPC_DIALOG, ACT_WAITING_FOR_DIALOG})
+# Mario held by the game with no control given: a textbox (Bowser opens his
+# own the moment Mario lands in an arena), the fresh-file intro, and a
+# teleporter's fade (whose fade-in byte lingers for 100+ frames, above). Being
+# in one is not the player ACTING (anchors.py's activity flag), so a reset
+# taken during one is a reset made before he could play (2026-09-28, the
+# Bowser intros: "technically I didn't have any inputs as a player... but I
+# still DID reset"; and a 22-frame WDW "reset" that an L reset's own reload
+# banked off the lingering fade-in, console-support journal id 20182).
+NO_CONTROL_ACTIONS = DIALOG_ACTIONS | {ACT_INTRO_CUTSCENE, ACT_TELEPORT_FADE_OUT,
+                                       ACT_TELEPORT_FADE_IN}
 
 # The dialog actions' own SUB-STATE -- the field immediately preceding
 # MARIO_ACTION_TIMER, u16, same struct. `tools/probe_textbox.py` round 2
@@ -668,6 +716,41 @@ MARIO_YAW_OFF = 0x2E             # s16, the yaw of that vector
 # changes over time and where there are opportunities to go faster".
 # VERIFY until read live with him.
 MARIO_FORWARD_VEL_OFF = 0x54     # f32
+# pos -- where he stands in the level, for the ghost. It lies BETWEEN action
+# (0x0C) and forwardVel, so the one block inputs/frame.py already copies per
+# picture holds it: no new read, no layout row, no address gate. The same
+# decomp struct row as above; tools/probe_objects.py has read it at this
+# offset since 2026-08-05.
+#
+# VERIFIED 2026-09-20 against his own play, and by a check that needs no ground
+# truth: on his Fall onto the Caged Island recording, over the 45 consecutive
+# picture pairs where he was on level ground above walking speed, the distance
+# between the two stored positions matches that row's own `forwardVel` to a
+# median of 2.4 %. The residual is the engine's own order of operations -- the
+# step taken between two pictures is the LATER row's speed, and he was
+# decelerating exactly one unit a frame through most of them (moved 42.14 at a
+# speed of 43.14, 41.14 at 42.14, and so on down). Two independently decoded
+# fields of the same struct agreeing on his motion is what pins the offset.
+MARIO_POS_OFF = 0x3C             # Vec3f {x, y, z}, world units
+
+# Ghost capture live-gate offsets: original N64 types.h / graph_node.h.
+# VERIFY against the renderer-boundary capture before claiming pose fidelity.
+# Host libsm64 structs have modified field layouts and are not RAM decoders.
+MARIO_AREA_OFF = 0x90            # Area* in MarioState
+MARIO_GFX_ANIM_TIMER_OFF = 0x42  # u16 in Object.header.gfx.animInfo
+AREA_INDEX_OFF = 0x00           # s8
+AREA_FLAGS_OFF = 0x01           # active bit 0
+AREA_GRAPH_ROOT_OFF = 0x04      # GraphNodeRoot*
+AREA_CAMERA_OFF = 0x24          # Camera*
+GRAPH_NODE_TYPE_OFF = 0x00      # s16, GraphNodeRoot is type 1
+GRAPH_NODE_FLAGS_OFF = 0x02     # active bit 0
+GRAPH_ROOT_AREA_OFF = 0x14      # u8
+# The collision world is s16: every floor the game can find lies inside
+# +-32768, a level's own cells stop at +-8192 sideways, and the default
+# floor/ceiling are -11000/+20000. So this is four times a level's width and
+# clears its full height; a float past it is reset/loading memory, not a
+# place. (A parallel-universe excursion also reads past it and is refused.)
+MARIO_POS_LIMIT = 32768.0
 
 # An s16 angle spans the whole circle, so degrees are (value / 65536) * 360.
 # The game's own units are what every other tool shows ("the 64xxx whatever

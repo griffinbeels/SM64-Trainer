@@ -66,7 +66,7 @@ class FakeExtractor:
 
 
 def make_service(tmp_path, attempts, cov=None):
-    cfg = ReplayConfig(save_root=tmp_path / "replays",
+    cfg = ReplayConfig(save_root=tmp_path / "replays", pre_pad_s=3.0,
                        scratch_dir=tmp_path / "buf", extract_wait_s=0.0)
     cov = cov or (T0 - timedelta(seconds=60), T0 + timedelta(seconds=60))
     return ReplayService(cfg=cfg, recorder=FakeRecorder(cov),
@@ -158,7 +158,7 @@ def test_available_attempt_ids_saved_or_buffer_covered(tmp_path):
 def test_available_attempt_ids_empty_buffer_only_disk(tmp_path):
     a = attempt(id=1)
     svc = ReplayService(
-        cfg=ReplayConfig(save_root=tmp_path / "replays",
+        cfg=ReplayConfig(save_root=tmp_path / "replays", pre_pad_s=3.0,
                          scratch_dir=tmp_path / "buf", extract_wait_s=0.0),
         recorder=FakeRecorder(None),             # no coverage -> nothing buffer-covered
         extractor=FakeExtractor(), tracker=FakeTracker([a]))
@@ -340,7 +340,7 @@ def test_wait_for_tail_blocks_until_coverage_reaches_span_end(tmp_path):
         def status(self):
             return {"recording": True}
 
-    cfg = ReplayConfig(save_root=tmp_path / "replays",
+    cfg = ReplayConfig(save_root=tmp_path / "replays", pre_pad_s=3.0,
                        scratch_dir=tmp_path / "buf", extract_wait_s=5.0)
     svc = ReplayService(cfg=cfg, recorder=Rec(), extractor=FakeExtractor(),
                         tracker=FakeTracker([attempt()]))
@@ -363,7 +363,7 @@ def test_wait_for_tail_short_circuits_when_not_recording(tmp_path):
         def status(self):
             return {"recording": False}
 
-    cfg = ReplayConfig(save_root=tmp_path / "replays",
+    cfg = ReplayConfig(save_root=tmp_path / "replays", pre_pad_s=3.0,
                        scratch_dir=tmp_path / "buf", extract_wait_s=5.0)
     svc = ReplayService(cfg=cfg, recorder=StoppedRec(), extractor=FakeExtractor(),
                         tracker=FakeTracker([attempt()]))
@@ -374,7 +374,7 @@ def test_wait_for_tail_short_circuits_when_not_recording(tmp_path):
 
 def test_reveal_validates_path_is_inside_save_root(tmp_path):
     opened = []
-    cfg = ReplayConfig(save_root=tmp_path / "replays",
+    cfg = ReplayConfig(save_root=tmp_path / "replays", pre_pad_s=3.0,
                        scratch_dir=tmp_path / "buf", extract_wait_s=0.0)
     svc = ReplayService(cfg=cfg, recorder=FakeRecorder(
                             (T0 - timedelta(seconds=60), T0 + timedelta(seconds=60))),
@@ -404,7 +404,7 @@ class RecorderWithRealRing:
 
 
 def test_settings_update_validates_persists_and_applies(tmp_path):
-    cfg = ReplayConfig(save_root=tmp_path / "replays",
+    cfg = ReplayConfig(save_root=tmp_path / "replays", pre_pad_s=3.0,
                        scratch_dir=tmp_path / "buf",
                        settings_path=tmp_path / "replay_settings.json")
     rec = RecorderWithRealRing()
@@ -428,7 +428,7 @@ def test_settings_update_validates_persists_and_applies(tmp_path):
 
 
 def test_settings_pads_apply_to_span_and_idle_window(tmp_path):
-    cfg = ReplayConfig(save_root=tmp_path / "replays",
+    cfg = ReplayConfig(save_root=tmp_path / "replays", pre_pad_s=3.0,
                        scratch_dir=tmp_path / "buf",
                        settings_path=tmp_path / "replay_settings.json")
     rec = RecorderWithRealRing()
@@ -452,7 +452,7 @@ def test_settings_pads_apply_to_span_and_idle_window(tmp_path):
 
 
 def test_settings_reports_saved_bytes_on_demand(tmp_path):
-    cfg = ReplayConfig(save_root=tmp_path / "replays",
+    cfg = ReplayConfig(save_root=tmp_path / "replays", pre_pad_s=3.0,
                        scratch_dir=tmp_path / "buf",
                        settings_path=tmp_path / "replay_settings.json")
     svc = ReplayService(cfg=cfg, recorder=RecorderWithRealRing(),
@@ -495,7 +495,7 @@ def test_save_segment_attempt_filename_contains_segment_name_and_rta(tmp_path):
     a = attempt(id=10_000_000_005, segment_id=1, course_id=None,
                 star_id=None, igt_frames=None, rta_frames=85,
                 outcome="success")
-    cfg = ReplayConfig(save_root=tmp_path / "replays",
+    cfg = ReplayConfig(save_root=tmp_path / "replays", pre_pad_s=3.0,
                        scratch_dir=tmp_path / "buf", extract_wait_s=0.0)
     cov = (T0 - timedelta(seconds=60), T0 + timedelta(seconds=60))
     svc = ReplayService(cfg=cfg, recorder=FakeRecorder(cov),
@@ -744,3 +744,52 @@ def test_a_few_inexact_rows_keep_the_plugin_map_but_say_so(tmp_path):
     svc.track_pads = lambda attempt: {}
     res = svc.view(42)
     assert res["frame_map"] is None and res["frame_map_source"] is None
+
+
+def _utc(moment):
+    return moment.isoformat().replace("+00:00", "Z")
+
+
+@pytest.mark.parametrize("prev_s, expected_lead_s", [
+    (None, 3.0),   # nothing came before: the pad alone
+    (10.0, 3.0),   # the previous reset is further back than the pad
+    (1.0, 1.0),    # a reset 1 s earlier: the clip opens ON it, not before
+])
+def test_the_lead_in_never_reaches_back_past_the_previous_reset(
+        tmp_path, prev_s, expected_lead_s):
+    """His ruling (task 0144): "if I reset 15 times, and actually do a run on
+    the 16th time, then the practice log entry only shows the video for the
+    gameplay between the 16th reset and the xcam dance"."""
+    prev = None if prev_s is None else _utc(T0 - timedelta(seconds=prev_s))
+    svc = make_service(tmp_path, [attempt(prev_anchor_utc=prev)])
+    svc.view(42)
+    start, end, _ = svc.extractor.calls[0]
+    assert start == T0 - timedelta(seconds=expected_lead_s)
+    assert end == T0 + timedelta(seconds=12 + 2)
+
+
+def test_the_prune_scan_validates_only_its_candidates_native_clips(tmp_path, monkeypatch):
+    """The startup prune names its candidates, and only their clips are
+    opened: each check parses and hashes the whole clip, and every clip on
+    every start cost 1.66 s (09-25). A candidate is still protected only by
+    a committed, hashed clip."""
+    import shutil
+    from sm64_events.ghost import clip
+    from sm64_events.replay.service import saved_attempt_ids
+    from test_ghost_recording import native_service
+    service, row, archive = native_service(tmp_path)
+    service.preserve_native(row.id)
+    archive.close()
+    root = service.cfg.save_root
+    path, _manifest = service.find_native(row.id)
+    for other in (7, 8, 9):          # other attempts' clips, never candidates here
+        shutil.copyfile(path, path.with_name(f"attempt_{other}.ghost"))
+        shutil.copyfile(path.with_suffix(".json"), path.with_name(f"attempt_{other}.json"))
+    checked = []
+    genuine = clip.check_manifest
+    monkeypatch.setattr(clip, "check_manifest",
+                        lambda ghost, *args, **kw: checked.append(ghost.name) or genuine(ghost, *args, **kw))
+    assert saved_attempt_ids(root, among=[row.id, 5]) == {row.id}
+    assert checked == [path.name]
+    path.write_bytes(b"corrupt native recording")
+    assert saved_attempt_ids(root, among=[row.id]) == set()

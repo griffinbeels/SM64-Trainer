@@ -19,8 +19,14 @@ Two numbers that used to live in this docstring as folklore, both measured the
 same day: the old `hz=60` was the REQUESTED rate and 45.9 Hz was the achieved
 one (each tick worked for 3.4 ms and then slept a full interval), and no game
 frame went unobserved at any rate tried — 60, 120, 250 or 500.
+
+The rate is kept by `PollClock`, not by `asyncio.sleep`: see its docstring for
+why a 4 ms sleep on the event loop lands every 15.6 ms.
 """
 import asyncio
+import ctypes
+import sys
+from asyncio import get_running_loop
 from contextlib import asynccontextmanager
 from sm64_events.core.profiling import measured
 import logging
@@ -36,6 +42,92 @@ from sm64_events.core.onboarding import identify_rom, is_practice_rom
 from sm64_events.memory.base import MemoryReadError
 
 log = logging.getLogger("sm64.poller")
+
+_CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002
+_TIMER_ALL_ACCESS = 0x1F0003
+
+
+class _HighResolutionTimer:
+    """One Windows high-resolution waitable timer (Win10 1803+), armed one
+    shot at a time. Its own kernel32 instance, so these prototypes never
+    change the ones `replay/` sets on the shared `ctypes.windll.kernel32`."""
+
+    def __init__(self):
+        self.handle = None
+        if sys.platform != "win32":
+            return
+        k = ctypes.WinDLL("kernel32")
+        k.CreateWaitableTimerExW.restype = ctypes.c_void_p
+        k.CreateWaitableTimerExW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p,
+                                            ctypes.c_uint32, ctypes.c_uint32]
+        k.SetWaitableTimer.restype = ctypes.c_int
+        k.SetWaitableTimer.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_longlong),
+                                       ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p,
+                                       ctypes.c_int]
+        self._set = k.SetWaitableTimer
+        self.handle = k.CreateWaitableTimerExW(
+            None, None, _CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, _TIMER_ALL_ACCESS)
+
+    def arm(self, seconds: float) -> bool:
+        """Signal once, `seconds` from now."""
+        due = ctypes.c_longlong(-max(1, int(seconds * 10_000_000)))
+        return bool(self.handle) and bool(
+            self._set(self.handle, ctypes.byref(due), 0, None, None, False))
+
+
+class PollClock:
+    """Paces the poll loop at `interval` on the high-resolution waitable timer.
+
+    `asyncio.sleep` cannot keep this rate on Windows: the event loop's wait is
+    rounded to the 15.6 ms system timer, so a 4 ms sleep lands every 15.6 ms,
+    64.5 ticks/s (measured 2026-09-27, the real loop, Python 3.13). It reached
+    ~220/s only while something ELSE in the process raised the timer
+    resolution -- the audio tap -- so before audio started, in capture
+    reconnects and in broadcast-only servers the pad was looked at about twice
+    a frame and the settle point (`_settle_ticks`, 5) was never reached.
+    Windows 11 ignores timeBeginPeriod for background processes
+    (`replay/video.py`); the high-resolution timer is exempt.
+
+    The timer is waited on through the event loop's own completion port
+    (`IocpProactor.wait_for_handle`, which asyncio's Windows subprocesses use
+    too), so the kernel wakes the loop directly. A clock THREAD calling
+    `call_soon_threadsafe` does the same job at about twice the CPU -- 5.2% of
+    a core against 2.7-3.1% at 250/s, measured 2026-09-27 -- because it fights
+    the loop for the interpreter lock on every tick. A loop without a
+    completion port, or no timer, falls back to `asyncio.sleep` (exact off
+    Windows).
+
+    Fixed-rate: a slow tick shortens the next wait instead of adding a whole
+    interval, and a tick that overran by more than an interval -- or the first
+    tick after a pause, a detach or a stall -- restarts the schedule rather
+    than bursting. The timer is armed one shot per wait, so while the loop is
+    paused or detached (waiting in seconds) nothing runs and nothing is armed.
+    """
+
+    def __init__(self):
+        self._due = 0.0
+        # Created at the first wait and kept for the poller's life: a wait a
+        # cancelled task left registered on it must never see it closed.
+        self._timer: _HighResolutionTimer | None = None
+
+    async def wait(self, interval: float) -> None:
+        """Until the next tick of an `interval` schedule (at once if it is due)."""
+        now = perf_counter()
+        self._due += interval
+        if self._due < now - interval:
+            self._due = now
+        delay = self._due - now
+        proactor = getattr(get_running_loop(), "_proactor", None)
+        if delay > 0 and proactor is not None:
+            if self._timer is None:
+                self._timer = _HighResolutionTimer()
+                if not self._timer.handle:
+                    log.warning("no high-resolution timer; the poll rate falls "
+                                "to the 15.6 ms system tick")
+            if self._timer.arm(delay):
+                await proactor.wait_for_handle(self._timer.handle)
+                return
+        await asyncio.sleep(max(0.0, delay))
 
 
 def _lifecycle_event(type_: str) -> Event:
@@ -69,7 +161,7 @@ class Poller:
 
     def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
                  reader=None, on_frame=None, input_sampler=None,
-                 detector_factory=None, on_gap=None,
+                 detector_factory=None, on_gap=None, on_snapshot=None,
 ):
         self.memory = memory
         self.detectors = list(detectors)
@@ -78,6 +170,7 @@ class Poller:
         #: until a header is read (or when the backend has none), then
         #: True/False. The recorder's capture gate reads it (main.py).
         self.practice_rom: bool | None = None
+        self.observed_game_version: str | None = None
         self._rom_name: str | None = None
         self._rom_identified_at = float("-inf")
         self.on_gap = on_gap
@@ -122,6 +215,9 @@ class Poller:
         # `broadcaster`, which is sometimes a plain Broadcaster: this poller's
         # sink contract is publish(), and a clock consumer is a second concern.
         self.on_frame = on_frame
+        # Native ghost ownership observes accepted readings synchronously.
+        # The callback never waits for rendering, files or a browser.
+        self.on_snapshot = on_snapshot
         self.interval = 1.0 / hz
         self.reader = reader or SnapshotReader(memory)
         # Set when the reader can never read (core/snapshot.py::UnreadyReader
@@ -142,6 +238,12 @@ class Poller:
         self._tick_ms_ema = 0.0
         self._tick_ms_max = 0.0
         self._tick_count = 0
+        self.clock = PollClock()
+        # The rate run() actually achieved since the last perf_stats() read:
+        # the number that fell to 65/s with nothing raising the timer
+        # resolution, invisible until it was counted (2026-09-27).
+        self._polls = 0
+        self._polls_since = (0, monotonic())
 
     def set_paused(self, paused: bool) -> None:
         """Session pause (POST /api/pause): while paused, run() neither
@@ -233,6 +335,20 @@ class Poller:
     #: the tick reads the snapshot regardless, so a dead emulator detaches
     UNREADABLE_TICKS_BEFORE_READ = 125
 
+    def _log_detach(self) -> None:
+        """Project64 closing is a normal end (INFO). A live Project64 whose
+        memory stopped reading, or a reader that cannot tell, keeps the
+        warning."""
+        alive = getattr(self.memory, "alive", None)
+        try:
+            exited = alive is not None and not alive()
+        except (OSError, RuntimeError):
+            exited = False
+        if exited:
+            log.info("Project64 closed; tracking detached")
+        else:
+            log.warning("lost emulator; detaching")
+
     @measured("poller.tick", interval=True)
     async def tick(self) -> None:
         async with self._tick_lock:
@@ -254,7 +370,7 @@ class Poller:
             # counter, never from the sampler's guess before the read.
             self._snapshot_frame = curr.global_timer
         except MemoryReadError:
-            log.warning("lost emulator; detaching")
+            self._log_detach()
             self._break_input_capture()
             self.memory.detach()
             self._prev = None
@@ -313,6 +429,8 @@ class Poller:
         self._prev = curr
         self.latest = curr
         self._last_timer = curr.global_timer
+        if self.on_snapshot is not None:
+            self.on_snapshot(curr)
 
     def _run_detectors(self, curr) -> tuple[list, str | None]:
         """Every detector sees this pair; the name of the one that failed, if any.
@@ -366,6 +484,7 @@ class Poller:
                      "practice tooling on" if practice else
                      "not a practice ROM; tracking and replay stay off")
         self.practice_rom, self._rom_name = practice, identity["name"]
+        self.observed_game_version = identity["region"] if practice else None
         return practice
 
     async def _left_practice_rom(self, curr) -> bool:
@@ -400,11 +519,17 @@ class Poller:
         """Per-tick detector-compute timing for the perf monitor's gauges. The
         windowed max RESETS on read (one read per monitor interval); the EMA is
         a cumulative trend — a climbing EMA over a session is the 'inefficient
-        calls building up' signature the memory probes can't catch."""
+        calls building up' signature the memory probes can't catch.
+        `poll_hz` is the rate run() achieved over the same window: the shipped
+        rate is 250 while attached with a pad sampler, 0 while detached."""
         m = self._tick_ms_max
         self._tick_ms_max = 0.0
+        (polls, since), now = self._polls_since, monotonic()
+        self._polls_since = (self._polls, now)
+        hz = (self._polls - polls) / (now - since) if now > since else 0.0
         return {"tick_ms_ema": round(self._tick_ms_ema, 3),
-                "tick_ms_max": round(m, 3), "ticks": self._tick_count}
+                "tick_ms_max": round(m, 3), "ticks": self._tick_count,
+                "poll_hz": round(hz, 1)}
 
     def _probe(self) -> bool:
         """Post-attach layout check: refuse to serve a ROM whose reads are
@@ -439,4 +564,5 @@ class Poller:
                     continue
                 await self.broadcaster.publish(_lifecycle_event("emulator_connected"))
             await self.tick()
-            await asyncio.sleep(self.interval)
+            self._polls += 1
+            await self.clock.wait(self.interval)

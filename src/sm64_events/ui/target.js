@@ -11,7 +11,9 @@
 // bare `await send(...)` inside a click handler rejects into nothing, and the
 // button reads as dead. Callers that need to stay open on failure read the
 // boolean; the rest can ignore it.
+import { useEffect, useState } from "preact/hooks";
 import { send } from "./api.js";
+import { entityKey } from "./entitysection.js";
 import { releaseCelebrationHold } from "./rankclimb.js";
 import { soleSelectionBinding } from "./stagecontext.js";
 
@@ -19,6 +21,27 @@ function reportReplaySave(t, result) {
   const replay = result?.automatic_pb?.replay_save;
   if (replay?.status === "failed")
     t.setNotice(`PB saved. Replay could not be saved: ${replay.message}`);
+}
+
+// The last target HE picked in this page, `{key, at}`, recorded once the server
+// accepts it. The practice log reads it to tell his pick (its card opens at
+// once) from the game moving the target (the card he was reading stays open
+// until the new one has a row). Module-level, like rankclimb.js's hold: one
+// page, one pick, and no component in between has to carry it.
+let lastPick = null;
+const pickListeners = new Set();
+export const lastTargetPick = () => lastPick;
+export function useTargetPick() {
+  const [pick, setPick] = useState(lastPick);
+  useEffect(() => {
+    pickListeners.add(setPick);
+    return () => { pickListeners.delete(setPick); };
+  }, []);
+  return pick;
+}
+function notePick(key) {
+  lastPick = { key, at: Date.now() };
+  pickListeners.forEach((notify) => notify(lastPick));
 }
 
 // `quiet` is for a write NO GESTURE ASKED FOR — today only the lone-route
@@ -63,6 +86,9 @@ export async function requestTarget(t, body, { quiet = false,
     const result = await send("POST", "/api/target",
       { ...body, timer_mode: t.clock || "igt" });
     reportReplaySave(t, result);
+    // Only an accepted gesture: the practice log opens a PICKED target's card
+    // at once, and must not mistake a convenience fill or a refusal for one.
+    if (!auto) notePick(entityKey(body));
     t.refresh();
     return true;
   } catch (refusal) {

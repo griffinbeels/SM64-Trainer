@@ -43,8 +43,8 @@ def _build_host(out, *, lose_busy=False, resample_busy=False):
         delivery = out / "gpu_delivery.cpp"
         delivery.write_text(changed, encoding="utf-8")
     files = [delivery, SOURCE / "gpu_channel.cpp", SOURCE / "gpu_delivery_host.cpp"]
-    files += [native / name for name in ("gpu_delivery_context.cpp", "gpu_bridge.cpp")]
-    files += [native / name for name in ("source_snapshot.cpp", "gl_snapshot.cpp", "gpu_selection.cpp", "renderer_boundary.cpp", "context_lifetime.cpp", "runtime_control.cpp", "runtime_delivery.cpp", "gpu_request.cpp")]
+    files += [native / name for name in ("gpu_render.cpp",)]
+    files += [native / name for name in ("source_snapshot.cpp", "gl_snapshot.cpp", "renderer_boundary.cpp", "context_lifetime.cpp", "runtime_control.cpp", "runtime_delivery.cpp", "gpu_request.cpp")]
     exe = out / "delivery.exe"
     build._cl(vc, flags + ["/std:c++17", "/EHsc", "/DGD_TEST_HOST", f"/I{SOURCE}", f"/I{native}",
         *map(str, files), f"/Fe:{exe}", f"/Fo{out}\\", "/link", *build.LIBS, "d3d11.lib", "dxgi.lib"], out)
@@ -186,6 +186,7 @@ def test_healthy_diagnostic_production_log_fields_cpu(tmp_path):
     assert "event=gpu_summary " in lines[0]
     assert "frequency=1000 window_started_qpc=1000 previous_emit_ticks=1" in lines[0]
     assert "snapshot_bytes=12345678 bridge_bytes=8765432 sample_calls=151 sample_reuses=9 publish_busy=9" in lines[0]
+    assert "peak_pending=5 slots=8 peak_bridges=2" in lines[0]
     assert sum("event=gpu_summary_phase " in line for line in lines) == 8
     assert all("observed_qpc=6000" in line for line in lines)
     assert "event=gpu_summary_cadence epoch=17 records=3 pictures=1 same_origin=2" in lines[-1]
@@ -200,6 +201,59 @@ def test_healthy_diagnostic_production_log_fields_cpu(tmp_path):
     assert windows[0]["cadence"]["max_ms"] == 50
     assert windows[0]["previous_logging_ms"] == 1
     print(result.stdout, end="")  # JUnit stdout is the exact parser-integration fixture.
+
+
+def test_project64_code_opens_no_second_gpu_context():
+    """NVIDIA's threaded optimization froze the renderer 150-270 ms the first
+    time any other thread in Project64 used the GPU, so every capture GPU call
+    runs in the renderer's own context (renderer-thread capture). No unit
+    compiled into the wrapper or the renderer overlay may create, share or make
+    current a GL context, or open D3D11/DXGI; the encoder helper's own 64-bit
+    process may, and does."""
+    import re
+
+    def load(name):
+        spec = importlib.util.spec_from_file_location(f"guard_{name}", ROOT / "tools" / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    # Every shipped Project64 unit is covered. No speculative device warm-up
+    # may bypass this guard: its own initialization can stall the game thread.
+    units = ["gfxwrap.c", *(f"{name}.cpp" for name in load("build_plugin").RUNTIME_SOURCES),
+             *load("build_renderer").OVERLAY_MODULES]
+    forbidden = re.compile(r"\b(wglCreateContext\w*|wglShareLists|wglMakeCurrent|D3D11CreateDevice\w*|CreateDXGIFactory\w*)\b")
+    offenders = {}
+    for unit in units:
+        found = sorted(set(forbidden.findall((SOURCE / unit).read_text(encoding="utf-8"))))
+        if found:
+            offenders[unit] = found
+    assert len(units) > 20 and offenders == {}, offenders
+
+
+def test_startup_note_lines_place_each_preparation_step_cpu(tmp_path):
+    """The first capture's freeze is attributed by QPC overlap: a callback_stall
+    whose begin/end overlaps a step names that step. Each note must carry
+    absolute QPCs plus per-step durations computed from the worker's stamps,
+    and the request note opens the stall watch window at the request QPC."""
+    spec = importlib.util.spec_from_file_location("diagnostic_build", ROOT / "tools/build_plugin.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    exe = tmp_path / "diagnostic_notes.exe"
+    build._cl(build.find_vcvars32(), build.COMMON_FLAGS + [
+        str(SOURCE / "gpu_diagnostic_log_host.c"), f"/I{SOURCE}", f"/Fe:{exe}",
+        f"/Fo{tmp_path}\\", "/link", "kernel32.lib"], tmp_path)
+    result = subprocess.run([str(exe), "--notes"], capture_output=True, text=True,
+                            timeout=5, check=True, **quiet_spawn_kwargs())
+    lines = result.stdout.splitlines()
+    assert lines[0] == "watch 1000000"
+    events = {line.split(" event=")[1].split()[0]: line for line in lines[1:]}
+    assert set(events) == {"gpu_request", "gpu_prepare"}  # no shared anchor to time
+    assert "epoch=3 request_qpc=1000000 frequency=10000000" in events["gpu_request"]
+    prepare = events["gpu_prepare"]
+    assert ("request_qpc=1000000 surface_qpc=1160000 prepare_begin_qpc=1200000 snapshots_ms=1.000 "
+            "sampler_ms=2.000 luid_ms=1.000 channel_ms=5.000 reader_qpc=2500000 "
+            "import_begin_qpc=2510000 import_ms=2.000 end_qpc=2540000") in prepare
 
 
 class Running:
@@ -314,24 +368,111 @@ def test_real_delivery_selection_actual_key_custody_and_restart(host, modern_gl)
         next_bridge = select(client, reset, 2)
         assert run.command(f"take {next_bridge.texture_index} 2") == "take 1"
         client.acknowledge_metadata(next_bridge)
+        # The helper created the bridge textures, so stop ends this side's
+        # imports without waiting on the consumer (renderer-thread capture):
+        # the drain needs no renderer callback, and the held texture stays the
+        # helper's to verify and return.
         assert run.command("stop") == "stopped"
-        time.sleep(0.025)
-        assert run.command("status").split()[1] == "4", "stop freed consumer-held GPU texture"
+        eventually(lambda: run.command("status").split()[1] == "0")
         assert run.command(f"give {next_bridge.texture_index}") == "give"
         assert run.command("settled") == "settled"
         client.close()
         client = run.start(102)
         third = offer_for(run, client, 9)
         pending = select(client, third, 1)
-        # Close before Submit: stop must reclaim actual unconsumed key1.
+        # Close before Submit: the picture already handed over stays whole in
+        # the helper's texture after this side stopped and deleted its import.
         assert run.command("stop") == "stopped"
         eventually(lambda: run.command("status").split()[1] == "0")
-        assert run.command(f"take {pending.texture_index} 9") == "take 0"
+        assert run.command(f"take {pending.texture_index} 9") == "take 1"
+        assert run.command(f"give {pending.texture_index}") == "give"
         assert run.command("settled") == "settled"
         client.close()
         client = None
         assert run.command("exit") == "exit"
         assert run.process.wait(timeout=3) == 0
+    finally:
+        if client:
+            client.close()
+        run.close()
+
+
+def test_renderer_thread_preparation_stamps_run_in_order(host, modern_gl):
+    """Every preparation step runs on the renderer's thread (renderer-thread
+    capture); the gpu_prepare note carries each step's QPC, in order, from the
+    request to ACTIVE, with the import after the helper created the textures."""
+    run = Running(host)
+    client = None
+    try:
+        client = run.start(701)
+        offer = offer_for(run, client, 4)
+        client.reply(offer, gpuchannel.SUPPRESSED, reason=1)
+        stamps = list(map(int, run.command("prepnote").split()[1:]))
+        assert len(stamps) == 11 and all(stamps)
+        assert stamps == sorted(stamps), stamps
+        assert run.command("stop") == "stopped"
+        assert run.command("settled") == "settled"
+        client.close()
+        client = None
+        assert run.command("exit") == "exit"
+    finally:
+        if client:
+            client.close()
+        run.close()
+
+
+def test_capture_hands_back_the_renderers_gl_state(host, modern_gl):
+    """Renderer-thread capture samples, copies into the helper's texture and
+    polls its keys in the renderer's own context. The host sets unusual scissor
+    and pack state before every capture call and checks it after (a mismatch
+    ends the host), across a sample, a bridge copy and a key return."""
+    run = Running(host)
+    client = None
+    try:
+        client = run.start(801)
+        assert run.command("guard 1") == "guard"
+        bridge = select(client, offer_for(run, client, 5), 1)
+        assert run.command(f"take {bridge.texture_index} 5") == "take 1"
+        client.acknowledge_metadata(bridge)
+        assert run.command(f"give {bridge.texture_index}") == "give"
+        eventually(lambda: run.command("status").split()[5] == "0")
+        client.reply(offer_for(run, client, 6), gpuchannel.SUPPRESSED, reason=1)
+        assert run.command("guard 0") == "guard"
+        assert run.command("status").split()[1:3] == ["3", "0"]
+        assert run.command("stop") == "stopped"
+        assert run.command("settled") == "settled"
+        client.close()
+        client = None
+        assert run.command("exit") == "exit"
+    finally:
+        if client:
+            client.close()
+        run.close()
+
+
+def test_a_paused_renderer_offers_its_last_picture_on_resume(host, modern_gl):
+    """A paused emulator stops calling back, and only the renderer's callback
+    can finish a picture's sample. The picture taken just before a pause longer
+    than the 2 s age limit is offered on resume, not failed for its age."""
+    run = Running(host)
+    client = None
+    try:
+        client = run.start(901)
+        assert run.command("tick 0") == "tick"
+        assert run.command("frame 7") == "frame 7"
+        time.sleep(2.5)
+        assert not client.offers()
+        assert run.command("tick 1") == "tick"
+        offers = eventually(client.offers)
+        assert [o.sample for o in offers] == [expected_sample(7)]
+        client.reply(offers[0], gpuchannel.SUPPRESSED, reason=1)
+        time.sleep(0.05)
+        assert run.command("status").split()[1:3] == ["3", "0"]
+        assert run.command("stop") == "stopped"
+        assert run.command("settled") == "settled"
+        client.close()
+        client = None
+        assert run.command("exit") == "exit"
     finally:
         if client:
             client.close()
@@ -427,13 +568,17 @@ def test_prepared_channel_waits_for_explicit_encoder_readiness(host, modern_gl):
         run.close()
 
 
-def test_abandoned_key_quarantines_fixed_pool_and_refuses_reallocation(host, modern_gl):
+def test_bridge_fault_quarantines_fixed_pool_and_refuses_reallocation(host, modern_gl):
+    """A faulted handoff (an abandoned or failed keyed mutex) poisons this
+    process's capture: the run ends and no later request reallocates."""
     run = Running(host)
     client = None
     try:
         client = run.start(501)
         select(client, offer_for(run, client, 8), 1)
         assert run.command("abandon") == "abandoned injected"
+        client.reply(offer_for(run, client, 9), gpuchannel.SELECTED, encode_serial=2, pts=1,
+                     nominal_duration=3000, force_idr=False)
         assert run.command("exhausted") == "exhausted 128"
         client.close()
         client = None

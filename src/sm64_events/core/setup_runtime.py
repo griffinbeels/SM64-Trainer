@@ -16,6 +16,10 @@ log = logging.getLogger("sm64.setup")
 
 
 class SetupRuntime:
+    #: How long a Project64 with no game booted (no RDRAM to attach to) is
+    #: left before this observer walks its memory again.
+    ATTACH_RETRY_S = 2.0
+
     def __init__(self, processes, memory_factory, poller, replay, clock=time.monotonic):
         self.processes = processes
         self.memory_factory = memory_factory
@@ -27,18 +31,55 @@ class SetupRuntime:
         self._cached = {}
         self._cached_layer = None
         self._window = CounterWindow(clock)
+        # ONE reader per Project64 process, kept while that process runs. The
+        # setup screen observes once a second, and a fresh reader each time
+        # attached anew: a process-list snapshot, a debug-privileged open and a
+        # walk of Project64's memory to find RDRAM, 38 times in one minute of
+        # live play (2026-09-28). Its own reader, never the poller's.
+        self._reader = None
+        self._reader_pid: int | None = None
+        self._refused: tuple[int, float] | None = None   # (pid, when) attach found no RDRAM
 
     def _rom(self, target) -> dict:
-        if target.get("pid") is None:
+        reader = self._reader_for(target.get("pid"))
+        if reader is None:
             return identify_rom(None)
-        memory = self.memory_factory()
         try:
-            return identify_rom(memory.rom_header() if memory.attach() else None)
+            return identify_rom(reader.rom_header())
         except (OSError, RuntimeError):
             log.warning("game identity is temporarily unreadable", exc_info=True)
+            self._release_reader()
             return identify_rom(None)
-        finally:
-            memory.detach()
+
+    def _reader_for(self, pid):
+        """This process's reader, attached once; None while there is no
+        Project64 or it has no game booted yet."""
+        if pid is None:
+            self._release_reader()
+            return None
+        if self._reader_pid == pid and self._reader.alive():
+            return self._reader
+        self._release_reader()
+        if (self._refused is not None and self._refused[0] == pid
+                and self.clock() - self._refused[1] < self.ATTACH_RETRY_S):
+            return None
+        reader = self.memory_factory()
+        try:
+            attached = reader.attach(pid=pid)
+        except (OSError, RuntimeError):
+            log.warning("game identity is temporarily unreadable", exc_info=True)
+            attached = False
+        if not attached:
+            reader.detach()
+            self._refused = (pid, self.clock())
+            return None
+        self._reader, self._reader_pid, self._refused = reader, pid, None
+        return reader
+
+    def _release_reader(self) -> None:
+        reader, self._reader, self._reader_pid = self._reader, None, None
+        if reader is not None:
+            reader.detach()
 
     def __call__(self, layer) -> dict:
         with self._lock:
@@ -59,9 +100,12 @@ class SetupRuntime:
         target = self.processes.setup_target()
         if target["state"] == "missing" and layer.pj64_dir:
             target = self.processes.check_folder(layer.pj64_dir)
-        rom = self._rom(target) if target["state"] == "ready" else identify_rom(None)
+        rom = self._rom(target if target["state"] == "ready" else {})
         recorder = self.replay.recorder.status() if self.replay else {}
         health = recorder.get("frame_source_health") or {}
+        # This Project64's adapter can never record through the layer, so the
+        # recorder keeps the desktop grab: ITS written pictures are the proof.
+        unsupported = recorder.get("gpu_unsupported")
         sampler = getattr(self.poller, "input_sampler", None)
         inputs = sampler.health() if sampler else {}
         latest = getattr(self.poller, "latest", None)
@@ -69,14 +113,25 @@ class SetupRuntime:
         counters = self._window.observe(
             (target.get("pid"), rom["name"], rom["region"], layer.plugin_pid,
              gpu.identity if gpu else None),
-            delivered=health.get("delivered"), inputs=inputs.get("frames"),
+            delivered=recorder.get("pictures_fed") if unsupported else health.get("delivered"),
+            inputs=inputs.get("frames"),
             game=latest.global_timer if latest else None)
         same_process = target.get("pid") is not None and target["pid"] == layer.plugin_pid
         plugin = same_process and layer.layer_alive
         captured = (recorder.get("recording") and recorder.get("frame_source") == "plugin"
                     and counters["delivered"])
         pictures = captured
-        if gpu is not None:
+        if unsupported:
+            # No GPU lease means the control page's heartbeat never moves, so
+            # the layer is proved the way the passive exception below proves
+            # it: its page names this Project64 and the game and inputs move.
+            plugin = bool(same_process and counters["inputs"] and counters["game"]
+                          and not self.poller.paused
+                          and not getattr(self.poller, "hold_reason", None))
+            pictures = bool(recorder.get("recording")
+                            and recorder.get("frame_source") == "desktop"
+                            and counters["delivered"])
+        elif gpu is not None:
             # The GPU observer validates native control identity and counts only
             # accepted captured pictures. Encoder repeats cannot refresh it.
             captured = gpu.matches(recorder)

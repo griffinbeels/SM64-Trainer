@@ -1,12 +1,23 @@
-/* Isolated hidden real GPU witness. No emulator, capture lease or recorder. */
+/* Isolated hidden real GPU witness. No emulator, capture lease or recorder.
+ * A render thread owns the producer context, as LINK's does: every picture and
+ * every capture tick runs there, and while an epoch is armed it keeps ticking
+ * the way a renderer calls back once per VI. The consumer plays the encoder
+ * helper: it creates the two keyed-mutex textures the renderer imports.
+ *   <owner pid> <owner birth> [twin]   the producer; twin: a SourceV4 renderer
+ *                                      whose display surface shows a ghost
+ *   helper <nonce lo> <nonce hi>       the ghost copy's helper, its own process */
 #include "gpu_delivery.h"
 #include "gpu_delivery_diagnostics.h"
-#include "gpu_bridge.h"
 #include "stamp_adapter.h"
 #include "runtime_control.h"
 #include "runtime_delivery.h"
 #include "gpu_request.h"
 #include "gl_fixture.h"
+#include <d3d11_1.h>
+#include <dxgi1_2.h>
+#include <wrl/client.h>
+#include <condition_variable>
+#include <mutex>
 #include <sstream>
 #include <iostream>
 extern "C" void gd_test_hold_poll(int);
@@ -22,7 +33,8 @@ extern "C" int gd_test_channel_retry(unsigned,uint32_t*);
 extern "C" int gd_test_sample_retry(unsigned,uint32_t*);
 extern "C" int gd_test_failure_snapshot(gd_diagnostic*,uint32_t*);
 extern "C" int gd_test_healthy_snapshot(gd_diagnostic*);
-extern "C" void gpu_bridge_test_abandon_once();
+extern "C" void gd_test_bridge_fault_once(uint32_t);
+extern "C" void gd_test_twin_bridge_fault_once(uint32_t);
 namespace {
 source_context::Registry registry;
 Window* producer=nullptr;
@@ -38,6 +50,20 @@ HANDLE iteration_entered=nullptr,iteration_continue=nullptr,retired_entered=null
 void __cdecl prepare_probe(){SetEvent(prepare_entered);CHECK(WaitForSingleObject(prepare_continue,4000)==WAIT_OBJECT_0);}
 void __cdecl iteration_probe(){SetEvent(iteration_entered);CHECK(WaitForSingleObject(iteration_continue,4000)==WAIT_OBJECT_0);}
 void __cdecl retired_probe(){SetEvent(retired_entered);CHECK(WaitForSingleObject(retired_continue,4000)==WAIT_OBJECT_0);}
+// The worker's latest preparation note, for the gpu_prepare stamp witness.
+std::atomic<bool> prepared_note{false};gd_prepare_diagnostic prepare_note{};
+void __cdecl note(const gd_diagnostic*d){
+    if(d->kind==GD_KIND_PREPARE && !prepared_note.load()){prepare_note=d->prepare;prepared_note.store(true);}
+}
+bool device_for_luid(LUID luid,ID3D11Device**device,ID3D11DeviceContext**context){
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory;if(FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))return false;
+    for(unsigned i=0;i<32;++i){Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;if(factory->EnumAdapters1(i,&adapter)!=S_OK)break;
+        DXGI_ADAPTER_DESC1 desc{};if(FAILED(adapter->GetDesc1(&desc))||memcmp(&desc.AdapterLuid,&luid,sizeof luid))continue;
+        return SUCCEEDED(D3D11CreateDevice(adapter.Get(),D3D_DRIVER_TYPE_UNKNOWN,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            nullptr,0,D3D11_SDK_VERSION,device,nullptr,context));
+    }
+    return false;
+}
 int64_t ticks(){LARGE_INTEGER v{};QueryPerformanceCounter(&v);return v.QuadPart;}
 int __cdecl source_surface(rb_surface*s){
     *s={};s->width=width;s->height=height;s->context=reinterpret_cast<uintptr_t>(producer->rc);
@@ -45,6 +71,42 @@ int __cdecl source_surface(rb_surface*s){
     s->context_generation=1;s->drawable_generation=1;s->boundary_qpc=ticks();
     s->drawable_width=64;s->drawable_height=64;s->restore_read_buffer=GL_BACK;
     s->source_format=RB_SOURCE_RGB8_LINEAR;s->post_vi_origin=last_marker;return 1;
+}
+// THE GHOST COPY (twin mode): a SourceV4 renderer whose display surface is a
+// private FBO holding a different picture (the pattern of marker+100: "the
+// ghost"), and the consumer switch the delivery turns on with the lane.
+bool twin_mode=false;
+std::atomic<unsigned> display_mode{1}; // 1 a ghost was drawn, 2 no ghost (same as clean)
+std::atomic<bool> display_on{false};
+std::atomic<unsigned> display_calls{0},consumer_calls{0};
+GLuint display_fbo=0,display_texture=0;
+int __cdecl source_surface3(rb_ticket,rb_surface*s,rs_source_descriptor3*d){
+    source_surface(s);*d={};d->bytes=sizeof(*d);d->version=RS_ABI_V3;d->kind=RS_SOURCE_DEFAULT_FRONT;
+    d->read_buffer=GL_FRONT;d->y=s->bottom_offset;d->width=s->width;d->height=s->height;
+    d->surface_width=s->drawable_width;d->surface_height=s->drawable_height;d->source_format=s->source_format;
+    d->context=s->context;d->read_drawable=s->read_drawable;d->renderer_thread=s->renderer_thread;
+    d->context_generation=s->context_generation;d->drawable_generation=s->drawable_generation;d->vi_origin=s->post_vi_origin;
+    return 1;
+}
+void __cdecl clean_consumer(bool){}
+int __cdecl query_display(rb_ticket t,rs_source_descriptor3*out){
+    display_calls.fetch_add(1);rs_source_descriptor3 clean{};
+    if(!rb_read_source_descriptor3(t,&clean)){*out={};return 0;}
+    *out={};out->bytes=sizeof(*out);out->version=RS_ABI_V4;out->kind=RS_SOURCE_UNAVAILABLE;
+    if(!display_on.load())return 1;
+    if(display_mode.load()==2){out->kind=RS_SOURCE_SAME_AS_CLEAN;out->update_occurrence=t.occurrence;return 1;}
+    *out=clean;out->version=RS_ABI_V4;out->kind=RS_SOURCE_DISPLAY_VI;out->framebuffer=display_fbo;out->read_buffer=0x8CE0;
+    out->source_format=RB_SOURCE_RGB8_LINEAR;out->resource_generation=1;out->presentation_serial=out->update_occurrence=t.occurrence;
+    return 1;
+}
+void __cdecl display_consumer(bool on){display_on.store(on);consumer_calls.fetch_add(1);}
+void make_display(){
+    glGenTextures(1,&display_texture);glBindTexture(GL_TEXTURE_2D,display_texture);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,64,64,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);glBindTexture(GL_TEXTURE_2D,0);
+    proc<GenFbo>("glGenFramebuffers")(1,&display_fbo);proc<BindFbo>("glBindFramebuffer")(framebuffer,display_fbo);
+    proc<Attach>("glFramebufferTexture2D")(framebuffer,attachment,GL_TEXTURE_2D,display_texture,0);
+    CHECK(proc<CheckFbo>("glCheckFramebufferStatus")(framebuffer)==complete);
+    proc<BindFbo>("glBindFramebuffer")(framebuffer,0);CHECK(glGetError()==GL_NO_ERROR);
 }
 int __cdecl capture(const rb_record*r,rb_image*i){gd_surface(r);return gd_capture(r,i);}
 bool __cdecl begin(){return glGetError()==GL_NO_ERROR;}
@@ -54,15 +116,46 @@ int __cdecl release(rcl_token t){return registry.release(t);}
 uint32_t __cdecl health(){return registry.health();}
 uint32_t __cdecl error(){return registry.error();}
 uint32_t __cdecl activate(){++stage_count;return rb_activate();}
+// Renderer-thread capture runs in the renderer's own context, so its GL state
+// must come back exactly: with the guard on, the renderer sets unusual scissor
+// and pack state before every capture call and checks it afterwards.
+std::atomic<bool> guard_state{false};GLuint guard_buffer=0;
+void odd_state(){
+    using Gen=void(APIENTRY*)(GLsizei,GLuint*);using Bind=void(APIENTRY*)(GLenum,GLuint);
+    if(!guard_buffer)proc<Gen>("glGenBuffers")(1,&guard_buffer);
+    proc<Bind>("glBindBuffer")(0x88EB,guard_buffer);glEnable(GL_SCISSOR_TEST);
+    glPixelStorei(GL_PACK_ALIGNMENT,2);glPixelStorei(GL_PACK_ROW_LENGTH,5);
+    glPixelStorei(GL_PACK_SKIP_ROWS,1);glPixelStorei(GL_PACK_SKIP_PIXELS,1);
+}
+void check_odd_state(){
+    GLint alignment=0,row=0,rows=0,pixels=0,buffer=0;
+    glGetIntegerv(GL_PACK_ALIGNMENT,&alignment);glGetIntegerv(GL_PACK_ROW_LENGTH,&row);
+    glGetIntegerv(GL_PACK_SKIP_ROWS,&rows);glGetIntegerv(GL_PACK_SKIP_PIXELS,&pixels);glGetIntegerv(0x88ED,&buffer);
+    CHECK(glIsEnabled(GL_SCISSOR_TEST) && alignment==2 && row==5 && rows==1 && pixels==1 && GLuint(buffer)==guard_buffer);
+}
+void plain_state(){
+    using Bind=void(APIENTRY*)(GLenum,GLuint);proc<Bind>("glBindBuffer")(0x88EB,0);
+    glPixelStorei(GL_PACK_ALIGNMENT,4);glPixelStorei(GL_PACK_ROW_LENGTH,0);
+    glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
+}
 void frame(unsigned marker){
     CHECK(wglGetCurrentContext()==producer->rc);glDrawBuffer(GL_FRONT);glEnable(GL_SCISSOR_TEST);
     for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x){glScissor(x,y,1,1);
         glClearColor(channel(marker,x,y,0)/255.f,channel(marker,x,y,1)/255.f,channel(marker,x,y,2)/255.f,1.f);glClear(GL_COLOR_BUFFER_BIT);}
-    glDrawBuffer(GL_BACK);last_marker=marker;transaction.fetch_add(1);
+    glDrawBuffer(GL_BACK);
+    if(twin_mode){ // the displayed picture: the clean one with a ghost over it
+        proc<BindFbo>("glBindFramebuffer")(draw_fbo,display_fbo);
+        for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x){glScissor(x,y,1,1);
+            glClearColor(channel(marker+100,x,y,0)/255.f,channel(marker+100,x,y,1)/255.f,channel(marker+100,x,y,2)/255.f,1.f);glClear(GL_COLOR_BUFFER_BIT);}
+        proc<BindFbo>("glBindFramebuffer")(draw_fbo,0);
+    }
+    last_marker=marker;transaction.fetch_add(1);
     rb_stamp stamp{};stamp.list_qpc=last_list_qpc=ticks();stamp.table_count=2;stamp.lengths[0]=4;stamp.lengths[1]=8;
     stamp.bytes[0]=uint8_t(marker);stamp.bytes[128]=uint8_t(255-marker);stamp.bytes[132]=0xA5;
     stamp.lists_since=1;const auto ticket=rb_stage(&stamp);
+    if(guard_state.load())odd_state();
     const auto begun=rb_source_begin(ticket);rb_source_end(begun);rb_finish(ticket);
+    if(guard_state.load())check_odd_state();
     if(ticket.occurrence)committed.store(ticket.occurrence);transaction.fetch_add(1);
 }
 gd_status status(){
@@ -79,11 +172,23 @@ bool wait_mapping(){for(unsigned n=0;n<4000;++n){const auto s=status();if(s.stat
 struct Consumer {
     Microsoft::WRL::ComPtr<ID3D11Device> device;Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture[2];Microsoft::WRL::ComPtr<IDXGIKeyedMutex> mutex[2];
+    HANDLE share[2]{};
     bool held[2]{};
-    void open(const gc_header&h){
-        LUID luid{h.luid_low,h.luid_high};CHECK(gpu_bridge::device_for_luid(luid,&device,&context));
-        Microsoft::WRL::ComPtr<ID3D11Device1>d;CHECK(SUCCEEDED(device.As(&d)));
-        for(unsigned i=0;i<2;++i){CHECK(SUCCEEDED(d->OpenSharedResourceByName(reinterpret_cast<const wchar_t*>(h.texture_names[i]),DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,IID_PPV_ARGS(&texture[i]))));CHECK(SUCCEEDED(texture[i].As(&mutex[i])));}
+    // The encoder helper's role: create the keyed-mutex textures under the
+    // channel's names (the renderer imports them; it has no D3D device).
+    void open(const gc_header&h,const uint16_t (*names)[128]=nullptr){
+        if(!names)names=h.texture_names;
+        LUID luid{h.luid_low,h.luid_high};CHECK(device_for_luid(luid,&device,&context));
+        D3D11_TEXTURE2D_DESC desc{};desc.Width=h.width&~1u;desc.Height=h.height&~1u;desc.MipLevels=1;desc.ArraySize=1;
+        desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;desc.Usage=D3D11_USAGE_DEFAULT;
+        desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
+        desc.MiscFlags=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        for(unsigned i=0;i<2;++i){
+            CHECK(SUCCEEDED(device->CreateTexture2D(&desc,nullptr,&texture[i])));CHECK(SUCCEEDED(texture[i].As(&mutex[i])));
+            Microsoft::WRL::ComPtr<IDXGIResource1> resource;CHECK(SUCCEEDED(texture[i].As(&resource)));
+            CHECK(SUCCEEDED(resource->CreateSharedHandle(nullptr,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,
+                reinterpret_cast<const wchar_t*>(names[i]),&share[i])));
+        }
     }
     bool take(unsigned i){CHECK(i<2&&!held[i]);const HRESULT result=mutex[i]->AcquireSync(1,0);held[i]=result==S_OK;CHECK(result==S_OK||result==WAIT_TIMEOUT);return held[i];}
     void give(unsigned i){CHECK(i<2&&held[i]);CHECK(SUCCEEDED(mutex[i]->ReleaseSync(0)));held[i]=false;}
@@ -98,8 +203,37 @@ struct Consumer {
             for(unsigned c=0;c<3;++c)CHECK(b[c]==channel(marker,x,height-1-y,c));CHECK(b[3]==255);}
         context->Unmap(staging.Get(),0);
     }
-    void close(){for(unsigned i=0;i<2;++i){CHECK(!held[i]);mutex[i].Reset();texture[i].Reset();}context.Reset();device.Reset();}
+    void close(){for(unsigned i=0;i<2;++i){CHECK(!held[i]);mutex[i].Reset();texture[i].Reset();if(share[i])CloseHandle(share[i]);share[i]=nullptr;}context.Reset();device.Reset();}
 };
+// The renderer's thread: owns the producer context; runs posted jobs (pictures)
+// and, between them, one capture tick every 2 ms while an epoch is armed.
+struct RenderThread {
+    std::mutex m;std::condition_variable cv;std::function<void()> job;bool has_job=false,done=false;
+    std::atomic<bool> ticking{true};std::thread thread;
+    void start(){
+        thread=std::thread([this]{
+            CHECK(wglMakeCurrent(producer->dc,producer->rc));
+            glDisable(GL_DITHER);glDisable(0x8DB9);glReadBuffer(GL_BACK);
+            if(twin_mode)make_display();
+            for(;;){
+                std::unique_lock<std::mutex> lock(m);
+                cv.wait_for(lock,std::chrono::milliseconds(2),[this]{return has_job;});
+                if(has_job){auto work=std::move(job);has_job=false;lock.unlock();work();lock.lock();done=true;cv.notify_all();continue;}
+                lock.unlock();
+                if(ticking.load() && gd_epoch()){
+                    const bool guard=guard_state.load();if(guard)odd_state();
+                    rb_record idle{};idle.epoch=gd_epoch();source_surface(&idle.surface);gd_surface(&idle);
+                    if(guard)check_odd_state();
+                }
+            }
+        });
+        thread.detach();
+    }
+    void post(std::function<void()> work){std::lock_guard<std::mutex> lock(m);job=std::move(work);has_job=true;done=false;cv.notify_all();}
+    void wait(){std::unique_lock<std::mutex> lock(m);CHECK(cv.wait_for(lock,std::chrono::seconds(8),[this]{return done;}));}
+    void run(std::function<void()> work){post(std::move(work));wait();}
+};
+RenderThread renderer;
 gc_header mapped_header(const gc_header&r){
     wchar_t name[128];swprintf_s(name,L"%s%016llx%016llx",GC_NAMESPACE,r.nonce_hi,r.nonce_lo);
     HANDLE mapping=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,name);CHECK(mapping);
@@ -152,6 +286,8 @@ struct SupervisorRequest {
     }
 };
 void startup_race(const gc_header& request,const gd_limits& limits){
+    // "Not one iteration yet" must hold: no renderer tick may advance it either.
+    renderer.ticking.store(false);
     CHECK(rc_bind_delivery(&limits));rc_rom(TRUE);
     iteration_entered=CreateEventW(nullptr,FALSE,FALSE,nullptr);iteration_continue=CreateEventW(nullptr,FALSE,FALSE,nullptr);
     retired_entered=CreateEventW(nullptr,FALSE,FALSE,nullptr);retired_continue=CreateEventW(nullptr,FALSE,FALSE,nullptr);
@@ -182,6 +318,21 @@ void startup_race(const gc_header& request,const gd_limits& limits){
     rc_revoke(GD_CANCELLED);CHECK(!gd_epoch());
     gd_test_set_iteration_probe(nullptr);SetEvent(iteration_continue);CHECK(wait_state(GD_OFF));
     for(HANDLE h:{iteration_entered,iteration_continue,retired_entered,retired_continue})CloseHandle(h);
+    renderer.ticking.store(true);
+}
+// The ghost copy's helper: its own process, which the witness may kill while
+// it holds a texture. It creates the two "-copy-" textures the lane imports.
+int helper_main(uint64_t lo,uint64_t hi){
+    gc_header named{};named.nonce_lo=lo;named.nonce_hi=hi;const auto h=mapped_header(named);
+    Consumer twin;twin.open(h,h.twin_texture_names);printf("helper ready\n");fflush(stdout);std::string line;
+    while(std::getline(std::cin,line)){std::istringstream in(line);std::string op;in>>op;unsigned index=0,marker=0;
+        if(op=="take"){in>>index>>marker;const bool got=twin.take(index);if(got)twin.verify(index,marker);printf("take %u\n",got);}
+        else if(op=="give"){in>>index;twin.give(index);printf("give\n");}
+        else if(op=="exit"){twin.close();printf("exit\n");fflush(stdout);return 0;}
+        else CHECK(false);
+        fflush(stdout);
+    }
+    return 1;
 }
 }
 extern "C" int __cdecl sa_publish_table(const sa_table*t){table=*t;return t->epoch!=0;}
@@ -201,8 +352,8 @@ int main(int argc,char**argv){
         gd_diagnostic windows[3]{};CHECK(gd_test_healthy_snapshot(windows));
         const auto&a=windows[0];const auto&b=windows[1];const auto&failure=windows[2];
         CHECK(a.healthy && b.healthy && !failure.healthy && a.epoch==17 && a.qpc_frequency==1000);
-        CHECK(a.window_started_qpc==1000 && a.observed_qpc==6000);
-        CHECK(b.window_started_qpc==6000 && b.observed_qpc==16000);
+        CHECK(a.window_started_qpc==1000 && a.observed_qpc==61000);
+        CHECK(b.window_started_qpc==61000 && b.observed_qpc==66000 && b.refused_pictures==1);
         CHECK(a.phases[GD_PHASE_SAMPLE].max_ticks==50 && b.phases[GD_PHASE_SAMPLE].max_ticks==3);
         CHECK(failure.phases[GD_PHASE_SAMPLE].max_ticks==50 && failure.phases[GD_PHASE_SAMPLE].total_ticks==53);
         CHECK(a.cadence.records==3 && a.cadence.pictures==1 && a.cadence.same_origin==2);
@@ -268,19 +419,23 @@ int main(int argc,char**argv){
         gd_status results[2]{};uint32_t revoked=0;CHECK(gd_test_terminal_diagnostics(results,&revoked));
         printf("diagnostic %u %u %u %u %u\n",results[0].reason,results[0].error,revoked,results[1].reason,results[1].error);return 0;
     }
-    CHECK(argc==3);const auto owner=uint32_t(strtoul(argv[1],nullptr,10));const auto birth=strtoull(argv[2],nullptr,10);
+    if(argc==4 && !strcmp(argv[1],"helper"))return helper_main(strtoull(argv[2],nullptr,10),strtoull(argv[3],nullptr,10));
+    twin_mode=argc==4 && !strcmp(argv[3],"twin");
+    CHECK(argc==3 || twin_mode);const auto owner=uint32_t(strtoul(argv[1],nullptr,10));const auto birth=strtoull(argv[2],nullptr,10);
     WNDCLASSW wc{};wc.style=CS_OWNDC;wc.lpfnWndProc=DefWindowProcW;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"SnapshotHiddenHost";CHECK(RegisterClassW(&wc));
-    Window window;producer=&window;CHECK(wglMakeCurrent(window.dc,window.rc));glDisable(GL_DITHER);glDisable(0x8DB9);glReadBuffer(GL_BACK);
-    using Create=HGLRC(WINAPI*)(HDC,HGLRC,const int*);const auto create=proc<Create>("wglCreateContextAttribsARB");
-    const int attrib[]={0x2091,4,0x2092,5,0x9126,2,0};
-    CHECK(registry.publish(window.rc,1,GetPixelFormat(window.dc),create,window.dc,attrib));
-    CHECK(rb_configure_images(capture,gd_completed));CHECK(rb_bind_source(source_surface));
+    Window window;producer=&window;renderer.start();
+    CHECK(rb_configure_images(capture,gd_completed));CHECK(twin_mode?rb_bind_source3(source_surface3):rb_bind_source(source_surface));
     rs_api source{};source.bytes=sizeof(source);source.version=RS_ABI_V2;source.capabilities=3;
     source.activate=activate;source.disarm=rb_disarm;source.take=rb_take;source.release=rb_release;source.begin_capture=begin;source.end_capture=end;
     rcl_api contexts{sizeof(rcl_api),RCL_ABI_V1,RCL_CAP_NEVER_CURRENT_ANCHOR,0,acquire,release,health,error};
     gd_limits limits{sizeof(gd_limits),GD_VERSION,4,2000,4u*1024*1024,4u*1024*1024,1024*1024,1024*1024,2,0};
-    CHECK(gd_configure(&source,&contexts,&limits)==GD_ACCEPTED);
+    const rs_api_v3 source3{sizeof(rs_api_v3),RS_ABI_V3,RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT|RS_CAP_CLEAN_PRESENTATION,0,
+        source,rb_read_source_descriptor3,clean_consumer};
+    const rs_api_v4 source4{sizeof(rs_api_v4),RS_ABI_V4,
+        RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT|RS_CAP_CLEAN_PRESENTATION|RS_CAP_DISPLAY_COPY,0,source3,query_display,display_consumer};
+    CHECK((twin_mode?gd_configure4(&source4,&contexts,&limits):gd_configure(&source,&contexts,&limits))==GD_ACCEPTED);
     CHECK(gd_configure(&source,&contexts,&limits)==GD_BUSY);CHECK(!gd_epoch());
+    gd_set_diagnostic(note);
     rb_rom_open();
     gc_header request{};request.owner_pid=owner;request.owner_birth=birth;request.generation=1;
     request.offer_count=4;request.table_count=2;request.table[0]={0,4};request.table[1]={8,8};
@@ -288,20 +443,32 @@ int main(int argc,char**argv){
     Consumer consumer;printf("ready\n");fflush(stdout);std::string line;
     while(std::getline(std::cin,line)){std::istringstream in(line);std::string op;in>>op;
         if(op=="startuprace"){startup_race(request,limits);printf("startup race 2\n");
+        }else if(op=="prepnote"){
+            for(unsigned n=0;n<2000 && !prepared_note.load();++n)Sleep(1);CHECK(prepared_note.load());
+            const auto&p=prepare_note;
+            printf("prepnote %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\n",
+                p.request_qpc,p.surface_qpc,p.prepare_begin,p.snapshots,p.sampler,p.luid,p.channel,
+                p.reader_qpc,p.import_begin,p.imported,p.end_qpc);
         }else if(op=="start"){
             unsigned nonce=0;in>>nonce;request.nonce_lo=nonce;request.nonce_hi=GetCurrentProcessId();
             const auto prior=stage_count.load();CHECK(gd_request(&request,4u*1024*1024)==GD_ACCEPTED);
             CHECK(gd_request(&request,4u*1024*1024)==GD_UNCHANGED);CHECK(stage_count.load()==prior+1);
-            CHECK(wait_state(GD_BOOTSTRAP));frame(0);CHECK(wait_mapping());
+            CHECK(wait_state(GD_BOOTSTRAP));renderer.run([]{frame(0);});CHECK(wait_mapping());
             fprintf(stderr,"host active header\n");fflush(stderr);const auto h=mapped_header(request);
             fprintf(stderr,"host consumer open\n");fflush(stderr);consumer.open(h);
             fprintf(stderr,"host consumer opened\n");fflush(stderr);
             printf("prepared %u %u %llu %llu\n",gd_epoch(),GetCurrentProcessId(),request.nonce_lo,request.nonce_hi);
         }else if(op=="active"){CHECK(wait_state(GD_ACTIVE));printf("active\n");
-        }else if(op=="frame"){unsigned marker=0;in>>marker;frame(marker);printf("frame %u\n",marker);
+        }else if(op=="frame"){unsigned marker=0;in>>marker;renderer.run([marker]{frame(marker);});printf("frame %u\n",marker);
+        }else if(op=="guard"){unsigned value=0;in>>value;
+            renderer.run([value]{guard_state.store(value!=0);if(!value)plain_state();});printf("guard\n");
+        }else if(op=="tick"){unsigned value=0;in>>value;renderer.ticking.store(value!=0);printf("tick\n");
         }else if(op=="hold"){unsigned value=0;in>>value;gd_test_hold_poll(value);printf("hold\n");
         }else if(op=="laststamp"){printf("stamp %lld\n",last_list_qpc);
-        }else if(op=="abandon"){gpu_bridge_test_abandon_once();gd_disarm(GD_CANCELLED);CHECK(!gd_epoch());printf("abandoned injected\n");
+        }else if(op=="abandon"){gd_test_bridge_fault_once(128);printf("abandoned injected\n");
+        }else if(op=="mode"){std::string kind;in>>kind;CHECK(kind=="ghost"||kind=="same");display_mode.store(kind=="ghost"?1:2);printf("mode\n");
+        }else if(op=="displaystats"){printf("display %u %u %u\n",display_calls.load(),unsigned(display_on.load()),consumer_calls.load());
+        }else if(op=="twinfault"){gd_test_twin_bridge_fault_once(1);printf("twinfault\n");
         }else if(op=="exhausted"){
             for(unsigned n=0;n<3000 && !status().quarantined;++n)Sleep(1);
             const auto s=status();CHECK(s.quarantined&&s.state==GD_FAULT);++request.nonce_lo;
@@ -310,11 +477,11 @@ int main(int argc,char**argv){
         }else if(op=="cancelprep"){
             prepare_entered=CreateEventW(nullptr,FALSE,FALSE,nullptr);prepare_continue=CreateEventW(nullptr,FALSE,FALSE,nullptr);CHECK(prepare_entered&&prepare_continue);
             gd_test_set_preparation_probe(prepare_probe);request.nonce_lo=333;request.nonce_hi=GetCurrentProcessId();
-            CHECK(gd_request(&request,4u*1024*1024)==GD_ACCEPTED);CHECK(wait_state(GD_BOOTSTRAP));frame(0);
+            CHECK(gd_request(&request,4u*1024*1024)==GD_ACCEPTED);CHECK(wait_state(GD_BOOTSTRAP));renderer.post([]{frame(0);});
             CHECK(WaitForSingleObject(prepare_entered,4000)==WAIT_OBJECT_0);
-            // Worker is deliberately blocked in its own preparation callback.
-            // Disarm must return independently, without joining that worker.
-            gd_disarm(GD_CANCELLED);CHECK(!gd_epoch());SetEvent(prepare_continue);CHECK(wait_state(GD_OFF));
+            // The renderer is deliberately blocked in its own preparation step.
+            // Disarm must return independently, without joining that thread.
+            gd_disarm(GD_CANCELLED);CHECK(!gd_epoch());SetEvent(prepare_continue);renderer.wait();CHECK(wait_state(GD_OFF));
             gd_test_set_preparation_probe(nullptr);CloseHandle(prepare_entered);CloseHandle(prepare_continue);printf("cancelled preparation\n");
         }else if(op=="invalid"){
             auto bad=request;bad.nonce_lo=444;bad.nonce_hi=GetCurrentProcessId();const auto calls=stage_count.load();

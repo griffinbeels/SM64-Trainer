@@ -28,16 +28,18 @@ import json
 import logging
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 
 from sm64_events.core.update_plan import (BACKUP_DIR, JOURNAL_NAME,
-                                          STAGING_DIR)
+                                          STAGING_DIR, INSTALLED_MANIFEST, _safe_path)
 
 log = logging.getLogger("sm64.updater")
+_RECOVERY_LOCK = threading.RLock()
 
 __all__ = ["BACKUP_DIR", "STAGING_DIR", "JOURNAL_NAME", "apply_plan",
-           "read_journal", "startup_repair", "sweep_backup"]
+           "read_journal", "startup_repair", "confirm_startup", "sweep_backup"]
 
 
 def _local(root: Path, rel: str) -> Path:
@@ -59,9 +61,32 @@ def _write_journal(root: Path, doc: dict) -> None:
 
 def read_journal(root: Path) -> "dict | None":
     try:
-        return json.loads((root / JOURNAL_NAME).read_text())
-    except (OSError, json.JSONDecodeError):
+        doc = json.loads((root / JOURNAL_NAME).read_text())
+        if not isinstance(doc, dict) or doc.get("state") not in ("applying", "done", "rolled_back"):
+            return None
+        for key in ("replace", "delete", "added"):
+            rows = doc.get(key)
+            if not isinstance(rows, list) or any(not isinstance(path, str) or
+                    not (path == INSTALLED_MANIFEST or _safe_path(path)) for path in rows):
+                return None
+        return doc
+    except (OSError, ValueError):
         return None
+
+
+def confirm_startup(install_root: Path) -> bool:
+    """Mark recovery evidence expendable only after the server starts."""
+    with _RECOVERY_LOCK:
+        return _confirm_startup(install_root)
+
+
+def _confirm_startup(install_root: Path) -> bool:
+    journal = read_journal(install_root)
+    if journal is None or journal.get("state") == "applying" or journal.get("rollback_failures", 0):
+        return False
+    journal["healthy_startup"] = True
+    _write_journal(install_root, journal)
+    return True
 
 
 def _replace_retry(src: Path, dst: Path, *, os_replace, retries, sleep) -> None:
@@ -118,9 +143,26 @@ def apply_plan(install_root: Path, staging: Path, *, replace, delete,
     """Swap staged files into the install. `replace` paths must exist under
     `staging`; `delete` paths are renamed into the backup tree. Raises on
     failure AFTER rolling back every completed step."""
+    with _RECOVERY_LOCK:
+        _apply_plan(install_root, staging, replace=replace, delete=delete,
+                    os_replace=os_replace, retries=retries, sleep=sleep)
+
+
+def _apply_plan(install_root: Path, staging: Path, *, replace, delete,
+                os_replace, retries, sleep) -> None:
     replace = list(replace)
     delete = list(delete)
     backup = install_root / BACKUP_DIR
+    previous = read_journal(install_root)
+    if (previous and (previous.get("state") == "applying"
+                     or previous.get("rollback_failures", 0)
+                     or (previous.get("state") == "done" and not previous.get("healthy_startup")))):
+        raise RuntimeError("Finish recovery of the previous update before installing another.")
+    if previous is None and (backup.exists() or (install_root / JOURNAL_NAME).exists()):
+        raise RuntimeError("Update recovery evidence needs external installer repair.")
+    if any(not isinstance(path, str) or not (path == INSTALLED_MANIFEST or _safe_path(path))
+           for path in replace + delete):
+        raise ValueError("unsafe update path")
     added = set(p for p in replace if not _local(install_root, p).exists())
     journal = {"state": "applying", "replace": replace, "delete": delete,
                "added": sorted(added)}
@@ -158,6 +200,11 @@ def apply_plan(install_root: Path, staging: Path, *, replace, delete,
 def startup_repair(install_root: Path, *, os_replace=os.replace) -> str:
     """Run at launch BEFORE the server starts. 'rolled_back' => caller must
     relaunch once (the journal is already terminal — no restart loop)."""
+    with _RECOVERY_LOCK:
+        return _startup_repair(install_root, os_replace=os_replace)
+
+
+def _startup_repair(install_root: Path, *, os_replace) -> str:
     journal = read_journal(install_root)
     if journal is None:
         return "none"
@@ -179,17 +226,21 @@ def sweep_backup(install_root: Path, *, attempts: int = 60,
                  sleep=time.sleep) -> bool:
     """Remove the backup tree + a FINISHED journal. Never touches an
     'applying' journal (that is startup_repair's job)."""
-    journal = read_journal(install_root)
-    if journal is not None and journal.get("state") == "applying":
-        return False
     backup = install_root / BACKUP_DIR
     for attempt in range(attempts):
-        shutil.rmtree(backup, ignore_errors=True)
-        if not backup.exists():
-            break
+        with _RECOVERY_LOCK:
+            # Re-read after every retry. Another apply can run while an AV
+            # lock delays old-file cleanup; its recovery record is its own.
+            journal = read_journal(install_root)
+            if journal is None:
+                return not (backup.exists() or (install_root / JOURNAL_NAME).exists())
+            if (journal.get("state") == "applying" or journal.get("rollback_failures", 0)
+                    or not journal.get("healthy_startup")):
+                return False
+            shutil.rmtree(backup, ignore_errors=True)
+            if not backup.exists():
+                (install_root / JOURNAL_NAME).unlink(missing_ok=True)
+                return True
         if attempt < attempts - 1:
             sleep(1.0)
-    if backup.exists():
-        return False
-    (install_root / JOURNAL_NAME).unlink(missing_ok=True)
-    return True
+    return False

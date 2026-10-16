@@ -16,7 +16,7 @@ const stamp = seconds => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2
 export function ReplayTransport({ video, clock = null, frameStep = null,
     playing, onStart, onStep, onToggle, stepHandlers = null,
     startTitle = "Jump to the beginning", canStep = true, frameKind = "game", note = null,
-    loop: controlledLoop, onLoopChange, reviewReady = true }) {
+    loop: controlledLoop, onLoopChange, reviewReady = true, ghosts }) {
   const [localLoop, setLocalLoop] = useState(null);
   const [error, setError] = useState(null);
   const loop = controlledLoop === undefined ? localLoop : controlledLoop;
@@ -64,7 +64,8 @@ export function ReplayTransport({ video, clock = null, frameStep = null,
     <button ...${handlers(1)} disabled=${!canStep} title=${stepTitle("forward")}>
       <${Icon} name="stepForward" size=${15} /> Forward 1
     </button>
-    </div><${PlaybackOptions} video=${video} media=${media} fullscreen=${fullscreen} /></div>
+    </div><${PlaybackOptions} video=${video} media=${media} fullscreen=${fullscreen}
+      ghosts=${ghosts} /></div>
     <${LoopEditor} video=${video} media=${media} interval=${interval} loop=${loop} changeLoop=${changeLoop}
       reviewReady=${reviewReady} setError=${setError} note=${note} />
     ${error && html`<p class="replay-control-error" role="status">${error}</p>`}

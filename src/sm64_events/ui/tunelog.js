@@ -1,3 +1,4 @@
+import { localFetch } from "/ui/api.js";
 // src/sm64_events/ui/tunelog.js — the practice-log card tuning inspector,
 // served at /ui/tunelog.html.
 //
@@ -47,6 +48,7 @@ import { entityKey } from "/ui/entitysection.js";
 import { TUNABLES, CHOICES, DEFAULTS, GROUPS, setLogTuning, encodeTuning,
          decodeTuning, changedFromDefault, withDefaults } from "/ui/logtuning.js";
 import { ControlGroups } from "/ui/tunecontrols.js";
+import { fmtIgtShort } from "/ui/format.js";
 
 const html = htm.bind(h);
 const STORE_KEY = "sm64.logTuneDraft";
@@ -71,7 +73,7 @@ function mkAttempt(overrides = {}) {
   const outcome = overrides.outcome || "success";
   return {
     id, journal_id: id, outcome,
-    igt: "0'24\"11", igt_frames: 733, rta: "0'25\"02", rta_frames: 750,
+    igt: "24\"11", igt_frames: 733, rta: "25\"02", rta_frames: 750,
     pb_delta_frames: null, cleared: false, cleared_reason: null,
     strat_tag: "Standard", rank: null, caveat: null,
     segment_id: null, outcome_detail: null, other_strat: false,
@@ -82,18 +84,18 @@ function mkAttempt(overrides = {}) {
 }
 
 const OPEN_ATTEMPTS = [
-  mkAttempt({ outcome: "success", igt: "0'22\"41", igt_frames: 673,
+  mkAttempt({ outcome: "success", igt: "22\"41", igt_frames: 673,
     pb_action: "undo", pb_delta_frames: -34 }),
-  mkAttempt({ outcome: "reset", igt: "0'06\"10" }),
-  mkAttempt({ outcome: "death", outcome_detail: "fell", igt: "0'14\"02" }),
-  mkAttempt({ outcome: "success", igt: "0'25\"77", igt_frames: 773, pb_delta_frames: 100 }),
-  mkAttempt({ outcome: "success", igt: "0'23\"90", igt_frames: 717, pb_delta_frames: 44 }),
+  mkAttempt({ outcome: "reset", igt: "06\"10" }),
+  mkAttempt({ outcome: "death", outcome_detail: "fell", igt: "14\"02" }),
+  mkAttempt({ outcome: "success", igt: "25\"77", igt_frames: 773, pb_delta_frames: 100 }),
+  mkAttempt({ outcome: "success", igt: "23\"90", igt_frames: 717, pb_delta_frames: 44 }),
   // A row belonging to ANOTHER strategy: no Save button and no delta (his
   // 2026-08-22 ruling -- nothing of the active strategy's applies to it), so
   // the actions cell holds only the replay and × controls. Kept on the page
   // because the card's row heights are tuned against every row shape,
   // including the one with the emptiest actions cell.
-  mkAttempt({ outcome: "success", igt: "0'26\"05", igt_frames: 782,
+  mkAttempt({ outcome: "success", igt: "26\"05", igt_frames: 782,
     strat_tag: "Cannonless", pb_delta_frames: null, pb_action: null,
     pb_blocked: { reason: "foreign_strat", strat: "Standard" },
     other_strat: true }),
@@ -136,10 +138,10 @@ const SECTIONS = [
     rank: GRADED("Gold", "II", 40),
     entity_rank: GRADED("Silver", "IV", 70),
     one_ladder: false, armed_detail: null,
-    pb: { igt: { display: "0'22\"41", attempt_id: 1, caveat: null },
-          rta: { display: "0'23\"90", attempt_id: 1, caveat: null } },
-    pb_by_strat: { igt: { display: "0'22\"41", attempt_id: 1, caveat: null },
-          rta: { display: "0'23\"90", attempt_id: 1, caveat: null } },
+    pb: { igt: { display: "22\"41", attempt_id: 1, caveat: null },
+          rta: { display: "23\"90", attempt_id: 1, caveat: null } },
+    pb_by_strat: { igt: { display: "22\"41", attempt_id: 1, caveat: null },
+          rta: { display: "23\"90", attempt_id: 1, caveat: null } },
     last_activity: 5,
   },
   // 2. Ladder FLOOR -- a strategy is picked, but no PB has landed on it yet,
@@ -215,9 +217,9 @@ const SEGMENT_SECTIONS = [
     attempts: [], strategies: ["Standard"], last_strat: "Standard", default_strat: "Standard",
     rank: GRADED("Bronze", "III", 55), entity_rank: null, one_ladder: true,
     armed_detail: null,
-    pb: { rta: { display: "0'41\"09", attempt_id: null, caveat: null },
+    pb: { rta: { display: "41\"09", attempt_id: null, caveat: null },
           igt: { display: null, attempt_id: null, caveat: null } },
-    pb_by_strat: { rta: { display: "0'41\"09", attempt_id: null, caveat: null },
+    pb_by_strat: { rta: { display: "41\"09", attempt_id: null, caveat: null },
           igt: { display: null, attempt_id: null, caveat: null } },
     last_activity: 2,
   },
@@ -234,25 +236,89 @@ const MORE_SECTIONS = [
     strategies: ["Standard"], last_strat: "Standard", default_strat: null,
     rank: GRADED("Grandmaster", "I", 95), entity_rank: GRADED("Diamond", "II", 30),
     one_ladder: false, armed_detail: null,
-    pb: { igt: { display: "0'18\"04", attempt_id: null, caveat: null },
-          rta: { display: "0'18\"90", attempt_id: null, caveat: null } },
-    pb_by_strat: { igt: { display: "0'18\"04", attempt_id: null, caveat: null },
-          rta: { display: "0'18\"90", attempt_id: null, caveat: null } },
+    pb: { igt: { display: "18\"04", attempt_id: null, caveat: null },
+          rta: { display: "18\"90", attempt_id: null, caveat: null } },
+    pb_by_strat: { igt: { display: "18\"04", attempt_id: null, caveat: null },
+          rta: { display: "18\"90", attempt_id: null, caveat: null } },
     last_activity: 1,
   },
 ];
 
 const UNASSIGNED_ATTEMPTS = [
-  mkAttempt({ outcome: "reset", igt: "0'03\"20" }),
-  mkAttempt({ outcome: "hard_reset", igt: "0'00\"40" }),
+  mkAttempt({ outcome: "reset", igt: "03\"20" }),
+  mkAttempt({ outcome: "hard_reset", igt: "00\"40" }),
 ];
 
-function fixtureView() {
+function fixtureView(demo = null) {
+  const stars = demo ? [crownedSection(SECTIONS[0], demo), ...SECTIONS.slice(1)] : SECTIONS;
   return {
-    stars: [...SECTIONS, ...MORE_SECTIONS],
+    stars: [...stars, ...MORE_SECTIONS],
     segments: SEGMENT_SECTIONS,
     unassigned: UNASSIGNED_ATTEMPTS,
   };
+}
+
+// ---- The PB row, both directions (task 0147) --------------------------------
+//
+// "New PB" plays what an automatic PB does live: a faster run lands at the top
+// of the open card still measured against the old PB, and a beat later the
+// save crowns it -- the order the server's background save produces, so the
+// "-0.47s -> GOLD!!" swap is what gets judged. The crowning goes through the
+// REAL door: a `pb_saved` event on the fixture store's feed, which the log's
+// own crown hook reads exactly as it reads the socket's. "Undo PB" takes the
+// newest crown back, so the drain and the quiet hand-back can be judged too.
+// The crown is a stack of attempt ids; the card is rebuilt from it, deltas and
+// all, the way the server measures every row against the strategy's PB.
+const PB_STEP_FRAMES = 14;
+const CROWN_DELAY_MS = 250;
+
+function crownedSection(section, demo) {
+  const pbId = demo.crowns[demo.crowns.length - 1];
+  const attempts = [...demo.extra, ...section.attempts];
+  const pbRow = attempts.find((attempt) => attempt.id === pbId);
+  const measured = attempts.map((attempt) => (
+    attempt.outcome !== "success" || attempt.other_strat ? attempt : {
+      ...attempt,
+      pb_delta_frames: attempt.igt_frames - pbRow.igt_frames,
+      pb_action: attempt.id === pbId ? "undo" : "save",
+    }));
+  const pb = { display: fmtIgtShort(pbRow.igt_frames), attempt_id: pbId, caveat: null };
+  return { ...section, attempts: measured,
+           pb: { ...section.pb, igt: pb }, pb_by_strat: { ...section.pb_by_strat, igt: pb } };
+}
+
+function usePbDemo() {
+  const [demo, setDemo] = useState(() => ({
+    extra: [], crowns: [OPEN_ATTEMPTS[0].id], feed: [] }));
+  function newPb() {
+    const all = [...demo.extra, ...OPEN_ATTEMPTS];
+    const best = all.find((attempt) => attempt.id === demo.crowns[demo.crowns.length - 1]);
+    const frames = best.igt_frames - PB_STEP_FRAMES;
+    const run = mkAttempt({ outcome: "success", igt: fmtIgtShort(frames), igt_frames: frames });
+    setDemo((prior) => ({ ...prior, extra: [run, ...prior.extra],
+      feed: [{ type: "attempt_completed", payload: { attempt_id: run.id } }, ...prior.feed] }));
+    setTimeout(() => setDemo((prior) => ({
+      ...prior, crowns: [...prior.crowns, run.id],
+      feed: [{ type: "pb_saved", payload: { attempt_id: run.id, frames,
+                                            previous_frames: best.igt_frames } },
+             ...prior.feed] })),
+    CROWN_DELAY_MS);
+  }
+  function undoPb() {
+    setDemo((prior) => (prior.crowns.length > 1
+      ? { ...prior, crowns: prior.crowns.slice(0, -1),
+          feed: [{ type: "pb_undone", payload: { attempt_id: prior.crowns[prior.crowns.length - 1] } },
+                 ...prior.feed] }
+      : prior));
+  }
+  // The Time Save stands until the next attempt is logged -- a reset is the
+  // commonest one, so that is what this lands.
+  function nextAttempt() {
+    const run = mkAttempt({ outcome: "reset", igt: "04\"20" });
+    setDemo((prior) => ({ ...prior, extra: [run, ...prior.extra],
+      feed: [{ type: "attempt_completed", payload: { attempt_id: run.id } }, ...prior.feed] }));
+  }
+  return { demo, newPb, undoPb, nextAttempt, canUndo: demo.crowns.length > 1 };
 }
 
 // The first section (the OPEN-card / long-name demonstration above) doubles
@@ -339,6 +405,7 @@ function Inspector() {
   const [status, setStatus] = useState(null);
   const [sort, setSort] = useState("newest");
   const [hideResets, setHideResets] = useState(false);
+  const [hideSavestates, setHideSavestates] = useState(true);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, encodeTuning(values)); }, [values]);
   // Commit to the active slot SYNCHRONOUSLY, in the render body -- not in a
@@ -358,15 +425,17 @@ function Inspector() {
   const tuningKey = encodeTuning(values);
 
   const ui = useMemo(() => ({
-    sort, hideResets, setSort, setHideResets,
-  }), [sort, hideResets]);
-  const view = useMemo(() => fixtureView(), []);
-  const t = useMemo(() => fixtureT(), []);
+    sort, hideResets, hideSavestates, setSort, setHideResets, setHideSavestates,
+  }), [sort, hideResets, hideSavestates]);
+  const pbDemo = usePbDemo();
+  const view = useMemo(() => fixtureView(pbDemo.demo),
+    [pbDemo.demo.extra, pbDemo.demo.crowns]);
+  const t = useMemo(() => ({ ...fixtureT(), feed: pbDemo.demo.feed }), [pbDemo.demo.feed]);
 
   async function saveToRepo() {
     setStatus({ kind: "busy", text: "Saving..." });
     try {
-      const response = await fetch("/api/tuning/log", {
+      const response = await localFetch("/api/tuning/log", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ values }),
       });
@@ -416,6 +485,17 @@ function Inspector() {
         recency order -- so the alignment items (1-3) can be judged across
         several closed cards at once; the first card stays open, with
         attempts, for item 4.</p>
+
+      <p class="tune-note">Personal best: <b>New PB</b>${" "}lands a faster
+        run on the first card and crowns it a beat later, the way an automatic
+        save does, with its Time Save beside GOLD!!; <b>Next attempt</b>${" "}logs
+        a reset, which retires the Time Save; <b>Undo PB</b>${" "}hands the
+        crown back.</p>
+      <div class="tune-actions">
+        <button class="save" onclick=${pbDemo.newPb}>New PB</button>
+        <button onclick=${pbDemo.nextAttempt}>Next attempt</button>
+        <button disabled=${!pbDemo.canUndo} onclick=${pbDemo.undoPb}>Undo PB</button>
+      </div>
 
       <${ControlGroups} groups=${GROUPS} rows=${{ ...CHOICES, ...TUNABLES }}
         values=${values} defaults=${DEFAULTS} onChange=${set} />

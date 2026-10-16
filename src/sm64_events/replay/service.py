@@ -8,18 +8,21 @@ Anything else (e.g. codec failure on a corrupt segment) is a genuine 500 —
 extract.py already guarantees no partial file survives those.
 """
 import asyncio
+from collections import OrderedDict
 from contextlib import contextmanager, nullcontext, ExitStack
+from sm64_events.replay.savedindex import SavedClipIndex
 from sm64_events.replay.sessiongate import SessionGate
 import json
 import logging
 import math
 import re
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sm64_events.core.timefmt import GAME_FPS, format_igt
+from sm64_events.core.timefmt import GAME_FPS, format_igt, format_igt_short
 from sm64_events.core.profiling import measured
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.association import association_problem, valid_picture_times
@@ -27,8 +30,8 @@ from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.navigation import captured_input_span, attempt_start_slot
 from sm64_events.replay.reviewstate import ReviewStateStore
 from sm64_events.replay.compress import SavedReplayCompressor
-from sm64_events.replay.publication import (publish as publish_saved, recover as recover_saved,
-                                           resume as resume_saved)
+from sm64_events.replay.publication import (GHOST_COPY_SUFFIX, atomic_json, publish as publish_saved,
+                                           recover as recover_saved, resume as resume_saved)
 from sm64_events.replay.extract import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
@@ -39,10 +42,26 @@ log = logging.getLogger("sm64.replay")
 _CLIP_NAME = "clip_attempt_{id}.mp4"
 # fullmatch pattern — rejects traversal, wrong extension, empty id
 _CLIP_RE = re.compile(r"clip_attempt_\d+\.mp4")
+# The ghost copy (the twin recording, ghosts kept) of a buffer clip.
+_GHOST_COPY_NAME = "ghostcopy_attempt_{id}.mp4"
+_GHOST_COPY_RE = re.compile(r"ghostcopy_attempt_\d+\.mp4")
+
+# Why a replay offers no ghost copy, in the words the player shows.
+GHOST_COPY_NONE = "No ghost copy was recorded for this attempt"
+GHOST_COPY_PARTIAL = "The ghost copy covers only part of this replay"
+GHOST_COPY_UNREADABLE = "The ghost copy could not be read"
+GHOST_COPY_GONE = "The ghost copy is no longer in the buffer"
+GHOST_COPY_LOST_BEFORE_SAVE = "The ghost copy left the buffer before this replay was saved"
+GHOST_COPY_MISSING = "The ghost copy file is missing"
+# The copy's own helper encodes and publishes it, so its tail trails the clean
+# recording's. A cut taken at once waits this long, at most, for the copy to
+# reach the clean clip's last picture -- only while a copy covers the clip's
+# start. With Ghosts in recording off there is no copy and no wait.
+GHOST_COPY_TAIL_WAIT_S = 1.0
 
 
-def saved_attempt_ids(root: Path) -> set[int]:
-    """One walk of a save tree -> the attempt ids that have a saved clip.
+def saved_attempt_ids(root: Path, *, include_native: bool = True, among=None) -> set[int]:
+    """Attempt ids protected by saved video or validated standalone native poses.
 
     The FILENAME is the index (`attempt_<id>_...`, see ReplayService's class
     docstring), so nothing but the directory is needed to answer this. Bulk
@@ -50,15 +69,70 @@ def saved_attempt_ids(root: Path) -> set[int]:
     attempt — and module-level so `main.py` can hand it to the tracker's
     startup prune, which must protect a saved clip's attempt from deletion
     (tracking/prune.py) whether or not replay is enabled this run.
+
+    `among` limits the answer to those attempt ids. The prune asks only about
+    its candidates, because validating a native clip parses and hashes all of
+    it (~31 ms/MiB): every clip on every start took 1.66 s on 09-25, and the
+    clips are never pruned, so that grew without bound.
     """
     if not root.exists():
         return set()
+    wanted = None if among is None else set(among)
     ids: set[int] = set()
     for path in root.rglob("attempt_*.mp4"):
         match = re.match(r"attempt_(\d+)_", path.name)
-        if match:
+        if match and (wanted is None or int(match.group(1)) in wanted):
             ids.add(int(match.group(1)))
+    if include_native:
+        ids.update(_native_attempt_ids(root, wanted))
     return ids
+
+
+def _native_manifest(path: Path) -> dict:
+    with path.open("rb") as stream:
+        data = stream.read(65537)
+    if len(data) > 65536:
+        raise ValueError("native ghost manifest exceeds its bound")
+    return json.loads(data)
+
+
+def _native_attempt_ids(root: Path, among=None) -> set[int]:
+    """Pruning evidence must contain a committed, hashed clip, not just a name.
+
+    With `among`, only those attempts' manifests are opened and validated."""
+    from sm64_events.ghost.clip import OlderPoseFormat, check_manifest
+    from types import SimpleNamespace
+    root = root.resolve()
+    identities = set()
+    native = root / "native"
+    metas = (native.glob("attempt_*.json") if among is None else
+             (path for path in (native / f"attempt_{int(attempt_id)}.json"
+                                for attempt_id in sorted(among)) if path.is_file()))
+    for meta in metas:
+        match = re.fullmatch(r"attempt_([1-9][0-9]{0,18})\.json", meta.name)
+        path = meta.with_suffix(".ghost")
+        if not match or not all(item.resolve().is_relative_to(root) for item in (path, meta)):
+            continue
+        try:
+            manifest = _native_manifest(meta)
+            session, target = manifest["session_id"], manifest["target"]
+            if (type(session) is not int or session <= 0 or not isinstance(target, dict)
+                    or target.get("kind") not in ("star", "segment")
+                    or not isinstance(target.get("entity_key"), str) or not target["entity_key"]
+                    or target.get("strat") is not None and not isinstance(target["strat"], str)):
+                continue
+            attempt_id = int(match.group(1))
+            # This protects a saved source from pruning before the database is
+            # available. Playback separately compares the current projected row.
+            recorded = SimpleNamespace(**{**manifest, "id": attempt_id})
+            try:
+                check_manifest(path, manifest, attempt=recorded, target=target)
+            except OlderPoseFormat:
+                pass  # Unplayable today, still his committed recording: never prune it.
+            identities.add(attempt_id)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return identities
 
 
 # How many game frames LATER than its wall time a frame's picture appears in
@@ -172,6 +246,11 @@ class ReplayService:
     #: ONE injected hook left; there were seven, one per generation of the
     #: derived frame map, and the capture layer retired all of them.
     track_pads = None
+    #: `(attempt, span) -> [(frame, InputFrame)]`: the attempt's own input
+    #: track widened to the raw game frames `span` covers, for filling a
+    #: native clip recorded before pad capture (`native_with_inputs`).
+    #: Injected beside `track_pads` by the same owner.
+    input_track = None
 
     def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
                  revealer=None):
@@ -188,6 +267,12 @@ class ReplayService:
         self._cut_locks: dict[int, tuple[threading.Lock, int]] = {}
         self._cut_locks_guard = threading.Lock()
         self._review_state = ReviewStateStore()
+        # Saved clips by attempt, from one walk of the save root, and each
+        # saved clip's parsed sidecar while its bytes are unchanged -- the two
+        # costs the ghost picker paid per candidate (savedindex.py).
+        self._saved_index = SavedClipIndex(cfg.save_root)
+        self._saved_meta_cache: OrderedDict = OrderedDict()
+        self._saved_meta_lock = threading.Lock()
         # clips_dir lives inside scratch_dir; it is created in lifecycle_start
         # AFTER recorder.start() so any future recursive wipe by the recorder
         # doesn't evict a directory we created first.
@@ -196,11 +281,18 @@ class ReplayService:
         # what _span uses; update_settings replaces them.
         self.pre_pad_s = cfg.pre_pad_s
         self.post_pad_s = cfg.post_pad_s
+        self._settings_guard = threading.Lock()
+        # Storage applies stay ordered without holding the persistence lock
+        # used by Stop. Published limits may still be awaiting disk eviction.
+        self._settings_apply_guard = threading.Lock()
+        self._settings_limits = None
         self._save_guard = threading.Lock()
         self._active_saves = 0
         self._session_gate = SessionGate()
         self._descriptors: dict[str, tuple[int, dict | None]] = {}  # sidecar name -> (mtime, descriptor)
         self._save_failures: dict[int, str] = {}
+        self._native_preservation_failures: OrderedDict[int, tuple[tuple, str]] = OrderedDict()
+        self._native_preservation_lock = threading.Lock()
         self._recovery_failures: list[str] = []
         # Shrinks what Save/PB publishes, after the fact (replay/compress.py).
         self.compressor: SavedReplayCompressor | None = None
@@ -217,6 +309,11 @@ class ReplayService:
             self.recorder.ring.expire_before(cutoff)
             if self.fragments is not None:
                 self.fragments.expire_before(cutoff)
+            # The ring leaves ghost copy extents to their own archive. Expired
+            # even while it records nothing, so no copy outlives its history.
+            copies = getattr(self.recorder, "ghost_copies", None)
+            if copies is not None:
+                copies.expire_before(cutoff)
 
     def _protected_scratch(self):
         with self._save_guard:
@@ -226,6 +323,12 @@ class ReplayService:
     def fragments(self):
         source = getattr(self.recorder, "fragments", None)
         return source if source is not None and source.enabled else None
+
+    @property
+    def ghost_copies(self):
+        """The recorder's ghost copy archive; None when it records none."""
+        copies = getattr(self.recorder, "ghost_copies", None)
+        return copies if copies is not None and getattr(copies, "enabled", False) else None
 
     def buffer_coverage(self):
         return self.fragments.coverage() if self.fragments else self.recorder.ring.coverage("video")
@@ -237,7 +340,7 @@ class ReplayService:
         if cached and cached.get("fragment_source"):
             with ExitStack() as local:
                 (leases or local).enter_context(source.read(cached["fragment_source"]))
-                return cached, False
+                return self._ghost_copy_held(cached, leases or local), False
         start, end = self._span(attempt)
         # Wait only for the attempted action itself, never future post-padding.
         required = _parse_utc(attempt.ended_utc)
@@ -260,9 +363,98 @@ class ReplayService:
                     "start_utc": result.start_utc.isoformat(), "video_start_s": result.video_start_s,
                     "frame_times": [round(t, 6) for t in result.frame_times], "encode": "picture_feed",
                     "fragment_source": descriptor}
+            meta.update(self._ghost_copy_cut(result, meta["frame_times"], leases or local))
             self._map_from_feeds(meta, result)
         self.clips_dir.mkdir(parents=True, exist_ok=True)
         return meta, True
+
+    def _ghost_copy_cut(self, result, frame_times: list, leases) -> dict:
+        """The ghost copy over the clean clip's exact span, or why there is none.
+
+        Offered only when its first picture starts at the clean clip's start to
+        the microsecond and its picture times equal the clean clip's: the
+        player swaps one for the other at the same `currentTime`, and every
+        consumer of `frame_times`/`frame_map` reads the clean clip's. A fault
+        here never reaches the clean cut."""
+        copies = self.ghost_copies
+        if copies is None:
+            return {"ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_NONE}
+        start = result.start_utc
+        end = start + timedelta(seconds=result.duration_s)
+        try:
+            self._wait_for_ghost_copy(copies, start, end)
+            _, twin, descriptor = leases.enter_context(copies.open(start, end, required_span=(start, end)))
+        except (LookupError, ValueError):
+            return {"ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_NONE}
+        except Exception:  # noqa: BLE001 - a twin fault stops only the twin
+            log.exception("ghost copy cut failed; the replay offers the clean clip only")
+            return {"ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_UNREADABLE}
+        if twin.start_utc != start or [round(t, 6) for t in twin.frame_times] != frame_times:
+            return {"ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_PARTIAL}
+        return {"ghost_copy_source": descriptor, "ghost_copy_reason": None}
+
+    def _wait_for_ghost_copy(self, copies, start: datetime, end: datetime) -> None:
+        """Bounded: see GHOST_COPY_TAIL_WAIT_S. A copy that does not reach back
+        to the clip's start can never match it, so it is not waited for."""
+        deadline = time.monotonic() + min(self.cfg.extract_wait_s, GHOST_COPY_TAIL_WAIT_S)
+        reached = end - timedelta(milliseconds=1)  # µs rounding of two UTC sums
+        while True:
+            coverage = copies.coverage()
+            if coverage is None or coverage[0] > start or coverage[1] >= reached:
+                return
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(0.02)
+
+    def _ghost_copy_held(self, meta: dict, leases) -> dict:
+        """A cached cut's ghost copy, still retained; otherwise say so."""
+        descriptor = meta.get("ghost_copy_source")
+        if descriptor is None:
+            return meta
+        copies = self.ghost_copies
+        try:
+            if copies is None:
+                raise LookupError("no ghost copy archive")
+            leases.enter_context(copies.read(descriptor))
+        except (LookupError, ValueError, OSError):
+            return {**meta, "ghost_copy_source": None, "ghost_copy_reason": GHOST_COPY_GONE}
+        return meta
+
+    @staticmethod
+    def _ghost_copy_offer(attempt_id: int, source: str, meta: dict, saved: Path | None) -> dict:
+        """The payload's `ghost_copy_url` and `ghost_copy_reason`."""
+        if source == "saved":
+            block = meta.get("ghost_copy")
+            if isinstance(block, dict) and saved.with_suffix(GHOST_COPY_SUFFIX).is_file():
+                return {"ghost_copy_url": f"/api/replay/saved/{attempt_id}/ghosts",
+                        "ghost_copy_reason": None}
+            reason = GHOST_COPY_MISSING if isinstance(block, dict) else None
+        elif meta.get("ghost_copy_source") is not None:
+            return {"ghost_copy_url": "/api/replay/ghostcopy/clips/"
+                                      + _GHOST_COPY_NAME.format(id=attempt_id),
+                    "ghost_copy_reason": None}
+        else:
+            reason = None
+        return {"ghost_copy_url": None,
+                "ghost_copy_reason": reason or meta.get("ghost_copy_reason") or GHOST_COPY_NONE}
+
+    @contextmanager
+    def _ghost_copy_for_save(self, meta: dict):
+        """`(media, None)` for a cut whose ghost copy is still retained, else
+        `(None, reason)`. The lease lasts through publication."""
+        descriptor = meta.get("ghost_copy_source")
+        if descriptor is None:
+            yield None, meta.get("ghost_copy_reason") or GHOST_COPY_NONE
+            return
+        with ExitStack() as stack:
+            media, reason = None, GHOST_COPY_LOST_BEFORE_SAVE
+            copies = self.ghost_copies
+            if copies is not None:
+                try:
+                    media, reason = stack.enter_context(copies.read(descriptor)), None
+                except (LookupError, ValueError, OSError):
+                    pass
+            yield media, reason
 
     def _pin_clip(self, attempt_id: int):
         pin = getattr(self.recorder.ring, "pin_temp", None)
@@ -313,10 +505,11 @@ class ReplayService:
 
     # -- queries -------------------------------------------------------------
 
-    def status(self) -> dict:
+    def status(self, *, nonblocking: bool = False) -> dict:
         with self._save_guard:
             failures = dict(self._save_failures)
-        return {"enabled": True, **self.recorder.status(),
+        current = self.recorder.status(nonblocking=True) if nonblocking else self.recorder.status()
+        return {"enabled": True, **current,
                 "retention_attempts": self.history.count,
                 "save_failures": failures, "recovery_failures": self._recovery_failures}
 
@@ -344,18 +537,51 @@ class ReplayService:
         affect the next view(); the recorder's idle threshold follows the
         padding window). None pads = keep current. Persist before apply so
         a write failure can't leave limits applied but not durable."""
-        pre = self.pre_pad_s if pre_pad_s is None else float(pre_pad_s)
-        post = self.post_pad_s if post_pad_s is None else float(post_pad_s)
-        count = self.history.count if retention_attempts == "unchanged" else retention_attempts
-        validate_settings(retention_s, max_buffer_bytes, pre, post, count)
-        save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes,
-                      pre, post, count)
+        with self._settings_apply_guard:
+            return self._update_settings(retention_s, max_buffer_bytes, pre_pad_s,
+                                         post_pad_s, retention_attempts)
+
+    def _update_settings(self, retention_s, max_buffer_bytes, pre_pad_s,
+                         post_pad_s, retention_attempts):
+        with self._settings_guard:
+            pre = self.pre_pad_s if pre_pad_s is None else float(pre_pad_s)
+            post = self.post_pad_s if post_pad_s is None else float(post_pad_s)
+            count = self.history.count if retention_attempts == "unchanged" else retention_attempts
+            validate_settings(retention_s, max_buffer_bytes, pre, post, count)
+            save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes,
+                          pre, post, count,
+                          recording_enabled=getattr(self.recorder, "recording_enabled",
+                                                    self.cfg.recording_enabled))
+            # Stop must preserve the durable request, even if the ring is
+            # blocked before applying it. None remains a valid retention limit.
+            self._settings_limits = (retention_s, max_buffer_bytes)
+            self.history.configure(count)
+            self.pre_pad_s, self.post_pad_s = pre, post
+            self.recorder.set_idle_after(pre + post)
         self.recorder.ring.set_limits(retention_s, max_buffer_bytes)
-        self.history.configure(count)
-        self.pre_pad_s, self.post_pad_s = pre, post
-        self.recorder.set_idle_after(pre + post)
         self._maintain_history()
         return self.settings()
+
+    def set_recording_enabled(self, enabled: bool) -> dict:
+        """Persist desired capture state, then wake the existing attach owner.
+
+        Closing and joining video/audio/pose/encoder owners happens on that
+        worker. The request never waits for capture startup or teardown.
+        """
+        if type(enabled) is not bool:
+            raise ValueError("enabled must be a boolean")
+        with self._settings_guard:
+            retention, cap = (self._settings_limits if self._settings_limits is not None else
+                              (self.recorder.ring.retention_s, self.recorder.ring.max_bytes))
+            save_settings(self.cfg.settings_path, retention,
+                          cap, self.pre_pad_s, self.post_pad_s,
+                          self.history.count, recording_enabled=enabled)
+            self.recorder.set_recording_enabled(enabled)
+        return self.status(nonblocking=True)
+
+    def attempt(self, attempt_id: int):
+        """The projected attempt row; LookupError when there is none."""
+        return self._attempt(attempt_id)
 
     def _attempt(self, attempt_id: int):
         db = self.tracker.db
@@ -373,7 +599,18 @@ class ReplayService:
         raise LookupError(f"no attempt {attempt_id}")
 
     def _span(self, a) -> tuple[datetime, datetime]:
-        start = _parse_utc(a.started_utc) - timedelta(seconds=self.pre_pad_s)
+        """The attempt's footage: `pre_pad_s` of lead-in, never reaching back
+        past the anchor before the one that opened it (task 0144, his ruling
+        2026-09-23: "about 0.5 s before the opening reset, never reaching back
+        past the previous reset"). Reset fifteen times and run on the
+        sixteenth, and the clip opens on the sixteenth, not on a stack of the
+        fifteen before it. `prev_anchor_utc` is None for a run nothing came
+        before; the pad alone applies."""
+        started = _parse_utc(a.started_utc)
+        start = started - timedelta(seconds=self.pre_pad_s)
+        floor = getattr(a, "prev_anchor_utc", None)
+        if floor is not None:
+            start = max(start, min(_parse_utc(floor), started))
         end = _parse_utc(a.ended_utc) + timedelta(seconds=self.post_pad_s)
         return start, end
 
@@ -383,15 +620,189 @@ class ReplayService:
         """Locate an attempt's saved clip anywhere under save_root (the
         filename is the index — see class docstring). First match in
         sorted order wins if the user duplicated a file manually."""
-        root = self.cfg.save_root
-        if not root.exists():
-            return None
-        matches = sorted(root.rglob(f"attempt_{attempt_id:04d}_*.mp4"))
-        return matches[0] if matches else None
+        return self._saved_index.find(attempt_id)
+
+    @property
+    def saved_generation(self) -> int:
+        """Moves whenever which attempts have a saved clip can have changed."""
+        return self._saved_index.generation
 
     def saved_attempt_ids(self) -> set[int]:
-        """This service's own save tree -> `saved_attempt_ids(root)`."""
-        return saved_attempt_ids(self.cfg.save_root)
+        """Video availability for Compare/compilation excludes pose-only saves."""
+        return self._saved_index.ids()
+
+    @staticmethod
+    def _native_target(attempt):
+        from sm64_events.inputs.service import entity_key_of
+        kind, key = entity_key_of(attempt)
+        return {"kind": kind, "entity_key": key, "strat": attempt.strat_tag}
+
+    def find_native(self, attempt_id: int) -> tuple[Path, dict] | None:
+        """Read a validated permanent pose clip, independent of video availability."""
+        return self._find_native(attempt_id)[0]
+
+    def _find_native(self, attempt_id: int) -> tuple[tuple[Path, dict] | None, str | None]:
+        """The first playable candidate wins; otherwise name an older-format file.
+
+        An older-format commit is recorded as this attempt's preservation
+        refusal so the selector explains it, and callers must not replace it.
+        """
+        from sm64_events.ghost.clip import OlderPoseFormat, blink_frames, check_manifest, inputs_complete
+        attempt = self._attempt(attempt_id)
+        older = None
+        root = self.cfg.save_root.resolve()
+        candidates = [(root / "native" / f"attempt_{attempt_id}.ghost", False)]
+        saved = self.find_saved(attempt_id)
+        if saved is not None:
+            candidates.append((saved.with_suffix(".ghost"), True))
+        for path, video_metadata in candidates:
+            try:
+                meta = path.with_suffix(".json")
+                if not all(item.resolve().is_relative_to(root) for item in (path, meta)):
+                    continue
+                manifest = (json.loads(meta.read_text(encoding="utf-8")) if video_metadata
+                            else _native_manifest(meta))
+                if video_metadata:
+                    manifest = manifest.get("native_ghost")
+                clip = check_manifest(path, manifest, attempt=attempt, target=self._native_target(attempt))
+                # By the current playback rule, including manifests written before it.
+                # `inputs_complete` is the stored clip's own truth; the playback copy
+                # (`native_with_inputs`) restates it after the input track fills pads.
+                manifest = {**manifest, "blink_frames": blink_frames(clip), "inputs_complete": inputs_complete(clip)}
+                self._remember_native_preservation(self._native_preservation_key(attempt), None)
+                return (path, manifest), None
+            except OlderPoseFormat as error:
+                older = older or str(error)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                continue
+        if older is not None:
+            self._remember_native_preservation(self._native_preservation_key(attempt), older)
+        return None, older
+
+    def retarget_native(self, attempt_id: int) -> bool:
+        """Carry this attempt's committed pose clips to its corrected strategy.
+
+        A committed manifest binds its clip to the attempt's target, strategy
+        included (`ghost/clip.py::check_manifest`). Reclassifying the run
+        (Standard, then TJ Strat; his report 2026-10-13) left `find_native`
+        refusing the clip it had committed, and a PB re-save re-exported from
+        the pose archive, which forgets after `ARCHIVE_RETENTION_S`. Only the
+        stored `strat` may differ: a manifest naming another kind or entity
+        is not this run's and stays untouched. True when a manifest changed.
+        """
+        with self._session_gate.use(), self._cut_lock(attempt_id):
+            return self._retarget_native(self._attempt(attempt_id))
+
+    def _retarget_native(self, attempt) -> bool:
+        """`retarget_native` for a caller already holding the attempt's cut lock."""
+        from sm64_events.ghost.clip import OlderPoseFormat, check_manifest
+        target = self._native_target(attempt)
+        root = self.cfg.save_root.resolve()
+        saved = self.find_saved(attempt.id)
+        # The committed clip, the saved video's sidecar copy of its manifest,
+        # and the pad-filled playback copy, which restates that manifest.
+        candidates = [(root / "native" / f"attempt_{attempt.id}.ghost", None),
+                      *([(saved.with_suffix(".ghost"), "native_ghost")] if saved is not None else []),
+                      (root / "native" / "inputs" / f"attempt_{attempt.id}.ghost", None)]
+        rewritten = False
+        for path, field in candidates:
+            meta = path.with_suffix(".json")
+            try:
+                if not meta.is_file() or not all(item.resolve().is_relative_to(root) for item in (path, meta)):
+                    continue
+                document = json.loads(meta.read_text(encoding="utf-8")) if field else _native_manifest(meta)
+                manifest = document.get(field) if field else document
+                stored = manifest.get("target") if isinstance(manifest, dict) else None
+                if not isinstance(stored, dict) or stored == target:
+                    continue
+                if {**stored, "strat": target["strat"]} != target:
+                    log.info("Pose clip %s names %s, not attempt %s's %s; left untouched",
+                             path.name, stored, attempt.id, target)
+                    continue
+                moved = {**manifest, "target": target}
+                try:
+                    check_manifest(path, moved, attempt=attempt, target=target)
+                except OlderPoseFormat:
+                    pass  # His committed older recording: its bytes stay, its strategy follows.
+                if field:
+                    touch = getattr(self.compressor, "touch", None)
+                    if touch is not None:
+                        touch(saved)  # A compression swap waits for the clip to go idle.
+                    atomic_json(meta, {**document, field: moved}, allow_nan=True)
+                else:
+                    atomic_json(meta, moved)
+                rewritten = True
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                log.info("Pose clip %s kept its strategy: %s", path.name, error)
+        with self._native_preservation_lock:
+            self._native_preservation_failures.pop(attempt.id, None)
+        return rewritten
+
+    def native_with_inputs(self, attempt_id: int, found: tuple[Path, dict]) -> tuple[Path, dict]:
+        """The copy of `find_native`'s clip the renderer plays and a collection
+        exports: the attempt's input track fills the pads its capture never
+        recorded (`ghost/padfill.py`). `found` itself when nothing can be
+        filled; the committed clip and its manifest never change."""
+        if self.input_track is None:
+            return found
+        from sm64_events.ghost.padfill import with_track_pads
+        try:
+            attempt = self._attempt(attempt_id)
+        except (LookupError, RuntimeError, ValueError):
+            return found
+        return with_track_pads(found, attempt, self.input_track,
+                               self.cfg.save_root.resolve() / "native" / "inputs")
+
+    def native_identity(self, attempt_id: int) -> dict:
+        """Cheap projected ownership key; reprojected origins invalidate cached clips."""
+        from sm64_events.ghost.clip import attempt_origin
+        attempt = self._attempt(attempt_id)
+        return {"attempt_id": attempt.id, "session_id": attempt.session_id,
+                "target": self._native_target(attempt), **attempt_origin(attempt)}
+
+    def _native_preservation_key(self, attempt) -> tuple:
+        # Failure identity also permits missing/invalid origin fields: those are
+        # export refusals worth explaining, never valid playback identities.
+        target = self._native_target(attempt)
+        return (attempt.id, attempt.session_id, target["kind"], target["entity_key"], target["strat"],
+                *(getattr(attempt, name, None) for name in (
+                    "native_clock_frame", "native_clock_utc", "native_clock_kind",
+                    "closed_frame", "ended_utc")))
+
+    def _remember_native_preservation(self, identity: tuple, reason: str | None) -> None:
+        with self._native_preservation_lock:
+            previous = self._native_preservation_failures.get(identity[0])
+            if not reason and previous is not None and previous[0] != identity:
+                return  # An older successful lookup cannot clear a newer projection's refusal.
+            self._native_preservation_failures.pop(identity[0], None)
+            # Said once per refusal, not per lookup: the ghost picker re-reads
+            # every candidate every few seconds, and one old-format template
+            # filled the log with the same line every 4 s (2026-09-22).
+            repeated = previous is not None and previous == (identity, (reason or "")[:1024])
+            if reason:
+                self._native_preservation_failures[identity[0]] = identity, reason[:1024]
+                while len(self._native_preservation_failures) > 128:
+                    self._native_preservation_failures.popitem(last=False)
+        if reason and not repeated:
+            log.warning("Native Mario preservation refused for attempt %s (session %s): %s",
+                        identity[0], identity[1], reason)
+
+    def native_preservation_reason(self, attempt_id: int) -> str | None:
+        """Last explicit preservation refusal for this exact projected attempt.
+
+        A lookup neither exports nor scans the archive. Refusals are bounded,
+        process-local diagnostics; they never become saved-asset metadata.
+        """
+        identity = self._native_preservation_key(self._attempt(attempt_id))
+        with self._native_preservation_lock:
+            previous = self._native_preservation_failures.get(attempt_id)
+            if previous is None:
+                return None
+            if previous[0] != identity:
+                # This caller may have read an older projection just before a
+                # concurrent preservation published the newer refusal.
+                return None
+            return previous[1]
 
     def available_attempt_ids(self) -> list[int]:
         """Attempt ids whose replay is obtainable RIGHT NOW: a saved clip on
@@ -425,16 +836,38 @@ class ReplayService:
                 out.append(a.id)
         return out
 
-    @staticmethod
-    def _saved_meta(saved: Path) -> dict:
+    #: Parsed saved-clip sidecars kept, newest used last out.
+    SAVED_META_CACHE = 64
+
+    def _saved_meta(self, saved: Path) -> dict:
         """Sidecar metadata for a saved clip. Files saved before sidecars
         existed (pre 2026-06-12) have none: degrade to unknown duration and
         no truncation banner — the <video> element learns the real duration
-        itself once loaded."""
+        itself once loaded.
+
+        Parsed once per version of the file: a sidecar carries the clip's
+        whole picture map (152 KB on his PB clips, 5.6 ms to parse) and the
+        ghost picker read it on every resolve. Keyed on size and mtime, so a
+        rewrite (the compressor, a review promotion) is read fresh. A copy is
+        handed out because callers fill in fields."""
         meta = saved.with_suffix(".json")
-        if not meta.exists():
+        try:
+            stat = meta.stat()
+        except FileNotFoundError:
             return {}
-        return json.loads(meta.read_text())
+        key = (str(meta), stat.st_size, stat.st_mtime_ns)
+        with self._saved_meta_lock:
+            cached = self._saved_meta_cache.get(str(meta))
+            if cached is not None and cached[0] == key:
+                self._saved_meta_cache.move_to_end(str(meta))
+                return dict(cached[1])
+        parsed = json.loads(meta.read_text())
+        with self._saved_meta_lock:
+            self._saved_meta_cache[str(meta)] = (key, parsed)
+            self._saved_meta_cache.move_to_end(str(meta))
+            while len(self._saved_meta_cache) > self.SAVED_META_CACHE:
+                self._saved_meta_cache.popitem(last=False)
+        return dict(parsed)
 
     @measured("replay.view")
     def view(self, attempt_id: int) -> dict:
@@ -571,6 +1004,9 @@ class ReplayService:
                 # video_start_s.
                 "frame_times": m.get("frame_times"),
                 "encode": m.get("encode", "cfr"),
+                # The ghost copy, when one matches this clip picture for
+                # picture (the "Show ghosts" toggle); else why there is none.
+                **self._ghost_copy_offer(attempt_id, source, m, saved),
                 # How much of the clip the feed log accounted for, and how
                 # many rows the plugin could not call exact -- the capture's
                 # own health, so a degraded run reads as degraded rather
@@ -833,7 +1269,7 @@ class ReplayService:
         """
         start = meta.get("start_utc")
         if start is None:
-            wall = float(self.pre_pad_s)
+            wall = (_parse_utc(a.started_utc) - self._span(a)[0]).total_seconds()
         else:
             wall = max(0.0, (_parse_utc(a.started_utc)
                              - _parse_utc(start)).total_seconds())
@@ -878,22 +1314,72 @@ class ReplayService:
         with self._session_gate.use():
             return self._preserve(attempt_id)
 
-    def _preserve(self, attempt_id: int) -> dict:
+    @contextmanager
+    def _saving(self):
         with self._save_guard:
             self._active_saves += 1
         try:
-            with self._cut_lock(attempt_id), self._pin_clip(attempt_id):
-                result = self._save(attempt_id)
-                self._review_state.promote(attempt_id, Path(result["path"]))
-                with self._save_guard:
-                    self._save_failures.pop(attempt_id, None)
-                if self.compressor is not None:
-                    self.compressor.enqueue(Path(result["path"]), attempt_id=attempt_id,
-                                            **self._replay_name(attempt_id))
-                return result
+            yield
         finally:
             with self._save_guard:
                 self._active_saves -= 1
+
+    def preserve_native(self, attempt_id: int, *, wait_tail: bool = True) -> dict:
+        """Commit poses for a template mark without extracting or encoding video.
+
+        ``wait_tail=False`` commits the run the moment it closes, before its
+        star dance is recorded (his rule, round 47: the PB ghost is ready on
+        the very next reset); the manifest then says ``tail_pending``. A later
+        call with the default completes the dance over the same committed
+        path, so every other caller still receives the finished clip.
+        """
+        with self._session_gate.use(), self._cut_lock(attempt_id), self._saving():
+            existing, older = self._find_native(attempt_id)
+            if existing is None and older is None and self._retarget_native(self._attempt(attempt_id)):
+                # Committed under the run's earlier strategy: never re-export over it.
+                existing, older = self._find_native(attempt_id)
+            if existing is not None:
+                path, manifest = existing
+                if wait_tail and manifest.get("tail_pending") and path.parent.name == "native":
+                    attempt = self._attempt(attempt_id)
+                    completed, finished, reason = self._preserve_ghost(attempt, path, wait_tail=True)
+                    if completed is not None:
+                        atomic_json(path.with_suffix(".json"), finished)
+                        self._remember_native_preservation(self._native_preservation_key(attempt), None)
+                        return {"path": str(path), "native_ghost": finished, "native_ghost_reason": None}
+                return {"path": str(path), "native_ghost": manifest, "native_ghost_reason": None}
+            if older is not None:  # Keep the committed older file byte-for-byte.
+                return {"path": None, "native_ghost": None, "native_ghost_reason": older}
+            root = self.cfg.save_root.resolve()
+            destination = root / "native" / f"attempt_{attempt_id}.ghost"
+            if not all(path.resolve().is_relative_to(root) for path in
+                       (destination, destination.with_suffix(".json"))):
+                raise ValueError("native ghost destination is outside the save root")
+            attempt = self._attempt(attempt_id)
+            identity = self._native_preservation_key(attempt)
+            path, manifest, reason = self._preserve_ghost(attempt, destination, wait_tail=wait_tail)
+            if path is not None:
+                # The JSON is the commit record. Orphan binary bytes are never discovered.
+                try:
+                    atomic_json(path.with_suffix(".json"), manifest)
+                except OSError as error:
+                    self._remember_native_preservation(identity, str(error))
+                    raise
+            self._remember_native_preservation(identity, reason)
+            return {"path": str(path) if path else None,
+                    "native_ghost": manifest, "native_ghost_reason": reason}
+
+    def _preserve(self, attempt_id: int) -> dict:
+        with self._saving(), self._cut_lock(attempt_id), self._pin_clip(attempt_id):
+            result = self._save(attempt_id)
+            self._saved_index.add(Path(result["path"]))
+            self._review_state.promote(attempt_id, Path(result["path"]))
+            with self._save_guard:
+                self._save_failures.pop(attempt_id, None)
+            if self.compressor is not None:
+                self.compressor.enqueue(Path(result["path"]), attempt_id=attempt_id,
+                                        **self._replay_name(attempt_id))
+            return result
 
     def _replay_name(self, attempt_id: int) -> dict:
         """What the compression progress list calls this replay: the same
@@ -910,7 +1396,7 @@ class ReplayService:
         else:
             label = course_name(a.course_id) if a.course_id is not None else None
         frames = a.igt_frames if a.igt_frames is not None else a.rta_frames
-        return {"label": label, "time_text": format_igt(frames) if frames is not None else None}
+        return {"label": label, "time_text": format_igt_short(frames) if frames is not None else None}
 
     def compression_status(self) -> dict:
         """`GET /api/replay/compression`; empty when compression is off."""
@@ -937,7 +1423,9 @@ class ReplayService:
         existing = resume_saved(self.cfg.save_root, attempt_id) or self.find_saved(attempt_id)
         if existing is not None:
             m = self._saved_meta(existing)
-            return {"path": str(existing), "truncated": m.get("truncated", False)}
+            return {"path": str(existing), "truncated": m.get("truncated", False),
+                    "native_ghost": m.get("native_ghost"),
+                    "native_ghost_reason": m.get("native_ghost_reason")}
         self._view(attempt_id, leases)  # caller holds the cut lock
         clip = self.clips_dir / _CLIP_NAME.format(id=attempt_id)
         ended_local = _parse_utc(a.ended_utc).astimezone()  # folder by local date
@@ -955,18 +1443,50 @@ class ReplayService:
                       if a.star_id is not None and a.course_id is not None else "no-star")
         dest = dest_dir / slug_filename(a, c_name, s_name)
         m = json.loads(clip.with_suffix(".json").read_text())
+        permanent = self.find_native(attempt_id)
+        if permanent is None and self._retarget_native(a):
+            permanent = self.find_native(attempt_id)
+        ghost_path, ghost_manifest, ghost_reason = ((*permanent, None) if permanent else
+                                                  self._preserve_ghost(a, clip.with_suffix(".ghost")))
+        m["native_ghost"] = ({**ghost_manifest, "file": dest.with_suffix(".ghost").name}
+                             if ghost_manifest else None)
+        m["native_ghost_reason"] = ghost_reason
         # fps stamped at save time: the step buttons must match the clip's
         # actual encode rate even if cfg.fps changes in a future version.
-        with self.read_clip(clip.name) as media:
-            dest = publish_saved(self.cfg.save_root, attempt_id, media, dest,
-                          {**m, "fps": self.cfg.fps}, self._review_state.get(attempt_id, None))
+        try:
+            with self.read_clip(clip.name) as media, self._ghost_copy_for_save(m) as (copy, copy_reason):
+                dest = publish_saved(self.cfg.save_root, attempt_id, media, dest,
+                              {**m, "fps": self.cfg.fps, "ghost_copy": None, "ghost_copy_reason": copy_reason},
+                              self._review_state.get(attempt_id, None), ghost=ghost_path, ghost_copy=copy)
+        finally:
+            if ghost_path is not None and permanent is None:
+                ghost_path.unlink(missing_ok=True)
         forget = getattr(self.recorder.ring, "forget_temp", None)
         if forget is not None:
             forget(f"attempt:{attempt_id}", delete=True)
         else:
             clip.unlink(missing_ok=True)
             clip.with_suffix(".json").unlink(missing_ok=True)
-        return {"path": str(dest), "truncated": m["truncated"]}
+        return {"path": str(dest), "truncated": m["truncated"],
+                "native_ghost": m["native_ghost"], "native_ghost_reason": ghost_reason}
+
+    def _preserve_ghost(self, attempt, path, *, wait_tail: bool = True):
+        from sm64_events.ghost.clip import ClipError
+        archive = getattr(self.recorder, "pose_archive", None)
+        if archive is None:
+            return None, None, "This recording has no native Mario poses."
+        try:
+            manifest = archive.export_attempt(attempt, path, target=self._native_target(attempt), wait_tail=wait_tail)
+        except (ClipError, OSError, sqlite3.Error) as error:
+            return None, None, str(error)
+        from sm64_events.ghost.clip import pose_gaps
+        if pose_gaps(manifest):
+            # Loud on purpose: a hole is where the ghost blinks, and every later
+            # ghost feature hinges on extraction being complete.
+            log.warning("Mario position missing on %s of %s frames of attempt %s "
+                        "(%s refused, %s never captured)", pose_gaps(manifest), manifest.get("records"),
+                        attempt.id, manifest.get("invalid_records"), manifest.get("missing_occurrences"))
+        return path, manifest, None
 
     def reveal(self, path_str: str) -> None:
         """Open Explorer with a SAVED clip selected. Only paths inside
@@ -992,6 +1512,9 @@ class ReplayService:
             saved = self.find_saved(int(name.removeprefix("clip_attempt_").removesuffix(".mp4")))
             if saved is None:
                 raise LookupError("no such clip")
+            if self.compressor is not None:
+                # The pre-Save URL is still an active reader after promotion.
+                self.compressor.touch(saved)
             return saved
         return p
 
@@ -1012,6 +1535,24 @@ class ReplayService:
                     return
             yield self.clip_path(name)
 
+    @contextmanager
+    def read_ghost_copy(self, name: str):
+        """A buffer clip's ghost copy, leased through the entire HTTP range
+        response. After Save the same URL serves the saved copy."""
+        if not _GHOST_COPY_RE.fullmatch(name):
+            raise LookupError("no such ghost copy")
+        attempt_id = int(name.removeprefix("ghostcopy_attempt_").removesuffix(".mp4"))
+        with self._pin_clip(attempt_id):
+            meta = (self.clips_dir / _CLIP_NAME.format(id=attempt_id)).with_suffix(".json")
+            copies = self.ghost_copies
+            if copies is not None and meta.exists():
+                descriptor = self._fragment_descriptor(name, meta, "ghost_copy_source")
+                if descriptor is not None:
+                    with copies.read(descriptor) as media:
+                        yield media
+                    return
+            yield self.saved_ghost_copy_path(attempt_id)
+
     def _footage_note(self) -> str:
         """The recorder's actual state, for an error that would otherwise only
         say that nothing is playable."""
@@ -1028,15 +1569,16 @@ class ReplayService:
             parts.append(f"capture recovery: {recovery['error']}")
         return ", ".join(parts)
 
-    def _fragment_descriptor(self, name: str, meta: Path):
+    def _fragment_descriptor(self, name: str, meta: Path, key: str = "fragment_source"):
         """The sidecar's fragment descriptor, parsed once per sidecar version.
         Every Range request (each seek) came through here and re-parsed a
-        sidecar carrying one dict per picture (round 48)."""
+        sidecar carrying one dict per picture (round 48). `name` is the URL's
+        own name, so a clip and its ghost copy are cached apart."""
         stamp = meta.stat().st_mtime_ns
         cached = self._descriptors.get(name)
         if cached is not None and cached[0] == stamp:
             return cached[1]
-        descriptor = json.loads(meta.read_text()).get("fragment_source")
+        descriptor = json.loads(meta.read_text()).get(key)
         if len(self._descriptors) >= 64:
             self._descriptors.pop(next(iter(self._descriptors)))
         self._descriptors[name] = (stamp, descriptor)
@@ -1053,6 +1595,16 @@ class ReplayService:
             # A player is reading this clip: do not swap its bytes under it.
             self.compressor.touch(p)
         return p
+
+    def saved_ghost_copy_path(self, attempt_id: int) -> Path:
+        """A saved replay's ghost copy for serving; LookupError when none."""
+        saved = self.find_saved(attempt_id)
+        copy = saved.with_suffix(GHOST_COPY_SUFFIX) if saved is not None else None
+        if copy is None or not copy.is_file():
+            raise LookupError("no saved ghost copy for this attempt")
+        if self.compressor is not None:
+            self.compressor.touch(copy)
+        return copy
 
     # -- lifecycle (called from app lifespan) --------------------------------
 

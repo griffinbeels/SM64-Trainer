@@ -1,24 +1,61 @@
 /* One formatter for production logging and the CPU diagnostic witness. */
 #pragma once
+/* Milliseconds from the previous nonzero stamp; 0 when this step did not run. */
+static double gd_step_ms(uint64_t *previous, uint64_t stamp, uint64_t frequency) {
+    if (!stamp || !*previous || !frequency || stamp < *previous) return 0.0;
+    const double ms = 1000.0 * (double)(stamp - *previous) / (double)frequency;
+    *previous = stamp;
+    return ms;
+}
+/* The startup notes (gd_diagnostic.kind): one line each, all copied to the
+ * activation log. Absolute QPCs let a callback_stall's begin/end be placed
+ * against each step (docs/replay-gpu-runtime.md, readout rule). */
+static void gd_log_note(const gd_diagnostic *s) {
+    const uint64_t f = s->qpc_frequency;
+    if (s->kind == GD_KIND_REQUEST) {
+        /* Every slow callback for the next 15 s is logged unthrottled. */
+        diagnostics_watch_stalls((int64_t)s->prepare.request_qpc);
+        plugin_logf("gpu_request", "epoch=%u request_qpc=%llu frequency=%llu", s->epoch,
+            s->prepare.request_qpc, f);
+    } else if (s->kind == GD_KIND_PREPARE) {
+        /* Renderer-thread steps: a long one is a renderer stall by itself. */
+        const gd_prepare_diagnostic *p = &s->prepare;
+        uint64_t at = p->prepare_begin;
+        const double snapshots = gd_step_ms(&at, p->snapshots, f);
+        const double sampler = gd_step_ms(&at, p->sampler, f);
+        const double luid = gd_step_ms(&at, p->luid, f);
+        const double channel = gd_step_ms(&at, p->channel, f);
+        at = p->import_begin;
+        const double import = gd_step_ms(&at, p->imported, f);
+        plugin_logf("gpu_prepare", "epoch=%u request_qpc=%llu surface_qpc=%llu prepare_begin_qpc=%llu "
+            "snapshots_ms=%.3f sampler_ms=%.3f luid_ms=%.3f channel_ms=%.3f reader_qpc=%llu "
+            "import_begin_qpc=%llu import_ms=%.3f end_qpc=%llu frequency=%llu",
+            s->epoch, p->request_qpc, p->surface_qpc, p->prepare_begin, snapshots, sampler, luid,
+            channel, p->reader_qpc, p->import_begin, import, p->end_qpc, f);
+    }
+}
 static void __cdecl runtime_diagnostic(const gd_diagnostic *s) {
     static const char *phases[GD_PHASE_COUNT] = {
         "wait", "take", "sample", "decisions", "copy", "bridge_returns", "reap", "frontier"
     };
     sa_refusal source;
     if (!s || s->bytes != sizeof *s || s->version != GD_DIAGNOSTIC_VERSION) return;
-    /* Delivery worker only. At most ten bounded queue admissions per five-second
-     * healthy window; the existing try-only logger owns file I/O and rotation. */
+    if (s->kind != GD_KIND_WINDOW) { gd_log_note(s); return; }
+    /* Delivery worker only. At most ten bounded queue admissions per healthy
+     * window (a minute, or five seconds when something needs attention); the
+     * try-only logger owns file I/O and rotation. */
     if (s->healthy) plugin_logf("gpu_summary", "epoch=%u observed_qpc=%llu frequency=%llu "
         "window_started_qpc=%llu previous_emit_ticks=%llu source=%u retirements=%u bridges=%u "
         "unpublished=%u returning=%u decisions=%u copies=%u unsampled=%u accounted=%llu token=%llu "
         "oldest=%llu dropped_records=%ld snapshot_bytes=%llu bridge_bytes=%llu "
-        "sample_calls=%llu sample_reuses=%llu publish_busy=%llu refused=%llu",
+        "sample_calls=%llu sample_reuses=%llu publish_busy=%llu refused=%llu "
+        "peak_pending=%u slots=%u peak_bridges=%u",
         s->epoch,s->observed_qpc,s->qpc_frequency,s->window_started_qpc,s->previous_emit_ticks,
         s->source_records,s->offer_retirements,s->bridge_credits,s->unpublished_bridges,
         s->returning_records,s->awaiting_decisions,s->awaiting_copy,s->unsampled,
         s->accounted_occurrence,s->published_token,s->oldest_admitted_qpc,(long)g_log_dropped,
         s->snapshot_bytes,s->bridge_bytes,s->sample_calls,s->sample_reuses,s->publish_busy,
-        s->refused_pictures);
+        s->refused_pictures,s->peak_pending,s->offer_count,s->peak_bridges);
     else plugin_logf("gpu_failure", "epoch=%u reason=%u detail=%u observed_qpc=%llu frequency=%llu "
         "phase=%u phase_started=%llu source=%u retirements=%u bridges=%u unpublished=%u "
         "returning=%u decisions=%u copies=%u unsampled=%u accounted=%llu token=%llu oldest=%llu",

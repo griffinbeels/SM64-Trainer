@@ -31,8 +31,14 @@ full run, and the merge check reruns last run's failures by itself.
 ## The blast radius
 
 `tools/blast_radius.py` diffs the working tree (uncommitted and untracked files
-included) against the **baseline**: the newest ancestor of HEAD whose full run
-on main passed, else the merge-base with main (the output says which). Then:
+included) against the **baseline**: the ancestor of HEAD nearest to it (fewest
+commits behind) whose full run passed, on any branch, else the merge-base with
+main (the output says which, and how far back). A green run proves the whole
+suite at its commit wherever it ran, and being an ancestor is what makes the
+diff complete, so a long-lived branch gets a small radius by dispatching its
+own full run (`gh workflow run full.yml --ref <branch>`). Against main's last
+green run, 440 commits back, feature/ghost-integrate selected 566 of 654 test
+files; against a green run one commit back, 1 (2026-09-27). Then:
 
 | Changed | Selects |
 | --- | --- |
@@ -42,6 +48,8 @@ on main passed, else the merge-base with main (the output says which). Then:
 | Test file | itself |
 | Anything else | tests and modules whose code (not comments) names the file |
 | Runner, lock file, `conftest.py` | every test that starts no browser; GitHub covers the rest (the selector itself is not one: it changes which tests run, not how they behave) |
+| `pyproject.toml` | as a runner file only when its parsed settings changed; a comment, spacing or line-ending edit selects the tests that name the file (546 files -> 4) |
+| `tests/skip_inventory.py` | the tests importing it: only a whole-suite run reads it, and a merge check never is one (546 files -> 1) |
 
 Plus every test that failed in this checkout's last run, unless that record is
 older than a baseline with a green full run, which supersedes it. The viewport sweeps
@@ -63,7 +71,8 @@ MARELO whatever tab a test is about).
 `tests/test_blast_radius.py` pins the rules against the real tree (a Rank
 component and a Rank class reach the Rank page and not the Library, a global
 rule reaches every page and leaves them to GitHub, a change past the cap keeps
-its plain tests, the canary and the page naming it), each proved by mutation. If the radius missed
+its plain tests, the canary and the page naming it, the nearest green ancestor
+beats a newer farther one), each proved by mutation. If the radius missed
 something, the full run finds it after the push; widen the rule, not the habit.
 
 ## The full run
@@ -160,12 +169,17 @@ seconds it held the GIL a serial run's tests need for 14-34% of the time.
 | Mode | Workers per run | CPUs all runs share |
 | --- | ---: | ---: |
 | Normal (32-CPU desktop) | 8 | 20 |
-| OBS process open | 4 | 8 |
+| Reduced: OBS or Project64 open | 4 | 8 |
 | GitHub runner (4 CPUs, one job each) | the job's: 2 browser, 4 other | 4 |
 
 Explicit `--workers`/`--reserve` may tighten these, never loosen them. Affinity
-is set before spawning; OBS opening mid-run tightens the whole tree within two
-seconds. The runner contains pytest and every descendant in a Windows job.
+is set before spawning; OBS or Project64 opening mid-run tightens the whole
+tree within two seconds, and admission names the app (`Project64 open, reduced
+budget`). Project64 joined OBS after a normal-budget run with the game open
+froze it on 2026-09-25 (09:20:45-09:24Z: display-list calls over the slow mark
+went from 61 to 488, the longest 908 ms). The browser wait is 60 s on the
+reduced budget, whichever app caused it (30 s otherwise): a page that paints
+in under a second alone took over 20 s on a quarter of the CPUs. The runner contains pytest and every descendant in a Windows job.
 `--limit-minutes` stops a run that long after admission, so queued time never
 cancels it (`tools/verify_full.py` uses 30).
 
@@ -174,6 +188,48 @@ cancels it (`tools/verify_full.py` uses 30).
 A whole-suite run (each full-run job) fails on a skip whose reason is not in
 `tests/skip_inventory.py`; a narrowed run may skip freely. Add a row only for
 something the machine genuinely cannot run, saying what would lift it.
+
+## Native host builds
+
+Every test that compiles a native host goes through `tools/build_plugin.py::_cl`,
+which, under the suite (`tests/conftest.py` sets `SM64_NATIVE_BUILD_CACHE`),
+reuses an identical earlier compile from
+`%LOCALAPPDATA%/SM64Trainer/build-cache/test-hosts`, shared by every worktree.
+The key is the command line with each input's content hash, and a hit also
+needs every header `/showIncludes` reported to hash the same, so any source or
+header edit rebuilds exactly the hosts that read it. A miss captures the MSVC
+environment once per process (not about 1.4 s of `vcvars32.bat` per compile)
+and compiles several sources in parallel. `SM64_NATIVE_BUILD_CACHE=0` turns it
+off; shipped builds never use it. How it works and its one limit:
+`tools/native_build_cache.py`.
+
+## Native ghost witnesses
+
+The ordinary suite covers portable clips, recording ownership, IPC, frame
+selection and the practice controls. Hidden OpenGL witnesses run separately
+through `tools/run_tests.py` as focused checks, without waiting for a merge
+slot. Enable `SM64_TEST_GHOST_COMPOSITOR=1` for `test_ghost_compositor.py` and
+`test_ghost_compositor_tint.py`, and `SM64_TEST_GHOST_PRESENTATION=1` for
+`test_ghost_presentation.py`.
+
+`test_native_model.py` also needs `SM64_MODEL_ROM` pointing at a locally supplied
+big-endian US ROM. `SM64_MODEL_SEED_DIR` names a cache containing the exact input
+files and hashes in `renderer/model/inputs.json`; `SM64_MODEL_PRACTICE_ROM` adds
+a separate practice-ROM compatibility check. ROM bytes are never committed.
+
+The connected `test_ghost_pipeline.py` additionally requires
+`SM64_TEST_GHOST_PIPELINE=1`, the stock US ROM and that pinned seed cache. Its
+synthetic scene connects actual capture, model, playback, compositor and
+presentation components. Pixel checks cover opaque and half-opacity Mario,
+foreground occlusion, and unchanged clean color/depth. Timing includes GPU
+completion and reports swap cost separately. It does not measure the actual
+GLideN64 terrain/VI path, capture encoding or live emulator frame budget.
+
+The actual staged display-list witness in `test_ghost_pass.py` takes
+`SM64_GHOST_WITNESS_SOURCE` pointing at the `staged` directory retained by
+`tools/build_renderer.py --keep-scratch`. Its source-identity checks require a
+fresh build when the adapter changes. A skipped optional witness is explicitly
+listed in `tests/skip_inventory.py`; it is never a native acceptance result.
 
 ## Browser-free component checks
 

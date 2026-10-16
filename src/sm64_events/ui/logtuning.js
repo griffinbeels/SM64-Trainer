@@ -177,6 +177,85 @@ export const TUNABLES = {
     why: "How long a row takes to dim or brighten when the header's strategy changes — both directions, one duration.",
   },
 
+  // ---- Personal best: the row that IS the PB (task 0147) -------------------
+  // "not super distracting, but it should be OBVIOUS that this is your
+  // personal best" -- both halves are feel, so every number is his to move.
+  pbTint: {
+    group: "Personal best", label: "Gold wash", value: 0.14,
+    min: 0, max: 0.6, step: 0.01, unit: "x",
+    why: "How strongly the PB row is washed gold, strongest at its left edge and fading to the right. 0 = no wash.",
+  },
+  pbEdge: {
+    group: "Personal best", label: "Gold edge ribbon", value: 3,
+    min: 0, max: 10, step: 1, unit: "px",
+    why: "Width of the solid gold bar down the PB row's left edge. 0 = none.",
+  },
+  pbHolo: {
+    group: "Personal best", label: "GOLD!! rainbow", value: 0.6,
+    min: 0, max: 1, step: 0.05, unit: "x",
+    why: "How much pink/cyan/green holo shows over the gold foil of the GOLD!! word. 0 = plain gold foil.",
+  },
+  pbRowHolo: {
+    group: "Personal best", label: "Row rainbow", value: 0.06,
+    min: 0, max: 0.4, step: 0.01, unit: "x",
+    why: "The faint holo band across the whole PB row that slides as the pointer moves over it, like tilting a holo card. 0 = none.",
+  },
+  pbShimmer: {
+    group: "Personal best", label: "Holo drift period", value: 7000,
+    min: 0, max: 30000, step: 250, unit: "ms",
+    why: "How long the rainbow takes to drift once across GOLD!! at rest. Longer is calmer; 0 = still (it then only moves under the pointer).",
+  },
+  pbFade: {
+    group: "Personal best", label: "Gold fade in/out", value: 700,
+    min: 0, max: 3000, step: 50, unit: "ms",
+    why: "How long a row takes to lose its gold when a faster PB or an Undo takes the crown -- and to gain it quietly when an Undo hands it back.",
+  },
+  pbSwap: {
+    group: "Personal best", label: "Delta / GOLD!! swap", value: 220,
+    min: 0, max: 1000, step: 10, unit: "ms",
+    why: "Each half of the swap between the time delta and GOLD!!: the outgoing one fades out over this, then the incoming one fades in over this.",
+  },
+  pbArrive: {
+    group: "Personal best", label: "New-PB glint length", value: 1400,
+    min: 200, max: 5000, step: 50, unit: "ms",
+    why: "How long the one-shot arrival runs when a PB is saved while you watch: the glint's trip across the row, and the wash's flash settling.",
+  },
+  pbGlint: {
+    group: "Personal best", label: "New-PB glint brightness", value: 0.45,
+    min: 0, max: 1, step: 0.02, unit: "x",
+    why: "Peak brightness of the light band that sweeps across the row on a new PB. 0 = no glint.",
+  },
+  pbFlash: {
+    group: "Personal best", label: "New-PB wash flash", value: 1.7,
+    min: 1, max: 5, step: 0.1, unit: "x",
+    why: "How far past its resting strength the gold wash (and the word's glow) flares before settling. 1 = no flare.",
+  },
+  pbPop: {
+    group: "Personal best", label: "GOLD!! pop size", value: 1.3,
+    min: 1, max: 2, step: 0.05, unit: "x",
+    why: "How big GOLD!! overshoots as it pops in on a new PB. 1 = it fades in without growing.",
+  },
+  pbPopMs: {
+    group: "Personal best", label: "GOLD!! pop length", value: 650,
+    min: 100, max: 2000, step: 25, unit: "ms",
+    why: "How long GOLD!! takes to pop in and settle on a new PB.",
+  },
+  pbSparkle: {
+    group: "Personal best", label: "Sparkles", value: 1,
+    min: 0, max: 1, step: 0.05, unit: "x",
+    why: "Brightness of the three sparks that twinkle around GOLD!! on a new PB. 0 = no sparkles.",
+  },
+  pbSaveDelay: {
+    group: "Personal best", label: "Time Save delay", value: 900,
+    min: 0, max: 3000, step: 50, unit: "ms",
+    why: "How long after the save the \"Time Save: -X.XX (Y frames)\" text starts fading in beside GOLD!! -- long enough to let the word pop first.",
+  },
+  pbSaveFade: {
+    group: "Personal best", label: "Time Save fade", value: 400,
+    min: 0, max: 2000, step: 25, unit: "ms",
+    why: "How long the Time Save text takes to fade in, and to fade out once the next attempt is logged.",
+  },
+
   // ---- Density: the log list itself ----------------------------------------
   cardGap: {
     group: "Density", label: "Gap between cards", value: 2,

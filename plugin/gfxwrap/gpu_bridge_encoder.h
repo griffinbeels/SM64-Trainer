@@ -1,6 +1,10 @@
 /* Single-consumer NVENC encoder; compressed packet delivery has no file coupling. */
 #pragma once
-#include "gpu_bridge.h"
+#include <windows.h>
+#include <d3d11_1.h>
+#include <dxgi1_2.h>
+#include <wrl/client.h>
+#include <stdint.h>
 #include "nvEncodeAPI.h"
 #include "gpu_bridge_encoder_api.h"
 #include <vector>

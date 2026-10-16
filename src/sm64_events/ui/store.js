@@ -1,6 +1,7 @@
 // src/sm64_events/ui/store.js — session state + live WS subscription
 import { useEffect, useRef, useState, useCallback, useMemo } from "preact/hooks";
 import { getJSON, send } from "./api.js";
+import { useUpdates } from "./updates.js";
 import { coalesce } from "./coalesce.js";
 import { pollJSON } from "./pollstate.js";
 import { noteEvent, noteFetchDone, noteFetchStart } from "./latency.js";
@@ -25,6 +26,18 @@ export const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   // stop the selector narrowing to a subarea; with the narrowing gone the
   // field is gone, and a view refetch on every spawn buys nothing.
 ]);
+// The REFRESH_ON events that can move a PB, a rank or a goal -- what the
+// Daily Star (server/dailystar_api.py: PBs, today's attempts, the overall
+// curve, the tile strategy) and the entry goals (server/scorecard_api.py:
+// the scope's MARELO, PBs, standards, goals) are computed from. Read off
+// those two endpoints' inputs, not guessed: target_changed, segment_progress,
+// route_selected, session_started, icons_changed and a bare star_collected
+// feed neither, and until 2026-09-27 each still refetched both (perf audit
+// 2026-09-25, UI-2). A route pick moves the goals' scope, which their fetch
+// already keys on.
+export const STANDING_ON = new Set(["attempt_completed", "attempts_invalidated",
+  "pb_saved", "pb_undone", "strat_set", "rank_standards_changed",
+  "rank_mode_changed", "game_version_changed", "marelo_changed", "goal_changed"]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
 // Sentinel for "this client has no pending route pick of its own" -- distinct
@@ -46,6 +59,30 @@ export const RUN_ACTIVE = "run-active";
 export function runBlocksScopeChange(run, currentRouteId, nextRouteId) {
   if (!run || !run.active) return false;
   return nextRouteId !== currentRouteId;
+}
+
+// Server-owned pause truth: {paused, reason: "manual"|"afk"|null}. Polled
+// (5 s) because "afk" flips server-side without any UI action; the POST
+// response updates it instantly on manual toggles.
+function usePauseState() {
+  const [pauseState, setPauseState] = useState({ paused: false, reason: null });
+  const reasonRef = useRef(null);
+  useEffect(() => { reasonRef.current = pauseState.reason; }, [pauseState]);
+  // Each poll answers a NEW object; handing it straight over re-rendered the
+  // whole app every 5 s with nothing changed (perf audit 2026-09-25, UI-3).
+  // Keeping the previous object is what lets Preact skip the render.
+  useEffect(() => pollJSON("/api/pause", (next) => setPauseState((prev) =>
+    prev.paused === next.paused && prev.reason === next.reason ? prev : next)), []);
+  // The button drives only the MANUAL layer: pausing while afk escalates
+  // to manual (movement no longer resumes); resume exists only for manual.
+  const togglePause = useCallback(async () => {
+    try {
+      const r = await send("POST", "/api/pause",
+                           { paused: reasonRef.current !== "manual" });
+      setPauseState(r);
+    } catch (e) { console.error(e); }
+  }, []);
+  return { pauseState, togglePause };
 }
 
 function retirePendingClassifications(receipts, changed) {
@@ -120,6 +157,7 @@ function useLiveStage() {
   return [stage, loadStage, updateStage];
 }
 
+// eslint-disable-next-line max-lines-per-function -- Existing practice and WS composition; updates have their own lifecycle.
 export function useTracker() {
   const [view, setView] = useState(null);
   const [clock, setClock] = useState(localStorage.getItem("clock") || "igt");
@@ -222,6 +260,11 @@ export function useTracker() {
   // effect's dependency list, and every REFRESH_ON tick must be a distinct
   // dependency value even if two land back-to-back.
   const [mareloRev, setMareloRev] = useState(0);
+  // standingRev: bumped only when a refresh round carries a STANDING_ON
+  // event, a component's own write, or a reconnect (which may have missed
+  // one). The Daily Star and the entry goals key on it instead of mareloRev.
+  const [standingRev, setStandingRev] = useState(0);
+  const standingStale = useRef(false);
   // Ladders change less often than attempts. Their mounted readers refresh
   // together on configuration changes, including after a disconnected edit.
   const [standardsRev, setStandardsRev] = useState(0);
@@ -391,22 +434,7 @@ export function useTracker() {
     refreshMarelo();
   }, [marelo, activeRouteId, refreshMarelo]);
 
-  // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
-  // Polled (5 s) because "afk" flips server-side without any UI action;
-  // the POST response updates it instantly on manual toggles.
-  const [pauseState, setPauseState] = useState({ paused: false, reason: null });
-  const reasonRef = useRef(null);
-  useEffect(() => { reasonRef.current = pauseState.reason; }, [pauseState]);
-  useEffect(() => pollJSON("/api/pause", setPauseState), []);
-  // The button drives only the MANUAL layer: pausing while afk escalates
-  // to manual (movement no longer resumes); resume exists only for manual.
-  const togglePause = useCallback(async () => {
-    try {
-      const r = await send("POST", "/api/pause",
-                           { paused: reasonRef.current !== "manual" });
-      setPauseState(r);
-    } catch (e) { console.error(e); }
-  }, []);
+  const { pauseState, togglePause } = usePauseState();
 
   // clockRef / scopeRef keep refresh's identity stable so the WS effect never restarts
   const clockRef = useRef(clock);
@@ -462,12 +490,15 @@ export function useTracker() {
   // with two in flight together (task 0113). The raw one stays for the paths
   // that own freshness outright: mount, socket open, the never-loaded retry.
   const requestRefresh = useRef(null);
+  const refreshAfterWrite = useRef(null);
   if (requestRefresh.current === null) {
     requestRefresh.current = coalesce(async () => {
       // Bumped at the START of the run rather than per event: the Rank tab
       // keys its own fetches off this counter, so it should reload alongside
       // this one instead of a round trip behind it.
       setMareloRev((prevRev) => prevRev + 1);
+      if (standingStale.current) setStandingRev((prevRev) => prevRev + 1);
+      standingStale.current = false;
       // Stamped around the WHOLE round, not around refresh() alone: both
       // fetches are awaited together, so what the page waits for is the slower
       // of the two and measuring one of them would understate it (latency.js).
@@ -475,6 +506,13 @@ export function useTracker() {
       await Promise.all([refresh(), refreshMarelo()]);
       noteFetchDone(new Date().toISOString());
     });
+    // A component's own write can move a PB or a goal through a door whose
+    // broadcast is not in STANDING_ON (clearing or restoring an attempt), so
+    // its refresh always counts as one. Writes are gestures: rare.
+    refreshAfterWrite.current = () => {
+      standingStale.current = true;
+      return requestRefresh.current();
+    };
   }
 
   useEffect(() => {
@@ -483,7 +521,8 @@ export function useTracker() {
       ws = new WebSocket(`ws://${location.host}/ws/events`);
       ws.onopen = () => {
         if (everConnected.current) {
-          setStandardsRev((revision) => revision + 1);
+          // A reconnect may have missed a STANDING_ON event too.
+          setStandardsRev((rev) => rev + 1); setStandingRev((rev) => rev + 1);
           setFeed((f) => [{ type: "ws_reconnected", seq: "", frame: "",
                             payload: {} }, ...f].slice(0, 200));
         }
@@ -508,6 +547,7 @@ export function useTracker() {
           // rather than the moment we got round to acting on it — the
           // coalescer's own window is one of the four stages being measured.
           noteEvent(ev.type, ev.seq, ev.frame, new Date().toISOString());
+          if (STANDING_ON.has(ev.type)) standingStale.current = true;
           requestRefresh.current();
         }
         if (RUN_REFRESH_ON.has(ev.type)) refreshRun();
@@ -564,12 +604,7 @@ export function useTracker() {
     return () => clearInterval(retry);
   }, [viewLoaded, refresh]);
 
-  // --- auto-update (shared so the header "Check for updates" button and the
-  // popup agree on one status / one in-flight install) ---
-  const [update, setUpdate] = useState(null);              // /api/update/status dict
-  const [updateForced, setUpdateForced] = useState(false); // manual check found one -> show despite Skip/Later
-  const [updateApplying, setUpdateApplying] = useState(false);
-  const [updateMsg, setUpdateMsg] = useState("");          // transient header toast
+  const updates = useUpdates();
   // notice: a transient, app-wide "the server said no" line (app.js renders it).
   // Added for the practice-target refusal (2026-07-27) -- a rejected write that
   // rejects into a click handler leaves the button looking dead, and the server
@@ -580,55 +615,6 @@ export function useTracker() {
     const id = setTimeout(() => setNotice(""), 6000);
     return () => clearTimeout(id);
   }, [notice]);
-  const fetchUpdate = useCallback(async (force) => {
-    try {
-      const st = await getJSON("/api/update/status" + (force ? "?force=1" : ""));
-      setUpdate(st);
-      return st;
-    } catch (e) { return null; }
-  }, []);
-  useEffect(() => { fetchUpdate(false); }, [fetchUpdate]);  // passive check once on load
-  const checkUpdates = useCallback(async () => {           // the header button
-    setUpdateMsg("Checking…");
-    const st = await fetchUpdate(true);                    // force=1 bypasses the server cache
-    if (!st) setUpdateMsg("Check failed");
-    else if (st.update_available) { setUpdateForced(true); setUpdateMsg(""); }
-    else if (!st.frozen) setUpdateMsg(`v${st.current} — updates run in the packaged app`);
-    else setUpdateMsg(`Up to date · v${st.current}`);
-  }, [fetchUpdate]);
-  useEffect(() => {   // auto-clear the toast, but keep "Checking…" until the result lands
-    if (!updateMsg || updateMsg === "Checking…") return;
-    const id = setTimeout(() => setUpdateMsg(""), 5000);
-    return () => clearTimeout(id);
-  }, [updateMsg]);
-  const applyUpdate = useCallback(async () => {
-    setUpdateApplying(true);
-    try {
-      const res = await send("POST", "/api/update/apply");
-      if (!res || (res.state !== "downloading" && res.state !== "installing")) {
-        // begin_apply refused WITHOUT starting the worker (re-check failed,
-        // folder not writable): the service stays "idle", so the status poll
-        // would render the button-less "Installing…" branch forever. Unstick
-        // the popup and surface the reason as a header toast.
-        setUpdateApplying(false);
-        setUpdateMsg("Update could not start" +
-                     (res && res.error ? `: ${res.error}` : ""));
-      }
-    } catch (e) {
-      setUpdateApplying(false);
-      setUpdateMsg("Update could not start");
-    }
-  }, []);
-  useEffect(() => {   // poll progress while installing; the WS drop on restart ends the session
-    if (!updateApplying) return;
-    const id = setInterval(() => fetchUpdate(false), 700);
-    return () => clearInterval(id);
-  }, [updateApplying, fetchUpdate]);
-  const skipUpdate = useCallback(async (version) => {
-    try { await send("POST", "/api/update/skip", { version }); } catch (e) { /* ignore */ }
-    setUpdate((u) => (u ? { ...u, skipped: version } : u));
-    setUpdateForced(false);
-  }, []);
 
   const pickClock = (c) => selectClassificationClock(c, setClock, classificationPbs);
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
@@ -643,13 +629,12 @@ export function useTracker() {
            starIcons, pickStarIcons, rankIcons, pickRankIcons,
            showDust, pickShowDust, courseIcons,
            segments, vocab, loadSegments,
-           refresh: requestRefresh.current, paused: pauseState.paused,
+           refresh: refreshAfterWrite.current, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun, endRun,
-           marelo, mareloRev, standardsRev, clearMareloCelebration,
+           marelo, mareloRev, standingRev, standardsRev, clearMareloCelebration,
            routes, activeRouteId, pickRoute,
-           update, updateForced, setUpdateForced, updateApplying,
-           setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate,
+           ...updates,
            notice, setNotice };
 }

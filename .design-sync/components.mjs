@@ -117,7 +117,7 @@ export const COMPONENTS = [
       ["iconSize?", "number", "Pixel size the rank sprite draws itself at. A CSS variable alone only ever reserved its margin, never resized it."],
       ["nextStepMode?", "'classic' | 'always' | 'compact' | 'hidden' | 'hover'", "How the next-rung timesave is shown."],
       ["swapKey?", "string | null", "Changing this exchanges the old and new measurement with the shared MARELO route-swap animation."],
-      ["earnedTransition?", "Record<string, unknown> | null", "Fresh earned classification metadata; omitted for an ordinary measurement refresh."],
+      ["earnedTransition?", "Record<string, unknown> | null", "A live classification receipt and its destination rank baseline from PracticeLog. The banner claims it once to play the earned climb across first mount/remount; omit it for ordinary rank displays."],
     ],
   },
 
@@ -141,6 +141,7 @@ export const COMPONENTS = [
       ["onPick?", "() => void", "Called when the cell is chosen."],
       ["onEdit?", "() => void", "Called when the cell's edit affordance is used."],
       ["caveat?", "string | null", "Names a caveat on the result; renders the caveat mark."],
+      ["daily?", "DailyStar | null", "Today's Daily Star payload when this cell is the Daily Star; adds the foil look and its hover line."],
     ],
   },
   {

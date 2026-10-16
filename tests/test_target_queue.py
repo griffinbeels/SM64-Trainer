@@ -192,6 +192,26 @@ def test_hooked_head_expires_after_its_hold_budget():
     assert p.target is None
 
 
+def test_a_request_is_not_a_sighting_of_an_armed_head():
+    """What the app journals for him (a fill, a strategy pick, a PB save)
+    carries frame 0. Counted as a sighting of an armed head, it set the
+    head's last alive frame to 0 and the next disarm expired it on the spot
+    (the Bowser 2 arena, 2026-09-29). The budget still runs from the last
+    GAME event that saw it armed."""
+    p = Projector(segments=[exit_def()])
+    p.feed(jev(1, "level_changed", 30000, {"from": 30, "to": 6}))   # hooked
+    p.feed(jev(2, "strat_set", 0, {"kind": "segment", "segment_id": 1,
+                                   "strat_tag": "Standard"}))
+    p.feed(jev(3, "pb_saved", 0, {"segment_id": 1}))
+    p.feed(jev(4, "level_changed", 30500, {"from": 6, "to": 5}))    # disarms
+    assert 1 not in p.armed_segment_ids()
+    assert p.target == ("segment", 1)
+    p.settle(30000 + MIN_BUDGET_FRAMES)
+    assert p.target == ("segment", 1)
+    p.settle(30000 + MIN_BUDGET_FRAMES + 1)
+    assert p.target is None
+
+
 def test_settle_delivers_the_expiry_on_the_clock():
     p = Projector(segments=[exit_def()])
     p.feed(jev(1, "level_changed", 1000, {"from": 30, "to": 6}))    # hooked
@@ -228,14 +248,18 @@ def test_a_picked_head_keeps_the_retry_loop_on_completion():
 
 
 def test_a_hooked_head_pops_on_the_same_completion():
-    # ...while the SAME def, hooked by detection instead of clicked, hands
-    # the turn onward (his FIFO) — the flavor is the whole difference.
+    # ...while the SAME def, hooked by detection instead of clicked, stops
+    # being HELD on its completion (his FIFO) -- the flavor is the whole
+    # difference. It stays in the hand as a leftover, exactly as a success
+    # with an empty hand follows onto its segment (round 10, 2026-09-23: his
+    # Bowser 3 PB emptied the hand, so the ghost lost its target and every
+    # retry after it went unrecorded); the next detection displaces it.
     d = exit_def(id=1, end_to=16)
     p = Projector(segments=[d])
     p.feed(jev(1, "level_changed", 1000, {"from": 30, "to": 6}))
     closed = p.feed(jev(2, "level_changed", 2000, {"from": 6, "to": 16}))
     assert any(a.segment_id == 1 and a.outcome == "success" for a in closed)
-    assert p.target is None
+    assert p.target == ("segment", 1) and p._target_hooked is False
 
 
 def test_an_auto_fill_may_replace_a_picked_head_but_never_a_hooked_one():
@@ -267,10 +291,10 @@ def test_an_auto_fill_is_hooked_and_a_late_one_is_dropped():
     p.feed(jev(2, "target_set", 0, {"kind": "segment", "segment_id": 7,
                                     "auto": True}))
     assert p.target == ("segment", 1)
-    # hooked flavor: its completion pops instead of holding
+    # hooked flavor: its completion stops holding (a leftover, not a hold)
     p.feed(jev(3, "level_changed", 1000, {"from": 30, "to": 6}))
     p.feed(jev(4, "level_changed", 2000, {"from": 6, "to": 16}))
-    assert p.target is None
+    assert p.target == ("segment", 1) and p._target_hooked is False
 
 
 # -- nothing steals a held head --------------------------------------------

@@ -7,7 +7,7 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { fmtIgt } from "../format.js";
+import { fmtIgtShort } from "../format.js";
 import { requestTarget } from "../target.js";
 import { isManualSegment } from "../entitysection.js";
 import { Icon } from "./icons.js";
@@ -935,7 +935,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
       <div class="backtest-summary">
         ${backtestSummary(btReport)}
         ${btReport.fires > 0 && btReport.pb_after != null
-          ? html` <span class="meta">Fastest: ${fmtIgt(btReport.pb_after)}</span>` : ""}
+          ? html` <span class="meta">Fastest: ${fmtIgtShort(btReport.pb_after)}</span>` : ""}
         ${initial && initial.id != null ? html` <span class="meta">
           vs. current definition: +${btReport.gained} / -${btReport.lost} attempts</span>` : ""}
       </div>
@@ -949,7 +949,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
             class="meta ${a.cleared ? "cleared" : ""}">
           ${a.outcome === "success" ? "✔" : "✘"}${" "}${a.outcome.replace(/_/g, " ")}
           ${a.outcome === "success" && a.rta_frames != null
-            ? html` <b>${fmtIgt(a.rta_frames)}</b>` : ""}
+            ? html` <b>${fmtIgtShort(a.rta_frames)}</b>` : ""}
           ${a.cleared && a.cleared_reason ? html` (${a.cleared_reason})` : ""}
         </div>`)}
       </div>`}

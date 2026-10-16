@@ -7,7 +7,7 @@ replay views reference these bytes; explicit saves publish ordinary MP4 files.
 """
 from contextlib import contextmanager, ExitStack
 from bisect import bisect_right
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import threading
@@ -47,14 +47,18 @@ class _MissingStart(LookupError):
 
 
 class FragmentArchive:
-    def __init__(self, directory, ring, run, *, extent_bytes=8 * 1024**2,
+    def __init__(self, directory, ring, run, *, prefix="fragments", extent_bytes=8 * 1024**2,
                  extent_samples=8192, index_samples=131072, extent_ticks=720000, discard=None,
                  idle_window=None):
         if min(extent_bytes, extent_samples, index_samples) <= 0:
             raise ValueError("fragment archive limits must be positive")
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
+        # The ring group and file prefix: "fragments" for the clean recording,
+        # "ghostcopy" for the ghost copy (ring.FRAGMENT_PREFIXES).
+        self.prefix = prefix
         self.ring, self.run = ring, run
+        self._offset, self._shift = (0, 0), {}
         self._extent_bytes, self._extent_samples = extent_bytes, extent_samples
         self._index_limit = index_samples
         self._extent_ticks, self._discard = extent_ticks, discard
@@ -70,6 +74,23 @@ class FragmentArchive:
     def _utc(self, ticks):
         return datetime.fromtimestamp(self.run.origin_ts + ticks / 90000, timezone.utc)
 
+    def offset_clock(self, ticks, micros):
+        """The muxed stream's zero sits this far into the run's clock.
+
+        A run whose first picture is not at its origin (the ghost copy shares
+        the clean run's clock) muxes from zero: libav writes a two-entry edit
+        list for a later first picture, which the fragment index refuses. The
+        video's zero is `ticks` on the 90 kHz clock and the audio's zero is
+        `micros` after the origin. Indexed samples carry the run's clock, so
+        every reader, and the UTC of each picture, matches the run's.
+        """
+        with self._lock:
+            if self._init is not None:
+                raise RuntimeError("fragment clock offset after the stream began")
+            if min(ticks, micros) < 0:
+                raise ValueError("fragment clock offset must not be negative")
+            self._offset = (ticks, micros)
+
     def feed(self, data):
         with self._lock:
             if self.closed:
@@ -80,6 +101,7 @@ class FragmentArchive:
                         self.tracks = tracks_of(unit)
                         if any(t.kind == "video" and t.timescale != 90000 for t in self.tracks.values()):
                             raise ValueError("video clock must be 90 kHz")
+                        self._shift = self._track_shift()
                         self._init = unit.data
                     elif unit.kind == "media":
                         self._publish(unit)
@@ -87,9 +109,24 @@ class FragmentArchive:
                 self.finish(str(failure))
                 raise
 
+    def _track_shift(self):
+        ticks, micros = self._offset
+        shift = {}
+        for track in self.tracks.values():
+            if track.kind == "video":
+                shift[track.id] = ticks
+            elif micros * track.timescale % 1_000_000:
+                raise ValueError("audio clock offset is not a whole sample")
+            else:
+                shift[track.id] = micros * track.timescale // 1_000_000
+        return shift if any(shift.values()) else {}
+
     @measured("replay.fragment_publish")
     def _publish(self, unit):
         samples = fragment_samples(unit, self.tracks, max_samples=self._index_limit)
+        if self._shift:
+            samples = tuple(replace(s, dts=s.dts + self._shift[s.track_id],
+                                    pts=s.pts + self._shift[s.track_id]) for s in samples)
         for sample in samples:
             if sample.dts < self._last.get(sample.track_id, sample.dts):
                 raise ValueError("overlapping fragment clock")
@@ -128,8 +165,8 @@ class FragmentArchive:
     def _open_extent(self, tick):
         self._sequence += 1
         # The run identifier is opaque; it never becomes a filesystem path.
-        path = self.directory / f"fragments_{uuid4().hex}.bin"
-        group = f"fragments:{self.run.id}:{self._sequence}"
+        path = self.directory / f"{self.prefix}_{uuid4().hex}.bin"
+        group = f"{self.prefix}:{self.run.id}:{self._sequence}"
         lease = self.ring.pin_temp(group)
         lease.__enter__()
         try:
@@ -218,28 +255,48 @@ class FragmentArchive:
             index = max(0, bisect_right(self._extents, start, key=lambda extent: extent.start) - 1)
             while index < len(self._extents) and self._extents[index].units[-1].end <= start:
                 index += 1
-            if index == len(self._extents):
-                raise LookupError("replay footage is no longer retained")
-            first = self._extents[index]
-            start = max(start, first.start)
-            if index == 0 or self._extents[index-1].units[-1].end < first.start:
-                start = max(start, self._playable_start(first))
-            last = first
-            for following_index in range(index+1, len(self._extents)):
-                following = self._extents[following_index]
-                if last.units[-1].end >= end or following.start > last.units[-1].end:
-                    break
-                last = following
-            bounds = {}
-            for unit in reversed(last.units):
-                for sample in reversed(unit.samples):
-                    bounds.setdefault(sample.track_id, sample.dts + sample.duration)
-                if len(bounds) == len(self.tracks):
-                    break
-            end = min(end, *(tick * 90000 // self.tracks[key].timescale for key, tick in bounds.items()))
-            if end <= start:
-                raise ValueError("no complete replay interval is published")
-            return start, end
+            while True:
+                if index == len(self._extents):
+                    raise LookupError("replay footage is no longer retained")
+                window, following = self._window_from(index, start, end)
+                if window is not None:
+                    return window
+                # The query began after the last instant every track covers
+                # before a hole: one track (usually AAC) ended a little before
+                # the other. Nothing complete is left on this side, so the
+                # selection starts in the next retained run. Seen when a
+                # loaded machine shifted audio against video at an idle hole:
+                # the previous window ended where audio did, and a query from
+                # the next tick landed in that video-only tail (2026-09-23).
+                if following is None:
+                    raise ValueError("no complete replay interval is published")
+                index = following
+
+    def _window_from(self, index, start, end):
+        """((start, end), None) for the window beginning in extent `index`, or
+        (None, the first extent after its run's hole) when that run has no
+        instant at or after `start` that every track covers."""
+        first = self._extents[index]
+        start = max(start, first.start)
+        if index == 0 or self._extents[index-1].units[-1].end < first.start:
+            start = max(start, self._playable_start(first))
+        last, after = first, None
+        for following_index in range(index+1, len(self._extents)):
+            following = self._extents[following_index]
+            if last.units[-1].end >= end:
+                break
+            if following.start > last.units[-1].end:
+                after = following_index
+                break
+            last = following
+        bounds = {}
+        for unit in reversed(last.units):
+            for sample in reversed(unit.samples):
+                bounds.setdefault(sample.track_id, sample.dts + sample.duration)
+            if len(bounds) == len(self.tracks):
+                break
+        end = min(end, *(tick * 90000 // self.tracks[key].timescale for key, tick in bounds.items()))
+        return ((start, end), None) if end > start else (None, after)
 
     def discard(self):
         """Retire a closed run under the session-wide metadata budget."""
@@ -332,6 +389,18 @@ class FragmentArchive:
     def _select(self, start, end):
         if not self._init or start < 0 or end <= start:
             raise LookupError("invalid fragment interval")
+        selected, visible = self._select_from(start, end)
+        # The replay begins at the picture HELD at `start`, which can begin
+        # earlier. Every track must cover that instant, not only `start`:
+        # otherwise an audio packet starting between the two leaves the audio
+        # track with nothing at the replay's first instant, and the save fails
+        # "MP4 selection lacks initial track dependency" (live 2026-09-22).
+        held = visible[0].pts
+        if held < start:
+            return self._select_from(held, end)
+        return selected, visible
+
+    def _select_from(self, start, end):
         index = bisect_right(self._extents, start, key=lambda extent: extent.start) - 1
         if index < 0:
             raise LookupError("replay dependency GOP was evicted")

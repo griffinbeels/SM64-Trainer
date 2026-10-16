@@ -15,8 +15,39 @@ async function httpError(url, r) {
   err.status = r.status;
   return err;
 }
+let localAccess = null;
+async function requestToken() {
+  if (!localAccess) {
+    localAccess = fetch("/api/local-access", { cache: "no-store" }).then(async response => {
+      // Unprotected isolated fixtures and older app servers retain their API.
+      if (response.status === 404) return null;
+      if (!response.ok) throw await httpError("/api/local-access", response);
+      const result = await response.json();
+      if (typeof result.request_token !== "string") throw new Error("Local access unavailable.");
+      return result.request_token;
+    }).catch(error => { localAccess = null; throw error; });
+  }
+  return localAccess;
+}
+
+export async function localFetch(url, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return fetch(url, options);
+  if (new URL(url, location.href).origin !== location.origin) {
+    throw new Error("Local actions must use this app's address.");
+  }
+  const token = await requestToken();
+  const headers = new Headers(options.headers);
+  if (token) headers.set("X-SM64-Request-Token", token);
+  const response = await fetch(url, { ...options, headers });
+  // A restarted server owns a new capability. Let the next deliberate action
+  // bootstrap again; never automatically replay a possibly accepted mutation.
+  if (response.status === 403) localAccess = null;
+  return response;
+}
+
 export async function getJSON(url, options) {
-  const r = await fetch(url, options);
+  const r = await localFetch(url, options);
   if (!r.ok) throw await httpError(url, r);
   return r.json();
 }
@@ -41,7 +72,7 @@ export function pollJob(statusUrl, onStep, intervalMs = 250) {
 }
 
 export async function send(method, url, body) {
-  const r = await fetch(url, {
+  const r = await localFetch(url, {
     method, headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });

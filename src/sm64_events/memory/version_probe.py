@@ -46,6 +46,26 @@ def normalise_header(raw: bytes) -> bytes | None:
     return None
 
 
+def plausible_header(raw: bytes) -> bytes | None:
+    """`normalise_header`, and the bytes after the magic also read as a
+    cartridge header: a printable internal name and a letter for the country.
+
+    The 4-byte magic alone is not an identity. 0x80371240 is also an ordinary
+    RDRAM address, and a game pointer to it, stored word-swapped by Project64,
+    is exactly the swapped magic -- so a scan that trusted the magic accepted a
+    stretch of game memory as the cartridge and called Usamune "unsupported"
+    (live report 2026-09-22, the loaded ROM's name logged as binary)."""
+    header = normalise_header(raw)
+    if header is None:
+        return None
+    name = header[NAME_FIELD].rstrip(b" \0")
+    if not name or any(not 0x20 <= byte < 0x7F for byte in name):
+        return None
+    if not (0x41 <= header[0x3E] <= 0x5A):
+        return None
+    return header
+
+
 def version_from_header(raw: bytes) -> str | None:
     header = normalise_header(raw)
     if header is None:

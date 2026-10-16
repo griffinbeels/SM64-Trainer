@@ -92,7 +92,7 @@ class OwnedJob:
             self.handle = None
             raise error
 
-    def spawn(self, command, cwd):
+    def spawn(self, command, cwd, env=None):
         with self.lock:
             if self.closed or self.child is not None or self.spawning:
                 raise RuntimeError("job unavailable for creation")
@@ -104,6 +104,7 @@ class OwnedJob:
             child = subprocess.Popen(
                 command,
                 cwd=cwd,
+                env=env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
