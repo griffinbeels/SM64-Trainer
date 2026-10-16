@@ -1559,7 +1559,8 @@ changing original history.
 
 ### Sign-in step
 
-The first thing a configured build asks for: a Discord or Twitch sign-in,
+After the startup update check and any update offer, a configured build asks for
+a Discord or Twitch sign-in,
 then a player name and consent. The player cannot close the account screen
 until the account is active, and the Project64 wizard waits behind it (his
 direction, 2026-10-12: "logging in is the first step for onboarding, and

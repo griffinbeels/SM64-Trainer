@@ -4,7 +4,6 @@
 // install/progress live in store.js so both stay in sync.
 // Notes are GitHub-release markdown rendered by a tiny safe pass (escape first).
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { Modal } from "./modal.js";
 import { Icon } from "./icons.js";
@@ -143,17 +142,15 @@ function UpdateActions({ applying, st, t, onClose, onSkip, onLater }) {
 export function UpdatePopup({ t }) {
   const st = t.update;
   const applying = t.updateApplying;
-  const [dismissed, setDismissed] = useState(false);
-  // A manual "Check for updates" re-opens the modal even after Skip/Later.
-  useEffect(() => { if (t.updateForced) setDismissed(false); }, [t.updateForced]);
+  if (t.updateStartupPending && !t.updateVisible) return html`<${Modal}
+      title="Checking for updates…" icon="updates">
+    <p role="status">Checking for a newer version before sign-in.</p>
+  <//>`;
+  if (!t.updateVisible) return null;
 
-  if (!st || !st.update_available) return null;
-  const blockedBySkip = !t.updateForced && st.skipped && st.skipped === st.latest;
-  if (!applying && (dismissed || blockedBySkip)) return null;
-
-  const onSkip = () => { t.skipUpdate(st.latest); setDismissed(true); };
-  const onLater = () => { setDismissed(true); t.setUpdateForced(false); };
-  const onClose = () => { t.setUpdateApplying(false); t.setUpdateForced(false); setDismissed(true); };
+  const onSkip = () => t.skipUpdate(st.latest);
+  const onLater = t.dismissUpdate;
+  const onClose = () => { t.setUpdateApplying(false); t.dismissUpdate(); };
   const missed = (st.releases || []).length;
   // Backdrop click / Esc mirror whichever dismiss action is visible: "Later"
   // on the normal offer, "Close" on a failed install, and NOTHING while an

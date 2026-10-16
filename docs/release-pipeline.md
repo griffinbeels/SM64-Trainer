@@ -47,6 +47,14 @@ Launch/account sign-in schedules the normal cached check; sign-in is not require
 to update a publicly released application. Disabling beta stops new beta offers
 without reinstalling, resetting data or downgrading the installed application.
 
+Startup gives the update check and any available offer priority over sign-in,
+signup and emulator setup. A failed check or five-second wait releases onboarding;
+a late offer preserves any unfinished form, sign-in attempt and setup state.
+Later and Skip release onboarding immediately. Existing published clients retain
+their own check schedule: older normal betas check on launch or manually, rather
+than continuously while already open. No sign-in is needed to download or apply
+an update; the existing live-practice safety guards still govern application.
+
 Updates download changed files where practical and apply when the player
 chooses to restart at a safe idle point. They never interrupt a live attempt,
 recording or emulator plugin installation. If bundled emulator plugins change,

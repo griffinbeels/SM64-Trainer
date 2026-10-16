@@ -1,5 +1,5 @@
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
@@ -58,6 +58,19 @@ function shouldOfferSetup(setup) {
 }
 
 const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];
+
+function OnboardingFlow({blocked, children}) {
+  const container = useRef(null);
+  const focus = useRef(null);
+  useEffect(() => {
+    if (blocked) return;
+    const target = focus.current?.isConnected ? focus.current
+      : container.current?.querySelector("[autofocus],button,input");
+    target?.focus();
+  }, [blocked]);
+  return html`<div ref=${container} hidden=${blocked} inert=${blocked}
+      onFocusCapture=${event => { focus.current = event.target; }}>${children}</div>`;
+}
 
 // The route IS the rank scope, so changing it mid-run would re-rate a run
 // against a plan it is not following. `store.js::pickRoute` refuses and returns
@@ -125,6 +138,9 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const [setupWarning, setSetupWarning] = useState(null);
   const [overlayOpen, setOverlayOpen] = useState(false);
   const community = useCommunityAccount();
+  const updateFirst = t.updateStartupPending || t.updateVisible;
+  const [onboardingStarted, setOnboardingStarted] = useState(false);
+  useEffect(() => { if (!updateFirst) setOnboardingStarted(true); }, [updateFirst]);
   useEffect(() => {
     if (community.account.authenticated) t.refreshUpdates?.(false);
   }, [community.account.authenticated, t.refreshUpdates]);
@@ -141,10 +157,10 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
     }).catch(() => {});
   }, []);
   useEffect(() => {
-    if (!setupOffer || community.required) return;
+    if (!setupOffer || community.required || updateFirst) return;
     setSetupOffer(false);
     closeSettings(); setSetupOpen(true);
-  }, [setupOffer, community.required]);
+  }, [setupOffer, community.required, updateFirst]);
   const closeSetup = () => {
     setSetupOpen(false);
     rememberSetupPrompt();
@@ -159,13 +175,13 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   };
 
   useEffect(() => {
-    if (setupOpen || !community.account.enabled || !communitySetupReady || community.account.authenticated) return;
+    if (setupOpen || updateFirst || !community.account.enabled || !communitySetupReady || community.account.authenticated) return;
     try {
       if (sessionStorage.getItem('sm64.communityPrompt') === '1') return;
       sessionStorage.setItem('sm64.communityPrompt', '1');
     } catch { /* Private browsing still allows this session's account prompt. */ }
     closeSettings(); community.setOpen(true);
-  }, [community.account.enabled, communitySetupReady, setupOpen]);
+  }, [community.account.enabled, communitySetupReady, setupOpen, updateFirst]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -577,8 +593,10 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
          copy of this question. */""}
     <${RunScopeWarning} t=${t} pending=${pendingScope} onDone=${resolveScope} />
     ${overlayOpen && html`<${StreamOverlayDesigner} onClose=${() => setOverlayOpen(false)} />`}
-    ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
-    ${community.open && !setupOpen && html`<${CommunityAccountModal} community=${community}
-      onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh} />`}
+    ${onboardingStarted && html`<${OnboardingFlow} blocked=${updateFirst}>
+      ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
+      ${community.open && !setupOpen && html`<${CommunityAccountModal} community=${community}
+        onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh} />`}
+    <//>`}
   </header>`;
 }

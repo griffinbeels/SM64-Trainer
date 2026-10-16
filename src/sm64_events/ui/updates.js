@@ -1,6 +1,11 @@
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { getJSON, send } from "./api.js";
 
+export function updateOfferVisible(status, applying, forced, dismissed) {
+  if (!status?.update_available) return false;
+  return applying || (!dismissed && (forced || status.skipped !== status.latest));
+}
+
 export function useUpdates() {
   // --- auto-update (shared so the header "Check for updates" button and the
   // popup agree on one status / one in-flight install) ---
@@ -9,6 +14,8 @@ export function useUpdates() {
   const [updateApplying, setUpdateApplying] = useState(false);
   const [updateMsg, setUpdateMsg] = useState("");          // transient header toast
   const [betaUpdatesBusy, setBetaUpdatesBusy] = useState(false);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [updateStartupPending, setUpdateStartupPending] = useState(true);
   const fetchUpdate = useCallback(async (force) => {
     try {
       const st = await getJSON("/api/update/status" + (force ? "?force=1" : ""));
@@ -16,7 +23,19 @@ export function useUpdates() {
       return st;
     } catch { return null; }
   }, []);
-  useEffect(() => { fetchUpdate(false); }, [fetchUpdate]);  // passive check once on load
+  useEffect(() => {
+    let mounted = true;
+    const finish = () => { if (mounted) setUpdateStartupPending(false); };
+    // Wait for updates before onboarding, bounded for offline starts.
+    const timeout = setTimeout(finish, 5000);
+    fetchUpdate(false).finally(finish);
+    return () => { mounted = false; clearTimeout(timeout); };
+  }, [fetchUpdate]);
+  useEffect(() => { if (updateForced) setUpdateDismissed(false); }, [updateForced]);
+  const dismissUpdate = useCallback(() => {
+    setUpdateDismissed(true);
+    setUpdateForced(false);
+  }, []);
   const checkUpdates = useCallback(async () => {           // the header button
     setUpdateMsg("Checking…");
     const st = await fetchUpdate(true);                    // force=1 bypasses the server cache
@@ -77,12 +96,15 @@ export function useUpdates() {
     return () => clearInterval(id);
   }, [updateApplying, fetchUpdate]);
   const skipUpdate = useCallback(async (version) => {
-    try { await send("POST", "/api/update/skip", { version }); } catch { /* ignore */ }
     setUpdate((u) => (u ? { ...u, skipped: version } : u));
     setUpdateForced(false);
+    setUpdateDismissed(true);
+    try { await send("POST", "/api/update/skip", { version }); } catch { /* best-effort persistence */ }
   }, []);
 
   return { update, updateForced, setUpdateForced, updateApplying,
     setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate,
-    betaUpdatesBusy, setBetaUpdates, repairUpdate, refreshUpdates: fetchUpdate };
+    betaUpdatesBusy, setBetaUpdates, repairUpdate, refreshUpdates: fetchUpdate,
+    updateStartupPending, dismissUpdate,
+    updateVisible: updateOfferVisible(update, updateApplying, updateForced, updateDismissed) };
 }

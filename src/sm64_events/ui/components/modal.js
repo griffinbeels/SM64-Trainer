@@ -31,6 +31,9 @@ export function Modal({ title, description, icon = "practice", size = "medium",
     if (panel && !panel.contains(document.activeElement))
       (panel.querySelector("[autofocus]") || focusable()[0] || panel).focus();
     const onKey = (keyEvent) => {
+      // A late update can temporarily cover an unfinished onboarding flow.
+      // Its mounted draft survives, but its dialog must not intercept keys.
+      if (panel?.closest("[inert]")) return;
       if (keyEvent.key === "Escape") {
         keyEvent.preventDefault();
         keyEvent.stopPropagation();
