@@ -5,8 +5,8 @@ HTML/CSS and a small browser script. The approved navy/gold design keeps the
 download action in the first screen, explains practice feedback and community
 ghosts, and makes optional support easy to find.
 
-**Start with an offline preview below.** Production builds intentionally wait
-for a matching stable community release. Hosting, credentials, DNS, and the dated
+**Start with an offline preview below.** Production builds require a complete
+eligible stable or public beta release. Hosting, credentials, DNS, and the dated
 readiness snapshot belong to the [deployment runbook](../docs/website-deployment.md).
 The app's live recorder is independent of website work.
 
@@ -29,6 +29,12 @@ The app's live recorder is independent of website work.
 Keep this separation when adding a feature. The site does not need the trainer
 server, app dependencies, a database, or a frontend framework to render. Add a
 helper only when an observed repeated task needs it.
+
+One [index.html](index.html) template renders both `/` and `/beta/`. The builder's
+`data-site-copy` hooks supply beta title, introduction, update notice and signup
+copy. Assets, styles and scripts use site-root paths. Keep one shared design.
+The enduring public beta link is **https://sm64trainer.app/beta/**; it resolves to
+the current validated, versioned public installer without an invitation token.
 
 ## Preview without a public release
 
@@ -62,6 +68,12 @@ uv run --no-project --python 3.13 python tools/preview_website.py --output $webs
 Omit `--serve` to build files only. Every output must be a **new directory**;
 pick a new name instead of overwriting an old preview. Repository/source roots
 and the system temporary root are protected. Keep outputs outside `website/`.
+
+Use `--state beta-only` for the launch state before stable 1.10.0: the root
+explains that community stable is pending and links to `/beta/`. The beta route
+has the normal ready layout. `ready` renders both channels ready; `unavailable`
+renders both without direct downloads. Each state includes `/beta/` and its own
+`/beta/release.json`; all preview download actions remain disabled.
 
 Use this server for CSP review: it applies the checked-in global and exact-path
 rules from `_headers`. Opening the file directly, or using a plain static
@@ -107,9 +119,12 @@ and hidden assets are excluded; linked files/directories are rejected.
 New public root files require an explicit builder allowlist update. Do not put
 private content in the public asset directory.
 
-Production output requires a complete public stable release at or above the
-policy floor, currently **1.10.0**. The highest eligible SemVer wins, independent
-of publication date. Incomplete newer releases block publication. Withdrawn
+Stable downloads require a complete public stable release at or above the
+policy floor, currently **1.10.0**. `/beta/` independently selects a published
+`v1.10.0-beta` or later beta core, with GitHub prerelease enabled. Beta ordering
+uses the installer's shared SemVer contract (`beta.10` follows `beta.9`).
+Both channels require all six public assets and exact versioned repository URLs.
+The highest eligible SemVer wins, independent of publication date. Incomplete newer releases block publication. Withdrawn
 releases can select an earlier eligible release or, in an explicit withdrawal
 refresh, produce unavailable output. Network failures leave the existing site
 alone. Detailed exit codes and operator recovery live in the runbook.
@@ -187,7 +202,7 @@ Project-wide verification still uses the repository's configured
 the integration and full-CI gates remain owned by the project workflow.
 
 For visible edits, review the actual source through the safe preview helper.
-CI also builds ready/unavailable sample artifacts separately from production.
+CI also builds ready/unavailable/beta-only sample artifacts separately from production.
 A green production launch hold does not verify the rendered design.
 
 - Start with mobile 390 × 844 and desktop 1440 × 900; check 320px for narrow copy.
@@ -210,7 +225,7 @@ should not start, restart, or attach the app's live recording server.
 
 | Symptom | Next check |
 | --- | --- |
-| Production exits 3 with `launch_hold` | Expected before an eligible community release; use the preview helper for editing, preserve the floor |
+| Production exits 3 with `launch_hold` | Expected before either eligible release channel exists; use the preview helper for editing, preserve the floor |
 | Output already exists or is protected | Choose a new leaf directory outside source and protected roots |
 | Local port is busy | Stop your own preview or choose another port; do not kill an unrelated listener |
 | Source downloads differ from generated output | `index.html` is a template; inspect the generated release metadata |

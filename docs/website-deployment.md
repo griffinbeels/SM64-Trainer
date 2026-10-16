@@ -10,6 +10,13 @@ the GitHub API or receive a token.
 that hostname, Worker, Supabase/provider redirects, policies and native localhost
 callback. Website setup requires no change to them.
 
+The public beta landing page is **https://sm64trainer.app/beta/**. It uses the
+same approved page template and public assets as the homepage. Anyone can join
+this beta through the trainer's sign-in and signup flow; the public download
+contains no invitation. Install once for future published beta and production
+updates in the same installation and profile. Public signup remains a separately
+controlled community-service deployment setting; a website build does not enable it.
+
 ## Current readiness — October 13, 2026
 
 This is a dated operator-verified snapshot for the existing installation. Recheck
@@ -27,7 +34,8 @@ current settings before changing them; it is not a template for a new account.
 An Active domain and enabled switch do not establish that a website has been
 uploaded. The release gate still applies. The first eligible deployment is also
 the remaining end-to-end check of the stored CI credential's publishing access.
-Authentication remains on its existing service and hostname.
+Authentication remains on its existing service and hostname. This dated snapshot
+predates the public beta route; current builder eligibility is described below.
 
 ## Production build and release validation
 
@@ -59,15 +67,20 @@ fixtures, logs or generated files.
 | Exit | Meaning | Output and publishing |
 | --- | --- | --- |
 | `0`, status `ready` | Complete eligible production release | Static website ready for review and publishing. |
-| `3`, status `launch_hold` | No eligible community stable release | No deployable output; CI reports a launch hold. |
+| `0`, status `beta_only` | Complete eligible public beta, no community stable | `/beta/` offers beta; `/` explains the stable wait and links to beta. |
+| `3`, status `launch_hold` | Neither an eligible stable nor public beta release | No deployable output; CI reports a launch hold. |
 | `2` | Invalid metadata, incomplete newest candidate, or failed discovery | No deployable output; CI fails validation. |
 | `0`, status `unavailable` | Explicit withdrawal refresh with no eligible release remaining | Static page removes direct installer links. |
 
-The launch policy is `website/release-policy.json`: stable **1.10.0 or later**.
-The pre-community public **1.9.1** and private **1.10.0-beta** builds cannot launch
-a page advertising public community ghosts. The highest eligible stable SemVer
-wins, independent of publication-date ordering. Drafts, prereleases, withdrawn
-releases and malformed tags are excluded. All six uploaded, positive-size
+The stable policy remains `website/release-policy.json`: **1.10.0 or later**.
+Pre-community **1.9.1** cannot advertise community ghosts. Independently, `/beta/`
+selects a complete published `v1.10.0-beta` or later beta core, with GitHub's
+prerelease flag enabled. Beta-only launch does not need stable 1.10.0 to exist.
+Private tester executables never qualify as public download assets. The highest
+eligible SemVer wins in each channel, independent of publication dates; beta
+ordering reuses the installer's contract, so `beta.10` follows `beta.9`.
+Drafts, withdrawn releases, malformed tags, and channel/flag mismatches are
+excluded. All six uploaded, positive-size
 assets must have unambiguous versioned HTTPS links to this repository:
 
 - `SM64Trainer.exe` and `SM64Trainer.exe.sha256`
@@ -78,8 +91,15 @@ assets must have unambiguous versioned HTTPS links to this repository:
 installer's size; it downloads the app payload during installation. Private
 tester installers are never website downloads. The withdrawal marker
 `<!-- sm64-withdrawn -->` is honored, matching the community release branch.
-An incomplete newer eligible stable release blocks deployment rather than
+An incomplete newer eligible release in either channel blocks deployment rather than
 silently selecting an older download.
+
+Both routes are built from one release-feed snapshot. The root `release.json`
+describes stable availability and includes a `beta` summary pointing to
+`/beta/release.json`, which holds the beta's version, installer and checksums.
+Without stable, root status is `beta_only` and no stable installer is advertised.
+If one channel is unavailable while the other is ready, only the available
+channel has direct downloads. A withdrawal refresh can retire either channel.
 
 ## Set up a new environment
 
@@ -87,7 +107,7 @@ For the existing installation, start with the readiness snapshot above rather
 than repeating setup. For a new environment, prepare the empty project and CI
 settings with publishing disabled while access and content are reviewed. Domain
 preparation and file publishing are separate steps. Enabling the switch does not
-bypass the matching stable-release gate.
+bypass either channel's release validation.
 
 1. Use the **Direct Upload** Pages project `sm64-trainer` in the owning
    Cloudflare account, with production branch `main`. Create it only if absent.
@@ -114,14 +134,14 @@ bypass the matching stable-release gate.
    `WEBSITE_SOURCE_SHA` records that checkout's actual commit in the build
    metadata; a release event's tag commit does not identify the website source.
 5. Run **Actions > trainer website > Run workflow** with `retire_download`
-   unchecked. Before a matching stable release, expect a successful **launch
-   hold** and no production website candidate. Separate ready/unavailable sample
+   unchecked. Before either eligible channel exists, expect a successful **launch
+   hold** and no production website candidate. Separate ready/unavailable/beta-only sample
    preview artifacts remain available for review, with `status: preview` and
-   disabled downloads. After a complete stable release, review the production
+   disabled downloads. After a complete stable or public beta release, review the production
    artifact and `release.json` while publishing remains disabled in a new environment.
 6. At the approved community-release launch, set `WEBSITE_DEPLOY_ENABLED=true`
    and run the workflow again. If settings are prepared beforehand, publication
-   of the complete matching stable release triggers the same workflow. Missing
+   of a complete matching stable or public beta release triggers the same workflow. Missing
    secrets or a disabled gate produce a visible **setup hold**, retaining the
    review artifact. They do not count as a deployment.
 
@@ -183,11 +203,13 @@ from production, so a new PR cannot cancel a pending production refresh.
 Production runs discover current releases rather than trusting the triggering
 release as the download candidate. GitHub documents the [release event types](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#release).
 
-For a stable release at or above the community floor, deletion/unpublishing,
+For a stable release at or above the community floor or an eligible public beta, deletion/unpublishing,
 or an edit adding the withdrawal marker, enables an explicit withdrawal refresh.
-An earlier complete community stable release can replace the withdrawn one.
-If none remains, CI can publish the `unavailable` page. Deleting an old 1.9.x
-release or changing a beta cannot launch the community website prematurely.
+An earlier complete release in the same channel can replace the withdrawn one.
+If none remains in a channel, CI removes that channel's direct download links.
+If no channel remains, CI can publish the `unavailable` pages. Deleting an old
+1.9.x release cannot launch the community website prematurely. Published beta
+events refresh `/beta/` automatically through the same main-branch workflow.
 
 After launch, a manual run with **retire_download=true** permits the same
 unavailable output when no eligible release remains. Leave it unchecked for
@@ -216,7 +238,7 @@ withdrawal publish an unavailable page before the ordinary launch hold. Local
 regression validation models the documented queue behavior and checks this
 workflow's actual configuration; it does not claim a live GitHub queue test.
 
-CI tests the website tooling and creates separate ready/unavailable sample
+CI tests the website tooling and creates separate ready/unavailable/beta-only sample
 preview artifacts from the actual source. Those artifacts have disabled downloads
 and `status: preview`; the Cloudflare upload never consumes them.
 

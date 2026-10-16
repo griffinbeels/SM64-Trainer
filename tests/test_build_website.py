@@ -184,7 +184,7 @@ class WebsiteBuildTests(unittest.TestCase):
         self.assertNotIn("<noscript", rendered)
         self.assertNotIn("/releases/latest", rendered)
         expected = {"index.html", "styles.css", "release.js", "_headers", "robots.txt",
-                    "sitemap.xml", "release.json", "assets/logo.png"}
+                    "sitemap.xml", "release.json", "assets/logo.png", "beta/index.html", "beta/release.json"}
         actual = {path.relative_to(self.output).as_posix() for path in self.output.rglob("*") if path.is_file()}
         self.assertEqual(actual, expected)
         output_text = "".join(path.read_text(encoding="utf-8") for path in self.output.rglob("*")

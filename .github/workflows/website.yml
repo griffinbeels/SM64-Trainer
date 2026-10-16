@@ -9,7 +9,9 @@ on:
       - "tools/preview_website.py"
       - "tests/test_build_website.py"
       - "tests/test_preview_website.py"
+      - "tests/test_beta_website.py"
       - "src/sm64_events/core/update_plan.py"
+      - "src/sm64_events/core/release_contract.py"
       - ".github/workflows/website.yml"
   pull_request:
     branches: [main]
@@ -19,7 +21,9 @@ on:
       - "tools/preview_website.py"
       - "tests/test_build_website.py"
       - "tests/test_preview_website.py"
+      - "tests/test_beta_website.py"
       - "src/sm64_events/core/update_plan.py"
+      - "src/sm64_events/core/release_contract.py"
       - ".github/workflows/website.yml"
   release:
     types: [published, released, edited, deleted, unpublished]
@@ -66,12 +70,13 @@ jobs:
       - name: Test website release and review contracts
         run: python -m unittest discover -s tests -p 'test_*website.py' -v
 
-      # Always render actual source, including before the first stable release.
+      # Always render actual source, including before the first public release.
       # Sample output has inert downloads and is never a publishing candidate.
       - name: Build offline review states
         run: |
           python tools/preview_website.py --output .website-preview/ready
           python tools/preview_website.py --output .website-preview/unavailable --state unavailable
+          python tools/preview_website.py --output .website-preview/beta-only --state beta-only
 
       - name: Save isolated sample previews
         uses: actions/upload-artifact@v7
@@ -91,7 +96,10 @@ jobs:
           import json
           import os
           import re
+          import sys
           from pathlib import Path
+          sys.path.insert(0, "src")
+          from sm64_events.core.release_contract import version_key
 
           def stable_version(value):
               if not isinstance(value, str):
@@ -112,12 +120,23 @@ jobs:
               release = event.get("release") or {}
               action = event.get("action")
               version = stable_version(release.get("tag_name"))
+              tag = release.get("tag_name")
+              try:
+                  beta_version = version_key(tag)
+                  eligible_beta = (
+                      isinstance(tag, str) and tag.startswith("v") and "+" not in tag
+                      and beta_version.core >= floor and bool(beta_version.prerelease)
+                      and beta_version.prerelease[0] == "beta"
+                      and release.get("prerelease") is True
+                  )
+              except ValueError:
+                  eligible_beta = False
               body = release.get("body") or ""
               eligible_event = (
-                  version is not None and version >= floor
+                  ((version is not None and version >= floor
+                    and release.get("prerelease") is False) or eligible_beta)
                   # Unpublishing can turn a formerly public release into a draft.
                   and (release.get("draft") is False or action == "unpublished")
-                  and release.get("prerelease") is False
               )
               withdrawn = (
                   action in {"deleted", "unpublished"}
@@ -145,7 +164,7 @@ jobs:
             0) echo 'built=true' >> "$GITHUB_OUTPUT" ;;
             3)
               echo 'built=false' >> "$GITHUB_OUTPUT"
-              echo '::notice title=Website launch held::No eligible community stable release is available. No website was deployed.'
+              echo '::notice title=Website launch held::No eligible community stable or public beta release is available. No website was deployed.'
               ;;
             *) exit "$result" ;;
           esac
@@ -236,7 +255,7 @@ jobs:
           initial = os.environ["INITIAL_BUILT"]
           outcome = os.environ["DEPLOY_OUTCOME"]
           if initial == "false":
-              message = "Launch held: no eligible community stable release. Nothing was deployed."
+              message = "Launch held: no eligible community stable or public beta release. Nothing was deployed."
           elif initial != "true":
               message = "Validation failed before a review artifact was produced. Nothing was deployed."
           elif os.environ["GITHUB_EVENT_NAME"] == "pull_request":

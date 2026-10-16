@@ -1,4 +1,4 @@
-"""Build public static downloads from a complete stable GitHub release.
+"""Build public stable and beta downloads from complete GitHub releases.
 
 Exit 3 holds first launch; exit 2 leaves invalid builds untouched. Withdrawal
 refreshes may explicitly emit an unavailable page. The withdrawal marker is
@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from sm64_events.core.update_plan import BOOTSTRAP_ASSET, MANIFEST_ASSET, ZIP_ASSET
+from sm64_events.core.release_contract import version_key
 
 REPOSITORY = "griffinbeels/SM64-Trainer"
 WITHDRAWN_MARKER = "<!-- sm64-withdrawn -->"
@@ -96,22 +97,22 @@ def validate_release(release: dict, policy: dict) -> dict:
         raise ReleaseNotReady("Release identity or URL is invalid.")
     assets = release.get("assets")
     if not isinstance(assets, list) or len(assets) != len(ASSET_NAMES):
-        raise ReleaseNotReady("The stable release needs exactly six public assets.")
+        raise ReleaseNotReady("The release needs exactly six public assets.")
     validated = {}
     for asset in assets:
         if not isinstance(asset, dict) or asset.get("name") not in ASSET_NAMES:
-            raise ReleaseNotReady("The stable release asset set is invalid.")
+            raise ReleaseNotReady("The release asset set is invalid.")
         name = asset["name"]
         url = f"https://github.com/{policy['repository']}/releases/download/{tag}/{name}"
         if (name in validated or asset.get("state") != "uploaded"
                 or type(asset.get("size")) is not int or asset["size"] <= 0
                 or type(asset.get("id")) is not int or asset["id"] <= 0
                 or asset.get("browser_download_url") != url):
-            raise ReleaseNotReady("A stable release asset is duplicate, incomplete or unsafe.")
+            raise ReleaseNotReady("A release asset is duplicate, incomplete or unsafe.")
         validated[name] = {"id": asset["id"], "url": url, "size": asset["size"],
                            "uploaded_at": utc_timestamp(asset.get("created_at"))}
     if set(validated) != set(ASSET_NAMES):
-        raise ReleaseNotReady("The stable release is missing a required asset.")
+        raise ReleaseNotReady("The release is missing a required asset.")
     installer = validated[BOOTSTRAP_ASSET]
     return {"status": "ready", "version": tag[1:], "tag": tag,
             "release_id": release["id"], "release_url": release_url,
@@ -153,6 +154,68 @@ def select_release(feed: object, policy: dict) -> dict:
     return validate_release(max(candidates, key=lambda item: item[0])[1], policy)
 
 
+def select_beta(feed: object, policy: dict) -> dict:
+    """Select a published beta by the installer's shared SemVer precedence.
+
+    A beta may launch before the stable floor ships, but its core must reach
+    that floor. Validate the newest candidate rather than quietly downgrading.
+    """
+    releases = [feed] if isinstance(feed, dict) else feed
+    if not isinstance(releases, list) or any(not isinstance(item, dict) for item in releases):
+        raise BuildError("Release feed must be a release object or list of objects.")
+    candidates, seen = [], set()
+    for release in releases:
+        tag = release.get("tag_name")
+        if not isinstance(tag, str) or not tag.startswith("v") or "+" in tag:
+            continue
+        try:
+            version = version_key(tag)
+        except ValueError:
+            continue
+        if (version.core < version_tuple(policy["minimum_version"])
+                or not version.prerelease or version.prerelease[0] != "beta"):
+            continue
+        if type(release.get("draft")) is not bool or type(release.get("prerelease")) is not bool:
+            raise ReleaseNotReady("Beta release visibility flags are invalid.")
+        if release["draft"] or not release["prerelease"]:
+            continue
+        body = release.get("body")
+        if body is not None and not isinstance(body, str):
+            raise ReleaseNotReady("Beta release withdrawal status is invalid.")
+        if WITHDRAWN_MARKER in (body or ""):
+            continue
+        if version in seen:
+            raise ReleaseNotReady("The feed repeats a beta release version.")
+        seen.add(version)
+        candidates.append((version, release))
+    if not candidates:
+        raise LaunchHold("No eligible public beta release is available.")
+    return {**validate_release(max(candidates, key=lambda item: item[0])[1], policy), "channel": "beta"}
+
+
+def select_channels(feed: object, policy: dict, allow_unavailable: bool = False) -> tuple[dict, dict]:
+    """One feed snapshot controls both routes; neither channel lowers the stable floor."""
+    channels = []
+    for selector in (select_release, select_beta):
+        try:
+            channels.append(selector(feed, policy))
+        except LaunchHold:
+            channels.append({"status": "unavailable", "reason": "no_eligible_release",
+                             "release_url": f"https://github.com/{policy['repository']}/releases"})
+        except ReleaseNotReady:
+            if not allow_unavailable:
+                raise
+            channels.append({"status": "unavailable", "reason": "release_not_ready",
+                             "release_url": f"https://github.com/{policy['repository']}/releases"})
+    stable, beta = channels
+    beta["channel"] = "beta"
+    if stable["status"] != "ready" and beta["status"] == "ready":
+        stable["status"] = "beta_only"
+    elif stable["status"] != "ready" and not allow_unavailable:
+        raise LaunchHold("No eligible community stable or public beta release is available.")
+    return stable, beta
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise BuildError("GitHub release feed redirects are not accepted.")
@@ -185,7 +248,7 @@ def fetch_releases(policy: dict) -> list:
 
 
 def resolve_release(policy: dict, fixture: Path | None, attempts: int, retry_delay: float,
-                    allow_unavailable: bool) -> dict:
+                    allow_unavailable: bool, *, channels: bool = False) -> dict | tuple[dict, dict]:
     if fixture is not None:
         try:
             feed = json.loads(fixture.read_text(encoding="utf-8"))
@@ -193,7 +256,20 @@ def resolve_release(policy: dict, fixture: Path | None, attempts: int, retry_del
             raise BuildError("Offline release fixture could not be read.") from error
     for attempt in range(1 if fixture is not None else attempts):
         try:
-            return select_release(feed if fixture is not None else fetch_releases(policy), policy)
+            snapshot = feed if fixture is not None else fetch_releases(policy)
+            if channels:
+                # Retry incomplete uploads before an explicit withdrawal removes links.
+                try:
+                    return select_channels(snapshot, policy)
+                except LaunchHold:
+                    if allow_unavailable:
+                        return select_channels(snapshot, policy, True)
+                    raise
+                except ReleaseNotReady:
+                    if allow_unavailable and (fixture is not None or attempt + 1 >= attempts):
+                        return select_channels(snapshot, policy, True)
+                    raise
+            return select_release(snapshot, policy)
         except LaunchHold:
             if not allow_unavailable:
                 raise
@@ -244,6 +320,9 @@ class _Template(HTMLParser):
         values = dict(attrs)
         classes = (values.get("class") or "").split()
         kind = None
+        copy_key = values.get("data-site-copy")
+        if copy_key and copy_key in self.page_copy:
+            kind = "copy:" + copy_key
         if "download-link" in classes:
             if tag != "a":
                 raise BuildError("A download hook must be an anchor.")
@@ -264,6 +343,11 @@ class _Template(HTMLParser):
             self.edits.append((start, end, _start_tag(tag, attrs, {"href": self.site_url})))
         elif tag == "meta" and values.get("property") == "og:url":
             self.edits.append((start, end, _start_tag(tag, attrs, {"content": self.site_url})))
+        elif tag == "meta" and self.metadata.get("channel") == "beta":
+            key = values.get("property") or values.get("name")
+            if key in ("og:title", "og:description", "description"):
+                value = self.page_copy["title"] if key == "og:title" else self.page_copy["description"]
+                self.edits.append((start, end, _start_tag(tag, attrs, {"content": value})))
         if tag not in VOID_TAGS:
             self.stack.append((tag, start, end, attrs, kind))
 
@@ -273,7 +357,23 @@ class _Template(HTMLParser):
 
     @property
     def download_url(self) -> str:
+        if self.metadata["status"] == "beta_only":
+            return "/beta/"
         return self.metadata.get("installer_url", self.metadata["release_url"])
+
+    @property
+    def page_copy(self) -> dict:
+        if self.metadata.get("channel") == "beta":
+            return {"title": "SM64 Trainer — Try the Ghost Overlay beta",
+                    "hero": "Try the Ghost<br>Overlay <span>beta.</span>",
+                    "description": "Early access to community ghosts in SM64 Trainer. Install once, sign in, and practice.",
+                    "notice": "Early access: expect rough edges. Install once to receive future published beta and production updates in the same app, with your profile and practice history.",
+                    "signup": "Anyone can join. Sign in with Discord or Twitch, choose your name, and review ghost sharing before you practice.",
+                    "route": '<a class="text-link" href="/">SM64 Trainer home ↗</a>'}
+        notice = ("The Ghost Overlay is available in early access. The community stable release is not available yet. "
+                  if self.metadata["status"] == "beta_only" else "")
+        return {"notice": notice,
+                "route": '<a class="text-link" href="/beta/">Try the Ghost Overlay beta ↗</a>'}
 
     def handle_endtag(self, tag):
         if not self.stack or self.stack[-1][0] != tag:
@@ -284,10 +384,16 @@ class _Template(HTMLParser):
         elif kind in ("label", "metadata"):
             self.counts[kind] += 1
             value = self.release_text() if kind == "metadata" else (
-                "Download for Windows" if self.metadata["status"] == "ready" else "View release history")
+                ("Download beta for Windows" if self.metadata.get("channel") == "beta" else "Download for Windows")
+                if self.metadata["status"] == "ready" else
+                "Try the Ghost Overlay beta" if self.metadata["status"] == "beta_only" else "View release history")
             self.edits.append((content_start, self.position(), value))
+        elif kind and kind.startswith("copy:"):
+            self.edits.append((content_start, self.position(), self.page_copy[kind[5:]]))
 
     def release_text(self) -> str:
+        if self.metadata["status"] == "beta_only":
+            return 'Community stable release coming later. <a href="/beta/">Get the current public beta.</a>'
         if self.metadata["status"] != "ready":
             return "Downloads are temporarily unavailable. Please check the release history for updates."
         uploaded = datetime.fromisoformat(self.metadata["installer_uploaded_at"].replace("Z", "+00:00"))
@@ -338,7 +444,7 @@ def public_files(source: Path) -> dict[str, bytes]:
     return files
 
 
-def write_site(source: Path, output: Path, policy: dict, release: dict) -> dict:
+def write_site(source: Path, output: Path, policy: dict, release: dict, beta: dict | None = None) -> dict:
     if source.is_symlink() or source.is_junction() or output.is_symlink() or output.is_junction():
         raise BuildError("Website source and output may not be linked directories.")
     source, output = source.resolve(), output.resolve()
@@ -356,8 +462,20 @@ def write_site(source: Path, output: Path, policy: dict, release: dict) -> dict:
     if re.fullmatch(r"[0-9a-f]{40}", commit):
         metadata["build"]["commit"] = commit
     try:
-        files["index.html"] = _Template(files["index.html"].decode("utf-8"), metadata,
+        template = files["index.html"].decode("utf-8")
+        files["index.html"] = _Template(template, metadata,
                                          policy["site_url"]).render().encode("utf-8")
+        if beta is not None:
+            beta_metadata = {**metadata, **beta, "channel": "beta"}
+            # Stable-only fields must not leak into an unavailable beta route.
+            beta_metadata = {key: value for key, value in beta_metadata.items()
+                             if key in ("schema_version", "repository", "minimum_version", "build", "channel") or key in beta}
+            files["beta/index.html"] = _Template(template, beta_metadata,
+                                                   policy["site_url"].rstrip("/") + "/beta/").render().encode("utf-8")
+            files["beta/release.json"] = (json.dumps(beta_metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            metadata["beta"] = {"status": beta["status"], "path": "/beta/", "metadata": "/beta/release.json"}
+            if beta.get("version"):
+                metadata["beta"]["version"] = beta["version"]
         script = files["release.js"].decode("utf-8")
         if "api.github.com" in script or re.search(r"\bfetch\s*\(", script):
             raise BuildError("Website JavaScript must not fetch release metadata.")
@@ -396,9 +514,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--retry-delay must be between 0 and 30 seconds")
     try:
         policy = load_policy(args.policy or args.source / "release-policy.json")
-        release = resolve_release(policy, args.releases_json, args.attempts,
-                                  args.retry_delay, args.allow_unavailable)
-        metadata = write_site(args.source, args.output, policy, release)
+        release, beta = resolve_release(policy, args.releases_json, args.attempts,
+                                        args.retry_delay, args.allow_unavailable, channels=True)
+        metadata = write_site(args.source, args.output, policy, release, beta)
         print(json.dumps({"status": metadata["status"], "output": str(args.output),
                           "version": metadata.get("version")}))
         return 0
