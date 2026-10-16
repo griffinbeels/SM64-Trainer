@@ -17,6 +17,8 @@ export class Store {
         this.sql("INSERT INTO guards(id,allowed) SELECT ?, CASE WHEN ("+predicate+") THEN 1 ELSE 0 END",id,...values),
         ...statements,this.sql("DELETE FROM guards WHERE id=?",id)]);
     } catch(error) {
+      if(/CHECK constraint failed:.*(?:ops_limit|upload_limit|class_a|class_b)/.test(String(error)))
+        fail(429,"budget_exhausted","The community daily budget is exhausted.");
       if(/CHECK constraint failed|UNIQUE constraint failed|FOREIGN KEY constraint failed/.test(String(error))) fail(status,code,message);
       throw error;
     }
@@ -24,10 +26,12 @@ export class Store {
   async account(identity) {
     requireThat(identity.issuer===this.cfg.issuer,"invalid_issuer","This identity provider is not configured.",401);
     const uid=identity.sub;
-    // Only an operator invitation persists a new identity. Ordinary valid
-    // JWTs can inspect an ephemeral profile without increasing retained rows.
-    return await this.one("SELECT * FROM accounts WHERE uid=? AND issuer=?",uid,identity.issuer)||
-      {uid,issuer:identity.issuer,subject:uid,ephemeral:true,invited:0,status:"new",name:null,
+    // Public beta eligibility is transient until deliberate profile submission.
+    // Look up the UID across issuers so an existing denied owner never rejoins.
+    const stored=await this.one("SELECT * FROM accounts WHERE uid=?",uid);
+    requireThat(!stored||stored.issuer===identity.issuer,"account_unavailable","This account is unavailable.",403);
+    return stored||
+      {uid,issuer:identity.issuer,subject:uid,ephemeral:true,invited:Number(this.cfg.publicBetaSignup===true),status:"new",name:null,
         sharing:0,terms_version:null,privacy_version:null,sheet_runner:null,sheet_verified:0};
   }
   publicAccount(a) {
@@ -38,7 +42,7 @@ export class Store {
     if(a?.status==="deleted") fail(403,"deleted","This account has been deleted.");
     if(a?.status==="suspended") fail(403,"suspended","This account is suspended.");
     if(!a?.invited) fail(403,"not_invited","This account is not invited to the private beta.");
-    // From here the account exists and is invited.
+    // An ephemeral public-beta identity can only prepare its initial profile.
     requireThat(a.status==="active" || (profile&&["new","rename_required"].includes(a.status)),
       a.status==="rename_required"?"rename_required":"account_unavailable","Your account is not admitted for this action.",403);
     if(!profile) requireThat(a.terms_version===this.cfg.terms && a.privacy_version===this.cfg.privacy,
@@ -95,12 +99,7 @@ export class Store {
     }
     // Every admitted call consumes an exact account and global ticket, even cache hits.
     // Asset downloads conservatively consume a Class B ticket even on cache hits.
-    const statements=[
-      this.sql("INSERT INTO quotas(owner,day,ops_limit,upload_limit) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",uid,day,LIMITS.account_ops_day,LIMITS.upload_bytes_day),
-      this.sql("INSERT INTO quotas(owner,day,ops_limit,upload_limit) VALUES('*',?,?,?) ON CONFLICT DO NOTHING",day,LIMITS.global_ops_day,LIMITS.global_upload_bytes_day),
-      this.sql("UPDATE quotas SET ops=CASE WHEN (SELECT enabled FROM settings WHERE id=1)=1 OR ?=1 THEN ops+1 ELSE ops_limit+1 END,"+
-        "uploaded=uploaded+?,class_a=class_a+?,class_b=class_b+? WHERE (owner=? OR owner='*') AND day=?",
-        Number(maintenance),uploadBytes,classA,classB,uid,day)];
+    const statements=this.ticketSQL(uid,{uploadBytes,classA,classB,maintenance});
     try {
       // D1 batch rolls back both counters AND newly inserted quota rows when
       // either CHECK fails. Denied new identities cannot grow quota history.
@@ -109,6 +108,16 @@ export class Store {
       if(/CHECK constraint failed/.test(String(error))) fail(429,"budget_exhausted","The community daily budget is exhausted.");
       throw error;
     }
+  }
+  // Initial public signup includes these tickets in the account transaction.
+  ticketSQL(uid,{uploadBytes=0,classA=0,classB=0,maintenance=false}={}) {
+    const day=new Date().toISOString().slice(0,10);
+    return [
+      this.sql("INSERT INTO quotas(owner,day,ops_limit,upload_limit) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",uid,day,LIMITS.account_ops_day,LIMITS.upload_bytes_day),
+      this.sql("INSERT INTO quotas(owner,day,ops_limit,upload_limit) VALUES('*',?,?,?) ON CONFLICT DO NOTHING",day,LIMITS.global_ops_day,LIMITS.global_upload_bytes_day),
+      this.sql("UPDATE quotas SET ops=CASE WHEN (SELECT enabled FROM settings WHERE id=1)=1 OR ?=1 THEN ops+1 ELSE ops_limit+1 END,"+
+        "uploaded=uploaded+?,class_a=class_a+?,class_b=class_b+? WHERE (owner=? OR owner='*') AND day=?",
+        Number(maintenance),uploadBytes,classA,classB,uid,day)];
   }
   async receipt(uid,route,key,digest) {
     const row=await this.one("SELECT * FROM mutation_receipts WHERE uid=? AND route=? AND request_key=?",uid,route,key);
@@ -124,11 +133,19 @@ export class Store {
       (input.sheet_runner===null || (typeof input.sheet_runner==="string" && input.sheet_runner.length<=128)),
       "invalid_profile","Accept current policies and provide a valid name.");
     const response={...this.publicAccount({...a,...input,name:named.name,status:"active",sheet_verified:input.sheet_runner===a.sheet_runner?a.sheet_verified:0})};
-    await this.tx("EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1 AND status IN ('new','active','rename_required'))",[a.uid],[
+    const joining=a.ephemeral&&this.cfg.publicBetaSignup;
+    const existing="EXISTS(SELECT 1 FROM accounts WHERE uid=? AND issuer=? AND invited=1 AND status IN ('new','active','rename_required'))";
+    const predicate=joining?"(SELECT enabled FROM settings WHERE id=1)=1 AND ("+existing+" OR (NOT EXISTS(SELECT 1 FROM accounts WHERE uid=?) AND "+
+      "((SELECT uncapped FROM beta_admission WHERE id=1)=1 OR (SELECT COUNT(*) FROM accounts)<(SELECT max_members FROM beta_admission WHERE id=1))))":existing;
+    const values=joining?[a.uid,this.cfg.issuer,a.uid]:[a.uid,this.cfg.issuer];
+    await this.tx(predicate,values,[
+      ...(joining?[
+        this.sql("INSERT INTO accounts(uid,issuer,subject,invited,created_at,updated_at) VALUES(?,?,?,1,?,?) ON CONFLICT(uid) DO NOTHING",a.uid,this.cfg.issuer,a.uid,sec(),sec()),
+        ...this.ticketSQL(a.uid)]:[]),
       this.sql("UPDATE accounts SET name=?,name_key=?,status='active',sharing=?,terms_version=?,privacy_version=?,sheet_verified=CASE WHEN sheet_runner IS ? THEN sheet_verified ELSE 0 END,sheet_runner=?,updated_at=? WHERE uid=?",
         named.name,named.key,Number(input.sharing),input.terms_version,input.privacy_version,input.sheet_runner,input.sheet_runner,sec(),a.uid),
       this.sql("UPDATE settings SET global_epoch=global_epoch+1 WHERE id=1"),
-      this.receiptSQL(a.uid,"profile",key,digest,response)],"name_unavailable","This name is already held or the account changed.");
+      this.receiptSQL(a.uid,"profile",key,digest,response)],"name_unavailable",joining?"This name is already held or beta admission is unavailable.":"This name is already held or the account changed.");
     return response;
   }
   async rename(a,input,key,digest) {

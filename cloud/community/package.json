@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.js",
-    "test:runtime": "wrangler deploy --dry-run --outdir .wrangler/dry-run && node test/runtime.js",
+    "test:runtime": "wrangler deploy --dry-run --outdir .wrangler/dry-run && node test/runtime.js && node test/runtime.js --public-beta",
     "catalog:check": "node scripts/validate-catalog.js",
     "build": "node scripts/build.js",
     "check": "npm run build && wrangler deploy --dry-run",

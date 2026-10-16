@@ -2,6 +2,7 @@
 import asyncio
 import json
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode
 from playwright.async_api import async_playwright
@@ -9,6 +10,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 
 ROOT = Path(__file__).resolve().parents[1]
 ORIGIN = 'https://community.example.invalid'
+PUBLIC_BETA = '--public-beta' in sys.argv
 CONFIG = {'v': 1, 'terms_url': ORIGIN + '/policies#terms', 'auth': {
     'supabase_url': 'https://fixture.supabase.co', 'publishable_key': 'public-fixture-only',
     'client_id': 'client-fixture', 'native_callback': 'http://127.0.0.1:8072/api/community/auth/callback',
@@ -17,7 +19,7 @@ CONFIG = {'v': 1, 'terms_url': ORIGIN + '/policies#terms', 'auth': {
 
 def production_portal():
     """The Worker's real portal and policy responses, fetched before the event loop starts."""
-    result=subprocess.run(['C:/Program Files/nodejs/node.exe', 'test/portal-response.js'], cwd=ROOT,
+    result=subprocess.run(['C:/Program Files/nodejs/node.exe', 'test/portal-response.js', *(['--public-beta'] if PUBLIC_BETA else [])], cwd=ROOT,
         capture_output=True, text=True, encoding='utf-8', timeout=20, check=False,
         **quiet_spawn_kwargs())
     assert result.returncode==0, result.stderr[-1000:]
@@ -106,11 +108,14 @@ async def check_native_pairs(page, seen, saved_pairs):
 
 async def check_policies(page):
     await page.goto(ORIGIN+'/policies')
-    await page.get_by_role('heading', name='Community ghosts private beta', exact=True).wait_for()
+    await page.get_by_role('heading', name='Community ghosts '+('open' if PUBLIC_BETA else 'private')+' beta', exact=True).wait_for()
+    if PUBLIC_BETA:
+        assert await page.get_by_text('Anyone can join the beta', exact=False).is_visible()
+    assert 'Admitted signed-in players can receive' in await page.locator('main').inner_text()
     assert await page.get_by_role('heading', name='Terms', exact=True).is_visible()
     assert await page.get_by_role('heading', name='Privacy notice', exact=True).is_visible()
     assert 'Fixture operator' in await page.locator('main').inner_text()
-    await page.screenshot(path=str(ROOT/'.wrangler'/'policy-smoke.png'))
+    await page.screenshot(path=str(ROOT/'.wrangler'/('policy-public-smoke.png' if PUBLIC_BETA else 'policy-smoke.png')))
 
 async def main(actual_portal):
     async with async_playwright() as p:

@@ -52,6 +52,7 @@
   },
   "vars": {
     "SERVICE_ENABLED": "false",
+    "PUBLIC_BETA_SIGNUP": "false",
     "SUPABASE_URL": "https://REPLACE.supabase.co",
     "SUPABASE_PUBLISHABLE_KEY": "REPLACE_PUBLIC_KEY",
     "OAUTH_CLIENT_ID": "REPLACE_PUBLIC_CLIENT_ID",

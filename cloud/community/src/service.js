@@ -57,13 +57,19 @@ async function administer(c,adminAuth){
 }
 async function redeemInvitation({request,url,env,ctx,s,a,identity}){
   exactQuery(url,[]);const body=await readJSON(request,['token']);
-  if(a.invited)await s.ticket(a.uid);
+  if(a.invited&&!a.ephemeral)await s.ticket(a.uid);
   const account=await s.redeem(identity,body.token);armMaintenance(env,ctx);return json(account);
 }
 function readAccount({url,s,a}){exactQuery(url,[]);return json(s.publicAccount(a));}
 // The gate for an uninvited, deleted or suspended account; it may read itself without a ticket.
 function lapsedAccess(c){
   const {request,url,s,a}=c;
+  if(a.ephemeral&&a.invited){
+    if(url.pathname==='/v1/account'&&request.method==='GET')return readAccount(c);
+    if((url.pathname==='/v1/account'&&request.method==='PUT')||
+      (url.pathname==='/v1/names/check'&&request.method==='GET'))return null;
+    s.active(a);
+  }
   if(!a.invited||['deleted','suspended'].includes(a.status)){
     if(url.pathname==='/v1/account'&&request.method==='GET')return readAccount(c);
     // Persisted owners retain export/removal after invitation revocation or
@@ -195,8 +201,12 @@ async function member(c,{auth,adminAuth,catalog}){
   const a=await s.account(identity),signed={...c,s,identity,a};
   if(url.pathname==='/v1/account/invitation'&&request.method==='POST')return redeemInvitation(signed);
   const lapsed=lapsedAccess(signed);if(lapsed)return lapsed;
-  await s.ticket(a.uid,{classB:url.pathname.endsWith('/asset')?1:0});
-  armMaintenance(env,ctx);
+  // Eligible first-time players have no quota identity until valid profile
+  // creation commits. That mutation charges its first ticket atomically.
+  if(!a.ephemeral){
+    await s.ticket(a.uid,{classB:url.pathname.endsWith('/asset')?1:0});
+    armMaintenance(env,ctx);
+  }
   const own=findRoute(ACCOUNT_ROUTES,request,url);if(own)return own(signed);
   s.active(a);const model=await catalog(env);
   const library=findRoute(LIBRARY_ROUTES,request,url);if(library)return library({...signed,model});

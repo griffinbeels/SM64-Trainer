@@ -1,4 +1,4 @@
-# Community service private beta
+# Community service beta
 
 One Worker, D1 metadata, private immutable R2 assets and maintained Supabase Auth
 implement [protocol v1](../../docs/community-protocol.md). This checkout is disabled
@@ -52,6 +52,7 @@ compliance, age or jurisdiction promise.
 | CURSOR_SECRET | Independently generated server secret, at least 32 characters. |
 | SUPABASE_SECRET_KEY | Server-only admin/service-role credential used solely for Auth identity deletion. |
 | BETA_SHARED_PUBLISHERS | Optional JSON array of at most eight immutable Auth UUIDs. Friend beta uses Griffin's verified UID; `[]` allows only the caller's own recordings. Unset enables the general community policy. Display names never approve authors. |
+| PUBLIC_BETA_SIGNUP | Exact string `"true"` enables invitation-free profile completion. Unset, `"false"` or any other value keeps private admission. Defaults to `"false"` in the portable config. |
 
 Supply server credentials through Wrangler's secret input mechanism. Never
 commit them, put them in literal shell arguments, public assets/config or desktop
@@ -72,6 +73,42 @@ migration, regrades 20 retained recordings per invocation, then retires former
 generation winners. During rollout, generation_changed blocks new cloud pool/
 admission requests while local playback remains available. Finish an admitted
 migration before replacing its catalog again.
+
+## Open beta admission
+
+`PUBLIC_BETA_SIGNUP: "true"` lets valid registered native OAuth clients use the
+existing protocol without a packaged invitation. An unknown signed-in player
+receives the existing `status: "new"` profile envelope from `GET /v1/account`.
+For that unknown identity, account and name-availability reads retain no account,
+per-owner quota or receipt.
+They still consume the fixed global authenticated-entry budget. Until profile
+completion, library, upload and owner-data routes remain unavailable.
+
+`PUT /v1/account` deliberately creates the account only after a valid unique name,
+explicit sharing boolean and current Terms/Privacy versions pass validation.
+One guarded D1 transaction checks enabled admission and lifetime headcount,
+creates the active admitted account, charges its first owner/global request
+ticket, applies the profile and writes its replay receipt. A rejected name,
+full membership cap, exhausted budget or changed owner rolls back these writes.
+Retries reuse the existing account. Existing revoked, suspended, deleted or
+foreign-issuer accounts never qualify as new public members. Switching public
+signup off closes new enrollment; it does not revoke completed memberships.
+
+For an intentionally open audience, the operator must review three separate
+settings: enable `PUBLIC_BETA_SIGNUP`, set `beta_admission.uncapped=1` when the
+retained member count should be unlimited, and **remove** `BETA_SHARED_PUBLISHERS`
+when ordinary players should see one another's eligible recordings. The signup
+flag changes neither the membership cap nor publisher restriction. Leaving
+`uncapped=0` preserves `max_members`, including deletion tombstones. Leaving a
+publisher list restricts visibility; setting it to `[]` means own ghosts only.
+Request, upload, storage, burst and authenticated-entry budgets remain intact.
+Public build metadata must omit `friend_invitation`; this server-only policy
+supports existing invitation-free clients. Deployment and real provider signup
+remain operator QA gates. No new database migration is needed beyond 0001-0004.
+
+The policies page labels open versus private beta from this deployment setting
+and describes admitted players as recipients. Review the notice before changing
+the deployed audience and policy versions.
 
 ## Private beta admission
 
