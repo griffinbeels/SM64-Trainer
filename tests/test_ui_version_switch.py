@@ -288,6 +288,9 @@ def test_narrowing_to_one_region_says_so_and_refiles_the_overall_block(
     read_note = ("(document.querySelector('.workshop-hero .version-switch-note')"
                  " || {}).textContent")
     assert library_page.evaluate(read_note) == "Both regions shown"
+    # The full app fills Chromium's default 250-entry timing buffer before
+    # this gesture. Observe a fresh bounded interaction, not a saturated log.
+    library_page.evaluate("performance.setResourceTimingBufferSize(4096); performance.clearResourceTimings();")
     library_page.evaluate(TOGGLE_US)          # JP only
     library_page.wait_ms(400)
     note = library_page.evaluate(read_note)
@@ -295,11 +298,17 @@ def test_narrowing_to_one_region_says_so_and_refiles_the_overall_block(
     # The overall block's OWN request named the version -- read it off the
     # page's resource timeline rather than inferring it from a rendered value
     # (the fixture star's overall ladder need not differ between versions).
-    requests = library_page.evaluate("""
-      performance.getEntriesByType('resource')
-        .map((entry) => entry.name)
-        .filter((name) => name.includes('/api/ranks/standards?'))
-    """)
+    requests = library_page.evaluate("""(async () => {
+      const deadline = performance.now() + 10000;
+      let requests = [];
+      while (performance.now() < deadline) {
+        requests = performance.getEntriesByType('resource').map(entry => entry.name)
+          .filter(name => name.includes('/api/ranks/standards?'));
+        if (requests.some(name => name.includes('version=jp'))) return requests;
+        await new Promise(resolve => setTimeout(resolve, 40));
+      }
+      return requests;
+    })()""")
     assert any("version=jp" in name for name in requests), requests
     library_page.evaluate(TOGGLE_US)          # both again
     library_page.wait_ms(400)
