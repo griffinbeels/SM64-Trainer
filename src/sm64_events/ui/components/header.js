@@ -1,5 +1,5 @@
 import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
@@ -62,7 +62,7 @@ const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];
 function OnboardingFlow({blocked, children}) {
   const container = useRef(null);
   const focus = useRef(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (blocked) return;
     const target = focus.current?.isConnected ? focus.current
       : container.current?.querySelector("[autofocus],button,input");

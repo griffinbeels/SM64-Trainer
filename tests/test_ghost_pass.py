@@ -1,11 +1,10 @@
 """Native occurrence, pose and queue contracts; no emulator or installation.
 
-The actual staged-list test uses verified cached upstream source or a current
+The actual staged-list test uses verified pinned upstream source or a current
 SM64_GHOST_WITNESS_SOURCE staging. Its fake drawer proves list/flush ownership;
 it does not establish actual GPU cost or displayed-frame pacing.
 """
 import importlib.util
-import hashlib
 import json
 import os
 import subprocess
@@ -14,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from renderer_fixture import renderer_archive as renderer_archive
 from sm64_events.core.childproc import quiet_spawn_kwargs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,7 +48,7 @@ def test_native_world_and_stream_contracts(tmp_path, host, sources):
     _build_host(tmp_path, host, sources)
 
 
-def test_actual_staged_list_lifetime(tmp_path):
+def test_actual_staged_list_lifetime(tmp_path, request):
     value = os.environ.get("SM64_GHOST_WITNESS_SOURCE")
     if value:
         source = Path(value).resolve() / "src"
@@ -57,13 +57,10 @@ def test_actual_staged_list_lifetime(tmp_path):
             assert (gl / name).read_bytes() == (ROOT / "plugin/gfxwrap" / name).read_bytes(), name
         rsp = (source / "RSP.cpp").read_bytes()
     else:
-        # Exercise the shipped staging function with verified cached upstream
+        # Exercise the shipped staging function with verified pinned upstream
         # source. This is a CPU witness, with no renderer build or GPU context.
         pinned = json.loads((ROOT / "renderer/build-inputs.json").read_text())["upstream"]
-        archive = Path(os.environ["LOCALAPPDATA"]) / "SM64Trainer/build-cache/renderer" / f"GLideN64-{pinned['commit']}.zip"
-        if not archive.is_file():
-            pytest.skip("requires verified cached pinned renderer archive")
-        assert hashlib.sha256(archive.read_bytes()).hexdigest() == pinned["archive_sha256"]
+        archive = request.getfixturevalue("renderer_archive")
         modules = {}
         for name in ("stage_ghost_renderer", "stage_link_witness"):
             spec = importlib.util.spec_from_file_location(name, ROOT / f"tools/{name}.py")

@@ -239,7 +239,11 @@ def test_the_baseline_is_the_nearest_green_ancestor_from_any_branch(tmp_path):
 def test_the_skip_inventory_reaches_only_the_tests_importing_it():
     """Only a whole-suite run reads it (conftest's session finish), and a
     merge check never is one; as a global input it picked 546 files."""
-    assert chosen({"tests/skip_inventory.py": "M"}) == {"tests/test_skip_inventory.py": None}
+    assert chosen({"tests/skip_inventory.py": "M"}) == {
+        "tests/test_skip_inventory.py": None,
+        # The renderer fixture checks the copyrighted-ROM skip contract too.
+        "tests/test_renderer_fixture.py": None,
+    }
 
 
 @pytest.mark.parametrize("old,new,global_", [

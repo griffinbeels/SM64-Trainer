@@ -54,6 +54,7 @@ READ_GAME_SECTION = """
       names,
       gameIndex,
       trainerIndex: names.indexOf('Trainer'),
+      updatesIndex: names.indexOf('Updates'),
       value: select ? select.value : null,
       disabled: select ? select.disabled : null,
       options: select
@@ -145,7 +146,7 @@ def page(game_version_server):
         yield opened
 
 
-def test_game_section_sits_right_after_trainer_and_reads_auto_on_first_open(
+def test_game_section_follows_updates_and_reads_auto_on_first_open(
         page, game_version_server):
     # The server starts with no persisted tracker_mode.json, so the default
     # ModeConfig (auto/emu) is what a first-ever open must show -- confirmed
@@ -154,7 +155,8 @@ def test_game_section_sits_right_after_trainer_and_reads_auto_on_first_open(
 
     state = _wait_for_game_state(page, "state.disabled === false")
     assert state["gameIndex"] >= 0, state["names"]
-    assert state["gameIndex"] == state["trainerIndex"] + 1, state["names"]
+    assert state["updatesIndex"] == state["trainerIndex"] + 1, state["names"]
+    assert state["gameIndex"] == state["updatesIndex"] + 1, state["names"]
     assert state["options"] == ["Auto-detect", "JP", "US"], state["options"]
     assert state["value"] == "auto", state
     assert state["notes"] == [

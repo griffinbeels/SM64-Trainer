@@ -30,7 +30,7 @@ def test_ghost_sound_engine_queue_and_volume(tmp_path):
         pytest.skip("Win32 audio engine")
     rom, seed = os.environ.get("SM64_MODEL_ROM"), os.environ.get("SM64_MODEL_SEED_DIR")
     if not rom or not seed:
-        pytest.skip("needs SM64_MODEL_ROM (local US ROM) and SM64_MODEL_SEED_DIR (pinned libsm64)")
+        pytest.skip("set SM64_MODEL_ROM (local US ROM) and SM64_MODEL_SEED_DIR (pinned libsm64)")
     compiler = tool("build_plugin")
     vcvars = compiler.find_vcvars32()
     assert vcvars, "x86 MSVC toolchain required"

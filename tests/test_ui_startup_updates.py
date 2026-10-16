@@ -1,4 +1,5 @@
 """Update-before-sign-in through the real app and token-free remote seams."""
+import json
 import threading
 from pathlib import Path
 
@@ -11,8 +12,46 @@ from test_ui_community import FixtureAccount
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def trace_onboarding_focus(page):
+    page.evaluate("""(() => {
+      const rows = []; let frame;
+      const sample = why => {
+        const dialog = [...document.querySelectorAll('.modal')].find(node =>
+          node.getClientRects().length && !node.closest('[inert]')
+          && node.querySelector('.community-providers,.community-form'));
+        if (dialog) rows.push({why, at: performance.now(),
+          inside: dialog.contains(document.activeElement),
+          active: document.activeElement?.tagName + '.' + document.activeElement?.className});
+      };
+      const observer = new MutationObserver(() => sample('mutation'));
+      observer.observe(document.body, {subtree:true,childList:true,attributes:true});
+      const focus = () => sample('focus');
+      document.addEventListener('focusin', focus);
+      const tick = () => { sample('frame'); frame = requestAnimationFrame(tick); };
+      frame = requestAnimationFrame(tick);
+      window.finishStartupFocusTrace = async () => {
+        const end = performance.now() + 3000;
+        while (performance.now() < end && rows.filter(row => row.why === 'frame').length < 2)
+          await new Promise(resolve => setTimeout(resolve, 10));
+        observer.disconnect(); cancelAnimationFrame(frame);
+        document.removeEventListener('focusin', focus);
+        return rows;
+      };
+    })()""")
+
+
+def assert_painted_onboarding_owns_focus(page, name):
+    rows = page.evaluate("window.finishStartupFocusTrace()")
+    folder = ROOT / ".iteration/adaptive-ghosts/round53-ui"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"focus-{name}.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    painted = [row for row in rows if row["why"] == "frame"]
+    assert len(painted) >= 2, rows
+    assert all(row["inside"] for row in painted), rows
+
+
 def test_actual_update_hook_startup_and_dismissal_contracts():
-    run_frontend("startup-updates.test.js")
+    run_frontend("startup-updates.test.js", "modal-focus.test.js")
 
 
 class StartupRelease(ReleaseBoundary):
@@ -50,8 +89,10 @@ def test_update_precedes_login_and_signup_then_later_resumes_them(tmp_path, monk
                 assert page.count(".community-providers, .community-form") == 0
                 assert not account.calls, account.calls
                 (artifacts / f"{account_status}-{width}-update-first.png").write_bytes(page.screenshot())
+                trace_onboarding_focus(page)
                 page.click(".modal-actions button:text-is('Later')")
                 page.wait_for(".community-providers" if account_status == "signed_out" else ".community-form")
+                assert_painted_onboarding_owns_focus(page, f"initial-{account_status}-{width}")
                 assert page.count(".update-summary") == 0
                 assert page.count(".modal") == 1
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -81,8 +122,16 @@ def test_late_update_preserves_signup_draft_and_keyboard_focus(tmp_path, monkeyp
                 page.wait_for(".update-summary")
                 assert page.count(".modal:visible") == 1
                 assert page.count(".community-form") == 1
-                page.click(".modal-actions button:text-is('Later')")
+                trace_onboarding_focus(page)
+                # Shift+Tab and Tab cycle within the active update dialog;
+                # the retained inert signup dialog must not intercept them.
+                page.evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',shiftKey:true,bubbles:true,cancelable:true}))")
+                assert page.evaluate("document.activeElement.textContent.trim()") == "Later"
+                page.evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',bubbles:true,cancelable:true}))")
+                assert page.evaluate("document.activeElement.getAttribute('aria-label')") == "Close dialog"
+                page.evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true,cancelable:true}))")
                 page.wait_for(".community-form")
+                assert_painted_onboarding_owns_focus(page, "late-signup")
                 assert page.evaluate("document.querySelector('.community-form input[type=text]').value") == "KeepMyDraft"
                 assert page.evaluate("document.querySelector('.community-form input[type=checkbox]').checked")
                 assert page.evaluate("document.querySelector('.community-form').contains(document.activeElement)")

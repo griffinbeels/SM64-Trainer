@@ -14,6 +14,7 @@ from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.media import MediaRun
 from sm64_events.replay.packetmux import NativeFormat
 from test_gpumedia import FakeMux, complete, media, sample, stamp
+from test_gpu_codec_choice import encoder_asset as encoder_asset
 from test_packetmux import Output, RATE, fixture_packets, pcm, verify_audio, verify_video
 
 
@@ -198,7 +199,7 @@ def test_real_worker_prepares_without_publication_and_preserves_media(tmp_path):
     ledger.detach()
 
 
-def test_session_never_admits_native_frames_until_sink_preparation_completes(monkeypatch):
+def test_session_never_admits_native_frames_until_sink_preparation_completes(monkeypatch, encoder_asset):
     from sm64_events.replay import gpucapture_session as session_module
     from sm64_events.replay.gpudemand import DemandSnapshot
     from sm64_events.replay.gpusettings import GpuSettings
@@ -240,7 +241,7 @@ def test_session_never_admits_native_frames_until_sink_preparation_completes(mon
     thread = threading.Thread(target=start)
     thread.start()
     try:
-        assert entered.wait(2)
+        assert entered.wait(2), errors
         assert not admitted.is_set() and not calls
         release.set()
         thread.join(3)

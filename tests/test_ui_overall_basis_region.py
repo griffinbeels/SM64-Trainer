@@ -93,14 +93,17 @@ def test_saved_jp_pb_offers_its_distinct_overall_rank_while_running_us():
                 {"label": "Strategy", "visible": True, "disabled": False},
                 {"label": "Overall", "visible": True, "disabled": False}], controls
             for mode, grade in [("strategy", section["rank"]), ("overall", section["entity_rank"])]:
-                button = CARD + f' .rank-mode-button[title^="Show the {"rank for" if mode == "strategy" else "best overall"}"]'
+                label = "Strategy" if mode == "strategy" else "Overall"
+                button = CARD + f' .rank-mode-button:text-is("{label}")'
                 page.click(button)
                 expected = page.evaluate(f"""(async () => {{
                   const caps = await import('/ui/components/caps.js');
                   return caps.capName({json.dumps(grade['rank'])}).toUpperCase()
                     + ' ' + caps.divisionDigit({json.dumps(grade['division'])});
                 }})()""")
-                _until(page, f"document.querySelector({json.dumps(button)}).getAttribute('aria-pressed') === 'true'")
+                selected = (f"Array.from(document.querySelectorAll({json.dumps(CARD + ' .rank-mode-button')}))"
+                            f".find(button => button.textContent.trim() === {json.dumps(label)})")
+                _until(page, f"{selected}.getAttribute('aria-pressed') === 'true'")
                 _until(page, f"document.querySelector({json.dumps(CARD + ' .rank-banner-name')}).textContent.trim() === {json.dumps(expected)}")
                 _capture(page, mode)
             assert page.problems() == []

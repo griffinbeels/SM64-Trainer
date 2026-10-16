@@ -1,6 +1,5 @@
 """Execute the captured root contract without attaching to the emulator."""
 import importlib.util
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +8,7 @@ import zipfile
 
 import pytest
 
+from renderer_fixture import renderer_archive as renderer_archive
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.memory.layout import US
@@ -34,10 +34,8 @@ def function(source, signature):
     return source[start:end]
 
 
-def staged_dispatch(tmp_path):
+def staged_dispatch(tmp_path, archive):
     spec = json.loads((ROOT / "renderer/build-inputs.json").read_text(encoding="utf-8"))["upstream"]
-    archive = Path(os.environ["LOCALAPPDATA"]) / "SM64Trainer/build-cache/renderer" / f"GLideN64-{spec['commit']}.zip"
-    assert hashlib.sha256(archive.read_bytes()).hexdigest() == spec["archive_sha256"]
     with zipfile.ZipFile(archive) as source:
         prefix = f"GLideN64-{spec['commit']}/src/"
         gsp = source.read(prefix + "gSP.cpp")
@@ -54,13 +52,13 @@ def staged_dispatch(tmp_path):
 
 
 @pytest.mark.parametrize("host", ["ghost_root", "ghost_root_dispatch"])
-def test_executed_root_after_transient_throw_pointer_clears(tmp_path, host):
+def test_executed_root_after_transient_throw_pointer_clears(tmp_path, host, request):
     native = Path(os.environ.get("SM64_GHOST_ROOT_BASELINE", ROOT / "plugin/gfxwrap"))
     baseline = "SM64_GHOST_ROOT_BASELINE" in os.environ
     if baseline and host != "ghost_root":
         pytest.skip("baseline has no renderer root instrumentation")
     if host == "ghost_root_dispatch":
-        staged_dispatch(tmp_path)
+        staged_dispatch(tmp_path, request.getfixturevalue("renderer_archive"))
     spec = importlib.util.spec_from_file_location("root_build", ROOT / "tools/build_plugin.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
@@ -70,7 +68,8 @@ def test_executed_root_after_transient_throw_pointer_clears(tmp_path, host):
     if not baseline:
         sources.append(native / "ghost_root.cpp")
     target = tmp_path / "ghost_root_host.exe"
-    build._cl(vcvars, ["/nologo", "/std:c++17", "/EHsc", "/MT", "/W4", "/WX",
+    # Like shipped capture code: the stress host repeats full-RDRAM byte swaps.
+    build._cl(vcvars, ["/nologo", "/O2", "/std:c++17", "/EHsc", "/MT", "/W4", "/WX",
         f"/I{native}", f"/I{tmp_path}", *map(str, sources), str(ROOT / f"tests/native/{host}_host.cpp"),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/MANIFEST:EMBED",
         "/MANIFESTUAC:level='asInvoker'"], tmp_path)
