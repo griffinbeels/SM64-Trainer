@@ -852,13 +852,6 @@ PROJECT = Project(
     # sweep could see any of it. uilab's stale-exemption gate deletes each
     # row the moment its defect stops occurring.
     known_defects={
-        # The goal plate's 1000px gate adds these samples to the shared matrix.
-        # This is the existing overlap into the star art's transparent gap.
-        # Detail text records the measurement; uilab classifies by key only.
-        '1000x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1001x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1060x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1061x1000 [page] overlap :: span.starholder x span.starrank':
@@ -1063,16 +1056,6 @@ BOWSER_PROJECT = dataclasses.replace(
         # identical, long-owed 7x2px overlap, at every viewport a cell
         # renders at all (both cells on this row share it; the probe
         # reports one row per colliding SELECTOR pair, not per cell).
-        # The goal plate's 1000px container gate adds these matrix edges;
-        # the selector keeps the same documented 26x2px icon-box overlap.
-        '1000x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1000x1000 [bowser-row] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1001x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1001x1000 [bowser-row] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1060x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1060x1000 [bowser-row] overlap :: span.starholder x span.starrank':
