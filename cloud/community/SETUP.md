@@ -209,6 +209,7 @@ bindings in `wrangler.jsonc`:
 | `OPERATOR_NAME`, `OPERATOR_CONTACT` | Real accountable operator and reachable contact. |
 | `TERMS_VERSION`, `PRIVACY_VERSION` | Versions of the reviewed notices. |
 | `CATALOG_GENERATION` | Validated `catalog.json` digest, matching D1 settings. |
+| `PUBLIC_BETA_SIGNUP` | Default `"false"`. Use exact string `"true"` only for reviewed open beta enrollment; see section 7b. |
 
 Add the chosen Custom Domain in Worker Settings > Domains & Routes, or use its
 documented `routes` entry with `custom_domain: true`. Keep gateway caching
@@ -286,6 +287,42 @@ sending; the confirmation is accepted for five minutes. Access supplies the
 verified operator assertion to the Worker; do not send a fake role or a browser
 Supabase bearer token as admin authority. Use this same endpoint with
 `invited: false` to revoke admission. Persisted owners retain export/removal.
+
+## 7b. Open enrollment instead of private invitations
+
+For an approved public beta, deploy `PUBLIC_BETA_SIGNUP: "true"`. Valid native
+sign-ins can then read `status: "new"`, choose a unique player name and accept
+current policies through the existing profile screen. The account is persisted
+only when that deliberate profile submission succeeds. For an unknown identity,
+reads and rejected submissions create no account or owner quota rows. The fixed
+authenticated-entry budget still charges reads; successful signup atomically charges owner/global
+request budgets with the new profile. Revoked, suspended, deleted or foreign
+stored identities cannot enroll again.
+
+Review these independent audience controls before opening enrollment:
+
+- `beta_admission.uncapped=1` removes the retained-member headcount cap. Keeping
+  it zero preserves `max_members`, counting every retained account/tombstone.
+  Public signup never changes this setting implicitly.
+- Remove `BETA_SHARED_PUBLISHERS` to serve the normal community pool. A retained
+  allowlist limits players to those authors plus their own recordings; `[]`
+  means only their own recordings. Public signup does not clear this setting.
+- Keep existing per-account/global request, upload, storage, burst and fixed
+  authenticated-entry budgets. Unlimited enrollment is not unlimited usage.
+
+No invitation is needed or included in the public build. Omit `friend_invitation`
+from build configuration and do not distribute the private tester installer.
+The public flag uses existing migrations 0001-0004 and needs no further migration.
+The policies page says open beta in this mode; review the recipient wording and
+policy versions before changing the deployed audience. The private instructions
+above still apply when the flag is unset/false. Switching it off stops new joins
+without removing completed public memberships.
+
+Before public distribution, verify the actual packaged app reaches profile setup
+and practice without an invitation, a normal player's eligible recording appears
+for another player, name/policy refusal works, and revoked/deleted sign-ins stay
+refused. These are remote/operator QA gates; local workerd fixtures do not prove
+provider audience settings, delivered build metadata or deployed configuration.
 
 ## 8. Rebuild the beta with four public service values
 
