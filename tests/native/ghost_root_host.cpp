@@ -697,4 +697,5 @@ int main(int argc,char **argv) {
     ridden_shell_block(f);
     std::puts("executed root qualification passed");
 #endif
+    return 0;
 }

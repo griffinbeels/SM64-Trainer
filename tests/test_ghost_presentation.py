@@ -1,6 +1,5 @@
 """Real default-drawable clean/display witness plus pinned staging contracts."""
 import ast
-import hashlib
 import importlib.util
 import json
 import os
@@ -10,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from renderer_fixture import renderer_archive as renderer_archive
 from sm64_events.core.childproc import quiet_spawn_kwargs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,13 +104,9 @@ def _actual_windows_staging(stage, function, start_marker, end_marker, source_tr
     return output["src/Graphics/OpenGLContext/windows/windows_DisplayWindow.cpp"].decode("utf-8")
 
 
-def _pinned_transition_tree(tmp_path):
+def _pinned_transition_tree(tmp_path, archive):
     """Apply the actual capture staging block to five verified upstream files."""
     pinned = json.loads((ROOT / "renderer/build-inputs.json").read_text())["upstream"]
-    archive = Path(os.environ["LOCALAPPDATA"]) / "SM64Trainer/build-cache/renderer" / f"GLideN64-{pinned['commit']}.zip"
-    if not archive.is_file():
-        pytest.skip("requires verified cached pinned renderer archive")
-    assert hashlib.sha256(archive.read_bytes()).hexdigest() == pinned["archive_sha256"]
     stage = module("transition_stage", "tools/stage_ghost_presentation.py")
     capture = module("transition_capture_stage", "tools/stage_link_witness.py")
     source_tree = tmp_path / "pinned"
@@ -145,9 +141,9 @@ def _pinned_transition_tree(tmp_path):
 
 
 @pytest.mark.parametrize("restore_regression", [None, "rebuild", "staging_stop"])
-def test_cpu_actual_presentation_and_pinned_window_transitions(tmp_path, restore_regression):
+def test_cpu_actual_presentation_and_pinned_window_transitions(tmp_path, restore_regression, renderer_archive):
     """Actual lifecycle glue and staged resize/fullscreen entries, with CPU shells."""
-    source_tree, stage, capture = _pinned_transition_tree(tmp_path)
+    source_tree, stage, capture = _pinned_transition_tree(tmp_path, renderer_archive)
     display = stage.edits(source_tree, capture.replace_once)["src/DisplayWindow.cpp"].decode("utf-8")
     if restore_regression == "staging_stop":
         assert display.count("ghost_presentation::drawable_changing();") == 2

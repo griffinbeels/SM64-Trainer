@@ -49,4 +49,5 @@ int main(int argc,char **argv) {
     ghost_root_finish(probe,true,f.sample);
     check(f.sample.pose.root_kind==GC_ROOT_SCALED_MODELVIEW,"actual staged dispatch failed root proof");
     std::puts("actual staged root dispatch passed");
+    return 0;
 }
