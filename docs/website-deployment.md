@@ -37,6 +37,13 @@ the remaining end-to-end check of the stored CI credential's publishing access.
 Authentication remains on its existing service and hostname. This dated snapshot
 predates the public beta route; current builder eligibility is described below.
 
+HTML and release metadata responses retain `no-transform` alongside revalidation
+in `website/_headers`. Cloudflare's automatic analytics injection otherwise adds
+a third-party beacon blocked by the site's strict CSP. A local preview cannot
+observe provider injection; [Cloudflare documents this directive](https://developers.cloudflare.com/web-analytics/faq/#my-website-is-proxied-through-cloudflare-but-web-analytics-automatic-setup-is-not-working).
+Check the deployed root and beta pages in a browser
+after changing hosting or response headers.
+
 ## Production build and release validation
 
 For copy, screenshots and layout review, use the safe offline preview in
