@@ -32,7 +32,9 @@ from sm64_events.core.update_plan import (INSTALLED_MANIFEST, MANIFEST_ASSET,
                                           ZIP_ASSET, file_sha256, parse_manifest,
                                           validate_release_manifest)
 from sm64_events.core.release_contract import release_assets, select_release, version_key
-from sm64_events.core.update_policy import installed_floor, read_policy, record_installed
+from sm64_events.core.update_policy import (adopt_channel_default, installed_floor,
+                                            read_policy, record_installed)
+from sm64_events.bootstrap.public_offer import bundled_offer, validate_offer
 from sm64_events.core.profile_migration import (beta_profile_migration_available,
                                                migrate_private_beta_profile)
 from sm64_events.bootstrap.beta_payload import (FOOTER, MAGIC, MAX_ARCHIVE_BYTES,
@@ -402,7 +404,8 @@ def _network_offer(http, ui, repo, floor, receive_beta, temporary):
 def run_install(*, http, ui, repo: str = DEFAULT_REPO,
                 install_dir: "Path | None" = None,
                 own_path: "Path | None" = None,
-                policy_path: "Path | None" = None, activate: bool = True) -> bool:
+                policy_path: "Path | None" = None, activate: bool = True,
+                public_offer: dict | None = None) -> bool:
     """The whole install: release -> download+verify zip -> swap in ->
     shortcut -> launch. Returns False after ui.error() on any failure."""
     target = install_dir or default_install_dir()
@@ -421,7 +424,9 @@ def run_install(*, http, ui, repo: str = DEFAULT_REPO,
         with _install_lock(target):
             recover_install(target)
         floor = repair_floor(target, policy)
-        receive_beta = read_policy(policy)["receive_beta_updates"]
+        preference = read_policy(policy)
+        receive_beta = preference["receive_beta_updates"]
+        offer = validate_offer(public_offer) if public_offer is not None else None
         embedded = False
         if own_path is not None and own_path.is_file() and own_path.stat().st_size > FOOTER.size:
             with own_path.open("rb") as source:
@@ -431,11 +436,19 @@ def run_install(*, http, ui, repo: str = DEFAULT_REPO,
             if embedded:
                 tag, manifest_text, zip_path = _embedded_offer(own_path, ui, floor)
             else:
+                # Downloading beta chooses this installation, just like the
+                # private offline offer. The player's future update preference
+                # remains sovereign; the installed floor prevents downgrades.
+                if offer is not None:
+                    floor = max((floor, offer["version"]), key=version_key)
+                    receive_beta = receive_beta or offer["channel"] == "beta"
                 tag, manifest_text, zip_path = _network_offer(http, ui, repo, floor, receive_beta, td)
             ui.status("Installing…")
             exe = install_tree(zip_path, manifest_text, target, offered_version=tag, embedded=embedded,
                                policy_path=policy)
             record_installed(policy, parse_manifest(manifest_text).version)
+            if offer is not None and not embedded:
+                adopt_channel_default(policy, offer["channel"])
         if activate:
             if not create_desktop_shortcut(exe):
                 ui.status("Note: could not create the Desktop shortcut — "
@@ -589,18 +602,29 @@ def main(argv: "list[str] | None" = None) -> int:
         if len(args) != 2 or own_path is None:
             return 2
         return install_self_check(own_path, Path(args[1]))
+    # Read before any network request; invalid bundled intent fails closed.
+    try:
+        offer = bundled_offer()
+    except (OSError, ValueError) as error:
+        if silent:
+            ConsoleUI().error(str(error))
+        else:
+            ui = TkUI()
+            ui.error(str(error))
+            ui.root.mainloop()
+        return 1
     if silent:
         ui = ConsoleUI(allow_beta_repair="--allow-beta-repair" in args,
                        migrate_beta_profile="--migrate-beta-profile" in args)
         ok = run_install(http=lambda request: urllib.request.urlopen(request, timeout=60), ui=ui,
-                         own_path=own_path)
+                         own_path=own_path, public_offer=offer)
         return 0 if ok else 1
     ui = TkUI()
     result = {"ok": False}
 
     def work():
         result["ok"] = run_install(http=lambda request: urllib.request.urlopen(request, timeout=60), ui=ui,
-                                   own_path=own_path)
+                                   own_path=own_path, public_offer=offer)
 
     import threading
     threading.Thread(target=work, daemon=True).start()
