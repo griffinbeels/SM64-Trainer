@@ -124,7 +124,7 @@ function useProfileForm(account, busy, onSave) {
 export function CommunityProfile({ account, busy, onSave }) {
   const form = useProfileForm(account, busy, onSave);
   const groups = useSheetRunners(!form.rename);
-  const label = form.rename ? "Save new name" : "Start practicing";
+  const label = form.rename ? "Save new name" : "Continue";
   return html`<form class="community-form" onsubmit=${form.save}>
     ${form.rename && html`<p>Your previous name was reassigned. Your account and ghosts are still yours.</p>`}
     <label>Player name<input autofocus type="text" value=${form.name} maxlength="128" required

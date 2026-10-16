@@ -4,16 +4,23 @@ import { getJSON, send } from "./api.js";
 
 export function useCommunityAccount() {
   const [account, setAccount] = useState({enabled: false, authenticated: false, status: 'signed_out'});
+  const [loading, setLoading] = useState(true);
+  // Explicit open state belongs to Settings. Automatic sign-in/profile steps
+  // follow accountRequired and disappear as soon as an active account arrives.
   const [open, setOpen] = useState(false);
-  const refresh = () => getJSON("/api/community/account").then(setAccount);
-  useEffect(() => { refresh().catch(() => setAccount({ enabled: false })); }, []);
+  const refresh = () => getJSON("/api/community/account").then(value => {
+    setAccount(value); setLoading(false); return value;
+  });
+  useEffect(() => { refresh().catch(() => {
+    setAccount({ enabled: false }); setLoading(false);
+  }); }, []);
   useEffect(() => {
     if (!account.enabled) return;
-    const timer = setInterval(() => refresh().catch(() => {}), 10000);
+    const pendingProfile = account.authenticated && account.status === "signed_out";
+    const timer = setInterval(() => refresh().catch(() => {}), pendingProfile ? 1000 : 10000);
     return () => clearInterval(timer);
-  }, [account.enabled]);
+  }, [account.enabled, account.authenticated, account.status]);
   useEffect(() => {
-    if (account.status === "rename_required" || account.status === "consent_required") setOpen(true);
     if (account.status === 'consent_required') {
       setAccount(current => ({...current, policies_loading: true}));
       send('POST', '/api/community/account/refresh').then(setAccount)
@@ -28,12 +35,14 @@ export function useCommunityAccount() {
   const required = accountRequired(account);
   // While required, the screen is open whatever a close handler did; a
   // sign-out from a forced rename lands back on the providers at once.
-  return { account, open: open || required, setOpen, refresh, refreshRemote, setAccount, required };
+  return { account, loading, open: open || required, setOpen, refresh, refreshRemote, setAccount, required };
 }
 
 export function accountRequired(account) {
   if (!account?.enabled) return false;
-  if (account.authenticated) return ["new", "rename_required", "consent_required"].includes(account.status);
+  // Token exchange can finish before the remote profile arrives. That is
+  // still sign-in, rather than an active account ready for emulator setup.
+  if (account.authenticated) return ["signed_out", "new", "rename_required", "consent_required"].includes(account.status);
   return !account.stored;
 }
 
