@@ -156,7 +156,7 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
 
 
 def bootstrap_args(*, distpath: Path | None = None, workpath: Path | None = None,
-                   specpath: Path | None = None) -> list[str]:
+                   specpath: Path | None = None, offer_path: Path | None = None) -> list[str]:
     argv = [
         str(REPO / "bootstrap_entry.py"),
         "--name", "SM64TrainerSetup",
@@ -164,10 +164,34 @@ def bootstrap_args(*, distpath: Path | None = None, workpath: Path | None = None
         "--paths", str(REPO / "src"),
         "--icon", str(REPO / "assets" / "ukiki.ico"),
     ]
+    if offer_path is not None:
+        argv += ["--add-data", f"{offer_path}{SEP}."]
     for option, path in (("--distpath", distpath), ("--workpath", workpath), ("--specpath", specpath)):
         if path is not None:
             argv += [option, str(path)]
     return argv
+
+
+def stage_public_offer(work: Path, version: str, config: Path | None = None) -> Path:
+    """Stage only public release identity; never copy the application's config."""
+    sys.path.insert(0, str(REPO / "src"))
+    from sm64_events.bootstrap.public_offer import FILENAME, validate_offer
+    from sm64_events.core.release_contract import version_key
+    # Standalone/legacy callers can supply only --version. Candidate builds
+    # additionally validate the normal application's declared channel.
+    channel = "beta" if version_key(version).prerelease else "stable"
+    if config is not None:
+        from sm64_events.core.build_channel import read_metadata
+        build = read_metadata(config)
+        if build.installation != "normal":
+            raise ValueError("public installer requires normal installation identity")
+        channel = build.channel
+    offer = validate_offer({"schema": 1, "version": version,
+                            "channel": channel})
+    work.mkdir(parents=True, exist_ok=True)
+    path = work / FILENAME
+    path.write_text(json.dumps(offer, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 def stage_version(work: Path, version: str) -> tuple[Path, Path]:
@@ -258,8 +282,11 @@ def main() -> int:
         print("\nBuilt:", REPO / "dist" / "SM64Trainer")
     if args.mode in ("bootstrap", "all"):
         work = args.workpath or REPO / "build" / "normal-release"
+        sys.path.insert(0, str(REPO / "src"))
+        from sm64_events.core.version import __version__
+        offer = stage_public_offer(work, args.version or __version__, args.config)
         pyi.run(bootstrap_args(distpath=args.distpath, workpath=work / "installer",
-                               specpath=work / "spec"))
+                               specpath=work / "spec", offer_path=offer))
         print("\nBuilt:", REPO / "dist" / "SM64TrainerSetup.exe")
     return 0
 
