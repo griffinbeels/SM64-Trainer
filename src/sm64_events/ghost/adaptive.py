@@ -250,9 +250,12 @@ def _eligible_auto(row, pb, options, low, high, strategy, scope):
             and (scope == "overall" or row.get("strategy") == strategy))
 
 
-def _player(row):
+def player_key(row):
     """Who a recording belongs to; a recording without a player stands alone."""
-    return row["player_id"] if row.get("player_id") is not None else ("recording", row["id"])
+    if row.get("_owned") is True:
+        return ("current-player",)
+    player = row.get("player_id")
+    return player if isinstance(player, str) and player.strip() else ("recording", row["id"])
 
 
 def _automatic(rows, count, low, high, players):
@@ -264,19 +267,19 @@ def _automatic(rows, count, low, high, players):
     """
     winners = {}
     for row in rows:
-        key = _player(row), row["strategy"], row["step"]
+        key = player_key(row), row["strategy"], row["step"]
         current = winners.get(key)
         if current is None or (row["frames"], row["id"]) < (current["frames"], current["id"]):
             winners[key] = row
-    remaining = [row for row in winners.values() if _player(row) not in players]
+    remaining = [row for row in winners.values() if player_key(row) not in players]
     picked = []
-    count = min(count, len({_player(row) for row in remaining}))
+    count = min(count, len({player_key(row) for row in remaining}))
     for index in range(count):
         goal = low if count == 1 else low + (high - low) * index / (count - 1)
         row = min(remaining, key=lambda item: (abs(item["step"] - goal), item["step"], item["frames"], item["id"]))
         picked.append(row)
-        players.add(_player(row))
-        remaining = [item for item in remaining if _player(item) != _player(row)]
+        players.add(player_key(row))
+        remaining = [item for item in remaining if player_key(item) != player_key(row)]
     return sorted(picked, key=lambda row: (row["step"], row["frames"], row["id"]))
 
 
@@ -310,9 +313,9 @@ def _widened(candidates, taken, players, seats, high, strategy, scope, allow_fas
     for row in (*above, *below):
         if len(picked) == seats:
             break
-        if _player(row) not in players:
+        if player_key(row) not in players:
             picked.append(row)
-            players.add(_player(row))
+            players.add(player_key(row))
     return picked
 
 
@@ -340,24 +343,31 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
     used = {row["id"] for row in candidates.values()
             if options["include_pb"] and _same_as_pb(row, pb)}
     result = {}
+    players = set()
     for slot in range(options["count"]):
         identity = pins.get(str(slot))
         if identity is not None:
             row = candidates.get(identity)
-            result[slot] = _placed(row, slot, True) if row is not None and identity not in used else _missing_pin(identity, slot)
+            duplicate = row is not None and player_key(row) in players
+            if row is not None and identity not in used and not duplicate:
+                result[slot] = _placed(row, slot, True)
+                players.add(player_key(row))
+            else:
+                result[slot] = _missing_pin(identity, slot)
+                if duplicate:
+                    result[slot]["reason_text"] = "This player already has a chosen rival. Reset or replace this slot."
             used.add(identity)
-    # Pinned choices are his and stay as chosen; every automatic seat below
-    # (carried over or new) belongs to a player not yet in the group.
-    players = {_player(row) for row in result.values() if row.get("ghost") is not None}
+    # Persisted conflicting pins keep the first playable slot. Every seat,
+    # including protected choices and carried-over rows, belongs to one player.
     for old in sorted(previous, key=lambda item: item.get("slot") if type(item.get("slot")) is int else -1):
         slot = old.get("slot")
         row = candidates.get(old["id"])
         if (not old.get("pinned") and type(slot) is int and 0 <= slot < options["count"] and slot not in result
-                and row is not None and row["id"] not in used and _player(row) not in players
+                and row is not None and row["id"] not in used and player_key(row) not in players
                 and _eligible_auto(row, pb, options, low, high, strategy, scope)):
             result[slot] = _placed(row, slot, False)
             used.add(row["id"])
-            players.add(_player(row))
+            players.add(player_key(row))
     available = [row for row in candidates.values() if row["id"] not in used
                  and _eligible_auto(row, pb, options, low, high, strategy, scope)]
     automatic = list(_automatic(available, options["count"] - len(result), low, high, players))

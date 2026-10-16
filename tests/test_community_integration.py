@@ -116,6 +116,28 @@ def test_downloads_do_not_displace_playable_rivals_or_hold_up_private_choices():
     assert not staging.downloading
 
 
+@pytest.mark.parametrize("moved_slot", [0, 1])
+def test_partially_downloaded_slot_changes_never_race_two_recordings_of_one_player(moved_slot):
+    def row(identifier, player, slot):
+        return {"id": identifier, "player_id": player, "slot": slot, "provenance": "community-unverified"}
+    previous = (row("a-old", "a", moved_slot), row("b-old", "b", 1 - moved_slot))
+    desired = (row("b-new", "b", moved_slot), row("a-new", "a", 1 - moved_slot))
+    sync = SimpleNamespace(request_assets=lambda _ids: None)
+    population = SimpleNamespace(is_ready=lambda identifier: identifier != "a-new")
+    staging = CommunityRivals(sync, population)
+    staged = staging.stage(desired, previous)
+    assert [(row["id"], row["player_id"]) for row in staged] == [("b-new", "b")]
+    assert staging.downloading
+    population.is_ready = lambda _identifier: True
+    assert staging.stage(desired, previous) == tuple(sorted(desired, key=lambda row: row["slot"]))
+
+
+def test_staging_keeps_equal_names_with_distinct_verified_players_and_unknown_legacy_rows():
+    rows = tuple({"id": str(i), "slot": i, "player_id": player, "player_name": "Same name"}
+                 for i, player in enumerate(("uid-a", "uid-b", None, "")))
+    assert CommunityRivals(None, None).stage(rows, ()) == rows
+
+
 def test_cloud_offer_precedes_independent_local_winner_skip(tmp_path):
     run, replay, path = recorded(tmp_path)
     original = path.read_bytes()

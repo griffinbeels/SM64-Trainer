@@ -4,11 +4,11 @@ from itertools import islice
 from uuid import UUID
 
 from sm64_events.ghost.adaptive import (
-    PracticeIdentity, add_slot, checked_options, rank_frames, rank_recordings, select_rivals,
+    PracticeIdentity, add_slot, checked_options, player_key, rank_frames, rank_recordings, select_rivals,
     MAX_STEP, MAX_AHEAD, MAX_RIVALS,
 )
 from sm64_events.ghost.library_preferences import AUTHOR_KEY
-from sm64_events.ghost.pb import saved_pb_basis
+from sm64_events.ghost.pb import AttemptGhost, saved_pb_basis
 from sm64_events.ghost.sharing_targets import describe
 from sm64_events.ranks.standards import entity_key
 
@@ -19,7 +19,7 @@ LIMITS = {"last_step":MAX_STEP, "max_ahead":MAX_AHEAD, "counts":list(range(1,MAX
 
 def wire(row):
     """Playback references and local paths never belong in a browser answer."""
-    return {key:value for key,value in row.items() if key not in ("ghost", "path", "manifest", "source")}
+    return {key:value for key,value in row.items() if key not in ("ghost", "path", "manifest", "source", "_owned")}
 
 
 class ColoredGhost:
@@ -280,7 +280,8 @@ class Rivals:
         ranked = rank_recordings(records,self.tracker.ranks,identity)
         owners = self._owned_players()
         # Explicit choices survive; automatic slots exclude our own runs.
-        ranked = tuple(row for row in ranked if row["id"] in pins.values() or row["player_id"] not in owners)
+        ranked = tuple(self._seat_row(row, owners) for row in ranked
+                       if row["id"] in pins.values() or row["player_id"] not in owners)
         simulation = self._simulation()
         if simulation and simulation.get("zero_practice") is True and pb:
             # Prefer unbeaten runs until the tester beats the whole population.
@@ -323,7 +324,8 @@ class Rivals:
             desired = select_rivals((*ranked,*private),pb,self.options,pins,
                                     self.rows if self.preserve_slots else (),scope=identity.scope,
                                     allow_fastest=self.community.complete(identity))
-            self.rows = self.community.stage(desired, self.rows)
+            previous = tuple(self._seat_row(row) for row in self.rows)
+            self.rows = self.community.stage(desired, previous)
             self.preserve_slots = False
             self.pb = pb
             ghosts = [ColoredGhost(row["ghost"],row["hue_degrees"],row["slot"]) for row in self.rows if row.get("ghost") is not None]
@@ -387,6 +389,16 @@ class Rivals:
             names.append(self.community.sync.account.snapshot().get('name'))
         return tuple(name for name in names if isinstance(name, str) and name.strip())
 
+    def _seat_row(self, row, owners=None):
+        """Only this install's established own IDs share its explicit rival seat.
+
+        Remote metadata cannot submit this internal flag. Local saved choices
+        set it when resolving their actual attempt; an import's credit cannot.
+        """
+        owners = self._owned_players() if owners is None else owners
+        local = row.get("manual_only") is True and isinstance(row.get("ghost"), AttemptGhost)
+        return {**row, "_owned": local or row.get("player_id") in owners}
+
     def payload(self):
         native = self.native.state()
         if native.get("active_generation")==self.generation:
@@ -423,7 +435,7 @@ class Rivals:
         """An explicit private import may be pinned, but never earns admission."""
         local = self.local_choices.get(identity)
         if isinstance(local,dict):
-            from sm64_events.ghost.pb import AttemptGhost, local_attempt_source
+            from sm64_events.ghost.pb import local_attempt_source
             from sm64_events.inputs.service import entity_key_of
             number = local.get("attempt_id")
             attempt = self.tracker.db.attempt(number) if type(number) is int else None
@@ -439,7 +451,7 @@ class Rivals:
             return {"id":identity,"player_id":"private:you","player_name":"You",
                     "strategy":attempt.strat_tag or "Standard","frames":frames,
                     "ghost":AttemptGhost(number,target.kind,target.entity_key,attempt.strat_tag,frames),
-                    "manual_only":True,"current_strategy":target.strategy,**progress}
+                    "manual_only":True,"_owned":True,"current_strategy":target.strategy,**progress}
         if self.sharing is None:
             return None
         try:
@@ -550,6 +562,12 @@ class Rivals:
             raise ValueError("The ghost view changed. Reopen this choice in the current view.")
         return {"scope":body["scope"]}
 
+    def _check_player_slot(self, row, slot):
+        row = self._seat_row(row)
+        if any(item.get("ghost") is not None and item["slot"] != slot
+               and player_key(self._seat_row(item)) == player_key(row) for item in self.rows):
+            raise ValueError("That player is already in your rivals. Replace their current slot.")
+
     def checked(self, body, target):
         if not isinstance(body,dict) or set(body)-{"options","action","id","slot","scope"}:
             raise ValueError("Choose rival settings or a saved ghost.")
@@ -593,6 +611,7 @@ class Rivals:
                 if row["id"] in self.pins.get(self._key(target),{}).values():
                     raise ValueError("That ghost is already chosen in a hidden rival slot. Increase the rival count to replace it.")
                 slot = add_slot(self.rows,self.options["count"],slot)
+                self._check_player_slot(row, slot)
                 result.update(action=action,slot=slot,id=row["id"])
         return result
 

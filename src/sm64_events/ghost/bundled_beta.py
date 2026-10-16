@@ -17,6 +17,8 @@ import sys
 import tempfile
 import threading
 import unicodedata
+from urllib.parse import urlsplit
+from uuid import UUID
 import zipfile
 
 from sm64_events.ghost.clip import blink_frames, read_clip, require_complete_inputs
@@ -32,6 +34,24 @@ MAX_COLLECTION_BYTES = 128 << 20
 MAX_CACHE_BYTES = 64 << 20
 
 
+def checked_author_identity(value):
+    """A reviewed Auth identity, never inferred from a recording's display name."""
+    try:
+        if not isinstance(value, dict) or set(value) != {"issuer", "subject"}:
+            raise ValueError()
+        issuer, subject = value["issuer"], value["subject"]
+        if not isinstance(issuer, str) or not 1 <= len(issuer) <= 2048 or not isinstance(subject, str):
+            raise ValueError()
+        parts = urlsplit(issuer)
+        if (parts.scheme != "https" or not parts.hostname or parts.username is not None or parts.password is not None
+                or parts.query or parts.fragment or parts.path != "/auth/v1" or parts.port not in (None, 443)
+                or str(UUID(subject)) != subject):
+            raise ValueError()
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("The curated author identity is invalid.") from None
+    return dict(value)
+
+
 def _same_author(name):
     """A display name spells the collection author, ignoring case, width and edges."""
     return (isinstance(name, str)
@@ -41,18 +61,20 @@ def _same_author(name):
 def with_bundled_beta(local, *, cache, definitions):
     """Composition door; source/stable builds never acquire packaged seed trust."""
     from sm64_events.core.build_channel import current_build
-    if not getattr(sys, "frozen", False) or current_build().channel != "beta":
+    build = current_build()
+    if not getattr(sys, "frozen", False) or build.channel != "beta":
         return local
     descriptor = Path(sys._MEIPASS) / DESCRIPTOR
     if not descriptor.exists():
         return local
     return BundledPopulation(local, descriptor=descriptor,
                              collection=Path(sys.executable).parent / COLLECTION,
-                             cache=cache, definitions=definitions)
+                             cache=cache, definitions=definitions,
+                             auth_issuer=build.supabase_url.rstrip("/") + "/auth/v1" if build.community_enabled else None)
 
 
 class BundledPopulation:
-    def __init__(self, local, *, descriptor, collection, cache, definitions):
+    def __init__(self, local, *, descriptor, collection, cache, definitions, auth_issuer=None):
         self.local, self.collection, self.root = local, Path(collection), Path(cache).resolve()
         self._definitions, self._lock = definitions, threading.RLock()
         self._ready = OrderedDict()
@@ -60,10 +82,15 @@ class BundledPopulation:
         if descriptor.is_symlink() or not 0 < descriptor.stat().st_size <= 4096:
             raise ValueError("The packaged beta ghost descriptor is invalid.")
         value = json.loads(descriptor.read_text(encoding="utf-8"))
-        if (not isinstance(value, dict) or set(value) != {"schema", "file", "author", "sha256", "count"}
-                or value["schema"] != 1 or value["file"] != COLLECTION or value["author"] != AUTHOR
+        fields = {"schema", "file", "author", "sha256", "count"}
+        if (not isinstance(value, dict) or type(value.get("schema")) is not int or value["schema"] not in (1, 2)
+                or set(value) != fields | ({"author_identity"} if value["schema"] == 2 else set())
+                or value["file"] != COLLECTION or value["author"] != AUTHOR
                 or type(value["count"]) is not int or not 1 <= value["count"] <= MAX_ENTRIES):
             raise ValueError("The packaged beta ghost descriptor is invalid.")
+        binding = checked_author_identity(value["author_identity"]) if value["schema"] == 2 else None
+        self.author_identity = binding if binding and binding["issuer"] == auth_issuer else None
+        self.player_id = self.author_identity["subject"] if self.author_identity else PLAYER_ID
         self.digest = checked_hash(value["sha256"])
         if self.collection.is_symlink() or not 0 < self.collection.stat().st_size <= MAX_COLLECTION_BYTES:
             raise ValueError("The packaged beta ghost collection is invalid.")
@@ -105,7 +132,7 @@ class BundledPopulation:
                               row["frames"], AUTHOR)
         return {**row, "kind": ghost.kind, "entity_key": key, "strategy": ghost.strat_tag,
                 "signature": row["target"].get("signature"), "ghost": ghost,
-                "player_id": PLAYER_ID, "player_name": AUTHOR, "valid": True,
+                "player_id": self.player_id, "player_name": AUTHOR, "valid": True,
                 "source_status": "bundled-author-recording", "structurally_valid": True,
                 "certified": False, "full_start": None, "recorded_game_version": row.get("game_version"),
                 # A query's current ROM is a local compatibility context only.
@@ -148,7 +175,9 @@ class BundledPopulation:
         fights their own ghosts as a rival; only the PB ghost is theirs."""
         method = getattr(self.local, "owned_player_ids", None)
         owned = set(method(local_id, names=names) if method else (local_id,))
-        if any(_same_author(name) for name in names):
+        # Historical schema1 has only export credit. A reviewed schema2
+        # identity uses the account subject; a matching name proves nothing.
+        if getattr(self, "author_identity", None) is None and any(_same_author(name) for name in names):
             owned.add(PLAYER_ID)
         return frozenset(value for value in owned if value)
 

@@ -230,3 +230,60 @@ def test_collection_review_refuses_any_recording_with_an_unknown_input(tmp_path)
         review_collection(collection)
     approved = review_collection(approved_collection(tmp_path))
     assert (approved.count, approved.with_inputs) == (1, 1)
+
+
+def author_file(tmp_path, build, **changes):
+    path = tmp_path / "reviewed-author.json"
+    path.write_text(json.dumps({"schema": 1, "author": "griffman1212",
+        "issuer": build.supabase_url + "/auth/v1", "subject": "11111111-1111-4111-8111-111111111111", **changes}))
+    return path
+
+
+def test_reviewed_binding_travels_through_actual_zip_and_frozen_population_entrypoint(artifact, tmp_path, monkeypatch):
+    from beta_ghosts import review_author
+    from sm64_events.core import build_channel
+    from sm64_events.ghost.bundled_beta import with_bundled_beta
+    from test_bundled_beta_ghosts import Local
+    folder, build = artifact
+    source = approved_collection(tmp_path)
+    approved = review_collection(source)
+    author = review_author(author_file(tmp_path, build), build)
+    archive = build_beta.package_beta(folder, build, tmp_path / "output", ghosts=approved, ghost_author=author)
+    with zipfile.ZipFile(archive) as zipped:
+        descriptor = json.loads(zipped.read("_internal/" + build_beta.SEED_DESCRIPTOR))
+    assert descriptor["schema"] == 2 and descriptor["author_identity"] == author
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(folder / "_internal"), raising=False)
+    monkeypatch.setattr(sys, "executable", str(folder / "SM64TrainerBeta.exe"))
+    monkeypatch.setattr(build_channel, "current_build", lambda: build)
+    population = with_bundled_beta(Local(), cache=tmp_path / "runtime-cache", definitions=())
+    assert population.metadata_snapshot("star", "2-1", clock="igt", game_version="us")[0]["player_id"] == author["subject"]
+    # Artifact verification compares the identity as well as collection bytes.
+    (folder / "_internal" / build_beta.SEED_DESCRIPTOR).write_text(json.dumps({**descriptor,
+        "author_identity": {**author, "subject": "22222222-2222-4222-8222-222222222222"}}))
+    with pytest.raises(RuntimeError, match="reviewed collection"):
+        build_beta.validate_artifact(folder, build, ghosts=approved, ghost_author=author)
+
+
+@pytest.mark.parametrize("changes", [{"author": "someone-else"}, {"schema": 2}, {"subject": "bad-uuid"},
+    {"issuer": "https://another.supabase.co/auth/v1"}, {"issuer": "https://fixture/auth/v1?secret=private"}])
+def test_author_review_refuses_wrong_author_subject_or_issuer_without_echoing_values(artifact, tmp_path, changes):
+    from beta_ghosts import review_author
+    _, build = artifact
+    with pytest.raises(ValueError) as failure:
+        review_author(author_file(tmp_path, build, **changes), build)
+    assert not any(str(value) in str(failure.value) for value in changes.values())
+
+
+def test_legacy_builder_forwards_reviewed_author_to_normal_candidate(monkeypatch, tmp_path):
+    import release
+    build = parse_metadata({**metadata(), "schema": 2, "installation": "normal"})
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(build.metadata()))
+    author = author_file(tmp_path, build)
+    calls = []
+    monkeypatch.setattr(release, "prepare_candidate", lambda *args, **kwargs: calls.append(kwargs))
+    assert build_beta.main(["--config", str(config), "--version", "1.10.0-beta.16",
+        "--destination", str(tmp_path / "candidate"), "--ghosts", str(tmp_path / "collection.sm64ghosts"),
+        "--ghost-author", str(author), "--check"]) == 0
+    assert calls[0]["ghost_author"] == author

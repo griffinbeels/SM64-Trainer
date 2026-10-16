@@ -2,7 +2,7 @@
 from time import monotonic
 from uuid import UUID
 
-from sm64_events.ghost.adaptive import MAX_RIVALS
+from sm64_events.ghost.adaptive import MAX_RIVALS, player_key
 from sm64_events.ghost.community_catalog import match_windows
 from sm64_events.ghost.portable import checked_hash
 
@@ -84,23 +84,32 @@ class CommunityRivals:
     def stage(self, desired, previous):
         """Keep compatible playable rivals until the desired bytes are cached."""
         if self.sync is None:
-            return desired
+            return self._unique_players(desired)
         def ready(row):
             return row.get('provenance') != 'community-unverified' or self.population.is_ready(row['id'])
         self.downloading = any(not ready(row) for row in desired)
         if not self.downloading:
-            return desired
+            return self._unique_players(desired)
         self.sync.request_assets(tuple(row['id'] for row in desired if row.get('provenance') == 'community-unverified'))
         wanted = {row['slot'] for row in desired}
         slots = {row['slot']: row for row in previous if row['slot'] in wanted and ready(row)}
         for row in desired:
             if ready(row):
                 slots[row['slot']] = row
-        ids = set()
+        # A ready replacement takes precedence over an old recording of that
+        # player carried in a different slot while another asset downloads.
+        fresh = {row['slot']: row['id'] for row in desired if ready(row)}
+        ordered = sorted(slots.values(), key=lambda row: (fresh.get(row['slot']) != row['id'], row['slot']))
+        return self._unique_players(ordered)
+
+    @staticmethod
+    def _unique_players(rows):
+        ids, players = set(), set()
         result = []
-        for slot in sorted(slots):
-            row = slots[slot]
-            if row['id'] not in ids:
+        for row in rows:
+            if row['id'] not in ids and (row.get('ghost', True) is None or player_key(row) not in players):
                 ids.add(row['id'])
+                if row.get('ghost', True) is not None:
+                    players.add(player_key(row))
                 result.append(row)
-        return tuple(result)
+        return tuple(sorted(result, key=lambda row: row['slot']))

@@ -26,7 +26,8 @@ from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_F
                                            read_metadata)  # noqa: E402
 from build_exe import COLLECT, SEP, _source_date_epoch, app_args, needs_reexec  # noqa: E402
 from make_manifest import build_zip  # noqa: E402
-from beta_ghosts import ApprovedCollection, COLLECTION_NAME, matches, review_collection  # noqa: E402
+from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
+                         candidate_author, seed_descriptor)  # noqa: E402
 from sm64_events.bootstrap.beta_payload import append_payload  # noqa: E402
 
 DIST = REPO / "dist" / "private-beta"
@@ -105,7 +106,8 @@ def installer_args(*, work: Path = WORK) -> list[str]:
             "--workpath", str(work / "installer-work"), "--specpath", str(work / "installer-spec")]
 
 
-def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedCollection | None = None) -> None:
+def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedCollection | None = None,
+                      ghost_author: dict | None = None) -> None:
     """Refuse incomplete or contaminated outputs before producing a friend ZIP."""
     if build.channel != "beta" and build.installation != "normal":
         raise RuntimeError("private artifact requires a beta build")
@@ -129,8 +131,10 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
         raise RuntimeError("packaged beta metadata does not match the requested build")
     if ghosts is not None:
         descriptor = internal / SEED_DESCRIPTOR
-        expected = {"schema": 1, "file": COLLECTION_NAME, "author": "griffman1212",
-                    "sha256": ghosts.sha256, "count": ghosts.count}
+        expected = seed_descriptor(ghosts, ghost_author)
+        if ghost_author is not None and (not build.community_enabled
+                or ghost_author["issuer"] != build.supabase_url.rstrip("/") + "/auth/v1"):
+            raise RuntimeError("packaged ghost author does not match the configured Auth issuer")
         if (not descriptor.is_file() or descriptor.stat().st_size > 4096
                 or json.loads(descriptor.read_text(encoding="utf-8")) != expected):
             raise RuntimeError("packaged beta ghost seed does not match the reviewed collection")
@@ -152,15 +156,15 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
             raise RuntimeError("beta artifact contains an unexpected private or public-release file")
 
 
-def package_beta(folder: Path, build: BuildChannel, destination: Path, *, ghosts: ApprovedCollection | None = None) -> Path:
+def package_beta(folder: Path, build: BuildChannel, destination: Path, *, ghosts: ApprovedCollection | None = None,
+                 ghost_author: dict | None = None) -> Path:
     if ghosts is not None:
         if not matches(ghosts.source, ghosts):
             raise RuntimeError("The approved ghost collection changed before packaging.")
         shutil.copyfile(ghosts.source, folder / COLLECTION_NAME)
-        (folder / "_internal" / SEED_DESCRIPTOR).write_text(json.dumps({
-            "schema": 1, "file": COLLECTION_NAME, "author": "griffman1212",
-            "sha256": ghosts.sha256, "count": ghosts.count}, sort_keys=True) + "\n", encoding="utf-8")
-    validate_artifact(folder, build, ghosts=ghosts)
+        (folder / "_internal" / SEED_DESCRIPTOR).write_text(
+            json.dumps(seed_descriptor(ghosts, ghost_author), sort_keys=True) + "\n", encoding="utf-8")
+    validate_artifact(folder, build, ghosts=ghosts, ghost_author=ghost_author)
     readme = README
     if ghosts is not None:
         readme += (f"\nIncluded: {ghosts.count} legitimate recordings credited to griffman1212.\n"
@@ -197,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="explicit packaged beta settings (not an environment file)")
     parser.add_argument("--ffmpeg", help="existing ffmpeg.exe; defaults to PATH")
     parser.add_argument("--ghosts", type=Path, help="explicit curated griffman1212 collection to include")
+    parser.add_argument("--ghost-author", type=Path, help="reviewed author Auth issuer/subject binding JSON")
     parser.add_argument("--check", action="store_true", help="check prerequisites without building")
     parser.add_argument("--version", help="normal beta version, e.g. 1.10.0-beta.1")
     parser.add_argument("--destination", type=Path, help="normal candidate directory (must be empty)")
@@ -210,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("normal beta requires --version and --destination")
             from release import prepare_candidate
             prepare_candidate(args.version, args.destination, config=args.config,
-                              ffmpeg=args.ffmpeg, ghosts=args.ghosts, private=True,
+                              ffmpeg=args.ffmpeg, ghosts=args.ghosts, ghost_author=args.ghost_author, private=True,
                               check_only=args.check)
             return 0
         if not args.check and needs_reexec(os.environ):
@@ -222,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(result.stderr)
             return result.returncode
         ffmpeg = check_prerequisites(args.ffmpeg)
+        author = candidate_author(args.ghost_author, args.ghosts, build, private=True)
         ghosts = review_collection(args.ghosts) if args.ghosts is not None else None
         if args.check:
             print("Private beta prerequisites verified; no build was run.")
@@ -231,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         metadata.write_text(json.dumps(build.metadata(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
         import PyInstaller.__main__ as pyi
         pyi.run(beta_args(ffmpeg, metadata))
-        archive = package_beta(DIST / BETA_APP_DIR, build, DIST, ghosts=ghosts)
+        archive = package_beta(DIST / BETA_APP_DIR, build, DIST, ghosts=ghosts, ghost_author=author)
         pyi.run(installer_args())
         executable = package_installer(WORK / "installer" / "SM64TrainerBetaSetup.exe", archive, build, DIST)
         print(f"Private beta installer: {executable}\nSHA-256: {executable}.sha256\nPortable ZIP: {archive}")

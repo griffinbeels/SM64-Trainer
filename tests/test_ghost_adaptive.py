@@ -706,3 +706,23 @@ def test_a_player_takes_one_automatic_seat_per_rival_group():
                              ranked(18, "a-other", 318, player_id="p:a"), ranked(18, "b", 325, player_id="p:b")],
                             basis(19, 321), {}, {})
     assert [row["id"] for row in fastest] == ["b", "a-fast"]
+
+
+def test_conflicting_saved_pins_keep_first_player_and_explain_the_unavailable_slot():
+    rows = [ranked(10, "first", player_id="same"), ranked(11, "second", player_id="same"), ranked(12, "other")]
+    chosen = select_rivals(rows, basis(), {}, {"0": "first", "1": "second"})
+    assert [row["id"] for row in chosen if row.get("ghost") is not None] == ["first", "other"]
+    assert chosen[1]["id"] == "second" and chosen[1]["pinned"] and chosen[1]["available"] is False
+    assert "already has a chosen rival" in chosen[1]["reason_text"]
+    # A hidden conflicting pin remains deterministic when the count expands.
+    pins = {"0": "first", "3": "second"}
+    assert len(select_rivals(rows, basis(), {"count": 1}, pins)) == 1
+    expanded = select_rivals(rows, basis(), {}, pins)
+    assert len([row for row in expanded if row.get("player_id") == "same"]) == 1
+
+
+@pytest.mark.parametrize("missing", [None, "", "   ", 0, []])
+def test_unknown_legacy_player_ids_do_not_collapse_unrelated_recordings(missing):
+    rows = [ranked(10, "one", player_id=missing), ranked(11, "two", player_id=missing)]
+    chosen = select_rivals(rows, basis(), {}, {"0": "one", "1": "two"})
+    assert [row["id"] for row in chosen if row.get("ghost") is not None] == ["one", "two"]

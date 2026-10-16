@@ -611,3 +611,84 @@ def test_a_community_recording_under_the_signed_in_account_is_never_an_automatic
         assert UID in rivals._owned_players()
     finally:
         tracker.db.close()
+
+
+def test_add_rejects_a_second_recording_of_a_seated_player_but_allows_replacing_that_slot(tmp_path, monkeypatch):
+    rivals, tracker, _, population, _ = controller(tmp_path, monkeypatch)
+    try:
+        first = rivals.rows[0]
+        extra = {**population.rows[0], "id": "e" * 64, "player_id": first["player_id"]}
+        population.rows.append(extra)
+        with pytest.raises(ValueError, match="player is already"):
+            rivals.checked({"action": "add", "id": extra["id"], "slot": 1}, TARGET)
+        accepted = rivals.checked({"action": "add", "id": extra["id"], "slot": first["slot"]}, TARGET)
+        assert accepted["slot"] == first["slot"]
+        rivals.apply(accepted)
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+        assert len([row for row in rivals.rows if row.get("player_id") == first["player_id"]]) == 1
+    finally:
+        tracker.db.close()
+
+
+def test_known_local_and_account_self_ids_share_one_pin_without_aliasing_an_equal_name(tmp_path, monkeypatch):
+    population = CloudPopulation()
+    local, cloud, stranger, extra = population.rows[:4]
+    population.rows = [{**local, "player_id": "local-recorder", "player_name": AUTHOR},
+                      {**cloud, "player_id": UID, "player_name": AUTHOR},
+                      {**stranger, "player_id": "different-account", "player_name": AUTHOR},
+                      {**extra, "player_id": UID, "player_name": AUTHOR}]
+    rivals, tracker = seated(tmp_path, monkeypatch, population, signed_in(AUTHOR))
+    try:
+        tracker.db.set_state("ghost_player_id", "local-recorder")
+        rivals.pins[rivals._key(TARGET)] = {"0": local["id"], "1": cloud["id"]}
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+        playable = [row for row in rivals.rows if row.get("ghost") is not None]
+        assert {row["id"] for row in playable} == {local["id"], stranger["id"]}
+        assert rivals.rows[1]["available"] is False
+        assert all("_owned" not in wire(row) for row in rivals.rows)
+        with pytest.raises(ValueError, match="player is already"):
+            rivals.checked({"action": "add", "id": extra["id"], "slot": 2}, TARGET)
+    finally:
+        tracker.db.close()
+
+
+def test_a_saved_local_attempt_shares_own_population_seat_but_private_credit_does_not(tmp_path, monkeypatch):
+    from sm64_events.ghost.adaptive import player_key, select_rivals
+    from sm64_events.ghost.pb import local_attempt_source
+    rivals, tracker, _, population, _ = controller(tmp_path, monkeypatch)
+    try:
+        run = attempt(91, frames=700, game_version="us")
+        monkeypatch.setattr(tracker.db, "attempt", lambda number: run if number == run.id else None)
+        identity = rivals._remember_local(local_attempt_source(run))
+        saved = rivals._private_record(identity, rivals.identity)
+        assert saved is not None and saved["_owned"] is True
+        tracker.db.set_state("ghost_player_id", population.rows[0]["player_id"])
+        own = rivals._seat_row({**population.rows[0], "step": saved["step"]})
+        assert player_key(saved) == player_key(own)
+        assert player_key({**own, "_owned": False, "player_id": "private:you"}) != player_key(saved)
+        result = select_rivals([saved, own], basis(), {}, {"0": saved["id"], "1": own["id"]})
+        assert len([row for row in result if row.get("ghost") is not None]) == 1
+    finally:
+        tracker.db.close()
+
+
+def test_account_change_recomputes_prior_rows_self_alias_before_download_staging(tmp_path, monkeypatch):
+    population = CloudPopulation()
+    population.rows[0] = {**population.rows[0], "player_id": UID}
+    rivals, tracker = seated(tmp_path, monkeypatch, population, signed_in(AUTHOR))
+    try:
+        rivals.pins[rivals._key(TARGET)] = {"0": population.rows[0]["id"]}
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+        assert rivals.rows[0]["_owned"] is True
+        rivals.community.sync = signed_in("Other", "22222222-2222-4222-8222-222222222222")
+        staged = []
+        stage = rivals.community.stage
+        def capture(desired, previous):
+            staged.extend(previous)
+            return stage(desired, previous)
+        monkeypatch.setattr(rivals.community, "stage", capture)
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+        assert staged[0]["player_id"] == UID and staged[0]["_owned"] is False
+        assert rivals.rows[0]["_owned"] is False
+    finally:
+        tracker.db.close()

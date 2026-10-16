@@ -148,6 +148,81 @@ def test_ship_beta_coordinator_only_delegates_to_shared_preparation(tmp_path, mo
     assert prepared_calls[0][2]["private"] is True
 
 
+def test_public_beta_coordinator_forwards_reviewed_author_binding(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(release, "prepare_candidate", lambda *args, **kw: calls.append(kw))
+    binding = tmp_path / "reviewed-author.json"
+    assert release_flow.main(["ship-beta", "1.10.0-beta.16", str(tmp_path / "candidate"),
+        "--config", str(tmp_path / "config.json"), "--ghosts", str(tmp_path / "collection.sm64ghosts"),
+        "--ghost-author", str(binding), "--public", "--check"]) == 0
+    assert calls[0]["ghost_author"] == binding and calls[0]["private"] is False
+
+
+def test_release_prepare_cli_forwards_author_binding(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(release, "prepare_candidate", lambda *args, **kw: calls.append(kw))
+    binding = tmp_path / "reviewed-author.json"
+    monkeypatch.setattr(sys, "argv", ["release.py", "1.10.0-beta.16", "--phase", "prepare",
+        "--candidate", str(tmp_path), "--config", str(tmp_path / "config.json"), "--ghost-author", str(binding)])
+    assert release.main() == 0 and calls[0]["ghost_author"] == binding
+
+
+def test_public_curated_candidate_requires_binding_before_build_prerequisites(tmp_path, monkeypatch):
+    import build_beta
+    from sm64_events.core.build_channel import parse_metadata
+    from test_beta_channel import metadata
+    build = parse_metadata({**metadata(), "schema": 2, "installation": "normal"})
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(build.metadata()))
+    monkeypatch.setattr(build_beta, "check_prerequisites", lambda _: pytest.fail("missing binding reached build"))
+    with pytest.raises(ValueError, match="requires --ghost-author"):
+        release.prepare_candidate("1.10.0-beta.16", tmp_path / "candidate", config=config,
+                                  ghosts=tmp_path / "collection.sm64ghosts", check_only=True)
+    assert not (tmp_path / "candidate").exists()
+
+
+def test_public_candidate_packages_the_reviewed_author_in_the_actual_descriptor(tmp_path, monkeypatch):
+    import build_beta
+    import shutil
+    import zipfile
+    from sm64_events.core.build_channel import parse_metadata
+    from test_beta_channel import metadata
+    from test_build_beta import approved_collection, author_file
+    build = parse_metadata({**metadata(), "schema": 2, "installation": "normal"})
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(build.metadata()))
+    source = approved_collection(tmp_path)
+    author = author_file(tmp_path, build)
+    prepared_app = tmp_path / "fixture-app"
+    # Reuse the real artifact guard's required assets with disposable bytes.
+    from test_build_beta import artifact
+    folder, _ = artifact.__wrapped__(tmp_path / "private-fixture")
+    shutil.copytree(folder, prepared_app)
+    (prepared_app / "SM64TrainerBeta.exe").rename(prepared_app / "SM64Trainer.exe")
+    (prepared_app / "_internal" / "python313.dll").write_bytes(b"fixture-runtime")
+    (prepared_app / "_internal" / CONFIG_FILENAME).write_text(json.dumps(build.metadata()))
+    destination = tmp_path / "candidate"
+    def fake_build(command, **_kwargs):
+        assert "build_exe.py" in command[1]
+        dist = destination / ".work" / "dist"
+        shutil.copytree(prepared_app, dist / "SM64Trainer")
+        (dist / "SM64TrainerSetup.exe").write_bytes(b"fixture-bootstrap")
+    monkeypatch.setattr(build_beta, "check_prerequisites", lambda _: "fixture-ffmpeg.exe")
+    monkeypatch.setattr(release, "_run", fake_build)
+    monkeypatch.setattr(release, "_capture", lambda _: "")
+    monkeypatch.setattr(candidate, "source_revision", lambda _: "a" * 40)
+    monkeypatch.setattr(release, "_assert_build_source", lambda *_: None)
+    monkeypatch.setattr(candidate, "record_candidate", lambda *a, **kw: destination / "candidate.json")
+    monkeypatch.setattr(release, "verify_candidate", lambda *_args, **_kwargs: None)
+    release.prepare_candidate("1.10.0-beta.16", destination, config=config, ghosts=source, ghost_author=author)
+    with zipfile.ZipFile(destination / "SM64Trainer-full.zip") as archive:
+        descriptor = json.loads(archive.read("_internal/" + build_beta.SEED_DESCRIPTOR))
+        assert archive.read("griffman1212.sm64ghosts") == source.read_bytes()
+    binding = json.loads(author.read_text())
+    assert descriptor["schema"] == 2
+    assert descriptor["author_identity"] == {key: binding[key] for key in ("issuer", "subject")}
+
+
 def test_promotion_requires_human_qa_of_exact_candidate(tmp_path):
     directory, _, _ = prepared(tmp_path)
     approval = tmp_path / "approval.json"

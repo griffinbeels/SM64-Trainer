@@ -28,7 +28,8 @@ class Local:
         pass
 
 
-def provider(tmp_path, *, author=AUTHOR, game_version=None, definitions=(), pad=(12, -34, 0x8000)):
+def provider(tmp_path, *, author=AUTHOR, game_version=None, definitions=(), pad=(12, -34, 0x8000),
+             author_identity=None, auth_issuer=None):
     target = describe("segment", "3", "Standard", definitions) if definitions else None
     source, row = recording(tmp_path, kind="segment" if definitions else "star", target=target, pad=pad)
     row = make_entry(source, author=author, target=row["target"], frames=row["frames"], clock=row["clock"],
@@ -36,10 +37,14 @@ def provider(tmp_path, *, author=AUTHOR, game_version=None, definitions=(), pad=
     collection = tmp_path / COLLECTION
     write_package(collection, [(row, source)])
     descriptor = tmp_path / DESCRIPTOR
-    descriptor.write_text(json.dumps({"schema": 1, "file": COLLECTION, "author": AUTHOR,
-        "sha256": hashlib.sha256(collection.read_bytes()).hexdigest(), "count": 1}))
+    document = {"schema": 1, "file": COLLECTION, "author": AUTHOR,
+        "sha256": hashlib.sha256(collection.read_bytes()).hexdigest(), "count": 1}
+    if author_identity is not None:
+        document.update(schema=2, author_identity=author_identity)
+    descriptor.write_text(json.dumps(document))
     root = tmp_path / "cache"
-    value = BundledPopulation(Local(), descriptor=descriptor, collection=collection, cache=root, definitions=definitions)
+    value = BundledPopulation(Local(), descriptor=descriptor, collection=collection, cache=root, definitions=definitions,
+                              auth_issuer=auth_issuer)
     return value, row, source, root
 
 
@@ -200,3 +205,65 @@ def test_cloud_wrapper_forwards_the_players_names_to_the_bundled_collection(tmp_
         assert bundled.owned_player_ids(None, names=(AUTHOR,)) == {PLAYER_ID}
     finally:
         population.close()
+
+
+AUTHOR_IDENTITY = {"issuer": "https://fixture.supabase.co/auth/v1",
+                   "subject": "11111111-1111-4111-8111-111111111111"}
+
+
+@pytest.mark.parametrize("issuer", [None, "https://another.supabase.co/auth/v1", AUTHOR_IDENTITY["issuer"]])
+def test_reviewed_author_subject_is_used_only_for_the_packaged_auth_issuer(tmp_path, issuer):
+    from sm64_events.ghost.bundled_beta import PLAYER_ID
+    value, raw, _, _ = provider(tmp_path, author_identity=AUTHOR_IDENTITY, auth_issuer=issuer)
+    expected = AUTHOR_IDENTITY["subject"] if issuer == AUTHOR_IDENTITY["issuer"] else PLAYER_ID
+    assert value.get(raw["id"])["player_id"] == expected
+    assert value.metadata_snapshot("star", "2-1", clock="igt", game_version="us")[0]["player_id"] == expected
+    if issuer == AUTHOR_IDENTITY["issuer"]:
+        # A name claim never acquires the reviewed account's ownership.
+        assert AUTHOR_IDENTITY["subject"] not in value.owned_player_ids("another", names=(AUTHOR,))
+
+
+@pytest.mark.parametrize("binding", [None, {}, {**AUTHOR_IDENTITY, "extra": True},
+    {**AUTHOR_IDENTITY, "subject": "not-an-account"}, {**AUTHOR_IDENTITY, "issuer": "https://fixture/auth/v1?secret=x"}])
+def test_malformed_schema_two_identity_never_acquires_curated_trust(tmp_path, binding):
+    value, _, _, _ = provider(tmp_path)
+    descriptor = tmp_path / DESCRIPTOR
+    document = json.loads(descriptor.read_text())
+    document.update(schema=2, author_identity=binding)
+    descriptor.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="identity"):
+        BundledPopulation(Local(), descriptor=descriptor, collection=value.collection,
+                          cache=tmp_path / "new-cache", definitions=(), auth_issuer=AUTHOR_IDENTITY["issuer"])
+
+
+def test_bound_bundled_and_cloud_recordings_take_one_seat_but_a_name_impostor_stays_distinct(tmp_path):
+    from sm64_events.community.cache import CachedPopulation
+    from sm64_events.ghost.adaptive import PracticeIdentity, rank_recordings, select_rivals
+    from test_community_sync import page, recording as cloud_recording
+    from test_ghost_adaptive import Standards
+    bundled, _, _, _ = provider(tmp_path, author_identity=AUTHOR_IDENTITY, auth_issuer=AUTHOR_IDENTITY["issuer"])
+    account = SimpleNamespace(snapshot=lambda: {"authenticated": True, "status": "active", "uid": "tester"})
+    population = CachedPopulation(bundled, root=tmp_path / "cloud", account=account)
+    identity = PracticeIdentity("star", "2-1", "igt", "us", "10 coin")
+    remote = {**cloud_recording(), "player_id": AUTHOR_IDENTITY["subject"], "player_name": AUTHOR,
+              "target": {"kind": "star", "entity_key": "2-1", "strat": "10 coin"}, "strategy": "10 coin"}
+    impostor = {**remote, "id": "2" * 64, "player_id": "22222222-2222-4222-8222-222222222222"}
+    population.remember_page(identity, page([remote, impostor]))
+    try:
+        rows = population.metadata_snapshot("star", "2-1", clock="igt", game_version="us")
+        assert len(rows) == 3 and len({row["id"] for row in rows}) == 3
+        ranked = rank_recordings(rows, Standards(), identity)
+        chosen = select_rivals(ranked, None, {"mode": "fixed", "min_step": 0, "max_step": 44}, {})
+        assert len(chosen) == 2
+        assert {row["player_id"] for row in chosen} == {AUTHOR_IDENTITY["subject"], impostor["player_id"]}
+        assert {row["player_name"] for row in chosen} == {AUTHOR}
+    finally:
+        population.close()
+
+
+def test_remote_metadata_cannot_assert_the_current_players_internal_seat_flag():
+    from sm64_events.community.cache import checked_metadata
+    from sm64_events.community.config import CommunityError
+    from test_community_sync import recording as cloud_recording
+    with pytest.raises(CommunityError, match="temporarily unavailable"):
+        checked_metadata({**cloud_recording(), "_owned": True})

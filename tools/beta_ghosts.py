@@ -1,10 +1,12 @@
-"""Explicitly reviewed portable recordings for a private beta, never a profile."""
+"""Reviewed portable recordings and author identities for packaged candidates."""
 from dataclasses import dataclass
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 
 from sm64_events.ghost.portable import validate_package
+from sm64_events.ghost.bundled_beta import AUTHOR, checked_author_identity
 
 COLLECTION_NAME = "griffman1212.sm64ghosts"
 MAX_COLLECTION_BYTES = 128 << 20
@@ -22,6 +24,41 @@ class ApprovedCollection:
     # playback copies. The number is reported, never a refusal: a recording
     # its input track cannot fill is honestly unknown.
     with_inputs: int = 0
+
+
+def review_author(source: Path, build) -> dict:
+    """Read the operator-reviewed public binding without echoing submitted values."""
+    if source.is_symlink() or not source.is_file() or not 0 < source.stat().st_size <= 4096:
+        raise ValueError("Choose a bounded reviewed ghost author binding.")
+    try:
+        value = json.loads(source.read_text(encoding="utf-8"))
+        if (not isinstance(value, dict) or set(value) != {"schema", "author", "issuer", "subject"}
+                or type(value["schema"]) is not int or value["schema"] != 1 or value["author"] != AUTHOR):
+            raise ValueError()
+        identity = checked_author_identity({"issuer": value["issuer"], "subject": value["subject"]})
+    except (ValueError, UnicodeError):
+        raise ValueError("The reviewed ghost author binding is invalid.") from None
+    if not build.community_enabled or identity["issuer"] != build.supabase_url.rstrip("/") + "/auth/v1":
+        raise ValueError("The reviewed ghost author binding does not match the configured Auth issuer.")
+    return identity
+
+
+def candidate_author(source: Path | None, ghosts: Path | None, build, *, private=False):
+    """Public curated candidates require the reviewed account before any build."""
+    if source is not None and ghosts is None:
+        raise ValueError("A reviewed ghost author binding requires --ghosts.")
+    if ghosts is not None and source is None and not private:
+        raise ValueError("A public ghost collection requires --ghost-author with its reviewed Auth identity.")
+    return review_author(source, build) if source is not None else None
+
+
+def seed_descriptor(approved: ApprovedCollection, author_identity=None) -> dict:
+    """One manifest shared by private packaging, public preparation and verification."""
+    value = {"schema": 1, "file": COLLECTION_NAME, "author": AUTHOR,
+             "sha256": approved.sha256, "count": approved.count}
+    if author_identity is not None:
+        value.update(schema=2, author_identity=checked_author_identity(author_identity))
+    return value
 
 
 def matches(path: Path, approved: ApprovedCollection) -> bool:

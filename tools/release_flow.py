@@ -101,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--ffmpeg")
         command.add_argument("--ghosts", type=Path)
+        command.add_argument("--ghost-author", type=Path, help="reviewed author Auth issuer/subject binding JSON")
         command.add_argument("--service-provenance", type=Path,
                              help="bounded public worker/catalog/migration revision JSON")
         command.add_argument("--check", action="store_true")
@@ -120,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
             promoted = promotion_source(args.beta_candidate, args.approval, args.version, args.config)
             private = False
         release.prepare_candidate(args.version, args.destination, config=args.config, ffmpeg=args.ffmpeg,
-                                  ghosts=args.ghosts, private=private, check_only=args.check,
+                                  ghosts=args.ghosts, ghost_author=args.ghost_author, private=private, check_only=args.check,
                                   service_provenance=provenance, promoted_from=promoted)
         print("Prerequisites verified; no build run." if args.check else
               "Candidate prepared and verified. No tag, push, release or deployment was performed.")

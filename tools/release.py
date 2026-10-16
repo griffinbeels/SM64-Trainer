@@ -266,13 +266,14 @@ def _package_private_installer(destination, zip_path, manifest_path, version, re
 
 def prepare_candidate(version: str, destination: Path, *, config: Path,
                       ffmpeg: str | None = None, ghosts: Path | None = None,
+                      ghost_author: Path | None = None,
                       private: bool = False, check_only: bool = False,
                       service_provenance: dict | None = None, promoted_from: str | None = None) -> Path | None:
     """Build pinned artifacts once. Never bump, tag, push, deploy or publish."""
     from sm64_events.core.build_channel import read_metadata
     from sm64_events.core.release_contract import version_key
     from build_beta import check_prerequisites, validate_artifact, SEED_DESCRIPTOR
-    from beta_ghosts import review_collection, COLLECTION_NAME, matches
+    from beta_ghosts import review_collection, candidate_author, seed_descriptor, COLLECTION_NAME, matches
     from make_manifest import build_zip, make_manifest
     from release_candidate import record_candidate, source_revision
     import shutil
@@ -284,6 +285,7 @@ def prepare_candidate(version: str, destination: Path, *, config: Path,
         raise ValueError("candidate version requires matching normal stable/beta identity")
     if build.friend_invitation and not private:
         raise ValueError("public candidate cannot contain a private invitation")
+    author = candidate_author(ghost_author, ghosts, build, private=private)
     resolved_ffmpeg = check_prerequisites(ffmpeg)
     approved = review_collection(ghosts) if ghosts else None
     if approved:
@@ -307,10 +309,9 @@ def prepare_candidate(version: str, destination: Path, *, config: Path,
         if not matches(approved.source, approved):
             raise ValueError("approved ghost source changed during the build")
         shutil.copyfile(approved.source, app / COLLECTION_NAME)
-        (app / "_internal" / SEED_DESCRIPTOR).write_text(json.dumps({
-            "schema": 1, "file": COLLECTION_NAME, "author": "griffman1212",
-            "sha256": approved.sha256, "count": approved.count}, sort_keys=True) + "\n", encoding="utf-8")
-    validate_artifact(app, build, ghosts=approved)
+        (app / "_internal" / SEED_DESCRIPTOR).write_text(
+            json.dumps(seed_descriptor(approved, author), sort_keys=True) + "\n", encoding="utf-8")
+    validate_artifact(app, build, ghosts=approved, ghost_author=author)
     zip_path, manifest_path = destination / ZIP_ASSET, destination / MANIFEST_ASSET
     build_zip(app, zip_path)
     manifest_path.write_text(make_manifest(zip_path, version), encoding="utf-8")
@@ -523,6 +524,7 @@ def main() -> int:
     ap.add_argument("--config", type=Path)
     ap.add_argument("--ffmpeg")
     ap.add_argument("--ghosts", type=Path)
+    ap.add_argument("--ghost-author", type=Path, help="reviewed author Auth issuer/subject binding JSON")
     ap.add_argument("--private", action="store_true")
     ap.add_argument("--approval", type=Path)
     ap.add_argument("--notes-file", help="markdown notes (default: gh auto-notes)")
@@ -538,7 +540,7 @@ def main() -> int:
             if args.config is None or args.version is None:
                 ap.error("prepare requires version and --config")
             prepare_candidate(args.version, args.candidate, config=args.config,
-                              ffmpeg=args.ffmpeg, ghosts=args.ghosts, private=args.private)
+                              ffmpeg=args.ffmpeg, ghosts=args.ghosts, ghost_author=args.ghost_author, private=args.private)
         elif args.phase == "verify":
             verify_candidate(args.candidate)
         elif args.phase == "draft":
