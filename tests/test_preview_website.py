@@ -98,7 +98,7 @@ class PreviewTests(unittest.TestCase):
                         self.assertIn("connect-src 'none'",
                                       response.headers["Content-Security-Policy"])
                         self.assertEqual(response.headers["Cache-Control"],
-                                         "public, max-age=0, must-revalidate")
+                                         "public, max-age=0, must-revalidate, no-transform")
                         if path.endswith("/release.json"):
                             self.assertEqual(json.load(response)["status"], "preview")
             finally:
