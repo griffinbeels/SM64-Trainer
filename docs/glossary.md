@@ -1570,7 +1570,7 @@ you're not allowed to continue unless you login in some way"). A stored
 refresh token counts as an account while offline, so practice never locks
 out on a bad connection; signing out returns to this step. Google and email
 are not offered. The same provider identity always returns to its own
-account. New-account signup enables automatic ghost sharing, without a sharing
+account. New-account signup enables automatic [[ghost]] sharing, without a sharing
 toggle; Settings is where the player changes it. Returning login preserves a
 saved opt-out. The name field checks validity while typing and availability after
 a pause or on blur (4 to 20 characters; a check or a cross), and the account
