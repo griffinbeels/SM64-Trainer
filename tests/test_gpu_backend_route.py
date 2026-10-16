@@ -42,6 +42,7 @@ from sm64_events.replay.gpuprocess.process_controller import Controller
 from sm64_events.replay.gpuretry import RetryGate
 from sm64_events.replay.gpusettings import GpuSettings
 from test_gpu_codec_choice import ONE, Replies, session_for
+from test_gpu_codec_choice import encoder_asset as encoder_asset
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -275,7 +276,7 @@ def test_the_verdict_is_asked_once_per_adapter_and_driver(monkeypatch):
     assert len(asked) == 2
 
 
-def test_an_adapter_that_cannot_encode_is_a_verdict_before_any_helper(monkeypatch):
+def test_an_adapter_that_cannot_encode_is_a_verdict_before_any_helper(monkeypatch, encoder_asset):
     monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: AMD)
     session = session_for(Replies())
     session.controller_factory = lambda **_: pytest.fail("a helper for an adapter that cannot encode")
@@ -283,7 +284,7 @@ def test_an_adapter_that_cannot_encode_is_a_verdict_before_any_helper(monkeypatc
         session._open_encoder()
 
 
-def test_no_usable_codec_is_a_verdict_and_a_real_fault_is_not(monkeypatch):
+def test_no_usable_codec_is_a_verdict_and_a_real_fault_is_not(monkeypatch, encoder_asset):
     monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: None)
     with pytest.raises(GpuBackendUnsupported, match="neither AV1 nor H.264"):
         session_for(Replies(Result.CODEC, Result.CODEC))._open_encoder()
