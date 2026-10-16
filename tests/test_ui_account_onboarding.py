@@ -102,6 +102,28 @@ def test_new_account_chooses_name_then_setup_with_sharing_default_on(monkeypatch
             assert page.problems() == []
 
 
+def test_returning_login_from_settings_also_skips_account_editing(monkeypatch, tmp_path):
+    account = FixtureAccount()
+    account.update(stored=True)  # Existing credentials still allow offline practice.
+    with community_app(monkeypatch, tmp_path, account) as (base, _):
+        with get_driver().launch(headless=True, viewport=(850, 1100)) as page:
+            page.goto(base)
+            page.wait_for(".practice-page")
+            wait_until(page, "!document.querySelector('.modal')", "startup checks")
+            open_account(page)
+            page.wait_for(".community-provider.community-twitch:not([disabled])")
+            trace_account_forms(page)
+            page.click(".community-provider.community-twitch")
+            wait_until(page, "document.querySelector('.modal-body')?.innerText.includes('Finish signing in')",
+                       "manual provider sign-in")
+            account.update(authenticated=True, status="active", provider="twitch",
+                           terms_version="t1", privacy_version="p1")
+            wait_until(page, "!document.querySelector('.modal')", "manual returning sign-in completion")
+            assert finish_trace(page, "returning-from-settings-850")["forms"] == []
+            assert not any(call[0] in {"profile", "rename", "sharing"} for call in account.calls)
+            assert page.problems() == []
+
+
 def test_setup_waits_for_initial_account_state(monkeypatch, tmp_path):
     account = FixtureAccount()
     release = threading.Event()

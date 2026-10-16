@@ -1,5 +1,5 @@
 import {h} from 'preact';
-import {useEffect, useRef, useState} from 'preact/hooks';
+import {useEffect, useLayoutEffect, useRef, useState} from 'preact/hooks';
 import htm from 'htm';
 import {pollJob, send} from '../api.js';
 import {beginCommunitySignIn} from '../community.js';
@@ -60,6 +60,11 @@ function useAccountActions(community, onClose) {
     pending?.popup?.close(); setPending(null);
   };
   useSignInPoll(pending, community.refresh, cancel);
+  // A sign-in started from Settings also finishes at practice/setup. Close
+  // before the pending screen can turn into editable account settings.
+  useLayoutEffect(() => {
+    if (pending && community.account.authenticated && community.account.status === 'active') onClose();
+  }, [pending, community.account.authenticated, community.account.status]);
   useEffect(() => {
     if (community.account.authenticated && community.account.status !== 'signed_out') setPending(null);
   }, [community.account.authenticated, community.account.status]);
