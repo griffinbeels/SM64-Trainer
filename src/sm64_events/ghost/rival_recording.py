@@ -8,6 +8,8 @@ creates no ghost locally nor a community offer, silently. A strategy change
 re-admits the run under its new strategy and removes it from the old one.
 Each start also admits saved PB runs whose committed clip never became a row
 (his runs 18711 and 18930 finished untagged and were tagged only afterwards).
+An unassigned certified success retains its capture before the rolling archive
+expires. It acquires no population row or community offer until classified.
 """
 import asyncio
 from dataclasses import replace
@@ -141,6 +143,8 @@ class PopulationRecorder:
             raise ValueError("The practice database is unavailable.")
         identity = self.identity_of(attempt)
         if identity is None:
+            if not getattr(attempt, "strat_tag", None):
+                return self._preserve_unassigned(attempt, contribution)
             raise ValueError("This attempt has no complete compatible start certificate.")
         ranks = getattr(self.tracker, "ranks", None)
         frames = getattr(attempt, f"{identity.clock}_frames", None)
@@ -172,6 +176,31 @@ class PopulationRecorder:
         if slower:
             self.store.remove([row_id for row_id in slower if row_id != kept])
         return True
+
+    def _preserve_unassigned(self, attempt, contribution):
+        """Keep certified bytes only, without inventing a strategy or grading one.
+
+        The normal reclassification callback later retargets these manifests
+        and applies every final admission rule. Native-only commits also spare
+        their unassigned attempts from the existing startup prune.
+        """
+        from sm64_events.ghost.adaptive import PracticeIdentity, rank_entity_key
+        from sm64_events.ghost.pb import eligible_capture
+        from sm64_events.ghost.population import _preserved_asset
+        from sm64_events.inputs.service import entity_key_of
+        current = self.replay.attempt(attempt.id)
+        if current.strat_tag:
+            return self._admit(current, contribution)
+        ranks = getattr(self.tracker, "ranks", None)
+        if ranks is None:
+            raise ValueError("This attempt has no known practice clock.")
+        kind, key = entity_key_of(current)
+        identity = PracticeIdentity(kind, key, "igt", current.game_version, None)
+        identity = replace(identity, clock=ranks.clock_for(rank_entity_key(identity)))
+        if not eligible_capture(current, identity):
+            raise ValueError("This attempt has no complete compatible start certificate.")
+        _preserved_asset(self.replay, current)  # Strict owner, hash and complete-input validation.
+        return False  # Retained capture, never an admitted population recording.
 
     def _subdivision_rows(self, attempt, identity, ranks, frames, player_id):
         """This player's rows in the run's strategy subdivision, or None when the

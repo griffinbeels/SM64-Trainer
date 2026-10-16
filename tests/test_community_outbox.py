@@ -5,13 +5,14 @@ import hashlib
 import json
 import threading
 from types import SimpleNamespace
+from uuid import uuid4
 
 import httpx
 import pytest
 
 from sm64_events.community import CachedPopulation, CommunityAccount, CommunitySync
 from sm64_events.community.config import CommunityError
-from sm64_events.community.outbox import MAX_BYTES, MAX_OFFERS, SourceOutbox
+from sm64_events.community.outbox import MAX_BYTES, MAX_OFFERS, RetractionOutbox, SourceOutbox
 from test_community_account import Store, config, profile, UID
 from test_community_sync import Account, Local, TARGET, IDENTITY, catalog, native, page, recording
 
@@ -21,6 +22,23 @@ def source(path, frames=3, strategy="Standard"):
     path.write_bytes(raw)
     return {"target": {**TARGET, "strat": strategy}, "clock": "igt", "game_version": "us", "strategy": strategy,
             "frames": frames, "path": str(path), "raw_sha256": hashlib.sha256(raw).hexdigest(), "full_start": True, "valid": True}
+
+
+def test_retraction_freshness_survives_restart_and_repeated_same_strategy(tmp_path):
+    path = tmp_path / "retractions.json"
+    outbox = RetractionOutbox(path)
+    first = {"owner": UID, "raw_sha256": hashlib.sha256(native()).hexdigest(),
+             "keep_strategy": "B", "key": str(uuid4())}
+    newest = {**first, "key": str(uuid4())}
+    outbox.remember(first)
+    outbox.remember({**first, "keep_strategy": "C", "key": str(uuid4())})
+    outbox.remember(newest)
+    restored = RetractionOutbox(path)
+    assert restored.is_current(newest) and not restored.is_current(first)
+    restored.discard(first)  # An obsolete HTTP success cannot erase the newer retry.
+    assert restored.pending(UID) == (newest,)
+    restored.discard(newest)
+    assert not restored.is_current(newest) and RetractionOutbox(path).pending(UID) == ()
 
 
 def sync_at(root, account):

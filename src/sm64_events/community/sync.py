@@ -719,6 +719,8 @@ class CommunitySync:
         snapshot = self.account.snapshot()
         if snapshot.get("uid") != retraction["owner"] or snapshot.get("status") != "active":
             return  # The saved retraction waits for its owner's next active session.
+        if not await self._cpu(self._retractions.is_current, retraction):
+            return  # A newer strategy superseded this queued/in-flight operation.
         body = {"raw_sha256": retraction["raw_sha256"], "keep_strategy": retraction["keep_strategy"]}
         try:
             value = await self._json("POST", RETRACT_ROUTE, json=body, headers={"Idempotency-Key": retraction["key"]})
@@ -747,6 +749,8 @@ class CommunitySync:
         delay = max(error.retry_after or 0, self._network_until - time.monotonic(),
                     random.uniform(1, 1.25) * min(900, 30 * 2 ** (tries - 1)))
         with self._lock:
+            if operation[0] == "retract" and not self._retractions.is_current(source):
+                return  # Its late HTTP failure must not retry over a newer keep.
             self._offer_retry[key] = operation, time.monotonic() + delay, tries
             while len(self._offer_retry) > MAX_QUEUE:
                 self._offer_retry.popitem(last=False)

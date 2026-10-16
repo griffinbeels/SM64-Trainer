@@ -92,13 +92,24 @@ def eligible_attempt(attempt, identity) -> bool:
     star reattributed from the segment engine retains that engine's known clock
     span instead of pretending it began at a star reset.
     """
-    from sm64_events.inputs.service import entity_key_of
-    from sm64_events.tracking.caveats import save_state_run
+    return bool(getattr(attempt, "strat_tag", None)) and eligible_capture(attempt, identity)
 
-    if (identity.game_version not in ("us", "jp") or attempt is None or getattr(attempt, "valid", None) is not True
+
+def eligible_capture(attempt, identity) -> bool:
+    """A complete certificate may retain poses before its strategy is chosen.
+
+    This grants no population membership. Admission still requires a strategy,
+    its ceiling and subdivision checks, and complete recorded inputs.
+    """
+    from sm64_events.inputs.service import entity_key_of
+    from sm64_events.tracking.caveats import pb_blocked_by, save_state_run
+
+    if (identity.clock not in ("igt", "rta") or identity.game_version not in ("us", "jp")
+            or attempt is None or getattr(attempt, "valid", None) is not True
             or attempt.outcome != "success" or attempt.cleared or save_state_run(attempt)
+            or pb_blocked_by(attempt) or getattr(attempt, "timed_by", None) == "imported"
+            or identity.clock == "igt" and getattr(attempt, "timed_by", None) != "igt"
             or getattr(attempt, "game_version", None) != identity.game_version
-            or not getattr(attempt, "strat_tag", None)
             or entity_key_of(attempt) != (identity.kind, identity.entity_key)):
         return False
     start, end = getattr(attempt, "native_clock_frame", None), getattr(attempt, "closed_frame", None)

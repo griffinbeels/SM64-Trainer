@@ -1018,6 +1018,57 @@ def test_retraction_retries_a_transient_failure_with_the_same_key(tmp_path, monk
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("final_strategy", ["C", "B"])
+@pytest.mark.parametrize("fail_old", [True, False])
+def test_old_inflight_retraction_failure_cannot_retry_over_a_newer_strategy(tmp_path, final_strategy, fail_old):
+    """A->B is awaiting HTTP when B->C wins; retrying keep-B would delete C."""
+    from sm64_events.community.sync import RETRACT_ROUTE
+
+    async def scenario():
+        account = Account()
+        sync = CommunitySync(account, CachedPopulation(Local(), root=tmp_path / "cache", account=account))
+        entered, release = asyncio.Event(), asyncio.Event()
+        posts = []
+        original = account.request_json
+
+        async def respond(method, path, **kwargs):
+            if path != RETRACT_ROUTE:
+                return await original(method, path, **kwargs)
+            posts.append(kwargs["json"]["keep_strategy"])
+            if len(posts) == 1:
+                entered.set()
+                await release.wait()
+                if fail_old:
+                    raise CommunityError("request_failed", status=503, retry_after=30)
+            return {"v": 1, "retracted": 1}
+        account.request_json = respond
+        raw_sha256 = hashlib.sha256(native()).hexdigest()
+        assert sync.retract_other_strategies(raw_sha256=raw_sha256, keep_strategy="B")
+        old_key, old = sync._take_operation(contribution=True)
+
+        async def old_request():
+            try:
+                await sync._retract(old[1])
+            except CommunityError as error:
+                await sync._failed_operation(old_key, old, error)
+        task = asyncio.create_task(old_request())
+        await asyncio.wait_for(entered.wait(), 2)
+        assert sync.retract_other_strategies(raw_sha256=raw_sha256, keep_strategy="C")
+        if final_strategy == "B":
+            assert sync.retract_other_strategies(raw_sha256=raw_sha256, keep_strategy="B")
+        release.set()
+        await task
+        assert not sync._offer_retry  # A late failure cannot reinstall keep-B.
+        _new_key, new = sync._take_operation(contribution=True)
+        sync._network_until = 0  # The fake error's account cooldown is unrelated.
+        await sync._retract(new[1])
+        await sync._retract(old[1])  # Nor can a stale dispatcher send it directly.
+        assert posts == ["B", final_strategy]
+        assert sync._retractions.pending(UID) == ()
+        await sync.stop()
+    asyncio.run(scenario())
+
+
 def test_older_service_without_the_route_drops_the_retraction_quietly(tmp_path):
     import json
 

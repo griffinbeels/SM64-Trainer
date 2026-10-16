@@ -263,6 +263,16 @@ class RetractionOutbox:
             self.load()
             return tuple(dict(row) for row in self._rows.values() if row["owner"] == owner)
 
+    def is_current(self, retraction):
+        """Only the newest unanswered operation may send or schedule a retry.
+
+        Compare operation keys as well as the clip: B->C->B still supersedes
+        the first keep-B request, even though the final strategy matches it.
+        """
+        with self._lock:
+            self.load()
+            return self._rows.get(retraction_key(retraction), {}).get("key") == retraction["key"]
+
     def discard(self, retraction):
         """Forget an answered retraction unless a newer one replaced it."""
         with self._lock:

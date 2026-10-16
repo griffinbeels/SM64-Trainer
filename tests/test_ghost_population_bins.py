@@ -248,7 +248,7 @@ def test_reclassifying_to_no_strategy_removes_every_row_and_admits_nothing(tmp_p
     population.close()
 
 
-def test_an_untagged_run_refused_at_completion_is_admitted_once_it_has_a_strategy(tmp_path):
+def test_an_untagged_run_retained_at_completion_is_admitted_once_it_has_a_strategy(tmp_path):
     """His runs 18711 and 18930 finished untagged; picking a strategy seconds later admits them."""
     run = recorded(tmp_path / "run", number=77, frames=2, strategy=None)
     recorder, population = recorder_for(tmp_path, Replays(run), community=Community(fail=True))
@@ -257,7 +257,7 @@ def test_an_untagged_run_refused_at_completion_is_admitted_once_it_has_a_strateg
         run[1].current = replace(run[0], strat_tag="TJ Strat")
         recorder.reclassify(run[0])
     asyncio.run(drain(recorder, lambda: recorder.enqueue(run[0]), tag))
-    assert recorder.refused == 1 and recorder.accepted == 1
+    assert recorder.refused == 0 and recorder.accepted == 1
     assert rows(population) == [(PLAYER, "TJ Strat", 2)]
     population.close()
 
