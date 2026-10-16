@@ -1,6 +1,6 @@
 # Community ghosts protocol, version 1
 
-The private beta uses Cloudflare Workers, D1 metadata, private R2 objects and
+The community service uses Cloudflare Workers, D1 metadata, private R2 objects and
 managed Supabase Auth. Public player names are mutable; the verified Auth
 issuer/subject owns data. A valid login does not prove honest emulator play.
 No ROMs, videos, passwords or complete practice histories are uploaded.
@@ -19,10 +19,12 @@ identity and full web credits remain unchanged. See the native runtime contract.
 
 ## Authentication and build configuration
 
-Use Supabase's maintained OAuth 2.1 server with one registered **public** beta
+Use Supabase's maintained OAuth 2.1 server with a registered **public** native
 client, `token_endpoint_auth_method=none`, S256 PKCE and exact redirect
-`http://127.0.0.1:8072/api/community/auth/callback`. This deliberately uses
-Supabase's documented beta OAuth-server feature for the private beta, rather
+`http://127.0.0.1:8064/api/community/auth/callback` for normal installations.
+The legacy isolated beta retains its separately registered 8072 callback; the
+Worker validates the configured client/callback pair. This deliberately uses
+Supabase's documented beta OAuth-server feature, rather
 than inventing a password service or forwarding browser access tokens into the
 trainer. Native OAuth is through Authlib; the hosted login/consent page uses
 the maintained Supabase JS SDK for Discord and Twitch (Google and email remain
@@ -39,14 +41,15 @@ The native client keeps state and code verifier in memory, expiring after five
 minutes; exchange happens off the game/selection path. Tokens do not appear in
 URLs, local API responses, exception text, request logs or public profiles.
 Refresh tokens use Windows Credential Manager scoped by issuer, OAuth client
-and build channel. Access tokens remain in memory. No plaintext fallback.
+and installation namespace. Normal beta and stable builds share that namespace;
+the legacy isolated beta has its own. Access tokens remain in memory. No plaintext fallback.
 Cancellation invalidates the pending attempt; duplicate/wrong/expired callbacks
 fail. Refresh rotation replaces the stored refresh token before reuse.
 
 The Worker verifies asymmetric ES256/RS256 JWTs through maintained `jose`, with
 fixed configured issuer, `aud=authenticated`, current expiry, UUID subject and
 the exact registered `client_id`. ID tokens are rejected as API credentials.
-JWT validity never bypasses current account status, invitation, consent, forced
+JWT validity never bypasses current account status, admission, consent, forced
 rename or owner predicates. Admin routes additionally verify Cloudflare Access
 identity and an explicit administrator allowlist; never accept submitted roles.
 
@@ -56,9 +59,12 @@ Sources: [Supabase OAuth setup](https://supabase.com/docs/guides/auth/oauth-serv
 Configured providers, real desktop return and deployed CPU are required staging
 checks; local fixtures do not prove them.
 
-`core/build_channel.py` is the packaged channel authority. Stable defaults retain
-existing behavior. Beta: `SM64TrainerBeta`, display `SM64 Trainer Beta`, separate
-LocalAppData profile, port8072, public updates disabled, no stable-data migration.
+`core/build_channel.py` is the packaged channel authority. Schema2 normal beta
+and stable builds use `SM64Trainer.exe`, one LocalAppData profile, the same
+account namespace, port8064 and public updates. A beta opts the installation into
+future betas once unless the player has chosen; stable builds preserve that
+choice. Only the legacy schema1 standalone beta uses `SM64TrainerBeta`, separate
+practice data, port8072 and disabled public updates.
 Global recorder ownership and shared emulator installation metadata stay shared.
 Packaged metadata contains public community URL, Supabase project URL,
 publishable key and OAuth client ID. A private beta build may also carry one
@@ -66,6 +72,21 @@ invitation capability, with reuse and expiry controlled by the service. It is
 not an operator credential and is sent
 only after authenticated login; snapshots and diagnostics omit it. Keep that
 build private. No provider secrets or account refresh/access tokens are packaged.
+
+## Public beta admission
+
+`PUBLIC_BETA_SIGNUP=true` explicitly permits authenticated viewers to complete
+normal profile setup without a packaged invitation. The default remains private
+admission. Reading an eligible new account returns the setup state without
+persisting an account; deliberate profile creation establishes admission with
+the name and current policy acknowledgement. Authenticated read budgets still
+apply before admission, and account/member budgets apply at creation.
+
+Open signup does not restore revoked, suspended or deleted identities, reset a
+profile, change sharing without consent, or bypass name uniqueness or ownership.
+The private invitation endpoint remains available for private-mode clients.
+Deployment mode and member-cap configuration are operator responsibilities;
+choosing open beta does not disable request, upload or storage limits.
 
 ## HTTP contracts
 
@@ -84,7 +105,7 @@ Burst limits shed traffic before expensive operations.
 | `GET /v1/config` | Public config:protocol/limits/policy versions, auth public fields, canonical catalog generation. No secrets. |
 | `GET /v1/account` | Token-free profile:uid,name,status (`new`,`active`,`rename_required`,`suspended`,`deleted`,`not_invited`),sharing,terms_version,privacy_version,sheet_runner,sheet_verified. |
 | `POST /v1/account/invitation` | Authenticated `{token}` beta capability, stored as SHA-256 only. Legacy single-use binds one UID; reusable admits independent UIDs without consumption. Reusable expiry0 means until revoked. Membership is atomically capped unless the operator explicitly enables uncapped mode. Retries preserve profile/visibility epoch; revoked, deleted and suspended accounts cannot re-invite themselves. Request/storage limits always apply. Invalid/unavailable capability returns403 `invite_unavailable`. |
-| `PUT /v1/account` | Initial profile `{name,sharing,terms_version,privacy_version,sheet_runner:null|string}`; server requires current policies and invitation. No client owner/status/verification fields. |
+| `PUT /v1/account` | Initial profile `{name,sharing,terms_version,privacy_version,sheet_runner:null|string}`; requires current policies and admission through an invitation or enabled public signup. Public signup persists only on deliberate creation. No client owner/status/verification fields. |
 | `PUT /v1/account/name` | `{name}`; supports forced rename, retains data and consent. |
 | `PUT /v1/account/sharing` | `{enabled:bool}`; opt-out stops uploads; withdrawal is separate. |
 | `GET /v1/catalog` | Canonical supported portable targets, clocks/ROMs/strategies, generation and integer frame cutoffs. Server derives every published subdivision. |

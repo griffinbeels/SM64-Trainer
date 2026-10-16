@@ -1,13 +1,14 @@
 # Beta-to-production pipeline
 
-Status: Round34 implementation available, October 11, 2026. Prepare and verify a
-private candidate before friend testing. Human gameplay acceptance, public
-enrollment and public publication remain separate, explicit later gates.
+Status: single-install beta/production updates implemented. Round 51 adds public
+beta distribution for streamer viewers. Open beta enrollment was chosen on
+October 15, 2026; exact-candidate gameplay acceptance and publication remain
+separate operator gates.
 Implementation approval: event:042e8c5a19555fd43c256bfb8a1b9835693f103b3cd724bee09f184965c184a7.
 Current human source: event:7c38b72652f2f19bd8ba8e0c7671f43354b12f55e365dfcd26c52fd5507f906c.
 This supersedes the two-installation Round32 proposal, whose original source
 remains in the private round ledger.
-Source review: feature/ghost-overlay at 297756ea.
+Open enrollment source: event:7f9bb6da0c489b8e78dcc04236fb684f19cb3e7e0e9d6b0d1cb96cdd0bbd4268.
 
 ## The repeatable loop
 
@@ -54,6 +55,31 @@ client/native pair. Offline users keep practicing.
 
 Use the existing updater interaction. There is no channel picker, second installer
 or beta-only account onboarding in the eventual public application.
+
+## Public beta distribution
+
+The streamer-facing entry point is `/beta/` on the existing website. Reuse the
+same page design and assets, identify the download as a beta, and display its
+version. The address stays constant as newer public betas are published. A public
+prerelease does not require a production release first; preserve the stable
+website's community-version floor rather than advertising an old stable build
+as community-enabled. Website selection and publishing belong to
+[the website runbook](website-deployment.md).
+
+The public beta installer must carry its beta installation intent from the
+build, not infer it from its filename or depend on a pre-existing profile's beta
+preference. Test the actual installation flow with a fresh profile before linking
+it. After installation, the normal beta default and saved player preference govern
+future update offers. An existing newer installation must never be downgraded.
+
+Public candidates contain no friend invitation. When the community service's
+explicit public-signup setting is enabled, viewers authenticate and complete the
+normal name and policy-consent flow without an invitation. Existing account
+restrictions and resource budgets still apply; see
+[the community protocol](community-protocol.md). Private tester candidates remain
+private and frozen. Changing a link does not establish that installation, account
+entry or update delivery works: verify those boundaries before the streamer shares
+the address.
 
 ## Implemented responsibilities
 

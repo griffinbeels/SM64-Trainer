@@ -1623,13 +1623,25 @@ bytes. Not account-wide withdrawal, which removes every shared [[ghost]].
 
 ### Private beta
 
-A complete test application ZIP sent directly to friends. Its packaged identity
-selects separate practice data and disables public updates. An offline beta has
-no configured community service. A configured beta requires its invited staging
-accounts. Project64 and the [[recorder]] remain shared machine resources.
+A test build sent directly to friends, rather than published as a download. A
+normal-identity private candidate uses the same installation and practice data as
+production, defaults to beta updates, and may carry a private friend invitation.
+The older standalone ZIP has a separate profile and no public updates. Project64
+and the [[recorder]] remain shared machine resources in both cases.
 
-- **Lives** — `src/sm64_events/core/build_channel.py` and `tools/build_beta.py`;
+- **Lives** — `src/sm64_events/core/build_channel.py`, `tools/release_flow.py` and `tools/build_beta.py`;
   `docs/private-beta.md`
+
+### Public beta
+
+A published prerelease anyone can download from the beta page. Its installer
+starts new users on that beta in the normal installation, with future beta and
+production updates through the same app. It contains no private invitation; open
+signup is an explicit community-service setting. A player's saved update choice
+and practice data survive later releases.
+
+- **Lives** — `tools/release_flow.py`, `src/sm64_events/bootstrap/installer.py`,
+  `src/sm64_events/core/update_policy.py` and `tools/build_website.py`
 
 ### Imported ghost
 
