@@ -258,21 +258,13 @@ def resolve_release(policy: dict, fixture: Path | None, attempts: int, retry_del
         try:
             snapshot = feed if fixture is not None else fetch_releases(policy)
             if channels:
-                # Retry incomplete uploads before an explicit withdrawal removes links.
-                try:
-                    return select_channels(snapshot, policy)
-                except LaunchHold:
-                    if allow_unavailable:
-                        return select_channels(snapshot, policy, True)
-                    raise
-                except ReleaseNotReady:
-                    if allow_unavailable and (fixture is not None or attempt + 1 >= attempts):
-                        return select_channels(snapshot, policy, True)
-                    raise
+                return select_channels(snapshot, policy)
             return select_release(snapshot, policy)
         except LaunchHold:
             if not allow_unavailable:
                 raise
+            if channels:
+                return select_channels(snapshot, policy, True)
             return {"status": "unavailable", "reason": "no_eligible_release",
                     "release_url": f"https://github.com/{policy['repository']}/releases"}
         except ReleaseNotReady:
@@ -281,6 +273,8 @@ def resolve_release(policy: dict, fixture: Path | None, attempts: int, retry_del
                 continue
             if not allow_unavailable:
                 raise
+            if channels:
+                return select_channels(snapshot, policy, True)
             return {"status": "unavailable", "reason": "release_not_ready",
                     "release_url": f"https://github.com/{policy['repository']}/releases"}
         except BuildError:

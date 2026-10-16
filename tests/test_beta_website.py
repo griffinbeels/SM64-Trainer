@@ -118,6 +118,25 @@ class BetaWebsiteTests(unittest.TestCase):
                 self.assertEqual(metadata["version"], "1.10.0-beta.10")
                 self.assertEqual(metadata["channel"], "beta")
 
+    def test_beta_footer_uses_validated_beta_release_or_history_when_unavailable(self):
+        for available in (False, True):
+            with self.subTest(available=available), tempfile.TemporaryDirectory() as temporary:
+                feed = [complete_release()]
+                if available:
+                    feed.append(beta_release())
+                stable, beta = builder.select_channels(feed, POLICY)
+                output = Path(temporary) / "site"
+                builder.write_site(builder.ROOT / "website", output, POLICY, stable, beta)
+                page = (output / "beta/index.html").read_bytes().decode()
+                footer = Links(page[page.index("<footer"):])
+                links = [link for link in footer.anchors
+                         if link.get("href", "").startswith("https://github.com/griffinbeels/SM64-Trainer/releases")]
+                expected = "https://github.com/griffinbeels/SM64-Trainer/releases"
+                if available:
+                    expected += "/tag/v1.10.0-beta.10"
+                self.assertEqual([link["href"] for link in links], [expected])
+                self.assertNotIn("/releases/latest", page)
+
     def test_beta_ci_withdrawal_event_enables_explicit_refresh(self):
         workflow = (builder.ROOT / ".github/workflows/website.yml").read_text()
         self.assertIn("types: [published, released, edited, deleted, unpublished]", workflow)

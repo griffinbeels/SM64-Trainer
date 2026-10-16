@@ -21,6 +21,7 @@ class Links(HTMLParser):
     def __init__(self, page):
         super().__init__()
         self.downloads = []
+        self.anchors = []
         self.ids = set()
         self.feed(page)
 
@@ -28,6 +29,8 @@ class Links(HTMLParser):
         attrs = dict(attrs)
         if "id" in attrs:
             self.ids.add(attrs["id"])
+        if tag == "a":
+            self.anchors.append(attrs)
         if tag == "a" and "download-link" in attrs.get("class", "").split():
             self.downloads.append(attrs)
 
