@@ -59,19 +59,26 @@ const idFor = (entityKey, part) =>
 /**
  * The app's one ghost session, plus the two doors to change it.
  *
- * `reachable` is false when the session door is not there at all (a build
- * without it, or a server that has not wired it yet) -- the card then draws
- * NOTHING, which is the honest degrade: a control that cannot reach its own
- * server is worse than no control, and `store.js` already treats a missing
- * door this way for the segment list.
+ * A failed read is recoverable, not evidence that the feature is absent.
+ * Keep its explanation on the active card and let a successful reply revive it.
  */
 export function useGhostSession(t, active = true) {
   const [session, setSession] = useState(null);
   const [reachable, setReachable] = useState(true);
+  const [readVersion, setReadVersion] = useState(0);
   const [draft, setDraft] = useState(null);
   const inFlight = useRef(0);
   const timer = useRef(null);
   const queued = useRef(null);
+  const received = useRef(0);
+  const newest = newestGhostSession(t.feed);
+  const seenBroadcast = useRef(newest);
+  const accept = useCallback((answer) => {
+    received.current += 1;
+    setSession(answer);
+    setReachable(true);
+  }, []);
+  const retry = useCallback(() => setReadVersion(value => value + 1), []);
 
   // `active` is why this hook exists on every card and reads on ONE. The
   // practice log holds up to nine cards; a session read per card would be
@@ -81,16 +88,24 @@ export function useGhostSession(t, active = true) {
   useEffect(() => {
     if (!active) return undefined;
     let dropped = false;
+    const before = received.current;
     getJSON(GHOST_URL)
-      .then((answer) => { if (!dropped) setSession(answer); })
-      .catch(() => { if (!dropped) setReachable(false); });
+      .then((answer) => {
+        if (!dropped && before === received.current
+            && inFlight.current === 0 && timer.current === null) accept(answer);
+      })
+      .catch(() => {
+        // A late request cannot hide a newer broadcast or write response.
+        if (!dropped && before === received.current
+            && inFlight.current === 0 && timer.current === null) setReachable(false);
+      });
     return () => { dropped = true; };
-  }, [active]);
+  }, [active, t.connected, readVersion, accept]);
 
   const put = useCallback(async (body) => {
     inFlight.current += 1;
     try {
-      setSession(await send("PUT", GHOST_URL, body));
+      accept(await send("PUT", GHOST_URL, body));
       return {applied: true};
     } catch (error) {
       // The server writes the sentence (api.js carries its `detail`
@@ -101,7 +116,7 @@ export function useGhostSession(t, active = true) {
       inFlight.current -= 1;
       if (inFlight.current === 0 && timer.current === null) setDraft(null);
     }
-  }, [t]);
+  }, [t, accept]);
 
   // Show it now, send it once the gesture stops.
   //
@@ -141,15 +156,29 @@ export function useGhostSession(t, active = true) {
 
   // The broadcast. `newest` is the payload object the socket handler stored,
   // so its identity changes only when a genuinely new ghost_changed lands.
-  const newest = newestGhostSession(t.feed);
   useEffect(() => {
-    if (!newest || !active) return;
+    const arrived = newest !== seenBroadcast.current;
+    seenBroadcast.current = newest;
+    // An old feed already present at mount must not supersede the fresh GET.
+    if (!arrived || !newest || !active) return;
     if (inFlight.current > 0 || timer.current !== null) return;
-    setSession(newest);
+    accept(newest);
     setDraft(null);
-  }, [newest, active]);
+  }, [newest, active, accept]);
 
-  return { session, reachable, draft, write, queue };
+  return { session, reachable, draft, write, queue, retry };
+}
+
+function GhostReadFailure({retry, id}) {
+  return html`<span id=${id} class="ghost-why" role="status">
+    Ghost controls couldn't load.
+    <button type="button" class="quiet-button" onclick=${retry}>Retry</button>
+  </span>`;
+}
+
+function GhostReadStatus({reachable, reasonText, reasonId, retry}) {
+  if (!reachable) return html`<${GhostReadFailure} retry=${retry} id=${reasonId} />`;
+  return reasonText && html`<span class="ghost-why" id=${reasonId}>${reasonText}</span>`;
 }
 
 /**
@@ -505,7 +534,7 @@ function GhostAppearance({controls, appearance, patch, timing = true}) {
 
 /** A second entry to the same controls, reading the session only while open. */
 export function GhostSettings({t, onClose}) {
-  const {session, reachable, write} = useGhostSession(t);
+  const {session, reachable, write, retry} = useGhostSession(t);
   const [appearance, setAppearance] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -543,8 +572,8 @@ export function GhostSettings({t, onClose}) {
         onclick=${save}>${saving ? "Saving…" : "Done"}</button>`}>
     ${available ? html`<${GhostAppearance} controls=${controls} appearance=${appearance} patch=${patch}
       timing=${Boolean(ghostTargetKey(session.target))} />`
-      : html`<p>${!reachable ? "Ghost settings are unavailable. Close this window and try again."
-        : session ? "Ghost settings are unavailable while the trainer is disconnected." : "Loading ghost settings…"}</p>`}
+      : !reachable ? html`<${GhostReadFailure} retry=${retry} />`
+        : html`<p>${session ? "Ghost settings are unavailable while the trainer is disconnected." : "Loading ghost settings…"}</p>`}
     ${error && html`<p class="error" role="alert">${error}</p>`}
   <//>`;
 }
@@ -606,28 +635,27 @@ function racingScopeReady(session, scope, known) {
  * below read. Nothing renders and nothing is requested on the other cards.
  */
 export function GhostSwitch({ t, entityKey, active = true, scope = "strategy" }) {
-  const { session, reachable, draft, write, queue } = useGhostSession(t, active);
+  const { session, reachable, draft, write, queue, retry } = useGhostSession(t, active);
   useRivalScope(session, scope, entityKey, active && reachable, write);
-  if (!active || !reachable) return null;
+  if (!active) return null;
   const controls = ghostControls(session, entityKey);
   const held = draft || {};
   const on = held.enabled == null
     ? controls.enabled : Boolean(held.enabled) && controls.available;
   const labelId = idFor(entityKey, "label");
-  const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;
+  const reasonId = !reachable || controls.reasonText ? idFor(entityKey, "why") : null;
 
   return html`<div class="ghost-row ${on ? "is-on" : ""}">
     <div class="ghost-row-head">
-      <${GhostSwitchButton} on=${on} canToggle=${controls.canToggle}
+      <${GhostSwitchButton} on=${on} canToggle=${reachable && controls.canToggle}
         labelId=${labelId} reasonId=${reasonId}
         onToggle=${() => write({ enabled: !on })} />
       <span class="ghost-label" id=${labelId}>Ghost Overlay</span>
-      <${GhostLibraryButton} t=${t} entityKey=${entityKey} session=${session} write=${write} />
-      ${controls.reasonText && html`<span class="ghost-why" id=${reasonId}>
-        ${controls.reasonText}
-      </span>`}
+      ${reachable && html`<${GhostLibraryButton} t=${t} entityKey=${entityKey} session=${session} write=${write} />`}
+      <${GhostReadStatus} reachable=${reachable} reasonText=${controls.reasonText}
+        reasonId=${reasonId} retry=${retry} />
     </div>
-    ${racingScopeReady(session,scope,controls.known) ? html`<${GhostRacing} session=${session} controls=${controls} held=${held} on=${on}
+    ${reachable && racingScopeReady(session,scope,controls.known) ? html`<${GhostRacing} session=${session} controls=${controls} held=${held} on=${on}
       write=${write} queue=${queue} entityKey=${entityKey} />` : null}
   </div>`;
 }

@@ -62,7 +62,7 @@ def test_the_switch_never_reaches_a_card_that_is_not_active():
     assert "if (!active) return undefined;" in source, (
         "the session read is not gated on `active` -- every card would "
         "request the session")
-    assert "if (!active || !reachable) return null;" in source, (
+    assert "if (!active) return null;" in source, (
         "GhostSwitch renders without checking `active`")
 
 
@@ -218,6 +218,46 @@ STATES = {
                 "window": {"running": False, "visible": False, "backend": "native",
                            "reason": budget_reason(2)}},
 }
+
+
+@pytest.mark.parametrize("kind", ("star", "segment"))
+@pytest.mark.parametrize("width", WIDTHS)
+def test_failed_read_stays_visible_and_retry_restores_real_card(kind, width):
+    """A temporary API failure must not erase a single active card's controls."""
+    target = {"kind": kind, "entity_key": "5-4" if kind == "star" else str(FIXTURE_SEGMENT),
+              "strat": "Standard"}
+    fixture = {"stage": (5, 4), "target": (5, 4)} if kind == "star" else {
+        "arm_segment": FIXTURE_SEGMENT, "target_segment": FIXTURE_SEGMENT}
+    artifacts = REPO / ".iteration" / "adaptive-ghosts" / "round52-ui-renders"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    with serve_ui_with_ghost(ghost_session(enabled=False, target=target),
+                             **fixture) as (base, state):
+        state["read_error"] = True
+        with get_driver().launch() as page:
+            page.set_viewport(width, 1200)
+            page.goto(base)
+            page.wait_for(".ghost-why button")
+            rows = page.evaluate(MEASURE)
+            assert len(rows) == 1 and rows[0]["onActiveCard"], rows
+            assert rows[0]["disabled"] and rows[0]["whySeen"], rows
+            assert "couldn't load" in rows[0]["whyText"], rows
+            assert rows[0]["rowScroll"] <= rows[0]["rowClient"] + 1, rows
+            (artifacts / f"{kind}-{width}-failed.png").write_bytes(page.screenshot())
+            initial_faults = page.problems()
+            assert initial_faults and all("503" in fault for fault in initial_faults), initial_faults
+            state["read_error"] = False
+            page.click(".ghost-why button")
+            page.wait_for(".ghost-row-head .ghost-switch:not([disabled])")
+            page.click(".ghost-row-head .ghost-switch")
+            page.wait_for('.ghost-row-head .ghost-switch[aria-checked="true"]')
+            assert state["writes"] == [{"enabled": True}], state["writes"]
+            recovered = page.evaluate(MEASURE)
+            assert len(recovered) == 1 and recovered[0]["onActiveCard"], recovered
+            assert not recovered[0]["disabled"], recovered
+            assert recovered[0]["rowScroll"] <= recovered[0]["rowClient"] + 1, recovered
+            page.wait_ms(320)  # Capture the settled switch, after its normal motion.
+            (artifacts / f"{kind}-{width}-recovered.png").write_bytes(page.screenshot())
+            assert not page.problems()
 
 MEASURE = """
 (() => {

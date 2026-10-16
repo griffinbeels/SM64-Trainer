@@ -161,6 +161,10 @@ def attach_ghost_routes(app, state: dict) -> None:
 
     @app.get("/api/ghost")
     def _ghost_get():
+        state["reads"] = state.get("reads", 0) + 1
+        if state.get("read_error"):
+            from fastapi import HTTPException
+            raise HTTPException(503, "Ghost controls are warming up.")
         return state["session"]
 
     @app.put("/api/ghost")
