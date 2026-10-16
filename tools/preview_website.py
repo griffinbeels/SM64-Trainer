@@ -16,12 +16,13 @@ DISABLED_URL = "#preview-download-disabled"
 SAMPLE_TIME = "2026-10-13T12:00:00Z"
 
 
-def sample_release(policy: dict, state: str) -> dict:
+def sample_release(policy: dict, state: str, *, beta: bool = False) -> dict:
     """Display sample metadata without constructing a publishable release feed."""
     release = {"status": state, "release_url": f"https://github.com/{policy['repository']}/releases",
                "installer_url": DISABLED_URL}
     if state == "ready":
-        release.update(version=policy["minimum_version"], tag="v" + policy["minimum_version"],
+        version = policy["minimum_version"] + ("-beta.10" if beta else "")
+        release.update(version=version, tag="v" + version,
                        installer_size=12_000_000, installer_uploaded_at=SAMPLE_TIME,
                        published_at=SAMPLE_TIME, assets={}, checksums={})
     return release
@@ -29,12 +30,27 @@ def sample_release(policy: dict, state: str) -> dict:
 
 def build_preview(source: Path, output: Path, state: str = "ready") -> dict:
     """Reuse production rendering, then mark the review and disable downloads."""
-    if state not in ("ready", "unavailable"):
-        raise builder.BuildError("Preview state must be ready or unavailable.")
+    if state not in ("ready", "unavailable", "beta-only"):
+        raise builder.BuildError("Preview state must be ready, unavailable or beta-only.")
     policy = builder.load_policy(source / "release-policy.json")
-    metadata = builder.write_site(source, output, policy, sample_release(policy, state))
+    stable = sample_release(policy, "ready" if state == "ready" else "unavailable")
+    if state == "beta-only":
+        stable["status"] = "beta_only"
+    beta = {**sample_release(policy, "unavailable" if state == "unavailable" else "ready", beta=True),
+            "channel": "beta"}
+    builder.write_site(source, output, policy, stable, beta)
+    for directory in (output, output / "beta"):
+        _mark_preview(directory, state)
+    return json.loads((output / "release.json").read_bytes())
+
+
+def _mark_preview(output: Path, state: str) -> None:
     page = (output / "index.html").read_bytes().decode("utf-8")
     hook = f'href="{DISABLED_URL}"'
+    # Keep the three beta-only root CTA hooks inert, like installer actions.
+    if state == "beta-only":
+        page = re.sub(r'(<a\b[^>]*class="[^"]*\bdownload-link\b[^"]*"[^>]*href=")/beta/("[^>]*>)',
+                      rf'\g<1>{DISABLED_URL}\2', page)
     body_pattern = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
     if page.count(hook) != 3 or len(body_pattern.findall(page)) != 1:
         raise builder.BuildError("Preview download controls or body are missing.")
@@ -44,11 +60,11 @@ def build_preview(source: Path, output: Path, state: str = "ready") -> dict:
               '&middot; downloads disabled</div>')
     page = body_pattern.sub(lambda match: match.group() + "\n  " + notice, page, count=1)
     (output / "index.html").write_bytes(page.encode("utf-8"))
+    metadata = json.loads((output / "release.json").read_bytes())
     metadata["status"] = "preview"
     metadata["preview"] = {"rendered_state": state, "downloads_disabled": True}
     (output / "release.json").write_bytes(
         (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    return metadata
 
 
 def header_rules(directory: Path) -> list[tuple[str, dict]]:
@@ -105,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--source", type=Path, default=builder.ROOT / "website")
-    parser.add_argument("--state", choices=("ready", "unavailable"), default="ready")
+    parser.add_argument("--state", choices=("ready", "unavailable", "beta-only"), default="ready")
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--port", type=int, default=8787)
     args = parser.parse_args(argv)
