@@ -1,6 +1,6 @@
 """Compile the pinned drawer's real class and methods against inert GL calls.
 
-No renderer DLL, driver, context, or device is built/loaded. A cached verified
+No renderer DLL, driver, context, or device is built/loaded. Verified pinned
 archive or SM64_BUFFER_DRAWER_SOURCE supplies the unmodified upstream bytes.
 """
 import hashlib
@@ -13,6 +13,7 @@ import zipfile
 
 import pytest
 
+from renderer_fixture import renderer_archive as renderer_archive
 from sm64_events.core.childproc import quiet_spawn_kwargs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,17 +35,13 @@ def tool(name):
 
 
 @pytest.fixture(scope="module")
-def drawer_source():
+def drawer_source(request):
     explicit = os.environ.get("SM64_BUFFER_DRAWER_SOURCE")
     if explicit:
         data = {name: (Path(explicit) / name).read_bytes() for name in FILES}
     else:
         upstream = json.loads((ROOT / "renderer/build-inputs.json").read_text())["upstream"]
-        cache = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
-        archive = cache / "SM64Trainer/build-cache/renderer" / f"GLideN64-{upstream['commit']}.zip"
-        if not archive.is_file():
-            pytest.skip("requires separately staged pinned LINK source input: SM64_BUFFER_DRAWER_SOURCE or cached archive")
-        assert hashlib.sha256(archive.read_bytes()).hexdigest() == upstream["archive_sha256"]
+        archive = request.getfixturevalue("renderer_archive")
         with zipfile.ZipFile(archive) as handle:
             prefix = f"GLideN64-{upstream['commit']}/"
             data = {name: handle.read(prefix + name) for name in FILES}
