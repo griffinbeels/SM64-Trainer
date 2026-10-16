@@ -104,3 +104,13 @@ def test_a_runner_only_reason_passes_on_a_runner_and_fails_here():
     assert skip_inventory.allowed_for(reason, runner=False) is None
     for pattern, why, where in skip_inventory.RUNNER_ONLY:
         assert pattern.strip() and len(why) > 30 and where.strip(), pattern
+
+
+def test_unmerged_ghost_skip_does_not_hide_broken_ghost_dependencies():
+    missing = "could not import 'sm64_events.ghost.session': No module named 'sm64_events.ghost'"
+    assert skip_inventory.allowed_for(missing) is not None
+    for broken in (
+        "could not import 'sm64_events.ghost.session': No module named 'zstandard'",
+        "could not import 'sm64_events.ghost.session': No module named 'sm64_events.ghost.session'",
+    ):
+        assert skip_inventory.allowed_for(broken) is None

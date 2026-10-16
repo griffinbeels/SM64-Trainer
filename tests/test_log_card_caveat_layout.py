@@ -43,13 +43,12 @@ def _post(base: str, path: str, payload: dict) -> dict:
         return json.loads(response.read())
 
 
-def _make_unattributed(base: str, attempt_id: int, *, save_clock=None) -> None:
-    """Retag a real saved PB to null; optionally save the row first."""
-    if save_clock:
+def _make_unattributed(base: str, attempt_id: int, *, seed_pb=False) -> None:
+    """Retag a real saved PB to null; optionally attribute the row first."""
+    if seed_pb:
+        # Retagging this success already saves its strategy PB automatically.
         _post(base, f"/api/attempts/{attempt_id}/strat",
               {"strat_tag": "Standard"})
-        _post(base, "/api/pb",
-              {"attempt_id": attempt_id, "timer_mode": save_clock})
     _post(base, f"/api/attempts/{attempt_id}/strat", {"strat_tag": None})
 
 
@@ -95,7 +94,7 @@ def measured():
                            if s["course_id"] == 16 and s["star_id"] == 0)
         _make_unattributed(base, top_star["pb"]["igt"]["attempt_id"])
         _make_unattributed(base, nested_star["attempts"][0]["id"],
-                           save_clock="igt")
+                           seed_pb=True)
 
         with get_driver().launch() as page:
             page.goto(base)

@@ -17,6 +17,11 @@ single-file run is free to skip anything.
 
 # (substring of the skip reason, why it is allowed, what would lift it)
 ALLOWED = (
+    ("could not import 'sm64_events.ghost.session': No module named 'sm64_events.ghost'",
+     "These conditional special-stage witnesses need the community ghost "
+     "module, which is not on the pre-community main branch. They run "
+     "automatically once that feature module is merged.",
+     "tests/test_ui_special_stages.py::test_special_stage_ghost_target_when_overlay_is_available"),
     ("is not usable on this machine",
      "A vendor's hardware video encoder is absent (this box is NVIDIA, so the "
      "Intel QuickSync and AMD paths cannot run). Lifts on hardware that has it.",

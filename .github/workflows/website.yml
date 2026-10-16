@@ -1,0 +1,262 @@
+name: trainer website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "tools/build_website.py"
+      - "tools/preview_website.py"
+      - "tests/test_build_website.py"
+      - "tests/test_preview_website.py"
+      - "src/sm64_events/core/update_plan.py"
+      - ".github/workflows/website.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "tools/build_website.py"
+      - "tools/preview_website.py"
+      - "tests/test_build_website.py"
+      - "tests/test_preview_website.py"
+      - "src/sm64_events/core/update_plan.py"
+      - ".github/workflows/website.yml"
+  release:
+    types: [published, released, edited, deleted, unpublished]
+  workflow_dispatch:
+    inputs:
+      retire_download:
+        description: "After launch: permit an unavailable page if no eligible release remains"
+        type: boolean
+        default: false
+
+# Preserve queued withdrawals when ordinary updates arrive during an upload.
+# Each queued run reconstructs current main and releases after taking its slot.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('trainer-website-pr-{0}', github.event.pull_request.number) || 'trainer-website-production' }}
+  queue: max
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  website:
+    if: github.repository == 'griffinbeels/SM64-Trainer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the website to validate
+        uses: actions/checkout@v7
+        with:
+          # PRs test their merge commit without Cloudflare settings. Production
+          # always uses approved main, including release-tag events.
+          ref: ${{ github.event_name == 'pull_request' && github.sha || 'main' }}
+          persist-credentials: false
+
+      - name: Record the actual website source revision
+        run: |
+          source_sha=$(git rev-parse HEAD)
+          printf 'WEBSITE_SOURCE_SHA=%s\n' "$source_sha" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Test website release and review contracts
+        run: python -m unittest discover -s tests -p 'test_*website.py' -v
+
+      # Always render actual source, including before the first stable release.
+      # Sample output has inert downloads and is never a publishing candidate.
+      - name: Build offline review states
+        run: |
+          python tools/preview_website.py --output .website-preview/ready
+          python tools/preview_website.py --output .website-preview/unavailable --state unavailable
+
+      - name: Save isolated sample previews
+        uses: actions/upload-artifact@v7
+        with:
+          name: trainer-website-sample-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .website-preview/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Determine whether this is a withdrawal refresh
+        id: policy
+        env:
+          MANUAL_RETIRE_DOWNLOAD: ${{ inputs.retire_download && 'true' || 'false' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          def stable_version(value):
+              if not isinstance(value, str):
+                  return None
+              match = re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", value)
+              return tuple(map(int, match.groups())) if match else None
+
+          policy = json.loads(Path("website/release-policy.json").read_text())
+          floor = stable_version(policy["minimum_version"])
+          if floor is None:
+              raise SystemExit("Website policy must name a stable minimum version.")
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          allow_unavailable = (
+              os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
+              and os.environ["MANUAL_RETIRE_DOWNLOAD"] == "true"
+          )
+          if os.environ["GITHUB_EVENT_NAME"] == "release":
+              release = event.get("release") or {}
+              action = event.get("action")
+              version = stable_version(release.get("tag_name"))
+              body = release.get("body") or ""
+              eligible_event = (
+                  version is not None and version >= floor
+                  # Unpublishing can turn a formerly public release into a draft.
+                  and (release.get("draft") is False or action == "unpublished")
+                  and release.get("prerelease") is False
+              )
+              withdrawn = (
+                  action in {"deleted", "unpublished"}
+                  or (action == "edited" and isinstance(body, str)
+                      and "<!-- sm64-withdrawn -->" in body)
+              )
+              allow_unavailable = eligible_event and withdrawn
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"allow_unavailable={str(allow_unavailable).lower()}\n")
+          PY
+
+      - name: Build the static review artifact
+        id: build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ALLOW_UNAVAILABLE: ${{ steps.policy.outputs.allow_unavailable }}
+        run: |
+          args=(--output "$RUNNER_TEMP/website-review" --attempts 3 --retry-delay 10)
+          if [[ "$ALLOW_UNAVAILABLE" == 'true' ]]; then args+=(--allow-unavailable); fi
+          set +e
+          python tools/build_website.py "${args[@]}"
+          result=$?
+          set -e
+          case "$result" in
+            0) echo 'built=true' >> "$GITHUB_OUTPUT" ;;
+            3)
+              echo 'built=false' >> "$GITHUB_OUTPUT"
+              echo '::notice title=Website launch held::No eligible community stable release is available. No website was deployed.'
+              ;;
+            *) exit "$result" ;;
+          esac
+
+      - name: Save the review artifact
+        if: steps.build.outputs.built == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: sm64trainer-website-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/website-review/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check deployment settings
+        if: github.event_name != 'pull_request' && steps.build.outputs.built == 'true'
+        id: setup
+        env:
+          DEPLOY_ENABLED: ${{ vars.WEBSITE_DEPLOY_ENABLED || 'false' }}
+          PAGES_PROJECT: ${{ vars.WEBSITE_PAGES_PROJECT || 'sm64-trainer' }}
+          ACCOUNT_CONFIGURED: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' && 'true' || 'false' }}
+          API_CONFIGURED: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && 'true' || 'false' }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+
+          enabled = os.environ["DEPLOY_ENABLED"] == "true"
+          project = os.environ["PAGES_PROJECT"]
+          missing = [name for name, present in (
+              ("CLOUDFLARE_ACCOUNT_ID", os.environ["ACCOUNT_CONFIGURED"]),
+              ("CLOUDFLARE_API_TOKEN", os.environ["API_CONFIGURED"]),
+          ) if present != "true"]
+          if not re.fullmatch(r"[a-z0-9-]+", project):
+              raise SystemExit("WEBSITE_PAGES_PROJECT must be a lowercase Pages project name.")
+          ready = enabled and not missing
+          if not enabled:
+              print("::notice title=Website setup hold::WEBSITE_DEPLOY_ENABLED is false; the review artifact is ready.")
+          elif missing:
+              print("::notice title=Website setup hold::Missing repository secrets: " + ", ".join(missing))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"can_deploy={str(ready).lower()}\nproject={project}\n")
+          PY
+
+      - name: Revalidate and deploy to Cloudflare Pages
+        if: github.event_name != 'pull_request' && steps.setup.outputs.can_deploy == 'true'
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.149.0"
+          # One pre-command runs after Wrangler installation; a nonzero builder
+          # exit stops the action before upload. Always use a new directory.
+          preCommands: >-
+            python tools/build_website.py --output "$RUNNER_TEMP/website-publish"
+            --attempts 3 --retry-delay 10
+            ${{ steps.policy.outputs.allow_unavailable == 'true' && '--allow-unavailable' || '' }}
+          # --force preserves Pages rather than delegating a new site to Workers.
+          command: >-
+            pages deploy ${{ runner.temp }}/website-publish --force
+            --project-name=${{ steps.setup.outputs.project }} --branch=main
+
+      - name: Save the final publishing candidate
+        if: always() && steps.setup.outputs.can_deploy == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: sm64trainer-website-publish-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/website-publish/
+          # Failed final validation deliberately creates no deployable output.
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Summarize the website result
+        if: always()
+        env:
+          INITIAL_BUILT: ${{ steps.build.outputs.built }}
+          CAN_DEPLOY: ${{ steps.setup.outputs.can_deploy }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          initial = os.environ["INITIAL_BUILT"]
+          outcome = os.environ["DEPLOY_OUTCOME"]
+          if initial == "false":
+              message = "Launch held: no eligible community stable release. Nothing was deployed."
+          elif initial != "true":
+              message = "Validation failed before a review artifact was produced. Nothing was deployed."
+          elif os.environ["GITHUB_EVENT_NAME"] == "pull_request":
+              message = "Pull request review artifact ready. Deployment settings and publishing were not used."
+          elif os.environ["CAN_DEPLOY"] != "true":
+              message = "Review artifact ready. Publishing held by repository deployment settings."
+          elif outcome == "success":
+              message = "Website deployed to Cloudflare Pages."
+          else:
+              message = "Publishing failed or was canceled. Inspect the final validation and Wrangler logs."
+          lines = [message]
+          candidate = Path(os.environ["RUNNER_TEMP"]) / "website-publish" / "release.json"
+          if not candidate.exists():
+              candidate = Path(os.environ["RUNNER_TEMP"]) / "website-review" / "release.json"
+          if candidate.exists():
+              metadata = json.loads(candidate.read_text())
+              lines.append("Candidate status: " + str(metadata.get("status", "unknown")))
+          url = os.environ["DEPLOYMENT_URL"]
+          if outcome == "success" and url.startswith("https://"):
+              lines.append("Deployment: " + url)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\n\n".join(lines) + "\n")
+          PY

@@ -37,6 +37,7 @@ not in this map.
 | Import correctness | `uv run python tools/scorecard_parity.py`; successive runners must produce `+0.00` on every corresponding Scorecard tile |
 | Inspect one UI surface at supported widths | `uv run python tools/contact_sheet.py <selector>`; read UI rules for state-specific fixtures |
 | Why each lint rule exists | [docs/agent-maintainability.md](docs/agent-maintainability.md); `python tools/verify_lint.py` enforces them |
+| Public website: copy, screenshots, styling, offline preview | [website/README.md](website/README.md); [deployment runbook](docs/website-deployment.md) |
 | API consumer | [docs/api.md](docs/api.md): `GET /state`, `GET /health`, `/ws/events` |
 | Cross-cutting domain evidence | [docs/architecture.md](docs/architecture.md) |
 | Older probe commands, incidents and rejected approaches | [archived guide](docs/history/agent-guide-2026-09-05.md), historical evidence only |
@@ -107,16 +108,16 @@ together when changing their shared Attempt contract. Land prerequisite contract
 changes before dependent work. Integrate with `--no-ff`.
 
 Choose the smallest meaningful check while editing: rerun a failure by name,
-never the whole suite. The merge check (the blast radius) is the integration
-gate and owns the shared resource budget and child cleanup; the full run on
+never the whole suite. The merge check runs the blast radius and gates every
+merge. It owns the shared resource budget and child cleanup. The full run on
 GitHub runs everything after the push. Repeat or broaden only for changed
 inputs, failures, or unresolved concerns. Preserve actual native exit codes; in
 PowerShell never pipe test output into `Select-Object` or use `2>&1` on native
 commands.
 
-For UI changes, render and inspect the named surface with representative data
-at its supported widths (850px minimum, any height). Confirm the fixture reaches
-the changed state, count repeated elements, and use realistically long values.
+For Trainer UI changes (`src/sm64_events/ui/`), render and inspect the named
+surface with representative data at its supported widths (850px minimum, any
+height). Confirm the fixture reaches the changed state, count repeated elements, and use realistically long values.
 Read UI rules for `@container` layout gates, fixture-reach and surface contracts.
 Behavior judged by feel gets a tuning inspector and human verification.
 Prove new source-scan or layout guards by restoring the violation, seeing the
@@ -124,15 +125,18 @@ failure, then reverting it. Tests alone do not establish visual correctness.
 
 ## Definition of done for integration
 
-- The merge check (`tools/run_tests.py`, the blast radius) passes for the
-  integrated tree. An identical tree reuses that evidence; record revision,
-  command, result and skips. The full run on GitHub covers the whole suite
+- The merge check (`tools/run_tests.py`) passes for the integrated tree. An
+  identical tree reuses that evidence; record revision, command, result and
+  skips. The full run on GitHub covers the whole suite
   after the push and must be green before a release.
 - Relevant behavior tests and, for visible changes, rendered evidence cover
   the change. New memory reads have human live verification.
 - Update the glossary for changed domain nouns, chain rules for moved value
   hops, the rule index for changed routes, architecture for cross-cutting facts,
   API docs for endpoints, and README for consumer-facing changes.
+- When a shipped feature changes public capabilities or UI pictured on the
+  website, assess its website impact through [website/README.md](website/README.md).
+  Update affected copy or screenshots where appropriate; unrelated fixes need no refresh.
 - Keep one authoritative home for each fact and link it elsewhere. Tracked
   references must resolve in a fresh clone; private working notes are not public
   evidence. Preserve incident detail on demand rather than appending it here.

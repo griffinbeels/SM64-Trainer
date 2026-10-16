@@ -80,7 +80,12 @@ def test_lblj_editor_saves_to_the_visible_scope(can_share, tmp_path, monkeypatch
         name = "LBLJ — corrected default through the visible save button"
         set_input(page, '.segbuilder input[placeholder="e.g. Lobby to BitDW"]', name)
         page.click(primary)
-        page.wait_ms(600)
+        # Persistence precedes the editor reload and confirmation. Wait for
+        # the completed UI save before checking its database/release outputs.
+        receipt = "Saved for the next release" if can_share else "Saved"
+        page.wait_for(f'.app-notice[role="status"]:has-text("{receipt}")', timeout_ms=5000)
+        assert receipt == page.evaluate(
+            "document.querySelector('.app-notice[role=\"status\"]').textContent")
         # Read the DB-backed API after the actual button has completed its save.
         rows = page.evaluate("return fetch('/api/segments').then(r=>r.json())")
         row = next(r for r in rows if r.get("seed_key") == "seg:lblj")
@@ -90,7 +95,6 @@ def test_lblj_editor_saves_to_the_visible_scope(can_share, tmp_path, monkeypatch
             shipped = json.loads(seed_path.read_text(encoding="utf-8"))
             assert next(r for r in shipped["segments"] if r["seed_key"] == "seg:lblj")["name"] == name
             assert (data / "segments.authored.json").is_file()
-            assert "Saved for the next release" in page.evaluate("document.body.innerText")
         else:
             assert seed_path.read_bytes() == before
             assert not (data / "segments.authored.json").exists()
