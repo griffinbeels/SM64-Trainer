@@ -1518,16 +1518,18 @@ many more recordings than the [[ghost set]] can race at once.
 
 One place in the adaptive [[ghost set]] for the current [[target]] and [[ghost matching scope]]. The trainer
 chooses a compatible recording above the saved [[personal best]], or protects
-the player's exact manual choice until they clear it. Automatic seats hold one
-recording per player: a rival group never shows the same player twice unless
-the player pinned both (his rule, 2026-10-12: "per rival group, there should
-be only unique players"). Seats the range cannot fill widen upward, nearest
+the player's exact manual choice until they clear it. Every seat, including
+manual choices and recordings waiting to download, holds one recording per
+player. A second choice from that player must replace their existing slot
+(round 52, 2026-10-15: "there's no way for someone to be racing two versions of me
+at the same time right?"). Seats the range cannot fill widen upward, nearest
 subdivision first, then downward (his rule, round 49: "keep expanding the
 range upwards until the rival list is full ... then expand downwards"), in
 fixed ranges too. Automatic seats never hold the player's own
 recordings: this install's player identity, the signed-in community account, and
-the bundled [[ghost collection]] when the player is its author by export credit
-or account name (his rule, 2026-10-13: "the player doesn't ever actually fight
+the bundled [[ghost collection]] when its reviewed author identity matches the
+signed-in account. Legacy collections without that identity retain export-credit
+matching (his rule, 2026-10-13: "the player doesn't ever actually fight
 their own [[ghost]]s as a rival"). A pinned own recording still plays. The slot keeps its colour when
 its recording changes; the separate [[PB ghost]] keeps its own colour.
 

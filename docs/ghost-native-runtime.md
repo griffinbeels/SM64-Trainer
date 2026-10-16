@@ -2148,3 +2148,27 @@ registration, camera alignment, terrain occlusion, uninterrupted clean recording
 or the full 33.33 ms Project64 budget. Those still require current built binaries
 and a separate live recording witness. Neither this document nor a synthetic
 receipt closes that live acceptance gate.
+
+## Capture classification and rival identity (round 52)
+
+An unassigned, certified successful attempt retains complete native inputs and
+poses before the rolling archive expires. Retention alone grants no population
+membership or community offer. Later strategy classification uses the normal
+tracker callback, including after restart; retagging retracts old membership and
+rechecks the current strategy's ceiling and subdivision winner. Incomplete or
+uncertified captures remain ineligible. Retraction retries compare the latest
+durable operation UUID, so a late keep-B failure cannot replace a newer keep-C
+operation, including B→C→B sequences.
+
+One player may occupy one rival seat across automatic choices, explicit pins and
+mixed ready/downloading rosters. Bundled schema2 author identities match the
+packaged Auth issuer and account subject; equal display names do not merge
+accounts. Established identities belonging to the current player share one
+manual seat. Unknown legacy recordings retain independent fallback identities.
+
+Ghost controls remain on the active practice card after a failed session read,
+with an explanation and Retry. A successful read, accepted write, new broadcast
+or reconnect can restore them; a late GET cannot overwrite newer valid state.
+Inactive cards neither read the session nor render its controls. Daily Star
+styling does not alter this contract. Browser fixtures prove recovery on BBH and
+segments at 850px and 1500px; they do not identify the original live HTTP failure.

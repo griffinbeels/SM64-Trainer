@@ -125,6 +125,14 @@ a staged version hook and metadata; the frozen runtime self-check must prove the
 target version, normal identity, port and updater baseline. Preparation rechecks
 HEAD, working-tree status and `uv.lock` before writing the candidate record.
 
+Public preparation with `--public --ghosts COLLECTION` also requires
+`--ghost-author REVIEWED_AUTHOR.json`. This bounded schema1 input names `author`,
+`issuer` and `subject`; the issuer must match the packaged community service and
+the subject must be its verified account UUID. The emitted seed descriptor uses
+schema2 `author_identity`, allowing bundled and downloaded recordings to occupy
+one player's seat. Display names alone never establish this binding. Private
+legacy collections without a binding continue using schema1 descriptors.
+
 Private output includes `SM64Trainer-VERSION-private.exe`, its checksum and an
 immutable private-installer receipt. The EXE contains the complete application,
 the reviewed legitimate Griffin collection and a private friend invitation.
