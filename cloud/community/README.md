@@ -5,7 +5,8 @@ implement [protocol v1](../../docs/community-protocol.md). This checkout is disa
 with placeholders. Actual beta bindings and provisioning receipts are private
 operator artifacts; this portable config does not describe their live state. Login proves
 account ownership. Recordings remain **community-unverified**. Structural native
-checks cannot attest honest play, ROM identity, full start, or 100-coin completion.
+checks cannot attest honest play, full start, or 100-coin completion. ROM, inputs
+and time are bound to the clip's own bytes, which a modified client could still forge.
 
 ## Local verification
 
@@ -208,6 +209,18 @@ GHC1 preserves native versions 4–7, 160-byte header, exact <=256-record blocks
 byte-column shuffle and single zlib Deflate6 streams. Hash, structural/finite
 fields, clock continuity, portable clock/course and playable-pose checks precede
 R2. Raw/encoded limits are 16 MiB/2 MiB before decoding allocations.
+
+Before R2, the clip must also bear out the upload's claims (422 each). Its header
+`rom_layout` (1 US, 2 JP) must name the upload's `rom` (`rom_mismatch`). Every
+record must carry a controller pad, so only version 7 qualifies (`incomplete_inputs`).
+The claimed `frames` must match the clip's clock (`frames_mismatch`). A star (igt)
+is the counter at its close plus one display tick, exactly. A dance tail moves
+the close to the dance entry or at most two frames before it. A segment (rta)
+lies between the counter's span and the frame span plus 30 loading frames.
+The trainer runs the same checks before it uploads and again on download
+(`sm64_events.community.claims`); tests/test_community_wire.py runs both sides.
+Rows published before these checks are not re-read; the trainer's download check
+covers them.
 
 Multipart create, one part and complete reserve three Class A tickets; recovery
 abort uses another. Persist multipart intent before any part write. Abort fences
