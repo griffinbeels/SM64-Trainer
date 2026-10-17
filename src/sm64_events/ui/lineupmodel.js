@@ -23,7 +23,7 @@ export const OTHER_STRATEGY = "Other…";
 export const LINEUP_WORDS = {
   noStrategy: "Pick your strategy to race ghosts",
   noStrategies: "Create a strategy to race ghosts",
-  nobody: "No one has shared a run on this strategy yet.",
+  nobody: "No ghosts available.",
   offline: "Rivals return when you're back online.",
   signedOut: "Sign in to race community ghosts.",
   unknownRom: "Load a compatible practice ROM to race ghosts.",

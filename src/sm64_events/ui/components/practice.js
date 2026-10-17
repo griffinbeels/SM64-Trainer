@@ -20,7 +20,7 @@ import { practiceSuccessSnapshot, usePracticeScroll } from "../practicescroll.js
 const html = htm.bind(h);
 
 // New-entry blink: attempt ids first seen AFTER the initial view load get
-// .row-new (three gold pulses, ~2.4s) so the row that just landed is
+// .row-new (one white flash across the whole row, 1.2s) so the row that just landed is
 // unmissable. The first view after mount and the first after a
 // session↔lifetime flip are absorbed silently — those bring in OLD
 // attempts, not new entries. Expiry is real state, not just animation-end:

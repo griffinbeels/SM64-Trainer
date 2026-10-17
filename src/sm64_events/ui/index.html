@@ -1152,9 +1152,6 @@
   /* progress-graph pick: one fading gold pulse lands the eye on the row */
   @keyframes rowflash { from { background: #3a321d; } to { background: transparent; } }
   .row-flash td { animation: rowflash 1.6s ease-out; }
-  /* new-entry blink: three gold pulses single out the row that just landed */
-  @keyframes rownew { 0%, 100% { background: transparent; } 50% { background: #3a321d; } }
-  .row-new td { animation: rownew 0.8s ease-in-out 3; }
   .popover { position: absolute; background: #1b1e24; border: 1px solid #3a4150;
              border-radius: 6px; padding: .7rem; z-index: 5; }
   li { margin: .25rem 0; list-style: none; } ul { padding: 0; }
@@ -3733,8 +3730,12 @@
      extent with a touch of room, consistent with the rank-banner fix
      (round 4) and every other site swept this round -- see caps.js's
      HAT_LAYOUT_WIDTH_RATIO/HAT_WING_SPILL_RATIO for where these numbers
-     come from. */
-  .attempt-medal { width: 54px; text-align: center; }
+     come from.
+     64px since 2026-10-16 (his live report, Lineup round 6: the cap "feels
+     weirdly positioned / spaced, same with the 21"63"): 54px left the wing
+     tips touching the result's check, so the cap read as jammed against the
+     time. 64px keeps the ~52px wing extent centred with ~6px clear each side. */
+  .attempt-medal { width: 64px; text-align: center; }
   /* NEVER WRAPS, at any width and at any nesting depth (round 24). The
      narrow-container variant far below has said `nowrap` since it was
      written; the WIDE one did not, so a result cell squeezed by anything
@@ -7382,6 +7383,13 @@
   @property --pb-sweep { syntax: "<percentage>"; inherits: false; initial-value: -40%; }
   @property --pb-tilt { syntax: "<percentage>"; inherits: true; initial-value: 0%; }
   @property --pb-drift { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+  /* THE NEW-ENTRY FLASH (2026-10-16, his live report: the old three gold
+     pulses were painted per cell, "split up with these ugly lines / separate
+     boxes", and read as red on a successful run -- "it should just be a white
+     background flash to indicate that it just appeared"). One white wash,
+     painted on the ROW like the PB wash below so it is one continuous colour,
+     rising fast and fading out once. A PB's own arrival replaces it. */
+  @property --row-new { syntax: "<number>"; inherits: false; initial-value: 0; }
   .attempt-table tr:not(.replay-row) {
     background-image:
       linear-gradient(100deg, transparent calc(var(--pb-sweep) - 9%),
@@ -7397,11 +7405,15 @@
       linear-gradient(90deg,
         rgb(255 215 95 / calc(var(--log-pb-tint, 0.14) * var(--pb-lit))),
         rgb(255 215 95 / calc(var(--log-pb-tint, 0.14) * 0.35 * var(--pb-lit))) 55%,
-        rgb(255 215 95 / 0));
+        rgb(255 215 95 / 0)),
+      linear-gradient(rgb(255 255 255 / calc(0.16 * var(--row-new))), rgb(255 255 255 / calc(0.16 * var(--row-new))));
     background-repeat: no-repeat;
-    background-size: 100% 100%, 250% 100%, 100% 100%;
-    background-position: 0 0, calc(50% + var(--pb-tilt) * 1.5) 0, 0 0;
+    background-size: 100% 100%, 250% 100%, 100% 100%, 100% 100%;
+    background-position: 0 0, calc(50% + var(--pb-tilt) * 1.5) 0, 0 0, 0 0;
   }
+  @keyframes rownew { 0% { --row-new: 0; } 14% { --row-new: 1; } 100% { --row-new: 0; } }
+  .attempt-table tr.row-new { animation: rownew 1.2s ease-out; }
+  @media (prefers-reduced-motion: reduce) { .attempt-table tr.row-new { animation: none; } }
   .attempt-table tr:not(.replay-row) > td:first-child {
     box-shadow: inset var(--log-pb-edge, 3px) 0 0 rgb(255 215 95 / calc(min(var(--pb-lit), 1)));
   }
@@ -7409,10 +7421,10 @@
   .attempt-table tr.pb-arrive {
     animation: pbarrive var(--log-pb-arrive, 1400ms) cubic-bezier(.25, .1, .25, 1) both;
   }
-  /* The arrival REPLACES the new-entry blink rather than stacking on it: an
-     automatic PB lands as a new row and is crowned a beat later, and three
-     gold pulses under a glint read as two things happening. */
-  .attempt-table tr.pb-arrive.row-new td { animation: none; }
+  /* The arrival REPLACES the new-entry flash rather than stacking on it: an
+     automatic PB lands as a new row and is crowned a beat later, and a flash
+     under a glint reads as two things happening. Both animate the row, so the
+     arrival, declared after the flash, simply wins. */
   @keyframes pbarrive {
     0%   { --pb-lit: 0; --pb-sweep: -40%; }
     35%  { --pb-lit: var(--log-pb-flash, 1.7); }
