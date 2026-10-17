@@ -110,10 +110,20 @@ when a write lands after the publish window and says something new, which of
 the measured shapes only a subarea star's whole-star write does — and the
 subarea branch above is what stops even that one from being seen.
 
-Where no write comes at all — `STOP` of Grab or None, both already illegal —
-the counter derivation stands in, `igt_source` is `"counter"` rather than
-`"result"`, and the publish deadline is what ends the wait. That case keeps
-the subarea error; it cannot be fixed from a counter that restarted.
+## Why Usamune's STOP setting no longer matters (2026-10-17)
+
+Under `STOP` of Grab or None no x-cam write ever comes, and every such row
+waited the whole `PUBLISH_WAIT_FRAMES` for it: twelve of his thirteen JP grabs
+that day, whose fresh ROM still had Grab. His ruling: *"we should NEVER rely
+on the player to remember to set up their timer mode correctly ... we need to
+be able to automatically extract the RIGHT TIME REGARDLESS OF THE USER'S TIMER
+SETTING."* The number never needed the setting — the x-cam is Mario's landing
+and the counter never stops — so the detector now reads the setting off the
+writes (`_observe_stop`) and, once it knows none is coming, publishes its own
+derivation at the x-cam with no wait. Under Grab it also refuses the touch
+write, which on a ground grab sits one frame under the x-cam and used to pass
+for agreement. Each row carries `usamune_stop`, so the practice log can tell
+the player why the game's screen shows another number.
 
 ## Why this detector runs FIRST in the chain
 
@@ -177,6 +187,9 @@ class _PendingGrab:
     xcam_frame: int | None = None
     xcam_igt: int = 0
     xcam_igt_source: str = ""
+    # The x-cam number from the counter alone (plus any banked legs), kept
+    # beside `xcam_igt`, which may already be Usamune's write.
+    derived_igt: int = 0
     # Captured with the x-cam reading, not asked for again later: whether our
     # own counter can be trusted is a fact about the run this grab belongs to,
     # and by the time the emit decides, a new run may have started.
@@ -208,6 +221,10 @@ class _PendingGrab:
     # replaces — every ordinary grab now carries its own evidence.
     published_after: int = 0
     writes: list[tuple[int, int]] | None = None
+    # What THIS grab's result-store writes said about Usamune's STOP, once they
+    # say anything (`_observe_stop`): "xcam", "grab", "none", or None while
+    # the writes are still inconclusive.
+    stop_seen: str | None = None
 
 
 class StarGrabDetector:
@@ -281,10 +298,19 @@ class StarGrabDetector:
     # here would emit the grab time — the exact bug this file fixes — so the
     # threshold sits far above the skew and far below any real reset.
     IGT_RESET_DROP_FRAMES = 15
+    # The shortest fall whose writes can tell STOP=Grab from an x-cam setting.
+    # Under Grab, Usamune writes the counter at the TOUCH, which sits fall + 1
+    # frames under our x-cam number; at a fall of 0 or 1 (and a torn read can
+    # turn 0 into 1) that is within AGREEMENT_FRAMES and looks like agreement.
+    STOP_EVIDENCE_FALL_FRAMES = 2
 
     def __init__(self):
         self._clock = IgtClock()
         self._pending: _PendingGrab | None = None
+        # What Usamune's timer did on the last grab that showed it: "xcam"
+        # (STOP GrabX or Xcam: it writes our x-cam number), "grab" (it wrote
+        # only the touch), "none" (it wrote nothing), None until a grab says.
+        self._stop: str | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if self._clock.empty():
@@ -337,6 +363,10 @@ class StarGrabDetector:
                    curr: GameSnapshot) -> None:
         grab.xcam_frame = frame
         grab.xcam_igt, grab.xcam_igt_source = self._clock.igt_at_xcam(frame, curr)
+        # Our own number, never Usamune's: on a ground grab `igt_at_xcam`
+        # already took the store, which under STOP=Grab holds the touch.
+        grab.derived_igt = (self._clock.whole_star_igt_at_xcam(frame, curr)[0]
+                            if grab.xcam_igt_source == "result" else grab.xcam_igt)
         grab.xcam_counter_is_partial = self._clock.counter_may_be_subarea_local()
         if grab.xcam_counter_is_partial:
             # The counter is measuring one LEG of this star, and the clock has
@@ -348,7 +378,7 @@ class StarGrabDetector:
             grab.subarea_local_igt = grab.xcam_igt
             grab.carried_igt, grab.xcam_igt_source = \
                 self._clock.whole_star_igt_at_xcam(frame, curr)
-            grab.xcam_igt = grab.carried_igt
+            grab.xcam_igt = grab.derived_igt = grab.carried_igt
 
     def _identify(self, prev: GameSnapshot,
                   curr: GameSnapshot) -> _PendingGrab | None:
@@ -419,6 +449,8 @@ class StarGrabDetector:
             else:
                 return []
         waited = curr.global_timer - grab.xcam_frame
+        if not broken:
+            self._observe_stop(grab, curr, waited)
         if grab.published is not None and grab.timed_at == "grab":
             # Published by the backstop above and the x-cam has now arrived.
             # Same decision as a first publish — when is Usamune's number
@@ -507,12 +539,61 @@ class StarGrabDetector:
             # Scored 4/4 exact against Usamune's whole-star write on his
             # 2026-08-02 session before it was trusted.
             return True
+        if self._usamune_stops_early(grab):
+            # Usamune's timer does not stop at the x-cam (STOP Grab or None),
+            # so no write is coming to agree with: the derivation IS the
+            # answer, and waiting PUBLISH_WAIT_FRAMES for nothing was the
+            # 0.4 s every JP row paid on 2026-10-17.
+            return True
         usamune = self._usamune_answer(grab, curr, proven_final=True)
         if (usamune is not None
                 and abs(usamune - grab.xcam_igt) <= self.AGREEMENT_FRAMES
                 and grab.xcam_igt_source != "reconstructed"):
             return True
         return waited >= self.PUBLISH_WAIT_FRAMES
+
+    def _stop_for(self, grab: _PendingGrab) -> str | None:
+        """This grab's own evidence about STOP, else the last grab's."""
+        return grab.stop_seen or self._stop
+
+    def _usamune_stops_early(self, grab: _PendingGrab) -> bool:
+        return self._stop_for(grab) in ("grab", "none")
+
+    def _observe_stop(self, grab: _PendingGrab, curr: GameSnapshot,
+                      waited: int) -> None:
+        """Read Usamune's STOP off what it wrote for this grab.
+
+        STOP=Grab writes once, the counter at the TOUCH, which sits fall + 1
+        frames under our x-cam number; None writes nothing; GrabX and Xcam
+        write at the x-cam. So a write that AGREES with our derivation, or
+        one that provably landed after the x-cam, means "xcam"; writes with
+        neither mean "grab"; silence means "none". On JP, 1-2 frame falls
+        under Grab wrote before the dance entry and journaled no write at all
+        (ids 20151 and 20183, 2026-10-17: Usamune showed 405, we said 407).
+
+        A fall under STOP_EVIDENCE_FALL_FRAMES proves no "xcam": Grab's touch
+        value is within a frame of the x-cam there. "grab" and "none" are only
+        concluded once every write had time to land (the PUBLISH_WAIT_FRAMES
+        burst, or the whole watch on a multi-leg star, whose whole-star write
+        comes ~27 frames after the dance), and a later x-cam write still
+        overrules them: a subarea star the epoch missed gets that write at +30."""
+        if grab.stop_seen == "xcam":
+            return
+        writes = self._clock.result_writes_since(grab.grab_frame, curr)
+        agrees = any(abs(value - grab.derived_igt) <= self.AGREEMENT_FRAMES
+                     for _, value in writes)
+        if grab.xcam_frame - grab.grab_frame >= self.STOP_EVIDENCE_FALL_FRAMES:
+            late = self._clock.settled_result_at_or_after(
+                grab.xcam_frame, curr, strictly_after=True)
+            if agrees or late is not None:
+                grab.stop_seen = self._stop = "xcam"
+                return
+        elif agrees:
+            return      # a ground grab's agreement fits every setting that writes
+        settle = (self.RESULT_SETTLE_FRAMES if grab.carried_igt is not None
+                  else self.PUBLISH_WAIT_FRAMES)
+        if grab.stop_seen is None and waited >= settle:
+            grab.stop_seen = self._stop = "grab" if writes else "none"
 
     def _usamune_answer(self, grab: _PendingGrab, curr: GameSnapshot,
                         proven_final: bool = False) -> int | None:
@@ -551,6 +632,12 @@ class StarGrabDetector:
         """Usamune's number for this x-cam, as best known RIGHT NOW — the one
         door both the publish and the correction read, so the two can never
         disagree about anything except when they were asked."""
+        if self._usamune_stops_early(grab):
+            # Under STOP Grab every write is a TOUCH value: on a ground grab
+            # it lands one frame under the x-cam and passes for agreement.
+            return grab.derived_igt, ("reconstructed"
+                                      if grab.xcam_igt_source == "reconstructed"
+                                      else "counter")
         usamune = self._usamune_answer(grab, curr)
         if usamune is not None and grab.xcam_igt_source != "reconstructed":
             # Usamune's own number for this x-cam beats our derivation of it —
@@ -587,6 +674,13 @@ class StarGrabDetector:
                 "published_after": grab.published_after,
                 "result_writes": grab.writes or [],
                 "carried_igt": grab.carried_igt,
+                # Both moments, whatever was published: Usamune's clock at the
+                # touch, and our own x-cam derivation (before Usamune's write
+                # replaced it), so every row can be scored against the other.
+                "grab_igt_frames": grab.grab_igt,
+                "derived_igt_frames": (grab.derived_igt if grab.xcam_frame is not None
+                                       else None),
+                "usamune_stop": self._stop_for(grab),
             },
         )
 

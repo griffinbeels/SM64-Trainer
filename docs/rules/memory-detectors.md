@@ -70,7 +70,10 @@ the manual's footnote *"the in-game timer keeps running internally"*,
 confirmed under every STOP value, is what makes that possible. The residual ±1
 frame is OUR torn read, not Usamune: a snapshot is twelve `ReadProcessMemory`
 calls, so the action and the counter in one sample can straddle a game frame.
-**Still true, still unused: `STOP` is INFERABLE from the write pattern** —
+**Used since 2026-10-17 (`StarGrabDetector._observe_stop`, by VALUE: an
+agreeing or post-x-cam write = xcam, a touch-only write = grab, silence =
+none; once grab/none is known the row publishes at the x-cam). Originally
+noted as: `STOP` is INFERABLE from the write pattern** —
 *write at the grab?* × *write later?* separates all four values
 (None/Grab/GrabX/Xcam) out of the 150 frames of `igt_result` history
 `IgtClock` already keeps, so no settings block in memory is needed to know

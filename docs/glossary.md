@@ -1854,6 +1854,9 @@ whole time, and a [[reset]] throws it away.
 The camera cut Super Mario 64 plays when you touch a [[star]]. The community
 times a grab there, so the trainer publishes a [[star]] time when the
 x-cam starts rather than when the game finishes writing its own result.
+The trainer derives that time from Mario's landing and Usamune's running
+counter, so the time holds whatever Usamune's TIMER → STOP menu says; the
+menu only decides whether the game's own screen agrees.
 
 - **Lives** — the star-grab detector
   (`src/sm64_events/detectors/star_grab.py`)

@@ -131,13 +131,15 @@ Every WebSocket message is a versioned envelope:
 - `igt_source`: `result` (Usamune's own stored final time — exact),
   `counter` (running overall counter, back-computed), `reconstructed` (see
   Behavior notes)
-- `igt_source` **on a star** is also the legality signal: `result` means Usamune wrote a time at or after the x-cam, i.e. its `STOP` was GrabX or Xcam; `counter` means it did not, so `STOP` was Grab or None and the row is not leaderboard-legal. `counter` on a multi-area star is additionally the time spent in the SUBAREA, not the whole star — the overall counter restarts at an area warp and nothing can recover the earlier part.
+- `igt_source` **on a star** says where the number came from, not whether it is legal: `result` is Usamune's own x-cam write (its `STOP` was GrabX or Xcam); `counter` is our derivation at the same x-cam, the number Usamune would have written, used when its timer stopped at the grab or never (`usamune_stop`). A multi-area star's `counter` adds the legs banked before each area warp (`carried_igt`). Legality is `igt_timed_at`.
+- `usamune_stop` *(star_collected only, added 2026-10-17)*: what Usamune's own timer did, read off its result-store writes — `xcam` (GrabX or Xcam: it shows the x-cam time), `grab` (it stopped at the touch), `none` (it never stops), or null before any grab has shown it. Once `grab` or `none` is known the row goes out at the x-cam with no wait. The practice log's "Set Timer → GrabX" hint reads it.
+- `grab_igt_frames` / `derived_igt_frames` *(star_collected only, added 2026-10-17)*: Usamune's clock at the touch, and our own counter derivation of the x-cam (null when no x-cam happened). `igt_frames` stays the x-cam time; these two let every row be scored against Usamune's.
 - `igt_timed_at` *(star_collected only, added 2026-08-01)*: `xcam` — the time
   is the leaderboard-legal one, taken when Mario landed after the grab — or
   `grab`, the fallback for a grab that never reached a star dance (savestate
   load, level change, or the 300-frame backstop). Usamune's own `STOP` setting
   does not enter into it: the x-cam moment is derived from Mario's actions, so
-  the number is legal whatever the TIMER menu says
+  the number is legal whatever the TIMER menu says, on US and JP alike
 - `grab_frame` *(star_collected only, added 2026-08-01)*: the frame Mario
   touched the star. Equal to `frame` on a ground grab, earlier on a midair one
 - `published_after` / `result_writes` *(star_collected only, added
