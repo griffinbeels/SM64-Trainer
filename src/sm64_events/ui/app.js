@@ -95,7 +95,7 @@ function ConnectionStatus({ t, mobile = false }) {
     : t.paused ? (t.pauseReason === "afk" ? "Paused · AFK" : "Paused")
     : "Live";
   return html`<div class=${mobile ? "mobile-status" : "sidebar-status"}>
-    <div class="connection-line ${t.connected && !t.paused ? "is-live" : "is-warn"}">
+    <div class="connection-line ${t.connected && !t.paused ? "is-live" : "is-warn"}" title=${label}>
       <span class="status-light" aria-hidden="true"></span>
       <span class="status-main">${label}</span>
       ${!mobile && html`<span class="status-sub">${t.connected ? "Server connected" : "Reconnecting…"}</span>`}

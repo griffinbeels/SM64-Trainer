@@ -35,6 +35,7 @@ const PATHS = {
   close: "M5 5l14 14M19 5L5 19",
   play: "M8 5v14l11-7L8 5z",
   bookmark: "M6 3h12v18l-6-4-6 4V3z",
+  undo: "M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11",
   edit: "M4 20h4l11-11-4-4L4 16v4zm9-13 4 4M4 20h16",
   trash: "M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6",
   save: "M5 3h12l2 2v16H5V3zm3 0v6h8V3M8 21v-7h8v7",

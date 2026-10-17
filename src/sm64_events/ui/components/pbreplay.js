@@ -40,17 +40,28 @@ export function usePbReplay(attemptId, timerMode, refresh) {
   return { busy, notice, save: () => run(false), retry: () => run(true) };
 }
 
-export function PbAction({ attempt, blocked, state, undo, beat }) {
+export function PbAction({ attempt, blocked, state, undo, beat, unfinished = false }) {
   // The server resolves Save/Undo/blocked. Preserve its strategy and time gates.
   if (attempt.pb_action === "undo") return html`<button onclick=${undo} disabled=${state.busy}
-    title="delete this save — the previous PB on this strategy becomes current again">Undo PB</button>`;
+    title="delete this save — the previous PB on this strategy becomes current again">
+    <${Icon} name="undo" size=${14} /><span class="pb-word">Undo PB</span></button>`;
+  // A failure can never be a PB; it holds the button's place, disabled.
+  if (unfinished && attempt.pb_action !== "save" && !blocked) return html`<button
+    class="pb-unfinished" disabled title="Only a finished run can be a PB">
+    <${Icon} name="bookmark" size=${14} />
+    <span class="save-pb-wide">Save as PB</span><span class="save-pb-narrow">Save PB</span></button>`;
   if (attempt.pb_action !== "save" && !blocked) return null;
   const { cls, title, mark } = saveReason(attempt, blocked, beat);
   return html`<button class=${cls}
     disabled=${Boolean(blocked) || state.busy} onclick=${state.save}
     title=${title} aria-label=${mark ? title : undefined}>
     <${Icon} name="bookmark" size=${14} />
-    <span class="save-pb-wide">Save as PB</span><span class="save-pb-narrow">Save PB</span>
+    ${/* A button wearing its reason says less, so it fits the same slot as
+         every other row's (round 7: no button moves between rows): "Save
+         PB" plus the mark where there is room, the icon plus the mark in
+         the narrow log. The full sentence rides the title either way. */""}
+    <span class="save-pb-wide">${mark ? "Save PB" : "Save as PB"}</span>${mark
+      ? "" : html`<span class="save-pb-narrow">Save PB</span>`}
     ${mark ? cardBadge(mark) : ""}</button>`;
 }
 

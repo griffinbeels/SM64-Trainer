@@ -30,9 +30,14 @@ import { PbAction, PbReplayNotice, usePbReplay } from "./pbreplay.js";
 const html = htm.bind(h);
 
 // `loaded`: a save state ended it (attempt rules 2) -- not a reset he chose.
-const OUTCOME_LABEL = { success: "✔", reset: "✘ reset",
-  loaded: "⟲ loaded save state",
-  hard_reset: "✘ hard reset", abandoned: "– abandoned", death: "✘ death" };
+// The glyph sits in the row's mark column, where a ranked finish shows its
+// cap instead, so every row has a mark and every row's words start at the
+// same x (round 7, 2026-10-17: "the checkmark is redundant: the rank cap
+// serves as the checkmark now" and "the resets feel empty").
+const OUTCOME_LABEL = { success: { glyph: "✔", word: "" }, reset: { glyph: "✘", word: "reset" },
+  loaded: { glyph: "⟲", word: "loaded save state" },
+  hard_reset: { glyph: "✘", word: "hard reset" }, abandoned: { glyph: "–", word: "abandoned" },
+  death: { glyph: "✘", word: "death" } };
 
 export const SORT_OPTIONS = [
   ["newest", "newest first"], ["oldest", "oldest first"],
@@ -227,6 +232,49 @@ function usePbRow(a, sec, t) {
   };
 }
 
+// The row's mark: its rank cap, else its outcome glyph (OUTCOME_LABEL above).
+function RowMark({ a }) {
+  const success = a.outcome === "success";
+  const mark = a.rank
+    ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />`
+    : html`<span class=${`attempt-glyph ${success ? "good" : "badx"}`}
+        aria-hidden="true">${(OUTCOME_LABEL[a.outcome] || {}).glyph || ""}</span>`;
+  return html`${mark}${success ? html`<span class="sr-only">finished</span>` : ""}`;
+}
+
+// The row's words: the time of a finish, or what ended the run and how far in.
+function RowResult({ a, time, inTime, timeMark, showDust }) {
+  const success = a.outcome === "success";
+  return html`${(OUTCOME_LABEL[a.outcome] || { word: a.outcome }).word}
+    ${a.outcome === "death" && a.outcome_detail
+      ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
+    ${success && time ? html` <b>${time}</b>` : ""}
+    ${timeMark ? cardBadge(timeMark) : ""}
+    ${!success && inTime ? html` <span class="meta">${inTime} in</span>` : ""}
+    ${showDust && a.rollouts_total > 0
+      ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
+    ${showDust && a.jumps_total > 0
+      ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
+    ${a.cleared && a.cleared_reason
+      ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}`;
+}
+
+// What the strategy the card heads with means for this row (round 7):
+// * `unfinished` -- a failure on that strategy wears a DISABLED Save PB ("if
+//   it's a reset, then it cannot possibly be a PB, so it should be
+//   DISABLED"), so every row's buttons sit in the same places. Another
+//   strategy's row keeps an empty slot instead -- "hidden entirely"
+//   (2026-08-22) -- and so does any row while no strategy is picked.
+// * `sameStrat` -- a row on that strategy does not repeat its name: the picker
+//   stays (hover or focus brings it up), and only a row on ANOTHER strategy
+//   shows one, so the column says something when it is shown.
+function rowStrategy(a, sec) {
+  const heading = (sec && sec.last_strat) || null;
+  const own = Boolean(heading) && !a.other_strat;
+  return { unfinished: own && a.outcome !== "success" && !a.cleared,
+           sameStrat: own && a.strat_tag === heading };
+}
+
 export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
   const [showReplay, setShowReplay] = useState(false);
   const [flash, setFlash] = useState(false);
@@ -316,6 +364,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // the server decides which rows earn it (tracking/caveats.py's PROVEN-only
   // rule, measured), this only draws it.
   const timeMark = caveatOf(a.caveat);
+  const { unfinished, sameStrat } = rowStrategy(a, sec);
   // `other-strat` dims the row (index.html, tuned by logtuning.js's
   // otherStratDim/otherStratFade): the row is keyed by id, so a strategy
   // change keeps the same <tr> and the opacity TRANSITIONS rather than
@@ -325,24 +374,12 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   const row = html`<tr ref=${(el) => { rowRef.current = el; }} ...${pbRow.handlers}
       class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""} ${pbRow.rowClass}">
     <td class="meta attempt-index">#${idx + 1}</td>
-    <td class="attempt-medal">${a.rank
-      ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />` : ""}</td>
+    <td class="attempt-medal"><${RowMark} a=${a} /></td>
     <td class="attempt-result ${a.outcome === "success" ? "good" : "badx"}">
-      ${OUTCOME_LABEL[a.outcome] || a.outcome}
-      ${a.outcome === "death" && a.outcome_detail
-        ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
-      ${a.outcome === "success" && time ? html` <b>${time}</b>` : ""}
-      ${timeMark ? cardBadge(timeMark) : ""}
-      ${a.outcome !== "success" && inTime ? html` <span class="meta">${inTime} in</span>` : ""}
-      ${t.showDust && a.rollouts_total > 0
-        ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
-      ${t.showDust && a.jumps_total > 0
-        ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
-      ${a.cleared && a.cleared_reason
-        ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}
+      <${RowResult} a=${a} time=${time} inTime=${inTime} timeMark=${timeMark} showDust=${t.showDust} />
     </td>
     <td class="attempt-delta" title=${pbRow.title}>${a.outcome === "success" ? pbRow.delta : ""}</td>
-    <td class="meta attempt-strategy">
+    <td class="meta attempt-strategy ${sameStrat ? "same-strat" : ""}">
       ${sec
         ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
             groups=${sec.strategy_groups}
@@ -352,7 +389,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
             onChanged=${t.refresh} />`
         : html`<span>${a.strat_tag || "— no strategy —"}</span>`}
     </td>
-    <td class="attempt-actions">
+    <td class="attempt-actions"><div class="attempt-action-slots">
       <button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
             aria-expanded=${showReplay}
             title="View replay" aria-label="View replay">
@@ -360,16 +397,20 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
       ${/* THE action column, a straight cascade over the server's own
            resolved answer (tracking/pbaction.py). Three drawn states and no
            client-side precedence: undo, save, "the time is not a legal
-           quantity". Everything else -- a failure, a cleared row, an attempt
-           with no entity, a row on another strategy, a card with no strategy
-           picked -- draws nothing (the last two by his 2026-08-22 ruling:
-           hide the button until the action is valid again). */""}
-      <${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay} undo=${pbRow.undo} beat=${pbBeat} />
+           quantity" -- plus the disabled Save a failure wears (`unfinished`
+           above), which offers nothing. Everything else -- a cleared row, an
+           attempt with no entity, a row on another strategy, a card with no
+           strategy picked -- leaves the slot empty (the last two by his
+           2026-08-22 ruling: hide the button until the action is valid
+           again). The slot itself is always there, one width, so the buttons
+           never move between rows. */""}
+      <span class="attempt-pb-slot"><${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay}
+        undo=${pbRow.undo} beat=${pbBeat} unfinished=${unfinished} /></span>
       ${a.cleared
-        ? html` <button onclick=${restore}>undo</button>`
-        : html` <button class="icon-button" onclick=${clear}
+        ? html`<button onclick=${restore}>undo</button>`
+        : html`<button class="icon-button" onclick=${clear}
             title="Clear this attempt as a mistake" aria-label="Clear attempt">×</button>`}
-    </td>
+    </div></td>
   </tr>`;
   const onCompare = (openCompare && entity)
     ? (recording) => openCompare({ attemptId: a.id, entity, strat,

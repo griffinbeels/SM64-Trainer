@@ -3736,6 +3736,12 @@
      tips touching the result's check, so the cap read as jammed against the
      time. 64px keeps the ~52px wing extent centred with ~6px clear each side. */
   .attempt-medal { width: 64px; text-align: center; }
+  /* THE MARK COLUMN holds a mark on every row (round 7, 2026-10-17): the
+     rank cap on a ranked finish, else this glyph -- ✔ an unranked finish,
+     ✘ a reset or death, ⟲ a save state. The words beside it start at one x
+     on every row, and a reset no longer leaves the column empty ("the resets
+     feel empty"). */
+  .attempt-glyph { display: inline-block; font-size: 1rem; font-weight: 700; line-height: 1; }
   /* NEVER WRAPS, at any width and at any nesting depth (round 24). The
      narrow-container variant far below has said `nowrap` since it was
      written; the WIDE one did not, so a result cell squeezed by anything
@@ -3752,10 +3758,42 @@
   .attempt-result { min-width: 0; white-space: nowrap; }
   .attempt-delta { width: 72px; white-space: nowrap; font-weight: 700; }
   .attempt-strategy { width: 150px; white-space: nowrap; }
-  .attempt-strategy select { max-width: 120px; min-width: 0; height: 30px; min-height: 30px; }
-  .attempt-actions {
-    width: 210px; text-align: right; white-space: nowrap;
+  /* QUIET until asked (round 7: "we're just very very very cluttered"): the
+     same strategy name in a boxed control on every row was the heaviest
+     repeated thing in the log. It reads as a muted label with its chevron and
+     shows its box on the row's hover or on focus. Still a real select with
+     its own opaque background -- the popup themes off it (the dropdown rule
+     in ui-core). */
+  .attempt-strategy select {
+    max-width: 120px; min-width: 0; height: 30px; min-height: 30px;
+    border-color: transparent; color: var(--muted);
+    transition: border-color .15s ease, color .15s ease, opacity .15s ease;
   }
+  .attempt-table tr:hover .attempt-strategy select,
+  .attempt-strategy select:focus-visible { border-color: #344b64; color: var(--text); }
+  /* A row on the card's own strategy hides the repeated name until the row
+     is hovered or the picker focused (opacity, never display: it stays one
+     click away and keeps its opaque background for the popup). Another
+     strategy's row always shows its name -- the case worth reading. */
+  .attempt-strategy.same-strat select { opacity: 0; }
+  .attempt-table tr:hover .attempt-strategy.same-strat select,
+  .attempt-strategy.same-strat select:focus-visible { opacity: 1; }
+  .attempt-actions { width: 210px; white-space: nowrap; }
+  /* THREE FIXED SLOTS, ▷ | PB | ×, right-aligned, and the PB slot is always
+     there at one width (round 7: "the buttons are staggered / in totally
+     different positions every time"). It holds Save, Undo, a disabled Save
+     on a failure, or nothing on another strategy's row -- never a different
+     width, so no button moves between rows. `min-width`, not `width`: a
+     refused Save wearing its caveat chip may grow its own row's slot. */
+  .attempt-action-slots { display: flex; align-items: center; justify-content: flex-end; gap: .25rem; }
+  .attempt-pb-slot { display: flex; flex: 0 0 auto; min-width: var(--log-pb-slot-width, 7rem); }
+  .attempt-pb-slot > button { flex: 1 1 auto; }
+  /* A refused or invalid Save wears its mark as the glyph alone, like the
+     time's own chip, so it fits the slot every other row uses; the sentence
+     rides the chip's and the button's titles. */
+  .attempt-pb-slot .caveat-chip { gap: 0; padding-inline: .3rem; }
+  .attempt-pb-slot .caveat-chip-word { display: none; }
+  .attempt-actions button.pb-unfinished { opacity: .3; cursor: default; }
   /* `vertical-align: middle`, because the cell lays its buttons out INLINE
      and inline-blocks sit on the text baseline by default -- the replay
      button's SVG, "Save as PB"'s text and the ×'s glyph each put that
@@ -6059,7 +6097,13 @@
        (which has no room) and `::before` draws the indicator, CENTRED rather
        than left-aligned in a full-width box, with the border and padding
        dropped so the block is a dot and not a panel containing one. */
-    .connection-line { display: block; }
+    /* Round 7 (2026-10-17, "the recording button isn't even centered! Big
+       problem!"): two causes, both measured. The connection light was an
+       empty INLINE span inside a block, so it drew nothing and left the top
+       of the box empty (since the 2026-07-24 redesign); it is a centred flex
+       item now. And the button's flex gap sat between the dot and its
+       zero-width label, pushing the dot left by half of it; `gap: 0`. */
+    .connection-line { display: flex; justify-content: center; }
     .recording-status {
       width: 100%; display: flex; justify-content: center;
       border-top: 0; padding-top: .35rem;
@@ -6067,7 +6111,7 @@
     .recording-status > span, .recording-status .dot {
       display: flex; align-items: center; justify-content: center;
     }
-    .recording-status .dot { font-size: 0; overflow: visible; }
+    .recording-status .dot { font-size: 0; overflow: visible; gap: 0; }
     .recording-status .dot::before {
       content: ""; display: block; width: 10px; height: 10px;
       border-radius: 50%; background: currentColor;
@@ -6534,23 +6578,33 @@
     /* One line per attempt even in the narrow layout (2026-07-24) — the old
        two-line grid doubled every entry's height. Long result text ellipses
        instead of wrapping. */
-    .attempt-table, .attempt-table tbody { display: block; width: 100%; }
-    .attempt-table tr:not(.replay-row) {
-      height: auto; min-height: 44px; display: grid;
-      grid-template-columns: 30px 26px minmax(0,1fr) max-content
+    /* The ROWS SHARE THE TABLE'S TRACKS (subgrid), round 7: each row used to
+       be its own grid sized by its own content, so a row with Save PB put its
+       strategy select at a different x from a reset's ("the buttons are
+       staggered"), and the 26px mark track let a 52px cap cover the time's
+       check. Now every max-content track is as wide as its widest row. */
+    .attempt-table {
+      display: grid; width: 100%; column-gap: .18rem;
+      grid-template-columns: 30px 56px minmax(0,1fr) max-content
                              minmax(0,max-content) max-content;
-      align-items: center; gap: 0 .18rem;
+    }
+    .attempt-table tbody { display: contents; }
+    .attempt-table tr:not(.replay-row) {
+      grid-column: 1 / -1; height: auto; min-height: 44px; display: grid;
+      grid-template-columns: subgrid; align-items: center;
       padding: .14rem 0; border-bottom: 1px solid var(--border-soft);
     }
+    .attempt-table tr.pb-replay-notice > td { grid-column: 1 / -1; }
     .attempt-table td { display: block; width: auto; border: 0; padding: .12rem .2rem; }
+    .replay-row { grid-column: 1 / -1; }
     .attempt-result { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .attempt-delta { text-align: right; }
     .pb-swap { justify-items: end; }
     .attempt-strategy { min-width: 0; }
-    .attempt-actions { display: flex; justify-content: flex-end; }
     .attempt-strategy select { max-width: 104px; }
     .save-pb-wide { display: none; }
     .save-pb-narrow { display: inline; }
+    .attempt-pb-slot { min-width: var(--log-pb-slot-narrow-width, 5.5rem); }
     .replay-row, .replay-row td { display: block; height: auto; width: 100%; }
     .settings-actions { grid-template-columns: 1fr; }
   }
@@ -6564,6 +6618,8 @@
     .reset-toggle span { display: none; }
     .attempt-actions button { padding-inline: .32rem; }
     .save-pb-narrow { display: none; } /* icon-only Save on phones */
+    .attempt-pb-slot { min-width: 2.2rem; }
+    .attempt-pb-slot .pb-word { display: none; }
     .replay-setting-row { grid-template-columns: 1fr; gap: .35rem; }
     .replay-setting-controls { width: 100%; }
   }
@@ -7138,12 +7194,17 @@
     background: rgba(5,14,24,.55); border: 1px solid var(--border-soft);
     font-variant-numeric: tabular-nums;
   }
-  .goal-plate-row { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+  /* ONE gap for both lines (round 7: "the PB / goal values ... clearly don't
+     align"). The PB line spaces its word from its time with this row's gap,
+     the GOAL line with its trigger button's, so the two have to read the same
+     number -- the narrow plate once set only the row's, and the GOAL time sat
+     1.6px right of the PB time. */
+  .goal-plate-row { display: flex; align-items: center; gap: var(--goal-plate-gap, .4rem); min-width: 0; }
   .log-card-head .goal-plate .pbtag {
     margin: 0; min-width: 0; font-size: var(--log-pb-size, 13px);
   }
   .goal-plate-trigger {
-    min-height: 0; display: flex; align-items: center; gap: .4rem; width: 100%;
+    min-height: 0; display: flex; align-items: center; gap: var(--goal-plate-gap, .4rem); width: 100%;
     padding: 0; border: 0; background: none; color: inherit; cursor: pointer;
     font: inherit; text-align: left; min-width: 0; justify-content: flex-start;
   }
@@ -7245,8 +7306,10 @@
      source stays in the picker and the Scorecard; the plate keeps PB, GOAL
      and the count, which is what a stream crop is for. */
   @container (max-width: 1000px) {
-    .log-card-head .goal-plate { min-width: var(--goal-plate-narrow-width, 100px); padding: 1px 7px; }
-    .log-card-head .goal-plate .goal-plate-row { gap: .3rem; }
+    .log-card-head .goal-plate {
+      min-width: var(--goal-plate-narrow-width, 100px); padding: 1px 7px; --goal-plate-gap: .3rem;
+    }
+    .log-card-head .goal-plate .goal-plate-count { gap: .3rem; }
     .log-card-head .goal-plate .goal-plate-word { flex-basis: 2.1rem; }
     .log-card-head .goal-plate .goal-plate-clock { display: none; }
     .log-card-head .goal-plate .goal-plate-source { display: none; }
