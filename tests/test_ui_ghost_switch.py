@@ -223,6 +223,8 @@ STATES = {
     "no_room": {**ghost_session(enabled=True, opacity=0.6, nudge_frames=3),
                 "window": {"running": False, "visible": False, "backend": "native",
                            "reason": budget_reason(2)}},
+    # Usamune's save state is on D-pad Up, so the ghost hotkey is all four C buttons.
+    "c_buttons": ghost_session(enabled=False, hotkey="c_x4"),
 }
 
 
@@ -593,9 +595,29 @@ def test_the_wording_a_player_reads(rendered, width):
     on = rendered[("on", width)][0]
     off = rendered[("off", width)][0]
     assert on["label"] == off["label"] == "Ghost Overlay"
-    assert on["title"].startswith("Ghosts on.") and off["title"].startswith("Ghosts off."), (
-        on["title"], off["title"])
+    assert on["title"] == "Ghosts on. Click, or press D-pad Up in the game, to hide them."
+    assert off["title"] == "Ghosts off. Click, or press D-pad Up in the game, to race them."
     assert on["timing"].strip() == "3 frames ahead"
+
+
+# Every hotkey the server can name, and the words its tooltip reads.
+HOTKEY_TITLES = {
+    "dpad_up": ("off", "Ghosts off. Click, or press D-pad Up in the game, to race them."),
+    "c_x4": ("c_buttons",
+             "Ghosts off. Click, or press all four C buttons in the game, to race them."),
+}
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_the_toggles_hover_names_the_ghost_hotkey_the_server_reports(rendered, width):
+    """His ask, 2026-10-17: "update the tool tip when hovering over the ghost
+    icon in the trainer webapp accordingly". Keyed by the server's own names,
+    so a hotkey Python adds without words here fails."""
+    from sm64_events.ghost.dpad_toggle import HOTKEYS
+    assert set(HOTKEY_TITLES) == set(HOTKEYS)
+    for hotkey, (state, title) in HOTKEY_TITLES.items():
+        assert STATES[state]["hotkey"] == hotkey
+        assert rendered[(state, width)][0]["title"] == title
 
 
 # --------------------------------------------------------------------------

@@ -109,12 +109,14 @@ class GameSnapshot:
     # reaches the engagement pointers above (measured, round 10), so what the
     # player caused has to be read off the object.
     caused: tuple = ()
-    # Player 1's held buttons (CONTROLLER_BUTTON_DOWN_OFF, addresses.BUTTON_BITS)
-    # and whether Usamune's practice menu is open, for the Ghost Overlay's
-    # D-pad Up toggle (ghost/dpad_toggle.py). None when this ROM's layout has
-    # no verified address, so an unknown reads as unknown and never as 0.
+    # Player 1's held buttons (CONTROLLER_BUTTON_DOWN_OFF, addresses.BUTTON_BITS),
+    # whether Usamune's practice menu is open, and Usamune's save state button
+    # byte (Cx4 or D-pad Up), for the Ghost Overlay's in-game toggle
+    # (ghost/dpad_toggle.py). None when this ROM's layout has no verified
+    # address, so an unknown reads as unknown and never as 0.
     buttons_held: int | None = None
     usamune_menu_open: bool | None = None
+    usamune_savestate_button: int | None = None
 
 
 class SnapshotReader:
@@ -162,6 +164,7 @@ class SnapshotReader:
         self._buttons_at = (L.player1_controller + A.CONTROLLER_BUTTON_DOWN_OFF
                             if L.player1_controller is not None else None)
         self._menu_at = L.usamune_menu
+        self._savestate_button_at = L.usamune_savestate_button
         # The watched behaviours, as THIS ROM's pointers -> their symbols. A
         # symbol this ROM lacks, or a base not yet known, simply watches
         # nothing for that row rather than failing.
@@ -276,6 +279,8 @@ class SnapshotReader:
                           if self._buttons_at is not None else None),
             usamune_menu_open=(m.read_u8(self._menu_at) != 0
                                if self._menu_at is not None else None),
+            usamune_savestate_button=(m.read_u8(self._savestate_button_at)
+                                      if self._savestate_button_at is not None else None),
         )
 
 

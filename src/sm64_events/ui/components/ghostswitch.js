@@ -688,16 +688,21 @@ function overlayOn(session, draft) {
  * THE GHOST TOGGLE, in the active card's head beside the Library book (round
  * 5: the row's switch "feels awkwardly placed ... Maybe it needs to join the
  * rest of the headers up top"). A ghost glyph, gold while ghosts race, struck
- * through while they don't. D-pad Up in the game flips the same setting.
+ * through while they don't. The ghost hotkey in the game flips the same
+ * setting: D-pad Up, or all four C buttons while Usamune's save state is on
+ * D-pad Up. The server names it (`session.hotkey`, ghost/dpad_toggle.py).
  */
+const HOTKEY_WORDS = { dpad_up: "D-pad Up", c_x4: "all four C buttons" };
+
 export function GhostToggle({ ghost, entityKey, active }) {
   if (!active) return null;
   const { session, reachable, draft, write } = ghost;
   const controls = ghostControls(session, entityKey);
   const on = overlayOn(session, draft);
   const known = reachable && controls.known;
-  const words = on ? "Ghosts on. Click, or press D-pad Up in the game, to hide them."
-    : "Ghosts off. Click, or press D-pad Up in the game, to race them.";
+  const key = HOTKEY_WORDS[session?.hotkey] || HOTKEY_WORDS.dpad_up;
+  const words = on ? `Ghosts on. Click, or press ${key} in the game, to hide them.`
+    : `Ghosts off. Click, or press ${key} in the game, to race them.`;
   return html`<button type="button" class=${`ghost-toggle${on && known ? " is-on" : ""}`}
       aria-pressed=${on ? "true" : "false"} aria-label="Ghost Overlay" title=${known ? words : "Loading ghosts…"}
       disabled=${!known} onclick=${() => write({ enabled: !on })}>

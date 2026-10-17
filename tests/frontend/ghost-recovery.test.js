@@ -135,3 +135,17 @@ test("inactive cards make no ghost request or target write", () => {
   expect(api.getJSON).not.toHaveBeenCalled();
   expect(api.send).not.toHaveBeenCalled();
 });
+
+test("the toggle's hover names the ghost hotkey each broadcast reports", async () => {
+  // A session that names no hotkey (an older server) keeps the D-pad Up words.
+  api.getJSON.mockResolvedValue(session());
+  const t = tracker();
+  const view = render(h(Card, {t, entityKey: "star:5:4", active: true}));
+  const title = () => view.container.querySelector(".ghost-toggle").getAttribute("title");
+  await waitFor(() => expect(title()).toBe("Ghosts off. Click, or press D-pad Up in the game, to race them."));
+  const told = hotkey => ({...t, feed: [{type: "ghost_changed", payload: {...session(), hotkey}}]});
+  view.rerender(h(Card, {t: told("c_x4"), entityKey: "star:5:4", active: true}));
+  await waitFor(() => expect(title()).toBe("Ghosts off. Click, or press all four C buttons in the game, to race them."));
+  view.rerender(h(Card, {t: told("dpad_up"), entityKey: "star:5:4", active: true}));
+  await waitFor(() => expect(title()).toBe("Ghosts off. Click, or press D-pad Up in the game, to race them."));
+});

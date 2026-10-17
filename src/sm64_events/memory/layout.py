@@ -96,6 +96,9 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("usamune_input_display", None, "usamune_hud",
               "VERIFY: u8 Usamune input display setting, 0 = off (2 = stick, else values); "
               "its HUD path calls the display (RAM 0x80408848) only while nonzero"),
+    LayoutRow("usamune_savestate_button", None, "usamune_setting_watch",
+              "VERIFY: u8 Usamune's save state button (RESET page: Cx4 or DUP); "
+              "ghost/dpad_toggle.py SAVESTATE_ON_DPAD_UP names the DUP value"),
     LayoutRow("behaviour_base", None, "mario_object_behaviour",
               "RAM address of segment 0x13; = mario_object->behaviour "
               "minus bhvMario's segmented offset for this version"),
@@ -130,6 +133,7 @@ class Layout:
     usamune_timer: int | None = None
     usamune_menu: int | None = None
     usamune_input_display: int | None = None
+    usamune_savestate_button: int | None = None
     behaviour_base: int | None = None
 
     def value(self, field: str) -> int | None:
@@ -197,6 +201,7 @@ US = Layout(
     # path's `lbu 0xb(0x80417b4c)` gates `jal 0x80408848`, the input display).
     usamune_menu=0x804168D8,
     usamune_input_display=0x80417B57,
+    usamune_savestate_button=None,  # VERIFY: found by the live hunt
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
 

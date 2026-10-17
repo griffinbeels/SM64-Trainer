@@ -42,7 +42,8 @@ NO_POSES_TEXT = ("This Mario recording uses an older pose format. "
 def ghost_session(*, enabled: bool | None = None, opacity: float | None = None,
                   nudge_frames: int = 0, available: bool = True,
                   reason: str | None = None, reason_text: str | None = None,
-                  target: dict | None = None, tint: dict | None = None) -> dict:
+                  target: dict | None = None, tint: dict | None = None,
+                  hotkey: str = "dpad_up") -> dict:
     """One I5 payload, in the frozen shape.
 
     Every setting is the registry's own default and the ranges are the ones
@@ -72,6 +73,7 @@ def ghost_session(*, enabled: bool | None = None, opacity: float | None = None,
                    "ghosts": []},
         "window": {"running": values["enabled"] and available,
                    "visible": values["enabled"] and available, "backend": "native"},
+        "hotkey": hotkey,
     }
 
 

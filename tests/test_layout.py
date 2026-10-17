@@ -26,7 +26,10 @@ def test_layout_for_answers_both_versions_and_refuses_others():
 
 
 def test_us_is_complete_and_jp_starts_empty():
-    assert L.US.missing() == ()
+    # Complete except a row the US pin itself records as still hunted (None).
+    from tests.test_layout_us import US_2026_08_15
+    hunted = {field for field, value in US_2026_08_15.items() if value is None}
+    assert set(L.US.missing()) == hunted
     assert set(L.JP.missing()) == {row.field for row in L.LAYOUT_ROWS}
 
 

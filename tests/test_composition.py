@@ -523,13 +523,19 @@ def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
 
 def test_build_wires_dpad_up_to_the_ghost_session_across_detector_rebuilds(monkeypatch):
     """The chain member exists on the real poller, survives a recovery's
-    rebuild, and its press reaches the session `build()` made."""
+    rebuild, and its press and its hotkey's name reach the session `build()`
+    made."""
     from types import SimpleNamespace
+    from sm64_events.ghost import dpad_toggle
     from sm64_events.ghost.dpad_toggle import DpadGhostToggle, OverlayFlipper
     from sm64_events.ghost.session import GhostSession
     main_mod = _stubbed_main(monkeypatch)
     captured = {}
     asked = []
+    told = []
+    monkeypatch.setattr(dpad_toggle, "SAVESTATE_ON_DPAD_UP", 7)  # test-local DUP value
+    monkeypatch.setattr(GhostSession, "note_hotkey",
+                        lambda self, hotkey: told.append((self, hotkey)))
     real_poller, real_create = main_mod.Poller, main_mod.create_app
 
     def poller_spy(memory, detectors, sink, **kw):
@@ -546,12 +552,17 @@ def test_build_wires_dpad_up_to_the_ghost_session_across_detector_rebuilds(monke
                         lambda self: asked.append(self.session))
     main_mod.build()
     poller = captured["poller"]
-    for chain in (poller.detectors, poller.detector_factory()):
+    # The first chain reads no save state button (unknown: D-pad Up); the
+    # rebuilt one reads it on D-pad Up, so its hotkey is all four C buttons.
+    for chain, savestate, hotkey in ((poller.detectors, None, 0x0800),
+                                     (poller.detector_factory(), 7, 0x000F)):
         toggles = [d for d in chain if isinstance(d, DpadGhostToggle)]
         assert len(toggles) == 1
         up, down = (SimpleNamespace(global_timer=frame, buttons_held=buttons,
-                                    usamune_menu_open=False)
-                    for frame, buttons in ((10, 0), (11, 0x0800)))
+                                    usamune_menu_open=False,
+                                    usamune_savestate_button=savestate)
+                    for frame, buttons in ((10, 0), (11, hotkey)))
         toggles[0].process(up, down)
     assert len(asked) == 2 and all(s is captured["ghost"] for s in asked)
+    assert told == [(captured["ghost"], "dpad_up"), (captured["ghost"], "c_x4")]
     assert isinstance(captured["ghost"], GhostSession)

@@ -1,14 +1,27 @@
 # src/sm64_events/ghost/dpad_toggle.py
-"""D-pad Up turns the Ghost Overlay on and off from the controller.
+"""The ghost hotkey turns the Ghost Overlay on and off from the controller.
+
+The hotkey is D-pad Up, unless Usamune's save state is on D-pad Up: then it
+is all four C buttons held together ("Cx4"), the other choice on Usamune's
+RESET page, so one press never both loads a state and flips the ghosts. His
+ask, 2026-10-17: "if the user selected Cx4, then the ghost toggle is D-UP; if
+the user selected D-UP, then the toggle is Cx4". `hotkey_for` reads the save
+state button byte (layout row `usamune_savestate_button`, VERIFY), and
+`SAVESTATE_ON_DPAD_UP` is the value meaning D-pad Up. An unknown byte, or a
+value not yet known, keeps D-pad Up. The key that is not the hotkey does
+nothing. The toggle tells the ghost session which key it is whenever that
+changes (`GhostSession.note_hotkey`), so the card's tooltip names it.
 
 His words, 2026-10-16: "Gameplay active or normal pause --> toggle ghost
 overlay; USAMUNE MENU --> don't do anything", because D-pad Up is how
 Usamune's menu navigates. A press counts when, between two consecutive
 snapshots:
 
-- D-pad Up goes from up to down, whatever else is held (his ask, 2026-10-17:
-  "It should detect if dpad up is ever selected, even if it's combined with
-  other buttons"; the first version ignored a press with L, R or Z held);
+- the hotkey goes from not held to held, whatever else is held (his ask,
+  2026-10-17: "It should detect if dpad up is ever selected, even if it's
+  combined with other buttons"; the first version ignored a press with L, R
+  or Z held). For Cx4 that is the reading where the last of the four joins:
+  they need not go down on one frame;
 - Usamune's menu reads closed on this reading and the one before, and was
   not seen open within one game frame, so a press that opens or closes the
   menu never counts (two readings can share a frame without a pad sampler);
@@ -54,7 +67,21 @@ log = logging.getLogger("sm64.ghost")
 
 _BIT = {name: bit for bit, name in A.BUTTON_BITS}
 DPAD_UP = _BIT["Dup"]
+C_X4 = _BIT["Cup"] | _BIT["Cdown"] | _BIT["Cleft"] | _BIT["Cright"]
 _NOT_BUTTONS = 0xFFFF & ~A.BUTTON_VALID_MASK
+
+#: Each hotkey by the name `GET /api/ghost` gives it, and the buttons it holds.
+HOTKEYS = {"dpad_up": DPAD_UP, "c_x4": C_X4}
+#: The save state button byte's value for Usamune's DUP choice.
+SAVESTATE_ON_DPAD_UP: int | None = None  # filled from the live hunt
+
+
+def hotkey_for(savestate_button: int | None) -> str:
+    """The hotkey's name: Cx4 while Usamune's save state is on D-pad Up, else
+    D-pad Up, which an unknown byte also answers."""
+    if SAVESTATE_ON_DPAD_UP is not None and savestate_button == SAVESTATE_ON_DPAD_UP:
+        return "c_x4"
+    return "dpad_up"
 
 
 def _known(snap) -> bool:
@@ -63,15 +90,15 @@ def _known(snap) -> bool:
             and snap.usamune_menu_open is not None)
 
 
-class DpadUpPress:
-    """The press rule over consecutive (prev, curr) snapshots. Its only state
-    is the frame the menu was last seen open, cleared when `global_timer`
-    goes backward (a reset or a state load)."""
+class HotkeyPress:
+    """The press rule over consecutive (prev, curr) snapshots, for the keys
+    the caller names. Its only state is the frame the menu was last seen
+    open, cleared when `global_timer` goes backward (a reset or a state load)."""
 
     def __init__(self):
         self._menu_open_at: int | None = None
 
-    def pressed(self, prev, curr) -> bool:
+    def pressed(self, prev, curr, keys: int) -> bool:
         if not (_known(prev) and _known(curr)):
             return False
         if self._menu_open_at is not None and curr.global_timer < self._menu_open_at:
@@ -82,20 +109,31 @@ class DpadUpPress:
         if (self._menu_open_at is not None
                 and curr.global_timer - self._menu_open_at <= 1):
             return False
-        return bool(curr.buttons_held & DPAD_UP and not prev.buttons_held & DPAD_UP)
+        return ((curr.buttons_held & keys) == keys
+                and (prev.buttons_held & keys) != keys)
 
 
 class DpadGhostToggle:
     """The poller's chain member: publishes no event (a press is a command,
     not something that happened in the game) and calls `on_press` once per
-    press. Rebuilt with the chain after a recovery, like every detector."""
+    press of the current hotkey. `on_hotkey` hears the hotkey's name on the
+    first reading and whenever it changes, never per frame. Rebuilt with the
+    chain after a recovery, like every detector, so a rebuilt one tells the
+    name again and the session ignores the repeat."""
 
-    def __init__(self, on_press):
-        self._press = DpadUpPress()
+    def __init__(self, on_press, on_hotkey=None):
+        self._press = HotkeyPress()
         self._on_press = on_press
+        self._on_hotkey = on_hotkey
+        self._hotkey: str | None = None
 
     def process(self, prev, curr) -> list:
-        if self._press.pressed(prev, curr):
+        hotkey = hotkey_for(curr.usamune_savestate_button)
+        if hotkey != self._hotkey:
+            self._hotkey = hotkey
+            if self._on_hotkey is not None:
+                self._on_hotkey(hotkey)
+        if self._press.pressed(prev, curr, HOTKEYS[hotkey]):
             self._on_press()
         return []
 
@@ -130,11 +168,11 @@ class OverlayFlipper:
             try:
                 body = await session.refresh(resolve=False)
                 if not body.get("target"):
-                    log.info("D-pad Up: no practice target to race ghosts on")
+                    log.info("ghost hotkey: no practice target to race ghosts on")
                     return None
                 body = await session.update(enabled=not body["enabled"])
             except Exception:  # noqa: BLE001 - a press must never break the poll loop
-                log.exception("D-pad Up could not flip the Ghost Overlay")
+                log.exception("the ghost hotkey could not flip the Ghost Overlay")
                 return None
-            log.info("D-pad Up: Ghost Overlay %s", "on" if body["enabled"] else "off")
+            log.info("ghost hotkey: Ghost Overlay %s", "on" if body["enabled"] else "off")
             return body

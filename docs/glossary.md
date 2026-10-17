@@ -1304,23 +1304,27 @@ next faster rival lights up and carries how much faster that rival's time is,
 as both times are displayed ("−0.13") — the target for your next attempt,
 never a comparison with the last one.
 
-- **Lives** — `src/sm64_events/ui/lineup.js` (`gapText`, `markNext`)
+- **Lives** — `src/sm64_events/ui/lineup.js` (gapText, markNext)
 
 ### Ghost toggle
 
 The ghost glyph in the active practice card's head that turns the Ghost
 Overlay on and off — gold while ghosts race. It is a preference, not a
 capability: with nobody to race it stays on and the [[lineup]] says why.
-D-pad Up in the game flips the same setting, in play or in the game's pause
-menu, even with other buttons held, but never while Usamune's menu is open
-(it navigates with D-pad Up) — his rule, 2026-10-16:
+The **ghost hotkey** in the game flips the same setting, in play or in the
+game's pause menu, even with other buttons held, but never while Usamune's
+menu is open (it navigates with D-pad Up) — his rule, 2026-10-16:
 "Gameplay active or normal pause --> toggle ghost overlay; USAMUNE MENU -->
-don't do anything". Off hides the race rather than ending it: the [[ghost set]]
+don't do anything". The hotkey is D-pad Up, or all four C buttons together
+while Usamune's save state uses D-pad Up, so one press never both loads
+a state and flips the ghosts (his ask, 2026-10-17); the glyph's hover names
+the current one. Off hides the race rather than ending it: the [[ghost set]]
 runs on unseen and unheard, so switching back on mid-run shows every ghost at
 the frame the attempt has reached, at once (his ask, 2026-10-17).
 
-- **Lives** — `src/sm64_events/ui/components/ghostswitch.js` (`GhostToggle`);
-  `src/sm64_events/ghost/dpad_toggle.py` (the press rule and the flip)
+- **Lives** — `src/sm64_events/ui/components/ghostswitch.js` (GhostToggle);
+  `src/sm64_events/ghost/dpad_toggle.py` (the hotkey choice, the press rule
+  and the flip)
 
 ### Recorded shadow
 

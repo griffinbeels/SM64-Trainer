@@ -30,6 +30,7 @@ is bounded by a module-level `..._TIMEOUT_S`/`..._SECONDS` constant named
 for what it is waiting on, and a loop that exhausts its budget returns
 `Verdict("failed", ...)` rather than looping forever.
 """
+from sm64_events.ghost import dpad_toggle
 from sm64_events.memory import addresses as A
 from sm64_events.memory.behaviours import base_from_mario, pointer_of, symbol_of
 from sm64_events.inputs.frame import button_names, fits_controller
@@ -1092,6 +1093,54 @@ register(Gate(
                 "turn the display back on.",
     proves="the RAM byte holding Usamune's input display setting, zero while it is off.",
     check=_check_usamune_input_display,
+))
+
+
+# --- usamune_savestate_button -----------------------------------------------
+
+def _check_usamune_savestate_button(ctx) -> Verdict:
+    """The byte reads one value on Cx4, another on DUP, and the first again on
+    Cx4: two choices, two values, either of which may be zero. Once
+    `ghost/dpad_toggle.py` knows the DUP value, the DUP reading must be it."""
+    field = "usamune_savestate_button"
+    candidate = ctx.candidate(field)
+    if candidate is None:
+        return Verdict("missing", evidence=f"no candidate for {field}: it is hunted by "
+                                           "switching Usamune's save state button, so a new "
+                                           "ROM needs that hunt again")
+    cx4 = dup = None
+    start = ctx.now()
+    while ctx.now() - start < USAMUNE_HUD_TIMEOUT_S:
+        value = ctx.raw().read_u8(candidate)
+        if cx4 is None:
+            cx4 = value
+        elif dup is None and value != cx4:
+            dup = value
+        elif dup is not None and value not in (cx4, dup):
+            return Verdict("failed", value=candidate, measured={"values": [cx4, dup, value]},
+                           evidence="read three values for a two-choice setting")
+        elif dup is not None and value == cx4:
+            known = dpad_toggle.SAVESTATE_ON_DPAD_UP
+            measured = {"c_x4": cx4, "dpad_up": dup}
+            if known is not None and dup != known:
+                return Verdict("failed", value=candidate, measured=measured,
+                               evidence=f"DUP read {dup}, but the ghost hotkey expects {known}")
+            return Verdict("verified", value=candidate, measured=measured,
+                           evidence=f"read {cx4} on Cx4, {dup} on DUP, then {cx4} again")
+        ctx.sleep(POLL_INTERVAL_S)
+    return Verdict("failed", value=candidate,
+                   evidence="never saw one value, a second, then the first again "
+                            "while the save state button was switched")
+
+
+register(Gate(
+    id="address.usamune_savestate_button", feature="controller input", kind="address",
+    needs=("version.rom",), timeout_s=USAMUNE_HUD_TIMEOUT_S + 10,
+    instruction="On the RESET page of Usamune's menu, set the save state button to Cx4, "
+                "wait a moment, switch it to DUP, wait, then switch it back to Cx4.",
+    proves="the RAM byte holding Usamune's save state button choice, which picks the "
+           "ghost hotkey (all four C buttons while the save state is on D-pad Up).",
+    check=_check_usamune_savestate_button,
 ))
 
 
