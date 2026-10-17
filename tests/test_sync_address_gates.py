@@ -549,6 +549,36 @@ def test_usamune_star_result_hunt_fails_when_nothing_holds_it():
     assert verdict.status == "failed"
 
 
+def _star_result_ctx(store):
+    """A grab whose dance starts at t=0.1 with the overall counter at 1188,
+    ticking 30/s until he resets at t=2.6 and Usamune zeroes it."""
+    clock = ScriptedClock()
+    mem = ScriptedMemory(clock)
+    dance = next(iter(A.STAR_DANCE_ACTIONS))
+    mem.script("u32", US.mario_struct + A.MARIO_ACTION_OFF,
+               lambda t: NON_STAR_ACTION if t < 0.1 else dance)
+    counter = lambda t: 0 if t >= 2.6 else 1188 + int(max(t - 0.1, 0) * 30)  # noqa: E731
+    mem.script("u16", US.usamune_overall, counter)
+    mem.script("u16", US.usamune_star_result, lambda t: store(t, counter(t)))
+    return _ctx(mem, {"mario_struct": US.mario_struct,
+                      "usamune_overall": US.usamune_overall}, clock=clock)
+
+
+def test_star_result_candidate_holds_then_survives_his_reset():
+    """The live JP shape: written one frame past the dance's counter, held
+    while the counter ran on, then zeroed with it by his reset."""
+    ctx = _star_result_ctx(lambda t, counter: 0 if t < 0.1 or t >= 2.6 else 1189)
+    verdict = AG._check_star_result_candidate(ctx, US.usamune_star_result)
+    assert verdict.status == "verified", verdict
+    assert verdict.measured["ran_on"] >= AG.RESULT_RUN_ON_FRAMES
+
+
+def test_star_result_candidate_that_follows_the_counter_fails():
+    ctx = _star_result_ctx(lambda t, counter: counter)
+    verdict = AG._check_star_result_candidate(ctx, US.usamune_star_result)
+    assert verdict.status == "failed", verdict
+
+
 def test_usamune_timer_reports_candidates_that_reset_across_the_load():
     """Diagnostics only: keep u32s that were a running counter BEFORE the
     area load and near zero AFTER it. A near-zero one-image scan of an

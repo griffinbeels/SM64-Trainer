@@ -57,6 +57,7 @@ HUNT_MAX_ROUNDS = 4
 HUNT_SURVIVOR_CEILING = 3
 USAMUNE_CONTRACT_SAMPLE_SECONDS = 2.0
 USAMUNE_RESULT_SETTLE_SECONDS = 3.0
+RESULT_RUN_ON_FRAMES = 15             # half a second of counter past a held result
 USAMUNE_TIMER_TIMEOUT_S = 60.0
 # The two-image differential for the section counter (diagnostics only): a
 # u32 that was at least this many frames old before the area load and at
@@ -963,8 +964,12 @@ def _check_usamune_overall(ctx) -> Verdict:
 def _check_star_result_candidate(ctx, candidate: int) -> Verdict:
     """Without a typed reading: at the star dance the result store is
     written with a time near the running overall counter, and then holds
-    while the counter keeps going -- a byte that merely changes, or that
-    follows the counter, fails one half or the other."""
+    while the counter runs RESULT_RUN_ON_FRAMES past it -- a byte that
+    merely changes, or that follows the counter, fails one half or the
+    other. A reset after that ends the watch without undoing it: Usamune
+    zeroes both on a reset, and resetting right after a grab is how he
+    practises (2026-10-17, JP: held 1189 against a dance at 1188, then
+    the reset cleared both and the old all-window hold failed it)."""
     mario_struct = ctx.candidate("mario_struct")
     overall = ctx.candidate("usamune_overall")
     if mario_struct is None or overall is None:
@@ -980,19 +985,19 @@ def _check_star_result_candidate(ctx, candidate: int) -> Verdict:
     at_dance = mem.read_u16(overall)
     ctx.sleep(USAMUNE_RESULT_SETTLE_SECONDS / 3)
     result = mem.read_u16(candidate)
-    held = True
+    ran_on = 0
     settle_start = ctx.now()
     while ctx.now() - settle_start < USAMUNE_RESULT_SETTLE_SECONDS:
-        if mem.read_u16(candidate) != result:
-            held = False
+        counter = mem.read_u16(overall)
+        if mem.read_u16(candidate) != result or counter < result:
             break
+        ran_on = max(ran_on, counter - result)
         ctx.sleep(POLL_INTERVAL_S)
-    moved_on = mem.read_u16(overall)
-    measured = {"result": result, "overall_at_dance": at_dance, "overall_after": moved_on}
-    if held and result and abs(result - at_dance) <= 60 and moved_on != result:
+    measured = {"result": result, "overall_at_dance": at_dance, "ran_on": ran_on}
+    if result and abs(result - at_dance) <= 60 and ran_on >= RESULT_RUN_ON_FRAMES:
         return Verdict("verified", value=candidate, measured=measured,
                        evidence=f"written {result} at the dance (counter {at_dance}) and held "
-                                f"{USAMUNE_RESULT_SETTLE_SECONDS:.0f}s while the counter ran on")
+                                f"while the counter ran {ran_on} frames past it")
     return Verdict("failed", value=candidate, measured=measured,
                    evidence="the candidate did not take and hold a time near the "
                             "counter at the star dance")
