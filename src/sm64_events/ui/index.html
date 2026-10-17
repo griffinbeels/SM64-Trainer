@@ -3799,7 +3799,7 @@
      width, so no button moves between rows. `min-width`, not `width`: a
      refused Save wearing its caveat chip may grow its own row's slot. */
   .attempt-action-slots { display: flex; align-items: center; justify-content: flex-end; gap: .25rem; }
-  .attempt-pb-slot { display: flex; flex: 0 0 auto; min-width: var(--log-pb-slot-width, 7rem); }
+  .attempt-pb-slot { display: flex; flex: 0 0 auto; min-width: 7rem; }
   .attempt-pb-slot > button { flex: 1 1 auto; }
   /* A refused or invalid Save wears its mark as the glyph alone, like the
      time's own chip, so it fits the slot every other row uses; the sentence
@@ -6631,7 +6631,7 @@
     .attempt-strategy select { max-width: 104px; }
     .save-pb-wide { display: none; }
     .save-pb-narrow { display: inline; }
-    .attempt-pb-slot { min-width: var(--log-pb-slot-narrow-width, 5.5rem); }
+    .attempt-pb-slot { min-width: 5.5rem; }
     .replay-row, .replay-row td { display: block; height: auto; width: 100%; }
     .settings-actions { grid-template-columns: 1fr; }
   }
