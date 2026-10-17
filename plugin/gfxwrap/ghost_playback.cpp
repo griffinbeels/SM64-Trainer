@@ -6,6 +6,7 @@
 #include "ghost_proximity.h"
 #include "ghost_sound_fade.h"
 #include "ghost_pose.h"
+#include "ghost_behaviours.h"
 #include "ghost_particle_pose.h"
 #include "ghost_compositor.h"
 #include "ghost_annotation_assets.h"
@@ -476,7 +477,7 @@ bool valid_sound(const gc_sample& s) {
 bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexed) {
     if(std::memcmp(h.magic,GCLIP_MAGIC,8) || h.version!=GCLIP_VERSION || h.bytes!=sizeof(h)
             || h.record_bytes!=sizeof(gclip_frame) || !h.record_count || h.record_count>GCLIP_MAX_RECORDS
-            || h.rom_layout!=GC_ROM_US || h.sample_version!=GC_VERSION || !h.configuration || !h.epoch
+            || !ghost_behaviours::supported_layout(h.rom_layout) || h.sample_version!=GC_VERSION || !h.configuration || !h.epoch
             || !nonzero_id(h.clip_id) || !h.qpc_frequency || h.qpc_anchor<0
             || !std::isfinite(h.utc_anchor) || h.utc_anchor<=0
             || h.level<4 || h.level>36 || h.area<1 || h.area>8 || (h.flags&~GCLIP_DANCE_TAIL)
@@ -913,7 +914,7 @@ const gclip_frame *bridged(const Clip& clip,uint32_t at) {
         if(clip.frames[i].sample.level!=first.level || clip.frames[i].sample.area!=first.area)return nullptr;
     return &clip.frames[before];
 }
-uint32_t draw(uint32_t index,const gs_record& recorded,
+uint32_t draw(uint32_t index,uint32_t rom_layout,const gs_record& recorded,
               const gc_sample& particles_from,const gc_sample& live,const ghost::WorldPass& world,
               float fade,ghost_compositor::Pose& out);
 // The dance past its recording, at coordinate `at`: the last recorded dance
@@ -1033,7 +1034,8 @@ uint32_t choose(uint32_t index,const Coordinate& frame,const gc_sample& live,Cho
 }
 // One ghost's pose, shadow and particles for the recorded (or defeated)
 // sample, with every world-space part mapped into the live area's coordinates.
-uint32_t draw(uint32_t index,const gs_record& recorded,
+// rom_layout is the clip's capture layout, whichever cartridge runs now.
+uint32_t draw(uint32_t index,uint32_t rom_layout,const gs_record& recorded,
               const gc_sample& particles_from,const gc_sample& live,const ghost::WorldPass& world,
               float fade,ghost_compositor::Pose& out) {
     gs_record mapped=recorded;
@@ -1047,7 +1049,7 @@ uint32_t draw(uint32_t index,const gs_record& recorded,
         ? ghost_proximity::factor(live.pose.position,live.pose.scale,
               mapped.sample.pose.position,mapped.sample.pose.scale,active_request.proximity_distance)
         : 1.0f;
-    if(ghost_pose::evaluate(model.value,mapped,live,world,opacity,scratch[index],out)!=ghost_pose::Result::ok) {
+    if(ghost_pose::evaluate(model.value,mapped,live,world,opacity,scratch[index],out,rom_layout)!=ghost_pose::Result::ok) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
     out.hue_degrees=active_request.tint_enabled?float(active_request.clips[index].hue_degrees):0.0f;
@@ -1105,7 +1107,7 @@ uint32_t pose_fall(uint32_t index,uint32_t post,const Choice& choice,const gc_sa
     p.punch_state=0;p.grab_position=0;
     for(unsigned k=0;k<3;++k)p.torso_angles[k]=p.head_angles[k]=0;
     recorded.sample.valid_fields&=~uint32_t(GC_VALID_PARTICLES|GC_VALID_HELD);
-    const auto result=draw(index,recorded,recorded.sample,live,world,choice.fade,out);
+    const auto result=draw(index,defeat.clip[index]->header.rom_layout,recorded,recorded.sample,live,world,choice.fade,out);
     // Camera/overlap fading cannot end an otherwise visible death, including
     // a paused one. Its own end fade still follows the frozen game clock.
     if(result==GP_READY)out.occlusion.minimum=ghost_occlusion::GHOST_FLOOR;
@@ -1118,7 +1120,7 @@ uint32_t pose_row(uint32_t index,const Choice& choice,const gc_sample& live,cons
     recorded.configuration=shown.configuration;recorded.sample=shown.sample;
     recorded.world.status=shown.world_status;
     if(choice.played)play_dance(index,choice.played,clip_coordinate(clip,clip.index_count-1),recorded);
-    return draw(index,recorded,choice.played?recorded.sample:clip.frames[choice.record].sample,live,world,
+    return draw(index,clip.header.rom_layout,recorded,choice.played?recorded.sample:clip.frames[choice.record].sample,live,world,
                 choice.fade,out);
 }
 void annotate(uint32_t index,const Choice& choice,ghost_compositor::Pose& pose) {

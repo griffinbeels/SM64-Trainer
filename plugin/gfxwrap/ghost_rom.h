@@ -16,7 +16,7 @@ struct Limits {
 };
 // current() checks the owning ROM generation. It is called between bounded
 // reads; the copied 64-byte header is also checked before accepting any image.
-// Only a complete, unambiguous normalized US image is returned in out.
+// Only a complete, unambiguous normalized practice image (US or JP) is returned in out.
 Result read(const uint8_t* header, const std::function<bool()>& current,
             std::vector<uint8_t>& out,
             const std::function<Validation(const uint8_t*, size_t)>& validate, Limits limits = {});

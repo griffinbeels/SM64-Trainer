@@ -7,17 +7,17 @@ import zlib
 
 import pytest
 
-from ghost_native_fixture import frame, producer
+from ghost_native_fixture import attempt, frame, producer
 from sm64_events.ghost.archive import stored_record
 from sm64_events.ghost.native_layout import (
     CLIP_MAGIC, CLIP_VERSION, HEADER_BYTES, HELD_ANGLES_AT, HELD_AT, HELD_RELEASED_AT, PAD_AT, VALID_PAD, PARTICLES_AT,
-    PARTICLES_ENTRIES_AT, ROOT_KIND_AT, SAMPLE_VERSION, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
-    V5_MAGIC, V5_RECORD_BYTES, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION, V5_VERSION,
+    PARTICLES_ENTRIES_AT, ROM_JP, ROM_US, ROOT_KIND_AT, SAMPLE_VERSION, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT,
+    SOUND_BITS_AT, V5_MAGIC, V5_RECORD_BYTES, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION, V5_VERSION,
     V6_MAGIC, V6_RECORD_BYTES, V6_SAMPLE_BYTES, V6_SAMPLE_VERSION, V6_VERSION,
 )
 from sm64_events.ghost.clip import (
     PARTICLES, RECORD_BYTES, STAR_CLOCK, SEGMENT_CLOCK, ClipError, OlderPoseFormat, check_manifest,
-    decode_clip, encode_clip, frame_from_bytes, read_clip, write_clip,
+    attempt_origin, decode_clip, encode_clip, frame_from_bytes, read_clip, write_clip,
 )
 
 
@@ -93,6 +93,30 @@ def test_gclip6_and_archived_gc7_rows_keep_poses_with_unknown_inputs(tmp_path):
     manifest = write_clip(exported, [stored_record(row) for row in rows], producer(), clock_kind=STAR_CLOCK)
     assert manifest["pad_records"] == 0
     assert all(item.pad is None for item in read_clip(exported).frames)
+
+
+def test_a_clip_records_the_cartridge_it_was_captured_on(tmp_path):
+    """A JP capture writes rom_layout 2, with its own segmented scripts (JP's
+    bob-omb), and reads back as JP; its manifest source carries it, and the
+    manifest must agree with the bytes. A source from before JP was US."""
+    rows = (frame(1, held=(0x13003154, 1, 12)), frame(2))
+    data = encode_clip(rows, producer(rom_layout=ROM_JP), clock_kind=STAR_CLOCK)
+    assert struct.unpack_from("<I", data, 24)[0] == ROM_JP
+    clip = decode_clip(data)
+    assert clip.rom_layout == ROM_JP and clip.frames[0].held_behaviour == 0x13003154
+    assert decode_clip(encoded(rows)).rom_layout == ROM_US
+    with pytest.raises(ClipError, match="cartridge"):
+        encode_clip(rows, producer(rom_layout=3), clock_kind=STAR_CLOCK)
+    path = tmp_path / "jp.ghost"
+    manifest = write_clip(path, rows, producer(rom_layout=ROM_JP), clock_kind=STAR_CLOCK)
+    assert manifest["source"]["rom_layout"] == ROM_JP
+    owner = attempt(end=102)
+    manifest = {**manifest, "attempt_id": owner.id, "session_id": owner.session_id, **attempt_origin(owner),
+                "target": None}
+    assert check_manifest(path, manifest, attempt=owner, target=None).rom_layout == ROM_JP
+    older = {**manifest, "source": {k: v for k, v in manifest["source"].items() if k != "rom_layout"}}
+    with pytest.raises(ClipError, match="disagrees with its captured bytes"):
+        check_manifest(path, older, attempt=owner, target=None)
 
 
 def test_older_file_cannot_claim_new_pad_validity_as_exact_neutral():
@@ -316,7 +340,7 @@ def test_unplayable_or_ambiguous_file_refused(rows, reason):
         encoded(rows)
 
 
-BAD_HEADER_WORDS = [(8, 1), (12, 128), (16, 192), (20, 240001), (28, 2),
+BAD_HEADER_WORDS = [(8, 1), (12, 128), (16, 192), (20, 240001), (24, 0), (24, 3), (28, 2),
                     (104, 25), (112, 3), (116, 102), (120, 2), (124, 2),
                     (128, 2), (136, 2), (144, 10), (152, 1), (156, 1)]
 
