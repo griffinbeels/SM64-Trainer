@@ -300,11 +300,11 @@ def test_session_shaped_command_carries_the_occlusion_switch(kernel, tmp_path):
 
 
 @pytest.mark.parametrize("hides", [True, False])
-def test_the_overlay_switch_hides_where_the_renderer_can_and_otherwise_keeps_the_roster_loaded(
+def test_the_overlay_switch_hides_where_the_renderer_can_and_otherwise_turns_playback_off(
         kernel, tmp_path, hides):
     """`hidden`, the overlay switch off: a renderer advertising GIPC_CAP_HIDDEN
-    plays on unseen. An older one refuses the word, so it gets playback off
-    with the roster's generations and clips kept: nothing reloads."""
+    plays on unseen. An older one refuses the word, so it gets what the
+    switch always sent it: playback off with no roster generations."""
     from sm64_events.ghost.native_layout import IPC_CAP_HIDDEN
     reply = status()
     reply.capabilities = IPC_CAP_HIDDEN if hides else 0
@@ -321,8 +321,8 @@ def test_the_overlay_switch_hides_where_the_renderer_can_and_otherwise_keeps_the
         connection.poll({**command, "hidden": True})
         request = kernel.request
         assert (request.play_enabled, request.hidden) == ((1, 1) if hides else (0, 0))
-        assert (request.prepare_generation, request.activate_generation, request.activate_start) == (3, 3, 1)
-        assert request.clip_count == 1
+        assert (request.prepare_generation, request.activate_generation, request.activate_start) == (
+            (3, 3, 1) if hides else (0, 0, 0))
         connection.poll({**command, "hidden": False})
         assert (kernel.request.play_enabled, kernel.request.hidden) == (1, 0)
         before = bytes(kernel.request)

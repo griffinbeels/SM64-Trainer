@@ -1344,6 +1344,22 @@ int main() {
             ++r.revision;r.hidden=0;check(api->configure(&r)==GP_OK,"overlay on after the grab");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(!step(13,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"the race stays over: no fall, no dance");
+            // Switched off during the fall his grab began, on again before it
+            // ends: the fall went on unseen, so it shows the frame it reached
+            // and cries no second time.
+            run(13600);
+            check(step(10,GP_READY,{GP_READY,GP_READY},{4010,5010}),"both ghosts running before his grab");
+            live.live_action=0x1302;
+            check(step(11,GP_READY,{GP_READY,GP_READY},{GP_DEFEAT_SOUND,GP_DEFEAT_SOUND}),"his grab: both fall");
+            live.live_action=1;
+            ++r.revision;r.hidden=1;check(api->configure(&r)==GP_OK,"overlay off during the fall");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(!step(12,GP_DISABLED,{GP_DISABLED,GP_DISABLED},{}),"the fall goes on hidden");
+            check(!step(15,GP_DISABLED,{GP_DISABLED,GP_DISABLED},{}),"and silent");
+            ++r.revision;r.hidden=0;check(api->configure(&r)==GP_OK,"overlay on during the fall");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(16,GP_READY,{GP_READY,GP_READY},{}) && count==2 && selected_frame==5,
+                  "shown again at the fall frame it reached, with no second cry");
             // The 100-coin star: its clock is its exit segment's (no star_ends),
             // and its run grabs the 100-coin star (rows 10..14, a no-exit dance)
             // before closing on the exit star (row 20) and dancing to row 29.

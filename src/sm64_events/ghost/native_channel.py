@@ -169,12 +169,15 @@ class NativeChannel:
         if retired:
             raise ValueError(f"native ghost clips are a list; retired keys: {retired}")
         # The overlay switch off (`hidden`): a renderer with GIPC_CAP_HIDDEN
-        # keeps the race running unseen. An older one refuses the word, so it
-        # gets playback off with the roster and its generations kept: the
-        # clips stay loaded and the switch back on re-resolves the origin.
+        # keeps the race running unseen. An older one refuses the word and
+        # cannot keep a hidden race's restore history, so it gets what the
+        # switch always sent it: playback off with no roster, which waits for
+        # the next attempt. Hidden rather than wrong: re-resolving a race
+        # without that history can misplace a segment ghost after a load.
         hidden = _switch(value, "hidden", False)
-        enabled = bool(value.get("enabled", False)) and not (hidden and not self._hides)
-        preparing = _set_generations(request, value)
+        revoked = hidden and not self._hides
+        enabled = bool(value.get("enabled", False)) and not revoked
+        preparing = _set_generations(request, {} if revoked else value)
         request.play_enabled = enabled
         request.hidden = int(hidden and enabled)
         _set_presentation(request, value)

@@ -710,12 +710,15 @@ nobody. On, the next command draws the frame the clock reached and sounds only
 from there. On with nobody racing (off at the start, nothing prepared), the
 session joins this run once the roster is ready, at any frame. The worker
 advertises `GIPC_CAP_HIDDEN`; an older renderer refuses the word, so the channel
-sends it playback off with the roster's generations and clips kept, and the
-switch-on re-resolves the origin from the ledger (its last `GO_HISTORY`
-samples, about two minutes). The playback witness switches off mid-run, runs
-a second hidden and switches on (drawn at the reached record, nothing replayed),
-and grabs while hidden (the race stays over); the IPC witness checks forwarding
-without a withdrawal or a clip read.
+sends it the old playback off (no roster), and switching on there waits for the
+next attempt. Re-resolving a race without its restore history would misplace a
+segment ghost whose arm a load rebased, so it stays hidden rather than wrong.
+The playback witness switches off mid-run, runs a second hidden and switches on
+(drawn at the reached record, nothing replayed), grabs while hidden (the race
+stays over) and hides a defeat's fall (shown again at the fall frame it reached,
+no second cry); the IPC witness checks forwarding without a withdrawal or a clip
+read; the recovery witness loads a state while hidden (star and segment) and is
+shown at the loaded frame.
 
 A capture restart keeps the run (his report, 2026-09-23: spamming state loads
 in Blast Away the Wall, "eventually the ghost broke, and it never showed up
