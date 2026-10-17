@@ -46,8 +46,10 @@ export function youSeat(rivals) {
     hue: pb?.hue_degrees ?? 250, ghost: racing };
 }
 
+// A pinned run of your own says so by identity (`own`, from the server), never
+// by whatever name a recording carries -- an import credited "You" is not you.
 function rivalSeat(row) {
-  return { key: `s${row.slot}`, id: row.id, name: row.player_name || "Chosen rival",
+  return { key: `s${row.slot}`, id: row.id, name: row.own === true ? "Your run" : (row.player_name || "Chosen rival"),
     frames: Number.isInteger(row.frames) ? row.frames : null, tier: row.tier, division: row.division,
     hue: row.hue_degrees, pinned: Boolean(row.pinned), pending: Boolean(row.pending),
     verified: row.verified === true, slot: row.slot };
