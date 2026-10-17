@@ -105,7 +105,7 @@ def test_a_downloading_seat_is_pending_and_never_holds_up_private_choices():
         requested = None
         def request_assets(self, values): self.requested = values
     sync = Sync()
-    population = SimpleNamespace(is_ready=lambda key: False)
+    population = SimpleNamespace(is_ready=lambda key: False, keep=lambda _ids: None)
     staging = CommunityRivals(sync, population)
     new = {'id': 'new', 'slot': 0, 'provenance': 'community-unverified', 'ghost': object()}
     private = {'id': 'private', 'slot': 1, 'manual_only': True, 'ghost': object()}
@@ -124,7 +124,7 @@ def test_partially_downloaded_slot_changes_never_seat_two_recordings_of_one_play
                 "ghost": object()}
     desired = (row("b-new", "b", moved_slot), row("a-new", "a", 1 - moved_slot))
     sync = SimpleNamespace(request_assets=lambda _ids: None)
-    population = SimpleNamespace(is_ready=lambda identifier: identifier != "a-new")
+    population = SimpleNamespace(is_ready=lambda identifier: identifier != "a-new", keep=lambda _ids: None)
     staging = CommunityRivals(sync, population)
     staged = staging.stage(desired)
     assert {(row["id"], row["pending"]) for row in staged} == {("b-new", False), ("a-new", True)}

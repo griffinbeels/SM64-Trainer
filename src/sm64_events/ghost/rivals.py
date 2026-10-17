@@ -89,6 +89,7 @@ class Rivals:
         self._signatures, self._signature_basis = {}, None
         self._simulation_state = None
         self._known_key, self._known = None, ()
+        self._saved_pb = None
         self.prepared_answer = None
         self.sharing = None
         from sm64_events.ghost.community_rivals import CommunityRivals
@@ -147,7 +148,7 @@ class Rivals:
         return self._strategy_key(target)
 
     def _strategy_key(self, target):
-        return json.dumps([target["kind"],target["entity_key"],target.get("strat") or "Standard"],separators=(",",":"))
+        return json.dumps([target["kind"],target["entity_key"],target.get("strat")],separators=(",",":"))
 
     def _entity_key(self, target):
         """The entity owns its scope independently of the current strategy."""
@@ -164,15 +165,20 @@ class Rivals:
             number = local.get("attempt_id") if isinstance(local,dict) else None
             attempt = self.tracker.db.attempt(number) if type(number) is int and number>0 else None
             if attempt is not None:
-                strategy = attempt.strat_tag or "Standard"
+                strategy = attempt.strat_tag
             else:
                 try:
-                    strategy = self.population.get(identity).get("strategy") or "Standard"
+                    strategy = self.population.get(identity).get("strategy")
                 except (LookupError,ValueError):
                     try:
-                        strategy = self.sharing.get(identity).strat_tag or "Standard"
+                        strategy = self.sharing.get(identity).strat_tag
                     except (LookupError,AttributeError,ValueError):
                         continue
+            if not strategy:
+                # A run with no strategy has no lineup to keep this choice in.
+                legacy.pop(slot)
+                changed = True
+                continue
             destination = {**target,"strat":strategy}
             choices = self.pins.setdefault(self._strategy_key(destination),{})
             if identity not in choices.values():
@@ -271,7 +277,7 @@ class Rivals:
             self.options = checked_options({})
             self.pins = {}
         self.loaded_db = database
-        self.fingerprint = self.prepared_key = None
+        self.fingerprint = self.prepared_key = self._saved_pb = None
         self.rows, self.pb = (),None
         self.manual = False
 
@@ -284,7 +290,7 @@ class Rivals:
         # The saved PB is authoritative, including Undo. Recompute now, but
         # retain an unchanged active/pending roster rather than canceling it.
         # Seats keep their players; the rival list itself is not asked again.
-        self.fingerprint = None
+        self.fingerprint = self._saved_pb = None
 
     def pb_preserved(self, attempt_id):
         """Retry a refused current PB only after its committed poses validate."""
@@ -308,7 +314,15 @@ class Rivals:
         records = self.population.metadata_snapshot(identity.kind,identity.entity_key,
             clock=identity.clock,game_version=identity.game_version,
             strategy=identity.strategy if identity.scope=="strategy" else None)
-        ranked = rank_recordings(records,self.tracker.ranks,identity)
+        present = {row.get("id") for row in records if isinstance(row,dict)}
+        chosen = []
+        for value in pins.values():
+            if value not in present:
+                try:
+                    chosen.append(self.population.get(value))
+                except (LookupError,ValueError):
+                    continue  # Shown as an unavailable chosen slot.
+        ranked = rank_recordings((*records,*chosen),self.tracker.ranks,identity)
         owners = self._owned_players()
         refused = self.community.refused()
         # Explicit choices survive; automatic slots exclude our own runs. A
@@ -329,7 +343,7 @@ class Rivals:
         """
         self._load()
         if force:
-            self._signature_basis = self._simulation_state = None
+            self._signature_basis = self._simulation_state = self._saved_pb = None
         changed_target = target != self.target
         if changed_target:
             self.target = target
@@ -402,7 +416,7 @@ class Rivals:
 
     def _desired(self, identity, target):
         """The saved PB and the seats it implies; seats keep their players and colours."""
-        pb = self._simulation_pb(saved_pb_basis(self.tracker.db,self.tracker.ranks,identity),target)
+        pb = self._simulation_pb(self._pb_basis(identity),target)
         pins = self.pins.get(self._key(target),{})
         ranked = self._ranked_population(identity,target,pb,pins)
         private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
@@ -411,6 +425,14 @@ class Rivals:
         previous = () if self.redeal else tuple(self._seat_row(row, owners) for row in self.rows)
         return pb, select_rivals((*ranked,*private),pb,self.options,pins,previous,scope=identity.scope,
                                  allow_fastest=self.community.complete(identity))
+
+    def _pb_basis(self, identity):
+        """The saved PB, read again only after pb_changed, a forced resolve,
+        another database, lineup or calibration: downloads finishing do not."""
+        key = (id(self.tracker.db), identity, getattr(self.tracker.ranks, "calibration_revision", None))
+        if self._saved_pb is None or self._saved_pb[0] != key:
+            self._saved_pb = (key, saved_pb_basis(self.tracker.db,self.tracker.ranks,identity))
+        return self._saved_pb[1]
 
     def _pb_playback(self, answer):
         """Retain the rank anchor when its separate pose resolution fails."""
@@ -472,8 +494,8 @@ class Rivals:
 
         loading: no seats yet while this identity's list is in flight. A ready
         lineup with no seats says why: nobody (the list came back empty, or
-        signed out with nothing local) or offline (no list and the cloud is
-        unreachable or backing off). Nothing asked yet (overlay off) says nothing.
+        this build has no cloud), signed_out, or offline (no list and the cloud
+        is unreachable or backing off). Nothing asked yet (overlay off) says nothing.
         """
         if self.target is not None and not has_strategy(self.target):
             return "no_strategy", None
@@ -482,8 +504,8 @@ class Rivals:
         progress = self.community.list_state(self.identity)
         if progress == "pending":
             return "loading", None
-        if progress == "offline":
-            return "ready", "offline"
+        if progress in ("offline", "signed_out"):
+            return "ready", progress
         return "ready", None if progress == "absent" else "nobody"
 
     def payload(self):
@@ -495,7 +517,7 @@ class Rivals:
         return {"options":dict(self.options),"limits":dict(LIMITS),"scope":self.scope_for(self.target),
                 "state":state,"reason":reason,
                 "simulation":simulation.get("label") if simulation else None,
-                "rows":[{"pending":False,**wire(row)} for row in self.rows],
+                "rows":[{"pending":False,**wire(row),"own":row.get("_owned") is True} for row in self.rows],
                 "pb":wire(self.pb) if self.pb else None,
                 "strategy_name":self.target.get("strat") or None if self.target else None,
                 "coverage": self.community.coverage(self.identity),
@@ -530,17 +552,18 @@ class Rivals:
             from sm64_events.inputs.service import entity_key_of
             number = local.get("attempt_id")
             attempt = self.tracker.db.attempt(number) if type(number) is int else None
-            if (attempt is None or local_attempt_source(attempt)!=local
+            if (attempt is None or local_attempt_source(attempt)!=local or not attempt.strat_tag
                     or entity_key_of(attempt)!=(target.kind,target.entity_key)
-                    or target.scope=="strategy" and (attempt.strat_tag or "Standard") != (target.strategy or "Standard")
+                    or target.scope=="strategy" and attempt.strat_tag != target.strategy
                     or attempt.game_version not in (None,target.game_version)):
                 return None
             frames = getattr(attempt,f"{target.clock}_frames")
             progress = rank_frames(self.tracker.ranks,target,frames)
             if progress is None:
                 return None
-            return {"id":identity,"player_id":"private:you","player_name":"You",
-                    "strategy":attempt.strat_tag or "Standard","frames":frames,
+            # Owned by identity (`_owned`), never by a name an import could also carry.
+            return {"id":identity,"player_id":"local:self","player_name":"You",
+                    "strategy":attempt.strat_tag,"frames":frames,
                     "ghost":AttemptGhost(number,target.kind,target.entity_key,attempt.strat_tag,frames),
                     "manual_only":True,"_owned":True,"current_strategy":target.strategy,**progress}
         if self.sharing is None:
@@ -550,15 +573,15 @@ class Rivals:
             row = self.sharing.portable_entry(identity)
         except (LookupError,ValueError):
             return None
-        if ((ghost.kind,ghost.entity_key)!=(target.kind,target.entity_key)
-                or target.scope=="strategy" and (ghost.strat_tag or "Standard") != (target.strategy or "Standard")
+        if ((ghost.kind,ghost.entity_key)!=(target.kind,target.entity_key) or not ghost.strat_tag
+                or target.scope=="strategy" and ghost.strat_tag != target.strategy
                 or row["clock"]!=target.clock or row.get("game_version") not in (None,target.game_version)):
             return None
         progress = rank_frames(self.tracker.ranks,target,ghost.frames)
         if progress is None:
             return None
         return {"id":ghost.id,"player_id":f"private:{ghost.author}","player_name":ghost.author,
-                "strategy":ghost.strat_tag or "Standard","frames":ghost.frames,"ghost":ghost,
+                "strategy":ghost.strat_tag,"frames":ghost.frames,"ghost":ghost,
                 "manual_only":True,"current_strategy":target.strategy,**progress}
 
     def _remember_local(self, source):
@@ -607,7 +630,7 @@ class Rivals:
         if not has_strategy(target):
             raise ValueError(NO_STRATEGY)
         identity = self.identity_for(target)
-        if self.scope_for(target)=="strategy" and any((getattr(ghost,"strat_tag",None) or "Standard") != (target.get("strat") or "Standard") for ghost in ghosts):
+        if self.scope_for(target)=="strategy" and any(getattr(ghost,"strat_tag",None) != target.get("strat") for ghost in ghosts):
             raise ValueError("Choose ghosts for the strategy you are practicing.")
         basis = saved_pb_basis(self.tracker.db,self.tracker.ranks,identity) if identity else None
         dedicated = getattr(basis.get("ghost"),"origin",None) if basis else None

@@ -105,6 +105,9 @@ class Population:
     def search(self, _identity, _player, *, cursor=None, limit=20):
         return {"records":self.rows[:limit],"next_cursor":cursor}
 
+    def keep(self, _identifiers):
+        pass
+
 
 class Native:
     def __init__(self):
@@ -693,5 +696,38 @@ def test_account_change_recomputes_prior_rows_self_alias_before_download_staging
         rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
         assert staged[0]["player_id"] == UID and staged[0]["_owned"] is False
         assert rivals.rows[0]["_owned"] is False
+    finally:
+        tracker.db.close()
+
+
+def test_own_seats_are_marked_by_identity_never_by_name(tmp_path, monkeypatch):
+    """A rival who calls themselves "You" is still a rival; the player's own
+    saved run is marked `own` from who recorded it."""
+    rivals, tracker, _, population, _ = controller(tmp_path, monkeypatch)
+    try:
+        tracker.db.upsert_attempt(attempt())
+        population.rows = [{**row, "player_name": "You"} for row in population.rows]
+        rivals.choose_library(TARGET, [AttemptGhost(1, "star", "2-1", "Standard", 600)], True)
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+        rows = rivals.payload()["rows"]
+        own = [row for row in rows if row["own"]]
+        assert len(own) == 1 and own[0]["pinned"] and own[0]["player_id"] == "local:self"
+        assert [row["player_name"] for row in rows if not row["own"]] and all(
+            row["player_name"] == "You" for row in rows if not row["own"])
+    finally:
+        tracker.db.close()
+
+
+def test_a_run_with_no_strategy_never_joins_the_standard_lineup(tmp_path, monkeypatch):
+    rivals, tracker, _, _, _ = controller(tmp_path, monkeypatch)
+    try:
+        run = attempt(strat_tag=None)
+        tracker.db.upsert_attempt(run)
+        before = json.dumps(rivals.pins, sort_keys=True)
+        assert not rivals.remember_saved({**TARGET, "strat": None}, run)
+        from sm64_events.ghost.pb import local_attempt_source
+        identity = rivals._remember_local(local_attempt_source(run))
+        assert rivals._private_record(identity, rivals.identity) is None  # not "Standard" by default
+        assert json.dumps(rivals.pins, sort_keys=True) == before
     finally:
         tracker.db.close()

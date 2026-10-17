@@ -47,7 +47,7 @@ def test_pending_download_obeys_a_reduced_visible_slot_count():
         "provenance": "community-unverified"} for index in range(4))
     desired = ({"id": "f" * 64, "slot": 0, "ghost": object(), "provenance": "community-unverified"},)
     cloud = Cloud()
-    population = SimpleNamespace(is_ready=lambda identifier: identifier != "f" * 64)
+    population = SimpleNamespace(is_ready=lambda identifier: identifier != "f" * 64, keep=lambda _ids: None)
     staging = CommunityRivals(cloud, population)
     assert [row["pending"] for row in staging.stage(previous)] == [False] * 4
     staged = staging.stage(desired)

@@ -58,7 +58,7 @@ def test_preserved_identity_survives_reused_attempt_ids_and_population_restart(t
     assert first["certified"] and first["valid"] and first["full_start"]
     assert first["source"] == {"session_id": row.session_id, "attempt_id": row.id, "started_utc": row.started_utc}
     assert provider.metadata_snapshot("star", "2-1", clock="igt", game_version="jp") == ()
-    path, manifest = provider.resolve(first["ghost"], {"kind": "star", "entity_key": "2-1"})
+    path, manifest = provider.resolve(first["ghost"], {"kind": "star", "entity_key": "2-1", "strat": "Standard"})
     assert path.read_bytes() == original.read_bytes()
     assert manifest["sha256"] == hashlib.sha256(original.read_bytes()).hexdigest()
     provider.close()
@@ -157,7 +157,7 @@ def test_deleted_or_modified_bytes_never_resolve_as_an_available_rival(tmp_path)
     row, replay, _ = recorded(tmp_path)
     provider = LocalPopulation(tmp_path / "population")
     record = admit(provider, row, replay)
-    target = {"kind": "star", "entity_key": "2-1"}
+    target = {"kind": "star", "entity_key": "2-1", "strat": "Standard"}
     path, _ = provider.resolve(record["ghost"], target)
     path.write_bytes(path.read_bytes()[:-1] + b"!")
     with pytest.raises(ValueError):
@@ -275,3 +275,14 @@ def test_a_run_with_an_unknown_input_never_enters_the_population(tmp_path):
     assert provider.metadata_snapshot("star", "2-1", clock="igt", game_version="us") == ()
     with pytest.raises(ValueError, match="not known on every frame"):
         provider.qualified_source(row, replay, clock="igt", game_version="us", full_start=True)
+
+
+def test_a_target_with_no_strategy_never_resolves_a_standard_rival(tmp_path):
+    """No strategy is not "Standard": it has no lineup at all (2026-10-16)."""
+    row, replay, _ = recorded(tmp_path)
+    provider = LocalPopulation(tmp_path / "population")
+    record = admit(provider, row, replay)
+    for target in ({"kind": "star", "entity_key": "2-1"}, {"kind": "star", "entity_key": "2-1", "strat": None}):
+        with pytest.raises(ValueError):
+            provider.resolve(record["ghost"], target)
+    provider.close()
