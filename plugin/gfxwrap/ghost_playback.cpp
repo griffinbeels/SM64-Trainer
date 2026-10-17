@@ -161,6 +161,7 @@ struct LiveRecovery {
 // recorded sounds are handed over exactly once, as the ghost passes it.
 constexpr int64_t unheard=INT64_MIN;
 std::atomic<const ghost_playback::SoundSink*> sound_sink{nullptr};
+std::atomic<ghost_playback::AnnotationLoader> annotation_loader{nullptr};
 int64_t heard[GP_GHOSTS]{};           // last displayed record index, or unheard
 int64_t loudest[GP_GHOSTS]{};         // highest record whose sounds were handed over
 const Clip *heard_clip[GP_GHOSTS]{};
@@ -321,7 +322,10 @@ int32_t __cdecl prepare_model(uint64_t id,const uint8_t *rom,uint32_t bytes) {
     }
     // A missing optional font atlas never refuses the body model. Extraction
     // happens on this worker, while the verified ROM copy is still resident.
-    try {model.annotations.load(rom,bytes);}catch(const std::bad_alloc&) {model.annotations.ready=false;}
+    try {
+        const auto loader=annotation_loader.load(std::memory_order_acquire);
+        if(loader)loader(model.annotations,rom,bytes);else model.annotations.load(rom,bytes);
+    }catch(const std::bad_alloc&) {model.annotations.ready=false;}
     model.id=id; model.cancellation=before; model_error.store(SG_OK);
     model.state.store(GP_MODEL_READY,std::memory_order_release); return worker_leave(GP_OK);
 }
@@ -1239,6 +1243,7 @@ uint32_t hidden_refusals(const gclip_header& header,const gclip_frame *frames) {
 }
 const gp_api *api() {return &api_v2;}
 void set_sound_sink(const SoundSink *sink) {sound_sink.store(sink,std::memory_order_release);}
+void set_annotation_loader(AnnotationLoader loader) {annotation_loader.store(loader,std::memory_order_release);}
 void safe_boundary(uint32_t rom,uint32_t configuration) {
     const auto thread=GetCurrentThreadId();
     if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return;}

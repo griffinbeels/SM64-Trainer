@@ -111,8 +111,8 @@ int jp_source(uint8_t c) {
 }
 constexpr uint8_t jp_comma=0x6f,jp_handakuten=0xf1;
 }
-bool Assets::load(const uint8_t* rom,uint32_t bytes) {
-    ready=usamune=chevron=false;font=font::us;rgba.fill(0);
+bool Assets::load(const uint8_t* rom,uint32_t bytes,const UsFont* us_font) {
+    ready=usamune=chevron=lends=borrowed=false;font=font::us;rgba.fill(0);lent={};
     const Cartridge* cart=cartridge(rom,bytes);
     constexpr uint32_t span=128*1024;
     if(!cart || bytes<cart->segment2+span)return false;
@@ -127,7 +127,17 @@ bool Assets::load(const uint8_t* rom,uint32_t bytes) {
         return data.data()+(pointer&0xffffff);
     };
     if(cart->font==font::us) {
-        for(unsigned c=0;c<256;++c)if(const auto* src=lut_glyph(cart->font_lut,c,64))us_glyph(src,uint8_t(c),rgba.data());
+        for(unsigned c=0;c<256;++c)if(const auto* src=lut_glyph(cart->font_lut,c,64)) {
+            us_glyph(src,uint8_t(c),rgba.data());
+            lent.present[c/8]=uint8_t(lent.present[c/8]|(1u<<(c%8)));
+            std::memcpy(lent.tiles.data()+c*64,src,64);
+        }
+        lends=true;
+    } else if(us_font) {
+        // His own US cartridge's font, kept on his machine: US glyphs, US widths.
+        for(unsigned c=0;c<256;++c)
+            if(us_font->present[c/8]&(1u<<(c%8)))us_glyph(us_font->tiles.data()+c*64,uint8_t(c),rgba.data());
+        borrowed=true;
     } else {
         for(unsigned c=0;c<256;++c) {
             const int from=jp_source(uint8_t(c));
@@ -142,7 +152,7 @@ bool Assets::load(const uint8_t* rom,uint32_t bytes) {
             }
         }
     }
-    font=cart->font;
+    font=borrowed?font::us:cart->font;
     auto blit=[&](const uint8_t* src,unsigned w,unsigned h,unsigned left,unsigned top) {
         for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
             const unsigned color=(unsigned(src[(y*w+x)*2])<<8)|src[(y*w+x)*2+1];

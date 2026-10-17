@@ -5,6 +5,7 @@
 #include "ghost_draw.h"
 #include "ghost_ipc.h"
 #include "ghost_audio.h"
+#include "ghost_font_cache.h"
 #include "ghost_playback.h"
 #include "ghost_rom.h"
 #include "link_dispatch.h"
@@ -29,8 +30,16 @@ bool __cdecl audio_start(const uint8_t *rom, size_t bytes) {
 }
 void __cdecl audio_stop() { ghost_audio::stop(); }
 const ghost_ipc::AudioHooks audio_hooks{audio_start, audio_stop};
+// Names on a JP cartridge borrow the US font his own US cartridge lent, kept
+// in his per-user cache (ghost_font_cache.h); a US cartridge refreshes it.
+bool __cdecl load_annotations(ghost_annotation::Assets &assets, const uint8_t *rom, uint32_t bytes) {
+    return ghost_font_cache::load(ghost_font_cache::user_cache(), assets, rom, bytes);
+}
 const struct AudioWiring {
-    AudioWiring() { ghost_playback::set_sound_sink(ghost_audio::sink()); ghost_ipc::set_audio(&audio_hooks); }
+    AudioWiring() {
+        ghost_playback::set_sound_sink(ghost_audio::sink()); ghost_ipc::set_audio(&audio_hooks);
+        ghost_playback::set_annotation_loader(load_annotations);
+    }
 } audio_wiring;
 uint32_t context_generation = 0;
 bool context_current = false, observing = false;
