@@ -96,15 +96,16 @@ void jp_glyph(const uint8_t* src,uint8_t c,uint8_t* atlas,int dx=0,int dy=0) {
 // takes JP's own capital; the period is JP's own (print_generic_string draws
 // its full stop as the handakuten circle moved 2 left and 5 down); the colon is that
 // circle twice; the apostrophe is JP's comma stroke raised to the cap line.
-// US's C-button arrows (^ | < >), + and & have no JP glyph and draw JP's "?".
+// US's C-button arrows (^ | < >) and & have no JP glyph and draw JP's "?".
+// (+ draws code 0xE4, a left-right arrow in both fonts, as on US.)
 enum : int {none=-1,period=-2,colon=-3,apostrophe=-4};
 int jp_source(uint8_t c) {
     if(c<=0x23)return c;                     // 0-9, A-Z: the same codes
     if(c<=0x3d)return c-0x1a;                // a-z: JP's A-Z
     switch(c) {
     case 0x3e:return apostrophe;case 0x3f:return period;case 0xe6:return colon;
-    case 0x50:case 0x51:case 0x52:case 0x53:case 0xe4:case 0xe5:return 0xf4;
-    case 0x6f:case 0x9f:case 0xe1:case 0xe3:case 0xf2:case 0xf3:case 0xf4:case 0xf7:case 0xf9:return c;
+    case 0x50:case 0x51:case 0x52:case 0x53:case 0xe5:return 0xf4;
+    case 0x6f:case 0x9f:case 0xe1:case 0xe3:case 0xe4:case 0xf2:case 0xf3:case 0xf4:case 0xf7:case 0xf9:return c;
     default:return none;
     }
 }

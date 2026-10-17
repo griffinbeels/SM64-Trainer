@@ -110,7 +110,7 @@ on JP a name is drawn in JP's capitals (lowercase takes the capital), spaced
 by JP's own monospaced rule (10 pixels a glyph, 5 a space); its period is
 JP's own (the handakuten circle moved 2 left and 5 down, as the game draws
 its full stop), its colon that circle twice, its apostrophe JP's comma raised
-to the cap line, and `^ | < > + &`, which JP cannot draw, show JP's `?`.
+to the cap line, and `^ | < > &`, which JP cannot draw, show JP's `?`.
 Names and inputs are
 sized in world units (`GP_ANNOTATION_*` in `ghost_tuning.h`), so a far ghost's
 name shrinks with its body, up to a largest size beside the camera. The

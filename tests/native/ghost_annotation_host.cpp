@@ -114,8 +114,9 @@ int main(int argc,char** argv) {
             check(lit(glyph('.'),0,12) && !lit(glyph('.'),2,7),"the period is JP's handakuten moved 2 left, 5 down");
             check(lit(glyph(':'),0,12) && lit(glyph(':'),0,6),"the colon is that circle twice");
             check(lit(glyph('\''),1,4) && !lit(glyph('\''),1,12),"the apostrophe is JP's comma raised to the cap line");
-            for(uint32_t c:{uint32_t('^'),uint32_t('|'),uint32_t('<'),uint32_t('>'),uint32_t('+'),uint32_t('&')})
+            for(uint32_t c:{uint32_t('^'),uint32_t('|'),uint32_t('<'),uint32_t('>'),uint32_t('&')})
                 check(lit(glyph(c),3,3),"a mark JP cannot draw shows JP's question mark");
+            check(!lit(glyph('+'),3,3),"+ keeps code 0xE4's own glyph, as on US");
             check(advance(glyph('W'),font::jp)==10 && advance(glyph('i'),font::jp)==10 && advance(glyph(' '),font::jp)==5
                   && advance(glyph('.'),font::jp)==5,"JP glyphs advance by JP's own monospaced rule");
             uint8_t chars[64]{};unsigned width=0;
