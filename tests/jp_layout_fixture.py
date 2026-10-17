@@ -1,11 +1,11 @@
 """A JP Layout for tests of the native ghost path, built from candidates.
 
 memory/layout.py's JP row stays empty until each address passes its live gate
-(.claude/rules/sync.md), so these are NOT verified addresses. The first group
+(.claude/rules/sync.md), so these are NOT a verified layout. The first group
 was derived statically from SM64_USAMUNE_v1.93j.z64 and agrees with STROOP's
-JP map (data/symbols_jp.tsv); the warp pair is that map's. behaviour_base and
-usamune_overall have no JP candidate yet: FIXTURE values, only somewhere a
-byte fixture can plant objects and a clock.
+JP map (data/symbols_jp.tsv); the warp pair is that map's. usamune_overall is
+the ROM-derived candidate seen ticking 30/s in his JP game; behaviour_base is
+what the sync gate verified live (both 2026-10-16).
 """
 from sm64_events.memory.layout import Layout
 
@@ -26,6 +26,6 @@ JP_CANDIDATE = Layout(
     player1_controller=0x80339C20,
     pending_warp_op=0x80339EE2,
     delayed_warp_timer=0x80339EE4,
-    usamune_overall=0x80417C72,  # FIXTURE: the US address; JP's is unknown
-    behaviour_base=0x800EA000,   # FIXTURE: JP's segment 0x13 base is unknown
+    usamune_overall=0x80417D3A,
+    behaviour_base=0x800E8320,
 )
