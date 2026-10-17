@@ -19,6 +19,7 @@ Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../d
 | A ghost setting (default, range, sentence, db key, native field) | One row in `ghost/settings.py` `ROWS`. It drives validation, load/apply, the payload, `limits` and the native command. |
 | A range or limit the card shows | The row's `limits`. `GET /api/ghost` publishes them and the card reads `session.limits` (`ui/ghostsession.js`). JS never restates a Python number. |
 | The words of an on/off switch | `SWITCH_LABELS` in `ui/ghostsession.js`, keyed by the row name |
+| D-pad Up flipping the Ghost Overlay in game | `ghost/dpad_toggle.py`: the press rule (never in Usamune's menu or under L/R/Z) and the flip through the card's own GET/PUT; wired as the last poller chain member in `main.build` |
 | Which ghosts play | Adaptive `ghost/rivals.py` uses `ghost/adaptive.py` and the current strategy saved PB from `ghost/pb.py`; legacy choices use `ghost/selection.py`. Native sets are built in `ghost/native_session.py`. |
 | Historical bests and surviving recordings in Ghost Library | `ghost/library_bests.py` resolves winners before joining `sharing_catalog.py` availability. It never changes the current saved PB slot or promotes a slower recording when a winner expires. |
 | Reviewing and importing only selected ghosts | `ghost/library_imports.py` owns bounded staging leases; `sharing.py` revalidates selected clips before publishing the collection index; `server/ghost_sharing_api.py` mounts preview/commit/discard jobs. |

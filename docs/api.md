@@ -1051,6 +1051,9 @@ playback inside GLideN64. `source.exactness` is `"native_pose"`;
 is ready; `visible` requires a matching renderer acknowledgement. There is no
 separate ghost window or video fallback. Opacity, tint and timing apply inside
 the renderer. See [new-user defaults](ghost-native-runtime.md#new-user-settings-and-iteration-boundary).
+Pressing D-pad Up in game flips `enabled` through the same `PUT`, outside
+Usamune's menu and with L, R and Z up (`ghost/dpad_toggle.py`), so it
+publishes `ghost_changed` like a click.
 
 Native settings also include `names_enabled` (boolean, initially true),
 `inputs_enabled` (boolean, initially false), `input_mode` (`"stick"` or

@@ -519,3 +519,39 @@ def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     r = client.get("/api/compare/view",
                    params={"entity": "star:16:0", "strat": None})
     assert r.status_code == 503              # honest "not yet", never a 404
+
+
+def test_build_wires_dpad_up_to_the_ghost_session_across_detector_rebuilds(monkeypatch):
+    """The chain member exists on the real poller, survives a recovery's
+    rebuild, and its press reaches the session `build()` made."""
+    from types import SimpleNamespace
+    from sm64_events.ghost.dpad_toggle import DpadGhostToggle, OverlayFlipper
+    from sm64_events.ghost.session import GhostSession
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    asked = []
+    real_poller, real_create = main_mod.Poller, main_mod.create_app
+
+    def poller_spy(memory, detectors, sink, **kw):
+        captured["poller"] = real_poller(memory, detectors, sink, **kw)
+        return captured["poller"]
+
+    def create_spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_create(*args, **kwargs)
+
+    monkeypatch.setattr(main_mod, "Poller", poller_spy)
+    monkeypatch.setattr(main_mod, "create_app", create_spy)
+    monkeypatch.setattr(OverlayFlipper, "request",
+                        lambda self: asked.append(self.session))
+    main_mod.build()
+    poller = captured["poller"]
+    for chain in (poller.detectors, poller.detector_factory()):
+        toggles = [d for d in chain if isinstance(d, DpadGhostToggle)]
+        assert len(toggles) == 1
+        up, down = (SimpleNamespace(global_timer=frame, buttons_held=buttons,
+                                    usamune_menu_open=False)
+                    for frame, buttons in ((10, 0), (11, 0x0800)))
+        toggles[0].process(up, down)
+    assert len(asked) == 2 and all(s is captured["ghost"] for s in asked)
+    assert isinstance(captured["ghost"], GhostSession)
