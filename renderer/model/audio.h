@@ -16,26 +16,34 @@ enum { SA_OK = 0, SA_ARGUMENT = -1, SA_INVALID_ROM = -2, SA_BUSY = -3,
 #define SA_TICK_MAX_FRAMES 1088u
 #define SA_TICK_TARGET_FRAMES 1100u /* queued below this asks for the longer tick */
 
-/* US ROM regions the engine parses. The seq headers are bounds-checked here;
- * the instrument/sample tables inside CTL are parsed by upstream code without
- * bounds, so the caller must first prove these bytes are known audio data. */
+/* The regions the engine parses, in each practice cartridge: CTL (banks),
+ * TBL (samples), SEQ (sequences, 0 the sound player) and the bank-set table
+ * (u16 offsets, then each sequence's bank list), padded to SA_BANKS_BYTES.
+ * The seq headers and bank sets are bounds-checked here; the instrument and
+ * sample tables inside CTL are parsed by upstream code without bounds, so the
+ * caller must first prove these bytes are known audio data (ghost_audio.cpp
+ * hashes each region). The regions are one contiguous span, and the engine
+ * reads nothing else: about 2.3 MB of US's 8 MB ROM, 1.9 MB of JP's.
+ *
+ * JP's data is JP's own, at its own offsets (found by their seqfile headers
+ * in SM64_USAMUNE_v1.93j.z64, 2026-10-17): US added voices (Mario's
+ * triple-jump yahoo/waha/yippee, "doh", "hello", "so long-a Bowser", Peach's
+ * lines) and red-coin and secret chimes, so US's TBL is 0x67580
+ * bytes longer and its voice (2) and menu (7) banks hold 0x40 sounds to JP's
+ * 0x30; US also added sequence 0x22. The engine itself is US's, which plays
+ * JP's data as JP's: its sequence player is the same code under both
+ * versions, a tempo byte runs 0.3% faster than on JP, and the voice and menu
+ * banks are bounded at JP's 0x30 while JP's data is loaded. */
 #define SA_ROM_BYTES 0x800000u
-#define SA_CTL_OFFSET 0x57B720u
-#define SA_TBL_OFFSET 0x593560u
-#define SA_SEQ_OFFSET 0x7B0860u
-#define SA_BANKS_OFFSET 0x7CC621u
 #define SA_BANKS_BYTES 0xA0u
-/* Upstream's audio_init DMA-copies 0x100 bytes from the bank-set table, 0x60
- * past the 0xA0 it uses (upstream read them from its whole-ROM copy). */
-#define SA_BANKS_READ_BYTES 0x100u
-/* Those regions are one contiguous span, and the engine reads nothing else:
- * about 2.3 MB of the 8 MB ROM (TBL's samples are most of it). */
-#define SA_AUDIO_OFFSET SA_CTL_OFFSET
-#define SA_AUDIO_BYTES (SA_BANKS_OFFSET + SA_BANKS_READ_BYTES - SA_AUDIO_OFFSET)
+typedef struct sa_regions { uint32_t ctl, tbl, seq, banks; uint8_t voice_menu_sounds; } sa_regions;
+static const sa_regions SA_US = {0x57B720u, 0x593560u, 0x7B0860u, 0x7CC620u, 0x40};
+static const sa_regions SA_JP = {0x579140u, 0x590200u, 0x745F80u, 0x761B40u, 0x30};
+#define SA_SPAN(r) ((r).banks + SA_BANKS_BYTES - (r).ctl)
 
-/* Copies the big-endian ROM's audio span (SA_AUDIO_BYTES starting at
- * SA_AUDIO_OFFSET); owns that copy and every parse until close. */
-int32_t sa_open(const uint8_t *audio, size_t bytes);
+/* Copies the big-endian ROM's audio span (SA_SPAN(*regions) bytes from
+ * regions->ctl); owns that copy and every parse until close. */
+int32_t sa_open(const uint8_t *audio, size_t bytes, const sa_regions *regions);
 #define SA_SOURCES 16u /* one per displayed ghost (GP_GHOSTS) */
 /* Where a source sounds from, relative to the camera as SM64 places its own
  * sounds (+x right, +y up, -z ahead), and its gain 0..1 on top of the engine's

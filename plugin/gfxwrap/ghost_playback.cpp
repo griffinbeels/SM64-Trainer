@@ -1145,6 +1145,7 @@ void annotate(uint32_t index,const Choice& choice,ghost_compositor::Pose& pose) 
     out.inputs=active_request.inputs_enabled && recorded;
     out.values=active_request.input_mode==GP_INPUT_VALUES;
     out.artwork=model.annotations.usamune;
+    out.font=model.annotations.font;
     // A refused pose can borrow older geometry. Its pad remains the exact
     // current record: independent validity must never borrow a button hold.
     const auto& selected=bound[index]->frames[choice.record].sample;

@@ -90,6 +90,10 @@ struct Result {
     uint64_t stop_at = 0, resume_at = 0;
 };
 struct Place { float position[3]; float gain; };
+// A long voice for the stop/resume window below: US's triple-jump yahoo.
+// JP has no such line (its voice slot 0x2B holds a short filler), so on JP
+// the falling scream, the same recording on both.
+static uint32_t long_voice = SOUND_MARIO_YAHOO_WAHA_YIPPEE;
 // Cues at fixed game frames from one ghost, placed camera-relative; the
 // other ghost of the pair (0/1) is placed at `other` but stays silent.
 // Returns the PCM and where each cue was issued.
@@ -101,7 +105,7 @@ static Result run(const std::vector<uint8_t> &rom, float volume, bool stop_midwa
     check(ghost_audio::start(rom.data(), rom.size(), capture.output()) == ghost_audio::Start::ok, "engine and capture start");
     capture.settle();
     const uint32_t schedule[][2] = {{10, SOUND_MARIO_YAH_WAH_HOO}, {40, SOUND_ACTION_TERRAIN_LANDING},
-                                    {70, SOUND_MARIO_YAHOO_WAHA_YIPPEE}, {100, SOUND_ACTION_METAL_LANDING}};
+                                    {70, long_voice}, {100, SOUND_ACTION_METAL_LANDING}};
     Result out;
     for (uint32_t frame = 0; frame < 150; ++frame) {
         for (auto &cue : schedule) if (cue[0] == frame) {
@@ -218,18 +222,35 @@ int main(int argc, char **argv) {
         check(argc == 2, "usage: ghost_audio_host rom");
         std::ifstream file(argv[1], std::ios::binary);
         std::vector<uint8_t> rom((std::istreambuf_iterator<char>(file)), {});
-        check(rom.size() == SA_ROM_BYTES && rom[0] == 0x80, "big-endian US ROM");
+        check(rom.size() == SA_ROM_BYTES && rom[0] == 0x80, "big-endian US or JP ROM");
+        // Each cartridge's own regions; the other's are never read.
+        const bool jp = rom[0x3e] == 'J';
+        const sa_regions &regions = jp ? SA_JP : SA_US, &other = jp ? SA_US : SA_JP;
+        if (jp) long_voice = SOUND_MARIO_WAAAOOOW;
         check(ghost_audio::known_audio(rom.data(), rom.size()), "known SM64 audio regions");
-        for (uint32_t offset : {SA_CTL_OFFSET + 0x100, SA_TBL_OFFSET + 0x1000, SA_SEQ_OFFSET + 0x10, SA_BANKS_OFFSET}) {
+        {   auto relabelled = rom; relabelled[0x3e] = jp ? 'E' : 'J';
+            check(!ghost_audio::known_audio(relabelled.data(), relabelled.size()), "another cartridge's regions refused"); }
+        {   const int32_t opened = sa_open(rom.data() + other.ctl, SA_SPAN(other), &other);
+            if (opened == SA_OK) sa_close();
+            check(opened == SA_INVALID_ROM, "the other cartridge's places parse nothing here"); }
+        for (uint32_t offset : {regions.ctl + 0x100, regions.tbl + 0x1000, regions.seq + 0x10, regions.banks + 1}) {
             auto changed = rom; changed[offset] ^= 0x40;
             check(!ghost_audio::known_audio(changed.data(), changed.size()), "altered audio data refused");
             Capture unused;
             check(ghost_audio::start(changed.data(), changed.size(), unused.output()) == ghost_audio::Start::invalid_rom
                   && !unused.opened, "engine never parses unknown audio data");
         }
-        check(sa_open(rom.data() + SA_AUDIO_OFFSET, SA_AUDIO_BYTES - 4) == SA_ARGUMENT, "short audio span refused");
-        {   auto broken = rom; broken[SA_TBL_OFFSET + 3] = 0xff; // 255 banks: headers leave the region
-            check(sa_open(broken.data() + SA_AUDIO_OFFSET, SA_AUDIO_BYTES) == SA_INVALID_ROM, "bank headers bounded"); }
+        check(sa_open(rom.data() + regions.ctl, SA_SPAN(regions) - 4, &regions) == SA_ARGUMENT, "short audio span refused");
+        {   auto broken = rom; broken[regions.tbl + 3] = 0xff; // 255 banks: headers leave the region
+            check(sa_open(broken.data() + regions.ctl, SA_SPAN(regions), &regions) == SA_INVALID_ROM, "bank headers bounded"); }
+        {   auto broken = rom; broken[regions.banks + 2] = 0x00; broken[regions.banks + 3] = 0xff; // a list past the table
+            check(sa_open(broken.data() + regions.ctl, SA_SPAN(regions), &regions) == SA_INVALID_ROM, "bank sets bounded"); }
+        // The voice bank holds 0x30 sounds on JP, 0x40 on US: a US-only id
+        // (SOUND_MARIO_DOH, 0x30) sounds on US and is never looked up on JP.
+        {   const Place ahead{{0, 0, -300}, 1};
+            const double doh = energy(run_one(rom, SOUND_MARIO_DOH, 1.0f, ahead));
+            std::fprintf(stderr, "voice 0x30 energy %.0f\n", doh);
+            check(jp ? doh == 0 : doh > 1e9, jp ? "a voice past JP's bank sounded" : "US's voice 0x30 is silent"); }
         // The engine keeps the ROM's audio span (~2.3 MB), not the whole 8 MB ROM.
         size_t engine_bytes = 0;
         {   Capture held; PROCESS_MEMORY_COUNTERS_EX before{}, after{};

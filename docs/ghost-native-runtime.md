@@ -104,7 +104,14 @@ The committed clip is never changed. A frame the track lacks, and a whole clip w
 track Mario's action does not line up, keep the unavailable-input indicator. Synthetic
 death, extrapolated dance and post-recording holds have no invented inputs.
 
-The font is the original thin white SM64 dialogue font. Names and inputs are
+The font is the cartridge's own thin white SM64 dialogue font. JP's is an
+8x16 one-bit font with digits, capitals and kana but no lowercase Latin, so
+on JP a name is drawn in JP's capitals (lowercase takes the capital), spaced
+by JP's own monospaced rule (10 pixels a glyph, 5 a space); its period is
+JP's own (the handakuten circle moved 2 left and 5 down, as the game draws
+its full stop), its colon that circle twice, its apostrophe JP's comma raised
+to the cap line, and `^ | < > &`, which JP cannot draw, show JP's `?`.
+Names and inputs are
 sized in world units (`GP_ANNOTATION_*` in `ghost_tuning.h`), so a far ghost's
 name shrinks with its body, up to a largest size beside the camera. The
 renderer draws the world upside down (`flip_y`), so layout offsets flip with
@@ -265,11 +272,23 @@ region-neutral: positions, animation ids and frames (both cartridges carry
 the same 209-entry Mario table), camera, shadow, particles (segmented lists
 in segments that decode to identical bytes) and level/area numbers. The model
 reads each cartridge's ROM blocks from its own offsets (`jp_blocks` in
-[assets.c](../renderer/model/assets.c)). Ghost sound runs only on the US
-cartridge: JP's sound banks and sequences differ, so `ghost_audio` refuses
-them and JP ghosts are silent. On the US cartridge a JP clip's sound ids
-play through US's banks; that every JP id sounds the same there is not yet
-verified by ear. The product path targets Windows x86 Project64
+[assets.c](../renderer/model/assets.c)). Names and inputs read each
+cartridge's own art the same way (`cartridges` in
+[ghost_annotation_assets.cpp](../plugin/gfxwrap/ghost_annotation_assets.cpp)),
+and ghost sound each cartridge's own audio (`SA_US`/`SA_JP` in
+[audio.h](../renderer/model/audio.h), hashed per region in `ghost_audio.cpp`).
+JP's sound data is JP's own: US added voices and chimes, so its voice and
+menu banks hold 0x40 sounds to JP's 0x30, and the engine bounds them at
+JP's 0x30 while JP's data is loaded. Rendering every sound id through the
+engine on both cartridges (2026-10-17): 779 of 864 sound the same, 32 exist
+only on US (voice and menu 0x30-0x3F: "doh", "hello", Peach's lines, the
+secret chimes), and 52 differ, among them the triple-jump yahoo/waha/yippee
+(voice 0x2B-0x2F, a short filler on JP), Peach's "dear Mario" (0x28), the
+star-grab "okey-dokey"/"let's-a go" chimes (menu 0x23-0x24) and the red-coin
+chimes (menu 0x28-0x2F). So a ghost's sound ids play the running cartridge's
+version: a US ghost on JP drops its US-only voices and plays JP's filler for
+the triple-jump yahoo; a JP ghost on US plays US's versions of those 52.
+The product path targets Windows x86 Project64
 and the supported practice ROMs. Its presentation requires OpenGL 4.3; the world
 hook qualifies the supported F3D command path, not LLE or arbitrary microcodes.
 

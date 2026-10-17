@@ -1449,8 +1449,9 @@ on by default), a [[ghost]]'s sound also follows its [[overlap fade]] and
 [[frame]] plays only once.
 
 They play from the [[ghost sound player]], so a recording only has them while
-[[ghosts in recording]] is on. They play only on the US [[practice ROM]]: on
-JP the [[ghost]]s are silent, since its sound banks differ.
+[[ghosts in recording]] is on. Each [[practice ROM]] plays its own sounds:
+on JP a [[ghost]] sounds as the JP game does, so a US [[ghost]]'s US-only voices
+(its triple-jump yahoo, "doh") are JP's or none.
 
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
   `plugin/gfxwrap/ghost_audio.cpp` makes their sound; `plugin/gfxwrap/ghost_sound_fade.h`
@@ -1762,7 +1763,8 @@ The box behind a [[ghost]]'s name in the game: SM64's own dialog box, the
 black one with white text that characters speak in, or the white one with
 black text that signs use, at the opacity you choose (none at zero). The name
 itself sits just over the top of the [[ghost]]'s body, so it crouches and dives
-with him.
+with him. It is written in the running [[practice ROM]]'s own font: on JP, which
+has no lowercase, in capitals.
 
 - **Lives** — its two rows in `src/sm64_events/ghost/settings.py`;
   `plugin/gfxwrap/ghost_annotation_mesh.h` draws it

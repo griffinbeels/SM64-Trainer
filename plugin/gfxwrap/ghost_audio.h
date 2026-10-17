@@ -77,8 +77,9 @@ namespace ghost_audio {
 const ghost_playback::SoundSink *sink();
 
 enum class Start { ok, busy, invalid_rom, engine, device, thread };
-/* Worker thread. Checks the ROM's audio regions against known SM64 US audio
- * data, copies only that span, and starts the audio thread (engine + device). */
+/* Worker thread. Checks the ROM's audio regions against the known audio of
+ * its cartridge (US or JP), copies only that span, and starts the audio
+ * thread (engine + device). */
 Start start(const uint8_t *rom, size_t bytes, const Output &output);
 bool known_audio(const uint8_t *rom, size_t bytes);
 /* Worker thread: stops and joins the audio thread; closes engine and device. */
