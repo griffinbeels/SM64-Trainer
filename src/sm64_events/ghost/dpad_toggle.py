@@ -39,9 +39,10 @@ One press is one edge, so it is at most one flip. `OverlayFlipper` runs the
 card's own doors in order: the state `GET /api/ghost` answers
 (`GhostSession.refresh(resolve=False)`), then `PUT /api/ghost {enabled}`
 (`GhostSession.update`). The setting is remembered and `ghost_changed` reaches
-every client. It flips only while the card's switch could
-(`source.available`, `ui/ghostsession.js::ghostControls`), and flips are
-serialized so a quick second press reads the first one's result.
+every client. Like the card's ghost toggle it is a preference, not a
+capability (round 5): it flips whenever there is a practice target, even with
+nobody to race yet, and the card's Lineup says why. Flips are serialized so a
+quick second press reads the first one's result.
 """
 import asyncio
 import logging
@@ -124,16 +125,15 @@ class OverlayFlipper:
         task.add_done_callback(self._tasks.discard)
 
     async def flip(self) -> dict | None:
-        """The new state, or None when the switch could not flip."""
+        """The new state, or None with no practice target to flip it for."""
         async with self._lock:
             session = self.session
             if session is None:
                 return None
             try:
                 body = await session.refresh(resolve=False)
-                if not body["source"].get("available"):
-                    log.info("D-pad Up: no ghost to show here (%s)",
-                             body["source"].get("reason"))
+                if not body.get("target"):
+                    log.info("D-pad Up: no practice target to race ghosts on")
                     return None
                 body = await session.update(enabled=not body["enabled"])
             except Exception:  # noqa: BLE001 - a press must never break the poll loop

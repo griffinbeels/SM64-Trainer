@@ -120,7 +120,19 @@ def test_the_flip_turns_the_overlay_back_on_remembers_it_and_tells_clients(tmp_p
     asyncio.run(check())
 
 
-def test_nothing_flips_when_the_switch_could_not(tmp_path):
+def test_it_flips_with_nobody_to_race_like_the_cards_toggle(tmp_path):
+    session, _, _, _ = a_session(tmp_path)
+    flipper = OverlayFlipper(session)
+
+    async def check():
+        before = await session.refresh()
+        assert not before["source"].get("available")
+        assert (await flipper.flip())["enabled"] is (not before["enabled"])
+        await session.stop()
+    asyncio.run(check())
+
+
+def test_nothing_flips_without_a_practice_target(tmp_path):
     session, _, _, _ = a_session(tmp_path, target=None)
     flipper = OverlayFlipper(session)
 
