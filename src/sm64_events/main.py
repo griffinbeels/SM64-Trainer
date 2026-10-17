@@ -1,5 +1,6 @@
 # src/sm64_events/main.py
 """Composition root: registry -> memory -> poller -> detectors -> tracking -> app."""
+import asyncio
 import json
 import logging
 import shutil
@@ -539,19 +540,23 @@ def build(*, recorder_lock=None):
     native_ghost = NativeGhost(replay, supported=lambda: ghost_supported(running["version"]),
         origin_of=lambda kind,key:service.native_rival_origin(kind,key,frame=ghost_frame["frame"]))
 
+    regrades = set()
+
     def follow_build(new_version):
         """The cartridge's build changed (poller): every memory reader moves
-        to its layout. The poller has already swapped its own reader and
-        rebuilds the detectors after this returns."""
+        to its layout, and grading under AUTO follows the cartridge. The
+        poller has already swapped its own reader and rebuilds the detectors
+        after this returns; the regrade broadcasts, so it runs as its own
+        task on the poller's loop."""
         running["version"] = new_version
         new_layout = layout_for(new_version)
         inputs.set_layout(new_layout)
         if replay is not None:
             replay.recorder.set_ghost_capture_factory(_ghost_capture_factory(new_layout))
             replay.recorder.retarget_capture()
-        note = getattr(service, "note_running_version", None)
-        if note is not None:
-            note(new_version)
+        task = asyncio.get_running_loop().create_task(service.note_running_version(new_version))
+        regrades.add(task)
+        task.add_done_callback(regrades.discard)
 
     def note_ghost_snapshot(snapshot):
         ghost_frame["frame"] = snapshot.global_timer
