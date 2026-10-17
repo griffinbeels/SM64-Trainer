@@ -72,10 +72,15 @@ function loadingModel(on, lineup, you, rivals) {
   return { on, lineup, people: [you, ...holes], loading: true };
 }
 
-/** Ready: you and the rivals, or you and one sentence when nobody can be raced. */
+/**
+ * Ready: you and the rivals, or you and one sentence when nobody can be raced.
+ * No seats and no reason means nobody has been asked yet (the overlay was
+ * off): that is about to load, so it draws as loading, never as "nobody".
+ */
 function readyModel(on, lineup, you, rivals) {
   const seats = (rivals.rows || []).filter(row => Number.isInteger(row.slot)).map(rivalSeat);
   if (seats.length) return { on, lineup, people: [you, ...seats] };
+  if (!rivals.reason) return loadingModel(on, lineup, you, rivals);
   return { on, lineup, people: [you], note: { text: EMPTY_WORDS[rivals.reason] || LINEUP_WORDS.nobody } };
 }
 
