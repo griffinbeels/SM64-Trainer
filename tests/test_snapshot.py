@@ -44,3 +44,17 @@ def test_curr_area_defaults_to_zero_for_old_call_sites():
                      num_stars=0, last_completed_course=0,
                      last_completed_star=0)
     assert s.curr_area == 0
+
+
+def test_reader_carries_the_pad_and_usamunes_menu_for_the_ghost_toggle():
+    from dataclasses import replace
+    mem = BufferMemory()
+    mem.write_u16(US.player1_controller + A.CONTROLLER_BUTTON_DOWN_OFF, 0x0820)
+    mem.write_u8(US.usamune_menu, 1)
+    snap = SnapshotReader(mem).read()
+    assert snap.buttons_held == 0x0820 and snap.usamune_menu_open is True
+    mem.write_u8(US.usamune_menu, 0)
+    assert SnapshotReader(mem).read().usamune_menu_open is False
+    # A layout that has not verified either address reads them as unknown.
+    bare = SnapshotReader(mem, replace(US, player1_controller=None, usamune_menu=None)).read()
+    assert bare.buttons_held is None and bare.usamune_menu_open is None
