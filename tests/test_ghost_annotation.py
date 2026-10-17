@@ -25,12 +25,26 @@ def test_native_annotations(tmp_path):
     build._cl(vc, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", f"/I{ROOT / 'plugin/gfxwrap'}",
         str(ROOT / "plugin/gfxwrap/ghost_annotation_assets.cpp"), str(ROOT / "tests/native/ghost_annotation_host.cpp"),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'"], tmp_path)
-    args = [str(target)]
-    if rom := os.environ.get("SM64_GHOST_ROM"):
-        args.extend([rom, str(tmp_path / "annotation-atlas.rgba"), str(tmp_path / "annotation-layout.bin")])
-    result = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=20,
-        check=False, **quiet_spawn_kwargs())
-    assert result.returncode == 0, result.stdout + result.stderr
-    report = json.loads(result.stdout)
-    assert report["ok"] and report["checks"] > 50
-    assert {chr(c) for c in report["label_characters"]} == LABEL_CHARACTERS
+    # Each supplied cartridge reads its own places: SM64_GHOST_ROM (Usamune US)
+    # and SM64_GHOST_JP_ROM (Usamune JP). No ROM byte is distributed.
+    runs = [("synthetic", None)] + [(name, os.environ[key]) for name, key in
+                                    (("us", "SM64_GHOST_ROM"), ("jp", "SM64_GHOST_JP_ROM")) if os.environ.get(key)]
+    atlases = {}
+    for name, rom in runs:
+        args = [str(target)]
+        if rom:
+            atlas = tmp_path / f"annotation-atlas-{name}.rgba"
+            args.extend([rom, str(atlas), str(tmp_path / f"annotation-layout-{name}.bin")])
+            atlases[name] = atlas
+        result = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=20,
+            check=False, **quiet_spawn_kwargs())
+        assert result.returncode == 0, f"{name}: {result.stdout}{result.stderr}"
+        report = json.loads(result.stdout)
+        assert report["ok"] and report["checks"] > 50 and report["rom"] == (rom is not None)
+        assert {chr(c) for c in report["label_characters"]} == LABEL_CHARACTERS
+    if len(atlases) == 2:
+        # Below the font cells (rows 128 on) every cartridge holds the same art:
+        # HUD numerals and letters, Usamune's buttons, ring and base, the chevron.
+        us, jp = (atlases[name].read_bytes() for name in ("us", "jp"))
+        row = 256 * 4
+        assert us[128 * row:] == jp[128 * row:] and us[:128 * row] != jp[:128 * row]

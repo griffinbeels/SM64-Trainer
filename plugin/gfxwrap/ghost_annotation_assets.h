@@ -34,12 +34,15 @@ constexpr uint8_t floor=89;
 struct Assets {
     std::array<uint8_t,atlas_width*atlas_height*4> rgba{};
     bool ready=false,usamune=false,chevron=false;
+    uint8_t font=font::us; // whose dialogue font filled the glyph cells
     bool load(const uint8_t* rom,uint32_t bytes);
     View view() const {return ready?View{rgba.data(),atlas_width,atlas_height,usamune}:View{};}
 };
 // Pinned n64decomp 06ec56df7f951f88da05f468cdcacecba496145a:
 // charmap.txt, ingame_menu.c:gDialogCharWidths, segment2.c:font LUT.
 // An underscore uses the canonical hyphen stroke lowered to the baseline.
+// Glyph cells are named by these US codes on both cartridges: a JP atlas
+// fills each from JP's own font (Assets::load says which glyph).
 constexpr uint8_t underscore=0xfe;
 inline uint8_t glyph(uint32_t c) {
     if(c>='0' && c<='9')return uint8_t(c-'0');
@@ -56,7 +59,14 @@ inline uint8_t glyph(uint32_t c) {
     }
 }
 inline bool supported(uint32_t c) {return c=='?' || glyph(c)!=glyph('?');}
-inline uint8_t advance(uint8_t c) {
+// JP's dialogue font is monospaced: print_generic_string advances 10 per
+// glyph and 5 per space (ingame_menu.c, VERSION_JP). The narrow marks the
+// JP atlas builds from its own strokes (' . :) take a space's 5.
+inline uint8_t jp_advance(uint8_t c) {
+    return c==0x9e || c==0x3e || c==0x3f || c==0xe6 ? 5 : 10;
+}
+inline uint8_t advance(uint8_t c,uint8_t font=font::us) {
+    if(font==font::jp)return jp_advance(c);
     constexpr uint8_t first[]={7,7,7,7,7,7,7,7,7,7,6,6,6,6,6,6,6,6,5,6,6,5,8,8,6,6,6,6,6,5,6,6,
         8,7,6,6,6,5,5,6,5,5,6,5,4,5,5,3,7,5,5,5,6,5,5,5,5,5,7,7,5,5,4,4};
     if(c<sizeof(first))return first[c];

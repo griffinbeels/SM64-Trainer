@@ -34,6 +34,7 @@ HANDLE thread = nullptr;
 std::atomic<bool> quit{false};
 Output device{};
 std::vector<uint8_t> audio_copy; // the ROM's audio span, handed to the audio thread; freed once opened
+sa_regions audio_regions{};      // where that span's regions sit, for the engine
 // While the device is closed the audio thread sleeps on `wake` with `idle`
 // set; cue() signals it. Both sides order their store before their load
 // (seq_cst), so a request pushed as the thread goes idle is never missed.
@@ -80,7 +81,7 @@ bool reopen_on_request() {
 }
 
 DWORD WINAPI audio_main(void *) {
-    const int32_t opened=sa_open(audio_copy.data(),audio_copy.size());
+    const int32_t opened=sa_open(audio_copy.data(),audio_copy.size(),&audio_regions);
     SecureZeroMemory(audio_copy.data(),audio_copy.size()); std::vector<uint8_t>().swap(audio_copy);
     if(opened!=SA_OK) return 1;
     if(!device.open(device.owner,SA_RATE)) { sa_close(); return 2; }
@@ -222,15 +223,20 @@ void __cdecl ring_close(void *) {
     if(ring.header) InterlockedExchange(reinterpret_cast<volatile LONG*>(&ring.header->renderer_open),0);
 }
 
-// SHA-256 of the regions the engine parses: stock SM64 US and the Usamune US
-// practice ROM share CTL/TBL/SEQ; Usamune changes only the bank-set table.
-struct Region { uint32_t offset, bytes; const char *digests[2]; };
-const Region regions[] = {
-    {SA_CTL_OFFSET,SA_TBL_OFFSET-SA_CTL_OFFSET,{"a536f5f2a88d642fedfd67fb38b51475998ae5a83a5347e3064285f8f19c8fee",nullptr}},
-    {SA_TBL_OFFSET,SA_SEQ_OFFSET-SA_TBL_OFFSET,{"d7ee2287c6e0201f6f947ef0b085b7c1dc15c24db312f99734ead3437f9eb864",nullptr}},
-    {SA_SEQ_OFFSET,SA_BANKS_OFFSET-SA_SEQ_OFFSET,{"cb6fc92d8471bfc4b00bafc72d475c8b766c4b83015f0afeaeca019795988e1a",nullptr}},
-    {SA_BANKS_OFFSET,SA_BANKS_BYTES,{"b516e8cc50039af0d96e1ea2d9eedb35f1f63c2ff7a846e1fe137a005a924510",
-                                     "524c0be0aa96485e4c55225ec6f2f39d3acc67a5f9e481bef8d93a93839c38b3"}},
+// SHA-256 of the regions the engine parses (CTL, TBL, SEQ, bank sets), by
+// the header's country byte. Each cartridge's practice ROM holds its stock
+// game's audio unchanged: stock SM64 US and Usamune US share all four, as do
+// stock SM64 JP and Usamune JP (measured 2026-10-17).
+struct Cartridge { uint8_t country; const sa_regions *regions; const char *digests[4]; };
+const Cartridge cartridges[] = {
+    {'E',&SA_US,{"a536f5f2a88d642fedfd67fb38b51475998ae5a83a5347e3064285f8f19c8fee",
+                 "d7ee2287c6e0201f6f947ef0b085b7c1dc15c24db312f99734ead3437f9eb864",
+                 "175954e943bf014e7d442ae1192783843f76d6db27f58d604a93ad24999e9a19",
+                 "a065117bef9c74e631ae83d7496b02a16815b60205ddec9cfaf500de33ada137"}},
+    {'J',&SA_JP,{"a65f6851f9634b3821990cb717ac0c3a9e6d91fa3261787bd9c72259bd29404d",
+                 "37518f7449cb0eff825ac26dd82c1f0f5acebc267c05c9b53c567ae4b2f548f1",
+                 "d9b086845270572e2b55303d381cd8482abcf908ffe8753167fe3be2cca5109f",
+                 "7a27ae55256d2b73693823cae8427116571689ebbc1fd6d8d706d5c4a72d0865"}},
 };
 bool matches(const uint8_t digest[32], const char *hex) {
     if(!hex) return false;
@@ -268,22 +274,31 @@ void control(bool on, float level) {
 const ghost_playback::SoundSink *sink() { return &playback_sink; }
 Output shared_ring() { return {nullptr,ring_open,ring_queued,ring_write,ring_wait,ring_close}; }
 
-bool known_audio(const uint8_t *rom, size_t bytes) {
-    if(!rom || bytes!=SA_ROM_BYTES) return false;
-    for(const auto &region:regions) {
-        std::vector<uint8_t> part(rom+region.offset,rom+region.offset+region.bytes);
-        uint8_t digest[32]{};
-        if(!ghost_assets::sha256(part,digest)
-                || !(matches(digest,region.digests[0]) || matches(digest,region.digests[1]))) return false;
+// The cartridge whose four regions all hash to its known audio, or none.
+const sa_regions *audio_regions_of(const uint8_t *rom, size_t bytes) {
+    if(!rom || bytes!=SA_ROM_BYTES) return nullptr;
+    for(const auto &cartridge:cartridges) {
+        if(rom[0x3e]!=cartridge.country) continue;
+        const sa_regions &r=*cartridge.regions;
+        const uint32_t bounds[5]={r.ctl,r.tbl,r.seq,r.banks,r.banks+SA_BANKS_BYTES};
+        for(unsigned i=0;i<4;++i) {
+            std::vector<uint8_t> part(rom+bounds[i],rom+bounds[i+1]);
+            uint8_t digest[32]{};
+            if(!ghost_assets::sha256(part,digest) || !matches(digest,cartridge.digests[i])) return nullptr;
+        }
+        return &r;
     }
-    return true;
+    return nullptr;
 }
+bool known_audio(const uint8_t *rom, size_t bytes) { return audio_regions_of(rom,bytes)!=nullptr; }
 Start start(const uint8_t *rom, size_t bytes, const Output &output) {
     if(thread) return Start::busy;
-    if(!known_audio(rom,bytes)) return Start::invalid_rom;
+    const sa_regions *regions=audio_regions_of(rom,bytes);
+    if(!regions) return Start::invalid_rom;
     if(!output.open || !output.queued || !output.write || !output.wait || !output.close) return Start::device;
     if(!wake && !(wake=CreateEventW(nullptr,FALSE,FALSE,nullptr))) return Start::thread;
-    audio_copy.assign(rom+SA_AUDIO_OFFSET,rom+SA_AUDIO_OFFSET+SA_AUDIO_BYTES); device=output; quit.store(false);
+    audio_copy.assign(rom+regions->ctl,rom+regions->ctl+SA_SPAN(*regions)); audio_regions=*regions;
+    device=output; quit.store(false);
     for(auto &placement:placements) { // a new engine starts every ghost centred, at full gain
         for(auto &axis:placement.position) axis.store(0.0f);
         placement.gain.store(1.0f);

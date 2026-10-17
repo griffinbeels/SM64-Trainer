@@ -3,6 +3,7 @@
 #include "ghost_annotation_mesh.h"
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <vector>
 #include <fstream>
 #include <stdexcept>
@@ -71,17 +72,57 @@ int main(int argc,char** argv) {
         sample.pad.stick_x=128;check(!valid_pad(sample),"out-of-range signed raw axis refused");
         sample.pad.stick_x=0;sample.pad.buttons=0x40;check(!valid_pad(sample),"reserved button bit refused");
         sample.pad.buttons=0;sample.pad.reserved=1;check(!valid_pad(sample),"reserved field refused");
-        constexpr unsigned size=100878,base=0x108a40,lut=0x77e8;
-        std::vector<uint8_t> decoded(size);put(decoded,lut,0x02005900);
+        // A literal (all-raw) MIO0 segment 2 at a cartridge's place: its font
+        // LUT naming the first glyph, and its HUD LUT 0-9, A-Z at 512 bytes each.
+        const auto segment2=[&](char country,unsigned base,unsigned size,unsigned lut,uint32_t first,unsigned hud,
+                                const std::vector<std::pair<unsigned,uint8_t>>& texels) {
+            std::vector<uint8_t> decoded(size);put(decoded,lut,first);
+            for(unsigned i=0;i<48;++i)put(decoded,hud+4*i,0x02000000u+i*512);
+            for(const auto& t:texels)decoded[t.first]=t.second;
+            std::vector<uint8_t> rom(8*1024*1024);rom[0x3e]=uint8_t(country);std::memcpy(rom.data()+base,"MIO0",4);
+            const unsigned flags_end=16+(size+7)/8;put(rom,base+4,size);put(rom,base+8,flags_end);put(rom,base+12,flags_end);
+            std::memset(rom.data()+base+16,255,flags_end-16);std::memcpy(rom.data()+base+flags_end,decoded.data(),size);
+            return rom;
+        };
         // Asymmetric texel: tile S=2,T=1 appears at screen X=6,Y=13.
-        decoded[0x5900+(1*16+2)/2]=0xf0;
-        std::vector<uint8_t> rom(8*1024*1024);std::memcpy(rom.data()+base,"MIO0",4);
-        const unsigned flags_end=16+(size+7)/8;put(rom,base+4,size);put(rom,base+8,flags_end);put(rom,base+12,flags_end);
-        std::memset(rom.data()+base+16,255,flags_end-16);std::memcpy(rom.data()+base+flags_end,decoded.data(),size);
+        auto rom=segment2('E',0x108a40,100878,0x77e8,0x02005900,0x7700,{{0x5900+(1*16+2)/2,0xf0}});
         Assets assets;check(assets.load(rom.data(),unsigned(rom.size())),"bounded literal MIO0 font fixture decoded");
+        check(assets.font==font::us,"a US cartridge fills the cells from the US font");
         check(assets.rgba[(13*atlas_width+6)*4+3]==255 && assets.rgba[(2*atlas_width+1)*4+3]==0,
               "font quad uses canonical rotation rather than an invented font orientation");
-        rom[base+12]=0xff;check(!assets.load(rom.data(),unsigned(rom.size())),"corrupt compressed stream fails optional atlas");
+        rom[0x3e]='P';check(!assets.load(rom.data(),unsigned(rom.size())),"a cartridge with no known places draws no atlas");
+        rom[0x3e]='J';check(!assets.load(rom.data(),unsigned(rom.size())),"US places are never read on a JP cartridge");
+        rom[0x3e]='E';rom[0x108a40+12]=0xff;check(!assets.load(rom.data(),unsigned(rom.size())),"corrupt compressed stream fails optional atlas");
+        {
+            // JP: its own 8x16 one-bit font, upright, at JP's places. Glyph
+            // A's top row lights its leftmost pixel; the handakuten its middle.
+            constexpr unsigned glyph_a=0x7100+10*16,handakuten=0x7100+0xf1*16,comma=0x7100+0x6f*16,question=0x7100+0xf4*16;
+            auto jp=segment2('J',0x1076d0,0x15bae,0x8338,0x02007100,0x8250,
+                {{glyph_a,0x80},{handakuten+7,0x20},{comma+12,0x40},{question+3,0x10}});
+            const unsigned base=0x1076d0,flags_end=16+(0x15bae+7)/8;
+            for(unsigned c=0;c<256;++c) { // every LUT entry names its glyph by its code
+                const uint32_t pointer=0x02007100u+c*16;
+                for(unsigned i=0;i<4;++i)jp[base+flags_end+0x8338+c*4+i]=uint8_t(pointer>>(24-8*i));
+            }
+            Assets japanese;check(japanese.load(jp.data(),unsigned(jp.size())),"JP segment 2 decoded at JP's place");
+            check(japanese.font==font::jp,"a JP cartridge fills the cells from JP's font");
+            const auto lit=[&](uint8_t c,unsigned x,unsigned y) {
+                return japanese.rgba[(((c/32)*16+y)*atlas_width+(c%32)*8+x)*4+3]==255;
+            };
+            check(lit(glyph('A'),0,0) && !lit(glyph('A'),7,0),"JP glyphs are upright one-bit tiles");
+            check(lit(glyph('a'),0,0),"lowercase takes JP's own capital");
+            check(lit(glyph('.'),0,12) && !lit(glyph('.'),2,7),"the period is JP's handakuten moved 2 left, 5 down");
+            check(lit(glyph(':'),0,12) && lit(glyph(':'),0,6),"the colon is that circle twice");
+            check(lit(glyph('\''),1,4) && !lit(glyph('\''),1,12),"the apostrophe is JP's comma raised to the cap line");
+            for(uint32_t c:{uint32_t('^'),uint32_t('|'),uint32_t('<'),uint32_t('>'),uint32_t('+'),uint32_t('&')})
+                check(lit(glyph(c),3,3),"a mark JP cannot draw shows JP's question mark");
+            check(advance(glyph('W'),font::jp)==10 && advance(glyph('i'),font::jp)==10 && advance(glyph(' '),font::jp)==5
+                  && advance(glyph('.'),font::jp)==5,"JP glyphs advance by JP's own monospaced rule");
+            uint8_t chars[64]{};unsigned width=0;
+            check(Layout::fitted("Mario",1,1000,chars,width,font::jp)==5 && width==50,"a JP name is 10 pixels a glyph");
+            check(Layout::fitted("Mario",1,1000,chars,width)==5 && width<50,"a US name keeps US widths");
+            jp[0x3e]='E';check(!japanese.load(jp.data(),unsigned(jp.size())),"JP places are never read on a US cartridge");
+        }
         Payload p;std::strcpy(p.label,"YOUR PB");p.names=true;
         float vp[16]{};vp[0]=vp[5]=vp[10]=1;vp[15]=500;
         Mesh mesh;ghost_occlusion::Region region{};
@@ -248,6 +289,8 @@ int main(int argc,char** argv) {
             std::ifstream file(argv[1],std::ios::binary);std::vector<uint8_t> real((std::istreambuf_iterator<char>(file)),{});
             check(real.size()==8*1024*1024 && assets.load(real.data(),unsigned(real.size())),"canonical real-ROM atlas decoded");
             if(!std::memcmp(real.data()+0x20,"SM64 USAMUNE",12))check(assets.usamune,"actual Usamune table resolves every canonical icon");
+            check(assets.chevron,"the cartridge's own chevron texture loads");
+            check(assets.font==(real[0x3e]=='J'?font::jp:font::us),"the cartridge's own dialogue font fills the cells");
             if(argc>=3) {std::ofstream out(argv[2],std::ios::binary);out.write(reinterpret_cast<const char*>(assets.rgba.data()),assets.rgba.size());}
             if(argc>=4) {
                 std::ofstream out(argv[3],std::ios::binary);
