@@ -15,7 +15,7 @@
 // see changes. A MutationObserver picks up loops as the app renders them.
 // tests/test_ui_idle_animations.py fails when an endless main-thread loop is
 // running that this list does not cover.
-export const LOOPS = ".pb-gold, .needs-strat, .daily-star-foil, .pb-glow";
+export const LOOPS = ".pb-gold, .needs-strat, .daily-star-foil, .pb-glow, .lineup-bone, .lineup-seat.is-placeholder > .lineup-mark";
 const MARGIN = "96px";
 
 export function watchOffscreenLoops(root = document.body) {

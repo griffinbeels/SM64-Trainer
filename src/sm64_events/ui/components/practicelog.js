@@ -29,7 +29,7 @@ import { Icon } from "./icons.js";
 import { ShrinkToFitName } from "./shrinkname.js";
 import { Disclose } from "./collapsible.js";
 import { useFeedMotion } from "./feedmotion.js";
-import { StratPicker } from "./stratpicker.js";
+import { StratPicker, writeActiveStrategy } from "./stratpicker.js";
 import { StandardsPanel } from "./standards.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
          StatMenuTrigger, comparator, ranksAreAtFloor,
@@ -44,7 +44,7 @@ import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { AddTime } from "./addtime.js";
-import { GhostSettings, GhostSwitch } from "./ghostswitch.js";
+import { GhostSettings, GhostSwitch, GhostToggle, useGhostSession } from "./ghostswitch.js";
 import { GoalPlate, useEntryGoals } from "./goalplate.js";
 import { useTargetPick } from "../target.js";
 
@@ -562,6 +562,13 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // Active practice also uses this choice for ghosts, even on a shared ladder.
   const [preferredRankMode, setPreferredRankMode] = useState(
     () => readRankDisplayMode(ek));
+  // The card's ONE ghost session: the head's ghost toggle and the Lineup under
+  // the head read the same answer, and only the active card fetches it.
+  const ghost = useGhostSession(t, active);
+  // A strategy picked from the Lineup's buttons is held on the picker until the
+  // store's refresh carries it -- the hold the picker keeps for its own picks.
+  const [lineupStrat, setLineupStrat] = useState(undefined);
+  const stratPickerRef = useRef(null);
   // `forceOpen` exists for exactly one moment (Task 6 brief, Step 1): "so a
   // pick on a COLLAPSED card has a scroll target to find" -- it must win
   // just long enough to make the row exist, never permanently. Folding
@@ -609,6 +616,22 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const manualTiming = isSegment(sec) && isManualSegment(
     (t.segments || []).find((definition) => definition.id === sec.segment_id));
   const clock = sectionClock(sec, t.clock);
+  const pickFromLineup = async (tag) => {
+    setLineupStrat(tag);
+    try {
+      await writeActiveStrategy(entityIdentity(sec), tag, clock, t.setNotice);
+    } catch {
+      if (t.setNotice) t.setNotice("Couldn't save the strategy. The tracker may be reconnecting; try again.");
+    }
+    try { await t.refresh(); } finally { setLineupStrat(undefined); }
+  };
+  // "Other…" in the Lineup opens this card's own strategy picker.
+  const openStrategyPicker = () => {
+    const select = stratPickerRef.current?.querySelector("select");
+    if (!select) return;
+    select.focus();
+    try { select.showPicker?.(); } catch { /* an engine may refuse a scripted open; focus still lands */ }
+  };
   const pb = sectionPb(sec, t.clock);
   const stratPb = sectionPbByStrat(sec, t.clock);
   // The badge describes the PB the TAG is showing, which is the active
@@ -825,9 +848,9 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
              always rendered at (icon-size 40px + head padding 10px * 2). */""}
         ${broken
           ? html`<span class="log-card-strat">Definition deleted</span>`
-          : html`<span class="log-card-strat-picker">
+          : html`<span class="log-card-strat-picker" ref=${stratPickerRef}>
               <${StratPicker} entity=${ek} identity=${entityIdentity(sec)}
-                  strategies=${sec.strategies} active=${sec.last_strat}
+                  strategies=${sec.strategies} active=${lineupStrat !== undefined ? lineupStrat : sec.last_strat}
                   groups=${sec.strategy_groups} allowBlank=${!sec.default_strat}
                   timerMode=${clock} onNotice=${t.setNotice} onChanged=${t.refresh} /></span>`}
       </div>
@@ -871,6 +894,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            star's real, populated one. One card, one ladder, and now one
            Library identity -- never two doors to the same standings. */""}
       <div class="log-card-actions">
+        <${GhostToggle} ghost=${ghost} entityKey=${ek} active=${active} />
         ${/* Wears the LIBRARY (open book) icon, the same glyph the nav's own
              Library entry and the standards table's per-tier links wear -- a
              door into the Library is the library icon everywhere (round 1,
@@ -887,7 +911,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           <${Icon} name="chevron" size=${18} />
         </button>
       </div>
-    </div><${GhostSwitch} t=${t} entityKey=${ek} active=${active} scope=${rankMode} />
+    </div><${GhostSwitch} t=${t} ghost=${ghost} entityKey=${ek} active=${active} scope=${rankMode}
+      strategies=${sec.strategies || []} onPickStrategy=${pickFromLineup} onOtherStrategy=${openStrategyPicker} />
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
       ${inBody && ranksBlock}

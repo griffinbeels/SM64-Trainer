@@ -36,10 +36,25 @@ function strategyOptions(shown, strategies) {
   return shown && !known.includes(shown) ? [...known, shown] : known;
 }
 
-async function submitStrategy(submit, identity, tag, timerMode) {
-  if (submit) return submit(tag);
-  return send("POST", "/api/strat",
+/**
+ * THE active-strategy write, shared by this picker and the Lineup's strategy
+ * buttons (ui/components/lineup.js): one door to POST /api/strat, so a pick
+ * from either place saves, reports a failed replay and settles the same way.
+ */
+export async function writeActiveStrategy(identity, tag, timerMode, onNotice) {
+  const result = await send("POST", "/api/strat",
     { ...identity, strat_tag: tag, timer_mode: timerMode });
+  reportAutomaticReplay(result, onNotice);
+  return result;
+}
+
+async function submitStrategy(submit, identity, tag, timerMode, onNotice) {
+  if (submit) {
+    const result = await submit(tag);
+    reportAutomaticReplay(result, onNotice);
+    return result;
+  }
+  return writeActiveStrategy(identity, tag, timerMode, onNotice);
 }
 
 // `allowBlank=false` drops the "no strategy" sentinel entirely. Segments whose
@@ -99,8 +114,7 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
       // component: the practice cards set the ACTIVE strategy, an attempt row
       // reclassifies one recorded attempt. One dropdown, so the modal, the
       // dropped-write recovery, and the styling can't drift apart.
-      const result = await submitStrategy(submit, identity, tag, timerMode);
-      reportAutomaticReplay(result, onNotice);
+      await submitStrategy(submit, identity, tag, timerMode, onNotice);
     } catch {
       // A dropped write (tracker reconnecting, or a second copy running) must
       // NOT silently leave a phantom selection that later reverts. Tell the
