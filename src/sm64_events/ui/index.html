@@ -6099,24 +6099,30 @@
        (which has no room) and `::before` draws the indicator, CENTRED rather
        than left-aligned in a full-width box, with the border and padding
        dropped so the block is a dot and not a panel containing one. */
-    /* WORDS, NOT DOTS (round 8, 2026-10-17: "there shouldn't be 2 dots.
-       Rethink this for the most clarity possible"). Two unlabelled coral
-       dots could mean anything -- they meant "paused" and "recording". The
-       narrow sidebar now says each in one word, centred: the connection as
-       LIVE (green) / PAUSED / OFFLINE (coral), and the recorder as "● REC"
-       (red, the camera convention) or "REC OFF" (grey). The full label
-       still rides each one's title. */
+    /* ONE WORD (round 8, 2026-10-17). First "there shouldn't be 2 dots":
+       two unlabelled coral dots meant "paused" and "recording". Then "Remove
+       the "Live" and "Paused" text. Instead, just have the Rec text become
+       either red or grey depending on if we're actively recording or not.
+       And then adjust the size of the bounding box accordingly." So the box
+       holds REC alone -- red while capturing, grey otherwise -- and shrinks
+       to it. The connection appears only when it is LOST (OFFLINE, coral),
+       which is also when the recorder cannot answer. Full labels ride the
+       titles. */
     .connection-line { display: flex; justify-content: center; }
+    .sidebar-status { gap: .3rem; padding: .45rem .3rem; }
+    .sidebar-status .connection-line:not(.is-offline) { display: none; }
     .sidebar-status .status-light { display: none; }
     .sidebar-status .status-short, .sidebar-status .recording-short {
-      display: block; font-size: .62rem; font-weight: 800; line-height: 1.2;
+      display: block; font-size: .66rem; font-weight: 800; line-height: 1.2;
       letter-spacing: .08em; text-transform: uppercase; white-space: nowrap;
     }
     .sidebar-status .status-short { color: var(--coral); }
-    .sidebar-status .connection-line.is-live .status-short { color: var(--green); }
+    .sidebar-status .recording-short { color: var(--muted); }
+    .sidebar-status .recording-short.is-on { color: var(--coral); }
+    .sidebar-status .recording-status:empty { display: none; }
     .recording-status {
       width: 100%; display: flex; justify-content: center;
-      border-top: 0; padding-top: .35rem;
+      border-top: 0; padding-top: 0;
     }
     .recording-status > span, .recording-status .dot {
       display: flex; align-items: center; justify-content: center;
@@ -6397,7 +6403,8 @@
     }
     /* The phone header says what the recorder is doing, not always "REC":
        the same one-word form as the narrow sidebar (round 8). */
-    .mobile-status .recording-short { display: inline; font-size: .66rem; font-weight: 700; }
+    .mobile-status .recording-short { display: inline; font-size: .66rem; font-weight: 700; color: var(--muted); }
+    .mobile-status .recording-short.is-on { color: var(--coral); }
     .context-shell {
       position: static; top: auto; padding: 10px 10px 6px;
       background: rgba(5,12,22,.96);

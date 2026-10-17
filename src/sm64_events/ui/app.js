@@ -94,13 +94,14 @@ function ConnectionStatus({ t, mobile = false }) {
   const label = !t.connected ? "Offline"
     : t.paused ? (t.pauseReason === "afk" ? "Paused · AFK" : "Paused")
     : "Live";
-  // The narrow sidebar has room for one word, not the label (round 8).
-  const short = !t.connected ? "OFFLINE" : t.paused ? "PAUSED" : "LIVE";
+  // The narrow sidebar names the connection only when it is lost (round 8:
+  // "Remove the "Live" and "Paused" text"); the recorder's REC is the rest.
   return html`<div class=${mobile ? "mobile-status" : "sidebar-status"}>
-    <div class="connection-line ${t.connected && !t.paused ? "is-live" : "is-warn"}" title=${label}>
+    <div class="connection-line ${t.connected && !t.paused ? "is-live" : "is-warn"} ${t.connected ? "" : "is-offline"}"
+        title=${label}>
       <span class="status-light" aria-hidden="true"></span>
       <span class="status-main">${label}</span>
-      <span class="status-short" aria-hidden="true">${short}</span>
+      <span class="status-short" aria-hidden="true">OFFLINE</span>
       ${!mobile && html`<span class="status-sub">${t.connected ? "Server connected" : "Reconnecting…"}</span>`}
     </div>
     <div class="recording-status"><${RecordingDot} /></div>

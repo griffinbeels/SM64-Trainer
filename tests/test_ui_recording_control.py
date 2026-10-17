@@ -27,6 +27,13 @@ def button_label(page):
         "b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()")
 
 
+def narrow_rec_is(page, on):
+    """The narrow sidebar's one word: REC, red (`is-on`) only while capturing."""
+    page.wait_for_function(
+        "(() => { const s = document.querySelector('.sidebar-status .recording-short');"
+        f" return !!s && s.textContent === 'REC' && s.classList.contains('is-on') === {str(on).lower()}; }})()")
+
+
 def assert_off_panel_fits(page, panel, switch, tmp_path, width):
     page.set_viewport_size({"width": width, "height": 1100})
     # Enter through the real recording button at each supported
@@ -93,11 +100,12 @@ def test_manual_recording_control_waits_for_actual_stop_and_resume(tmp_path):
             # A startup can be cancelled; on is not painted as already recording.
             assert switch.get_by_role("button", name="Stop recording").is_enabled()
             assert button_label(page) == "Starting recording…"
-            # At 850 the sidebar is narrow: its one-word form says the recorder
-            # is starting, not off (round 8).
-            assert page.locator(".sidebar-status .recording-short").inner_text() == "REC …"
+            # At 850 the sidebar is narrow and says only REC: grey until the
+            # recorder is actually capturing, red once it is (round 8).
+            narrow_rec_is(page, on=False)
             state.update(capture_state="recording", recording=True)
             page.wait_for_function("[...document.querySelectorAll('.recording-button')].filter(el => el.getClientRects().length).every(el => el.textContent.includes('rec ·'))")
+            narrow_rec_is(page, on=True)
             panel.screenshot(path=str(tmp_path / "recording-on-850.png"), animations="disabled")
             assert errors == []
             assert responses and all(200 <= row["status"] < 300 for row in responses)

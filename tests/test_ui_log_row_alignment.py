@@ -76,10 +76,14 @@ RAIL = """(() => {
   const shown = el => el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0;
   const word = box.querySelector('.status-short'), rec = box.querySelector('.recording-short');
   const dot = box.querySelector('.recording-status .dot');
-  return { box: centre(box), word: shown(word) && word.textContent, wordCentre: centre(word),
+  const b = box.getBoundingClientRect(), r = rec.getBoundingClientRect();
+  return { box: centre(box), word: shown(word) && word.textContent,
            rec: shown(rec) && rec.textContent, recCentre: centre(rec),
+           recOn: rec.classList.contains('is-on'), recColour: getComputedStyle(rec).color,
            light: shown(box.querySelector('.status-light')),
-           dotMark: getComputedStyle(dot, '::before').content };
+           dotMark: getComputedStyle(dot, '::before').content,
+           // the box hugs the word: padding above and below it, nothing else
+           above: r.top - b.top, below: b.bottom - r.bottom };
 })()"""
 STATUS = {"recording": False, "capture_state": "off", "capture_gated": False,
           "idle": False, "disk_bytes": 0, "max_buffer_bytes": 0}
@@ -140,8 +144,12 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
     # The narrow plate (his layout) centres the PB/GOAL pair in its box.
     left_gap, right_gap = narrow["plateGaps"]
     assert abs(left_gap - right_gap) < 1, narrow["plateGaps"]
-    # The narrow sidebar says two words, not two dots ("there shouldn't be 2
-    # dots", round 8): the connection and the recorder, each centred.
-    assert rail["word"] == "LIVE" and rail["rec"] == "REC OFF", rail
-    assert not rail["light"] and rail["dotMark"] in ("none", "normal"), rail
-    assert abs(rail["wordCentre"] - rail["box"]) < 0.75 and abs(rail["recCentre"] - rail["box"]) < 0.75, rail
+    # The narrow sidebar holds one word, REC, grey while not recording ("there
+    # shouldn't be 2 dots", then "Remove the "Live" and "Paused" text", round
+    # 8): no connection word while connected, no dot, centred, and the box
+    # sized to it (equal room above and below).
+    assert rail["word"] is False and rail["rec"] == "REC" and not rail["recOn"], rail
+    assert rail["recColour"] == "rgb(143, 160, 181)" and not rail["light"], rail   # --muted, not --coral
+    assert rail["dotMark"] in ("none", "normal"), rail
+    assert abs(rail["recCentre"] - rail["box"]) < 0.75, rail
+    assert abs(rail["above"] - rail["below"]) < 1.5, rail
