@@ -85,6 +85,36 @@ class CounterWindow:
                 for name, value in values.items()}
 
 
+class SteadyChecks:
+    """A proven check outlives a brief gap; a new setup starts over.
+
+    Every check rests on fresh movement, and the sources pause for reasons
+    that are not failures: the recorder going idle and resuming restarts its
+    picture count, and a capture reconnect starts a new one. Read raw, one
+    poll then says "not set up" and the wizard bounced between "Checking your
+    setup" and "Setup checked" (his report, 2026-10-17; GET /api/setup showed
+    `pictures` false for 0.6 s at each idle-to-active turn). So a check stays
+    true until it has been false for `hold_s`, and a different Project64,
+    ROM or plugin process (`key`) proves everything again from nothing.
+    """
+
+    def __init__(self, clock=time.monotonic, hold_s=3.0):
+        self.clock = clock
+        self.hold_s = hold_s
+        self.key = None
+        self.proven = {}
+
+    def hold(self, key, checks: dict) -> dict:
+        now = self.clock()
+        if key != self.key:
+            self.key, self.proven = key, {}
+        for name, value in checks.items():
+            if value:
+                self.proven[name] = now
+        return {name: bool(value) or (name in self.proven and now - self.proven[name] < self.hold_s)
+                for name, value in checks.items()}
+
+
 def readiness(layer, observation: dict) -> dict:
     """The current next action. JP bypasses only unimplemented tracking."""
     target = observation.get("target", {})

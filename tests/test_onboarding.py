@@ -171,14 +171,60 @@ def test_runtime_requires_fresh_counters_from_same_process_and_recorder():
     assert readiness(installed(), probe(installed()))["ready"]  # second tab
     now[0] = 2
     recorder["frame_source"] = "desktop"
-    assert not readiness(installed(), probe(installed()))["ready"]
-    now[0] = 3
+    assert readiness(installed(), probe(installed()))["ready"]  # a gap, held
+    now[0] = 4.1
+    assert not readiness(installed(), probe(installed()))["ready"]  # held no longer
+    now[0] = 5
     recorder["frame_source"] = "plugin"
     target["pid"] = 124
     assert not probe(installed())["checks"]["plugin"]
     assert memory.attaches == [123, 124]
-    now[0] = 10
+    now[0] = 12
     assert not any(probe(installed())["checks"].values())
+
+
+def test_a_brief_gap_never_moves_setup_back_but_a_new_game_starts_over():
+    """His report, 2026-10-17: the wizard went "Setup checked", then back to
+    "Checking your setup", then forward again. The recorder resuming from
+    idle restarts its picture count, and one poll read "no pictures" (GET
+    /api/setup: `pictures` false for 0.6 s at each turn). A proven check now
+    holds through a gap shorter than SteadyChecks.hold_s; a stall longer than
+    that, or another Project64 or ROM, still reads as not set up."""
+    probe, now, target, inputs, recorder, memory, poller = runtime()
+    probe(installed())
+
+    def tick(at, pictures=1):
+        now[0] = at
+        inputs["frames"] += 30
+        poller.latest.global_timer += 30
+        recorder["frame_source_health"]["delivered"] += pictures
+        return readiness(installed(), probe(installed()))
+
+    assert tick(1)["ready"]
+    recorder["frame_source_health"]["delivered"] = 0    # the capture starts a new count
+    assert tick(2, pictures=0)["ready"]
+    assert tick(3)["ready"]                             # the new count moves again
+    # A real stall: pictures stop for good. Movement stays fresh for the
+    # counter window's 3 s and the proven check for 3 s more.
+    for at in (4, 5, 6, 7):
+        assert tick(at, pictures=0)["ready"]
+    assert not tick(8, pictures=0)["ready"]
+    assert tick(9)["ready"]
+    memory.raw = LIVE_USAMUNE_BE.replace(b"USAMUNE", b"USAMUNX")   # another ROM
+    assert not tick(10)["ready"]
+
+
+def test_one_unreadable_header_keeps_the_game_it_just_read():
+    probe, now, target, *_, memory, _ = runtime()
+    assert probe(installed())["rom"]["region"] == "us"
+
+    def failing():
+        raise OSError("partial copy")
+    memory.rom_header = failing
+    now[0] = 1
+    assert probe(installed())["rom"]["region"] == "us"
+    now[0] = 4.5
+    assert probe(installed())["rom"]["state"] == "missing"
 
 
 def test_closed_emulator_clears_rom_identity_even_if_poller_has_old_data():
@@ -262,8 +308,11 @@ def test_an_adapter_that_cannot_record_finishes_setup_on_desktop_pictures():
     inputs["frames"] += 1
     poller.latest.global_timer += 1
     assert readiness(layer, probe(layer))["ready"]
-    now[0] = 3
+    now[0] = 5.1                        # past SteadyChecks' hold of the proof above
     recorder["gpu_unsupported"] = None  # a capable adapter still needs GPU pictures
+    recorder["pictures_fed"] += 1       # ... however many desktop pictures move
+    inputs["frames"] += 1
+    poller.latest.global_timer += 1
     assert not probe(layer)["checks"]["pictures"]
 
 

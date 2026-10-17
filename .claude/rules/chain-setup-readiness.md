@@ -29,6 +29,11 @@ paths:
   target's pid and keeps it while that process runs (`alive()`); an observation is
   one header read. A fresh reader per poll re-walked Project64's memory every
   second (38 attaches in one minute of play, 2026-09-28).
+- **A proven check holds through a gap:** `onboarding.SteadyChecks` keeps a
+  check true until it has been false for 3 s, keyed by Project64 pid, ROM and
+  plugin pid; another of any of those proves everything again. A real stall
+  therefore reads as not set up after about 6 s (3 s of movement freshness,
+  then 3 s of hold). One unreadable header keeps the game it just read.
 - **One clock:** server monotonic time bounds fresh evidence to three seconds;
   the browser separately acknowledges progress for about one second. Neither
   polling frequency nor persisted completion can establish current readiness.
@@ -64,6 +69,15 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-10-17, hop 2: "the Setup Checked for some reason gets detected, then
+  undos itself ... We detected JP -- we're done. Move on." Each check needed
+  continuous fresh movement, and the recorder's idle-to-active turn restarts
+  its picture count: GET /api/setup at 4 Hz showed `pictures` false for 0.6 s
+  at each turn, while his first seconds in the game toggled idle four times.
+  `SteadyChecks` now holds a proven check through gaps under 3 s;
+  `test_a_brief_gap_never_moves_setup_back_but_a_new_game_starts_over` fails
+  without the hold.
 
 - 2026-09-28, hop 1: his server and Project64 started together. The boot
   refresh found no Project64, Project64 then loaded both plugins (its log:
