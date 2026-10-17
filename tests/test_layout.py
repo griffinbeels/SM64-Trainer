@@ -25,14 +25,14 @@ def test_layout_for_answers_both_versions_and_refuses_others():
         L.layout_for("eu")
 
 
-def test_us_is_complete_and_jp_starts_empty():
+def test_both_builds_are_complete():
     assert L.US.missing() == ()
-    assert set(L.JP.missing()) == {row.field for row in L.LAYOUT_ROWS}
+    assert L.JP.missing() == ()
 
 
 def test_require_names_the_missing_field():
     with pytest.raises(L.LayoutIncomplete, match="global_timer"):
-        L.JP.require("global_timer", "curr_level")
+        L.Layout(version="jp").require("global_timer", "curr_level")
     L.US.require("global_timer")            # no raise
 
 
@@ -44,11 +44,9 @@ def test_version_from_argv_reads_the_flag_and_refuses_an_unknown_version():
         L.version_from_argv(["--version", "usa"])
 
 
-def test_the_controller_has_a_us_address_and_no_jp_one_yet():
-    assert L.US.player1_controller is not None
-    assert L.JP.player1_controller is None, (
-        "a JP value lands only after its gate is verified and the sync "
-        "report says so")
+def test_each_build_reads_its_own_controller():
+    assert None not in (L.US.player1_controller, L.JP.player1_controller)
+    assert L.US.player1_controller != L.JP.player1_controller
 
 
 def test_the_button_table_covers_every_n64_button_exactly_once():

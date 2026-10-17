@@ -364,6 +364,30 @@ shipped-but-refuted address a red build. Run on US it is the regression proof:
 every gate verified except the three marked optional (screenshot-scored
 display lag, the Bowser 3 grand star, the diagnostics-only section counter).
 
+**The layout follows the cartridge (task 0064, 2026-10-16).** The poller
+identifies the cartridge from its header about 30 times a second, before it
+reads a frame. A different build's region swaps the reader to that build's
+layout, and the composition root (`main.follow_build`) moves every other
+reader with it: the input sampler (its pending frame is dropped, because it may
+have been read through the old addresses), the native ghost capture and its
+support check, and grading under AUTO (`TrackerService.note_running_version`).
+A build whose layout is incomplete HOLDS: nothing is read, journalled, sampled
+or recorded, and `/health.held` names why. A mid-session swap closes the open
+attempt as a capture gap. So no attempt, PB or ghost can come from a build the
+sync loop has not verified, and swapping ROMs needs no setting.
+
+**Usamune's own globals on JP came from the ROM images.** The exact-value hunt
+above needs typed readings; `tools/derive_rom_candidates.py` instead aligns the
+two builds' instruction streams with immediates masked and pairs each
+`lui`/offset reference. It reached 18 symbol rows and agreed with STROOP on all
+18, then named the controller and Usamune's five globals
+(`data/rom_candidates_jp.tsv`). Each still passed its live gate before
+`layout.py` took it.
+
+**Which ROM's ghosts and PBs count** is the strategy's region scope
+(`ranks/region_scope.py`, glossary "Region scope"): shared when the standards
+name no US/JP difference, regional otherwise.
+
 ## Memory hunting playbook
 
 For VANILLA statics (no public US map entry, e.g. file-scope `s*` in

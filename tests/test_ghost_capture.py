@@ -16,7 +16,7 @@ from sm64_events.memory import addresses as A
 from sm64_events.ghost import native_layout as L
 from jp_layout_fixture import JP_CANDIDATE
 from sm64_events.memory.ghost_layout import GhostLayout, ghost_supported
-from sm64_events.memory.layout import JP, US, Layout, LayoutIncomplete
+from sm64_events.memory.layout import US, Layout, LayoutIncomplete
 from sm64_events.sync.address_gates import (
     _check_area_update_counter,
     _check_current_area_pointer,
@@ -106,9 +106,9 @@ def test_semantic_config_resolves_selected_layout():
     assert len(config.to_bytes()) == L.LAYOUT_BYTES
     assert struct.unpack_from("<II", config.to_bytes()) == (L.LAYOUT_BYTES, L.SAMPLE_VERSION)
     assert struct.unpack_from("<II", config.to_bytes(), 56) == (US.pending_warp_op, US.delayed_warp_timer)
-    # JP's verified row is still empty: every root it lacks is named.
+    # A build before its sync run: every root it lacks is named.
     with pytest.raises(LayoutIncomplete, match="jp layout has no verified address for: global_timer"):
-        GhostLayout.from_layout(JP)
+        GhostLayout.from_layout(Layout(version="jp"))
     with pytest.raises(LayoutIncomplete, match="no eu layout schema"):
         GhostLayout.from_layout(Layout(version="eu"))
     with pytest.raises(LayoutIncomplete, match="current_area_pointer"):

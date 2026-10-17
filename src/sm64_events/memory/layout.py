@@ -5,7 +5,7 @@ ids, level and course ids, names, the world graph, struct offsets. This module
 holds what is true of ONE BUILD of it: the RAM address of each global. US is
 Usamune v1.93u, every value live-verified (short evidence beside each row; the
 long form moved into git history and `.claude/rules/memory-detectors.md` when
-the literals left addresses.py on 2026-08-15). JP starts empty and fills
+the literals left addresses.py on 2026-08-15). JP is Usamune v1.93j, filled
 through `tools/sync_version.py`: a value lands here only after its gate is
 verified and the sync report (`data/version_sync/jp.json`) says so —
 `tests/test_layout_matches_report.py` keeps the two in step, and
@@ -200,9 +200,42 @@ US = Layout(
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
 
-# JP — nothing verified yet. Candidates come from data/symbols_jp.tsv
-# through the sync runner; a value is written here only after its gate passes.
-JP = Layout(version="jp")
+# JP / Usamune v1.93j. Every value passed its address gate on his JP game
+# 2026-10-16/17 (data/version_sync/jp.json). Symbol rows came from STROOP's
+# MappingJP.map (data/symbols_jp.tsv); Usamune's own globals and the hunted
+# controller came from the ROM images (tools/derive_rom_candidates.py, which
+# also agreed with STROOP on all 18 symbol rows it reached).
+JP = Layout(
+    version="jp",
+    global_timer=0x8032C694,        # ticked 30/s
+    mario_struct=0x80339E00,        # action edge on his jump; 120 stars
+    curr_level=0x8032CE98,          # read 24 entering Whomp's Fortress
+    curr_area=0x8033A75A,           # read 1 in the lobby, then 3 in the basement
+    last_completed_course=0x8032CE20,  # read 2 after Chip off Whomp's Block
+    last_completed_star=0x8032CE24,    # read 1 after the same grab
+    pending_warp_op=0x80339EE2,     # nonzero 1 frame after his BitDW pipe touch
+    delayed_warp_timer=0x80339EE4,  # counted down from 19 to 0 on the same ride
+    warp_dest=0x80339ED8,           # changed to level 17 (BitDW), area 1, node 10
+    object_pool=0x8033C118,         # holds Mario's object; slot confirmed as bhvMario
+    player1_controller=0x80339C20,  # ROM-derived; stick off centre with A and B held
+    hud_display=0x80339EF0,         # race timer 0 under Usamune, as on US
+    hud_timer_running=0x80339EEE,
+    mario_object=0x8035FDE8,        # points at a slot boundary in the pool
+    current_area_pointer=0x8032CE6C,  # agrees with MarioState.area and the area graph
+    area_update_counter=0x8032CFA8, # equals Mario's gfx animation timer while moving
+    sound_code=0x8031DC78,          # play_sound names exactly this producer and ring
+    sound_producer=0x80331E34,      # advanced as he jumped
+    sound_consumer=0x80331E30,      # caught up with the producer
+    sound_ring=0x80360128,          # each new entry's source was Mario's object
+    usamune_overall=0x80417D3A,     # ROM-derived; ticked 30.1/s
+    usamune_star_result=0x80417D3C, # ROM-derived; 1193 at the grab, 1196 at the
+                                    # x-cam, zeroed at the course exit, as on US
+    usamune_timer=0x8033C26C,       # object slot 0's oTimer (pool + 0x154), as on US;
+                                    # diagnostics only, its gate never verifies
+    usamune_menu=0x804169A0,        # ROM-derived; 0, nonzero while open, 0 again
+    usamune_input_display=0x80417C1F,  # ROM-derived; 0 while off, nonzero while on
+    behaviour_base=0x800E8320,      # from Mario's object, 2026-10-16
+)
 
 VERSIONS = ("us", "jp")
 _LAYOUTS = {"us": US, "jp": JP}

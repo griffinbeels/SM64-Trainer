@@ -1,0 +1,269 @@
+{
+ "address.area_update_counter": {
+  "at": "2026-10-17T09:23:13.677263+00:00",
+  "evidence": "candidate advances and equals the independent gfx animation timer; pose/picture alignment still needs its renderer witness",
+  "frames": null,
+  "measured": {
+   "matching_advances": 60,
+   "matching_samples": 116
+  },
+  "status": "verified",
+  "value": 2150813608
+ },
+ "address.curr_area": {
+  "at": "2026-10-17T09:28:32.850066+00:00",
+  "evidence": "reads 1 then 3",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2150868826
+ },
+ "address.curr_level": {
+  "at": "2026-10-17T09:29:56.585011+00:00",
+  "evidence": "reads 24 (Whomp's Fortress)",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2150813336
+ },
+ "address.current_area_pointer": {
+  "at": "2026-10-17T09:28:33.892417+00:00",
+  "evidence": "active Area agrees with MarioState.area and independent area/root identity; this gate does not certify rendered camera matrices",
+  "frames": null,
+  "measured": {
+   "area": 3,
+   "pointer": 2150868500,
+   "root": 2149116600
+  },
+  "status": "verified",
+  "value": 2150813292
+ },
+ "address.delayed_warp_timer": {
+  "at": "2026-10-17T09:44:05.299949+00:00",
+  "evidence": "counted down from 19 to 0",
+  "frames": null,
+  "measured": {
+   "peak": 19,
+   "reached_zero": true
+  },
+  "status": "verified",
+  "value": 2150866660
+ },
+ "address.global_timer": {
+  "at": "2026-10-17T04:06:04.327053+00:00",
+  "evidence": "global_timer ticks 30.1/s over 2.0s",
+  "frames": null,
+  "measured": {
+   "per_second": 30.11,
+   "samples": 118
+  },
+  "status": "verified",
+  "value": 2150811284
+ },
+ "address.hud_display": {
+  "at": "2026-10-17T04:06:04.369261+00:00",
+  "evidence": "0 under Usamune, as on US",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2150866672
+ },
+ "address.hud_timer_running": {
+  "at": "2026-10-17T04:06:04.375334+00:00",
+  "evidence": "0 under Usamune, as on US",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2150866670
+ },
+ "address.last_completed_course": {
+  "at": "2026-10-17T09:30:44.742230+00:00",
+  "evidence": "last_completed_course reads 2 within 5s of the grab",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2150813216
+ },
+ "address.last_completed_star": {
+  "at": "2026-10-17T09:34:54.319849+00:00",
+  "evidence": "last_completed_star reads 1 within 5s of the grab",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2150813220
+ },
+ "address.mario_object": {
+  "at": "2026-10-17T04:06:04.342165+00:00",
+  "evidence": "pointer 0x8034a9d8 lands on a pool slot boundary",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2151022056
+ },
+ "address.mario_struct": {
+  "at": "2026-10-17T09:23:07.583106+00:00",
+  "evidence": "action edge seen from 0x3000881; num_stars=120",
+  "frames": null,
+  "measured": {
+   "num_stars": 120
+  },
+  "status": "verified",
+  "value": 2150866432
+ },
+ "address.object_pool": {
+  "at": "2026-10-17T04:06:04.336815+00:00",
+  "evidence": "240 slots readable at 0x8033c118; mario_object's pointer lands inside",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2150875416
+ },
+ "address.object_pool.confirm": {
+  "at": "2026-10-17T04:06:04.364332+00:00",
+  "evidence": "Mario's own slot behaviour matches bhvMario",
+  "frames": null,
+  "measured": {
+   "behaviour": 2148446656,
+   "expected": 2148446656
+  },
+  "status": "verified",
+  "value": 2150875416
+ },
+ "address.pending_warp_op": {
+  "at": "2026-10-17T09:44:04.261371+00:00",
+  "evidence": "op went nonzero 1 frame(s) after the touch",
+  "frames": null,
+  "measured": {
+   "delay_frames": 1
+  },
+  "status": "verified",
+  "value": 2150866658
+ },
+ "address.player1_controller": {
+  "at": "2026-10-17T09:23:18.741477+00:00",
+  "evidence": "the stick left the dead zone and buttons ('A', 'B') were held, with the dead-zone and magnitude relation holding on every read",
+  "frames": null,
+  "measured": {
+   "magnitude": 64.0,
+   "stick_x": 15,
+   "stick_y": 83
+  },
+  "status": "verified",
+  "value": 2150865952
+ },
+ "address.sound_code": {
+  "at": "2026-10-17T04:06:04.352894+00:00",
+  "evidence": "play_sound stores bits then source into 8-byte entries of this ring and publishes this u8 producer after both",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2150751352
+ },
+ "address.sound_consumer": {
+  "at": "2026-10-17T09:23:17.717375+00:00",
+  "evidence": "the consumer reached the producer after Mario's requests",
+  "frames": null,
+  "measured": {
+   "advances": 5,
+   "consumer_caught_up": 4,
+   "foreign_requests": 20,
+   "mario_requests": 3
+  },
+  "status": "verified",
+  "value": 2150833712
+ },
+ "address.sound_producer": {
+  "at": "2026-10-17T09:23:15.056918+00:00",
+  "evidence": "the producer advanced as Mario made sounds",
+  "frames": null,
+  "measured": {
+   "advances": 11,
+   "consumer_caught_up": 10,
+   "foreign_requests": 44,
+   "mario_requests": 3
+  },
+  "status": "verified",
+  "value": 2150833716
+ },
+ "address.sound_ring": {
+  "at": "2026-10-17T09:23:16.546434+00:00",
+  "evidence": "each new entry's source was Mario's gfx.cameraToObject with nonzero bits",
+  "frames": null,
+  "measured": {
+   "advances": 15,
+   "consumer_caught_up": 13,
+   "foreign_requests": 60,
+   "mario_requests": 4
+  },
+  "status": "verified",
+  "value": 2151022888
+ },
+ "address.usamune_input_display": {
+  "at": "2026-10-17T09:27:17.961599+00:00",
+  "evidence": "read 0 while Usamune's input display was off and nonzero while on, then 0 again",
+  "frames": null,
+  "measured": {
+   "off": true,
+   "on": true
+  },
+  "status": "verified",
+  "value": 2151775263
+ },
+ "address.usamune_menu": {
+  "at": "2026-10-17T09:23:23.722495+00:00",
+  "evidence": "read 0 while Usamune's menu was off and nonzero while on, then 0 again",
+  "frames": null,
+  "measured": {
+   "off": true,
+   "on": true
+  },
+  "status": "verified",
+  "value": 2151770528
+ },
+ "address.usamune_overall": {
+  "at": "2026-10-17T09:23:10.637479+00:00",
+  "evidence": "the candidate ticks 30.1/s at 0x80417d3a",
+  "frames": null,
+  "measured": {
+   "ticks_per_s": 30.1
+  },
+  "status": "verified",
+  "value": 2151775546
+ },
+ "address.usamune_star_result": {
+  "at": "2026-10-17T09:41:41.585023+00:00",
+  "evidence": "written 1196 at the dance (counter 1195) and held while the counter ran 110 frames past it",
+  "frames": null,
+  "measured": {
+   "overall_at_dance": 1195,
+   "ran_on": 110,
+   "result": 1196
+  },
+  "status": "verified",
+  "value": 2151775548
+ },
+ "address.warp_dest": {
+  "at": "2026-10-17T09:44:06.324138+00:00",
+  "evidence": "changed from (0, 6, 1, 52) to (0, 17, 1, 10)",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2150866648
+ },
+ "behaviour.base": {
+  "at": "2026-10-17T04:06:04.358904+00:00",
+  "evidence": "segment base 0x800e8320 from bhvMario at 0x800eb1c0",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": 2148434720
+ },
+ "version.rom": {
+  "at": "2026-10-17T04:06:02.310850+00:00",
+  "evidence": "ROM header reports 'jp'",
+  "frames": null,
+  "measured": null,
+  "status": "verified",
+  "value": null
+ }
+}

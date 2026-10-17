@@ -252,7 +252,7 @@ def test_scope_switch_revokes_native_owner_before_population_failure(tmp_path):
     generations = {"prepared_generation": 1, "active_generation": 1}
     source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
 
-    def metadata_snapshot(_kind, _entity, *, clock, game_version, strategy=None):
+    def metadata_snapshot(_kind, _entity, *, clock, game_version, strategy=None, versions=None):
         if strategy is None:
             assert source.commands[-1] == {"enabled": False}
             assert native._asset is native._selected_asset is None

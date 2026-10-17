@@ -45,11 +45,24 @@ def test_executable_version_reads_a_real_resource_without_launching_it():
     assert version.split(".")[:2] == [str(sys.version_info.major), str(sys.version_info.minor)]
 
 
-def test_jp_is_detected_without_claiming_tracking():
+def _jp_header():
     jp = bytearray(LIVE_USAMUNE_BE)
     jp[0x20:0x34] = b"SM64 USAMUNE v1.93j ".ljust(20)
     jp[0x3E] = ord("J")
-    observed = observation(bytes(jp))
+    return bytes(jp)
+
+
+def test_verified_jp_is_supported_like_us():
+    observed = observation(_jp_header())
+    assert observed["rom"]["state"] == "supported" and observed["rom"]["warning"] is None
+    observed["checks"]["game"] = False
+    assert readiness(installed(), observed)["step"] == "verify"
+
+
+def test_an_unverified_jp_layout_is_detected_without_claiming_tracking(monkeypatch):
+    import sm64_events.core.onboarding as onboarding
+    monkeypatch.setattr(onboarding, "_layout_ready", lambda version: False)
+    observed = observation(_jp_header())
     observed["checks"].update(inputs=False, game=False)
     verdict = readiness(installed(pictures_flowing=True), observed)
     assert verdict["ready"] and verdict["limited"]

@@ -14,11 +14,19 @@ from pathlib import Path
 import pytest
 
 from sm64_events.memory.buffer import BufferMemory
-from sm64_events.memory.layout import LayoutIncomplete
+from sm64_events.memory import layout as layout_module
+from sm64_events.memory.layout import Layout, LayoutIncomplete
 from sm64_events.sync import gates as G
 from sm64_events.sync.report import Report
 from sm64_events.sync.runner import (GateContext, default_server, run,
                                      summary, working_layout)
+
+
+@pytest.fixture(autouse=True)
+def jp_under_sync(monkeypatch):
+    """JP plays the build being synced: its row as it was before its sync
+    run, every field None (JP's real row is verified since 2026-10-17)."""
+    monkeypatch.setitem(layout_module._LAYOUTS, "jp", Layout(version="jp"))
 
 
 @pytest.fixture

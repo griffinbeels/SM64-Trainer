@@ -1,7 +1,8 @@
 """The Game version setting can name a ROM whose layout is not verified yet.
 
 feature/game-version lets him set JP (or AUTO with a JP ROM loaded);
-feature/version-sync ships JP's layout empty until the sync run fills it.
+feature/version-sync shipped JP's layout empty until the sync run filled it
+(2026-10-17); a new build starts the same way, so these tests stand one up.
 The two met at boot on 2026-08-15: `SnapshotReader` refuses an incomplete
 layout (by design -- never read address 0), and `main.build()` constructed
 it unguarded, so choosing JP in Settings would have killed the next start.
@@ -9,10 +10,19 @@ The rule: an incomplete layout HOLDS the poller (nothing read, nothing
 journaled, /health says why and names the fix) -- it never crashes the
 server and never falls back to reading US addresses off a JP ROM.
 """
+import pytest
+
 from sm64_events.core.snapshot import UnreadyReader, reader_for
+from sm64_events.memory import layout as layout_module
 from sm64_events.memory.base import MemoryReadError
 from sm64_events.memory.buffer import BufferMemory
-from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
+from sm64_events.memory.layout import LAYOUT_ROWS, Layout, layout_for
+
+
+@pytest.fixture(autouse=True)
+def unverified_jp(monkeypatch):
+    """JP as it shipped before its sync run: every row None."""
+    monkeypatch.setitem(layout_module._LAYOUTS, "jp", Layout(version="jp"))
 
 
 def test_a_complete_layout_gives_the_real_reader():
