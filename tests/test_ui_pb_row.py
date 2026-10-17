@@ -19,7 +19,8 @@ from its failure:
 3. HOW the gold leaves: the old row drains, and an Undo's restored row lights
    up, through intermediate values of the one number that drives the gold
    (`--pb-lit`) -- a snap looks identical to a fade at both ends.
-4. The TIME SAVE, his words the same day: "Time Save: -X.XX (Y frames)... It
+4. The TIME SAVE (its "Time Save:" label dropped in round 9, 2026-10-17:
+   "this is redundant ... we got a gold!"), his words the same day: "Time Save: -X.XX (Y frames)... It
    should persist until the next attempt is logged (a reset, a successful
    attempt, etc). Once there's another attempt, we should animate that text
    out and get rid of it, leaving just "GOLD!!"". It shows the margin the save
@@ -99,7 +100,7 @@ def test_a_time_save_stands_until_the_next_logged_attempt():
     assert result["nextRun"]["saves"] == [], "the next logged attempt did not retire it"
     assert result["first"]["saves"] == [], "a first PB replaced nothing and saved nothing"
     assert result["undoing"]["saves"] == [], "an Undo left its own Time Save standing"
-    assert result["text"] == ["Time Save: -0.30 (9 frames)", "Time Save: -0.03 (1 frame)"]
+    assert result["text"] == ["-0.30 (9 frames)", "-0.03 (1 frame)"]   # no "Time Save:" label (round 9)
 
 
 # ---- The rendered row (real app, offline fixture) -----------------------------
@@ -310,7 +311,7 @@ def test_a_strategy_round_trip_does_not_celebrate(run):
 
 def test_the_save_shows_its_time_save_until_the_next_attempt_then_leaves_gold(run):
     frames = run["saved_frames"]
-    expected = f"Time Save: -{frames / 30:.2f} ({frames} {'frame' if frames == 1 else 'frames'})"
+    expected = f"-{frames / 30:.2f} ({frames} {'frame' if frames == 1 else 'frames'})"
     shown = _track(run["takeover"], "best")[-1]
     assert shown["save"] and shown["save"]["shown"], ("no Time Save beside the new PB", shown)
     assert shown["save"]["text"] == expected and shown["save"]["opacity"] == 1, shown["save"]

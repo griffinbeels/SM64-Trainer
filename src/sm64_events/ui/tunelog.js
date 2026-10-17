@@ -488,7 +488,7 @@ function Inspector() {
 
       <p class="tune-note">Personal best: <b>New PB</b>${" "}lands a faster
         run on the first card and crowns it a beat later, the way an automatic
-        save does, with its Time Save beside GOLD!!; <b>Next attempt</b>${" "}logs
+        save does, with its margin under GOLD!!; <b>Next attempt</b>${" "}logs
         a reset, which retires the Time Save; <b>Undo PB</b>${" "}hands the
         crown back.</p>
       <div class="tune-actions">

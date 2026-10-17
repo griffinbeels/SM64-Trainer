@@ -78,7 +78,9 @@ function foldPbEvent(state, event) {
   return state;
 }
 
-/** "Time Save: -0.30 (9 frames)" -- his wording, 30 fps like every delta. */
+/** "-0.30 (9 frames)", 30 fps like every delta. No "Time Save:" label since
+ *  round 9 (2026-10-17): "this is redundant, obviously this is a time save,
+ *  we got a gold!" */
 export function timeSaveText(frames) {
-  return `Time Save: -${(frames / 30).toFixed(2)} (${frames} ${frames === 1 ? "frame" : "frames"})`;
+  return `-${(frames / 30).toFixed(2)} (${frames} ${frames === 1 ? "frame" : "frames"})`;
 }

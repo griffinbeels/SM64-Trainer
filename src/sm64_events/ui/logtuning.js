@@ -248,7 +248,7 @@ export const TUNABLES = {
   pbSaveDelay: {
     group: "Personal best", label: "Time Save delay", value: 900,
     min: 0, max: 3000, step: 50, unit: "ms",
-    why: "How long after the save the \"Time Save: -X.XX (Y frames)\" text starts fading in beside GOLD!! -- long enough to let the word pop first.",
+    why: "How long after the save the \"-X.XX (Y frames)\" margin starts fading in under GOLD!! -- long enough to let the word pop first.",
   },
   pbSaveFade: {
     group: "Personal best", label: "Time Save fade", value: 400,

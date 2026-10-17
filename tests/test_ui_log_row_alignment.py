@@ -46,6 +46,13 @@ MEASURE = """(() => {
       words: tr.querySelector('.attempt-result').textContent.trim(),
       mark: !!tr.querySelector('.attempt-medal .hat, .attempt-medal svg, .attempt-medal img, .attempt-glyph'),
       delta: left(tr.querySelector('.attempt-delta')),
+      // Round 9: the time and the gap/GOLD!! are centred in their columns.
+      resultOff: (() => { const c = tr.querySelector('.attempt-result'); const r = document.createRange();
+        r.selectNodeContents(c); const a = r.getBoundingClientRect(), b = c.getBoundingClientRect();
+        return (a.left + a.width / 2) - (b.left + b.width / 2); })(),
+      deltaOff: (() => { const c = tr.querySelector('.attempt-delta'), s = c.querySelector('.pb-swap');
+        if (!s) return 0; const a = s.getBoundingClientRect(), b = c.getBoundingClientRect();
+        return (a.left + a.width / 2) - (b.left + b.width / 2); })(),
       strategy: left(tr.querySelector('.attempt-strategy')),
       replay: left(tr.querySelector('.attempt-actions button.icon-button')),
       slot: left(tr.querySelector('.attempt-pb-slot')),
@@ -131,6 +138,10 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
         assert any(r["success"] for r in rows) and any(not r["success"] for r in rows), rows
         for what in ("result", "delta", "strategy", "replay", "slot", "clear"):
             _one([r[what] for r in rows], what, rows)
+        # The time and the gap/GOLD!! sit centred in their columns (round 9:
+        # "I'd like to test where the text is all CENTERED").
+        assert all(abs(r["resultOff"]) < 1 and abs(r["deltaOff"]) < 1 for r in rows), (
+            [(r["words"], round(r["resultOff"], 1), round(r["deltaOff"], 1)) for r in rows])
         # The × is a drawn mark sitting on its button's centre.
         assert all(r["xOff"] and max(map(abs, r["xOff"])) < 0.75 for r in rows), [r["xOff"] for r in rows]
         # Every row has a mark, and the ✔ is no longer beside the time.

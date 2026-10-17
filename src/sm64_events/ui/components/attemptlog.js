@@ -113,22 +113,21 @@ export const PbNews = createContext(null);
 // so a live PB reads as "beat it by this much -> GOLD!!". Losing the crown (a
 // faster PB, an Undo) runs the same swap backwards.
 //
-// THE TIME SAVE sits just left of the word -- "Time Save: -0.30 (9 frames)",
-// his wording -- from the save until the next attempt is logged, then fades
-// out and leaves GOLD!! alone: "the intention is to inform the user about how
-// much they saved, but not for too long". It is positioned out of flow, so
-// neither its arrival nor its exit moves a column of the table. The element is
-// always there, holding the last margin it showed, so leaving is a fade of
-// text that is still present rather than a removal.
+// THE TIME SAVE sits centred UNDER the word -- "-0.30 (9 frames)" -- from the
+// save until the next attempt is logged, then fades out and leaves GOLD!!
+// alone: "the intention is to inform the user about how much they saved, but
+// not for too long". Round 9 (2026-10-17) dropped its "Time Save:" label ("this
+// is redundant, obviously this is a time save, we got a gold!") and its
+// beside-or-under measuring: "centered, under the gold". It is positioned out
+// of flow, so neither its arrival nor its exit moves a column of the table. The
+// element is always there, holding the last margin it showed, so leaving is a
+// fade of text that is still present rather than a removal.
 function PbDelta({ frames, isPb, arriving, timeSave }) {
   const before = useRef(frames);
   if (!isPb) before.current = frames;
   const lastSave = useRef(null);
   if (timeSave) lastSave.current = timeSave;
-  const swapRef = useRef(null);
-  const under = useTimeSaveFit(swapRef, Boolean(timeSave));
-  return html`<span ref=${swapRef}
-      class=${`pb-swap${under ? " save-under" : ""}${timeSave ? " has-save" : ""}`}>
+  return html`<span class=${`pb-swap${timeSave ? " has-save" : ""}`}>
     <span class="pb-swap-num" aria-hidden=${isPb ? "true" : undefined}>${
       delta(isPb ? before.current : frames)}</span>
     <span class="pb-gold" aria-hidden=${isPb ? undefined : "true"}>${PB_WORD}</span>
@@ -138,37 +137,6 @@ function PbDelta({ frames, isPb, arriving, timeSave }) {
       class="pb-spark" aria-hidden="true">✦</i><i
       class="pb-spark" aria-hidden="true">✦</i>` : ""}
   </span>`;
-}
-
-// Beside GOLD!! when the row's own empty stretch holds the Time Save, UNDER it
-// (the word lifts to make room) when it does not. The stretch is whatever the
-// result cell leaves over: a narrow card, a caveat badge or the dust counts
-// all eat it, so no width threshold can answer this -- measured beside at
-// 1500/1100px, it overran the run's own time at 850px. Only the one row
-// showing a Time Save measures, and it re-measures as the row resizes.
-const TIME_SAVE_GAP_PX = 20;
-
-function useTimeSaveFit(swapRef, active) {
-  const [under, setUnder] = useState(false);
-  useLayoutEffect(() => {
-    const swap = swapRef.current;
-    const row = swap && swap.closest("tr");
-    const cell = row && row.querySelector(".attempt-result");
-    const save = swap && swap.querySelector(".pb-save");
-    if (!active || !cell || !save) return undefined;
-    const measure = () => {
-      const content = document.createRange();
-      content.selectNodeContents(cell);
-      const room = swap.getBoundingClientRect().left - content.getBoundingClientRect().right;
-      setUnder(room < save.offsetWidth + TIME_SAVE_GAP_PX);
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(measure);
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, [active]);
-  return under;
 }
 
 // The holo follows the pointer across the PB row -- the flat-screen version of

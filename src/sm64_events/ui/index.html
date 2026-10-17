@@ -3757,9 +3757,16 @@
      a subentry or a top level entry." A wrap also breaks the row's own
      `--log-row-height`, which is where "one row's worth of height" comes
      from. */
-  .attempt-result { min-width: 0; white-space: nowrap; }
-  .attempt-delta { width: 72px; white-space: nowrap; font-weight: 700; }
-  .attempt-strategy { width: 150px; white-space: nowrap; }
+  /* CENTRED TEXT COLUMNS (round 9, 2026-10-17: GOLD!! over "+2.63s" should
+     be "CENTER ALIGNED. Same with the time column ... I'd like to test where
+     the text is all CENTERED"). The time column hugs its widest entry
+     (`width: 1px` on a no-wrap cell) and centres every entry in it; the gap
+     column is wide enough for the Time Save under GOLD!! and centres too. The
+     spare width goes to the strategy column, which pushes its picker against
+     the buttons. */
+  .attempt-result { min-width: 0; width: 1px; white-space: nowrap; text-align: center; padding-inline: .6rem; }
+  .attempt-delta { width: 6.5rem; white-space: nowrap; font-weight: 700; text-align: center; }
+  .attempt-strategy { white-space: nowrap; text-align: right; }
   /* QUIET until asked (round 7: "we're just very very very cluttered"): the
      same strategy name in a boxed control on every row was the heaviest
      repeated thing in the log. It reads as a muted label with its chevron and
@@ -6596,8 +6603,8 @@
        check. Now every max-content track is as wide as its widest row. */
     .attempt-table {
       display: grid; width: 100%; column-gap: .18rem;
-      grid-template-columns: 30px 56px minmax(0,1fr) max-content
-                             minmax(0,max-content) max-content;
+      grid-template-columns: 30px 56px minmax(0,max-content) minmax(6.5rem,max-content)
+                             minmax(0,1fr) max-content;
     }
     .attempt-table tbody { display: contents; }
     .attempt-table tr:not(.replay-row) {
@@ -6609,9 +6616,8 @@
     .attempt-table td { display: block; width: auto; border: 0; padding: .12rem .2rem; }
     .replay-row { grid-column: 1 / -1; }
     .attempt-result { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .attempt-delta { text-align: right; }
-    .pb-swap { justify-items: end; }
-    .attempt-strategy { min-width: 0; }
+    .attempt-delta { text-align: center; }
+    .attempt-strategy { min-width: 0; text-align: right; }
     .attempt-strategy select { max-width: 104px; }
     .save-pb-wide { display: none; }
     .save-pb-narrow { display: inline; }
@@ -7525,7 +7531,7 @@
   /* The delta and GOLD!! share one grid cell and exchange SEQUENTIALLY
      (ui-core: never a crossfade) -- the outgoing one reaches 0 before the
      incoming one starts, in both directions, by swapping which side waits. */
-  .pb-swap { display: inline-grid; position: relative; vertical-align: middle; }
+  .pb-swap { display: inline-grid; position: relative; vertical-align: middle; justify-items: center; }
   .pb-swap > .pb-swap-num, .pb-swap > .pb-gold { grid-area: 1 / 1; }
   .pb-swap-num { transition: opacity var(--log-pb-swap, 220ms) ease var(--log-pb-swap, 220ms); }
   .pb-gold {
@@ -7583,32 +7589,31 @@
     40%  { opacity: var(--log-pb-sparkle, 1); transform: scale(1) rotate(60deg); }
     100% { opacity: 0; transform: scale(.3) rotate(120deg); }
   }
-  /* THE TIME SAVE, just left of GOLD!!: "Time Save: -0.30 (9 frames)" from
-     the save until the next attempt is logged (ui/pbcrown.js decides), then
-     it fades out and leaves the word alone. Out of flow, so it never moves a
-     column: it lives in the result column's empty stretch. It fades in
-     after the word has popped (--log-pb-save-delay), and @starting-style
-     gives a row that MOUNTS already carrying one -- an automatic save that
-     landed in the same refetch as its run -- the same fade in. */
+  /* THE TIME SAVE, centred UNDER GOLD!!: "-0.30 (9 frames)" from the save
+     until the next attempt is logged (ui/pbcrown.js decides), then it fades
+     out and leaves the word alone. Round 9 (2026-10-17): no "Time Save:"
+     label, and always "centered, under the gold" -- the beside-or-under
+     measuring went with it. Out of flow, so it never moves a column. It
+     fades in after the word has popped (--log-pb-save-delay), rising a
+     little, and @starting-style gives a row that MOUNTS already carrying one
+     -- an automatic save that landed in the same refetch as its run -- the
+     same fade in. The word lifts to make room -- `translate`, not
+     `transform`, so the lift composes with the arrival's scale pop instead
+     of fighting it; it waits for the Time Save's own delay and settles as
+     it leaves. */
   .pb-save {
-    position: absolute; right: calc(100% + 12px); top: 50%;
+    position: absolute; left: 50%; top: calc(50% + 11px);
     white-space: nowrap; font-size: .86em; line-height: 1.1; font-weight: 700; color: #a3e0a3;
-    pointer-events: none; opacity: 0; transform: translate(8px, -50%);
+    pointer-events: none; opacity: 0; transform: translate(-50%, calc(-50% + 4px));
     transition: opacity var(--log-pb-save-fade, 400ms) ease,
                 transform var(--log-pb-save-fade, 400ms) ease;
   }
   .pb-save.is-shown {
-    opacity: 1; transform: translate(0, -50%);
+    opacity: 1; transform: translate(-50%, -50%);
     transition-delay: var(--log-pb-save-delay, 900ms);
   }
-  @starting-style { .pb-save.is-shown { opacity: 0; transform: translate(8px, -50%); } }
-  /* Where the row has no room beside the word (attemptlog.js measures it:
-     useTimeSaveFit), the Time Save sits UNDER GOLD!!, right-aligned to it,
-     and the word lifts to make room -- `translate`, not `transform`, so the
-     lift composes with the arrival's scale pop instead of fighting it. The
-     lift waits for the Time Save's own delay and settles as it leaves. */
-  .pb-swap.save-under .pb-save { right: 0; top: calc(50% + 11px); }
-  .pb-swap.save-under.has-save .pb-gold {
+  @starting-style { .pb-save.is-shown { opacity: 0; transform: translate(-50%, calc(-50% + 4px)); } }
+  .pb-swap.has-save .pb-gold {
     translate: 0 -6px;
     transition-delay: var(--log-pb-swap, 220ms), var(--log-pb-save-delay, 900ms);
   }
