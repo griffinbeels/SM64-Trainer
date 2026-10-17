@@ -606,7 +606,7 @@ def test_usamune_input_display_is_verified_by_switching_it_off_and_on():
 
 # --- usamune_savestate_button -----------------------------------------------
 
-SAVESTATE_AT = 0x80417B60  # test-local: the US address is still being hunted
+SAVESTATE_AT = 0x80417B66  # the US address, found live 2026-10-17
 
 
 def _savestate_switch(script, candidate=SAVESTATE_AT):
@@ -622,8 +622,12 @@ def cx4_dup_cx4(cx4, dup):
 
 
 @pytest.mark.parametrize("cx4,dup", [(0, 1), (1, 0), (2, 5)])
-def test_usamune_savestate_button_is_verified_by_switching_to_dup_and_back(cx4, dup):
-    """Either choice may be zero: seeing both values and the first again is the proof."""
+def test_usamune_savestate_button_is_verified_by_switching_to_dup_and_back(cx4, dup, monkeypatch):
+    """Before a version's DUP value is known, either choice may be zero:
+    seeing both values and the first again is the proof (and `measured`
+    hands over the DUP value to set)."""
+    from sm64_events.ghost import dpad_toggle
+    monkeypatch.setattr(dpad_toggle, "SAVESTATE_ON_DPAD_UP", None)
     verdict = _savestate_switch(cx4_dup_cx4(cx4, dup))
     assert verdict.status == "verified" and verdict.value == SAVESTATE_AT
     assert verdict.measured == {"c_x4": cx4, "dpad_up": dup}

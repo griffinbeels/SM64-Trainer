@@ -72,8 +72,9 @@ _NOT_BUTTONS = 0xFFFF & ~A.BUTTON_VALID_MASK
 
 #: Each hotkey by the name `GET /api/ghost` gives it, and the buttons it holds.
 HOTKEYS = {"dpad_up": DPAD_UP, "c_x4": C_X4}
-#: The save state button byte's value for Usamune's DUP choice.
-SAVESTATE_ON_DPAD_UP: int | None = None  # filled from the live hunt
+#: The save state button byte's value for Usamune's DUP choice (Cx4 reads 0),
+#: from the same live watch as the layout row, 2026-10-17.
+SAVESTATE_ON_DPAD_UP: int | None = 1
 
 
 def hotkey_for(savestate_button: int | None) -> str:

@@ -201,7 +201,11 @@ US = Layout(
     # path's `lbu 0xb(0x80417b4c)` gates `jal 0x80408848`, the input display).
     usamune_menu=0x804168D8,
     usamune_input_display=0x80417B57,
-    usamune_savestate_button=None,  # VERIFY: found by the live hunt
+    # VERIFY: found live 2026-10-17 -- a read-only watch of 0x80416000-0x80418000,
+    # counted only while Usamune's menu was open: as he flipped the save state
+    # button DUP -> Cx4 -> DUP -> Cx4 -> DUP this byte alone went 1 0 1 0 1
+    # (settings array 0x80417B4C + 0x1A).
+    usamune_savestate_button=0x80417B66,
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
 
