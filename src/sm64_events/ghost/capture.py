@@ -157,6 +157,7 @@ class NativeCapture:
                  *, producer_pid: int | None = None, sound_player=None):
         config = layout if isinstance(layout, GhostLayout) else GhostLayout.from_layout(layout)
         self._layout = config.to_bytes()
+        self._rom_layout = config.rom_layout  # every clip records its capture cartridge
         self._on_batch, self._pid = on_batch, producer_pid
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -329,7 +330,7 @@ class NativeCapture:
                     control = dict(self._playback) if revision != sent_revision else None
                 status, frames = self._channel.poll(control)
                 sent_revision = revision
-                producer = Producer.from_status(status)
+                producer = Producer.from_status(status, self._rom_layout)
                 for identity, batch in grouped(producer, frames):
                     if self._stop.is_set():
                         break

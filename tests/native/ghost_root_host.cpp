@@ -624,6 +624,68 @@ static void ridden_shell_block(Fixture &f) {
     f.put16(shell+0x74,0);f.put16(box+0x74,0);
 }
 #endif
+#if GC_VERSION >= 4
+// Each cartridge names its own scripts (data/behaviours_{us,jp}.tsv, stated
+// here independently of ghost_behaviours.h). JP moves four of them; the other
+// cartridge's offset for a moved, animated script proves no table length, so
+// nothing is captured, and Hoot is ridden only under its own layout's script.
+static void layout_scripts(Fixture &f) {
+    gc_root_probe p;gc_root_memory memory;
+    const bool jp=f.config.rom_layout==GC_ROM_JP;
+    const uint32_t bomb=f.config.object_pool+0x260,anim=Fixture::base+0x14100;
+    const auto holding=[&](uint32_t script,uint16_t flags,uint32_t index,uint32_t count) {
+        scene(f);f.put16(f.config.object_pool+0x42,0x8123);
+        f.put32(f.config.mario_state+0x7c,bomb);
+        f.put16(bomb+0x74,1);f.put16(bomb+2,flags);f.put32(bomb+0x14,Fixture::base+0x14200);
+        f.put32(bomb+0x20c,f.config.behaviour_base+script);
+        f.put16(bomb+0x38,0);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);f.put32(bomb+0xf0,1);
+        f.put32(bomb+0x3c,count?anim:0);f.put16(anim+8,24);f.put16(bomb+0x42,0x8123);
+        if(count)object_animation_table(f,bomb,anim,index,count);
+        f.frame.segments=nullptr;
+        for(unsigned i=0;i<3;++i) {f.putfloat(bomb+0x2c+4*i,1.0f);f.putfloat(Fixture::body+0x18+4*i,100.0f+float(i));}
+    };
+    const auto frame=[&] {
+        begin(f,p);pair(p);ghost_root_finish(p,true,f.sample,&memory);
+        check((f.sample.valid_fields&GC_VALID_HELD) || zero(f.sample.held),"held block bytes follow validity");
+        return (f.sample.valid_fields&GC_VALID_HELD)!=0;
+    };
+    const struct { uint32_t us,jp; uint16_t flags; uint32_t index,count; int16_t id; const char *name; } scripts[]={
+        {0x3174,0x3154,0x31,1,2,1,"Bob-omb"},{0x44fc,0x44dc,0x31,4,5,4,"Mips"},
+        {0x4218,0x41f8,0x00,0,0,-1,"cork box"},{0x01f4,0x01f4,0x20,11,12,11,"King Bob-omb (unmoved)"},
+        {0x20e8,0x20e8,0x20,4,5,4,"penguin (unmoved)"}};
+    for(const auto &s:scripts) {
+        const uint32_t own=jp?s.jp:s.us,other=jp?s.us:s.jp;
+        holding(own,s.flags,s.index,s.count);
+        if(!frame() || f.sample.held.behavior!=0x13000000u+own || f.sample.held.animation_id!=s.id)
+            {std::fprintf(stderr,"%s\n",s.name);check(false,"own cartridge's script not captured");}
+        if(s.count && other!=own) {
+            holding(other,s.flags,s.index,s.count);
+            if(frame()) {std::fprintf(stderr,"%s\n",s.name);check(false,"other cartridge's script guessed a table");}
+        }
+    }
+    // Hoot rides through usedObj under ACT_RIDING_HOOT: only its own script.
+    const uint32_t owl=bomb;
+    const auto ride=[&](uint32_t script) {
+        scene(f);f.put16(f.config.object_pool+0x42,0x8123);f.frame.segments=nullptr;
+        f.put32(f.config.mario_state+0x0c,0x000004a8);
+        f.put32(f.config.mario_state+0x7c,0);f.put32(f.config.mario_state+0x80,owl);
+        f.put32(f.config.mario_state+0x84,0);
+        f.put16(owl+0x74,1);f.put16(owl+2,0x21);f.put8(owl+0x18,1);
+        f.put32(owl+0x14,Fixture::base+0x14200);f.put32(owl+0x50,0);
+        f.put32(owl+0x20c,f.config.behaviour_base+script);f.put32(owl+0x3c,anim);
+        f.put16(owl+0x38,0);f.put16(owl+0x40,12);f.put16(owl+0x42,0x8123);f.put16(anim+8,24);
+        object_animation_table(f,owl,anim,1,2);
+        for(unsigned i=0;i<3;++i) {
+            f.putfloat(owl+0x20+4*i,800.0f+float(i)*100);f.putfloat(owl+0x2c+4*i,1.0f);
+        }
+    };
+    ride(jp?0x33cc:0x33ec);
+    check(frame() && f.sample.held.behavior==(jp?0x130033ccu:0x130033ecu) && f.sample.held.released==1
+          && f.sample.held.animation_id==1,"ridden Hoot by its own cartridge's script");
+    ride(jp?0x33ec:0x33cc);check(!frame(),"ridden Hoot by the other cartridge's script");
+    f.put32(f.config.mario_state+0x80,0);f.put16(owl+0x74,0);
+}
+#endif
 int main(int argc,char **argv) {
     check(argc==2,"usage: ghost_root_host config"); Fixture f(argv[1]);scene(f);
 #if GC_VERSION < 4
@@ -691,11 +753,15 @@ int main(int argc,char **argv) {
     held(f);
     culled(f);
     materials(f);
-    held_block(f);
-    released_block(f);
-    ridden_block(f);
-    ridden_shell_block(f);
-    std::puts("executed root qualification passed");
+    // The literal US scripts below assume the US cartridge; JP runs its own.
+    if(f.config.rom_layout==GC_ROM_US) {
+        held_block(f);
+        released_block(f);
+        ridden_block(f);
+        ridden_shell_block(f);
+    }
+    layout_scripts(f);
+    std::printf("executed root qualification passed (rom layout %u)\n",f.config.rom_layout);
 #endif
     return 0;
 }

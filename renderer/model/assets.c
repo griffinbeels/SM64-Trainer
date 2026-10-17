@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ROM blocks are named by their US offset, here and in HELD_MODELS
+ * (tools/build_model.py); cartridge_block maps one to the running cartridge. */
 #define ANIM_BASE 0x4ec000u
 #define TEXTURE_BASE 1132368u
 #define TEXTURE_SPAN (128u * 1024u)
@@ -13,6 +15,25 @@
 /* Held objects' textures, each from its model's own MIO0 segment
  * (HELD_MODELS in tools/build_model.py generates the table). */
 #define HELD_SEGMENT_SPAN (256u * 1024u)
+/* Where Usamune JP (country 'J', v1.93j) keeps each block. Every one decodes
+ * to the same bytes as its US block (Mario's animation table is the same
+ * 0x8DC16 raw bytes); each JP offset is where that decoded content was found
+ * by searching SM64_USAMUNE_v1.93j.z64, 2026-10-16. Group 6 is the one
+ * relocation inside a block: US inserted 0xF0 bytes ahead of Mips's texture,
+ * which JP keeps at its decomp address (the Mips shift in HELD_MODELS), so a
+ * JP texture offset in that block is 0xF0 lower. The model itself is the same
+ * graph and lists on both cartridges. */
+static const struct { uint32_t us, jp; int32_t jp_shift; } jp_blocks[] = {
+    {ANIM_BASE, 0x4e9fa0u, 0},      /* Mario's animation table */
+    {TEXTURE_BASE, 0x112b50u, 0},   /* group0 (segment 4): Mario, his particles */
+    {COMMON1_BASE, 0x1ff740u, 0},   /* common1 (segment 3) */
+    {0x1f2200u, 0x1f0530u, 0},      /* common0 (segment 8): Bob-omb, Chuckya, boxes, shell */
+    {0x160670u, 0x15ea70u, 0},      /* penguin's group */
+    {0x134d20u, 0x133120u, 0},      /* King Bob-omb's group */
+    {0x1d8310u, 0x1d6660u, -0xf0},  /* group 6: Mips */
+    {0x12a7e0u, 0x128be0u, 0},      /* Hoot's group */
+    {0x1521d0u, 0x1505d0u, 0},      /* Ukiki's group */
+};
 static const struct { unsigned kind, cell; uint32_t segment, offset; } held_textures[] = {
     SG_HELD_TEXTURES
 };
@@ -28,6 +49,23 @@ static uint32_t be32(const uint8_t *p)
 }
 static int range(size_t at, size_t count, size_t bytes)
 { return at <= bytes && count <= bytes - at; }
+
+/* The running cartridge's offset of a block named by its US offset, with the
+ * shift its texture offsets take there; 0 for an unknown cartridge or block.
+ * The country byte is only the map's key: the bounded parsers still judge
+ * every byte at the offset they are given. */
+static int cartridge_block(const uint8_t *rom, size_t bytes, uint32_t us, uint32_t span,
+                           uint32_t *at, int32_t *shift)
+{
+    unsigned i;
+    *at = 0; *shift = 0;
+    if (rom[0x3e] == 'E') *at = us;
+    else if (rom[0x3e] == 'J') {
+        for (i = 0; i < sizeof(jp_blocks) / sizeof(jp_blocks[0]); ++i)
+            if (jp_blocks[i].us == us) { *at = jp_blocks[i].jp; *shift = jp_blocks[i].jp_shift; }
+    }
+    return *at && range(*at, span, bytes);
+}
 
 /* The model needs only bounded MIO0 decoding and RGBA16 conversion. No image
  * encoder, filesystem utility, directory enumerator or audio loader is linked.
@@ -91,10 +129,11 @@ static int blit(struct sg_model *model, unsigned tile, const uint8_t *decoded, u
 
 /* Held objects' textures; a kind whose segment or texture fails leaves its
  * cells empty and is marked unavailable rather than refusing Mario. */
-static void held_cells(struct sg_model *model, const uint8_t *rom)
+static void held_cells(struct sg_model *model, const uint8_t *rom, size_t bytes)
 {
     uint8_t *decoded = NULL;
-    uint32_t size = 0, segment = 0;
+    uint32_t size = 0, segment = 0, at;
+    int32_t shift = 0;
     unsigned i, present = 0, failed = 0;
     for (i = 0; i < sizeof(held_textures) / sizeof(held_textures[0]); ++i) {
         present |= 1u << held_textures[i].kind;
@@ -102,9 +141,12 @@ static void held_cells(struct sg_model *model, const uint8_t *rom)
             free(decoded);
             decoded = NULL;
             segment = held_textures[i].segment;
-            if (mio0(rom, segment, HELD_SEGMENT_SPAN, &decoded, &size) != SG_OK) decoded = NULL;
+            if (!cartridge_block(rom, bytes, segment, HELD_SEGMENT_SPAN, &at, &shift)
+                    || mio0(rom, at, HELD_SEGMENT_SPAN, &decoded, &size) != SG_OK) decoded = NULL;
         }
-        if (!decoded || blit(model, held_textures[i].cell, decoded, size, held_textures[i].offset) != SG_OK)
+        if (!decoded || (int64_t)held_textures[i].offset + shift < 0
+                || blit(model, held_textures[i].cell, decoded, size,
+                        (size_t)((int64_t)held_textures[i].offset + shift)) != SG_OK)
             failed |= 1u << held_textures[i].kind;
     }
     free(decoded);
@@ -152,21 +194,25 @@ refuse:
     memset(&model->body_lights, 0, sizeof(model->body_lights));
 }
 
-static int textures(struct sg_model *model, const uint8_t *rom)
+static int textures(struct sg_model *model, const uint8_t *rom, size_t bytes)
 {
-    uint32_t size, common1_size;
+    uint32_t size, common1_size, at, common1_at;
+    int32_t shift;
     unsigned tile;
     uint8_t *decoded, *common1;
-    int status = mio0(rom, TEXTURE_BASE, TEXTURE_SPAN, &decoded, &size);
+    int status;
+    if (!cartridge_block(rom, bytes, TEXTURE_BASE, TEXTURE_SPAN, &at, &shift)) return SG_INVALID_ROM;
+    status = mio0(rom, at, TEXTURE_SPAN, &decoded, &size);
     if (status != SG_OK) return status;
     for (tile = 0; tile < SG_MARIO_ATLAS_CELLS; ++tile)
         if (blit(model, tile, decoded, size, (size_t)mario_tex_offsets[tile]) != SG_OK) goto bad;
-    held_cells(model, rom);
+    held_cells(model, rom, bytes);
     body_lights(model, decoded, size);
     /* Same segment: Mario's particle models. Unsupported lists leave none;
      * the flame (common1) is added only when its own lists read too. */
     if (sg_particles_load(&model->particles, decoded, size) == SG_OK &&
-        mio0(rom, COMMON1_BASE, COMMON1_SPAN, &common1, &common1_size) == SG_OK) {
+        cartridge_block(rom, bytes, COMMON1_BASE, COMMON1_SPAN, &common1_at, &shift) &&
+        mio0(rom, common1_at, COMMON1_SPAN, &common1, &common1_size) == SG_OK) {
         sg_particles_add_common1(&model->particles, common1, common1_size);
         free(common1);
     }
@@ -179,20 +225,22 @@ bad:
 
 static int animations(struct sg_model *model, const uint8_t *rom, size_t bytes)
 {
-    uint32_t i;
+    uint32_t i, base;
+    int32_t shift;
     size_t total = 0;
-    if (be32(rom + ANIM_BASE) != SG_ANIMATION_COUNT) return SG_INVALID_ROM;
+    if (!cartridge_block(rom, bytes, ANIM_BASE, 8 + SG_ANIMATION_COUNT * 8, &base, &shift) ||
+        be32(rom + base) != SG_ANIMATION_COUNT) return SG_INVALID_ROM;
     for (i = 0; i < SG_ANIMATION_COUNT; ++i) {
-        size_t offset = be32(rom + ANIM_BASE + 8 + i * 8);
-        size_t length = be32(rom + ANIM_BASE + 12 + i * 8);
+        size_t offset = be32(rom + base + 8 + i * 8);
+        size_t length = be32(rom + base + 12 + i * 8);
         size_t values, indices, end, value_count, j;
         const uint8_t *src;
         struct Animation *anim = &model->animations[i];
         if (offset < 8 + SG_ANIMATION_COUNT * 8 || length < 24 || length > 256u * 1024u ||
             total > 4u * 1024u * 1024u - length ||
-            !range(offset, length, bytes - ANIM_BASE)) return SG_INVALID_ROM;
+            !range(offset, length, bytes - base)) return SG_INVALID_ROM;
         total += length;
-        src = rom + ANIM_BASE + offset;
+        src = rom + base + offset;
         values = be32(src + 12); indices = be32(src + 16); end = be32(src + 20);
         /* Mario's fixed skeleton has 20 animated parts + root translation:
          * 63 (count,offset) pairs. Every supported US animation uses 126 u16s.
@@ -226,11 +274,8 @@ static int animations(struct sg_model *model, const uint8_t *rom, size_t bytes)
 int sg_assets_load(struct sg_model *model, const uint8_t *rom, size_t bytes)
 {
     int status;
-    if (!rom || bytes != 8u * 1024u * 1024u || be32(rom) != 0x80371240u ||
-        !range(ANIM_BASE, 8 + SG_ANIMATION_COUNT * 8, bytes) ||
-        !range(TEXTURE_BASE, TEXTURE_SPAN, bytes) ||
-        !range(COMMON1_BASE, COMMON1_SPAN, bytes)) return SG_INVALID_ROM;
-    status = textures(model, rom);
+    if (!rom || bytes != 8u * 1024u * 1024u || be32(rom) != 0x80371240u) return SG_INVALID_ROM;
+    status = textures(model, rom, bytes);
     if (status != SG_OK) return status;
     return animations(model, rom, bytes);
 }

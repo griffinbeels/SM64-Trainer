@@ -26,6 +26,7 @@ Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../d
 | The contextual library and guided import/export steps | `ui/components/ghostlibrary*.js`, using the shared Modal and entity picker. `ui/ghostlibrary.js` owns pure selection/filter/group derivations. Browsing never writes the practice target. |
 | Inputs an older local clip shows (its playback copy) | `ghost/padfill.py`: the join, its calibration and every refusal. Never write filled pads into the committed clip |
 | What the renderer draws, and how it fades | `plugin/gfxwrap/ghost_*`. The fade rule and its constants are in `ghost_occlusion.h`; see `native-plugin.md` |
+| A held or ridden object's identity on each cartridge | `plugin/gfxwrap/ghost_behaviours.h`: one row per decomp symbol with its US and JP offset, read through the clip's `rom_layout`; `tests/test_ghost_behaviours.py` checks it against `data/behaviours_*.tsv`. A ROM block the model reads on JP: `jp_blocks` in `renderer/model/assets.c` |
 | Where ghost sound plays, and which recording hears it | `ghost/sound_player.py` plays the renderer's shared ring (`ghost_audio.h`) outside Project64; `replay/audio.py` taps it only while Ghosts in recording is on, onto a `GhostTimeline` that only the ghost copy mixes in. The clean recording never hears it |
 | The ghost copy (the second recording while Ghosts in recording is on) | `replay/ghostcopy.py` (lane), `gpu_delivery.cpp` twin lane, `fragmentmedia.py` "ghostcopy:" archive, `service.py` cut/save; contract in `docs/replay-gpu-runtime.md`, "The ghost copy" |
 

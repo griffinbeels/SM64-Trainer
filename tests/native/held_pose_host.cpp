@@ -72,6 +72,20 @@ int main(int argc, char **argv) {
                     && pose.vertices[i].color[c] <= 1;
         check(shaded, "held colours are F3D shades");
     }
+    // A JP clip names its moved scripts by JP offsets: drawn the same on this
+    // cartridge, whichever one it is (the US kinds above are a US clip).
+    const struct { uint32_t behavior; int16_t animation; uint32_t vertices; const char *name; } jp_kinds[] = {
+        {0x13003154u, 1, 240, "JP clip Bob-omb"}, {0x130041F8u, -1, 36, "JP clip cork box"},
+        {0x130044DCu, 0, 588, "JP clip Mips"}, {0x130033CCu, 1, 594, "JP clip Hoot"}};
+    for (const auto &k : jp_kinds) {
+        saved.valid_fields = GC_VALID_CLOCK | GC_VALID_POSE | GC_VALID_HELD;
+        saved.held = {}; saved.held.behavior = k.behavior; saved.held.animation_id = k.animation;
+        saved.held.released = k.behavior == 0x130033CCu;
+        saved.held.holp[0] = 45; saved.held.holp[1] = 75; saved.held.holp[2] = 45;
+        saved.held.scale[0] = saved.held.scale[1] = saved.held.scale[2] = 1;
+        check(ghost_pose::evaluate(model, record, live, world, 1.0f, scratch, pose, GC_ROM_JP) == ghost_pose::Result::ok
+              && scratch.evaluated == alone + k.vertices, k.name);
+    }
     // The shell uses its own root. The hand-held Ukiki uses Mario's root
     // orientation at the recorded HOLP, including his canonical stolen-cap
     // switch state. All companion vertices share the overlay's opacity.
@@ -183,8 +197,11 @@ int main(int argc, char **argv) {
     sg_model_close(&model);
     // The same delivered pose fallback with an optional model's ROM segment
     // unavailable. Never hide Mario merely because a companion cannot draw.
+    // Each block where this cartridge keeps it (renderer/model/assets.c).
+    const bool jp = rom[0x3e] == 'J';
     for(const auto &bad : std::vector<std::pair<uint32_t,uint32_t>>{
-            {0x1F2200u,0x13001F3Cu},{0x1521D0u,0x13000F08u},{0x201410u,0x13000F08u}}) {
+            {jp?0x1F0530u:0x1F2200u,0x13001F3Cu},{jp?0x1505D0u:0x1521D0u,0x13000F08u},
+            {jp?0x1FF740u:0x201410u,0x13000F08u}}) {
         auto missing=rom;missing[bad.first]=0;
         check(sg_model_open(missing.data(),missing.size(),&model)==SG_OK,"missing companion segment still opens Mario");
         if(!model)continue;

@@ -14,7 +14,10 @@ extern "C" {
 
 #define GC_VERSION 8u
 #define GC_RAM_WORD_SWAPPED 1u
+/* gc_layout/gclip_header rom_layout: the cartridge a clip was captured on.
+ * Behaviour offsets are named per layout in ghost_behaviours.h. */
 #define GC_ROM_US 1u
+#define GC_ROM_JP 2u
 #define GC_GRAPH_NODE_LIMIT 256u
 #define GC_GRAPH_DEPTH_LIMIT 32u
 
@@ -86,7 +89,8 @@ enum gc_root_kind {
 
 /* Addresses are N64 KSEG0 addresses from the selected Python Layout. No
  * arbitrary pointer programs or offsets cross this ABI. New fields remain
- * VERIFY until their live address gates pass. Only the US schema is enabled.
+ * VERIFY until their live address gates pass. rom_layout is GC_ROM_US or
+ * GC_ROM_JP: the same RAM schema, with JP's own roots and behaviour offsets.
  * Either warp root may be zero to declare unavailable raw warp evidence;
  * nonzero roots must still be aligned and bounded inside RDRAM.
  */
@@ -202,7 +206,8 @@ typedef struct gc_particles {
  * with no animation (id -1, frame 0). A hand object has priority over a ridden companion;
  * dismounting does not start a release follow. Zero unless GC_VALID_HELD. */
 typedef struct gc_held {
-    uint32_t behavior; /* segmented behaviour script, e.g. 0x13003174 bhvBobomb */
+    uint32_t behavior; /* segmented behaviour script on the capture's rom_layout,
+                        * e.g. bhvBobomb 0x13003174 (US), 0x13003154 (JP) */
     int16_t animation_id, animation_frame, anim_y_translation;
     uint16_t anim_state; /* oAnimState: texture/switch frame (the Bob-omb's blink) */
     float holp[3];     /* marioBodyState->heldObjLastPosition */

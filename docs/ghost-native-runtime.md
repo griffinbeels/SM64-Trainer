@@ -249,10 +249,24 @@ are rebuilt once when the work is integrated (see the native plugin rule).
 renderer display-list command. [ghost_capture.cpp](../plugin/gfxwrap/ghost_capture.cpp)
 reads bounded, validated N64 memory without writes. The root probe borrows the
 renderer-owned RAM only within one serialized display-list occurrence.
-The US layout comes from [ghost_layout.py](../src/sm64_events/memory/ghost_layout.py);
-new camera/graphics addresses retain their live verification gates. JP is not
-configured for this path. The product path targets Windows x86 Project64 and
-the supported US practice ROM. Its presentation requires OpenGL 4.3; the world
+Each cartridge's layout comes from [ghost_layout.py](../src/sm64_events/memory/ghost_layout.py);
+new camera/graphics addresses retain their live verification gates. The two
+practice ROMs share one RAM schema; `rom_layout` (1 US, 2 JP) names which one
+runs, and every clip records the cartridge it was captured on. Capture and
+playback name a held or ridden object's behaviour script through that layout
+([ghost_behaviours.h](../plugin/gfxwrap/ghost_behaviours.h), checked against
+`data/behaviours_{us,jp}.tsv` by symbol), so a JP clip draws its Bob-omb on
+the US cartridge and the reverse. Everything else a clip holds is
+region-neutral: positions, animation ids and frames (both cartridges carry
+the same 209-entry Mario table), camera, shadow, particles (segmented lists
+in segments that decode to identical bytes) and level/area numbers. The model
+reads each cartridge's ROM blocks from its own offsets (`jp_blocks` in
+[assets.c](../renderer/model/assets.c)). Ghost sound runs only on the US
+cartridge: JP's sound banks and sequences differ, so `ghost_audio` refuses
+them and JP ghosts are silent. On the US cartridge a JP clip's sound ids
+play through US's banks; that every JP id sounds the same there is not yet
+verified by ear. The product path targets Windows x86 Project64
+and the supported practice ROMs. Its presentation requires OpenGL 4.3; the world
 hook qualifies the supported F3D command path, not LLE or arbitrary microcodes.
 
 The sample contains graphics root, animation phase, body state, scene, camera,

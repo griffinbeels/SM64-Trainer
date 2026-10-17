@@ -40,7 +40,10 @@ Result read(const uint8_t* header, const std::function<bool()>& current,
     uint8_t raw[HEADER_BYTES]{}, expected[HEADER_BYTES]{}, swapped[HEADER_BYTES]{};
     if (!header || !current() || !copy(reinterpret_cast<uintptr_t>(header), raw, sizeof(raw)))
         return Result::changed;
-    if (!practice_rom(raw) || !practice_rom_normalise(raw, expected) || expected[0x3e] != 'E')
+    // Either practice cartridge (US 'E' or JP 'J'); the model's asset loader
+    // knows where each keeps its blocks (renderer/model/assets.c).
+    if (!practice_rom(raw) || !practice_rom_normalise(raw, expected)
+            || (expected[0x3e] != 'E' && expected[0x3e] != 'J'))
         return Result::missing;
     for (size_t at = 0; at < HEADER_BYTES; ++at) swapped[at] = expected[at ^ 3];
     const DWORD started = GetTickCount();

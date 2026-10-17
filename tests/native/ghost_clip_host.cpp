@@ -24,7 +24,7 @@ Placed place(sg_model*,const sg_particle_view&,const gc_sample&,const gc_camera&
 }
 namespace ghost_pose {
 Result evaluate(sg_model*,const gs_record&,const gc_sample&,const ghost::WorldPass&,
-                float,Scratch&,ghost_compositor::Pose&) {std::abort();}
+                float,Scratch&,ghost_compositor::Pose&,uint32_t) {std::abort();}
 bool shadow(sg_model*,const gc_sample&,const float*,ghost_compositor::ShadowVertex*,uint8_t*,
             ghost_compositor::Shadow&) {std::abort();}
 bool camera_relative(sg_model*,const gc_camera&,const float*,float*) {std::abort();}
