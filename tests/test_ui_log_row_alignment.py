@@ -24,12 +24,20 @@ His live report, 2026-10-17 (Lineup round 7):
     identical; a disabled Save faded its whole frame, so it now keeps the
     frame and dims only its words. "that thick yellow line to the left of
     #1" -- the PB row has no edge ribbon.
+  * Round 11: "the "GOLD!!" text should be in line with the rest of the row
+    ... move the (-8.77 (263 frames)) to the right of GOLD!!" -- the word sits
+    on the time's mid-line and the margin beside it, clear of the strategy
+    picker. "make sure that the visual balance of each row is maintained no
+    matter the circumstances" -- every row draws ▷ | PB | × as three frames:
+    a run on another strategy and every row while no strategy is picked wear
+    a disabled Save saying why.
 
 Both log layouts are measured: the table (a wide pane) and the per-row grid
 (a pane of 700px or less -- his window at his zoom; 800 here).
 """
 import json
 import sys
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,17 +69,29 @@ MEASURE = """(() => {
       deltaText: (() => { const s = tr.querySelector(tr.classList.contains('is-pb') ? '.pb-gold' : '.pb-swap-num');
         return s && s.textContent.trim() ? left(s) : null; })(),
       saveText: left(tr.querySelector('.pb-save.is-shown')),
+      // Round 11: GOLD!! on the time's mid-line, the margin beside it.
+      goldBox: (() => { const g = tr.classList.contains('is-pb') && tr.querySelector('.pb-gold');
+        if (!g) return null; const r = g.getBoundingClientRect(), t = tr.querySelector('.attempt-result b');
+        const tb = t.getBoundingClientRect();
+        return { right: r.right, mid: r.top + r.height / 2, timeMid: tb.top + tb.height / 2 }; })(),
+      saveBox: (() => { const e = tr.querySelector('.pb-save.is-shown'); if (!e) return null;
+        const r = e.getBoundingClientRect(), sel = tr.querySelector('.attempt-strategy select');
+        return { left: r.left, right: r.right, mid: r.top + r.height / 2,
+                 next: Math.min(sel ? sel.getBoundingClientRect().left : Infinity,
+                                tr.querySelector('.attempt-actions').getBoundingClientRect().left) }; })(),
+      slotButton: !!tr.querySelector('.attempt-pb-slot > button'),
+      reason: (tr.querySelector('.attempt-pb-slot button.pb-unavailable') || {}).title || null,
       pb: tr.classList.contains('is-pb'),
       edge: getComputedStyle(tr.querySelector('td')).boxShadow,
       // A disabled Save draws the same frame as ▷ and dims only its words.
-      frame: (() => { const b = tr.querySelector('.attempt-pb-slot button.pb-unfinished');
+      frame: (() => { const b = tr.querySelector('.attempt-pb-slot button.pb-unavailable');
         if (!b) return null; const s = getComputedStyle(b), p = getComputedStyle(tr.querySelector('.attempt-actions button.icon-button'));
         return [s.opacity, s.borderTopColor === p.borderTopColor, getComputedStyle(b.firstElementChild).opacity]; })(),
       strategy: left(tr.querySelector('.attempt-strategy')),
       replay: left(tr.querySelector('.attempt-actions button.icon-button')),
       slot: left(tr.querySelector('.attempt-pb-slot')),
       clear: left([...tr.querySelectorAll('.attempt-actions button')].pop()),
-      unfinished: !!tr.querySelector('.attempt-pb-slot button.pb-unfinished[disabled]'),
+      unavailable: !!tr.querySelector('.attempt-pb-slot button.pb-unavailable[disabled]'),
       // The ×'s mark against its button's centre, both axes.
       xOff: (() => { const b = [...tr.querySelectorAll('.attempt-actions button')].pop();
         const i = b.querySelector('svg'); if (!i) return null;
@@ -146,12 +166,22 @@ def _reset_then_finish(service, anchor):
         _run_coro(service.publish(event))
 
 
+def _no_strategy(base):
+    request = urllib.request.Request(f"{base}/api/strat", method="POST",
+                                     headers={"Content-Type": "application/json"},
+                                     data=json.dumps({"course_id": FIXTURE_COURSE, "star_id": FIXTURE_STAR,
+                                                      "strat_tag": None}).encode())
+    urllib.request.urlopen(request, timeout=15).read()
+
+
 def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
     with serve_ui_live() as (base, service):
         _reset_then_finish(service, 30000)
         with sync_playwright() as play:
-            wide, _ = _render(play, base, 1500, save_newest=True)
-            narrow, rail = _render(play, base, 800)
+            narrow, rail = _render(play, base, 800, save_newest=True)
+            wide, _ = _render(play, base, 1500)
+            _no_strategy(base)
+            unpicked, _ = _render(play, base, 800)
     assert not wide["narrow"] and narrow["narrow"], (wide["narrow"], narrow["narrow"])
     for seen in (wide, narrow):
         rows = seen["rows"]
@@ -176,13 +206,32 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
         # Every row has a mark, and the ✔ is no longer beside the time.
         assert all(r["mark"] for r in rows), rows
         assert not any(r["words"].startswith("✔") for r in rows), rows
-        # A failure on the practised strategy wears a disabled Save; a finish never does.
-        assert any(r["unfinished"] for r in rows if not r["success"] and not r["other"]), rows
-        assert not any(r["unfinished"] for r in rows if r["success"] or r["other"]), rows
+        # Every row draws its PB slot's button (round 11): a failure and a
+        # run on another strategy wear a disabled Save; a finish on the
+        # practised strategy never does.
+        assert all(r["slotButton"] for r in rows), rows
+        assert all(r["unavailable"] for r in rows if not r["success"] or r["other"]), rows
+        assert not any(r["unavailable"] for r in rows if r["success"] and not r["other"]), rows
+        assert any(r["other"] for r in rows), "the fixture shows no other-strategy row"
+        # GOLD!! sits on the time's mid-line (round 11: "in line with the rest of the row").
+        golds = [r["goldBox"] for r in rows if r["goldBox"]]
+        assert golds and all(abs(g["mid"] - g["timeMid"]) < 1.5 for g in golds), golds
         if seen["pb"] is not None:
             assert abs(seen["pb"] - seen["goal"]) < 0.5, (seen["pb"], seen["goal"])
-    saved = [r for r in wide["rows"] if r["saveText"] is not None]
-    assert len(saved) == 1 and abs(saved[0]["saveText"] - saved[0]["deltaText"]) < 0.5, saved
+    # The Time Save sits to the right of GOLD!!, on its line, and ends before
+    # the strategy picker or the buttons -- in his narrow layout.
+    saved = [(r["goldBox"], r["saveBox"]) for r in narrow["rows"] if r["saveBox"]]
+    assert len(saved) == 1, narrow["rows"]
+    gold, box = saved[0]
+    assert gold["right"] < box["left"] < gold["right"] + 12, saved
+    assert abs(box["mid"] - gold["mid"]) < 1.5 and box["right"] <= box["next"], saved
+    # With no strategy picked every row still draws three frames, its Save
+    # disabled and saying how to bring it back.
+    assert all(r["slotButton"] and r["unavailable"] for r in unpicked["rows"]), unpicked["rows"]
+    assert all(r["reason"].startswith(("Pick", "Only a finished")) for r in unpicked["rows"]), (
+        [r["reason"] for r in unpicked["rows"]])
+    for what in ("replay", "slot", "clear"):
+        _one([r[what] for r in unpicked["rows"]], what, unpicked["rows"])
     # The narrow plate (his layout) centres the PB/GOAL pair in its box.
     left_gap, right_gap = narrow["plateGaps"]
     assert abs(left_gap - right_gap) < 1, narrow["plateGaps"]

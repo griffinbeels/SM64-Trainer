@@ -20,6 +20,7 @@ import { RANK_FLOOR } from "./components/caps.js";
 
 export const LINEUP_WORDS = {
   noStrategy: "Pick your strategy to race ghosts",
+  noStrategyOff: "Pick your strategy",
   noStrategies: "Create a strategy to race ghosts",
   nobody: "No ghosts available.",
   offline: "Rivals return when you're back online.",
@@ -54,11 +55,18 @@ function rivalSeat(row) {
 
 const EMPTY_WORDS = { offline: LINEUP_WORDS.offline, signed_out: LINEUP_WORDS.signedOut };
 
-/** No strategy: nobody to race, so the row offers the strategies themselves. */
+/**
+ * No strategy: nobody to race, so the row offers the strategies themselves.
+ * The buttons pick the card's strategy, which matters with ghosts off too, so
+ * this note always stands open (round 11: "That strategy selector should be
+ * visible REGARDLESS of ghosts being on or off"); with ghosts off it drops
+ * "to race ghosts", since picking one races nobody until they are on.
+ */
 function noStrategyModel(on, entityKey, strategies) {
   const choices = strategyChoices(strategies);
-  return { on, lineup: `${entityKey}|none`, people: [],
-    note: choices.length ? { text: LINEUP_WORDS.noStrategy, choices } : { text: LINEUP_WORDS.noStrategies } };
+  const text = on ? LINEUP_WORDS.noStrategy : LINEUP_WORDS.noStrategyOff;
+  return { on: true, lineup: `${entityKey}|none`, people: [],
+    note: choices.length ? { text, choices } : { text: LINEUP_WORDS.noStrategies } };
 }
 
 /** Loading: your seat, then one empty place per rival the options ask for. */

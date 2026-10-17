@@ -113,21 +113,21 @@ export const PbNews = createContext(null);
 // so a live PB reads as "beat it by this much -> GOLD!!". Losing the crown (a
 // faster PB, an Undo) runs the same swap backwards.
 //
-// THE TIME SAVE sits centred UNDER the word -- "-0.30 (9 frames)" -- from the
-// save until the next attempt is logged, then fades out and leaves GOLD!!
-// alone: "the intention is to inform the user about how much they saved, but
-// not for too long". Round 9 (2026-10-17) dropped its "Time Save:" label ("this
-// is redundant, obviously this is a time save, we got a gold!") and its
-// beside-or-under measuring: "centered, under the gold". It is positioned out
-// of flow, so neither its arrival nor its exit moves a column of the table. The
-// element is always there, holding the last margin it showed, so leaving is a
-// fade of text that is still present rather than a removal.
+// THE TIME SAVE sits BESIDE the word, on the row's mid-line -- "-0.30 (9
+// frames)" -- from the save until the next attempt is logged, then fades out
+// and leaves GOLD!! alone: "the intention is to inform the user about how much
+// they saved, but not for too long". Round 9 (2026-10-17) dropped its "Time
+// Save:" label ("this is redundant, obviously this is a time save, we got a
+// gold!"); round 11 moved it beside the word so GOLD!! stays "in line with the
+// rest of the row". The element is always there, holding the last margin it
+// showed, so leaving is a fade of text that is still present rather than a
+// removal.
 function PbDelta({ frames, isPb, arriving, timeSave }) {
   const before = useRef(frames);
   if (!isPb) before.current = frames;
   const lastSave = useRef(null);
   if (timeSave) lastSave.current = timeSave;
-  return html`<span class=${`pb-swap${timeSave ? " has-save" : ""}`}>
+  return html`<span class="pb-swap">
     <span class="pb-swap-num" aria-hidden=${isPb ? "true" : undefined}>${
       delta(isPb ? before.current : frames)}</span>
     <span class="pb-gold" aria-hidden=${isPb ? undefined : "true"}>${PB_WORD}</span>
@@ -158,7 +158,7 @@ function settleFoil(event) { event.currentTarget.style.removeProperty("--pb-tilt
 // from the live pb_saved broadcast, which lands before the refetch that paints
 // this row as the PB -- hence waiting for both. The Celebrations preference
 // silences the arrival only; the standing gold is information.
-function usePbRow(a, sec, t) {
+function usePbRow(a, sec, t, isNew) {
   const news = useContext(PbNews);
   const pb = sec ? sectionPbByStrat(sec, t.clock) : null;
   const isPb = Boolean(pb) && pb.attempt_id === a.id && !a.cleared;
@@ -191,7 +191,12 @@ function usePbRow(a, sec, t) {
   }
   return {
     undo,
-    rowClass: `${isPb ? "is-pb" : ""} ${arriving ? "pb-arrive" : ""}`,
+    // The white new-row flash, unless the gold arrival owns this row (round
+    // 11: "When it's a gold, it should OVERRIDE the animation"): never on a
+    // row that is the PB or that a live pb_saved has already crowned. The
+    // flash outlives the 1.4 s arrival, so it used to start over the moment
+    // the arrival ended (measured per frame, tests/test_ui_new_gold_row.py).
+    rowClass: `${isNew && !isPb && !crowned ? "row-new" : ""} ${isPb ? "is-pb" : ""} ${arriving ? "pb-arrive" : ""}`,
     handlers: isPb
       ? { onpointermove: tiltFoil, onpointerleave: settleFoil, onanimationend: endArrival } : {},
     title: isPb ? PB_TITLE : undefined,
@@ -227,20 +232,12 @@ function RowResult({ a, time, inTime, timeMark, showDust }) {
       ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}`;
 }
 
-// What the strategy the card heads with means for this row (round 7):
-// * `unfinished` -- a failure on that strategy wears a DISABLED Save PB ("if
-//   it's a reset, then it cannot possibly be a PB, so it should be
-//   DISABLED"), so every row's buttons sit in the same places. Another
-//   strategy's row keeps an empty slot instead -- "hidden entirely"
-//   (2026-08-22) -- and so does any row while no strategy is picked.
-// * `sameStrat` -- a row on that strategy does not repeat its name: the picker
-//   stays (hover or focus brings it up), and only a row on ANOTHER strategy
-//   shows one, so the column says something when it is shown.
-function rowStrategy(a, sec) {
+// A row on the strategy the card heads with does not repeat its name (round
+// 7): the picker stays (hover or focus brings it up), and only a row on
+// ANOTHER strategy shows one, so the column says something when it is shown.
+function sameStrategy(a, sec) {
   const heading = (sec && sec.last_strat) || null;
-  const own = Boolean(heading) && !a.other_strat;
-  return { unfinished: own && a.outcome !== "success" && !a.cleared,
-           sameStrat: own && a.strat_tag === heading };
+  return Boolean(heading) && !a.other_strat && a.strat_tag === heading;
 }
 
 export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
@@ -298,7 +295,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // saves with "segments are RTA-only") — force rta whatever the view clock.
   const isSeg = a.segment_id != null;
   const pbReplay = usePbReplay(a.id, isSeg ? "rta" : t.clock, t.refresh);
-  const pbRow = usePbRow(a, sec, t);
+  const pbRow = usePbRow(a, sec, t, isNew);
   const time = isSeg ? a.rta : (t.clock === "igt" ? a.igt : a.rta);
   const frames = isSeg ? a.rta_frames : (t.clock === "igt" ? a.igt_frames : a.rta_frames);
   const inTime = isSeg ? a.rta : a.igt; // failures: how-far-in on the section's clock
@@ -318,13 +315,12 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // "undo" | null, and when null, why. Never re-derived here -- save_pb and
   // undo_pb refuse on the SAME resolver (tracking/pbaction.py), and a button
   // that offers what the server rejects is the drift one door prevents. Of
-  // the two shapes of "why", only a caveat key (the TIME is not a legal
-  // quantity) draws anything: the disabled button it always was. A STRATEGY
-  // reason draws NOTHING -- the row belongs to another strategy, or no
-  // strategy is picked, and his ruling (2026-08-22) is that the button is
-  // simply absent: "the button / text just shouldn't be there & should be
-  // hidden entirely for a strategy that isn't the one selected". The
-  // printed "<strat> only" chip of 2026-08-20 is gone with it.
+  // the two shapes of "why", a caveat key (the TIME is not a legal quantity)
+  // draws the disabled button wearing its chip. A STRATEGY reason -- the row
+  // belongs to another strategy, or no strategy is picked -- draws a plain
+  // disabled Save whose tooltip says how to bring it back (round 11, so no
+  // row leaves a hole between ▷ and ×); no chip, no delta, as his 2026-08-22
+  // ruling keeps the rest of the active strategy's marks off such a row.
   const blockedPb = caveatOf(a.pb_blocked && a.pb_blocked.reason);
   // The mark on the TIME, not on the save button: this row's number is not
   // the quantity it looks like ("if you've been practicing all wrong, you
@@ -332,7 +328,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // the server decides which rows earn it (tracking/caveats.py's PROVEN-only
   // rule, measured), this only draws it.
   const timeMark = caveatOf(a.caveat);
-  const { unfinished, sameStrat } = rowStrategy(a, sec);
+  const sameStrat = sameStrategy(a, sec);
   // `other-strat` dims the row (index.html, tuned by logtuning.js's
   // otherStratDim/otherStratFade): the row is keyed by id, so a strategy
   // change keeps the same <tr> and the opacity TRANSITIONS rather than
@@ -340,7 +336,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // states" (2026-08-23). The server decides which rows are other
   // (`other_strat`, the same gate that withholds the button).
   const row = html`<tr ref=${(el) => { rowRef.current = el; }} ...${pbRow.handlers}
-      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""} ${pbRow.rowClass}">
+      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${pbRow.rowClass}">
     <td class="meta attempt-index">#${idx + 1}</td>
     <td class="attempt-medal"><${RowMark} a=${a} /></td>
     <td class="attempt-result ${a.outcome === "success" ? "good" : "badx"}">
@@ -363,19 +359,18 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
             title="View replay" aria-label="View replay">
           <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>
       ${/* THE action column, a straight cascade over the server's own
-           resolved answer (tracking/pbaction.py). Three drawn states and no
-           client-side precedence: undo, save, "the time is not a legal
-           quantity" -- plus the disabled Save a failure wears (`unfinished`
-           above), which offers nothing. Everything else -- a cleared row, an
-           attempt with no entity, a row on another strategy, a card with no
-           strategy picked -- leaves the slot empty (the last two by his
-           2026-08-22 ruling: hide the button until the action is valid
-           again). The slot itself is always there, one width, so the buttons
-           never move between rows. */""}
+           resolved answer (tracking/pbaction.py): undo, save, "the time is
+           not a legal quantity", and otherwise a DISABLED Save saying why --
+           a failure, a run on another strategy, no strategy picked, a
+           cleared run. Every row draws the same three frames in every state
+           (round 11: "make sure that the visual balance of each row is
+           maintained no matter the circumstances"), so no button moves and
+           no row has a hole. */""}
       <span class="attempt-pb-slot"><${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay}
-        undo=${pbRow.undo} beat=${pbBeat} unfinished=${unfinished} /></span>
+        undo=${pbRow.undo} beat=${pbBeat} /></span>
       ${a.cleared
-        ? html`<button onclick=${restore}>undo</button>`
+        ? html`<button class="icon-button" onclick=${restore}
+            title="Restore this attempt" aria-label="Restore attempt"><${Icon} name="undo" size=${13} /></button>`
         : html`<button class="icon-button" onclick=${clear}
             title="Clear this attempt as a mistake" aria-label="Clear attempt"><${Icon} name="close" size=${12} /></button>`}
     </div></td>

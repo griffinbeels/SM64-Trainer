@@ -40,17 +40,34 @@ export function usePbReplay(attemptId, timerMode, refresh) {
   return { busy, notice, save: () => run(false), retry: () => run(true) };
 }
 
-export function PbAction({ attempt, blocked, state, undo, beat, unfinished = false }) {
+// Why a row can neither save nor undo a PB, in the words its disabled Save
+// carries. The server's gate reason (tracking/pbaction.py) picks the
+// strategy sentences; the rest read off the row itself.
+export function unavailableReason(attempt) {
+  if (attempt.outcome !== "success") return "Only a finished run can be a PB";
+  if (attempt.cleared) return "Restore this run to save it as a PB";
+  const gate = attempt.pb_blocked && attempt.pb_blocked.reason;
+  const strat = attempt.strat_tag;
+  if (gate === "no_active_strat") {
+    return strat ? `Pick ${strat} above to save this as its PB` : "Pick a strategy to save a PB";
+  }
+  if (gate === "foreign_strat") {
+    return strat ? `Switch to ${strat} to save this as its PB` : "Give this run a strategy to save it as a PB";
+  }
+  return "This run can't be saved as a PB";
+}
+
+export function PbAction({ attempt, blocked, state, undo, beat }) {
   // The server resolves Save/Undo/blocked. Preserve its strategy and time gates.
   if (attempt.pb_action === "undo") return html`<button onclick=${undo} disabled=${state.busy}
     title="delete this save — the previous PB on this strategy becomes current again">
     <${Icon} name="undo" size=${14} /><span class="pb-word">Undo PB</span></button>`;
-  // A failure can never be a PB; it holds the button's place, disabled.
-  if (unfinished && attempt.pb_action !== "save" && !blocked) return html`<button
-    class="pb-unfinished" disabled title="Only a finished run can be a PB">
+  // Nothing to save or undo: the button holds its place, disabled, and says
+  // why (round 11 -- no row may leave a hole where its Save would be).
+  if (attempt.pb_action !== "save" && !blocked) return html`<button
+    class="pb-unavailable" disabled title=${unavailableReason(attempt)}>
     <${Icon} name="bookmark" size=${14} />
     <span class="save-pb-wide">Save as PB</span><span class="save-pb-narrow">Save PB</span></button>`;
-  if (attempt.pb_action !== "save" && !blocked) return null;
   const { cls, title, mark } = saveReason(attempt, blocked, beat);
   return html`<button class=${cls}
     disabled=${Boolean(blocked) || state.busy} onclick=${state.save}

@@ -72,6 +72,17 @@ def test_every_strategy_is_offered_in_the_order_the_server_sends():
     assert choices == [{"label": name, "strategy": name} for name in names]
 
 
+def test_the_strategy_buttons_stand_open_with_ghosts_off():
+    """Round 11: "That strategy selector should be visible REGARDLESS of ghosts
+    being on or off." The buttons pick the card's strategy either way; off,
+    the words drop "to race ghosts"."""
+    session = {**lineup_session(state="no_strategy"), "target": {**FIXTURE_TARGET, "strat": None}}
+    off = model(session, on=False, strategies=("Standard", "Sideflip"))
+    assert off["on"] is True and off["note"]["text"] == WORDS["noStrategyOff"]
+    assert [c["label"] for c in off["note"]["choices"]] == ["Standard", "Sideflip"]
+    assert model(session, on=True, strategies=("Standard",))["note"]["text"] == WORDS["noStrategy"]
+
+
 def test_no_strategies_at_all_asks_for_one_to_be_created():
     session = {**lineup_session(state="no_strategy"), "target": {**FIXTURE_TARGET, "strat": None}}
     shown = model(session, strategies=())

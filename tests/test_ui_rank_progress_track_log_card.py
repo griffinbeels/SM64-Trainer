@@ -200,7 +200,10 @@ ACTION_CELLS = """
       const row = tr.querySelector('.attempt-strategy select');
       return head && row && head.value === row.value;
     };
-    const hasAction = (tr) => !!cell(tr).querySelector('button:not(.icon-button)');
+    // An ACTION is a Save or Undo that can run; the disabled placeholder a
+    // row keeps when it cannot (round 11) holds the slot and offers nothing.
+    const hasAction = (tr) => !!cell(tr).querySelector('button:not(.icon-button):not(.pb-unavailable)');
+    const holdsSlot = (tr) => !!cell(tr).querySelector('.attempt-pb-slot > button');
     return {
       rows: rows.length,
       successRows: success.length,
@@ -212,6 +215,8 @@ ACTION_CELLS = """
       mute: success.filter((tr) => active(tr) && !hasAction(tr)).length,
       leaking: success.filter((tr) => !active(tr) && hasAction(tr)).length,
       foreign: success.filter((tr) => !active(tr)).length,
+      // Every row keeps its PB slot's button, so no row has a hole (round 11).
+      holes: rows.filter((tr) => !holdsSlot(tr)).length,
       saves: document.querySelectorAll('.log-card .attempt-actions button.pb-glow, '
         + '.log-card .attempt-actions button:not(.icon-button)').length,
       pbTags: [...new Set(Array.from(document.querySelectorAll('.log-card .pbtag'))
@@ -232,8 +237,10 @@ def test_the_tuning_fixture_draws_a_real_actions_column(tunelog_demo):
 
     So this pins COHERENCE, not contents: every success row on the card's
     active strategy offers an action, every success row on another strategy
-    offers none (his 2026-08-22 ruling), and the page holds at least one of
-    each so both row shapes are tuned against."""
+    offers none (his 2026-08-22 ruling) while still holding its slot with a
+    disabled Save (round 11, 2026-10-17: "the visual balance of each row is
+    maintained no matter the circumstances"), and the page holds at least
+    one of each so both row shapes are tuned against."""
     state = tunelog_demo.evaluate(ACTION_CELLS)
     assert state["successRows"] >= 3, state
     assert state["mute"] == 0, (
@@ -241,6 +248,7 @@ def test_the_tuning_fixture_draws_a_real_actions_column(tunelog_demo):
         "is not shipping pb_action/pb_blocked", state)
     assert state["leaking"] == 0, (
         "a row on another strategy offers a PB action", state)
+    assert state["holes"] == 0, ("a row leaves its PB slot empty", state)
     assert state["foreign"] >= 1, (
         "no other-strategy row anywhere on the tuning page: the emptiest "
         "actions cell cannot be tuned against a page that never draws it",

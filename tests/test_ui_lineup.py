@@ -88,6 +88,9 @@ STATES = {
     "marks": lineup_session(rows=marked_rows()),
     "loading": lineup_session(state="loading"),
     "no_strategy": lineup_session(state="no_strategy", target=NO_STRAT_TARGET),
+    # Round 11: "That strategy selector should be visible REGARDLESS of ghosts
+    # being on or off."
+    "no_strategy_off": lineup_session(enabled=False, state="no_strategy", target=NO_STRAT_TARGET),
     "nobody": lineup_session(rows=[], reason="nobody"),
     "offline": lineup_session(rows=[], reason="offline"),
     "signed_out": lineup_session(rows=[], reason="signed_out"),
@@ -99,13 +102,15 @@ STATES = {
 #: (seats, placeholders, note words) each state paints.
 EXPECT = {
     "ready": (5, 0, None), "marks": (5, 0, None), "loading": (5, 4, None),
-    "no_strategy": (0, 0, "noStrategy"), "nobody": (1, 0, "nobody"), "offline": (1, 0, "offline"),
+    "no_strategy": (0, 0, "noStrategy"), "no_strategy_off": (0, 0, "noStrategyOff"),
+    "nobody": (1, 0, "nobody"), "offline": (1, 0, "offline"),
     "signed_out": (1, 0, "signedOut"), "unknown_rom": (0, 0, "unknownRom"),
     "unreachable": (0, 0, "unreachable"), "off": (5, 0, None),
 }
 
 READY = {
     "loading": f"{SEAT}.is-placeholder", "no_strategy": f"{ROW} .lineup-note.has-choices",
+    "no_strategy_off": f"{ROW} .lineup-note.has-choices",
     "off": f"{ROW} .lineup.is-off", "ready": f"{SEAT}:not(.is-you)", "marks": f"{SEAT}:not(.is-you)",
 }
 
@@ -312,14 +317,17 @@ def test_the_marks_say_pinned_downloading_and_beaten(rendered, width):
     assert beaten["beaten"] and beaten["opacity"] < 1
 
 
+@pytest.mark.parametrize("state", ["no_strategy", "no_strategy_off"])
 @pytest.mark.parametrize("width", WIDTHS)
-def test_no_strategy_offers_every_strategy_in_balanced_rows(rendered, width):
+def test_no_strategy_offers_every_strategy_in_balanced_rows(rendered, width, state):
     """Round 10: "all of the strategies here fit without it being difficult
     to understand / messy" and "for the buttons, we should also sort them in
     rank standard order". Every strategy the card's picker lists, in its
     order, on buttons of one width, in rows that differ by at most one
     button, the longer rows first, nothing clipped and nothing overflowing."""
-    shown = rendered[("no_strategy", width)]
+    shown = rendered[(state, width)]
+    # Standing open with ghosts on or off: the row is not folded away.
+    assert not shown["off"] and shown["clipHeight"] > 40, (shown["off"], shown["clipHeight"])
     note, = shown["notes"]
     assert len(shown["picker"]) > 3 and note["choices"] == shown["picker"], (note["choices"], shown["picker"])
     chips = note["chips"]

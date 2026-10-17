@@ -505,17 +505,18 @@ Picking one also claims every [[attempt]] of that [[target]] that has no
 
 ### PB gate
 
-Why a [[practice log]] row's Save/Undo button is not there: the row belongs to
-a [[strategy]] other than the [[active strategy]], or you have selected no
-[[strategy]] at all. The row shows no button and no time comparison at all —
-nothing of the [[active strategy]]'s applies to it — and the server refuses
-the save for the same stated reason.
+Why a [[practice log]] row offers only a disabled Save: the row belongs to a
+[[strategy]] other than the [[active strategy]], or you have selected no
+[[strategy]] at all. The row keeps a disabled Save whose tooltip says how to
+bring it back, so every row draws the same buttons, but shows no time
+comparison, since nothing of the [[active strategy]]'s applies to it. The
+server refuses the save for the same stated reason.
 
 - **Not** — a [[caveat mark]]. A [[caveat mark]] says the time is not the
   quantity it looks like and draws a mark; a gated row is fine and simply
-  not yours to act on right now, and draws nothing.
+  not yours to act on right now.
 - **Lives** — the resolver (`src/sm64_events/tracking/pbaction.py`)
-  → the absent button in the [[practice log]]'s action column
+  → the disabled Save in the [[practice log]]'s action column
 
 ### Route
 
