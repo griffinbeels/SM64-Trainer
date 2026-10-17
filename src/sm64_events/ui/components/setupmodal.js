@@ -6,10 +6,10 @@ import { getJSON, send } from "../api.js";
 import { Modal } from "./modal.js";
 import { Icon } from "./icons.js";
 import { EMU, N64 } from "../platform.js";
-import { SetupSwap, useSetupAttention } from "./setupmotion.js";
+import { SetupSwap, useSetupAttention, useShownStep } from "./setupmotion.js";
 import { ConnectPage, EmuSetupPane, N64SetupPane, CompletionPage } from "./setuppages.js";
 import { SETUP_TITLES, ACKNOWLEDGE_MS, canAdvance, canReviewForward,
-         pagesFor, readResume, saveResume } from "../setupflow.js";
+         pagesFor, readResume, saveResume, setupStep } from "../setupflow.js";
 
 const html = htm.bind(h);
 export { EmuSetupPane, N64SetupPane };
@@ -73,7 +73,7 @@ function useSetupConnection(onFailure) {
   return {setup, busy, error, offline, alive, refresh, mutate, setError};
 }
 
-function SetupContent({page, platform, setup, choose, finish, busy, refresh, install, remove, resume, manual}) {
+function SetupContent({page, platform, setup, shown, choose, finish, busy, refresh, install, remove, resume, manual}) {
   const Pane = SETUP_PANES[platform];
   return page === "platform" ? html`<div class="setup-platform-picks">
       ${[[EMU, "Emulator", "Only Project64 v1.6 supported", "compare"],
@@ -88,7 +88,7 @@ function SetupContent({page, platform, setup, choose, finish, busy, refresh, ins
     : page === "connect" ? html`<${ConnectPage} setup=${setup}/>`
     : !setup ? html`<p role="status">Connecting to the trainer…</p>`
     : page === "complete" ? html`<${CompletionPage} setup=${setup} onFinish=${finish} busy=${busy}/>`
-    : Pane ? html`<${Pane} setup=${setup} refresh=${refresh} installing=${busy}
+    : Pane ? html`<${Pane} setup=${setup} shown=${shown} refresh=${refresh} installing=${busy}
         onInstall=${install} onRemove=${remove} onResume=${resume} manual=${manual}
         onEmulator=${() => choose(EMU)} onFinish=${finish} busy=${busy}/>` : null;
 }
@@ -101,6 +101,9 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
     Math.max(1, pagesFor(initial.platform).indexOf(initial.page) + 1)));
   const [review, setReview] = useState(false);
   const [direction, setDirection] = useState(1);
+  // Nothing paints until the first observation picks the page, so opening
+  // never flashes a page it is about to leave.
+  const [decided, setDecided] = useState(false);
   const attentive = useSetupAttention();
   const root = useRef(null);
   const initialized = useRef(false);
@@ -109,9 +112,12 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
   });
 
 
+  const shown = useShownStep(setupStep(setup), page === "install");
+
   useEffect(() => {
     if (!setup || initialized.current) return;
     initialized.current = true;
+    setDecided(true);
     if (setup.emu.consented_at || setup.emu.wrapper_present) {
       const next = setup.platform === N64 ? "console"
         : setup.emu.target?.state === "ready" ? "install" : "connect";
@@ -137,7 +143,7 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
     go(next === EMU ? "connect" : "console");
   }
 
-  const advance = !offline && !busy && canAdvance(page, setup);
+  const advance = !offline && !busy && canAdvance(page, setup, shown.step);
   useEffect(() => {
     if (!advance || review || !attentive) return;
     const timer = setTimeout(() => go(page === "connect" ? "install" : "complete"), ACKNOWLEDGE_MS);
@@ -151,7 +157,7 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
       const heading = root.current?.closest(".modal")?.querySelector(".modal-heading h2");
       if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
     }
-  }, [page, platform]);
+  }, [page, platform, decided]);
 
 
   const install = () => mutate("POST", "/api/setup/capture-layer", {consent: true});
@@ -165,37 +171,43 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
     else onClose();
   }
 
-  const pages = pagesFor(platform), index = pages.indexOf(page);
-  const back = index > 0;
-  const forward = review && canReviewForward(page, {platform, pages: reached}, setup) && !offline;
-  const stepComplete = canAdvance(page, setup) || forward;
+  const pages = pagesFor(platform);
+  const forward = review && canReviewForward(page, {platform, pages: reached}, setup, shown.step) && !offline;
+  const stepComplete = canAdvance(page, setup, shown.step) || forward;
   const title = setupTitle(page, setup);
+  if (!decided && !offline) return null;
 
 
   return html`<${Modal} title=${title} icon=${page === "complete" ? "check" : "practice"} size="large"
-      footer=${html`<div class="setup-footer">
-        <div class="setup-navigation">
-          <span>${back && html`<button type="button" class="setup-arrow" aria-label="Back" disabled=${busy}
-            onclick=${() => go(pages[index - 1], true, true)}><${Icon} name="arrowLeft" size=${22}/></button>`}</span>
-          <div class="setup-progress" aria-label=${`Step ${index + 1} of ${pages.length}`}>
-            <div class="setup-dots">${pages.map((key, at) => html`<span key=${key}
-              class=${`setup-dot ${at === index ? "is-current" : at < index ? "is-done" : ""}`}
-              aria-current=${at === index ? "step" : undefined}></span>`)}</div>
-            <span>Step ${index + 1} of ${pages.length}</span>
-          </div>
-          <span>${forward && html`<button type="button" class="setup-arrow setup-arrow-ready" aria-label="Forward" disabled=${busy}
-            onclick=${() => go(pages[index + 1], false, true)}><${Icon} name="arrowRight" size=${22}/></button>`}
-            ${!stepComplete && !["complete", "console"].includes(page) && html`<button type="button" class="setup-not-now"
-              disabled=${busy} onclick=${onClose}>Not now</button>`}</span>
-        </div>
-      </div>`}>
+      footer=${html`<${SetupFooter} pages=${pages} page=${page} busy=${busy} forward=${forward}
+        stepComplete=${stepComplete} go=${go} onClose=${onClose}/>`}>
     <div class="setup-modal" ref=${root} data-page=${page} aria-busy=${busy}>
-      <${SetupSwap} identity=${page} direction=${direction}><${SetupContent} page=${page} platform=${platform} setup=${setup} choose=${choose}
+      <${SetupSwap} identity=${page} direction=${direction}><${SetupContent} page=${page} platform=${platform} setup=${setup} shown=${shown} choose=${choose}
         finish=${finish} busy=${busy} refresh=${refresh} install=${install} remove=${remove} resume=${resume} manual=${manual}/></${SetupSwap}>
       ${offline && html`<p class="setup-error" role="alert">Connection interrupted. Retrying automatically…</p>`}
       ${error && html`<p class="setup-error" role="alert">${error}</p>`}
     </div>
   </${Modal}>`;
+}
+
+function SetupFooter({pages, page, busy, forward, stepComplete, go, onClose}) {
+  const index = pages.indexOf(page);
+  return html`<div class="setup-footer">
+    <div class="setup-navigation">
+      <span>${index > 0 && html`<button type="button" class="setup-arrow" aria-label="Back" disabled=${busy}
+        onclick=${() => go(pages[index - 1], true, true)}><${Icon} name="arrowLeft" size=${22}/></button>`}</span>
+      <div class="setup-progress" aria-label=${`Step ${index + 1} of ${pages.length}`}>
+        <div class="setup-dots">${pages.map((key, at) => html`<span key=${key}
+          class=${`setup-dot ${at === index ? "is-current" : at < index ? "is-done" : ""}`}
+          aria-current=${at === index ? "step" : undefined}></span>`)}</div>
+        <span>Step ${index + 1} of ${pages.length}</span>
+      </div>
+      <span>${forward && html`<button type="button" class="setup-arrow setup-arrow-ready" aria-label="Forward" disabled=${busy}
+        onclick=${() => go(pages[index + 1], false, true)}><${Icon} name="arrowRight" size=${22}/></button>`}
+        ${!stepComplete && !["complete", "console"].includes(page) && html`<button type="button" class="setup-not-now"
+          disabled=${busy} onclick=${onClose}>Not now</button>`}</span>
+    </div>
+  </div>`;
 }
 
 function setupTitle(page, setup) {

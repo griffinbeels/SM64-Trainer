@@ -3,7 +3,7 @@
 import { h } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { STEP_ORDER, SUBSTEP_MS } from "../setupflow.js";
+import { shownNext, shownStart, shownWake, stageOf } from "../setupflow.js";
 import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
@@ -51,21 +51,24 @@ export function SetupDisclosure({ label, children }) {
   </div>`;
 }
 
-export function useDisclosedStep(actual) {
-  const [shown, setShown] = useState(actual);
-  const latest = useRef(actual);
-  latest.current = actual;
-  const from = STEP_ORDER.indexOf(shown), to = STEP_ORDER.indexOf(actual);
-  const completing = from >= 0 && to > from;
+// The install page's shown step (setupflow.js `shownNext`), derived during
+// render so progress paints with the observation that proved it. Off the
+// install page it follows the server, so arriving never acknowledges a stage
+// nobody saw.
+export function useShownStep(actual, active) {
+  const machine = useRef(null);
+  const [tick, wake] = useState(0);
+  const now = performance.now();
+  machine.current = active && machine.current
+    ? shownNext(machine.current, actual, now) : shownStart(actual, now);
+  const state = machine.current;
+  const at = active ? shownWake(state) : null;
   useEffect(() => {
-    if (shown === actual) return;
-    if (!completing) { setShown(actual); return; }
-    // Keep this completion visible, then take the newest observation. Repeated
-    // poll payloads do not restart the delay or enqueue obsolete instructions.
-    const timer = setTimeout(() => setShown(latest.current), SUBSTEP_MS);
+    if (at == null) return;
+    const timer = setTimeout(() => wake(tick => tick + 1), Math.max(0, at - performance.now()));
     return () => clearTimeout(timer);
-  }, [shown, completing, completing ? null : actual]);
-  return { shown, completing };
+  }, [at, tick]);  // a timer that fires a little early schedules the rest
+  return { step: state.step, stage: stageOf(state.step), acknowledging: !!state.ack };
 }
 
 // Whether the wizard is on screen, so a confirmation is never spent unseen.

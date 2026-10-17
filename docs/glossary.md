@@ -1240,14 +1240,21 @@ setup completes only with fresh game, replay pictures and input data. JP can
 finish the available installation with an explicit unsupported-tracking warning.
 N64 currently explains that support is in development and offers emulator setup.
 
+The Set up Practice Replay page shows one card per **setup stage**: Close
+Project64 (only when an install needs it), Install Practice Replay, Open your
+game, and Checking your setup. The server's finer steps change a card's text in
+place. Progress shows at once; a step back shows only once it lasts 2 s. Moving
+on to the next stage, the card acknowledges what you did ("Usamune found") if
+it was on screen at least 1.5 s; a stage that resolved by itself gets none.
+
 Pages advance automatically after a visible acknowledgment. Back reviews prior
 pages without advancing again. Not now defers incomplete setup for the current
 app visit; Ready to practice saves completion and opens Practice. Setup is always
 available in Settings; it also opens automatically for a missing, regressed,
 outdated or unfinished emulator installation. Beginner guides appear where needed.
 
-- **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; its API is
-  `src/sm64_events/server/setup_api.py`
+- **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; setup stages in
+  `src/sm64_events/ui/setupflow.js`; its API is `src/sm64_events/server/setup_api.py`
 
 ### Overlay layer
 

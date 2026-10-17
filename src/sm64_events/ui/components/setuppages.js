@@ -1,24 +1,34 @@
 import { h } from "preact";
+import { useRef } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { RegionFlag, REGIONS } from "./regionflag.js";
 import { castSrc } from "./emptystate.js";
-import { SetupDisclosure, SetupSwap, useDisclosedStep } from "./setupmotion.js";
-import { setupStep } from "../setupflow.js";
+import { SetupDisclosure, SetupSwap } from "./setupmotion.js";
+import { STAGE_ORDER, stageOf } from "../setupflow.js";
 
 const html = htm.bind(h);
 const GUIDE = "https://wermi.neocities.org/emuguide/";
-const STEP_COPY = {
+// Title, detail and acknowledgment of each visible stage (setupflow.js STAGE_OF).
+const STAGE_COPY = {
   close: ["Close Project64", "This lets us add Practice Replay to your emulator.", "Project64 closed"],
   install: ["Install Practice Replay", "Record your practice and replay it with your inputs, frame by frame.", "Practice Replay installed"],
-  reopen: ["Open Project64", "Start Project64 v1.6 again to load Practice Replay.", "Project64 opened"],
-  rom: ["Open Usamune", "In Project64, choose File → Open ROM and open your Usamune practice ROM.", "Usamune found"],
-  verify: ["Checking your setup", "Keep the game running while we check your replay pictures and inputs.", "Setup checked"],
-  ready: ["Setup checked", "Everything available for your game is set up.", "Setup checked"],
-  emulator: ["Find Project64", "Open the supported Project64 installation to continue.", "Project64 found"],
-  unavailable: ["Practice Replay unavailable", "This trainer build doesn't include the replay component.", ""],
+  game: ["Open your game", "", "Usamune found"],
+  check: ["Checking your setup", "Keep the game running while we check your replay pictures and inputs.", ""],
+  unavailable: ["Practice Replay unavailable", "", ""],
   checking: ["Checking your setup", "Connecting to the trainer…", ""],
 };
+
+// The line under a stage's title follows the server's step in place.
+function stageDetail(step, emu) {
+  if (step === "reopen") return "Start Project64 v1.6 to load Practice Replay.";
+  if (step === "rom" && emu.rom?.state !== "unsupported") {
+    return "In Project64, choose File → Open ROM and open your Usamune practice ROM.";
+  }
+  if (["emulator", "rom", "unavailable"].includes(step)) return emu.verification?.message;
+  if (step === "ready") return "Everything available for your game is set up.";
+  return STAGE_COPY[stageOf(step)][1];
+}
 
 function GuideLink({ path, children }) {
   return html`<a href=${GUIDE + path} target="_blank" rel="noopener noreferrer">${children} ↗</a>`;
@@ -33,17 +43,17 @@ export function SetupStatus({ done, title, detail, children }) {
   </div>`;
 }
 
-export function RomResult({ emu }) {
-  if (!emu?.rom?.region || !emu.pj64_running) return null;
+export function RomResult({ rom }) {
+  if (!rom?.region) return null;
   return html`<div class="setup-rom-result">
     <div class="setup-regions" aria-label="Detected game region">
-      ${REGIONS.map(region => html`<div class=${`setup-region ${emu.rom.region === region ? "is-detected" : ""}`} key=${region}>
+      ${REGIONS.map(region => html`<div class=${`setup-region ${rom.region === region ? "is-detected" : ""}`} key=${region}>
         <${RegionFlag} version=${region} size=${48}/><span>${region.toUpperCase()}</span>
-        ${emu.rom.region === region && html`<span class="setup-detected-label">Detected</span>`}
+        ${rom.region === region && html`<span class="setup-detected-label">Detected</span>`}
       </div>`)}
     </div>
-    <p class="setup-rom-name">${emu.rom.name}</p>
-    ${emu.rom.warning && html`<p class="setup-warning" role="status">${emu.rom.warning}</p>`}
+    <p class="setup-rom-name">${rom.name}</p>
+    ${rom.warning && html`<p class="setup-warning" role="status">${rom.warning}</p>`}
   </div>`;
 }
 
@@ -105,21 +115,44 @@ function InstallDetails({ emu }) {
   </${SetupDisclosure}>`;
 }
 
-export function EmuSetupPane({ setup, installing, onInstall, onRemove, onResume, manual }) {
+// The game a stage shows: the check stage keeps the one it detected, so its
+// flag appears once and stays; the game stage names only a rejected game.
+function useStageRom(emu, step) {
+  const kept = useRef(null);
+  const current = emu.rom?.region && emu.pj64_running ? emu.rom : null;
+  if (stageOf(step) !== "check") kept.current = null;
+  else if (current) kept.current = current;
+  if (step === "rom") return current?.state === "unsupported" ? current : null;
+  return kept.current;
+}
+
+function useStageDirection(stage) {
+  const last = useRef({stage, direction: 1});
+  if (last.current.stage !== stage) {
+    const back = STAGE_ORDER.indexOf(stage) < STAGE_ORDER.indexOf(last.current.stage);
+    last.current = {stage, direction: back ? -1 : 1};
+  }
+  return last.current.direction;
+}
+
+// One card per visible stage (`shown`, the modal's useShownStep): the card
+// swaps only when the stage changes; the server's finer steps change its text.
+export function EmuSetupPane({ setup, shown, installing, onInstall, onRemove, onResume, manual }) {
   const emu = setup.emu;
-  const actual = setupStep(setup);
-  const { shown, completing } = useDisclosedStep(actual);
-  const gameStep = ["rom", "verify", "ready"].includes(shown);
-  return html`<div class="setup-install" data-substep=${shown}>
-    <${EmuStepStatus} shown=${shown} completing=${completing} emu=${emu} installing=${installing} onInstall=${onInstall}/>
-    ${gameStep && html`<${RomResult} emu=${emu}/>`}
-    ${!completing && ["emulator", "rom", "unavailable"].includes(shown)
-      && emu.verification?.message && html`<p class="setup-next-detail" role="status">${emu.verification.message}</p>`}
-    ${shown === "verify" && html`<${VerificationHelp} emu=${emu} installing=${installing} onResume=${onResume}/>`}
-    ${shown === "install" && !completing && html`<${InstallDetails} emu=${emu}/>`}
-    ${["reopen", "emulator"].includes(shown) && html`<${Project64Help}/>`}
-    ${gameStep && html`<${RomHelp}/>`}
-    ${manual && emu.wrapper_present && html`<${ManageReplay} emu=${emu} installing=${installing} onRemove=${onRemove}/>`}
+  const { step, stage, acknowledging } = shown;
+  const rom = useStageRom(emu, step);
+  const direction = useStageDirection(stage);
+  return html`<div class="setup-install" data-stage=${stage} data-substep=${step}>
+    <${SetupSwap} identity=${stage} direction=${direction} className="setup-substep-swap">
+      <${EmuStepStatus} step=${step} acknowledging=${acknowledging} emu=${emu}
+        installing=${installing} onInstall=${onInstall}/>
+      <${RomResult} rom=${rom}/>
+      ${stage === "install" && html`<${InstallDetails} emu=${emu}/>`}
+      ${step === "verify" && html`<${VerificationHelp} emu=${emu} installing=${installing} onResume=${onResume}/>`}
+      ${["reopen", "emulator"].includes(step) && html`<${Project64Help}/>`}
+      ${["rom", "verify", "ready"].includes(step) && html`<${RomHelp}/>`}
+      ${manual && emu.wrapper_present && html`<${ManageReplay} emu=${emu} installing=${installing} onRemove=${onRemove}/>`}
+    </${SetupSwap}>
   </div>`;
 }
 
@@ -171,17 +204,15 @@ function ManageReplay({emu, installing, onRemove}) {
     </${SetupDisclosure}>`;
 }
 
-function EmuStepStatus({shown, completing, emu, installing, onInstall}) {
-  const [title, detail, acknowledgment] = STEP_COPY[shown] || STEP_COPY.checking;
-  const done = completing || shown === "ready";
-  return html`<${SetupSwap} identity=${shown} className="setup-substep-swap">
-      <${SetupStatus} done=${done} title=${completing ? acknowledgment : title}
-        detail=${completing ? null : shown === "verify" ? emu.verification?.message : detail}>
-        ${shown === "install" && !completing && html`<div class="setup-install-action">
-          <p>Adds the trainer's graphics plugin to Project64. You can remove it later in Settings.</p>
-          <button class="primary-button" type="button" disabled=${installing}
-              onclick=${onInstall}>${installing ? "Installing…" : "Install Practice Replay"}</button>
-        </div>`}
-      </${SetupStatus}>
-    </${SetupSwap}>`;
+function EmuStepStatus({step, acknowledging, emu, installing, onInstall}) {
+  const [title, , acknowledgment] = STAGE_COPY[stageOf(step)];
+  return html`<${SetupStatus} done=${acknowledging || step === "ready"}
+      title=${acknowledging ? acknowledgment : step === "ready" ? "Setup checked" : title}
+      detail=${acknowledging ? null : stageDetail(step, emu)}>
+    ${step === "install" && !acknowledging && html`<div class="setup-install-action">
+      <p>Adds the trainer's graphics plugin to Project64. You can remove it later in Settings.</p>
+      <button class="primary-button" type="button" disabled=${installing}
+          onclick=${onInstall}>${installing ? "Installing…" : "Install Practice Replay"}</button>
+    </div>`}
+  </${SetupStatus}>`;
 }
