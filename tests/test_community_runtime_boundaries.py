@@ -31,21 +31,27 @@ class Cloud:
     def request_assets(self, identifiers):
         self.assets.append(tuple(identifiers))
 
+    def pool_status(self, _identity):
+        return None
+
+    def refused_assets(self):
+        return frozenset()
+
     async def search(self, identity, prefix, **options):
         self.searches.append((identity, prefix, options))
         raise CommunityError("network_unavailable")
 
 
 def test_pending_download_obeys_a_reduced_visible_slot_count():
-    previous = tuple({"id": f"{index + 1:064x}", "slot": index,
+    previous = tuple({"id": f"{index + 1:064x}", "slot": index, "ghost": object(),
         "provenance": "community-unverified"} for index in range(4))
-    desired = ({"id": "f" * 64, "slot": 0, "provenance": "community-unverified"},)
+    desired = ({"id": "f" * 64, "slot": 0, "ghost": object(), "provenance": "community-unverified"},)
     cloud = Cloud()
     population = SimpleNamespace(is_ready=lambda identifier: identifier != "f" * 64)
     staging = CommunityRivals(cloud, population)
-    assert staging.stage(previous, ()) == previous
-    staged = staging.stage(desired, previous)
-    assert staged == (previous[0],)
+    assert [row["pending"] for row in staging.stage(previous)] == [False] * 4
+    staged = staging.stage(desired)
+    assert [(row["id"], row["slot"], row["pending"]) for row in staged] == [("f" * 64, 0, True)]
     assert cloud.assets == [("f" * 64,)] and staging.downloading
 
 
@@ -73,7 +79,9 @@ def test_identity_changes_revoke_old_native_rows_before_new_downloads(tmp_path, 
         rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
         assert rivals.identity == changed
         assert any(command["enabled"] is False for command in commands)
-        assert not rivals.rows and native.preparations[-1][1] == []
+        # The new seat shows at once, pending; native playback waits for its bytes.
+        assert [(row["id"], row["pending"]) for row in rivals.rows] == [("f" * 64, True)]
+        assert native.preparations[-1][1] == []
         assert cloud.assets == [("f" * 64,)]
     finally:
         tracker.db.close()
@@ -91,7 +99,7 @@ def test_pool_requests_lease_remote_pins_and_preserve_private_choices():
     before = dict(pins)
     cloud = Cloud()
     staging = CommunityRivals(cloud, SimpleNamespace(get=get))
-    staging.request(Standards(), IDENTITY, basis(10, 1200), checked_options({}), pins)
+    staging.request(Standards(), IDENTITY, pins)
     assert cloud.pools and cloud.pools[0][1]["pinned_ids"] == (remote,)
     assert pins == before
 
@@ -163,7 +171,10 @@ def test_persisted_remote_provenance_never_promotes_private_or_other_account_cho
         tracker.db.set_state(STATE_KEY, state)
         restored = Rivals(tracker, population, native, lambda: "us", community=cloud)
         restored.refresh(TARGET, CONTROLS, enabled=True, sharing=sharing)
-        assert cloud.pools and cloud.pools[-1][1]["pinned_ids"] == ()
+        if change == "signed_out":
+            assert not cloud.pools  # Signed out asks the cloud nothing.
+        else:
+            assert cloud.pools and cloud.pools[-1][1]["pinned_ids"] == ()
         if change in ("legacy", "invalid"):
             assert restored.remote_choices == {}
     finally:

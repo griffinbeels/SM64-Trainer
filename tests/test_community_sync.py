@@ -422,7 +422,7 @@ def test_unavailable_asset_does_not_requery_ready_rivals_in_a_loop(tmp_path):
         await sync.start()
         try:
             for _ in range(6):
-                staging.stage(desired, ())
+                staging.stage(desired)
                 await asyncio.sleep(0)
             metadata_reads = [call[1] for call in account.calls if call[1].startswith("/v1/recordings/")]
             assert metadata_reads == ["/v1/recordings/" + rows[-1]["id"]]
@@ -474,7 +474,8 @@ def test_active_manual_pin_outside_pool_renews_before_metadata_expiry(tmp_path, 
             row = population.get(pin["id"])
             path, _ = population.resolve(row["ghost"], TARGET)
             assert path.is_file()
-            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 4
+            # One list per publication lease: no re-fetch every 120 s (2026-10-16).
+            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 2
             assert len([call for call in account.calls if call[1] == "/v1/recordings/" + pin["id"]]) == 2
             assert not any(call[1].endswith("/asset") for call in account.calls)
         finally:
@@ -708,7 +709,8 @@ def test_eight_hours_with_four_chosen_rivals_and_twenty_uploads_fits_account_bud
             if elapsed < 20 * 120:
                 await sync._offer({"target": TARGET, "clock": "igt", "game_version": "us", "strategy": "Standard",
                     "frames": 3, "path": str(source), "raw_sha256": hashlib.sha256(raw).hexdigest(), "owner": UID})
-        assert len([call for call in calls if call[1] == "/v1/pool"]) == 240
+        # One list per ten-minute publication lease (2026-10-16; was every 120 s).
+        assert len([call for call in calls if call[1] == "/v1/pool"]) == 48
         assert len([call for call in calls if call[1] == "/v1/catalog"]) == 8
         assert len([call for call in calls if call[1] == "/v1/pins"]) == 1
         assert len([call for call in calls if call[1].startswith("/v1/recordings/") and not call[1].endswith("/asset")]) == 192
@@ -717,7 +719,7 @@ def test_eight_hours_with_four_chosen_rivals_and_twenty_uploads_fits_account_bud
         assert len([call for call in calls if call[1] == "/v1/account"]) == 8
         # The public config route precedes authentication/ticketing in the
         # service. OAuth provider calls never enter this Worker counter.
-        assert len([call for call in calls if call[1] != "/v1/config"]) == 493 < 500
+        assert len([call for call in calls if call[1] != "/v1/config"]) == 301 < 500
         await http.aclose()
     asyncio.run(scenario())
 

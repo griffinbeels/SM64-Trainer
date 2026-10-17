@@ -75,8 +75,9 @@ def test_scoped_clear_then_delete_previous_session_refreshes_real_pb_and_roster(
         assert [row.id for row in db.attempts()] == [old.id]
         await service.delete_session(old.session_id)
         assert rivals.pb is None and len(rivals.rows) == 4
-        # No PB starts at the floor; the empty range widens upward, nearest first (round 49).
-        assert sorted(row["frames"] for row in rivals.rows) == [1160, 1170, 1180, 1190]
+        # No PB spreads across the two lowest tiers; seats already there keep their slots.
+        steps = {row["frames"]: rank_frames(service.ranks, identity, row["frames"])["step"] for row in rivals.rows}
+        assert all(step <= 9 for step in steps.values()) and len({row["player_id"] for row in rivals.rows}) == 4
         assert len(native.preparations[-1][1]) == 4
         assert len(snapshots) == 2 and population.rows
 
@@ -160,7 +161,8 @@ def test_complete_historical_bundle_falls_back_offline_and_remains_manually_sele
     native, population = Native(), Bundle()
     sync = SimpleNamespace(account=SimpleNamespace(snapshot=lambda: {
         "authenticated": True, "status": "active", "uid": "11111111-1111-4111-8111-111111111111"}),
-        last_error="network_unavailable", request_pool=lambda *_args, **_kwargs: None) if cloud_active else None
+        last_error="network_unavailable", request_pool=lambda *_args, **_kwargs: None,
+        pool_status=lambda _identity: "offline", refused_assets=frozenset) if cloud_active else None
     rivals = Rivals(tracker, population, native, lambda: "us", community=sync)
     try:
         rivals.refresh(TARGET, CONTROLS, enabled=True)
@@ -554,7 +556,8 @@ class BundledRows(CloudPopulation):
 def signed_in(name, uid=UID):
     return SimpleNamespace(account=SimpleNamespace(snapshot=lambda: {
         "authenticated": True, "status": "active", "uid": uid, "name": name}),
-        last_error=None, request_pool=lambda *_args, **_kwargs: None, request_assets=lambda *_args, **_kwargs: None)
+        last_error=None, request_pool=lambda *_args, **_kwargs: None, request_assets=lambda *_args, **_kwargs: None,
+        pool_status=lambda _identity: None, refused_assets=frozenset)
 
 
 def seated(tmp_path, monkeypatch, population, community=None, *, author=None):
@@ -682,11 +685,11 @@ def test_account_change_recomputes_prior_rows_self_alias_before_download_staging
         assert rivals.rows[0]["_owned"] is True
         rivals.community.sync = signed_in("Other", "22222222-2222-4222-8222-222222222222")
         staged = []
-        stage = rivals.community.stage
-        def capture(desired, previous):
+        select = module.select_rivals
+        def capture(rows, pb, options, pins, previous=(), **kwargs):
             staged.extend(previous)
-            return stage(desired, previous)
-        monkeypatch.setattr(rivals.community, "stage", capture)
+            return select(rows, pb, options, pins, previous, **kwargs)
+        monkeypatch.setattr(module, "select_rivals", capture)
         rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
         assert staged[0]["player_id"] == UID and staged[0]["_owned"] is False
         assert rivals.rows[0]["_owned"] is False

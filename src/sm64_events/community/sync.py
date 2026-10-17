@@ -13,7 +13,7 @@ from uuid import uuid4
 from sm64_events.ghost.sharing_targets import canonical, checked_target
 
 from . import codec
-from .cache import checked_metadata, target_key, value_of
+from .cache import LEASE_RENEW_S, checked_metadata, target_key, value_of
 from .config import CommunityError
 from .outbox import RetractionOutbox, SourceOutbox, checked_source, checked_strategy, retraction_key, source_key
 
@@ -26,9 +26,11 @@ CONTRIBUTIONS = ("offer", "retract")  # Serial owner-bound work on the contribut
 MAX_PAGE = 256
 MAX_PAGES = 4
 ASSET_RETRY_S = 30
+POOL_RETRY_MIN_S = 5
+"""The shortest wait before the same rival list is asked for again."""
 PIN_RENEW_S = 24 * 60 * 60  # Seven-day server leases; visibility metadata has its own bounded refresh.
-PIN_METADATA_RENEW_S = 600
 CATALOG_RENEW_S = 3600
+MAX_POOL_JOBS = 64
 
 
 def _prepare_source(source):
@@ -77,6 +79,26 @@ def _cutoffs(rows):
         result.append((row["step"], row["frames"]))
         previous = row["step"]
     return tuple(result)
+
+
+INTEGRITY_FAILURES = ("asset_mismatch", "incomplete_inputs", "invalid_metadata", "identity_mismatch", "invalid_response")
+
+
+def _unusable_until(error):
+    """How long one recording leaves automatic seats after its download failed.
+
+    Wrong or malformed content is content-addressed, so it never changes: the
+    rest of the session. A refusal about that recording (gone, hidden) waits
+    out the retry. Network, quota and account trouble is nobody's recording:
+    it never empties the lineup.
+    """
+    if isinstance(error, CommunityError):
+        if error.code in INTEGRITY_FAILURES:
+            return float("inf")
+        if _retryable(error) or error.status in (401, 403) or error.code in ("closed", "canceled"):
+            return None
+        return time.monotonic() + ASSET_RETRY_S
+    return None if isinstance(error, OSError) else float("inf")
 
 
 def checked_catalog(value):
@@ -158,8 +180,13 @@ class CommunitySync:
     def __init__(self, account, population, *, http=None):
         self.account, self.population, self._http = account, population, http
         self._lock = threading.RLock()
-        self._queue, self._recent = OrderedDict(), OrderedDict()
+        self._queue = OrderedDict()
+        self._running = None
+        # (owner, list key) -> ((windows, pins) last served, when it is due again)
+        self._pool_jobs = OrderedDict()
+        self._pool_failures = OrderedDict()  # (owner, list key) -> "offline" | "unsupported"
         self._asset_retry = OrderedDict()
+        self._asset_unusable = OrderedDict()  # (owner, recording id) -> monotonic time it may seat again
         self._offer_retry = OrderedDict()
         self._network_owner, self._network_until, self._network_error = None, 0, None
         self._loop = self._wake = self._task = None
@@ -171,7 +198,7 @@ class CommunitySync:
         self._search_task = None
         self._pins_leased = False
         self._pin_key, self._pins_until = None, 0
-        self._pin_metadata_key, self._pin_metadata_until = None, 0
+        self._pin_metadata_key = None
         self._outbox = SourceOutbox(population.root / "pending-contributions.json")
         self._retractions = RetractionOutbox(population.root / "pending-retractions.json")
         self._retired = OrderedDict()  # raw_sha256 -> the one strategy it may still be offered under
@@ -244,6 +271,12 @@ class CommunitySync:
         return True
 
     def request_pool(self, identity, *, frame_windows, pinned_ids=()):
+        """Ask for one identity's rival list, only when the network is needed.
+
+        Safe to call every cycle. Nothing is queued while the same list is
+        queued or running, or while the list and chosen rivals it last served
+        are still inside their publication leases (or a failure's back-off).
+        """
         try:
             key = self.population.identity_key(identity)
             windows = tuple(tuple(window) for window in frame_windows)
@@ -253,6 +286,18 @@ class CommunitySync:
             from sm64_events.ghost.portable import checked_hash
             for pin in pins:
                 checked_hash(pin)
+        except (ValueError, TypeError):
+            return False
+        job = self.account.snapshot().get("uid"), key
+        with self._lock:
+            if self._closing:
+                return False
+            if ("pool", key) in self._queue or self._running == ("pool", key):
+                return True
+            served, due = self._pool_jobs.get(job, (None, 0))
+            if served == (windows, pins) and time.monotonic() < due:
+                return True
+        try:
             target = self.population.portable_target(identity)
             frozen = {"target": target, "kind": value_of(identity, "kind"), "entity_key": value_of(identity, "entity_key"),
                 "clock": value_of(identity, "clock"), "game_version": value_of(identity, "game_version"),
@@ -260,6 +305,45 @@ class CommunitySync:
         except (ValueError, TypeError):
             return False
         return self._enqueue(("pool", key), ("pool", frozen, windows, pins))
+
+    def pool_status(self, identity):
+        """'pending' while this list is queued or running; after a failed
+        request 'unsupported' (the catalog has no such list) or 'offline'
+        (unreachable, rate limited or in a network cooldown); else None."""
+        try:
+            key = self.population.identity_key(identity)
+        except (ValueError, TypeError):
+            return None
+        owner = self.account.snapshot().get("uid")
+        with self._lock:
+            if ("pool", key) in self._queue or self._running == ("pool", key):
+                return "pending"
+            failure = self._pool_failures.get((owner, key))
+        if failure is None and self._network_owner == owner and self._network_until > time.monotonic():
+            return "offline"
+        return failure
+
+    def refused_assets(self):
+        """Recordings that cannot download now; automatic seats pass them over."""
+        owner, now = self.account.snapshot().get("uid"), time.monotonic()
+        with self._lock:
+            return frozenset(identifier for (holder, identifier), until in self._asset_unusable.items()
+                             if holder == owner and until > now)
+
+    def _pool_served(self, owner, key, windows, pins, *, due, failure=None):
+        """Remember what a list request settled and when it is due again."""
+        with self._lock:
+            job = owner, key
+            self._pool_jobs[job] = (tuple(tuple(window) for window in windows), tuple(pins)), due
+            self._pool_jobs.move_to_end(job)
+            if failure is None:
+                self._pool_failures.pop(job, None)
+            else:
+                self._pool_failures[job] = failure
+                self._pool_failures.move_to_end(job)
+            for mapping in (self._pool_jobs, self._pool_failures):
+                while len(mapping) > MAX_POOL_JOBS:
+                    mapping.popitem(last=False)
 
     def request_assets(self, recording_ids):
         from sm64_events.ghost.portable import checked_hash
@@ -276,7 +360,8 @@ class CommunitySync:
             if self._closing:
                 return False
             identifiers = tuple(identifier for identifier in identifiers
-                if self._asset_retry.get((owner, identifier), 0) <= time.monotonic())
+                if self._asset_retry.get((owner, identifier), 0) <= time.monotonic()
+                and self._asset_unusable.get((owner, identifier), 0) <= time.monotonic())
         identifiers = tuple(identifier for identifier in identifiers if not self.population.is_ready(identifier))
         if not identifiers:
             return True
@@ -494,8 +579,6 @@ class CommunitySync:
                 return
             value = await self._json("GET", "/v1/catalog")
             generation, catalog = checked_catalog(value)
-            if generation != self._catalog_generation:
-                self._recent.clear()
             self._catalog_generation, self._catalog = generation, catalog
             self._catalog_until = time.monotonic() + CATALOG_RENEW_S
 
@@ -525,52 +608,63 @@ class CommunitySync:
                 self._catalog_until = 0
             raise
 
+    def _lease_due(self, lease):
+        return lease is None or lease - time.monotonic() <= LEASE_RENEW_S
+
     async def _pool(self, identity, windows, pins):
+        """Fetch a list only when none is held for this catalog band and lease.
+
+        The list covers the whole ladder, so it never depends on the PB or the
+        rival settings: a new PB re-picks locally. A held list renews once,
+        shortly before its publication lease lapses.
+        """
         owner = self.account.snapshot().get("uid")
         await self._catalog_ready()
         key, query = self._query(identity)
         minimum, maximum, base = frame_band(self._catalog[key], windows)
-        canonical_key = (owner, key, minimum, maximum, base, self._catalog_generation, pins)
         coverage = self.population.coverage(identity)
-        covered = (coverage.get("generation") == self._catalog_generation
+        # Authentication changes clear the population view, so a new account
+        # never inherits a held list.
+        held = (coverage.get("generation") == self._catalog_generation
             and coverage.get("min_step") == minimum and coverage.get("max_step") == maximum
-            and coverage.get("base_step") == base)
-        # Authentication changes clear the population view. An old request
-        # throttle must never prevent refilling that newly empty account view.
-        if covered and self._recent.get(canonical_key, 0) > time.monotonic():
-            return
-        query.update(min_step=minimum, max_step=maximum, base_step=base)
-        combined = None
-        for _ in range(MAX_PAGES):
-            page = await self._page("/v1/pool", query)
-            self._check_identity(page["recordings"], key)
-            if combined is None:
-                combined = page
-            else:
-                combined["recordings"] += page["recordings"]
-                combined["next_cursor"] = page["next_cursor"]
-                combined["coverage"]["complete"] = page["coverage"]["complete"]
-            if page["next_cursor"] is None:
-                break
-            query["cursor"] = page["next_cursor"]
-        if combined["next_cursor"] is not None:
-            combined["coverage"]["complete"] = False
-        if self._closing or self.account.snapshot().get("uid") != owner:
-            return
-        self.population.remember_page(identity, combined)
-        self._recent[canonical_key] = time.monotonic() + 120
-        while len(self._recent) > MAX_QUEUE:
-            self._recent.popitem(last=False)
+            and coverage.get("base_step") == base and not self._lease_due(self.population.lease_until(identity)))
+        if not held:
+            query.update(min_step=minimum, max_step=maximum, base_step=base)
+            combined = None
+            for _ in range(MAX_PAGES):
+                page = await self._page("/v1/pool", query)
+                self._check_identity(page["recordings"], key)
+                if combined is None:
+                    combined = page
+                else:
+                    combined["recordings"] += page["recordings"]
+                    combined["next_cursor"] = page["next_cursor"]
+                    combined["coverage"]["complete"] = page["coverage"]["complete"]
+                if page["next_cursor"] is None:
+                    break
+                query["cursor"] = page["next_cursor"]
+            if combined["next_cursor"] is not None:
+                combined["coverage"]["complete"] = False
+            if self._closing or self.account.snapshot().get("uid") != owner:
+                return
+            # Stored under the identity this request named, never the one on screen now.
+            self.population.remember_page(identity, combined)
         pin_key = owner, pins
         if (pins or self._pins_leased) and (pin_key != self._pin_key or time.monotonic() >= self._pins_until):
             await self._json("PUT", "/v1/pins", json={"recording_ids": list(pins)})
             self._pins_leased = bool(pins)
             self._pin_key, self._pins_until = pin_key, time.monotonic() + PIN_RENEW_S
         # Chosen rivals may sit outside every automatic rank band. Renew their
-        # publication gates with this existing refresh, or fetch them on restart.
-        if pin_key != self._pin_metadata_key or time.monotonic() >= self._pin_metadata_until:
+        # publication gates before they lapse, or fetch them on restart.
+        if pin_key != self._pin_metadata_key or any(
+                self._lease_due(self.population.lease_until(recording=pin)) for pin in pins):
             await self._assets(pins, renew=True, identity_key=key, owner=owner)
-            self._pin_metadata_key, self._pin_metadata_until = pin_key, time.monotonic() + PIN_METADATA_RENEW_S
+            self._pin_metadata_key = pin_key
+        leases = [lease for lease in (self.population.lease_until(identity),
+                                      *(self.population.lease_until(recording=pin) for pin in pins))
+                  if lease is not None]
+        due = max(time.monotonic() + POOL_RETRY_MIN_S, min(leases, default=0) - LEASE_RENEW_S)
+        self._pool_served(owner, key, windows, pins, due=due)
 
     async def search(self, identity, prefix, *, cursor=None):
         if self._closing:
@@ -644,20 +738,27 @@ class CommunitySync:
                 continue
             key = (owner, identifier)
             with self._lock:
-                if self._asset_retry.get(key, 0) > time.monotonic():
+                if max(self._asset_retry.get(key, 0), self._asset_unusable.get(key, 0)) > time.monotonic():
                     continue
             try:
                 await self._asset(identifier, identity_key=identity_key)
-            except (CommunityError, ValueError, OSError):
+            except (CommunityError, ValueError, OSError) as error:
                 failed = True
                 with self._lock:
                     self._asset_retry[key] = time.monotonic() + ASSET_RETRY_S
                     self._asset_retry.move_to_end(key)
                     while len(self._asset_retry) > MAX_QUEUE:
                         self._asset_retry.popitem(last=False)
+                    until = _unusable_until(error)
+                    if until is not None:
+                        self._asset_unusable[key] = until
+                        self._asset_unusable.move_to_end(key)
+                        while len(self._asset_unusable) > MAX_RETIRED:
+                            self._asset_unusable.popitem(last=False)
             else:
                 with self._lock:
                     self._asset_retry.pop(key, None)
+                    self._asset_unusable.pop(key, None)
         if failed:
             raise CommunityError("asset_unavailable")
 
@@ -760,13 +861,30 @@ class CommunitySync:
             for key, operation in self._queue.items():
                 if (operation[0] in CONTRIBUTIONS) == contribution:
                     self._queue.pop(key)
+                    if not contribution:
+                        self._running = key  # Still in flight for request_pool's dedupe.
                     return key, operation
         return None
+
+    def _pool_failed(self, operation, error):
+        """Back off one list after a failure, and say why for the lineup."""
+        try:
+            key = self.population.identity_key(operation[1])
+        except (ValueError, TypeError):
+            return
+        code = getattr(error, "code", None)
+        delay = (CATALOG_RENEW_S if code == "unsupported_identity"
+                 else POOL_RETRY_MIN_S if code == "generation_changed" else ASSET_RETRY_S)
+        due = max(time.monotonic() + delay, self._network_until)
+        self._pool_served(self.account.snapshot().get("uid"), key, operation[2], operation[3], due=due,
+                          failure="unsupported" if code == "unsupported_identity" else "offline")
 
     async def _failed_operation(self, key, operation, error):
         self.last_error = "Community ghosts are temporarily unavailable."
         if isinstance(error, CommunityError) and error.code == "generation_changed":
             self._catalog_until = 0
+        if operation[0] == "pool":
+            self._pool_failed(operation, error)
         self._retry_offer(key, operation, error)
         if operation[0] == "offer" and (isinstance(error, OSError)
                 or isinstance(error, CommunityError) and error.code in ("source_changed", "invalid_source", "unsupported_identity")):
@@ -784,16 +902,19 @@ class CommunitySync:
             self._wake.clear()
             while (item := self._take_operation(contribution=False)) is not None:
                 key, operation = item
-                if self.account.snapshot().get("status") != "active":
-                    continue
                 try:
-                    if operation[0] == "pool":
-                        await self._pool(*operation[1:])
-                    else:
-                        await self._assets(operation[1])
-                    self.last_error = None
-                except (CommunityError, ValueError, OSError) as error:
-                    await self._failed_operation(key, operation, error)
+                    if self.account.snapshot().get("status") != "active":
+                        continue
+                    try:
+                        if operation[0] == "pool":
+                            await self._pool(*operation[1:])
+                        else:
+                            await self._assets(operation[1])
+                        self.last_error = None
+                    except (CommunityError, ValueError, OSError) as error:
+                        await self._failed_operation(key, operation, error)
+                finally:
+                    self._running = None
             self._practice_started.set()
 
     async def _run_contributions(self):

@@ -334,12 +334,20 @@ def test_overall_cross_strategy_cap_still_requires_a_faster_comparable_time():
     assert select_rivals(rows, pb, {}, {}) == ()
 
 
-def test_no_pb_begins_at_the_floor_and_fixed_range_can_include_slower_runs():
+def test_no_pb_spreads_across_the_two_lowest_tiers_and_fixed_range_can_include_slower_runs():
+    """His design (2026-10-16): with no saved PB, four rivals spread across
+    Capless V to Toad I (steps 0-9), one near each evenly spaced target,
+    not the four slowest."""
     rows = [ranked(step) for step in range(12)]
-    result = select_rivals(rows, None, {}, {})
-    assert result and all(1 <= row["step"] <= 5 for row in result)
-    narrowed = select_rivals(rows, None, {"min_ahead": 2, "max_ahead": 2}, {})
-    assert [row["step"] for row in narrowed] == [2, 3, 4, 5]  # the range, then upward
+    assert [row["step"] for row in select_rivals(rows, None, {}, {})] == [0, 3, 6, 9]
+    assert [row["step"] for row in select_rivals(rows, None, {"count": 3}, {})] == [0, 4, 9]
+    assert [row["step"] for row in select_rivals(rows, None, {"count": 2}, {})] == [0, 9]
+    assert [row["step"] for row in select_rivals(rows, None, {"count": 1}, {})] == [0]
+    # The ahead offsets only mean something beside a saved PB.
+    assert select_rivals(rows, None, {"min_ahead": 2, "max_ahead": 2}, {}) == select_rivals(rows, None, {}, {})
+    # A sparse window still widens upward, then downward (round 49).
+    sparse = [ranked(1), ranked(12), ranked(20), ranked(30)]
+    assert [row["step"] for row in select_rivals(sparse, None, {}, {})] == [1, 12, 20, 30]
     result = select_rivals([ranked(9, frames=2000)], basis(9, 1900),
                            {"mode": "fixed", "min_step": 9, "max_step": 9}, {})
     assert result[0]["frames"] == 2000
@@ -726,3 +734,47 @@ def test_unknown_legacy_player_ids_do_not_collapse_unrelated_recordings(missing)
     rows = [ranked(10, "one", player_id=missing), ranked(11, "two", player_id=missing)]
     chosen = select_rivals(rows, basis(), {}, {"0": "one", "1": "two"})
     assert [row["id"] for row in chosen if row.get("ghost") is not None] == ["one", "two"]
+
+
+def _seats(rows):
+    return {row["slot"]: (row["id"], row["hue_degrees"]) for row in rows}
+
+
+def test_a_new_pb_keeps_surviving_seats_in_their_slots_and_colours():
+    """His design (2026-10-16): seats keep their player and colour; only the
+    rivals the new PB passed are replaced, and nothing is dealt afresh."""
+    rows = [ranked(step, f"p{step}") for step in range(10, 20)]
+    before = select_rivals(rows, basis(9, 1900), {}, {})
+    assert [row["step"] for row in before] == [10, 11, 13, 14]
+    after = select_rivals(rows, basis(11, 1770), {}, {}, previous=before)
+    assert _seats(after)[2] == _seats(before)[2] and _seats(after)[3] == _seats(before)[3]
+    assert {after[0]["id"], after[1]["id"]}.isdisjoint({before[0]["id"], before[1]["id"]})
+    assert all(row["step"] > 11 for row in after) and len({row["player_id"] for row in after}) == 4
+    # Without the previous roster the same PB deals afresh, moving the survivors.
+    assert _seats(select_rivals(rows, basis(11, 1770), {}, {})) != _seats(after)
+
+
+def test_a_passed_seat_takes_the_same_rivals_faster_recording():
+    """"Same rival, faster": the passed seat keeps its player when that player
+    has a faster in-range recording; otherwise the nearest rival fills it."""
+    rows = [ranked(step, f"p{step}") for step in range(10, 20)]
+    faster = [ranked(13, "p10-at-13", player_id="player:p10"), ranked(15, "p10-at-15", player_id="player:p10")]
+    before = select_rivals([*rows, *faster], basis(9, 1900), {}, {})
+    assert before[0]["id"] == "p10"
+    after = select_rivals([*rows, *faster], basis(11, 1770), {}, {}, previous=before)
+    # The fastest of that player's recordings in the new range, in the same seat and colour,
+    # although the normal fill would have dealt steps 12 and 16.
+    assert after[0]["id"] == "p10-at-15" and after[0]["hue_degrees"] == before[0]["hue_degrees"]
+    assert len({row["player_id"] for row in after}) == 4
+    # A player whose only faster run is out of range gives the seat to the normal fill.
+    distant = [ranked(30, "p10-at-30", player_id="player:p10")]
+    refilled = select_rivals([*rows, *distant], basis(11, 1770), {}, {}, previous=before)
+    assert refilled[0]["player_id"] != "player:p10" and refilled[0]["step"] >= 12
+
+
+def test_a_pin_never_moves_and_stays_when_the_pb_passes_it():
+    rows = [ranked(10, "pinned"), *[ranked(step) for step in range(12, 20)]]
+    before = select_rivals(rows, basis(9, 1900), {}, {"1": "pinned"})
+    after = select_rivals(rows, basis(13, 1730), {}, {"1": "pinned"}, previous=before)
+    assert _seats(after)[1] == _seats(before)[1] and after[1]["pinned"]
+    assert after[1]["frames"] > 1730  # beaten, and still seated
