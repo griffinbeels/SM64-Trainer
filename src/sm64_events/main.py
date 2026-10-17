@@ -500,8 +500,8 @@ def build(*, recorder_lock=None):
     replay, codec = (_build_replay(replay_cfg, layout, service) if recorder_lock is None
                      else _build_replay(replay_cfg, layout, service, recorder_lock=recorder_lock))
     compare, compilation = _comparison_services(replay, service, broadcaster, codec, replay_cfg)
-    # D-pad Up flips the Ghost Overlay (ghost/dpad_toggle.py). The flipper
-    # outlives detector rebuilds and is bound to the session built below.
+    # The ghost hotkey flips the Ghost Overlay (ghost/dpad_toggle.py). The
+    # flipper outlives detector rebuilds and is bound to the session built below.
     overlay_flipper = OverlayFlipper()
     # NO target gate. This passed `target_active=lambda: service.target is not
     # None` (task 0087) until 2026-08-06, which made the recorder blind exactly
@@ -520,7 +520,10 @@ def build(*, recorder_lock=None):
         if replay is not None:
             from sm64_events.replay.activity import ActivityTap
             detectors.append(ActivityTap(replay.recorder))
-        detectors.append(DpadGhostToggle(overlay_flipper.request))
+        # Its hotkey's name reaches the session the flipper is bound to.
+        detectors.append(DpadGhostToggle(
+            overlay_flipper.request,
+            lambda hotkey: overlay_flipper.session and overlay_flipper.session.note_hotkey(hotkey)))
         return detectors
 
     from sm64_events.server.inputruntime import InputRuntime

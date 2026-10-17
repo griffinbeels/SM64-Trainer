@@ -14,6 +14,7 @@ from time import monotonic
 from types import SimpleNamespace
 
 from sm64_events.core.events import Event
+from sm64_events.ghost.dpad_toggle import hotkey_for
 from sm64_events.ghost.native_session import ghost_hue
 from sm64_events.ghost.pb import GhostLibrary
 from sm64_events.ghost.selection import (
@@ -153,6 +154,8 @@ class GhostSession:
         self._source: dict = dict(NO_TARGET)
         self._task: asyncio.Task | None = None
         self._published: dict | None = None
+        # The in-game key that flips the switch; D-pad Up until the poller says.
+        self._hotkey = hotkey_for(None)
         # The watch, a GET and a PUT can all land at once. One cycle at a time
         # keeps them from reading a half-applied change or sending a partial native command.
         self._lock = asyncio.Lock()
@@ -173,7 +176,15 @@ class GhostSession:
                               "candidates": [dict(row) for row in self._candidates]},
                 "source": dict(self._source),
                 "window": self._window_state(),
+                "hotkey": self._hotkey,
                 **({"rivals":self._rivals.payload()} if self._rivals else {})}
+
+    def note_hotkey(self, hotkey: str) -> None:
+        """The ghost hotkey's name (`ghost/dpad_toggle.py`), told from inside a
+        poll tick when it changes. Only remembered here: the next refresh (the
+        watch's, a GET's or a PUT's) carries it, and a changed payload is what
+        publishes `ghost_changed`, so a repeat publishes nothing."""
+        self._hotkey = hotkey
 
     def _playing(self) -> list:
         """Which ticked ghosts Only Mario draws, in order, with the colour each

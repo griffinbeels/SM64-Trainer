@@ -1051,9 +1051,12 @@ playback inside GLideN64. `source.exactness` is `"native_pose"`;
 is ready; `visible` requires a matching renderer acknowledgement. There is no
 separate ghost window or video fallback. Opacity, tint and timing apply inside
 the renderer. See [new-user defaults](ghost-native-runtime.md#new-user-settings-and-iteration-boundary).
-Pressing D-pad Up in game flips `enabled` through the same `PUT`, outside
-Usamune's menu, whatever else is held (`ghost/dpad_toggle.py`), so it
-publishes `ghost_changed` like a click. `enabled: false` hides the race
+Pressing the ghost hotkey in game flips `enabled` through the same `PUT`,
+outside Usamune's menu, whatever else is held (`ghost/dpad_toggle.py`), so it
+publishes `ghost_changed` like a click. `hotkey` names it: `"dpad_up"`, or
+`"c_x4"` (all four C buttons) while Usamune's save state is on D-pad Up; it
+reads `"dpad_up"` until the poller knows otherwise, and a change publishes
+`ghost_changed`. `enabled: false` hides the race
 rather than ending it (`running` and `visible` false, no `reason`); `true`
 again shows it at the attempt's current frame.
 
