@@ -533,7 +533,6 @@ def test_build_wires_dpad_up_to_the_ghost_session_across_detector_rebuilds(monke
     captured = {}
     asked = []
     told = []
-    monkeypatch.setattr(dpad_toggle, "SAVESTATE_ON_DPAD_UP", 7)  # test-local DUP value
     monkeypatch.setattr(GhostSession, "note_hotkey",
                         lambda self, hotkey: told.append((self, hotkey)))
     real_poller, real_create = main_mod.Poller, main_mod.create_app
@@ -555,7 +554,8 @@ def test_build_wires_dpad_up_to_the_ghost_session_across_detector_rebuilds(monke
     # The first chain reads no save state button (unknown: D-pad Up); the
     # rebuilt one reads it on D-pad Up, so its hotkey is all four C buttons.
     for chain, savestate, hotkey in ((poller.detectors, None, 0x0800),
-                                     (poller.detector_factory(), 7, 0x000F)):
+                                     (poller.detector_factory(),
+                                      dpad_toggle.SAVESTATE_ON_DPAD_UP, 0x000F)):
         toggles = [d for d in chain if isinstance(d, DpadGhostToggle)]
         assert len(toggles) == 1
         up, down = (SimpleNamespace(global_timer=frame, buttons_held=buttons,

@@ -19,9 +19,9 @@ START = datetime(2026, 10, 16, 20, 0, tzinfo=timezone.utc)
 BIT = {name: bit for bit, name in A.BUTTON_BITS}
 C_BUTTONS = ("Cup", "Cdown", "Cleft", "Cright")
 CX4 = BIT["Cup"] | BIT["Cdown"] | BIT["Cleft"] | BIT["Cright"]
-# A test-local value for Usamune's DUP choice: the real one comes from the
-# live hunt, and these rules hold whatever it turns out to be.
-DUP = 3
+# The save state button byte as his menu flips read it, 2026-10-17.
+DUP = dpad_toggle.SAVESTATE_ON_DPAD_UP
+ON_CX4 = 0
 
 
 def snap(frame, buttons=0, menu=False, igt=None, savestate=None):
@@ -118,22 +118,22 @@ def test_an_unknown_or_impossible_reading_never_toggles():
 # D-UP; if the user selected D-UP, then the toggle is Cx4".
 
 
-@pytest.fixture
-def dup(monkeypatch):
-    monkeypatch.setattr(dpad_toggle, "SAVESTATE_ON_DPAD_UP", DUP)
-    return DUP
+def test_dup_is_the_value_his_menu_flips_read():
+    """The measured pin (2026-10-17: DUP -> Cx4 -> DUP -> Cx4 -> DUP read
+    1 -> 0 -> 1 -> 0 -> 1). Swapping it would silently swap the two hotkeys."""
+    assert (DUP, ON_CX4) == (1, 0)
 
 
 def on_dup(frame, buttons=0, menu=False):
     return snap(frame, buttons, menu=menu, savestate=DUP)
 
 
-def test_with_the_save_state_on_dpad_up_all_four_c_buttons_flip_once(dup):
+def test_with_the_save_state_on_dpad_up_all_four_c_buttons_flip_once():
     held = [on_dup(1)] + [on_dup(frame, CX4) for frame in range(2, 40)]
     assert presses(held) == 1
 
 
-def test_the_c_buttons_count_on_the_reading_the_fourth_one_joins(dup):
+def test_the_c_buttons_count_on_the_reading_the_fourth_one_joins():
     joining, held = [on_dup(1)], 0
     for frame, name in enumerate(C_BUTTONS, start=2):
         held |= BIT[name]
@@ -145,21 +145,21 @@ def test_the_c_buttons_count_on_the_reading_the_fourth_one_joins(dup):
 
 
 @pytest.mark.parametrize("missing", C_BUTTONS)
-def test_three_c_buttons_of_four_never_flip(dup, missing):
+def test_three_c_buttons_of_four_never_flip(missing):
     three = CX4 & ~BIT[missing]
     assert presses([on_dup(1), on_dup(2, three), on_dup(3, three | BIT["A"])]) == 0
 
 
-def test_dpad_up_stops_flipping_while_it_loads_usamunes_save_state(dup):
+def test_dpad_up_stops_flipping_while_it_loads_usamunes_save_state():
     assert presses([on_dup(1), on_dup(2, DPAD_UP), on_dup(3), on_dup(4, DPAD_UP | BIT["Z"])]) == 0
 
 
-def test_all_four_c_buttons_with_others_held_still_flip(dup):
+def test_all_four_c_buttons_with_others_held_still_flip():
     others = BIT["Z"] | BIT["R"] | DPAD_UP
     assert presses([on_dup(1, others), on_dup(2, others | CX4)]) == 1
 
 
-def test_the_c_buttons_never_flip_in_or_beside_usamunes_menu(dup):
+def test_the_c_buttons_never_flip_in_or_beside_usamunes_menu():
     navigating = [on_dup(1, menu=True), on_dup(2, CX4, menu=True), on_dup(3, menu=True)]
     opening = [on_dup(1), on_dup(2, CX4, menu=True)]
     closing = [on_dup(10, menu=True), on_dup(10), on_dup(11, CX4)]
@@ -167,28 +167,20 @@ def test_the_c_buttons_never_flip_in_or_beside_usamunes_menu(dup):
     assert presses([on_dup(10, menu=True), on_dup(11), on_dup(11), on_dup(12, CX4)]) == 1
 
 
-@pytest.mark.parametrize("savestate", [None, 0, 1, DUP + 1, 0xFF])
-def test_any_other_choice_or_an_unknown_byte_keeps_dpad_up(dup, savestate):
+@pytest.mark.parametrize("savestate", [None, ON_CX4, DUP + 1, 0xFF])
+def test_cx4_another_value_or_an_unknown_byte_keeps_dpad_up(savestate):
     def at(frame, buttons=0):
         return snap(frame, buttons, savestate=savestate)
     assert presses([at(1), at(2, DPAD_UP), at(3, DPAD_UP)]) == 1
     assert presses([at(1), at(2, CX4), at(3, CX4)]) == 0
 
 
-def test_before_the_dup_value_is_known_every_byte_keeps_dpad_up(monkeypatch):
-    monkeypatch.setattr(dpad_toggle, "SAVESTATE_ON_DPAD_UP", None)
-    for savestate in (None, 0, 1, DUP):
-        readings = [snap(1, savestate=savestate), snap(2, DPAD_UP, savestate=savestate)]
-        assert presses(readings) == 1
-        assert presses([snap(1, savestate=savestate), snap(2, CX4, savestate=savestate)]) == 0
-
-
-def test_the_session_hears_the_hotkey_on_the_first_reading_and_on_each_change_only(dup):
+def test_the_session_hears_the_hotkey_on_the_first_reading_and_on_each_change_only():
     told = []
     toggle = DpadGhostToggle(lambda: None, told.append)
     readings = ([snap(frame) for frame in range(1, 5)]
                 + [on_dup(frame) for frame in range(5, 9)]
-                + [snap(frame, savestate=0) for frame in range(9, 12)])
+                + [snap(frame, savestate=ON_CX4) for frame in range(9, 12)])
     for prev, curr in pairwise(readings):
         toggle.process(prev, curr)
     assert told == ["dpad_up", "c_x4", "dpad_up"]

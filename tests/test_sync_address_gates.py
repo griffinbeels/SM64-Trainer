@@ -14,6 +14,7 @@ matching the brief: "FakeContext... candidate() = US layout".
 """
 import pytest
 
+from sm64_events.ghost import dpad_toggle
 from sm64_events.memory import addresses as A
 from sm64_events.memory.behaviours import base_from_mario, pointer_of
 from sm64_events.memory.buffer import BufferMemory
@@ -606,7 +607,8 @@ def test_usamune_input_display_is_verified_by_switching_it_off_and_on():
 
 # --- usamune_savestate_button -----------------------------------------------
 
-SAVESTATE_AT = 0x80417B66  # the US address, found live 2026-10-17
+SAVESTATE_AT = US.usamune_savestate_button
+DUP = dpad_toggle.SAVESTATE_ON_DPAD_UP
 
 
 def _savestate_switch(script, candidate=SAVESTATE_AT):
@@ -621,16 +623,12 @@ def cx4_dup_cx4(cx4, dup):
     return lambda t: dup if 1.0 <= t < 2.0 else cx4
 
 
-@pytest.mark.parametrize("cx4,dup", [(0, 1), (1, 0), (2, 5)])
-def test_usamune_savestate_button_is_verified_by_switching_to_dup_and_back(cx4, dup, monkeypatch):
-    """Before a version's DUP value is known, either choice may be zero:
-    seeing both values and the first again is the proof (and `measured`
-    hands over the DUP value to set)."""
-    from sm64_events.ghost import dpad_toggle
-    monkeypatch.setattr(dpad_toggle, "SAVESTATE_ON_DPAD_UP", None)
-    verdict = _savestate_switch(cx4_dup_cx4(cx4, dup))
+@pytest.mark.parametrize("cx4", [0, 2])
+def test_usamune_savestate_button_is_verified_by_switching_to_dup_and_back(cx4):
+    """Seeing both values and the first again is the proof; 0 is what Cx4 read."""
+    verdict = _savestate_switch(cx4_dup_cx4(cx4, DUP))
     assert verdict.status == "verified" and verdict.value == SAVESTATE_AT
-    assert verdict.measured == {"c_x4": cx4, "dpad_up": dup}
+    assert verdict.measured == {"c_x4": cx4, "dpad_up": DUP}
 
 
 def test_usamune_savestate_button_that_never_moves_or_never_returns_fails():
@@ -639,12 +637,10 @@ def test_usamune_savestate_button_that_never_moves_or_never_returns_fails():
     assert _savestate_switch(lambda t: min(int(t), 3)).status == "failed"  # three values
 
 
-def test_usamune_savestate_button_dup_reading_must_match_the_hotkeys_value(monkeypatch):
-    from sm64_events.ghost import dpad_toggle
-    monkeypatch.setattr(dpad_toggle, "SAVESTATE_ON_DPAD_UP", 1)
-    assert _savestate_switch(cx4_dup_cx4(0, 1)).status == "verified"
-    refuted = _savestate_switch(cx4_dup_cx4(1, 0))
-    assert refuted.status == "failed" and "expects 1" in refuted.evidence
+def test_usamune_savestate_button_dup_reading_must_match_the_hotkeys_value():
+    """A ROM whose DUP reads another value would pick the wrong hotkey."""
+    refuted = _savestate_switch(cx4_dup_cx4(DUP + 1, DUP + 2))
+    assert refuted.status == "failed" and f"expects {DUP}" in refuted.evidence
 
 
 def test_usamune_savestate_button_without_a_candidate_is_missing_and_its_row_is_verify():

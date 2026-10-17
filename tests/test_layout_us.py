@@ -24,7 +24,7 @@ US_2026_08_15 = {
     "current_area_pointer": 0x8032DDCC, "area_update_counter": 0x8032DF08,
     "sound_code": 0x8031EB00, "sound_producer": 0x80332F44,
     "sound_consumer": 0x80332F40, "sound_ring": 0x80361498,
-    # Found by a live watch 2026-10-17; its gate remains VERIFY.
+    # Found by a menu-open RAM watch (2026-10-17); its live gate remains VERIFY.
     "usamune_savestate_button": 0x80417B66,
 }
 

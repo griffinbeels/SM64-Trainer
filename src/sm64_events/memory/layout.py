@@ -97,8 +97,8 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               "VERIFY: u8 Usamune input display setting, 0 = off (2 = stick, else values); "
               "its HUD path calls the display (RAM 0x80408848) only while nonzero"),
     LayoutRow("usamune_savestate_button", None, "usamune_setting_watch",
-              "VERIFY: u8 Usamune's save state button (RESET page: Cx4 or DUP); "
-              "ghost/dpad_toggle.py SAVESTATE_ON_DPAD_UP names the DUP value"),
+              "VERIFY: u8 Usamune's save state button (RESET page), settings array "
+              "+0x1A: 0 = Cx4, 1 = DUP (ghost/dpad_toggle.py SAVESTATE_ON_DPAD_UP)"),
     LayoutRow("behaviour_base", None, "mario_object_behaviour",
               "RAM address of segment 0x13; = mario_object->behaviour "
               "minus bhvMario's segmented offset for this version"),
@@ -201,10 +201,10 @@ US = Layout(
     # path's `lbu 0xb(0x80417b4c)` gates `jal 0x80408848`, the input display).
     usamune_menu=0x804168D8,
     usamune_input_display=0x80417B57,
-    # VERIFY: found live 2026-10-17 -- a read-only watch of 0x80416000-0x80418000,
-    # counted only while Usamune's menu was open: as he flipped the save state
-    # button DUP -> Cx4 -> DUP -> Cx4 -> DUP this byte alone went 1 0 1 0 1
-    # (settings array 0x80417B4C + 0x1A).
+    # VERIFY until his live check: Usamune's settings array 0x80417B4C + 0x1A.
+    # A read-only watch of 0x80416000-0x80418000 at 20 Hz while Usamune's menu
+    # was open, 2026-10-17: he flipped DUP -> Cx4 -> DUP -> Cx4 -> DUP and this
+    # byte, and no other in that range, went 1 -> 0 -> 1 -> 0 -> 1 in step.
     usamune_savestate_button=0x80417B66,
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
