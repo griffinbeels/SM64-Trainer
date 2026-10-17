@@ -1,10 +1,21 @@
 """Cached rank-band requests and download staging, outside native playback."""
+from dataclasses import replace
 from time import monotonic
 from uuid import UUID
 
 from sm64_events.ghost.adaptive import MAX_RIVALS, player_key
 from sm64_events.ghost.community_catalog import match_windows
 from sm64_events.ghost.portable import checked_hash
+from sm64_events.ranks.region_scope import SHARED, VERSIONS
+
+
+def pools(identity):
+    """The community pools one practice reads, its running ROM's first. A
+    shared region scope reads the other ROM's pool too (`ranks/region_scope.py`)."""
+    if getattr(identity, "region_scope", None) != SHARED:
+        return (identity,)
+    return (identity, *(replace(identity, game_version=rom) for rom in VERSIONS
+                        if rom != identity.game_version))
 
 
 class CommunityRivals:
@@ -34,7 +45,10 @@ class CommunityRivals:
             self.next_request = 0
         if self.windows and monotonic() >= self.next_request:
             remote = self.remote_pins(pins, known_remote=known_remote)
-            self.sync.request_pool(identity, frame_windows=self.windows, pinned_ids=remote)
+            running, *others = pools(identity)
+            self.sync.request_pool(running, frame_windows=self.windows, pinned_ids=remote)
+            for other in others:
+                self.sync.request_pool(other, frame_windows=self.windows)
             self.next_request = monotonic() + 5
             return remote
         return ()
@@ -65,7 +79,12 @@ class CommunityRivals:
     def coverage(self, identity):
         if self.sync is None or self.sync.account.snapshot().get('status') != 'active':
             return None
-        return self.population.coverage(identity)
+        running, *others = pools(identity)
+        result = self.population.coverage(running)
+        if others:
+            result = {**result, 'complete': result['complete'] and all(
+                self.population.coverage(other)['complete'] for other in others)}
+        return result
 
     def complete(self, identity):
         coverage = self.coverage(identity)

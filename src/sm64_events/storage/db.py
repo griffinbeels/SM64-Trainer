@@ -1562,14 +1562,22 @@ class Database:
     # legacy manual save) reads NULL, which core/modes.py::platform_of
     # resolves. Every pbs column that attempts also has (course_id, star_id,
     # segment_id, strat_tag) must be qualified `pbs.` in the WHERE.
-    _PB_SELECT = ("SELECT pbs.*, attempt_of_pb.platform AS platform FROM pbs"
+    #
+    # `pb_version` is the ROM the PB was SET on: its own stamp, else the run
+    # that set it (a played save before 2026-10-16 stamped nothing, though
+    # its attempt knows). NULL only where nothing recorded it, which reads as
+    # "same for both" (migration v28). Region-scoped slots read this.
+    _PB_VERSION = "COALESCE(pbs.game_version, attempt_of_pb.game_version)"
+    _PB_SELECT = ("SELECT pbs.*, attempt_of_pb.platform AS platform, "
+                  + _PB_VERSION + " AS pb_version FROM pbs"
                   " LEFT JOIN attempts AS attempt_of_pb"
                   " ON attempt_of_pb.id = pbs.attempt_id WHERE")
 
     def current_pb(self, course_id: int | None, star_id: int | None,
                    timer_mode: str, segment_id: int | None = None,
                    strat_tag: str | None = None,
-                   game_version: str | None = None) -> dict | None:
+                   game_version: str | None = None,
+                   region_scope: str | None = None) -> dict | None:
         """Latest saved row for one star/segment + mode — the same row
         views._current_pbs picks (later saves win). Kind-aware like
         insert_pb: segment rows match by segment_id, star rows by
@@ -1581,16 +1589,27 @@ class Database:
 
         Rows on hidden attempts are skipped (see _VISIBLE_PB), so hiding the
         current PB's run resolves to the previous save exactly as undoing it
-        by hand does."""
+        by hand does.
+
+        `region_scope` ("shared"/"regional", `ranks/region_scope.py`) with a
+        `game_version` names one PB slot the way `views.current_pbs_by_strat`
+        resolves it: regional is that ROM's latest save, shared the faster
+        of the two ROMs' latest saves."""
+        if game_version is not None and region_scope == "shared":
+            rows = [row for rom in ("us", "jp")
+                    if (row := self.current_pb(course_id, star_id, timer_mode,
+                                               segment_id=segment_id, strat_tag=strat_tag,
+                                               game_version=rom)) is not None]
+            return min(rows, key=lambda row: (row["frames"], -row["id"])) if rows else None
         strat_clause = " AND strat_tag=?" if strat_tag is not None else ""
         strat_param = (strat_tag,) if strat_tag is not None else ()
         strat_clause = strat_clause.replace("strat_tag", "pbs.strat_tag")
         # When a ROM is named, a row set on the OTHER one is not an answer --
         # but an unversioned row still is, since NULL means "grade on whatever
-        # is running" (migration v28). Only the sheet column export asks; every
-        # other caller omits it and sees exactly what it always did.
+        # is running" (migration v28). The ROM is `pb_version`, so a played
+        # save is filed where its run was played even when it stamped nothing.
         if game_version is not None:
-            strat_clause += " AND (pbs.game_version=? OR pbs.game_version IS NULL)"
+            strat_clause += f" AND ({self._PB_VERSION}=? OR {self._PB_VERSION} IS NULL)"
             strat_param += (game_version,)
         if segment_id is not None:
             q = (self._PB_SELECT + " pbs.segment_id=? AND timer_mode=?"

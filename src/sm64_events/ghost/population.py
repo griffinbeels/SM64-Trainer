@@ -80,6 +80,20 @@ def _admissible(attempt, clock, game_version, full_start):
     return frames
 
 
+def searched_versions(identity):
+    """The recorded ROMs a search for this practice identity may return."""
+    from sm64_events.ranks.region_scope import REGIONAL, servable_versions
+    read = (lambda key, default=None: identity.get(key, default)) if isinstance(identity, dict) \
+        else (lambda key, default=None: getattr(identity, key, default))
+    return servable_versions(read("region_scope", REGIONAL), read("game_version"))
+
+
+def _known(versions, game_version):
+    """The ROMs among `versions` (default: `game_version` alone) a local row can have."""
+    return tuple(dict.fromkeys(rom for rom in (versions if versions is not None else (game_version,))
+                               if rom in ("us", "jp")))
+
+
 @dataclass(frozen=True)
 class Admission:
     """A worker's immutable projected owner, checked again after preservation."""
@@ -191,14 +205,20 @@ class LocalPopulation:
         return {**row, "kind": ghost.kind, "entity_key": key, "strategy": ghost.strat_tag,
                 "signature": row["target"].get("signature"), "ghost": ghost}
 
-    def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None):
+    def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None, versions=None):
+        """`versions` names the recorded ROMs to return (`region_scope.servable_versions`);
+        omitted, only `game_version`'s. Every local row knows its ROM."""
         target = self._target(kind, entity_key)
+        roms = _known(versions, game_version)
+        if not roms:
+            return ()
         scope = " AND json_extract(document,'$.target.strat')=?" if strategy is not None else ""
         parameters = (strategy,) if strategy is not None else ()
         with self._lock:
-            rows = self._db.execute("SELECT document FROM recordings WHERE target=? AND clock=? AND version=?" + scope +
+            rows = self._db.execute("SELECT document FROM recordings WHERE target=? AND clock=?"
+                                    f" AND version IN ({','.join('?' * len(roms))})" + scope +
                                     " ORDER BY frames,id LIMIT ?",
-                                    (target, clock, game_version, *parameters, MAX_RECORDINGS)).fetchall()
+                                    (target, clock, *roms, *parameters, MAX_RECORDINGS)).fetchall()
         return tuple(self._row(row) for row in rows)
 
     def snapshot_all(self):
@@ -298,6 +318,9 @@ class LocalPopulation:
         version = identity["game_version"] if isinstance(identity, dict) else identity.game_version
         strategy = identity.get("strategy") if isinstance(identity, dict) else getattr(identity,"strategy",None)
         matching_scope = identity.get("scope","strategy") if isinstance(identity,dict) else getattr(identity,"scope","strategy")
+        roms = _known(searched_versions(identity), version)
+        if not roms:
+            return {"records": [], "next_cursor": None}
         if matching_scope=="overall":
             strategy = None
         scope = " AND json_extract(document,'$.target.strat')=?" if strategy is not None else ""
@@ -313,9 +336,10 @@ class LocalPopulation:
         where = " AND (normalized,frames,id) > (?,?,?)" if after else ""
         with self._lock:
             rows = self._db.execute("SELECT document,normalized,frames,id FROM recordings "
-                "WHERE target=? AND clock=? AND version=?" + scope + " AND normalized>=? AND normalized<?" + where +
+                f"WHERE target=? AND clock=? AND version IN ({','.join('?' * len(roms))})" + scope +
+                " AND normalized>=? AND normalized<?" + where +
                 " ORDER BY normalized,frames,id LIMIT ?",
-                (target, clock, version, *parameters, prefix, prefix + chr(0x10ffff), *after, limit + 1)).fetchall()
+                (target, clock, *roms, *parameters, prefix, prefix + chr(0x10ffff), *after, limit + 1)).fetchall()
         next_cursor = ([rows[limit - 1][key] for key in ("normalized", "frames", "id")]
                        if len(rows) > limit else None)
         return {"records": [self._row(row) for row in rows[:limit]], "next_cursor": next_cursor}

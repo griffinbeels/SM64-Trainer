@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from itertools import islice
 
 from sm64_events.ghost.native_session import ghost_hue
-from sm64_events.ranks import classify, curves, scoring
+from sm64_events.ranks import classify, curves, region_scope, scoring
 from sm64_events.ranks.calibration import resolve_curve
 from sm64_events.ranks.standards import entity_key
 
@@ -44,9 +44,15 @@ class PracticeIdentity:
     strategy: str | None
     signature: str | None = None
     scope: str = "strategy"
+    # Which ROMs' recordings the providers FETCH (`ranks/region_scope.py`):
+    # "regional" only `game_version`'s, "shared" both. Whether one may SERVE
+    # is never read from here: `ghost_region_scope` asks the standards, so a
+    # default-built identity cannot widen what plays.
+    region_scope: str = region_scope.REGIONAL
 
     def __post_init__(self):
         _checked_scope(self.scope)
+        region_scope.checked(self.region_scope)
 
 
 def rank_entity_key(identity: PracticeIdentity) -> str:
@@ -141,12 +147,36 @@ def _admitted(row):
             and row.get('structurally_valid') is True)
 
 
-def _compatible(row, identity):
+def recorded_version(row):
+    """The ROM a ghost was recorded on; None when nobody knows. A bundled row's
+    `game_version` is only the query's context (`ghost/bundled_beta.py`)."""
+    return row.get("recorded_game_version") if _bundled(row) else row.get("game_version")
+
+
+def ghost_region_scope(identity, strategy, ranks):
+    """The region scope that judges one ghost: its strategy's on this target,
+    from the standards (the practice's own strategy on the Strategy tab)."""
+    if identity.scope == "strategy":
+        strategy = identity.strategy
+    return region_scope.scope_of(rank_entity_key(identity), strategy, ranks)
+
+
+def region_serves(identity, strategy, recorded, ranks) -> bool:
+    """Whether a ghost of `strategy` recorded on `recorded` may serve this practice."""
+    return region_scope.serves(ghost_region_scope(identity, strategy, ranks),
+                               identity.game_version, recorded)
+
+
+def _compatible(row, identity, scope):
     return (isinstance(row, dict) and _admitted(row) and row.get("valid") is True
             and (row.get("full_start") is True or _bundled(row))
             and (identity.scope == "overall" or row.get("strategy") == identity.strategy)
-            and (row.get("kind"), row.get("entity_key"), row.get("clock"), row.get("game_version"))
-            == (identity.kind, identity.entity_key, identity.clock, identity.game_version)
+            and (row.get("kind"), row.get("entity_key"), row.get("clock"))
+            == (identity.kind, identity.entity_key, identity.clock)
+            # Only a bundled historical recording may lack its ROM; any other
+            # admitted row without one is malformed, whatever the scope.
+            and (_bundled(row) or row.get("game_version") in region_scope.VERSIONS)
+            and region_scope.serves(scope, identity.game_version, recorded_version(row))
             and (identity.kind != "segment" or identity.signature is not None
                  and row.get("signature") == identity.signature)
             and type(row.get("frames")) is int and 0 < row["frames"] <= 30 * 60 * 60 * 24
@@ -169,12 +199,14 @@ def rank_recordings(rows, ranks, identity: PracticeIdentity) -> tuple[dict, ...]
         revision = getattr(ranks, "calibration_revision", None)
         result = {}
         for row in rows:
-            if not _compatible(row, identity):
+            scope = ghost_region_scope(identity, row.get("strategy"), ranks) if isinstance(row, dict) else None
+            if not _compatible(row, identity, scope):
                 continue
             progress = _progress(model, row["frames"], identity.scope)
             if progress is not None:
                 result.setdefault(row["id"], {**row, **progress, "calibration_revision": revision,
-                                              "current_strategy": identity.strategy, "scope": identity.scope})
+                                              "current_strategy": identity.strategy, "scope": identity.scope,
+                                              "region_scope": scope})
     return tuple(result[key] for key in sorted(result))
 
 
@@ -241,9 +273,12 @@ def _missing_pin(identity, slot):
 def _eligible_auto(row, pb, options, low, high, strategy, scope):
     # Different ROMs have different timing standards. A higher rank step
     # proves progress without comparing their raw clocks. At the capped final
-    # step, a faster time only proves progress on the same ROM (or legacy PB).
+    # step, a faster time only proves progress on the same ROM (or legacy PB),
+    # or where the ghost's region scope says both ROMs time it alike.
+    comparable = (pb is not None and pb.get("game_version") in (None, row.get("game_version"))
+                  or row.get("region_scope") == region_scope.SHARED)
     progresses = (pb is None or row["step"] > pb["step"]
-                  or pb.get("game_version") in (None, row.get("game_version")) and row["frames"] < pb["frames"])
+                  or comparable and row["frames"] < pb["frames"])
     return (row.get("manual_only") is not True and row.get("beaten_in_simulation") is not True
             and low <= row["step"] <= high
             and (options["mode"] == "fixed" or progresses)

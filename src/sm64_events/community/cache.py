@@ -148,8 +148,12 @@ class CachedPopulation:
                     and (stored[0]["raw_sha256"], stored[0]["encoded_sha256"])
                     == (asset["raw_sha256"], asset["encoded_sha256"]))
 
-    def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None):
-        local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version, strategy=strategy)
+    def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None, versions=None):
+        """`versions` names the recorded ROMs to return (`region_scope.servable_versions`);
+        omitted, only `game_version`'s. Every community row knows its ROM."""
+        local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version,
+                                             strategy=strategy, versions=versions)
+        roms = (game_version,) if versions is None else versions
         with self._lock:
             if not self._active():
                 return local
@@ -161,7 +165,8 @@ class CachedPopulation:
                     row = self._row(metadata)
                 except LookupError:
                     continue
-                if (row["kind"], row["entity_key"], row["clock"], row["game_version"]) == (kind, entity_key, clock, game_version) and (strategy is None or row["strategy"] == strategy):
+                if ((row["kind"], row["entity_key"], row["clock"]) == (kind, entity_key, clock)
+                        and row["game_version"] in roms and (strategy is None or row["strategy"] == strategy)):
                     rows.append(row)
             return tuple(local) + tuple(rows)
 

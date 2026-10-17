@@ -519,8 +519,10 @@ def create_scorecard_router(service, library=None, adoptions=None,
         return {**card, "scope": scope, "goal": goal_value,
                 "goal_coverage": coverage, "custom_goals": custom_names,
                 "regions": goals.scorecard_regions(ranks),
-                "detected_region": (ranks.grading_version
-                                    if ranks is not None else "us")}
+                # The cartridge actually loaded when one has been seen; else
+                # what grading resolves to.
+                "detected_region": (getattr(service, "running_version", lambda: None)()
+                                    or (ranks.grading_version if ranks is not None else "us"))}
 
     @router.put("/goal")
     async def set_goal(body: GoalBody | None = Body(default=None)):
