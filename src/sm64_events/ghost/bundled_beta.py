@@ -134,7 +134,11 @@ class BundledPopulation:
                 "signature": row["target"].get("signature"), "ghost": ghost,
                 "player_id": self.player_id, "player_name": AUTHOR, "valid": True,
                 "source_status": "bundled-author-recording", "structurally_valid": True,
-                "certified": False, "full_start": None, "recorded_game_version": row.get("game_version"),
+                "certified": False, "full_start": None,
+                # A row naming no ROM predates the stamp, and every recording
+                # before task 0064 was on US: JP's layout was empty, so the
+                # poller held and nothing recorded on a JP cartridge.
+                "recorded_game_version": row.get("game_version") or "us",
                 # A query's current ROM is a local compatibility context only.
                 "game_version": game_version if game_version is not None else row.get("game_version")}
 
