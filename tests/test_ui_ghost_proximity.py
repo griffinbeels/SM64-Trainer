@@ -1,7 +1,7 @@
 """Drive the native overlap controls on the actual practice card."""
 from pathlib import Path
 
-from tests.test_ui_ghost_switch import (FIXTURE_SEGMENT, WIDTHS, get_driver,
+from tests.test_ui_ghost_switch import (FIXTURE_SEGMENT, TOGGLE, WIDTHS, get_driver,
     ghost_session, serve_ui_with_ghost, settled)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,10 +48,10 @@ def test_native_overlap_controls_preserve_distance_across_switches():
                   return row.scrollWidth <= row.clientWidth + 1;
                 })()""")
                 (screenshots / f"overlap-{width}.png").write_bytes(page.screenshot())
-                page.click(".ghost-row-head > .ghost-switch")
+                page.click(TOGGLE)
                 assert settled(page, state, 4)[3] == {"enabled": False}
                 assert not page.evaluate("!!document.querySelector('.ghost-proximity')")
-                page.click(".ghost-row-head > .ghost-switch")
+                page.click(TOGGLE)
                 assert settled(page, state, 5)[4] == {"enabled": True}
                 page.click(".ghost-proximity summary")
                 assert page.evaluate("document.querySelector('.ghost-distance').value") == "120"

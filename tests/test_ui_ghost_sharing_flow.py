@@ -7,10 +7,12 @@ from urllib.request import urlopen
 import zipfile
 
 from sm64_events.core.timefmt import format_igt_short
-from test_ui_ghost_switch import WIDTHS, get_driver
+from test_ui_ghost_switch import LIBRARY_MODAL, WIDTHS, get_driver, open_ghost_library
 from ghost_sharing_fixture import FOREIGN_COUNT, TARGET, serve_collection
 
 ROOT = Path(__file__).resolve().parents[1]
+#: The library's own primary action, never the Ghost settings sheet's behind it.
+LIBRARY_PRIMARY = f"{LIBRARY_MODAL} > .modal-actions button.primary"
 
 
 def until(page, expression, expected, timeout=15):
@@ -39,11 +41,14 @@ def search(page, query):
 
 
 def click_race(page):
-    page.evaluate("Array.from(document.querySelectorAll('.modal-actions button')).find(b=>b.textContent==='Use selected ghosts').click()")
+    page.evaluate(f"Array.from(document.querySelectorAll({json.dumps(LIBRARY_MODAL + ' .modal-actions button')})).find(b=>b.textContent==='Use selected ghosts').click()")
 
 
 def action(page, caption):
-    control = ("Array.from(document.querySelectorAll('.modal button')).find(b=>b.getAttribute('aria-label')==="
+    # Scoped to the library's own dialog: the Ghost settings sheet it opened
+    # from stays open behind it, with a "Done" of its own.
+    control = (f"Array.from(document.querySelectorAll({json.dumps(LIBRARY_MODAL + ' button')}))"
+               ".find(b=>b.getAttribute('aria-label')==="
                + json.dumps(caption) + "||b.textContent.trim()===" + json.dumps(caption) + ")")
     # The shell mounts while the catalog is loading. Its step attribute does
     # not prove that the action exists or has finished its preceding write.
@@ -67,8 +72,8 @@ def rows(page):
 
 
 def assert_fits_and_shoot(page, width, name):
-    measured = page.evaluate("""(() => {const modal=document.querySelector('.modal');
-      const library=document.querySelector('.ghost-library');
+    measured = page.evaluate("""(() => {const library=document.querySelector('.ghost-library');
+      const modal=library.closest('.modal');
       return {modal:modal.scrollWidth-modal.clientWidth, library:library.scrollWidth-library.clientWidth,
         rows:Array.from(library.querySelectorAll('.ghost-library-row'),row=>row.scrollWidth-row.clientWidth)};})()""")
     assert measured["modal"] <= 1 and measured["library"] <= 1
@@ -79,9 +84,9 @@ def assert_fits_and_shoot(page, width, name):
 
 
 def exported_collection(page, base, folder):
-    page.click(".modal-actions button.primary")
+    page.click(LIBRARY_PRIMARY)
     page.wait_for('.ghost-library[data-step="review"]')
-    page.click(".modal-actions button.primary")
+    page.click(LIBRARY_PRIMARY)
     page.wait_for(".ghost-library a[download]")
     href = page.evaluate("document.querySelector('.ghost-library a[download]').getAttribute('href')")
     with urlopen(base + href, timeout=10) as response:
@@ -97,9 +102,9 @@ def exported_collection(page, base, folder):
 def import_collection(page, path, text):
     page.set_input_files(".ghost-library input[type=file]", str(path))
     page.wait_for('.ghost-library[data-step="import-review"]')
-    can_import = page.evaluate("!document.querySelector('.modal-actions button.primary').disabled")
+    can_import = page.evaluate(f"!document.querySelector({json.dumps(LIBRARY_PRIMARY)}).disabled")
     if can_import:
-        page.click('.modal-actions button.primary')
+        page.click(LIBRARY_PRIMARY)
         page.wait_for('.ghost-library[data-step="receipt"]')
         browse(page)
     else:
@@ -190,8 +195,7 @@ def test_real_bulk_collection_flow_at_supported_widths(tmp_path):
             with get_driver().launch() as page:
                 page.set_viewport(width, 1200)
                 page.goto(base)
-                page.wait_for(".ghost-library-button")
-                page.click(".ghost-library-button")
+                open_ghost_library(page)
                 exported, download = local_export_and_race(page, base, state, folder, width)
                 page.click(".ghost-library-button")
                 page.wait_for('.ghost-library[data-step="home"]')
@@ -218,8 +222,7 @@ def test_race_keeps_library_open_when_target_changes_during_preservation(tmp_pat
         with get_driver().launch() as page:
             page.set_viewport(1500, 1200)
             page.goto(base)
-            page.wait_for(".ghost-library-button")
-            page.click(".ghost-library-button")
+            open_ghost_library(page)
             page.wait_for('.ghost-library[data-step="home"]')
             action(page, "Choose ghosts to race")
             page.wait_for(".ghost-library-row")

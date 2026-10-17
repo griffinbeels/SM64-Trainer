@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-from tests.test_ui_ghost_switch import (FIXTURE_SEGMENT, MEASURE, WIDTHS,
+from tests.test_ui_ghost_switch import (FIXTURE_SEGMENT, MEASURE, TOGGLE, WIDTHS,
                                         get_driver, ghost_session, serve_ui_with_ghost, settled)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,16 +20,16 @@ def test_pose_only_ghost_can_be_enabled_at_supported_widths():
                 state["writes"].clear()
                 page.set_viewport(width, 1200)
                 page.goto(base)
-                # The row mounts before GET /api/ghost supplies availability.
-                page.wait_for(".ghost-row-head > .ghost-switch:enabled")
+                # The toggle mounts before GET /api/ghost supplies availability.
+                page.wait_for(f"{TOGGLE}:enabled")
                 row = page.evaluate(MEASURE)[0]
-                assert not row["disabled"] and row["checked"] == "false"
-                page.click(".ghost-row-head > .ghost-switch")
+                assert not row["disabled"] and row["pressed"] == "false"
+                page.click(TOGGLE)
                 assert settled(page, state, 1) == [{"enabled": True}]
                 page.wait_for(".ghost-opacity")
                 page.wait_ms(250)
                 row = page.evaluate(MEASURE)[0]
-                assert row["checked"] == "true"
+                assert row["pressed"] == "true"
                 assert row["rowScroll"] <= row["rowClient"] + 1
                 assert row["cardScroll"] <= row["cardClient"] + 1
                 (screenshots / f"mario-only-{width}.png").write_bytes(page.screenshot())
@@ -51,7 +51,7 @@ def test_ghost_in_another_area_has_a_visible_reason_and_enabled_controls():
                 row = page.evaluate(MEASURE)[0]
                 assert row["whyText"] == "Ghost is in another area."
                 assert row["whySeen"] and not row["disabled"]
-                assert row["checked"] == "true"
+                assert row["pressed"] == "true"
                 assert row["rowScroll"] <= row["rowClient"] + 1
                 assert not state["writes"]
                 assert page.problems() == []
