@@ -82,8 +82,9 @@ export function breakName(name) {
   return frag;
 }
 
-// No time yet sorts as the slowest, so you stay on the left until your first finish.
-const timeOf = p => (p.frames == null ? Infinity : p.frames);
+// No time yet sorts as the slowest, so you stay on the left until your first
+// finish; a place still loading sorts after everyone, so your seat is first.
+const timeOf = p => (p.placeholder ? -Infinity : p.frames == null ? Infinity : p.frames);
 export function sortPeople(people) {
   return [...people].sort((a, b) => (timeOf(b) - timeOf(a)) || (a.you ? -1 : b.you ? 1 : 0)
     || String(a.key).localeCompare(String(b.key)));
@@ -127,9 +128,13 @@ function lock(ctx, p) {
   const b = el("button", "lineup-lock", { type: "button",
     title: `Pinned: ${p.name} stays until you unpin them. Click to let the trainer choose.`,
     "aria-label": `Unpin ${p.name}` });
-  b.append(glyph(LOCK, 11));
-  b.addEventListener("mouseenter", () => b.replaceChildren(glyph(UNLOCK, 11)));
-  b.addEventListener("mouseleave", () => b.replaceChildren(glyph(LOCK, 11)));
+  // Both glyphs are drawn and CSS shows the open one on hover. Swapping the
+  // DOM under the pointer instead set off an endless mouseenter storm in
+  // Chromium, and the click never landed.
+  const closed = glyph(LOCK, 11), open = glyph(UNLOCK, 11);
+  closed.classList.add("lineup-lock-closed");
+  open.classList.add("lineup-lock-open");
+  b.append(closed, open);
   b.addEventListener("click", event => {
     event.stopPropagation();
     if (ctx.o.onUnpin) ctx.o.onUnpin(ctx.current(b.closest(".lineup-seat").dataset.key));

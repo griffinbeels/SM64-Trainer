@@ -12,6 +12,12 @@ import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
 let nextModalId = 1;
+// Open dialogs, oldest first. Only the topmost answers keys: a dialog opened
+// from inside another (the Ghost Library from Ghost settings) closes alone on
+// Escape, and the one beneath keeps its unsaved draft. Every dialog listens on
+// the document, and the outer one registered first, so without this it heard
+// Escape first and closed both.
+const openPanels = [];
 
 export function Modal({ title, description, icon = "practice", size = "medium",
                         onClose, footer, children }) {
@@ -35,6 +41,7 @@ export function Modal({ title, description, icon = "practice", size = "medium",
       // A late update can temporarily cover an unfinished onboarding flow.
       // Its mounted draft survives, but its dialog must not intercept keys.
       if (panel?.closest("[inert]")) return;
+      if (openPanels[openPanels.length - 1] !== panel) return;
       if (keyEvent.key === "Escape") {
         keyEvent.preventDefault();
         keyEvent.stopPropagation();
@@ -51,8 +58,10 @@ export function Modal({ title, description, icon = "practice", size = "medium",
         keyEvent.preventDefault(); first.focus();
       }
     };
+    openPanels.push(panel);
     document.addEventListener("keydown", onKey);
     return () => {
+      openPanels.splice(openPanels.indexOf(panel), 1);
       document.removeEventListener("keydown", onKey);
       if (before && before.focus) before.focus();
     };

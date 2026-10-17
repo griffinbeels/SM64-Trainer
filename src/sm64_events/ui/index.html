@@ -9468,6 +9468,9 @@
   transition: background 140ms ease, color 140ms ease; }
 .lineup .lineup-lock:hover { background: hsl(var(--hue) 80% 64%); color: #07111e; }
 .lineup .lineup-lock:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.lineup-lock svg { pointer-events: none; }
+.lineup-lock .lineup-lock-open, .lineup-lock:is(:hover, :focus-visible) .lineup-lock-closed { display: none; }
+.lineup-lock:is(:hover, :focus-visible) .lineup-lock-open { display: block; }
 
 /* Swap: only on hover or focus, in the seat's corner. */
 .lineup .lineup-swap { position: absolute; top: 7px; right: 5px; z-index: 2; width: 24px; height: 24px; padding: 0; display: inline-flex;
