@@ -18,10 +18,18 @@ on the running version; imported times can also supply the rank anchor.
 The native provider separately checks whether that PB has playable poses.
 An expired clip retains its PB time/rank and reports its playback failure.
 Undo resolves the surviving saved slot; historical minima cannot restore an
-undone PB. Without a saved basis, selection starts at the bottom tier.
+undone PB. Without a saved basis, four rivals spread across the two lowest
+tiers (steps 0 to 9, Capless V to Toad I), one near each evenly spaced step.
+A target with no strategy has no rivals, no PB, no chosen slots and no cloud
+request; the lineup reports `no_strategy`.
 
 The default range is one to five subdivisions above that basis. The floor stays
-above the PB until the final subdivision. When the completed compatible pool
+above the PB until the final subdivision. Seats keep their player, slot and
+colour (his design, 2026-10-16): a new PB replaces only the seats it passed,
+and a passed seat first takes that same player's fastest recording still ahead
+inside the range. A seat above the range's top is dealt again, so an undone PB
+brings nearer rivals back. Only changed rival settings deal every seat afresh.
+Chosen slots never move and stay when beaten. When the completed compatible pool
 has no automatic opponents in the chosen range, the fastest available recordings
 fill automatic slots. They can be slower than the user's PB or outside its rank
 range. The separate PB still plays; chosen slots stay protected. This fallback

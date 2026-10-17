@@ -1084,8 +1084,15 @@ are hidden by default; explicitly selected practice ghosts remain reachable.
 Collections never create local PBs, golds or input templates.
 
 The adaptive session adds `rivals` to the state: `{options, limits, rows, pb,
-strategy_name, status, generation, manual, simulation, scope}`. `scope` is
+strategy_name, status, generation, manual, simulation, scope, state, reason}`. `scope` is
 `strategy` (default) or `overall`; the existing Practice tabs choose it per entity.
+`state` is `no_strategy` (the target has no strategy: no rows, no PB, no cloud
+request), `loading` (no rows yet while this identity's rival list is in flight)
+or `ready`. Beside `ready` with no rows, `reason` is `nobody` (the list came
+back empty, or signed out with nothing local), `offline` (no list and the cloud
+is unreachable or backing off) or null (nothing asked yet: the overlay is off).
+Each row carries `pending: true` while its recording downloads; a pending row
+shows its player and colour but does not play.
 `simulation` is an
 isolated developer profile label or null. Rows include immutable `id`, slot,
 player/name, strategy, rank/time, `pinned` and explicit `hue_degrees`.

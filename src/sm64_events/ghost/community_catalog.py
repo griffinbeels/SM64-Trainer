@@ -7,7 +7,7 @@ bins with identical cutoffs are unreachable and remain absent from matches.
 import hashlib
 import json
 
-from sm64_events.ghost.adaptive import MAX_STEP, _progress, _range, _read_context, rank_entity_key
+from sm64_events.ghost.adaptive import MAX_STEP, _progress, _read_context, rank_entity_key
 from sm64_events.ghost.sharing_targets import binding_index, describe
 from sm64_events.ranks.calibration import resolve_curve
 
@@ -128,12 +128,13 @@ def export_catalog(ranks, definitions=()):
     return {"v": 1, "generation": hashlib.sha256(encoded).hexdigest(), "entries": entries}
 
 
-def match_windows(ranks, identity, pb, options):
-    """The whole ladder, never the exact PB.
+def match_windows(ranks, identity):
+    """The whole ladder, never the exact PB or the rival settings.
 
     The trainer seats rivals in the player's range first and widens upward,
     then downward, until the list is full (his rule, round 49), so the pool
     covers every bin. The cloud accepts a band of the whole ladder (45 bins).
+    One list therefore serves every PB and range: a new PB re-picks locally.
     """
     key = rank_entity_key(identity)
     with ranks.read_context():
@@ -142,5 +143,4 @@ def match_windows(ranks, identity, pb, options):
         cutoffs = model_cutoffs(model, identity.scope)
     if not cutoffs:
         return ()
-    _range(pb, options)  # an invalid saved basis still refuses the request
     return ((1, cutoffs[0]["frames"]),)
