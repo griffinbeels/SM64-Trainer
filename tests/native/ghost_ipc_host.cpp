@@ -380,7 +380,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.star_action_count=1;r.star_actions[0]=0x1302;r.stop_at_star=1;
         r.path_enabled=1;r.path_buttons=1;r.path_source=GP_PATH_AVERAGE;r.path_clip=0;
         r.path_ahead_ms=4500;r.path_width=55.5f;r.path_opacity=.7f;r.path_spacing_ms=150;
-        r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
+        r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;r.layout.rom_layout=GC_ROM_US;
         r.layout.clock.near_zero=30;
         ready(page,r);auto first=last_command();
         {const auto hooked=page.status();check(hooked.hook_gl_queries==2 && hooked.hook_micros==345 && hooked.hook_list==7
@@ -483,6 +483,11 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         bad=r;bad.revision=20;bad.occlusion_fade=2;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=21;bad.volume=1.25f;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=22;bad.sound_fade=2;refused(page,bad,GIPC_PROTOCOL);
+        // A config for the other cartridge (JP's on this US one, as after a
+        // ROM swap the trainer has not caught up with) never reaches capture.
+        const auto configured_before=configuration.load();
+        bad=r;bad.revision=22;bad.layout.rom_layout=GC_ROM_JP;refused(page,bad,GIPC_LAYOUT);
+        check(configuration.load()==configured_before,"a config for the other cartridge configured capture");
         // The protocol refusals retired the model, and the worker holds no
         // cartridge once a model is built: rebuilding reads the cartridge again.
         rom[0]=0x40;const auto before_rebuild=rom_validations.load();

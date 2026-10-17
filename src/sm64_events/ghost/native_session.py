@@ -101,9 +101,8 @@ def ghost_label(ghost, number=1) -> str:
 class NativeGhost:
     def __init__(self, replay, *, supported=True, origin_of=None, running=emulator_running, portable=None):
         # `supported`: a bool, or a no-argument callable asked on every
-        # resolve, so a ROM swap changes the answer without a new session
-        # (the composition root passes memory/ghost_layout.ghost_supported
-        # of the running game version).
+        # resolve. The composition root calls set_supported on every ROM swap
+        # with memory/ghost_layout.ghost_supported of the running version.
         self._replay, self._supported_answer = replay, supported
         # (pid, birth) of the game whose renderer last served poses. It
         # outlives a replaced pose source on purpose: the game connection
@@ -139,6 +138,10 @@ class NativeGhost:
     def _supported(self) -> bool:
         answer = self._supported_answer
         return bool(answer() if callable(answer) else answer)
+
+    def set_supported(self, supported: bool) -> None:
+        """Whether the running cartridge shows native ghosts; the next resolve answers it."""
+        self._supported_answer = bool(supported)
 
     def set_portable(self, provider):
         """The human-paced collection provider; never consulted by the clock feed."""
