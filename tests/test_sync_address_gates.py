@@ -630,3 +630,21 @@ def test_usamune_input_display_is_verified_by_switching_it_off_and_on():
     assert verdict.status == "verified"
     assert _usamune_flip("usamune_input_display", lambda t: 2,
                          AG._check_usamune_input_display).status == "failed"
+
+
+def test_usamune_stop_is_verified_by_setting_grab_then_grabx():
+    # GrabX, stepped through Xcam to Grab, then back up to GrabX.
+    def menu(t):
+        return 3 if t < 1.0 else 2 if t < 1.5 else 1 if t < 3.0 else 2 if t < 3.5 else 3
+    verdict = _usamune_flip("usamune_stop", menu, AG._check_usamune_stop)
+    assert verdict.status == "verified" and verdict.value == US.usamune_stop
+    assert verdict.measured["values"] == [3, 2, 1, 2, 3]
+
+
+def test_usamune_stop_that_never_moves_or_leaves_the_four_settings_fails():
+    assert _usamune_flip("usamune_stop", lambda t: 3, AG._check_usamune_stop).status == "failed"
+    # The order matters: DISPLAY, the byte beside it, also holds 0..3.
+    assert _usamune_flip("usamune_stop", lambda t: 3 if t < 1.0 else 1,
+                         AG._check_usamune_stop).status == "failed"
+    assert _usamune_flip("usamune_stop", lambda t: 1 if t < 1.0 else 7,
+                         AG._check_usamune_stop).status == "failed"

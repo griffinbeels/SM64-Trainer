@@ -118,12 +118,16 @@ that day, whose fresh ROM still had Grab. His ruling: *"we should NEVER rely
 on the player to remember to set up their timer mode correctly ... we need to
 be able to automatically extract the RIGHT TIME REGARDLESS OF THE USER'S TIMER
 SETTING."* The number never needed the setting — the x-cam is Mario's landing
-and the counter never stops — so the detector now reads the setting off the
-writes (`_observe_stop`) and, once it knows none is coming, publishes its own
-derivation at the x-cam with no wait. Under Grab it also refuses the touch
-write, which on a ground grab sits one frame under the x-cam and used to pass
-for agreement. Each row carries `usamune_stop`, so the practice log can tell
-the player why the game's screen shows another number.
+and the counter never stops — so the detector now reads the setting itself,
+Usamune's STOP byte (layout `usamune_stop`), and when no x-cam write is coming
+publishes its own derivation at the x-cam with no wait. Under Grab it also
+refuses the touch write, which on a ground grab sits one frame under the x-cam
+and used to pass for agreement. Each row carries `usamune_stop`, so the
+practice log can tell the player why the game's screen shows another number.
+
+Where a build has no verified address for the byte, the grab's own writes
+stand in (`_observe_stop`), and only that grab's: an earlier grab's answer
+stamped the row he took right after switching to GrabX with the old setting.
 
 ## Why this detector runs FIRST in the chain
 
@@ -162,6 +166,16 @@ from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.memory.addresses import (KEY_GRAB_LEVELS, STAR_DANCE_ACTIONS,
                                           STAR_GRAB_ACTIONS, course_name,
                                           star_name)
+
+
+def stop_from_byte(value: int | None) -> str | None:
+    """Usamune's STOP byte (layout `usamune_stop`) as what its timer does:
+    bit 1 writes the x-cam ("xcam": GrabX or Xcam), else bit 0 the touch
+    ("grab"), else nothing ("none"). None for no reading or a value outside
+    the four settings."""
+    if value is None or not 0 <= value <= 3:
+        return None
+    return "xcam" if value & 2 else "grab" if value & 1 else "none"
 
 
 @dataclass
@@ -221,9 +235,10 @@ class _PendingGrab:
     # replaces — every ordinary grab now carries its own evidence.
     published_after: int = 0
     writes: list[tuple[int, int]] | None = None
-    # What THIS grab's result-store writes said about Usamune's STOP, once they
-    # say anything (`_observe_stop`): "xcam", "grab", "none", or None while
-    # the writes are still inconclusive.
+    # Usamune's STOP for THIS grab: read off its settings byte at the grab
+    # (`stop_from_byte`), else what this grab's own writes said once they say
+    # anything (`_observe_stop`): "xcam", "grab", "none", or None.
+    stop_read: str | None = None
     stop_seen: str | None = None
 
 
@@ -307,10 +322,6 @@ class StarGrabDetector:
     def __init__(self):
         self._clock = IgtClock()
         self._pending: _PendingGrab | None = None
-        # What Usamune's timer did on the last grab that showed it: "xcam"
-        # (STOP GrabX or Xcam: it writes our x-cam number), "grab" (it wrote
-        # only the touch), "none" (it wrote nothing), None until a grab says.
-        self._stop: str | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if self._clock.empty():
@@ -396,7 +407,7 @@ class StarGrabDetector:
             course_id=curr.last_completed_course, star_id=star_id,
             already_collected=curr.num_stars == prev.num_stars,
             num_stars=curr.num_stars, coins=curr.coins, alive=mario_alive(curr),
-            level=curr.curr_level,
+            level=curr.curr_level, stop_read=stop_from_byte(curr.usamune_stop),
             grab_frame=grab_frame, grab_igt=igt_frames,
             grab_igt_source=source,
         )
@@ -552,8 +563,12 @@ class StarGrabDetector:
         return waited >= self.PUBLISH_WAIT_FRAMES
 
     def _stop_for(self, grab: _PendingGrab) -> str | None:
-        """This grab's own evidence about STOP, else the last grab's."""
-        return grab.stop_seen or self._stop
+        """Usamune's STOP for this grab: the settings byte when this build's
+        layout reads it, else what this grab's own writes said. Never an
+        earlier grab's answer: a row stamped with the setting he had BEFORE
+        switching to GrabX kept its "Set Timer" hint (journal 20263,
+        2026-10-17, published on the previous grabs' Grab)."""
+        return grab.stop_read or grab.stop_seen
 
     def _usamune_stops_early(self, grab: _PendingGrab) -> bool:
         return self._stop_for(grab) in ("grab", "none")
@@ -577,7 +592,7 @@ class StarGrabDetector:
         comes ~27 frames after the dance), and a later x-cam write still
         overrules them: a subarea star the epoch missed gets that write at +30.
         A `broken` tick (reset, level exit) describes another context."""
-        if broken or grab.stop_seen == "xcam":
+        if broken or grab.stop_read or grab.stop_seen == "xcam":
             return
         writes = self._clock.result_writes_since(grab.grab_frame, curr)
         agrees = any(abs(value - grab.derived_igt) <= self.AGREEMENT_FRAMES
@@ -586,14 +601,14 @@ class StarGrabDetector:
             late = self._clock.settled_result_at_or_after(
                 grab.xcam_frame, curr, strictly_after=True)
             if agrees or late is not None:
-                grab.stop_seen = self._stop = "xcam"
+                grab.stop_seen = "xcam"
                 return
         elif agrees:
             return      # a ground grab's agreement fits every setting that writes
         settle = (self.RESULT_SETTLE_FRAMES if grab.carried_igt is not None
                   else self.PUBLISH_WAIT_FRAMES)
         if grab.stop_seen is None and waited >= settle:
-            grab.stop_seen = self._stop = "grab" if writes else "none"
+            grab.stop_seen = "grab" if writes else "none"
 
     def _usamune_answer(self, grab: _PendingGrab, curr: GameSnapshot,
                         proven_final: bool = False) -> int | None:

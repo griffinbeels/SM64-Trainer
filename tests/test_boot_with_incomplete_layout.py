@@ -36,7 +36,7 @@ def test_an_incomplete_layout_gives_an_unready_reader_that_names_the_fix():
     assert isinstance(reader, UnreadyReader)
     assert "jp" in reader.reason and "sync_version.py --version jp" in reader.reason
     assert reader.missing == layout_for("jp").missing()
-    assert len(reader.missing) == len(LAYOUT_ROWS)
+    assert len(reader.missing) == sum(not row.optional for row in LAYOUT_ROWS)
     try:
         reader.read()
     except MemoryReadError as error:

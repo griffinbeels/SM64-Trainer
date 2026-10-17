@@ -7,3 +7,4 @@
 0x804169a0	usamune_menu	73 aligned references to the US byte name it
 0x80417c1f	usamune_input_display	the HUD-settings block aligns +0xC8 (250 references); the display byte is +0xB on both
 0x8033c26c	usamune_timer	object slot 0's oTimer (pool + 0x154) on both builds
+0x80417c15	usamune_stop	settings base + 1 on both (STOP is menu index 1 in Usamune's own menu table, JP 0x80416114; its grab hook 0x80412e94 tests bit 0), US value + 0xC8

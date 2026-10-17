@@ -34,6 +34,9 @@ class LayoutRow:
     symbol: str | None     # decomp symbol in STROOP's map, or None
     hunt: str | None       # how to find it when no map names it
     note: str              # what it is / the trap around it
+    # A read the tracker runs WITHOUT: an absent address degrades one feature
+    # and never holds the build (`Layout.missing`).
+    optional: bool = False
 
 
 LAYOUT_ROWS: tuple[LayoutRow, ...] = (
@@ -96,6 +99,12 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("usamune_input_display", None, "usamune_hud",
               "VERIFY: u8 Usamune input display setting, 0 = off (2 = stick, else values); "
               "its HUD path calls the display (RAM 0x80408848) only while nonzero"),
+    LayoutRow("usamune_stop", None, "usamune_hud",
+              "VERIFY: u8 Usamune TIMER -> STOP, a bitmask in menu order: bit 0 copies "
+              "the counter into the star result at the grab, bit 1 at the x-cam "
+              "(0 None, 1 Grab, 2 Xcam, 3 GrabX); settings base + 1, read off its menu "
+              "table and its grab/dance hooks. Trap: base + 2 is DISPLAY",
+              optional=True),
     LayoutRow("behaviour_base", None, "mario_object_behaviour",
               "RAM address of segment 0x13; = mario_object->behaviour "
               "minus bhvMario's segmented offset for this version"),
@@ -130,6 +139,7 @@ class Layout:
     usamune_timer: int | None = None
     usamune_menu: int | None = None
     usamune_input_display: int | None = None
+    usamune_stop: int | None = None
     behaviour_base: int | None = None
 
     def value(self, field: str) -> int | None:
@@ -137,7 +147,7 @@ class Layout:
 
     def missing(self) -> tuple[str, ...]:
         return tuple(row.field for row in LAYOUT_ROWS
-                     if getattr(self, row.field) is None)
+                     if not row.optional and getattr(self, row.field) is None)
 
     def require(self, *names: str) -> None:
         absent = [name for name in names if getattr(self, name) is None]
@@ -197,6 +207,8 @@ US = Layout(
     # path's `lbu 0xb(0x80417b4c)` gates `jal 0x80408848`, the input display).
     usamune_menu=0x804168D8,
     usamune_input_display=0x80417B57,
+    usamune_stop=0x80417B4D,        # VERIFY: read off Usamune's code 2026-10-17 (STOP is
+                                    # menu index 1, Input index 0xb = the byte above)
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
 

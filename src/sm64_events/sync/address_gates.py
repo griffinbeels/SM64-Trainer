@@ -1161,6 +1161,50 @@ register(Gate(
 ))
 
 
+# --- usamune_stop -------------------------------------------------------------
+
+USAMUNE_STOP_TIMEOUT_S = 600.0      # the human finds Usamune's TIMER page in his own time
+STOP_GRAB, STOP_GRABX = 1, 3
+
+
+def _check_usamune_stop(ctx) -> Verdict:
+    """The byte must read Grab (1) and then GrabX (3) while the human sets
+    TIMER -> STOP that way, and never leave 0..3: the menu steps through the
+    four values, so any other reading is some other byte. The neighbour at
+    base + 2 (DISPLAY) also holds 0..3 -- the ORDER of the two values he sets
+    is what tells them apart."""
+    candidate = ctx.candidate("usamune_stop")
+    if candidate is None:
+        return Verdict("missing", evidence="no candidate for usamune_stop: it is read off "
+                                           "Usamune's menu table, so a new ROM needs that read again")
+    seen, saw_grab = [], False
+    start = ctx.now()
+    while ctx.now() - start < USAMUNE_STOP_TIMEOUT_S:
+        value = ctx.raw().read_u8(candidate)
+        if not seen or seen[-1] != value:
+            seen.append(value)
+        if value > STOP_GRABX:
+            return Verdict("failed", value=candidate, measured={"values": seen},
+                           evidence=f"read {value}, outside the four STOP settings")
+        saw_grab = saw_grab or value == STOP_GRAB
+        if saw_grab and value == STOP_GRABX:
+            return Verdict("verified", value=candidate, measured={"values": seen},
+                           evidence="read 1 while STOP was Grab, then 3 at GrabX")
+        ctx.sleep(POLL_INTERVAL_S)
+    return Verdict("failed", value=candidate, measured={"values": seen},
+                   evidence="never saw Grab (1) and then GrabX (3)")
+
+
+register(Gate(
+    id="address.usamune_stop", feature="IGT clock", kind="address",
+    needs=("version.rom",), timeout_s=USAMUNE_STOP_TIMEOUT_S + 10,
+    instruction="In Usamune's menu, set TIMER -> STOP to Grab, then back to GrabX.",
+    proves="the RAM byte holding Usamune's STOP setting: bit 0 writes the star result "
+           "at the grab, bit 1 at the x-cam.",
+    check=_check_usamune_stop,
+))
+
+
 # --- player1_controller -----------------------------------------------------
 
 CONTROLLER_HOLD_TIMEOUT_S = 60.0

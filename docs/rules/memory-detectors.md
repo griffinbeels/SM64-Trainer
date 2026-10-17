@@ -73,8 +73,9 @@ calls, so the action and the counter in one sample can straddle a game frame.
 **Used since 2026-10-17 (`StarGrabDetector._observe_stop`, by VALUE: an
 agreeing or post-x-cam write = xcam, a touch-only write = grab, silence =
 none; once grab/none is known the row publishes at the x-cam).** The byte
-itself was read off Usamune's code the same day and is NOT in the layout (no
-live gate yet): settings base + 1, US `0x80417B4D`, JP `0x80417C15`, a
+itself was read off Usamune's code the same day and is the layout's OPTIONAL
+row `usamune_stop` (US VERIFY; JP once `address.usamune_stop` verifies), which
+the detector prefers to the inference: settings base + 1, US `0x80417B4D`, JP `0x80417C15`, a
 bitmask in menu order — 0 None, 1 Grab, 2 Xcam ("*Cam"), 3 GrabX ("Grab*").
 Bit 0 makes the grab hook (wrapping `set_mario_action`) copy the counter into
 the result store; bit 1 makes the star-dance hooks do it when `actionTimer`
