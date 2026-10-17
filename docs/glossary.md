@@ -2452,7 +2452,8 @@ can never disagree about what a time means.
 
 ### Timer hint
 
-The "Set Timer → GrabX" note left of a [[practice log]] row's entry number.
+The warning triangle left of a [[practice log]] row's entry number; hover
+it for why the game's timer showed a different time.
 The log records the [[x-cam]] time whatever STOP setting Usamune uses, but
 Usamune's own timer shows that number only under GrabX or Xcam. The trainer
 hints a [[star]] row grabbed under another setting while the newest
@@ -2461,9 +2462,10 @@ one [[star]] under GrabX.
 
 - **Not** — a [[caveat mark]]. A [[caveat mark]] says the row's time is not
   the quantity it looks like; a hinted row's time is right, and the hint is
-  about the number the game shows.
+  about the number the game shows. It is a muted triangle, never the
+  orange round "!" of a [[caveat mark]].
 - **Lives** — the rule (`src/sm64_events/tracking/views.py`)
-  → the note (`src/sm64_events/ui/components/attemptlog.js`)
+  → the symbol (`src/sm64_events/ui/components/attemptlog.js`)
 
 ### MARELO pill
 

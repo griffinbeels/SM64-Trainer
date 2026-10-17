@@ -45,6 +45,7 @@ const PATHS = {
   check: "M5 12l4 4L19 6",
   copy: "M9 9h12v12H9V9zM5 15H3V3h12v2",
   shield: "M12 3l7 3v5c0 4.6-2.8 8.1-7 10-4.2-1.9-7-5.4-7-10V6l7-3z",
+  warning: "M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01",
   stepBack: "M7 5v14M18 6l-8 6 8 6V6z",
   stepForward: "M17 5v14M6 6l8 6-8 6V6z",
   expand: "M8 3H3v5M16 3h5v5M8 21H3v-5m13 5h5v-5",
