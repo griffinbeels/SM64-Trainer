@@ -1272,7 +1272,7 @@ all: every door a recording enters through (bundled collection, rival
 admission, community upload and download, collection import and export, your
 own PB, saved and template ghosts) refuses it with one reason (his rule,
 2026-10-12: "If it's not a perfectly recorded ghost, it doesn't belong in the
-system"). A ghost records the [[practice ROM]] it was captured on (US or JP)
+system"). A ghost records the [[practice ROM]] the trainer captured it on (US or JP)
 and plays on either. The practice card's switch calls it Ghost Overlay.
 
 - **Lives** — `src/sm64_events/ghost/session.py` joins selection, settings and
@@ -1406,7 +1406,7 @@ card. Its [[ghost sound events]] can follow it too.
 
 The object Mario holds on a recorded [[frame]] (a Bob-omb, a baby penguin,
 a cork box), recorded as what it is (its behaviour, named through the
-[[practice ROM]] it was captured on), its animation state,
+[[practice ROM]] the trainer captured it on), its animation state,
 and where his hand drew it in that [[frame]]. Captured only when the game
 provably drew it from his hand in that [[frame]]. A [[ghost]] draws the kinds
 its model knows (the Bob-omb, the small penguin, King Bob-omb, Chuckya, the
@@ -1450,7 +1450,7 @@ on by default), a [[ghost]]'s sound also follows its [[overlap fade]] and
 
 They play from the [[ghost sound player]], so a recording only has them while
 [[ghosts in recording]] is on. They play only on the US [[practice ROM]]: on
-JP the ghosts are silent, since its sound banks differ.
+JP the [[ghost]]s are silent, since its sound banks differ.
 
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
   `plugin/gfxwrap/ghost_audio.cpp` makes their sound; `plugin/gfxwrap/ghost_sound_fade.h`
@@ -1560,7 +1560,9 @@ only; with neither, a [[strategy]] with a [[ladder]] counts as shared. A
 either release may race you, and one [[personal best]] covers both releases,
 the faster winning. Regional: only your running release's [[ghost]]s race,
 and each release keeps its own [[personal best]]. A [[ghost]] whose release
-nobody recorded races only on a shared [[strategy]].
+nobody recorded races only on a shared [[strategy]]. A bundled [[ghost]] that
+names no release counts as US: before JP support, the trainer recorded only
+on US.
 
 - **Not** — the [[region switch]], which picks which releases a surface
   shows; the [[game version]], which picks the [[ladder]] the trainer grades

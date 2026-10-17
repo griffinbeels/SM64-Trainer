@@ -24,7 +24,9 @@ never serve a ghost from the other ROM without evidence it plays the same.
 
 A ghost whose ROM is unknown is served only under a shared scope (his ruling,
 2026-10-12: "If it's not a perfectly recorded ghost, it doesn't belong in the
-system"). Scope only widens which ROM's ghosts may be SERVED; a ghost is still
+system"). A bundled recording that names no ROM is not unknown: it predates
+the stamp, and every recording before task 0064 was on US
+(`ghost/bundled_beta.py`). Scope only widens which ROM's ghosts may be SERVED; a ghost is still
 captured on exactly one ROM (`ghost/pb.py::eligible_capture`).
 """
 from __future__ import annotations
