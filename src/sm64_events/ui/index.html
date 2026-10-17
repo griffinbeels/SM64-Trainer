@@ -3722,20 +3722,26 @@
   .attempt-table tr:not(.replay-row) { height: 40px; }   /* the drawer's row grows -- see the narrow-layout note by --log-row-height */
   .attempt-table td { padding: .3rem .36rem; border-bottom: 1px solid var(--border-soft); }
   .attempt-index { width: 38px; position: relative; }
-  /* "Set Timer -> GrabX" left of the entry number (2026-10-17; which rows:
-     attemptlog.js::TimerHint). Out of flow, in the card body's left indent
-     (`.log-card-body`, --log-body-indent + .7rem = 61px as shipped): a column
-     of its own would cost the result cell ~110px it does not have at 850px
-     (99px there, 44px in a nested card), and `#N` stays where it is on every
-     row. Two short lines because one line does not fit the indent. Muted,
-     not the caveat hue: the row's time is right; this is about the game's. */
-  .timer-hint {
-    position: absolute; right: 100%; top: 50%; transform: translateY(-50%);
-    margin-right: 1px; display: grid; justify-items: end;
-    font-size: .68rem; font-weight: 600; line-height: 1.15;
-    color: var(--muted); white-space: nowrap; cursor: help;
+  /* The timer hint's warning triangle left of the entry number (2026-10-17;
+     which rows: attemptlog.js::TimerHint). Out of flow, in the card body's
+     left indent (`.log-card-body`, 61px as shipped, 44px in a nested card),
+     so `#N` stays where it is on every row. Muted, not the caveat hue, and a
+     triangle, not the caveat's round "!": the row's time is right; this is
+     about the game's. It wears the `.hint` tooltip with one difference: the
+     tooltip opens rightward over the row, since centered on the indent it
+     would hang past the card's left edge. Centered by stretching to the cell
+     rather than by a transform, which would trap the tooltip's z-index. */
+  .attempt-index .timer-hint {
+    position: absolute; right: 100%; top: 0; bottom: 0; margin-right: 2px;
+    align-items: center; border-radius: 3px;
   }
-  .timer-hint > span:last-child { color: var(--text); }
+  .attempt-index .timer-hint:hover,
+  .attempt-index .timer-hint:focus-visible { color: var(--text); outline: none; }
+  .attempt-index .timer-hint:focus-visible .ui-icon { outline: 2px solid #78b9ff; outline-offset: 2px; border-radius: 2px; }
+  .attempt-index .timer-hint::after { left: 0; top: calc(50% + 14px); transform: none; }
+  /* A dimmed row (another strategy, or cleared) would dim its tooltip too, so
+     the row lights up while its hint is read, through the row's own fade. */
+  .attempt-table tr:is(.other-strat, .cleared):has(.timer-hint:is(:hover, :focus-visible)) { opacity: 1; }
   /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
      for the old disc"): 34px was sized for a 22px SQUARE Medal/Crest. A Hat
      at size=22 has a layout box alone of 22 * HAT_LAYOUT_WIDTH_RATIO (~1.632,
