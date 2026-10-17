@@ -396,6 +396,22 @@ class Attempt:
                                # "grab" there would assert something nobody
                                # has run the experiment for; the limitation is
                                # recorded in docs/api.md instead.
+    usamune_stop: str | None = None  # what Usamune's OWN timer was set to stop
+                               # at when this star was grabbed -- "xcam"
+                               # (STOP = GrabX or Xcam: the game shows the
+                               # x-cam time we record), "grab" (it froze at the
+                               # grab), "none" (it never stops) -- read off the
+                               # closing star_collected's `usamune_stop` key,
+                               # so it re-derives on every reproject like
+                               # timed_at. None for a segment, a failure that
+                               # no grab closed, an import, and every grab
+                               # journaled before the key existed (UNKNOWN,
+                               # never guessed). It describes the GAME's
+                               # display, not our number: the row's time is
+                               # the x-cam either way. The practice log reads
+                               # it to say "Set Timer -> GrabX" while his
+                               # setting would show him a different number
+                               # (tracking/views.py::usamune_stop_now).
     platform: str | None = None    # WHICH MACHINE set this time -- "emu" or
                                # "n64" -- read off the closing event's own
                                # `platform` key (core/modes.py::
@@ -444,6 +460,19 @@ OUTCOMES = ("success", "reset", "loaded", "hard_reset", "abandoned", "death")
 #        through attempts instead of splitting them, and every attempt is
 #        judged (valid / invalid_reason).
 ATTEMPT_RULES = 2
+
+
+# The values a grab's `usamune_stop` key may carry (detectors/star_grab.py).
+# Anything else -- an older or newer detector's word -- reads as unknown.
+USAMUNE_STOPS = ("xcam", "grab", "none")
+
+
+def usamune_stop_of(ev) -> str | None:
+    """`Attempt.usamune_stop` for a row closed by `ev`: only a star grab says."""
+    if ev.type != "star_collected":
+        return None
+    stop = ev.payload.get("usamune_stop")
+    return stop if stop in USAMUNE_STOPS else None
 
 
 def _native_star_origin_known(first) -> bool:
@@ -1693,6 +1722,7 @@ class Projector:
                         timed_by="igt",
                         timed_at=(ev.payload.get("igt_timed_at")
                                   if ev.type == "star_collected" else None),
+                        usamune_stop=usamune_stop_of(ev),
                         platform=platform_from_payload(ev.payload))
             # WHICH EXIT STAR ended the run is a fact the closing event
             # carries, and it decides which of the 100-coin star's ladders
@@ -2935,6 +2965,7 @@ class Projector:
             jumps_total=self._jumps_total,
             jumps_dustless=self._jumps_dustless,
             timed_at=timed_at,
+            usamune_stop=usamune_stop_of(close),
             game_version=(first.payload.get("game_version")
                           if first.payload.get("game_version") == close.payload.get("game_version") else None),
             native_clock_frame=first.frame if native_origin_known else None,

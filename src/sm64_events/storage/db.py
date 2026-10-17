@@ -776,6 +776,15 @@ MIGRATIONS = [
     ALTER TABLE attempts ADD COLUMN start_area INTEGER;
     ALTER TABLE attempts ADD COLUMN prev_anchor_utc TEXT;
     """,
+    # v40 -- what Usamune's own timer was set to stop at when a star was
+    # grabbed (`Attempt.usamune_stop`: "xcam" | "grab" | "none"), so the
+    # practice log can say "Set Timer -> GrabX" while his setting shows a
+    # different number from ours. Read off the grab's payload by projection,
+    # the timed_at shape: no backfill, NULL for every row whose grab never
+    # said.
+    """
+    ALTER TABLE attempts ADD COLUMN usamune_stop TEXT;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -788,7 +797,8 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "platform", "game_version", "native_clock_frame",
                  "native_clock_utc", "native_clock_kind", "closed_frame",
                  "valid", "invalid_reason", "state_loads", "first_load_frame",
-                 "start_level", "start_area", "prev_anchor_utc")
+                 "start_level", "start_area", "prev_anchor_utc",
+                 "usamune_stop")
 
 
 def _attempt_from_row(r) -> Attempt:
@@ -1150,7 +1160,7 @@ class Database:
                 a.native_clock_utc, a.native_clock_kind, a.closed_frame,
                 None if a.valid is None else int(a.valid), a.invalid_reason,
                 a.state_loads, a.first_load_frame, a.start_level, a.start_area,
-                a.prev_anchor_utc)
+                a.prev_anchor_utc, a.usamune_stop)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock, self._conn:
