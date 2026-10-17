@@ -392,8 +392,7 @@ class Poller:
             self._prev = None
             self.latest = None
             self._reset_detectors()
-            if self.on_gap is not None:
-                await self.on_gap("emulator disconnected")
+            await self._gap("emulator disconnected")
             await self.broadcaster.publish(_lifecycle_event("emulator_disconnected"))
             return
         if not _plausible(curr):
@@ -404,8 +403,7 @@ class Poller:
             self._prev = None
             self.latest = None
             self._reset_detectors()
-            if self.on_gap is not None:
-                await self.on_gap("implausible memory snapshot")
+            await self._gap("implausible memory snapshot")
             return
         # Reset-across-reattach synthesis (live gate 2026-06-15): an F1 console
         # reset makes RDRAM briefly implausible/unreadable, so the poller
@@ -448,6 +446,10 @@ class Poller:
         self._last_timer = curr.global_timer
         if self.on_snapshot is not None:
             self.on_snapshot(curr)
+
+    async def _gap(self, reason: str) -> None:
+        if self.on_gap is not None:
+            await self.on_gap(reason)
 
     def _run_detectors(self, curr) -> tuple[list, str | None]:
         """Every detector sees this pair; the name of the one that failed, if any.

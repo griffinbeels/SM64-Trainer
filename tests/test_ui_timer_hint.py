@@ -30,7 +30,7 @@ from uilab.driver import get_driver  # noqa: E402
 NOW = datetime(2026, 10, 17, 12, 0, 0, tzinfo=timezone.utc)
 WIDTHS = (850, 1500)
 HINT_TEXT = "Set Timer → GrabX"
-HINT_TITLE = ("The game's timer stops at the grab. This log shows the x-cam time."
+HINT_TITLE = ("The game's timer doesn't stop at the x-cam. This log shows the x-cam time."
               " Set Usamune's TIMER → STOP to GrabX to match.")
 
 

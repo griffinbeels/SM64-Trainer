@@ -449,8 +449,7 @@ class StarGrabDetector:
             else:
                 return []
         waited = curr.global_timer - grab.xcam_frame
-        if not broken:
-            self._observe_stop(grab, curr, waited)
+        self._observe_stop(grab, curr, waited, broken)
         if grab.published is not None and grab.timed_at == "grab":
             # Published by the backstop above and the x-cam has now arrived.
             # Same decision as a first publish — when is Usamune's number
@@ -560,7 +559,7 @@ class StarGrabDetector:
         return self._stop_for(grab) in ("grab", "none")
 
     def _observe_stop(self, grab: _PendingGrab, curr: GameSnapshot,
-                      waited: int) -> None:
+                      waited: int, broken: bool) -> None:
         """Read Usamune's STOP off what it wrote for this grab.
 
         STOP=Grab writes once, the counter at the TOUCH, which sits fall + 1
@@ -576,8 +575,9 @@ class StarGrabDetector:
         concluded once every write had time to land (the PUBLISH_WAIT_FRAMES
         burst, or the whole watch on a multi-leg star, whose whole-star write
         comes ~27 frames after the dance), and a later x-cam write still
-        overrules them: a subarea star the epoch missed gets that write at +30."""
-        if grab.stop_seen == "xcam":
+        overrules them: a subarea star the epoch missed gets that write at +30.
+        A `broken` tick (reset, level exit) describes another context."""
+        if broken or grab.stop_seen == "xcam":
             return
         writes = self._clock.result_writes_since(grab.grab_frame, curr)
         agrees = any(abs(value - grab.derived_igt) <= self.AGREEMENT_FRAMES

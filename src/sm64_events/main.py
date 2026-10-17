@@ -480,6 +480,44 @@ def _community_population(service):
     return population, account, CommunitySync(account, population)
 
 
+_BACKGROUND = set()
+
+
+def _in_background(coroutine):
+    """Run `coroutine` as its own task on the running loop, held until it
+    ends: the loop keeps only a weak reference to a task."""
+    task = asyncio.get_running_loop().create_task(coroutine)
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+
+
+def _log_boot_layout(version, reader, layout):
+    if isinstance(reader, UnreadyReader):
+        logging.getLogger("sm64.tracker").error(
+            "game version %s: %s", version, reader.reason)
+    else:
+        logging.getLogger("sm64.tracker").info(
+            "game version %s: %d/%d addresses in the layout", version,
+            len(LAYOUT_ROWS) - len(layout.missing()), len(LAYOUT_ROWS))
+
+
+def _build_follower(running, inputs, replay, service):
+    """The poller's `on_version_change`: the cartridge's build changed, so
+    every memory reader moves to its layout, and grading under AUTO follows
+    the cartridge. The poller has already swapped its own reader and rebuilds
+    the detectors after this returns; the regrade broadcasts, so it runs as
+    its own task on the poller's loop."""
+    def follow_build(new_version):
+        running["version"] = new_version
+        new_layout = layout_for(new_version)
+        inputs.set_layout(new_layout)
+        if replay is not None:
+            replay.recorder.set_ghost_capture_factory(_ghost_capture_factory(new_layout))
+            replay.recorder.retarget_capture()
+        _in_background(service.note_running_version(new_version))
+    return follow_build
+
+
 def build(*, recorder_lock=None):
     configure_logging()
     migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
@@ -494,13 +532,7 @@ def build(*, recorder_lock=None):
     # now. Boot starts from the setting/detection guess; the poller corrects
     # it from the cartridge header and `follow_build` moves every reader.
     running = {"version": version}
-    if isinstance(reader, UnreadyReader):
-        logging.getLogger("sm64.tracker").error(
-            "game version %s: %s", version, reader.reason)
-    else:
-        logging.getLogger("sm64.tracker").info(
-            "game version %s: %d/%d addresses in the layout", version,
-            len(LAYOUT_ROWS) - len(layout.missing()), len(LAYOUT_ROWS))
+    _log_boot_layout(version, reader, layout)
     broadcaster = Broadcaster()
     service, _db, db_retry = _build_tracker(broadcaster)
     # User-set storage limits (UI panel) overlay the code defaults.
@@ -540,23 +572,7 @@ def build(*, recorder_lock=None):
     native_ghost = NativeGhost(replay, supported=lambda: ghost_supported(running["version"]),
         origin_of=lambda kind,key:service.native_rival_origin(kind,key,frame=ghost_frame["frame"]))
 
-    regrades = set()
-
-    def follow_build(new_version):
-        """The cartridge's build changed (poller): every memory reader moves
-        to its layout, and grading under AUTO follows the cartridge. The
-        poller has already swapped its own reader and rebuilds the detectors
-        after this returns; the regrade broadcasts, so it runs as its own
-        task on the poller's loop."""
-        running["version"] = new_version
-        new_layout = layout_for(new_version)
-        inputs.set_layout(new_layout)
-        if replay is not None:
-            replay.recorder.set_ghost_capture_factory(_ghost_capture_factory(new_layout))
-            replay.recorder.retarget_capture()
-        task = asyncio.get_running_loop().create_task(service.note_running_version(new_version))
-        regrades.add(task)
-        task.add_done_callback(regrades.discard)
+    follow_build = _build_follower(running, inputs, replay, service)
 
     def note_ghost_snapshot(snapshot):
         ghost_frame["frame"] = snapshot.global_timer

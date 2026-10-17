@@ -93,7 +93,7 @@ export function delta(frames) {
 // both stop short of the x-cam), so it disappears from every row once he grabs
 // one star under GrabX. It sits in the card body's left indent, out of flow,
 // so `#N` does not move and the row gives up no width.
-const TIMER_HINT_TITLE = "The game's timer stops at the grab. This log shows the x-cam time."
+const TIMER_HINT_TITLE = "The game's timer doesn't stop at the x-cam. This log shows the x-cam time."
   + " Set Usamune's TIMER → STOP to GrabX to match.";
 
 function TimerHint({ show }) {
