@@ -48,7 +48,7 @@ class Request(C.LittleEndianStructure):
         ("star_action_count", U32), ("star_actions", U32 * 8),
         ("tint_enabled", U32),
         ("proximity_enabled", U32), ("proximity_distance", C.c_float),
-        ("origin", Origin), ("clip_count", U32), ("reserved1", U32),
+        ("origin", Origin), ("clip_count", U32), ("hidden", U32),
         ("clips", Clip * GHOSTS),
         ("shadow_enabled", U32), ("occlusion_fade", U32),
         ("volume", C.c_float), ("sound_fade", U32),

@@ -12,6 +12,10 @@
 #define GIPC_LEASE_MS 3000u
 #define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v14_"
 #define GIPC_GHOSTS GP_GHOSTS
+/* status.capabilities, beside the capture's GS_CAP_* bits: this worker honours
+ * gipc_request.hidden. An older one refuses hidden as a nonzero reserved word,
+ * so a client sends it only where this bit is set. */
+#define GIPC_CAP_HIDDEN 0x100u
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
 enum gipc_reason { GIPC_OK, GIPC_OWNER_GONE, GIPC_EXPIRED, GIPC_PROTOCOL,
@@ -47,8 +51,10 @@ typedef struct gipc_request {
     uint32_t proximity_enabled;
     float proximity_distance;
     go_marker origin;
-    /* play_enabled requires 1..GIPC_GHOSTS nonzero, distinct clip ids. */
-    uint32_t clip_count, reserved1;
+    /* play_enabled requires 1..GIPC_GHOSTS nonzero, distinct clip ids.
+     * hidden: the overlay switch is off; the race goes on unseen and unheard
+     * (gp_request.hidden). Formerly the checked-zero reserved1, so 0 shows as before. */
+    uint32_t clip_count, hidden;
     gipc_clip clips[GIPC_GHOSTS];
     /* 0 draws no recorded shadow for any ghost (the A/B switch). 1 in
      * occlusion_fade fades ghost pixels that block live Mario or the camera

@@ -37,6 +37,9 @@ class NativeChannel:
         self._map = self._view = self._mutex = self._wake = None
         self._request = None
         self._birth = None
+        # Whether this renderer can hide a race and keep it running
+        # (GIPC_CAP_HIDDEN); read from every status before a command is encoded.
+        self._hides = False
         try:
             self._map = self._k.OpenFileMappingW(0xF001F, False, self.name)
             if not self._map:
@@ -127,6 +130,7 @@ class NativeChannel:
             current = P.Request.from_buffer_copy(C.string_at(self._view + 256, C.sizeof(P.Request)))
             if current.token != request.token:
                 raise RuntimeError("native ghost lease was replaced")
+            self._hides = bool(status.capabilities & L.IPC_CAP_HIDDEN)
             if playback is not None:
                 try:
                     self._set_playback(playback)
@@ -164,9 +168,15 @@ class NativeChannel:
         retired = sorted(set(value) & {"clip_id", "clip_sha256", "clip_path", "hue_degrees"})
         if retired:
             raise ValueError(f"native ghost clips are a list; retired keys: {retired}")
-        enabled = bool(value.get("enabled", False))
+        # The overlay switch off (`hidden`): a renderer with GIPC_CAP_HIDDEN
+        # keeps the race running unseen. An older one refuses the word, so it
+        # gets playback off with the roster and its generations kept: the
+        # clips stay loaded and the switch back on re-resolves the origin.
+        hidden = _switch(value, "hidden", False)
+        enabled = bool(value.get("enabled", False)) and not (hidden and not self._hides)
         preparing = _set_generations(request, value)
         request.play_enabled = enabled
+        request.hidden = int(hidden and enabled)
         _set_presentation(request, value)
         _set_seek(request, value, enabled)
         if enabled or preparing:

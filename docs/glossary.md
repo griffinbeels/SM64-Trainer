@@ -1315,7 +1315,9 @@ D-pad Up in the game flips the same setting, in play or in the game's pause
 menu, but never while Usamune's menu is open (it navigates with D-pad Up) and
 never with L, R or Z held (Usamune's button combos) — his rule, 2026-10-16:
 "Gameplay active or normal pause --> toggle ghost overlay; USAMUNE MENU -->
-don't do anything".
+don't do anything". Off hides the race rather than ending it: the [[ghost set]]
+runs on unseen and unheard, so switching back on mid-run shows every ghost at
+the frame the attempt has reached, at once (his ask, 2026-10-17).
 
 - **Lives** — `src/sm64_events/ui/components/ghostswitch.js` (`GhostToggle`);
   `src/sm64_events/ghost/dpad_toggle.py` (the press rule and the flip)

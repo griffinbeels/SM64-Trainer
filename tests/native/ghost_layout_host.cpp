@@ -126,6 +126,7 @@ int main() {
     number("IPC_SLOTS", GIPC_SLOTS); number("IPC_RING_AT", offsetof(gipc_page, records));
     number("IPC_PATH_CHARS", GIPC_PATH_CHARS);
     number("IPC_CLIP_BYTES", sizeof(gipc_clip)); number("IPC_REQUEST_BYTES", sizeof(gipc_request));
+    number("IPC_CAP_HIDDEN", GIPC_CAP_HIDDEN);
     number("LABEL_BYTES", GP_LABEL_BYTES);
     number("GHOSTS", GP_GHOSTS); number("PROXIMITY_MAX", GP_PROXIMITY_MAX); number("BRIDGE_FRAMES", GP_BRIDGE_FRAMES);
     text("SOUND_RING_MAGIC", GS_RING_MAGIC); number("SOUND_RING_VERSION", GS_RING_VERSION);

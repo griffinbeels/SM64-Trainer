@@ -377,23 +377,35 @@ class Rivals:
             if pb and self.options["include_pb"] and pb.get("ghost") is not None:
                 ghosts.insert(0,ColoredGhost(pb["ghost"],controls["hue_degrees"]))
                 self.pb = {**pb,"hue_degrees":controls["hue_degrees"]}
-            prepared_key = (id(self.loaded_db),identity,enabled,source,
+            # What the renderer holds, whatever the overlay switch says: a flip
+            # never re-prepares the same roster (his ask, 2026-10-17: switched
+            # back on, the ghosts resume at once).
+            prepared_key = (id(self.loaded_db),identity,source,
                             tuple((ghost.origin,ghost.hue_degrees,ghost.rival_slot) for ghost in ghosts))
             self.fingerprint = stamp
+            if not enabled:
+                # Nothing is prepared while the overlay is off. A roster the
+                # renderer already holds races on hidden (native_session.py).
+                self.status = None
+                return self._answer(ghosts, None)
             if prepared_key == self.prepared_key:
                 self._pb_playback(self.prepared_answer)
-                return None
+                return self._answer(ghosts, self.prepared_answer)
             self.prepared_key = prepared_key
             self.generation += 1
             self.native.set_portable(RivalProvider(self.population,sharing))
-            answer = self.native.prepare(self.native_target(target),ghosts,controls,self.generation) if enabled else None
+            answer = self.native.prepare(self.native_target(target),ghosts,controls,self.generation)
             self.prepared_answer = answer
             self._pb_playback(answer)
-            self.status = ("Updates on your next attempt."
-                           if enabled and ghosts and answer and answer.get("available") else None)
-            return (answer if ghosts else None) or {"available":bool(ghosts),"reason":None if ghosts else "no_rivals",
-                              "reason_text":None if ghosts else "No compatible ghosts in this range yet.","ghosts":[]}
+            self.status = "Updates on your next attempt." if ghosts and answer and answer.get("available") else None
+            return self._answer(ghosts, answer)
         return None
+
+    @staticmethod
+    def _answer(ghosts, prepared):
+        """The session's ghost answer: the prepared one, else whether anyone could race."""
+        return (prepared if ghosts else None) or {"available":bool(ghosts),"reason":None if ghosts else "no_rivals",
+            "reason_text":None if ghosts else "No compatible ghosts in this range yet.","ghosts":[]}
 
     def _parked(self, target):
         """The answer while nothing can race: no ROM, no target or no strategy."""

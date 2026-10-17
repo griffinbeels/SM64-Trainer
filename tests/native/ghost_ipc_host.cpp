@@ -235,7 +235,7 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(token) X(revision) X(heartbeat) X(capture_enabled) X(play_enabled) X(mode) X(seek_igt) \
     X(nudge) X(opacity) X(stop_at_star) X(rom_generation) X(owner_suspended) X(model_id) \
     X(layout) X(rom_path) X(star_action_count) X(star_actions) X(tint_enabled) \
-    X(proximity_enabled) X(proximity_distance) X(origin) X(clip_count) X(reserved1) X(clips) \
+    X(proximity_enabled) X(proximity_distance) X(origin) X(clip_count) X(hidden) X(clips) \
     X(shadow_enabled) X(occlusion_fade) X(volume) X(sound_fade) \
     X(names_enabled) X(inputs_enabled) X(input_mode) X(name_background) X(name_background_opacity) \
     X(hud_inputs_enabled) X(record_ghosts) X(path_enabled) X(path_buttons) X(path_source) X(path_clip) \
@@ -483,10 +483,11 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         bad=r;bad.revision=20;bad.occlusion_fade=2;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=21;bad.volume=1.25f;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=22;bad.sound_fade=2;refused(page,bad,GIPC_PROTOCOL);
+        bad=r;bad.revision=23;bad.hidden=2;refused(page,bad,GIPC_PROTOCOL);
         // The protocol refusals retired the model, and the worker holds no
         // cartridge once a model is built: rebuilding reads the cartridge again.
         rom[0]=0x40;const auto before_rebuild=rom_validations.load();
-        r.revision=23;ready(page,r);
+        r.revision=24;ready(page,r);
         check(rom_validations.load()>before_rebuild,"a retired model is rebuilt from a fresh cartridge read");
         // His star swap (2026-10-03: "the OLD GHOST'S PATH was still there"):
         // the path now names clip 1, which must be read again. While it loads,
@@ -496,7 +497,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
             const size_t before=[&]{std::lock_guard<std::mutex> lock(command_mutex);return history.size();}();
             const auto shown=last_command();
             check(shown.path_enabled && shown.clips[shown.path_clip].clip_id[0]==2,"the path draws clip 2's route");
-            r.revision=24;set_clip(r.clips[0],1,argv[1],argv[2],217);r.path_clip=0;ready(page,r);
+            r.revision=25;set_clip(r.clips[0],1,argv[1],argv[2],217);r.path_clip=0;ready(page,r);
             std::vector<gp_request> sent;{std::lock_guard<std::mutex> lock(command_mutex);sent.assign(history.begin()+before,history.end());}
             bool withheld=false,wrong=false;
             for(const auto& c:sent) {
@@ -510,8 +511,8 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
                   "the new set brings its own path");
         }
         // The set as it was (clip 2 then 3) for the sections that follow.
-        r.revision=25;set_clip(r.clips[0],2,argv[4],argv[5],40);ready(page,r);
-        r.revision=26;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
+        r.revision=26;set_clip(r.clips[0],2,argv[4],argv[5],40);ready(page,r);
+        r.revision=27;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
         r.owner_created_lo^=1;r.token=124;r.revision=1;ready(page,r);
         // Reproduce the reader owning the page exactly when lease expiry must
         // be published. No new request/event wakes the worker after this race.
@@ -668,6 +669,20 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.revision=22;r.play_enabled=1;page.send(r);
         page.wait([](const gipc_status& s){return s.active_generation==105;},"clock readiness plays the already selected generation");
         check(last_command().clips[0].clip_id[0]==2,"clock resolution cannot swap in a newer prepared roster");
+        // His overlay switch: the worker says it honours hidden, forwards it on
+        // the applied race and shows that race again, never withdrawing,
+        // re-reading a clip or re-activating a generation.
+        check(page.status().capabilities&GIPC_CAP_HIDDEN,"the worker advertises the overlay switch");
+        {
+            const unsigned withdrawn=withdrawals.load(),sent=commands.load(),read=prepared_ids[1]+prepared_ids[2];
+            r.revision=23;r.hidden=1;ready(page,r);
+            check(last_command().hidden==1 && last_command().clips[0].clip_id[0]==2 && commands.load()>sent,
+                  "overlay off reaches playback as the same race, hidden");
+            r.revision=24;r.hidden=0;ready(page,r);
+            check(last_command().hidden==0 && last_command().clips[0].clip_id[0]==2,"overlay on shows that race again");
+            check(withdrawals.load()==withdrawn && prepared_ids[1]+prepared_ids[2]==read
+                  && page.status().active_generation==105,"no withdrawal, clip read or new activation either way");
+        }
         ghost_ipc::rom(false);page.stopped();
         check(!page.status().prepared_generation && !page.status().active_generation,"ROM closure invalidates both generation acknowledgements");
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");

@@ -86,8 +86,11 @@ typedef struct gp_request {
     uint32_t sound_fade;
     /* The tracker's arm is gone (a completed star or segment): hide and stay
      * silent, unless a state load the renderer resolves after suspension
-     * brings the ghost back on that frame, ahead of the owner's next command. */
-    uint32_t suspended, reserved4;
+     * brings the ghost back on that frame, ahead of the owner's next command.
+     * hidden: his overlay switch is off. The race goes on unseen and unheard
+     * (its restores, star latch and defeat included), so showing it again
+     * draws the frame it has reached. Formerly the checked-zero reserved4. */
+    uint32_t suspended, hidden;
     /* Annotations follow the displayed ghost's own pose/fade and occurrence.
      * Inputs are omitted when that occurrence has no GC_VALID_PAD. */
     uint32_t names_enabled, inputs_enabled, input_mode;

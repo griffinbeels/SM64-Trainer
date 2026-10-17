@@ -497,6 +497,228 @@ def test_a_different_runs_token_never_joins_late(tmp_path, monkeypatch, consumed
     native.stop()
 
 
+#: His report's moment, 2026-10-17: 0'04"43 into a run, at 30 fps.
+MID_RUN_FRAMES = 133
+
+
+def switch_session(tmp_path, monkeypatch, *, prepared_before_start=True):
+    """A star run with its certified start, and the overlay switch as the
+    session drives it (`GhostSession._reconcile`). Returns the native owner,
+    its fake renderer, the run's live origin and the renderer's generations."""
+    session, source, _ = native_session(tmp_path)
+    native = session._native
+    target = {"kind": "star", "entity_key": "1-5", "strat": "Bomb Clip"}
+    ghost = SimpleNamespace(id=17, origin="attempt:7", frames=30, pb=True)
+    controls = settings.native_controls(settings.defaults())
+    state = {"origin": {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
+                        "utc": "2026-09-21T08:00:00+00:00", "full_start_token": ("star", 1, 9),
+                        "full_start_now": True, "frames_since_start": 0}}
+    native._origin_of = lambda *_: state["origin"]
+    served = source.snapshot_status
+    generations = {"prepared_generation": 7 if prepared_before_start else 0, "active_generation": 0}
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
+
+    def switch(on):
+        native.reconcile(enabled=True, hidden=not on, target=target, controls=controls)
+
+    def prepare():
+        native.prepare(target, [ghost], controls, 7)
+
+    return native, source, state, generations, switch, prepare
+
+
+def mid_run(state, frames=MID_RUN_FRAMES):
+    state["origin"] = {**state["origin"], "full_start_now": False, "frames_since_start": frames}
+
+
+def without(command, *keys):
+    return {key: value for key, value in command.items() if key not in keys}
+
+
+def test_switching_off_mid_run_hides_the_race_and_switching_on_resumes_it_on_the_next_command(
+        tmp_path, monkeypatch):
+    native, source, state, generations, switch, prepare = switch_session(tmp_path, monkeypatch)
+    prepare()
+    switch(True)
+    native.note()  # the run's certified start adopts the ready roster
+    racing = source.commands[-1]
+    assert racing["enabled"] and not racing.get("hidden") and racing["activate_generation"] == 7
+    generations["active_generation"] = 7
+    mid_run(state)
+    native.note()
+    assert source.commands[-1] == racing
+    # Neither flip may touch a clip, a template or the disk.
+    monkeypatch.setattr(native, "resolve", lambda *_: pytest.fail("the switch resolved assets"))
+    monkeypatch.setattr(native, "_fingerprint", lambda *_: pytest.fail("the switch inspected files"))
+    sent = len(source.commands)
+    switch(False)
+    hidden = source.commands[-1]
+    assert len(source.commands) == sent + 1, "switching off sends exactly one command"
+    assert hidden["enabled"] and hidden.get("hidden")
+    # The binding is kept: the same clips, origin, generation and activation.
+    assert without(hidden, "hidden") == without(racing, "hidden")
+    assert native.state() == {"running": False, "visible": False, "backend": "native", "reason": None,
+                              "prepared_generation": 7, "active_generation": 7}
+    mid_run(state, MID_RUN_FRAMES + 30)  # one second later, still following the run
+    native.note()
+    assert source.commands[-1] == hidden
+    switch(True)
+    shown = source.commands[-1]
+    assert len(source.commands) == sent + 2, "switching on shows it on the very next command"
+    assert shown == racing
+    assert native.state()["running"] and native.state()["reason"] is None
+    native.stop()
+
+
+def test_switching_on_mid_run_with_nobody_racing_joins_this_run_once_its_roster_is_ready(
+        tmp_path, monkeypatch):
+    """Off at the run's start (nothing prepared then), on 0'04"43 in: the
+    roster prepares now and joins THIS run, aligned to its elapsed clock, not
+    the next one. A switch-on is not the spawn fall's late join."""
+    native, source, state, generations, switch, prepare = switch_session(
+        tmp_path, monkeypatch, prepared_before_start=False)
+    switch(False)
+    native.note()  # the run starts while the overlay is off
+    assert source.commands[-1] == {"enabled": False}
+    mid_run(state)
+    switch(True)   # the session's switch reaches the native owner first,
+    prepare()      # then the resolve prepares the roster
+    native.note()
+    assert not source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 0
+    generations["prepared_generation"] = 7
+    native.note()
+    joined = source.commands[-1]
+    assert joined["enabled"] and not joined.get("hidden")
+    assert joined["activate_generation"] == 7 and joined["activate_start"] == 1
+    assert joined["origin"]["global_timer"] == 100, "aligned to this run's own start"
+    assert native._selected_asset[0][1]["clip_id"] == "ab" * 16
+    native.note()
+    assert source.commands[-1] == joined, "the join is consumed once"
+    native.stop()
+
+
+def test_a_switch_on_with_nobody_racing_joins_as_soon_as_the_roster_is_ready_even_late(
+        tmp_path, monkeypatch):
+    native, source, state, generations, switch, prepare = switch_session(
+        tmp_path, monkeypatch, prepared_before_start=False)
+    switch(False)
+    native.note()
+    mid_run(state, 3000)  # well past the spawn fall's late join
+    switch(True)
+    prepare()
+    generations["prepared_generation"] = 7
+    native.note()
+    assert source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 7
+    native.stop()
+
+
+def test_a_full_start_while_switched_off_races_hidden_and_switching_on_shows_it_at_once(
+        tmp_path, monkeypatch):
+    native, source, state, generations, switch, prepare = switch_session(tmp_path, monkeypatch)
+    prepare()
+    switch(True)
+    native.note()
+    generations["active_generation"] = 7
+    switch(False)
+    # His reset while the overlay is off: the next run adopts the roster, hidden.
+    state["origin"] = {**state["origin"], "arm_id": 10, "frame": 900, "full_start_token": ("star", 1, 10),
+                       "full_start_now": True, "frames_since_start": 0}
+    native.note()
+    hidden = source.commands[-1]
+    assert hidden["enabled"] and hidden.get("hidden") and hidden["activate_start"] == 2
+    assert hidden["origin"]["global_timer"] == 900
+    mid_run(state)
+    switch(True)
+    assert source.commands[-1] == {**hidden, "hidden": False}
+    native.stop()
+
+
+@pytest.mark.parametrize(("change", "value"), [("strat", "Single jump ending"), ("scope", "overall"),
+                                               ("entity_key", "1-6")])
+def test_a_target_strategy_or_scope_change_while_switched_off_still_revokes(tmp_path, monkeypatch, change, value):
+    native, source, state, generations, switch, prepare = switch_session(tmp_path, monkeypatch)
+    prepare()
+    switch(True)
+    native.note()
+    switch(False)
+    controls = settings.native_controls(settings.defaults())
+    other = {"kind": "star", "entity_key": "1-5", "strat": "Bomb Clip", change: value}
+    native.reconcile(enabled=True, hidden=True, target=other, controls=controls)
+    assert source.commands[-1] == {"enabled": False}
+    assert native._selected_asset is native._asset is None
+    native.reconcile(enabled=True, hidden=False, target=other, controls=controls)
+    native.note()
+    assert source.commands[-1] == {"enabled": False}
+    native.stop()
+
+
+def test_the_card_toggle_and_dpad_up_hide_and_resume_the_lineups_race_without_preparing_again(tmp_path):
+    """Both switches reach `GhostSession.update(enabled=...)`. The flip reaches
+    the renderer before the setting is saved or the roster re-resolves, and
+    switching back on keeps the same generation and activation, so the card
+    never says the lineup "Updates on your next attempt"."""
+    from sm64_events.ghost.dpad_toggle import OverlayFlipper
+    from sm64_events.ghost.rivals import Rivals
+    from sm64_events.storage.db import Database
+    from tests.test_ghost_adaptive import Standards, attempt, save
+
+    session, source, tracker = native_session(tmp_path)
+    native = session._native
+    tracker.db, tracker.ranks = Database(tmp_path / "switch.db"), Standards()
+    row = attempt(7, 30, course_id=24, star_id=1, strat_tag="10 coin",
+                  native_clock_frame=100, closed_frame=130)
+    tracker.db.upsert_attempt(row)
+    save(tracker.db, row)
+    native._origin_of = lambda kind, entity_key: {
+        "kind": "star", "session_id": 1, "arm_id": 9, "frame": 100, "utc": "2026-09-21T08:00:00+00:00",
+        "full_start_token": (1, 9), "full_start_now": True}
+    served = source.snapshot_status
+    source.snapshot_status = lambda **kwargs: {**served(**kwargs), "prepared_generation": 1, "active_generation": 1}
+    population = SimpleNamespace(generation=1, metadata_snapshot=lambda *_args, **_kwargs: ())
+    session._rivals = Rivals(tracker, population, native, lambda: "us")
+    refresh, resolved = session._rivals.refresh, []
+
+    def observed(*args, **kwargs):
+        if kwargs.get("force"):
+            resolved.append(source.commands[-1].get("hidden") if source.commands else None)
+        return refresh(*args, **kwargs)
+
+    session._rivals.refresh = observed
+
+    async def check():
+        await session.update(enabled=True)
+        native.note()
+        racing = source.commands[-1]
+        assert racing["enabled"] and racing["activate_generation"] == 1 and not racing.get("hidden")
+        generation = session._rivals.generation
+        resolved.clear()
+        await session.update(enabled=False)
+        assert source.commands[-1] == {**racing, "hidden": True}
+        await OverlayFlipper(session).flip()  # D-pad Up
+        assert source.commands[-1] == racing
+        assert resolved == [True, False], "each flip reached the renderer before the roster re-resolved"
+        assert session._rivals.generation == generation
+        assert session.payload()["rivals"]["status"] is None
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        tracker.db.close()
+
+
+@pytest.mark.parametrize("hidden", [False, True])
+def test_recording_off_still_blocks_a_hidden_or_shown_race(tmp_path, monkeypatch, hidden):
+    native, source, state, generations, switch, prepare = switch_session(tmp_path, monkeypatch)
+    prepare()
+    switch(True)
+    native.note()
+    native._replay.recorder.recording_enabled = False
+    switch(not hidden)
+    assert source.commands[-1] == {"enabled": False}
+    native.stop()
+
+
 def test_native_switch_uses_saved_poses_and_preserves_controls(tmp_path):
     session, source, _ = native_session(tmp_path)
 

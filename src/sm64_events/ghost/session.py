@@ -322,6 +322,15 @@ class GhostSession:
         if self._pending:
             pending, self._pending = self._pending, {}
             resolve = resolve or bool(RESOLVING_CHANGES & set(pending))
+            if "enabled" in pending:
+                # The switch shows or hides the race the renderer already
+                # holds, so it reaches the renderer before the setting is
+                # saved or the roster re-resolved.
+                self._values["enabled"] = pending["enabled"]
+                try:
+                    self._reconcile()
+                except Exception:  # noqa: BLE001 - renderer failure must not stop practice
+                    log.exception("native ghost playback could not be reconciled")
             self._apply(pending)
         world = self._world_now()
         resolve = resolve or world != self._world or self._resolved_at is None
@@ -671,9 +680,10 @@ class GhostSession:
     def _reconcile(self) -> None:
         if self._native is not None:
             # A pending unavailable roster must not disable the current race.
+            # The switch off hides that race rather than ending it.
             available = (self._rivals.identity is not None if self._rivals is not None
                          else self._source.get("available",False))
-            self._native.reconcile(enabled=self._values["enabled"] and available,
+            self._native.reconcile(enabled=available, hidden=not self._values["enabled"],
                                    target=self._rivals.native_target(self._target) if self._rivals is not None else self._target,
                                    controls=settings.native_controls(self._values))
 
