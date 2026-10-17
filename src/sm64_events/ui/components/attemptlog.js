@@ -85,6 +85,22 @@ export function delta(frames) {
   return html` <span class=${cls}>${sign}${(frames / 30).toFixed(2)}s</span>`;
 }
 
+// THE TIMER HINT (2026-10-17), left of the entry number: "annotate the entry
+// (TO THE LEFT OF THE ENTRY NUMBER) such that we say "Set Timer -> GRABX"".
+// The row's time is the x-cam time whatever Usamune is set to; this says how
+// to make the GAME's timer show the same number. The server decides which rows
+// (tracking/views.py `timer_hint`: this grab's setting and the current one
+// both stop short of the x-cam), so it disappears from every row once he grabs
+// one star under GrabX. It sits in the card body's left indent, out of flow,
+// so `#N` does not move and the row gives up no width.
+const TIMER_HINT_TITLE = "The game's timer stops at the grab. This log shows the x-cam time."
+  + " Set Usamune's TIMER → STOP to GrabX to match.";
+
+function TimerHint({ show }) {
+  if (!show) return null;
+  return html`<span class="timer-hint" title=${TIMER_HINT_TITLE}><span>Set Timer</span>${" "}<span>→ GrabX</span></span>`;
+}
+
 // THE PB ROW (task 0147, 2026-09-23). The row that is its strategy's current
 // personal best says GOLD!! where its 0.00s used to be, in holo-foil gold, on
 // a gold-washed row -- his ask: "it should say "GOLD!!" -- it should have a
@@ -324,7 +340,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // (`other_strat`, the same gate that withholds the button).
   const row = html`<tr ref=${(el) => { rowRef.current = el; }} ...${pbRow.handlers}
       class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""} ${pbRow.rowClass}">
-    <td class="meta attempt-index">#${idx + 1}</td>
+    <td class="meta attempt-index"><${TimerHint} show=${a.timer_hint} />#${idx + 1}</td>
     <td class="attempt-medal">${a.rank
       ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />` : ""}</td>
     <td class="attempt-result ${a.outcome === "success" ? "good" : "badx"}">

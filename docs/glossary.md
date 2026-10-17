@@ -2450,6 +2450,21 @@ can never disagree about what a time means.
 - **Lives** — the caveat vocabulary
   (`src/sm64_events/ui/components/marks.js`)
 
+### Timer hint
+
+The "Set Timer → GrabX" note left of a [[practice log]] row's entry number.
+The log records the [[x-cam]] time whatever STOP setting Usamune uses, but
+Usamune's own timer shows that number only under GrabX or Xcam. The trainer
+hints a [[star]] row grabbed under another setting while the newest
+grab that reported a setting still did, so every hint leaves once you grab
+one [[star]] under GrabX.
+
+- **Not** — a [[caveat mark]]. A [[caveat mark]] says the row's time is not
+  the quantity it looks like; a hinted row's time is right, and the hint is
+  about the number the game shows.
+- **Lives** — the rule (`src/sm64_events/tracking/views.py`)
+  → the note (`src/sm64_events/ui/components/attemptlog.js`)
+
 ### MARELO pill
 
 The bar carrying your [[MARELO]] [[tier]] and [[division]] at the top of the

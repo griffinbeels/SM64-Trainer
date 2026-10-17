@@ -290,8 +290,29 @@ def _pb_row_json(row, attempt_by_id, igt_seen):
                                  igt_seen)}
 
 
+# Usamune STOP settings whose on-screen time is not the x-cam time this log
+# records: it froze at the grab, or it never stops.
+_STOPS_SHORT_OF_XCAM = frozenset({"grab", "none"})
+
+
+def usamune_stop_now(attempts) -> str | None:
+    """What Usamune's timer is set to stop at NOW, as far as the record says:
+    the newest star attempt whose grab reported it (`Attempt.usamune_stop`),
+    or None when no grab has. `attempts` in journal order (`db.attempts()`).
+
+    The practice log's "Set Timer -> GrabX" hint is LIVE on this: a row is
+    hinted only while the current setting still disagrees with the log, so
+    the moment he sets GrabX and grabs one star, every hint disappears --
+    older rows included, because the advice is about his setting, not about
+    those rows' times (always x-cam)."""
+    for a in reversed(attempts):
+        if a.segment_id is None and a.usamune_stop is not None:
+            return a.usamune_stop
+    return None
+
+
 def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
-                  pbs_by_strat=None, active_strat=None):
+                  pbs_by_strat=None, active_strat=None, stop_now=None):
     # A row is MEASURED only when it belongs to the ACTIVE strategy, and then
     # against that strategy's own PB -- never the entity-wide one. A row on
     # any other strategy shows no delta at all (his ruling, 2026-08-22: "the
@@ -382,6 +403,14 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             # but every one of them still carries a time that measures the
             # wrong moment.
             "caveat": attempt_caveat(a),
+            # "Set Timer -> GrabX" beside the entry number: this grab's own
+            # Usamune setting showed him a different number from this row,
+            # and his CURRENT setting (`stop_now`, usamune_stop_now) still
+            # would. "All of our practice entries should be xcam times"
+            # (2026-10-17) -- the time is right regardless; this only tells
+            # him how to make the game agree.
+            "timer_hint": (a.usamune_stop in _STOPS_SHORT_OF_XCAM
+                           and stop_now in _STOPS_SHORT_OF_XCAM),
             # A VALID run (projection caveat 21): True/False once judged,
             # null for every row journaled before the rules that judge it.
             # `invalid_reason` is a caveats.py VALIDITY_CAVEATS key; the log
@@ -1351,6 +1380,23 @@ def _armed_detail_for(d, seg_id: int, armed_arms: dict) -> dict | None:
             "steps": card_step_labels(d)}
 
 
+def _entity_histories(all_attempts) -> tuple[dict, dict]:
+    """ONE pass over all_attempts → per-entity lifetime histories (id order
+    preserved): `({(course_id, star_id): [...]}, {segment_id: [...]})`.
+    Shared by the section builders and every rank-mode average; the per-star
+    list-comp scans this replaces were O(stars × attempts) per view build and
+    ran even in pb mode, which discards the history entirely (final-review
+    finding, 2026-07-23)."""
+    by_star: dict = {}
+    by_seg: dict = {}
+    for a in all_attempts:
+        if a.segment_id is not None:
+            by_seg.setdefault(a.segment_id, []).append(a)
+        elif a.course_id is not None:
+            by_star.setdefault((a.course_id, a.star_id), []).append(a)
+    return by_star, by_seg
+
+
 @calibrated_view
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
@@ -1368,6 +1414,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # for its own `frames`), and an unclaimable PB is still unclaimable with
     # no attempt behind it.
     attempt_by_id = {a.id: a for a in all_attempts}
+    # Lifetime, whatever the scope: his Usamune setting is a fact about now.
+    stop_now = usamune_stop_now(all_attempts)
     sessions_list = db.sessions()
     session_meta = {s["id"]: s for s in sessions_list}
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
@@ -1407,18 +1455,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         hundred_coin_ids.add(d.id)
         hundred_coin_engine_for_star.setdefault(hc, d)
 
-    # ONE pass over all_attempts → per-entity lifetime histories (id order
-    # preserved). Shared by the section builders and every rank-mode average;
-    # the per-star list-comp scans this replaces were O(stars × attempts) per
-    # view build and ran even in pb mode, which discards the history entirely
-    # (final-review finding, 2026-07-23).
-    attempts_by_star: dict = {}
-    attempts_by_seg: dict = {}
-    for a in all_attempts:
-        if a.segment_id is not None:
-            attempts_by_seg.setdefault(a.segment_id, []).append(a)
-        elif a.course_id is not None:
-            attempts_by_star.setdefault((a.course_id, a.star_id), []).append(a)
+    attempts_by_star, attempts_by_seg = _entity_histories(all_attempts)
 
     deleted_strats = db.get_state("deleted_strats", {})
     # THE reading of "which strategy is this entity being practised with"
@@ -1692,7 +1729,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "pb_by_strat": pb_by_strat_json,
             "attempts": [_attempt_json(a, clock, service.ranks, rank_clock,
                                        pbs_by_strat=pbs_by_strat,
-                                       active_strat=star_strat)
+                                       active_strat=star_strat,
+                                       stop_now=stop_now)
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
             "strategies": star_strategies,
