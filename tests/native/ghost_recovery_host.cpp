@@ -246,6 +246,19 @@ int main() {
             check(!run.session->recovery.bound(),"new tracker session cannot inherit playback history");
         }
         for(bool segment:{false,true}) {
+            // His overlay switch off mid-run, a state load while it is off, then
+            // on (2026-10-17): the race followed the load unseen, so the first
+            // frame shown again is the loaded run's own. Hidden frames draw nothing.
+            Run run(segment);const uint16_t start=segment?20:0;
+            for(uint16_t raw=start;raw<=start+120;++raw)run.step(raw,raw-start);
+            run.demand.hidden=1;++run.demand.revision;
+            for(uint16_t raw=start+121;raw<=start+150;++raw)run.step(raw,-1);
+            check(run.session->recovery.bound(),"the overlay switch keeps the restore history");
+            run.step(uint16_t(start+60),-1);run.step(uint16_t(start+61),-1); // his load, unseen
+            run.demand.hidden=0;++run.demand.revision;
+            run.step(uint16_t(start+62),62);run.step(uint16_t(start+63),63); // shown where the load put him
+        }
+        for(bool segment:{false,true}) {
             Run run(segment,true);const uint16_t start=segment?20:0;
             // Template enters area2 at coordinate40; LIVE enters at coordinate80.
             for(uint16_t raw=start;raw<=start+80;++raw)run.step(raw,raw-start<40?raw-start:-1);

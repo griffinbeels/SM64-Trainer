@@ -71,6 +71,7 @@ V6_MAGIC, V6_VERSION, V6_SAMPLE_VERSION, V6_RECORD_BYTES, V6_SAMPLE_BYTES = b"SM
 # The IPC page and ghost limits
 IPC_SLOTS, IPC_RING_AT, IPC_PATH_CHARS = 512, 20480, 520
 IPC_CLIP_BYTES, IPC_REQUEST_BYTES, LABEL_BYTES = 1160, 20080, 64
+IPC_CAP_HIDDEN = 0x100  # GIPC_CAP_HIDDEN: the renderer can hide a race and keep it running
 GHOSTS = 16  # displayed ghosts at once: playback, compositor batch, sound sources, request slots
 PROXIMITY_MAX = 400.0  # the largest overlap-fade distance a request may carry
 BRIDGE_FRAMES = 2  # the longest refused run playback holds the previous pose over

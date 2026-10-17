@@ -89,7 +89,7 @@ bool same_controls(gipc_request a, gipc_request b) {
     return !std::memcmp(&a, &b, sizeof(a));
 }
 bool valid_set(const gipc_request &r) {
-    if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count && !r.prepare_generation)
+    if (r.clip_count > GIPC_GHOSTS || r.hidden > 1 || (r.play_enabled && !r.clip_count && !r.prepare_generation)
             || (r.activate_generation && r.activate_generation != r.prepare_generation)
             || (!!r.activate_generation != !!r.activate_start)
             || r.cancel_preparation > 1 || (r.cancel_preparation && (!r.prepare_generation || r.activate_generation))
@@ -618,7 +618,7 @@ struct Session {
                     command.proximity_distance = r.proximity_distance;
                     command.shadow_enabled = r.shadow_enabled; command.volume = r.volume;
                     command.occlusion_fade = r.occlusion_fade; command.sound_fade = r.sound_fade;
-                    command.suspended = r.owner_suspended;
+                    command.suspended = r.owner_suspended; command.hidden = r.hidden;
                     command.names_enabled=r.names_enabled;command.inputs_enabled=r.inputs_enabled;
                     command.input_mode=r.input_mode;command.name_background=r.name_background;
                     command.name_background_opacity=r.name_background_opacity;
@@ -866,7 +866,7 @@ DWORD WINAPI worker(void *argument) {
                         std::memcpy(initial.magic, GIPC_MAGIC, 8);
                         initial.version = GIPC_VERSION; initial.bytes = sizeof(gipc_page);
                         initial.producer_pid = GetCurrentProcessId(); initial.generation = generation;
-                        initial.record_bytes = sizeof(gclip_frame); initial.capabilities = GS_CAP_POSE | GS_CAP_WORLD_PASS;
+                        initial.record_bytes = sizeof(gclip_frame); initial.capabilities = GS_CAP_POSE | GS_CAP_WORLD_PASS | GIPC_CAP_HIDDEN;
                         initial.state = GIPC_PASSIVE;
                         FILETIME birth{}, unused[3]{}, utc{};
                         GetProcessTimes(GetCurrentProcess(), &birth, unused, unused+1, unused+2);

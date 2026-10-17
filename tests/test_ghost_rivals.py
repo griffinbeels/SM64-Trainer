@@ -322,12 +322,21 @@ def test_new_database_and_capture_source_force_new_preparation(tmp_path,monkeypa
 
 def test_overlay_off_does_not_prepare_clip_bytes(tmp_path,monkeypatch):
     rivals,_,native,_,_ = controller(tmp_path,monkeypatch)
-    count=len(native.preparations)
+    count,generation=len(native.preparations),rivals.generation
     rivals.refresh(TARGET,CONTROLS,enabled=False)
     assert len(native.preparations)==count
     assert rivals.payload()["status"] is None
+    # Switched back on, the renderer still holds this roster and its race
+    # resumes (his ask, 2026-10-17): nothing is prepared again.
+    rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
+    assert (len(native.preparations),rivals.generation)==(count,generation)
+    assert rivals.payload()["status"] is None
+    # A renderer that no longer holds it (a new capture) prepares once on.
+    rivals.source_of=lambda:"new-capture"
+    rivals.refresh(TARGET,CONTROLS,enabled=False)
+    assert len(native.preparations)==count
     rivals.refresh(TARGET,CONTROLS,enabled=True)
-    assert len(native.preparations)==count+1
+    assert len(native.preparations)==count+1 and rivals.generation==generation+1
 
 
 def test_wire_omits_private_playback_and_local_lineage():
