@@ -566,7 +566,7 @@ class StarGrabDetector:
         """Usamune's STOP for this grab: the settings byte when this build's
         layout reads it, else what this grab's own writes said. Never an
         earlier grab's answer: a row stamped with the setting he had BEFORE
-        switching to GrabX kept its "Set Timer" hint (journal 20263,
+        switching to GrabX kept its timer hint (journal 20263,
         2026-10-17, published on the previous grabs' Grab)."""
         return grab.stop_read or grab.stop_seen
 

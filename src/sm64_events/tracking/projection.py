@@ -409,7 +409,7 @@ class Attempt:
                                # never guessed). It describes the GAME's
                                # display, not our number: the row's time is
                                # the x-cam either way. The practice log reads
-                               # it to say "Set Timer -> GrabX" while his
+                               # it to show the timer hint while his
                                # setting would show him a different number
                                # (tracking/views.py::usamune_stop_now).
     platform: str | None = None    # WHICH MACHINE set this time -- "emu" or

@@ -300,7 +300,7 @@ def usamune_stop_now(attempts) -> str | None:
     the newest star attempt whose grab reported it (`Attempt.usamune_stop`),
     or None when no grab has. `attempts` in journal order (`db.attempts()`).
 
-    The practice log's "Set Timer -> GrabX" hint is LIVE on this: a row is
+    The practice log's timer hint (a warning triangle) is LIVE on this: a row is
     hinted only while the current setting still disagrees with the log, so
     the moment he sets GrabX and grabs one star, every hint disappears --
     older rows included, because the advice is about his setting, not about
@@ -403,7 +403,7 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             # but every one of them still carries a time that measures the
             # wrong moment.
             "caveat": attempt_caveat(a),
-            # "Set Timer -> GrabX" beside the entry number: this grab's own
+            # The timer hint beside the entry number: this grab's own
             # Usamune setting showed him a different number from this row,
             # and his CURRENT setting (`stop_now`, usamune_stop_now) still
             # would. "All of our practice entries should be xcam times"

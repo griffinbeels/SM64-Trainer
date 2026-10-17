@@ -778,7 +778,7 @@ MIGRATIONS = [
     """,
     # v40 -- what Usamune's own timer was set to stop at when a star was
     # grabbed (`Attempt.usamune_stop`: "xcam" | "grab" | "none"), so the
-    # practice log can say "Set Timer -> GrabX" while his setting shows a
+    # practice log can show its timer hint while his setting shows a
     # different number from ours. Read off the grab's payload by projection,
     # the timed_at shape: no backfill, NULL for every row whose grab never
     # said.
