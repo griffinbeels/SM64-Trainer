@@ -483,10 +483,13 @@ Raisn's, white text, and Trebuchet MS, and they are only a starting point.
 
 A named way of doing a [[target]] — which path through the level, which tricks.
 Two people playing the same [[star]] on different strategies are doing genuinely
-different things, so each strategy carries its own [[ladder]].
+different things, so each strategy carries its own [[ladder]]. Every list of
+strategies follows one order, the column order of the table of [[standard]]s:
+the slowest [[ladder]] first, the way you climb (his rule, 2026-10-17).
 
 - **Lives** — the standards file (`src/sm64_events/ranks/standards.py`)
-  → the [[strategy picker]]
+  → the [[strategy picker]]; the order: `src/sm64_events/ranks/ladder_order.py`
+  and its browser twin `src/sm64_events/ui/ladderorder.js`
 
 ### Active strategy
 
@@ -1288,7 +1291,8 @@ colour, the time and the name; a name wraps where the handle divides and is
 never cut off. A dashed ring is a [[ghost]] that cannot race yet (yours before
 your first time, a rival still downloading); a lock on a ring is a pinned
 rival, who stays even once beaten, to your left. The [[lineup track]] threads
-the rings. With no [[strategy]] the row offers the [[strategies]] themselves.
+the rings. With no [[strategy]] the row offers every one of the [[strategies]]
+as a button, all one width, in rows of equal length.
 Inside one lineup every change slides; a different [[star]], [[strategy]] or
 [[ghost matching scope]] keeps your seat in place and exchanges everyone else.
 

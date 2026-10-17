@@ -9,16 +9,14 @@
 // your saved time on it (round 3: "our UI has to be responsive to all of the
 // contexts"). Everything else only decides whether a ghost can race yet.
 //   * No strategy: nobody to race, so the row offers the strategies themselves
-//     (round 5: "I like the strategy buttons in the row").
+//     (round 5: "I like the strategy buttons in the row"), every one of them,
+//     in the order the server sends: the rank standards table's (round 10:
+//     "we have the realestate to show more of the strategies").
 //   * Loading: your seat plus empty places, so the card never jumps.
 //   * Ready: you first, then the rivals; a seat still downloading is drawn
 //     with a dashed ring (`pending`).
 //   * Nobody or offline: your seat and one sentence.
 import { RANK_FLOOR } from "./components/caps.js";
-
-// More strategies than this fold into "Other…", which opens the picker.
-export const MAX_STRATEGY_CHOICES = 3;
-export const OTHER_STRATEGY = "Other…";
 
 export const LINEUP_WORDS = {
   noStrategy: "Pick your strategy to race ghosts",
@@ -31,9 +29,8 @@ export const LINEUP_WORDS = {
 };
 
 function strategyChoices(strategies) {
-  const names = (strategies || []).filter(name => typeof name === "string" && name);
-  const shown = names.slice(0, MAX_STRATEGY_CHOICES).map(name => ({ label: name, strategy: name }));
-  return names.length > MAX_STRATEGY_CHOICES ? [...shown, { label: OTHER_STRATEGY, strategy: null }] : shown;
+  return (strategies || []).filter(name => typeof name === "string" && name)
+    .map(name => ({ label: name, strategy: name }));
 }
 
 /** Your own seat: always present, Capless 5 with no time until your first finish. */

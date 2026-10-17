@@ -28,7 +28,7 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not o
 
 
 def run_node(body: str):
-    script = (f"import {{ lineupModel, youSeat, LINEUP_WORDS, MAX_STRATEGY_CHOICES, OTHER_STRATEGY }} "
+    script = (f"import {{ lineupModel, youSeat, LINEUP_WORDS }} "
               f"from {MODEL_JS!r};\nimport {{ RANK_FLOOR }} from {CAPS_JS!r};\n"
               f"console.log(JSON.stringify({body}));")
     result = subprocess.run(["node", "--input-type=module", "-"], input=script, capture_output=True,
@@ -62,20 +62,14 @@ def test_no_strategy_offers_the_strategies_themselves():
                                         {"label": "Sideflip", "strategy": "Sideflip"}]
 
 
-def test_more_strategies_than_fit_fold_into_other():
-    """A fourth strategy would crowd the row: the rest sit behind "Other…",
-    which carries no strategy because it opens the card's own picker."""
+def test_every_strategy_is_offered_in_the_order_the_server_sends():
+    """Round 10: "we have the realestate to show more of the strategies" --
+    every one is a button, none folds behind "Other…", and the order is the
+    list's own: the server sends it in the rank standards table's order."""
     session = {**lineup_session(state="no_strategy"), "target": {**FIXTURE_TARGET, "strat": None}}
-    names = ("Standard", "Sideflip", "Cannonless", "No Reds", "BLJ")
-    limit = run_node("MAX_STRATEGY_CHOICES")
-    shown = model(session, strategies=names)
-    choices = shown["note"]["choices"]
-    assert [c["label"] for c in choices] == [*names[:limit], run_node("OTHER_STRATEGY")]
-    assert choices[-1]["strategy"] is None
-    assert all(c["strategy"] == c["label"] for c in choices[:-1])
-    # Exactly the limit shows every strategy and no "Other…".
-    exact = model(session, strategies=names[:limit])
-    assert [c["label"] for c in exact["note"]["choices"]] == list(names[:limit])
+    names = ("Owl", "Mad Owl", "Standard", "TJ Owlless", "DJ Owlless", "Sideflip", "No Reds", "BLJ")
+    choices = model(session, strategies=names)["note"]["choices"]
+    assert choices == [{"label": name, "strategy": name} for name in names]
 
 
 def test_no_strategies_at_all_asks_for_one_to_be_created():

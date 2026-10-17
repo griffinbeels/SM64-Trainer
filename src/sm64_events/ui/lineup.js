@@ -183,6 +183,30 @@ function seatNode(ctx, p, you) {
   return li;
 }
 
+// THE STRATEGY BUTTONS share one width (the longest name's) and wrap into
+// rows of equal length (round 10: "all of the strategies here fit without it
+// being difficult to understand / messy"): six read as one row or as three
+// and three, eight as four and four, never five and a straggler. CSS draws
+// the equal widths (`.lineup-choices`); this picks the column count from the
+// room the note has, whenever that room changes. A ResizeObserver reports
+// after layout and before paint, so the first frame is already balanced.
+function balanceChoices(note, list) {
+  const count = list.children.length;
+  const columns = () => {
+    // Measured on one unconstrained row, where every button is the widest.
+    list.style.setProperty("--lineup-cols", String(count));
+    list.style.maxWidth = "none";
+    const width = list.firstElementChild.getBoundingClientRect().width;
+    list.style.maxWidth = "";
+    const gap = parseFloat(getComputedStyle(list).columnGap) || 0;
+    const pad = getComputedStyle(note);
+    const room = note.clientWidth - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight);
+    const rows = Math.ceil(count / Math.max(1, Math.floor((room + gap) / (width + gap))));
+    list.style.setProperty("--lineup-cols", String(Math.ceil(count / rows)));
+  };
+  new ResizeObserver(columns).observe(note);
+}
+
 // A note stands where missing seats would be: no strategy (with the
 // strategies themselves as buttons), nobody yet, offline, an unusable ROM.
 function noteNode(ctx, note) {
@@ -192,12 +216,13 @@ function noteNode(ctx, note) {
     li.classList.add("has-choices");
     const list = el("span", "lineup-choices");
     for (const choice of note.choices) {
-      const b = el("button", "lineup-choice", { type: "button" });
+      const b = el("button", "lineup-choice", { type: "button", title: choice.label });
       b.textContent = choice.label;
       b.addEventListener("click", () => ctx.o.onChoose && ctx.o.onChoose(choice));
       list.append(b);
     }
     li.append(list);
+    if (note.choices.length) balanceChoices(li, list);
   } else if (note.action) {
     const go = el("button", "lineup-note-action", { type: "button" });
     go.textContent = note.action;

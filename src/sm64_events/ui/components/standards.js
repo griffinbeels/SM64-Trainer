@@ -19,7 +19,7 @@ import { fmtIgtShort, fmtSeconds } from "../format.js";
 import { nounOfKey } from "../entitysection.js";
 import { TimeFields } from "./timefields.js";
 import { useStandardWrites } from "../standardwrites.js";
-import { ceilingOf, slowestFirst } from "../ladderorder.js";
+import { orderedBands, tableOrder } from "../ladderorder.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 import { capName, capGradient, divisionDigit, DIVISION_NUMERALS } from "./caps.js";
 import { bandsOf, divisionRangeLabel, ladderBands, estimateNote } from "./librarymodel.js";
@@ -421,33 +421,14 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // come from the server's own `strategy_groups`; nothing here works out which
   // variant a strategy belongs to. `bands` is empty for every ordinary entity
   // and the table renders exactly as it did before.
-  const bands = ((data && data.strategy_groups) || [])
-    .map((group) => ({
-      label: group.label,
-      names: group.strategies.map((s) => s.name).filter((s) => allStrats.includes(s)),
-    }))
-    .filter((band) => band.names.length);
-  const banded = new Set(bands.flatMap((band) => band.names));
-  const loose = allStrats.filter((s) => !banded.has(s));
-  if (bands.length && loose.length) bands.push({ label: "Other", names: loose });
   // SLOWEST on the left, FASTEST on the right — the table is a PATH, read
-  // bottom-left to top-right as you improve (user, 2026-08-03; the rule and
-  // its tie-breaks live in ui/ladderorder.js). Applied WITHIN each exit-star
-  // band, and to the bands themselves by their own fastest column, so the
-  // progression still reads left-to-right across a banded 100-coin table
-  // without a column leaving its heading.
+  // bottom-left to top-right as you improve (user, 2026-08-03). The rule,
+  // its tie-breaks and the 100-coin bands live in ui/ladderorder.js, whose
+  // order every strategy list in the app follows (2026-10-17).
   const ladders = (data && data.strategies) || {};
-  for (const band of bands) band.names = slowestFirst(band.names, ladders);
-  bands.sort((a, b) => {
-    const fastest = (band) => Math.min(
-      ...band.names.map((name) => ceilingOf(ladders[name])));
-    const one = fastest(a), other = fastest(b);
-    return one === other ? 0 : other - one;
-  });
+  const bands = orderedBands(allStrats, ladders, data && data.strategy_groups);
   // Banded order, so a column always sits under its own heading.
-  const strats = bands.length
-    ? bands.flatMap((band) => band.names)
-    : slowestFirst(allStrats, ladders);
+  const strats = tableOrder(allStrats, ladders, data && data.strategy_groups);
   // Colour is assigned AFTER the bands are ordered, so the leftmost band is
   // always the first hue and the table looks the same every time it opens.
   bands.forEach((band, index) => {

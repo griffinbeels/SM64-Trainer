@@ -425,8 +425,8 @@
     "b2af8eb78f846a5cfdc1264190ddd38ee8ebe0044dc83c10033f5a828841d913",
     "95d5da3760841b19f656d98d004257fff3d2c7ec4cbdcd9b6863417510aef538",
     "289ac2c8c296cd8927e335ee99884be42fd606ce3aa0fe9e7c70a3f76d241f81",
-    "1a037c3abc02901bc4405ed43e8d42472b886388cbd0c7af672a05aaa3a7e105",
-    "bcb7ff95775d0e1c757ad18aa4484ecf4a93cf85c1a93c5aa26746399738d0ab",
+    "27a30841ae401d6105406e808b942b2aaa159fff329c2c3b3584dadd1dc12563",
+    "dddb662119f3b0efc36534f26581148998159d69e282fe5cf51037c022023391",
     "afff8f96f9b62d1aad606907b4be11b10d7d4990bf304105222c1df290120add",
     "b22884d66bb338c373c58dda59f4e58dd0c877d22782f3d0ee93bc6cfbd524b8",
     "5456352edd2f9ec334cf4912c873b0d55b9efc65823e94de5738402435cf22b4",
@@ -3036,13 +3036,13 @@
       "path": "src/sm64_events/ui/components/standards.js",
       "line": 241,
       "rule": "max-lines-per-function",
-      "message": "Function 'StandardsPanel' has too many lines (367). Maximum allowed is 100."
+      "message": "Function 'StandardsPanel' has too many lines (350). Maximum allowed is 100."
     },
     {
       "path": "src/sm64_events/ui/components/standards.js",
-      "line": 240,
+      "line": 241,
       "rule": "complexity",
-      "message": "Function 'StandardsPanel' has a complexity of 71. Maximum allowed is 15."
+      "message": "Function 'StandardsPanel' has a complexity of 67. Maximum allowed is 15."
     },
     {
       "path": "src/sm64_events/ui/components/standards.js",

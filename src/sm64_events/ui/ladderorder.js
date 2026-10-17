@@ -40,3 +40,38 @@ export function slowestFirst(strategies, ladders) {
                     || (a.index - b.index))
     .map((entry) => entry.name);
 }
+
+// The table's bands, each {label, names} in column order (spec
+// 2026-08-03-hundred-coin-exit-variants): the server's `strategy_groups`
+// ([] for every star but a 100-coin one) restricted to `names`, plus one
+// "Other" band for the names no group covers. Slowest first INSIDE each band,
+// and the bands by their own fastest column, so the progression still reads
+// left to right without a column leaving its heading. `[]` = not banded.
+export function orderedBands(names, ladders, groups) {
+  const bands = (groups || [])
+    .map((group) => ({
+      label: group.label,
+      names: group.strategies.map((s) => s.name).filter((s) => names.includes(s)),
+    }))
+    .filter((band) => band.names.length);
+  const banded = new Set(bands.flatMap((band) => band.names));
+  const loose = names.filter((s) => !banded.has(s));
+  if (bands.length && loose.length) bands.push({ label: "Other", names: loose });
+  for (const band of bands) band.names = slowestFirst(band.names, ladders);
+  const fastest = (band) => Math.min(
+    ...band.names.map((name) => ceilingOf((ladders || {})[name])));
+  return bands.sort((a, b) => {
+    const one = fastest(a), other = fastest(b);
+    return one === other ? 0 : other - one;
+  });
+}
+
+// Every name, in the table's column order -- which is every strategy list's
+// order (his rule, 2026-10-17: "strategies should always be sorted in rank
+// standard order"). The server orders the lists it sends with the Python
+// twin, ranks/ladder_order.py; tests/test_cross_language_parity.py holds the
+// two together.
+export function tableOrder(names, ladders, groups) {
+  const bands = orderedBands(names, ladders, groups);
+  return bands.length ? bands.flatMap((band) => band.names) : slowestFirst(names, ladders);
+}

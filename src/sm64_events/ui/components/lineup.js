@@ -77,7 +77,7 @@ function useDriver(core, model, sweep) {
 }
 
 export function Lineup({ session, known, reachable, on, entityKey, strategies, write, retry,
-                         onPickStrategy, onOtherStrategy }) {
+                         onPickStrategy }) {
   const host = useRef(null);
   const core = useRef(null);
   const [swap, setSwap] = useState(null);
@@ -92,7 +92,7 @@ export function Lineup({ session, known, reachable, on, entityKey, strategies, w
         left: Math.max(0, Math.min(at.left - box.left, box.width - 300)), top: at.bottom - box.top + 4 });
     },
     onUnpin: person => write({ rivals: { scope, action: "reset", slot: person.slot }, target: session.target }),
-    onChoose: choice => (choice.strategy ? onPickStrategy(choice.strategy) : onOtherStrategy()),
+    onChoose: choice => onPickStrategy(choice.strategy),
     onNote: note => { if (note.kind === "retry") retry(); },
   };
   useLayoutEffect(() => {

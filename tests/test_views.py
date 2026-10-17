@@ -3134,3 +3134,24 @@ def test_crossed_legacy_strategy_cutoffs_do_not_break_the_session_view(tmp_path)
     [section] = build_session_view(db, svc, clock="igt")["stars"]
     assert not section["one_ladder"]
     assert svc.ranks.ladder_cs("star:2:2", "fast") == {"Mario": 2000, "Gold": 1000}
+
+
+def test_a_sections_strategies_come_in_the_rank_standards_tables_order(tmp_path):
+    """His rule, 2026-10-17: "strategies should always be sorted in rank
+    standard order". The server sends the list every picker draws in the
+    table's column order -- slowest Mario cutoff first, a strategy with no
+    times furthest left -- however the player registered or used them."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc = make(tmp_path)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {"star:2:2": {"clock": "igt", "strategies": {
+        "Sideflip": {"Mario": 11.06}, "Owl": {"Mario": 16.06}, "Standard": {"Mario": 11.83},
+        "Mad Owl": {"Mario": 14.40}}}}}))
+    svc.ranks = RankStandards(p)
+    svc.ranks.load()
+    asyncio.run(svc.set_target(2, 2))
+    asyncio.run(svc.set_strat(2, 2, "Standard"))       # registered first
+    asyncio.run(svc.set_strat(2, 2, "my own"))         # a custom one, no times
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["strategies"] == ["my own", "Owl", "Mad Owl", "Standard", "Sideflip"]

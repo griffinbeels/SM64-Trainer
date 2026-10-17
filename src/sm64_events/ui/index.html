@@ -3757,15 +3757,19 @@
      a subentry or a top level entry." A wrap also breaks the row's own
      `--log-row-height`, which is where "one row's worth of height" comes
      from. */
-  /* CENTRED TEXT COLUMNS (round 9, 2026-10-17: GOLD!! over "+2.63s" should
-     be "CENTER ALIGNED. Same with the time column ... I'd like to test where
-     the text is all CENTERED"). The time column hugs its widest entry
-     (`width: 1px` on a no-wrap cell) and centres every entry in it; the gap
-     column is wide enough for the Time Save under GOLD!! and centres too. The
-     spare width goes to the strategy column, which pushes its picker against
-     the buttons. */
-  .attempt-result { min-width: 0; width: 1px; white-space: nowrap; text-align: center; padding-inline: .6rem; }
-  .attempt-delta { width: 6.5rem; white-space: nowrap; font-weight: 700; text-align: center; }
+  /* ONE LEFT EDGE PER TEXT COLUMN (round 10, 2026-10-17). Round 9 centred
+     them to try it; on the page, a column that holds different kinds of text
+     -- "reset 12"26 in" or a time, "+2.63s" or GOLD!! -- left ragged edges on
+     both sides ("maybe actually all the text needs to be left aligned? ...
+     the best decision for smooth, clean UIUX here when the same column can
+     display different types of text"). Every entry now starts on its
+     column's edge, so the eye runs straight down each column. The time
+     column hugs its widest entry (`width: 1px` on a no-wrap cell); the gap
+     column is wide enough for the Time Save under GOLD!!. The spare width
+     goes to the strategy column, which pushes its picker against the
+     buttons. */
+  .attempt-result { min-width: 0; width: 1px; white-space: nowrap; text-align: left; padding-inline: .6rem; }
+  .attempt-delta { width: 6.5rem; white-space: nowrap; font-weight: 700; text-align: left; }
   .attempt-strategy { white-space: nowrap; text-align: right; }
   /* QUIET until asked (round 7: "we're just very very very cluttered"): the
      same strategy name in a boxed control on every row was the heaviest
@@ -3802,7 +3806,13 @@
      rides the chip's and the button's titles. */
   .attempt-pb-slot .caveat-chip { gap: 0; padding-inline: .3rem; }
   .attempt-pb-slot .caveat-chip-word { display: none; }
-  .attempt-actions button.pb-unfinished { opacity: .3; cursor: default; }
+  /* A disabled Save keeps the same frame as every other button and dims
+     only its icon and words. Round 10: fading the whole button made the row
+     with an enabled Undo PB look different -- "the size of the play button
+     to its left ... is smaller than the play buttons above" (measured: the
+     buttons were pixel-identical; the frames beside them were not). */
+  .attempt-actions button.pb-unfinished { opacity: 1; cursor: default; }
+  .attempt-actions button.pb-unfinished > * { opacity: .35; }
   /* `vertical-align: middle`, because the cell lays its buttons out INLINE
      and inline-blocks sit on the text baseline by default -- the replay
      button's SVG, "Save as PB"'s text and the ×'s glyph each put that
@@ -6616,7 +6626,7 @@
     .attempt-table td { display: block; width: auto; border: 0; padding: .12rem .2rem; }
     .replay-row { grid-column: 1 / -1; }
     .attempt-result { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .attempt-delta { text-align: center; }
+    .attempt-delta { text-align: left; }
     .attempt-strategy { min-width: 0; text-align: right; }
     .attempt-strategy select { max-width: 104px; }
     .save-pb-wide { display: none; }
@@ -7455,14 +7465,15 @@
   @media (prefers-reduced-motion: reduce) { .attempt-table tr { transition: none; } }
   /* ---- The PB row (task 0147, 2026-09-23) -------------------------------
      The row that IS its strategy's current personal best: GOLD!! in holo
-     foil where 0.00s was, a gold wash fading left to right, a gold edge
-     ribbon. His ask: "not super distracting, but it should be OBVIOUS...
+     foil where 0.00s was, a gold wash fading left to right. (The gold edge
+     ribbon left in round 10, 2026-10-17: "that thick yellow line to the
+     left of #1 is quite weird".) His ask: "not super distracting, but it should be OBVIOUS...
      holographic, like a cool pokemon card". attemptlog.js::usePbRow decides
      which row and when; every number here is a logtuning.js "Personal best"
      row.
 
      ONE registered number, --pb-lit (0 = an ordinary row, 1 = the PB),
-     drives the wash, the ribbon and the glow, so the crown arrives and
+     drives the wash and the glow, so the crown arrives and
      leaves as one transition: a faster PB or an Undo drains the old row
      back to normal over the same --log-pb-fade it lit up with, riding the
      row's one `transition` declaration above. The gradients sit on EVERY
@@ -7512,9 +7523,6 @@
   @keyframes rownew { 0% { --row-new: 0; } 14% { --row-new: 1; } 100% { --row-new: 0; } }
   .attempt-table tr.row-new { animation: rownew 1.2s ease-out; }
   @media (prefers-reduced-motion: reduce) { .attempt-table tr.row-new { animation: none; } }
-  .attempt-table tr:not(.replay-row) > td:first-child {
-    box-shadow: inset var(--log-pb-edge, 3px) 0 0 rgb(255 215 95 / calc(min(var(--pb-lit), 1)));
-  }
   .attempt-table tr.is-pb { --pb-lit: 1; }
   .attempt-table tr.pb-arrive {
     animation: pbarrive var(--log-pb-arrive, 1400ms) cubic-bezier(.25, .1, .25, 1) both;
@@ -7531,7 +7539,7 @@
   /* The delta and GOLD!! share one grid cell and exchange SEQUENTIALLY
      (ui-core: never a crossfade) -- the outgoing one reaches 0 before the
      incoming one starts, in both directions, by swapping which side waits. */
-  .pb-swap { display: inline-grid; position: relative; vertical-align: middle; justify-items: center; }
+  .pb-swap { display: inline-grid; position: relative; vertical-align: middle; justify-items: start; }
   .pb-swap > .pb-swap-num, .pb-swap > .pb-gold { grid-area: 1 / 1; }
   .pb-swap-num { transition: opacity var(--log-pb-swap, 220ms) ease var(--log-pb-swap, 220ms); }
   .pb-gold {
@@ -7589,11 +7597,13 @@
     40%  { opacity: var(--log-pb-sparkle, 1); transform: scale(1) rotate(60deg); }
     100% { opacity: 0; transform: scale(.3) rotate(120deg); }
   }
-  /* THE TIME SAVE, centred UNDER GOLD!!: "-0.30 (9 frames)" from the save
-     until the next attempt is logged (ui/pbcrown.js decides), then it fades
-     out and leaves the word alone. Round 9 (2026-10-17): no "Time Save:"
-     label, and always "centered, under the gold" -- the beside-or-under
-     measuring went with it. Out of flow, so it never moves a column. It
+  /* THE TIME SAVE, UNDER GOLD!!: "-0.30 (9 frames)" from the save until the
+     next attempt is logged (ui/pbcrown.js decides), then it fades out and
+     leaves the word alone. Round 9 (2026-10-17): no "Time Save:" label, and
+     always "under the gold" -- the beside-or-under measuring went with it.
+     Round 10 left-aligns the column, so it starts on GOLD!!'s own left edge
+     rather than centring and poking out past it. Out of flow, so it never
+     moves a column. It
      fades in after the word has popped (--log-pb-save-delay), rising a
      little, and @starting-style gives a row that MOUNTS already carrying one
      -- an automatic save that landed in the same refetch as its run -- the
@@ -7602,17 +7612,17 @@
      of fighting it; it waits for the Time Save's own delay and settles as
      it leaves. */
   .pb-save {
-    position: absolute; left: 50%; top: calc(50% + 11px);
+    position: absolute; left: 0; top: calc(50% + 11px);
     white-space: nowrap; font-size: .86em; line-height: 1.1; font-weight: 700; color: #a3e0a3;
-    pointer-events: none; opacity: 0; transform: translate(-50%, calc(-50% + 4px));
+    pointer-events: none; opacity: 0; transform: translate(0, calc(-50% + 4px));
     transition: opacity var(--log-pb-save-fade, 400ms) ease,
                 transform var(--log-pb-save-fade, 400ms) ease;
   }
   .pb-save.is-shown {
-    opacity: 1; transform: translate(-50%, -50%);
+    opacity: 1; transform: translate(0, -50%);
     transition-delay: var(--log-pb-save-delay, 900ms);
   }
-  @starting-style { .pb-save.is-shown { opacity: 0; transform: translate(-50%, calc(-50% + 4px)); } }
+  @starting-style { .pb-save.is-shown { opacity: 0; transform: translate(0, calc(-50% + 4px)); } }
   .pb-swap.has-save .pb-gold {
     translate: 0 -6px;
     transition-delay: var(--log-pb-swap, 220ms), var(--log-pb-save-delay, 900ms);
@@ -9623,11 +9633,18 @@
 .lineup .lineup-note-action { display: inline; padding: 0; border: 0; background: none; color: var(--gold-soft); font-weight: 650; cursor: pointer;
   text-decoration: underline; text-underline-offset: 3px; }
 .lineup .lineup-note-action:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 3px; }
-/* No strategy: the strategies themselves, so one click picks one and the ghosts arrive. */
-.lineup-note.has-choices { display: grid; justify-items: center; gap: 8px; padding: 8px 12px 10px; }
-.lineup-choices { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+/* No strategy: the strategies themselves, so one click picks one and the
+   ghosts arrive. Every strategy, in the rank standards table's order, on
+   buttons of one width (the longest name's: 1fr columns in a max-content
+   grid) in rows of equal length -- lineup.js::balanceChoices sets
+   --lineup-cols from the room the note has (round 10). */
+.lineup-note.has-choices { display: grid; justify-items: center; gap: 8px; padding: 8px 12px 10px;
+  flex: 1 1 100%; max-width: 100%; min-width: 0; }
+.lineup-choices { display: grid; grid-template-columns: repeat(var(--lineup-cols, 1), minmax(0, 1fr)); gap: 6px;
+  width: max-content; max-width: 100%; }
 .lineup .lineup-choice { height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2);
   color: var(--text); font-size: .78rem; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center;
+  justify-content: center; min-width: 0; overflow: hidden; white-space: nowrap;
   transition: border-color 140ms ease, background 140ms ease; }
 .lineup .lineup-choice:hover { border-color: var(--gold-soft); background: var(--surface-3); }
 .lineup .lineup-choice:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }

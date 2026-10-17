@@ -570,12 +570,11 @@ function RankModeButtons({ rankMode, canChooseScope, active, strategyTitle, over
  * Lineup under the head; only the active card fetches), and the strategy the
  * Lineup's buttons pick. A pick from the row is held on the head's picker until
  * the store's refresh carries it -- the same hold the picker keeps for its own
- * picks, so the two never disagree on screen. "Other…" opens that picker.
+ * picks, so the two never disagree on screen.
  */
 function useCardGhost(sec, t, active) {
   const session = useGhostSession(t, active);
   const [held, setHeld] = useState(undefined);
-  const stratRef = useRef(null);
   const pick = async (tag) => {
     setHeld(tag);
     try {
@@ -585,13 +584,7 @@ function useCardGhost(sec, t, active) {
     }
     try { await t.refresh(); } finally { setHeld(undefined); }
   };
-  const openPicker = () => {
-    const select = stratRef.current?.querySelector("select");
-    if (!select) return;
-    select.focus();
-    try { select.showPicker?.(); } catch { /* an engine may refuse a scripted open; focus has landed */ }
-  };
-  return { session, stratRef, pick, openPicker, strat: held !== undefined ? held : sec.last_strat };
+  return { session, pick, strat: held !== undefined ? held : sec.last_strat };
 }
 
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
@@ -861,7 +854,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
              always rendered at (icon-size 40px + head padding 10px * 2). */""}
         ${broken
           ? html`<span class="log-card-strat">Definition deleted</span>`
-          : html`<span class="log-card-strat-picker" ref=${ghost.stratRef}>
+          : html`<span class="log-card-strat-picker">
               <${StratPicker} entity=${ek} identity=${entityIdentity(sec)}
                   strategies=${sec.strategies} active=${ghost.strat}
                   groups=${sec.strategy_groups} allowBlank=${!sec.default_strat}
@@ -923,7 +916,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           <${Icon} name="chevron" size=${18} />
         </button>
       </div>
-    </div><${GhostSwitch} t=${t} ghost=${ghost.session} entityKey=${ek} active=${active} scope=${rankMode} strategies=${sec.strategies} onPickStrategy=${ghost.pick} onOtherStrategy=${ghost.openPicker} />
+    </div><${GhostSwitch} t=${t} ghost=${ghost.session} entityKey=${ek} active=${active} scope=${rankMode} strategies=${sec.strategies} onPickStrategy=${ghost.pick} />
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
       ${inBody && ranksBlock}

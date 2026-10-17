@@ -16,6 +16,14 @@ His live report, 2026-10-17 (Lineup round 7):
   * Round 8: the PB / GOAL pair "should be CENTERED INSIDE THE BOUNDING BOX
     ... while still being aligned with each other".
   * Round 8: "the X button seems ... off center" -- the × is an icon now.
+  * Round 10: "maybe actually all the text needs to be left aligned" -- round
+    9's centred columns left ragged edges where one column holds different
+    kinds of text; every entry now starts on its column's edge, the Time
+    Save under GOLD!! included. "when "undo pb" is visible, the size of the
+    play button to its left ... is smaller" -- the buttons measured
+    identical; a disabled Save faded its whole frame, so it now keeps the
+    frame and dims only its words. "that thick yellow line to the left of
+    #1" -- the PB row has no edge ribbon.
 
 Both log layouts are measured: the table (a wide pane) and the per-row grid
 (a pane of 700px or less -- his window at his zoom; 800 here).
@@ -46,13 +54,19 @@ MEASURE = """(() => {
       words: tr.querySelector('.attempt-result').textContent.trim(),
       mark: !!tr.querySelector('.attempt-medal .hat, .attempt-medal svg, .attempt-medal img, .attempt-glyph'),
       delta: left(tr.querySelector('.attempt-delta')),
-      // Round 9: the time and the gap/GOLD!! are centred in their columns.
-      resultOff: (() => { const c = tr.querySelector('.attempt-result'); const r = document.createRange();
-        r.selectNodeContents(c); const a = r.getBoundingClientRect(), b = c.getBoundingClientRect();
-        return (a.left + a.width / 2) - (b.left + b.width / 2); })(),
-      deltaOff: (() => { const c = tr.querySelector('.attempt-delta'), s = c.querySelector('.pb-swap');
-        if (!s) return 0; const a = s.getBoundingClientRect(), b = c.getBoundingClientRect();
-        return (a.left + a.width / 2) - (b.left + b.width / 2); })(),
+      // Round 10: where each column's text starts -- the time (or reset),
+      // the gap or GOLD!!, and the Time Save under GOLD!!.
+      resultText: (() => { const r = document.createRange();
+        r.selectNodeContents(tr.querySelector('.attempt-result')); return left(r); })(),
+      deltaText: (() => { const s = tr.querySelector(tr.classList.contains('is-pb') ? '.pb-gold' : '.pb-swap-num');
+        return s && s.textContent.trim() ? left(s) : null; })(),
+      saveText: left(tr.querySelector('.pb-save.is-shown')),
+      pb: tr.classList.contains('is-pb'),
+      edge: getComputedStyle(tr.querySelector('td')).boxShadow,
+      // A disabled Save draws the same frame as ▷ and dims only its words.
+      frame: (() => { const b = tr.querySelector('.attempt-pb-slot button.pb-unfinished');
+        if (!b) return null; const s = getComputedStyle(b), p = getComputedStyle(tr.querySelector('.attempt-actions button.icon-button'));
+        return [s.opacity, s.borderTopColor === p.borderTopColor, getComputedStyle(b.firstElementChild).opacity]; })(),
       strategy: left(tr.querySelector('.attempt-strategy')),
       replay: left(tr.querySelector('.attempt-actions button.icon-button')),
       slot: left(tr.querySelector('.attempt-pb-slot')),
@@ -96,7 +110,7 @@ STATUS = {"recording": False, "capture_state": "off", "capture_gated": False,
           "idle": False, "disk_bytes": 0, "max_buffer_bytes": 0}
 
 
-def _render(play, base, width):
+def _render(play, base, width, save_newest=False):
     browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
     try:
         page = browser.new_page(viewport={"width": width, "height": 1100})
@@ -106,6 +120,12 @@ def _render(play, base, width):
         page.goto(base)
         page.locator(ROWS).nth(2).wait_for(timeout=20000)
         page.locator(".sidebar-status .recording-status .dot").wait_for(timeout=20000)
+        if save_newest:
+            # His case: the newest run saved as the PB, GOLD!! and Undo PB on
+            # its row, the Time Save under the word once it has popped.
+            page.locator(ROWS).nth(0).locator(".attempt-pb-slot button").click()
+            page.locator(f"{ROWS}.is-pb .pb-save.is-shown").wait_for(timeout=20000)
+            page.wait_for_timeout(1800)
         page.wait_for_timeout(600)
         return page.evaluate(MEASURE), page.evaluate(RAIL)
     finally:
@@ -122,7 +142,7 @@ def _reset_then_finish(service, anchor):
     for event in (ev("practice_reset", anchor, {"igt_frames_before": 0}),
                   ev("practice_reset", anchor + 300, {"igt_frames_before": 300}),
                   ev("star_collected", anchor + 660, {"course_id": FIXTURE_COURSE, "star_id": FIXTURE_STAR,
-                                                      "igt_frames": 360, "igt_timed_at": "xcam"})):
+                                                      "igt_frames": 200, "igt_timed_at": "xcam"})):
         _run_coro(service.publish(event))
 
 
@@ -130,7 +150,7 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
     with serve_ui_live() as (base, service):
         _reset_then_finish(service, 30000)
         with sync_playwright() as play:
-            wide, _ = _render(play, base, 1500)
+            wide, _ = _render(play, base, 1500, save_newest=True)
             narrow, rail = _render(play, base, 800)
     assert not wide["narrow"] and narrow["narrow"], (wide["narrow"], narrow["narrow"])
     for seen in (wide, narrow):
@@ -138,10 +158,19 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
         assert any(r["success"] for r in rows) and any(not r["success"] for r in rows), rows
         for what in ("result", "delta", "strategy", "replay", "slot", "clear"):
             _one([r[what] for r in rows], what, rows)
-        # The time and the gap/GOLD!! sit centred in their columns (round 9:
-        # "I'd like to test where the text is all CENTERED").
-        assert all(abs(r["resultOff"]) < 1 and abs(r["deltaOff"]) < 1 for r in rows), (
-            [(r["words"], round(r["resultOff"], 1), round(r["deltaOff"], 1)) for r in rows])
+        # One left edge per text column (round 10): a reset and a time start
+        # together, a gap and GOLD!! start together, and the Time Save starts
+        # where GOLD!! does.
+        _one([r["resultText"] for r in rows], "the time column's text", rows)
+        _one([r["deltaText"] for r in rows if r["deltaText"] is not None], "the gap column's text", rows)
+        # The newest run is the PB on both pages (saved on the first), and
+        # its row has no gold edge.
+        pb_rows = [r for r in rows if r["pb"]]
+        assert len(pb_rows) == 1 and pb_rows[0]["edge"] == "none", pb_rows
+        # A disabled Save keeps its frame: full opacity, ▷'s border colour,
+        # only its icon and words dimmed.
+        frames = [r["frame"] for r in rows if r["frame"]]
+        assert frames and all(f[0] == "1" and f[1] and float(f[2]) < 0.5 for f in frames), frames
         # The × is a drawn mark sitting on its button's centre.
         assert all(r["xOff"] and max(map(abs, r["xOff"])) < 0.75 for r in rows), [r["xOff"] for r in rows]
         # Every row has a mark, and the ✔ is no longer beside the time.
@@ -152,6 +181,8 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
         assert not any(r["unfinished"] for r in rows if r["success"] or r["other"]), rows
         if seen["pb"] is not None:
             assert abs(seen["pb"] - seen["goal"]) < 0.5, (seen["pb"], seen["goal"])
+    saved = [r for r in wide["rows"] if r["saveText"] is not None]
+    assert len(saved) == 1 and abs(saved[0]["saveText"] - saved[0]["deltaText"]) < 0.5, saved
     # The narrow plate (his layout) centres the PB/GOAL pair in its box.
     left_gap, right_gap = narrow["plateGaps"]
     assert abs(left_gap - right_gap) < 1, narrow["plateGaps"]

@@ -156,12 +156,17 @@ MEASURE = """() => {
     const box = n.getBoundingClientRect();
     return { text: words.textContent.trim(),
       choices: [...n.querySelectorAll('.lineup-choice')].map((b) => b.textContent.trim()),
+      chips: [...n.querySelectorAll('.lineup-choice')].map((b) => { const r = b.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: Math.round(r.top), width: r.width,
+                 clipped: b.scrollWidth - b.clientWidth }; }),
       action: (n.querySelector('.lineup-note-action') || {}).textContent || null,
       inside: box.left >= clipBox.left - 0.5 && box.right <= clipBox.right + 0.5 };
   });
   const toggle = card.querySelector('.log-card-actions > .ghost-toggle');
+  const picker = [...card.querySelectorAll('.log-card-strat-picker select option')]
+    .map((o) => o.value).filter((v) => v && v !== '__new');
   return {
-    seats, notes, off: lineup.classList.contains('is-off'), clipHeight: clipBox.height,
+    seats, notes, picker, off: lineup.classList.contains('is-off'), clipHeight: clipBox.height,
     rowOverflow: ol.scrollWidth - ol.clientWidth, clipOverflow: clip.scrollWidth - clip.clientWidth,
     ghostRowOverflow: row.scrollWidth - row.clientWidth, cardOverflow: card.scrollWidth - card.clientWidth,
     pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -308,9 +313,21 @@ def test_the_marks_say_pinned_downloading_and_beaten(rendered, width):
 
 
 @pytest.mark.parametrize("width", WIDTHS)
-def test_no_strategy_offers_three_strategies_and_other(rendered, width):
-    note, = rendered[("no_strategy", width)]["notes"]
-    assert len(note["choices"]) == 4 and note["choices"][-1] == "Other…", note
+def test_no_strategy_offers_every_strategy_in_balanced_rows(rendered, width):
+    """Round 10: "all of the strategies here fit without it being difficult
+    to understand / messy" and "for the buttons, we should also sort them in
+    rank standard order". Every strategy the card's picker lists, in its
+    order, on buttons of one width, in rows that differ by at most one
+    button, the longer rows first, nothing clipped and nothing overflowing."""
+    shown = rendered[("no_strategy", width)]
+    note, = shown["notes"]
+    assert len(shown["picker"]) > 3 and note["choices"] == shown["picker"], (note["choices"], shown["picker"])
+    chips = note["chips"]
+    assert max(c["width"] for c in chips) - min(c["width"] for c in chips) < 0.5, chips
+    assert all(c["clipped"] <= 0 for c in chips), chips
+    rows = [sum(1 for c in chips if c["top"] == top) for top in sorted({c["top"] for c in chips})]
+    assert max(rows) - min(rows) <= 1 and rows == sorted(rows, reverse=True), rows
+    assert note["inside"], note
 
 
 @pytest.mark.parametrize("width", WIDTHS)
@@ -449,7 +466,7 @@ def test_loading_resolving_never_paints_a_row_without_seats(served, width):
 # The gestures
 # --------------------------------------------------------------------------
 
-def test_a_strategy_button_writes_this_cards_strategy_and_other_opens_the_picker(served):
+def test_a_strategy_button_writes_this_cards_strategy(served):
     posted = []
 
     def strat(route):
@@ -461,10 +478,6 @@ def test_a_strategy_button_writes_this_cards_strategy_and_other_opens_the_picker
         show(page, served, "no_strategy")
         choices = page.locator(f"{ROW} .lineup-choice")
         first = choices.first.text_content().strip()
-        page.locator(f"{ROW} .lineup-choice", has_text="Other…").click()
-        page.wait_for_function("""() => document.activeElement
-          && document.activeElement.matches('.log-card.log-card-active .log-card-strat-picker select')""")
-        assert posted == [], "Other… wrote a strategy instead of opening the picker"
         choices.first.click()
         for _ in range(100):
             if posted:

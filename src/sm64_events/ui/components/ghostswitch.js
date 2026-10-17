@@ -729,7 +729,7 @@ function LegacyRow({ session, controls, held, on, write, queue, retry, entityKey
 }
 
 export function GhostSwitch({ t, ghost, entityKey, active = true, scope = "strategy",
-                              strategies = [], onPickStrategy, onOtherStrategy }) {
+                              strategies = [], onPickStrategy }) {
   const { session, reachable, draft, write, queue, retry } = ghost;
   useRivalScope(session, scope, entityKey, active && reachable, write);
   if (!active) return null;
@@ -742,6 +742,6 @@ export function GhostSwitch({ t, ghost, entityKey, active = true, scope = "strat
   return html`<div class="ghost-row ghost-row-lineup ${on ? "is-on" : ""}">
     <${Lineup} session=${session} known=${controls.known && racingScopeReady(session, scope, controls.known)}
       reachable=${reachable} on=${on} entityKey=${entityKey} strategies=${strategies || []} write=${write} retry=${retry}
-      onPickStrategy=${onPickStrategy} onOtherStrategy=${onOtherStrategy} />
+      onPickStrategy=${onPickStrategy} />
   </div>`;
 }
