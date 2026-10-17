@@ -947,7 +947,6 @@ def test_an_upload_names_the_rom_its_clip_header_records(tmp_path):
     assert admission[2]["json"]["rom"] == "us" and admission[2]["json"]["frames"] == 3
 
 
-@pytest.mark.xfail(strict=True, reason="decode_clip refuses rom_layout 2 before feature/jp-ghost-native")
 def test_a_jp_clip_uploads_as_jp(tmp_path):
     calls, refusal = _offered(tmp_path, _jp(native()), game_version="jp")
     assert refusal is None

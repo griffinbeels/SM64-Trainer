@@ -37,6 +37,7 @@ from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
 from sm64_events.ghost.session import GhostSession
+from sm64_events.memory.ghost_layout import ghost_supported
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
@@ -300,16 +301,10 @@ def _build_tracker(broadcaster):
 
 
 
-def _ghost_supported(version: str) -> bool:
-    from sm64_events.memory import ghost_layout
-    supported = getattr(ghost_layout, "ghost_supported", None)
-    return supported(version) if supported is not None else version == "us"
-
-
 def _ghost_capture_factory(layout):
     """The recorder's pose capture for one build, or None where the native
     ghost cannot capture that build yet."""
-    if not _ghost_supported(layout.version):
+    if not ghost_supported(layout.version):
         return None
     from sm64_events.ghost.capture import NativeCapture
     from sm64_events.ghost.sound_player import SoundPlayerProcess
@@ -541,7 +536,7 @@ def build(*, recorder_lock=None):
     inputs = InputRuntime(service, memory, layout, replay)
     from sm64_events.ghost.native_session import NativeGhost
     ghost_frame = {"frame":None}
-    native_ghost = NativeGhost(replay, supported=_ghost_supported(version),
+    native_ghost = NativeGhost(replay, supported=lambda: ghost_supported(running["version"]),
         origin_of=lambda kind,key:service.native_rival_origin(kind,key,frame=ghost_frame["frame"]))
 
     def follow_build(new_version):
@@ -551,9 +546,6 @@ def build(*, recorder_lock=None):
         running["version"] = new_version
         new_layout = layout_for(new_version)
         inputs.set_layout(new_layout)
-        set_supported = getattr(native_ghost, "set_supported", None)
-        if set_supported is not None:
-            set_supported(_ghost_supported(new_version))
         if replay is not None:
             replay.recorder.set_ghost_capture_factory(_ghost_capture_factory(new_layout))
             replay.recorder.retarget_capture()

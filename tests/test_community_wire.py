@@ -304,14 +304,7 @@ def test_independent_service_native_fixtures_decode_exactly_in_python(version, w
                          for index in range(COUNT))
 
 
-# Until ghost/clip.py decodes rom_layout 2 (feature/jp-ghost-native), the
-# trainer refuses every JP clip as malformed; integrating that branch turns
-# these two red, and the marks come off.
-JP_DECODE = pytest.mark.xfail(strict=True, reason="decode_clip refuses rom_layout 2 before feature/jp-ghost-native")
-
-
-@pytest.mark.parametrize("name", tuple(pytest.param(name, marks=JP_DECODE) if name.startswith("jp_") else name
-                                       for name in _claims()[1]))
+@pytest.mark.parametrize("name", _claims()[1])
 def test_both_sides_reach_one_verdict_on_every_upload_claim(name, wire):
     """The Worker (codec.js) and the trainer (community/claims.py) refuse the
     same claims with the same code: a ROM the header contradicts, any unknown
