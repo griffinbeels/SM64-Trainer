@@ -189,12 +189,20 @@ after background validated download. A seat whose recording is still
 downloading is listed as pending and does not play; retain safe full-start
 adoption. A recording whose bytes or metadata fail validation leaves automatic
 seats for the session; one the service refuses (gone or hidden) leaves them for
-the retry interval. Network and quota failures never empty the lineup.
+the retry interval. Network and quota failures never empty the lineup. The
+cache never evicts a recording the lineup on screen uses (`keep`), so four
+large seats may exceed the byte cap by at most their own size. Automatic seats
+read only that lineup's list; a chosen rival outside it is looked up by id.
+Incoming player names follow the cloud's own rule (`names.incoming_name`, the
+twin of `names.js` checkedName): a recording whose name the cloud would refuse
+is dropped from its page. A failed token rotation keeps the account's view;
+only signing out or another account clears it.
 
 `CommunitySync`: async `start/stop/search(identity,prefix,*,cursor=None)`;
 synchronous `request_pool(identity,*,frame_windows,pinned_ids=())`,
 `request_assets(recording_ids)`, thread-safe `offer_source(source)` with bounded
-coalescing queue. Pool requests map frame windows to canonical server bins;
+coalescing queue. Rival lists, recording downloads and contributions run on
+three workers, so a 180-second download never holds up a list request. Pool requests map frame windows to canonical server bins;
 cache keys never contain exact PB or unrelated local rank integers. Stop has
 bounded cancellation and joins owned work before replay/provider teardown.
 

@@ -1092,10 +1092,11 @@ strategy_name, status, generation, manual, simulation, scope, state, reason}`. `
 `state` is `no_strategy` (the target has no strategy: no rows, no PB, no cloud
 request), `loading` (no rows yet while this identity's rival list is in flight)
 or `ready`. Beside `ready` with no rows, `reason` is `nobody` (the list came
-back empty, or signed out with nothing local), `offline` (no list and the cloud
-is unreachable or backing off) or null (nothing asked yet: the overlay is off).
-Each row carries `pending: true` while its recording downloads; a pending row
-shows its player and colour but does not play.
+back empty, or this build has no cloud), `signed_out`, `offline` (this lineup's
+own list failed, or the account is in a network cooldown) or null (nothing asked
+yet: the overlay is off). Each row carries `pending: true` while its recording
+downloads; a pending row shows its player and colour but does not play. `own`
+marks the player's own recordings by identity, never by name.
 `simulation` is an
 isolated developer profile label or null. Rows include immutable `id`, slot,
 player/name, strategy, rank/time, `pinned` and explicit `hue_degrees`.

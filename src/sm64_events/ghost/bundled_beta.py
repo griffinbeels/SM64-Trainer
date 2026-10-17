@@ -214,7 +214,7 @@ class BundledPopulation:
         row = self._row(raw)
         if (not target or (row["kind"], row["entity_key"]) != (target["kind"], target["entity_key"])
                 or target.get("scope", "strategy") == "strategy"
-                and (row["strategy"] or "Standard") != (target.get("strat") or "Standard")):
+                and row["strategy"] != target.get("strat")):
             raise ValueError("This rival belongs to another practice target.")
         with self._lock:
             if self.collection.is_symlink() or self._collection_stamp() != self._stamp:

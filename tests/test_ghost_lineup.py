@@ -41,6 +41,7 @@ class Cloud(Account):
         self.rows = list(rows)
         self.gate = None
         self.failure = None
+        self.complete = True
 
     def lists(self, strategy=None):
         return [call for call in self.calls if call[1] == "/v1/pool"
@@ -61,7 +62,8 @@ class Cloud(Account):
                 raise self.failure
             query = kwargs["params"]
             return page([row for row in self.rows
-                         if query["scope"] == "overall" or row["strategy"] == query.get("strategy")])
+                         if query["scope"] == "overall" or row["strategy"] == query.get("strategy")],
+                        complete=self.complete)
         if path.startswith("/v1/recordings/") and not path.endswith("/asset"):
             self.calls.append((method, path, kwargs))
             found = next((row for row in self.rows if row["id"] == path.split("/")[-1]), None)
@@ -265,7 +267,9 @@ def test_lineup_state_and_reason_for_each_case(tmp_path, monkeypatch):
         # Signed out with no local rows.
         cloud.state.update(authenticated=False, status="signed_out", uid=None)
         rivals.refresh(STANDARD, CONTROLS, enabled=True, force=True)
-        assert (rivals.payload()["state"], rivals.payload()["reason"]) == ("ready", "nobody")
+        assert (rivals.payload()["state"], rivals.payload()["reason"]) == ("ready", "signed_out")
+        # A build with no cloud at all has nobody to race.
+        rivals.community.sync = None
         assert rivals.lineup_state() == ("ready", "nobody")
     run(tmp_path, cloud, scenario)
 
@@ -326,3 +330,90 @@ def test_a_recording_that_cannot_download_gives_up_its_seat(tmp_path, monkeypatc
         attempts = [call for call in cloud.calls if broken in call[1] and call[1].endswith("/asset")]
         assert len(attempts) == 1
     run(tmp_path, cloud, scenario)
+
+
+def test_a_held_list_renews_once_per_lease_without_moving_seats(tmp_path, monkeypatch):
+    """The approved lease plan (2026-10-16): one list per ten-minute lease while
+    on screen, no loading state and no reshuffle on renewal; a retracted
+    recording's seat refills by the normal rules."""
+    from sm64_events.community import cache as cache_module, sync as sync_module
+    now = [1000.0]
+    clock = SimpleNamespace(monotonic=lambda: now[0])
+    monkeypatch.setattr(cache_module, "time", clock)
+    monkeypatch.setattr(sync_module, "time", clock)
+    monkeypatch.setattr(module, "saved_pb_basis", lambda *_: pb_at(930))
+    cloud = Cloud([cloud_row(number, frames) for number, frames in enumerate(FRAMES, 1)])
+
+    def seats(rivals):
+        return {row["slot"]: (row["id"], row["hue_degrees"]) for row in rivals.rows}
+
+    async def scenario(rivals, tracker, population, sync, native):
+        await settle(sync, rivals, STANDARD)
+        before, states = seats(rivals), set()
+        retracted = before[0][0]
+        for minute in range(1, 61):
+            now[0] += 60
+            if minute == 20:
+                cloud.rows = [row for row in cloud.rows if row["id"] != retracted]
+            await settle(sync, rivals, STANDARD)
+            states.add(rivals.payload()["state"])
+            current = seats(rivals)
+            assert all(current[slot] == before[slot] for slot in (1, 2, 3))
+            assert current[0] == before[0] if minute < 27 else current[0][0] != retracted
+        # One list at arrival, then one renewal every nine minutes: 7 in the first hour.
+        assert len(cloud.lists()) == 7 and states == {"ready"}
+        assert seats(rivals)[0][1] == before[0][1]  # the refilled seat keeps its colour
+        assets = [call[1] for call in cloud.calls if call[1].endswith("/asset")]
+        assert len(assets) == len(set(assets)) == 5  # four seats, then the refill; never twice
+    run(tmp_path, cloud, scenario)
+
+
+def test_one_lineups_failure_never_marks_another_unavailable(tmp_path, monkeypatch):
+    from sm64_events.community import sync as sync_module
+    monkeypatch.setattr(module, "saved_pb_basis", lambda *_: pb_at(930))
+    monkeypatch.setattr(sync_module, "random", SimpleNamespace(uniform=lambda *_: 0))
+    cloud = Cloud([cloud_row(number, frames) for number, frames in enumerate(FRAMES, 1)])
+    cloud.complete = False  # a truncated list: the lineup reports its own list's standing
+    missing = {**STANDARD, "strat": "Not in the catalog"}
+
+    async def scenario(rivals, tracker, population, sync, native):
+        await settle(sync, rivals, STANDARD)
+        assert rivals.payload()["status"] == "Showing a partial rival list."
+        await settle(sync, rivals, missing)
+        assert (rivals.payload()["state"], rivals.payload()["reason"]) == ("ready", "nobody")
+        assert rivals.payload()["status"] is None
+        sync.last_error = "Community contributions are temporarily unavailable."  # an upload failed
+        await settle(sync, rivals, STANDARD)
+        payload = rivals.payload()
+        assert payload["state"] == "ready" and len(payload["rows"]) == 4
+        assert payload["status"] == "Showing a partial rival list."
+    run(tmp_path, cloud, scenario)
+
+
+def test_the_card_answers_with_no_strategy_and_still_saves_settings(tmp_path):
+    """The reported break: a signed-in Strategy target with no strategy made
+    GET /api/ghost answer 500 and every PUT 422 after applying it."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sm64_events.server.ghost_api import create_ghost_router
+    from tests.test_ghost_session import a_session
+    cloud = Cloud([cloud_row(number, frames) for number, frames in enumerate(FRAMES, 1)])
+    database = Database(tmp_path / "card.db")
+    session, native, tracker, _ = a_session(tmp_path, target=("star", 1, 0), strat=None, db=database)
+    tracker.ranks = Standards()
+    population = CachedPopulation(Local(), root=tmp_path / "cache", account=cloud)
+    session._rivals = Rivals(tracker, population, native, lambda: "us", community=CommunitySync(cloud, population))
+    app = FastAPI()
+    app.include_router(create_ghost_router(session))
+    try:
+        with TestClient(app) as client:
+            read = client.get("/api/ghost")
+            assert read.status_code == 200
+            assert (read.json()["rivals"]["state"], read.json()["rivals"]["rows"]) == ("no_strategy", [])
+            saved = client.put("/api/ghost", json={"opacity": 0.3})
+            assert saved.status_code == 200 and saved.json()["opacity"] == 0.3
+            assert client.get("/api/ghost").json()["opacity"] == 0.3
+        assert cloud.calls == []
+    finally:
+        population.close()
+        database.close()

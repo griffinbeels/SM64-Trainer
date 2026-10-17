@@ -323,7 +323,7 @@ class LocalPopulation:
     def resolve(self, ghost, target):
         row = self.get(ghost.id)
         if (target is None or (row["kind"], row["entity_key"]) != (target["kind"], target["entity_key"])
-                or target.get("scope","strategy")=="strategy" and (row["strategy"] or "Standard") != (target.get("strat") or "Standard")):
+                or target.get("scope","strategy")=="strategy" and row["strategy"] != target.get("strat")):
             raise ValueError("This rival belongs to another practice target.")
         path = self.root / "clips" / f"{checked_hash(row['sha256'])}.ghost"
         if not path.resolve().is_relative_to(self.root):

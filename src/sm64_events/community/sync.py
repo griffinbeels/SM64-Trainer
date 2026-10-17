@@ -23,6 +23,11 @@ MAX_QUEUE = 32
 MAX_RETIRED = 256
 RETRACT_ROUTE = "/v1/recordings/retract"
 CONTRIBUTIONS = ("offer", "retract")  # Serial owner-bound work on the contribution task.
+
+
+def _lane(operation):
+    """Which worker runs it: a 180 s recording download never holds up a rival list."""
+    return "contribution" if operation[0] in CONTRIBUTIONS else "download" if operation[0] == "assets" else "list"
 MAX_PAGE = 256
 MAX_PAGES = 4
 ASSET_RETRY_S = 30
@@ -81,7 +86,8 @@ def _cutoffs(rows):
     return tuple(result)
 
 
-INTEGRITY_FAILURES = ("asset_mismatch", "incomplete_inputs", "invalid_metadata", "identity_mismatch", "invalid_response")
+INTEGRITY_FAILURES = ("asset_mismatch", "incomplete_inputs", "invalid_metadata", "invalid_name", "identity_mismatch",
+                      "invalid_response")
 
 
 def _unusable_until(error):
@@ -168,7 +174,14 @@ def checked_page(value, *, generation=None):
             or coverage["min_step"] > coverage["max_step"]
             or coverage["complete"] and value["next_cursor"] is not None):
         raise CommunityError("invalid_response")
-    rows = [checked_metadata(row) for row in value["recordings"]]
+    rows = []
+    for row in value["recordings"]:
+        try:
+            rows.append(checked_metadata(row))
+        except CommunityError as error:
+            if error.code != "invalid_name":
+                raise
+            # A name the cloud itself would refuse: drop that recording only.
     if any(row["generation"] != coverage["generation"] for row in rows) or len({row["id"] for row in rows}) != len(rows):
         raise CommunityError("invalid_response")
     if generation is not None and coverage["generation"] != generation:
@@ -191,6 +204,7 @@ class CommunitySync:
         self._network_owner, self._network_until, self._network_error = None, 0, None
         self._loop = self._wake = self._task = None
         self._contribution_wake = self._contribution_task = self._practice_started = None
+        self._download_wake = self._download_task = None
         self._closing = False
         self._catalog, self._catalog_generation, self._catalog_until = {}, None, 0
         self._catalog_lock = asyncio.Lock()
@@ -215,10 +229,13 @@ class CommunitySync:
         self._loop = asyncio.get_running_loop()
         self._wake = asyncio.Event()
         self._contribution_wake = asyncio.Event()
+        self._download_wake = asyncio.Event()
         self._practice_started = asyncio.Event()
         self._task = asyncio.create_task(self._run(), name="community-sync")
+        self._download_task = asyncio.create_task(self._run_downloads(), name="community-downloads")
         self._contribution_task = asyncio.create_task(self._run_contributions(), name="community-contributions")
         self._wake.set()
+        self._download_wake.set()
         self._contribution_wake.set()
 
     async def stop(self):
@@ -227,7 +244,8 @@ class CommunitySync:
             self._closing = True
             self._queue.clear()
             self._offer_retry.clear()
-        tasks = [task for task in (self._task, self._contribution_task, self._search_task) if task and not task.done()]
+        tasks = [task for task in (self._task, self._download_task, self._contribution_task, self._search_task)
+                 if task and not task.done()]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -247,6 +265,7 @@ class CommunitySync:
                 raise CommunityError("shutdown_timeout", "Community processing is still finishing.") from None
         self._task = self._wake = self._loop = self._search_task = None
         self._contribution_task = self._contribution_wake = self._practice_started = None
+        self._download_task = self._download_wake = None
 
     def _enqueue(self, key, operation):
         with self._lock:
@@ -265,7 +284,8 @@ class CommunitySync:
             while len(self._queue) > MAX_QUEUE:
                 self._queue.popitem(last=False)
             loop = self._loop
-            wake = self._contribution_wake if operation[0] in CONTRIBUTIONS else self._wake
+            wake = {"contribution": self._contribution_wake, "download": self._download_wake}.get(
+                _lane(operation), self._wake)
         if loop and wake and not loop.is_closed():
             loop.call_soon_threadsafe(wake.set)
         return True
@@ -856,12 +876,13 @@ class CommunitySync:
             while len(self._offer_retry) > MAX_QUEUE:
                 self._offer_retry.popitem(last=False)
 
-    def _take_operation(self, *, contribution):
+    def _take_operation(self, *, contribution=False, lane=None):
+        lane = lane or ("contribution" if contribution else "list")
         with self._lock:
             for key, operation in self._queue.items():
-                if (operation[0] in CONTRIBUTIONS) == contribution:
+                if _lane(operation) == lane:
                     self._queue.pop(key)
-                    if not contribution:
+                    if lane == "list":
                         self._running = key  # Still in flight for request_pool's dedupe.
                     return key, operation
         return None
@@ -896,26 +917,38 @@ class CommunitySync:
                 pass  # A row left saved is only sent again; the server answers replays.
 
     async def _run(self):
-        """Practice requests never wait behind a contribution's HTTP transfer."""
+        """Rival lists never wait behind a contribution's or a recording's HTTP transfer."""
         while True:
             await self._wake.wait()
             self._wake.clear()
-            while (item := self._take_operation(contribution=False)) is not None:
+            while (item := self._take_operation(lane="list")) is not None:
                 key, operation = item
                 try:
                     if self.account.snapshot().get("status") != "active":
                         continue
                     try:
-                        if operation[0] == "pool":
-                            await self._pool(*operation[1:])
-                        else:
-                            await self._assets(operation[1])
+                        await self._pool(*operation[1:])
                         self.last_error = None
                     except (CommunityError, ValueError, OSError) as error:
                         await self._failed_operation(key, operation, error)
                 finally:
                     self._running = None
             self._practice_started.set()
+
+    async def _run_downloads(self):
+        """Chosen seats' recordings, one request at a time, beside the list worker."""
+        while True:
+            await self._download_wake.wait()
+            self._download_wake.clear()
+            while (item := self._take_operation(lane="download")) is not None:
+                key, operation = item
+                if self.account.snapshot().get("status") != "active":
+                    continue
+                try:
+                    await self._assets(operation[1])
+                    self.last_error = None
+                except (CommunityError, ValueError, OSError) as error:
+                    await self._failed_operation(key, operation, error)
 
     async def _run_contributions(self):
         """One serial recovery/upload task, sharing the existing owned loop."""

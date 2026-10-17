@@ -1102,3 +1102,43 @@ def test_signed_out_or_sharing_off_retraction_sends_nothing(tmp_path, state):
     assert sync.retract_other_strategies(raw_sha256=hashlib.sha256(native()).hexdigest(), keep_strategy=None) is False
     assert not sync._queue and not account.calls
     assert not (tmp_path / "cache" / "pending-retractions.json").exists()
+
+
+def test_a_name_the_cloud_refuses_drops_only_that_recording():
+    """The cloud's name rule (names.js): no hidden format characters such as
+    bidi overrides, at most 20 characters, no reserved names."""
+    good = recording("1" * 64)
+    rows = [good, {**recording("2" * 64), "player_name": "Evil\u202egnippilf"},
+            {**recording("3" * 64), "player_name": "Admin"}, {**recording("4" * 64), "player_name": "x" * 21}]
+    checked = checked_page(page(rows))
+    assert [row["id"] for row in checked["recordings"]] == [good["id"]]
+    with pytest.raises(CommunityError) as found:
+        checked_metadata(rows[1])
+    assert found.value.code == "invalid_name"
+    assert checked_metadata({**good, "player_name": "Bo"})["player_name"] == "Bo"  # no minimum, as in the cloud
+
+
+def test_a_transient_token_failure_keeps_held_lists_but_signing_out_clears_them(tmp_path):
+    account = Account()
+    population = CachedPopulation(Local(), root=tmp_path, account=account)
+    population.remember_page(IDENTITY, checked_page(page([recording()])))
+    account.state.update(authenticated=False, stored=True)  # rotation failed; the account remains
+    assert population.coverage(IDENTITY)["complete"]
+    account.state.update(authenticated=False, stored=False, status="signed_out", uid=None)
+    assert not population.coverage(IDENTITY)["complete"]
+    population.close()
+
+
+def test_a_download_never_evicts_a_recording_the_lineup_on_screen_uses(tmp_path, monkeypatch):
+    import sm64_events.community.cache as module
+    first, second, third = recording("1" * 64), recording("2" * 64), recording("3" * 64)
+    monkeypatch.setattr(module, "CACHE_RAW", first["raw_bytes"] + 1)
+    population = CachedPopulation(Local(), root=tmp_path, account=Account())
+    population.keep((first["id"], second["id"]))
+    for row in (first, second):
+        population.store_asset(row, codec.encode(native()), native())
+    assert population.is_ready(first["id"]) and population.is_ready(second["id"])
+    population.keep((second["id"], third["id"]))
+    population.store_asset(third, codec.encode(native()), native())
+    assert not population.is_ready(first["id"]) and population.is_ready(second["id"]) and population.is_ready(third["id"])
+    population.close()

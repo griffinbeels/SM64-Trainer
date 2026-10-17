@@ -121,15 +121,27 @@ class CommunityAccount:
         self._policies = {}
         self._policies_until = 0
         self._error = None
+        self._stored = None  # Whether the Credential Manager holds a refresh token; None until read.
         self.on_contribution_cancel = None
 
     def _credentials_stored(self):
         """A refresh token in the Credential Manager: this profile has an
-        account even while offline, so the sign-in gate must not reappear."""
-        try:
-            return bool(self._store.load())
-        except Exception:  # noqa: BLE001 -- a store failure reads as no stored account
-            return False
+        account even while offline, so the sign-in gate must not reappear.
+
+        Read once, then kept current by save, load and clear: every status
+        check would otherwise copy the refresh token out of the vault.
+        """
+        if self._stored is None:
+            try:
+                self._stored = bool(self._store.load())
+            except Exception:  # noqa: BLE001 -- a store failure reads as no stored account
+                self._stored = False
+        return self._stored
+
+    def _load_refresh(self):
+        refresh = self._store.load()
+        self._stored = bool(refresh)
+        return refresh
 
     def snapshot(self):
         with self._lock:
@@ -242,6 +254,7 @@ class CommunityAccount:
             # not durably stored. The old memory token is discarded as well.
             self._access = None
             self._store.save(token["refresh_token"])
+            self._stored = True
             self._access = token["access_token"]
             self._expires = time.monotonic() + token["expires_in"]
             self._error = None
@@ -250,7 +263,7 @@ class CommunityAccount:
         if not self.config.enabled:
             return self.snapshot()
         async with self._auth_lock:
-            refresh = self._store.load()
+            refresh = self._load_refresh()
             if not refresh:
                 return self.snapshot()
             await self._rotate(refresh)
@@ -275,7 +288,7 @@ class CommunityAccount:
         async with self._auth_lock:
             if self._access and self._expires > time.monotonic() + 30:
                 return self._access
-            refresh = self._store.load()
+            refresh = self._load_refresh()
             if not refresh:
                 raise CommunityError("signed_out", "Sign in to use community ghosts.")
             await self._rotate(refresh)
@@ -408,6 +421,7 @@ class CommunityAccount:
             self._sharing_disabled = False
             self._expires = 0
             self._store.clear()
+            self._stored = False
         if self.on_contribution_cancel is not None:
             await self.on_contribution_cancel(owner)
         return self.snapshot()

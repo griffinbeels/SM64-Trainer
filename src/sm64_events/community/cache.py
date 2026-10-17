@@ -15,6 +15,7 @@ from sm64_events.ghost.sharing_targets import bind, binding_index, checked_targe
 
 from . import codec
 from .config import CommunityError
+from .names import incoming_name
 
 MAX_METADATA = 1024
 """Rows outside any rival list: search pages, chosen-rival renewals, downloads."""
@@ -36,6 +37,18 @@ def target_key(target):
     return (target["kind"], target.get("signature") if target["kind"] == "segment" else target["entity_key"])
 
 
+def account_owner(snapshot):
+    """The signed-in account whose cloud view this is, or None.
+
+    A refresh token that failed to rotate (a network blip at expiry) leaves
+    the profile and the stored token: still this account, so nothing it
+    holds is wiped. Signing out or another account changes the owner.
+    """
+    if snapshot.get("status") != "active" or not (snapshot.get("authenticated") or snapshot.get("stored")):
+        return None
+    return snapshot.get("uid")
+
+
 def checked_metadata(value):
     fields = {"id", "player_id", "player_name", "target", "strategy", "clock", "game_version", "frames",
               "raw_sha256", "raw_bytes", "encoded_sha256", "encoded_bytes", "codec", "generation", "step",
@@ -48,10 +61,13 @@ def checked_metadata(value):
             checked_hash(value[field])
         if str(UUID(value["player_id"])) != value["player_id"]:
             raise ValueError()
-        checked_author(value["player_name"])
         result["target"] = checked_target(value["target"])
     except (ValueError, TypeError, AttributeError):
         raise CommunityError("invalid_metadata") from None
+    try:
+        result["player_name"] = incoming_name(checked_author(value["player_name"]))
+    except ValueError:
+        raise CommunityError("invalid_name") from None
     if (value["clock"] not in ("igt", "rta") or value["game_version"] not in ("us", "jp")
             or not isinstance(value["strategy"], str) or not 1 <= len(value["strategy"].encode("utf8")) <= 256
             or any(ord(c) < 32 for c in value["strategy"])
@@ -77,6 +93,7 @@ class CachedPopulation:
         self._generation = 0
         self._owner = None
         self._closed = False
+        self._kept = frozenset()
         # The index is deliberately memory-only. Reopening requires publication
         # gates again; stale private files cannot become an offline public roster.
         for suffix in (".ghost", ".ghc1", ".part"):
@@ -119,8 +136,7 @@ class CachedPopulation:
         return (*self._target_key(identity), clock, rom, scope, strategy)
 
     def _active(self):
-        snapshot = self.account.snapshot() if self.account else {}
-        owner = snapshot.get("uid") if snapshot.get("authenticated") and snapshot.get("status") == "active" else None
+        owner = account_owner(self.account.snapshot()) if self.account else None
         if owner != self._owner:
             self._owner = owner
             self._pools.clear()
@@ -138,7 +154,7 @@ class CachedPopulation:
     def owned_player_ids(self, local_id, *, names=()):
         """The signed-in account's uid, plus whatever the wrapped layers own."""
         snapshot = self.account.snapshot() if self.account else {}
-        uid = snapshot.get("uid") if snapshot.get("authenticated") else None
+        uid = snapshot.get("uid") if snapshot.get("authenticated") or snapshot.get("stored") else None
         method = getattr(self.local, "owned_player_ids", None)
         inner = method(local_id, names=names) if method else ()
         return frozenset(value for value in (local_id, uid, *inner) if value)
@@ -174,10 +190,11 @@ class CachedPopulation:
                     == (asset["raw_sha256"], asset["encoded_sha256"]))
 
     def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None):
-        """Local rows, then the matching rival list and loose rows.
+        """Local rows, then this lineup's own rival list.
 
         A strategy reads only that strategy's list; None reads only the Overall
-        list. Another identity's list never fills this one's candidates.
+        list. Another identity's list, search results and other loose rows
+        never become candidates; a chosen rival is looked up by `get`.
         """
         local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version, strategy=strategy)
         with self._lock:
@@ -189,7 +206,7 @@ class CachedPopulation:
                      if key[0] == kind and key[2:] == (clock, game_version, *scope)
                      for row in page["recordings"]]
             rows, seen, index = [], set(), None
-            for metadata, expiry in (*lists, *self._rows.values()):
+            for metadata, expiry in lists:
                 if expiry <= now or metadata["id"] in seen:
                     continue
                 if metadata["target"]["kind"] == "segment" and index is None:
@@ -269,6 +286,11 @@ class CachedPopulation:
             if not item or item[1] <= time.monotonic():
                 return {"complete": False, "min_step": None, "max_step": None, "base_step": None, "generation": None}
             return dict(item[0]["coverage"])
+
+    def keep(self, identifiers):
+        """The recordings the lineup on screen uses: a download never evicts them."""
+        with self._lock:
+            self._kept = frozenset(identifiers)
 
     def lease_until(self, identity=None, *, recording=None):
         """When a held list (or one recording's freshest row) lapses; None when absent."""
@@ -366,7 +388,12 @@ class CachedPopulation:
             self._trim_rows()
             while (sum(item["raw"] for item in self._assets.values()) > CACHE_RAW or
                    sum(item["encoded"] for item in self._assets.values()) > CACHE_ENCODED):
-                oldest, _ = self._assets.popitem(last=False)
+                # Oldest first, never a recording the lineup on screen uses (at
+                # most four seats, so the cap can be exceeded by that bound only).
+                oldest = next((key for key in self._assets if key not in self._kept and key != identifier), None)
+                if oldest is None:
+                    break
+                self._assets.pop(oldest)
                 for suffix in (".ghost", ".ghc1"):
                     (self.root / (oldest + suffix)).unlink(missing_ok=True)
             self._generation += 1
@@ -380,7 +407,7 @@ class CachedPopulation:
                 raise LookupError("This community ghost is not downloaded or its visibility needs refreshing.")
             row, asset = self._row(entry[0]), self._assets[ghost.id]
             if (target is None or (row["kind"], row["entity_key"]) != (target["kind"], target["entity_key"])
-                    or target.get("scope", "strategy") == "strategy" and (target.get("strat") or "Standard") != row["strategy"]):
+                    or target.get("scope", "strategy") == "strategy" and target.get("strat") != row["strategy"]):
                 raise ValueError("This community ghost belongs to another practice target.")
             path = self.root / (ghost.id + ".ghost")
             if path.is_symlink() or not path.resolve().is_relative_to(self.root):

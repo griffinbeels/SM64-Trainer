@@ -1,6 +1,7 @@
 """Whole-ladder rival lists and download staging, outside native playback."""
 from uuid import UUID
 
+from sm64_events.community.cache import account_owner
 from sm64_events.ghost.adaptive import MAX_RIVALS, player_key
 from sm64_events.ghost.community_catalog import match_windows
 from sm64_events.ghost.portable import checked_hash
@@ -14,10 +15,8 @@ class CommunityRivals:
         self.downloading = False
 
     def owner(self):
-        snapshot = self.sync.account.snapshot() if self.sync is not None else {}
-        owner = snapshot.get('uid')
-        if not snapshot.get('authenticated') or snapshot.get('status') != 'active':
-            return None
+        """The signed-in account, kept through a failed token refresh (see account_owner)."""
+        owner = account_owner(self.sync.account.snapshot()) if self.sync is not None else None
         try:
             return owner if str(UUID(owner)) == owner else None
         except (ValueError, TypeError, AttributeError):
@@ -88,11 +87,15 @@ class CommunityRivals:
     def list_state(self, identity):
         """Where this identity's rival list stands, for the lineup's state.
 
-        'signed_out' (no cloud), 'pending' (asked, not answered), 'held' (an
-        answer is cached, possibly empty), 'offline', 'unsupported' (the cloud
-        has no such list), or 'absent' (never asked: the overlay is off).
+        'local' (this build has no cloud), 'signed_out', 'pending' (asked, not
+        answered), 'held' (an answer is cached, possibly empty), 'offline' (this
+        list's request failed, or the account is in a network cooldown),
+        'unsupported' (the cloud has no such list), or 'absent' (never asked:
+        the overlay is off).
         """
-        if self.owner() is None or identity is None or not identity.strategy:
+        if self.sync is None:
+            return 'local'
+        if self.owner() is None:
             return 'signed_out'
         status = self.sync.pool_status(identity)
         if status == 'pending':
@@ -107,11 +110,15 @@ class CommunityRivals:
         return self.sync.refused_assets() if self.sync is not None else frozenset()
 
     def status(self, identity):
+        """One sentence about this lineup's own list; another request's failure never shows here."""
         if self.downloading:
             return 'Downloading rivals…'
         coverage = self.coverage(identity)
         if coverage is not None and not coverage['complete']:
-            if self.sync.last_error:
+            failure = self.sync.pool_status(identity)
+            if failure == 'unsupported':
+                return None
+            if failure == 'offline':
                 return 'Community rivals are unavailable. Your saved ghosts still work.'
             return 'Showing a partial rival list.' if coverage['generation'] else 'Finding rivals…'
         return None
@@ -127,6 +134,9 @@ class CommunityRivals:
             return (self.sync is None or row.get('provenance') != 'community-unverified'
                     or self.population.is_ready(row['id']))
         rows = tuple({**row, 'pending': not ready(row)} for row in desired)
+        if self.sync is not None:
+            # Downloads for these seats never evict the ones already on screen.
+            self.population.keep(row['id'] for row in rows if row.get('provenance') == 'community-unverified')
         waiting = tuple(row['id'] for row in rows if row['pending'])
         self.downloading = bool(waiting)
         if waiting and fetch:
