@@ -139,3 +139,32 @@ def test_failed_attach_after_session_allocation_is_retried(tmp_path, monkeypatch
         asyncio.run(app_module._db_reattach_loop(tracker, lambda: db))
         assert len(calls) == 2
         assert tracker.session_id is not None
+
+
+def test_a_rom_swap_rebinds_the_pad_pipeline_and_drops_the_pending_frame(tmp_path):
+    """Task 0064: the frame being sampled when the cartridge changed may have
+    been read through the old ROM's addresses, so it is dropped, not flushed;
+    a build without a controller row samples nothing."""
+    import dataclasses
+    tracker = TrackerService(None, Broadcaster())
+    memory = ScriptedMemory([(100, 0x8000, 0, 84, 0), (101, 0, 0, 0, 0)])
+    replay = SimpleNamespace(recorder=SimpleNamespace(set_player_active=lambda: None))
+    runtime = InputRuntime(tracker, memory, US, replay)
+    poller = Poller(OfflineMemory(), [], tracker)
+    runtime.bind(poller)
+    with closing(Database(tmp_path / "swap.db")) as db:
+        asyncio.run(tracker.attach_db(db))
+        runtime.attach(db)
+        before = datetime.now(timezone.utc).isoformat()
+        runtime.sampler.sample()                     # frame 100 is pending
+        old = runtime.sampler
+        padless = dataclasses.replace(US, version="jp", player1_controller=None)
+        runtime.set_layout(padless)
+        runtime.close()
+        after = datetime.now(timezone.utc).isoformat()
+        assert db.inputs.chunks_between(before, after) == []
+        assert runtime.sampler is None and poller.input_sampler is None
+        assert runtime.inputs is not None and runtime.db is db
+        runtime.set_layout(US)
+        assert runtime.sampler is not None and runtime.sampler is not old
+        assert poller.input_sampler is runtime.sampler
