@@ -12,6 +12,7 @@ if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
 from uilab.driver import default_wait_ms, get_driver
+from uilab.trace import record
 from ui_fixture import serve_ui
 from uilab_project import _SETUP_SETUP
 from sm64_events.core.onboarding import JP_WARNING
@@ -86,6 +87,72 @@ def installed(layer):
     layer.update(INSTALLED)
 
 
+US_ROM = dict(state="supported", region="us", name="SM64 USAMUNE v1.93u", warning=None)
+ALL_CHECKS = dict(plugin=True, pictures=True, inputs=True, game=True)
+
+# Every state the setup modal commits to the DOM, in order, as
+# "page|stage|step|card title|detected region|forward arrow", plus each card
+# swap on the install page. A
+# MutationObserver sees every commit before it can paint, so a card that
+# flashes for one frame is still recorded.
+_WATCH = """(() => {
+  window.__seen = []; window.__swaps = [];
+  const current = '.setup-modal > .setup-swap > .setup-swap-in';
+  const read = () => {
+    const modal = document.querySelector('.setup-modal');
+    if (!modal) return null;
+    const pane = document.querySelector(current + ' .setup-install');
+    const title = pane?.querySelector('.setup-substep-swap > .setup-swap-in .setup-current h3');
+    const region = pane?.querySelector('.setup-substep-swap > .setup-swap-in .setup-region.is-detected span');
+    return [modal.dataset.page, pane?.dataset.stage || '', pane?.dataset.substep || '',
+            (title?.textContent || '').trim(), region?.textContent || '',
+            document.querySelector('.setup-arrow-ready') ? 'forward' : ''].join('|');
+  };
+  new MutationObserver(records => {
+    for (const r of records) for (const node of r.addedNodes) {
+      if (node.nodeType === 1 && node.matches('.setup-substep-swap > .setup-swap-out')
+          && node.closest(current)) window.__swaps.push(node.parentElement.dataset.direction);
+    }
+    const now = read();
+    if (now && now !== window.__seen.at(-1)?.[1]) window.__seen.push([Date.now(), now]);
+  }).observe(document.body, {subtree: true, childList: true, attributes: true, characterData: true});
+  return true;
+})()"""
+
+
+def seen(page):
+    return [row.split("|") for _, row in page.evaluate("window.__seen")]
+
+
+def stages(page):
+    """The install page's cards in the order shown, repeats collapsed."""
+    out = []
+    for name, stage, *_ in seen(page):
+        if name == "install" and stage and (not out or out[-1] != stage):
+            out.append(stage)
+    return out
+
+
+class PollScript:
+    """Answers /api/setup with `base` until armed, then one scripted
+    observation per request, holding the last: a one-poll flicker is exact
+    instead of a sleep racing the modal's one-second poll."""
+
+    def __init__(self, base):
+        self.base, self.frames, self.served = base, None, []
+
+    def arm(self, *frames):
+        self.frames = list(frames)
+
+    def __call__(self, _layer):
+        import time
+        if not self.frames:
+            return self.base
+        frame = self.frames.pop(0) if len(self.frames) > 1 else self.frames[0]
+        self.served.append((time.time(), frame))
+        return frame
+
+
 def test_first_run_reveals_only_the_current_page_and_back_stays_put(tmp_path):
     layer, observed = scenario()
     with serve_ui(capture_layer_status=layer, setup_observer=lambda _: observed) as url, get_driver().launch() as page:
@@ -105,7 +172,7 @@ def test_first_run_reveals_only_the_current_page_and_back_stays_put(tmp_path):
         assert page.count('.setup-modal[data-page="connect"]') == 1
         wait_page(page, "install")
         wait_step(page, "close")
-        assert "Open Usamune" not in body(page)
+        assert "Open ROM" not in body(page)
         assert page.count(".setup-install-action") == 0
         page.click('.setup-arrow[aria-label="Back"]')
         wait_page(page, "connect")
@@ -121,6 +188,38 @@ def test_first_run_reveals_only_the_current_page_and_back_stays_put(tmp_path):
         assert page.problems() == []
 
 
+def assert_game_found_moves_to_the_check(page, observed):
+    """Open the game on "Open your game" and sample the stage change per
+    frame: its acknowledgment, then the check card entering from aside and
+    coming to rest while the old card leaves."""
+    trace = record(page, watch={"in": ".setup-substep-swap > .setup-swap-in",
+                                "out": ".setup-substep-swap > .setup-swap-out",
+                                "title": ".setup-substep-swap > .setup-swap-in .setup-current h3"},
+                   trigger=lambda _: observed.update(rom=dict(US_ROM)), ms=2600)
+    titles = []
+    for row in trace.of("title").frames:
+        if row.get("text") and (not titles or titles[-1] != row["text"]):
+            titles.append(row["text"])
+    entering = [row for row, title in zip(trace.of("in").frames, trace.of("title").frames, strict=True)
+                if title.get("text") == "Checking your setup" and "x" in row]
+    leaving = [row for row in trace.of("out").frames if "x" in row]
+    assert titles == ["Open your game", "Usamune found", "Checking your setup"]
+    assert entering[0]["opacity"] < .5 and entering[0]["x"] > 10  # starts aside, not at rest
+    assert any(0 < row["x"] < entering[0]["x"] and .1 < row["opacity"] < .95 for row in entering)
+    assert entering[-1]["x"] == 0 and entering[-1]["opacity"] == 1
+    assert trace.of("in").comes_to_rest("x")[0]
+    assert leaving and leaving[-1]["opacity"] < leaving[0]["opacity"]
+
+
+def assert_walked_four_cards(page):
+    """Four cards in order, each once; "Open your game" changed its text in
+    place (reopen, then rom) with no card swap of its own."""
+    assert stages(page) == ["close", "install", "game", "check"]
+    assert page.evaluate("window.__swaps") == ["forward"] * 3
+    game = [step for name, stage, step, *_ in seen(page) if name == "install" and stage == "game"]
+    assert game[0] == "reopen" and "rom" in game
+
+
 def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
     layer, observed = scenario()
     connect(layer, observed)
@@ -128,12 +227,13 @@ def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
                   setup_observer=lambda _: observed) as url, get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
         wait_page(page, "platform")
+        assert page.evaluate(_WATCH)
         page.click(".setup-platform-choice:first-child")
         wait_page(page, "install")
         wait_step(page, "close")
         layer["pj64_running"] = False
         wait_step(page, "install")
-        assert "Open Usamune" not in body(page)
+        assert "Open ROM" not in body(page)
         click_text(page, "What does this install change?")
         page.wait_ms(400)
         (tmp_path / "install-details.png").write_bytes(page.screenshot())
@@ -143,7 +243,8 @@ def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
         layer["pj64_running"] = True
         wait_step(page, "rom")
         assert page.count(".setup-regions") == 0
-        observed["rom"] = dict(state="supported", region="us", name="SM64 USAMUNE v1.93u", warning=None)
+        page.wait_ms(1600)  # he reads "Open your game", then opens it
+        assert_game_found_moves_to_the_check(page, observed)
         wait_step(page, "verify")
         (tmp_path / "verify-us.png").write_bytes(page.screenshot())
         assert page.count(".setup-region.is-detected") == 1
@@ -151,6 +252,7 @@ def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
         assert page.count(".setup-completion") == 0  # a header and plugin heartbeat aren't enough
         observed["checks"] = dict(plugin=True, pictures=True, inputs=True, game=True)
         wait_page(page, "complete")
+        assert_walked_four_cards(page)
         assert page.count(".setup-cast img") == 3
         assert page.count(".setup-not-now") == 0
         assert page.count('.setup-confetti i') == 24
@@ -177,6 +279,52 @@ _UNFOCUSED = ("(() => { Object.defineProperty(document, 'hasFocus', {configurabl
               " window.dispatchEvent(new Event('blur')); return true; })()")
 _VISIBILITY = ("(() => {{ Object.defineProperty(document, 'visibilityState', {{configurable: true, get: () => {state!r}}});"
                " document.dispatchEvent(new Event('visibilitychange')); return true; }})()")
+
+
+def test_opening_with_everything_running_shows_one_calm_card(tmp_path):
+    """His report, 2026-10-17: "it's bouncing visually between so many steps".
+    Opened with Project64 and Usamune already running, Settings → Setup shows
+    "Checking your setup", then "Setup checked" in place: no earlier page or
+    card first, and one-poll flickers inside the stage or back to an earlier
+    one change nothing. A step back that lasts shows after the hold."""
+    layer, observed = scenario()
+    connect(layer, observed)
+    installed(layer)
+    verify = dict(observed, rom=dict(US_ROM), checks={})
+    ready = dict(verify, checks=dict(ALL_CHECKS))
+    no_game = dict(verify, rom=dict(MISSING_ROM))
+    script = PollScript(verify)
+    with serve_ui(capture_layer_status=layer, setup_observer=script) as url, \
+            get_driver().launch(viewport=(850, 600)) as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_ms(1500)
+        assert page.count(".setup-modal") == 0
+        assert page.evaluate(_WATCH)
+        script.arm(verify, ready, verify, ready, no_game, ready, ready)
+        page.evaluate(_SETUP_SETUP)
+        wait_until(page, "!!document.querySelector('.setup-arrow-ready')", "Setup checked offers Forward")
+        (tmp_path / "opened-checked-850.png").write_bytes(page.screenshot())
+        while script.frames != [ready]:
+            page.wait_ms(100)
+        page.wait_ms(2500)  # past the hold after the last one-poll step back
+        served = [frame for _, frame in script.served]
+        assert served[:6] == [verify, ready, verify, ready, no_game, ready]
+        assert [row[0] for row in seen(page)] == ["install", "install"]
+        assert [row[1:] for row in seen(page)] == [["check", "verify", "Checking your setup", "US", ""],
+                                                   ["check", "ready", "Setup checked", "US", "forward"]]
+        assert page.evaluate("window.__swaps") == []
+        assert page.count(".setup-region.is-detected") == 1
+
+        script.arm(no_game)  # the game really closed
+        wait_until(page, "!!document.querySelector('.setup-install[data-stage=\"game\"]')",
+                   "a lasting step back shows the game card")
+        shown_at = page.evaluate("window.__seen.at(-1)[0]") / 1000
+        first_back = next(at for at, frame in script.served[6:] if frame == no_game)
+        assert 1.9 <= shown_at - first_back <= 4.5
+        assert page.evaluate("window.__swaps") == ["back"]
+        assert seen(page)[-1][1:] == ["game", "rom", "Open your game", "", ""]
+        assert page.count(".setup-substep-swap > .setup-swap-in .setup-regions") == 0
+        assert page.problems() == []
 
 
 def test_confirmed_setup_continues_while_visible_and_waits_while_hidden(tmp_path):
@@ -366,7 +514,7 @@ def test_existing_install_rechecks_unresolved_emulator_before_step_three(tmp_pat
                               "build": "Known unversioned Project64 1.6"}
         wait_page(page, "install")
         wait_step(page, "rom")
-        assert "Open Usamune" in body(page)
+        assert "Open your game" in body(page) and "File → Open ROM" in body(page)
         assert page.count(".setup-install-action") == 0
         assert page.count(".setup-completion") == 0
         (tmp_path / "recognized-idle-project64.png").write_bytes(page.screenshot())
