@@ -192,6 +192,12 @@ class RankStandards:
         self._sheet = {}
         self._sheet_jp = {}
         self._sheet_estimates = {}
+        # {ek: {strategy: "us"|"jp"}} -- Sheet rows whose every entry declares
+        # one ROM, so the strategy exists on that ROM only (`ranks/region_scope.py`).
+        self._sheet_versions = {}
+        # Bumped whenever the fitted layers above are replaced, so a reader
+        # can key a cache on them without fingerprinting whole ladders.
+        self._layers_serial = 0
         self.calibrations = None
         self._read_user = ContextVar(f"rank_user_{id(self)}", default=None)
         self._overall_cache = {}
@@ -219,11 +225,13 @@ class RankStandards:
 
     def _load_sheet(self) -> None:
         sheet = self._read_valid(self.sheet_path)
-        self._sheet, self._sheet_jp = {}, {}
+        self._sheet, self._sheet_jp, self._sheet_versions = {}, {}, {}
+        self._layers_serial += 1
         for ek, entity in (sheet["entities"] if sheet else {}).items():
             if "strategies" in entity:     # v2: the vetted seed's own two-layer shape
                 self._sheet[ek] = entity.get("strategies", {})
                 self._sheet_jp[ek] = entity.get("jp_strategies", {})
+                self._sheet_versions[ek] = entity.get("versions", {})
             else:                          # v1: flat strat -> ladder
                 self._sheet[ek] = entity
 
@@ -374,7 +382,7 @@ class RankStandards:
         if generation is not None:
             return generation.layers.get(ek, {}).get(layer, {})
         source = {"strategies": self._sheet, "jp_strategies": self._sheet_jp,
-                  "estimates": self._sheet_estimates}
+                  "estimates": self._sheet_estimates, "versions": self._sheet_versions}
         return source[layer].get(ek, {})
 
     @property
@@ -389,8 +397,18 @@ class RankStandards:
         pinned = self._read_user.get()
         user = pinned[1] if pinned else self._user_revision
         return fingerprint([generation.revision if generation else
-                            [self._sheet, self._sheet_jp, self._sheet_estimates],
+                            [self._sheet, self._sheet_jp, self._sheet_estimates, self._sheet_versions],
                             user, self.grading_version])
+
+    @property
+    def region_revision(self):
+        """Changes whenever an input to `ranks/region_scope.py` can: the fitted
+        layers or the user's file. Cheap, unlike `calibration_revision`, and
+        blind to the grading version, which no region scope depends on."""
+        generation = self.calibrations.read if self.calibrations else None
+        pinned = self._read_user.get()
+        return (generation.revision if generation else self._layers_serial,
+                pinned[1] if pinned else self._user_revision)
 
     def overall_curve(self, ek, version=None):
         """Resolve Overall independently from editable strategy cutoffs."""
@@ -527,6 +545,8 @@ class RankStandards:
         self._sheet = {ek: layer.get("strategies", {}) for ek, layer in layers.items()}
         self._sheet_jp = {ek: layer.get("jp_strategies", {}) for ek, layer in layers.items()}
         self._sheet_estimates = {ek: layer.get("estimates", {}) for ek, layer in layers.items()}
+        self._sheet_versions = {ek: layer.get("versions", {}) for ek, layer in layers.items()}
+        self._layers_serial += 1
         with self._overall_edit_lock:
             self._overall_cache.clear()
 
@@ -538,7 +558,7 @@ class RankStandards:
             out[ek] = deepcopy(entity if "strategies" in entity else {"strategies": entity})
         for ek, entity in (mapping or {}).items():
             layers = entity if "strategies" in entity else {"strategies": entity}
-            for kind in ("strategies", "jp_strategies", "estimates"):
+            for kind in ("strategies", "jp_strategies", "estimates", "versions"):
                 out.setdefault(ek, {}).setdefault(kind, {}).update(deepcopy(layers.get(kind, {})))
         return out
 
@@ -587,6 +607,12 @@ class RankStandards:
         """The strategies whose JP ladder differs from their US one -- what
         the standards editor opens a JP column for."""
         return [strat for strat in self.ladders(ek, "us") if self.jp_deltas(ek, strat)]
+
+    def single_version_strategies(self, ek) -> dict:
+        """{strategy: "us"|"jp"} for the Sheet rows whose every entry names
+        one ROM: that strategy exists on only that release."""
+        return {strat: version for strat, version in self._fitted(ek, "versions").items()
+                if version in ("us", "jp")}
 
     def clearable_jp_strategies(self, ek) -> list:
         """Strategies with an effective JP overlay that `clear_jp` can drop.

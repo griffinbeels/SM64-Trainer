@@ -112,6 +112,13 @@ def test_distinct_original_rom_ladders_keep_both_practice_banners(tmp_path, rank
 
     sections = build_session_view(db, service, "igt")["stars" if kind == "star" else "segments"]
     [section] = [s for s in sections if s["attempts"]]
+    if mode == "pb":
+        # Region scope (2026-10-16): JP times make this strategy regional, so
+        # the JP save is the JP slot's personal best and US grading has none.
+        assert section["rank"]["rank"] is None
+        ranks.grading_version = "jp"
+        sections = build_session_view(db, service, "igt")["stars" if kind == "star" else "segments"]
+        [section] = [s for s in sections if s["attempts"]]
     assert section["rank"]["rank"] == "Mario"
     assert section["entity_rank"]["rank"] != "Mario"
     assert not section["one_ladder"]

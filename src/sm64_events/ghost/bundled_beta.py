@@ -142,11 +142,16 @@ class BundledPopulation:
     def generation(self):
         return self.local.generation, self.digest
 
-    def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None):
-        local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version, strategy=strategy)
+    def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None, versions=None):
+        """`versions` names the recorded ROMs to return (`region_scope.servable_versions`);
+        omitted, only `game_version`'s. A recording whose ROM nobody knows is
+        always a candidate: whether it may serve is `ghost/adaptive.py`'s call."""
+        local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version,
+                                             strategy=strategy, versions=versions)
+        roms = (game_version,) if versions is None else versions
         rows = []
         for raw in self._rows.values():
-            if (raw["clock"] != clock or raw.get("game_version") not in (None, game_version)
+            if (raw["clock"] != clock or raw.get("game_version") not in (None, *roms)
                     or strategy is not None and raw["target"].get("strat") != strategy):
                 continue
             try:
@@ -194,8 +199,10 @@ class BundledPopulation:
         if not normalized or not AUTHOR.startswith(normalized):
             return local
         value = lambda key, default=None: identity.get(key, default) if isinstance(identity, dict) else getattr(identity, key, default)
+        from sm64_events.ghost.population import searched_versions
         rows = self.metadata_snapshot(value("kind"), value("entity_key"), clock=value("clock"),
-            game_version=value("game_version"), strategy=value("strategy") if value("scope", "strategy") == "strategy" else None)
+            game_version=value("game_version"), strategy=value("strategy") if value("scope", "strategy") == "strategy" else None,
+            versions=searched_versions(identity))
         seeds = [row for row in rows if row.get("source_status") == "bundled-author-recording"]
         key = lambda row: (unicodedata.normalize("NFKC", row["player_name"]).casefold(), row["frames"], row["id"])
         if cursor is not None:

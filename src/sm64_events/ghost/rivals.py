@@ -4,12 +4,13 @@ from itertools import islice
 from uuid import UUID
 
 from sm64_events.ghost.adaptive import (
-    PracticeIdentity, add_slot, checked_options, player_key, rank_frames, rank_recordings, select_rivals,
-    MAX_STEP, MAX_AHEAD, MAX_RIVALS,
+    PracticeIdentity, add_slot, checked_options, player_key, rank_frames, rank_recordings, region_serves,
+    select_rivals, MAX_STEP, MAX_AHEAD, MAX_RIVALS,
 )
 from sm64_events.ghost.library_preferences import AUTHOR_KEY
 from sm64_events.ghost.pb import AttemptGhost, saved_pb_basis
 from sm64_events.ghost.sharing_targets import describe
+from sm64_events.ranks import region_scope
 from sm64_events.ranks.standards import entity_key
 
 STATE_KEY = "ghost_rivals_v1"
@@ -97,8 +98,13 @@ class Rivals:
             ek = entity_key(None,None,int(target["entity_key"]))
             signature = describe(target["kind"],target["entity_key"],target.get("strat"),
                                  self.tracker.db.segment_defs()).get("signature")
+        scope = self.scope_for(target)
+        # Strategy tab: that strategy's region scope. Overall tab: fetch both
+        # ROMs when any strategy could serve, then judge each ghost by its own.
+        regional = (region_scope.scope_of(ek,target.get("strat"),ranks) if scope=="strategy"
+                    else region_scope.widest_scope(ek,ranks))
         return PracticeIdentity(target["kind"],target["entity_key"],ranks.clock_for(ek),
-                                version,target.get("strat"),signature,self.scope_for(target))
+                                version,target.get("strat"),signature,scope,regional)
 
     def scope_for(self, target):
         return self.scopes.get(self._entity_key(target),"strategy") if target else "strategy"
@@ -276,7 +282,8 @@ class Rivals:
     def _ranked_population(self, identity, target, pb, pins):
         records = self.population.metadata_snapshot(identity.kind,identity.entity_key,
             clock=identity.clock,game_version=identity.game_version,
-            strategy=identity.strategy if identity.scope=="strategy" else None)
+            strategy=identity.strategy if identity.scope=="strategy" else None,
+            versions=region_scope.servable_versions(identity.region_scope,identity.game_version))
         ranked = rank_recordings(records,self.tracker.ranks,identity)
         owners = self._owned_players()
         # Explicit choices survive; automatic slots exclude our own runs.
@@ -442,7 +449,7 @@ class Rivals:
             if (attempt is None or local_attempt_source(attempt)!=local
                     or entity_key_of(attempt)!=(target.kind,target.entity_key)
                     or target.scope=="strategy" and (attempt.strat_tag or "Standard") != (target.strategy or "Standard")
-                    or attempt.game_version not in (None,target.game_version)):
+                    or not region_serves(target,attempt.strat_tag,attempt.game_version,self.tracker.ranks)):
                 return None
             frames = getattr(attempt,f"{target.clock}_frames")
             progress = rank_frames(self.tracker.ranks,target,frames)
@@ -461,7 +468,8 @@ class Rivals:
             return None
         if ((ghost.kind,ghost.entity_key)!=(target.kind,target.entity_key)
                 or target.scope=="strategy" and (ghost.strat_tag or "Standard") != (target.strategy or "Standard")
-                or row["clock"]!=target.clock or row.get("game_version") not in (None,target.game_version)):
+                or row["clock"]!=target.clock
+                or not region_serves(target,ghost.strat_tag,row.get("game_version"),self.tracker.ranks)):
             return None
         progress = rank_frames(self.tracker.ranks,target,ghost.frames)
         if progress is None:
@@ -598,7 +606,9 @@ class Rivals:
                         # unknown. Its trusted snapshot provides playback context.
                         rows = self.population.metadata_snapshot(self.identity.kind, self.identity.entity_key,
                             clock=self.identity.clock, game_version=self.identity.game_version,
-                            strategy=self.identity.strategy if self.identity.scope == "strategy" else None)
+                            strategy=self.identity.strategy if self.identity.scope == "strategy" else None,
+                            versions=region_scope.servable_versions(self.identity.region_scope,
+                                                                    self.identity.game_version))
                         row = next((item for item in rows if item["id"] == identity), row)
                     ranked = rank_recordings([row],self.tracker.ranks,self.identity)
                 except LookupError:

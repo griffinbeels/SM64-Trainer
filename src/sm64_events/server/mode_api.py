@@ -38,9 +38,15 @@ class ModeBody(BaseModel):
     version: str | None = None
 
 
+def _effective(cfg: ModeConfig, service) -> str:
+    """The setting resolved on the running cartridge (AUTO follows it)."""
+    resolve = getattr(service, "effective_game_version", None)
+    return resolve(cfg) if resolve is not None else effective_version(cfg)
+
+
 def mode_json(cfg: ModeConfig, service) -> dict:
     return {"mode": cfg.mode.value, "version": cfg.version.value,
-            "effective": effective_version(cfg),
+            "effective": _effective(cfg, service),
             "unsupported": cfg.mode is TrackerMode.EMU
             and cfg.version is GameVersion.JP}
 
@@ -49,6 +55,10 @@ def create_mode_router(service, mode_path: Path | None = None) -> APIRouter:
     """`mode_path` overrides where the setting persists (tests; production
     takes core.paths.mode_settings_path())."""
     router = APIRouter(prefix="/api")
+    # A cartridge change under AUTO re-grades too (`service.note_running_version`),
+    # and it is no more a rank-up than a setting flip is.
+    if getattr(service, "on_regrade", False) is None:
+        service.on_regrade = lambda: absorb_after_regrade(service)
 
     @router.get("/mode")
     def get_mode():
@@ -75,7 +85,7 @@ def create_mode_router(service, mode_path: Path | None = None) -> APIRouter:
         # BEFORE the broadcast rather than after it.
         service.mode_config = cfg
         if service.ranks is not None:
-            service.ranks.grading_version = effective_version(cfg)
+            service.ranks.grading_version = _effective(cfg, service)
         absorb_after_regrade(service)
         await service.set_game_version(cfg)
         return mode_json(cfg, service)
@@ -91,5 +101,5 @@ def apply_persisted_mode(service, mode_path: Path | None = None) -> ModeConfig:
     cfg = load_mode_config(mode_path)
     service.mode_config = cfg
     if service.ranks is not None:
-        service.ranks.grading_version = effective_version(cfg)
+        service.ranks.grading_version = _effective(cfg, service)
     return cfg

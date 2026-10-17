@@ -1545,6 +1545,27 @@ choices, and every [[ghost]] keeps its recorded [[strategy]] label.
 
 - **Lives** — `src/sm64_events/ghost/rivals.py` and `src/sm64_events/ui/components/practicelog.js`
 
+### Region scope
+
+Whether a [[strategy]] plays the same on US and JP: **shared** or
+**regional**. The trainer reads the answer from that [[strategy]]'s
+[[standard]]s and never asks. A JP difference in its [[ladder]] makes a [[strategy]]
+regional, and so does an [[Ultimate Sheet]] that times it on one release
+only; with neither, a [[strategy]] with a [[ladder]] counts as shared. A
+[[strategy]] with no [[ladder]] follows the others on its [[target]], and a
+[[target]] with none at all is regional. Shared: a [[ghost]] recorded on
+either release may race you, and one [[personal best]] covers both releases,
+the faster winning. Regional: only your running release's [[ghost]]s race,
+and each release keeps its own [[personal best]]. A [[ghost]] whose release
+nobody recorded races only on a shared [[strategy]].
+
+- **Not** — the [[region switch]], which picks which releases a surface
+  shows; the [[game version]], which picks the [[ladder]] the trainer grades
+  you on; or the [[ghost matching scope]].
+- **Lives** — `src/sm64_events/ranks/region_scope.py`
+  → the rivals (`src/sm64_events/ghost/adaptive.py`) and the personal best
+  slot (`src/sm64_events/tracking/views.py`)
+
 ### Climb profile
 
 A separate practice database with its own player identity, the original
@@ -2365,9 +2386,8 @@ either choice, since nothing recorded which release produced it.
 ### Effective version
 
 What the [[game version]] resolves to — always JP or US, never Auto-detect.
-An explicit choice wins; Auto-detect resolves to US on the emulator, the only
-release it reads, and takes a detected release from a front-end that can read
-one off the screen.
+An explicit choice wins; Auto-detect follows the cartridge the emulator is
+running, keeps the last one seen when it detaches, and is US before any.
 
 - **Lives** — the mode config's resolver (`src/sm64_events/core/modes.py`)
   → the session view (`src/sm64_events/tracking/views.py`)

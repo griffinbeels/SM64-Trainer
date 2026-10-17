@@ -22,7 +22,7 @@ from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.tracking.service import TrackerService
 from sm64_events.ghost.adaptive import rank_frames
 from datetime import datetime, timezone
-from tests.test_ghost_adaptive import Standards, recording, basis, attempt
+from tests.test_ghost_adaptive import Standards, SharedStandards, recording, basis, attempt
 
 TARGET = {"kind":"star","entity_key":"2-1","strat":"Standard"}
 CONTROLS = {"hue_degrees":250}
@@ -154,7 +154,7 @@ def test_complete_historical_bundle_falls_back_offline_and_remains_manually_sele
         def coverage(self, _identity):
             return {"complete": False, "generation": None}
 
-    tracker = SimpleNamespace(db=Database(tmp_path / "bundle.db"), ranks=Standards())
+    tracker = SimpleNamespace(db=Database(tmp_path / "bundle.db"), ranks=SharedStandards())
     ghost = AttemptGhost(1, "star", "2-1", "Standard", 100, pb=True)
     monkeypatch.setattr(module, "saved_pb_basis", lambda *_args: basis(step=44, frames=100, ghost=ghost))
     native, population = Native(), Bundle()
@@ -558,7 +558,7 @@ def signed_in(name, uid=UID):
 
 
 def seated(tmp_path, monkeypatch, population, community=None, *, author=None):
-    tracker = SimpleNamespace(db=Database(tmp_path / "own.db"), ranks=Standards())
+    tracker = SimpleNamespace(db=Database(tmp_path / "own.db"), ranks=SharedStandards())
     if author:
         save_author(tracker.db, author)
     monkeypatch.setattr(module, "saved_pb_basis", lambda *_args: basis(step=10, frames=1200))
