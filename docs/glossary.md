@@ -1763,11 +1763,14 @@ The box behind a [[ghost]]'s name in the game: SM64's own dialog box, the
 black one with white text that characters speak in, or the white one with
 black text that signs use, at the opacity you choose (none at zero). The name
 itself sits just over the top of the [[ghost]]'s body, so it crouches and dives
-with him. The [[renderer]] draws it in the running [[practice ROM]]'s own font: on
-JP, which has no lowercase, in capitals.
+with him. The [[renderer]] draws it in the US game's font, which your own US
+[[practice ROM]] lends once you have played it: the [[renderer]] keeps a copy on
+your machine. On JP before that, it draws JP's own font, in capitals (JP's
+has no lowercase).
 
 - **Lives** — its two rows in `src/sm64_events/ghost/settings.py`;
-  `plugin/gfxwrap/ghost_annotation_mesh.h` draws it
+  `plugin/gfxwrap/ghost_annotation_mesh.h` draws it;
+  `plugin/gfxwrap/ghost_font_cache.cpp` keeps the lent US font
 
 ### Corner inputs
 

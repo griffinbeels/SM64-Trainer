@@ -104,14 +104,26 @@ The committed clip is never changed. A frame the track lacks, and a whole clip w
 track Mario's action does not line up, keep the unavailable-input indicator. Synthetic
 death, extrapolated dance and post-recording holds have no invented inputs.
 
-The font is the cartridge's own thin white SM64 dialogue font. JP's is an
-8x16 one-bit font with digits, capitals and kana but no lowercase Latin, so
-on JP a name is drawn in JP's capitals (lowercase takes the capital), spaced
-by JP's own monospaced rule (10 pixels a glyph, 5 a space); its period is
-JP's own (the handakuten circle moved 2 left and 5 down, as the game draws
+The font is the thin white SM64 US dialogue font. The trainer never ships
+it: each player's own US cartridge lends it. Whenever the atlas is built from a
+verified US cartridge, [ghost_font_cache.cpp](../plugin/gfxwrap/ghost_font_cache.cpp)
+keeps its font tiles in a per-user file,
+`%LOCALAPPDATA%\SM64Trainer\plugin-cache\us-dialogue-font.bin`: per user, as
+the cartridge was his; writable wherever Project64 is installed; kept across
+Project64 restarts and plugin reinstalls. It is written whole (a temporary
+file, then one replace) and read only when its magic, version, size and
+SHA-256 hold and the digest is the known US font (`us_font_sha256`, the same
+on stock SM64 US and Usamune US), so a short, altered or foreign file is
+refused. On a JP cartridge the atlas fills its glyph cells from that file:
+US glyphs, US widths, lowercase and US punctuation. Without it, a JP name is
+drawn in JP's own font, an 8x16 one-bit font with digits, capitals and kana
+but no lowercase Latin: in JP's capitals (lowercase takes the capital),
+spaced by JP's own monospaced rule (10 pixels a glyph, 5 a space); its period
+is JP's own (the handakuten circle moved 2 left and 5 down, as the game draws
 its full stop), its colon that circle twice, its apostrophe JP's comma raised
-to the cap line, and `^ | < > &`, which JP cannot draw, show JP's `?`.
-Names and inputs are
+to the cap line, and `^ | < > &`, which JP cannot draw, show JP's `?`. Only
+the names' font is borrowed: inputs, HUD art and sound stay the cartridge's
+own. Names and inputs are
 sized in world units (`GP_ANNOTATION_*` in `ghost_tuning.h`), so a far ghost's
 name shrinks with its body, up to a largest size beside the camera. The
 renderer draws the world upside down (`flip_y`), so layout offsets flip with

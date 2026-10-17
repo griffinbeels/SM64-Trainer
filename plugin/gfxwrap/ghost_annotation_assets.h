@@ -31,11 +31,26 @@ constexpr uint32_t bank=0x31e1d0,decoded=0xc000,texture=0xb800,texture_fnv1a=0x7
 constexpr unsigned first_column=12,first_row=1,size=8;
 constexpr uint8_t floor=89;
 }
+// The US dialogue font as a US cartridge's font LUT names it: which codes
+// it holds and each one's 64-byte IA4 tile. A JP atlas writes names with it
+// when the player's own US cartridge lent it (ghost_font_cache.h keeps it
+// on his machine); the trainer never ships it. Stock SM64 US and Usamune US
+// hold the same font: SHA-256 of present || tiles (2026-10-17) below.
+struct UsFont {
+    std::array<uint8_t,32> present{};       // bit c of byte c/8: code c has a tile
+    std::array<uint8_t,256*64> tiles{};     // code c's tile at c*64
+};
+constexpr char us_font_sha256[]="b34b151dd4caf9b82ad34605584fd90e1b393e6a2a43163f53b3843313a35ca6";
 struct Assets {
     std::array<uint8_t,atlas_width*atlas_height*4> rgba{};
     bool ready=false,usamune=false,chevron=false;
     uint8_t font=font::us; // whose dialogue font filled the glyph cells
-    bool load(const uint8_t* rom,uint32_t bytes);
+    // After a US load: the cartridge's font, which a JP atlas may borrow.
+    UsFont lent{};bool lends=false;
+    bool borrowed=false; // a JP atlas whose glyph cells came from `us_font`
+    // `us_font`, on a JP cartridge, fills the glyph cells with the US font
+    // and US advances; without it a JP atlas writes in JP's own capitals.
+    bool load(const uint8_t* rom,uint32_t bytes,const UsFont* us_font=nullptr);
     View view() const {return ready?View{rgba.data(),atlas_width,atlas_height,usamune}:View{};}
 };
 // Pinned n64decomp 06ec56df7f951f88da05f468cdcacecba496145a:

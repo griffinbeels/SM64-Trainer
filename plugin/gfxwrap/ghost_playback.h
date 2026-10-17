@@ -180,7 +180,7 @@ typedef struct gp_api {
 #ifdef __cplusplus
 namespace ghost { struct WorldPass; }
 namespace ghost_compositor { struct Pose; }
-namespace ghost_annotation {struct View;}
+namespace ghost_annotation {struct View;struct Assets;}
 namespace ghost_path { struct Frame; }
 namespace ghost_playback {
 const gp_api *api();
@@ -263,6 +263,11 @@ struct SoundSink {
     void (__cdecl *place)(uint32_t ghost, const float camera_relative[3], float gain);
 };
 void set_sound_sink(const SoundSink *);
+/* Builds the names' and inputs' atlas from the verified cartridge on the
+ * setup worker. The renderer passes its per-user font cache
+ * (ghost_font_cache.h); without a loader the atlas reads the cartridge alone. */
+using AnnotationLoader = bool (__cdecl *)(ghost_annotation::Assets &, const uint8_t *rom, uint32_t bytes);
+void set_annotation_loader(AnnotationLoader);
 /* Recheck immediately before final presentation; cancellation/configuration
  * during a list must not present an older provisional candidate. */
 bool current(const gp_draw_token &);
