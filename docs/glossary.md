@@ -1575,6 +1575,13 @@ matching (his rule, 2026-10-13: "the player doesn't ever actually fight
 their own [[ghost]]s as a rival"). A pinned own recording still plays. The slot keeps its colour when
 its recording changes; the separate [[PB ghost]] keeps its own colour.
 
+A seat keeps its player, slot and colour across a new [[personal best]] until
+the PB passes it; a passed seat first takes that same player's fastest run
+still ahead and in range (his answer, 2026-10-16: "Yes, we should keep
+improving the ghosts"). With no saved PB yet, the seats spread evenly across
+Capless 5 to Toad 1 (rank steps 0..9). A pinned seat never moves, even once
+beaten. With no [[strategy]] there are no slots, no pins and no cloud request.
+
 - **Lives** — `src/sm64_events/ghost/adaptive.py` and `src/sm64_events/ghost/rivals.py`
 
 ### Ghost matching scope
@@ -1637,10 +1644,14 @@ it does not certify that gameplay was legitimate. Sharing begins unchecked.
 
 ### Rival pool
 
-The bounded metadata list for a [[target]], ROM, clock, [[ghost matching scope]]
-and [[rank]] range. The cloud can reuse it across players. The trainer selects
-[[rival slot]]s locally and downloads only their recordings. A complete membership
-scan and downloaded playback bytes are separate states.
+The bounded metadata list for a [[target]], ROM, clock and [[ghost matching scope]],
+covering the whole rank ladder. The cloud can reuse it across players. The trainer
+selects [[rival slot]]s locally and downloads only their recordings, each once, so
+a new [[personal best]] needs no new list. Each list is asked for once, held under
+the cloud's 10-minute publication lease (so a withdrawn ghost leaves every screen),
+and renewed only for the star on screen with the overlay on; switching back within
+the lease asks nothing. A complete membership scan and downloaded playback bytes
+are separate states.
 
 - **Lives** — `src/sm64_events/community/sync.py` and `src/sm64_events/community/cache.py`
 
