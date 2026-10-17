@@ -1311,9 +1311,14 @@ never a comparison with the last one.
 The ghost glyph in the active practice card's head that turns the Ghost
 Overlay on and off — gold while ghosts race. It is a preference, not a
 capability: with nobody to race it stays on and the [[lineup]] says why.
-D-pad Up in the game flips the same setting.
+D-pad Up in the game flips the same setting, in play or in the game's pause
+menu, but never while Usamune's menu is open (it navigates with D-pad Up) and
+never with L, R or Z held (Usamune's button combos) — his rule, 2026-10-16:
+"Gameplay active or normal pause --> toggle ghost overlay; USAMUNE MENU -->
+don't do anything".
 
-- **Lives** — `src/sm64_events/ui/components/ghostswitch.js` (`GhostToggle`)
+- **Lives** — `src/sm64_events/ui/components/ghostswitch.js` (`GhostToggle`);
+  `src/sm64_events/ghost/dpad_toggle.py` (the press rule and the flip)
 
 ### Recorded shadow
 
