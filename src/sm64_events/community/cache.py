@@ -8,12 +8,12 @@ import time
 import unicodedata
 from uuid import UUID, uuid4
 
-from sm64_events.ghost.clip import INCOMPLETE_INPUTS, blink_frames, decode_clip, inputs_complete
+from sm64_events.ghost.clip import blink_frames
 from sm64_events.ghost.portable import checked_author, checked_hash
 from sm64_events.ghost.sharing import PortableGhost
 from sm64_events.ghost.sharing_targets import bind, checked_target, describe
 
-from . import codec
+from . import claims, codec
 from .config import CommunityError
 
 MAX_METADATA = 1024
@@ -268,11 +268,10 @@ class CachedPopulation:
                 or hashlib.sha256(raw).hexdigest() != row["raw_sha256"]
                 or hashlib.sha256(encoded).hexdigest() != row["encoded_sha256"]):
             raise CommunityError("asset_mismatch")
-        clip = decode_clip(raw)
-        if not inputs_complete(clip):
-            # His rule: a shared recording with any unknown pad never enters
-            # this cache, whatever the service accepted (ghost/clip.py).
-            raise CommunityError("incomplete_inputs", INCOMPLETE_INPUTS)
+        # His rule: a shared recording whose ROM, inputs or time its own bytes
+        # do not bear out never enters this cache, whatever the service
+        # accepted (community/claims.py).
+        clip = claims.check_claims(raw, game_version=row["game_version"], clock=row["clock"], frames=row["frames"])
         blinks = blink_frames(clip)
         expected_owner = owner or (self.account.snapshot().get('uid') if self.account else None)
         staged = []
