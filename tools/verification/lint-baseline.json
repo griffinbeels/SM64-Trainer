@@ -401,8 +401,8 @@
     "5ea56cfd1edc45e943d21ec85c54704d461a4006b7b4bae36ed0f800b1483ab8",
     "007b8b9299a0f3098ac167064608ab7fb3d73842490cd28422012909270cc839",
     "bd35722cd000901d45742634ac856830492bb6db18cbda860608fd77250718ec",
-    "9b3c7ce6f2f13f928abfd4e0327b0aa2dd2d14ff7b3bde297baeb395547e515f",
-    "53d8401e8fc6f0c2ccd83a752ec7619539d3cdbfee23c7e11bec928415803537",
+    "071ac7b076fa1d6addc5e2e7cbd68f57054318f4206b7a6498f8cefc24857e9b",
+    "7d4ec4c6f7acf9e9dc0d0a28060856d579ca24403f15827b4514e7962691ff21",
     "8c559afe45e453988a501daf3fa39469059a51b028edbc5dcecee3359d500709",
     "6be3739561756bc72d16f1ef70447bbb1012cfb2f8fb94c82f49de067af4161d",
     "28864ae98057e016d5839d3e0c6f0456a79c70a7710b65c7e1349c148aaf7884",
@@ -2873,15 +2873,15 @@
     },
     {
       "path": "src/sm64_events/ui/components/practicelog.js",
-      "line": 339,
+      "line": 597,
       "rule": "max-lines-per-function",
-      "message": "Function 'LogCard' has too many lines (194). Maximum allowed is 100."
+      "message": "Function 'LogCard' has too many lines (182). Maximum allowed is 100."
     },
     {
       "path": "src/sm64_events/ui/components/practicelog.js",
-      "line": 339,
+      "line": 597,
       "rule": "complexity",
-      "message": "Function 'LogCard' has a complexity of 50. Maximum allowed is 15."
+      "message": "Function 'LogCard' has a complexity of 44. Maximum allowed is 15."
     },
     {
       "path": "src/sm64_events/ui/components/rankpage.js",

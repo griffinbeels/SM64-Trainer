@@ -1272,11 +1272,48 @@ all: every door a recording enters through (bundled collection, rival
 admission, community upload and download, collection import and export, your
 own PB, saved and template ghosts) refuses it with one reason (his rule,
 2026-10-12: "If it's not a perfectly recorded ghost, it doesn't belong in the
-system"). The practice card's switch calls it Ghost Overlay.
+system"). The practice card's [[ghost toggle]] calls it Ghost Overlay.
 
 - **Lives** — `src/sm64_events/ghost/session.py` joins selection, settings and
   the [[target]]; `src/sm64_events/ghost/native_session.py` publishes native playback
 - **Not** — the [[overlay layer]], which writes a video file for an editor.
+
+### Lineup
+
+The active practice card's row of the people you race: your own seat first,
+then each [[rival slot]], slowest to fastest, centred at every width (his
+words, 2026-10-16: "our pb on far left, then times get faster as we go to the
+right"). A seat is a rank cap inside a ring in that [[ghost]]'s in-game
+colour, the time and the name; a name wraps where the handle divides and is
+never cut off. A dashed ring is a ghost that cannot race yet (yours before
+your first time, a rival still downloading); a lock on a ring is a pinned
+rival, who stays even once beaten, to your left. The [[track]] threads the
+rings. With no [[strategy]] the row offers the strategies themselves. Inside
+one lineup every change slides; a different star, strategy or [[ghost
+matching scope]] keeps your seat in place and exchanges everyone else.
+
+- **Lives** — `src/sm64_events/ui/lineup.js` (drawing and motion),
+  `src/sm64_events/ui/lineupmodel.js` (what it shows),
+  `src/sm64_events/ui/components/lineup.js` (the card's wiring)
+- **Not** — the [[ghost set]] the renderer draws; the Lineup shows who is in it.
+
+### Track
+
+The rail through the [[lineup]]'s rings. The one stretch from your seat to the
+next faster rival lights up and carries how much faster that rival's time is,
+as both times are displayed ("−0.13") — the target for your next attempt,
+never a comparison with the last one.
+
+- **Lives** — `src/sm64_events/ui/lineup.js` (`gapText`, `markNext`)
+
+### Ghost toggle
+
+The ghost glyph in the active practice card's head that turns the Ghost
+Overlay on and off — gold while ghosts race. It is a preference, not a
+capability: with nobody to race it stays on and the [[lineup]] says why.
+D-pad Up in the game flips the same setting.
+
+- **Lives** — `src/sm64_events/ui/components/ghostswitch.js` (`GhostToggle`)
 
 ### Recorded shadow
 

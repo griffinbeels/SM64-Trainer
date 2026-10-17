@@ -542,19 +542,34 @@ function GhostAppearance({controls, appearance, patch, timing = true}) {
  * session only while open, and Done writes the rivals' options and the
  * appearance in one PUT.
  */
-export function GhostSettings({t, onClose}) {
-  const {session, reachable, write, retry} = useGhostSession(t);
-  const [appearance, setAppearance] = useState({});
-  const [options, setOptions] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const controls = ghostAppearanceControls(session);
-  const available = reachable && controls && session.source?.reason !== "no_session";
-  const identity = JSON.stringify(session?.target);
-  const timingTarget = useRef(identity);
-  const rivals = session?.rivals || null;
-  const draft = options || (rivals ? rivalDraft(rivals) : null);
+/** The sheet's sections: Rivals (when this session races rivals), Appearance and sound, Ghost Library. */
+function GhostSettingsSections({t, session, write, controls, appearance, patch, rivals, draft, setOptions}) {
   const entityKey = ghostTargetKey(session?.target);
+  return html`
+    ${rivals && draft && html`<${RivalOptions} rivals=${rivals} draft=${draft}
+      setDraft=${next => setOptions(previous => (typeof next === "function" ? next(previous || draft) : next))} />`}
+    <section class="ghost-settings-appearance" aria-label="Appearance and sound">
+      <h4 class="ghost-settings-heading">Appearance and sound</h4>
+      <${GhostAppearance} controls=${controls} appearance=${appearance} patch=${patch}
+        timing=${Boolean(entityKey)} />
+    </section>
+    ${entityKey && html`<section class="ghost-settings-library" aria-label="Ghost Library">
+      <h4 class="ghost-settings-heading">Ghost Library</h4>
+      <${GhostLibraryButton} t=${t} entityKey=${entityKey} session=${session} write=${write} />
+    </section>`}`;
+}
+
+/** One PUT for Done: the appearance he touched, his timing only for the target he set it on, and the rivals' options. */
+function settingsBody(appearance, sameTarget, options, rivals, session) {
+  const body = {...appearance};
+  if (!sameTarget) delete body.nudge_frames;
+  if (options && rivals) Object.assign(body, {rivals: {scope: rivals.scope || "strategy", options}, target: session.target});
+  return body;
+}
+
+function useAppearanceDraft(identity) {
+  const [appearance, setAppearance] = useState({});
+  const timingTarget = useRef(identity);
   useEffect(() => {
     setAppearance(previous => {
       const preferences = {...previous};
@@ -567,10 +582,27 @@ export function GhostSettings({t, onClose}) {
     if (changes.nudge_frames != null) timingTarget.current = identity;
     return mergeGhostAppearance(previous, changes);
   });
+  return {appearance, patch, sameTarget: () => timingTarget.current === identity};
+}
+
+function SettingsFooter({saving, canSave, onCancel, onSave}) {
+  return html`<button type="button" disabled=${saving} onclick=${onCancel}>Cancel</button>
+    <button type="button" class="primary-button" disabled=${saving || !canSave}
+      onclick=${onSave}>${saving ? "Saving…" : "Done"}</button>`;
+}
+
+export function GhostSettings({t, onClose}) {
+  const {session, reachable, write, retry} = useGhostSession(t);
+  const [options, setOptions] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const controls = ghostAppearanceControls(session);
+  const available = reachable && controls && session.source?.reason !== "no_session";
+  const {appearance, patch, sameTarget} = useAppearanceDraft(JSON.stringify(session?.target));
+  const rivals = session?.rivals || null;
+  const draft = options || (rivals ? rivalDraft(rivals) : null);
   const save = async () => {
-    const body = {...appearance};
-    if (timingTarget.current !== identity) delete body.nudge_frames;
-    if (options && rivals) Object.assign(body, {rivals: {scope: rivals.scope || "strategy", options}, target: session.target});
+    const body = settingsBody(appearance, sameTarget(), options, rivals, session);
     if (!Object.keys(body).length) { onClose(); return; }
     setSaving(true);
     setError(null);
@@ -579,25 +611,13 @@ export function GhostSettings({t, onClose}) {
     if (result.applied) onClose();
     else setError(result.error);
   };
+  const unavailable = !reachable ? html`<${GhostReadFailure} retry=${retry} />`
+    : html`<p>${session ? "Ghost settings are unavailable while the trainer is disconnected." : "Loading ghost settings…"}</p>`;
   return html`<${Modal} title="Ghost settings" icon="settings"
     onClose=${saving ? null : onClose}
-    footer=${html`<button type="button" disabled=${saving} onclick=${onClose}>Cancel</button>
-      <button type="button" class="primary-button" disabled=${saving || !available}
-        onclick=${save}>${saving ? "Saving…" : "Done"}</button>`}>
-    ${available ? html`
-      ${rivals && draft && html`<${RivalOptions} rivals=${rivals} draft=${draft}
-        setDraft=${next => setOptions(previous => (typeof next === "function" ? next(previous || draft) : next))} />`}
-      <section class="ghost-settings-appearance" aria-label="Appearance and sound">
-        <h4 class="ghost-settings-heading">Appearance and sound</h4>
-        <${GhostAppearance} controls=${controls} appearance=${appearance} patch=${patch}
-          timing=${Boolean(entityKey)} />
-      </section>
-      ${entityKey && html`<section class="ghost-settings-library" aria-label="Ghost Library">
-        <h4 class="ghost-settings-heading">Ghost Library</h4>
-        <${GhostLibraryButton} t=${t} entityKey=${entityKey} session=${session} write=${write} />
-      </section>`}`
-      : !reachable ? html`<${GhostReadFailure} retry=${retry} />`
-        : html`<p>${session ? "Ghost settings are unavailable while the trainer is disconnected." : "Loading ghost settings…"}</p>`}
+    footer=${html`<${SettingsFooter} saving=${saving} canSave=${Boolean(available)} onCancel=${onClose} onSave=${save} />`}>
+    ${available ? html`<${GhostSettingsSections} t=${t} session=${session} write=${write} controls=${controls}
+      appearance=${appearance} patch=${patch} rivals=${rivals} draft=${draft} setOptions=${setOptions} />` : unavailable}
     ${error && html`<p class="error" role="alert">${error}</p>`}
   <//>`;
 }
@@ -691,27 +711,32 @@ export function GhostToggle({ ghost, entityKey, active }) {
  * and to this row). With adaptive rivals it is the Lineup; a session without
  * rivals keeps the older ticks-and-tuning controls.
  */
+/** The row under a session without rivals: the older ticks-and-tuning controls, and the reason if any. */
+function LegacyRow({ session, controls, held, on, write, queue, retry, entityKey, scope }) {
+  const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;
+  return html`<div class="ghost-row ${on ? "is-on" : ""}">
+    ${reasonId && html`<div class="ghost-row-head">
+      <${GhostReadStatus} reachable=${true} reasonText=${controls.reasonText} reasonId=${reasonId} retry=${retry} />
+    </div>`}
+    ${racingScopeReady(session, scope, controls.known) ? html`<${GhostRacing} session=${session} controls=${controls}
+      held=${held} on=${on && controls.available} write=${write} queue=${queue} entityKey=${entityKey} />` : null}
+  </div>`;
+}
+
 export function GhostSwitch({ t, ghost, entityKey, active = true, scope = "strategy",
                               strategies = [], onPickStrategy, onOtherStrategy }) {
   const { session, reachable, draft, write, queue, retry } = ghost;
   useRivalScope(session, scope, entityKey, active && reachable, write);
   if (!active) return null;
   const controls = ghostControls(session, entityKey);
-  const held = draft || {};
   const on = overlayOn(session, draft);
-  if (!reachable || session?.rivals || !controls.known) {
-    return html`<div class="ghost-row ghost-row-lineup ${on ? "is-on" : ""}">
-      <${Lineup} session=${session} known=${controls.known && racingScopeReady(session, scope, controls.known)}
-        reachable=${reachable} on=${on} entityKey=${entityKey} strategies=${strategies} write=${write} retry=${retry}
-        onPickStrategy=${onPickStrategy} onOtherStrategy=${onOtherStrategy} />
-    </div>`;
+  if (reachable && !session?.rivals && controls.known) {
+    return html`<${LegacyRow} session=${session} controls=${controls} held=${draft || {}} on=${on} write=${write}
+      queue=${queue} retry=${retry} entityKey=${entityKey} scope=${scope} />`;
   }
-  const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;
-  return html`<div class="ghost-row ${on ? "is-on" : ""}">
-    ${reasonId && html`<div class="ghost-row-head">
-      <${GhostReadStatus} reachable=${reachable} reasonText=${controls.reasonText} reasonId=${reasonId} retry=${retry} />
-    </div>`}
-    ${racingScopeReady(session, scope, controls.known) ? html`<${GhostRacing} session=${session} controls=${controls}
-      held=${held} on=${on && controls.available} write=${write} queue=${queue} entityKey=${entityKey} />` : null}
+  return html`<div class="ghost-row ghost-row-lineup ${on ? "is-on" : ""}">
+    <${Lineup} session=${session} known=${controls.known && racingScopeReady(session, scope, controls.known)}
+      reachable=${reachable} on=${on} entityKey=${entityKey} strategies=${strategies || []} write=${write} retry=${retry}
+      onPickStrategy=${onPickStrategy} onOtherStrategy=${onOtherStrategy} />
   </div>`;
 }

@@ -548,6 +548,52 @@ function rankViewFor(active, preferred, separate) {
       ? "Show this PB's overall rank" : "Strategy and overall use the same rank standards"};
 }
 
+/** The card's Strategy / Overall pair: one banner, two pressed-state buttons in its kicker. */
+function RankModeButtons({ rankMode, canChooseScope, active, strategyTitle, overallTitle, onPick }) {
+  return html`<span class="rank-mode-buttons" role="group"
+      aria-label=${active ? "Rank and ghosts" : "Rank view"}>
+    ${canChooseScope && html`<button type="button"
+        class=${`rank-mode-button${rankMode === "strategy" ? " is-selected" : ""}`}
+        aria-pressed=${rankMode === "strategy" ? "true" : "false"}
+        title=${strategyTitle}
+        onclick=${() => onPick("strategy")}>Strategy</button>`}
+    <button type="button"
+        class=${`rank-mode-button${rankMode === "overall" ? " is-selected" : ""}`}
+        aria-pressed=${rankMode === "overall" ? "true" : "false"}
+        title=${overallTitle}
+        onclick=${() => onPick("overall")}>Overall</button>
+  </span>`;
+}
+
+/**
+ * The card's ghosts: its one session (shared by the head's ghost toggle and the
+ * Lineup under the head; only the active card fetches), and the strategy the
+ * Lineup's buttons pick. A pick from the row is held on the head's picker until
+ * the store's refresh carries it -- the same hold the picker keeps for its own
+ * picks, so the two never disagree on screen. "Other…" opens that picker.
+ */
+function useCardGhost(sec, t, active) {
+  const session = useGhostSession(t, active);
+  const [held, setHeld] = useState(undefined);
+  const stratRef = useRef(null);
+  const pick = async (tag) => {
+    setHeld(tag);
+    try {
+      await writeActiveStrategy(entityIdentity(sec), tag, sectionClock(sec, t.clock), t.setNotice);
+    } catch {
+      if (t.setNotice) t.setNotice("Couldn't save the strategy. The tracker may be reconnecting; try again.");
+    }
+    try { await t.refresh(); } finally { setHeld(undefined); }
+  };
+  const openPicker = () => {
+    const select = stratRef.current?.querySelector("select");
+    if (!select) return;
+    select.focus();
+    try { select.showPicker?.(); } catch { /* an engine may refuse a scripted open; focus has landed */ }
+  };
+  return { session, stratRef, pick, openPicker, strat: held !== undefined ? held : sec.last_strat };
+}
+
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
@@ -562,13 +608,9 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // Active practice also uses this choice for ghosts, even on a shared ladder.
   const [preferredRankMode, setPreferredRankMode] = useState(
     () => readRankDisplayMode(ek));
-  // The card's ONE ghost session: the head's ghost toggle and the Lineup under
-  // the head read the same answer, and only the active card fetches it.
-  const ghost = useGhostSession(t, active);
-  // A strategy picked from the Lineup's buttons is held on the picker until the
-  // store's refresh carries it -- the hold the picker keeps for its own picks.
-  const [lineupStrat, setLineupStrat] = useState(undefined);
-  const stratPickerRef = useRef(null);
+  // The card's ONE ghost session, shared by the head's ghost toggle and the
+  // Lineup under the head; only the active card fetches it.
+  const ghost = useCardGhost(sec, t, active);
   // `forceOpen` exists for exactly one moment (Task 6 brief, Step 1): "so a
   // pick on a COLLAPSED card has a scroll target to find" -- it must win
   // just long enough to make the row exist, never permanently. Folding
@@ -616,22 +658,6 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const manualTiming = isSegment(sec) && isManualSegment(
     (t.segments || []).find((definition) => definition.id === sec.segment_id));
   const clock = sectionClock(sec, t.clock);
-  const pickFromLineup = async (tag) => {
-    setLineupStrat(tag);
-    try {
-      await writeActiveStrategy(entityIdentity(sec), tag, clock, t.setNotice);
-    } catch {
-      if (t.setNotice) t.setNotice("Couldn't save the strategy. The tracker may be reconnecting; try again.");
-    }
-    try { await t.refresh(); } finally { setLineupStrat(undefined); }
-  };
-  // "Other…" in the Lineup opens this card's own strategy picker.
-  const openStrategyPicker = () => {
-    const select = stratPickerRef.current?.querySelector("select");
-    if (!select) return;
-    select.focus();
-    try { select.showPicker?.(); } catch { /* an engine may refuse a scripted open; focus still lands */ }
-  };
   const pb = sectionPb(sec, t.clock);
   const stratPb = sectionPbByStrat(sec, t.clock);
   // The badge describes the PB the TAG is showing, which is the active
@@ -709,21 +735,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
     writeRankDisplayMode(ek, mode);
     setPreferredRankMode(mode);
   };
-  const scopeLabel = active
-    ? "Rank and ghosts" : "Rank view";
-  const rankModeButtons = html`<span class="rank-mode-buttons" role="group"
-      aria-label=${scopeLabel}>
-    ${canChooseScope && html`<button type="button"
-        class=${`rank-mode-button${rankMode === "strategy" ? " is-selected" : ""}`}
-        aria-pressed=${rankMode === "strategy" ? "true" : "false"}
-        title=${strategyTitle}
-        onclick=${() => pickRankMode("strategy")}>Strategy</button>`}
-    <button type="button"
-        class=${`rank-mode-button${rankMode === "overall" ? " is-selected" : ""}`}
-        aria-pressed=${rankMode === "overall" ? "true" : "false"}
-        title=${overallTitle}
-        onclick=${() => pickRankMode("overall")}>Overall</button>
-  </span>`;
+  const rankModeButtons = html`<${RankModeButtons} rankMode=${rankMode} canChooseScope=${canChooseScope}
+    active=${active} strategyTitle=${strategyTitle} overallTitle=${overallTitle} onPick=${pickRankMode} />`;
   const shownBanner = rankMode === "strategy"
     ? sec.rank : (hasSeparateRank ? sec.entity_rank : sec.rank);
   const shownIdentity = rankMode === "strategy" ? "strategy" : "entity";
@@ -848,9 +861,9 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
              always rendered at (icon-size 40px + head padding 10px * 2). */""}
         ${broken
           ? html`<span class="log-card-strat">Definition deleted</span>`
-          : html`<span class="log-card-strat-picker" ref=${stratPickerRef}>
+          : html`<span class="log-card-strat-picker" ref=${ghost.stratRef}>
               <${StratPicker} entity=${ek} identity=${entityIdentity(sec)}
-                  strategies=${sec.strategies} active=${lineupStrat !== undefined ? lineupStrat : sec.last_strat}
+                  strategies=${sec.strategies} active=${ghost.strat}
                   groups=${sec.strategy_groups} allowBlank=${!sec.default_strat}
                   timerMode=${clock} onNotice=${t.setNotice} onChanged=${t.refresh} /></span>`}
       </div>
@@ -893,8 +906,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            never a 404), while the ladder directly below kept showing the
            star's real, populated one. One card, one ladder, and now one
            Library identity -- never two doors to the same standings. */""}
-      <div class="log-card-actions">
-        <${GhostToggle} ghost=${ghost} entityKey=${ek} active=${active} />
+      <div class="log-card-actions"><${GhostToggle} ghost=${ghost.session} entityKey=${ek} active=${active} />
         ${/* Wears the LIBRARY (open book) icon, the same glyph the nav's own
              Library entry and the standards table's per-tier links wear -- a
              door into the Library is the library icon everywhere (round 1,
@@ -911,8 +923,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           <${Icon} name="chevron" size=${18} />
         </button>
       </div>
-    </div><${GhostSwitch} t=${t} ghost=${ghost} entityKey=${ek} active=${active} scope=${rankMode}
-      strategies=${sec.strategies || []} onPickStrategy=${pickFromLineup} onOtherStrategy=${openStrategyPicker} />
+    </div><${GhostSwitch} t=${t} ghost=${ghost.session} entityKey=${ek} active=${active} scope=${rankMode} strategies=${sec.strategies} onPickStrategy=${ghost.pick} onOtherStrategy=${ghost.openPicker} />
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
       ${inBody && ranksBlock}

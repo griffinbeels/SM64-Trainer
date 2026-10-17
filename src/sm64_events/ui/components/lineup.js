@@ -19,7 +19,7 @@ import { RivalSwap } from "./rivalpicker.js";
 
 const html = htm.bind(h);
 export const MIN_LOADING_MS = 400;
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms); });
 
 // Caps are the real RankIcon, rendered into a slot the core places. Each slot
 // is unmounted once the core has let go of it, so its style subscription ends.

@@ -53,43 +53,56 @@ function rivalSeat(row) {
     verified: row.verified === true, slot: row.slot };
 }
 
+const EMPTY_WORDS = { offline: LINEUP_WORDS.offline, signed_out: LINEUP_WORDS.signedOut };
+
+/** No strategy: nobody to race, so the row offers the strategies themselves. */
+function noStrategyModel(on, entityKey, strategies) {
+  const choices = strategyChoices(strategies);
+  return { on, lineup: `${entityKey}|none`, people: [],
+    note: choices.length ? { text: LINEUP_WORDS.noStrategy, choices } : { text: LINEUP_WORDS.noStrategies } };
+}
+
+/** Loading: your seat, then one empty place per rival the options ask for. */
+function loadingModel(on, lineup, you, rivals) {
+  const count = Math.max(1, Math.min(4, rivals.options?.count || 4));
+  const holes = Array.from({ length: count }, (_, slot) => ({ key: `s${slot}`, id: `s${slot}`, placeholder: true,
+    frames: null, hue: null }));
+  return { on, lineup, people: [you, ...holes], loading: true };
+}
+
+/** Ready: you and the rivals, or you and one sentence when nobody can be raced. */
+function readyModel(on, lineup, you, rivals) {
+  const seats = (rivals.rows || []).filter(row => Number.isInteger(row.slot)).map(rivalSeat);
+  if (seats.length) return { on, lineup, people: [you, ...seats] };
+  return { on, lineup, people: [you], note: { text: EMPTY_WORDS[rivals.reason] || LINEUP_WORDS.nobody } };
+}
+
+/** What a card shows when it cannot ask about rivals at all, or null when it can. */
+function blockedModel({ session, known, reachable, on, entityKey }) {
+  if (!reachable) {
+    return { on: true, lineup: `${entityKey}|unreachable`, people: [],
+      note: { text: LINEUP_WORDS.unreachable, action: "Retry", kind: "retry" } };
+  }
+  if (!known || !session) return undefined;
+  if (session.source?.reason === "unknown_rom") {
+    return { on, lineup: `${entityKey}|rom`, people: [], note: { text: LINEUP_WORDS.unknownRom } };
+  }
+  return null;
+}
+
 /**
  * The model for one practice card, or null while the session has not yet
  * answered for this card (nothing is drawn rather than a guess).
  * `on` is the overlay switch as shown (the in-flight draft laid over the server).
  */
 export function lineupModel({ session, known, reachable = true, on, entityKey, strategies }) {
-  if (!reachable) {
-    return { on: true, lineup: `${entityKey}|unreachable`, people: [],
-      note: { text: LINEUP_WORDS.unreachable, action: "Retry", kind: "retry" } };
-  }
-  if (!known || !session) return null;
-  const source = session.source || {};
-  if (source.reason === "unknown_rom") {
-    return { on, lineup: `${entityKey}|rom`, people: [], note: { text: LINEUP_WORDS.unknownRom } };
-  }
+  const blocked = blockedModel({ session, known, reachable, on, entityKey });
+  if (blocked !== null) return blocked ?? null;
   const rivals = session.rivals;
   if (!rivals) return null;
   const strat = session.target?.strat || null;
-  if (rivals.state === "no_strategy" || !strat) {
-    const choices = strategyChoices(strategies);
-    return { on, lineup: `${entityKey}|none`, people: [],
-      note: choices.length ? { text: LINEUP_WORDS.noStrategy, choices } : { text: LINEUP_WORDS.noStrategies } };
-  }
+  if (rivals.state === "no_strategy" || !strat) return noStrategyModel(on, entityKey, strategies);
   const lineup = `${entityKey}|${strat}|${rivals.scope || "strategy"}`;
   const you = youSeat(rivals);
-  if (rivals.state === "loading") {
-    const count = Math.max(1, Math.min(4, rivals.options?.count || 4));
-    const holes = Array.from({ length: count }, (_, slot) => ({ key: `s${slot}`, id: `s${slot}`, placeholder: true,
-      frames: null, hue: null }));
-    return { on, lineup, people: [you, ...holes], loading: true };
-  }
-  const seats = (rivals.rows || []).filter(row => Number.isInteger(row.slot)).map(rivalSeat);
-  if (!seats.length && rivals.reason) {
-    return { on, lineup, people: [you],
-      note: { text: rivals.reason === "offline" ? LINEUP_WORDS.offline
-        : rivals.reason === "signed_out" ? LINEUP_WORDS.signedOut : LINEUP_WORDS.nobody } };
-  }
-  if (!seats.length) return { on, lineup, people: [you], note: { text: LINEUP_WORDS.nobody } };
-  return { on, lineup, people: [you, ...seats] };
+  return rivals.state === "loading" ? loadingModel(on, lineup, you, rivals) : readyModel(on, lineup, you, rivals);
 }
