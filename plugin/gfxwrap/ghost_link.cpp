@@ -6,8 +6,8 @@
 #include "ghost_ipc.h"
 #include "ghost_audio.h"
 #include "ghost_playback.h"
+#include "ghost_rom.h"
 #include "link_dispatch.h"
-#include "practice_rom.h"
 #include "N64.h"
 #include "RSP.h"
 #include "GBI.h"
@@ -57,12 +57,6 @@ replay_gl::RasterState tracked() {
     replay_gl::Raster(&state);
     return state;
 }
-bool supported_rom() {
-    unsigned char bytes[PRACTICE_ROM_HEADER_BYTES]{};
-    SIZE_T got = 0;
-    return HEADER && ReadProcessMemory(GetCurrentProcess(), HEADER, bytes, sizeof(bytes), &got)
-        && got == sizeof(bytes) && practice_rom(bytes);
-}
 }
 namespace ghost_link {
 FrameBuffer* raster_buffer() {
@@ -86,8 +80,11 @@ uint64_t attachments(const FrameBuffer *buffer) {
     return (uint64_t(uint32_t(buffer->m_pTexture->name)) << 32) | depth_name;
 }
 void rom(bool opened) {
-    const bool practice = opened && supported_rom();
-    observing = false; ghost_stream::rom(practice); ghost_ipc::rom(practice, practice ? HEADER : nullptr);
+    // Which practice cartridge opened (US or JP rom_layout), 0 for any other:
+    // the stream captures only under a config for this same cartridge.
+    const uint32_t cartridge = opened ? ghost_rom::layout(reinterpret_cast<const uint8_t*>(HEADER)) : 0;
+    observing = false; ghost_stream::rom(cartridge);
+    ghost_ipc::rom(cartridge != 0, cartridge ? HEADER : nullptr);
 }
 void context_created() {
     context_current = true; context_generation = 0;

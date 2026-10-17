@@ -252,7 +252,11 @@ renderer-owned RAM only within one serialized display-list occurrence.
 Each cartridge's layout comes from [ghost_layout.py](../src/sm64_events/memory/ghost_layout.py);
 new camera/graphics addresses retain their live verification gates. The two
 practice ROMs share one RAM schema; `rom_layout` (1 US, 2 JP) names which one
-runs, and every clip records the cartridge it was captured on. Capture and
+runs, and every clip records the cartridge it was captured on. A config for
+the other cartridge never reads RAM: `ghost_rom::layout` maps the opened
+header to its layout, the stream treats the cartridge as closed to a
+mismatched config, and the worker refuses it as `GIPC_LAYOUT` (a swap from
+US to JP under the US config captures nothing). Capture and
 playback name a held or ridden object's behaviour script through that layout
 ([ghost_behaviours.h](../plugin/gfxwrap/ghost_behaviours.h), checked against
 `data/behaviours_{us,jp}.tsv` by symbol), so a JP clip draws its Bob-omb on

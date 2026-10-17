@@ -1204,3 +1204,14 @@ def test_supported_follows_the_running_cartridge_on_every_resolve():
     running["version"] = "jp"
     assert native.resolve(target, [])["reason"] == "no_template"
     assert NativeGhost(SimpleNamespace(), supported=False).resolve(target, [])["reason"] == "unsupported_rom"
+
+
+def test_set_supported_is_the_rom_swap_door():
+    """The composition root calls set_supported(ghost_supported(version)) on
+    every ROM swap; it replaces whatever the constructor was given."""
+    native = NativeGhost(SimpleNamespace(), supported=lambda: True)
+    target = {"kind": "star", "entity_key": "2-2"}
+    native.set_supported(ghost_supported("eu"))
+    assert native.resolve(target, [])["reason"] == "unsupported_rom"
+    native.set_supported(ghost_supported("jp"))
+    assert native.resolve(target, [])["reason"] == "no_template"

@@ -4,6 +4,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "ghost_rom.h"
+#include "ghost_capture.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -84,6 +85,7 @@ int main() {
         };
         require(discover(current) == Result::missing && out.empty(),
                 "a copied header alone is not an image");
+        require(ghost_rom::layout(copied_header) == GC_ROM_US, "US header names the US ghost layout");
         for (bool swapped : {false, true}) {
             // A cartridge may begin inside its allocation, across a scan-chunk
             // boundary; the header copied by the emulator remains word-swapped.
@@ -150,13 +152,16 @@ int main() {
             image(cartridge.bytes, true);
             require(discover(current) == Result::ready, "JP practice cartridge discovered");
             normalized(out);
+            require(ghost_rom::layout(copied_header) == GC_ROM_JP, "JP header names the JP ghost layout");
             const std::pair<const char*, uint8_t> others[] = {{"SUPER MARIO 64", 'J'}, {"SM64 USAMUNE v1.93u", 'P'}};
             for (const auto& other : others) {
                 title = other.first; country = other.second;
                 header(copied_header); swap(copied_header, 64);
                 image(cartridge.bytes, true);
                 require(discover(current) == Result::missing && out.empty(), "non-practice cartridge discovered");
+                require(!ghost_rom::layout(copied_header), "non-practice header names a ghost layout");
             }
+            require(!ghost_rom::layout(nullptr), "no header names a ghost layout");
         }
         std::printf("{\"ok\":true,\"checks\":%u,\"header_bytes\":64}\n", checks);
         return 0;

@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "ghost_rom.h"
+#include "ghost_capture.h"
 #include "practice_rom.h"
 #include <algorithm>
 #include <cstring>
@@ -32,6 +33,12 @@ struct Scratch {
 };
 }
 namespace ghost_rom {
+uint32_t layout(const uint8_t* header) {
+    uint8_t raw[HEADER_BYTES]{}, normal[HEADER_BYTES]{};
+    if (!header || !copy(reinterpret_cast<uintptr_t>(header), raw, sizeof(raw))
+            || !practice_rom(raw) || !practice_rom_normalise(raw, normal)) return 0;
+    return normal[0x3e] == 'E' ? GC_ROM_US : normal[0x3e] == 'J' ? GC_ROM_JP : 0;
+}
 Result read(const uint8_t* header, const std::function<bool()>& current,
             std::vector<uint8_t>& out,
             const std::function<Validation(const uint8_t*, size_t)>& validate, Limits limits) {
