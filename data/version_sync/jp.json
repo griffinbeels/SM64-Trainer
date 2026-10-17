@@ -242,6 +242,24 @@
   "status": "verified",
   "value": 2151775548
  },
+ "address.usamune_stop": {
+  "at": "2026-10-17T23:23:54.098534+00:00",
+  "evidence": "read 1 while STOP was Grab, then 3 at GrabX",
+  "frames": null,
+  "measured": {
+   "values": [
+    3,
+    2,
+    1,
+    0,
+    1,
+    2,
+    3
+   ]
+  },
+  "status": "verified",
+  "value": 2151775253
+ },
  "address.warp_dest": {
   "at": "2026-10-17T09:44:06.324138+00:00",
   "evidence": "changed from (0, 6, 1, 52) to (0, 17, 1, 10)",

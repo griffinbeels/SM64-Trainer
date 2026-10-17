@@ -246,6 +246,8 @@ JP = Layout(
                                     # diagnostics only, its gate never verifies
     usamune_menu=0x804169A0,        # ROM-derived; 0, nonzero while open, 0 again
     usamune_input_display=0x80417C1F,  # ROM-derived; 0 while off, nonzero while on
+    usamune_stop=0x80417C15,        # ROM-derived; read 3 2 1 0 1 2 3 as he stepped STOP
+                                    # GrabX -> Grab -> None and back, 2026-10-17
     behaviour_base=0x800E8320,      # from Mario's object, 2026-10-16
 )
 
