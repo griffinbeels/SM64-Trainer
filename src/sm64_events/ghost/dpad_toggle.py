@@ -7,10 +7,10 @@ RESET page, so one press never both loads a state and flips the ghosts. His
 ask, 2026-10-17: "if the user selected Cx4, then the ghost toggle is D-UP; if
 the user selected D-UP, then the toggle is Cx4". `hotkey_for` reads the save
 state button byte (layout row `usamune_savestate_button`, VERIFY), and
-`SAVESTATE_ON_DPAD_UP` is the value meaning D-pad Up. An unknown byte, or a
-value not yet known, keeps D-pad Up. The key that is not the hotkey does
-nothing. The toggle tells the ghost session which key it is whenever that
-changes (`GhostSession.note_hotkey`), so the card's tooltip names it.
+`SAVESTATE_ON_DPAD_UP` is the value meaning D-pad Up. An unknown byte keeps
+D-pad Up. The key that is not the hotkey does nothing. The toggle tells the
+ghost session which key it is whenever that changes
+(`GhostSession.note_hotkey`), so the card's tooltip names it.
 
 His words, 2026-10-16: "Gameplay active or normal pause --> toggle ghost
 overlay; USAMUNE MENU --> don't do anything", because D-pad Up is how
@@ -72,14 +72,15 @@ _NOT_BUTTONS = 0xFFFF & ~A.BUTTON_VALID_MASK
 
 #: Each hotkey by the name `GET /api/ghost` gives it, and the buttons it holds.
 HOTKEYS = {"dpad_up": DPAD_UP, "c_x4": C_X4}
-#: The save state button byte's value for Usamune's DUP choice.
-SAVESTATE_ON_DPAD_UP: int | None = None  # filled from the live hunt
+#: The save state button byte's value for Usamune's DUP choice (0 is Cx4).
+#: Read off his menu flips, 2026-10-17 (`memory/layout.py`'s US row).
+SAVESTATE_ON_DPAD_UP = 1
 
 
 def hotkey_for(savestate_button: int | None) -> str:
     """The hotkey's name: Cx4 while Usamune's save state is on D-pad Up, else
     D-pad Up, which an unknown byte also answers."""
-    if SAVESTATE_ON_DPAD_UP is not None and savestate_button == SAVESTATE_ON_DPAD_UP:
+    if savestate_button == SAVESTATE_ON_DPAD_UP:
         return "c_x4"
     return "dpad_up"
 

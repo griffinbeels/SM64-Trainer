@@ -1100,8 +1100,8 @@ register(Gate(
 
 def _check_usamune_savestate_button(ctx) -> Verdict:
     """The byte reads one value on Cx4, another on DUP, and the first again on
-    Cx4: two choices, two values, either of which may be zero. Once
-    `ghost/dpad_toggle.py` knows the DUP value, the DUP reading must be it."""
+    Cx4: two choices, two values. The DUP reading must be the value the ghost
+    hotkey keys on (`ghost/dpad_toggle.py`), or the hotkey would pick wrong."""
     field = "usamune_savestate_button"
     candidate = ctx.candidate(field)
     if candidate is None:
@@ -1122,7 +1122,7 @@ def _check_usamune_savestate_button(ctx) -> Verdict:
         elif dup is not None and value == cx4:
             known = dpad_toggle.SAVESTATE_ON_DPAD_UP
             measured = {"c_x4": cx4, "dpad_up": dup}
-            if known is not None and dup != known:
+            if dup != known:
                 return Verdict("failed", value=candidate, measured=measured,
                                evidence=f"DUP read {dup}, but the ghost hotkey expects {known}")
             return Verdict("verified", value=candidate, measured=measured,

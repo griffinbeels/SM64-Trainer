@@ -66,7 +66,5 @@ def test_reader_carries_usamunes_save_state_button_only_where_the_layout_has_it(
     # A layout without the address reads it as unknown, never as a choice.
     unknown = SnapshotReader(mem, replace(US, usamune_savestate_button=None)).read()
     assert unknown.usamune_savestate_button is None
-    at = 0x80417B60  # a test-local address; the live hunt fills US's own
-    mem.write_u8(at, 1)
-    known = SnapshotReader(mem, replace(US, usamune_savestate_button=at)).read()
-    assert known.usamune_savestate_button == 1
+    mem.write_u8(US.usamune_savestate_button, 1)
+    assert SnapshotReader(mem).read().usamune_savestate_button == 1
