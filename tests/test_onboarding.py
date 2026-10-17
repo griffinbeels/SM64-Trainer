@@ -47,6 +47,7 @@ def test_executable_version_reads_a_real_resource_without_launching_it():
 
 def test_jp_is_detected_without_claiming_tracking():
     jp = bytearray(LIVE_USAMUNE_BE)
+    jp[0x20:0x34] = b"SM64 USAMUNE v1.93j ".ljust(20)
     jp[0x3E] = ord("J")
     observed = observation(bytes(jp))
     observed["checks"].update(inputs=False, game=False)

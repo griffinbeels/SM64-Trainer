@@ -19,6 +19,11 @@ JP_WARNING = ("JP tracking isn't supported yet; support is planned for a later p
               "You can finish setup now.")
 
 
+def _layout_ready(version: str) -> bool:
+    from sm64_events.memory.layout import layout_for
+    return not layout_for(version).missing()
+
+
 def identify_rom(raw: bytes | None) -> dict:
     """Identity from the loaded cartridge; a preference is never detection."""
     header = normalise_header(raw) if raw else None
@@ -29,8 +34,9 @@ def identify_rom(raw: bytes | None) -> dict:
     state = "unsupported"
     if name == "SM64 USAMUNE v1.93u" and region == "us":
         state = "supported"
-    elif name.startswith("SM64 USAMUNE") and region == "jp":
-        state = "jp"
+    elif name == "SM64 USAMUNE v1.93j" and region == "jp":
+        # Practice either way; full support once its layout is verified.
+        state = "supported" if _layout_ready("jp") else "jp"
     return {"state": state, "region": region, "name": name,
             "warning": JP_WARNING if state == "jp" else None}
 

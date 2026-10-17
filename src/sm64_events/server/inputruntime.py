@@ -48,6 +48,20 @@ class InputRuntime:
         self.writer, self.sampler = writer, sampler
         self.tracker.on_attempt_settled = writer.close if writer else None
 
+    def set_layout(self, layout):
+        """The cartridge's build changed: drop the old sampler's pending frame
+        (it may have been read through the old addresses) and rebind the whole
+        pipeline to the new build's layout. A build without a controller row
+        samples nothing."""
+        if layout is self.layout:
+            return
+        if self.sampler is not None:
+            self.sampler.discard()
+        self.layout = layout
+        if self.db is not None and self.poller is not None:
+            db, self.db = self.db, None
+            self.attach(db)
+
     def get_service(self):
         if self.inputs is None:
             raise RuntimeError("Input storage is unavailable; waiting for database recovery")

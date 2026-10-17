@@ -1,0 +1,9 @@
+# Read off the ROM images by tools/derive_rom_candidates.py, 2026-10-16:
+# SM64 USAMUNE v1.93u (E) aligned against SM64 USAMUNE v1.93j (J). Candidates, not verdicts.
+# address	field	derivation
+0x80339c20	player1_controller	17 vanilla-code references to the US struct align here; its 0x8033 neighbourhood shifts -0x1370 like STROOP's
+0x80417d3a	usamune_overall	Usamune's data shifts +0xC8 on JP (183 aligned references); US value + 0xC8
+0x80417d3c	usamune_star_result	2 bytes after the overall counter on both builds; US value + 0xC8
+0x804169a0	usamune_menu	73 aligned references to the US byte name it
+0x80417c1f	usamune_input_display	the HUD-settings block aligns +0xC8 (250 references); the display byte is +0xB on both
+0x8033c26c	usamune_timer	object slot 0's oTimer (pool + 0x154) on both builds

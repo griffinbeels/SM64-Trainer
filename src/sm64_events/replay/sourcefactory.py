@@ -34,9 +34,15 @@ class DesktopForUnsupportedGpu(DesktopUntilLayerPresents):
 
 class SourceFactory:
     def __init__(self, layout, cfg, desktop_factory):
-        self.layout, self.cfg = layout, cfg
+        # `layout` is a Layout, or a zero-argument callable returning the
+        # running build's: the picture stamps follow a ROM swap (main.py).
+        self._layout, self.cfg = layout, cfg
         self.desktop_factory = desktop_factory
         self.retry_gate = RetryGate()
+
+    @property
+    def layout(self):
+        return self._layout() if callable(self._layout) else self._layout
 
     def _desktop(self, win):
         return self.desktop_factory(win, fps=self.cfg.fps)
