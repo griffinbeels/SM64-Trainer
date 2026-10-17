@@ -11,7 +11,11 @@ His live report, 2026-10-17 (Lineup round 7):
   * "the checkmark ... is hidden underneath the rank cap ... the rank cap
     serves as the checkmark now" -- the ✔ left the time; every row keeps a
     mark in the mark column instead.
-  * "the recording button isn't even centered!" -- in the sidebar rail.
+  * "the recording button isn't even centered!" -- in the sidebar rail; then,
+    round 8, "there shouldn't be 2 dots" -- the rail says words instead.
+  * Round 8: the PB / GOAL pair "should be CENTERED INSIDE THE BOUNDING BOX
+    ... while still being aligned with each other".
+  * Round 8: "the X button seems ... off center" -- the × is an icon now.
 
 Both log layouts are measured: the table (a wide pane) and the per-row grid
 (a pane of 700px or less -- his window at his zoom; 800 here).
@@ -47,18 +51,35 @@ MEASURE = """(() => {
       slot: left(tr.querySelector('.attempt-pb-slot')),
       clear: left([...tr.querySelectorAll('.attempt-actions button')].pop()),
       unfinished: !!tr.querySelector('.attempt-pb-slot button.pb-unfinished[disabled]'),
+      // The ×'s mark against its button's centre, both axes.
+      xOff: (() => { const b = [...tr.querySelectorAll('.attempt-actions button')].pop();
+        const i = b.querySelector('svg'); if (!i) return null;
+        const br = b.getBoundingClientRect(), ir = i.getBoundingClientRect();
+        return [ir.left + ir.width / 2 - (br.left + br.width / 2), ir.top + ir.height / 2 - (br.top + br.height / 2)]; })(),
     })),
     pb: left(plate && (plate.querySelector('.goal-plate-pb .pblink') || plate.querySelector('.goal-plate-pb .pbtag'))),
     goal: left(plate && plate.querySelector('.goal-plate-time')),
+    // The PB/GOAL pair inside its box: the words' left edge and the times'
+    // right edge (the goal's ✓ hangs outside the time's box), against the box.
+    plateGaps: plate && (() => {
+      const box = plate.getBoundingClientRect();
+      const words = [...plate.querySelectorAll('.goal-plate-word')].map(e => e.getBoundingClientRect());
+      const times = [plate.querySelector('.goal-plate-pb .pbtag'), plate.querySelector('.goal-plate-time')]
+        .map(e => e.getBoundingClientRect());
+      return [Math.min(...words.map(r => r.left)) - box.left, box.right - Math.max(...times.map(r => r.right))];
+    })(),
   };
 })()""" % (json.dumps(ROWS), CARD)
 RAIL = """(() => {
   const box = document.querySelector('.sidebar-status');
   const centre = el => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; };
+  const shown = el => el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0;
+  const word = box.querySelector('.status-short'), rec = box.querySelector('.recording-short');
   const dot = box.querySelector('.recording-status .dot');
-  return { box: centre(box), light: centre(box.querySelector('.status-light')),
-           lightWidth: box.querySelector('.status-light').getBoundingClientRect().width,
-           dot: centre(dot), dotWidth: dot.getBoundingClientRect().width };
+  return { box: centre(box), word: shown(word) && word.textContent, wordCentre: centre(word),
+           rec: shown(rec) && rec.textContent, recCentre: centre(rec),
+           light: shown(box.querySelector('.status-light')),
+           dotMark: getComputedStyle(dot, '::before').content };
 })()"""
 STATUS = {"recording": False, "capture_state": "off", "capture_gated": False,
           "idle": False, "disk_bytes": 0, "max_buffer_bytes": 0}
@@ -106,6 +127,8 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
         assert any(r["success"] for r in rows) and any(not r["success"] for r in rows), rows
         for what in ("result", "delta", "strategy", "replay", "slot", "clear"):
             _one([r[what] for r in rows], what, rows)
+        # The × is a drawn mark sitting on its button's centre.
+        assert all(r["xOff"] and max(map(abs, r["xOff"])) < 0.75 for r in rows), [r["xOff"] for r in rows]
         # Every row has a mark, and the ✔ is no longer beside the time.
         assert all(r["mark"] for r in rows), rows
         assert not any(r["words"].startswith("✔") for r in rows), rows
@@ -114,8 +137,11 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
         assert not any(r["unfinished"] for r in rows if r["success"] or r["other"]), rows
         if seen["pb"] is not None:
             assert abs(seen["pb"] - seen["goal"]) < 0.5, (seen["pb"], seen["goal"])
-    # The rail at 800: the connection light and the recording dot both sit on
-    # the box's centre line, and the dot's button is just the dot.
-    assert rail["lightWidth"] > 0, rail
-    assert abs(rail["light"] - rail["box"]) < 0.75 and abs(rail["dot"] - rail["box"]) < 0.75, rail
-    assert rail["dotWidth"] <= 12, rail
+    # The narrow plate (his layout) centres the PB/GOAL pair in its box.
+    left_gap, right_gap = narrow["plateGaps"]
+    assert abs(left_gap - right_gap) < 1, narrow["plateGaps"]
+    # The narrow sidebar says two words, not two dots ("there shouldn't be 2
+    # dots", round 8): the connection and the recorder, each centred.
+    assert rail["word"] == "LIVE" and rail["rec"] == "REC OFF", rail
+    assert not rail["light"] and rail["dotMark"] in ("none", "normal"), rail
+    assert abs(rail["wordCentre"] - rail["box"]) < 0.75 and abs(rail["recCentre"] - rail["box"]) < 0.75, rail

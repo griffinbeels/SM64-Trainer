@@ -6,9 +6,7 @@ from itertools import pairwise
 import pytest
 
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.ghost.dpad_toggle import (
-    COMBO_BUTTONS, DPAD_UP, DpadGhostToggle, OverlayFlipper,
-)
+from sm64_events.ghost.dpad_toggle import DPAD_UP, DpadGhostToggle, OverlayFlipper
 from sm64_events.ghost.session import EVENT_TYPE
 from sm64_events.memory import addresses as A
 from sm64_events.storage.db import Database
@@ -47,12 +45,21 @@ def test_release_and_press_again_toggles_again():
     assert presses(readings) == 2
 
 
-@pytest.mark.parametrize("combo", ["L", "R", "Z"])
-def test_a_usamune_combo_never_toggles(combo):
-    readings = [snap(1, BIT[combo]), snap(2, BIT[combo] | DPAD_UP),
-                snap(3, BIT[combo] | DPAD_UP)]
-    assert presses(readings) == 0
-    assert COMBO_BUTTONS & BIT[combo]
+@pytest.mark.parametrize("held", [("L",), ("R",), ("Z",), ("A", "B"), ("L", "R", "Z", "A", "B", "Start")])
+def test_up_pressed_with_any_other_buttons_held_still_toggles_once(held):
+    """His ask, 2026-10-17: "It should detect if dpad up is ever selected,
+    even if it's combined with other buttons" -- the first version ignored a
+    press with L, R or Z held."""
+    others = 0
+    for name in held:
+        others |= BIT[name]
+    readings = [snap(1, others), snap(2, others | DPAD_UP), snap(3, others | DPAD_UP)]
+    assert presses(readings) == 1
+
+
+def test_up_pressed_together_with_another_button_on_one_frame_toggles():
+    readings = [snap(1), snap(2, DPAD_UP | BIT["Z"]), snap(3, DPAD_UP | BIT["Z"])]
+    assert presses(readings) == 1
 
 
 def test_navigating_usamunes_menu_never_toggles():

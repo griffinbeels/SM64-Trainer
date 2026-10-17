@@ -409,7 +409,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
       ${a.cleared
         ? html`<button onclick=${restore}>undo</button>`
         : html`<button class="icon-button" onclick=${clear}
-            title="Clear this attempt as a mistake" aria-label="Clear attempt">×</button>`}
+            title="Clear this attempt as a mistake" aria-label="Clear attempt"><${Icon} name="close" size=${12} /></button>`}
     </div></td>
   </tr>`;
   const onCompare = (openCompare && entity)
@@ -525,7 +525,9 @@ export function PbTag({ pb, mode, rows, pick, t, strat = null,
   // pushing the picker left (his call, 2026-08-22; the track rule in
   // index.html has the mechanics). `.pbtag-strat` is a hook for that rule,
   // not a clamp.
-  if (!strat) return html`<span class="pbtag">no strategy</span>`;
+  // "N/A" beside the plate's PB word, his wording (2026-10-17); the reason
+  // rides the title.
+  if (!strat) return html`<span class="pbtag" title="No strategy picked">N/A</span>`;
   if (!pb) return html`<span class="pbtag">no PB · <span
     class="pbtag-strat">${strat}</span></span>`;
   function jump() {

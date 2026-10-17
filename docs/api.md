@@ -1052,7 +1052,7 @@ is ready; `visible` requires a matching renderer acknowledgement. There is no
 separate ghost window or video fallback. Opacity, tint and timing apply inside
 the renderer. See [new-user defaults](ghost-native-runtime.md#new-user-settings-and-iteration-boundary).
 Pressing D-pad Up in game flips `enabled` through the same `PUT`, outside
-Usamune's menu and with L, R and Z up (`ghost/dpad_toggle.py`), so it
+Usamune's menu, whatever else is held (`ghost/dpad_toggle.py`), so it
 publishes `ghost_changed` like a click. `enabled: false` hides the race
 rather than ending it (`running` and `visible` false, no `reason`); `true`
 again shows it at the attempt's current frame.

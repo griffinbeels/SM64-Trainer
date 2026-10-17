@@ -1744,6 +1744,8 @@
   }
   .recording-status .ok { color: var(--coral); }
   .recording-status .bad { color: var(--muted); }
+  /* The one-word forms the narrow sidebar and the phone header show. */
+  .status-short, .recording-short { display: none; }
   .app-main { min-width: 0; max-width: 100%; overflow-x: hidden; }
   .context-shell {
     position: sticky; top: 0; z-index: 24; padding: 14px 0 8px;
@@ -6097,13 +6099,21 @@
        (which has no room) and `::before` draws the indicator, CENTRED rather
        than left-aligned in a full-width box, with the border and padding
        dropped so the block is a dot and not a panel containing one. */
-    /* Round 7 (2026-10-17, "the recording button isn't even centered! Big
-       problem!"): two causes, both measured. The connection light was an
-       empty INLINE span inside a block, so it drew nothing and left the top
-       of the box empty (since the 2026-07-24 redesign); it is a centred flex
-       item now. And the button's flex gap sat between the dot and its
-       zero-width label, pushing the dot left by half of it; `gap: 0`. */
+    /* WORDS, NOT DOTS (round 8, 2026-10-17: "there shouldn't be 2 dots.
+       Rethink this for the most clarity possible"). Two unlabelled coral
+       dots could mean anything -- they meant "paused" and "recording". The
+       narrow sidebar now says each in one word, centred: the connection as
+       LIVE (green) / PAUSED / OFFLINE (coral), and the recorder as "● REC"
+       (red, the camera convention) or "REC OFF" (grey). The full label
+       still rides each one's title. */
     .connection-line { display: flex; justify-content: center; }
+    .sidebar-status .status-light { display: none; }
+    .sidebar-status .status-short, .sidebar-status .recording-short {
+      display: block; font-size: .62rem; font-weight: 800; line-height: 1.2;
+      letter-spacing: .08em; text-transform: uppercase; white-space: nowrap;
+    }
+    .sidebar-status .status-short { color: var(--coral); }
+    .sidebar-status .connection-line.is-live .status-short { color: var(--green); }
     .recording-status {
       width: 100%; display: flex; justify-content: center;
       border-top: 0; padding-top: .35rem;
@@ -6111,11 +6121,7 @@
     .recording-status > span, .recording-status .dot {
       display: flex; align-items: center; justify-content: center;
     }
-    .recording-status .dot { font-size: 0; overflow: visible; gap: 0; }
-    .recording-status .dot::before {
-      content: ""; display: block; width: 10px; height: 10px;
-      border-radius: 50%; background: currentColor;
-    }
+    .recording-status .dot { font-size: 0; overflow: visible; gap: 0; min-height: 0; }
     .recording-status .recording-light { display: none; }
 
     .context-bar {
@@ -6389,11 +6395,9 @@
     .mobile-status .recording-status .dot {
       width: auto; max-width: none; overflow: visible; font-size: 0;
     }
-    .mobile-status .recording-status .dot::before {
-      content: "● REC"; display: inline; width: auto; height: auto;
-      border-radius: 0; background: transparent; color: var(--coral);
-      font-size: .66rem; font-weight: 700;
-    }
+    /* The phone header says what the recorder is doing, not always "REC":
+       the same one-word form as the narrow sidebar (round 8). */
+    .mobile-status .recording-short { display: inline; font-size: .66rem; font-weight: 700; }
     .context-shell {
       position: static; top: auto; padding: 10px 10px 6px;
       background: rgba(5,12,22,.96);
@@ -7230,7 +7234,9 @@
   }
   .goal-plate-word.is-pb { color: #a3e0a3; }
   .goal-plate-clock { margin-left: auto; font-size: 10px; color: var(--muted, #8aa0b6); letter-spacing: .06em; }
-  .goal-plate-time { font-size: var(--log-pb-size, 13px); font-weight: 700; color: #f6e7b8; white-space: nowrap; }
+  .goal-plate-time {
+    position: relative; font-size: var(--log-pb-size, 13px); font-weight: 700; color: #f6e7b8; white-space: nowrap;
+  }
   .goal-plate-source {
     font-size: 11px; line-height: 1.3; color: var(--muted, #8aa0b6); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; min-width: 0; margin-left: auto;
@@ -7242,7 +7248,12 @@
        width whatever the goal came from. */
     width: 0; flex: 1 1 0; text-align: right;
   }
-  .goal-plate-done { color: var(--good, #5bc97a); font-weight: 800; font-size: 12px; }
+  /* Inside the time (goalplate.js); inline-block so the time's hover
+     underline does not run under it. */
+  .goal-plate-done {
+    display: inline-block; margin-left: var(--goal-plate-gap, .4rem);
+    color: var(--good, #5bc97a); font-weight: 800; font-size: 12px;
+  }
   /* Reserved while unmet, so reaching a goal never shifts the plate. */
   .goal-plate-done.is-pending { visibility: hidden; }
   .goal-plate.is-achieved { border-color: rgba(91,201,122,.45); }
@@ -7306,8 +7317,19 @@
      source stays in the picker and the Scorecard; the plate keeps PB, GOAL
      and the count, which is what a stream crop is for. */
   @container (max-width: 1000px) {
+    /* CENTRED, AND STILL ALIGNED (round 8: "the contents ... should be
+       CENTERED INSIDE THE BOUNDING BOX ... while still being aligned with
+       each other"). With the clock and source gone the two lines no longer
+       fill the box, so the plate is one column as wide as the wider line,
+       centred: both lines start at its left edge, the PB and GOAL times keep
+       one x, and the pair sits in the middle. The goal's ✓ hangs past its
+       time out of flow, so a hidden tick never pulls the pair off centre. */
     .log-card-head .goal-plate {
       min-width: var(--goal-plate-narrow-width, 100px); padding: 1px 7px; --goal-plate-gap: .3rem;
+      grid-template-columns: max-content; justify-content: center;
+    }
+    .log-card-head .goal-plate .goal-plate-done {
+      position: absolute; left: 100%; top: 50%; translate: 0 -50%; margin-left: .25rem;
     }
     .log-card-head .goal-plate .goal-plate-count { gap: .3rem; }
     .log-card-head .goal-plate .goal-plate-word { flex-basis: 2.1rem; }

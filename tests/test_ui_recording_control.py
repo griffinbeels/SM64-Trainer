@@ -20,6 +20,13 @@ def open_recording_page(browser, state, settings, control, errors, responses):
     return page
 
 
+def button_label(page):
+    """The recording button's own label, without the one-word form the narrow
+    sidebar shows beside it (round 8)."""
+    return page.locator(".recording-button:visible").evaluate(
+        "b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()")
+
+
 def assert_off_panel_fits(page, panel, switch, tmp_path, width):
     page.set_viewport_size({"width": width, "height": 1100})
     # Enter through the real recording button at each supported
@@ -69,7 +76,7 @@ def test_manual_recording_control_waits_for_actual_stop_and_resume(tmp_path):
             assert not switch.get_by_role("button", name="Start recording").is_enabled()
             assert "Practice tracking continues." in switch.inner_text()
             assert "Only Mario ghosts" in switch.inner_text()
-            assert page.locator(".recording-button:visible").inner_text() == "Stopping recording…"
+            assert button_label(page) == "Stopping recording…"
             state.update(capture_state="off")
             page.wait_for_function("document.querySelector('.recording-switch [role=status]').textContent === 'Recording off'")
             assert switch.get_by_role("button", name="Start recording").is_enabled()
@@ -85,7 +92,10 @@ def test_manual_recording_control_waits_for_actual_stop_and_resume(tmp_path):
             assert writes == [{"enabled": False}, {"enabled": True}]
             # A startup can be cancelled; on is not painted as already recording.
             assert switch.get_by_role("button", name="Stop recording").is_enabled()
-            assert page.locator(".recording-button:visible").inner_text() == "Starting recording…"
+            assert button_label(page) == "Starting recording…"
+            # At 850 the sidebar is narrow: its one-word form says the recorder
+            # is starting, not off (round 8).
+            assert page.locator(".sidebar-status .recording-short").inner_text() == "REC …"
             state.update(capture_state="recording", recording=True)
             page.wait_for_function("[...document.querySelectorAll('.recording-button')].filter(el => el.getClientRects().length).every(el => el.textContent.includes('rec ·'))")
             panel.screenshot(path=str(tmp_path / "recording-on-850.png"), animations="disabled")

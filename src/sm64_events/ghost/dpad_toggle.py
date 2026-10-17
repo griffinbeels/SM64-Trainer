@@ -6,8 +6,9 @@ overlay; USAMUNE MENU --> don't do anything", because D-pad Up is how
 Usamune's menu navigates. A press counts when, between two consecutive
 snapshots:
 
-- D-pad Up goes from up to down;
-- L, R and Z are all up, so none of Usamune's button combos ever flips it;
+- D-pad Up goes from up to down, whatever else is held (his ask, 2026-10-17:
+  "It should detect if dpad up is ever selected, even if it's combined with
+  other buttons"; the first version ignored a press with L, R or Z held);
 - Usamune's menu reads closed on this reading and the one before, and was
   not seen open within one game frame, so a press that opens or closes the
   menu never counts (two readings can share a frame without a pad sampler);
@@ -53,8 +54,6 @@ log = logging.getLogger("sm64.ghost")
 
 _BIT = {name: bit for bit, name in A.BUTTON_BITS}
 DPAD_UP = _BIT["Dup"]
-#: Held with D-pad Up, these are Usamune's combos rather than a toggle.
-COMBO_BUTTONS = _BIT["L"] | _BIT["R"] | _BIT["Z"]
 _NOT_BUTTONS = 0xFFFF & ~A.BUTTON_VALID_MASK
 
 
@@ -83,9 +82,7 @@ class DpadUpPress:
         if (self._menu_open_at is not None
                 and curr.global_timer - self._menu_open_at <= 1):
             return False
-        return bool(curr.buttons_held & DPAD_UP
-                    and not prev.buttons_held & DPAD_UP
-                    and not curr.buttons_held & COMBO_BUTTONS)
+        return bool(curr.buttons_held & DPAD_UP and not prev.buttons_held & DPAD_UP)
 
 
 class DpadGhostToggle:

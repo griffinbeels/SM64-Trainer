@@ -390,8 +390,11 @@ export function GoalPlate({ goalKey, goal, pbTag, attempts, t, onChanged }) {
           title=${plateTitle(goal)}
           onclick=${() => setOpen(!open)}>
         <span class="goal-plate-word">GOAL</span>
-        <span class="goal-plate-time">${goalTimeLabel(goal)}</span>
-        <span class="goal-plate-done ${achieved ? "" : "is-pending"}" aria-label=${achieved ? "achieved" : null}>✓</span>
+        ${/* The ✓ rides INSIDE the time, so the narrow plate can hang it
+             past the time out of flow and centre the PB/GOAL pair on what
+             they say (round 8), not on a hidden tick. */""}
+        <span class="goal-plate-time">${goalTimeLabel(goal)}<span
+          class="goal-plate-done ${achieved ? "" : "is-pending"}" aria-label=${achieved ? "achieved" : null}>✓</span></span>
         <span class="goal-plate-source">${plateSourceText(goal)}</span>
       </button>
       ${open ? html`<${GoalPicker} goalKey=${goalKey} t=${t} goal=${goal}

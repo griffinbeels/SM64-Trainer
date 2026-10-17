@@ -336,6 +336,16 @@ function captureLabel(st) {
   return st.capture_gated ? "replay off · not Usamune" : "no capture";
 }
 
+// The same state in the few letters the narrow sidebar and the phone header
+// have room for (round 8: words, not an unlabelled dot). The full label above
+// rides the button's title.
+function captureShort(st) {
+  if (st.capture_state === "starting" || st.capture_state === "stopping") return "REC …";
+  if (st.capture_state === "paused") return "REC ‖";
+  if (st.capture_state === "error") return "REC !";
+  return st.recording && st.capture_state !== "off" ? "● REC" : "REC OFF";
+}
+
 // Header indicator and panel share the recorder's actual lifecycle status.
 export function RecordingDot() {
   const [st, setSt] = useState(null);
@@ -349,9 +359,10 @@ export function RecordingDot() {
   const label = captureLabel(st);
   return html`<span class="recording-control">
     <button class=${`dot recording-button ${cls}`}
-          title="Recording controls and replay storage"
+          title=${`${label} — recording controls and replay storage`}
           aria-expanded=${open} onclick=${() => setOpen(!open)}>
       <span class="recording-light"></span>${label}
+      <span class="recording-short" aria-hidden="true">${captureShort(st)}</span>
     </button>
     ${open && html`<${BufferSettings} st=${st} onStatus=${setSt}
         refresh=${() => setTick((t) => t + 1)}

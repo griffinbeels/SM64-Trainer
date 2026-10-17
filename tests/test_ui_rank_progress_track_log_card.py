@@ -255,6 +255,6 @@ def test_the_tuning_fixture_draws_every_pb_tag_state(tunelog_demo):
     tags = tunelog_demo.evaluate(ACTION_CELLS)["pbTags"]
     # A saved PB is the bare time since the goal plate (task 0106) draws the
     # "PB" word in its own label column beside "GOAL".
-    assert any('"' in t and not t.startswith("no ") for t in tags), tags
+    assert any('"' in t and not t.startswith("no ") and t != "N/A" for t in tags), tags
     assert any(t.startswith("no PB") for t in tags), tags
-    assert any("no strategy" in t for t in tags), tags
+    assert any(t == "N/A" for t in tags), tags   # no strategy picked (his wording, 2026-10-17)
