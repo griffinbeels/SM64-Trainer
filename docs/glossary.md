@@ -1653,8 +1653,9 @@ changing original history.
 
 ### Sign-in step
 
-After the startup update check and any update offer, a configured build asks for
-a Discord or Twitch sign-in. A new account chooses a player name and acknowledges
+A configured build asks for a Discord or Twitch sign-in. The startup update
+check runs silently without delaying this step; an actual update offer takes
+priority and returns here when dismissed. A new account chooses a player name and acknowledges
 the policies once. A returning active account skips that form and account settings
 entirely. After either path, unfinished Project64 setup opens; a detected working
 installation skips setup. Setup waits until the account check settles. The player

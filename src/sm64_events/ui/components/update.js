@@ -142,10 +142,6 @@ function UpdateActions({ applying, st, t, onClose, onSkip, onLater }) {
 export function UpdatePopup({ t }) {
   const st = t.update;
   const applying = t.updateApplying;
-  if (t.updateStartupPending && !t.updateVisible) return html`<${Modal}
-      title="Checking for updates…" icon="updates">
-    <p role="status">Checking for a newer version before sign-in.</p>
-  <//>`;
   if (!t.updateVisible) return null;
 
   const onSkip = () => t.skipUpdate(st.latest);

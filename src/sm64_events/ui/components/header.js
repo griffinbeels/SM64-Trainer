@@ -138,7 +138,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const [setupWarning, setSetupWarning] = useState(null);
   const [overlayOpen, setOverlayOpen] = useState(false);
   const community = useCommunityAccount();
-  const updateFirst = t.updateStartupPending || t.updateVisible;
+  const updateFirst = t.updateVisible;
   const [onboardingStarted, setOnboardingStarted] = useState(false);
   useEffect(() => { if (!updateFirst) setOnboardingStarted(true); }, [updateFirst]);
   useEffect(() => {
