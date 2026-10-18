@@ -188,15 +188,42 @@ def test_first_run_reveals_only_the_current_page_and_back_stays_put(tmp_path):
         assert page.problems() == []
 
 
+def slows_before_rest(frames):
+    """Compare speed, not frame distance, when a busy renderer skips a rAF.
+
+    Exclude the interval landing on zero: its unknown stationary suffix can
+    make a linear animation appear to slow down. Require measured motion.
+    """
+    moving = [row for row in frames if row.get("x", 0) > 1e-6]
+    speeds = [abs(after["x"] - before["x"]) / (after["t"] - before["t"])
+              for before, after in zip(moving, moving[1:], strict=False) if after["t"] > before["t"]]
+    peak = max(speeds, default=0)
+    return len(speeds) >= 3 and peak > 0 and speeds[-1] <= peak * .5, speeds
+
+
+@pytest.mark.parametrize("times,positions,expected", [
+    ([0, 80, 160, 210, 300], [26, 18.7706, 4.82477, 1.60562, 0], True),
+    ([0, 120, 200, 250, 280, 295, 300, 340],
+     [26 * (1 - min(t, 300) / 300) for t in [0, 120, 200, 250, 280, 295, 300, 340]], False),
+    ([0, 80, 160, 240, 300], [26, 26, 26, 26, 0], False),
+    ([0, 150, 300], [26, 1, 0], False),
+], ids=["uneven-easing", "uneven-linear", "snap", "insufficient"])
+def test_rest_probe_uses_elapsed_time_and_requires_observed_deceleration(times, positions, expected):
+    frames = [{"t": t, "x": x} for t, x in zip(times, positions, strict=True)]
+    assert slows_before_rest(frames)[0] is expected
+
+
 def assert_game_found_moves_to_the_check(page, observed):
     """Open the game on "Open your game" and sample the stage change per
     frame: its acknowledgment, then the check card entering from aside and
     coming to rest while the old card leaves."""
+    before = page.evaluate("document.querySelector('.setup-substep-swap > .setup-swap-in .setup-current h3').textContent")
+    assert before == "Open your game"
     trace = record(page, watch={"in": ".setup-substep-swap > .setup-swap-in",
                                 "out": ".setup-substep-swap > .setup-swap-out",
                                 "title": ".setup-substep-swap > .setup-swap-in .setup-current h3"},
                    trigger=lambda _: observed.update(rom=dict(US_ROM)), ms=2600)
-    titles = []
+    titles = [before]
     for row in trace.of("title").frames:
         if row.get("text") and (not titles or titles[-1] != row["text"]):
             titles.append(row["text"])
@@ -207,7 +234,8 @@ def assert_game_found_moves_to_the_check(page, observed):
     assert entering[0]["opacity"] < .5 and entering[0]["x"] > 10  # starts aside, not at rest
     assert any(0 < row["x"] < entering[0]["x"] and .1 < row["opacity"] < .95 for row in entering)
     assert entering[-1]["x"] == 0 and entering[-1]["opacity"] == 1
-    assert trace.of("in").comes_to_rest("x")[0]
+    resting, speeds = slows_before_rest(entering)
+    assert resting, speeds
     assert leaving and leaving[-1]["opacity"] < leaving[0]["opacity"]
 
 

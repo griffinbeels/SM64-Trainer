@@ -332,7 +332,7 @@ def test_expired_persisted_grant_uses_fresh_key_and_finishes_after_restart(tmp_p
     asyncio.run(scenario())
 
 
-def test_recovery_backlog_and_blocked_upload_do_not_delay_rival_downloads(tmp_path):
+def test_recovery_backlog_and_blocked_upload_do_not_delay_rival_downloads(tmp_path, monkeypatch):
     async def scenario():
         first = sync_at(tmp_path, Account())
         for index in range(12):
@@ -356,12 +356,25 @@ def test_recovery_backlog_and_blocked_upload_do_not_delay_rival_downloads(tmp_pa
             return await original(method, path, **kwargs)
         account.request_json = delayed
         restored = sync_at(tmp_path, account)
+        write_allowed = threading.Event()
+        store_asset = restored.population.store_asset
+
+        def delayed_store(*args, **kwargs):
+            assert write_allowed.wait(5)
+            return store_asset(*args, **kwargs)
+
+        monkeypatch.setattr(restored.population, "store_asset", delayed_store)
         assert restored.request_pool(IDENTITY, frame_windows=[(1, 1000)])
         assert restored.request_assets(("1" * 64,))
         await restored.start()
         try:
             await asyncio.wait_for(entered.wait(), 2)
-            assert restored.population.is_ready("1" * 64)
+            # Upload entry does not imply another thread finished publishing
+            # the rival file. Prove it can finish while the upload stays held.
+            assert not restored.population.is_ready("1" * 64)
+            write_allowed.set()
+            await settled(lambda: restored.population.is_ready("1" * 64))
+            assert not resume.is_set()
             paths = [path for _method, path, _kwargs in account.calls]
             assert paths.index("/v1/recordings/" + "1" * 64 + "/asset") < paths.index("/v1/uploads")
             assert restored.request_pool(IDENTITY, frame_windows=[(1, 500)])
@@ -371,6 +384,7 @@ def test_recovery_backlog_and_blocked_upload_do_not_delay_rival_downloads(tmp_pa
             assert len([path for _method, path, _kwargs in account.calls if path == "/v1/catalog"]) == 1
             assert restored.population.get("2" * 64)["raw_sha256"] == hashlib.sha256(native()).hexdigest()
         finally:
+            write_allowed.set()
             await restored.stop()
         assert restored._contribution_task is None and not restored._local_jobs
         assert restored._outbox.pending(UID)
