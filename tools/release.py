@@ -421,7 +421,9 @@ def draft_candidate(directory: Path, *, notes_file: Path, approval: Path) -> Non
     body = compose_release_body(SETUP_HEADER.read_text(encoding="utf-8"), notes_file.read_text(encoding="utf-8"))
     body_file = directory / "release-body.md"
     body_file.write_text(body, encoding="utf-8")
-    existing = subprocess.run(["gh", "release", "view", tag, "--repo", REPOSITORY, "--json", "isDraft"],
+    # The release-view CLI says only "release not found". The API exposes an
+    # explicit HTTP 404, so auth, transport and rate-limit failures stay fatal.
+    existing = subprocess.run(["gh", "api", f"repos/{REPOSITORY}/releases/tags/{tag}", "--jq", "{isDraft:.draft}"],
                               cwd=REPO, capture_output=True, text=True,
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=60)
     if existing.returncode == 0:
