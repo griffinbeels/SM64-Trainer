@@ -91,6 +91,52 @@ def test_canonical_inclusive_bins_ties_and_unrelated_local_steps():
         frame_band(cutoffs, [(True, 200)])
 
 
+@pytest.mark.parametrize("lost", ["evicted", "signed_out", "expired"])
+def test_request_pool_reloads_a_successful_list_that_is_no_longer_held(tmp_path, monkeypatch, lost):
+    from sm64_events.community import cache
+
+    account = Account()
+    population = CachedPopulation(Local(), root=tmp_path, account=account)
+    sync = CommunitySync(account, population)
+    windows = [(1, 500)]
+    try:
+        population.remember_page(IDENTITY, checked_page(page()))
+        key = population.identity_key(IDENTITY)
+        sync._pool_served(UID, key, windows, (), due=time.monotonic() + 540)
+        assert sync.request_pool(IDENTITY, frame_windows=windows) and not sync._queue
+        if lost == "evicted":
+            for index in range(cache.MAX_POOLS):
+                population.remember_page({**IDENTITY, "entity_key": f"{index + 2}-0"}, checked_page(page()))
+        elif lost == "signed_out":
+            account.state.update(authenticated=False, status="signed_out", uid=None)
+            assert population.coverage(IDENTITY)["generation"] is None
+            account.state.update(authenticated=True, status="active", uid=UID)
+        else:
+            # The list's independent lease may lapse before the job lease.
+            monkeypatch.setattr(cache, "TTL", 0)
+            population.remember_page(IDENTITY, checked_page(page()))
+        assert population.coverage(IDENTITY)["generation"] is None
+        assert sync.request_pool(IDENTITY, frame_windows=windows)
+        assert ("pool", key) in sync._queue
+        assert sync.pool_status(IDENTITY) == "pending"
+    finally:
+        population.close()
+
+
+@pytest.mark.parametrize("failure", ["offline", "unsupported"])
+def test_request_pool_keeps_failure_backoff_without_a_held_list(tmp_path, failure):
+    account = Account()
+    population = CachedPopulation(Local(), root=tmp_path, account=account)
+    sync = CommunitySync(account, population)
+    try:
+        key = population.identity_key(IDENTITY)
+        sync._pool_served(UID, key, [(1, 500)], (), due=time.monotonic() + 540, failure=failure)
+        assert sync.request_pool(IDENTITY, frame_windows=[(1, 500)])
+        assert not sync._queue and sync.pool_status(IDENTITY) == failure
+    finally:
+        population.close()
+
+
 def test_remote_provenance_strict_metadata_does_not_claim_certification():
     row = recording()
     assert checked_metadata(row)["provenance"] == "community-unverified"

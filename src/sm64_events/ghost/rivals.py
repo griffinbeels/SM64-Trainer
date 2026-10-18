@@ -209,7 +209,11 @@ class Rivals:
 
     def _read_simulation(self):
         from pathlib import Path
-        from sm64_events.core.paths import practice_root
+        from sm64_events.core.paths import is_frozen, practice_root
+        # Developer profiles may inherit their environment into a packaged app.
+        # A released build must never activate the fake-rival simulation.
+        if is_frozen():
+            return None
         if self.tracker.db is None:
             return None
         state = self.tracker.db.get_state("ghost_simulation_v1",{})

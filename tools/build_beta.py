@@ -35,7 +35,8 @@ WORK = REPO / "build" / "private-beta"
 SEED_DESCRIPTOR = "beta-ghost-seed.json"
 _FORBIDDEN_NAMES = {"tracker.db", "tracker.lock", "server.pid", "window.json",
                     "update_state.json", "capture_layer.json", "replay_settings.json",
-                    "ui_log.jsonl", "library_adoptions.json", "tracker_mode.json"}
+                    "ui_log.jsonl", "library_adoptions.json", "tracker_mode.json",
+                    "climb-profile.json", "developer-simulation.json"}
 _FORBIDDEN_DIRS = {"replays", "logs", "replay_buffer", "ghost_population",
                    "community_cache", "compare_cache"}
 _FORBIDDEN_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".gho", ".ghost", ".ghc1",

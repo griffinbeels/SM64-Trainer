@@ -325,7 +325,11 @@ class CommunitySync:
                 return True
             served, due = self._pool_jobs.get(job, (None, 0))
             if served == (windows, pins, value_of(identity, "region_scope", REGIONAL)) and time.monotonic() < due:
-                return True
+                # A successful job outlives the bounded list cache. Eviction
+                # or sign-out must not leave an empty list waiting on its old
+                # job lease; failed requests still keep their network backoff.
+                if job in self._pool_failures or not self._lease_due(self.population.lease_until(identity)):
+                    return True
         try:
             target = self.population.portable_target(identity)
             frozen = {"target": target, "kind": value_of(identity, "kind"), "entity_key": value_of(identity, "entity_key"),
