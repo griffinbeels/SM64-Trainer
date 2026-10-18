@@ -1008,6 +1008,7 @@ async def _until(condition):
         if condition():
             return
         await asyncio.sleep(.01)
+    assert condition(), "community processing did not reach the expected state"
 
 
 def test_reclassified_clip_drops_old_strategy_offers_and_keeps_the_new_one(tmp_path):
@@ -1047,7 +1048,10 @@ def test_saved_retraction_is_sent_once_after_restart(tmp_path, monkeypatch):
         sync = CommunitySync(account, CachedPopulation(Local(), root=root, account=account))
         await sync.start()
         try:
-            await _until(lambda: posts and not json.loads((root / "pending-retractions.json").read_bytes())["retractions"])
+            # The outbox lock spans its atomic write. Polling the file itself
+            # can deny that replace on Windows while a reader is descheduled.
+            await _until(lambda: posts and not sync._retractions.pending(UID))
+            assert not json.loads((root / "pending-retractions.json").read_bytes())["retractions"]
             now[0] += 61  # Past the recovery throttle: a row still saved would be sent again.
             sync._contribution_wake.set()
             await asyncio.sleep(.1)
@@ -1155,7 +1159,8 @@ def test_older_service_without_the_route_drops_the_retraction_quietly(tmp_path):
         await sync.start()
         try:
             assert sync.retract_other_strategies(raw_sha256=hashlib.sha256(native()).hexdigest(), keep_strategy="Alternate")
-            await _until(lambda: posts and not json.loads((root / "pending-retractions.json").read_bytes())["retractions"])
+            await _until(lambda: posts and not sync._retractions.pending(UID))
+            assert not json.loads((root / "pending-retractions.json").read_bytes())["retractions"]
             await asyncio.sleep(.05)
             assert len(posts) == 1 and not sync._offer_retry and sync.last_error is None
         finally:
