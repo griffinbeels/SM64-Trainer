@@ -215,9 +215,10 @@ class NativeCapture:
 
     def records_ghosts(self) -> bool:
         """The ghosts' command asks for them in the recording (Ghosts in
-        recording): the recorder then keeps a ghost copy beside the clean one."""
+        recording): the recorder then keeps a ghost copy beside the clean one.
+        Not while the overlay is off: a hidden race draws nothing to copy."""
         playback = self._playback
-        return bool(playback.get("enabled") and playback.get("record_ghosts"))
+        return bool(playback.get("enabled") and playback.get("record_ghosts") and not playback.get("hidden"))
 
     def sound_pid(self) -> int | None:
         """The ghost sound player's pid while Ghosts in recording is on, for

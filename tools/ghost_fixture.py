@@ -42,7 +42,8 @@ NO_POSES_TEXT = ("This Mario recording uses an older pose format. "
 def ghost_session(*, enabled: bool | None = None, opacity: float | None = None,
                   nudge_frames: int = 0, available: bool = True,
                   reason: str | None = None, reason_text: str | None = None,
-                  target: dict | None = None, tint: dict | None = None) -> dict:
+                  target: dict | None = None, tint: dict | None = None,
+                  hotkey: str = "dpad_up") -> dict:
     """One I5 payload, in the frozen shape.
 
     Every setting is the registry's own default and the ranges are the ones
@@ -72,7 +73,66 @@ def ghost_session(*, enabled: bool | None = None, opacity: float | None = None,
                    "ghosts": []},
         "window": {"running": values["enabled"] and available,
                    "visible": values["enabled"] and available, "backend": "native"},
+        "hotkey": hotkey,
     }
+
+
+LINEUP_PLAYERS = (("Alexander_Speedruns", "Diamond", "V", 339), ("Quinn", "Diamond", "IV", 335),
+                  ("Kai", "Diamond", "III", 334), ("Morgan", "Diamond", "I", 331))
+
+
+def lineup_row(slot: int, name: str, tier: str, division: str, frames: int, *,
+               pinned: bool = False, pending: bool = False, player: str | None = None) -> dict:
+    """One rival seat as `session.rivals.rows` carries it, wearing the slot's real hue."""
+    from sm64_events.ghost.adaptive import PB_HUE_DEGREES
+    from sm64_events.ghost.native_session import ghost_hue
+
+    return {"id": f"{slot:x}{name.casefold()}".ljust(64, "0")[:64], "player_id": player or name.casefold(),
+            "player_name": name, "strategy": FIXTURE_TARGET["strat"], "frames": frames,
+            "tier": tier, "division": division, "slot": slot, "pinned": pinned, "pending": pending,
+            "hue_degrees": ghost_hue(PB_HUE_DEGREES, slot + 1)}
+
+
+def lineup_rivals(*, state: str = "ready", reason: str | None = None, pb_frames: int | None = 343,
+                  rows: list | None = None, include_pb: bool = True, count: int = 4,
+                  scope: str = "strategy") -> dict:
+    """`session.rivals` in the Lineup contract (engineering-plan.md): state,
+    reason, your PB and the rival seats, with the shipped options and limits."""
+    from sm64_events.ghost.adaptive import PB_HUE_DEGREES
+
+    if rows is None:
+        rows = [lineup_row(slot, *player) for slot, player in enumerate(LINEUP_PLAYERS)]
+    pb = None if pb_frames is None else {"frames": pb_frames, "tier": "Platinum", "division": "II", "step": 23,
+                                          "hue_degrees": PB_HUE_DEGREES, "available": True}
+    return {"state": state, "reason": reason, "scope": scope, "rows": rows if state == "ready" else [],
+            "pb": pb, "status": None, "simulation": None, "strategy_name": FIXTURE_TARGET["strat"],
+            "options": {"mode": "adaptive", "count": count, "include_pb": include_pb,
+                        "min_ahead": 1, "max_ahead": 5, "min_step": 0, "max_step": 44},
+            "limits": {"last_step": 44, "max_ahead": 10, "counts": [1, 2, 3, 4]},
+            "generation": 1, "manual": False}
+
+
+def _apply_rivals(session: dict, body: dict, search: list) -> None:
+    """The rival writes the Lineup sends: unpin a seat, pin a run into a seat,
+    or save options. Enough of the real session's answer to drive the card."""
+    rivals = dict(session.get("rivals") or {})
+    change = body.get("rivals") or {}
+    rows = [dict(row) for row in rivals.get("rows", [])]
+    if change.get("action") == "reset":
+        for row in rows:
+            if row["slot"] == change.get("slot"):
+                row["pinned"] = False
+    elif change.get("action") == "add":
+        found = next((row for row in search if row["id"] == change.get("id")), None)
+        if found is not None:
+            slot = change.get("slot")
+            rows = [row for row in rows if row["slot"] != slot]
+            rows.append(lineup_row(slot, found["player_name"], found["tier"], found["division"], found["frames"],
+                                   pinned=True))
+    if "options" in change:
+        rivals["options"] = {**rivals.get("options", {}), **change["options"]}
+    rivals["rows"] = sorted(rows, key=lambda row: row["slot"])
+    session["rivals"] = rivals
 
 
 def _select_ghosts(session: dict, body: dict, input_source: dict) -> None:
@@ -138,7 +198,7 @@ def _set_settings(session: dict, body: dict) -> None:
         session[name] = settings.applied(session.get(name) or {}, settings.BY_NAME[name], value)
 
 
-def attach_ghost_routes(app, state: dict) -> None:
+def attach_ghost_routes(app, state: dict, broadcaster=None) -> None:
     """`GET|PUT /api/ghost` over one mutable dict.
 
     The PUT applies only the keys it was given and answers with the whole
@@ -156,7 +216,7 @@ def attach_ghost_routes(app, state: dict) -> None:
     (measured 2026-09-18, on the merge of tracks E and F).
     """
     app.router.routes = [route for route in app.router.routes
-                         if getattr(route, "path", None) != "/api/ghost"]
+                         if getattr(route, "path", None) not in ("/api/ghost", "/api/ghost/rivals/search")]
     input_source = dict(state["session"]["source"])
 
     @app.get("/api/ghost")
@@ -167,6 +227,27 @@ def attach_ghost_routes(app, state: dict) -> None:
             raise HTTPException(503, "Ghost controls are warming up.")
         return state["session"]
 
+    @app.post("/api/_fixture/ghost_broadcast")
+    async def _ghost_broadcast():
+        """Fixture-only: publish the current session as ghost_changed, the way
+        the real session announces every change, so a test can drive the card
+        from one state to the next and watch the transition."""
+        from datetime import datetime, timezone
+
+        from sm64_events.core.events import Event
+        from sm64_events.ghost.session import EVENT_TYPE
+        if broadcaster is None:
+            return {"published": False}
+        await broadcaster.publish(Event(type=EVENT_TYPE, frame=0, timestamp_utc=datetime.now(timezone.utc),
+                                        payload=state["session"]))
+        return {"published": True}
+
+    @app.get("/api/ghost/rivals/search")
+    def _rival_search(target: str, player: str = "", scope: str = "strategy", cursor: str | None = None):
+        wanted = player.strip().casefold()
+        records = [row for row in state.get("search", []) if wanted in row["player_name"].casefold()]
+        return {"records": records, "next_cursor": None}
+
     @app.put("/api/ghost")
     def _ghost_put(body: dict):
         session = dict(state["session"])
@@ -175,6 +256,8 @@ def attach_ghost_routes(app, state: dict) -> None:
         # replaced the whole object would let a control that drops the other
         # half look correct.
         _set_settings(session, body)
+        if "rivals" in body and session.get("rivals") is not None:
+            _apply_rivals(session, body, state.get("search", []))
         if "ghosts" in body:
             _select_ghosts(session, body, input_source)
         available = session["source"]["available"]
@@ -198,7 +281,8 @@ def serve_ui_with_ghost(session: dict | None = None, **kwargs):
 
     def create_app_with_ghost(*args, **kwargs_inner):
         app = real_create_app(*args, **kwargs_inner)
-        attach_ghost_routes(app, state)
+        broadcaster = args[1] if len(args) > 1 else kwargs_inner.get("broadcaster")
+        attach_ghost_routes(app, state, broadcaster)
         return app
 
     ui_fixture.create_app = create_app_with_ghost

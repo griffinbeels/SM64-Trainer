@@ -54,4 +54,8 @@ extern "C" int __cdecl wr_configure(HMODULE module,const gfx_api_t *original,wr_
  clean_source=extended;if(clean_source)clean_source->clean_consumer(true);
  ready=true;rc_available(TRUE);return 1;
 }
-extern "C" void __cdecl wr_suspend(void){if(clean_source)clean_source->clean_consumer(false);rc_available(FALSE);}
+extern "C" void __cdecl wr_suspend(void){
+ // Revoke the capture epoch before withdrawing the renderer's clean image.
+ // An in-flight source callback may finish immediately on withdrawal.
+ rc_available(FALSE);if(clean_source)clean_source->clean_consumer(false);
+}

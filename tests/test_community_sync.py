@@ -91,6 +91,52 @@ def test_canonical_inclusive_bins_ties_and_unrelated_local_steps():
         frame_band(cutoffs, [(True, 200)])
 
 
+@pytest.mark.parametrize("lost", ["evicted", "signed_out", "expired"])
+def test_request_pool_reloads_a_successful_list_that_is_no_longer_held(tmp_path, monkeypatch, lost):
+    from sm64_events.community import cache
+
+    account = Account()
+    population = CachedPopulation(Local(), root=tmp_path, account=account)
+    sync = CommunitySync(account, population)
+    windows = [(1, 500)]
+    try:
+        population.remember_page(IDENTITY, checked_page(page()))
+        key = population.identity_key(IDENTITY)
+        sync._pool_served(UID, key, windows, (), due=time.monotonic() + 540)
+        assert sync.request_pool(IDENTITY, frame_windows=windows) and not sync._queue
+        if lost == "evicted":
+            for index in range(cache.MAX_POOLS):
+                population.remember_page({**IDENTITY, "entity_key": f"{index + 2}-0"}, checked_page(page()))
+        elif lost == "signed_out":
+            account.state.update(authenticated=False, status="signed_out", uid=None)
+            assert population.coverage(IDENTITY)["generation"] is None
+            account.state.update(authenticated=True, status="active", uid=UID)
+        else:
+            # The list's independent lease may lapse before the job lease.
+            monkeypatch.setattr(cache, "TTL", 0)
+            population.remember_page(IDENTITY, checked_page(page()))
+        assert population.coverage(IDENTITY)["generation"] is None
+        assert sync.request_pool(IDENTITY, frame_windows=windows)
+        assert ("pool", key) in sync._queue
+        assert sync.pool_status(IDENTITY) == "pending"
+    finally:
+        population.close()
+
+
+@pytest.mark.parametrize("failure", ["offline", "unsupported"])
+def test_request_pool_keeps_failure_backoff_without_a_held_list(tmp_path, failure):
+    account = Account()
+    population = CachedPopulation(Local(), root=tmp_path, account=account)
+    sync = CommunitySync(account, population)
+    try:
+        key = population.identity_key(IDENTITY)
+        sync._pool_served(UID, key, [(1, 500)], (), due=time.monotonic() + 540, failure=failure)
+        assert sync.request_pool(IDENTITY, frame_windows=[(1, 500)])
+        assert not sync._queue and sync.pool_status(IDENTITY) == failure
+    finally:
+        population.close()
+
+
 def test_remote_provenance_strict_metadata_does_not_claim_certification():
     row = recording()
     assert checked_metadata(row)["provenance"] == "community-unverified"
@@ -422,7 +468,7 @@ def test_unavailable_asset_does_not_requery_ready_rivals_in_a_loop(tmp_path):
         await sync.start()
         try:
             for _ in range(6):
-                staging.stage(desired, ())
+                staging.stage(desired)
                 await asyncio.sleep(0)
             metadata_reads = [call[1] for call in account.calls if call[1].startswith("/v1/recordings/")]
             assert metadata_reads == ["/v1/recordings/" + rows[-1]["id"]]
@@ -474,7 +520,8 @@ def test_active_manual_pin_outside_pool_renews_before_metadata_expiry(tmp_path, 
             row = population.get(pin["id"])
             path, _ = population.resolve(row["ghost"], TARGET)
             assert path.is_file()
-            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 4
+            # One list per publication lease: no re-fetch every 120 s (2026-10-16).
+            assert len([call for call in account.calls if call[1] == "/v1/pool"]) == 2
             assert len([call for call in account.calls if call[1] == "/v1/recordings/" + pin["id"]]) == 2
             assert not any(call[1].endswith("/asset") for call in account.calls)
         finally:
@@ -708,7 +755,8 @@ def test_eight_hours_with_four_chosen_rivals_and_twenty_uploads_fits_account_bud
             if elapsed < 20 * 120:
                 await sync._offer({"target": TARGET, "clock": "igt", "game_version": "us", "strategy": "Standard",
                     "frames": 3, "path": str(source), "raw_sha256": hashlib.sha256(raw).hexdigest(), "owner": UID})
-        assert len([call for call in calls if call[1] == "/v1/pool"]) == 240
+        # One list per ten-minute publication lease (2026-10-16; was every 120 s).
+        assert len([call for call in calls if call[1] == "/v1/pool"]) == 48
         assert len([call for call in calls if call[1] == "/v1/catalog"]) == 8
         assert len([call for call in calls if call[1] == "/v1/pins"]) == 1
         assert len([call for call in calls if call[1].startswith("/v1/recordings/") and not call[1].endswith("/asset")]) == 192
@@ -717,7 +765,7 @@ def test_eight_hours_with_four_chosen_rivals_and_twenty_uploads_fits_account_bud
         assert len([call for call in calls if call[1] == "/v1/account"]) == 8
         # The public config route precedes authentication/ticketing in the
         # service. OAuth provider calls never enter this Worker counter.
-        assert len([call for call in calls if call[1] != "/v1/config"]) == 493 < 500
+        assert len([call for call in calls if call[1] != "/v1/config"]) == 301 < 500
         await http.aclose()
     asyncio.run(scenario())
 
@@ -1177,3 +1225,145 @@ def test_signed_out_or_sharing_off_retraction_sends_nothing(tmp_path, state):
     assert sync.retract_other_strategies(raw_sha256=hashlib.sha256(native()).hexdigest(), keep_strategy=None) is False
     assert not sync._queue and not account.calls
     assert not (tmp_path / "cache" / "pending-retractions.json").exists()
+
+
+def test_a_name_the_cloud_refuses_drops_only_that_recording():
+    """The cloud's name rule (names.js): no hidden format characters such as
+    bidi overrides, at most 20 characters, no reserved names."""
+    good = recording("1" * 64)
+    rows = [good, {**recording("2" * 64), "player_name": "Evil\u202egnippilf"},
+            {**recording("3" * 64), "player_name": "Admin"}, {**recording("4" * 64), "player_name": "x" * 21}]
+    checked = checked_page(page(rows))
+    assert [row["id"] for row in checked["recordings"]] == [good["id"]]
+    with pytest.raises(CommunityError) as found:
+        checked_metadata(rows[1])
+    assert found.value.code == "invalid_name"
+    assert checked_metadata({**good, "player_name": "Bo"})["player_name"] == "Bo"  # no minimum, as in the cloud
+
+
+def test_a_transient_token_failure_keeps_held_lists_but_signing_out_clears_them(tmp_path):
+    account = Account()
+    population = CachedPopulation(Local(), root=tmp_path, account=account)
+    population.remember_page(IDENTITY, checked_page(page([recording()])))
+    account.state.update(authenticated=False, stored=True)  # rotation failed; the account remains
+    assert population.coverage(IDENTITY)["complete"]
+    account.state.update(authenticated=False, stored=False, status="signed_out", uid=None)
+    assert not population.coverage(IDENTITY)["complete"]
+    population.close()
+
+
+def test_a_download_never_evicts_a_recording_the_lineup_on_screen_uses(tmp_path, monkeypatch):
+    import sm64_events.community.cache as module
+    first, second, third = recording("1" * 64), recording("2" * 64), recording("3" * 64)
+    monkeypatch.setattr(module, "CACHE_RAW", first["raw_bytes"] + 1)
+    population = CachedPopulation(Local(), root=tmp_path, account=Account())
+    population.keep((first["id"], second["id"]))
+    for row in (first, second):
+        population.store_asset(row, codec.encode(native()), native())
+    assert population.is_ready(first["id"]) and population.is_ready(second["id"])
+    population.keep((second["id"], third["id"]))
+    population.store_asset(third, codec.encode(native()), native())
+    assert not population.is_ready(first["id"]) and population.is_ready(second["id"]) and population.is_ready(third["id"])
+    population.close()
+
+
+def test_shared_cache_reads_only_its_roms_scope_and_strategy_lists(tmp_path):
+    account = Account()
+    population = CachedPopulation(Local(), root=tmp_path, account=account)
+    us = {**IDENTITY, "scope": "strategy", "region_scope": "shared"}
+    jp = {**us, "game_version": "jp"}
+    first, second = recording("1" * 64), {**recording("2" * 64), "game_version": "jp"}
+    other = {**recording("3" * 64), "strategy": "Other", "target": {**TARGET, "strat": "Other"}}
+    overall, loose = recording("4" * 64), recording("5" * 64)
+    try:
+        population.remember_page(us, checked_page(page([first])))
+        population.remember_page(jp, checked_page(page([second])))
+        population.remember_page({**us, "strategy": "Other"}, checked_page(page([other])))
+        population.remember_page({**jp, "scope": "overall"}, checked_page(page([overall])))
+        population.renew_metadata(loose)
+        def ids(strategy, versions=None):
+            return {row["id"] for row in population.metadata_snapshot("star", "1-0", clock="igt",
+                game_version="us", strategy=strategy, versions=versions)}
+        assert ids("Standard") == {"local", first["id"]}
+        assert ids("Standard", ("us", "jp", None)) == {"local", first["id"], second["id"]}
+        assert ids(None, ("us", "jp", None)) == {"local", overall["id"]}
+        account.state.update(authenticated=False, status="signed_out", uid=None)
+        assert ids("Standard", ("us", "jp", None)) == {"local"}
+    finally:
+        population.close()
+
+
+def test_shared_pin_renews_across_roms_without_metadata_pool_clearing_it(tmp_path):
+    async def scenario():
+        account = Account()
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, population)
+        identifier = "f" * 64
+        raw = _jp(native())
+        encoded = codec.encode(raw)
+        row = {**recording(identifier), "game_version": "jp",
+            "raw_sha256": hashlib.sha256(raw).hexdigest(), "raw_bytes": len(raw),
+            "encoded_sha256": hashlib.sha256(encoded).hexdigest(), "encoded_bytes": len(encoded)}
+        original = account.request_json
+        async def respond(method, path, **kwargs):
+            if path == "/v1/catalog":
+                account.calls.append((method, path, kwargs))
+                result = catalog()
+                result["entries"].append({**result["entries"][0], "game_version": "jp"})
+                return result
+            if path == "/v1/pool":
+                account.calls.append((method, path, kwargs))
+                return page()
+            if path == "/v1/recordings/" + identifier:
+                account.calls.append((method, path, kwargs))
+                return {"v": 1, **row}
+            return await original(method, path, **kwargs)
+        async def bytes_for_pin(method, path, **kwargs):
+            account.calls.append((method, path, kwargs))
+            return encoded
+        async def settled():
+            for _ in range(100):
+                await asyncio.sleep(.01)
+                if not sync._queue and sync._running is None:
+                    return
+            raise AssertionError("shared pools did not settle")
+        account.request_json, account.request_bytes = respond, bytes_for_pin
+        us = {**IDENTITY, "scope": "strategy", "region_scope": "shared"}
+        jp = {**us, "game_version": "jp"}
+        await sync.start()
+        try:
+            sync.request_pool(us, frame_windows=[(1, 1000)], pinned_ids=(identifier,))
+            sync.request_pool(jp, frame_windows=[(1, 1000)], pinned_ids=None)
+            await settled()
+            assert population.is_ready(identifier) and population.get(identifier)["game_version"] == "jp"
+            for _ in range(5):
+                sync.request_pool(us, frame_windows=[(1, 1000)], pinned_ids=(identifier,))
+                sync.request_pool(jp, frame_windows=[(1, 1000)], pinned_ids=None)
+            await settled()
+            assert [call[2]["params"]["rom"] for call in account.calls if call[1] == "/v1/pool"] == ["us", "jp"]
+            assert [call[2]["json"]["recording_ids"] for call in account.calls if call[1] == "/v1/pins"] == [[identifier]]
+            assert sum(call[1].endswith("/asset") for call in account.calls) == 1
+            sync.request_pool(us, frame_windows=[(1, 1000)], pinned_ids=())
+            await settled()
+            assert [call[2]["json"]["recording_ids"] for call in account.calls if call[1] == "/v1/pins"] == [[identifier], []]
+        finally:
+            await sync.stop()
+            population.close()
+    asyncio.run(scenario())
+
+
+def test_shared_practice_still_refuses_wrong_rom_pool_pages(tmp_path):
+    async def scenario():
+        account = Account()
+        account.pages = [page([{**recording(), "game_version": "jp"}])]
+        population = CachedPopulation(Local(), root=tmp_path, account=account)
+        sync = CommunitySync(account, population)
+        try:
+            with pytest.raises(CommunityError) as refused:
+                await sync._pool({**IDENTITY, "region_scope": "shared"}, [(1, 1000)], ())
+            assert refused.value.code == "identity_mismatch"
+            assert population.metadata_snapshot("star", "1-0", clock="igt", game_version="us",
+                strategy="Standard", versions=("us", "jp")) == ({"id": "local"},)
+        finally:
+            population.close()
+    asyncio.run(scenario())

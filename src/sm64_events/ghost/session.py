@@ -14,6 +14,7 @@ from time import monotonic
 from types import SimpleNamespace
 
 from sm64_events.core.events import Event
+from sm64_events.ghost.dpad_toggle import hotkey_for
 from sm64_events.ghost.native_session import ghost_hue
 from sm64_events.ghost.pb import GhostLibrary
 from sm64_events.ghost.selection import (
@@ -154,6 +155,8 @@ class GhostSession:
         self._source: dict = dict(NO_TARGET)
         self._task: asyncio.Task | None = None
         self._published: dict | None = None
+        # The in-game key that flips the switch; D-pad Up until the poller says.
+        self._hotkey = hotkey_for(None)
         # The watch, a GET and a PUT can all land at once. One cycle at a time
         # keeps them from reading a half-applied change or sending a partial native command.
         self._lock = asyncio.Lock()
@@ -174,7 +177,15 @@ class GhostSession:
                               "candidates": [dict(row) for row in self._candidates]},
                 "source": dict(self._source),
                 "window": self._window_state(),
+                "hotkey": self._hotkey,
                 **({"rivals":self._rivals.payload()} if self._rivals else {})}
+
+    def note_hotkey(self, hotkey: str) -> None:
+        """The ghost hotkey's name (`ghost/dpad_toggle.py`), told from inside a
+        poll tick when it changes. Only remembered here: the next refresh (the
+        watch's, a GET's or a PUT's) carries it, and a changed payload is what
+        publishes `ghost_changed`, so a repeat publishes nothing."""
+        self._hotkey = hotkey
 
     def _playing(self) -> list:
         """Which ticked ghosts Only Mario draws, in order, with the colour each
@@ -323,6 +334,15 @@ class GhostSession:
         if self._pending:
             pending, self._pending = self._pending, {}
             resolve = resolve or bool(RESOLVING_CHANGES & set(pending))
+            if "enabled" in pending:
+                # The switch shows or hides the race the renderer already
+                # holds, so it reaches the renderer before the setting is
+                # saved or the roster re-resolved.
+                self._values["enabled"] = pending["enabled"]
+                try:
+                    self._reconcile()
+                except Exception:  # noqa: BLE001 - renderer failure must not stop practice
+                    log.exception("native ghost playback could not be reconciled")
             self._apply(pending)
         world = self._world_now()
         resolve = resolve or world != self._world or self._resolved_at is None
@@ -673,9 +693,10 @@ class GhostSession:
     def _reconcile(self) -> None:
         if self._native is not None:
             # A pending unavailable roster must not disable the current race.
+            # The switch off hides that race rather than ending it.
             available = (self._rivals.identity is not None if self._rivals is not None
                          else self._source.get("available",False))
-            self._native.reconcile(enabled=self._values["enabled"] and available,
+            self._native.reconcile(enabled=available, hidden=not self._values["enabled"],
                                    target=self._rivals.native_target(self._target) if self._rivals is not None else self._target,
                                    controls=settings.native_controls(self._values))
 

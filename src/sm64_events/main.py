@@ -37,6 +37,7 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
+from sm64_events.ghost.dpad_toggle import DpadGhostToggle, OverlayFlipper
 from sm64_events.ghost.session import GhostSession
 from sm64_events.memory.ghost_layout import ghost_supported
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
@@ -546,6 +547,9 @@ def build(*, recorder_lock=None):
     replay, codec = (_build_replay(replay_cfg, running_layout, service) if recorder_lock is None
                      else _build_replay(replay_cfg, running_layout, service, recorder_lock=recorder_lock))
     compare, compilation = _comparison_services(replay, service, broadcaster, codec, replay_cfg)
+    # The ghost hotkey flips the Ghost Overlay (ghost/dpad_toggle.py). The
+    # flipper outlives detector rebuilds and is bound to the session built below.
+    overlay_flipper = OverlayFlipper()
     # NO target gate. This passed `target_active=lambda: service.target is not
     # None` (task 0087) until 2026-08-06, which made the recorder blind exactly
     # when it is used — see `build_detectors`' docstring and moment.py's.
@@ -563,6 +567,10 @@ def build(*, recorder_lock=None):
         if replay is not None:
             from sm64_events.replay.activity import ActivityTap
             detectors.append(ActivityTap(replay.recorder))
+        # Its hotkey's name reaches the session the flipper is bound to.
+        detectors.append(DpadGhostToggle(
+            overlay_flipper.request,
+            lambda hotkey: overlay_flipper.session and overlay_flipper.session.note_hotkey(hotkey)))
         return detectors
 
     from sm64_events.server.inputruntime import InputRuntime
@@ -591,10 +599,11 @@ def build(*, recorder_lock=None):
     service.observed_game_version = lambda:poller.observed_game_version
     population, community_account, community_sync = _community_population(service)
     # One session owns native ghost preferences and the practice target.
-    ghost = GhostSession(tracker=service, inputs=inputs.get_service,
-                         replay=replay, broadcaster=broadcaster,
-                         native=native_ghost,population=population,
-                         version_of=lambda:poller.observed_game_version, community=community_sync)
+    ghost = overlay_flipper.session = GhostSession(
+        tracker=service, inputs=inputs.get_service,
+        replay=replay, broadcaster=broadcaster,
+        native=native_ghost,population=population,
+        version_of=lambda:poller.observed_game_version, community=community_sync)
     _ghost_follows_attempts(service, ghost)
     _ghost_follows_pb(service, ghost)
     if replay is not None:

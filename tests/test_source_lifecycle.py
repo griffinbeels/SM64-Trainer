@@ -266,9 +266,9 @@ def test_lifecycle_reconciliation_is_bounded_and_requires_positive_evidence():
     timeouts = []
     demand._ended = NS(wait=lambda timeout: timeouts.append(timeout))
     assert not demand.reconcile_lifecycle()
-    assert timeouts == [0.25]
-    with pytest.raises(ValueError, match="250 ms"):
-        demand.reconcile_lifecycle(0.251)
+    assert timeouts == [1.25]
+    with pytest.raises(ValueError, match="1250 ms"):
+        demand.reconcile_lifecycle(1.251)
     demand._publish(state="fault", reason="rom_closed", lifecycle=False)
     # The text alone is not evidence: only a typed supervisor outcome qualifies.
     assert not demand.reconcile_lifecycle(0)

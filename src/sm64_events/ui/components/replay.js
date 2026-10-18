@@ -336,6 +336,15 @@ function captureLabel(st) {
   return st.capture_gated ? "replay off · not Usamune" : "no capture";
 }
 
+// Whether the recorder is capturing right now -- the narrow sidebar's REC is
+// red then and grey otherwise (round 8: "just have the Rec text become either
+// red or grey depending on if we're actively recording or not"). Starting,
+// stopping, paused and a fault are all "not now"; the full label above rides
+// the button's title.
+function recordingNow(st) {
+  return Boolean(st.recording) && (st.capture_state == null || st.capture_state === "recording");
+}
+
 // Header indicator and panel share the recorder's actual lifecycle status.
 export function RecordingDot() {
   const [st, setSt] = useState(null);
@@ -349,9 +358,10 @@ export function RecordingDot() {
   const label = captureLabel(st);
   return html`<span class="recording-control">
     <button class=${`dot recording-button ${cls}`}
-          title="Recording controls and replay storage"
+          title=${`${label} — recording controls and replay storage`}
           aria-expanded=${open} onclick=${() => setOpen(!open)}>
       <span class="recording-light"></span>${label}
+      <span class=${`recording-short${recordingNow(st) ? " is-on" : ""}`} aria-hidden="true">REC</span>
     </button>
     ${open && html`<${BufferSettings} st=${st} onStatus=${setSt}
         refresh=${() => setTick((t) => t + 1)}

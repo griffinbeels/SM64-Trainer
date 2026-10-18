@@ -319,7 +319,7 @@ struct Runtime {
                 const bool observed_omission=r->outcome==RB_OBSERVED
                     && (r->image.status==SA_SAME_ORIGIN || r->image.status==SA_NO_SWAP || r->image.status==bootstrap_omission);
                 const bool pool_full=r->outcome==RB_SURFACE_FAILED && r->image.status==uint32_t(snapshot::Result::full);
-                if(!stopping && state.load()==GD_ACTIVE && r->epoch==epoch && !observed_omission && !pool_full){
+                if(!stopping && live() && state.load()==GD_ACTIVE && r->epoch==epoch && !observed_omission && !pool_full){
                     fail(GD_SOURCE_IMAGE_MISSING,r->image.status);return;
                 }
                 if(pool_full && state.load()==GD_ACTIVE && r->epoch==epoch)++refused_pictures;

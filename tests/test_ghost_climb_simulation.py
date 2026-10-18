@@ -48,6 +48,28 @@ def file_hashes(folder):
             for path in folder.rglob("*") if path.is_file()}
 
 
+@pytest.mark.parametrize("frozen", [False, True])
+@pytest.mark.parametrize("matching_profile", [False, True])
+def test_fake_rival_marker_only_activates_in_its_source_profile(tmp_path, monkeypatch, frozen, matching_profile):
+    from sm64_events.core import paths
+
+    profile = tmp_path / "fake-test-profile"
+    marker = {"version": 1, "scenario_root": str(profile),
+              "label": "Test profile · fake rivals from your own runs"}
+    reads = []
+
+    def get_state(key, fallback):
+        reads.append(key)
+        return marker
+
+    rivals = Rivals.__new__(Rivals)
+    rivals.tracker = SimpleNamespace(db=SimpleNamespace(get_state=get_state))
+    monkeypatch.setattr(paths, "is_frozen", lambda: frozen)
+    monkeypatch.setattr(paths, "practice_root", lambda: profile if matching_profile else tmp_path / "real-profile")
+    assert rivals._read_simulation() == (marker if not frozen and matching_profile else None)
+    assert reads == ([] if frozen else [SIMULATION_KEY])
+
+
 def test_named_simulation_preserves_bytes_times_legacy_evidence_and_real_history(tmp_path):
     source = donors(tmp_path)
     before = file_hashes(source)

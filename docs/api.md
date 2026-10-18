@@ -1057,6 +1057,14 @@ playback inside GLideN64. `source.exactness` is `"native_pose"`;
 is ready; `visible` requires a matching renderer acknowledgement. There is no
 separate ghost window or video fallback. Opacity, tint and timing apply inside
 the renderer. See [new-user defaults](ghost-native-runtime.md#new-user-settings-and-iteration-boundary).
+Pressing the ghost hotkey in game flips `enabled` through the same `PUT`,
+outside Usamune's menu, whatever else is held (`ghost/dpad_toggle.py`), so it
+publishes `ghost_changed` like a click. `hotkey` names it: `"dpad_up"`, or
+`"c_x4"` (all four C buttons) while Usamune's save state is on D-pad Up; it
+reads `"dpad_up"` until the poller knows otherwise, and a change publishes
+`ghost_changed`. `enabled: false` hides the race
+rather than ending it (`running` and `visible` false, no `reason`); `true`
+again shows it at the attempt's current frame.
 
 Native settings also include `names_enabled` (boolean, initially true),
 `inputs_enabled` (boolean, initially false), `input_mode` (`"stick"` or
@@ -1090,8 +1098,16 @@ are hidden by default; explicitly selected practice ghosts remain reachable.
 Collections never create local PBs, golds or input templates.
 
 The adaptive session adds `rivals` to the state: `{options, limits, rows, pb,
-strategy_name, status, generation, manual, simulation, scope}`. `scope` is
+strategy_name, status, generation, manual, simulation, scope, state, reason}`. `scope` is
 `strategy` (default) or `overall`; the existing Practice tabs choose it per entity.
+`state` is `no_strategy` (the target has no strategy: no rows, no PB, no cloud
+request), `loading` (no rows yet while this identity's rival list is in flight)
+or `ready`. Beside `ready` with no rows, `reason` is `nobody` (the list came
+back empty, or this build has no cloud), `signed_out`, `offline` (this lineup's
+own list failed, or the account is in a network cooldown) or null (nothing asked
+yet: the overlay is off). Each row carries `pending: true` while its recording
+downloads; a pending row shows its player and colour but does not play. `own`
+marks the player's own recordings by identity, never by name.
 `simulation` is an
 isolated developer profile label or null. Rows include immutable `id`, slot,
 player/name, strategy, rank/time, `pinned` and explicit `hue_degrees`.

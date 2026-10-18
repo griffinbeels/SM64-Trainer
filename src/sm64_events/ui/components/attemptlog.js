@@ -30,9 +30,14 @@ import { PbAction, PbReplayNotice, usePbReplay } from "./pbreplay.js";
 const html = htm.bind(h);
 
 // `loaded`: a save state ended it (attempt rules 2) -- not a reset he chose.
-const OUTCOME_LABEL = { success: "✔", reset: "✘ reset",
-  loaded: "⟲ loaded save state",
-  hard_reset: "✘ hard reset", abandoned: "– abandoned", death: "✘ death" };
+// The glyph sits in the row's mark column, where a ranked finish shows its
+// cap instead, so every row has a mark and every row's words start at the
+// same x (round 7, 2026-10-17: "the checkmark is redundant: the rank cap
+// serves as the checkmark now" and "the resets feel empty").
+const OUTCOME_LABEL = { success: { glyph: "✔", word: "" }, reset: { glyph: "✘", word: "reset" },
+  loaded: { glyph: "⟲", word: "loaded save state" },
+  hard_reset: { glyph: "✘", word: "hard reset" }, abandoned: { glyph: "–", word: "abandoned" },
+  death: { glyph: "✘", word: "death" } };
 
 export const SORT_OPTIONS = [
   ["newest", "newest first"], ["oldest", "oldest first"],
@@ -127,22 +132,21 @@ export const PbNews = createContext(null);
 // so a live PB reads as "beat it by this much -> GOLD!!". Losing the crown (a
 // faster PB, an Undo) runs the same swap backwards.
 //
-// THE TIME SAVE sits just left of the word -- "Time Save: -0.30 (9 frames)",
-// his wording -- from the save until the next attempt is logged, then fades
-// out and leaves GOLD!! alone: "the intention is to inform the user about how
-// much they saved, but not for too long". It is positioned out of flow, so
-// neither its arrival nor its exit moves a column of the table. The element is
-// always there, holding the last margin it showed, so leaving is a fade of
-// text that is still present rather than a removal.
+// THE TIME SAVE sits BESIDE the word, on the row's mid-line -- "-0.30 (9
+// frames)" -- from the save until the next attempt is logged, then fades out
+// and leaves GOLD!! alone: "the intention is to inform the user about how much
+// they saved, but not for too long". Round 9 (2026-10-17) dropped its "Time
+// Save:" label ("this is redundant, obviously this is a time save, we got a
+// gold!"); round 11 moved it beside the word so GOLD!! stays "in line with the
+// rest of the row". The element is always there, holding the last margin it
+// showed, so leaving is a fade of text that is still present rather than a
+// removal.
 function PbDelta({ frames, isPb, arriving, timeSave }) {
   const before = useRef(frames);
   if (!isPb) before.current = frames;
   const lastSave = useRef(null);
   if (timeSave) lastSave.current = timeSave;
-  const swapRef = useRef(null);
-  const under = useTimeSaveFit(swapRef, Boolean(timeSave));
-  return html`<span ref=${swapRef}
-      class=${`pb-swap${under ? " save-under" : ""}${timeSave ? " has-save" : ""}`}>
+  return html`<span class="pb-swap">
     <span class="pb-swap-num" aria-hidden=${isPb ? "true" : undefined}>${
       delta(isPb ? before.current : frames)}</span>
     <span class="pb-gold" aria-hidden=${isPb ? undefined : "true"}>${PB_WORD}</span>
@@ -152,37 +156,6 @@ function PbDelta({ frames, isPb, arriving, timeSave }) {
       class="pb-spark" aria-hidden="true">✦</i><i
       class="pb-spark" aria-hidden="true">✦</i>` : ""}
   </span>`;
-}
-
-// Beside GOLD!! when the row's own empty stretch holds the Time Save, UNDER it
-// (the word lifts to make room) when it does not. The stretch is whatever the
-// result cell leaves over: a narrow card, a caveat badge or the dust counts
-// all eat it, so no width threshold can answer this -- measured beside at
-// 1500/1100px, it overran the run's own time at 850px. Only the one row
-// showing a Time Save measures, and it re-measures as the row resizes.
-const TIME_SAVE_GAP_PX = 20;
-
-function useTimeSaveFit(swapRef, active) {
-  const [under, setUnder] = useState(false);
-  useLayoutEffect(() => {
-    const swap = swapRef.current;
-    const row = swap && swap.closest("tr");
-    const cell = row && row.querySelector(".attempt-result");
-    const save = swap && swap.querySelector(".pb-save");
-    if (!active || !cell || !save) return undefined;
-    const measure = () => {
-      const content = document.createRange();
-      content.selectNodeContents(cell);
-      const room = swap.getBoundingClientRect().left - content.getBoundingClientRect().right;
-      setUnder(room < save.offsetWidth + TIME_SAVE_GAP_PX);
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(measure);
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, [active]);
-  return under;
 }
 
 // The holo follows the pointer across the PB row -- the flat-screen version of
@@ -204,7 +177,7 @@ function settleFoil(event) { event.currentTarget.style.removeProperty("--pb-tilt
 // from the live pb_saved broadcast, which lands before the refetch that paints
 // this row as the PB -- hence waiting for both. The Celebrations preference
 // silences the arrival only; the standing gold is information.
-function usePbRow(a, sec, t) {
+function usePbRow(a, sec, t, isNew) {
   const news = useContext(PbNews);
   const pb = sec ? sectionPbByStrat(sec, t.clock) : null;
   const isPb = Boolean(pb) && pb.attempt_id === a.id && !a.cleared;
@@ -237,13 +210,54 @@ function usePbRow(a, sec, t) {
   }
   return {
     undo,
-    rowClass: `${isPb ? "is-pb" : ""} ${arriving ? "pb-arrive" : ""}`,
+    // The white new-row flash, unless the gold arrival owns this row (round
+    // 11: "When it's a gold, it should OVERRIDE the animation"): never on a
+    // row that is the PB or that a live pb_saved has already crowned. The
+    // flash outlives the 1.4 s arrival, so it used to start over the moment
+    // the arrival ended (measured per frame, tests/test_ui_new_gold_row.py).
+    rowClass: `${isNew && !isPb && !crowned ? "row-new" : ""} ${isPb ? "is-pb" : ""} ${arriving ? "pb-arrive" : ""}`,
     handlers: isPb
       ? { onpointermove: tiltFoil, onpointerleave: settleFoil, onanimationend: endArrival } : {},
     title: isPb ? PB_TITLE : undefined,
     delta: html`<${PbDelta} frames=${a.pb_delta_frames} isPb=${isPb} arriving=${arriving}
       timeSave=${timeSave} />`,
   };
+}
+
+// The row's mark: its rank cap, else its outcome glyph (OUTCOME_LABEL above).
+function RowMark({ a }) {
+  const success = a.outcome === "success";
+  const mark = a.rank
+    ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />`
+    : html`<span class=${`attempt-glyph ${success ? "good" : "badx"}`}
+        aria-hidden="true">${(OUTCOME_LABEL[a.outcome] || {}).glyph || ""}</span>`;
+  return html`${mark}${success ? html`<span class="sr-only">finished</span>` : ""}`;
+}
+
+// The row's words: the time of a finish, or what ended the run and how far in.
+function RowResult({ a, time, inTime, timeMark, showDust }) {
+  const success = a.outcome === "success";
+  return html`<span class="attempt-result-line">
+    <span class="attempt-outcome">${(OUTCOME_LABEL[a.outcome] || { word: a.outcome }).word}</span>
+    ${a.outcome === "death" && a.outcome_detail
+      ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
+    ${success && time ? html` <b>${time}</b>` : ""}
+    ${timeMark ? cardBadge(timeMark) : ""}
+    ${!success && inTime ? html` <span class="meta">${inTime} in</span>` : ""}
+    ${showDust && a.rollouts_total > 0
+      ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
+    ${showDust && a.jumps_total > 0
+      ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
+    ${a.cleared && a.cleared_reason
+      ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}</span>`;
+}
+
+// A row on the strategy the card heads with does not repeat its name (round
+// 7): the picker stays (hover or focus brings it up), and only a row on
+// ANOTHER strategy shows one, so the column says something when it is shown.
+function sameStrategy(a, sec) {
+  const heading = (sec && sec.last_strat) || null;
+  return Boolean(heading) && !a.other_strat && a.strat_tag === heading;
 }
 
 export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
@@ -301,7 +315,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // saves with "segments are RTA-only") — force rta whatever the view clock.
   const isSeg = a.segment_id != null;
   const pbReplay = usePbReplay(a.id, isSeg ? "rta" : t.clock, t.refresh);
-  const pbRow = usePbRow(a, sec, t);
+  const pbRow = usePbRow(a, sec, t, isNew);
   const time = isSeg ? a.rta : (t.clock === "igt" ? a.igt : a.rta);
   const frames = isSeg ? a.rta_frames : (t.clock === "igt" ? a.igt_frames : a.rta_frames);
   const inTime = isSeg ? a.rta : a.igt; // failures: how-far-in on the section's clock
@@ -321,13 +335,12 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // "undo" | null, and when null, why. Never re-derived here -- save_pb and
   // undo_pb refuse on the SAME resolver (tracking/pbaction.py), and a button
   // that offers what the server rejects is the drift one door prevents. Of
-  // the two shapes of "why", only a caveat key (the TIME is not a legal
-  // quantity) draws anything: the disabled button it always was. A STRATEGY
-  // reason draws NOTHING -- the row belongs to another strategy, or no
-  // strategy is picked, and his ruling (2026-08-22) is that the button is
-  // simply absent: "the button / text just shouldn't be there & should be
-  // hidden entirely for a strategy that isn't the one selected". The
-  // printed "<strat> only" chip of 2026-08-20 is gone with it.
+  // the two shapes of "why", a caveat key (the TIME is not a legal quantity)
+  // draws the disabled button wearing its chip. A STRATEGY reason -- the row
+  // belongs to another strategy, or no strategy is picked -- draws a plain
+  // disabled Save whose tooltip says how to bring it back (round 11, so no
+  // row leaves a hole between ▷ and ×); no chip, no delta, as his 2026-08-22
+  // ruling keeps the rest of the active strategy's marks off such a row.
   const blockedPb = caveatOf(a.pb_blocked && a.pb_blocked.reason);
   // The mark on the TIME, not on the save button: this row's number is not
   // the quantity it looks like ("if you've been practicing all wrong, you
@@ -335,6 +348,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // the server decides which rows earn it (tracking/caveats.py's PROVEN-only
   // rule, measured), this only draws it.
   const timeMark = caveatOf(a.caveat);
+  const sameStrat = sameStrategy(a, sec);
   // `other-strat` dims the row (index.html, tuned by logtuning.js's
   // otherStratDim/otherStratFade): the row is keyed by id, so a strategy
   // change keeps the same <tr> and the opacity TRANSITIONS rather than
@@ -342,26 +356,14 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // states" (2026-08-23). The server decides which rows are other
   // (`other_strat`, the same gate that withholds the button).
   const row = html`<tr ref=${(el) => { rowRef.current = el; }} ...${pbRow.handlers}
-      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""} ${pbRow.rowClass}">
+      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${pbRow.rowClass}">
     <td class="meta attempt-index"><${TimerHint} show=${a.timer_hint} />#${idx + 1}</td>
-    <td class="attempt-medal">${a.rank
-      ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />` : ""}</td>
+    <td class="attempt-medal"><${RowMark} a=${a} /></td>
     <td class="attempt-result ${a.outcome === "success" ? "good" : "badx"}">
-      ${OUTCOME_LABEL[a.outcome] || a.outcome}
-      ${a.outcome === "death" && a.outcome_detail
-        ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
-      ${a.outcome === "success" && time ? html` <b>${time}</b>` : ""}
-      ${timeMark ? cardBadge(timeMark) : ""}
-      ${a.outcome !== "success" && inTime ? html` <span class="meta">${inTime} in</span>` : ""}
-      ${t.showDust && a.rollouts_total > 0
-        ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
-      ${t.showDust && a.jumps_total > 0
-        ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
-      ${a.cleared && a.cleared_reason
-        ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}
+      <${RowResult} a=${a} time=${time} inTime=${inTime} timeMark=${timeMark} showDust=${t.showDust} />
     </td>
     <td class="attempt-delta" title=${pbRow.title}>${a.outcome === "success" ? pbRow.delta : ""}</td>
-    <td class="meta attempt-strategy">
+    <td class="meta attempt-strategy ${sameStrat ? "same-strat" : ""}">
       ${sec
         ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
             groups=${sec.strategy_groups}
@@ -371,24 +373,27 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
             onChanged=${t.refresh} />`
         : html`<span>${a.strat_tag || "— no strategy —"}</span>`}
     </td>
-    <td class="attempt-actions">
+    <td class="attempt-actions"><div class="attempt-action-slots">
       <button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
             aria-expanded=${showReplay}
             title="View replay" aria-label="View replay">
           <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>
       ${/* THE action column, a straight cascade over the server's own
-           resolved answer (tracking/pbaction.py). Three drawn states and no
-           client-side precedence: undo, save, "the time is not a legal
-           quantity". Everything else -- a failure, a cleared row, an attempt
-           with no entity, a row on another strategy, a card with no strategy
-           picked -- draws nothing (the last two by his 2026-08-22 ruling:
-           hide the button until the action is valid again). */""}
-      <${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay} undo=${pbRow.undo} beat=${pbBeat} />
+           resolved answer (tracking/pbaction.py): undo, save, "the time is
+           not a legal quantity", and otherwise a DISABLED Save saying why --
+           a failure, a run on another strategy, no strategy picked, a
+           cleared run. Every row draws the same three frames in every state
+           (round 11: "make sure that the visual balance of each row is
+           maintained no matter the circumstances"), so no button moves and
+           no row has a hole. */""}
+      <span class="attempt-pb-slot"><${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay}
+        undo=${pbRow.undo} beat=${pbBeat} /></span>
       ${a.cleared
-        ? html` <button onclick=${restore}>undo</button>`
-        : html` <button class="icon-button" onclick=${clear}
-            title="Clear this attempt as a mistake" aria-label="Clear attempt">×</button>`}
-    </td>
+        ? html`<button class="icon-button" onclick=${restore}
+            title="Restore this attempt" aria-label="Restore attempt"><${Icon} name="undo" size=${13} /></button>`
+        : html`<button class="icon-button" onclick=${clear}
+            title="Clear this attempt as a mistake" aria-label="Clear attempt"><${Icon} name="close" size=${12} /></button>`}
+    </div></td>
   </tr>`;
   const onCompare = (openCompare && entity)
     ? (recording) => openCompare({ attemptId: a.id, entity, strat,
@@ -503,7 +508,9 @@ export function PbTag({ pb, mode, rows, pick, t, strat = null,
   // pushing the picker left (his call, 2026-08-22; the track rule in
   // index.html has the mechanics). `.pbtag-strat` is a hook for that rule,
   // not a clamp.
-  if (!strat) return html`<span class="pbtag">no strategy</span>`;
+  // "N/A" beside the plate's PB word, his wording (2026-10-17); the reason
+  // rides the title.
+  if (!strat) return html`<span class="pbtag" title="No strategy picked">N/A</span>`;
   if (!pb) return html`<span class="pbtag">no PB · <span
     class="pbtag-strat">${strat}</span></span>`;
   function jump() {

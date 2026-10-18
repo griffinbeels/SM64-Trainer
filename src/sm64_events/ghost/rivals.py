@@ -16,11 +16,17 @@ from sm64_events.ranks.standards import entity_key
 STATE_KEY = "ghost_rivals_v1"
 MAX_REMOTE_CHOICES = 1024
 LIMITS = {"last_step":MAX_STEP, "max_ahead":MAX_AHEAD, "counts":list(range(1,MAX_RIVALS+1))}
+NO_STRATEGY = "Choose a strategy to race rivals."
 
 
 def wire(row):
     """Playback references and local paths never belong in a browser answer."""
     return {key:value for key,value in row.items() if key not in ("ghost", "path", "manifest", "source", "_owned")}
+
+
+def has_strategy(target):
+    """Rivals, pins and cloud lists all belong to a chosen strategy."""
+    return bool(target and target.get("strat"))
 
 
 class ColoredGhost:
@@ -78,8 +84,13 @@ class Rivals:
         self.fingerprint = None
         self.status = None
         self.manual = False
-        self.preserve_slots = False
+        self.enabled = False
+        self.redeal = False
         self.prepared_key = None
+        self._signatures, self._signature_basis = {}, None
+        self._simulation_state = None
+        self._known_key, self._known = None, ()
+        self._saved_pb = None
         self.prepared_answer = None
         self.sharing = None
         from sm64_events.ghost.community_rivals import CommunityRivals
@@ -96,8 +107,7 @@ class Rivals:
             signature = None
         else:
             ek = entity_key(None,None,int(target["entity_key"]))
-            signature = describe(target["kind"],target["entity_key"],target.get("strat"),
-                                 self.tracker.db.segment_defs()).get("signature")
+            signature = self._signature(target)
         scope = self.scope_for(target)
         # Strategy tab: that strategy's region scope. Overall tab: fetch both
         # ROMs when any strategy could serve, then judge each ghost by its own.
@@ -105,6 +115,18 @@ class Rivals:
                     else region_scope.widest_scope(ek,ranks))
         return PracticeIdentity(target["kind"],target["entity_key"],ranks.clock_for(ek),
                                 version,target.get("strat"),signature,scope,regional)
+
+    def _signature(self, target):
+        """A segment's definition signature, read again only when the
+        definitions or the database change (or a forced resolve asks)."""
+        database, definitions = self.tracker.db, getattr(self.tracker, "segment_defs", None)
+        if (self._signature_basis is None or self._signature_basis[0] is not database
+                or self._signature_basis[1] is not definitions):
+            self._signatures, self._signature_basis = {}, (database, definitions)
+        if target["entity_key"] not in self._signatures:
+            self._signatures[target["entity_key"]] = describe(target["kind"],target["entity_key"],target.get("strat"),
+                                                              self.tracker.db.segment_defs()).get("signature")
+        return self._signatures[target["entity_key"]]
 
     def scope_for(self, target):
         return self.scopes.get(self._entity_key(target),"strategy") if target else "strategy"
@@ -132,7 +154,7 @@ class Rivals:
         return self._strategy_key(target)
 
     def _strategy_key(self, target):
-        return json.dumps([target["kind"],target["entity_key"],target.get("strat") or "Standard"],separators=(",",":"))
+        return json.dumps([target["kind"],target["entity_key"],target.get("strat")],separators=(",",":"))
 
     def _entity_key(self, target):
         """The entity owns its scope independently of the current strategy."""
@@ -149,15 +171,20 @@ class Rivals:
             number = local.get("attempt_id") if isinstance(local,dict) else None
             attempt = self.tracker.db.attempt(number) if type(number) is int and number>0 else None
             if attempt is not None:
-                strategy = attempt.strat_tag or "Standard"
+                strategy = attempt.strat_tag
             else:
                 try:
-                    strategy = self.population.get(identity).get("strategy") or "Standard"
+                    strategy = self.population.get(identity).get("strategy")
                 except (LookupError,ValueError):
                     try:
-                        strategy = self.sharing.get(identity).strat_tag or "Standard"
+                        strategy = self.sharing.get(identity).strat_tag
                     except (LookupError,AttributeError,ValueError):
                         continue
+            if not strategy:
+                # A run with no strategy has no lineup to keep this choice in.
+                legacy.pop(slot)
+                changed = True
+                continue
             destination = {**target,"strat":strategy}
             choices = self.pins.setdefault(self._strategy_key(destination),{})
             if identity not in choices.values():
@@ -173,9 +200,22 @@ class Rivals:
             self._store()
 
     def _simulation(self):
-        """A fixture marker is valid only inside its separately prepared profile."""
+        """A fixture marker is valid only inside its separately prepared profile.
+
+        Read once per database (and again on a forced resolve), not per cycle."""
+        if self._simulation_state is None or self._simulation_state[0] is not self.tracker.db:
+            self._simulation_state = (self.tracker.db, self._read_simulation())
+        return self._simulation_state[1]
+
+    def _read_simulation(self):
         from pathlib import Path
-        from sm64_events.core.paths import practice_root
+        from sm64_events.core.paths import is_frozen, practice_root
+        # Developer profiles may inherit their environment into a packaged app.
+        # A released build must never activate the fake-rival simulation.
+        if is_frozen():
+            return None
+        if self.tracker.db is None:
+            return None
         state = self.tracker.db.get_state("ghost_simulation_v1",{})
         if not isinstance(state,dict) or state.get("version") != 1:
             return None
@@ -247,7 +287,7 @@ class Rivals:
             self.options = checked_options({})
             self.pins = {}
         self.loaded_db = database
-        self.fingerprint = self.prepared_key = None
+        self.fingerprint = self.prepared_key = self._saved_pb = None
         self.rows, self.pb = (),None
         self.manual = False
 
@@ -259,7 +299,8 @@ class Rivals:
             return
         # The saved PB is authoritative, including Undo. Recompute now, but
         # retain an unchanged active/pending roster rather than canceling it.
-        self.fingerprint = None
+        # Seats keep their players; the rival list itself is not asked again.
+        self.fingerprint = self._saved_pb = None
 
     def pb_preserved(self, attempt_id):
         """Retry a refused current PB only after its committed poses validate."""
@@ -279,24 +320,39 @@ class Rivals:
         self.fingerprint = self.prepared_key = None
         return True
 
-    def _ranked_population(self, identity, target, pb, pins):
+    def _ranked_population(self, identity, pins):
         records = self.population.metadata_snapshot(identity.kind,identity.entity_key,
             clock=identity.clock,game_version=identity.game_version,
             strategy=identity.strategy if identity.scope=="strategy" else None,
             versions=region_scope.servable_versions(identity.region_scope,identity.game_version))
-        ranked = rank_recordings(records,self.tracker.ranks,identity)
+        present = {row.get("id") for row in records if isinstance(row,dict)}
+        chosen = []
+        for value in pins.values():
+            if value not in present:
+                try:
+                    chosen.append(self.population.get(value))
+                except (LookupError,ValueError):
+                    continue  # Shown as an unavailable chosen slot.
+        ranked = rank_recordings((*records,*chosen),self.tracker.ranks,identity)
         owners = self._owned_players()
-        # Explicit choices survive; automatic slots exclude our own runs.
-        ranked = tuple(self._seat_row(row, owners) for row in ranked
-                       if row["id"] in pins.values() or row["player_id"] not in owners)
-        simulation = self._simulation()
-        if simulation and simulation.get("zero_practice") is True and pb:
-            # Prefer unbeaten runs until the tester beats the whole population.
-            ranked = tuple({**row, "beaten_in_simulation": row["frames"] >= pb["frames"]} for row in ranked)
+        refused = self.community.refused()
+        # Explicit choices survive; automatic slots exclude our own runs. A
+        # recording that can never download leaves its seat (a pin shows unavailable).
+        ranked = tuple(self._seat_row(row, owners) for row in ranked if row["id"] not in refused
+                       and (row["id"] in pins.values() or row["player_id"] not in owners))
+        # Test profiles use production selection too: retiring beaten donors
+        # here would prevent the closest-below fallback from filling its seats.
         return ranked
 
     def refresh(self, target, controls, *, enabled, sharing=None, force=False):
+        """Recompute the lineup when anything it reads moved.
+
+        A quiet watch cycle compares an in-memory stamp and returns: it reads
+        no saved PB, no pins from the database and asks the cloud nothing new.
+        """
         self._load()
+        if force:
+            self._signature_basis = self._simulation_state = self._saved_pb = None
         changed_target = target != self.target
         if changed_target:
             self.target = target
@@ -306,56 +362,98 @@ class Rivals:
         self._update_identity(target,controls,changed_target)
         identity = self.identity
         self.sharing = sharing
+        self.enabled = enabled
         if self.manual:
             return None
-        if identity is None:
+        parked = self._parked(target)
+        if parked is not None:
+            return parked
+        if force or changed_target or self.fingerprint is None:
+            self._migrate_pins(target)
+        self._request_community(enabled, identity, target)
+        source = self.source_of()
+        stamp = (id(self.loaded_db),identity,enabled,source,controls["hue_degrees"],getattr(self.population,"generation",None),
+                 getattr(self.tracker.ranks,"calibration_revision",None),
+                 getattr(sharing,"generation",None),self.community.refused(),
+                 json.dumps(self.options,sort_keys=True),json.dumps(self.pins,sort_keys=True))
+        if force or stamp != self.fingerprint:
+            pb, desired = self._desired(identity, target)
+            self.rows = self.community.stage(desired, fetch=enabled)
+            self.redeal = False
+            self.pb = pb
+            ghosts = [ColoredGhost(row["ghost"],row["hue_degrees"],row["slot"]) for row in self.rows
+                      if row.get("ghost") is not None and not row.get("pending")]
+            if pb and self.options["include_pb"] and pb.get("ghost") is not None:
+                ghosts.insert(0,ColoredGhost(pb["ghost"],controls["hue_degrees"]))
+                self.pb = {**pb,"hue_degrees":controls["hue_degrees"]}
+            # What the renderer holds, whatever the overlay switch says: a flip
+            # never re-prepares the same roster (his ask, 2026-10-17: switched
+            # back on, the ghosts resume at once).
+            prepared_key = (id(self.loaded_db),identity,source,
+                            tuple((ghost.origin,ghost.hue_degrees,ghost.rival_slot) for ghost in ghosts))
+            self.fingerprint = stamp
+            if not enabled:
+                # Nothing is prepared while the overlay is off. A roster the
+                # renderer already holds races on hidden (native_session.py).
+                self.status = None
+                return self._answer(ghosts, None)
+            if prepared_key == self.prepared_key:
+                self._pb_playback(self.prepared_answer)
+                return self._answer(ghosts, self.prepared_answer)
+            self.prepared_key = prepared_key
+            self.generation += 1
+            self.native.set_portable(RivalProvider(self.population,sharing))
+            answer = self.native.prepare(self.native_target(target),ghosts,controls,self.generation)
+            self.prepared_answer = answer
+            self._pb_playback(answer)
+            self.status = "Updates on your next attempt." if ghosts and answer and answer.get("available") else None
+            return self._answer(ghosts, answer)
+        return None
+
+    @staticmethod
+    def _answer(ghosts, prepared):
+        """The session's ghost answer: the prepared one, else whether anyone could race."""
+        return (prepared if ghosts else None) or {"available":bool(ghosts),"reason":None if ghosts else "no_rivals",
+            "reason_text":None if ghosts else "No compatible ghosts in this range yet.","ghosts":[]}
+
+    def _parked(self, target):
+        """The answer while nothing can race: no ROM, no target or no strategy."""
+        if self.identity is None:
             self.rows, self.pb = (),None
             self.fingerprint = self.prepared_key = None
             self.native.cancel_preparation()
             self.status = "Load a compatible practice ROM to choose rivals." if target else None
             return {"available":False,"reason":"unknown_rom" if target else "no_target",
                     "reason_text":self.status,"ghosts":[]}
-        self._migrate_pins(target)
-        self._request_community(enabled, identity, target)
-        source = self.source_of()
-        stamp = (id(self.loaded_db),identity,enabled,source,controls["hue_degrees"],getattr(self.population,"generation",None),
-                 getattr(self.tracker.ranks,"calibration_revision",None),
-                 getattr(sharing,"generation",None),
-                 json.dumps(self.options,sort_keys=True),json.dumps(self.pins,sort_keys=True))
-        if force or stamp != self.fingerprint:
-            pb = saved_pb_basis(self.tracker.db,self.tracker.ranks,identity)
-            pb = self._simulation_pb(pb,target)
-            pins = self.pins.get(self._key(target),{})
-            ranked = self._ranked_population(identity,target,pb,pins)
-            private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
-            desired = select_rivals((*ranked,*private),pb,self.options,pins,
-                                    self.rows if self.preserve_slots else (),scope=identity.scope,
-                                    allow_fastest=self.community.complete(identity))
-            previous = tuple(self._seat_row(row) for row in self.rows)
-            self.rows = self.community.stage(desired, previous)
-            self.preserve_slots = False
-            self.pb = pb
-            ghosts = [ColoredGhost(row["ghost"],row["hue_degrees"],row["slot"]) for row in self.rows if row.get("ghost") is not None]
-            if pb and self.options["include_pb"] and pb.get("ghost") is not None:
-                ghosts.insert(0,ColoredGhost(pb["ghost"],controls["hue_degrees"]))
-                self.pb = {**pb,"hue_degrees":controls["hue_degrees"]}
-            prepared_key = (id(self.loaded_db),identity,enabled,source,
-                            tuple((ghost.origin,ghost.hue_degrees,ghost.rival_slot) for ghost in ghosts))
-            self.fingerprint = stamp
-            if prepared_key == self.prepared_key:
-                self._pb_playback(self.prepared_answer)
-                return None
-            self.prepared_key = prepared_key
-            self.generation += 1
-            self.native.set_portable(RivalProvider(self.population,sharing))
-            answer = self.native.prepare(self.native_target(target),ghosts,controls,self.generation) if enabled else None
-            self.prepared_answer = answer
-            self._pb_playback(answer)
-            self.status = ("Updates on your next attempt."
-                           if enabled and ghosts and answer and answer.get("available") else None)
-            return (answer if ghosts else None) or {"available":bool(ghosts),"reason":None if ghosts else "no_rivals",
-                              "reason_text":None if ghosts else "No compatible ghosts in this range yet.","ghosts":[]}
+        if not has_strategy(target):
+            # No strategy: no PB, no pins, no cloud list, no native preparation.
+            if self.rows or self.prepared_key is not None:
+                self.native.cancel_preparation()
+            self.rows, self.pb = (),None
+            self.fingerprint = self.prepared_key = None
+            self.status = None
+            return {"available":False,"reason":"no_strategy","reason_text":NO_STRATEGY,"ghosts":[]}
         return None
+
+    def _desired(self, identity, target):
+        """The saved PB and the seats it implies; seats keep their players and colours."""
+        pb = self._simulation_pb(self._pb_basis(identity),target)
+        pins = self.pins.get(self._key(target),{})
+        ranked = self._ranked_population(identity,pins)
+        private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
+        owners = self._owned_players()
+        # Only new rival settings deal afresh.
+        previous = () if self.redeal else tuple(self._seat_row(row, owners) for row in self.rows)
+        return pb, select_rivals((*ranked,*private),pb,self.options,pins,previous,scope=identity.scope,
+                                 allow_fastest=self.community.complete(identity))
+
+    def _pb_basis(self, identity):
+        """The saved PB, read again only after pb_changed, a forced resolve,
+        another database, lineup or calibration: downloads finishing do not."""
+        key = (id(self.tracker.db), identity, getattr(self.tracker.ranks, "calibration_revision", None))
+        if self._saved_pb is None or self._saved_pb[0] != key:
+            self._saved_pb = (key, saved_pb_basis(self.tracker.db,self.tracker.ranks,identity))
+        return self._saved_pb[1]
 
     def _pb_playback(self, answer):
         """Retain the rank anchor when its separate pose resolution fails."""
@@ -366,13 +464,19 @@ class Rivals:
                            "reason_text":playback.get("reason_text")}
 
     def _request_community(self, enabled, identity, target):
+        """Nothing is asked while the overlay is off; the list ignores the PB."""
         if enabled and self.community.sync is not None:
-            basis = saved_pb_basis(self.tracker.db, self.tracker.ranks, identity)
             pins = self.pins.get(self._key(target), {})
             owner = self.community.owner()
-            known = tuple(value for value in pins.values() if owner and self.remote_choices.get(value) == owner
-                          and self._private_record(value,identity) is None)
-            remote = self.community.request(self.tracker.ranks, identity, basis, self.options, pins, known_remote=known)
+            stamp = (owner, identity, id(self.loaded_db), tuple(sorted(pins.items())),
+                     tuple(sorted((value, self.remote_choices.get(value)) for value in pins.values())),
+                     getattr(self.sharing, "generation", None))
+            if stamp != self._known_key:
+                # Private records read the database; only a changed choice re-reads them.
+                self._known_key = stamp
+                self._known = tuple(value for value in pins.values() if owner and self.remote_choices.get(value) == owner
+                                    and self._private_record(value,identity) is None)
+            remote = self.community.request(self.tracker.ranks, identity, pins, known_remote=self._known)
             if owner and any(self.remote_choices.get(value) != owner for value in remote):
                 self.remote_choices.update((value,owner) for value in remote if value not in self.local_choices)
                 self._store()
@@ -406,17 +510,38 @@ class Rivals:
         local = row.get("manual_only") is True and isinstance(row.get("ghost"), AttemptGhost)
         return {**row, "_owned": local or row.get("player_id") in owners}
 
+    def lineup_state(self):
+        """(state, reason) for the lineup: no_strategy, loading or ready.
+
+        loading: no seats yet while this identity's list is in flight. A ready
+        lineup with no seats says why: nobody (the list came back empty, or
+        this build has no cloud), signed_out, or offline (no list and the cloud
+        is unreachable or backing off). Nothing asked yet (overlay off) says nothing.
+        """
+        if self.target is not None and not has_strategy(self.target):
+            return "no_strategy", None
+        if self.rows or self.identity is None:
+            return "ready", None
+        progress = self.community.list_state(self.identity)
+        if progress == "pending":
+            return "loading", None
+        if progress in ("offline", "signed_out"):
+            return "ready", progress
+        return "ready", None if progress == "absent" else "nobody"
+
     def payload(self):
         native = self.native.state()
         if native.get("active_generation")==self.generation:
             self.status = None
         simulation = self._simulation()
+        state, reason = self.lineup_state()
         return {"options":dict(self.options),"limits":dict(LIMITS),"scope":self.scope_for(self.target),
+                "state":state,"reason":reason,
                 "simulation":simulation.get("label") if simulation else None,
-                "rows":[wire(row) for row in self.rows],
+                "rows":[{"pending":False,**wire(row),"own":row.get("_owned") is True} for row in self.rows],
                 "pb":wire(self.pb) if self.pb else None,
-                "strategy_name":self.target.get("strat") or "Standard" if self.target else None,
-                "coverage": self.community.coverage(self.identity) if self.identity is not None else None,
+                "strategy_name":self.target.get("strat") or None if self.target else None,
+                "coverage": self.community.coverage(self.identity),
                 "status": self.community.status(self.identity) or (
                     self.status if native.get("prepared_generation")==self.generation else None),
                 "generation":self.generation,"manual":self.manual}
@@ -425,6 +550,8 @@ class Rivals:
         identity = self.identity_for(target)
         if target != self.target or identity is None:
             raise ValueError("The practice target changed. Search for the current star or segment.")
+        if not has_strategy(target):
+            raise ValueError(NO_STRATEGY)
         if scope is not None and scope!=identity.scope:
             raise ValueError("The ghost view changed. Search in the current Strategy or Overall view.")
         result = self.population.search(identity,player,cursor=cursor,limit=20)
@@ -446,17 +573,18 @@ class Rivals:
             from sm64_events.inputs.service import entity_key_of
             number = local.get("attempt_id")
             attempt = self.tracker.db.attempt(number) if type(number) is int else None
-            if (attempt is None or local_attempt_source(attempt)!=local
+            if (attempt is None or local_attempt_source(attempt)!=local or not attempt.strat_tag
                     or entity_key_of(attempt)!=(target.kind,target.entity_key)
-                    or target.scope=="strategy" and (attempt.strat_tag or "Standard") != (target.strategy or "Standard")
+                    or target.scope=="strategy" and attempt.strat_tag != target.strategy
                     or not region_serves(target,attempt.strat_tag,attempt.game_version,self.tracker.ranks)):
                 return None
             frames = getattr(attempt,f"{target.clock}_frames")
             progress = rank_frames(self.tracker.ranks,target,frames)
             if progress is None:
                 return None
-            return {"id":identity,"player_id":"private:you","player_name":"You",
-                    "strategy":attempt.strat_tag or "Standard","frames":frames,
+            # Owned by identity (`_owned`), never by a name an import could also carry.
+            return {"id":identity,"player_id":"local:self","player_name":"You",
+                    "strategy":attempt.strat_tag,"frames":frames,
                     "ghost":AttemptGhost(number,target.kind,target.entity_key,attempt.strat_tag,frames),
                     "manual_only":True,"_owned":True,"current_strategy":target.strategy,**progress}
         if self.sharing is None:
@@ -466,16 +594,15 @@ class Rivals:
             row = self.sharing.portable_entry(identity)
         except (LookupError,ValueError):
             return None
-        if ((ghost.kind,ghost.entity_key)!=(target.kind,target.entity_key)
-                or target.scope=="strategy" and (ghost.strat_tag or "Standard") != (target.strategy or "Standard")
-                or row["clock"]!=target.clock
-                or not region_serves(target,ghost.strat_tag,row.get("game_version"),self.tracker.ranks)):
+        if ((ghost.kind,ghost.entity_key)!=(target.kind,target.entity_key) or not ghost.strat_tag
+                or target.scope=="strategy" and ghost.strat_tag != target.strategy
+                or row["clock"]!=target.clock or not region_serves(target,ghost.strat_tag,row.get("game_version"),self.tracker.ranks)):
             return None
         progress = rank_frames(self.tracker.ranks,target,ghost.frames)
         if progress is None:
             return None
         return {"id":ghost.id,"player_id":f"private:{ghost.author}","player_name":ghost.author,
-                "strategy":ghost.strat_tag or "Standard","frames":ghost.frames,"ghost":ghost,
+                "strategy":ghost.strat_tag,"frames":ghost.frames,"ghost":ghost,
                 "manual_only":True,"current_strategy":target.strategy,**progress}
 
     def _remember_local(self, source):
@@ -489,7 +616,7 @@ class Rivals:
         from sm64_events.ghost.pb import local_attempt_source
         self._load()
         source = local_attempt_source(attempt)
-        if source is None:
+        if source is None or not has_strategy(target):
             return False
         choices = self.pins.setdefault(self._key(target),{})
         if any(self.local_choices.get(identity) == source for identity in choices.values()):
@@ -505,7 +632,6 @@ class Rivals:
         identity = self._remember_local(source)
         if identity not in choices.values():
             choices[str(slot)] = identity
-        self.preserve_slots = True
         self.fingerprint = None
         self._store()
         return True
@@ -517,14 +643,15 @@ class Rivals:
         forgotten = {key for key,value in self.local_choices.items() if value == source}
         self.pins = {key:{slot:identity for slot,identity in choices.items() if identity not in forgotten}
                      for key,choices in self.pins.items()}
-        self.preserve_slots = True
         self.fingerprint = None
         self._store()
 
     def check_library(self, target, ghosts):
         """Validate the roster before a session persists any accompanying values."""
+        if not has_strategy(target):
+            raise ValueError(NO_STRATEGY)
         identity = self.identity_for(target)
-        if self.scope_for(target)=="strategy" and any((getattr(ghost,"strat_tag",None) or "Standard") != (target.get("strat") or "Standard") for ghost in ghosts):
+        if self.scope_for(target)=="strategy" and any(getattr(ghost,"strat_tag",None) != target.get("strat") for ghost in ghosts):
             raise ValueError("Choose ghosts for the strategy you are practicing.")
         basis = saved_pb_basis(self.tracker.db,self.tracker.ranks,identity) if identity else None
         dedicated = getattr(basis.get("ghost"),"origin",None) if basis else None
@@ -588,6 +715,8 @@ class Rivals:
         if action is not None:
             if action not in ("add","reset"):
                 raise ValueError("Choose or reset a rival.")
+            if not has_strategy(target):
+                raise ValueError(NO_STRATEGY)
             slot = body.get("slot")
             if slot is not None and (type(slot) is not int or not 0<=slot<self.options["count"]):
                 raise ValueError("Choose a visible rival slot.")
@@ -596,44 +725,49 @@ class Rivals:
                     raise ValueError("Choose the rival to reset.")
                 result.update(action=action,slot=slot)
             else:
-                identity = body.get("id")
-                if not isinstance(identity,str) or len(identity)!=64 or any(char not in "0123456789abcdef" for char in identity):
-                    raise ValueError("Choose a saved ghost identity.")
-                try:
-                    row = self.population.get(identity)
-                    if row.get("source_status") == "bundled-author-recording" and row.get("game_version") is None:
-                        # The exact packaged recording keeps its historical ROM
-                        # unknown. Its trusted snapshot provides playback context.
-                        rows = self.population.metadata_snapshot(self.identity.kind, self.identity.entity_key,
-                            clock=self.identity.clock, game_version=self.identity.game_version,
-                            strategy=self.identity.strategy if self.identity.scope == "strategy" else None,
-                            versions=region_scope.servable_versions(self.identity.region_scope,
-                                                                    self.identity.game_version))
-                        row = next((item for item in rows if item["id"] == identity), row)
-                    ranked = rank_recordings([row],self.tracker.ranks,self.identity)
-                except LookupError:
-                    row = self._private_record(identity,self.identity)
-                    ranked = (row,) if row else ()
-                if not ranked:
-                    raise ValueError("That ghost is not compatible with this target.")
-                if any(item.get("id")==row["id"] for item in self.rows):
-                    raise ValueError("That ghost is already in your rivals.")
-                if row["id"] in self.pins.get(self._key(target),{}).values():
-                    raise ValueError("That ghost is already chosen in a hidden rival slot. Increase the rival count to replace it.")
-                slot = add_slot(self.rows,self.options["count"],slot)
-                self._check_player_slot(row, slot)
-                result.update(action=action,slot=slot,id=row["id"])
+                result.update(self._checked_add(body.get("id"),target,slot))
         return result
+
+    def _checked_add(self, identity, target, slot):
+        if not isinstance(identity,str) or len(identity)!=64 or any(char not in "0123456789abcdef" for char in identity):
+            raise ValueError("Choose a saved ghost identity.")
+        try:
+            row = self.population.get(identity)
+            if row.get("source_status") == "bundled-author-recording" and row.get("game_version") is None:
+                # The exact packaged recording keeps its historical ROM
+                # unknown. Its trusted snapshot provides playback context.
+                rows = self.population.metadata_snapshot(self.identity.kind, self.identity.entity_key,
+                    clock=self.identity.clock, game_version=self.identity.game_version,
+                    strategy=self.identity.strategy if self.identity.scope == "strategy" else None,
+                    versions=region_scope.servable_versions(self.identity.region_scope,self.identity.game_version))
+                row = next((item for item in rows if item["id"] == identity), row)
+            ranked = rank_recordings([row],self.tracker.ranks,self.identity)
+        except LookupError:
+            row = self._private_record(identity,self.identity)
+            ranked = (row,) if row else ()
+        if not ranked:
+            raise ValueError("That ghost is not compatible with this target.")
+        if any(item.get("id")==row["id"] for item in self.rows):
+            raise ValueError("That ghost is already in your rivals.")
+        if row["id"] in self.pins.get(self._key(target),{}).values():
+            raise ValueError("That ghost is already chosen in a hidden rival slot. Increase the rival count to replace it.")
+        slot = add_slot(self.rows,self.options["count"],slot)
+        self._check_player_slot(row, slot)
+        return {"action":"add","slot":slot,"id":row["id"]}
 
     def apply(self, body):
         if "scope" in body:
             self.scopes[self._entity_key(self.target)] = body["scope"]
         if "options" in body:
+            # New rival settings deal afresh; every other change keeps the seats.
+            self.redeal = self.redeal or body["options"] != self.options
             self.options = body["options"]
-        choices = self.pins.setdefault(self._key(self.target),{})
-        if body.get("action")=="reset":
+        # Pins belong to a strategy; a target with none never creates one.
+        action = body.get("action") if has_strategy(self.target) else None
+        choices = self.pins.setdefault(self._key(self.target),{}) if action else {}
+        if action=="reset":
             choices.pop(str(body["slot"]),None)
-        elif body.get("action")=="add":
+        elif action=="add":
             choices[str(body["slot"])]=body["id"]
             owner = self.community.owner()
             if owner:
@@ -644,7 +778,6 @@ class Rivals:
                 if row.get("provenance") == "community-unverified":
                     self.remote_choices[body["id"]] = owner
         self.manual = False
-        self.preserve_slots = "options" not in body
         self.fingerprint = None
         self._store()
 

@@ -24,7 +24,11 @@ int __cdecl surface3(rb_ticket,rb_surface*s,rs_source_descriptor3*d){
 int __cdecl configure3(const rs_callbacks*c){
  if(opens||wrapper_value("TestConfigured")!=1||!c||c->bytes!=sizeof(*c)||c->version!=RS_ABI_V2)return 0;
  return rb_configure_images(c->capture,c->completed)&&rb_bind_source3(surface3);}
-void __cdecl negotiate(bool value){clean_enabled=value;}
+void __cdecl negotiate(bool value){
+ // Source withdrawal can immediately make an in-flight capture unavailable.
+ // The wrapper must revoke delivery before calling this renderer boundary.
+ if(!value && wrapper_value("TestGate"))ExitProcess(94);
+ clean_enabled=value;}
 // The ghost copy's source: this fixture never presents a ghost.
 int __cdecl query_display(rb_ticket t,rs_source_descriptor3*d){
  rs_source_descriptor3 clean{};if(!rb_read_source_descriptor3(t,&clean)){*d={};return 0;}

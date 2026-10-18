@@ -26,6 +26,15 @@ HUE_STEP_DEGREES = 137
 #: clip adopted mid-run to the attempt's elapsed clock (ghost_playback.cpp).
 LATE_JOIN_FRAMES = 60
 
+# The overlay switch hides; it never revokes (his report, 2026-10-17: "the
+# ghost overlay should RESUME FROM EXACTLY WHERE IT SHOULD BE AT THAT EXACT
+# FRAME, instantly, and without lag ... We shouldn't have to wait for a reset
+# for it to come back"). Switched off, an adaptive race keeps its roster,
+# origin and activation, and follows every later start, while the renderer
+# draws and sounds nothing (`hidden`). Switched on, it shows that race on the
+# next command. With nothing racing this run, the switch-on joins it at any
+# frame once a roster is ready, where the late join allows only the spawn fall.
+
 
 #: The renderer's GIPC_BUDGET: the chosen set does not fit the clip budget (or
 #: memory) together. The files are fine; fewer or shorter ghosts would show.
@@ -123,6 +132,10 @@ class NativeGhost:
         self._controls = None
         self._selected_asset = None
         self._requested = False
+        # The overlay switch is off: the race runs on, shown and heard nowhere.
+        self._hidden = False
+        # Switched on with no roster racing: join this run once one is ready.
+        self._join_requested = False
         self._portable = portable
         self._adaptive_generation = 0
         self._activate_generation = 0
@@ -339,9 +352,13 @@ class NativeGhost:
         return {**answer, "available": True, "reason": None, "reason_text": None,
                 "exactness": "native_pose", "blinks": manifest["blink_frames"]}, (path, manifest)
 
-    def reconcile(self, *, enabled, target, controls: dict):
+    def reconcile(self, *, enabled, target, controls: dict, hidden=None):
         """`controls` are the settings' native command fields
-        (`ghost/settings.py::native_controls`); the target adds the rest."""
+        (`ghost/settings.py::native_controls`); the target adds the rest.
+        `enabled` False revokes the race; `hidden` is the overlay switch off,
+        which keeps an adaptive race running unseen (see the module note).
+        None leaves the switch as it was (the lineup's own revocations)."""
+        hidden = self._hidden if hidden is None else bool(hidden)
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
         identity = (target["kind"], target["entity_key"]) if target else None
         roster_target = (*identity, target.get("strat"), target.get("scope", "strategy")) if target else None
@@ -356,11 +373,13 @@ class NativeGhost:
                     self._revoke_roster()
                     self._target = identity
                     self._roster_target = roster_target
+                    self._switch(hidden)
                     return
                 else:
                     self._requested = bool(enabled)
                     if not enabled:
                         self._activate_generation = self._activate_start = 0
+                    self._switch(hidden)
                     self._controls = {**controls,
                                       "stop_at_star": bool(target and target["kind"] == "star"), "mode": 0}
                     self._send()
@@ -377,10 +396,21 @@ class NativeGhost:
             self._target = identity
             self._roster_target = roster_target
             self._selected_asset = self._asset
-            self._requested = bool(enabled)
+            # Nothing adaptive is held: the switch off is simply off.
+            self._requested = bool(enabled and not hidden)
+            self._switch(hidden)
             self._controls = {**controls,
                               "stop_at_star": bool(target and target["kind"] == "star"), "mode": 0}
             self._send()
+
+    def _switch(self, hidden):
+        """The overlay switch. Switched on with no roster racing this run, it
+        asks `note` to join the run as soon as a prepared roster is ready."""
+        if hidden or not self._hidden:
+            self._join_requested = self._join_requested and not hidden
+        elif self._selected_asset is None:
+            self._join_requested = True
+        self._hidden = hidden
 
     def note(self, _snapshot=None):
         """After a settled poll tick, forward changed owner markers only.
@@ -407,19 +437,29 @@ class NativeGhost:
                         self._activate_generation = self._adaptive_generation
                         self._activate_start = self._start_sequence
                         self._selected_asset = self._pending_asset
-                elif (token is not None and token == self._last_full_start
-                        and self._activate_generation != self._adaptive_generation
+                        self._join_requested = False
+                elif (token is not None and self._activate_generation != self._adaptive_generation
                         and not self._preparation_canceled
-                        and type(origin.get("frames_since_start")) is int
-                        and origin["frames_since_start"] <= LATE_JOIN_FRAMES):
+                        and (self._join_requested and self._selected_asset is None
+                             or token == self._last_full_start
+                             and type(origin.get("frames_since_start")) is int
+                             and origin["frames_since_start"] <= LATE_JOIN_FRAMES)):
                     # The roster became ready after this run's start was
-                    # consumed, but Mario is still falling in: join now. The
-                    # renderer aligns the clips to the attempt's elapsed clock.
+                    # consumed, but Mario is still falling in, or he switched
+                    # the overlay on with nobody racing this run: join now.
+                    # The renderer aligns the clips to the attempt's elapsed
+                    # clock. Readiness is observed before activation is sent.
                     status = self._source.snapshot_status(blocking=False) if self._source is not None else None
                     if status is not None and status.get("available") and status.get("prepared_generation") == self._adaptive_generation:
+                        if token != self._last_full_start:
+                            # A start this session never saw (the overlay was
+                            # off then): consume it now, so it joins once.
+                            self._last_full_start = token
+                            self._start_sequence += 1
                         self._activate_generation = self._adaptive_generation
                         self._activate_start = self._start_sequence
                         self._selected_asset = self._pending_asset
+                        self._join_requested = False
             if origin is not None and origin.get("clock_ready") is False:
                 # A fresh arm can be certified before its move clock settles.
                 # Freeze the ready roster now; publish no playable origin until
@@ -428,8 +468,8 @@ class NativeGhost:
                 self._origin = None
                 origin = None
             # Completion or a restore can temporarily remove the tracker arm.
-            # Hide presentation while retaining native checkpoints. Explicit
-            # switch-off and target changes still revoke the binding.
+            # Hide presentation while retaining native checkpoints. Target
+            # changes still revoke the binding; the overlay switch only hides it.
             self._owner_suspended = bool(origin is None and self._origin is not None and self._requested)
             if origin is not None or not self._requested:
                 self._origin = origin
@@ -477,7 +517,7 @@ class NativeGhost:
             # with preparation. Only a roster chosen at a full start may draw.
             playing = self._selected_asset if self._adaptive_generation else clips
             command = {"enabled": bool(origin and playing), "model_id": 1,
-                       "owner_suspended": self._owner_suspended,
+                       "owner_suspended": self._owner_suspended, "hidden": self._hidden,
                        "clips": clips, "rom_path": "",
                        "path_clip": fastest_clip(assets), **controls}
             if origin is not None:
@@ -516,17 +556,20 @@ class NativeGhost:
         self._remember_renderer(status)
         recorder = getattr(self._replay, "recorder", None)
         recording_disabled = getattr(recorder, "recording_enabled", True) is False
-        ready = bool(not recording_disabled and self._enabled and not self._owner_suspended
+        # A race hidden by the overlay switch is neither running nor waiting
+        # for anything the card should mention.
+        shown = self._requested and not self._hidden
+        ready = bool(not recording_disabled and self._enabled and not self._owner_suspended and shown
                      and status.get("available") and status.get("state") == 4)
         # A generated pose is not display evidence. Only the renderer's last
         # qualified swap can say this command reached the game window.
         visible = ready and bool(status.get("displayed"))
         reason = None
-        if self._requested and recording_disabled:
+        if shown and recording_disabled:
             reason = "Recording is off. Start recording to show Only Mario ghosts and play their sounds."
         elif ready and not visible and status.get("playback_reason") == GP_WRONG_SCENE:
             reason = "Ghost is in another area."
-        elif self._requested and not ready:
+        elif shown and not ready:
             if status.get("state") == 5 and status.get("reason") != 10:
                 reason = {4: "Open the US practice ROM to show Mario.",
                           5: "This practice ROM does not provide the required Mario poses.",
@@ -572,6 +615,7 @@ class NativeGhost:
             self._sent = {"enabled": False}
         self._enabled = False
         self._requested = False
+        self._join_requested = False
         self._origin = None
         self._owner_suspended = False
         self._adaptive_generation = self._activate_generation = 0

@@ -483,10 +483,13 @@ Raisn's, white text, and Trebuchet MS, and they are only a starting point.
 
 A named way of doing a [[target]] — which path through the level, which tricks.
 Two people playing the same [[star]] on different strategies are doing genuinely
-different things, so each strategy carries its own [[ladder]].
+different things, so each strategy carries its own [[ladder]]. Every list of
+strategies follows one order, the column order of the table of [[standard]]s:
+the slowest [[ladder]] first, the way you climb (his rule, 2026-10-17).
 
 - **Lives** — the standards file (`src/sm64_events/ranks/standards.py`)
-  → the [[strategy picker]]
+  → the [[strategy picker]]; the order: `src/sm64_events/ranks/ladder_order.py`
+  and its browser twin `src/sm64_events/ui/ladderorder.js`
 
 ### Active strategy
 
@@ -502,17 +505,18 @@ Picking one also claims every [[attempt]] of that [[target]] that has no
 
 ### PB gate
 
-Why a [[practice log]] row's Save/Undo button is not there: the row belongs to
-a [[strategy]] other than the [[active strategy]], or you have selected no
-[[strategy]] at all. The row shows no button and no time comparison at all —
-nothing of the [[active strategy]]'s applies to it — and the server refuses
-the save for the same stated reason.
+Why a [[practice log]] row offers only a disabled Save: the row belongs to a
+[[strategy]] other than the [[active strategy]], or you have selected no
+[[strategy]] at all. The row keeps a disabled Save whose tooltip says how to
+bring it back, so every row draws the same buttons, but shows no time
+comparison, since nothing of the [[active strategy]]'s applies to it. The
+server refuses the save for the same stated reason.
 
 - **Not** — a [[caveat mark]]. A [[caveat mark]] says the time is not the
   quantity it looks like and draws a mark; a gated row is fine and simply
-  not yours to act on right now, and draws nothing.
+  not yours to act on right now.
 - **Lives** — the resolver (`src/sm64_events/tracking/pbaction.py`)
-  → the absent button in the [[practice log]]'s action column
+  → the disabled Save in the [[practice log]]'s action column
 
 ### Route
 
@@ -1280,11 +1284,60 @@ admission, community upload and download, collection import and export, your
 own PB, saved and template ghosts) refuses it with one reason (his rule,
 2026-10-12: "If it's not a perfectly recorded ghost, it doesn't belong in the
 system"). A ghost records the [[practice ROM]] the trainer captured it on (US or JP)
-and plays on either. The practice card's switch calls it Ghost Overlay.
+and plays on either. The practice card's [[ghost toggle]] calls it Ghost Overlay.
 
 - **Lives** — `src/sm64_events/ghost/session.py` joins selection, settings and
   the [[target]]; `src/sm64_events/ghost/native_session.py` publishes native playback
 - **Not** — the [[overlay layer]], which writes a video file for an editor.
+
+### Lineup
+
+The active practice card's row of the people you race: your own seat first,
+then each [[rival slot]], slowest to fastest, centred at every width (his
+words, 2026-10-16: "our pb on far left, then times get faster as we go to the
+right"). A seat is a [[rank]] cap inside a ring in that [[ghost]]'s in-game
+colour, the time and the name; a name wraps where the handle divides and is
+never cut off. A dashed ring is a [[ghost]] that cannot race yet (yours before
+your first time, a rival still downloading); a lock on a ring is a pinned
+rival, who stays even once beaten, to your left. The [[lineup track]] threads
+the rings. With no [[strategy]] the row offers every one of the [[strategies]]
+as a button, all one width, in rows of equal length.
+Inside one lineup every change slides; a different [[star]], [[strategy]] or
+[[ghost matching scope]] keeps your seat in place and exchanges everyone else.
+
+- **Lives** — `src/sm64_events/ui/lineup.js` (drawing and motion),
+  `src/sm64_events/ui/lineupmodel.js` (what it shows),
+  `src/sm64_events/ui/components/lineup.js` (the card's wiring)
+- **Not** — the [[ghost set]] the [[renderer]] draws; the Lineup shows who is in it.
+
+### Lineup track
+
+The rail through the [[lineup]]'s rings. The one stretch from your seat to the
+next faster rival lights up and carries how much faster that rival's time is,
+in the hundredths both seats show ("−0.13") — the gap your next [[attempt]]
+has to close, never a comparison with the last one.
+
+- **Lives** — `src/sm64_events/ui/lineup.js` (gapText, markNext)
+- **Not** — the [[input track]], a recording's pad history.
+
+### Ghost toggle
+
+The glyph in the active practice card's head that turns the overlay of
+[[ghosts]] on and off — gold while they race. It is a preference, not a
+capability: with nobody to race it stays on and the [[lineup]] says why.
+A hotkey in the game flips the same setting, in play or in the game's pause
+menu, even with other buttons held, but never while Usamune's menu is open
+(it navigates with D-pad Up) — his rule, 2026-10-16. The hotkey is D-pad Up,
+or all four C buttons together while Usamune's save state uses D-pad Up, so
+one press never both loads a state and flips the overlay (his ask,
+2026-10-17); the glyph's hover names the current one. Off hides the race
+rather than ending it: the [[ghost set]] plays on unseen and unheard, so
+switching back on partway through shows every one of them at the [[frame]]
+the [[attempt]] has reached, at once (his ask, 2026-10-17).
+
+- **Lives** — `src/sm64_events/ui/components/ghostswitch.js` (GhostToggle);
+  `src/sm64_events/ghost/dpad_toggle.py` (the hotkey choice, the press rule
+  and the flip)
 
 ### Recorded shadow
 
@@ -1544,6 +1597,13 @@ matching (his rule, 2026-10-13: "the player doesn't ever actually fight
 their own [[ghost]]s as a rival"). A pinned own recording still plays. The slot keeps its colour when
 its recording changes; the separate [[PB ghost]] keeps its own colour.
 
+A seat keeps its player, slot and colour across a new [[personal best]] until
+the PB passes it; a passed seat first takes that same player's fastest [[run]]
+still ahead and in range (his answer, 2026-10-16: the same rivals keep
+improving). With no saved PB yet, the seats spread evenly across
+Capless 5 to Toad 1 ([[rank]] steps 0..9). A pinned seat never moves, even once
+beaten. With no [[strategy]] there are no slots, no pins and no cloud request.
+
 - **Lives** — `src/sm64_events/ghost/adaptive.py` and `src/sm64_events/ghost/rivals.py`
 
 ### Ghost matching scope
@@ -1593,8 +1653,9 @@ changing original history.
 
 ### Sign-in step
 
-After the startup update check and any update offer, a configured build asks for
-a Discord or Twitch sign-in. A new account chooses a player name and acknowledges
+A configured build asks for a Discord or Twitch sign-in. The startup update
+check stays silent without delaying this step; an actual update offer takes
+priority and returns here when dismissed. A new account chooses a player name and acknowledges
 the policies once. A returning active account skips that form and account settings
 entirely. After either path, unfinished Project64 setup opens; a detected working
 installation skips setup. Setup waits until the account check settles. The player
@@ -1629,10 +1690,14 @@ it does not certify that gameplay was legitimate. Sharing begins unchecked.
 
 ### Rival pool
 
-The bounded metadata list for a [[target]], ROM, clock, [[ghost matching scope]]
-and [[rank]] range. The cloud can reuse it across players. The trainer selects
-[[rival slot]]s locally and downloads only their recordings. A complete membership
-scan and downloaded playback bytes are separate states.
+The bounded metadata list for a [[target]], ROM, clock and [[ghost matching scope]],
+covering the whole [[rank]] [[ladder]]. The cloud can reuse it across players. The trainer
+selects [[rival slot]]s locally and downloads only their recordings, each once, so
+a new [[personal best]] needs no new list. The trainer asks for each list once, holds
+it under the cloud's 10-minute publication lease (so a withdrawn [[ghost]] leaves every
+screen), and renews it only for the [[star]] on screen with the overlay on; switching
+back within the lease asks nothing. A complete membership scan and downloaded playback bytes
+are separate states.
 
 - **Lives** — `src/sm64_events/community/sync.py` and `src/sm64_events/community/cache.py`
 

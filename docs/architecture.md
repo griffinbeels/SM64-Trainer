@@ -1104,7 +1104,7 @@ from a time run on a strategy other than the column it was drawn on.
 `tracking/pbaction.py::pb_action(attempt, active_strat, owns_strat_pb)` is the
 one resolver behind both the button and the API (`TrackerService.pb_action`
 asks it of the database for the commands); the strategy gate is stated before
-an illegal quantity (2026-08-22), since a foreign row draws nothing at all. Both of its ingredients have one door of their own:
+an illegal quantity (2026-08-22), since a foreign row shows only a plain disabled Save. Both of its ingredients have one door of their own:
 "which strategy is active" is `tracking/activestrat.py::ActiveStrats`, asked
 with identity (a star, a segment, an attempt) by the session view, the
 selector's medals, the route candidates AND the commands — until 2026-08-22
@@ -1617,7 +1617,15 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-30 for shared segment defaults and recording: **72,308
+Latest reading, 2026-10-18 for the Lineup and release hygiene: **94,871 lines,
+2,638 public names, 36.0 lines per public name, 116 pass-through (4.4%)**.
+Against integrated main before the Lineup, this branch adds 1,053 lines and
+24 public names with no new forwarders. The Lineup's model, DOM motion and
+component wiring have separate owners; rival selection and cloud leases keep
+their existing boundaries. The release review corrected successful request
+dedupe surviving an evicted list. No additional module split was justified.
+
+Previous reading, 2026-09-30 for shared segment defaults and recording: **72,308
 lines, 1,941 public names, 37.3 lines per public name, 84 pass-through (4.3%)**.
 Against main, this branch adds 742 lines and 18 public names with no new
 forwarders. Shared default authoring has its own source/store owner, recorder

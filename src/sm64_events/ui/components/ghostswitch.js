@@ -37,8 +37,10 @@ import { getJSON, send } from "../api.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { GhostProximity } from "./ghostproximity.js";
 import { GhostLibraryButton } from "./ghostlibrary.js";
-import { Rivals } from "./rivals.js";
+import { Icon } from "./icons.js";
+import { Lineup } from "./lineup.js";
 import { Modal } from "./modal.js";
+import { RivalOptions, rivalDraft } from "./rivalsettings.js";
 import { clampNudge, clampOpacity, ghostAppearanceControls, ghostControls, ghostPathTuning, ghostRecordingOptions,
          ghostOption, ghostTargetKey, hueText, mergeGhostAppearance, newestGhostSession, nudgeLimit, SWITCH_LABELS,
          nudgeSeconds, nudgeText, opacityText, pathTuningText, shownTint,
@@ -532,15 +534,41 @@ function GhostAppearance({controls, appearance, patch, timing = true}) {
       ranges=${limits.path_tuning} draft=${appearance.path_tuning} queue=${patch} />`;
 }
 
-/** A second entry to the same controls, reading the session only while open. */
-export function GhostSettings({t, onClose}) {
-  const {session, reachable, write, retry} = useGhostSession(t);
+/**
+ * THE ONE GHOST SETTINGS SHEET, reached from the practice log's settings.
+ * Who you race (Rivals), how ghosts look and sound (Appearance), and the
+ * Ghost Library, in one place: the Lineup row carries no settings button of
+ * its own (round 5, when the switch moved into the card head). It reads the
+ * session only while open, and Done writes the rivals' options and the
+ * appearance in one PUT.
+ */
+/** The sheet's sections: Rivals (when this session races rivals), Appearance and sound, Ghost Library. */
+function GhostSettingsSections({t, session, write, controls, appearance, patch, rivals, draft, setOptions}) {
+  const entityKey = ghostTargetKey(session?.target);
+  return html`
+    ${rivals && draft && html`<${RivalOptions} rivals=${rivals} draft=${draft}
+      setDraft=${next => setOptions(previous => (typeof next === "function" ? next(previous || draft) : next))} />`}
+    <section class="ghost-settings-appearance" aria-label="Appearance and sound">
+      <h4 class="ghost-settings-heading">Appearance and sound</h4>
+      <${GhostAppearance} controls=${controls} appearance=${appearance} patch=${patch}
+        timing=${Boolean(entityKey)} />
+    </section>
+    ${entityKey && html`<section class="ghost-settings-library" aria-label="Ghost Library">
+      <h4 class="ghost-settings-heading">Ghost Library</h4>
+      <${GhostLibraryButton} t=${t} entityKey=${entityKey} session=${session} write=${write} />
+    </section>`}`;
+}
+
+/** One PUT for Done: the appearance he touched, his timing only for the target he set it on, and the rivals' options. */
+function settingsBody(appearance, sameTarget, options, rivals, session) {
+  const body = {...appearance};
+  if (!sameTarget) delete body.nudge_frames;
+  if (options && rivals) Object.assign(body, {rivals: {scope: rivals.scope || "strategy", options}, target: session.target});
+  return body;
+}
+
+function useAppearanceDraft(identity) {
   const [appearance, setAppearance] = useState({});
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const controls = ghostAppearanceControls(session);
-  const available = reachable && controls && session.source?.reason !== "no_session";
-  const identity = JSON.stringify(session?.target);
   const timingTarget = useRef(identity);
   useEffect(() => {
     setAppearance(previous => {
@@ -554,9 +582,27 @@ export function GhostSettings({t, onClose}) {
     if (changes.nudge_frames != null) timingTarget.current = identity;
     return mergeGhostAppearance(previous, changes);
   });
+  return {appearance, patch, sameTarget: () => timingTarget.current === identity};
+}
+
+function SettingsFooter({saving, canSave, onCancel, onSave}) {
+  return html`<button type="button" disabled=${saving} onclick=${onCancel}>Cancel</button>
+    <button type="button" class="primary-button" disabled=${saving || !canSave}
+      onclick=${onSave}>${saving ? "Saving…" : "Done"}</button>`;
+}
+
+export function GhostSettings({t, onClose}) {
+  const {session, reachable, write, retry} = useGhostSession(t);
+  const [options, setOptions] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const controls = ghostAppearanceControls(session);
+  const available = reachable && controls && session.source?.reason !== "no_session";
+  const {appearance, patch, sameTarget} = useAppearanceDraft(JSON.stringify(session?.target));
+  const rivals = session?.rivals || null;
+  const draft = options || (rivals ? rivalDraft(rivals) : null);
   const save = async () => {
-    const body = {...appearance};
-    if (timingTarget.current !== identity) delete body.nudge_frames;
+    const body = settingsBody(appearance, sameTarget(), options, rivals, session);
     if (!Object.keys(body).length) { onClose(); return; }
     setSaving(true);
     setError(null);
@@ -565,24 +611,18 @@ export function GhostSettings({t, onClose}) {
     if (result.applied) onClose();
     else setError(result.error);
   };
-  return html`<${Modal} title="Ghost Overlay settings" icon="settings"
+  const unavailable = !reachable ? html`<${GhostReadFailure} retry=${retry} />`
+    : html`<p>${session ? "Ghost settings are unavailable while the trainer is disconnected." : "Loading ghost settings…"}</p>`;
+  return html`<${Modal} title="Ghost settings" icon="settings"
     onClose=${saving ? null : onClose}
-    footer=${html`<button type="button" disabled=${saving} onclick=${onClose}>Cancel</button>
-      <button type="button" class="primary-button" disabled=${saving || !available}
-        onclick=${save}>${saving ? "Saving…" : "Done"}</button>`}>
-    ${available ? html`<${GhostAppearance} controls=${controls} appearance=${appearance} patch=${patch}
-      timing=${Boolean(ghostTargetKey(session.target))} />`
-      : !reachable ? html`<${GhostReadFailure} retry=${retry} />`
-        : html`<p>${session ? "Ghost settings are unavailable while the trainer is disconnected." : "Loading ghost settings…"}</p>`}
+    footer=${html`<${SettingsFooter} saving=${saving} canSave=${Boolean(available)} onCancel=${onClose} onSave=${save} />`}>
+    ${available ? html`<${GhostSettingsSections} t=${t} session=${session} write=${write} controls=${controls}
+      appearance=${appearance} patch=${patch} rivals=${rivals} draft=${draft} setOptions=${setOptions} />` : unavailable}
     ${error && html`<p class="error" role="alert">${error}</p>`}
   <//>`;
 }
 
 function GhostRacing({session, controls, held, on, write, queue, entityKey}) {
-  if (session?.rivals) return html`<${Rivals} key=${JSON.stringify([session.target,session.rivals.scope || "strategy"])}
-    session=${session} write=${write}
-    renderAppearance=${(appearance, patch) => html`<${GhostAppearance} controls=${controls}
-      appearance=${appearance} patch=${patch} />`} />`;
   const values = heldValues(controls, held);
   const {limits} = controls;
   const recording = ghostRecordingOptions(controls.selection, held, practisedStrat(session));
@@ -634,28 +674,74 @@ function racingScopeReady(session, scope, known) {
  * it is this prop, and it is what both the fetch above and the early return
  * below read. Nothing renders and nothing is requested on the other cards.
  */
-export function GhostSwitch({ t, entityKey, active = true, scope = "strategy" }) {
-  const { session, reachable, draft, write, queue, retry } = useGhostSession(t, active);
+/**
+ * Whether ghosts race, as the head shows it: his preference, with any write
+ * still in flight laid over it. It is a preference, not a capability -- with
+ * nobody to race yet it stays on and the row says why (round 3).
+ */
+function overlayOn(session, draft) {
+  const held = draft || {};
+  return held.enabled == null ? Boolean(session?.enabled) : Boolean(held.enabled);
+}
+
+/**
+ * THE GHOST TOGGLE, in the active card's head beside the Library book (round
+ * 5: the row's switch "feels awkwardly placed ... Maybe it needs to join the
+ * rest of the headers up top"). A ghost glyph, gold while ghosts race, struck
+ * through while they don't. The ghost hotkey in the game flips the same
+ * setting: D-pad Up, or all four C buttons while Usamune's save state is on
+ * D-pad Up. The server names it (`session.hotkey`, ghost/dpad_toggle.py).
+ */
+const HOTKEY_WORDS = { dpad_up: "D-pad Up", c_x4: "all four C buttons" };
+
+export function GhostToggle({ ghost, entityKey, active }) {
+  if (!active) return null;
+  const { session, reachable, draft, write } = ghost;
+  const controls = ghostControls(session, entityKey);
+  const on = overlayOn(session, draft);
+  const known = reachable && controls.known;
+  const key = HOTKEY_WORDS[session?.hotkey] || HOTKEY_WORDS.dpad_up;
+  const words = on ? `Ghosts on. Click, or press ${key} in the game, to hide them.`
+    : `Ghosts off. Click, or press ${key} in the game, to race them.`;
+  return html`<button type="button" class=${`ghost-toggle${on && known ? " is-on" : ""}`}
+      aria-pressed=${on ? "true" : "false"} aria-label="Ghost Overlay" title=${known ? words : "Loading ghosts…"}
+      disabled=${!known} onclick=${() => write({ enabled: !on })}>
+    <${Icon} name=${on || !known ? "ghost" : "ghostOff"} size=${17} />
+  </button>`;
+}
+
+/**
+ * The row under the card head. `ghost` is the card's one session hook
+ * (practicelog.js calls `useGhostSession` once and hands it to the head toggle
+ * and to this row). With adaptive rivals it is the Lineup; a session without
+ * rivals keeps the older ticks-and-tuning controls.
+ */
+/** The row under a session without rivals: the older ticks-and-tuning controls, and the reason if any. */
+function LegacyRow({ session, controls, held, on, write, queue, retry, entityKey, scope }) {
+  const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;
+  return html`<div class="ghost-row ${on ? "is-on" : ""}">
+    ${reasonId && html`<div class="ghost-row-head">
+      <${GhostReadStatus} reachable=${true} reasonText=${controls.reasonText} reasonId=${reasonId} retry=${retry} />
+    </div>`}
+    ${racingScopeReady(session, scope, controls.known) ? html`<${GhostRacing} session=${session} controls=${controls}
+      held=${held} on=${on && controls.available} write=${write} queue=${queue} entityKey=${entityKey} />` : null}
+  </div>`;
+}
+
+export function GhostSwitch({ t, ghost, entityKey, active = true, scope = "strategy",
+                              strategies = [], onPickStrategy }) {
+  const { session, reachable, draft, write, queue, retry } = ghost;
   useRivalScope(session, scope, entityKey, active && reachable, write);
   if (!active) return null;
   const controls = ghostControls(session, entityKey);
-  const held = draft || {};
-  const on = held.enabled == null
-    ? controls.enabled : Boolean(held.enabled) && controls.available;
-  const labelId = idFor(entityKey, "label");
-  const reasonId = !reachable || controls.reasonText ? idFor(entityKey, "why") : null;
-
-  return html`<div class="ghost-row ${on ? "is-on" : ""}">
-    <div class="ghost-row-head">
-      <${GhostSwitchButton} on=${on} canToggle=${reachable && controls.canToggle}
-        labelId=${labelId} reasonId=${reasonId}
-        onToggle=${() => write({ enabled: !on })} />
-      <span class="ghost-label" id=${labelId}>Ghost Overlay</span>
-      ${reachable && html`<${GhostLibraryButton} t=${t} entityKey=${entityKey} session=${session} write=${write} />`}
-      <${GhostReadStatus} reachable=${reachable} reasonText=${controls.reasonText}
-        reasonId=${reasonId} retry=${retry} />
-    </div>
-    ${reachable && racingScopeReady(session,scope,controls.known) ? html`<${GhostRacing} session=${session} controls=${controls} held=${held} on=${on}
-      write=${write} queue=${queue} entityKey=${entityKey} />` : null}
+  const on = overlayOn(session, draft);
+  if (reachable && !session?.rivals && controls.known) {
+    return html`<${LegacyRow} session=${session} controls=${controls} held=${draft || {}} on=${on} write=${write}
+      queue=${queue} retry=${retry} entityKey=${entityKey} scope=${scope} />`;
+  }
+  return html`<div class="ghost-row ghost-row-lineup ${on ? "is-on" : ""}">
+    <${Lineup} session=${session} known=${controls.known && racingScopeReady(session, scope, controls.known)}
+      reachable=${reachable} on=${on} entityKey=${entityKey} strategies=${strategies || []} write=${write} retry=${retry}
+      onPickStrategy=${onPickStrategy} />
   </div>`;
 }

@@ -185,19 +185,36 @@ generation/metadata_snapshot/get/search/resolve/close contracts. Cache reads
 never perform network, including under GhostSession selection locks.
 `owned_player_ids(local_id)` returns local+authenticated aliases;
 `coverage(identity)` reports bounded actual coverage. Remote paths resolve only
-after background validated download. Keep old playable roster until replacements
-are ready; retain safe full-start adoption.
+after background validated download. A seat whose recording is still
+downloading is listed as pending and does not play; retain safe full-start
+adoption. A recording whose bytes or metadata fail validation leaves automatic
+seats for the session; one the service refuses (gone or hidden) leaves them for
+the retry interval. Network and quota failures never empty the lineup. The
+cache never evicts a recording the lineup on screen uses (`keep`), so four
+large seats may exceed the byte cap by at most their own size. Automatic seats
+read only that lineup's list; a chosen rival outside it is looked up by id.
+Incoming player names follow the cloud's own rule (`names.incoming_name`, the
+twin of `names.js` checkedName): a recording whose name the cloud would refuse
+is dropped from its page. A failed token rotation keeps the account's view;
+only signing out or another account clears it.
 
 `CommunitySync`: async `start/stop/search(identity,prefix,*,cursor=None)`;
 synchronous `request_pool(identity,*,frame_windows,pinned_ids=())`,
 `request_assets(recording_ids)`, thread-safe `offer_source(source)` with bounded
-coalescing queue. Pool requests map frame windows to canonical server bins;
+coalescing queue. Rival lists, recording downloads and contributions run on
+three workers, so a 180-second download never holds up a list request. Pool requests map frame windows to canonical server bins;
 cache keys never contain exact PB or unrelated local rank integers. Stop has
 bounded cancellation and joins owned work before replay/provider teardown.
 
-Automatic pool metadata refreshes at most every 120 seconds per canonical
-request. Chosen-rival metadata refreshes every ten minutes; its hard publication
-lease also expires after ten minutes offline. Logout and local withdrawal still
+One rival list covers the whole ladder, so its request names the account, the
+identity and the calibration revision, never the PB or rival settings: a new PB
+re-picks locally. `request_pool` is safe to call every cycle. It queues nothing
+while that list is queued or running, or while the list and the chosen rivals it
+last served are inside their publication leases or a failure's back-off. Each
+held list owns its rows (16 lists at most), so one strategy's list never evicts
+another's. A held list and chosen-rival metadata renew once, a minute before
+their hard ten-minute publication lease lapses, and only while that identity is
+on screen with the overlay on; the lease also expires offline. Logout and local withdrawal still
 clear the account view immediately. A fresh visibility response can reuse
 validated cached bytes only when both stored hashes match. Pin retention leases
 renew once per day or when their owner/IDs change; the server lease lasts seven
@@ -205,7 +222,7 @@ days. Static catalog data stays cached for an hour, with `generation_changed`
 invalidating that lease before the next operation.
 
 The actual client cadence test covers eight hours with four chosen rivals,
-twenty two-call uploads and eight deliberate account-panel refreshes: 493
+twenty two-call uploads and eight deliberate account-panel refreshes: 301
 ticketed Worker operations against the 500/day account limit. Public config
 reads and provider OAuth calls do not consume that account ticket. The UI's
 ten-second status polling reads local cached state. Additional searches,

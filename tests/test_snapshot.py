@@ -46,6 +46,29 @@ def test_curr_area_defaults_to_zero_for_old_call_sites():
     assert s.curr_area == 0
 
 
+def test_reader_carries_the_pad_and_usamunes_menu_for_the_ghost_toggle():
+    from dataclasses import replace
+    mem = BufferMemory()
+    mem.write_u16(US.player1_controller + A.CONTROLLER_BUTTON_DOWN_OFF, 0x0820)
+    mem.write_u8(US.usamune_menu, 1)
+    snap = SnapshotReader(mem).read()
+    assert snap.buttons_held == 0x0820 and snap.usamune_menu_open is True
+    mem.write_u8(US.usamune_menu, 0)
+    assert SnapshotReader(mem).read().usamune_menu_open is False
+    # A layout that has not verified either address reads them as unknown.
+    bare = SnapshotReader(mem, replace(US, player1_controller=None, usamune_menu=None)).read()
+    assert bare.buttons_held is None and bare.usamune_menu_open is None
+
+
+def test_reader_carries_usamunes_save_state_button_only_where_the_layout_has_it():
+    from dataclasses import replace
+    mem = BufferMemory()
+    # A layout without the address reads it as unknown, never as a choice.
+    unknown = SnapshotReader(mem, replace(US, usamune_savestate_button=None)).read()
+    assert unknown.usamune_savestate_button is None
+    mem.write_u8(US.usamune_savestate_button, 1)
+    assert SnapshotReader(mem).read().usamune_savestate_button == 1
+
 def test_the_stop_byte_is_read_where_the_build_has_its_address():
     from dataclasses import replace
     mem = BufferMemory()

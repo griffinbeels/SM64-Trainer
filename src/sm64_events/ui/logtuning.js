@@ -185,11 +185,6 @@ export const TUNABLES = {
     min: 0, max: 0.6, step: 0.01, unit: "x",
     why: "How strongly the PB row is washed gold, strongest at its left edge and fading to the right. 0 = no wash.",
   },
-  pbEdge: {
-    group: "Personal best", label: "Gold edge ribbon", value: 3,
-    min: 0, max: 10, step: 1, unit: "px",
-    why: "Width of the solid gold bar down the PB row's left edge. 0 = none.",
-  },
   pbHolo: {
     group: "Personal best", label: "GOLD!! rainbow", value: 0.6,
     min: 0, max: 1, step: 0.05, unit: "x",
@@ -248,7 +243,7 @@ export const TUNABLES = {
   pbSaveDelay: {
     group: "Personal best", label: "Time Save delay", value: 900,
     min: 0, max: 3000, step: 50, unit: "ms",
-    why: "How long after the save the \"Time Save: -X.XX (Y frames)\" text starts fading in beside GOLD!! -- long enough to let the word pop first.",
+    why: "How long after the save the \"-X.XX (Y frames)\" margin starts fading in beside GOLD!! -- long enough to let the word pop first.",
   },
   pbSaveFade: {
     group: "Personal best", label: "Time Save fade", value: 400,

@@ -948,3 +948,42 @@ def test_every_outcome_the_timeline_plots_has_a_marker():
         f"{declaration(UI / 'components' / 'timeline.js', 'MARKERS')}\n"
         "console.log(JSON.stringify(Object.keys(MARKERS)));")
     assert set(TIMELINE_OUTCOMES) <= set(js), f"unstyled: {sorted(set(TIMELINE_OUTCOMES) - set(js))}"
+
+
+# --- the strategy order (2026-10-17) ------------------------------------------
+
+def test_the_strategy_order_agrees():
+    """The server orders every strategy list it sends (ranks/ladder_order.py)
+    and the rank standards table orders its columns (ui/ladderorder.js). His
+    rule: "strategies should always be sorted in rank standard order", so a
+    picker that disagrees with the table below it is the bug. The cases hit
+    every branch: a Mario cutoff, a ladder without one, an empty ladder and a
+    name with none (both furthest left), ties, and 100-coin bands with a
+    strategy no band covers."""
+    from sm64_events.ranks.ladder_order import ordered_bands, table_order
+
+    ladders = {"Owl": {"Mario": 16.06, "Toad": 20.0}, "Mad Owl": {"Mario": 14.40},
+               "Standard": {"Mario": 11.83}, "TJ Owlless": {"Mario": 11.70},
+               "DJ Owlless": {"Mario": 11.10}, "Sideflip": {"Mario": 11.06},
+               "No Mario": {"Gold": 12.5, "Silver": 13.0}, "Empty": {},
+               "Twin": {"Mario": 11.83},
+               "A · Std": {"Mario": 30.0}, "A · Fast": {"Mario": 25.0},
+               "B · Std": {"Mario": 40.0}, "B · Fast": {"Mario": 20.0}, "Loose": {"Mario": 35.0}}
+    groups = [{"label": "A", "strategies": [{"name": "A · Fast"}, {"name": "A · Std"}]},
+              {"label": "B", "strategies": [{"name": "B · Std"}, {"name": "B · Fast"}]}]
+    plain = ["Sideflip", "Standard", "Custom", "DJ Owlless", "Owl", "Twin", "TJ Owlless",
+             "Empty", "Mad Owl", "No Mario"]
+    banded = ["A · Std", "B · Fast", "Loose", "A · Fast", "Custom", "B · Std"]
+    cases = [(plain, []), (banded, groups), (banded[:2], groups), ([], groups)]
+    js = run_node(f"import * as m from {(UI / 'ladderorder.js').as_uri()!r};\n"
+                  f"const ladders = {json.dumps(ladders)};\n"
+                  f"const cases = {json.dumps(cases)};\n"
+                  "console.log(JSON.stringify(cases.map(([n, g]) => "
+                  "[m.tableOrder(n, ladders, g), m.orderedBands(n, ladders, g)])));")
+    python = [[table_order(names, ladders, groups), ordered_bands(names, ladders, groups)]
+              for names, groups in cases]
+    assert js == python
+    # And the order is the table's own: the slowest Mario cutoff first, the
+    # unproven furthest left, ties in arrival order.
+    assert python[0][0] == ["Custom", "Empty", "Owl", "Mad Owl", "No Mario", "Standard",
+                            "Twin", "TJ Owlless", "DJ Owlless", "Sideflip"]

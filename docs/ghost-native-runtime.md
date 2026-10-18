@@ -203,8 +203,8 @@ readable explanation. A bulk read binds one current definition snapshot.
 | Capture | GC8: layout 200 (`player1_controller` at 188; Usamune's menu and input display bytes at 192 and 196, never recorded), sample 1268; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636), the [held object](#held-objects) (44 at 1216, its released angle at 36) and optional exact pad (8 at 1260, validity bit 512) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS7, still exported as `SM64GhostSourceV3` (the version argument must be 7); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP11: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension and global names/inputs/mode, name box and HUD input stack controls, whether the recording keeps the displayed picture, and [the ghost's path](#the-ghosts-path) | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC14: status 256, request 20080 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; appended preparation/activation generations, certified-start nonce and cancellation; status reserves hold separate prepared/active generations | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Playback | GP11: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension, the overlay switch's `hidden` and global names/inputs/mode, name box and HUD input stack controls, whether the recording keeps the displayed picture, and [the ghost's path](#the-ghosts-path) | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC14: status 256, request 20080 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; appended preparation/activation generations, certified-start nonce and cancellation; `hidden` (formerly `reserved1`), advertised by `GIPC_CAP_HIDDEN`; status reserves hold separate prepared/active generations | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP7: header 160, record 1284, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP6 (1276), GCLIP5 (1268) and GCLIP4 (652) still load with unavailable pad; GCLIP5 also has nothing released, GCLIP4 also has no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Portable collection | `.sm64ghosts` manifest version 2 adds known-or-null `game_version` to new entries' identity. Version 1 remains readable; re-export retains legacy entries' omitted version field and original identity/credit | [portable.py](../src/sm64_events/ghost/portable.py) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
@@ -746,6 +746,29 @@ counts 0 ghostless frames over 11 loads; forwarding the old withdraw hides the
 load frame, ignoring `suspended` draws the paused frames, and not reviving on
 a restore hides the load frame (each red).
 
+The overlay switch hides; it does not revoke (his report, 2026-10-17: off at
+0'04"43 and on a second later, the ghosts must "RESUME FROM EXACTLY WHERE IT
+SHOULD BE AT THAT EXACT FRAME, instantly"). Off, the session keeps the adaptive
+roster, origin and activation, follows later starts, and sends the same command
+with `hidden` (the checked-zero word after `clip_count`, and after `suspended`
+in the playback request; no size or version moved). The worker forwards it
+like any control, so the applied race, its recovery and its clips stay. Playback
+keeps planning each list (restores, the star latch, a running defeat) but draws
+and sounds nothing, and no ghost counts as seen, so a grab while hidden defeats
+nobody. On, the next command draws the frame the clock reached and sounds only
+from there. On with nobody racing (off at the start, nothing prepared), the
+session joins this run once the roster is ready, at any frame. The worker
+advertises `GIPC_CAP_HIDDEN`; an older renderer refuses the word, so the channel
+sends it the old playback off (no roster), and switching on there waits for the
+next attempt. Re-resolving a race without its restore history would misplace a
+segment ghost whose arm a load rebased, so it stays hidden rather than wrong.
+The playback witness switches off mid-run, runs a second hidden and switches on
+(drawn at the reached record, nothing replayed), grabs while hidden (the race
+stays over) and hides a defeat's fall (shown again at the fall frame it reached,
+no second cry); the IPC witness checks forwarding without a withdrawal or a clip
+read; the recovery witness loads a state while hidden (star and segment) and is
+shown at the loaded frame.
+
 A capture restart keeps the run (his report, 2026-09-23: spamming state loads
 in Blast Away the Wall, "eventually the ghost broke, and it never showed up
 again, until I reset"). His journal and pose archive show the cause: mid-run
@@ -1036,8 +1059,8 @@ uses `GIPC_ROM` (11); `GIPC_FILE` (6) describes clip acquisition. Neither a shar
 ROM failure nor renderer readiness changes saved-recording eligibility.
 
 Losing the active origin withdraws drawing while retaining prepared assets.
-Switching playback off (nothing listed to draw) also releases its clips; a
-later switch-on reads the files again. Withdrawal still retires released clips at the next
+Revoking playback (nothing listed to draw) also releases its clips; a later
+command reads the files again. The overlay switch hides instead (above). Withdrawal still retires released clips at the next
 render boundary, including released terminal poses, so worker collection can
 free their storage and the same clip can load again. An unreleased terminal pose
 keeps its position and death phase across temporary withdrawal. The

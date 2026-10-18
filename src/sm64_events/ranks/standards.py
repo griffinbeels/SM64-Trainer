@@ -12,6 +12,7 @@ from threading import RLock
 
 from sm64_events.memory.addresses import star_name
 from sm64_events.ranks.classify import RANK_NAMES, resolve_cutoff_videos
+from sm64_events.ranks.ladder_order import ordered_bands
 
 _log = logging.getLogger("sm64.ranks")
 
@@ -688,14 +689,19 @@ class RankStandards:
         `leaf` is the name minus its variant prefix — what a dropdown shows
         under a heading. The full `name` is still the identity, and every
         surface with no heading above it (a practice-log row, a PB tag) shows
-        that instead, because a leaf alone is ambiguous there."""
+        that instead, because a leaf alone is ambiguous there.
+
+        Groups and their members come in the rank standards table's column
+        order (`ladder_order.ordered_bands`), the order every strategy list
+        follows (2026-10-17)."""
         variants = self.exit_variants(ek)
         if not variants:
             return []
         groups = {label: {"label": label, "exit_star": star, "strategies": []}
                   for label, star in variants.items()}
         ungrouped = []
-        for strategy in self.ladders(ek):
+        ladders = self.ladders(ek)
+        for strategy in ladders:
             found = self.variant_of(ek, strategy)
             if found is None:
                 ungrouped.append({"name": strategy, "leaf": strategy})
@@ -707,7 +713,13 @@ class RankStandards:
         if ungrouped:
             out.append({"label": UNGROUPED_LABEL, "exit_star": None,
                         "strategies": ungrouped})
-        return out
+        by_label = {group["label"]: group for group in out}
+        ordered = []
+        for band in ordered_bands(list(ladders), ladders, out):
+            members = {s["name"]: s for s in by_label[band["label"]]["strategies"]}
+            ordered.append({**by_label[band["label"]],
+                            "strategies": [members[name] for name in band["names"]]})
+        return ordered
 
     def graded_entities(self) -> list:
         """Every entity key that has at least one ladder.

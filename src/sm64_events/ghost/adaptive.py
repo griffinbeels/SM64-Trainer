@@ -19,6 +19,8 @@ MAX_RIVALS = 4
 MAX_CANDIDATES = 16384
 MAX_AHEAD = 10
 MAX_STEP = scoring.progression_key(classify.RANK_NAMES[0], scoring.DIVISION_NUMERALS[-1])
+NO_PB_TOP_STEP = 2 * scoring.DIVISIONS_PER_TIER - 1
+"""With no saved PB, rivals spread across the two lowest tiers (Capless V to Toad I)."""
 PB_HUE_DEGREES = 250
 DEFAULT_OPTIONS = {
     "mode": "adaptive", "count": MAX_RIVALS, "include_pb": True,
@@ -233,8 +235,10 @@ def _range(pb, options):
         return options["min_step"], options["max_step"]
     if pb is not None and not _valid_basis(pb):
         raise ValueError("The rival range needs a valid saved personal best.")
-    # No saved PB starts at the floor; it does not override the chosen range.
-    step = pb["step"] if pb is not None else 0
+    if pb is None:
+        # Nothing to be ahead of yet: show the bottom two tiers, spread out.
+        return 0, NO_PB_TOP_STEP
+    step = pb["step"]
     return (min(MAX_STEP, step + max(1, options["min_ahead"])),
             min(MAX_STEP, step + max(1, options["max_ahead"])))
 
@@ -270,19 +274,42 @@ def _missing_pin(identity, slot):
                     "reason_text": "This chosen rival is unavailable. Reset or replace it."}, slot, True)
 
 
-def _eligible_auto(row, pb, options, low, high, strategy, scope):
-    # Different ROMs have different timing standards. A higher rank step
-    # proves progress without comparing their raw clocks. At the capped final
-    # step, a faster time only proves progress on the same ROM (or legacy PB),
-    # or where the ghost's region scope says both ROMs time it alike.
-    comparable = (pb is not None and pb.get("game_version") in (None, row.get("game_version"))
+def _ahead(row, pb):
+    """Whether the PB has not passed this recording yet.
+
+    Different ROMs have different timing standards. A higher rank step
+    proves progress without comparing their raw clocks. At the capped final
+    step, a faster time only proves progress on the same ROM (or legacy PB),
+    or when this strategy's region scope says both ROMs time it alike.
+    """
+    if pb is None:
+        return True
+    comparable = (pb.get("game_version") in (None, row.get("game_version"))
                   or row.get("region_scope") == region_scope.SHARED)
-    progresses = (pb is None or row["step"] > pb["step"]
-                  or comparable and row["frames"] < pb["frames"])
-    return (row.get("manual_only") is not True and row.get("beaten_in_simulation") is not True
-            and low <= row["step"] <= high
-            and (options["mode"] == "fixed" or progresses)
+    return row["step"] > pb["step"] or comparable and row["frames"] < pb["frames"]
+
+
+def _automatic_row(row, strategy, scope):
+    return (row.get("manual_only") is not True
             and (scope == "overall" or row.get("strategy") == strategy))
+
+
+def _eligible_auto(row, pb, options, low, high, strategy, scope):
+    return (_automatic_row(row, strategy, scope) and low <= row["step"] <= high
+            and (options["mode"] == "fixed" or _ahead(row, pb)))
+
+
+def _keeps_seat(row, pb, options, low, high, strategy, scope):
+    """A seated rival stays until the PB passes it (his rule, 2026-10-16:
+    seats keep their player and colour), even below the range's floor.
+
+    A seat above the range's top is dealt again: widening re-seats it in the
+    same slot while the range stays empty, and an undone PB brings nearer
+    rivals back.
+    """
+    if options["mode"] == "fixed":
+        return _eligible_auto(row, pb, options, low, high, strategy, scope)
+    return _automatic_row(row, strategy, scope) and _ahead(row, pb) and row["step"] <= high
 
 
 def player_key(row):
@@ -333,9 +360,7 @@ def _widened(candidates, taken, players, seats, high, strategy, scope, allow_fas
         return []
 
     def open_row(row):
-        # A developer climb retires the runs it has already beaten; they stay retired here.
         return (row["id"] not in taken and row.get("manual_only") is not True
-                and row.get("beaten_in_simulation") is not True
                 and (scope == "overall" or row.get("strategy") == strategy)
                 and (allow_fastest or _bundled(row)))
 
@@ -357,9 +382,11 @@ def _widened(candidates, taken, players, seats, high, strategy, scope, allow_fas
 def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope="strategy", allow_fastest=True) -> tuple[dict, ...]:
     """Choose visible slots; caller retains hidden pins and owns PB playback.
 
-    Pass the previous roster when changing one manual choice, to preserve its
-    other compatible automatic slots. Omit it when the saved basis/range changes.
-    Seats the range cannot fill widen upward, then downward (`_widened`),
+    Pass the previous roster to keep its seats: an automatic seat keeps its
+    player, slot and colour until the PB passes it, then takes that player's
+    faster in-range recording when one exists. Omit it to deal afresh (the
+    rival settings changed). With no saved PB the range spreads across the two
+    lowest tiers. Seats the range cannot fill widen upward, then downward (`_widened`),
     including recordings already beaten by the PB. Missing chosen recordings
     remain occupied rather than silently replaced.
     Overall permits other strategies, while every row keeps its recorded label.
@@ -377,42 +404,83 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
         candidates = {key: row for key, row in candidates.items() if strategy is not None and row.get("strategy") == strategy}
     used = {row["id"] for row in candidates.values()
             if options["include_pb"] and _same_as_pb(row, pb)}
-    result = {}
     players = set()
-    for slot in range(options["count"]):
-        identity = pins.get(str(slot))
-        if identity is not None:
-            row = candidates.get(identity)
-            duplicate = row is not None and player_key(row) in players
-            if row is not None and identity not in used and not duplicate:
-                result[slot] = _placed(row, slot, True)
-                players.add(player_key(row))
-            else:
-                result[slot] = _missing_pin(identity, slot)
-                if duplicate:
-                    result[slot]["reason_text"] = "This player already has a chosen rival. Reset or replace this slot."
-            used.add(identity)
+    result = _place_pins(pins, candidates, options["count"], used, players)
+    bounds = dict(pb=pb, options=options, low=low, high=high, strategy=strategy, scope=scope)
     # Persisted conflicting pins keep the first playable slot. Every seat,
     # including protected choices and carried-over rows, belongs to one player.
-    for old in sorted(previous, key=lambda item: item.get("slot") if type(item.get("slot")) is int else -1):
-        slot = old.get("slot")
-        row = candidates.get(old["id"])
-        if (not old.get("pinned") and type(slot) is int and 0 <= slot < options["count"] and slot not in result
-                and row is not None and row["id"] not in used and player_key(row) not in players
-                and _eligible_auto(row, pb, options, low, high, strategy, scope)):
-            result[slot] = _placed(row, slot, False)
-            used.add(row["id"])
-            players.add(player_key(row))
-    available = [row for row in candidates.values() if row["id"] not in used
-                 and _eligible_auto(row, pb, options, low, high, strategy, scope)]
+    seats = {old["slot"]: old for old in previous
+             if not old.get("pinned") and type(old.get("slot")) is int and 0 <= old["slot"] < options["count"]}
+    _carry_seats(seats, candidates, result, used, players, bounds)
+    available = [row for row in candidates.values() if row["id"] not in used and _eligible_auto(row, **bounds)]
     automatic = list(_automatic(available, options["count"] - len(result), low, high, players))
     automatic += _widened(candidates, used | {row["id"] for row in automatic}, players,
                           options["count"] - len(result) - len(automatic), high, strategy, scope, allow_fastest)
-    automatic = iter(sorted(automatic, key=lambda row: (row["step"], row["frames"], row["id"])))
-    for slot in range(options["count"]):
-        if slot not in result and (row := next(automatic, None)) is not None:
-            result[slot] = _placed(row, slot, False)
+    _deal(automatic, result, seats, options["count"])
     return tuple(result[slot] for slot in sorted(result))
+
+
+def _place_pins(pins, candidates, count, used, players):
+    """Chosen rivals first: each keeps its slot, playable or not."""
+    result = {}
+    for slot in range(count):
+        identity = pins.get(str(slot))
+        if identity is None:
+            continue
+        row = candidates.get(identity)
+        duplicate = row is not None and player_key(row) in players
+        if row is not None and identity not in used and not duplicate:
+            result[slot] = _placed(row, slot, True)
+            players.add(player_key(row))
+        else:
+            result[slot] = _missing_pin(identity, slot)
+            if duplicate:
+                result[slot]["reason_text"] = "This player already has a chosen rival. Reset or replace this slot."
+        used.add(identity)
+    return result
+
+
+def _carry_seats(seats, candidates, result, used, players, bounds):
+    """Keep each previous automatic seat the PB has not passed, in its slot.
+
+    Same rival, faster: a seat the new PB passed first takes its player's
+    fastest in-range recording that is still ahead (his design, 2026-10-16).
+    """
+    def seat(row, slot):
+        result[slot] = _placed(row, slot, False)
+        used.add(row["id"])
+        players.add(player_key(row))
+
+    passed = []
+    for slot, old in sorted(seats.items()):
+        row = candidates.get(old["id"])
+        if slot in result or row is not None and (row["id"] in used or player_key(row) in players):
+            continue
+        if row is not None and _keeps_seat(row, **bounds):
+            seat(row, slot)
+        elif not _ahead(row or old, bounds["pb"]):
+            passed.append((slot, old))
+    for slot, old in passed:
+        player = player_key(old)
+        faster = [row for row in candidates.values() if row["id"] not in used and player_key(row) == player
+                  and player not in players and _eligible_auto(row, **bounds)]
+        if faster:
+            seat(min(faster, key=lambda row: (row["frames"], row["id"])), slot)
+
+
+def _deal(automatic, result, seats, count):
+    """Fill vacancies in rank order; a returning player takes back the slot (and colour) they held."""
+    automatic = sorted(automatic, key=lambda row: (row["step"], row["frames"], row["id"]))
+    held = {player_key(old): slot for slot, old in seats.items()}
+    for row in tuple(automatic):
+        slot = held.get(player_key(row))
+        if slot is not None and slot not in result:
+            result[slot] = _placed(row, slot, False)
+            automatic.remove(row)
+    remaining = iter(automatic)
+    for slot in range(count):
+        if slot not in result and (row := next(remaining, None)) is not None:
+            result[slot] = _placed(row, slot, False)
 
 
 def add_slot(roster, count: int, replacement_slot: int | None = None) -> int:

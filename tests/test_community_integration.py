@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from test_ghost_adaptive import IDENTITY, Standards, recording
 from test_ghost_population import recorded
-from sm64_events.ghost.adaptive import checked_options, rank_frames, rank_recordings
+from sm64_events.ghost.adaptive import rank_frames, rank_recordings
 from sm64_events.ghost.community_catalog import match_windows, model_cutoffs
 from sm64_events.ghost.community_rivals import CommunityRivals
 from sm64_events.ghost.population import LocalPopulation
@@ -86,8 +86,7 @@ def test_catalog_bins_have_the_same_integer_boundaries_as_native_rank_selection(
         assert rank_frames(ranks, identity, row['frames'])['step'] >= row['step']
         if row['frames'] < 100000:
             assert rank_frames(ranks, identity, row['frames'] + 1)['step'] < row['step']
-    pb = {**rank_frames(ranks, identity, 600), 'frames': 600}
-    windows = match_windows(ranks, identity, pb, checked_options({}))
+    windows = match_windows(ranks, identity)
     assert any(low <= 600 <= high for low, high in windows)
 
 
@@ -99,43 +98,45 @@ def test_remote_structural_validation_preserves_unverified_provenance():
     assert not rank_recordings([{**row, 'structurally_valid': False}], Standards(), IDENTITY)
 
 
-def test_downloads_do_not_displace_playable_rivals_or_hold_up_private_choices():
+def test_a_downloading_seat_is_pending_and_never_holds_up_private_choices():
+    """His design (2026-10-16): a chosen seat shows its player at once, marked
+    pending until its recording downloads; nothing else waits for it."""
     class Sync:
         requested = None
         def request_assets(self, values): self.requested = values
     sync = Sync()
-    population = SimpleNamespace(is_ready=lambda key: key == 'old')
+    population = SimpleNamespace(is_ready=lambda key: False, keep=lambda _ids: None)
     staging = CommunityRivals(sync, population)
-    old = {'id': 'old', 'slot': 0, 'provenance': 'community-unverified'}
-    new = {'id': 'new', 'slot': 0, 'provenance': 'community-unverified'}
-    private = {'id': 'private', 'slot': 1, 'manual_only': True}
-    assert staging.stage((new, private), (old,)) == (old, private)
+    new = {'id': 'new', 'slot': 0, 'provenance': 'community-unverified', 'ghost': object()}
+    private = {'id': 'private', 'slot': 1, 'manual_only': True, 'ghost': object()}
+    staged = staging.stage((new, private))
+    assert [(row['id'], row['pending']) for row in staged] == [('new', True), ('private', False)]
     assert sync.requested == ('new',) and staging.downloading
     population.is_ready = lambda key: True
-    assert staging.stage((new, private), (old,)) == (new, private)
+    assert [row['pending'] for row in staging.stage((new, private))] == [False, False]
     assert not staging.downloading
 
 
 @pytest.mark.parametrize("moved_slot", [0, 1])
-def test_partially_downloaded_slot_changes_never_race_two_recordings_of_one_player(moved_slot):
+def test_partially_downloaded_slot_changes_never_seat_two_recordings_of_one_player(moved_slot):
     def row(identifier, player, slot):
-        return {"id": identifier, "player_id": player, "slot": slot, "provenance": "community-unverified"}
-    previous = (row("a-old", "a", moved_slot), row("b-old", "b", 1 - moved_slot))
+        return {"id": identifier, "player_id": player, "slot": slot, "provenance": "community-unverified",
+                "ghost": object()}
     desired = (row("b-new", "b", moved_slot), row("a-new", "a", 1 - moved_slot))
     sync = SimpleNamespace(request_assets=lambda _ids: None)
-    population = SimpleNamespace(is_ready=lambda identifier: identifier != "a-new")
+    population = SimpleNamespace(is_ready=lambda identifier: identifier != "a-new", keep=lambda _ids: None)
     staging = CommunityRivals(sync, population)
-    staged = staging.stage(desired, previous)
-    assert [(row["id"], row["player_id"]) for row in staged] == [("b-new", "b")]
+    staged = staging.stage(desired)
+    assert {(row["id"], row["pending"]) for row in staged} == {("b-new", False), ("a-new", True)}
     assert staging.downloading
-    population.is_ready = lambda _identifier: True
-    assert staging.stage(desired, previous) == tuple(sorted(desired, key=lambda row: row["slot"]))
+    duplicate = (*desired, row("a-other", "a", 2))
+    assert [row["id"] for row in staging.stage(duplicate)].count("a-other") == 0
 
 
 def test_staging_keeps_equal_names_with_distinct_verified_players_and_unknown_legacy_rows():
     rows = tuple({"id": str(i), "slot": i, "player_id": player, "player_name": "Same name"}
                  for i, player in enumerate(("uid-a", "uid-b", None, "")))
-    assert CommunityRivals(None, None).stage(rows, ()) == rows
+    assert CommunityRivals(None, None).stage(rows) == tuple({**row, "pending": False} for row in rows)
 
 
 def test_cloud_offer_precedes_independent_local_winner_skip(tmp_path):
@@ -220,8 +221,7 @@ def test_the_pool_request_covers_every_bin_so_the_range_can_widen(scope):
     identity = replace(IDENTITY, scope=scope)
     model = ranks.overall_curve('star:2:1', 'us') if scope == 'overall' else ranks.ladder_cs('star:2:1', 'Standard', 'us')
     cutoffs = [(row['step'], row['frames']) for row in model_cutoffs(model, scope)]
-    pb = {**rank_frames(ranks, identity, 600), 'frames': 600}
-    for basis in (pb, None):
-        windows = match_windows(ranks, identity, basis, checked_options({}))
-        assert frame_band(cutoffs, windows) == (cutoffs[0][0], cutoffs[-1][0], cutoffs[0][0])
-        assert all(600 not in window for window in windows)  # never the exact PB as a bound
+    # One list serves every PB and rival setting: its request names neither.
+    windows = match_windows(ranks, identity)
+    assert frame_band(cutoffs, windows) == (cutoffs[0][0], cutoffs[-1][0], cutoffs[0][0])
+    assert all(600 not in window for window in windows)  # never the exact PB as a bound

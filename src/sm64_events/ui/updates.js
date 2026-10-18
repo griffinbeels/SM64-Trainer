@@ -15,7 +15,6 @@ export function useUpdates() {
   const [updateMsg, setUpdateMsg] = useState("");          // transient header toast
   const [betaUpdatesBusy, setBetaUpdatesBusy] = useState(false);
   const [updateDismissed, setUpdateDismissed] = useState(false);
-  const [updateStartupPending, setUpdateStartupPending] = useState(true);
   const fetchUpdate = useCallback(async (force) => {
     try {
       const st = await getJSON("/api/update/status" + (force ? "?force=1" : ""));
@@ -24,12 +23,9 @@ export function useUpdates() {
     } catch { return null; }
   }, []);
   useEffect(() => {
-    let mounted = true;
-    const finish = () => { if (mounted) setUpdateStartupPending(false); };
-    // Wait for updates before onboarding, bounded for offline starts.
-    const timeout = setTimeout(finish, 5000);
-    fetchUpdate(false).finally(finish);
-    return () => { mounted = false; clearTimeout(timeout); };
+    // Check quietly in the background. Only an actionable offer interrupts;
+    // a refresh must not wait for this request before practice or sign-in.
+    void fetchUpdate(false);
   }, [fetchUpdate]);
   useEffect(() => { if (updateForced) setUpdateDismissed(false); }, [updateForced]);
   const dismissUpdate = useCallback(() => {
@@ -105,6 +101,6 @@ export function useUpdates() {
   return { update, updateForced, setUpdateForced, updateApplying,
     setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate,
     betaUpdatesBusy, setBetaUpdates, repairUpdate, refreshUpdates: fetchUpdate,
-    updateStartupPending, dismissUpdate,
+    dismissUpdate,
     updateVisible: updateOfferVisible(update, updateApplying, updateForced, updateDismissed) };
 }

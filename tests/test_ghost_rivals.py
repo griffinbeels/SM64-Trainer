@@ -75,8 +75,9 @@ def test_scoped_clear_then_delete_previous_session_refreshes_real_pb_and_roster(
         assert [row.id for row in db.attempts()] == [old.id]
         await service.delete_session(old.session_id)
         assert rivals.pb is None and len(rivals.rows) == 4
-        # No PB starts at the floor; the empty range widens upward, nearest first (round 49).
-        assert sorted(row["frames"] for row in rivals.rows) == [1160, 1170, 1180, 1190]
+        # No PB spreads across the two lowest tiers; seats already there keep their slots.
+        steps = {row["frames"]: rank_frames(service.ranks, identity, row["frames"])["step"] for row in rivals.rows}
+        assert all(step <= 9 for step in steps.values()) and len({row["player_id"] for row in rivals.rows}) == 4
         assert len(native.preparations[-1][1]) == 4
         assert len(snapshots) == 2 and population.rows
 
@@ -103,6 +104,9 @@ class Population:
 
     def search(self, _identity, _player, *, cursor=None, limit=20):
         return {"records":self.rows[:limit],"next_cursor":cursor}
+
+    def keep(self, _identifiers):
+        pass
 
 
 class Native:
@@ -160,7 +164,8 @@ def test_complete_historical_bundle_falls_back_offline_and_remains_manually_sele
     native, population = Native(), Bundle()
     sync = SimpleNamespace(account=SimpleNamespace(snapshot=lambda: {
         "authenticated": True, "status": "active", "uid": "11111111-1111-4111-8111-111111111111"}),
-        last_error="network_unavailable", request_pool=lambda *_args, **_kwargs: None) if cloud_active else None
+        last_error="network_unavailable", request_pool=lambda *_args, **_kwargs: None,
+        pool_status=lambda _identity: "offline", refused_assets=frozenset) if cloud_active else None
     rivals = Rivals(tracker, population, native, lambda: "us", community=sync)
     try:
         rivals.refresh(TARGET, CONTROLS, enabled=True)
@@ -317,12 +322,21 @@ def test_new_database_and_capture_source_force_new_preparation(tmp_path,monkeypa
 
 def test_overlay_off_does_not_prepare_clip_bytes(tmp_path,monkeypatch):
     rivals,_,native,_,_ = controller(tmp_path,monkeypatch)
-    count=len(native.preparations)
+    count,generation=len(native.preparations),rivals.generation
     rivals.refresh(TARGET,CONTROLS,enabled=False)
     assert len(native.preparations)==count
     assert rivals.payload()["status"] is None
+    # Switched back on, the renderer still holds this roster and its race
+    # resumes (his ask, 2026-10-17): nothing is prepared again.
+    rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
+    assert (len(native.preparations),rivals.generation)==(count,generation)
+    assert rivals.payload()["status"] is None
+    # A renderer that no longer holds it (a new capture) prepares once on.
+    rivals.source_of=lambda:"new-capture"
+    rivals.refresh(TARGET,CONTROLS,enabled=False)
+    assert len(native.preparations)==count
     rivals.refresh(TARGET,CONTROLS,enabled=True)
-    assert len(native.preparations)==count+1
+    assert len(native.preparations)==count+1 and rivals.generation==generation+1
 
 
 def test_wire_omits_private_playback_and_local_lineage():
@@ -429,20 +443,26 @@ def test_automatic_rivals_exclude_own_runs_but_preserve_explicit_choices(tmp_pat
     assert rivals.rows[0]["id"]==population.rows[0]["id"] and rivals.rows[0]["pinned"]
 
 
-def test_fresh_full_range_climb_retires_beaten_times_including_same_rank(tmp_path,monkeypatch):
+@pytest.mark.parametrize("simulated", [False, True])
+@pytest.mark.parametrize("frames", [640, 600])
+@pytest.mark.parametrize("count", [1, 9])
+def test_fresh_profile_fills_from_below_like_normal_play(tmp_path,monkeypatch,simulated,frames,count):
     rivals,_,native,population,clock=controller(tmp_path,monkeypatch)
-    monkeypatch.setattr(rivals,"_simulation",lambda:{"zero_practice":True})
-    monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=20,frames=640))
+    population.rows=population.rows[:count]
+    monkeypatch.setattr(rivals,"_simulation",lambda:{"zero_practice":True} if simulated else None)
+    monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=44,frames=frames))
+    rivals.options.update(mode="adaptive")
     rivals.pb_changed()
     before=rivals.generation
     rivals.refresh(TARGET,CONTROLS,enabled=True)
     assert clock[0]==0 and rivals.generation==before+1
-    assert [row["frames"] for row in rivals.rows]==[620]
+    rows=rivals.payload()["rows"]
+    assert len(rows)==min(4,count) and len({row["player_id"] for row in rows})==len(rows)
+    # With no recording above the range, fill from the closest subdivisions
+    # below, even after the tester beats every donated recording.
+    expected=sorted(population.rows,key=lambda row:row["frames"])[:4]
+    assert {row["id"] for row in rows}=={row["id"] for row in expected}
     assert native.preparations[-1][-1]==rivals.generation
-    # Fixed production ranges still allow the chosen absolute rank range.
-    monkeypatch.setattr(rivals,"_simulation",lambda:None)
-    rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
-    assert len(rivals.rows)==4 and any(row["frames"]>=640 for row in rivals.rows)
 
 
 def test_reopening_preserves_referenced_local_choices_across_many_targets(tmp_path,monkeypatch):
@@ -554,7 +574,8 @@ class BundledRows(CloudPopulation):
 def signed_in(name, uid=UID):
     return SimpleNamespace(account=SimpleNamespace(snapshot=lambda: {
         "authenticated": True, "status": "active", "uid": uid, "name": name}),
-        last_error=None, request_pool=lambda *_args, **_kwargs: None, request_assets=lambda *_args, **_kwargs: None)
+        last_error=None, request_pool=lambda *_args, **_kwargs: None, request_assets=lambda *_args, **_kwargs: None,
+        pool_status=lambda _identity: None, refused_assets=frozenset)
 
 
 def seated(tmp_path, monkeypatch, population, community=None, *, author=None):
@@ -682,13 +703,46 @@ def test_account_change_recomputes_prior_rows_self_alias_before_download_staging
         assert rivals.rows[0]["_owned"] is True
         rivals.community.sync = signed_in("Other", "22222222-2222-4222-8222-222222222222")
         staged = []
-        stage = rivals.community.stage
-        def capture(desired, previous):
+        select = module.select_rivals
+        def capture(rows, pb, options, pins, previous=(), **kwargs):
             staged.extend(previous)
-            return stage(desired, previous)
-        monkeypatch.setattr(rivals.community, "stage", capture)
+            return select(rows, pb, options, pins, previous, **kwargs)
+        monkeypatch.setattr(module, "select_rivals", capture)
         rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
         assert staged[0]["player_id"] == UID and staged[0]["_owned"] is False
         assert rivals.rows[0]["_owned"] is False
+    finally:
+        tracker.db.close()
+
+
+def test_own_seats_are_marked_by_identity_never_by_name(tmp_path, monkeypatch):
+    """A rival who calls themselves "You" is still a rival; the player's own
+    saved run is marked `own` from who recorded it."""
+    rivals, tracker, _, population, _ = controller(tmp_path, monkeypatch)
+    try:
+        tracker.db.upsert_attempt(attempt())
+        population.rows = [{**row, "player_name": "You"} for row in population.rows]
+        rivals.choose_library(TARGET, [AttemptGhost(1, "star", "2-1", "Standard", 600)], True)
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+        rows = rivals.payload()["rows"]
+        own = [row for row in rows if row["own"]]
+        assert len(own) == 1 and own[0]["pinned"] and own[0]["player_id"] == "local:self"
+        assert [row["player_name"] for row in rows if not row["own"]] and all(
+            row["player_name"] == "You" for row in rows if not row["own"])
+    finally:
+        tracker.db.close()
+
+
+def test_a_run_with_no_strategy_never_joins_the_standard_lineup(tmp_path, monkeypatch):
+    rivals, tracker, _, _, _ = controller(tmp_path, monkeypatch)
+    try:
+        run = attempt(strat_tag=None)
+        tracker.db.upsert_attempt(run)
+        before = json.dumps(rivals.pins, sort_keys=True)
+        assert not rivals.remember_saved({**TARGET, "strat": None}, run)
+        from sm64_events.ghost.pb import local_attempt_source
+        identity = rivals._remember_local(local_attempt_source(run))
+        assert rivals._private_record(identity, rivals.identity) is None  # not "Standard" by default
+        assert json.dumps(rivals.pins, sort_keys=True) == before
     finally:
         tracker.db.close()

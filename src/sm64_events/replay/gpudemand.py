@@ -118,16 +118,17 @@ class GpuDemand:
                     self._snapshot = replace(self._snapshot, cancelled=True)
         self.stop_event.set()
 
-    def reconcile_lifecycle(self, timeout=0.25):
+    def reconcile_lifecycle(self, timeout=1.25):
         """Media-error reconciliation only; lease reads stay on the supervisor.
 
         A native channel may close before the next (at most 100 ms) control
-        poll. Wait at most 250 ms for an explicit typed lifecycle outcome.
+        poll. Image loss can precede Project64's lifecycle callback, so allow
+        its one-second classification grace plus the control poll interval.
         Timeout/missing evidence is a failure, never permission to retry.
         Cleanup is still independently joined and checked by close().
         """
-        if not 0 <= timeout <= 0.25:
-            raise ValueError("lifecycle reconciliation must be within 250 ms")
+        if not 0 <= timeout <= 1.25:
+            raise ValueError("lifecycle reconciliation must be within 1250 ms")
         self._ended.wait(timeout)
         return self.snapshot.lifecycle
 
@@ -224,10 +225,41 @@ class GpuDemand:
     # (gfxwrap.c RomClosed: wr_suspend, then control_rom), so a capability
     # loss read while the ROM still shows open may be the first half of a
     # normal ROM or Project64 close. Poll briefly for that lifecycle evidence
-    # before calling it a fault: the media side waits at most 250 ms for this
-    # classification (reconcile_lifecycle), after a poll of up to 100 ms.
+    # before calling it a fault, after a poll of up to 100 ms.
     CLOSING_GRACE_S = 0.12
     CLOSING_POLL_S = 0.02
+
+    IMAGE_LOSS_GRACE_S = 1.0
+
+    def _classify_image_loss(self, control, request, failure):
+        """Keep the original fault unless this producer explicitly retires.
+
+        On window/ROM teardown the native image may disappear before the
+        lifecycle callback. Keep control reads on this supervisor, bounded
+        to one second; a terminal channel cannot produce further pictures.
+        Do not renew or replace its request, or let an explicit recorder stop
+        relabel this already-observed fault as cancellation.
+        """
+        deadline = self._clock() + self.IMAGE_LOSS_GRACE_S
+        while not self.stop_event.wait(self.CLOSING_POLL_S):
+            try:
+                status = control.status()
+                self._check_identity(status, request.identity)
+            except BlockingIOError:
+                pass
+            except DemandFailure as changed:
+                if changed.lifecycle:
+                    raise
+                # Capability loss alone is insufficient evidence of a close.
+            else:
+                if (status.ack_token == request.identity.token
+                        and status.state == C.UNAVAILABLE
+                        and status.reason == C.FRESH_REQUEST):
+                    raise DemandFailure(
+                        f"native_capture_ended:{status.state}:{status.reason}", lifecycle=True)
+            if self._clock() >= deadline:
+                break
+        raise failure
 
     def _monitor(self, control, request):
         started = last_renew = self._clock()
@@ -261,13 +293,16 @@ class GpuDemand:
                             self.expected_pid, request.identity.token, status.state,
                             status.reason, native_reason(status.reason),
                         )
-                        raise DemandFailure(
+                        failure = DemandFailure(
                             f"native_capture_ended:{status.state}:{status.reason}",
                             lifecycle=(
                                 status.state == C.UNAVAILABLE
                                 and status.reason == C.FRESH_REQUEST
                             ),
                         )
+                        if status.state == C.UNAVAILABLE and status.reason == 10016:
+                            self._classify_image_loss(control, request, failure)
+                        raise failure
                     if active and status.state != C.ACTIVE:
                         raise DemandFailure("native_capture_restarted")
                     active |= status.state == C.ACTIVE

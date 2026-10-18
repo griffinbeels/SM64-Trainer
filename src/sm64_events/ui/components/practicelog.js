@@ -29,7 +29,7 @@ import { Icon } from "./icons.js";
 import { ShrinkToFitName } from "./shrinkname.js";
 import { Disclose } from "./collapsible.js";
 import { useFeedMotion } from "./feedmotion.js";
-import { StratPicker } from "./stratpicker.js";
+import { StratPicker, writeActiveStrategy } from "./stratpicker.js";
 import { StandardsPanel } from "./standards.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
          StatMenuTrigger, comparator, ranksAreAtFloor,
@@ -44,7 +44,7 @@ import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { AddTime } from "./addtime.js";
-import { GhostSettings, GhostSwitch } from "./ghostswitch.js";
+import { GhostSettings, GhostSwitch, GhostToggle, useGhostSession } from "./ghostswitch.js";
 import { GoalPlate, useEntryGoals } from "./goalplate.js";
 import { useTargetPick } from "../target.js";
 
@@ -548,6 +548,45 @@ function rankViewFor(active, preferred, separate) {
       ? "Show this PB's overall rank" : "Strategy and overall use the same rank standards"};
 }
 
+/** The card's Strategy / Overall pair: one banner, two pressed-state buttons in its kicker. */
+function RankModeButtons({ rankMode, canChooseScope, active, strategyTitle, overallTitle, onPick }) {
+  return html`<span class="rank-mode-buttons" role="group"
+      aria-label=${active ? "Rank and ghosts" : "Rank view"}>
+    ${canChooseScope && html`<button type="button"
+        class=${`rank-mode-button${rankMode === "strategy" ? " is-selected" : ""}`}
+        aria-pressed=${rankMode === "strategy" ? "true" : "false"}
+        title=${strategyTitle}
+        onclick=${() => onPick("strategy")}>Strategy</button>`}
+    <button type="button"
+        class=${`rank-mode-button${rankMode === "overall" ? " is-selected" : ""}`}
+        aria-pressed=${rankMode === "overall" ? "true" : "false"}
+        title=${overallTitle}
+        onclick=${() => onPick("overall")}>Overall</button>
+  </span>`;
+}
+
+/**
+ * The card's ghosts: its one session (shared by the head's ghost toggle and the
+ * Lineup under the head; only the active card fetches), and the strategy the
+ * Lineup's buttons pick. A pick from the row is held on the head's picker until
+ * the store's refresh carries it -- the same hold the picker keeps for its own
+ * picks, so the two never disagree on screen.
+ */
+function useCardGhost(sec, t, active) {
+  const session = useGhostSession(t, active);
+  const [held, setHeld] = useState(undefined);
+  const pick = async (tag) => {
+    setHeld(tag);
+    try {
+      await writeActiveStrategy(entityIdentity(sec), tag, sectionClock(sec, t.clock), t.setNotice);
+    } catch {
+      if (t.setNotice) t.setNotice("Couldn't save the strategy. The tracker may be reconnecting; try again.");
+    }
+    try { await t.refresh(); } finally { setHeld(undefined); }
+  };
+  return { session, pick, strat: held !== undefined ? held : sec.last_strat };
+}
+
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
@@ -562,6 +601,9 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // Active practice also uses this choice for ghosts, even on a shared ladder.
   const [preferredRankMode, setPreferredRankMode] = useState(
     () => readRankDisplayMode(ek));
+  // The card's ONE ghost session, shared by the head's ghost toggle and the
+  // Lineup under the head; only the active card fetches it.
+  const ghost = useCardGhost(sec, t, active);
   // `forceOpen` exists for exactly one moment (Task 6 brief, Step 1): "so a
   // pick on a COLLAPSED card has a scroll target to find" -- it must win
   // just long enough to make the row exist, never permanently. Folding
@@ -686,21 +728,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
     writeRankDisplayMode(ek, mode);
     setPreferredRankMode(mode);
   };
-  const scopeLabel = active
-    ? "Rank and ghosts" : "Rank view";
-  const rankModeButtons = html`<span class="rank-mode-buttons" role="group"
-      aria-label=${scopeLabel}>
-    ${canChooseScope && html`<button type="button"
-        class=${`rank-mode-button${rankMode === "strategy" ? " is-selected" : ""}`}
-        aria-pressed=${rankMode === "strategy" ? "true" : "false"}
-        title=${strategyTitle}
-        onclick=${() => pickRankMode("strategy")}>Strategy</button>`}
-    <button type="button"
-        class=${`rank-mode-button${rankMode === "overall" ? " is-selected" : ""}`}
-        aria-pressed=${rankMode === "overall" ? "true" : "false"}
-        title=${overallTitle}
-        onclick=${() => pickRankMode("overall")}>Overall</button>
-  </span>`;
+  const rankModeButtons = html`<${RankModeButtons} rankMode=${rankMode} canChooseScope=${canChooseScope}
+    active=${active} strategyTitle=${strategyTitle} overallTitle=${overallTitle} onPick=${pickRankMode} />`;
   const shownBanner = rankMode === "strategy"
     ? sec.rank : (hasSeparateRank ? sec.entity_rank : sec.rank);
   const shownIdentity = rankMode === "strategy" ? "strategy" : "entity";
@@ -827,7 +856,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           ? html`<span class="log-card-strat">Definition deleted</span>`
           : html`<span class="log-card-strat-picker">
               <${StratPicker} entity=${ek} identity=${entityIdentity(sec)}
-                  strategies=${sec.strategies} active=${sec.last_strat}
+                  strategies=${sec.strategies} active=${ghost.strat}
                   groups=${sec.strategy_groups} allowBlank=${!sec.default_strat}
                   timerMode=${clock} onNotice=${t.setNotice} onChanged=${t.refresh} /></span>`}
       </div>
@@ -870,7 +899,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            never a 404), while the ladder directly below kept showing the
            star's real, populated one. One card, one ladder, and now one
            Library identity -- never two doors to the same standings. */""}
-      <div class="log-card-actions">
+      <div class="log-card-actions"><${GhostToggle} ghost=${ghost.session} entityKey=${ek} active=${active} />
         ${/* Wears the LIBRARY (open book) icon, the same glyph the nav's own
              Library entry and the standards table's per-tier links wear -- a
              door into the Library is the library icon everywhere (round 1,
@@ -887,7 +916,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           <${Icon} name="chevron" size=${18} />
         </button>
       </div>
-    </div><${GhostSwitch} t=${t} entityKey=${ek} active=${active} scope=${rankMode} />
+    </div><${GhostSwitch} t=${t} ghost=${ghost.session} entityKey=${ek} active=${active} scope=${rankMode} strategies=${sec.strategies} onPickStrategy=${ghost.pick} />
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
       ${inBody && ranksBlock}

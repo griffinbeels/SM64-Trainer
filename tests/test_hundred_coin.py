@@ -93,12 +93,15 @@ def test_strategy_groups_carry_the_leaf_the_dropdown_shows(tmp_path):
                        "100c + Race · Open": {"Gold": 2.0},
                        "Hand Edited": {"Gold": 3.0}}}""")
     groups = store.strategy_groups("star:4:6")
+    # In the rank standards table's band order, slowest band first (round
+    # 10, 2026-10-17: "strategies should always be sorted in rank standard
+    # order"), so the picker's headings run as the table's do.
     assert [(g["label"], g["exit_star"]) for g in groups] == [
-        ("100c + Slide", 0), ("100c + Race", 2), ("Other", None)]
-    assert groups[0]["strategies"] == [
+        ("Other", None), ("100c + Race", 2), ("100c + Slide", 0)]
+    assert groups[2]["strategies"] == [
         {"name": "100c + Slide · Standard", "leaf": "Standard"}]
     # A name matching no variant is listed rather than dropped.
-    assert groups[2]["strategies"] == [{"name": "Hand Edited", "leaf": "Hand Edited"}]
+    assert groups[0]["strategies"] == [{"name": "Hand Edited", "leaf": "Hand Edited"}]
 
 
 def test_an_ordinary_entity_has_no_groups_at_all(tmp_path):

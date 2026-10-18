@@ -11,16 +11,22 @@ from uuid import UUID, uuid4
 from sm64_events.ghost.clip import blink_frames
 from sm64_events.ghost.portable import checked_author, checked_hash
 from sm64_events.ghost.sharing import PortableGhost
-from sm64_events.ghost.sharing_targets import bind, checked_target, describe
+from sm64_events.ghost.sharing_targets import bind, binding_index, checked_target, describe
 
 from . import claims, codec
 from .config import CommunityError
+from .names import incoming_name
 
 MAX_METADATA = 1024
-MAX_POOLS = 32
+"""Rows outside any rival list: search pages, chosen-rival renewals, downloads."""
+MAX_POOLS = 16
+"""Rival lists held at once, each owning its rows (at most 4 pages of 256), so a
+list for one strategy never evicts another's. Least recently stored goes first."""
 CACHE_ENCODED = 16 << 20
 CACHE_RAW = 32 << 20
 TTL = 600  # Publication leases expire after ten minutes even when the network is down.
+LEASE_RENEW_S = 60
+"""A held list or chosen-rival row renews this long before its lease lapses."""
 
 
 def value_of(identity, name, default=None):
@@ -29,6 +35,18 @@ def value_of(identity, name, default=None):
 
 def target_key(target):
     return (target["kind"], target.get("signature") if target["kind"] == "segment" else target["entity_key"])
+
+
+def account_owner(snapshot):
+    """The signed-in account whose cloud view this is, or None.
+
+    A refresh token that failed to rotate (a network blip at expiry) leaves
+    the profile and the stored token: still this account, so nothing it
+    holds is wiped. Signing out or another account changes the owner.
+    """
+    if snapshot.get("status") != "active" or not (snapshot.get("authenticated") or snapshot.get("stored")):
+        return None
+    return snapshot.get("uid")
 
 
 def checked_metadata(value):
@@ -43,10 +61,13 @@ def checked_metadata(value):
             checked_hash(value[field])
         if str(UUID(value["player_id"])) != value["player_id"]:
             raise ValueError()
-        checked_author(value["player_name"])
         result["target"] = checked_target(value["target"])
     except (ValueError, TypeError, AttributeError):
         raise CommunityError("invalid_metadata") from None
+    try:
+        result["player_name"] = incoming_name(checked_author(value["player_name"]))
+    except ValueError:
+        raise CommunityError("invalid_name") from None
     if (value["clock"] not in ("igt", "rta") or value["game_version"] not in ("us", "jp")
             or not isinstance(value["strategy"], str) or not 1 <= len(value["strategy"].encode("utf8")) <= 256
             or any(ord(c) < 32 for c in value["strategy"])
@@ -72,6 +93,7 @@ class CachedPopulation:
         self._generation = 0
         self._owner = None
         self._closed = False
+        self._kept = frozenset()
         # The index is deliberately memory-only. Reopening requires publication
         # gates again; stale private files cannot become an offline public roster.
         for suffix in (".ghost", ".ghc1", ".part"):
@@ -93,20 +115,28 @@ class CachedPopulation:
         provided = value_of(identity, "target")
         if provided is not None:
             return checked_target(provided)
-        return describe(value_of(identity, "kind"), value_of(identity, "entity_key"),
-                        value_of(identity, "strategy"), self._defs())
+        kind = value_of(identity, "kind")
+        # Only a segment needs the definitions; a star never reads the database.
+        return describe(kind, value_of(identity, "entity_key"), value_of(identity, "strategy"),
+                        self._defs() if kind == "segment" else ())
+
+    def _target_key(self, identity):
+        signature = value_of(identity, "signature")
+        if value_of(identity, "target") is None and value_of(identity, "kind") == "segment" and signature is not None:
+            # A practice identity already carries its definition's signature.
+            return target_key(checked_target({"kind": "segment", "entity_key": value_of(identity, "entity_key"),
+                                              "signature": signature}))
+        return target_key(self.portable_target(identity))
 
     def identity_key(self, identity):
-        target = self.portable_target(identity)
         clock, rom, scope = value_of(identity, "clock"), value_of(identity, "game_version"), value_of(identity, "scope", "strategy")
         strategy = value_of(identity, "strategy") if scope == "strategy" else None
         if clock not in ("igt", "rta") or rom not in ("us", "jp") or scope not in ("strategy", "overall") or scope == "strategy" and not strategy:
             raise CommunityError("unsupported_identity")
-        return (*target_key(target), clock, rom, scope, strategy)
+        return (*self._target_key(identity), clock, rom, scope, strategy)
 
     def _active(self):
-        snapshot = self.account.snapshot() if self.account else {}
-        owner = snapshot.get("uid") if snapshot.get("authenticated") and snapshot.get("status") == "active" else None
+        owner = account_owner(self.account.snapshot()) if self.account else None
         if owner != self._owner:
             self._owner = owner
             self._pools.clear()
@@ -124,7 +154,7 @@ class CachedPopulation:
     def owned_player_ids(self, local_id, *, names=()):
         """The signed-in account's uid, plus whatever the wrapped layers own."""
         snapshot = self.account.snapshot() if self.account else {}
-        uid = snapshot.get("uid") if snapshot.get("authenticated") else None
+        uid = snapshot.get("uid") if snapshot.get("authenticated") or snapshot.get("stored") else None
         method = getattr(self.local, "owned_player_ids", None)
         inner = method(local_id, names=names) if method else ()
         return frozenset(value for value in (local_id, uid, *inner) if value)
@@ -132,8 +162,10 @@ class CachedPopulation:
     def additional_owned_player_ids(self, local_id):
         return self.owned_player_ids(local_id)
 
-    def _row(self, value):
-        key, reason = bind(value["target"], self._defs())
+    def _row(self, value, index=None):
+        if value["target"]["kind"] == "segment" and index is None:
+            index = binding_index(self._defs())
+        key, reason = bind(value["target"], index=index or {})
         if reason:
             raise LookupError(reason)
         ghost = PortableGhost(value["id"], value["target"]["kind"], key, value["strategy"], value["frames"], value["player_name"])
@@ -141,45 +173,66 @@ class CachedPopulation:
                 "signature": value["target"].get("signature"), "sha256": value["raw_sha256"],
                 "valid": True, "ghost": ghost}
 
+    def _entry(self, identifier):
+        """The freshest lease on one recording: a loose row or any held list's."""
+        found = self._rows.get(identifier)
+        for page, expiry in self._pools.values():
+            row = page["by_id"].get(identifier)
+            if row is not None and (found is None or expiry > found[1]):
+                found = row, expiry
+        return found
+
     def _ready(self, identity):
-        stored = self._rows.get(identity)
+        stored = self._entry(identity)
         asset = self._assets.get(identity)
         return bool(stored and stored[1] > time.monotonic() and asset
                     and (stored[0]["raw_sha256"], stored[0]["encoded_sha256"])
                     == (asset["raw_sha256"], asset["encoded_sha256"]))
 
     def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None, versions=None):
-        """`versions` names the recorded ROMs to return (`region_scope.servable_versions`);
-        omitted, only `game_version`'s. Every community row knows its ROM."""
-        local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version,
-                                             strategy=strategy, versions=versions)
+        """Local rows, then this lineup's own rival list.
+
+        A strategy reads only that strategy's list; None reads only the Overall
+        list. Another identity's list, search results and other loose rows
+        never become candidates; a chosen rival is looked up by `get`.
+        """
+        local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version, strategy=strategy, versions=versions)
         roms = (game_version,) if versions is None else versions
         with self._lock:
             if not self._active():
                 return local
-            rows = []
-            for metadata, expiry in self._rows.values():
-                if expiry <= time.monotonic():
+            now = time.monotonic()
+            scope = ("strategy", strategy) if strategy is not None else ("overall", None)
+            lists = [(row, expiry) for key, (page, expiry) in self._pools.items()
+                     if key[0] == kind and key[2] == clock and key[3] in roms and key[4:] == scope
+                     for row in page["recordings"]]
+            rows, seen, index = [], set(), None
+            for metadata, expiry in lists:
+                if expiry <= now or metadata["id"] in seen:
                     continue
+                if metadata["target"]["kind"] == "segment" and index is None:
+                    index = binding_index(self._defs())
                 try:
-                    row = self._row(metadata)
+                    row = self._row(metadata, index)
                 except LookupError:
                     continue
                 if ((row["kind"], row["entity_key"], row["clock"]) == (kind, entity_key, clock)
                         and row["game_version"] in roms and (strategy is None or row["strategy"] == strategy)):
+                    seen.add(row["id"])
                     rows.append(row)
             return tuple(local) + tuple(rows)
 
     def get(self, identity):
         checked_hash(identity)
         with self._lock:
-            if self._active() and identity in self._rows and self._rows[identity][1] > time.monotonic():
-                return self._row(self._rows[identity][0])
+            entry = self._entry(identity) if self._active() else None
+            if entry is not None and entry[1] > time.monotonic():
+                return self._row(entry[0])
         return self.local.get(identity)
 
     def is_ready(self, identity):
         with self._lock:
-            if self._active() and identity in self._rows:
+            if self._active() and self._entry(identity) is not None:
                 if not self._ready(identity):
                     return False
                 path = self.root / (identity + ".ghost")
@@ -228,32 +281,56 @@ class CachedPopulation:
         return unicodedata.normalize("NFKC", prefix).casefold().strip()
 
     def coverage(self, identity):
+        """The held list's coverage. Its rows share its lease, so a held
+        complete list stays complete until the lease lapses."""
         with self._lock:
             item = self._pools.get(self.identity_key(identity)) if self._active() else None
             if not item or item[1] <= time.monotonic():
                 return {"complete": False, "min_step": None, "max_step": None, "base_step": None, "generation": None}
-            result = dict(item[0]["coverage"])
-            result["complete"] = result["complete"] and all(
-                row['id'] in self._rows and self._rows[row['id']][1] > time.monotonic()
-                for row in item[0]['recordings'])
-            return result
+            return dict(item[0]["coverage"])
+
+    def keep(self, identifiers):
+        """The recordings the lineup on screen uses: a download never evicts them."""
+        with self._lock:
+            self._kept = frozenset(identifiers)
+
+    def lease_until(self, identity=None, *, recording=None):
+        """When a held list (or one recording's freshest row) lapses; None when absent."""
+        with self._lock:
+            if not self._active():
+                return None
+            if recording is not None:
+                entry = self._entry(recording)
+                return entry[1] if entry else None
+            item = self._pools.get(self.identity_key(identity))
+            return item[1] if item else None
+
+    def _trim_rows(self):
+        while len(self._rows) > MAX_METADATA:
+            self._rows.popitem(last=False)
 
     def remember_page(self, identity, page, *, prefix=None, cursor=None):
         with self._lock:
             if not self._active():
                 return
             expires = time.monotonic() + TTL
-            for row in page["recordings"]:
-                self._rows[row["id"]] = row, expires
-                self._rows.move_to_end(row["id"])
-            while len(self._rows) > MAX_METADATA:
-                self._rows.popitem(last=False)
-            mapping = self._pools if prefix is None else self._searches
-            key = self.identity_key(identity) if prefix is None else (self.identity_key(identity), self._prefix(prefix), cursor)
-            mapping[key] = page, expires
-            mapping.move_to_end(key)
-            while len(mapping) > MAX_POOLS:
-                mapping.popitem(last=False)
+            key = self.identity_key(identity)
+            if prefix is None:
+                # The list owns its rows: no other list or search can evict them.
+                self._pools[key] = {**page, "by_id": {row["id"]: row for row in page["recordings"]}}, expires
+                self._pools.move_to_end(key)
+                while len(self._pools) > MAX_POOLS:
+                    self._pools.popitem(last=False)
+            else:
+                for row in page["recordings"]:
+                    self._rows[row["id"]] = row, expires
+                    self._rows.move_to_end(row["id"])
+                self._trim_rows()
+                key = key, self._prefix(prefix), cursor
+                self._searches[key] = page, expires
+                self._searches.move_to_end(key)
+                while len(self._searches) > MAX_POOLS:
+                    self._searches.popitem(last=False)
             self._generation += 1
 
     def renew_metadata(self, row):
@@ -262,8 +339,7 @@ class CachedPopulation:
             if self._active():
                 self._rows[row["id"]] = row, time.monotonic() + TTL
                 self._rows.move_to_end(row["id"])
-                while len(self._rows) > MAX_METADATA:
-                    self._rows.popitem(last=False)
+                self._trim_rows()
                 self._generation += 1
 
     def store_asset(self, row, encoded, raw, *, owner=None):
@@ -309,22 +385,30 @@ class CachedPopulation:
                 "clip_id": clip.clip_id, "records": len(clip.frames), "blink_frames": blinks}
             self._assets.move_to_end(identifier)
             self._rows[identifier] = row, time.monotonic() + TTL
+            self._rows.move_to_end(identifier)
+            self._trim_rows()
             while (sum(item["raw"] for item in self._assets.values()) > CACHE_RAW or
                    sum(item["encoded"] for item in self._assets.values()) > CACHE_ENCODED):
-                oldest, _ = self._assets.popitem(last=False)
+                # Oldest first, never a recording the lineup on screen uses (at
+                # most four seats, so the cap can be exceeded by that bound only).
+                oldest = next((key for key in self._assets if key not in self._kept and key != identifier), None)
+                if oldest is None:
+                    break
+                self._assets.pop(oldest)
                 for suffix in (".ghost", ".ghc1"):
                     (self.root / (oldest + suffix)).unlink(missing_ok=True)
             self._generation += 1
 
     def resolve(self, ghost, target):
         with self._lock:
-            if not self._active() or ghost.id not in self._rows:
+            entry = self._entry(ghost.id) if self._active() else None
+            if entry is None:
                 return self.local.resolve(ghost, target)
             if not self._ready(ghost.id):
                 raise LookupError("This community ghost is not downloaded or its visibility needs refreshing.")
-            row, asset = self._row(self._rows[ghost.id][0]), self._assets[ghost.id]
+            row, asset = self._row(entry[0]), self._assets[ghost.id]
             if (target is None or (row["kind"], row["entity_key"]) != (target["kind"], target["entity_key"])
-                    or target.get("scope", "strategy") == "strategy" and (target.get("strat") or "Standard") != row["strategy"]):
+                    or target.get("scope", "strategy") == "strategy" and target.get("strat") != row["strategy"]):
                 raise ValueError("This community ghost belongs to another practice target.")
             path = self.root / (ghost.id + ".ghost")
             if path.is_symlink() or not path.resolve().is_relative_to(self.root):

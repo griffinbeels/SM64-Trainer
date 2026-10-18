@@ -1,4 +1,4 @@
-"""Contact sheets of the Ghost Overlay switch, one per state, to LOOK at.
+"""Contact sheets of the Ghost Overlay row, one per state, to LOOK at.
 
 `tools/contact_sheet.py` shoots the project's own fixture, which has no ghost
 session door yet (Track E is building it in parallel), so the card there would
@@ -8,8 +8,8 @@ warns about. This is that tool's machinery (uilab's `sheet.write`, the same
 widths, the same real project: real stylesheet, real shell, real practice
 page) over `tools/ghost_fixture.py`'s session instead.
 
-    uv run python tools/ghost_switch_sheet.py            # all three states
-    uv run python tools/ghost_switch_sheet.py on         # one of them
+    uv run python tools/ghost_switch_sheet.py            # every state
+    uv run python tools/ghost_switch_sheet.py lineup     # one of them
 
 Writes one PNG per state and prints the paths. Assertions answer "is
 something broken"; only a picture answers "is this the thing you meant".
@@ -32,7 +32,7 @@ if _MISSING:
 
 from uilab import sheet                                 # noqa: E402
 from ghost_fixture import (NO_POSES_TEXT,               # noqa: E402
-                           ghost_session, serve_ui_with_ghost)
+                           ghost_session, lineup_rivals, serve_ui_with_ghost)
 from ui_fixture import FIXTURE_SEGMENT                  # noqa: E402
 from uilab_project import PROJECT                       # noqa: E402
 
@@ -40,6 +40,9 @@ from uilab_project import PROJECT                       # noqa: E402
 WIDTHS = (1500, 1200, 900, 850)
 
 STATES = {
+    # The Lineup: a session with adaptive rivals, you first and four faster.
+    "lineup": {**ghost_session(enabled=True), "rivals": lineup_rivals()},
+    # The older ticks-and-tuning controls, for a session without rivals.
     "defaults": ghost_session(),
     "on": ghost_session(enabled=True, opacity=0.6, nudge_frames=3),
     # The colour treatment switched off: the tuning line is at its WIDEST in
@@ -62,8 +65,11 @@ def _project_for(session):
             yield base
     # Everything else is PROJECT's -- the stylesheet, the shell list, the
     # supported floor. Only the server and what to wait for change.
+    # The head's ghost toggle enables once the session has answered for the
+    # card, which is when the row under the head is the answered one.
     return dataclasses.replace(PROJECT, serve=serve,
-                               ready_selector=".ghost-row", stories=[])
+                               ready_selector=".log-card-active .ghost-toggle:enabled",
+                               stories=[])
 
 
 def main(argv: list[str]) -> int:

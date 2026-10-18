@@ -5,7 +5,7 @@ from pathlib import Path
 from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
 from sm64_events.ghost.settings import limits as published_limits
 from tests.test_ui_ghost_switch import (
-    FIXTURE_SEGMENT, MEASURE, WIDTHS, get_driver, ghost_session,
+    FIXTURE_SEGMENT, MEASURE, TOGGLE, WIDTHS, get_driver, ghost_session,
     serve_ui_with_ghost, settled,
 )
 
@@ -118,7 +118,7 @@ def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
                 tick(page, 3)
                 assert settled(page, state, 2)[1] == {"ghosts": {"pb": True, "attempts": [1908, 1909]},
                                                       "target": target}
-                page.click(".ghost-row-head > .ghost-switch")
+                page.click(TOGGLE)
                 assert settled(page, state, 3)[2] == {"enabled": True}
                 page.wait_for(".ghost-opacity")
                 shown = picks(page)

@@ -99,6 +99,11 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("usamune_input_display", None, "usamune_hud",
               "VERIFY: u8 Usamune input display setting, 0 = off (2 = stick, else values); "
               "its HUD path calls the display (RAM 0x80408848) only while nonzero"),
+    # Missing hotkey adaptation must not disable tracking on a verified ROM.
+    LayoutRow("usamune_savestate_button", None, "usamune_setting_watch",
+              "VERIFY: u8 Usamune's save state button (RESET page), settings array "
+              "+0x1A: 0 = Cx4, 1 = DUP (ghost/dpad_toggle.py SAVESTATE_ON_DPAD_UP)", optional=True),
+
     LayoutRow("usamune_stop", None, "usamune_hud",
               "u8 Usamune TIMER -> STOP, a bitmask in menu order: bit 0 copies "
               "the counter into the star result at the grab, bit 1 at the x-cam "
@@ -139,6 +144,8 @@ class Layout:
     usamune_timer: int | None = None
     usamune_menu: int | None = None
     usamune_input_display: int | None = None
+    usamune_savestate_button: int | None = None
+
     usamune_stop: int | None = None
     behaviour_base: int | None = None
 
@@ -207,6 +214,12 @@ US = Layout(
     # path's `lbu 0xb(0x80417b4c)` gates `jal 0x80408848`, the input display).
     usamune_menu=0x804168D8,
     usamune_input_display=0x80417B57,
+    # VERIFY until his live check: Usamune's settings array 0x80417B4C + 0x1A.
+    # A read-only watch of 0x80416000-0x80418000 at 20 Hz while Usamune's menu
+    # was open, 2026-10-17: he flipped DUP -> Cx4 -> DUP -> Cx4 -> DUP and this
+    # byte, and no other in that range, went 1 -> 0 -> 1 -> 0 -> 1 in step.
+    usamune_savestate_button=0x80417B66,
+
     usamune_stop=0x80417B4D,        # ROM-derived; live-confirmed 2026-10-17: Grab then
                                     # GrabX (journal 20368/20377; final raw byte 3)
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07

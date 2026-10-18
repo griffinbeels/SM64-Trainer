@@ -26,10 +26,12 @@ Two predicates, two questions, one precedence:
 
 STRATEGY outranks quantity (flipped 2026-08-22): "is this row yours to act
 on" is answered before "is its time legal", because his ruling that day is
-that a row of another strategy draws NOTHING -- not a delta, not a chip, and
-not the disabled grab-timed button either ("hidden entirely for a strategy
-that isn't the one selected"). The order changes only which reason is
-STATED; an illegal quantity stays illegal whatever you retag the row to, and
+that a row of another strategy shows nothing of the active strategy's -- not
+a delta, not a chip, not the grab-timed refusal. (Its button came back on
+2026-10-17 as a plain disabled Save saying how to bring it back, so every
+row draws the same three buttons: "make sure that the visual balance of each
+row is maintained no matter the circumstances".) The order changes only
+which reason is STATED; an illegal quantity stays illegal whatever you retag the row to, and
 shows its disabled button the moment the row is the active strategy's. The
 consequence he should know: with no strategy selected nothing can be saved as
 a PB at all, which permanently closes the untagged-PB class (live report
@@ -40,10 +42,10 @@ Its own module rather than a corner of `caveats.py` (2026-08-22): a caveat
 answers "does this saved time mean what the rank beside it implies", and a
 gate answers "is this row yours to act on". The likely iterations -- gate
 Undo or not, allow a no-strategy save, change which rows are gated -- all
-land here and only here. The browser draws NOTHING for a gate reason (his
-2026-08-22 ruling), so there is no JS vocabulary to keep in step -- the
-reasons exist for the API's refusal message and for any surface that later
-wants to explain the absence; `docs/api.md` names them.
+land here and only here. The browser draws a gate reason as a disabled
+Save whose tooltip names the fix (`ui/components/pbreplay.js::
+unavailableReason`), and the API's refusal message states the same reason;
+`docs/api.md` names them.
 """
 from sm64_events.tracking.caveats import pb_blocked_by
 

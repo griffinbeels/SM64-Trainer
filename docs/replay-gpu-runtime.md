@@ -377,6 +377,16 @@ capture and disposes that request's media/helper objects. Explicit unpause gets
 a new nonce and source epoch. Source shutdown signals revocation
 first; recorder shutdown then stops the audio source before joining the sink.
 Only the last consumed native frontier can seal the final video interval.
+
+Project64/ROM teardown revokes the capture epoch before withdrawing the clean
+image source. A delivery worker that already took a record checks the live
+epoch before treating a missing image as a fault. If image loss (native reason
+10016) arrives first, the lease supervisor keeps reading control for at most
+one second. Only explicit ROM closure, producer death/identity retirement or a
+fresh-request retirement makes that end normal. Otherwise it retains the
+original fault, including when the recorder is stopped during that window.
+Media reconciliation allows 1.25 seconds for this classification and the next
+control poll. Cleanup failures remain faults; reopening uses a fresh request.
 Unpublished work is an explicit incomplete suffix, never invented coverage.
 Expected recorder cancellation is typed separately from failure cleanup. A
 channel-close race is benign only with that cancellation and a compatible

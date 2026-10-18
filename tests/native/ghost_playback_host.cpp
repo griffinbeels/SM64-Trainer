@@ -1019,6 +1019,19 @@ int main() {
             step(114,{1114});                          // a removed ghost is silent
             live.area=2;step(116,{},false);live.area=1; // hidden frames sound nothing,
             step(117,{});step(118,{1118});             // and reappearing replays none
+            // His overlay switch off mid-run, then on: the same command and
+            // origin, hidden. Nothing is drawn or heard meanwhile, and the
+            // first frame shown again is the one the clock reached (its record
+            // sounds only from the next one on).
+            ++r.revision;r.hidden=1;check(api->configure(&r)==GP_OK,"overlay off mid-run");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(last_playing==0,"a hidden race is silent");
+            step(119,{},false);step(150,{},false);
+            ++r.revision;r.hidden=0;check(api->configure(&r)==GP_OK,"overlay on again");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(last_playing==1,"showing it again restores its sound");
+            step(151,{});check(count==1 && selected_x==3151,"shown again at the frame the clock reached");
+            step(152,{1152});
             ++r.revision;r.volume=0;check(api->configure(&r)==GP_OK,"volume zero");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(last_playing==1 && last_volume==0,"exact zero volume reaches the sink");
@@ -1327,6 +1340,35 @@ int main() {
             check(step(30,GP_READY,{GP_READY,GP_STAR_ENDED},{})
                   && poses[0].opacity==float(GP_STAR_FADE_FRAMES-1)/float(GP_STAR_FADE_FRAMES),"and fades after it");
             check(!step(29+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"then hides");
+            // His overlay switch off, then his grab: no ghost was seen, so none
+            // falls or dances; switched on again, that race stays over.
+            run(13500);
+            check(step(10,GP_READY,{GP_READY,GP_READY},{4010,5010}),"both ghosts running before the switch");
+            ++r.revision;r.hidden=1;check(api->configure(&r)==GP_OK,"overlay off");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(!step(11,GP_DISABLED,{GP_DISABLED,GP_DISABLED},{}),"hidden: nothing drawn or heard");
+            live.live_action=0x1302;
+            check(!step(12,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"his grab while hidden still ends the race");
+            live.live_action=1;
+            ++r.revision;r.hidden=0;check(api->configure(&r)==GP_OK,"overlay on after the grab");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(!step(13,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"the race stays over: no fall, no dance");
+            // Switched off during the fall his grab began, on again before it
+            // ends: the fall went on unseen, so it shows the frame it reached
+            // and cries no second time.
+            run(13600);
+            check(step(10,GP_READY,{GP_READY,GP_READY},{4010,5010}),"both ghosts running before his grab");
+            live.live_action=0x1302;
+            check(step(11,GP_READY,{GP_READY,GP_READY},{GP_DEFEAT_SOUND,GP_DEFEAT_SOUND}),"his grab: both fall");
+            live.live_action=1;
+            ++r.revision;r.hidden=1;check(api->configure(&r)==GP_OK,"overlay off during the fall");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(!step(12,GP_DISABLED,{GP_DISABLED,GP_DISABLED},{}),"the fall goes on hidden");
+            check(!step(15,GP_DISABLED,{GP_DISABLED,GP_DISABLED},{}),"and silent");
+            ++r.revision;r.hidden=0;check(api->configure(&r)==GP_OK,"overlay on during the fall");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(16,GP_READY,{GP_READY,GP_READY},{}) && count==2 && selected_frame==5,
+                  "shown again at the fall frame it reached, with no second cry");
             // The 100-coin star: its clock is its exit segment's (no star_ends),
             // and its run grabs the 100-coin star (rows 10..14, a no-exit dance)
             // before closing on the exit star (row 20) and dancing to row 29.
@@ -1932,8 +1974,8 @@ int main() {
         r.volume=.5f;r.sound_fade=2;check(api->configure(&r)==GP_INVALID,"overlap sound flag bounded");
         r.sound_fade=0;
         r.suspended=2;check(api->configure(&r)==GP_INVALID,"suspension flag bounded");
-        r.suspended=0;r.reserved4=1;check(api->configure(&r)==GP_INVALID,"suspension reserved word checked");
-        r.reserved4=0;
+        r.suspended=0;r.hidden=2;check(api->configure(&r)==GP_INVALID,"overlay-hidden flag bounded");
+        r.hidden=0;
         r.origin.continuity=0;check(api->configure(&r)==GP_INVALID,"follow requires resolved origin");
         r.origin.continuity=1;r.mode=GP_FIXED;
         check(api->configure(&r)==GP_INVALID,"fixed must not accidentally retain a live origin");

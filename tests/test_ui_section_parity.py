@@ -116,8 +116,12 @@ def test_one_switchable_rank_banner_is_rendered_for_both_kinds():
     body = _exported_body(source, "LogCard")
     assert body.count("<${RankBanner}") == 1, \
         "LogCard must paint exactly one rank banner"
-    assert '>Strategy</button>' in body
-    assert '>Overall</button>' in body
+    # The pair is its own small component (2026-10-16), still drawn once,
+    # from inside the one LogCard both kinds share.
+    assert body.count("<${RankModeButtons}") == 1
+    buttons = source[source.index("function RankModeButtons("):source.index("function useCardGhost(")]
+    assert '>Strategy</button>' in buttons
+    assert '>Overall</button>' in buttons
     assert "shownBanner" in body and "rankModeButtons" in body
     assert "swapKey=${strategySwapKey(sec.last_strat, rankMode, hasSeparateRank)}" in body
 

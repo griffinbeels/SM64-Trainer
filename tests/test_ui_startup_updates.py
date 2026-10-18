@@ -1,5 +1,7 @@
-"""Update-before-sign-in through the real app and token-free remote seams."""
+"""Silent startup checks, actionable offers and retained onboarding through the real app."""
+import contextlib
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -7,7 +9,7 @@ import pytest
 
 from frontend_runner import run_frontend
 from test_ui_beta_updates import ReleaseBoundary, ui_fixture, get_driver
-from test_ui_community import FixtureAccount
+from test_ui_community import FixtureAccount, wait_until
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,8 +61,10 @@ class StartupRelease(ReleaseBoundary):
         super().__init__()
         self.beta = True
         self.release = threading.Event()
+        self.started = threading.Event()
 
     def status(self, force=False, repair=False):
+        self.started.set()
         if not self.release.wait(15):
             raise RuntimeError("Fixture check was never released")
         return super().status(force=force, repair=repair)
@@ -68,7 +72,7 @@ class StartupRelease(ReleaseBoundary):
 
 @pytest.mark.parametrize("width", (1500, 850))
 @pytest.mark.parametrize("account_status", ("signed_out", "new"))
-def test_update_precedes_login_and_signup_then_later_resumes_them(tmp_path, monkeypatch, width, account_status):
+def test_checking_does_not_block_login_and_signup_but_a_real_offer_gets_priority(tmp_path, monkeypatch, width, account_status):
     updater = StartupRelease()
     account = FixtureAccount(account_status)
     create = ui_fixture.create_app
@@ -80,14 +84,15 @@ def test_update_precedes_login_and_signup_then_later_resumes_them(tmp_path, monk
         with ui_fixture.serve_ui(tmp_path / "startup.db") as base:
             with get_driver().launch(headless=True, viewport=(width, 1100)) as page:
                 page.goto(base)
-                page.wait_for(".modal h2")
-                assert "Checking for updates" in page.evaluate("document.querySelector('.modal').textContent")
-                assert page.count(".community-providers, .community-form") == 0
+                page.wait_for(".practice-page")
+                assert page.evaluate("![...document.querySelectorAll('.modal')].some(e=>e.textContent.includes('Checking for updates'))")
+                page.wait_for(".community-providers" if account_status == "signed_out" else ".community-form")
+                assert not updater.release.is_set()
                 updater.release.set()
                 page.wait_for(".update-summary")
-                assert page.count(".modal") == 1
-                assert page.count(".community-providers, .community-form") == 0
-                assert not account.calls, account.calls
+                assert page.count(".modal:visible") == 1
+                assert page.count(".community-providers, .community-form") == 1  # retained beneath the offer
+                assert all(call[0] == "check" for call in account.calls), account.calls
                 (artifacts / f"{account_status}-{width}-update-first.png").write_bytes(page.screenshot())
                 trace_onboarding_focus(page)
                 page.click(".modal-actions button:text-is('Later')")
@@ -99,6 +104,54 @@ def test_update_precedes_login_and_signup_then_later_resumes_them(tmp_path, monk
                 assert page.evaluate("document.querySelector('.modal').contains(document.activeElement)")
                 (artifacts / f"{account_status}-{width}-onboarding.png").write_bytes(page.screenshot())
                 assert page.problems() == []
+    finally:
+        updater.release.set()
+
+
+@pytest.mark.parametrize("width", (850, 1500))
+def test_refresh_is_usable_while_checking_and_stays_clear_without_an_offer(tmp_path, monkeypatch, width):
+    updater = StartupRelease()
+    updater.beta = False
+    account = FixtureAccount("active")
+    create = ui_fixture.create_app
+    monkeypatch.setattr(ui_fixture, "create_app", lambda *args, **kwargs:
+                        create(*args, **kwargs, updater=updater, community_account=account))
+    artifacts = Path(os.environ.get("SM64_STARTUP_EVIDENCE", tmp_path / "silent-update-shots"))
+    artifacts.mkdir(parents=True, exist_ok=True)
+    try:
+        with ui_fixture.serve_ui(tmp_path / "current.db") as base, contextlib.ExitStack() as cleanup:
+            cleanup.callback(updater.release.set)
+            with get_driver().launch(headless=True, viewport=(width, 1100)) as page:
+                for _ in range(2):  # the initial load and an ordinary refresh
+                    page.goto(base)
+                    page.wait_for(".practice-page")
+                    assert updater.started.wait(5)
+                    assert not updater.release.is_set()
+                    assert page.count(".modal, .update-summary") == 0
+                    page.wait_for("button[aria-label='Settings']:visible,button[aria-label='Open settings']:visible")
+                    label = page.evaluate("""[...document.querySelectorAll('button')].find(b=>
+                      ['Settings','Open settings'].includes(b.getAttribute('aria-label'))
+                      && b.getClientRects().length)?.getAttribute('aria-label')""")
+                    assert label, "The Settings control must be present before testing its reachability"
+                    page.click("button[aria-label=" + json.dumps(label) + "]")
+                    page.wait_for(".settings-drawer")
+                    page.click("button[aria-label='Close settings']")
+                    wait_until(page, "!document.querySelector('.settings-drawer')", "settings dismissal")
+                (artifacts / f"checking-silent-{width}.png").write_bytes(page.screenshot())
+                updater.release.set()
+                page.click("button[aria-label=" + json.dumps(label) + "]")
+                # This control becomes enabled only after the actual update
+                # hook receives status; observe the UI, not a guessed URL.
+                page.wait_for("#receive-beta-updates:not([disabled])")
+                page.click("button[aria-label='Close settings']")
+                wait_until(page, "!document.querySelector('.settings-drawer')", "settings dismissal")
+                assert page.count(".modal, .update-summary") == 0
+                (artifacts / f"no-offer-{width}.png").write_bytes(page.screenshot())
+                # The deliberate refresh aborts its previous page's two held
+                # status reads. Allow only those exact navigation cancellations.
+                problems = page.problems()
+                cancelled = f"requestfailed: {base}/api/update/status (net::ERR_ABORTED)"
+                assert len(problems) <= 2 and all(problem == cancelled for problem in problems), problems
     finally:
         updater.release.set()
 

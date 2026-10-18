@@ -300,6 +300,50 @@ def test_session_shaped_command_carries_the_occlusion_switch(kernel, tmp_path):
         connection.close()
 
 
+@pytest.mark.parametrize("hides", [True, False])
+def test_the_overlay_switch_hides_where_the_renderer_can_and_otherwise_turns_playback_off(
+        kernel, tmp_path, hides):
+    """`hidden`, the overlay switch off: a renderer advertising GIPC_CAP_HIDDEN
+    plays on unseen. An older one refuses the word, so it gets what the
+    switch always sent it: playback off with no roster generations."""
+    from sm64_events.ghost.native_layout import IPC_CAP_HIDDEN
+    reply = status()
+    reply.capabilities = IPC_CAP_HIDDEN if hides else 0
+    C.memmove(kernel.address, bytes(reply), 256)
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    command = {"enabled": True, "model_id": 1, "owner_suspended": False,
+               "clips": [clip(tmp_path, b"a", 10)], "rom_path": "", "mode": 0,
+               "prepare_generation": 3, "activate_generation": 3, "activate_start": 1,
+               "origin": {"kind": 1, "configuration": 4, "epoch": 5, "global_timer": 1234,
+                          "utc": 1000.0, "session_id": 7, "arm_id": 8}}
+    try:
+        connection.poll(command)
+        assert (kernel.request.play_enabled, kernel.request.hidden) == (1, 0)
+        connection.poll({**command, "hidden": True})
+        request = kernel.request
+        assert (request.play_enabled, request.hidden) == ((1, 1) if hides else (0, 0))
+        assert (request.prepare_generation, request.activate_generation, request.activate_start) == (
+            (3, 3, 1) if hides else (0, 0, 0))
+        connection.poll({**command, "hidden": False})
+        assert (kernel.request.play_enabled, kernel.request.hidden) == (1, 0)
+        before = bytes(kernel.request)
+        for value in (1, "yes", None):
+            with pytest.raises(channel.RejectedControl):
+                connection.poll({**command, "hidden": value})
+            assert bytes(kernel.request) == before
+    finally:
+        connection.close()
+
+
+def test_a_hidden_race_keeps_no_ghost_copy():
+    """Ghosts in recording keeps a second recording only while ghosts are drawn."""
+    source = capture.NativeCapture(US, lambda *_: None, producer_pid=123)
+    source.set_playback(enabled=True, record_ghosts=True)
+    assert source.records_ghosts()
+    source.set_playback(enabled=True, record_ghosts=True, hidden=True)
+    assert not source.records_ghosts()
+
+
 def test_session_shaped_command_carries_the_sound_fade_switch(kernel, tmp_path):
     """`sound_fade`: absent is on (the sound follows its picture's fade), False turns it off."""
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())

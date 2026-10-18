@@ -52,6 +52,7 @@ from sm64_events.ranks import classify
 from sm64_events.ranks import region_scope
 from sm64_events.ranks import scoring
 from sm64_events.ranks.calibration import calibrated_view
+from sm64_events.ranks.ladder_order import table_order
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
@@ -471,7 +472,8 @@ def _strategies_for(registered: dict, attempts, course_id: int, star_id: int,
         for strat in ranks.strategies(entity_key(course_id, star_id)):
             if strat not in out:
                 out.append(strat)
-    return [s for s in out if s not in deleted]
+    return _in_standards_order([s for s in out if s not in deleted], ranks,
+                               entity_key(course_id, star_id))
 
 
 def _seg_strategies(registered: dict, history, seg_id: int, ranks=None,
@@ -508,7 +510,21 @@ def _seg_strategies(registered: dict, history, seg_id: int, ranks=None,
         for strat in names:
             if strat not in out:
                 out.append(strat)
-    return [s for s in out if s not in deleted]
+    return _in_standards_order([s for s in out if s not in deleted], ranks,
+                               standards_ek or entity_key(None, None, seg_id))
+
+
+def _in_standards_order(names: list, ranks, ek: str) -> list:
+    """`names` in the rank standards table's column order, the order every
+    strategy list follows (his rule, 2026-10-17: "strategies should always be
+    sorted in rank standard order"). The table's arrival order breaks ties:
+    the store's own strategies first, then the ones only this player knows,
+    exactly as standards.js lays out its columns before sorting them."""
+    if ranks is None:
+        return names
+    ladders = ranks.ladders(ek)
+    arrival = [s for s in ladders if s in names] + [s for s in names if s not in ladders]
+    return table_order(arrival, ladders, ranks.strategy_groups(ek))
 
 
 def _attempt_rank(a, frames, ranks, ek=None) -> dict | None:

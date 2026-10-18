@@ -13,6 +13,7 @@ overflows the card it sits in at the one width nobody looks at.
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -42,16 +43,20 @@ def test_the_practice_log_mounts_the_switch_exactly_once_and_gates_it_on_active(
     drift, and so the gate cannot quietly disappear from both places.
     """
     source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
-    mounts = re.findall(r"<\$\{GhostSwitch\}[^>]*>", source)
-    assert len(mounts) == 1, f"expected one GhostSwitch mount, found {mounts}"
-    assert "active=${active}" in mounts[0], (
-        "the mount must pass the card's own active flag -- the switch belongs "
-        f"to the entity being practised, not to every card: {mounts[0]}")
-    assert "entityKey=${ek}" in mounts[0]
-    # ...and it is not gated on a kind, which would ship it for stars alone.
-    assert not re.search(r"isSegment\(sec\)[^\n]*GhostSwitch", source), (
-        "the switch is gated on the entity kind -- stars and segments both "
-        "get it (rule 11)")
+    # Two pieces now, each mounted once: the head's toggle and the row under
+    # the head. Both speak for the entity being practised, so both carry the
+    # card's own active flag and key.
+    for component in ("GhostSwitch", "GhostToggle"):
+        mounts = re.findall(r"<\$\{" + component + r"\}[^>]*>", source)
+        assert len(mounts) == 1, f"expected one {component} mount, found {mounts}"
+        assert "active=${active}" in mounts[0], (
+            "the mount must pass the card's own active flag -- the overlay belongs "
+            f"to the entity being practised, not to every card: {mounts[0]}")
+        assert "entityKey=${ek}" in mounts[0]
+        # ...and it is not gated on a kind, which would ship it for stars alone.
+        assert not re.search(r"isSegment\(sec\)[^\n]*" + component, source), (
+            f"{component} is gated on the entity kind -- stars and segments both "
+            "get it (rule 11)")
 
 
 def test_the_switch_never_reaches_a_card_that_is_not_active():
@@ -62,8 +67,9 @@ def test_the_switch_never_reaches_a_card_that_is_not_active():
     assert "if (!active) return undefined;" in source, (
         "the session read is not gated on `active` -- every card would "
         "request the session")
-    assert "if (!active) return null;" in source, (
-        "GhostSwitch renders without checking `active`")
+    # The head toggle and the row each refuse to render off the active card.
+    assert source.count("if (!active) return null;") >= 2, (
+        "GhostSwitch or GhostToggle renders without checking `active`")
 
 
 def test_only_the_ghost_switch_names_the_session_endpoint():
@@ -115,8 +121,8 @@ def test_every_class_the_switch_renders_is_styled():
     # The scan reaches both spellings, which is the half that was silently
     # missing: the row's own class and the small switch's are only expressible
     # inside a template.
-    assert {"ghost-row", "ghost-switch-sm", "ghost-hue"} <= ghost_classes, (
-        sorted(ghost_classes))
+    assert {"ghost-row", "ghost-row-lineup", "ghost-toggle", "ghost-switch-sm",
+            "ghost-hue"} <= ghost_classes, sorted(ghost_classes)
     missing = [name for name in sorted(ghost_classes) if f".{name}" not in css]
     assert not missing, f"unstyled classes: {missing}"
 
@@ -217,6 +223,8 @@ STATES = {
     "no_room": {**ghost_session(enabled=True, opacity=0.6, nudge_frames=3),
                 "window": {"running": False, "visible": False, "backend": "native",
                            "reason": budget_reason(2)}},
+    # Usamune's save state is on D-pad Up, so the ghost hotkey is all four C buttons.
+    "c_buttons": ghost_session(enabled=False, hotkey="c_x4"),
 }
 
 
@@ -236,9 +244,11 @@ def test_failed_read_stays_visible_and_retry_restores_real_card(kind, width):
         with get_driver().launch() as page:
             page.set_viewport(width, 1200)
             page.goto(base)
-            page.wait_for(".ghost-why button")
+            # An unreachable session is the Lineup's own note, with its Retry.
+            page.wait_for(".ghost-row .lineup-note-action")
             rows = page.evaluate(MEASURE)
             assert len(rows) == 1 and rows[0]["onActiveCard"], rows
+            assert rows[0]["toggles"] == 1, rows
             assert rows[0]["disabled"] and rows[0]["whySeen"], rows
             assert "couldn't load" in rows[0]["whyText"], rows
             assert rows[0]["rowScroll"] <= rows[0]["rowClient"] + 1, rows
@@ -246,18 +256,49 @@ def test_failed_read_stays_visible_and_retry_restores_real_card(kind, width):
             initial_faults = page.problems()
             assert initial_faults and all("503" in fault for fault in initial_faults), initial_faults
             state["read_error"] = False
-            page.click(".ghost-why button")
-            page.wait_for(".ghost-row-head .ghost-switch:not([disabled])")
-            page.click(".ghost-row-head .ghost-switch")
-            page.wait_for('.ghost-row-head .ghost-switch[aria-checked="true"]')
+            page.click(".ghost-row .lineup-note-action")
+            page.wait_for(f"{TOGGLE}:not([disabled])")
+            page.click(TOGGLE)
+            page.wait_for(f'{TOGGLE}[aria-pressed="true"]')
             assert state["writes"] == [{"enabled": True}], state["writes"]
             recovered = page.evaluate(MEASURE)
             assert len(recovered) == 1 and recovered[0]["onActiveCard"], recovered
             assert not recovered[0]["disabled"], recovered
             assert recovered[0]["rowScroll"] <= recovered[0]["rowClient"] + 1, recovered
-            page.wait_ms(320)  # Capture the settled switch, after its normal motion.
+            page.wait_ms(320)  # Capture the settled toggle, after its normal motion.
             (artifacts / f"{kind}-{width}-recovered.png").write_bytes(page.screenshot())
             assert not page.problems()
+
+
+#: The overlay's on/off: the ghost toggle in the ACTIVE card's head. It is
+#: disabled until the session has answered for this card, so `:enabled` is
+#: also the moment the row under the head is the answered one.
+TOGGLE = ".log-card.log-card-active .log-card-actions > .ghost-toggle"
+
+#: The Ghost Library's own dialog. It opens ON TOP of the Ghost settings
+#: sheet (its door lives there now), so a bare `.modal` names the sheet
+#: behind it; this names the library's.
+LIBRARY_MODAL = ".modal:has(> .modal-body > .ghost-library)"
+LIBRARY_CLOSE = f"{LIBRARY_MODAL} > .modal-header > .modal-close"
+
+
+def open_ghost_settings(page):
+    """Practice log settings -> Ghost settings: the one sheet every ghost
+    setting and the Ghost Library's door live in."""
+    page.wait_for('button[aria-label="Practice log settings"]')
+    page.click('button[aria-label="Practice log settings"]')
+    page.wait_for("#practice-log-settings")
+    page.evaluate("""Array.from(document.querySelectorAll('#practice-log-settings button'))
+      .find((button) => button.textContent.trim() === 'Ghost settings').click()""")
+    page.wait_for('.modal[aria-labelledby] .ghost-settings-heading')
+
+
+def open_ghost_library(page):
+    """The Ghost Library, through the door in the Ghost settings sheet. The
+    door opens once the sheet's session has answered."""
+    open_ghost_settings(page)
+    page.wait_for(".ghost-library-button:enabled")
+    page.click(".ghost-library-button")
 
 MEASURE = """
 (() => {
@@ -270,14 +311,16 @@ MEASURE = """
     && getComputedStyle(el).visibility !== 'hidden';
   return rows.map((row) => {
     const card = row.closest('.log-card');
-    const sw = row.querySelector('.ghost-switch');
-    const why = row.querySelector('.ghost-why');
+    const toggle = card.querySelector(':scope .log-card-actions > .ghost-toggle');
+    // The reason sentence: under the head for the older controls, or the
+    // Lineup's note when the session could not be read at all.
+    const why = row.querySelector('.ghost-row-head > .ghost-why') || row.querySelector('.lineup-note');
     const slider = row.querySelector('.ghost-opacity');
-    const track = row.querySelector('.ghost-switch-track');
-    const knob = row.querySelector('.ghost-switch-knob');
     const hue = row.querySelector('.ghost-hue');
     const colour = row.querySelector('.ghost-colour');
     const colourSwitch = colour && colour.querySelector('.ghost-switch');
+    const track = colourSwitch && colourSwitch.querySelector('.ghost-switch-track');
+    const toggleStyle = toggle && getComputedStyle(toggle);
     return {
       colours: row.querySelectorAll('.ghost-colour').length,
       hues: row.querySelectorAll('.ghost-hue').length,
@@ -298,12 +341,17 @@ MEASURE = """
         : null,
       onActiveCard: card.classList.contains('log-card-active'),
       cardClasses: card.className,
-      label: row.querySelector('.ghost-label').textContent.trim(),
-      checked: sw.getAttribute('aria-checked'),
-      role: sw.getAttribute('role'),
-      disabled: sw.disabled,
-      describedBy: sw.getAttribute('aria-describedby'),
-      whyId: why ? why.id : null,
+      toggles: document.querySelectorAll('.ghost-toggle').length,
+      label: toggle ? toggle.getAttribute('aria-label') : null,
+      title: toggle ? toggle.getAttribute('title') : null,
+      pressed: toggle ? toggle.getAttribute('aria-pressed') : null,
+      tag: toggle ? toggle.tagName : null,
+      disabled: toggle ? toggle.disabled : null,
+      // THE PAINT of the toggle, not its class: gold while ghosts race.
+      togglePaint: toggleStyle
+        ? [toggleStyle.color, toggleStyle.borderTopColor, toggleStyle.backgroundColor].join(' | ') : null,
+      toggleColour: toggleStyle ? toggleStyle.color : null,
+      toggleBox: box(toggle),
       whyText: why ? why.textContent.trim() : null,
       whySeen: seen(why),
       steps: row.querySelectorAll('.ghost-step').length,
@@ -312,8 +360,9 @@ MEASURE = """
       sliderValue: slider ? slider.value : null,
       timing: (row.querySelector('.ghost-nudge-value') || {}).textContent,
       readout: (row.querySelector('.ghost-field-value') || {}).textContent,
-      trackPaint: getComputedStyle(track).backgroundColor,
-      knobShift: getComputedStyle(knob).transform,
+      // The colour treatment's own switch: the one iOS-style switch left on
+      // this row with a knob that has to move.
+      trackPaint: track ? getComputedStyle(track).backgroundColor : null,
       // The control GROUPS, not everything in the row: the reason sentence
       // is a row of its own and is measured by its own checks.
       tuneBoxes: [slider && slider.closest('.ghost-field'), colour,
@@ -343,7 +392,10 @@ def rendered():
             for name, session in STATES.items():
                 state["session"] = session
                 page.goto(base)
-                page.wait_for(".ghost-row")
+                # Not `.ghost-row`: before the session answers, the row is the
+                # Lineup waiting to be told what to draw. The enabled toggle
+                # is the answered card.
+                page.wait_for(f"{TOGGLE}:enabled")
                 for width in WIDTHS:
                     page.set_viewport(width, 1200)
                     page.wait_ms(320)
@@ -353,38 +405,38 @@ def rendered():
 
 @pytest.mark.parametrize("state", sorted(STATES))
 @pytest.mark.parametrize("width", WIDTHS)
-def test_exactly_one_card_carries_the_switch(rendered, state, width):
+def test_exactly_one_card_carries_the_toggle_and_the_row(rendered, state, width):
     """The practice log draws up to nine cards. Counting them is the check --
-    a second row would mean the active-card rule stopped holding, and it
-    looks entirely correct in a screenshot of one card."""
+    a second row or toggle would mean the active-card rule stopped holding,
+    and it looks entirely correct in a screenshot of one card."""
     rows = rendered[(state, width)]
     assert len(rows) == 1, f"{len(rows)} ghost rows at {width}px in {state}"
     assert rows[0]["onActiveCard"], rows[0]["cardClasses"]
+    assert rows[0]["toggles"] == 1, f"{rows[0]['toggles']} ghost toggles at {width}px in {state}"
     assert rows[0]["label"] == "Ghost Overlay"
-    assert rows[0]["role"] == "switch"
+    assert rows[0]["tag"] == "BUTTON" and rows[0]["pressed"] in ("true", "false")
 
 
 @pytest.mark.parametrize("width", WIDTHS)
-def test_a_target_with_no_ghost_refuses_and_says_why_on_screen(rendered, width):
-    """His words, and the acceptance rule in one: the switch is not
-    selectable, and the reason is VISIBLE rather than behind a hover. Checked
-    with the longest sentence the server can produce."""
+def test_a_target_with_no_ghost_says_why_on_screen(rendered, width):
+    """The reason is VISIBLE rather than behind a hover, checked with the
+    longest sentence the server can produce. The toggle is a preference now,
+    not a capability (round 3): it stays usable and keeps his choice, and the
+    row says why nothing races."""
     row = rendered[("disabled", width)][0]
-    assert row["disabled"] is True
-    assert row["checked"] == "false"
+    assert row["disabled"] is False
+    assert row["pressed"] == ("true" if STATES["disabled"]["enabled"] else "false")
     assert row["whyText"] == NO_POSES_TEXT
     assert row["whySeen"], "the reason is in the DOM but not on the screen"
-    assert row["describedBy"] == row["whyId"], (
-        "the switch does not point at its own reason")
     # Nothing to tune when there is nothing to show.
     assert (row["sliders"], row["steps"], row["resets"], row["colours"]) == (0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("width", WIDTHS)
-def test_off_offers_the_switch_and_nothing_else(rendered, width):
+def test_off_offers_the_toggle_and_nothing_else(rendered, width):
     row = rendered[("off", width)][0]
     assert row["disabled"] is False
-    assert row["checked"] == "false"
+    assert row["pressed"] == "false"
     assert row["whyText"] is None
     assert (row["sliders"], row["steps"], row["colours"]) \
         == (0, 0, 0), (
@@ -394,7 +446,7 @@ def test_off_offers_the_switch_and_nothing_else(rendered, width):
 @pytest.mark.parametrize("width", WIDTHS)
 def test_on_offers_visibility_and_timing(rendered, width):
     row = rendered[("on", width)][0]
-    assert row["checked"] == "true"
+    assert row["pressed"] == "true"
     assert row["sliders"] == 1
     assert row["steps"] == 2, "earlier and later"
     assert row["resets"] == 1, "a non-zero offset offers a way back"
@@ -473,17 +525,35 @@ def test_switching_the_colour_off_takes_the_wheel_away(rendered, width):
 @pytest.mark.parametrize("width", WIDTHS)
 def test_the_knob_actually_moves_when_it_is_on(rendered, width):
     """A style built from a custom property has no DOM signature when it
-    fails -- the class is on the element either way. Read the PAINT."""
+    fails -- the class is on the element either way. Read the PAINT.
+
+    The switch measured is the colour treatment's: the overlay's own on/off is
+    the head's ghost toggle now, which has no knob (checked below)."""
     on = rendered[("on", width)][0]
-    off = rendered[("off", width)][0]
-    assert on["knobShift"] != off["knobShift"], (
-        f"the knob paints identically on and off: {on['knobShift']}")
-    assert on["trackPaint"] != off["trackPaint"], (
+    plain = rendered[("plain", width)][0]
+    assert (on["colourChecked"], plain["colourChecked"]) == ("true", "false")
+    assert on["colourKnobShift"] != plain["colourKnobShift"], (
+        f"the knob paints identically on and off: {on['colourKnobShift']}")
+    assert on["trackPaint"] != plain["trackPaint"], (
         f"the track paints identically on and off: {on['trackPaint']}")
-    for paint in (on["trackPaint"], off["trackPaint"]):
-        assert paint != "rgba(0, 0, 0, 0)", (
+    for paint in (on["trackPaint"], plain["trackPaint"]):
+        assert paint not in (None, "rgba(0, 0, 0, 0)"), (
             "the track's background computed to transparent -- a colour-mix "
             "that is invalid at computed-value time reverts silently")
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_the_toggle_paints_differently_when_ghosts_race(rendered, width):
+    """The head toggle's on look is a colour-mix of the gold: read the PAINT,
+    because a mix that is invalid at computed-value time reverts silently and
+    leaves on and off looking the same."""
+    on = rendered[("on", width)][0]
+    off = rendered[("off", width)][0]
+    assert on["togglePaint"] != off["togglePaint"], (
+        f"the ghost toggle paints identically on and off: {on['togglePaint']}")
+    for row in (on, off):
+        assert row["toggleColour"] not in (None, "rgba(0, 0, 0, 0)"), row["togglePaint"]
+        assert row["toggleBox"]["width"] > 0 and row["toggleBox"]["height"] > 0, row["toggleBox"]
 
 
 @pytest.mark.parametrize("state", sorted(STATES))
@@ -511,19 +581,43 @@ def test_the_geometry_guard_can_fail(rendered):
 @pytest.mark.parametrize("width", WIDTHS)
 def test_ghosts_that_do_not_fit_together_say_so_on_the_card(rendered, width):
     """His ghosts are fine; there are too many long ones at once. The card
-    says what to do, on screen, and the switch stays usable."""
+    says what to do, on screen, and the toggle stays usable."""
     row = rendered[("no_room", width)][0]
     assert row["whyText"] == "These ghosts are too long to show together; untick one."
-    assert row["whySeen"] and row["checked"] == "true" and not row["disabled"]
+    assert row["whySeen"] and row["pressed"] == "true" and not row["disabled"]
 
 
 @pytest.mark.parametrize("width", WIDTHS)
 def test_the_wording_a_player_reads(rendered, width):
     """Read back what is actually painted, not what the source says: the
-    label is his own phrase and the timing readout is a sentence."""
+    toggle's name is his own phrase, its hover says what a click does, and
+    the timing readout is a sentence."""
     on = rendered[("on", width)][0]
-    assert on["label"] == "Ghost Overlay"
+    off = rendered[("off", width)][0]
+    assert on["label"] == off["label"] == "Ghost Overlay"
+    assert on["title"] == "Ghosts on. Click, or press D-pad Up in the game, to hide them."
+    assert off["title"] == "Ghosts off. Click, or press D-pad Up in the game, to race them."
     assert on["timing"].strip() == "3 frames ahead"
+
+
+# Every hotkey the server can name, and the words its tooltip reads.
+HOTKEY_TITLES = {
+    "dpad_up": ("off", "Ghosts off. Click, or press D-pad Up in the game, to race them."),
+    "c_x4": ("c_buttons",
+             "Ghosts off. Click, or press all four C buttons in the game, to race them."),
+}
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_the_toggles_hover_names_the_ghost_hotkey_the_server_reports(rendered, width):
+    """His ask, 2026-10-17: "update the tool tip when hovering over the ghost
+    icon in the trainer webapp accordingly". Keyed by the server's own names,
+    so a hotkey Python adds without words here fails."""
+    from sm64_events.ghost.dpad_toggle import HOTKEYS
+    assert set(HOTKEY_TITLES) == set(HOTKEYS)
+    for hotkey, (state, title) in HOTKEY_TITLES.items():
+        assert STATES[state]["hotkey"] == hotkey
+        assert rendered[(state, width)][0]["title"] == title
 
 
 # --------------------------------------------------------------------------
@@ -602,14 +696,14 @@ def driven():
                              seed_editor_fixtures=True) as (base, state):
         with get_driver().launch() as page:
             page.goto(base)
-            # The row mounts while GET /api/ghost is still pending. A DOM
-            # .click() on its waiting/disabled switch is ignored by the browser.
-            page.wait_for(".ghost-row-head > .ghost-switch:enabled")
-            page.evaluate("(() => document.querySelector('.ghost-switch').click())()")
+            # The toggle mounts while GET /api/ghost is still pending. A DOM
+            # .click() on its waiting/disabled button is ignored by the browser.
+            page.wait_for(f"{TOGGLE}:enabled")
+            page.evaluate(f"(() => document.querySelector({TOGGLE!r}).click())()")
             out["after_flip"] = {"writes": settled(page, state, 1),
                                  "session": dict(state["session"])}
             out["flip_checked"] = page.evaluate(
-                "document.querySelector('.ghost-switch').getAttribute('aria-checked')")
+                f"document.querySelector({TOGGLE!r}).getAttribute('aria-pressed')")
             page.wait_for(".ghost-opacity")
             state["writes"].clear()
             out["drag_events"] = page.evaluate(DRAG)
@@ -671,9 +765,10 @@ def unstated_opacity():
             page.wait_for(".ghost-opacity")
             out["unknown"] = page.evaluate(READ_OPACITY)
             # A real gesture that DOES write, while the visibility is still
-            # unknown: flipping the switch must carry the switch and nothing
+            # unknown: flipping the toggle must carry the toggle and nothing
             # else. This is the write that could smuggle a default out.
-            page.evaluate("(() => document.querySelector('.ghost-switch').click())()")
+            page.wait_for(f"{TOGGLE}:enabled")
+            page.evaluate(f"(() => document.querySelector({TOGGLE!r}).click())()")
             out["writes_while_unknown"] = settled(page, state, 1)
 
             # The server catches up. Now the control has a value to show, it
@@ -721,7 +816,7 @@ def test_flipping_the_switch_writes_immediately_and_stays_flipped(driven):
     assert driven["after_flip"]["writes"] == [{"enabled": True}]
     assert driven["after_flip"]["session"]["enabled"] is True
     assert driven["flip_checked"] == "true", (
-        "the switch snapped back -- the server's answer or its own broadcast "
+        "the toggle snapped back -- the server's answer or its own broadcast "
         "overwrote the gesture")
 
 
@@ -775,3 +870,55 @@ def test_the_fixture_reaches_the_state_it_claims():
     assert STATES["on"]["target"]["entity_key"] == "2-4"
     assert json.dumps(STATES["disabled"]["source"]["reason_text"]) \
         == json.dumps(NO_POSES_TEXT)
+
+
+def test_escape_in_the_library_closes_only_the_library_and_keeps_the_settings_draft():
+    """A dialog opened from inside another closes alone on Escape.
+
+    The Ghost Library opens from inside the Ghost settings sheet. Every dialog
+    listens on the document and the sheet registered first, so Escape used to
+    close both and drop the sheet's unsaved draft. ui/components/modal.js keeps
+    a stack, and only the topmost dialog answers keys. The draft is a real
+    one: a visibility he moved in the sheet and has not saved, which must
+    still be on screen after the library closes and be the one thing Done
+    writes.
+    """
+    count = "document.querySelectorAll('.modal').length"
+    escape = ("(document.activeElement || document.body).dispatchEvent("
+              "new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true}))")
+    sheet_opacity = "document.querySelector('.modal .ghost-settings-appearance .ghost-opacity').value"
+    draft = """(() => {
+      const el = document.querySelector('.modal .ghost-settings-appearance .ghost-opacity');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '0.3');
+      el.dispatchEvent(new Event('input', {bubbles: true}));
+    })()"""
+
+    def settle_at(page, expected):
+        for _ in range(60):
+            if page.evaluate(count) == expected:
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"expected {expected} dialogs, saw {page.evaluate(count)}")
+
+    with serve_ui_with_ghost(ghost_session(enabled=True, opacity=0.6), arm_segment=FIXTURE_SEGMENT,
+                             seed_editor_fixtures=True) as (base, state):
+        with get_driver().launch() as page:
+            page.goto(base)
+            open_ghost_settings(page)
+            page.wait_for(".modal .ghost-settings-appearance .ghost-opacity:enabled")
+            page.evaluate(draft)
+            page.wait_ms(400)   # past the row's trailing write: the sheet keeps it local
+            assert page.evaluate(sheet_opacity) == "0.3" and state["writes"] == [], state["writes"]
+            page.wait_for(".ghost-library-button:enabled")
+            page.click(".ghost-library-button")
+            page.wait_for(LIBRARY_MODAL)
+            settle_at(page, 2)
+            page.evaluate(escape)
+            settle_at(page, 1)
+            assert page.evaluate("Boolean(document.querySelector('.modal .ghost-settings-heading'))")
+            assert page.evaluate(sheet_opacity) == "0.3", "the sheet's unsaved draft was lost"
+            assert state["writes"] == [], state["writes"]
+            page.evaluate("""Array.from(document.querySelectorAll('.modal .primary-button'))
+              .find((button) => button.textContent.trim() === 'Done').click()""")
+            settle_at(page, 0)
+            assert settled(page, state, 1) == [{"opacity": 0.3}]

@@ -251,7 +251,8 @@ def test_bound_bundled_and_cloud_recordings_take_one_seat_but_a_name_impostor_st
     impostor = {**remote, "id": "2" * 64, "player_id": "22222222-2222-4222-8222-222222222222"}
     population.remember_page(identity, page([remote, impostor]))
     try:
-        rows = population.metadata_snapshot("star", "2-1", clock="igt", game_version="us")
+        # The list was stored for the strategy view, so that is where it is read.
+        rows = population.metadata_snapshot("star", "2-1", clock="igt", game_version="us", strategy="10 coin")
         assert len(rows) == 3 and len({row["id"] for row in rows}) == 3
         ranked = rank_recordings(rows, Standards(), identity)
         chosen = select_rivals(ranked, None, {"mode": "fixed", "min_step": 0, "max_step": 44}, {})

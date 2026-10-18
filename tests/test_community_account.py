@@ -476,3 +476,44 @@ def test_name_check_asks_the_service_and_degrades_when_it_has_no_check_yet():
             assert not any("abc" in url for url in seen)
             await account.close()
     asyncio.run(scenario())
+
+
+def test_status_checks_read_the_credential_manager_once_and_a_failed_refresh_keeps_the_account():
+    """Every status check used to copy the refresh token out of the vault
+    (5-7 times a 0.5 s cycle). A failed rotation keeps the profile and the
+    stored token, so the cloud view is not wiped by a network blip."""
+    from sm64_events.community.cache import account_owner
+
+    class Counting(Store):
+        loads = 0
+
+        def load(self):
+            Counting.loads += 1
+            return super().load()
+
+    async def scenario():
+        failing = [False]
+
+        def respond(request):
+            if request.url.path.endswith("/token"):
+                if failing[0]:
+                    raise httpx.ConnectError("offline")
+                return httpx.Response(200, json=token("next"))
+            return httpx.Response(200, json=profile() if request.url.path == "/v1/account" else {"v": 1})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            store = Counting()
+            store.token = "old"
+            account = CommunityAccount(config(), http=http, token_store=store)
+            await account.restore()
+            loads = Counting.loads
+            for _ in range(20):
+                assert account.snapshot()["stored"] is True
+            assert Counting.loads == loads
+            failing[0], account._expires = True, 0
+            with pytest.raises(CommunityError):
+                await account.refresh()
+            snapshot = account.snapshot()
+            assert not snapshot["authenticated"] and snapshot["stored"] and account_owner(snapshot) == UID
+            await account.sign_out()
+            assert account.snapshot()["stored"] is False and account_owner(account.snapshot()) is None
+    asyncio.run(scenario())

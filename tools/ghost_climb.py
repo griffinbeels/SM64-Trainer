@@ -56,6 +56,9 @@ CONFIG_TABLES = ("segment_defs", "routes", "landmark_names")
 SIMULATION_KEY = "ghost_simulation_v1"
 WILD_BLUE = {"kind": "star", "entity_key": "2-2", "strat": "Standard"}
 SIMULATED_NAMES = ("Alex", "Sam", "Kai", "Morgan", "Taylor", "Riley", "Jamie", "Robin", "Casey", "Drew", "Avery", "Jules")
+# The Lineup demo's fake players (--demo-target). Invented handles, so nothing
+# on screen can be mistaken for a real community runner.
+DEMO_NAMES = ("Pasta", "Lumi", "Ochre_Runs", "Dex", "Kestrel", "Mako", "Nova_Rae", "Wren")
 
 
 def _absolute(path):
@@ -236,8 +239,9 @@ def _simulate_wild_blue(source_root, profiles_root, *, source_version, inputs_di
     return document
 
 
-def _fresh_simulation_donors(database, source, version, inputs_directory=None):
-    """Retain each playable target/strategy/time once, with its original clock."""
+def _fresh_simulation_donors(database, source, version, inputs_directory=None, wanted=None):
+    """Retain each playable target/strategy/time once, with its original clock.
+    `wanted` (kind, key, strategy) chooses the profile's first target."""
     replay = _SeedReplay(database, source, None, inputs_directory=inputs_directory)
     ranks = _seed_standards(source)
     definitions = database.segment_defs()
@@ -270,22 +274,49 @@ def _fresh_simulation_donors(database, source, version, inputs_directory=None):
         group = timing[:3]
         groups[group] = groups.get(group, 0) + 1
     full = [group for group, count in groups.items() if count >= MAX_RIVALS]
+    if wanted is not None:
+        if wanted not in groups:
+            raise ValueError("No saved, playable ghosts exist for that target and strategy.")
+        full = [wanted]
     if not full:
         raise ValueError(f"A full fresh simulation needs {MAX_RIVALS} distinct saved ghosts for one target and strategy.")
     wild_blue = WILD_BLUE["kind"], WILD_BLUE["entity_key"], WILD_BLUE["strat"]
-    initial = wild_blue if wild_blue in full else max(full, key=lambda group: groups[group])
+    initial = wanted or (wild_blue if wild_blue in full else max(full, key=lambda group: groups[group]))
     ordered = sorted(donors, key=lambda timing: (timing[:3] != initial, timing[:4], -timing[4]))
     return [donors[timing] for timing in ordered], dict(zip(("kind", "entity_key", "strat"), initial, strict=True))
 
 
-def simulate_fresh(source_root, profiles_root, *, source_version="us"):
+def simulate_fresh(source_root, profiles_root, *, source_version="us", demo_target=None):
     """Prepare a zero-practice climb with recorded pads on playback copies."""
     with tempfile.TemporaryDirectory(prefix="sm64-climb-inputs-") as folder:
         return _simulate_fresh(source_root, profiles_root, source_version=source_version,
-                               inputs_directory=Path(folder))
+                               inputs_directory=Path(folder), demo_target=demo_target)
 
 
-def _simulate_fresh(source_root, profiles_root, *, source_version, inputs_directory):
+def _donor_frames(entry):
+    (attempt, _path, _digest, _source), _target, clock = entry
+    return attempt.igt_frames if clock == "igt" else attempt.rta_frames
+
+
+def _demo_players(donors):
+    """The Lineup demo credits each target's runs, slowest to fastest, to a
+    few fake players in turn, so most of them own more than one run: passing
+    one brings the same player back faster, the way the real rival picker
+    does. Never fewer players than seats."""
+    by_group = {}
+    for index, (_donor, target, clock) in enumerate(donors):
+        by_group.setdefault((target["kind"], target["entity_key"], target["strat"], clock), []).append(index)
+    names = {}
+    for members in by_group.values():
+        members.sort(key=lambda index: -_donor_frames(donors[index]))
+        count = max(min(MAX_RIVALS, len(members)), (len(members) + 1) // 2)
+        players = [(f"simulated:{uuid4().hex}", DEMO_NAMES[n % len(DEMO_NAMES)]) for n in range(count)]
+        for order, index in enumerate(members):
+            names[index] = players[order % count]
+    return names
+
+
+def _simulate_fresh(source_root, profiles_root, *, source_version, inputs_directory, demo_target=None):
     """Zero practice, no PB and independent gtest opponents from exact saved clips.
 
     Use normal adaptive selection. Advanced-only samples can leave the beginner
@@ -297,7 +328,8 @@ def _simulate_fresh(source_root, profiles_root, *, source_version, inputs_direct
     if profiles == source or source.is_relative_to(profiles):
         raise ValueError("Simulations need a separate profile directory.")
     with source_snapshot(source) as original:
-        donors, initial = _fresh_simulation_donors(original, source, source_version, inputs_directory)
+        donors, initial = _fresh_simulation_donors(original, source, source_version, inputs_directory,
+                                                   wanted=demo_target)
         document = _fresh_profile(source, profiles / "unused", profiles, original)
     profile = Path(document["profile"])
     population = profile / "data" / "ghost_population"
@@ -305,10 +337,13 @@ def _simulate_fresh(source_root, profiles_root, *, source_version, inputs_direct
     database = Database(profile / "data" / "tracker.db")
     provider = LocalPopulation(population, database.segment_defs)
     try:
-        opponents = [_simulated_record(provider, donor, player_id=f"simulated:{uuid4().hex}",
-            name=f"gtest{index}", version=source_version, target=target, clock=clock)
-            for index, (donor, target, clock) in enumerate(donors, start=1)]
-        simulation = {"version": 1, "label": "Developer simulation · Fresh tester",
+        demo = _demo_players(donors) if demo_target else {}
+        opponents = [_simulated_record(provider, donor,
+            player_id=demo[index][0] if demo else f"simulated:{uuid4().hex}",
+            name=demo[index][1] if demo else f"gtest{index + 1}", version=source_version, target=target, clock=clock)
+            for index, (donor, target, clock) in enumerate(donors)]
+        label = "Test profile · fake rivals from your own runs" if demo else "Developer simulation · Fresh tester"
+        simulation = {"version": 1, "label": label,
             "scenario_root": str(profile), "target": initial, "game_version": source_version,
             "zero_practice": True}
         options = checked_options({"mode": "adaptive", "count": MAX_RIVALS, "include_pb": True})
@@ -555,6 +590,9 @@ def main():
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--simulate-wild-blue", action="store_true", help="Fresh simulated tester and exact Wild Blue recordings; original history stays untouched.")
     parser.add_argument("--simulate-fresh", action="store_true", help="Zero practice with renamed saved ghosts and adaptive matchmaking; original history stays untouched.")
+    parser.add_argument("--demo-target", metavar="KIND:KEY:STRATEGY",
+                        help="With --simulate-fresh: open on this target (e.g. star:6-5:Standard) and credit "
+                             "the runs to a few fake players, each owning several.")
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--port", type=int, default=8070)
     args = parser.parse_args()
@@ -574,7 +612,13 @@ def main():
         profile = args.profile
         if simulation:
             simulate = simulate_fresh if args.simulate_fresh else simulate_wild_blue
-            document = simulate(source, profiles, source_version=args.certify_source_version or "us")
+            extra = {}
+            if args.demo_target:
+                parts = tuple(args.demo_target.split(":", 2))
+                if not args.simulate_fresh or len(parts) != 3 or not all(parts):
+                    parser.error("--demo-target is KIND:KEY:STRATEGY (e.g. star:6-5:Standard), with --simulate-fresh.")
+                extra["demo_target"] = parts
+            document = simulate(source, profiles, source_version=args.certify_source_version or "us", **extra)
             profile = Path(document["profile"])
             print(json.dumps(document, indent=2))
         if args.prepare:

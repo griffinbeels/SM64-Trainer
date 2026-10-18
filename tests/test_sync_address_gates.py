@@ -12,6 +12,9 @@ directly, so a check with a 60-second internal timeout still runs instantly.
 Candidates are the real US layout addresses (`memory.layout.US`) throughout,
 matching the brief: "FakeContext... candidate() = US layout".
 """
+import pytest
+
+from sm64_events.ghost import dpad_toggle
 from sm64_events.memory import addresses as A
 from sm64_events.memory.behaviours import base_from_mario, pointer_of
 from sm64_events.memory.buffer import BufferMemory
@@ -631,6 +634,52 @@ def test_usamune_input_display_is_verified_by_switching_it_off_and_on():
     assert _usamune_flip("usamune_input_display", lambda t: 2,
                          AG._check_usamune_input_display).status == "failed"
 
+
+# --- usamune_savestate_button -----------------------------------------------
+
+SAVESTATE_AT = US.usamune_savestate_button
+DUP = dpad_toggle.SAVESTATE_ON_DPAD_UP
+
+
+def _savestate_switch(script, candidate=SAVESTATE_AT):
+    clock = ScriptedClock()
+    memory = ScriptedMemory(clock)
+    memory.script("u8", SAVESTATE_AT, script)
+    return AG._check_usamune_savestate_button(
+        FakeContext(memory, {"usamune_savestate_button": candidate}, clock=clock))
+
+
+def cx4_dup_cx4(cx4, dup):
+    return lambda t: dup if 1.0 <= t < 2.0 else cx4
+
+
+@pytest.mark.parametrize("cx4", [0, 2])
+def test_usamune_savestate_button_is_verified_by_switching_to_dup_and_back(cx4):
+    """Seeing both values and the first again is the proof; 0 is what Cx4 read."""
+    verdict = _savestate_switch(cx4_dup_cx4(cx4, DUP))
+    assert verdict.status == "verified" and verdict.value == SAVESTATE_AT
+    assert verdict.measured == {"c_x4": cx4, "dpad_up": DUP}
+
+
+def test_usamune_savestate_button_that_never_moves_or_never_returns_fails():
+    assert _savestate_switch(lambda t: 1).status == "failed"
+    assert _savestate_switch(lambda t: 1 if t >= 1.0 else 0).status == "failed"
+    assert _savestate_switch(lambda t: min(int(t), 3)).status == "failed"  # three values
+
+
+def test_usamune_savestate_button_dup_reading_must_match_the_hotkeys_value():
+    """A ROM whose DUP reads another value would pick the wrong hotkey."""
+    refuted = _savestate_switch(cx4_dup_cx4(DUP + 1, DUP + 2))
+    assert refuted.status == "failed" and f"expects {DUP}" in refuted.evidence
+
+
+def test_usamune_savestate_button_without_a_candidate_is_missing_and_its_row_is_verify():
+    assert _savestate_switch(lambda t: 0, candidate=None).status == "missing"
+    gate = next(g for g in GATES if g.id == "address.usamune_savestate_button")
+    assert gate.kind == "address"
+    from sm64_events.memory.layout import LAYOUT_ROWS
+    row = next(r for r in LAYOUT_ROWS if r.field == "usamune_savestate_button")
+    assert row.note.startswith("VERIFY") and row.symbol is None and row.hunt
 
 def test_usamune_stop_is_verified_by_setting_grab_then_grabx():
     # GrabX, stepped through Xcam to Grab, then back up to GrabX.

@@ -7,20 +7,24 @@ import {afterEach, beforeEach, expect, test, vi} from "vitest";
 vi.mock("../../src/sm64_events/ui/api.js", () => ({getJSON: vi.fn(), send: vi.fn()}));
 const api = await import("../../src/sm64_events/ui/api.js");
 const {useUpdates} = await import("../../src/sm64_events/ui/updates.js");
+const {UpdatePopup} = await import("../../src/sm64_events/ui/components/update.js");
 let updates;
-function Probe() { updates = useUpdates(); return h("output", null, String(updates.updateVisible)); }
+function Probe() {
+  updates = useUpdates();
+  return h("div", null, h("output", null, String(updates.updateVisible)), h(UpdatePopup, {t:updates}));
+}
 const offer = extra => ({update_available: true, current: "1.10.0-beta.16", latest: "1.10.0-beta.17", ...extra});
 beforeEach(() => { api.getJSON.mockReset(); api.send.mockReset(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
-test("startup offer precedes onboarding, Later releases it, manual check reopens it", async () => {
+test("startup checks stay silent, an actual offer opens, Later dismisses and manual check reopens", async () => {
   let answer;
   api.getJSON.mockReturnValue(new Promise(resolve => { answer = resolve; }));
   render(h(Probe));
-  expect(updates.updateStartupPending).toBe(true);
+  expect(updates.updateVisible).toBe(false);
+  expect(document.querySelector(".modal")).toBeNull();
   answer(offer());
   await waitFor(() => expect(updates.updateVisible).toBe(true));
-  expect(updates.updateStartupPending).toBe(false);
   act(() => updates.dismissUpdate());
   expect(updates.updateVisible).toBe(false);
   api.getJSON.mockResolvedValue(offer());
@@ -32,19 +36,19 @@ test.each(["offline", "current", "skipped"])("%s never traps onboarding", async 
   if (state === "offline") api.getJSON.mockRejectedValue(new Error("offline"));
   else api.getJSON.mockResolvedValue(state === "current" ? {update_available: false} : offer({skipped: "1.10.0-beta.17"}));
   render(h(Probe));
-  await waitFor(() => expect(updates.updateStartupPending).toBe(false));
+  await act(async () => {});
   expect(updates.updateVisible).toBe(false);
+  expect(document.querySelector(".modal")).toBeNull();
 });
 
-test("stalled check releases onboarding after five seconds and a late offer is usable", async () => {
+test("stalled checking never opens a modal and a late actual offer remains usable", async () => {
   vi.useFakeTimers();
   let answer;
   api.getJSON.mockReturnValue(new Promise(resolve => { answer = resolve; }));
   render(h(Probe));
-  await act(async () => { await vi.advanceTimersByTimeAsync(4999); });
-  expect(updates.updateStartupPending).toBe(true);
-  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-  expect(updates.updateStartupPending).toBe(false);
+  expect(document.querySelector(".modal")).toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+  expect(document.querySelector(".modal")).toBeNull();
   await act(async () => { answer(offer()); });
   expect(updates.updateVisible).toBe(true);
 });

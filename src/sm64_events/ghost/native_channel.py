@@ -37,6 +37,9 @@ class NativeChannel:
         self._map = self._view = self._mutex = self._wake = None
         self._request = None
         self._birth = None
+        # Whether this renderer can hide a race and keep it running
+        # (GIPC_CAP_HIDDEN); read from every status before a command is encoded.
+        self._hides = False
         try:
             self._map = self._k.OpenFileMappingW(0xF001F, False, self.name)
             if not self._map:
@@ -127,6 +130,7 @@ class NativeChannel:
             current = P.Request.from_buffer_copy(C.string_at(self._view + 256, C.sizeof(P.Request)))
             if current.token != request.token:
                 raise RuntimeError("native ghost lease was replaced")
+            self._hides = bool(status.capabilities & L.IPC_CAP_HIDDEN)
             if playback is not None:
                 try:
                     self._set_playback(playback)
@@ -164,9 +168,18 @@ class NativeChannel:
         retired = sorted(set(value) & {"clip_id", "clip_sha256", "clip_path", "hue_degrees"})
         if retired:
             raise ValueError(f"native ghost clips are a list; retired keys: {retired}")
-        enabled = bool(value.get("enabled", False))
-        preparing = _set_generations(request, value)
+        # The overlay switch off (`hidden`): a renderer with GIPC_CAP_HIDDEN
+        # keeps the race running unseen. An older one refuses the word and
+        # cannot keep a hidden race's restore history, so it gets what the
+        # switch always sent it: playback off with no roster, which waits for
+        # the next attempt. Hidden rather than wrong: re-resolving a race
+        # without that history can misplace a segment ghost after a load.
+        hidden = _switch(value, "hidden", False)
+        revoked = hidden and not self._hides
+        enabled = bool(value.get("enabled", False)) and not revoked
+        preparing = _set_generations(request, {} if revoked else value)
         request.play_enabled = enabled
+        request.hidden = int(hidden and enabled)
         _set_presentation(request, value)
         _set_seek(request, value, enabled)
         if enabled or preparing:

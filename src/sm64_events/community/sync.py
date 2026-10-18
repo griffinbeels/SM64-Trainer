@@ -11,9 +11,10 @@ import random
 from uuid import uuid4
 
 from sm64_events.ghost.sharing_targets import canonical, checked_target
+from sm64_events.ranks.region_scope import REGIONAL, servable_versions
 
 from . import claims, codec
-from .cache import checked_metadata, target_key, value_of
+from .cache import LEASE_RENEW_S, checked_metadata, target_key, value_of
 from .config import CommunityError
 from .outbox import RetractionOutbox, SourceOutbox, checked_source, checked_strategy, retraction_key, source_key
 
@@ -23,12 +24,19 @@ MAX_QUEUE = 32
 MAX_RETIRED = 256
 RETRACT_ROUTE = "/v1/recordings/retract"
 CONTRIBUTIONS = ("offer", "retract")  # Serial owner-bound work on the contribution task.
+
+
+def _lane(operation):
+    """Which worker runs it: a 180 s recording download never holds up a rival list."""
+    return "contribution" if operation[0] in CONTRIBUTIONS else "download" if operation[0] == "assets" else "list"
 MAX_PAGE = 256
 MAX_PAGES = 4
 ASSET_RETRY_S = 30
+POOL_RETRY_MIN_S = 5
+"""The shortest wait before the same rival list is asked for again."""
 PIN_RENEW_S = 24 * 60 * 60  # Seven-day server leases; visibility metadata has its own bounded refresh.
-PIN_METADATA_RENEW_S = 600
 CATALOG_RENEW_S = 3600
+MAX_POOL_JOBS = 64
 
 
 def _prepare_source(source):
@@ -85,6 +93,27 @@ def _cutoffs(rows):
         result.append((row["step"], row["frames"]))
         previous = row["step"]
     return tuple(result)
+
+
+INTEGRITY_FAILURES = ("asset_mismatch", "incomplete_inputs", "invalid_metadata", "invalid_name", "identity_mismatch",
+                      "invalid_response")
+
+
+def _unusable_until(error):
+    """How long one recording leaves automatic seats after its download failed.
+
+    Wrong or malformed content is content-addressed, so it never changes: the
+    rest of the session. A refusal about that recording (gone, hidden) waits
+    out the retry. Network, quota and account trouble is nobody's recording:
+    it never empties the lineup.
+    """
+    if isinstance(error, CommunityError):
+        if error.code in INTEGRITY_FAILURES:
+            return float("inf")
+        if _retryable(error) or error.status in (401, 403) or error.code in ("closed", "canceled"):
+            return None
+        return time.monotonic() + ASSET_RETRY_S
+    return None if isinstance(error, OSError) else float("inf")
 
 
 def checked_catalog(value):
@@ -154,7 +183,14 @@ def checked_page(value, *, generation=None):
             or coverage["min_step"] > coverage["max_step"]
             or coverage["complete"] and value["next_cursor"] is not None):
         raise CommunityError("invalid_response")
-    rows = [checked_metadata(row) for row in value["recordings"]]
+    rows = []
+    for row in value["recordings"]:
+        try:
+            rows.append(checked_metadata(row))
+        except CommunityError as error:
+            if error.code != "invalid_name":
+                raise
+            # A name the cloud itself would refuse: drop that recording only.
     if any(row["generation"] != coverage["generation"] for row in rows) or len({row["id"] for row in rows}) != len(rows):
         raise CommunityError("invalid_response")
     if generation is not None and coverage["generation"] != generation:
@@ -166,12 +202,18 @@ class CommunitySync:
     def __init__(self, account, population, *, http=None):
         self.account, self.population, self._http = account, population, http
         self._lock = threading.RLock()
-        self._queue, self._recent = OrderedDict(), OrderedDict()
+        self._queue = OrderedDict()
+        self._running = None
+        # (owner, list key) -> ((windows, pins) last served, when it is due again)
+        self._pool_jobs = OrderedDict()
+        self._pool_failures = OrderedDict()  # (owner, list key) -> "offline" | "unsupported"
         self._asset_retry = OrderedDict()
+        self._asset_unusable = OrderedDict()  # (owner, recording id) -> monotonic time it may seat again
         self._offer_retry = OrderedDict()
         self._network_owner, self._network_until, self._network_error = None, 0, None
         self._loop = self._wake = self._task = None
         self._contribution_wake = self._contribution_task = self._practice_started = None
+        self._download_wake = self._download_task = None
         self._closing = False
         self._catalog, self._catalog_generation, self._catalog_until = {}, None, 0
         self._catalog_lock = asyncio.Lock()
@@ -179,7 +221,7 @@ class CommunitySync:
         self._search_task = None
         self._pins_leased = False
         self._pin_key, self._pins_until = None, 0
-        self._pin_metadata_key, self._pin_metadata_until = None, 0
+        self._pin_metadata_key = None
         self._outbox = SourceOutbox(population.root / "pending-contributions.json")
         self._retractions = RetractionOutbox(population.root / "pending-retractions.json")
         self._retired = OrderedDict()  # raw_sha256 -> the one strategy it may still be offered under
@@ -196,10 +238,13 @@ class CommunitySync:
         self._loop = asyncio.get_running_loop()
         self._wake = asyncio.Event()
         self._contribution_wake = asyncio.Event()
+        self._download_wake = asyncio.Event()
         self._practice_started = asyncio.Event()
         self._task = asyncio.create_task(self._run(), name="community-sync")
+        self._download_task = asyncio.create_task(self._run_downloads(), name="community-downloads")
         self._contribution_task = asyncio.create_task(self._run_contributions(), name="community-contributions")
         self._wake.set()
+        self._download_wake.set()
         self._contribution_wake.set()
 
     async def stop(self):
@@ -208,7 +253,8 @@ class CommunitySync:
             self._closing = True
             self._queue.clear()
             self._offer_retry.clear()
-        tasks = [task for task in (self._task, self._contribution_task, self._search_task) if task and not task.done()]
+        tasks = [task for task in (self._task, self._download_task, self._contribution_task, self._search_task)
+                 if task and not task.done()]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -228,6 +274,7 @@ class CommunitySync:
                 raise CommunityError("shutdown_timeout", "Community processing is still finishing.") from None
         self._task = self._wake = self._loop = self._search_task = None
         self._contribution_task = self._contribution_wake = self._practice_started = None
+        self._download_task = self._download_wake = None
 
     def _enqueue(self, key, operation):
         with self._lock:
@@ -246,28 +293,92 @@ class CommunitySync:
             while len(self._queue) > MAX_QUEUE:
                 self._queue.popitem(last=False)
             loop = self._loop
-            wake = self._contribution_wake if operation[0] in CONTRIBUTIONS else self._wake
+            wake = {"contribution": self._contribution_wake, "download": self._download_wake}.get(
+                _lane(operation), self._wake)
         if loop and wake and not loop.is_closed():
             loop.call_soon_threadsafe(wake.set)
         return True
 
     def request_pool(self, identity, *, frame_windows, pinned_ids=()):
+        """Ask for one identity's rival list, only when the network is needed.
+
+        Safe to call every cycle. Nothing is queued while the same list is
+        queued or running, or while the list and chosen rivals it last served
+        are still inside their publication leases (or a failure's back-off).
+        """
         try:
             key = self.population.identity_key(identity)
             windows = tuple(tuple(window) for window in frame_windows)
-            pins = tuple(dict.fromkeys(pinned_ids))
-            if len(pins) > 4:
+            pins = None if pinned_ids is None else tuple(dict.fromkeys(pinned_ids))
+            if pins is not None and len(pins) > 4:
                 raise ValueError()
             from sm64_events.ghost.portable import checked_hash
-            for pin in pins:
+            for pin in pins or ():
                 checked_hash(pin)
+        except (ValueError, TypeError):
+            return False
+        job = self.account.snapshot().get("uid"), key
+        with self._lock:
+            if self._closing:
+                return False
+            if ("pool", key) in self._queue or self._running == ("pool", key):
+                return True
+            served, due = self._pool_jobs.get(job, (None, 0))
+            if served == (windows, pins, value_of(identity, "region_scope", REGIONAL)) and time.monotonic() < due:
+                # A successful job outlives the bounded list cache. Eviction
+                # or sign-out must not leave an empty list waiting on its old
+                # job lease; failed requests still keep their network backoff.
+                if job in self._pool_failures or not self._lease_due(self.population.lease_until(identity)):
+                    return True
+        try:
             target = self.population.portable_target(identity)
             frozen = {"target": target, "kind": value_of(identity, "kind"), "entity_key": value_of(identity, "entity_key"),
                 "clock": value_of(identity, "clock"), "game_version": value_of(identity, "game_version"),
-                "scope": value_of(identity, "scope", "strategy"), "strategy": value_of(identity, "strategy")}
+                "scope": value_of(identity, "scope", "strategy"), "strategy": value_of(identity, "strategy"),
+                "region_scope": value_of(identity, "region_scope", REGIONAL)}
         except (ValueError, TypeError):
             return False
         return self._enqueue(("pool", key), ("pool", frozen, windows, pins))
+
+    def pool_status(self, identity):
+        """'pending' while this list is queued or running; after a failed
+        request 'unsupported' (the catalog has no such list) or 'offline'
+        (unreachable, rate limited or in a network cooldown); else None."""
+        try:
+            key = self.population.identity_key(identity)
+        except (ValueError, TypeError):
+            return None
+        owner = self.account.snapshot().get("uid")
+        with self._lock:
+            if ("pool", key) in self._queue or self._running == ("pool", key):
+                return "pending"
+            failure = self._pool_failures.get((owner, key))
+        if failure is None and self._network_owner == owner and self._network_until > time.monotonic():
+            return "offline"
+        return failure
+
+    def refused_assets(self):
+        """Recordings that cannot download now; automatic seats pass them over."""
+        owner, now = self.account.snapshot().get("uid"), time.monotonic()
+        with self._lock:
+            return frozenset(identifier for (holder, identifier), until in self._asset_unusable.items()
+                             if holder == owner and until > now)
+
+    def _pool_served(self, owner, key, windows, pins, *, due, failure=None, region_scope=REGIONAL):
+        """Remember what a list request settled and when it is due again."""
+        with self._lock:
+            job = owner, key
+            self._pool_jobs[job] = (tuple(tuple(window) for window in windows),
+                                    None if pins is None else tuple(pins), region_scope), due
+            self._pool_jobs.move_to_end(job)
+            if failure is None:
+                self._pool_failures.pop(job, None)
+            else:
+                self._pool_failures[job] = failure
+                self._pool_failures.move_to_end(job)
+            for mapping in (self._pool_jobs, self._pool_failures):
+                while len(mapping) > MAX_POOL_JOBS:
+                    mapping.popitem(last=False)
 
     def request_assets(self, recording_ids):
         from sm64_events.ghost.portable import checked_hash
@@ -284,7 +395,8 @@ class CommunitySync:
             if self._closing:
                 return False
             identifiers = tuple(identifier for identifier in identifiers
-                if self._asset_retry.get((owner, identifier), 0) <= time.monotonic())
+                if self._asset_retry.get((owner, identifier), 0) <= time.monotonic()
+                and self._asset_unusable.get((owner, identifier), 0) <= time.monotonic())
         identifiers = tuple(identifier for identifier in identifiers if not self.population.is_ready(identifier))
         if not identifiers:
             return True
@@ -502,8 +614,6 @@ class CommunitySync:
                 return
             value = await self._json("GET", "/v1/catalog")
             generation, catalog = checked_catalog(value)
-            if generation != self._catalog_generation:
-                self._recent.clear()
             self._catalog_generation, self._catalog = generation, catalog
             self._catalog_until = time.monotonic() + CATALOG_RENEW_S
 
@@ -518,10 +628,12 @@ class CommunitySync:
             query["strategy"] = key[5]
         return key, query
 
-    def _check_identity(self, rows, key):
+    def _check_identity(self, rows, key, *, versions=None):
         for row in rows:
             row_key = (*target_key(row["target"]), row["clock"], row["game_version"])
-            if row_key != key[:4] or key[4] == "strategy" and row["strategy"] != key[5]:
+            roms = (key[3],) if versions is None else versions
+            if (row_key[:3] != key[:3] or row_key[3] not in roms
+                    or key[4] == "strategy" and row["strategy"] != key[5]):
                 raise CommunityError("identity_mismatch")
 
     async def _page(self, path, query):
@@ -533,52 +645,72 @@ class CommunitySync:
                 self._catalog_until = 0
             raise
 
+    def _lease_due(self, lease):
+        return lease is None or lease - time.monotonic() <= LEASE_RENEW_S
+
     async def _pool(self, identity, windows, pins):
+        """Fetch a list only when none is held for this catalog band and lease.
+
+        The list covers the whole ladder, so it never depends on the PB or the
+        rival settings: a new PB re-picks locally. A held list renews once,
+        shortly before its publication lease lapses.
+        """
         owner = self.account.snapshot().get("uid")
         await self._catalog_ready()
         key, query = self._query(identity)
         minimum, maximum, base = frame_band(self._catalog[key], windows)
-        canonical_key = (owner, key, minimum, maximum, base, self._catalog_generation, pins)
         coverage = self.population.coverage(identity)
-        covered = (coverage.get("generation") == self._catalog_generation
+        # Authentication changes clear the population view, so a new account
+        # never inherits a held list.
+        held = (coverage.get("generation") == self._catalog_generation
             and coverage.get("min_step") == minimum and coverage.get("max_step") == maximum
-            and coverage.get("base_step") == base)
-        # Authentication changes clear the population view. An old request
-        # throttle must never prevent refilling that newly empty account view.
-        if covered and self._recent.get(canonical_key, 0) > time.monotonic():
-            return
-        query.update(min_step=minimum, max_step=maximum, base_step=base)
-        combined = None
-        for _ in range(MAX_PAGES):
-            page = await self._page("/v1/pool", query)
-            self._check_identity(page["recordings"], key)
-            if combined is None:
-                combined = page
-            else:
-                combined["recordings"] += page["recordings"]
-                combined["next_cursor"] = page["next_cursor"]
-                combined["coverage"]["complete"] = page["coverage"]["complete"]
-            if page["next_cursor"] is None:
-                break
-            query["cursor"] = page["next_cursor"]
-        if combined["next_cursor"] is not None:
-            combined["coverage"]["complete"] = False
-        if self._closing or self.account.snapshot().get("uid") != owner:
-            return
-        self.population.remember_page(identity, combined)
-        self._recent[canonical_key] = time.monotonic() + 120
-        while len(self._recent) > MAX_QUEUE:
-            self._recent.popitem(last=False)
+            and coverage.get("base_step") == base and not self._lease_due(self.population.lease_until(identity)))
+        if not held:
+            query.update(min_step=minimum, max_step=maximum, base_step=base)
+            combined = None
+            for _ in range(MAX_PAGES):
+                page = await self._page("/v1/pool", query)
+                self._check_identity(page["recordings"], key)
+                if combined is None:
+                    combined = page
+                else:
+                    combined["recordings"] += page["recordings"]
+                    combined["next_cursor"] = page["next_cursor"]
+                    combined["coverage"]["complete"] = page["coverage"]["complete"]
+                if page["next_cursor"] is None:
+                    break
+                query["cursor"] = page["next_cursor"]
+            if combined["next_cursor"] is not None:
+                combined["coverage"]["complete"] = False
+            if self._closing or self.account.snapshot().get("uid") != owner:
+                return
+            # Stored under the identity this request named, never the one on screen now.
+            self.population.remember_page(identity, combined)
+        # The second ROM's metadata request must not clear account-wide pins.
+        if pins is not None:
+            await self._renew_pins(identity, key, pins, owner)
+        leases = [lease for lease in (self.population.lease_until(identity),
+                                      *(self.population.lease_until(recording=pin) for pin in pins or ()))
+                  if lease is not None]
+        due = max(time.monotonic() + POOL_RETRY_MIN_S, min(leases, default=0) - LEASE_RENEW_S)
+        self._pool_served(owner, key, windows, pins, due=due,
+                          region_scope=value_of(identity, "region_scope", REGIONAL))
+
+    async def _renew_pins(self, identity, key, pins, owner):
+        """One account-wide pin lease, including compatible cross-ROM choices."""
         pin_key = owner, pins
+        versions = servable_versions(value_of(identity, "region_scope", REGIONAL), key[3])
+        metadata_key = pin_key, versions
         if (pins or self._pins_leased) and (pin_key != self._pin_key or time.monotonic() >= self._pins_until):
             await self._json("PUT", "/v1/pins", json={"recording_ids": list(pins)})
             self._pins_leased = bool(pins)
             self._pin_key, self._pins_until = pin_key, time.monotonic() + PIN_RENEW_S
         # Chosen rivals may sit outside every automatic rank band. Renew their
-        # publication gates with this existing refresh, or fetch them on restart.
-        if pin_key != self._pin_metadata_key or time.monotonic() >= self._pin_metadata_until:
-            await self._assets(pins, renew=True, identity_key=key, owner=owner)
-            self._pin_metadata_key, self._pin_metadata_until = pin_key, time.monotonic() + PIN_METADATA_RENEW_S
+        # publication gates before they lapse, or fetch them on restart.
+        if metadata_key != self._pin_metadata_key or any(
+                self._lease_due(self.population.lease_until(recording=pin)) for pin in pins):
+            await self._assets(pins, renew=True, identity_key=key, owner=owner, versions=versions)
+            self._pin_metadata_key = metadata_key
 
     async def search(self, identity, prefix, *, cursor=None):
         if self._closing:
@@ -617,14 +749,14 @@ class CommunitySync:
         task.add_done_callback(self._local_jobs.discard)
         return await asyncio.shield(task)
 
-    async def _asset(self, identifier, *, identity_key=None):
+    async def _asset(self, identifier, *, identity_key=None, versions=None):
         owner = self.account.snapshot().get("uid")
         value = await self._json("GET", "/v1/recordings/" + identifier)
         row = checked_metadata({key: item for key, item in value.items() if key != "v"})
         if row["id"] != identifier:
             raise CommunityError("identity_mismatch")
         if identity_key is not None:
-            self._check_identity([row], identity_key)
+            self._check_identity([row], identity_key, versions=versions)
         if self._closing or self.account.snapshot().get("uid") != owner:
             return
         self.population.renew_metadata(row)
@@ -640,7 +772,7 @@ class CommunitySync:
             return
         await self._cpu(lambda: self.population.store_asset(row, encoded, raw, owner=owner))
 
-    async def _assets(self, identifiers, *, renew=False, identity_key=None, owner=None):
+    async def _assets(self, identifiers, *, renew=False, identity_key=None, owner=None, versions=None):
         """Try bounded IDs independently, without hot-looping failed gates."""
         owner = owner or self.account.snapshot().get("uid")
         failed = False
@@ -652,20 +784,27 @@ class CommunitySync:
                 continue
             key = (owner, identifier)
             with self._lock:
-                if self._asset_retry.get(key, 0) > time.monotonic():
+                if max(self._asset_retry.get(key, 0), self._asset_unusable.get(key, 0)) > time.monotonic():
                     continue
             try:
-                await self._asset(identifier, identity_key=identity_key)
-            except (CommunityError, ValueError, OSError):
+                await self._asset(identifier, identity_key=identity_key, versions=versions)
+            except (CommunityError, ValueError, OSError) as error:
                 failed = True
                 with self._lock:
                     self._asset_retry[key] = time.monotonic() + ASSET_RETRY_S
                     self._asset_retry.move_to_end(key)
                     while len(self._asset_retry) > MAX_QUEUE:
                         self._asset_retry.popitem(last=False)
+                    until = _unusable_until(error)
+                    if until is not None:
+                        self._asset_unusable[key] = until
+                        self._asset_unusable.move_to_end(key)
+                        while len(self._asset_unusable) > MAX_RETIRED:
+                            self._asset_unusable.popitem(last=False)
             else:
                 with self._lock:
                     self._asset_retry.pop(key, None)
+                    self._asset_unusable.pop(key, None)
         if failed:
             raise CommunityError("asset_unavailable")
 
@@ -764,18 +903,37 @@ class CommunitySync:
             while len(self._offer_retry) > MAX_QUEUE:
                 self._offer_retry.popitem(last=False)
 
-    def _take_operation(self, *, contribution):
+    def _take_operation(self, *, contribution=False, lane=None):
+        lane = lane or ("contribution" if contribution else "list")
         with self._lock:
             for key, operation in self._queue.items():
-                if (operation[0] in CONTRIBUTIONS) == contribution:
+                if _lane(operation) == lane:
                     self._queue.pop(key)
+                    if lane == "list":
+                        self._running = key  # Still in flight for request_pool's dedupe.
                     return key, operation
         return None
+
+    def _pool_failed(self, operation, error):
+        """Back off one list after a failure, and say why for the lineup."""
+        try:
+            key = self.population.identity_key(operation[1])
+        except (ValueError, TypeError):
+            return
+        code = getattr(error, "code", None)
+        delay = (CATALOG_RENEW_S if code == "unsupported_identity"
+                 else POOL_RETRY_MIN_S if code == "generation_changed" else ASSET_RETRY_S)
+        due = max(time.monotonic() + delay, self._network_until)
+        self._pool_served(self.account.snapshot().get("uid"), key, operation[2], operation[3], due=due,
+                          failure="unsupported" if code == "unsupported_identity" else "offline",
+                          region_scope=value_of(operation[1], "region_scope", REGIONAL))
 
     async def _failed_operation(self, key, operation, error):
         self.last_error = "Community ghosts are temporarily unavailable."
         if isinstance(error, CommunityError) and error.code == "generation_changed":
             self._catalog_until = 0
+        if operation[0] == "pool":
+            self._pool_failed(operation, error)
         self._retry_offer(key, operation, error)
         if operation[0] == "offer" and (isinstance(error, OSError)
                 or isinstance(error, CommunityError) and error.code in ("source_changed", "invalid_source", "unsupported_identity")):
@@ -787,23 +945,38 @@ class CommunitySync:
                 pass  # A row left saved is only sent again; the server answers replays.
 
     async def _run(self):
-        """Practice requests never wait behind a contribution's HTTP transfer."""
+        """Rival lists never wait behind a contribution's or a recording's HTTP transfer."""
         while True:
             await self._wake.wait()
             self._wake.clear()
-            while (item := self._take_operation(contribution=False)) is not None:
+            while (item := self._take_operation(lane="list")) is not None:
+                key, operation = item
+                try:
+                    if self.account.snapshot().get("status") != "active":
+                        continue
+                    try:
+                        await self._pool(*operation[1:])
+                        self.last_error = None
+                    except (CommunityError, ValueError, OSError) as error:
+                        await self._failed_operation(key, operation, error)
+                finally:
+                    self._running = None
+            self._practice_started.set()
+
+    async def _run_downloads(self):
+        """Chosen seats' recordings, one request at a time, beside the list worker."""
+        while True:
+            await self._download_wake.wait()
+            self._download_wake.clear()
+            while (item := self._take_operation(lane="download")) is not None:
                 key, operation = item
                 if self.account.snapshot().get("status") != "active":
                     continue
                 try:
-                    if operation[0] == "pool":
-                        await self._pool(*operation[1:])
-                    else:
-                        await self._assets(operation[1])
+                    await self._assets(operation[1])
                     self.last_error = None
                 except (CommunityError, ValueError, OSError) as error:
                     await self._failed_operation(key, operation, error)
-            self._practice_started.set()
 
     async def _run_contributions(self):
         """One serial recovery/upload task, sharing the existing owned loop."""

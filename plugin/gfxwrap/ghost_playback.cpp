@@ -182,6 +182,7 @@ void forget_heard(Forget why) {
     }
 }
 void sound_control(bool playing,float volume) {
+    playing=playing && !(have_request && active_request.hidden); // overlay off: never heard
     const auto *sink=sound_sink.load(std::memory_order_acquire);
     if(sink && sink->control)sink->control(playing?1u:0u,playing?volume:0.0f);
 }
@@ -614,7 +615,7 @@ bool valid_request(const gp_request& r) {
             || r.proximity_distance<0 || r.proximity_distance>GP_PROXIMITY_MAX
             || r.shadow_enabled>1 || r.occlusion_fade>1 || r.sound_fade>1
             || !std::isfinite(r.volume) || r.volume<0 || r.volume>1
-            || r.suspended>1 || r.reserved4 || r.names_enabled>1 || r.inputs_enabled>1
+            || r.suspended>1 || r.hidden>1 || r.names_enabled>1 || r.inputs_enabled>1
             || r.input_mode>GP_INPUT_VALUES || r.name_background>GP_NAME_WHITE
             || !std::isfinite(r.name_background_opacity) || r.name_background_opacity<0
             || r.name_background_opacity>1 || r.hud_inputs_enabled>1 || r.record_ghosts>1
@@ -1561,6 +1562,11 @@ void plan_list(const gc_sample& live) {
             }
         }
     }
+    // His overlay switch is off: everything above (restores, the star latch,
+    // a running defeat) went on; only the drawing and the sound stop. No
+    // ghost counts as seen, so a grab while hidden defeats nobody, and the
+    // first frame shown again sounds nothing it passed meanwhile.
+    if(active_request.hidden) {forget_shown();decide_all(GP_DISABLED);return;}
     if(defeat.active)sound_control(true,active_request.volume);
     for(uint32_t i=0;i<GP_GHOSTS && i<active_request.clip_count;++i) {
         auto &choice=list.ghost[i];

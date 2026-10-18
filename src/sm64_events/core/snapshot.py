@@ -109,6 +109,15 @@ class GameSnapshot:
     # reaches the engagement pointers above (measured, round 10), so what the
     # player caused has to be read off the object.
     caused: tuple = ()
+    # Player 1's held buttons (CONTROLLER_BUTTON_DOWN_OFF, addresses.BUTTON_BITS),
+    # whether Usamune's practice menu is open, and Usamune's save state button
+    # byte (Cx4 or D-pad Up), for the Ghost Overlay's in-game toggle
+    # (ghost/dpad_toggle.py). None when this ROM's layout has no verified
+    # address, so an unknown reads as unknown and never as 0.
+    buttons_held: int | None = None
+    usamune_menu_open: bool | None = None
+    usamune_savestate_button: int | None = None
+
     # Usamune's TIMER -> STOP byte (layout `usamune_stop`): bit 0 = it writes
     # the star result at the grab, bit 1 = at the x-cam. None where this
     # build's layout has no verified address for it.
@@ -156,6 +165,11 @@ class SnapshotReader:
             "warp_dest_area": L.warp_dest + A.WARP_DEST_AREA_OFF,
             "warp_dest_node": L.warp_dest + A.WARP_DEST_NODE_OFF,
         }
+        # Optional reads: a layout without them still snapshots everything else.
+        self._buttons_at = (L.player1_controller + A.CONTROLLER_BUTTON_DOWN_OFF
+                            if L.player1_controller is not None else None)
+        self._menu_at = L.usamune_menu
+        self._savestate_button_at = L.usamune_savestate_button
         # The watched behaviours, as THIS ROM's pointers -> their symbols. A
         # symbol this ROM lacks, or a base not yet known, simply watches
         # nothing for that row rather than failing.
@@ -266,6 +280,13 @@ class SnapshotReader:
             landmark_home=landmark_home,
             landmark_pos=landmark_pos,
             caused=self._caused_states(),
+            buttons_held=(m.read_u16(self._buttons_at)
+                          if self._buttons_at is not None else None),
+            usamune_menu_open=(m.read_u8(self._menu_at) != 0
+                               if self._menu_at is not None else None),
+            usamune_savestate_button=(m.read_u8(self._savestate_button_at)
+                                      if self._savestate_button_at is not None else None),
+
             usamune_stop=(m.read_u8(self.layout.usamune_stop)
                           if self.layout.usamune_stop is not None else None),
         )

@@ -14,10 +14,13 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 import pytest
 
-from test_ui_ghost_switch import WIDTHS, get_driver, ghost_session
+from test_ui_ghost_switch import (LIBRARY_CLOSE, LIBRARY_MODAL, WIDTHS, get_driver, ghost_session,
+                                  open_ghost_library)
 import ui_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
+#: The library's own primary action, never the Ghost settings sheet's behind it.
+LIBRARY_PRIMARY = f"{LIBRARY_MODAL} > .modal-actions .primary"
 SCREENSHOTS = ROOT / ".iteration" / "library-flow-verification"
 LIBRARY = "/api/ghost/library"
 TARGET = {"kind": "star", "entity_key": "2-4", "strat": ui_fixture.FIXTURE_STRAT}
@@ -261,7 +264,7 @@ def until(page, expression, expected=True, timeout=12):
     raise AssertionError(f"Never reached {expected!r}; last value {value!r} for {expression}")
 
 
-def click_text(page, text, scope=".modal"):
+def click_text(page, text, scope=LIBRARY_MODAL):
     """Resolve one visible button by its public words, then use a real click."""
     expression = f"""(() => {{ const found=Array.from(document.querySelectorAll({json.dumps(scope + ' button')}))
       .filter(node=>node.getClientRects().length && (node.getAttribute('aria-label')==={json.dumps(text)}
@@ -303,8 +306,7 @@ def tick(page, identity):
 def open_library(page, base, width):
     page.set_viewport(width, 1200)
     page.goto(base)
-    page.wait_for(".ghost-library-button")
-    page.click(".ghost-library-button")  # known-good control interaction
+    open_ghost_library(page)  # known-good control interaction
     page_is(page, "home")
     until(page, "document.querySelectorAll('.ghost-library button').length>2")
 
@@ -369,7 +371,7 @@ def export_start(page, state, name="Local Runner"):
     if not state["catalog"]["author"]:
         page_is(page, "name")
         input_value(page, '.ghost-library-name input', "é" * 65)
-        assert page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+        assert page.evaluate(f"document.querySelector({json.dumps(LIBRARY_PRIMARY)}).disabled")
         assert page.evaluate("document.querySelector('.ghost-library .error').getBoundingClientRect().height") > 0
         assert not any(call[1].endswith("/author") for call in state["calls"])
         input_value(page, '.ghost-library-name input', name)
@@ -378,7 +380,8 @@ def export_start(page, state, name="Local Runner"):
 
 
 def repeat_export_and_browse(page, state, width):
-    page.click(".modal-close")
+    page.click(LIBRARY_CLOSE)
+    # Closing the library leaves the Ghost settings sheet, and its door, open.
     page.wait_for(".ghost-library-button")
     page.click(".ghost-library-button")
     page_is(page, "home")
@@ -395,7 +398,7 @@ def repeat_export_and_browse(page, state, width):
     assert {row["id"] for row in rendered_rows(page)} == {
         "attempt:1", "attempt:2", "attempt:4", "attempt:5", "attempt:6", "attempt:7", "attempt:8"}
     assert "attempt:101" not in {row["id"] for row in rendered_rows(page)}
-    page.click(".modal-close")
+    page.click(LIBRARY_CLOSE)
     page.click(".ghost-library-button")
     page_is(page, "home")
     click_text(page, "Your personal bests")
@@ -483,7 +486,7 @@ def test_missing_overall_is_visible_not_replaced_and_segment_shortcut_matches(tm
             # peer is missing. No slower recording is substituted.
             state["catalog"]["bests"].append(local(52, 500, strat="Owl tied route"))
             state["catalog"]["ghosts"].append(local(52, 500, strat="Owl tied route"))
-            page.click(".modal-close")
+            page.click(LIBRARY_CLOSE)
             page.click(".ghost-library-button")
             page_is(page, "home")
             export_start(page, state)
@@ -625,7 +628,7 @@ def test_local_target_picker_and_saved_search_resolve_new_results(tmp_path, widt
             # New result matches the saved criteria. Reopening resolves it now;
             # a shortcut that stores the old selected IDs cannot pass this.
             state["catalog"]["ghosts"].append(local(109, 605))
-            page.click(".modal-close")
+            page.click(LIBRARY_CLOSE)
             page.click(".ghost-library-button")
             page_is(page, "home")
             export_start(page, state)
@@ -688,8 +691,7 @@ def test_library_opened_before_the_ghost_session_answers_still_races_this_target
         with get_driver().launch() as page:
             page.set_viewport(850, 1200)
             page.goto(base)
-            page.wait_for(".ghost-library-button")
-            page.click(".ghost-library-button")
+            open_ghost_library(page)
             page_is(page, "home")
             click_text(page, "Choose ghosts to race")
             page_is(page, "browser")
@@ -737,7 +739,7 @@ def test_race_checkbox_selection_matches_the_applied_slots(tmp_path, keep_pb):
             click_text(page, "Choose ghosts to race")
             page_is(page, "browser")
             assert set(selected_ids(page)) == {"attempt:1", "a" * 64}
-            assert not page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+            assert not page.evaluate(f"document.querySelector({json.dumps(LIBRARY_PRIMARY)}).disabled")
             if keep_pb:
                 tick(page, "a" * 64)
                 expected = {"pb": True, "attempts": [], "imports": []}
@@ -761,16 +763,16 @@ def test_race_slot_limit_includes_pb_and_empty_selection_is_disabled(tmp_path):
             click_text(page, "Choose ghosts to race")
             page_is(page, "browser")
             tick(page, "attempt:101")
-            assert page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+            assert page.evaluate(f"document.querySelector({json.dumps(LIBRARY_PRIMARY)}).disabled")
             assert "Choose at most 1 recording" in page.evaluate(
-                "document.querySelector('.modal-actions').textContent")
+                f"document.querySelector({json.dumps(LIBRARY_MODAL + ' > .modal-actions')}).textContent")
             assert not any(call[1].endswith("/prepare-race") for call in state["calls"])
             fits_and_shoot(page, 850, "race-cap")
             tick(page, "attempt:1")
-            assert not page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+            assert not page.evaluate(f"document.querySelector({json.dumps(LIBRARY_PRIMARY)}).disabled")
             tick(page, "attempt:101")
             tick(page, "a" * 64)
             assert selected_ids(page) == []
-            assert page.evaluate("document.querySelector('.modal-actions .primary').disabled")
+            assert page.evaluate(f"document.querySelector({json.dumps(LIBRARY_PRIMARY)}).disabled")
             assert state["writes"] == []
             assert_clean(page, state, base)

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 vi.mock("../../src/sm64_events/ui/api.js", () => ({ getJSON: vi.fn(), send: vi.fn() }));
 vi.mock("../../src/sm64_events/ui/components/ghostlibrary.js", () => ({ GhostLibraryButton: () => null }));
 const api = await import("../../src/sm64_events/ui/api.js");
-const { GhostSwitch, GhostSettings, useGhostSession } = await import("../../src/sm64_events/ui/components/ghostswitch.js");
+const { GhostSwitch, GhostSettings, GhostToggle, useGhostSession } = await import("../../src/sm64_events/ui/components/ghostswitch.js");
 
 const session = (target = {kind: "star", entity_key: "5-4", strat: "Standard"}) => ({
   enabled: false, target, source: {available: true}, window: {}, limits: {}, nudge_frames: 0,
@@ -19,6 +19,14 @@ const deferred = () => {
   return {promise, resolve, reject};
 };
 let observed;
+// The practice card's own wiring (practicelog.js): ONE session hook, handed to
+// the head's ghost toggle and to the row under the head.
+function Card({t, entityKey, active = true}) {
+  const ghost = useGhostSession(t, active);
+  return h("div", {class: "log-card log-card-active"},
+    h("div", {class: "log-card-actions"}, h(GhostToggle, {ghost, entityKey, active})),
+    h(GhostSwitch, {t, ghost, entityKey, active}));
+}
 function Probe({t, active = true}) {
   observed = useGhostSession(t, active);
   return h("output", {"data-testid": "availability"}, String(observed.reachable));
@@ -31,13 +39,14 @@ test.each([
   ["segment", "segment:130", {kind: "segment", entity_key: "130", strat: "Standard"}],
 ])("a failed %s read leaves an explanatory control and Retry restores it", async (_kind, key, target) => {
   api.getJSON.mockRejectedValueOnce(new Error("warming up")).mockResolvedValue(session(target));
-  const view = render(h(GhostSwitch, {t: tracker(), entityKey: key, active: true}));
+  const view = render(h(Card, {t: tracker(), entityKey: key, active: true}));
   const retry = await view.findByRole("button", {name: "Retry"});
   expect(view.container.querySelectorAll(".ghost-row")).toHaveLength(1);
-  expect(view.container.querySelector("[role=switch]").disabled).toBe(true);
-  expect(view.container.textContent).toContain("couldn't load");
+  expect(view.container.querySelectorAll(".ghost-toggle")).toHaveLength(1);
+  expect(view.container.querySelector(".ghost-toggle").disabled).toBe(true);
+  expect(view.container.querySelector(".ghost-row").textContent).toContain("couldn't load");
   fireEvent.click(retry);
-  await waitFor(() => expect(view.container.querySelector("[role=switch]").disabled).toBe(false));
+  await waitFor(() => expect(view.container.querySelector(".ghost-toggle").disabled).toBe(false));
   expect(view.queryByRole("button", {name: "Retry"})).toBeNull();
   expect(api.send).not.toHaveBeenCalled();
 });
@@ -120,8 +129,23 @@ test("settings recover through Retry instead of asking the user to close them", 
 
 test("inactive cards make no ghost request or target write", () => {
   const t = tracker({connected: true});
-  const view = render(h(GhostSwitch, {t, entityKey: "star:5:4", active: false}));
+  const view = render(h(Card, {t, entityKey: "star:5:4", active: false}));
   expect(view.container.querySelector(".ghost-row")).toBeNull();
+  expect(view.container.querySelector(".ghost-toggle")).toBeNull();
   expect(api.getJSON).not.toHaveBeenCalled();
   expect(api.send).not.toHaveBeenCalled();
+});
+
+test("the toggle's hover names the ghost hotkey each broadcast reports", async () => {
+  // A session that names no hotkey (an older server) keeps the D-pad Up words.
+  api.getJSON.mockResolvedValue(session());
+  const t = tracker();
+  const view = render(h(Card, {t, entityKey: "star:5:4", active: true}));
+  const title = () => view.container.querySelector(".ghost-toggle").getAttribute("title");
+  await waitFor(() => expect(title()).toBe("Ghosts off. Click, or press D-pad Up in the game, to race them."));
+  const told = hotkey => ({...t, feed: [{type: "ghost_changed", payload: {...session(), hotkey}}]});
+  view.rerender(h(Card, {t: told("c_x4"), entityKey: "star:5:4", active: true}));
+  await waitFor(() => expect(title()).toBe("Ghosts off. Click, or press all four C buttons in the game, to race them."));
+  view.rerender(h(Card, {t: told("dpad_up"), entityKey: "star:5:4", active: true}));
+  await waitFor(() => expect(title()).toBe("Ghosts off. Click, or press D-pad Up in the game, to race them."));
 });
