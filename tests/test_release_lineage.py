@@ -207,6 +207,48 @@ def test_resumed_wrong_source_draft_is_refused_before_provider_mutation(tmp_path
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize("status", [404, 403, 429, 500, "network"])
+def test_new_draft_discovery_requires_explicit_http_missing_status(tmp_path, monkeypatch, status):
+    header, notes = tmp_path / "header.md", tmp_path / "notes.md"
+    header.write_text("Setup")
+    notes.write_text("Changes")
+    monkeypatch.setattr(release, "SETUP_HEADER", header)
+    monkeypatch.setattr(candidate, "require_approval", lambda *_: "approved")
+    monkeypatch.setattr(release, "publication_preflight", lambda *_, **__: record("a" * 40))
+
+    def discovery(args, **kwargs):
+        if args[:3] == ["gh", "release", "view"]:
+            # Actual gh release view response omits HTTP status for a missing
+            # release. It cannot establish that creation is safe.
+            return subprocess.CompletedProcess(args, 1, "", "release not found\n")
+        assert args[:2] == ["gh", "api"]
+        assert args[2] == "repos/griffinbeels/SM64-Trainer/releases/tags/v1.10.0-beta.1"
+        error = "gh: connection timed out" if status == "network" else f"gh: request failed (HTTP {status})"
+        return subprocess.CompletedProcess(args, 1, "", error)
+
+    monkeypatch.setattr(subprocess, "run", discovery)
+    creates = []
+
+    class CreateRequested(Exception):
+        pass
+
+    def create(args, **kwargs):
+        assert args[:3] == ["gh", "release", "create"]
+        assert "--draft" in args and "--prerelease" in args
+        creates.append(args)
+        raise CreateRequested
+
+    monkeypatch.setattr(release, "_run", create)
+    if status == 404:
+        with pytest.raises(CreateRequested):
+            release.draft_candidate(tmp_path, notes_file=notes, approval=tmp_path / "qa.json")
+        assert len(creates) == 1
+    else:
+        with pytest.raises(ValueError, match="draft discovery failed"):
+            release.draft_candidate(tmp_path, notes_file=notes, approval=tmp_path / "qa.json")
+        assert creates == []
+
+
 @pytest.mark.parametrize("fault", ["source", "version", "channel", "published", None])
 def test_draft_resume_and_final_publication_require_exact_identity(fault):
     candidate = record("a" * 40)

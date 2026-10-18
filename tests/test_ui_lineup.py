@@ -44,14 +44,13 @@ from ghost_fixture import (FIXTURE_TARGET, LINEUP_PLAYERS, ghost_session,  # noq
                            lineup_rivals, lineup_row, serve_ui_with_ghost)
 from sm64_events.core.timefmt import format_igt_short  # noqa: E402
 from tests.test_ui_lineup_model import WORDS  # noqa: E402
+from tests.browser_faults import no_faults, watch  # noqa: E402
 
 CARD = ".log-card.log-card-active"
 ROW = f"{CARD} .ghost-row.ghost-row-lineup"
 TOGGLE = f"{CARD} .log-card-actions > .ghost-toggle"
 SEAT = f"{ROW} .lineup-row > .lineup-seat"
 WIDTHS = (1500, 850)
-# Telemetry is the only write that may be retired with a test document.
-BACKGROUND_POST = ("/api/uilog",)
 #: The PB whose gap to the first rival (Alexander_Speedruns, 339 frames) reads
 #: differently from frame arithmetic: 344 shows 11"46 and 339 shows 11"30, so
 #: the track must say −0.16, while (344 − 339) / 30 rounds to 0.17.
@@ -192,36 +191,6 @@ def shown_gap(you_text, next_text):
     return f"−{(centiseconds(you_text) - centiseconds(next_text)) / 100:.2f}"
 
 
-def watch(page):
-    seen = {"errors": [], "failed": []}
-    pending, retiring = set(), set()
-
-    def failed(request):
-        cancelled = (request in retiring and request.failure == "net::ERR_ABORTED"
-                     and (request.method == "GET" or
-                          request.method == "POST" and any(request.url.split("?")[0].endswith(path)
-                                                           for path in BACKGROUND_POST)))
-        if not cancelled:
-            seen["failed"].append(("failed", request.url, request.failure))
-        finished(request)
-
-    def finished(request):
-        pending.discard(request)
-        retiring.discard(request)
-
-    # Mark exact outstanding requests before the test destroys their document.
-    # An abort during ordinary rendering or a real network failure still fails.
-    page._retire_observed_requests = lambda: retiring.update(pending)
-    page.on("request", lambda request: pending.add(request))
-    page.on("requestfinished", finished)
-    page.on("pageerror", lambda error: seen["errors"].append(str(error)))
-    page.on("console", lambda message: seen["errors"].append(message.text) if message.type == "error" else None)
-    page.on("response", lambda response: seen["failed"].append((response.status, response.url))
-            if response.status >= 400 else None)
-    page.on("requestfailed", failed)
-    return seen
-
-
 @pytest.fixture(scope="module")
 def served():
     with serve_ui_with_ghost(deepcopy(STATES["ready"])) as (base, state):
@@ -273,16 +242,13 @@ def broadcast(page, served, session):
     assert page.request.post(base + "/api/_fixture/ghost_broadcast").json() == {"published": True}
 
 
-def no_faults(seen):
-    assert seen["errors"] == [], seen["errors"]
-    assert seen["failed"] == [], seen["failed"]
-
-
-@pytest.mark.parametrize("endpoint,method", [
-    ("/api/uilog", "POST"),
-    ("/api/scorecard/entry_goals?scope=overall&keys=star%3A2%3A4", "GET"),
+@pytest.mark.parametrize("endpoint,method,retired_allowed", [
+    ("/api/uilog", "POST", True),
+    ("/api/scorecard/entry_goals?scope=overall&keys=star%3A2%3A4", "GET", True),
+    ("/ui/assets/star_icons/wf6.png", "GET", True),
+    ("/api/scorecard/entry_goals", "POST", False),
 ])
-def test_navigation_cancellation_is_distinguished_from_a_telemetry_failure(served, endpoint, method):
+def test_navigation_cancellation_is_distinguished_from_a_telemetry_failure(served, endpoint, method, retired_allowed):
     with opened(served, 1500) as (page, seen):
         show(page, served, "ready")
         held = []
@@ -290,16 +256,21 @@ def test_navigation_cancellation_is_distinguished_from_a_telemetry_failure(serve
         probe_endpoint = endpoint + ("&" if "?" in endpoint else "?") + "probe=lineup-cancel"
         options = {"method": method, **({"body": "{}"} if method == "POST" else {})}
         fetch = f"void fetch({json.dumps(probe_endpoint)}, {json.dumps(options)}).catch(() => {{}})"
-        page.route(pattern, lambda route: held.append(route.request))
-        with page.expect_request(pattern):
+        page.route(pattern, lambda route: held.append(route.request)
+                   if route.request.url.endswith(probe_endpoint) else route.continue_())
+        with page.expect_request(lambda request: request.url.endswith(probe_endpoint)):
             page.evaluate(fetch)
         show(page, served, "ready")
         assert held and held[0].failure == "net::ERR_ABORTED"
-        no_faults(seen)
+        if retired_allowed:
+            no_faults(seen)
+        else:
+            assert seen["failed"] == [("failed", held[0].url, "net::ERR_ABORTED")]
         for code, failure in (("connectionrefused", "net::ERR_CONNECTION_REFUSED"),
                               ("aborted", "net::ERR_ABORTED")):
             page.unroute(pattern)
-            page.route(pattern, lambda route, *, code=code: route.abort(error_code=code))
+            page.route(pattern, lambda route, *, code=code: route.abort(error_code=code)
+                       if route.request.url.endswith(probe_endpoint) else route.continue_())
             with page.expect_event("requestfailed", predicate=lambda request: request.url.endswith(probe_endpoint)) as refused:
                 page.evaluate(fetch)
             assert refused.value.failure == failure
