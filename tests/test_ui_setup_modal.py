@@ -196,7 +196,7 @@ def slows_before_rest(frames):
     """
     moving = [row for row in frames if row.get("x", 0) > 1e-6]
     speeds = [abs(after["x"] - before["x"]) / (after["t"] - before["t"])
-              for before, after in zip(moving, moving[1:]) if after["t"] > before["t"]]
+              for before, after in zip(moving, moving[1:], strict=False) if after["t"] > before["t"]]
     peak = max(speeds, default=0)
     return len(speeds) >= 3 and peak > 0 and speeds[-1] <= peak * .5, speeds
 
