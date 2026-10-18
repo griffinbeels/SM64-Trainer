@@ -60,6 +60,13 @@ be right at every hop while the outcome is decided wrongly there.
 
 ## Failure catalogue
 
+- 2026-10-17 hop 4 — a JP grab under GrabX still carried the earlier Grab
+  setting, so the practice log showed the timer hint after he had fixed it.
+  The gate inferred STOP from earlier writes before this grab's own x-cam
+  write arrived. It now reads Usamune's STOP byte at the grab; the inference
+  fallback uses only this grab's evidence. `tests/test_star_grab.py` covers
+  the detector and `tests/test_timer_hint.py` / `tests/test_ui_timer_hint.py`
+  cover the row stamp and clearing every hint after the next GrabX grab.
 - 2026-08-01 hop 3 — the x-cam moment was the grab frame, so midair grabs recorded -4, -11, -23 and -39 frames and were leaderboard-INVALID — "the arithmetic was never wrong; the FRAME was" — fix at the dance entry, not in the arithmetic.
 - 2026-08-01 hop 3 — a subarea star read 0'40"63 against Usamune's 0'52"46, because `USAMUNE_OVERALL` restarts at an area warp — fix by banking each leg in `igt_clock.py`, never by an offset.
 - 2026-08-01 hop 4 — "now the tool feels like it's broken and laggy… we HAVE THE ANSWER RIGHT WHEN THE STAR DANCE HAPPENS" — the emit waited `RESULT_SETTLE_FRAMES` past the x-cam — fix at the gate, as an optimistic publish on agreement.
