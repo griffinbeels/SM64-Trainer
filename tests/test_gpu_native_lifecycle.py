@@ -47,7 +47,7 @@ def run(host, mode):
 
 
 @pytest.mark.parametrize("mode", ["recover", "cancel-deferred", "rom-deferred", "quarantine-deferred", "bootstrap",
-                                 "image-gap", "record-gap", "epoch-gap", "refusal-gap", "availability"])
+                                 "image-gap", "cancel-image-gap", "record-gap", "epoch-gap", "refusal-gap", "availability"])
 def test_actual_native_decision(hosts, mode):
     result = run(hosts, mode)
     assert result.returncode == 0, result.stdout + result.stderr

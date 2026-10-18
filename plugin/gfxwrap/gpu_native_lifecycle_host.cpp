@@ -127,12 +127,19 @@ bool availability(){
 }
 bool gap(const std::string&mode){
     Fixture f;REQUIRE(f.start(401));f.r.set_state(GD_ACTIVE);
-    if(mode=="image-gap"){
+    if(mode=="image-gap" || mode=="cancel-image-gap"){
         rb_record record{};record.epoch=f.r.epoch;record.slot=0;record.occurrence=1;
         record.outcome=RB_SURFACE_FAILED;record.image.status=47;
         static const rb_record*next=nullptr;next=&record;
-        f.r.source.take=[]()->const rb_record*{const auto value=next;next=nullptr;return value;};
+        static bool cancel_on_take=false;cancel_on_take=mode=="cancel-image-gap";
+        f.r.source.take=[]()->const rb_record*{const auto value=next;next=nullptr;
+            if(value && cancel_on_take)gd_disarm(GD_CANCELLED);return value;};
+        f.r.source.release=[](rb_ticket){return 1;};
         f.r.take_records(false);
+        if(cancel_on_take){
+            REQUIRE(!f.r.live() && f.r.first_failure.load()==GD_NONE && f.r.error==0);
+            REQUIRE(f.r.drain_tick() && f.no_graphics());return true;
+        }
         REQUIRE(f.r.diagnostic_reason()==10016 && f.r.error==47);
     }else if(mode=="record-gap"){
         rb_record record{};record.epoch=f.r.epoch+1;record.occurrence=1;
@@ -171,6 +178,6 @@ int main(int argc,char**argv){
     if(mode=="bootstrap")passed=lifecycle_fixture::bootstrap();
     else if(mode=="availability")passed=lifecycle_fixture::availability();
     else if(mode=="recover"||mode=="cancel-deferred"||mode=="rom-deferred"||mode=="quarantine-deferred")passed=lifecycle_fixture::recovery(mode);
-    else if(mode=="image-gap"||mode=="record-gap"||mode=="epoch-gap"||mode=="refusal-gap")passed=lifecycle_fixture::gap(mode);
+    else if(mode=="image-gap"||mode=="cancel-image-gap"||mode=="record-gap"||mode=="epoch-gap"||mode=="refusal-gap")passed=lifecycle_fixture::gap(mode);
     if(!passed)return 1;printf("native lifecycle passed: %s\n",mode.c_str());return 0;
 }

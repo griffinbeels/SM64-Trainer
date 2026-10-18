@@ -37,6 +37,7 @@ from sm64_events.ghost.native_protocol import Status as GhostStatus
 from sm64_events.memory.base import MemoryReadError
 from sm64_events.memory.layout import US
 from sm64_events.replay import capturecontrol as C
+from sm64_events.replay import gpuchannel as GC
 from sm64_events.replay import gpusettings
 from sm64_events.replay.gpucapture import GpuCapture
 from sm64_events.replay.gpucapture_session import CaptureSession
@@ -251,6 +252,104 @@ def test_b6_the_ghost_channel_ending_with_project64_is_one_info_line(monkeypatch
         run_ghost_capture(monkeypatch, Channels(["ok"], polls=["ok", "ok"]), 0.05)
     assert loud(caplog) == []
     assert len(lines(caplog, "native ghost channel absent")) == 1
+
+
+@pytest.mark.parametrize("retirement", [
+    {"rom_open": False, "capabilities": 0, "state": C.PASSIVE},
+    {"state": C.CLOSED, "reason": C.OWNER_GONE},
+    {"generation": 5},
+    {"state": C.UNAVAILABLE, "reason": C.FRESH_REQUEST},
+], ids=["rom-close", "project64-exit", "plugin-reinit", "rapid-rom-swap"])
+def test_image_disappears_before_lifecycle_publication_retires_quietly(lease, caplog, retirement):
+    """Real report: source-image-missing wins the race to the control page.
+
+    The producer's close may follow that terminal read. A terminal snapshot
+    must not stop the supervisor before it can observe that explicit evidence.
+    """
+    workers = []
+
+    def step(session):
+        lease.change(state=C.UNAVAILABLE, reason=10016)
+        original = lease.status
+        observed = threading.Event()
+
+        def status():
+            value = original()
+            if value.reason == 10016:
+                observed.set()
+            return value
+
+        lease.status = status
+
+        def retire():
+            assert observed.wait(1)
+            time.sleep(0.65)  # close follows the fault by ~0.66 s in his log
+            lease.change(**retirement)
+
+        worker = threading.Thread(target=retire)
+        workers.append(worker)
+        worker.start()
+        raise ChannelStopped(GC.CLOSED, 0x20000000 | 10016)
+
+    with caplog.at_level(logging.INFO):
+        try:
+            capture = gpu_run(lease, step)
+        finally:
+            for worker in workers:
+                worker.join(2)
+    assert capture.error is None and loud(caplog) == []
+    assert lease.requests == 1 and lease.closed == 1
+    assert lines(caplog, "failure before cleanup") == []
+    # A reopened/successor producer admits a fresh lease after the old owners
+    # close. No native request is resubmitted into the retired epoch.
+    lease.change(rom_open=True, capabilities=C.CAP_GPU, state=C.PASSIVE,
+                 ack_token=0, reason=0)
+    next_demand = lease.demand().start()
+    try:
+        assert next_demand.ready.wait(1)
+        lease.change(ack_token=123, state=C.ACTIVE)
+        eventual(lambda: next_demand.snapshot.state, lambda s: s == "active")
+        assert lease.requests == 2
+    finally:
+        next_demand.close()
+
+
+def test_missing_image_with_a_live_rom_keeps_the_original_fault(lease, caplog):
+    def step(session):
+        lease.change(state=C.UNAVAILABLE, reason=10016)
+        raise ChannelStopped(GC.CLOSED, 0x20000000 | 10016)
+
+    with caplog.at_level(logging.INFO):
+        capture = gpu_run(lease, step)
+    assert "native_capture_ended:3:10016" in capture.error
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
+
+
+def test_stopping_during_image_loss_cannot_erase_the_observed_fault(lease):
+    demand = lease.demand().start()
+    observed = threading.Event()
+    original = lease.status
+
+    def status():
+        value = original()
+        if value.reason == 10016:
+            observed.set()
+        return value
+
+    try:
+        assert demand.ready.wait(1)
+        lease.change(ack_token=123, state=C.ACTIVE)
+        eventual(lambda: demand.snapshot.state, lambda s: s == "active")
+        lease.status = status
+        lease.change(state=C.UNAVAILABLE, reason=10016)
+        assert observed.wait(1)
+        demand.request_stop("user_stopped", expected=True)
+        assert demand.done.wait(1)
+        assert demand.snapshot.reason == "native_capture_ended:3:10016"
+        assert demand.snapshot.state == "fault"
+        assert not demand.snapshot.lifecycle and not demand.snapshot.cancelled
+    finally:
+        demand.close()
 
 
 def test_b6b_a_ghost_channel_that_misbehaves_still_warns(monkeypatch, caplog):
