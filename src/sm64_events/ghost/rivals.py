@@ -310,7 +310,7 @@ class Rivals:
         self.fingerprint = self.prepared_key = None
         return True
 
-    def _ranked_population(self, identity, target, pb, pins):
+    def _ranked_population(self, identity, pins):
         records = self.population.metadata_snapshot(identity.kind,identity.entity_key,
             clock=identity.clock,game_version=identity.game_version,
             strategy=identity.strategy if identity.scope=="strategy" else None)
@@ -329,10 +329,8 @@ class Rivals:
         # recording that can never download leaves its seat (a pin shows unavailable).
         ranked = tuple(self._seat_row(row, owners) for row in ranked if row["id"] not in refused
                        and (row["id"] in pins.values() or row["player_id"] not in owners))
-        simulation = self._simulation()
-        if simulation and simulation.get("zero_practice") is True and pb:
-            # Prefer unbeaten runs until the tester beats the whole population.
-            ranked = tuple({**row, "beaten_in_simulation": row["frames"] >= pb["frames"]} for row in ranked)
+        # Test profiles use production selection too: retiring beaten donors
+        # here would prevent the closest-below fallback from filling its seats.
         return ranked
 
     def refresh(self, target, controls, *, enabled, sharing=None, force=False):
@@ -430,7 +428,7 @@ class Rivals:
         """The saved PB and the seats it implies; seats keep their players and colours."""
         pb = self._simulation_pb(self._pb_basis(identity),target)
         pins = self.pins.get(self._key(target),{})
-        ranked = self._ranked_population(identity,target,pb,pins)
+        ranked = self._ranked_population(identity,pins)
         private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
         owners = self._owned_players()
         # Only new rival settings deal afresh.

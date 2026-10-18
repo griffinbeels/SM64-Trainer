@@ -443,20 +443,26 @@ def test_automatic_rivals_exclude_own_runs_but_preserve_explicit_choices(tmp_pat
     assert rivals.rows[0]["id"]==population.rows[0]["id"] and rivals.rows[0]["pinned"]
 
 
-def test_fresh_full_range_climb_retires_beaten_times_including_same_rank(tmp_path,monkeypatch):
+@pytest.mark.parametrize("simulated", [False, True])
+@pytest.mark.parametrize("frames", [640, 600])
+@pytest.mark.parametrize("count", [1, 9])
+def test_fresh_profile_fills_from_below_like_normal_play(tmp_path,monkeypatch,simulated,frames,count):
     rivals,_,native,population,clock=controller(tmp_path,monkeypatch)
-    monkeypatch.setattr(rivals,"_simulation",lambda:{"zero_practice":True})
-    monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=20,frames=640))
+    population.rows=population.rows[:count]
+    monkeypatch.setattr(rivals,"_simulation",lambda:{"zero_practice":True} if simulated else None)
+    monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=44,frames=frames))
+    rivals.options.update(mode="adaptive")
     rivals.pb_changed()
     before=rivals.generation
     rivals.refresh(TARGET,CONTROLS,enabled=True)
     assert clock[0]==0 and rivals.generation==before+1
-    assert [row["frames"] for row in rivals.rows]==[620]
+    rows=rivals.payload()["rows"]
+    assert len(rows)==min(4,count) and len({row["player_id"] for row in rows})==len(rows)
+    # With no recording above the range, fill from the closest subdivisions
+    # below, even after the tester beats every donated recording.
+    expected=sorted(population.rows,key=lambda row:row["frames"])[:4]
+    assert {row["id"] for row in rows}=={row["id"] for row in expected}
     assert native.preparations[-1][-1]==rivals.generation
-    # Fixed production ranges still allow the chosen absolute rank range.
-    monkeypatch.setattr(rivals,"_simulation",lambda:None)
-    rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
-    assert len(rivals.rows)==4 and any(row["frames"]>=640 for row in rivals.rows)
 
 
 def test_reopening_preserves_referenced_local_choices_across_many_targets(tmp_path,monkeypatch):

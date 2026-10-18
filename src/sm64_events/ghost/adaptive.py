@@ -254,7 +254,7 @@ def _ahead(row, pb):
 
 
 def _automatic_row(row, strategy, scope):
-    return (row.get("manual_only") is not True and row.get("beaten_in_simulation") is not True
+    return (row.get("manual_only") is not True
             and (scope == "overall" or row.get("strategy") == strategy))
 
 
@@ -324,9 +324,7 @@ def _widened(candidates, taken, players, seats, high, strategy, scope, allow_fas
         return []
 
     def open_row(row):
-        # A developer climb retires the runs it has already beaten; they stay retired here.
         return (row["id"] not in taken and row.get("manual_only") is not True
-                and row.get("beaten_in_simulation") is not True
                 and (scope == "overall" or row.get("strategy") == strategy)
                 and (allow_fastest or _bundled(row)))
 

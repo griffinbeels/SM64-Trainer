@@ -3769,6 +3769,14 @@
      goes to the strategy column, which pushes its picker against the
      buttons. */
   .attempt-result { min-width: 0; width: 1px; white-space: nowrap; text-align: left; padding-inline: .6rem; }
+  .attempt-result-line { display: flex; align-items: center; gap: .3em; width: max-content; }
+  .attempt-outcome:empty { display: none; }
+  /* Center the lettering, not unlike font line boxes (Lineup round 12).
+     The result wrapper keeps badges beside a trimmed time; GOLD!! and its
+     smaller margin use the same cap-to-baseline geometry below. */
+  .attempt-result-line > b, .attempt-result-line > .meta, .attempt-outcome {
+    text-box-trim: trim-both; text-box-edge: cap alphabetic;
+  }
   .attempt-delta { width: 6.5rem; white-space: nowrap; font-weight: 700; text-align: left; }
   .attempt-strategy { white-space: nowrap; text-align: right; }
   /* QUIET until asked (round 7: "we're just very very very cluttered"): the
@@ -7542,8 +7550,9 @@
   /* The delta and GOLD!! share one grid cell and exchange SEQUENTIALLY
      (ui-core: never a crossfade) -- the outgoing one reaches 0 before the
      incoming one starts, in both directions, by swapping which side waits. */
-  .pb-swap { display: inline-grid; position: relative; vertical-align: middle; justify-items: start; }
+  .pb-swap { display: grid; width: max-content; position: relative; align-items: center; justify-items: start; }
   .pb-swap > .pb-swap-num, .pb-swap > .pb-gold { grid-area: 1 / 1; }
+  .pb-swap-num, .pb-gold, .pb-save { text-box-trim: trim-both; text-box-edge: cap alphabetic; }
   .pb-swap-num { transition: opacity var(--log-pb-swap, 220ms) ease var(--log-pb-swap, 220ms); }
   .pb-gold {
     display: inline-block; opacity: 0;

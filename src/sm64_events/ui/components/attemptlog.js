@@ -218,7 +218,8 @@ function RowMark({ a }) {
 // The row's words: the time of a finish, or what ended the run and how far in.
 function RowResult({ a, time, inTime, timeMark, showDust }) {
   const success = a.outcome === "success";
-  return html`${(OUTCOME_LABEL[a.outcome] || { word: a.outcome }).word}
+  return html`<span class="attempt-result-line">
+    <span class="attempt-outcome">${(OUTCOME_LABEL[a.outcome] || { word: a.outcome }).word}</span>
     ${a.outcome === "death" && a.outcome_detail
       ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
     ${success && time ? html` <b>${time}</b>` : ""}
@@ -229,7 +230,7 @@ function RowResult({ a, time, inTime, timeMark, showDust }) {
     ${showDust && a.jumps_total > 0
       ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
     ${a.cleared && a.cleared_reason
-      ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}`;
+      ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}</span>`;
 }
 
 // A row on the strategy the card heads with does not repeat its name (round
