@@ -87,6 +87,11 @@ def test_time_gold_and_margin_ink_share_the_whole_row_center():
                 page.wait_for_timeout(2300)
                 asset = page.request.get(base + "/ui/components/attemptlog.js").body()
                 assert asset == (ROOT / "src/sm64_events/ui/components/attemptlog.js").read_bytes()
+                # A regional row keeps Lineup's disabled PB slot and explains
+                # the JP/US gate added by main, rather than offering a save.
+                reason = page.evaluate("""async () => (await import('/ui/components/pbreplay.js'))
+                    .unavailableReason({outcome:'success',pb_blocked:{reason:'foreign_rom'}})""")
+                assert reason == "Open this run's game version to save it as its PB"
                 for width, zoom in ((850, 1), (1500, 1), (1500, 1.25), (1500, 1.5)):
                     page.set_viewport_size({"width": width, "height": 1400})
                     page.evaluate("z => document.documentElement.style.zoom=z", zoom)

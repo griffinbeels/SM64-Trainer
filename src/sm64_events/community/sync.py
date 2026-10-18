@@ -11,8 +11,9 @@ import random
 from uuid import uuid4
 
 from sm64_events.ghost.sharing_targets import canonical, checked_target
+from sm64_events.ranks.region_scope import REGIONAL, servable_versions
 
-from . import codec
+from . import claims, codec
 from .cache import LEASE_RENEW_S, checked_metadata, target_key, value_of
 from .config import CommunityError
 from .outbox import RetractionOutbox, SourceOutbox, checked_source, checked_strategy, retraction_key, source_key
@@ -39,11 +40,19 @@ MAX_POOL_JOBS = 64
 
 
 def _prepare_source(source):
-    """Bound and revalidate the immutable local recording before encoding."""
+    """Bound and revalidate the immutable local recording before encoding.
+
+    Nothing leaves the machine that its own bytes do not bear out: the clip's
+    ROM, a pad on every record, and the run's time (community/claims.py). A
+    refusal discards the offer instead of retrying it."""
     with Path(source['path']).open('rb') as stream:
         raw = stream.read(codec.MAX_RAW + 1)
     if len(raw) > codec.MAX_RAW or hashlib.sha256(raw).hexdigest() != source['raw_sha256']:
         raise CommunityError('source_changed')
+    try:
+        claims.check_claims(raw, game_version=source['game_version'], clock=source['clock'], frames=source['frames'])
+    except ValueError as error:  # CommunityError, or the decoder's ClipError
+        raise CommunityError('invalid_source', str(error)) from None
     return raw, codec.encode(raw)
 
 
@@ -300,11 +309,11 @@ class CommunitySync:
         try:
             key = self.population.identity_key(identity)
             windows = tuple(tuple(window) for window in frame_windows)
-            pins = tuple(dict.fromkeys(pinned_ids))
-            if len(pins) > 4:
+            pins = None if pinned_ids is None else tuple(dict.fromkeys(pinned_ids))
+            if pins is not None and len(pins) > 4:
                 raise ValueError()
             from sm64_events.ghost.portable import checked_hash
-            for pin in pins:
+            for pin in pins or ():
                 checked_hash(pin)
         except (ValueError, TypeError):
             return False
@@ -315,13 +324,14 @@ class CommunitySync:
             if ("pool", key) in self._queue or self._running == ("pool", key):
                 return True
             served, due = self._pool_jobs.get(job, (None, 0))
-            if served == (windows, pins) and time.monotonic() < due:
+            if served == (windows, pins, value_of(identity, "region_scope", REGIONAL)) and time.monotonic() < due:
                 return True
         try:
             target = self.population.portable_target(identity)
             frozen = {"target": target, "kind": value_of(identity, "kind"), "entity_key": value_of(identity, "entity_key"),
                 "clock": value_of(identity, "clock"), "game_version": value_of(identity, "game_version"),
-                "scope": value_of(identity, "scope", "strategy"), "strategy": value_of(identity, "strategy")}
+                "scope": value_of(identity, "scope", "strategy"), "strategy": value_of(identity, "strategy"),
+                "region_scope": value_of(identity, "region_scope", REGIONAL)}
         except (ValueError, TypeError):
             return False
         return self._enqueue(("pool", key), ("pool", frozen, windows, pins))
@@ -350,11 +360,12 @@ class CommunitySync:
             return frozenset(identifier for (holder, identifier), until in self._asset_unusable.items()
                              if holder == owner and until > now)
 
-    def _pool_served(self, owner, key, windows, pins, *, due, failure=None):
+    def _pool_served(self, owner, key, windows, pins, *, due, failure=None, region_scope=REGIONAL):
         """Remember what a list request settled and when it is due again."""
         with self._lock:
             job = owner, key
-            self._pool_jobs[job] = (tuple(tuple(window) for window in windows), tuple(pins)), due
+            self._pool_jobs[job] = (tuple(tuple(window) for window in windows),
+                                    None if pins is None else tuple(pins), region_scope), due
             self._pool_jobs.move_to_end(job)
             if failure is None:
                 self._pool_failures.pop(job, None)
@@ -613,10 +624,12 @@ class CommunitySync:
             query["strategy"] = key[5]
         return key, query
 
-    def _check_identity(self, rows, key):
+    def _check_identity(self, rows, key, *, versions=None):
         for row in rows:
             row_key = (*target_key(row["target"]), row["clock"], row["game_version"])
-            if row_key != key[:4] or key[4] == "strategy" and row["strategy"] != key[5]:
+            roms = (key[3],) if versions is None else versions
+            if (row_key[:3] != key[:3] or row_key[3] not in roms
+                    or key[4] == "strategy" and row["strategy"] != key[5]):
                 raise CommunityError("identity_mismatch")
 
     async def _page(self, path, query):
@@ -669,22 +682,31 @@ class CommunitySync:
                 return
             # Stored under the identity this request named, never the one on screen now.
             self.population.remember_page(identity, combined)
+        # The second ROM's metadata request must not clear account-wide pins.
+        if pins is not None:
+            await self._renew_pins(identity, key, pins, owner)
+        leases = [lease for lease in (self.population.lease_until(identity),
+                                      *(self.population.lease_until(recording=pin) for pin in pins or ()))
+                  if lease is not None]
+        due = max(time.monotonic() + POOL_RETRY_MIN_S, min(leases, default=0) - LEASE_RENEW_S)
+        self._pool_served(owner, key, windows, pins, due=due,
+                          region_scope=value_of(identity, "region_scope", REGIONAL))
+
+    async def _renew_pins(self, identity, key, pins, owner):
+        """One account-wide pin lease, including compatible cross-ROM choices."""
         pin_key = owner, pins
+        versions = servable_versions(value_of(identity, "region_scope", REGIONAL), key[3])
+        metadata_key = pin_key, versions
         if (pins or self._pins_leased) and (pin_key != self._pin_key or time.monotonic() >= self._pins_until):
             await self._json("PUT", "/v1/pins", json={"recording_ids": list(pins)})
             self._pins_leased = bool(pins)
             self._pin_key, self._pins_until = pin_key, time.monotonic() + PIN_RENEW_S
         # Chosen rivals may sit outside every automatic rank band. Renew their
         # publication gates before they lapse, or fetch them on restart.
-        if pin_key != self._pin_metadata_key or any(
+        if metadata_key != self._pin_metadata_key or any(
                 self._lease_due(self.population.lease_until(recording=pin)) for pin in pins):
-            await self._assets(pins, renew=True, identity_key=key, owner=owner)
-            self._pin_metadata_key = pin_key
-        leases = [lease for lease in (self.population.lease_until(identity),
-                                      *(self.population.lease_until(recording=pin) for pin in pins))
-                  if lease is not None]
-        due = max(time.monotonic() + POOL_RETRY_MIN_S, min(leases, default=0) - LEASE_RENEW_S)
-        self._pool_served(owner, key, windows, pins, due=due)
+            await self._assets(pins, renew=True, identity_key=key, owner=owner, versions=versions)
+            self._pin_metadata_key = metadata_key
 
     async def search(self, identity, prefix, *, cursor=None):
         if self._closing:
@@ -723,14 +745,14 @@ class CommunitySync:
         task.add_done_callback(self._local_jobs.discard)
         return await asyncio.shield(task)
 
-    async def _asset(self, identifier, *, identity_key=None):
+    async def _asset(self, identifier, *, identity_key=None, versions=None):
         owner = self.account.snapshot().get("uid")
         value = await self._json("GET", "/v1/recordings/" + identifier)
         row = checked_metadata({key: item for key, item in value.items() if key != "v"})
         if row["id"] != identifier:
             raise CommunityError("identity_mismatch")
         if identity_key is not None:
-            self._check_identity([row], identity_key)
+            self._check_identity([row], identity_key, versions=versions)
         if self._closing or self.account.snapshot().get("uid") != owner:
             return
         self.population.renew_metadata(row)
@@ -746,7 +768,7 @@ class CommunitySync:
             return
         await self._cpu(lambda: self.population.store_asset(row, encoded, raw, owner=owner))
 
-    async def _assets(self, identifiers, *, renew=False, identity_key=None, owner=None):
+    async def _assets(self, identifiers, *, renew=False, identity_key=None, owner=None, versions=None):
         """Try bounded IDs independently, without hot-looping failed gates."""
         owner = owner or self.account.snapshot().get("uid")
         failed = False
@@ -761,7 +783,7 @@ class CommunitySync:
                 if max(self._asset_retry.get(key, 0), self._asset_unusable.get(key, 0)) > time.monotonic():
                     continue
             try:
-                await self._asset(identifier, identity_key=identity_key)
+                await self._asset(identifier, identity_key=identity_key, versions=versions)
             except (CommunityError, ValueError, OSError) as error:
                 failed = True
                 with self._lock:
@@ -808,7 +830,8 @@ class CommunitySync:
         raw, encoded = await self._cpu(_prepare_source, source)
         if not self._source_active(source):
             return
-        body = {"target": source["target"], "clock": source["clock"], "rom": source["game_version"],
+        # The ROM comes from the clip header, never the attempt's own claim.
+        body = {"target": source["target"], "clock": source["clock"], "rom": claims.region_of(raw),
             "strategy": source["strategy"], "frames": source["frames"], "raw_sha256": source["raw_sha256"],
             "raw_bytes": len(raw), "encoded_sha256": hashlib.sha256(encoded).hexdigest(), "encoded_bytes": len(encoded),
             "codec": "ghc1", "generation": self._catalog_generation}
@@ -898,7 +921,8 @@ class CommunitySync:
                  else POOL_RETRY_MIN_S if code == "generation_changed" else ASSET_RETRY_S)
         due = max(time.monotonic() + delay, self._network_until)
         self._pool_served(self.account.snapshot().get("uid"), key, operation[2], operation[3], due=due,
-                          failure="unsupported" if code == "unsupported_identity" else "offline")
+                          failure="unsupported" if code == "unsupported_identity" else "offline",
+                          region_scope=value_of(operation[1], "region_scope", REGIONAL))
 
     async def _failed_operation(self, key, operation, error):
         self.last_error = "Community ghosts are temporarily unavailable."

@@ -186,6 +186,16 @@ def test_the_scorecard_starts_on_the_detected_region(tmp_path):
         assert card["detected_region"] == "jp"
 
 
+def test_the_detected_region_is_the_loaded_cartridge_when_one_is_seen(tmp_path):
+    """Region scope (2026-10-16): with an explicit US setting and a JP ROM
+    loaded, the card names the ROM it can see while still grading on US."""
+    with make_client(tmp_path) as (client, _db, service):
+        service.ranks.grading_version = "us"
+        service.observed_game_version = lambda: "jp"
+        card = client.get("/api/scorecard").json()
+        assert card["detected_region"] == "jp" and card["regions"] == ["us"]
+
+
 def test_at_least_one_region_stays_on(tmp_path):
     with make_client(tmp_path) as (client, _db, _svc):
         assert client.put("/api/scorecard/regions",

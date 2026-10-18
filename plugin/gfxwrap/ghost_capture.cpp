@@ -1,4 +1,5 @@
 #include "ghost_capture.h"
+#include "ghost_behaviours.h"
 #include "ghost_root.h"
 #include "ghost_ram.h"
 #include <cstddef>
@@ -112,10 +113,10 @@ uint32_t capture_camera(Ram &ram, uint32_t area, int16_t area_index, gc_camera &
     return GC_OK;
 }
 
-// play_sound(bits, pos): the 48 bytes of the original US leaf function. The
-// two lui/addiu pairs must name exactly the configured producer and ring;
-// the rest proves an 8-byte stride, bits at +0, source at +4, and a u8
-// producer published after both stores. Another build refuses sound.
+// play_sound(bits, pos): the 48 bytes of the original leaf function, the same
+// in US and JP. The two lui/addiu pairs must name exactly the configured
+// producer and ring; the rest proves an 8-byte stride, bits at +0, source at
+// +4, and a u8 producer published after both stores. Another build refuses sound.
 bool sound_code_matches(Ram &ram, const gc_layout &layout) {
     const auto upper = [](uint32_t address) { return (address + 0x8000u) >> 16; };
     const auto lower = [](uint32_t address) { return address & 0xffffu; };
@@ -265,8 +266,8 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
     return GC_OK;
 }
 
-// Segment 0x13 holds every behaviour script (the US map's last is below 0x6000).
-constexpr uint32_t behaviour_segment = 0x13000000u, behaviour_span = 0x10000u;
+// Segment 0x13 holds every behaviour script (each map's last is below 0x6000).
+constexpr uint32_t behaviour_segment = ghost_behaviours::segment, behaviour_span = 0x10000u;
 constexpr uint32_t object_behaviour = 0x20c, object_active_flags = 0x74, object_anim_state = 0xf0, body_holp = 0x18;
 constexpr uint32_t object_animations = 0x120;
 
@@ -275,24 +276,9 @@ bool pool_object(const gc_layout &layout, uint32_t object) {
         && (object - layout.object_pool) / object_size < object_count;
 }
 
-// geo_obj_init_animation updates curAnim, NOT animID. Resolve the same
-// animation-table entry through the renderer's segment bases. Object tables
-// are not uniformly terminated (penguin also aliases one animation twice).
-// These are the non-NULL entry counts in the pinned n64decomp/sm64 actor
-// tables at 06ec56df7f951f88da05f468cdcacecba496145a, matching our model inputs.
-// Unknown behaviours have no proven bound and cannot supply an animation ID.
-uint32_t object_animation_count(uint32_t behavior) {
-    switch (behavior) {
-        case 0x13003174u: return 2;  // Bob-omb: then NULL
-        case 0x130020e8u: return 5;  // penguin: no terminator; entries 0 and 4 alias
-        case 0x130001f4u: return 12; // King Bob-omb: no terminator
-        case 0x13000528u: return 6;  // Chuckya: no terminator
-        case 0x130044fcu: return 5;  // Mips: then two NULLs
-        case 0x130033ecu: return 2;  // Hoot: no terminator
-        case 0x13000f08u:            // Ukiki: alias of the common macro script
-        case 0x13001cb0u: return 13; // Macro Ukiki: then two NULLs
-        default: return 0;          // Both boxes have no animation
-    }
+// The RAM address of a recognised behaviour's script on the configured layout.
+uint32_t behaviour_pointer(const gc_layout &layout, ghost_behaviours::Symbol symbol) {
+    return layout.behaviour_base + (ghost_behaviours::offset(layout.rom_layout, symbol) - behaviour_segment);
 }
 
 uint32_t object_pointer(const Ram &ram, const gc_frame &frame, uint32_t pointer) {
@@ -307,9 +293,12 @@ uint32_t object_pointer(const Ram &ram, const gc_frame &frame, uint32_t pointer)
     const auto address = kseg0 + uint32_t(physical);
     return ram.fits(address, 4) ? address : 0;
 }
-bool object_animation(Ram &ram, const gc_frame &frame, uint32_t object,
+// geo_obj_init_animation updates curAnim, NOT animID. Resolve the same
+// animation-table entry through the renderer's segment bases, bounded by the
+// behaviour's proven table length (ghost_behaviours.h).
+bool object_animation(Ram &ram, const gc_frame &frame, uint32_t rom_layout, uint32_t object,
                       uint32_t behavior, uint32_t animation, int16_t &index) {
-    const uint32_t count = object_animation_count(behavior);
+    const uint32_t count = ghost_behaviours::animations(ghost_behaviours::symbol(rom_layout, behavior));
     if (!count) return false;
     const uint32_t table = object_pointer(ram, frame, ram.u32(object + object_animations));
     if (!table || !ram.has(table, 4*count)) return false;
@@ -339,7 +328,8 @@ bool object_state(Ram &ram, const gc_layout &layout, const gc_frame &frame,
     if (behaviour < layout.behaviour_base || behaviour - layout.behaviour_base >= behaviour_span) return false;
     h.behavior = behaviour_segment + (behaviour - layout.behaviour_base);
     h.animation_id = -1;
-    if (animation && !object_animation(ram, frame, object, h.behavior, animation, h.animation_id)) return false;
+    if (animation && !object_animation(ram, frame, layout.rom_layout, object, h.behavior, animation, h.animation_id))
+        return false;
     h.anim_y_translation = animation ? ram.s16(object + 0x3a) : int16_t(0);
     h.animation_frame = animation ? ram.s16(object + 0x40) : int16_t(0);
     const uint32_t anim_state = ram.u32(object + object_anim_state);
@@ -417,7 +407,7 @@ void capture_held(Ram &ram, const gc_layout &layout, const gc_frame &frame, gc_r
         // takes priority over following an earlier throw while attached.
         const uint32_t ridden = out.pose.action == 0x000004a8u ? ram.u32(state + 0x80) : 0;
         if (pool_object(layout,ridden) && (ram.u16(ridden + object_active_flags) & 1u)
-                && ram.u32(ridden + object_behaviour) == layout.behaviour_base + 0x33ecu)
+                && ram.u32(ridden + object_behaviour) == behaviour_pointer(layout, ghost_behaviours::Symbol::hoot))
             return capture_external(ram,layout,frame,ridden,out);
         // The ground, jump and fall shell actions attach through riddenObj.
         // usedObj also names it at mounting time but may survive dismounting.
@@ -427,7 +417,7 @@ void capture_held(Ram &ram, const gc_layout &layout, const gc_frame &frame, gc_r
             || out.pose.action == 0x0081089bu;
         const uint32_t shell = shell_action ? ram.u32(state + 0x84) : 0;
         if (pool_object(layout,shell) && (ram.u16(shell + object_active_flags) & 1u)
-                && ram.u32(shell + object_behaviour) == layout.behaviour_base + 0x1f3cu)
+                && ram.u32(shell + object_behaviour) == behaviour_pointer(layout, ghost_behaviours::Symbol::koopa_shell))
             return capture_external(ram,layout,frame,shell,out);
         return capture_released(ram, layout, frame, reader, out);
     }
@@ -459,7 +449,7 @@ extern "C" void ghost_capture_reset(gc_reader *reader) {
 
 extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
     if (!layout || layout->bytes != sizeof(*layout) || layout->version != GC_VERSION
-            || layout->ram_order != GC_RAM_WORD_SWAPPED || layout->rom_layout != GC_ROM_US
+            || layout->ram_order != GC_RAM_WORD_SWAPPED || !ghost_behaviours::supported_layout(layout->rom_layout)
             || (layout->rdram_bytes != (4u << 20) && layout->rdram_bytes != (8u << 20))) return GC_BAD_CONFIG;
     const uint32_t words[] = {layout->global_timer, layout->mario_object, layout->current_area_pointer};
     for (auto address : words) if (!span(address, 4, layout->rdram_bytes)) return GC_BAD_CONFIG;

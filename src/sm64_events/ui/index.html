@@ -3720,7 +3720,27 @@
   .attempt-table { margin: 0; font-size: .79rem; font-variant-numeric: tabular-nums; }
   .attempt-table tr:not(.replay-row) { height: 40px; }   /* the drawer's row grows -- see the narrow-layout note by --log-row-height */
   .attempt-table td { padding: .3rem .36rem; border-bottom: 1px solid var(--border-soft); }
-  .attempt-index { width: 38px; }
+  .attempt-index { width: 38px; position: relative; }
+  /* The timer hint's warning triangle left of the entry number (2026-10-17;
+     which rows: attemptlog.js::TimerHint). Out of flow, in the card body's
+     left indent (`.log-card-body`, 61px as shipped, 44px in a nested card),
+     so `#N` stays where it is on every row. Muted, not the caveat hue, and a
+     triangle, not the caveat's round "!": the row's time is right; this is
+     about the game's. It wears the `.hint` tooltip with one difference: the
+     tooltip opens rightward over the row, since centered on the indent it
+     would hang past the card's left edge. Centered by stretching to the cell
+     rather than by a transform, which would trap the tooltip's z-index. */
+  .attempt-index .timer-hint {
+    position: absolute; right: 100%; top: 0; bottom: 0; margin-right: 2px;
+    align-items: center; border-radius: 3px;
+  }
+  .attempt-index .timer-hint:hover,
+  .attempt-index .timer-hint:focus-visible { color: var(--text); outline: none; }
+  .attempt-index .timer-hint:focus-visible .ui-icon { outline: 2px solid #78b9ff; outline-offset: 2px; border-radius: 2px; }
+  .attempt-index .timer-hint::after { left: 0; top: calc(50% + 14px); transform: none; }
+  /* A dimmed row (another strategy, or cleared) would dim its tooltip too, so
+     the row lights up while its hint is read, through the row's own fade. */
+  .attempt-table tr:is(.other-strat, .cleared):has(.timer-hint:is(:hover, :focus-visible)) { opacity: 1; }
   /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
      for the old disc"): 34px was sized for a 22px SQUARE Medal/Crest. A Hat
      at size=22 has a layout box alone of 22 * HAT_LAYOUT_WIDTH_RATIO (~1.632,
@@ -5128,7 +5148,6 @@
   .setup-help-content p { margin: .4rem 0 .65rem; }
   .setup-help-content a { display: block; width: fit-content; margin: .55rem 0; color: #8fc8ff; }
   .setup-help-content code { overflow-wrap: anywhere; white-space: normal; font-size: .88rem; }
-  .setup-next-detail { margin: .65rem 0 1rem 68px; color: #bccbdd; font-size: .94rem; line-height: 1.55; }
   .setup-warning, .setup-error { border-left: 3px solid #e6b852; border-radius: 4px; background: #292b25; color: #f0d597; padding: .85rem 1rem; line-height: 1.55; font-size: .94rem; margin: .8rem 0; }
   .setup-error { color: #ffb6b6; background: #38252b; border-color: #e88383; }
   .setup-rom-result { margin: .9rem 0; }

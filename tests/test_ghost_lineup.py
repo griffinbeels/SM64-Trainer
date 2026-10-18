@@ -47,6 +47,15 @@ class Cloud(Account):
         return [call for call in self.calls if call[1] == "/v1/pool"
                 and (strategy is None or call[2]["params"].get("strategy") == strategy)]
 
+    async def request_bytes(self, method, path, **kwargs):
+        from sm64_events.community import codec
+        from test_community_codec import native
+        from test_community_sync import _jp
+        self.calls.append((method, path, kwargs))
+        row = next(row for row in self.rows if row["id"] == path.split("/")[-2])
+        raw = native(row["frames"])
+        return codec.encode(_jp(raw) if row["game_version"] == "jp" else raw)
+
     async def request_json(self, method, path, **kwargs):
         if path == "/v1/catalog":
             self.calls.append((method, path, kwargs))
@@ -417,3 +426,31 @@ def test_the_card_answers_with_no_strategy_and_still_saves_settings(tmp_path):
     finally:
         population.close()
         database.close()
+
+
+def test_shared_list_state_includes_other_rom_but_regional_state_does_not(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from sm64_events.community.sync import checked_page
+    from sm64_events.ghost.community_rivals import CommunityRivals
+    account = Cloud()
+    population = CachedPopulation(Local(), root=tmp_path, account=account)
+    sync = CommunitySync(account, population)
+    community = CommunityRivals(sync, population)
+    identity = PracticeIdentity("star", "1-0", "igt", "us", "Standard", region_scope="shared")
+    statuses = {"us": None, "jp": "pending"}
+    monkeypatch.setattr(sync, "pool_status", lambda item: statuses[item.game_version])
+    try:
+        population.remember_page(identity, checked_page(page()))
+        assert community.list_state(identity) == "pending" and not community.complete(identity)
+        statuses["jp"] = "offline"
+        assert community.list_state(identity) == "offline"
+        assert community.status(identity) == "Community rivals are unavailable. Your saved ghosts still work."
+        regional = replace(identity, region_scope="regional")
+        assert community.list_state(regional) == "held" and community.complete(regional)
+        assert community.status(regional) is None
+        population.remember_page(replace(identity, game_version="jp"), checked_page(page()))
+        statuses["jp"] = None
+        assert community.list_state(identity) == "held" and community.complete(identity)
+        assert community.status(identity) is None
+    finally:
+        population.close()

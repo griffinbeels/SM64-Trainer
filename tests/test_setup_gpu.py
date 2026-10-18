@@ -235,11 +235,18 @@ def test_gpu_idle_receipt_does_not_hide_missing_setup_evidence(fault):
     assert readiness(layer, observe(layer))["ready"] is (fault is None)
 
 
-def test_gpu_idle_receipt_on_jp_preserves_the_tracking_limitation():
+def _unverified_jp(memory, monkeypatch):
+    """The limited path is an UNVERIFIED JP layout's: a verified one is
+    supported like US (test_onboarding.py::test_verified_jp_is_supported_like_us)."""
+    import sm64_events.core.onboarding as onboarding
+    from test_onboarding import _jp_header
+    monkeypatch.setattr(onboarding, "_layout_ready", lambda version: False)
+    memory.raw = _jp_header()
+
+
+def test_gpu_idle_receipt_on_jp_preserves_the_tracking_limitation(monkeypatch):
     gpu, gpu_now, _, observe, now, _, inputs, memory, poller, _ = idle_gpu_runtime()
-    jp = bytearray(memory.raw)
-    jp[0x3E] = ord("J")
-    memory.raw = bytes(jp)
+    _unverified_jp(memory, monkeypatch)
     observe(replace(installed(), gpu_observation=gpu()))
     now[0] = gpu_now[0] = 10
     inputs["frames"] += 30
@@ -272,8 +279,17 @@ def test_epoch_change_invalidates_runtime_cache_immediately():
     poller.latest.global_timer += 1
     result = observe(replace(installed(), gpu_observation=gpu()))
     assert result["checks"]["pictures"]
+    reads = []
+    status = observe.replay.recorder.status
+    observe.replay.recorder.status = lambda: reads.append(1) or status()
     receipt["delivered"] = 0
     receipt["source_epoch"] += 1
+    observe(replace(installed(), gpu_observation=gpu()))
+    assert reads, "the new epoch was answered from the cache"
+    # The restart itself is a gap SteadyChecks holds (test_onboarding.py::
+    # test_a_brief_gap_never_moves_setup_back_but_a_new_game_starts_over);
+    # a capture that never delivers again fails once the hold runs out.
+    now[0] = gpu_now[0] = 4.1
     assert not observe(replace(installed(), gpu_observation=gpu()))["checks"]["pictures"]
 
 
@@ -287,14 +303,12 @@ def test_active_picture_movement_cannot_hide_frozen_control_ack():
     assert not probe().alive and not probe().pictures
 
 
-def test_gpu_passive_jp_cannot_bypass_absent_game_progress():
+def test_gpu_passive_jp_cannot_bypass_absent_game_progress(monkeypatch):
     gpu, _, _, gpu_recorder, _ = fixture()
     gpu_recorder["idle"] = True
     observe, _, _, _, recorder, memory, _ = runtime()
     recorder.update(gpu_recorder)
-    jp = bytearray(memory.raw)
-    jp[0x3E] = ord("J")
-    memory.raw = bytes(jp)
+    _unverified_jp(memory, monkeypatch)
     layer = replace(installed(), gpu_observation=gpu())
     result = readiness(layer, observe(layer))
     assert result["limited"] and not result["ready"]

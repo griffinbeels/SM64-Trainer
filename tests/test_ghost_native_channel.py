@@ -8,9 +8,10 @@ import time
 import pytest
 
 from sm64_events.ghost import capture, native_channel as channel, native_protocol as P
-from sm64_events.ghost.native_layout import GP_WRONG_SCENE
+from sm64_events.ghost.native_layout import GP_WRONG_SCENE, ROM_JP, ROM_US
 from sm64_events.memory.addresses import ACT_FALL_AFTER_STAR_GRAB, ACT_JUMBO_STAR_CUTSCENE, STAR_DANCE_ACTIONS
 from sm64_events.memory.ghost_layout import GhostLayout
+from jp_layout_fixture import JP_CANDIDATE
 from sm64_events.memory.layout import US
 
 
@@ -760,3 +761,32 @@ def test_new_lease_and_missing_playback_fields_use_registry_defaults(kernel):
         assert kernel.request.proximity_distance == pytest.approx(expected["proximity_distance"])
     finally:
         connection.close()
+
+
+@pytest.mark.parametrize("layout,rom", [(US, ROM_US), (JP_CANDIDATE, ROM_JP)], ids=["us", "jp"])
+def test_capture_configures_its_cartridge_and_stamps_every_batch_with_it(monkeypatch, layout, rom):
+    """The channel is configured with that cartridge's layout, and each batch's
+    producer names it, so every clip records the ROM it was captured on."""
+    batches, configured = [], []
+
+    class Source:
+        def __init__(self, _pid, config):
+            configured.append(config)
+
+        def poll(self, control=None):
+            return status(), (frame(4, 7),)
+
+        def close(self): pass
+
+    monkeypatch.setattr(capture, "NativeChannel", Source)
+    source = capture.NativeCapture(layout, lambda *args: batches.append(args), producer_pid=123)
+    source.start()
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not batches:
+            time.sleep(0.01)
+    finally:
+        assert source.stop(3)
+    assert configured[0] == GhostLayout.from_layout(layout).to_bytes()
+    assert struct.unpack_from("<I", configured[0], 16)[0] == rom
+    assert batches and all(producer.rom_layout == rom for producer, _frames in batches)

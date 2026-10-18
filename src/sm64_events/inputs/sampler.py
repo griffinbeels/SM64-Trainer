@@ -213,6 +213,13 @@ class InputSampler:
         self._frame = None
         self._new_source()
 
+    def discard(self) -> None:
+        """End this stretch WITHOUT its pending frame: the cartridge changed,
+        so the last reading may have been taken through the old ROM's
+        addresses off the new one's memory (task 0064)."""
+        self._frame = None
+        self._new_source()
+
     def _new_source(self) -> None:
         # Persist the observed seam; a UTC query may omit the reset's chunk.
         self._previous_buttons = 0

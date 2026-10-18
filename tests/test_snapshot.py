@@ -68,3 +68,10 @@ def test_reader_carries_usamunes_save_state_button_only_where_the_layout_has_it(
     assert unknown.usamune_savestate_button is None
     mem.write_u8(US.usamune_savestate_button, 1)
     assert SnapshotReader(mem).read().usamune_savestate_button == 1
+
+def test_the_stop_byte_is_read_where_the_build_has_its_address():
+    from dataclasses import replace
+    mem = BufferMemory()
+    mem.write_u8(US.usamune_stop, 3)
+    assert SnapshotReader(mem).read().usamune_stop == 3
+    assert SnapshotReader(mem, replace(US, usamune_stop=None)).read().usamune_stop is None

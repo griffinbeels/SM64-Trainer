@@ -50,6 +50,16 @@ class Standards:
         return self.curves[version or self.grading_version]
 
 
+class SharedStandards(Standards):
+    """A strategy whose standards name no regional difference: its region
+    scope is shared, the only one a recording of unknown ROM may serve
+    (`ranks/region_scope.py`). The plain fixture has no region evidence, so
+    every strategy on it is regional."""
+
+    def ladders(self, key, version=None):
+        return {"Standard": self.ladder_cs(key, "Standard", version)}
+
+
 def recording(identity="one", frames=600, **values):
     return {"id": identity, "player_id": f"player:{identity}", "player_name": identity,
             "kind": "star", "entity_key": "2-1", "clock": "igt", "game_version": "us",
@@ -274,7 +284,10 @@ def test_fastest_fallback_keeps_pb_separate_and_compatible_strategy_labels(scope
 def test_pinned_beta_historical_source_preserves_missing_certificate_and_original_rom():
     row = recording("bundled", 600, source_status="bundled-author-recording", structurally_valid=True,
                     certified=False, full_start=None, recorded_game_version=None)
-    graded, = rank_recordings([row], Standards(), IDENTITY)
+    # A recording whose ROM nobody knows serves only a SHARED region scope
+    # (`ranks/region_scope.py`): on a regional star it is unknowable.
+    assert rank_recordings([row], Standards(), IDENTITY) == ()
+    graded, = rank_recordings([row], SharedStandards(), IDENTITY)
     assert graded["certified"] is False and graded["recorded_game_version"] is None
     assert graded["full_start"] is None
     assert select_rivals([graded], basis(44, 100), {}, {})[0]["id"] == "bundled"
@@ -283,7 +296,7 @@ def test_pinned_beta_historical_source_preserves_missing_certificate_and_origina
     assert [item["id"] for item in select_rivals([graded, remote], basis(44, 100), {}, {},
                                                allow_fastest=False)] == ["bundled"]
     for bad in ({"structurally_valid": False}, {"source_status": "import"}, {"recorded_game_version": "unknown"}):
-        assert rank_recordings([{**row, **bad}], Standards(), IDENTITY) == ()
+        assert rank_recordings([{**row, **bad}], SharedStandards(), IDENTITY) == ()
 
 
 def test_same_subdivision_fallback_preserves_pins_and_winners():
@@ -527,9 +540,13 @@ def test_overall_scope_changes_pb_grade_without_changing_current_strategy_saved_
         assert {key: legacy[key] for key in ("tier", "division", "step")} == rank_frames(store, overall_identity, 630, version=None)
         database.insert_pb(2, 1, "Standard", "igt", 300, None, "2026-10-08T00:00:00Z",
                            imported_from="Other ROM", game_version="jp")
-        imported = saved_pb_basis(database, store, overall_identity)
+        # This strategy has no region evidence, so it is regional: the JP save
+        # is the JP slot's PB and never the US one's.
+        assert saved_pb_basis(database, store, overall_identity)["attempt_id"] == 1
+        jp_identity = replace(overall_identity, game_version="jp")
+        imported = saved_pb_basis(database, store, jp_identity)
         assert imported["ghost"] is None and imported["source"] is None
-        assert {key: imported[key] for key in ("tier", "division", "step")} == rank_frames(store, overall_identity, 300, version="jp")
+        assert {key: imported[key] for key in ("tier", "division", "step")} == rank_frames(store, jp_identity, 300, version="jp")
     finally:
         database.close()
 
@@ -561,10 +578,15 @@ def test_pb_anchor_uses_its_original_region_and_exact_strategy_clock(tmp_path):
             save(database, run)
         save(database, runs[0], timer_mode="rta", frames=100)
         database.insert_pb(2, 1, "Imported", "igt", 100, None, "2026-10-07T00:00:20Z", game_version="us")
+        # A strategy with no region evidence is regional: each ROM keeps its
+        # own PB slot, graded and raced on that ROM.
         result = saved_pb_basis(database, Standards(), IDENTITY)
-        assert result["attempt_id"] == 2 and result["ghost"] is None
-        assert {key: result[key] for key in ("step", "tier", "division")} == rank_frames(Standards(), IDENTITY, 300, version="jp")
-        assert saved_pb_basis(database, Standards(), replace(IDENTITY, game_version="jp"))["attempt_id"] == 2
+        assert result["attempt_id"] == 1 and result["ghost"].attempt_id == 1
+        assert {key: result[key] for key in ("step", "tier", "division")} == rank_frames(Standards(), IDENTITY, 600, version="us")
+        jp_identity = replace(IDENTITY, game_version="jp")
+        jp = saved_pb_basis(database, Standards(), jp_identity)
+        assert jp["attempt_id"] == 2 and jp["game_version"] == "jp" and jp["ghost"].attempt_id == 2
+        assert {key: jp[key] for key in ("step", "tier", "division")} == rank_frames(Standards(), jp_identity, 300, version="jp")
         assert saved_pb_basis(database, Standards("rta"), IDENTITY) is None
     finally:
         database.close()

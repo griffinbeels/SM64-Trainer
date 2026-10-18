@@ -4,10 +4,12 @@
 #define NOMINMAX
 #include <windows.h>
 #include "ghost_rom.h"
+#include "ghost_capture.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -24,13 +26,16 @@ struct Allocation {
     }
     ~Allocation() { VirtualFree(bytes, 0, MEM_RELEASE); }
 };
+// The cartridge the fixture plants: its internal name and country byte.
+const char* title = "SM64 USAMUNE v1.93u";
+uint8_t country = 'E';
 void header(uint8_t* bytes) {
     std::memset(bytes, 0, 64);
     const uint8_t magic[] = {0x80, 0x37, 0x12, 0x40};
     std::memcpy(bytes, magic, 4);
     std::memset(bytes + 0x20, ' ', 20);
-    std::memcpy(bytes + 0x20, "SM64 USAMUNE v1.93u", 19);
-    bytes[0x3e] = 'E';
+    std::memcpy(bytes + 0x20, title, std::strlen(title));
+    bytes[0x3e] = country;
 }
 void swap(uint8_t* bytes, size_t count) {
     for (size_t at = 0; at < count; at += 4) {
@@ -80,6 +85,7 @@ int main() {
         };
         require(discover(current) == Result::missing && out.empty(),
                 "a copied header alone is not an image");
+        require(ghost_rom::layout(copied_header) == GC_ROM_US, "US header names the US ghost layout");
         for (bool swapped : {false, true}) {
             // A cartridge may begin inside its allocation, across a scan-chunk
             // boundary; the header copied by the emulator remains word-swapped.
@@ -135,6 +141,27 @@ int main() {
                     PAGE_NOACCESS, &old) != 0, "partial cartridge guard");
             require(discover(current) == Result::missing && out.empty(),
                     "header with incomplete readable image is refused");
+        }
+        {
+            // The JP practice cartridge is discovered the same way; a header
+            // naming no practice ROM (vanilla JP, Usamune's name under any
+            // other country) is not, whatever image follows it.
+            title = "SM64 USAMUNE v1.93j"; country = 'J';
+            header(copied_header); swap(copied_header, 64);
+            Allocation cartridge(ghost_rom::IMAGE_BYTES);
+            image(cartridge.bytes, true);
+            require(discover(current) == Result::ready, "JP practice cartridge discovered");
+            normalized(out);
+            require(ghost_rom::layout(copied_header) == GC_ROM_JP, "JP header names the JP ghost layout");
+            const std::pair<const char*, uint8_t> others[] = {{"SUPER MARIO 64", 'J'}, {"SM64 USAMUNE v1.93u", 'P'}};
+            for (const auto& other : others) {
+                title = other.first; country = other.second;
+                header(copied_header); swap(copied_header, 64);
+                image(cartridge.bytes, true);
+                require(discover(current) == Result::missing && out.empty(), "non-practice cartridge discovered");
+                require(!ghost_rom::layout(copied_header), "non-practice header names a ghost layout");
+            }
+            require(!ghost_rom::layout(nullptr), "no header names a ghost layout");
         }
         std::printf("{\"ok\":true,\"checks\":%u,\"header_bytes\":64}\n", checks);
         return 0;

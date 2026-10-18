@@ -22,9 +22,11 @@ struct Scratch {
      * the back faces the game culls leave the drawn vertices (Pose::count). */
     uint32_t evaluated;
 };
+/* rom_layout: the layout the recording was captured on (gclip_header), which
+ * names its held object's behaviour; the live cartridge may be the other one. */
 Result evaluate(sg_model *, const gs_record &recorded, const gc_sample &live,
                 const ghost::WorldPass &, float opacity, Scratch &,
-                ghost_compositor::Pose &out);
+                ghost_compositor::Pose &out, uint32_t rom_layout = GC_ROM_US);
 /* A world point relative to the LIVE camera, in the space SM64 hands its own
  * sound engine (Mario's cameraToObject: +x right, +y up, -z ahead). */
 bool camera_relative(sg_model *, const gc_camera &live, const float world[3], float out[3]);

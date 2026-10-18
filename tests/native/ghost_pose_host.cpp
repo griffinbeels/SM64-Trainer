@@ -205,6 +205,31 @@ int main() {
         assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
         assert((applied.fields&SG_POSE_HELD) && applied.held_kind==k.kind);
     }
+    // A JP clip names its scripts by JP offsets (data/behaviours_jp.tsv): the
+    // four that JP moves draw through the clip's own layout, and the other
+    // cartridge's offset names nothing. The unmoved ones read the same.
+    const struct { uint32_t us, jp, kind; } moved[]={{0x13003174u,0x13003154u,SG_HELD_BOBOMB},
+        {0x13004218u,0x130041F8u,SG_HELD_BREAKABLE_BOX},{0x130044FCu,0x130044DCu,SG_HELD_MIPS},
+        {0x130033ECu,0x130033CCu,SG_HELD_HOOT}};
+    for(const auto &m:moved) {
+        saved.held.behavior=m.jp;
+        assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose,GC_ROM_JP)==Result::ok);
+        assert((applied.fields&SG_POSE_HELD) && applied.held_kind==m.kind);
+        assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose,GC_ROM_US)==Result::ok);
+        assert(!(applied.fields&SG_POSE_HELD));
+        saved.held.behavior=m.us;
+        assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose,GC_ROM_JP)==Result::ok);
+        assert(!(applied.fields&SG_POSE_HELD));
+    }
+    for(const auto &k:kinds) {
+        if(k.behavior==0x13004218u || k.behavior==0x130044FCu || k.behavior==0x130033ECu)continue;
+        saved.held.behavior=k.behavior;
+        assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose,GC_ROM_JP)==Result::ok);
+        assert((applied.fields&SG_POSE_HELD) && applied.held_kind==k.kind);
+    }
+    saved.held.behavior=0x13003174u;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose,GC_ROM_JP+1)==Result::ok);
+    assert(!(applied.fields&SG_POSE_HELD)); // an unknown cartridge names nothing
     saved.pose.model_state=0x180;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(pose.count==6 && pose.body_count==3 && pose.opacity==0.5f && pose.noise_alpha
@@ -216,6 +241,10 @@ int main() {
     saved.held.released=1;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(applied.held_animation_id==0); // released Mips keeps the recorded animation
+    saved.held.released=0;saved.held.behavior=0x130044DCu; // JP's Mips, the same rule
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose,GC_ROM_JP)==Result::ok);
+    assert(applied.held_kind==SG_HELD_MIPS && applied.held_animation_id==4);
+    saved.held.released=1;saved.held.behavior=0x130044FCu;
     saved.held.released=0;saved.held.animation_id=1;
     saved.held.behavior=0x130033ECu;saved.held.released=1;saved.held.angles[1]=0x4567;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);

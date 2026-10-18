@@ -230,7 +230,7 @@ struct Pipeline {
         gc::resync(compositor);glFinish();
     }
     ~Pipeline(){if(water_program){g.DeleteProgram(water_program);g.DeleteVertexArrays(1,&water_vao);}
-        present::destroy(presentation);gc::destroy(compositor);ghost_playback::retire_on_context_loss();ghost_stream::rom(false);}
+        present::destroy(presentation);gc::destroy(compositor);ghost_playback::retire_on_context_loss();ghost_stream::rom(0);}
     void background(bool wall){
         ordinary_state(g,scene);std::vector<uint8_t> color(W*H*4);std::vector<float> z(W*H,1.f);
         for(unsigned y=0;y<H;++y)for(unsigned x=0;x<W;++x){const auto i=y*W+x;
@@ -405,7 +405,7 @@ int main(int argc,char** argv){
     const auto prepare_start=Clock::now();require(api->prepare_model(1,rom.data(),uint32_t(rom.size()))==GP_OK,"actual model preparation");
     RenderOwner renderer;gs_record captured{};
     require(ghost_stream::api()->configure(&fixture.config)==1,"configure real source clock");
-    renderer.run([&]{ghost_stream::rom(true);float matrix[16];projection(matrix);
+    renderer.run([&]{ghost_stream::rom(GC_ROM_US);float matrix[16];projection(matrix);
         const ghost::RasterTarget target{1,2,W,H,1,0,{0,0,int32_t(W),int32_t(H)},{.5f,.5f},{1,1}};
         captured=capture_source(fixture,target,matrix,1234);});
     const auto& first=captured.sample;

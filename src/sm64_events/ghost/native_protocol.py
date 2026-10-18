@@ -12,7 +12,7 @@ from pathlib import Path
 from sm64_events.ghost.native_layout import (  # sizes and limits: native_layout.py
     GHOSTS, IPC_MAGIC as MAGIC, IPC_PATH_CHARS as PATH_CHARS, IPC_PREFIX, IPC_RING_AT as RING_OFFSET,
     IPC_SLOTS as SLOTS, IPC_VERSION as VERSION, IPC_CLIP_BYTES, IPC_REQUEST_BYTES,
-    LABEL_BYTES, LAYOUT_BYTES, RECORD_BYTES,
+    LABEL_BYTES, LAYOUT_BYTES, RECORD_BYTES, ROM_US,
 )
 
 PREFIX = IPC_PREFIX  # the named mapping, mutex and event, plus the producer pid
@@ -107,13 +107,17 @@ class Producer:
     qpc_frequency: int
     qpc_anchor: int
     utc_anchor: float
+    # The cartridge the capture was configured for (gc_layout.rom_layout);
+    # the native status page does not carry it, so its owner attaches it.
+    rom_layout: int = ROM_US
 
     @classmethod
-    def from_status(cls, status: Status) -> Producer:
+    def from_status(cls, status: Status, rom_layout: int = ROM_US) -> Producer:
         return cls(status.producer_pid,
                    status.producer_created_lo | (status.producer_created_hi << 32),
                    status.generation, status.rom_generation, status.configuration,
-                   status.epoch, status.qpc_frequency, status.qpc_anchor, status.utc_anchor)
+                   status.epoch, status.qpc_frequency, status.qpc_anchor, status.utc_anchor,
+                   rom_layout)
 
 
 def path_units(path: str | Path) -> tuple[int, ...]:

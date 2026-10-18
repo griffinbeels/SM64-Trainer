@@ -6,8 +6,8 @@
  * identically to the baseline graphics plugin we forked from").
  *
  * Mirrors src/sm64_events/core/onboarding.py::identify_rom exactly: "SM64
- * USAMUNE v1.93u" with country 'E' (US), or any "SM64 USAMUNE" name with
- * country 'J' (JP). tests/test_practice_rom.py runs this function and the
+ * USAMUNE v1.93u" with country 'E' (US), or "SM64 USAMUNE v1.93j" with
+ * country 'J' (JP): the two builds memory/layout.py describes. tests/test_practice_rom.py runs this function and the
  * Python one over the same headers in both byte orders.
  *
  * `raw` is the first 0x40 bytes of the ROM image as the emulator stores it:
@@ -43,6 +43,6 @@ static int practice_rom(const unsigned char *raw) {
     while (length > 0 && (name[length - 1] == ' ' || name[length - 1] == '\0'))
         name[--length] = '\0';
     if (header[0x3E] == 'E') return strcmp(name, "SM64 USAMUNE v1.93u") == 0;
-    if (header[0x3E] == 'J') return strncmp(name, "SM64 USAMUNE", 12) == 0;
+    if (header[0x3E] == 'J') return strcmp(name, "SM64 USAMUNE v1.93j") == 0;
     return 0;
 }

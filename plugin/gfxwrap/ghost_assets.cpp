@@ -1,5 +1,6 @@
 #include "ghost_assets.h"
 #include "ghost_clip_upgrade.h"
+#include "ghost_behaviours.h"
 #include <windows.h>
 #include <bcrypt.h>
 #include <cstring>
@@ -81,7 +82,7 @@ bool clip(std::vector<uint8_t> &data, const uint8_t expected[32],
     if (std::memcmp(header.magic, GCLIP_MAGIC, 8) || header.version != GCLIP_VERSION
             || header.bytes != sizeof(header) || header.record_bytes != sizeof(gclip_frame)
             || !header.record_count || header.record_count > GCLIP_MAX_RECORDS
-            || header.sample_version != GC_VERSION || header.rom_layout != GC_ROM_US
+            || header.sample_version != GC_VERSION || !ghost_behaviours::supported_layout(header.rom_layout)
             || data.size() != sizeof(header) + static_cast<size_t>(header.record_count) * sizeof(gclip_frame)
             || std::memcmp(header.clip_id, id, 16)) return false;
     out = header; return true;

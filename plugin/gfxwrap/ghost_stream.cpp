@@ -15,6 +15,9 @@ uint32_t write_cursor = 0, read_cursor = 0;
 std::atomic_flag control_writer = ATOMIC_FLAG_INIT;
 std::atomic_flag consumer = ATOMIC_FLAG_INIT;
 std::atomic<uint32_t> config_sequence{0}, configured{0};
+// The configured layout's rom_layout, beside `configured`: requested() asks
+// it against the cartridge without reading the whole config.
+std::atomic<uint32_t> configured_rom{0};
 std::atomic<uint32_t> config_words[sizeof(gc_layout) / sizeof(uint32_t)];
 std::atomic<uint32_t> epoch{0}, configuration{0}, offered{0}, dropped{0}, taken{0}, busy{0}, particles_dropped{0};
 // The last list's hook cost, one writer (the renderer) and one reader (the
@@ -33,6 +36,7 @@ gs_hook_cost read_hooks() {
     gs_hook_cost out{};std::memcpy(&out, words, sizeof(out));return out;
 }
 bool rom_open = false, active = false;
+uint32_t cartridge = 0; // the open practice cartridge's rom_layout
 uint32_t observed_config = 0;
 uint64_t serial = 0;
 gc_reader reader{};
@@ -64,6 +68,7 @@ int __cdecl configure(const gc_layout *value) {
     for (unsigned i = 0; i < sizeof(words) / sizeof(words[0]); ++i)
         config_words[i].store(words[i], std::memory_order_seq_cst);
     config_sequence.store(seq + 2, std::memory_order_seq_cst);
+    configured_rom.store(valid ? copy.rom_layout : 0, std::memory_order_release);
     if (valid) configured.store(seq + 2, std::memory_order_release);
     control_writer.clear(std::memory_order_release);
     return valid ? 1 : 0;
@@ -129,19 +134,26 @@ const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WOR
 }
 namespace ghost_stream {
 const gs_api *api() { return &capture_api; }
-bool requested() { return rom_open && configured.load(std::memory_order_acquire) != 0; }
+bool requested() {
+    return rom_open && configured.load(std::memory_order_acquire) != 0
+        && configured_rom.load(std::memory_order_acquire) == cartridge;
+}
 void cancel() {
     active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset();
     usamune_hidden = false; usamune_mode = 0;
 }
-void rom(bool opened) {
-    active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset(); rom_open = opened; new_epoch();
+void rom(uint32_t opened) {
+    active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset();
+    cartridge = opened; rom_open = opened != 0; new_epoch();
     usamune_hidden = false; usamune_mode = 0;
 }
 bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc, const uint32_t *segments) {
     active = false; current = {}; root_probe = {}; pass.reset(); usamune_hidden = false; usamune_mode = 0;
     uint32_t revision = 0;
     if (!rom_open || !generation || !read_config(layout, revision)) return false;
+    // A swap from US to JP under the US config (or the reverse) reads nothing:
+    // the config's roots and scripts belong to the other cartridge.
+    if (layout.rom_layout != cartridge) return false;
     if (revision != observed_config) {
         new_epoch(); observed_config = revision; configuration.store(revision, std::memory_order_release);
         if (!gcc_init(&source_clock, &layout.clock)) { disable(); return false; }

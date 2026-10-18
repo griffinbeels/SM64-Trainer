@@ -21,6 +21,8 @@
 namespace {
 std::atomic<uint32_t> opened{0}, lifetime{0};
 std::atomic<uintptr_t> rom_header{0};
+// The open cartridge's ghost rom_layout (ghost_rom::layout), 0 when closed.
+std::atomic<uint32_t> cartridge_layout{0};
 std::atomic<bool> running{false};
 std::atomic<HANDLE> lifecycle_signal{nullptr};
 std::atomic<uint64_t> displayed_revision{0};
@@ -448,6 +450,11 @@ struct Session {
         }
         if (!current_rom || r.rom_generation != current_rom) {
             revoke(GIPC_NO_ROM); previous = r; return false;
+        }
+        // A config for the other practice cartridge (the US layout still
+        // configured after a swap to JP) never reaches capture.
+        if (r.layout.rom_layout != cartridge_layout.load(std::memory_order_acquire)) {
+            revoke(GIPC_LAYOUT); previous = r; return false;
         }
         if (!live || rom != current_rom || std::memcmp(&r.layout, &previous.layout, sizeof(r.layout))) {
             // A fast RomClosed/RomOpen pair can finish before the worker wakes.
@@ -960,12 +967,14 @@ void rom(bool open, const uint8_t *header) {
         const uint32_t old = lifetime.load();
         if (old == UINT32_MAX) return;
         rom_header.store(reinterpret_cast<uintptr_t>(header), std::memory_order_release);
+        cartridge_layout.store(ghost_rom::layout(header), std::memory_order_release);
         lifetime.store(old + 1); opened.store(old + 1, std::memory_order_release);
         start_worker();
     } else {
         displayed_revision.store(0, std::memory_order_release);
         opened.store(0, std::memory_order_release);
         rom_header.store(0, std::memory_order_release);
+        cartridge_layout.store(0, std::memory_order_release);
         ghost_stream::api()->disable(); ghost_playback::api()->revoke(GP_WRONG_IDENTITY);
     }
     SetEvent(lifecycle_signal.load());

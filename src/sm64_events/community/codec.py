@@ -10,6 +10,8 @@ from sm64_events.ghost.native_layout import (
     ROOT_KIND_AT, ROOT_MATRIX_AT, VALID_CAMERA, VALID_POSE,
 )
 
+from .claims import REGIONS
+
 MAX_RAW = 16 << 20
 MAX_ENCODED = 2 << 20
 BLOCK_RECORDS = 256
@@ -24,8 +26,8 @@ def _header(raw, *, max_raw=MAX_RAW):
         raise ValueError("Native clip exceeds the community byte limit.")
     fmt = FORMATS.get(raw[:8])
     version, header, record, count, rom, sample = struct.unpack_from("<6I", raw, 8)
-    if (fmt is None or (version, header, record, rom, sample) != (fmt[0], HEADER_BYTES, fmt[1], 1, fmt[3])
-            or not 1 <= count <= MAX_RECORDS or len(raw) != header + record * count):
+    if (fmt is None or (version, header, record, sample) != (fmt[0], HEADER_BYTES, fmt[1], fmt[3])
+            or rom not in REGIONS or not 1 <= count <= MAX_RECORDS or len(raw) != header + record * count):
         raise ValueError("Unsupported native community clip header.")
     return header, record, count
 

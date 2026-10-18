@@ -8,6 +8,7 @@ import zipfile
 
 import pytest
 
+from jp_layout_fixture import JP_CANDIDATE
 from renderer_fixture import renderer_archive as renderer_archive
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.memory.ghost_layout import GhostLayout
@@ -51,12 +52,14 @@ def staged_dispatch(tmp_path, archive):
     (tmp_path / "actual_root_link.inc").write_text(function(link, "void display_list("), encoding="utf-8")
 
 
-@pytest.mark.parametrize("host", ["ghost_root", "ghost_root_dispatch"])
-def test_executed_root_after_transient_throw_pointer_clears(tmp_path, host, request):
+# The JP cartridge runs the same root proof and names its own held scripts.
+@pytest.mark.parametrize("host,layout", [("ghost_root", US), ("ghost_root_dispatch", US), ("ghost_root", JP_CANDIDATE)],
+                         ids=["ghost_root", "ghost_root_dispatch", "ghost_root-jp"])
+def test_executed_root_after_transient_throw_pointer_clears(tmp_path, host, layout, request):
     native = Path(os.environ.get("SM64_GHOST_ROOT_BASELINE", ROOT / "plugin/gfxwrap"))
     baseline = "SM64_GHOST_ROOT_BASELINE" in os.environ
-    if baseline and host != "ghost_root":
-        pytest.skip("baseline has no renderer root instrumentation")
+    if baseline and (host != "ghost_root" or layout is not US):
+        pytest.skip("baseline has no renderer root instrumentation or JP cartridge")
     if host == "ghost_root_dispatch":
         staged_dispatch(tmp_path, request.getfixturevalue("renderer_archive"))
     spec = importlib.util.spec_from_file_location("root_build", ROOT / "tools/build_plugin.py")
@@ -73,7 +76,7 @@ def test_executed_root_after_transient_throw_pointer_clears(tmp_path, host, requ
         f"/I{native}", f"/I{tmp_path}", *map(str, sources), str(ROOT / f"tests/native/{host}_host.cpp"),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/MANIFEST:EMBED",
         "/MANIFESTUAC:level='asInvoker'"], tmp_path)
-    config = bytearray(GhostLayout.from_layout(US).to_bytes())
+    config = bytearray(GhostLayout.from_layout(layout).to_bytes())
     if baseline:
         config[4:8] = (3).to_bytes(4, "little")
     path = tmp_path / "layout.bin"
@@ -82,3 +85,5 @@ def test_executed_root_after_transient_throw_pointer_clears(tmp_path, host, requ
                             text=True, timeout=15, check=False, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stdout + result.stderr
     assert "passed" in result.stdout
+    if host == "ghost_root" and not baseline:
+        assert f"passed (rom layout {GhostLayout.from_layout(layout).rom_layout})" in result.stdout

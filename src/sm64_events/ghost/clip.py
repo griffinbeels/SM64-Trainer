@@ -35,7 +35,7 @@ from sm64_events.ghost.native_layout import (  # every size and offset: native_l
     PAD_AT, PAD_BYTES,
     PARTICLE_EVENTS, PARTICLE_OPACITY, PARTICLE_OPACITY_AT, PARTICLE_OVERFLOW, PARTICLE_TRANSLATION_AT,
     PARTICLES_AT, PARTICLES_BYTES as PARTICLE_BYTES, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES,
-    REFUSAL_AT, ROOT_KIND_AT, ROOT_MATRIX_AT, ROOT_SCALED_MODELVIEW, ROOT_TRS, SAMPLE_BYTES,
+    REFUSAL_AT, ROM_JP, ROM_US, ROOT_KIND_AT, ROOT_MATRIX_AT, ROOT_SCALED_MODELVIEW, ROOT_TRS, SAMPLE_BYTES,
     SAMPLE_VERSION, SEGMENT_CLOCK,
     SHADOW_AT, SHADOW_BYTES, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW,
     STAR_CLOCK, V4_MAGIC, V4_RECORD_BYTES, V4_SAMPLE_BYTES, V4_SAMPLE_VERSION, V4_VERSION,
@@ -69,6 +69,9 @@ REFUSALS = ("", "object", "area", "held", "billboard", "throw_matrix", "floor", 
             "not_drawn", "not_drawn_floor", "body_mismatch", "duplicate", "incomplete")
 PRODUCER_FIELDS = ("pid", "created", "generation", "rom_generation", "configuration",
                    "epoch", "qpc_frequency", "qpc_anchor", "utc_anchor")
+# The cartridge a clip was captured on (its header's rom_layout). A producer
+# or manifest source written before JP support has none: it was US.
+ROM_LAYOUTS = (ROM_US, ROM_JP)
 
 
 class ClipError(ValueError):
@@ -376,6 +379,9 @@ def producer_values(producer) -> dict:
             raise ClipError(f"native ghost producer {name} exceeds its field")
     if values["created"] >= 2**64 or values["qpc_frequency"] >= 2**64 or values["qpc_anchor"] >= 2**63:
         raise ClipError("native ghost producer clock exceeds its field")
+    values["rom_layout"] = getattr(producer, "rom_layout", ROM_US)
+    if type(values["rom_layout"]) is not int or values["rom_layout"] not in ROM_LAYOUTS:
+        raise ClipError("native ghost producer names no supported cartridge")
     return values
 
 
@@ -398,6 +404,7 @@ class Clip:
     frames: tuple[Frame, ...]
     flags: int = 0
     file_version: int = VERSION  # 4: saved before particles, read without them
+    rom_layout: int = ROM_US  # the cartridge it was captured on (ROM_LAYOUTS)
 
     @property
     def dance_tail(self) -> bool:
@@ -489,9 +496,9 @@ def decode_clip(data: bytes) -> Clip:
      epoch, clip_id, frequency, anchor, utc, first, last, first_timer, last_timer,
      level, area, kind, origin_timer, origin_raw, flags, origin_sequence,
      origin_elapsed, origin_continuity, *reserved) = values
-    if ((magic, version, size, record_size, rom, sample_version) !=
-            (MAGIC, VERSION, HEADER_BYTES, RECORD_BYTES, 1, SAMPLE_VERSION)
-            or not configuration or not epoch or not frequency or anchor < 0
+    if ((magic, version, size, record_size, sample_version) !=
+            (MAGIC, VERSION, HEADER_BYTES, RECORD_BYTES, SAMPLE_VERSION)
+            or rom not in ROM_LAYOUTS or not configuration or not epoch or not frequency or anchor < 0
             or not math.isfinite(utc) or utc <= 0 or not any(clip_id) or any(reserved)
             or flags & ~DANCE_TAIL
             or not 1 <= count <= MAX_RECORDS or len(data) != HEADER_BYTES + count * RECORD_BYTES):
@@ -509,7 +516,7 @@ def decode_clip(data: bytes) -> Clip:
         raise ClipError("native ghost header disagrees with its exact origin")
     return Clip(clip_id.hex(), configuration, epoch, frequency, anchor, utc, level, area,
                 kind, origin_timer, origin_raw, origin_sequence, origin_elapsed, origin_continuity, frames,
-                flags, file_version)
+                flags, file_version, rom)
 
 
 def encode_clip(frames, producer, *, clock_kind: int, clip_id: str | None = None,
@@ -525,7 +532,7 @@ def encode_clip(frames, producer, *, clock_kind: int, clip_id: str | None = None
     identity = UUID(clip_id).bytes if clip_id else uuid4().bytes
     if not any(identity):
         raise ClipError("native ghost clip identity is empty")
-    header = _HEADER.pack(MAGIC, VERSION, HEADER_BYTES, RECORD_BYTES, len(records), 1,
+    header = _HEADER.pack(MAGIC, VERSION, HEADER_BYTES, RECORD_BYTES, len(records), source["rom_layout"],
                           SAMPLE_VERSION, source["configuration"], source["epoch"], identity,
                           source["qpc_frequency"], source["qpc_anchor"], source["utc_anchor"],
                           records[0].sequence, records[-1].sequence,
@@ -596,7 +603,8 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
                     first_igt=first.igt, last_igt=last.igt, **_origin_metadata(clip))
     if (any(manifest.get(key) != value for key, value in expected.items())
             or any(source[key] != getattr(clip, key)
-                   for key in ("configuration", "epoch", "qpc_frequency", "qpc_anchor", "utc_anchor"))):
+                   for key in ("configuration", "epoch", "qpc_frequency", "qpc_anchor", "utc_anchor",
+                               "rom_layout"))):
         raise ClipError("native ghost manifest disagrees with its captured bytes")
     if "pad_records" in manifest and (type(manifest["pad_records"]) is not int
             or manifest["pad_records"] != sum(item.pad is not None for item in clip.frames)):

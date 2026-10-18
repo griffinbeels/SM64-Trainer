@@ -5,7 +5,7 @@ ids, level and course ids, names, the world graph, struct offsets. This module
 holds what is true of ONE BUILD of it: the RAM address of each global. US is
 Usamune v1.93u, every value live-verified (short evidence beside each row; the
 long form moved into git history and `.claude/rules/memory-detectors.md` when
-the literals left addresses.py on 2026-08-15). JP starts empty and fills
+the literals left addresses.py on 2026-08-15). JP is Usamune v1.93j, filled
 through `tools/sync_version.py`: a value lands here only after its gate is
 verified and the sync report (`data/version_sync/jp.json`) says so —
 `tests/test_layout_matches_report.py` keeps the two in step, and
@@ -34,6 +34,9 @@ class LayoutRow:
     symbol: str | None     # decomp symbol in STROOP's map, or None
     hunt: str | None       # how to find it when no map names it
     note: str              # what it is / the trap around it
+    # A read the tracker runs WITHOUT: an absent address degrades one feature
+    # and never holds the build (`Layout.missing`).
+    optional: bool = False
 
 
 LAYOUT_ROWS: tuple[LayoutRow, ...] = (
@@ -96,9 +99,17 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("usamune_input_display", None, "usamune_hud",
               "VERIFY: u8 Usamune input display setting, 0 = off (2 = stick, else values); "
               "its HUD path calls the display (RAM 0x80408848) only while nonzero"),
+    # Missing hotkey adaptation must not disable tracking on a verified ROM.
     LayoutRow("usamune_savestate_button", None, "usamune_setting_watch",
               "VERIFY: u8 Usamune's save state button (RESET page), settings array "
-              "+0x1A: 0 = Cx4, 1 = DUP (ghost/dpad_toggle.py SAVESTATE_ON_DPAD_UP)"),
+              "+0x1A: 0 = Cx4, 1 = DUP (ghost/dpad_toggle.py SAVESTATE_ON_DPAD_UP)", optional=True),
+
+    LayoutRow("usamune_stop", None, "usamune_hud",
+              "u8 Usamune TIMER -> STOP, a bitmask in menu order: bit 0 copies "
+              "the counter into the star result at the grab, bit 1 at the x-cam "
+              "(0 None, 1 Grab, 2 Xcam, 3 GrabX); settings base + 1, read off its menu "
+              "table and its grab/dance hooks. Trap: base + 2 is DISPLAY",
+              optional=True),
     LayoutRow("behaviour_base", None, "mario_object_behaviour",
               "RAM address of segment 0x13; = mario_object->behaviour "
               "minus bhvMario's segmented offset for this version"),
@@ -134,6 +145,8 @@ class Layout:
     usamune_menu: int | None = None
     usamune_input_display: int | None = None
     usamune_savestate_button: int | None = None
+
+    usamune_stop: int | None = None
     behaviour_base: int | None = None
 
     def value(self, field: str) -> int | None:
@@ -141,7 +154,7 @@ class Layout:
 
     def missing(self) -> tuple[str, ...]:
         return tuple(row.field for row in LAYOUT_ROWS
-                     if getattr(self, row.field) is None)
+                     if not row.optional and getattr(self, row.field) is None)
 
     def require(self, *names: str) -> None:
         absent = [name for name in names if getattr(self, name) is None]
@@ -206,12 +219,50 @@ US = Layout(
     # was open, 2026-10-17: he flipped DUP -> Cx4 -> DUP -> Cx4 -> DUP and this
     # byte, and no other in that range, went 1 -> 0 -> 1 -> 0 -> 1 in step.
     usamune_savestate_button=0x80417B66,
+
+    usamune_stop=0x80417B4D,        # ROM-derived; live-confirmed 2026-10-17: Grab then
+                                    # GrabX (journal 20368/20377; final raw byte 3)
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
 
-# JP — nothing verified yet. Candidates come from data/symbols_jp.tsv
-# through the sync runner; a value is written here only after its gate passes.
-JP = Layout(version="jp")
+# JP / Usamune v1.93j. Every value passed its address gate on his JP game
+# 2026-10-16/17 (data/version_sync/jp.json). Symbol rows came from STROOP's
+# MappingJP.map (data/symbols_jp.tsv); Usamune's own globals and the hunted
+# controller came from the ROM images (tools/derive_rom_candidates.py, which
+# also agreed with STROOP on all 18 symbol rows it reached).
+JP = Layout(
+    version="jp",
+    global_timer=0x8032C694,        # ticked 30/s
+    mario_struct=0x80339E00,        # action edge on his jump; 120 stars
+    curr_level=0x8032CE98,          # read 24 entering Whomp's Fortress
+    curr_area=0x8033A75A,           # read 1 in the lobby, then 3 in the basement
+    last_completed_course=0x8032CE20,  # read 2 after Chip off Whomp's Block
+    last_completed_star=0x8032CE24,    # read 1 after the same grab
+    pending_warp_op=0x80339EE2,     # nonzero 1 frame after his BitDW pipe touch
+    delayed_warp_timer=0x80339EE4,  # counted down from 19 to 0 on the same ride
+    warp_dest=0x80339ED8,           # changed to level 17 (BitDW), area 1, node 10
+    object_pool=0x8033C118,         # holds Mario's object; slot confirmed as bhvMario
+    player1_controller=0x80339C20,  # ROM-derived; stick off centre with A and B held
+    hud_display=0x80339EF0,         # race timer 0 under Usamune, as on US
+    hud_timer_running=0x80339EEE,
+    mario_object=0x8035FDE8,        # points at a slot boundary in the pool
+    current_area_pointer=0x8032CE6C,  # agrees with MarioState.area and the area graph
+    area_update_counter=0x8032CFA8, # equals Mario's gfx animation timer while moving
+    sound_code=0x8031DC78,          # play_sound names exactly this producer and ring
+    sound_producer=0x80331E34,      # advanced as he jumped
+    sound_consumer=0x80331E30,      # caught up with the producer
+    sound_ring=0x80360128,          # each new entry's source was Mario's object
+    usamune_overall=0x80417D3A,     # ROM-derived; ticked 30.1/s
+    usamune_star_result=0x80417D3C, # ROM-derived; 1193 at the grab, 1196 at the
+                                    # x-cam, zeroed at the course exit, as on US
+    usamune_timer=0x8033C26C,       # object slot 0's oTimer (pool + 0x154), as on US;
+                                    # diagnostics only, its gate never verifies
+    usamune_menu=0x804169A0,        # ROM-derived; 0, nonzero while open, 0 again
+    usamune_input_display=0x80417C1F,  # ROM-derived; 0 while off, nonzero while on
+    usamune_stop=0x80417C15,        # ROM-derived; read 3 2 1 0 1 2 3 as he stepped STOP
+                                    # GrabX -> Grab -> None and back, 2026-10-17
+    behaviour_base=0x800E8320,      # from Mario's object, 2026-10-16
+)
 
 VERSIONS = ("us", "jp")
 _LAYOUTS = {"us": US, "jp": JP}

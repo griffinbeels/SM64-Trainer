@@ -1,10 +1,21 @@
 """Whole-ladder rival lists and download staging, outside native playback."""
+from dataclasses import replace
 from uuid import UUID
 
 from sm64_events.community.cache import account_owner
 from sm64_events.ghost.adaptive import MAX_RIVALS, player_key
 from sm64_events.ghost.community_catalog import match_windows
 from sm64_events.ghost.portable import checked_hash
+from sm64_events.ranks.region_scope import SHARED, VERSIONS
+
+
+def pools(identity):
+    """The community pools one practice reads, its running ROM's first. A
+    shared region scope reads the other ROM's pool too (`ranks/region_scope.py`)."""
+    if getattr(identity, "region_scope", None) != SHARED:
+        return (identity,)
+    return (identity, *(replace(identity, game_version=rom) for rom in VERSIONS
+                        if rom != identity.game_version))
 
 
 class CommunityRivals:
@@ -40,7 +51,10 @@ class CommunityRivals:
         if not self.windows:
             return ()
         remote = self.remote_pins(pins, known_remote=known_remote)
-        self.sync.request_pool(identity, frame_windows=self.windows, pinned_ids=remote)
+        running, *others = pools(identity)
+        self.sync.request_pool(running, frame_windows=self.windows, pinned_ids=remote)
+        for other in others:
+            self.sync.request_pool(other, frame_windows=self.windows, pinned_ids=None)
         return remote
 
     def remote_pins(self, pins, *, known_remote=()):
@@ -78,11 +92,20 @@ class CommunityRivals:
     def coverage(self, identity):
         if (not self._active() or identity is None or not identity.strategy):
             return None
-        return self.population.coverage(identity)
+        running, *others = pools(identity)
+        result = self.population.coverage(running)
+        if others:
+            result = {**result, 'complete': result['complete'] and all(
+                self.population.coverage(other)['complete'] for other in others)}
+        return result
 
     def complete(self, identity):
         coverage = self.coverage(identity)
         return coverage is None or coverage['complete']
+
+    def _pool_status(self, identity):
+        statuses = tuple(self.sync.pool_status(pool) for pool in pools(identity))
+        return next((status for status in ('pending', 'offline', 'unsupported') if status in statuses), None)
 
     def list_state(self, identity):
         """Where this identity's rival list stands, for the lineup's state.
@@ -97,10 +120,12 @@ class CommunityRivals:
             return 'local'
         if self.owner() is None:
             return 'signed_out'
-        status = self.sync.pool_status(identity)
+        status = self._pool_status(identity)
         if status == 'pending':
             return 'pending'
         coverage = self.coverage(identity)
+        if status == 'offline' and coverage is not None and not coverage['complete']:
+            return 'offline'
         if coverage is not None and coverage.get('generation') is not None:
             return 'held'
         return status or 'absent'
@@ -115,7 +140,7 @@ class CommunityRivals:
             return 'Downloading rivals…'
         coverage = self.coverage(identity)
         if coverage is not None and not coverage['complete']:
-            failure = self.sync.pool_status(identity)
+            failure = self._pool_status(identity)
             if failure == 'unsupported':
                 return None
             if failure == 'offline':

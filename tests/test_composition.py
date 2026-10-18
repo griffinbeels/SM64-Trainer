@@ -402,6 +402,37 @@ def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
     caused._counts["switch_press"] = 2
     hook()
     assert moment._counts == {} and caused._counts == {}
+def test_a_cartridge_swap_regrades_through_the_real_build(monkeypatch):
+    """The poller's build hook is synchronous and the grading hook is async:
+    called bare, the regrade was a coroutine nobody awaited, and grading
+    stayed on the old ROM after a US -> JP swap. Driven through build() so
+    the hook the poller actually got is the one proven."""
+    import asyncio
+    from sm64_events.tracking.service import TrackerService
+    main_mod = _stubbed_main(monkeypatch)
+    captured, noted = {}, []
+
+    async def note(self, version):
+        noted.append(version)
+
+    monkeypatch.setattr(TrackerService, "note_running_version", note)
+    real_poller = main_mod.Poller
+
+    def spy(memory, detectors, sink, **kw):
+        captured.update(kw)
+        return real_poller(memory, detectors, sink, **kw)
+
+    monkeypatch.setattr(main_mod, "Poller", spy)
+    main_mod.build()
+
+    async def swap():
+        captured["on_version_change"]("jp")
+        await asyncio.sleep(0)
+
+    asyncio.run(swap())
+    assert noted == ["jp"]
+
+
 def test_build_hands_every_snapshot_to_native_ghost_ownership(monkeypatch):
     """Settled poll snapshots reach the native arm/rebase observer, and the
     snapshot's frame is the one the adaptive rival origin is read at

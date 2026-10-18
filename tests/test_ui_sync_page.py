@@ -75,6 +75,9 @@ def report_file(request):
     beside a real jp.json a runner has already written."""
     path = REPO / "data" / "version_sync" / "jp.json"
     backup = path.read_bytes() if path.exists() else None
+    # The page starts from an EMPTY report: the real JP run's is committed
+    # since 2026-10-17, and every chip would read its verdicts instead.
+    path.unlink(missing_ok=True)
     yield path
     if backup is None:
         path.unlink(missing_ok=True)

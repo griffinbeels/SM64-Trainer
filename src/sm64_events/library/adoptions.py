@@ -213,7 +213,19 @@ def ladders(payload: dict, rows: dict) -> dict:
             layers["jp_strategies"].setdefault(name, item["ladder_jp"])
         if item.get("ladder_estimate"):
             layers.setdefault("estimates", {})[name] = item["ladder_estimate"]
+        _note_single_version(layers, name, item)
     return out
+
+
+def _note_single_version(layers: dict, name: str, item: dict) -> None:
+    """Record a row whose every entry names ONE ROM (`sheet.entry_version`):
+    that strategy exists on that release only, which `ranks/region_scope.py`
+    reads as regional. A row with any unannotated entry is both releases."""
+    from sm64_events.library.sheet import entry_version
+    versions = {entry_version(entry) for entry in item.get("entries", ())
+                if isinstance(entry, dict)}
+    if len(versions) == 1 and versions <= {"us", "jp"}:
+        layers.setdefault("versions", {}).setdefault(name, versions.pop())
 
 
 def library_ladders(payload: dict, rows: dict, qualified=()) -> dict:
@@ -252,6 +264,7 @@ def library_ladders(payload: dict, rows: dict, qualified=()) -> dict:
             layers["jp_strategies"].setdefault(name, item["ladder_jp"])
         if item.get("ladder_estimate"):
             layers.setdefault("estimates", {})[name] = item["ladder_estimate"]
+        _note_single_version(layers, name, item)
     return out
 
 

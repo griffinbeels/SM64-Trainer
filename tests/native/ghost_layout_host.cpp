@@ -61,6 +61,7 @@ int main() {
     std::printf("{");
     text("CLIP_MAGIC", GCLIP_MAGIC); number("CLIP_VERSION", GCLIP_VERSION);
     number("SAMPLE_VERSION", GC_VERSION);
+    number("ROM_US", GC_ROM_US); number("ROM_JP", GC_ROM_JP);
     number("STREAM_VERSION", GS_VERSION); number("PLAYBACK_VERSION", GP_VERSION);
     number("INPUT_STICK", GP_INPUT_STICK); number("INPUT_VALUES", GP_INPUT_VALUES);
     number("NAME_BLACK", GP_NAME_BLACK); number("NAME_WHITE", GP_NAME_WHITE);

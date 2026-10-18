@@ -109,7 +109,10 @@ def ghost_label(ghost, number=1) -> str:
 
 class NativeGhost:
     def __init__(self, replay, *, supported=True, origin_of=None, running=emulator_running, portable=None):
-        self._replay, self._supported = replay, supported
+        # `supported`: a bool, or a no-argument callable asked on every
+        # resolve. The composition root calls set_supported on every ROM swap
+        # with memory/ghost_layout.ghost_supported of the running version.
+        self._replay, self._supported_answer = replay, supported
         # (pid, birth) of the game whose renderer last served poses. It
         # outlives a replaced pose source on purpose: the game connection
         # ends when that process does, not when the recorder reconnects.
@@ -143,6 +146,15 @@ class NativeGhost:
         self._asset_hues = {}
         self._last_full_start = None
         self._preparation_canceled = False
+
+    @property
+    def _supported(self) -> bool:
+        answer = self._supported_answer
+        return bool(answer() if callable(answer) else answer)
+
+    def set_supported(self, supported: bool) -> None:
+        """Whether the running cartridge shows native ghosts; the next resolve answers it."""
+        self._supported_answer = bool(supported)
 
     def set_portable(self, provider):
         """The human-paced collection provider; never consulted by the clock feed."""
@@ -279,7 +291,7 @@ class NativeGhost:
                   "template_id": None, "attempt_id": None, "exactness": None}
         if not self._supported:
             return {**answer, "reason": "unsupported_rom",
-                    "reason_text": "Mario in the game currently supports the US practice ROM."}, None
+                    "reason_text": "Mario in the game supports the US and JP practice ROMs."}, None
         if target is None:
             return {**answer, "reason": "no_target",
                     "reason_text": "Pick a star or a segment to practise."}, None

@@ -232,9 +232,9 @@
     "a8b2b2df13a25908854a25691c8f8fb3f6444cc334d3d71825a7b8526eea0a2c",
     "8ef66c4d41ab6374cf208c6fa27c2c7fd1e461358a44546fa8de511778ee49c3",
     "d21b02e85b8857e019fa059fcf02b441ef12271140bad9f26bd1e02bfd2ea2b6",
-    "fc353886b0f5acec028ef2956a1276e51a3f496e556192a161a74f775198dd00",
-    "27357d66e5fcc29b48df17f682f35ddabdb171b00a1f81085e2cced3b1b2c8f3",
-    "36b1384cc7ed82664785b6b4f172978fb42022d387cb5baea15319c278acfee8",
+    "fb3b35e402eca08cd848a0664d0a7673ebecf0ee394893e2eb13d82badc8e7ae",
+    "6e4eac396964dbb0d9eb823506021aa4a1c33b4cd1aa94ce49fb04d413aa1269",
+    "76e9affd284288bb23c397730595a0a3711c586dab8c77e6591a445251d02ca0",
     "d43c06c1ba4b6bff30deae9aab053c5b42f627f4117bea06cb17bf8954f1ac26",
     "07552aa4ba4411cb99df52cd212e6c67cf6e0d22d3a1659a00a03a6ddaf308db",
     "0bfdc57f03924dbe561a7fca0ba3a96e912f62c872b9e4e548a9a22dd26fdcca",
@@ -1846,21 +1846,21 @@
     },
     {
       "path": "src/sm64_events/tracking/views.py",
-      "line": 1256,
+      "line": 1401,
       "rule": "C901",
-      "message": "`build_session_view` is too complex (24 > 15)"
+      "message": "`build_session_view` is too complex (21 > 15)"
     },
     {
       "path": "src/sm64_events/tracking/views.py",
-      "line": 1256,
+      "line": 1401,
       "rule": "PLR0912",
-      "message": "Too many branches (24 > 18)"
+      "message": "Too many branches (21 > 18)"
     },
     {
       "path": "src/sm64_events/tracking/views.py",
-      "line": 1256,
+      "line": 1401,
       "rule": "PLR0915",
-      "message": "Too many statements (120 > 50)"
+      "message": "Too many statements (116 > 50)"
     },
     {
       "path": "src/sm64_events/tracking/views.py",
@@ -3625,6 +3625,38 @@
       "source_commit": "dc8a965a",
       "source_state": "Reviewed working-tree delta from source_commit",
       "reviewer": "selection_premise independent read-only agent"
+    },
+    {
+      "findings": [
+        {
+          "path": "src/sm64_events/tracking/views.py",
+          "line": 1401,
+          "rule": "C901",
+          "message": "`build_session_view` is too complex (21 > 15)",
+          "allowance": "fb3b35e402eca08cd848a0664d0a7673ebecf0ee394893e2eb13d82badc8e7ae",
+          "replaces_allowance": "fc353886b0f5acec028ef2956a1276e51a3f496e556192a161a74f775198dd00"
+        },
+        {
+          "path": "src/sm64_events/tracking/views.py",
+          "line": 1401,
+          "rule": "PLR0912",
+          "message": "Too many branches (21 > 18)",
+          "allowance": "6e4eac396964dbb0d9eb823506021aa4a1c33b4cd1aa94ce49fb04d413aa1269",
+          "replaces_allowance": "27357d66e5fcc29b48df17f682f35ddabdb171b00a1f81085e2cced3b1b2c8f3"
+        },
+        {
+          "path": "src/sm64_events/tracking/views.py",
+          "line": 1401,
+          "rule": "PLR0915",
+          "message": "Too many statements (116 > 50)",
+          "allowance": "76e9affd284288bb23c397730595a0a3711c586dab8c77e6591a445251d02ca0",
+          "replaces_allowance": "36b1384cc7ed82664785b6b4f172978fb42022d387cb5baea15319c278acfee8"
+        }
+      ],
+      "reason": "The timer hint adds one statement to build_session_view (Usamune's current STOP, computed once per view). The one-pass per-entity history split moved into `_entity_histories`, so the function shrinks: C901 24 -> 21, branches 24 -> 21, statements 120 -> 116; the helper adds no findings. Replaces decreased allowances only; no new debt.",
+      "source_commit": "f6f3c259",
+      "source_state": "Working-tree delta from source_commit, measured by tools/verify_lint.py",
+      "reviewer": "jp-timer-hint agent (lint output; no independent review)"
     }
   ]
 }

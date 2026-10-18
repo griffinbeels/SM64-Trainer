@@ -1244,14 +1244,21 @@ setup completes only with fresh game, replay pictures and input data. JP can
 finish the available installation with an explicit unsupported-tracking warning.
 N64 currently explains that support is in development and offers emulator setup.
 
+The Set up Practice Replay page shows one card per **setup stage**: Close
+Project64 (only when an install needs it), Install Practice Replay, Open your
+game, and Checking your setup. The server's finer steps change a card's text in
+place. Progress shows at once; a step back shows only once it lasts 2 s. Moving
+on to the next stage, the card acknowledges what you did ("Usamune found") if
+it was on screen at least 1.5 s; a stage that resolved by itself gets none.
+
 Pages advance automatically after a visible acknowledgment. Back reviews prior
 pages without advancing again. Not now defers incomplete setup for the current
 app visit; Ready to practice saves completion and opens Practice. Setup is always
 available in Settings; it also opens automatically for a missing, regressed,
 outdated or unfinished emulator installation. Beginner guides appear where needed.
 
-- **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; its API is
-  `src/sm64_events/server/setup_api.py`
+- **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; setup stages in
+  `src/sm64_events/ui/setupflow.js`; its API is `src/sm64_events/server/setup_api.py`
 
 ### Overlay layer
 
@@ -1276,7 +1283,8 @@ all: every door a recording enters through (bundled collection, rival
 admission, community upload and download, collection import and export, your
 own PB, saved and template ghosts) refuses it with one reason (his rule,
 2026-10-12: "If it's not a perfectly recorded ghost, it doesn't belong in the
-system"). The practice card's [[ghost toggle]] calls it Ghost Overlay.
+system"). A ghost records the [[practice ROM]] the trainer captured it on (US or JP)
+and plays on either. The practice card's [[ghost toggle]] calls it Ghost Overlay.
 
 - **Lives** — `src/sm64_events/ghost/session.py` joins selection, settings and
   the [[target]]; `src/sm64_events/ghost/native_session.py` publishes native playback
@@ -1457,7 +1465,8 @@ card. Its [[ghost sound events]] can follow it too.
 ### Held object (ghost)
 
 The object Mario holds on a recorded [[frame]] (a Bob-omb, a baby penguin,
-a cork box), recorded as what it is (its behaviour), its animation state,
+a cork box), recorded as what it is (its behaviour, named through the
+[[practice ROM]] the trainer captured it on), its animation state,
 and where his hand drew it in that [[frame]]. Captured only when the game
 provably drew it from his hand in that [[frame]]. A [[ghost]] draws the kinds
 its model knows (the Bob-omb, the small penguin, King Bob-omb, Chuckya, the
@@ -1500,7 +1509,9 @@ on by default), a [[ghost]]'s sound also follows its [[overlap fade]] and
 [[frame]] plays only once.
 
 They play from the [[ghost sound player]], so a recording only has them while
-[[ghosts in recording]] is on.
+[[ghosts in recording]] is on. Each [[practice ROM]] plays its own sounds:
+on JP a [[ghost]] sounds as the JP game does, so a US [[ghost]]'s US-only voices
+(its triple-jump yahoo, "doh") are JP's or none.
 
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
   `plugin/gfxwrap/ghost_audio.cpp` makes their sound; `plugin/gfxwrap/ghost_sound_fade.h`
@@ -1604,6 +1615,29 @@ and grades them on the [[Overall curve]]. Both use the current [[strategy]]'s sa
 choices, and every [[ghost]] keeps its recorded [[strategy]] label.
 
 - **Lives** — `src/sm64_events/ghost/rivals.py` and `src/sm64_events/ui/components/practicelog.js`
+
+### Region scope
+
+Whether a [[strategy]] plays the same on US and JP: **shared** or
+**regional**. The trainer reads the answer from that [[strategy]]'s
+[[standard]]s and never asks. A JP difference in its [[ladder]] makes a [[strategy]]
+regional, and so does an [[Ultimate Sheet]] that times it on one release
+only; with neither, a [[strategy]] with a [[ladder]] counts as shared. A
+[[strategy]] with no [[ladder]] follows the others on its [[target]], and a
+[[target]] with none at all is regional. Shared: a [[ghost]] recorded on
+either release may race you, and one [[personal best]] covers both releases,
+the faster winning. Regional: only your running release's [[ghost]]s race,
+and each release keeps its own [[personal best]]. A [[ghost]] whose release
+nobody recorded races only on a shared [[strategy]]. A bundled [[ghost]] that
+names no release counts as US: before JP support, the trainer recorded only
+on US.
+
+- **Not** — the [[region switch]], which picks which releases a surface
+  shows; the [[game version]], which picks the [[ladder]] the trainer grades
+  you on; or the [[ghost matching scope]].
+- **Lives** — `src/sm64_events/ranks/region_scope.py`
+  → the rivals (`src/sm64_events/ghost/adaptive.py`) and the personal best
+  slot (`src/sm64_events/tracking/views.py`)
 
 ### Climb profile
 
@@ -1800,10 +1834,14 @@ The box behind a [[ghost]]'s name in the game: SM64's own dialog box, the
 black one with white text that characters speak in, or the white one with
 black text that signs use, at the opacity you choose (none at zero). The name
 itself sits just over the top of the [[ghost]]'s body, so it crouches and dives
-with him.
+with him. The [[renderer]] draws it in the US game's font, which your own US
+[[practice ROM]] lends once you have played it: the [[renderer]] keeps a copy on
+your machine. On JP before that, it draws JP's own font, in capitals (JP's
+has no lowercase).
 
 - **Lives** — its two rows in `src/sm64_events/ghost/settings.py`;
-  `plugin/gfxwrap/ghost_annotation_mesh.h` draws it
+  `plugin/gfxwrap/ghost_annotation_mesh.h` draws it;
+  `plugin/gfxwrap/ghost_font_cache.cpp` keeps the lent US font
 
 ### Corner inputs
 
@@ -1887,6 +1925,9 @@ whole time, and a [[reset]] throws it away.
 The camera cut Super Mario 64 plays when you touch a [[star]]. The community
 times a grab there, so the trainer publishes a [[star]] time when the
 x-cam starts rather than when the game finishes writing its own result.
+The trainer derives that time from Mario's landing and Usamune's running
+counter, so the time holds whatever Usamune's TIMER → STOP menu says; the
+menu only decides whether the game's own screen agrees.
 
 - **Lives** — the star-grab detector
   (`src/sm64_events/detectors/star_grab.py`)
@@ -2429,9 +2470,8 @@ either choice, since nothing recorded which release produced it.
 ### Effective version
 
 What the [[game version]] resolves to — always JP or US, never Auto-detect.
-An explicit choice wins; Auto-detect resolves to US on the emulator, the only
-release it reads, and takes a detected release from a front-end that can read
-one off the screen.
+An explicit choice wins; Auto-detect follows the cartridge the emulator is
+running, keeps the last one seen when it detaches, and is US before any.
 
 - **Lives** — the mode config's resolver (`src/sm64_events/core/modes.py`)
   → the session view (`src/sm64_events/tracking/views.py`)
@@ -2480,6 +2520,23 @@ can never disagree about what a time means.
 
 - **Lives** — the caveat vocabulary
   (`src/sm64_events/ui/components/marks.js`)
+
+### Timer hint
+
+The warning triangle left of a [[practice log]] row's entry number; hover
+it for why the game's timer showed a different time.
+The log records the [[x-cam]] time whatever STOP setting Usamune uses, but
+Usamune's own timer shows that number only under GrabX or Xcam. The trainer
+hints a [[star]] row grabbed under another setting while the newest
+grab that reported a setting still did, so every hint leaves once you grab
+one [[star]] under GrabX.
+
+- **Not** — a [[caveat mark]]. A [[caveat mark]] says the row's time is not
+  the quantity it looks like; a hinted row's time is right, and the hint is
+  about the number the game shows. It is a muted triangle, never the
+  orange round "!" of a [[caveat mark]].
+- **Lives** — the rule (`src/sm64_events/tracking/views.py`)
+  → the symbol (`src/sm64_events/ui/components/attemptlog.js`)
 
 ### MARELO pill
 

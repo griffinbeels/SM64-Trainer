@@ -13,7 +13,8 @@ from test_views import make
 
 @pytest.mark.parametrize("kind", ["star", "segment", "pipe"])
 @pytest.mark.parametrize("mode", ["pb", "avg10"])
-def test_destination_snapshot_matches_canonical_session_banners(tmp_path, ranks, kind, mode):
+@pytest.mark.parametrize("grading_version", ["us", "jp"])
+def test_destination_snapshot_matches_canonical_session_banners(tmp_path, ranks, kind, mode, grading_version):
     db, service = make(tmp_path)
     segment_id = None
     grading_key = KEY
@@ -37,6 +38,7 @@ def test_destination_snapshot_matches_canonical_session_banners(tmp_path, ranks,
         ranks = RankStandards(path)
         ranks.load()
     service.ranks = ranks
+    ranks.grading_version = grading_version
     db.set_state("rank_mode", mode)
     old = "Old (Pipe)" if kind == "pipe" else "Old"
     clock = "igt" if kind == "star" else "rta"
@@ -71,10 +73,17 @@ def test_destination_snapshot_matches_canonical_session_banners(tmp_path, ranks,
                  if sec["attempts"]]
     assert baseline == {"rank": section["rank"], "entity_rank": section["entity_rank"],
                         "game_version": sections["game_version"]}
-    # A pipe fixture has only its borrowed Strategy ladder; with no Overall
-    # curve to compare ROM quality, canonical basis selection takes raw time.
-    expected = "Master" if kind == "pipe" and mode == "avg10" else "Grandmaster"
-    assert baseline["rank"]["rank"] == expected
+    if mode == "pb" and grading_version == "us":
+        # The destination has regional standards and only a JP save. US
+        # starts unranked; switching to JP must recover its saved rank.
+        assert baseline["rank"]["rank"] is None
+        assert baseline["rank"]["reason"] == "unranked"
+        assert baseline["entity_rank"] is None
+    else:
+        # A pipe fixture has only its borrowed Strategy ladder; with no Overall
+        # curve to compare ROM quality, canonical basis selection takes raw time.
+        expected = "Master" if kind == "pipe" and mode == "avg10" else "Grandmaster"
+        assert baseline["rank"]["rank"] == expected
     if mode == "avg10":
         assert baseline["rank"]["basis"]["count"] == 1
 

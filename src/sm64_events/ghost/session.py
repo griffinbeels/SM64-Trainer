@@ -128,6 +128,7 @@ class GhostSession:
         self._reclassify_tasks: set[asyncio.Task] = set()
         self._population = population
         self._community = community
+        self._version_of = version_of or (lambda: None)
         self._population_closed = False
         if population is not None and native is not None:
             from sm64_events.ghost.rivals import Rivals
@@ -423,7 +424,8 @@ class GhostSession:
     def library(self) -> GhostLibrary:
         """The current PB, saved runs, template attempts and imported ghosts."""
         return GhostLibrary(template_store(self._inputs), self._db(),
-                            attempt_of=getattr(self._replay, "attempt", None), portable=self._sharing())
+                            attempt_of=getattr(self._replay, "attempt", None), portable=self._sharing(),
+                            running=self._version_of(), ranks=getattr(self._tracker, "ranks", None))
 
     def _sharing(self):
         if self._portable is not None:

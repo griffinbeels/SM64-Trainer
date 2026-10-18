@@ -412,6 +412,31 @@ int main(int argc, char **argv) {
         check(f.run() == GC_BAD_CONFIG, "misaligned ring accepted");
         f.config = layout; f.config.sound_code = 0;
         check(f.run() == GC_BAD_CONFIG, "partial sound configuration accepted");
+    } else if (mode == "rom_layout") {
+        // Either practice cartridge configures the reader; nothing else does.
+        f.config.rom_layout = GC_ROM_JP;
+        check(f.run() == GC_OK && (f.sample.valid_fields & GC_VALID_POSE), "JP cartridge refused");
+        for (const uint32_t layout : {0u, GC_ROM_JP + 1u}) {
+            f.config.rom_layout = layout;
+            check(f.run() == GC_BAD_CONFIG && !f.sample.valid_fields, "unknown cartridge accepted");
+        }
+    } else if (mode == "jp_sound") {
+        // play_sound as SM64_USAMUNE_v1.93j.z64 holds it (ROM 0xD8C78, RAM
+        // 0x8031DC78): the US instructions, naming JP's producer and ring.
+        const uint32_t code[12] = {0x3c068033, 0x24c61e34, 0x90c20000, 0x3c0f8036, 0x25ef0128,
+            0x000270c0, 0x01cf1821, 0x24580001, 0xac640000, 0xac650004, 0x03e00008, 0xa0d80000};
+        check(f.config.rom_layout == GC_ROM_JP && f.config.sound_code == 0x8031dc78
+              && f.config.sound_producer == 0x80331e34 && f.config.sound_ring == 0x80360128
+              && f.config.sound_consumer == 0x80331e30, "Python layout lost the JP sound roots");
+        for (unsigned i = 0; i < 12; ++i) f.put32(f.config.sound_code + 4*i, code[i]);
+        const uint32_t mario = f.config.object_pool + 0x54;
+        f.put8(f.config.sound_producer, 10);
+        check(f.run() == GC_OK && (f.sample.valid_fields & GC_VALID_POSE) && zero(f.sample.sound),
+              "JP first frame has no sound baseline");
+        f.put32(f.config.sound_ring + 8*10, 0x24228080); f.put32(f.config.sound_ring + 8*10 + 4, mario);
+        f.put8(f.config.sound_producer, 11); f.put32(f.config.global_timer, 0x12345679);
+        check(f.run() == GC_OK && (f.sample.valid_fields & GC_VALID_SOUND) && f.sample.sound.count == 1
+              && f.sample.sound.bits[0] == 0x24228080 && f.sample.sound.producer == 11, "JP Mario sound lost");
     } else if (mode == "held") {
         // The legacy TRS reader still refuses a holding Mario, so it never
         // records a held object; the executed-root reader does (root host).

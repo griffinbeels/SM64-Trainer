@@ -93,6 +93,7 @@ static bool refuse_adoption=false,refuse_close=false,revoke_evaluation=false;
 static uint64_t selected_sequence=0;
 static uint32_t selected_world=0;
 static float selected_x=0;
+static uint32_t selected_rom_layout=0;
 static float selected_position[3]{};
 static gc_sample selected_sample{},shadow_sample{},particle_sample{};
 // What the defeat hands the model: its animation, frame, eyes and angles.
@@ -163,8 +164,9 @@ Placed place(sg_model*,const sg_particle_view&,const gc_sample& sample,const gc_
 }
 namespace ghost_pose {
 Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
-                const ghost::WorldPass& world,float opacity,Scratch&,ghost_compositor::Pose& out) {
-    out={};
+                const ghost::WorldPass& world,float opacity,Scratch&,ghost_compositor::Pose& out,
+                uint32_t rom_layout) {
+    out={};selected_rom_layout=rom_layout;
     if(!p || p!=fake_model || p->owner!=GetCurrentThreadId())return Result::model_failed;
     if(!(live.valid_fields&GC_VALID_CAMERA))return Result::missing_pose;
     if(world.epoch!=live.epoch || world.list_serial!=live.dlist_serial || !world.context_generation)
@@ -297,7 +299,9 @@ int main() {
         const DWORD worker=GetCurrentThreadId();const auto *api=ghost_playback::api();
         check(api->bytes==sizeof(gp_api) && api->version==GP_VERSION,"API version");
         std::vector<uint8_t> rom(8u*1024u*1024u);
-        Clip clip(1);
+        // A JP capture: playback names its held object through the clip's own
+        // cartridge, whichever one runs; everything else is region-neutral.
+        Clip clip(1);clip.header.rom_layout=GC_ROM_JP;
         for(auto& frame:clip.frames)
             frame.world_status=static_cast<uint32_t>(ghost::PassStatus::InvalidIdentity);
         check(api->prepare_model(1,rom.data(),uint32_t(rom.size()))==GP_OK,"worker prepares detached model");
@@ -337,6 +341,7 @@ int main() {
         renderer.run([&] {ghost_playback::safe_boundary(7,4);sg_atlas_view atlas{};uint64_t id=0;
             check(ghost_playback::atlas(&atlas,&id) && id==1 && atlas.rgba,"renderer adopted atlas");});
         draw(8,true,GP_BEFORE_START,1);draw(10,true,GP_READY,1);check(selected_x==0,"preloaded frame is an owned copy");
+        check(selected_rom_layout==GC_ROM_JP,"pose evaluated without its clip's capture cartridge");
         check(selected_world==static_cast<uint32_t>(ghost::PassStatus::InvalidIdentity),
             "selected pose retains its historical renderer diagnostic");
         live.valid_fields&=~GC_VALID_CAMERA;draw(10,false,GP_POSE_REFUSED);
@@ -479,6 +484,10 @@ int main() {
         check(api->prepare_clip(&bad,clip.frames.data())==GP_INVALID,"record count bounded before reading");
         bad=clip.header;bad.first_sequence=2;
         check(api->prepare_clip(&bad,clip.frames.data())==GP_INVALID,"exact clip endpoints validated");
+        for(const uint32_t layout:{0u,GC_ROM_JP+1u}) {
+            bad=clip.header;bad.rom_layout=layout;
+            check(api->prepare_clip(&bad,clip.frames.data())==GP_INVALID,"unknown capture cartridge accepted");
+        }
         auto invalid=clip.frames;invalid[0].sample.valid_fields=0;invalid[0].sample.pose={};
         check(api->prepare_clip(&clip.header,invalid.data())==GP_INVALID,"clock-invalid endpoint refused");
         invalid=clip.frames;invalid[6].sample.igt=1;

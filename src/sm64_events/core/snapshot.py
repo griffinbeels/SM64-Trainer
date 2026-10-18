@@ -118,6 +118,11 @@ class GameSnapshot:
     usamune_menu_open: bool | None = None
     usamune_savestate_button: int | None = None
 
+    # Usamune's TIMER -> STOP byte (layout `usamune_stop`): bit 0 = it writes
+    # the star result at the grab, bit 1 = at the x-cam. None where this
+    # build's layout has no verified address for it.
+    usamune_stop: int | None = None
+
 
 class SnapshotReader:
     """One coherent read of the game, over ONE version's layout.
@@ -281,6 +286,9 @@ class SnapshotReader:
                                if self._menu_at is not None else None),
             usamune_savestate_button=(m.read_u8(self._savestate_button_at)
                                       if self._savestate_button_at is not None else None),
+
+            usamune_stop=(m.read_u8(self.layout.usamune_stop)
+                          if self.layout.usamune_stop is not None else None),
         )
 
 

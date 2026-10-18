@@ -7,6 +7,9 @@
 
 namespace ghost_annotation {
 constexpr unsigned label_bytes=64, max_vertices=2048, atlas_width=256, atlas_height=256;
+// Whose dialogue font the atlas holds, which sets each glyph's advance:
+// US's proportional widths, or JP's own monospaced rule (ghost_annotation_assets.h).
+namespace font {constexpr uint8_t us=0,jp=1;}
 struct Payload {
     char label[label_bytes]{};
     float position[3]{}, scale=1.0f;
@@ -18,13 +21,15 @@ struct Payload {
     // This ghost's row in the stack above the game's input display, ordered
     // by its slot among the ghosts that show one (filled in at upload).
     bool hud=false;uint8_t slot=0,hud_rank=0,hud_count=0;
+    uint8_t font=font::us; // the loaded atlas's font: its glyph advances
 };
 struct Vertex {float clip[4], uv[2], rgba[4];};
 struct Mesh {Vertex vertices[max_vertices]{};unsigned count=0;};
 struct View {const uint8_t* rgba=nullptr;uint32_t width=0,height=0;bool usamune=false;};
 // Usamune's own nine-entry held-button table at cartridge0x7e5c78: each row
 // is the mask, its 8x8 icon and its 16x16 icon. It draws nothing for L or
-// the D-pad, so neither does the ghost.
+// the D-pad, so neither does the ghost. Addresses are Usamune US's; Usamune
+// JP holds the same table and art 0x6AA18 earlier (ghost_annotation_assets.cpp).
 constexpr uint16_t button_masks[]={0x8000,0x4000,0x1000,0x2000,0x10,0x8,0x4,0x2,0x1};
 constexpr uint32_t button_rom[]={0x7e7570,0x7e74f0,0x7e7170,0x7e70f0,0x7e71f0,
     0x7e72f0,0x7e7470,0x7e73f0,0x7e7370};

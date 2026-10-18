@@ -94,10 +94,10 @@ def save_mode_config(cfg: ModeConfig, path: Path | None = None) -> None:
 
 def effective_version(cfg: ModeConfig, detected: str | None = None) -> str:
     """The version grading and the visual switches DEFAULT to: an explicit
-    JP/US setting wins outright; AUTO takes `detected` (what a live front-end
-    read off the screen -- console-support's N64 mode; nothing on the emulator
-    path detects yet) when it is a known version, else US, the only ROM the
-    emulator path supports. Always "jp" or "us", never "auto"."""
+    JP/US setting wins outright; AUTO takes `detected` (the running cartridge
+    -- `TrackerService.effective_game_version` passes the emulator's observed
+    region) when it is a known version, else US. Always "jp" or "us", never
+    "auto"."""
     if cfg.version is not GameVersion.AUTO:
         return cfg.version.value
     if detected in ("jp", "us"):

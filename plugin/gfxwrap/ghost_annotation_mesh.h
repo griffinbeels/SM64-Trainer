@@ -31,6 +31,7 @@ struct Layout {
     Mesh& mesh;float anchor[4],sx,sy,alpha; // sx, sy: clip units per layout pixel
     float hud_centre=0; // the Usamune x drawn at layout x = hud_left
     float hud_left=0,hud_scale=GP_ANNOTATION_INPUT_SCALE;
+    uint8_t font=font::us; // the atlas's font, for its glyph advances
     void quad(float x,float y,float w,float h,float u,float v,float uw,float vh,float shade=1,float opacity=1) {
         if(mesh.count+6>max_vertices)return;
         constexpr unsigned corners[]={0,1,2,0,2,3};
@@ -64,13 +65,14 @@ struct Layout {
         return count;
     }
     // The glyphs that fit in `limit` layout pixels, ending "..." when cut.
-    static unsigned fitted(const char* value,float scale,float limit,uint8_t (&chars)[64],unsigned& width) {
+    static unsigned fitted(const char* value,float scale,float limit,uint8_t (&chars)[64],unsigned& width,
+                           uint8_t font=font::us) {
         unsigned n=characters(value,chars),original=n;width=0;
-        for(unsigned i=0;i<n;++i)width+=advance(chars[i]);
-        while(n && width*scale>limit) {width-=advance(chars[--n]);}
+        for(unsigned i=0;i<n;++i)width+=advance(chars[i],font);
+        while(n && width*scale>limit) {width-=advance(chars[--n],font);}
         if(n<original) {
-            while(n && (width+3*advance(glyph('.')))*scale>limit)width-=advance(chars[--n]);
-            for(unsigned i=0;i<3 && n<63;++i) {chars[n++]=glyph('.');width+=advance(glyph('.'));}
+            while(n && (width+3*advance(glyph('.'),font))*scale>limit)width-=advance(chars[--n],font);
+            for(unsigned i=0;i<3 && n<63;++i) {chars[n++]=glyph('.');width+=advance(glyph('.'),font);}
         }
         return n;
     }
@@ -78,7 +80,7 @@ struct Layout {
     // white text) or sign (white, black text) dialog box when `box` is above zero.
     void text(const char* value,float y,float scale=0.75f,float box=0,uint8_t background=GP_NAME_BLACK,
               float left=NAN,float limit=180) {
-        uint8_t chars[64]{};unsigned width=0;const unsigned n=fitted(value,scale,limit,chars,width);
+        uint8_t chars[64]{};unsigned width=0;const unsigned n=fitted(value,scale,limit,chars,width,font);
         if(value[0] && n==0)return;
         float x=std::isnan(left)?-float(width)*scale*0.5f:left;
         const bool boxed=box>0,white=background==GP_NAME_WHITE;
@@ -89,13 +91,13 @@ struct Layout {
                  white_u,white_v,1,1,white?1.0f:0.0f,box);
         }
         for(unsigned i=0;i<n;++i) {
-            character(chars[i],x,y,scale,boxed && white?0.0f:1.0f,!boxed);x+=advance(chars[i])*scale;
+            character(chars[i],x,y,scale,boxed && white?0.0f:1.0f,!boxed);x+=advance(chars[i],font)*scale;
         }
     }
     // A left-aligned label (the stack's rows), cut to `limit`.
     void label(const char* value,float x,float y,float scale,float limit) {
-        uint8_t chars[64]{};unsigned width=0;const unsigned n=fitted(value,scale,limit,chars,width);
-        for(unsigned i=0;i<n;++i) {character(chars[i],x,y,scale);x+=advance(chars[i])*scale;}
+        uint8_t chars[64]{};unsigned width=0;const unsigned n=fitted(value,scale,limit,chars,width,font);
+        for(unsigned i=0;i<n;++i) {character(chars[i],x,y,scale);x+=advance(chars[i],font)*scale;}
     }
     // One rectangle of Usamune's HUD (its pixels, y down), its x measured from
     // hud_centre and its bottom edge at `bottom`.
@@ -196,6 +198,7 @@ inline void stack_row(const Payload& p,uint32_t flip_y,Mesh& mesh) {
     // One layout pixel is one HUD pixel from its top-left corner: NDC is 2/320 across, 2/240 down.
     const float up=flip_y?-1.0f:1.0f;
     Layout layout{mesh,{-1.0f,up,-0.99f,1.0f},2.0f/320,2.0f/240*up,1.0f};
+    layout.font=p.font;
     const float top_row=bottom-2*stack::half-1,low_row=bottom-stack::half; // Y's row over X's
     auto dialog=[&](uint8_t c,float x,float top) {layout.character(c,dx+x,-(top+stack::half),stack::scale);};
     // Both rows share the wider row's left edge, as his do.
@@ -265,6 +268,7 @@ inline void build(const Payload& p,const float vp[16],uint32_t flip_y,float opac
     const float up=flip_y?-1.0f:1.0f;
     if(flip_y)anchor[1]=-anchor[1];
     Layout layout{mesh,{anchor[0],anchor[1],anchor[2],anchor[3]},sx,sy*up,visibility};
+    layout.font=p.font;
     if(p.names)layout.text(p.label[0]?p.label:"GHOST",0,0.75f,p.background_opacity,p.background);
     // Usamune's display sits directly above the name.
     if(p.inputs && p.artwork)layout.inputs(p,p.names?14.0f:0.0f);

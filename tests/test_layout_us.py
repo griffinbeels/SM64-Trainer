@@ -20,6 +20,7 @@ US_2026_08_15 = {
     "behaviour_base": 0x800EB180, "player1_controller": 0x8033AF90,
     # Read off Usamune's own HUD code (2026-10-02); their live gates remain VERIFY.
     "usamune_menu": 0x804168D8, "usamune_input_display": 0x80417B57,
+    "usamune_stop": 0x80417B4D,
     # Source-backed candidates only; their new live gates remain VERIFY.
     "current_area_pointer": 0x8032DDCC, "area_update_counter": 0x8032DF08,
     "sound_code": 0x8031EB00, "sound_producer": 0x80332F44,

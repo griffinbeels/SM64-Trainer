@@ -25,7 +25,8 @@ int main() {
     const auto *api=ghost_stream::api();
     gc_layout config{}; config.bytes=sizeof(config); config.version=GC_VERSION; config.global_timer=0x1234;
     config.clock={GCC_VERSION,30,10,10,60,30,1,65000,1,1,{6},{2}};
-    assert(api->configure(&config)); ghost_stream::rom(true);
+    config.rom_layout=GC_ROM_US;
+    assert(api->configure(&config)); ghost_stream::rom(GC_ROM_US);
     // Fill all slots, prove bounded drops preserve every already-published item.
     for(unsigned i=0;i<GS_SLOTS+9;++i) emit(1000+i);
     auto stats=api->stats(); assert(stats.offered==GS_SLOTS+9 && stats.dropped==9);
@@ -74,7 +75,15 @@ int main() {
     const auto before=api->stats().epoch; emit(3000);
     assert(api->read(&record,sizeof(record))==1 && record.sample.epoch>before);
     assert(record.sample.global_timer==0x5678);
-    ghost_stream::rom(false); assert(!ghost_stream::begin(nullptr,0,7,2));
+    // A swap to JP under the US config: the cartridge is not open to it, and
+    // no list is read until a JP config arrives (and the reverse).
+    ghost_stream::rom(GC_ROM_JP);
+    assert(!ghost_stream::requested() && !ghost_stream::begin(nullptr,0,7,4) && !ghost_stream::sample());
+    config.rom_layout=GC_ROM_JP; assert(api->configure(&config) && ghost_stream::requested()); emit(3100);
+    assert(api->read(&record,sizeof(record))==1 && record.sample.qpc==3100);
+    ghost_stream::rom(GC_ROM_US); assert(!ghost_stream::requested() && !ghost_stream::begin(nullptr,0,7,5));
+    config.rom_layout=GC_ROM_US; assert(api->configure(&config) && ghost_stream::requested());
+    ghost_stream::rom(0); assert(!ghost_stream::begin(nullptr,0,7,2));
     api->disable(); assert(!api->stats().enabled);
     std::puts("ghost stream ownership passed");
 }

@@ -54,6 +54,7 @@ export function unavailableReason(attempt) {
   if (gate === "foreign_strat") {
     return strat ? `Switch to ${strat} to save this as its PB` : "Give this run a strategy to save it as a PB";
   }
+  if (gate === "foreign_rom") return "Open this run's game version to save it as its PB";
   return "This run can't be saved as a PB";
 }
 

@@ -70,7 +70,21 @@ the manual's footnote *"the in-game timer keeps running internally"*,
 confirmed under every STOP value, is what makes that possible. The residual ±1
 frame is OUR torn read, not Usamune: a snapshot is twelve `ReadProcessMemory`
 calls, so the action and the counter in one sample can straddle a game frame.
-**Still true, still unused: `STOP` is INFERABLE from the write pattern** —
+**Used since 2026-10-17 (`StarGrabDetector._observe_stop`, by VALUE: an
+agreeing or post-x-cam write = xcam, a touch-only write = grab, silence =
+none; once grab/none is known the row publishes at the x-cam).** The byte
+itself was read off Usamune's code the same day and is the layout's OPTIONAL
+row `usamune_stop` (US VERIFY; JP once `address.usamune_stop` verifies), which
+the detector prefers to the inference: settings base + 1, US `0x80417B4D`, JP `0x80417C15`, a
+bitmask in menu order — 0 None, 1 Grab, 2 Xcam ("*Cam"), 3 GrabX ("Grab*").
+Bit 0 makes the grab hook (wrapping `set_mario_action`) copy the counter into
+the result store; bit 1 makes the star-dance hooks do it when `actionTimer`
+is 0, which is the write the inference calls "xcam". Door/warp hooks copy it
+whenever the byte is non-zero. Trap: base + 2 is DISPLAY (Hide/Grab/*Cam/
+Always). The menu table puts STOP at index 1 and Input at 0xb, the
+input-display byte the layout already reads. Presets: Prac 3, StgRTA 2,
+Sgstar 1, Vanila/CatExt/NonStp 0. **Originally noted as: `STOP` is
+INFERABLE from the write pattern** —
 *write at the grab?* × *write later?* separates all four values
 (None/Grab/GrabX/Xcam) out of the 150 frames of `igt_result` history
 `IgtClock` already keeps, so no settings block in memory is needed to know

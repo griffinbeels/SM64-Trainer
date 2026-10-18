@@ -380,7 +380,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.star_action_count=1;r.star_actions[0]=0x1302;r.stop_at_star=1;
         r.path_enabled=1;r.path_buttons=1;r.path_source=GP_PATH_AVERAGE;r.path_clip=0;
         r.path_ahead_ms=4500;r.path_width=55.5f;r.path_opacity=.7f;r.path_spacing_ms=150;
-        r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
+        r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;r.layout.rom_layout=GC_ROM_US;
         r.layout.clock.near_zero=30;
         ready(page,r);auto first=last_command();
         {const auto hooked=page.status();check(hooked.hook_gl_queries==2 && hooked.hook_micros==345 && hooked.hook_list==7
@@ -484,10 +484,16 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         bad=r;bad.revision=21;bad.volume=1.25f;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=22;bad.sound_fade=2;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=23;bad.hidden=2;refused(page,bad,GIPC_PROTOCOL);
+
+        // A config for the other cartridge (JP's on this US one, as after a
+        // ROM swap the trainer has not caught up with) never reaches capture.
+        const auto configured_before=configuration.load();
+        bad=r;bad.revision=24;bad.layout.rom_layout=GC_ROM_JP;refused(page,bad,GIPC_LAYOUT);
+        check(configuration.load()==configured_before,"a config for the other cartridge configured capture");
         // The protocol refusals retired the model, and the worker holds no
         // cartridge once a model is built: rebuilding reads the cartridge again.
         rom[0]=0x40;const auto before_rebuild=rom_validations.load();
-        r.revision=24;ready(page,r);
+        r.revision=25;ready(page,r);
         check(rom_validations.load()>before_rebuild,"a retired model is rebuilt from a fresh cartridge read");
         // His star swap (2026-10-03: "the OLD GHOST'S PATH was still there"):
         // the path now names clip 1, which must be read again. While it loads,
@@ -497,7 +503,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
             const size_t before=[&]{std::lock_guard<std::mutex> lock(command_mutex);return history.size();}();
             const auto shown=last_command();
             check(shown.path_enabled && shown.clips[shown.path_clip].clip_id[0]==2,"the path draws clip 2's route");
-            r.revision=25;set_clip(r.clips[0],1,argv[1],argv[2],217);r.path_clip=0;ready(page,r);
+            r.revision=26;set_clip(r.clips[0],1,argv[1],argv[2],217);r.path_clip=0;ready(page,r);
             std::vector<gp_request> sent;{std::lock_guard<std::mutex> lock(command_mutex);sent.assign(history.begin()+before,history.end());}
             bool withheld=false,wrong=false;
             for(const auto& c:sent) {
@@ -511,8 +517,8 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
                   "the new set brings its own path");
         }
         // The set as it was (clip 2 then 3) for the sections that follow.
-        r.revision=26;set_clip(r.clips[0],2,argv[4],argv[5],40);ready(page,r);
-        r.revision=27;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
+        r.revision=27;set_clip(r.clips[0],2,argv[4],argv[5],40);ready(page,r);
+        r.revision=28;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
         r.owner_created_lo^=1;r.token=124;r.revision=1;ready(page,r);
         // Reproduce the reader owning the page exactly when lease expiry must
         // be published. No new request/event wakes the worker after this race.

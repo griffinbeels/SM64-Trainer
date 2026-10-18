@@ -6,7 +6,10 @@ does not simulate inputs, query terrain, advance animation, own an OpenGL
 context, load files, or draw. The renderer owns ROM identity validation, camera
 projection, GPU resources, depth testing, ghost opacity and scheduling.
 
-Open one runtime on its owner thread with validated, big-endian US ROM bytes.
+Open one runtime on its owner thread with validated, big-endian US or Usamune
+JP ROM bytes. Blocks are named by their US offset; `jp_blocks` in `assets.c`
+maps each to JP's (same decoded bytes, keyed by the header's country byte;
+`tests/test_model_rom_blocks.py` pins the table).
 Upload the borrowed RGBA atlas before closing the runtime. Call evaluate with
 the captured gfx transform, animation ID/frame and body state; `body_action`
 is distinct from `action`. Effective head rotation is supplied after the
@@ -54,7 +57,8 @@ Set `SM64_MODEL_ROM` to an explicitly supplied local ROM and optionally
 `python tools/run_tests.py tests/test_native_model.py`. The native witness
 also runs against `SM64_MODEL_PRACTICE_ROM` when supplied and records both
 asset hashes; this tests the practice ROM's actual asset sections.
-It compiles against the public header and exercises malformed assets, all animation
+`SM64_MODEL_JP_ROM` adds the JP cartridge; every supplied ROM must decode the
+same atlas. It compiles against the public header and exercises malformed assets, all animation
 endpoints, repeated/interleaved poses, distinct body/head transforms, normals,
 capacity and scratch failures, camera matrices, lifecycle and thread checks.
 Its WGL window stays hidden and renders to an FBO. That readback establishes
@@ -114,7 +118,9 @@ both behaviour aliases and all four eye/cap states. Its stolen cap reaches
 Mario's common1 display list and texture, imported through pinned extra lists
 and a segment override. The importer follows every selected geo switch and
 recursive display-list dependency, and excludes unreachable alternate models.
-Stock US and Usamune share the verified group6/common0/common1 ROM blocks.
+Stock US and Usamune share the verified group6/common0/common1 ROM blocks;
+Usamune JP holds the same decoded blocks elsewhere, with Mips's texture 0xF0
+earlier in group 6.
 Mario with wings plus capped Ukiki needs 3,258 vertices; the caller-owned bound
 is 4,096. Missing companion blocks in old clips require a new recording.
 

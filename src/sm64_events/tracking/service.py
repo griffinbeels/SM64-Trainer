@@ -35,7 +35,8 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import importing, practicable, recordings
 from sm64_events.tracking.views import (classification_rank_baseline,
-                                        current_pbs_by_strat)
+                                        foreign_rom, graded_pbs_by_strat,
+                                        pb_slot)
 from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
@@ -140,13 +141,26 @@ class TrackerService:
         self.db = db
         self.broadcaster = broadcaster
         self.ranks = ranks            # RankStandards | None
+        if ranks is not None:
+            # `ranks/region_scope.py::scope_of` reads this store when a caller
+            # names none, so the app needs no separate wiring.
+            from sm64_events.ranks import region_scope
+            region_scope.bind(ranks)
         self.on_segment_definitions_changed = None
         self.on_attempt_saved = None
         # Told once per strategy reclassification (`_adopt_untagged`,
         # `set_attempt_strat`) with the retagged attempts as stored now, so
         # the ghost side can move each run to its new strategy.
         self.on_attempts_reclassified = None
+        # Told when the grading version moves for a reason that is not a run
+        # (a new cartridge under AUTO), so every MARELO watermark moves
+        # without celebrating; server/mode_api.py wires it.
+        self.on_regrade = None
         self.observed_game_version = None
+        # The ROM last seen running ("us"/"jp"), kept when the emulator goes
+        # away so AUTO grading does not flip back to US until another ROM
+        # loads (`note_running_version`).
+        self._running_version = None
         # The game version SETTING (core/modes.py) as last applied through
         # `set_game_version` -- main.py applies the persisted one at boot.
         # What it RESOLVES to lives on the standards store as
@@ -1340,8 +1354,17 @@ class TrackerService:
                     db, self, attempt, strat_tag),
                 "pbs": {mode: db.current_pb(
                     attempt.course_id, attempt.star_id, mode,
-                    segment_id=attempt.segment_id, strat_tag=strat_tag)
+                    segment_id=attempt.segment_id, strat_tag=strat_tag,
+                    **self._pb_slot(attempt, strat_tag))
                     for mode in ("igt", "rta")}}
+
+    def _pb_slot(self, attempt, strat_tag: str | None = None) -> dict:
+        """The PB slot an attempt's strategy holds on the ROM being graded
+        (`views.pb_slot`): what every PB command reads, so the commands and
+        the practice log agree on which saved time is current."""
+        return pb_slot(self.ranks, entity_key(attempt.course_id, attempt.star_id,
+                                              attempt.segment_id),
+                       strat_tag or attempt.strat_tag)
 
     def _preserve_destination_pbs(self, classification: dict | None) -> None:
         """A corrected save may not displace a faster destination PB.
@@ -1358,7 +1381,10 @@ class TrackerService:
             if not prior:
                 continue
             current = db.current_pb(prior["course_id"], prior["star_id"], mode,
-                                    segment_id=prior["segment_id"], strat_tag=prior["strat_tag"])
+                                    segment_id=prior["segment_id"], strat_tag=prior["strat_tag"],
+                                    **pb_slot(self.ranks, entity_key(prior["course_id"], prior["star_id"],
+                                                                     prior["segment_id"]),
+                                              prior["strat_tag"]))
             if (current and current["attempt_id"] in classification["ids"]
                     and current["id"] != prior["id"] and current["frames"] >= prior["frames"]):
                 db.reassert_pb(prior["id"])
@@ -1381,7 +1407,8 @@ class TrackerService:
         frames, _, attempt = min(candidates, key=lambda candidate: candidate[:2])
         prior = classification["pbs"].get(timer_mode)
         current = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
-                                segment_id=attempt.segment_id, strat_tag=attempt.strat_tag)
+                                segment_id=attempt.segment_id, strat_tag=attempt.strat_tag,
+                                **self._pb_slot(attempt))
         if prior and frames >= prior["frames"]:
             return None
         if current and current["attempt_id"] != attempt.id and frames >= current["frames"]:
@@ -1892,7 +1919,42 @@ class TrackerService:
         what grading resolves it to ("jp"/"us") -- the session view's
         `game_version` field, and what the two visual switches default to."""
         return {"setting": self.mode_config.version.value,
-                "effective": effective_version(self.mode_config)}
+                "effective": self.effective_game_version()}
+
+    def running_version(self) -> str | None:
+        """The ROM loaded in the emulator, or the last one seen there; None
+        before any has been seen."""
+        observed = self.observed_game_version() if callable(self.observed_game_version) else None
+        if observed in ("us", "jp"):
+            self._running_version = observed
+        return self._running_version
+
+    def effective_game_version(self, cfg: ModeConfig | None = None) -> str:
+        """What grading resolves to: an explicit JP/US setting, else (AUTO)
+        the running cartridge, else US."""
+        return effective_version(self.mode_config if cfg is None else cfg,
+                                 detected=self.running_version())
+
+    async def note_running_version(self, version: str | None) -> dict | None:
+        """THE hook for a newly observed cartridge region (the composition
+        root calls it when the poller's region changes). Under AUTO, grading
+        follows the cartridge live: the grading version flips, every MARELO
+        watermark moves without a celebration (`on_regrade`), and
+        `game_version_changed` makes clients refetch. None (no emulator)
+        keeps the last ROM seen. Returns `game_version()` when grading moved,
+        else None."""
+        if version in ("us", "jp"):
+            self._running_version = version
+        resolved = effective_version(self.mode_config, detected=self._running_version)
+        if self.ranks is None or self.ranks.grading_version == resolved:
+            return None
+        self.ranks.grading_version = resolved
+        if self.on_regrade is not None:
+            self.on_regrade()
+        out = self.game_version()
+        await self.broadcaster.publish(Event(type="game_version_changed", frame=0,
+                                             timestamp_utc=_now(), payload=out))
+        return out
 
     async def set_game_version(self, cfg: ModeConfig) -> dict:
         """Apply a game version setting LIVE: the standards store's grading
@@ -1902,7 +1964,7 @@ class TrackerService:
         (same rule as the rank standards). Returns `game_version()`."""
         self.mode_config = cfg
         if self.ranks is not None:
-            self.ranks.grading_version = effective_version(cfg)
+            self.ranks.grading_version = self.effective_game_version(cfg)
         out = self.game_version()
         await self.broadcaster.publish(Event(type="game_version_changed", frame=0,
                                              timestamp_utc=_now(), payload=out))
@@ -2471,9 +2533,10 @@ class TrackerService:
         active = ActiveStrats.from_db(db, self.strat_by_star, self.strat_by_segment)
         row = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
                             segment_id=attempt.segment_id,
-                            strat_tag=attempt.strat_tag)
+                            strat_tag=attempt.strat_tag, **self._pb_slot(attempt))
         owns = row is not None and row["attempt_id"] == attempt.id
-        return pb_action(attempt, active.for_attempt(attempt), owns)
+        return pb_action(attempt, active.for_attempt(attempt), owns,
+                         foreign_rom=foreign_rom(self.ranks, attempt))
 
     def _pb_attempt(self, attempt_id: int, timer_mode: str):
         db = self._require_db()
@@ -2516,7 +2579,7 @@ class TrackerService:
             return None
         current = self.db.current_pb(attempt.course_id, attempt.star_id, mode,
                                      segment_id=attempt.segment_id,
-                                     strat_tag=attempt.strat_tag)
+                                     strat_tag=attempt.strat_tag, **self._pb_slot(attempt))
         if current is not None and current["frames"] <= frames:
             return None
         return mode
@@ -2568,11 +2631,15 @@ class TrackerService:
         # same refetch as the run itself, so the old PB is never on screen.
         replaced = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
                                  segment_id=attempt.segment_id,
-                                 strat_tag=attempt.strat_tag)
+                                 strat_tag=attempt.strat_tag, **self._pb_slot(attempt))
+        # A played PB names the ROM it was set on, as an imported one does,
+        # so region-scoped slots (`ranks/region_scope.py`) can file it.
         db.insert_pb(course_id=attempt.course_id, star_id=attempt.star_id,
                      strat_tag=attempt.strat_tag, timer_mode=timer_mode,
                      frames=frames, attempt_id=attempt_id, saved_utc=_iso(_now()),
-                     segment_id=attempt.segment_id)
+                     segment_id=attempt.segment_id,
+                     game_version=attempt.game_version
+                     if attempt.game_version in ("us", "jp") else None)
         return await self._publish_pb_saved(
             attempt, timer_mode, classification, auto=auto,
             previous_frames=replaced["frames"] if replaced else None)
@@ -2618,13 +2685,14 @@ class TrackerService:
             raise ValueError(
                 f"attempt {attempt_id} cannot undo a PB "
                 f"({self._refusal(blocked, f'not the current {timer_mode} PB')})")
+        slot = self._pb_slot(attempt)
         row = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
                             segment_id=attempt.segment_id,
-                            strat_tag=attempt.strat_tag)
+                            strat_tag=attempt.strat_tag, **slot)
         db.delete_pb(row["id"])
         restored = db.current_pb(attempt.course_id, attempt.star_id,
                                  timer_mode, segment_id=attempt.segment_id,
-                                 strat_tag=attempt.strat_tag)
+                                 strat_tag=attempt.strat_tag, **slot)
         payload = {"course_id": attempt.course_id, "star_id": attempt.star_id,
                    "segment_id": attempt.segment_id,
                    "strat_tag": row["strat_tag"], "timer_mode": timer_mode,
@@ -2770,7 +2838,7 @@ class TrackerService:
         db = self._require_db()
         active = ActiveStrats.from_db(db, self.strat_by_star,
                                       self.strat_by_segment)
-        by_strat = current_pbs_by_strat(db.pbs())
+        by_strat = graded_pbs_by_strat(db.pbs(), self.ranks)
 
         def fastest(match):
             rows = [row for key, row in by_strat.items() if match(key)]
