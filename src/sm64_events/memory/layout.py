@@ -100,7 +100,7 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               "VERIFY: u8 Usamune input display setting, 0 = off (2 = stick, else values); "
               "its HUD path calls the display (RAM 0x80408848) only while nonzero"),
     LayoutRow("usamune_stop", None, "usamune_hud",
-              "VERIFY: u8 Usamune TIMER -> STOP, a bitmask in menu order: bit 0 copies "
+              "u8 Usamune TIMER -> STOP, a bitmask in menu order: bit 0 copies "
               "the counter into the star result at the grab, bit 1 at the x-cam "
               "(0 None, 1 Grab, 2 Xcam, 3 GrabX); settings base + 1, read off its menu "
               "table and its grab/dance hooks. Trap: base + 2 is DISPLAY",
@@ -207,8 +207,8 @@ US = Layout(
     # path's `lbu 0xb(0x80417b4c)` gates `jal 0x80408848`, the input display).
     usamune_menu=0x804168D8,
     usamune_input_display=0x80417B57,
-    usamune_stop=0x80417B4D,        # VERIFY: read off Usamune's code 2026-10-17 (STOP is
-                                    # menu index 1, Input index 0xb = the byte above)
+    usamune_stop=0x80417B4D,        # ROM-derived; live-confirmed 2026-10-17: Grab then
+                                    # GrabX (journal 20368/20377; final raw byte 3)
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
 
