@@ -50,8 +50,8 @@ ROW = f"{CARD} .ghost-row.ghost-row-lineup"
 TOGGLE = f"{CARD} .log-card-actions > .ghost-toggle"
 SEAT = f"{ROW} .lineup-row > .lineup-seat"
 WIDTHS = (1500, 850)
-# The page's timed polls, cancelled by a navigation of the test's own.
-POLLS = ("/api/pause", "/api/replay/status")
+# Only these background requests may be cancelled by a test-owned navigation.
+BACKGROUND = ("/api/pause", "/api/replay/status", "/api/uilog")
 #: The PB whose gap to the first rival (Alexander_Speedruns, 339 frames) reads
 #: differently from frame arithmetic: 344 shows 11"46 and 339 shows 11"30, so
 #: the track must say −0.16, while (344 − 339) / 30 rounds to 0.17.
@@ -194,13 +194,29 @@ def shown_gap(you_text, next_text):
 
 def watch(page):
     seen = {"errors": [], "failed": []}
+    pending, retiring = set(), set()
+
+    def failed(request):
+        cancelled = (request in retiring and request.failure == "net::ERR_ABORTED"
+                     and any(request.url.split("?")[0].endswith(path) for path in BACKGROUND))
+        if not cancelled:
+            seen["failed"].append(("failed", request.url, request.failure))
+        finished(request)
+
+    def finished(request):
+        pending.discard(request)
+        retiring.discard(request)
+
+    # Mark exact outstanding requests before the test destroys their document.
+    # An abort during ordinary rendering or a real network failure still fails.
+    page._retire_observed_requests = lambda: retiring.update(pending)
+    page.on("request", lambda request: pending.add(request))
+    page.on("requestfinished", finished)
     page.on("pageerror", lambda error: seen["errors"].append(str(error)))
     page.on("console", lambda message: seen["errors"].append(message.text) if message.type == "error" else None)
     page.on("response", lambda response: seen["failed"].append((response.status, response.url))
             if response.status >= 400 else None)
-    page.on("requestfailed", lambda request: None
-            if any(request.url.split("?")[0].endswith(poll) for poll in POLLS)
-            else seen["failed"].append(("failed", request.url)))
+    page.on("requestfailed", failed)
     return seen
 
 
@@ -227,6 +243,7 @@ def opened(served, width, height=1100):
     try:
         yield page, seen
     finally:
+        page._retire_observed_requests()
         context.close()
 
 
@@ -241,6 +258,7 @@ def show(page, served, name, session=None):
     state["session"] = deepcopy(session or STATES[name])
     state["read_error"] = name == "unreachable"
     state["writes"].clear()
+    page._retire_observed_requests()
     page.goto(base)
     page.locator(READY.get(name, f"{ROW} .lineup-note")).first.wait_for()
     settle(page)
@@ -255,6 +273,24 @@ def broadcast(page, served, session):
 def no_faults(seen):
     assert seen["errors"] == [], seen["errors"]
     assert seen["failed"] == [], seen["failed"]
+
+
+def test_navigation_cancellation_is_distinguished_from_a_telemetry_failure(served):
+    with opened(served, 1500) as (page, seen):
+        show(page, served, "ready")
+        held = []
+        page.route("**/api/uilog", lambda route: held.append(route.request))
+        with page.expect_request("**/api/uilog"):
+            page.evaluate("void fetch('/api/uilog', {method:'POST', body:'{}'}).catch(() => {})")
+        show(page, served, "ready")
+        assert held and held[0].failure == "net::ERR_ABORTED"
+        no_faults(seen)
+        page.unroute("**/api/uilog")
+        page.route("**/api/uilog", lambda route: route.abort(error_code="connectionrefused"))
+        with page.expect_event("requestfailed") as refused:
+            page.evaluate("void fetch('/api/uilog', {method:'POST', body:'{}'}).catch(() => {})")
+        assert refused.value.failure == "net::ERR_CONNECTION_REFUSED"
+        assert ("failed", refused.value.url, refused.value.failure) in seen["failed"]
 
 
 # --------------------------------------------------------------------------

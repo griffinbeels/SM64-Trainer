@@ -1617,7 +1617,15 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-30 for shared segment defaults and recording: **72,308
+Latest reading, 2026-10-18 for the Lineup and release hygiene: **94,871 lines,
+2,638 public names, 36.0 lines per public name, 116 pass-through (4.4%)**.
+Against integrated main before the Lineup, this branch adds 1,053 lines and
+24 public names with no new forwarders. The Lineup's model, DOM motion and
+component wiring have separate owners; rival selection and cloud leases keep
+their existing boundaries. The release review corrected successful request
+dedupe surviving an evicted list. No additional module split was justified.
+
+Previous reading, 2026-09-30 for shared segment defaults and recording: **72,308
 lines, 1,941 public names, 37.3 lines per public name, 84 pass-through (4.3%)**.
 Against main, this branch adds 742 lines and 18 public names with no new
 forwarders. Shared default authoring has its own source/store owner, recorder
