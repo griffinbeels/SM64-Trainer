@@ -50,8 +50,8 @@ ROW = f"{CARD} .ghost-row.ghost-row-lineup"
 TOGGLE = f"{CARD} .log-card-actions > .ghost-toggle"
 SEAT = f"{ROW} .lineup-row > .lineup-seat"
 WIDTHS = (1500, 850)
-# Only these background requests may be cancelled by a test-owned navigation.
-BACKGROUND = ("/api/pause", "/api/replay/status", "/api/uilog")
+# Telemetry is the only write that may be retired with a test document.
+BACKGROUND_POST = ("/api/uilog",)
 #: The PB whose gap to the first rival (Alexander_Speedruns, 339 frames) reads
 #: differently from frame arithmetic: 344 shows 11"46 and 339 shows 11"30, so
 #: the track must say −0.16, while (344 − 339) / 30 rounds to 0.17.
@@ -198,7 +198,9 @@ def watch(page):
 
     def failed(request):
         cancelled = (request in retiring and request.failure == "net::ERR_ABORTED"
-                     and any(request.url.split("?")[0].endswith(path) for path in BACKGROUND))
+                     and (request.method == "GET" or
+                          request.method == "POST" and any(request.url.split("?")[0].endswith(path)
+                                                           for path in BACKGROUND_POST)))
         if not cancelled:
             seen["failed"].append(("failed", request.url, request.failure))
         finished(request)
@@ -260,7 +262,8 @@ def show(page, served, name, session=None):
     state["writes"].clear()
     page._retire_observed_requests()
     page.goto(base)
-    page.locator(READY.get(name, f"{ROW} .lineup-note")).first.wait_for()
+    page.locator(READY.get(name, f"{ROW} .lineup-note")).first.wait_for(
+        state="attached" if name == "off" else "visible")
     settle(page)
 
 
@@ -275,22 +278,32 @@ def no_faults(seen):
     assert seen["failed"] == [], seen["failed"]
 
 
-def test_navigation_cancellation_is_distinguished_from_a_telemetry_failure(served):
+@pytest.mark.parametrize("endpoint,method", [
+    ("/api/uilog", "POST"),
+    ("/api/scorecard/entry_goals?scope=overall&keys=star%3A2%3A4", "GET"),
+])
+def test_navigation_cancellation_is_distinguished_from_a_telemetry_failure(served, endpoint, method):
     with opened(served, 1500) as (page, seen):
         show(page, served, "ready")
         held = []
-        page.route("**/api/uilog", lambda route: held.append(route.request))
-        with page.expect_request("**/api/uilog"):
-            page.evaluate("void fetch('/api/uilog', {method:'POST', body:'{}'}).catch(() => {})")
+        pattern = "**" + endpoint.split("?")[0] + "*"
+        probe_endpoint = endpoint + ("&" if "?" in endpoint else "?") + "probe=lineup-cancel"
+        options = {"method": method, **({"body": "{}"} if method == "POST" else {})}
+        fetch = f"void fetch({json.dumps(probe_endpoint)}, {json.dumps(options)}).catch(() => {{}})"
+        page.route(pattern, lambda route: held.append(route.request))
+        with page.expect_request(pattern):
+            page.evaluate(fetch)
         show(page, served, "ready")
         assert held and held[0].failure == "net::ERR_ABORTED"
         no_faults(seen)
-        page.unroute("**/api/uilog")
-        page.route("**/api/uilog", lambda route: route.abort(error_code="connectionrefused"))
-        with page.expect_event("requestfailed") as refused:
-            page.evaluate("void fetch('/api/uilog', {method:'POST', body:'{}'}).catch(() => {})")
-        assert refused.value.failure == "net::ERR_CONNECTION_REFUSED"
-        assert ("failed", refused.value.url, refused.value.failure) in seen["failed"]
+        for code, failure in (("connectionrefused", "net::ERR_CONNECTION_REFUSED"),
+                              ("aborted", "net::ERR_ABORTED")):
+            page.unroute(pattern)
+            page.route(pattern, lambda route, *, code=code: route.abort(error_code=code))
+            with page.expect_event("requestfailed", predicate=lambda request: request.url.endswith(probe_endpoint)) as refused:
+                page.evaluate(fetch)
+            assert refused.value.failure == failure
+            assert ("failed", refused.value.url, failure) in seen["failed"]
 
 
 # --------------------------------------------------------------------------
@@ -543,7 +556,7 @@ def test_the_head_toggle_writes_enabled_and_folds_the_row(served, width):
         show(page, served, "ready")
         assert page.evaluate(TAG_YOU)
         page.click(TOGGLE)
-        page.locator(f"{ROW} .lineup.is-off").wait_for()
+        page.locator(f"{ROW} .lineup.is-off").wait_for(state="attached")
         settle(page)
         shown = page.evaluate(MEASURE)
         assert state["writes"] == [{"enabled": False}], state["writes"]
