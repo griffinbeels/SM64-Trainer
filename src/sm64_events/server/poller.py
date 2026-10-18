@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from time import monotonic, perf_counter
 
 from sm64_events.core.events import Event
-from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
+from sm64_events.core.snapshot import GameSnapshot, SnapshotReader, reader_for
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.memory import addresses as A
 from sm64_events.detectors.anchors import BOOT_TIMER_MAX
@@ -155,15 +155,29 @@ class Poller:
     #: nothing in RDRAM says it happened: 1.6 neither clears nor releases
     #: RDRAM between ROMs, so the old game's memory stays readable and
     #: plausible until the new one boots (Cpu.cpp CloseCpu, Memory.cpp
-    #: Allocate_ROM). A header read is one small cached read (memory/pj64.py).
+    #: Allocate_ROM). A header read is one small cached read (memory/pj64.py),
+    #: so the cartridge is identified once per game frame, before the pad is
+    #: sampled: a swap from one practice ROM to the other changes which
+    #: addresses mean anything, and no reading may cross it.
     PRACTICE_ROM_RETRY_S = 2.0
-    PRACTICE_ROM_CHECK_S = 1.0
+    PRACTICE_ROM_CHECK_S = 1 / 30
 
     def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
                  reader=None, on_frame=None, input_sampler=None,
                  detector_factory=None, on_gap=None, on_snapshot=None,
+                 reader_factory=None, on_version_change=None,
 ):
         self.memory = memory
+        # THE LAYOUT FOLLOWS THE CARTRIDGE. The reader names the build it
+        # reads (`reader.version`); when the loaded cartridge's region differs,
+        # `reader_factory(region)` builds that build's reader -- a real one over
+        # a verified layout, else an UnreadyReader that holds -- and
+        # `on_version_change(region)` lets the composition root move every
+        # other memory reader (pad sampler, picture stamps, ghost capture) with
+        # it. One ROM's addresses are never read off another (task 0064).
+        self.reader_factory = reader_factory or (lambda version: reader_for(memory, version))
+        self.on_version_change = on_version_change
+        self._swapped_to: str | None = None
         self.detectors = list(detectors)
         self.detector_factory = detector_factory
         #: Whether the cartridge Project64 has open is a practice ROM: None
@@ -355,6 +369,8 @@ class Poller:
             await self._tick()
 
     async def _tick(self) -> None:
+        if await self._left_served_cartridge(went_back=False):
+            return
         if self.input_sampler is not None:
             due_for_a_snapshot = self._due_for_a_snapshot()
             if (not due_for_a_snapshot
@@ -376,8 +392,7 @@ class Poller:
             self._prev = None
             self.latest = None
             self._reset_detectors()
-            if self.on_gap is not None:
-                await self.on_gap("emulator disconnected")
+            await self._gap("emulator disconnected")
             await self.broadcaster.publish(_lifecycle_event("emulator_disconnected"))
             return
         if not _plausible(curr):
@@ -388,8 +403,7 @@ class Poller:
             self._prev = None
             self.latest = None
             self._reset_detectors()
-            if self.on_gap is not None:
-                await self.on_gap("implausible memory snapshot")
+            await self._gap("implausible memory snapshot")
             return
         # Reset-across-reattach synthesis (live gate 2026-06-15): an F1 console
         # reset makes RDRAM briefly implausible/unreadable, so the poller
@@ -404,7 +418,8 @@ class Poller:
         # (Residual edge: if reattach lands AFTER boot, timer >= BOOT_TIMER_MAX,
         # so a slow reattach can still miss it — acceptable; F1 reattach observed
         # in the boot range.)
-        if await self._left_practice_rom(curr):
+        went_back = self._last_timer is not None and curr.global_timer < self._last_timer
+        if went_back and await self._left_served_cartridge(went_back=True):
             return
         if (self._prev is None and self._last_timer is not None
                 and self._last_timer >= BOOT_TIMER_MAX
@@ -431,6 +446,10 @@ class Poller:
         self._last_timer = curr.global_timer
         if self.on_snapshot is not None:
             self.on_snapshot(curr)
+
+    async def _gap(self, reason: str) -> None:
+        if self.on_gap is not None:
+            await self.on_gap(reason)
 
     def _run_detectors(self, curr) -> tuple[list, str | None]:
         """Every detector sees this pair; the name of the one that failed, if any.
@@ -470,14 +489,20 @@ class Poller:
         Only a POSITIVE identification refuses. A header that cannot be read
         keeps the last identification, and with none it serves, so a failed
         scan never stops practice and a momentary miss mid-swap (the old
-        image released, the new one not yet read) never serves a real run."""
+        image released, the new one not yet read) never serves a real run.
+
+        A practice ROM is served only through ITS OWN build's layout: the
+        reader follows the cartridge's region (`_follow_cartridge`), and a
+        build whose layout is not verified yet holds -- nothing is read for
+        it, exactly like a real run (task 0064: "No attempts, PBs or
+        publishable ghosts from an unverified ROM/layout")."""
         # A backend that can read the cartridge declares it on its class (a
         # forwarding proxy answers every name and proves nothing).
         read = getattr(type(self.memory), "rom_header", None)
         identity = identify_rom(read(self.memory) if callable(read) else None)
         self._rom_identified_at = monotonic()
         if identity["state"] == "missing":
-            return self.practice_rom is not False
+            return self.practice_rom is not False and self.hold_reason is None
         practice = is_practice_rom(identity)
         if (practice, identity["name"]) != (self.practice_rom, self._rom_name):
             log.info("loaded ROM %r: %s", identity["name"],
@@ -485,27 +510,64 @@ class Poller:
                      "not a practice ROM; tracking and replay stay off")
         self.practice_rom, self._rom_name = practice, identity["name"]
         self.observed_game_version = identity["region"] if practice else None
-        return practice
+        if practice:
+            self._follow_cartridge(identity["region"])
+        return practice and self.hold_reason is None
 
-    async def _left_practice_rom(self, curr) -> bool:
-        """Is the served cartridge still a practice ROM? A new one starts
+    def _follow_cartridge(self, region: str | None) -> None:
+        """Rebuild the reader when the cartridge's build differs from the one
+        it reads. A reader that names no version (a test double) is left as
+        it is. The composition root hears the change before the detectors are
+        rebuilt, so the new chain is built for the new build."""
+        current = getattr(self.reader, "version", None)
+        if region is None or current is None or region == current:
+            return
+        self.reader = self.reader_factory(region)
+        self.hold_reason = getattr(self.reader, "reason", None)
+        self._swapped_to = region
+        log.info("the loaded ROM is %s; %s", region,
+                 "reading its layout" if self.hold_reason is None
+                 else "holding: its layout is not verified yet")
+        if self.on_version_change is not None:
+            self.on_version_change(region)
+        self._reset_detectors()
+
+    def capture_allowed(self) -> bool:
+        """The recorder's gate: a practice ROM (or none identified yet) whose
+        build this poller can read. A held build records nothing either."""
+        return self.practice_rom is not False and self.hold_reason is None
+
+    async def _left_served_cartridge(self, *, went_back: bool) -> bool:
+        """Is the served cartridge still the one being read? A new one starts
         without the emulator ever becoming unreadable, so the header is read
         again whenever the timer moves backward (a boot, a reset, a state
         load: every SM64 ROM starts its timer at zero) and at least every
-        PRACTICE_ROM_CHECK_S (a game whose RAM says nothing). Both run before
-        the detectors, so the new cartridge's first frame is never served.
-        Leaving practice detaches like a lost emulator."""
-        went_back = self._last_timer is not None and curr.global_timer < self._last_timer
+        PRACTICE_ROM_CHECK_S -- before the pad is sampled and before the
+        detectors run, so no reading taken through one ROM's layout is ever
+        served for another. Leaving practice, or reaching a build that holds,
+        detaches like a lost emulator; a swap to another readable build ends
+        the stream and the next tick reads through the new layout."""
         due = monotonic() - self._rom_identified_at >= self.PRACTICE_ROM_CHECK_S
-        if not (went_back or due) or self._serves_loaded_rom():
+        if not (went_back or due):
+            return False
+        served = self._serves_loaded_rom()
+        swapped, self._swapped_to = self._swapped_to, None
+        if served and swapped is None:
             return False
         self._break_input_capture()
-        self.memory.detach()
         self._prev = None
         self.latest = None
         self._reset_detectors()
+        if not served:
+            self.memory.detach()
         if self.on_gap is not None:
-            await self.on_gap("not a practice ROM")
+            if not served and self.practice_rom:
+                reason = f"the {self.observed_game_version} ROM is not verified yet"
+            elif not served:
+                reason = "not a practice ROM"
+            else:
+                reason = f"the cartridge changed to {swapped}"
+            await self.on_gap(reason)
         return True
 
     def _record_tick_ms(self, dt_ms: float) -> None:
@@ -555,7 +617,9 @@ class Poller:
                 if not self.memory.attach():
                     await asyncio.sleep(self.ATTACH_RETRY_S)
                     continue
-                if not self._serves_loaded_rom():
+                served = self._serves_loaded_rom()
+                self._swapped_to = None        # a fresh attach starts a fresh stream
+                if not served:
                     self.memory.detach()
                     await asyncio.sleep(self.PRACTICE_ROM_RETRY_S)
                     continue

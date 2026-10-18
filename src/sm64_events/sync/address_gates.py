@@ -57,6 +57,7 @@ HUNT_MAX_ROUNDS = 4
 HUNT_SURVIVOR_CEILING = 3
 USAMUNE_CONTRACT_SAMPLE_SECONDS = 2.0
 USAMUNE_RESULT_SETTLE_SECONDS = 3.0
+RESULT_RUN_ON_FRAMES = 15             # half a second of counter past a held result
 USAMUNE_TIMER_TIMEOUT_S = 60.0
 # The two-image differential for the section counter (diagnostics only): a
 # u32 that was at least this many frames old before the area load and at
@@ -911,7 +912,27 @@ def _hunt_ticking_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
     return (found or []), last_frames
 
 
+def _ticks_like_the_overall_counter(ctx, address: int) -> float:
+    samples = []
+    start = ctx.now()
+    while ctx.now() - start < USAMUNE_CONTRACT_SAMPLE_SECONDS:
+        samples.append((ctx.now(), ctx.raw().read_u16(address)))
+        ctx.sleep(POLL_INTERVAL_S)
+    return ticks_per_second(samples)
+
+
 def _check_usamune_overall(ctx) -> Verdict:
+    candidate = ctx.candidate("usamune_overall")
+    if candidate is not None:
+        # A candidate read off the ROM code (sync/rom_candidates.py) names the
+        # address; live it only has to run at game rate. No typing needed.
+        rate = _ticks_like_the_overall_counter(ctx, candidate)
+        if 25.0 <= rate <= 35.0:
+            return Verdict("verified", value=candidate, measured={"ticks_per_s": round(rate, 1)},
+                           evidence=f"the candidate ticks {rate:.1f}/s at {candidate:#x}")
+        return Verdict("failed", value=candidate, measured={"ticks_per_s": round(rate, 1)},
+                       evidence=f"the candidate ticks {rate:.1f}/s, not ~30/s -- stand "
+                                "in a course with the timer running and re-run")
     found, _ = _hunt_ticking_u16(
         ctx, "Stand in any course with the Usamune timer RUNNING and "
              "visible; type what it reads right now (e.g. 0'20\"20) and press "
@@ -940,7 +961,52 @@ def _check_usamune_overall(ctx) -> Verdict:
                    evidence="no surviving candidate ticks like a running counter")
 
 
+def _check_star_result_candidate(ctx, candidate: int) -> Verdict:
+    """Without a typed reading: at the star dance the result store is
+    written with a time near the running overall counter, and then holds
+    while the counter runs RESULT_RUN_ON_FRAMES past it -- a byte that
+    merely changes, or that follows the counter, fails one half or the
+    other. A reset after that ends the watch without undoing it: Usamune
+    zeroes both on a reset, and resetting right after a grab is how he
+    practises (2026-10-17, JP: held 1189 against a dance at 1188, then
+    the reset cleared both and the old all-window hold failed it)."""
+    mario_struct = ctx.candidate("mario_struct")
+    overall = ctx.candidate("usamune_overall")
+    if mario_struct is None or overall is None:
+        return Verdict("missing", evidence="mario_struct and usamune_overall come first")
+    mem = ctx.raw()
+    start = ctx.now()
+    while ctx.now() - start < STAR_GRAB_EDGE_TIMEOUT_S:
+        if mem.read_u32(mario_struct + A.MARIO_ACTION_OFF) in A.STAR_DANCE_ACTIONS:
+            break
+        ctx.sleep(POLL_INTERVAL_S)
+    else:
+        return Verdict("failed", value=candidate, evidence="no star dance seen")
+    at_dance = mem.read_u16(overall)
+    ctx.sleep(USAMUNE_RESULT_SETTLE_SECONDS / 3)
+    result = mem.read_u16(candidate)
+    ran_on = 0
+    settle_start = ctx.now()
+    while ctx.now() - settle_start < USAMUNE_RESULT_SETTLE_SECONDS:
+        counter = mem.read_u16(overall)
+        if mem.read_u16(candidate) != result or counter < result:
+            break
+        ran_on = max(ran_on, counter - result)
+        ctx.sleep(POLL_INTERVAL_S)
+    measured = {"result": result, "overall_at_dance": at_dance, "ran_on": ran_on}
+    if result and abs(result - at_dance) <= 60 and ran_on >= RESULT_RUN_ON_FRAMES:
+        return Verdict("verified", value=candidate, measured=measured,
+                       evidence=f"written {result} at the dance (counter {at_dance}) and held "
+                                f"while the counter ran {ran_on} frames past it")
+    return Verdict("failed", value=candidate, measured=measured,
+                   evidence="the candidate did not take and hold a time near the "
+                            "counter at the star dance")
+
+
 def _check_usamune_star_result(ctx) -> Verdict:
+    candidate = ctx.candidate("usamune_star_result")
+    if candidate is not None:
+        return _check_star_result_candidate(ctx, candidate)
     found, last_frames = _hunt_frozen_u16(
         ctx, "Grab a star; once the result FREEZES on screen, type it.")
     if not found or last_frames is None:
@@ -1092,6 +1158,50 @@ register(Gate(
                 "turn the display back on.",
     proves="the RAM byte holding Usamune's input display setting, zero while it is off.",
     check=_check_usamune_input_display,
+))
+
+
+# --- usamune_stop -------------------------------------------------------------
+
+USAMUNE_STOP_TIMEOUT_S = 600.0      # the human finds Usamune's TIMER page in his own time
+STOP_GRAB, STOP_GRABX = 1, 3
+
+
+def _check_usamune_stop(ctx) -> Verdict:
+    """The byte must read Grab (1) and then GrabX (3) while the human sets
+    TIMER -> STOP that way, and never leave 0..3: the menu steps through the
+    four values, so any other reading is some other byte. The neighbour at
+    base + 2 (DISPLAY) also holds 0..3 -- the ORDER of the two values he sets
+    is what tells them apart."""
+    candidate = ctx.candidate("usamune_stop")
+    if candidate is None:
+        return Verdict("missing", evidence="no candidate for usamune_stop: it is read off "
+                                           "Usamune's menu table, so a new ROM needs that read again")
+    seen, saw_grab = [], False
+    start = ctx.now()
+    while ctx.now() - start < USAMUNE_STOP_TIMEOUT_S:
+        value = ctx.raw().read_u8(candidate)
+        if not seen or seen[-1] != value:
+            seen.append(value)
+        if value > STOP_GRABX:
+            return Verdict("failed", value=candidate, measured={"values": seen},
+                           evidence=f"read {value}, outside the four STOP settings")
+        saw_grab = saw_grab or value == STOP_GRAB
+        if saw_grab and value == STOP_GRABX:
+            return Verdict("verified", value=candidate, measured={"values": seen},
+                           evidence="read 1 while STOP was Grab, then 3 at GrabX")
+        ctx.sleep(POLL_INTERVAL_S)
+    return Verdict("failed", value=candidate, measured={"values": seen},
+                   evidence="never saw Grab (1) and then GrabX (3)")
+
+
+register(Gate(
+    id="address.usamune_stop", feature="IGT clock", kind="address",
+    needs=("version.rom",), timeout_s=USAMUNE_STOP_TIMEOUT_S + 10,
+    instruction="In Usamune's menu, set TIMER -> STOP to Grab, then back to GrabX.",
+    proves="the RAM byte holding Usamune's STOP setting: bit 0 writes the star result "
+           "at the grab, bit 1 at the x-cam.",
+    check=_check_usamune_stop,
 ))
 
 

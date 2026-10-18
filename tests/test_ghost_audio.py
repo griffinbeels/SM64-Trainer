@@ -1,8 +1,9 @@
 """Ghost sound: real queue, audio thread and SM64 audio engine into captured PCM.
 
 Needs a local US ROM (SM64_MODEL_ROM) and the cached pinned libsm64 archive
-(SM64_MODEL_SEED_DIR); it skips, saying so, without them. The waveOut smoke
-inside only plays silence and only when a device exists.
+(SM64_MODEL_SEED_DIR); it skips, saying so, without them. SM64_MODEL_JP_ROM
+adds the JP practice cartridge, whose own audio regions the engine plays. The
+waveOut smoke inside only plays silence and only when a device exists.
 """
 import importlib.util
 import json
@@ -44,11 +45,16 @@ def test_ghost_sound_engine_queue_and_volume(tmp_path):
         str(ROOT / "tests/native/ghost_audio_host.cpp"), str(library),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/MANIFEST:EMBED",
         "/MANIFESTUAC:level='asInvoker'", "winmm.lib", "bcrypt.lib", *compiler.LIBS], tmp_path)
-    result = subprocess.run([str(target), rom], cwd=tmp_path, capture_output=True, text=True,
-                            timeout=120, check=False, **quiet_spawn_kwargs())
-    (tmp_path / "audio-witness.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
-    assert result.returncode == 0, result.stdout + result.stderr
-    report = json.loads(result.stdout)
+    roms = [("us", rom)] + ([("jp", os.environ["SM64_MODEL_JP_ROM"])] if os.environ.get("SM64_MODEL_JP_ROM") else [])
+    for label, supplied in roms:
+        result = subprocess.run([str(target), supplied], cwd=tmp_path, capture_output=True, text=True,
+                                timeout=120, check=False, **quiet_spawn_kwargs())
+        (tmp_path / f"audio-witness-{label}.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
+        assert result.returncode == 0, f"{label}: {result.stdout}{result.stderr}"
+        check_report(json.loads(result.stdout))
+
+
+def check_report(report):
     print(json.dumps(report))
     assert report["ok"] and report["cues"] == 4 and report["nonzero_samples"] > 10000
     assert 0.24 < report["half_energy_ratio"] < 0.26

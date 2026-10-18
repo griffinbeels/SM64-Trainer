@@ -33,7 +33,7 @@ class Local:
 
 
 def recording(identifier="1" * 64, *, frames=3):
-    raw = native()
+    raw = native(frames)  # the clip bears out its own time (community/claims.py)
     encoded = codec.encode(raw)
     return {"id": identifier, "player_id": UID, "player_name": "Runner", "target": dict(TARGET),
         "strategy": "Standard", "clock": "igt", "game_version": "us", "frames": frames,
@@ -179,7 +179,7 @@ def test_upload_offer_faster_coalescing_refuses_unknown_and_expired_grant(tmp_pa
         account = Account()
         population = CachedPopulation(Local(), root=tmp_path / "cache", account=account)
         sync = CommunitySync(account, population)
-        offer = {"target": TARGET, "clock": "igt", "game_version": "us", "strategy": "Standard", "frames": 300,
+        offer = {"target": TARGET, "clock": "igt", "game_version": "us", "strategy": "Standard", "frames": 3,
             "path": source, "raw_sha256": hashlib.sha256(raw).hexdigest(), "full_start": True, "valid": True}
         assert not sync.offer_source({**offer, "game_version": None})
         assert sync.offer_source(offer)
@@ -460,7 +460,7 @@ def test_active_manual_pin_outside_pool_renews_before_metadata_expiry(tmp_path, 
             return await original(method, path, **kwargs)
 
         account.request_json = respond
-        population.store_asset(pin, codec.encode(native()), native())
+        population.store_asset(pin, codec.encode(native(700)), native(700))
         try:
             start = now[0]
             for elapsed in (0, 120, 240):
@@ -909,6 +909,78 @@ def test_a_shared_recording_with_an_unknown_input_never_enters_the_cache(tmp_pat
 
 
 
+def _offered(tmp_path, raw, **changes):
+    """Run one offer of `raw` to the network's edge: its calls, and its refusal."""
+    async def scenario():
+        source = tmp_path / "offer.ghost"
+        source.write_bytes(raw)
+        account, both = Account(), catalog()
+        both["entries"].append({**both["entries"][0], "game_version": "jp"})
+        original = account.request_json
+
+        async def respond(method, path, **kwargs):
+            if path == "/v1/catalog":
+                return both
+            return await original(method, path, **kwargs)
+
+        account.request_json = respond
+        sync = CommunitySync(account, CachedPopulation(Local(), root=tmp_path / "cache", account=account))
+        offer = {"target": TARGET, "clock": "igt", "game_version": "us", "strategy": "Standard", "frames": 3,
+                 "path": str(source), "raw_sha256": hashlib.sha256(raw).hexdigest(), "full_start": True,
+                 "valid": True, "owner": UID, **changes}
+        try:
+            await sync._offer(offer)
+        except CommunityError as error:
+            return account.calls, error
+        return account.calls, None
+    return asyncio.run(scenario())
+
+
+def _jp(raw):
+    return raw[:24] + (2).to_bytes(4, "little") + raw[28:]  # gclip_header.rom_layout
+
+
+def test_an_upload_names_the_rom_its_clip_header_records(tmp_path):
+    calls, refusal = _offered(tmp_path, native())
+    assert refusal is None
+    admission = next(call for call in calls if call[1] == "/v1/uploads")
+    assert admission[2]["json"]["rom"] == "us" and admission[2]["json"]["frames"] == 3
+
+
+def test_a_jp_clip_uploads_as_jp(tmp_path):
+    calls, refusal = _offered(tmp_path, _jp(native()), game_version="jp")
+    assert refusal is None
+    assert next(call for call in calls if call[1] == "/v1/uploads")[2]["json"]["rom"] == "jp"
+
+
+@pytest.mark.parametrize("raw, changes, reason", [
+    (native(), {"game_version": "jp"}, "different ROM"),
+    (native(pad=None), {}, "not known on every frame"),
+    (native(), {"frames": 2}, "own clock disagrees"),
+    (native(), {"frames": 4}, "own clock disagrees"),
+], ids=("us_clip_claimed_jp", "unknown_inputs", "one_frame_faster", "one_frame_slower"))
+def test_a_clip_that_disproves_its_upload_never_reaches_the_network(tmp_path, raw, changes, reason):
+    """The trainer refuses before any upload call, and as invalid_source, so
+    the outbox drops the offer instead of retrying it."""
+    calls, refusal = _offered(tmp_path, raw, **changes)
+    assert refusal is not None and refusal.code == "invalid_source" and reason in str(refusal)
+    assert not any(call[1].startswith("/v1/uploads") for call in calls)
+
+
+@pytest.mark.parametrize("changes, code", [({"game_version": "jp"}, "rom_mismatch"), ({"frames": 2}, "frames_mismatch")])
+def test_a_download_its_clip_disproves_never_enters_the_cache(tmp_path, changes, code):
+    """Whatever the service accepted, a row whose ROM or time its own bytes
+    contradict is not kept."""
+    row = {**recording(), **changes}
+    raw = native()
+    population = CachedPopulation(Local(), root=tmp_path, account=Account())
+    with pytest.raises(CommunityError) as refused:
+        population.store_asset(row, codec.encode(raw), raw)
+    assert refused.value.code == code
+    assert not population.is_ready(row["id"]) and not list(tmp_path.glob("*.ghost"))
+
+
+
 def _clip(tmp_path, strategy="Standard", frames=3):
     raw = native()
     path = tmp_path / "source.ghost"
@@ -936,6 +1008,7 @@ async def _until(condition):
         if condition():
             return
         await asyncio.sleep(.01)
+    assert condition(), "community processing did not reach the expected state"
 
 
 def test_reclassified_clip_drops_old_strategy_offers_and_keeps_the_new_one(tmp_path):
@@ -975,7 +1048,10 @@ def test_saved_retraction_is_sent_once_after_restart(tmp_path, monkeypatch):
         sync = CommunitySync(account, CachedPopulation(Local(), root=root, account=account))
         await sync.start()
         try:
-            await _until(lambda: posts and not json.loads((root / "pending-retractions.json").read_bytes())["retractions"])
+            # The outbox lock spans its atomic write. Polling the file itself
+            # can deny that replace on Windows while a reader is descheduled.
+            await _until(lambda: posts and not sync._retractions.pending(UID))
+            assert not json.loads((root / "pending-retractions.json").read_bytes())["retractions"]
             now[0] += 61  # Past the recovery throttle: a row still saved would be sent again.
             sync._contribution_wake.set()
             await asyncio.sleep(.1)
@@ -1083,7 +1159,8 @@ def test_older_service_without_the_route_drops_the_retraction_quietly(tmp_path):
         await sync.start()
         try:
             assert sync.retract_other_strategies(raw_sha256=hashlib.sha256(native()).hexdigest(), keep_strategy="Alternate")
-            await _until(lambda: posts and not json.loads((root / "pending-retractions.json").read_bytes())["retractions"])
+            await _until(lambda: posts and not sync._retractions.pending(UID))
+            assert not json.loads((root / "pending-retractions.json").read_bytes())["retractions"]
             await asyncio.sleep(.05)
             assert len(posts) == 1 and not sync._offer_retry and sync.last_error is None
         finally:

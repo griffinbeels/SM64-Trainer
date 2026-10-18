@@ -52,19 +52,24 @@ from sm64_events.tracking.caveats import pb_blocked_by
 # CAVEAT_SEVERITY: a caveat says a saved time does not mean what the rank
 # beside it implies (and draws a mark), while these say the row is fine and
 # simply is not what you are practising right now (and draw nothing).
-PB_GATE_REASONS = ("no_active_strat", "foreign_strat")
+PB_GATE_REASONS = ("no_active_strat", "foreign_strat", "foreign_rom")
 
 
-def pb_strat_gate(attempt, active_strat: str | None) -> str | None:
+def pb_strat_gate(attempt, active_strat: str | None,
+                  foreign_rom: bool = False) -> str | None:
     """Whether this row's PB action belongs to the strategy being practised:
-    a `PB_GATE_REASONS` key, or None when it does."""
+    a `PB_GATE_REASONS` key, or None when it does. `foreign_rom` (2026-10-16,
+    `views.foreign_rom`): the run was played on the other ROM of a REGIONAL
+    strategy, so it belongs to that ROM's PB slot, not the one on screen."""
     if not active_strat:
         return "no_active_strat"
-    return None if attempt.strat_tag == active_strat else "foreign_strat"
+    if attempt.strat_tag != active_strat:
+        return "foreign_strat"
+    return "foreign_rom" if foreign_rom else None
 
 
 def pb_action(attempt, active_strat: str | None,
-              owns_strat_pb: bool) -> tuple[str | None, dict | None]:
+              owns_strat_pb: bool, *, foreign_rom: bool = False) -> tuple[str | None, dict | None]:
     """`("save" | "undo" | None, {"reason", "strat"} | None)` for one row.
 
     Pure, so `views._attempt_json` can call it per row from the maps the
@@ -83,7 +88,7 @@ def pb_action(attempt, active_strat: str | None,
         return None, None
     if attempt.course_id is None and attempt.segment_id is None:
         return None, None
-    gate = pb_strat_gate(attempt, active_strat)
+    gate = pb_strat_gate(attempt, active_strat, foreign_rom)
     if gate is not None:
         return None, {"reason": gate, "strat": active_strat}
     blocked = pb_blocked_by(attempt)

@@ -104,7 +104,26 @@ The committed clip is never changed. A frame the track lacks, and a whole clip w
 track Mario's action does not line up, keep the unavailable-input indicator. Synthetic
 death, extrapolated dance and post-recording holds have no invented inputs.
 
-The font is the original thin white SM64 dialogue font. Names and inputs are
+The font is the thin white SM64 US dialogue font. The trainer never ships
+it: each player's own US cartridge lends it. Whenever the atlas is built from a
+verified US cartridge, [ghost_font_cache.cpp](../plugin/gfxwrap/ghost_font_cache.cpp)
+keeps its font tiles in a per-user file,
+`%LOCALAPPDATA%\SM64Trainer\plugin-cache\us-dialogue-font.bin`: per user, as
+the cartridge was his; writable wherever Project64 is installed; kept across
+Project64 restarts and plugin reinstalls. It is written whole (a temporary
+file, then one replace) and read only when its magic, version, size and
+SHA-256 hold and the digest is the known US font (`us_font_sha256`, the same
+on stock SM64 US and Usamune US), so a short, altered or foreign file is
+refused. On a JP cartridge the atlas fills its glyph cells from that file:
+US glyphs, US widths, lowercase and US punctuation. Without it, a JP name is
+drawn in JP's own font, an 8x16 one-bit font with digits, capitals and kana
+but no lowercase Latin: in JP's capitals (lowercase takes the capital),
+spaced by JP's own monospaced rule (10 pixels a glyph, 5 a space); its period
+is JP's own (the handakuten circle moved 2 left and 5 down, as the game draws
+its full stop), its colon that circle twice, its apostrophe JP's comma raised
+to the cap line, and `^ | < > &`, which JP cannot draw, show JP's `?`. Only
+the names' font is borrowed: inputs, HUD art and sound stay the cartridge's
+own. Names and inputs are
 sized in world units (`GP_ANNOTATION_*` in `ghost_tuning.h`), so a far ghost's
 name shrinks with its body, up to a largest size beside the camera. The
 renderer draws the world upside down (`flip_y`), so layout offsets flip with
@@ -249,10 +268,40 @@ are rebuilt once when the work is integrated (see the native plugin rule).
 renderer display-list command. [ghost_capture.cpp](../plugin/gfxwrap/ghost_capture.cpp)
 reads bounded, validated N64 memory without writes. The root probe borrows the
 renderer-owned RAM only within one serialized display-list occurrence.
-The US layout comes from [ghost_layout.py](../src/sm64_events/memory/ghost_layout.py);
-new camera/graphics addresses retain their live verification gates. JP is not
-configured for this path. The product path targets Windows x86 Project64 and
-the supported US practice ROM. Its presentation requires OpenGL 4.3; the world
+Each cartridge's layout comes from [ghost_layout.py](../src/sm64_events/memory/ghost_layout.py);
+new camera/graphics addresses retain their live verification gates. The two
+practice ROMs share one RAM schema; `rom_layout` (1 US, 2 JP) names which one
+runs, and every clip records the cartridge it was captured on. A config for
+the other cartridge never reads RAM: `ghost_rom::layout` maps the opened
+header to its layout, the stream treats the cartridge as closed to a
+mismatched config, and the worker refuses it as `GIPC_LAYOUT` (a swap from
+US to JP under the US config captures nothing). Capture and
+playback name a held or ridden object's behaviour script through that layout
+([ghost_behaviours.h](../plugin/gfxwrap/ghost_behaviours.h), checked against
+`data/behaviours_{us,jp}.tsv` by symbol), so a JP clip draws its Bob-omb on
+the US cartridge and the reverse. Everything else a clip holds is
+region-neutral: positions, animation ids and frames (both cartridges carry
+the same 209-entry Mario table), camera, shadow, particles (segmented lists
+in segments that decode to identical bytes) and level/area numbers. The model
+reads each cartridge's ROM blocks from its own offsets (`jp_blocks` in
+[assets.c](../renderer/model/assets.c)). Names and inputs read each
+cartridge's own art the same way (`cartridges` in
+[ghost_annotation_assets.cpp](../plugin/gfxwrap/ghost_annotation_assets.cpp)),
+and ghost sound each cartridge's own audio (`SA_US`/`SA_JP` in
+[audio.h](../renderer/model/audio.h), hashed per region in `ghost_audio.cpp`).
+JP's sound data is JP's own: US added voices and chimes, so its voice and
+menu banks hold 0x40 sounds to JP's 0x30, and the engine bounds them at
+JP's 0x30 while JP's data is loaded. Rendering every sound id through the
+engine on both cartridges (2026-10-17): 779 of 864 sound the same, 32 exist
+only on US (voice and menu 0x30-0x3F: "doh", "hello", Peach's lines, the
+secret chimes), and 52 differ, among them the triple-jump yahoo/waha/yippee
+(voice 0x2B-0x2F, a short filler on JP), Peach's "dear Mario" (0x28), the
+star-grab "okey-dokey"/"let's-a go" chimes (menu 0x23-0x24) and the red-coin
+chimes (menu 0x28-0x2F). So a ghost's sound ids play the running cartridge's
+version: a US ghost on JP drops its US-only voices and plays JP's filler for
+the triple-jump yahoo; a JP ghost on US plays US's versions of those 52.
+The product path targets Windows x86 Project64
+and the supported practice ROMs. Its presentation requires OpenGL 4.3; the world
 hook qualifies the supported F3D command path, not LLE or arbitrary microcodes.
 
 The sample contains graphics root, animation phase, body state, scene, camera,

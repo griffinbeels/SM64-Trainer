@@ -135,12 +135,12 @@ INVARIANTS = (
         concept="a RAM address",
         owners=frozenset({"layout.py"}),
         # The 16-bit prefixes every global the tracker reads sits under --
-        # US 0x8031 (play_sound)/0x8032/0x8033/0x8036, the behaviour segment 0x800E, Usamune's
+        # 0x8031 (play_sound)/0x8032/0x8033/0x8036 on both builds, JP's
+        # gMarioObject under 0x8035, the behaviour segment 0x800E, Usamune's
         # expansion RAM 0x8041. Uppercase, as layout.py spells them (a token
         # must appear in its owner -- see test_every_ingredient_can_actually_
-        # match_code); when JP rows land, add their prefixes here (0x8035 for
-        # gMarioObject) so the guard grows with the layout.
-        tokens=("0x8031", "0x8032", "0x8033", "0x8036", "0x8041", "0x800E"),
+        # match_code); a new build's rows add their prefixes here.
+        tokens=("0x8031", "0x8032", "0x8033", "0x8035", "0x8036", "0x8041", "0x800E"),
         files=python_sources(),
         why="memory/layout.py holds every RAM address per ROM version "
             "(2026-08-15); a literal anywhere else is a US address baked "

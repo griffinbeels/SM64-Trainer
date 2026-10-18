@@ -5,9 +5,10 @@
 #include "ghost_draw.h"
 #include "ghost_ipc.h"
 #include "ghost_audio.h"
+#include "ghost_font_cache.h"
 #include "ghost_playback.h"
+#include "ghost_rom.h"
 #include "link_dispatch.h"
-#include "practice_rom.h"
 #include "N64.h"
 #include "RSP.h"
 #include "GBI.h"
@@ -29,8 +30,16 @@ bool __cdecl audio_start(const uint8_t *rom, size_t bytes) {
 }
 void __cdecl audio_stop() { ghost_audio::stop(); }
 const ghost_ipc::AudioHooks audio_hooks{audio_start, audio_stop};
+// Names on a JP cartridge borrow the US font his own US cartridge lent, kept
+// in his per-user cache (ghost_font_cache.h); a US cartridge refreshes it.
+bool __cdecl load_annotations(ghost_annotation::Assets &assets, const uint8_t *rom, uint32_t bytes) {
+    return ghost_font_cache::load(ghost_font_cache::user_cache(), assets, rom, bytes);
+}
 const struct AudioWiring {
-    AudioWiring() { ghost_playback::set_sound_sink(ghost_audio::sink()); ghost_ipc::set_audio(&audio_hooks); }
+    AudioWiring() {
+        ghost_playback::set_sound_sink(ghost_audio::sink()); ghost_ipc::set_audio(&audio_hooks);
+        ghost_playback::set_annotation_loader(load_annotations);
+    }
 } audio_wiring;
 uint32_t context_generation = 0;
 bool context_current = false, observing = false;
@@ -57,12 +66,6 @@ replay_gl::RasterState tracked() {
     replay_gl::Raster(&state);
     return state;
 }
-bool supported_rom() {
-    unsigned char bytes[PRACTICE_ROM_HEADER_BYTES]{};
-    SIZE_T got = 0;
-    return HEADER && ReadProcessMemory(GetCurrentProcess(), HEADER, bytes, sizeof(bytes), &got)
-        && got == sizeof(bytes) && practice_rom(bytes);
-}
 }
 namespace ghost_link {
 FrameBuffer* raster_buffer() {
@@ -86,8 +89,11 @@ uint64_t attachments(const FrameBuffer *buffer) {
     return (uint64_t(uint32_t(buffer->m_pTexture->name)) << 32) | depth_name;
 }
 void rom(bool opened) {
-    const bool practice = opened && supported_rom();
-    observing = false; ghost_stream::rom(practice); ghost_ipc::rom(practice, practice ? HEADER : nullptr);
+    // Which practice cartridge opened (US or JP rom_layout), 0 for any other:
+    // the stream captures only under a config for this same cartridge.
+    const uint32_t cartridge = opened ? ghost_rom::layout(reinterpret_cast<const uint8_t*>(HEADER)) : 0;
+    observing = false; ghost_stream::rom(cartridge);
+    ghost_ipc::rom(cartridge != 0, cartridge ? HEADER : nullptr);
 }
 void context_created() {
     context_current = true; context_generation = 0;

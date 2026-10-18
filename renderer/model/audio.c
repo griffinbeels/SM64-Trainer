@@ -13,8 +13,15 @@
 
 extern unsigned char *gCtlSeqs;
 extern u8 sNumProcessedSoundRequests;
+extern u8 sNumSoundsPerBank[];
 
 static uint8_t *copy;
+/* The bank-set table as upstream reads it on a little-endian host: u16
+ * offsets in host order, then the bank lists, in the 0x100 bytes audio_init
+ * copies. Upstream's loader instead pointed one byte into the ROM's
+ * big-endian table and slid its lists along by one: the same values, but only
+ * for US's exact table. */
+static uint8_t bank_sets[0x100];
 static struct seqFile *ctl, *tbl, *seq;
 /* One source per ghost, camera-relative like SM64's own cameraToObject, so
  * the engine pans, distances and prioritises each ghost as the game would
@@ -28,18 +35,35 @@ static uint32_t be32(const uint8_t *p) {
 }
 static uint32_t be16(const uint8_t *p) { return (uint32_t)p[0] << 8 | p[1]; }
 
-/* Where a ROM offset lies inside the audio span. */
-#define AT(offset) ((offset) - SA_AUDIO_OFFSET)
-
-/* A seq file header whose every bank lies inside its own region. */
+/* A seq file header whose every bank lies inside its own region (offsets in
+ * the span, which begins at CTL). */
 static int header(const uint8_t *audio, uint32_t at, uint32_t end, uint32_t type) {
-    const uint8_t *seq = audio + AT(at);
+    const uint8_t *seq = audio + at;
     const uint32_t span = end - at, count = be16(seq + 2);
     if (be16(seq) != type || !count || count > 64 || 4 + 8 * count > span) return 0;
     for (uint32_t i = 0; i < count; ++i) {
         const uint32_t offset = be32(seq + 4 + 8 * i), length = be32(seq + 8 + 8 * i);
         if (offset > span || length > span - offset) return 0;
     }
+    return 1;
+}
+
+/* The big-endian table into bank_sets: every offset past the offsets and
+ * every list inside the table, or nothing. */
+static int load_bank_sets(const uint8_t *table) {
+    const uint32_t first = be16(table), count = first / 2;
+    uint32_t i;
+    if (!count || first % 2 || first >= SA_BANKS_BYTES) return 0;
+    for (i = 0; i < count; ++i) {
+        const uint32_t at = be16(table + 2 * i);
+        if (at < first || at >= SA_BANKS_BYTES || 1u + table[at] > SA_BANKS_BYTES - at) return 0;
+    }
+    memset(bank_sets, 0, sizeof(bank_sets));
+    for (i = 0; i < count; ++i) {
+        bank_sets[2 * i] = table[2 * i + 1];
+        bank_sets[2 * i + 1] = table[2 * i];
+    }
+    memcpy(bank_sets + first, table + first, SA_BANKS_BYTES - first);
     return 1;
 }
 
@@ -51,24 +75,28 @@ static void release(void) {
     gSoundDataADSR = gSoundDataRaw = gMusicData = NULL; gBankSetsData = NULL;
 }
 
-int32_t sa_open(const uint8_t *audio, size_t bytes) {
+int32_t sa_open(const uint8_t *audio, size_t bytes, const sa_regions *regions) {
+    uint32_t tbl_at, seq_at, banks_at;
     if (copy) return SA_BUSY;
-    if (!audio || bytes != SA_AUDIO_BYTES) return SA_ARGUMENT;
-    if (!header(audio, SA_CTL_OFFSET, SA_TBL_OFFSET, 1) || !header(audio, SA_TBL_OFFSET, SA_SEQ_OFFSET, 2)
-            || !header(audio, SA_SEQ_OFFSET, SA_BANKS_OFFSET, 3)) return SA_INVALID_ROM;
+    if (!audio || !regions || regions->tbl <= regions->ctl || regions->seq <= regions->tbl
+            || regions->banks <= regions->seq || bytes != SA_SPAN(*regions)) return SA_ARGUMENT;
+    tbl_at = regions->tbl - regions->ctl; seq_at = regions->seq - regions->ctl;
+    banks_at = regions->banks - regions->ctl;
+    if (!header(audio, 0, tbl_at, 1) || !header(audio, tbl_at, seq_at, 2)
+            || !header(audio, seq_at, banks_at, 3) || !load_bank_sets(audio + banks_at)) return SA_INVALID_ROM;
     /* Upstream copied the whole 8 MB ROM; every parse is relative to its own
      * region, so the span alone is enough. */
     copy = malloc(bytes);
     if (!copy) return SA_MEMORY;
     memcpy(copy, audio, bytes);
-    gSoundDataADSR = ctl = parse_seqfile(copy + AT(SA_CTL_OFFSET));
-    gSoundDataRaw = tbl = parse_seqfile(copy + AT(SA_TBL_OFFSET));
-    gMusicData = seq = parse_seqfile(copy + AT(SA_SEQ_OFFSET));
+    gSoundDataADSR = ctl = parse_seqfile(copy);
+    gSoundDataRaw = tbl = parse_seqfile(copy + tbl_at);
+    gMusicData = seq = parse_seqfile(copy + seq_at);
     if (!ctl || !tbl || !seq || !gCtlSeqs) { release(); return SA_MEMORY; }
-    /* Upstream's bank-set fixup, inside the region it was checked against. */
-    gBankSetsData = copy + AT(SA_BANKS_OFFSET);
-    memmove(gBankSetsData + 0x45, gBankSetsData + 0x44, 0x5B);
-    gBankSetsData[0x45] = 0x00;
+    gBankSetsData = bank_sets;
+    /* The engine's own bound on a request's sound id (process_sound_request),
+     * as the build whose data is loaded has it: past it lies no sound. */
+    sNumSoundsPerBank[2] = sNumSoundsPerBank[7] = regions->voice_menu_sounds;
     ptrs_to_offsets(ctl);
     audio_init();
     sound_init();

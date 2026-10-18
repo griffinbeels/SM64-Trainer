@@ -157,7 +157,7 @@ static void ownership_transfer(sg_model* model, const sg_pose& p, const std::vec
 static void independent_asset_validation(sg_model* model, const std::vector<uint8_t>& rom,
         const sg_pose& p, const std::vector<float>& expected) {
     auto damaged = rom;
-    damaged[1132368] = 0; // Existing MIO0 parser must reject a header-only/invalid asset image.
+    damaged[rom[0x3e] == 'J' ? 0x112b50 : 1132368] = 0; // Existing MIO0 parser must reject a header-only/invalid asset image.
     int valid = SG_BUSY, invalid = SG_BUSY, allocation = SG_OK;
     check(sg_model_test_enter() == 1, "hold render model gate during worker validation");
     std::thread worker([&] {
@@ -248,13 +248,17 @@ int main(int argc, char** argv) {
         check(sg_model_validate_rom(rom.data(),rom.size())==SG_OK,"validation before runtime binding");
         check(sg_model_open(nullptr,0,&model)==SG_INVALID_ROM && !model,"null ROM");
         check(sg_model_open(rom.data(),rom.size()-1,&model)==SG_INVALID_ROM && !model,"short ROM");
+        // The blocks where this cartridge keeps them (renderer/model/assets.c):
+        // Usamune JP holds the same decoded blocks at its own offsets.
+        const bool jp=rom[0x3e]=='J';
+        const size_t textures=jp?0x112b50:1132368,animations=jp?0x4e9fa0:0x4ec000;
         malformed(rom,0,4,0);
-        malformed(rom,1132368,4,0); // MIO0 signature.
-        malformed(rom,1132368+4,4,255); // Decoded capacity.
-        malformed(rom,1132368+8,4,255); // Compressed stream offset.
-        malformed(rom,0x4ec000,4,255); // Animation directory count.
-        malformed(rom,0x4ec008,4,255); // Animation entry offset.
-        const size_t first=0x4ec000+be32(rom.data()+0x4ec008);
+        malformed(rom,textures,4,0); // MIO0 signature.
+        malformed(rom,textures+4,4,255); // Decoded capacity.
+        malformed(rom,textures+8,4,255); // Compressed stream offset.
+        malformed(rom,animations,4,255); // Animation directory count.
+        malformed(rom,animations+8,4,255); // Animation entry offset.
+        const size_t first=animations+be32(rom.data()+animations+8);
         malformed(rom,first+16,4,255); // Animation index array offset.
         const size_t indices=first+be32(rom.data()+first+16);
         malformed(rom,indices,2,0); // Zero-length channel.
@@ -263,6 +267,10 @@ int main(int argc, char** argv) {
         sg_atlas_view atlas{};
         check(sg_model_get_atlas(model,&atlas)==SG_OK && atlas.animation_count==209 && atlas.rgba,"atlas");
         check(atlas.width==SG_ATLAS_CELLS*64 && atlas.height==64,"atlas dimensions");
+        // Every texture the model drew from this cartridge, as one FNV-1a: the
+        // test compares it across cartridges (the same art on US and JP).
+        uint64_t atlas_fnv=1469598103934665603ull;
+        for(size_t i=0;i<size_t(atlas.width)*atlas.height*4;++i) atlas_fnv=(atlas_fnv^atlas.rgba[i])*1099511628211ull;
         {
             // Mario's particle models: 58 textured quads (bubble first, splash
             // frames 32x64), then 12 lit meshes (stars, punch dirt, the cap).
@@ -370,7 +378,7 @@ int main(int argc, char** argv) {
         independent_asset_validation(model,rom,a,first_mesh);
         for(unsigned id=0; id<atlas.animation_count; ++id) {
             sg_pose sampled=a; sampled.animation_id=static_cast<int32_t>(id);
-            const size_t entry=0x4ec000+be32(rom.data()+0x4ec008+id*8);
+            const size_t entry=animations+be32(rom.data()+animations+8+id*8);
             const unsigned end=(unsigned(rom[entry+8])<<8)|rom[entry+9];
             for(unsigned frame : {0u,end-1}) {
                 sampled.animation_frame=static_cast<int16_t>(frame);
@@ -794,8 +802,8 @@ int main(int argc, char** argv) {
         // A missing optional companion segment refuses that model, while
         // Mario's own public mesh still evaluates normally.
         const struct {uint32_t segment,kind;int16_t animation;} missing[]={
-            {0x1F2200u,SG_HELD_KOOPA_SHELL,-1},{0x1521D0u,SG_HELD_UKIKI,12},
-            {0x201410u,SG_HELD_UKIKI,12}};
+            {jp?0x1F0530u:0x1F2200u,SG_HELD_KOOPA_SHELL,-1},{jp?0x1505D0u:0x1521D0u,SG_HELD_UKIKI,12},
+            {jp?0x1FF740u:0x201410u,SG_HELD_UKIKI,12}};
         for(const auto &entry:missing) {
             auto damaged=rom;damaged[entry.segment]=0;
             check(sg_model_open(damaged.data(),damaged.size(),&model)==SG_OK,"optional texture failure still opens Mario");
@@ -809,8 +817,9 @@ int main(int argc, char** argv) {
                   "companion with unavailable texture segment is refused");
             check(sg_model_close(&model)==SG_OK,"close missing-texture model");
         }
-        std::printf("{\"ok\":true,\"checks\":%u,\"vertices\":%u,\"max_held_vertices\":%u,\"scratch_bytes\":%zu,\"hidden_gl_pixels\":%u,\"cpu_only\":%s}\n",
-                    checks,vertices,max_held_vertices,scratch,covered,cpu_only?"true":"false");
+        std::printf("{\"ok\":true,\"checks\":%u,\"vertices\":%u,\"max_held_vertices\":%u,\"scratch_bytes\":%zu,\"hidden_gl_pixels\":%u,\"cpu_only\":%s,\"atlas_fnv\":\"%016llx\"}\n",
+                    checks,vertices,max_held_vertices,scratch,covered,cpu_only?"true":"false",
+                    static_cast<unsigned long long>(atlas_fnv));
         return 0;
     } catch(const std::exception& e) {
         if(model) sg_model_close(&model);

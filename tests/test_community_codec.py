@@ -10,8 +10,10 @@ from sm64_events.community import codec
 
 
 def native(count=3, pad=(0, 0, 0)):
-    return encode_clip(tuple(frame_from_bytes(frame(index, pad=pad)) for index in range(1, count + 1)), producer(),
-                       clock_kind=1, clip_id="22222222-2222-4222-8222-222222222222")
+    """A star clip whose exact time is `count` frames: its counter reads
+    0..count-1 and Usamune displays one tick ahead (community/claims.py)."""
+    return encode_clip(tuple(frame_from_bytes(frame(index, igt=index - 1, pad=pad)) for index in range(1, count + 1)),
+                       producer(), clock_kind=1, clip_id="22222222-2222-4222-8222-222222222222")
 
 
 def older(version):

@@ -55,7 +55,8 @@ def test_metadata_is_immediate_but_selected_asset_is_extracted_lazily(tmp_path):
     row = rows[0]
     assert (row["source_status"], row["structurally_valid"], row["certified"], row["full_start"]) == (
         "bundled-author-recording", True, False, None)
-    assert row["recorded_game_version"] is None and row["game_version"] == "us"
+    # No ROM in the collection: recorded before the stamp, so on US.
+    assert row["recorded_game_version"] == "us" and row["game_version"] == "us"
     assert row["player_name"] == AUTHOR and row["ghost"].pb is False and row["ghost"].attempt_id is None
     path, report = value.resolve(row["ghost"], {"kind": "star", "entity_key": "2-1", "strat": "10 coin"})
     assert path.read_bytes() == source.read_bytes()

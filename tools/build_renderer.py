@@ -58,7 +58,7 @@ OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_ap
                    "ghost_pass.cpp", "ghost_stream.cpp", "ghost_link.cpp", "ghost_particle_capture.cpp", "ghost_particle_pose.cpp",
                    "ghost_pose.cpp", "ghost_compositor.cpp", "ghost_assets.cpp", "ghost_rom.cpp", "ghost_ipc.cpp",
                    "ghost_draw.cpp", "ghost_playback.cpp", "ghost_dispatch.cpp", "ghost_presentation.cpp",
-                   "ghost_audio.cpp", "ghost_annotation_assets.cpp")
+                   "ghost_audio.cpp", "ghost_annotation_assets.cpp", "ghost_font_cache.cpp")
 DEFINES = "SM64_REPLAY_GL_WITNESS;SM64_REPLAY_SOURCE;SM64_REPLAY_CONTEXT_LIFETIME;SM64_GHOST_RENDERER;"
 RECIPE_VERSION = "3"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)

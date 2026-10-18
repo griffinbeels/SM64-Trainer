@@ -44,3 +44,11 @@ def test_curr_area_defaults_to_zero_for_old_call_sites():
                      num_stars=0, last_completed_course=0,
                      last_completed_star=0)
     assert s.curr_area == 0
+
+
+def test_the_stop_byte_is_read_where_the_build_has_its_address():
+    from dataclasses import replace
+    mem = BufferMemory()
+    mem.write_u8(US.usamune_stop, 3)
+    assert SnapshotReader(mem).read().usamune_stop == 3
+    assert SnapshotReader(mem, replace(US, usamune_stop=None)).read().usamune_stop is None

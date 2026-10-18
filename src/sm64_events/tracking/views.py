@@ -49,6 +49,7 @@ from sm64_events.links import star_links, ukikipedia_url
 from sm64_events.memory.addresses import (COURSE_BY_LEVEL, COURSE_NAMES,
                                           course_name, star_count, star_name)
 from sm64_events.ranks import classify
+from sm64_events.ranks import region_scope
 from sm64_events.ranks import scoring
 from sm64_events.ranks.calibration import calibrated_view
 from sm64_events.ranks.standards import entity_key
@@ -183,7 +184,46 @@ def fastest_current_pbs(pb_rows: list[dict], regions=None) -> dict:
     return best
 
 
-def current_pbs_by_strat(pb_rows: list[dict]) -> dict:
+def pb_rom(row: dict) -> str | None:
+    """The ROM a saved PB was set on: its own stamp, else its run's (the
+    storage layer's `pb_version`); None means "same for both"."""
+    return row["pb_version"] if "pb_version" in row else row.get("game_version")
+
+
+def pb_slot(ranks, ek: str, strat: str | None) -> dict:
+    """The `db.current_pb` arguments for one strategy's PB slot on the ROM
+    being graded: `{game_version, region_scope}`, or {} with no standards."""
+    if ranks is None:
+        return {}
+    return {"game_version": ranks.grading_version,
+            "region_scope": region_scope.scope_of(ek, strat, ranks)}
+
+
+def foreign_rom(ranks, attempt) -> bool:
+    """A run from the other ROM on a REGIONAL strategy: it belongs to the PB
+    slot that ROM keeps, not the one on screen, so it neither compares with
+    the shown PB nor acts on it (`pbaction.pb_strat_gate`)."""
+    version = getattr(attempt, "game_version", None)
+    if ranks is None or version not in region_scope.VERSIONS or not attempt.strat_tag:
+        return False
+    ek = entity_key(attempt.course_id, attempt.star_id, attempt.segment_id)
+    return (version != ranks.grading_version
+            and region_scope.scope_of(ek, attempt.strat_tag, ranks) == region_scope.REGIONAL)
+
+
+def _slot_row(by_rom: dict, scope: str, running: str) -> dict | None:
+    """One slot's current row from each ROM's latest save. A row naming no
+    ROM counts for both; a shared strategy takes the faster ROM."""
+    def latest(rom):
+        rows = [row for version, row in by_rom.items() if version in (rom, None)]
+        return max(rows, key=lambda row: row["id"]) if rows else None
+    if scope == region_scope.SHARED:
+        rows = [row for row in (latest("us"), latest("jp")) if row is not None]
+        return min(rows, key=lambda row: (row["frames"], -row["id"])) if rows else None
+    return latest(running)
+
+
+def current_pbs_by_strat(pb_rows: list[dict], *, running: str | None = None, ranks=None) -> dict:
     """Latest pb row keyed like _current_pbs but with the saving attempt's
     strat_tag appended. THE per-strategy ranking lookup: a strategy is ranked
     ONLY by times achieved WITH that strategy. PBs with no strat_tag can't be
@@ -194,8 +234,15 @@ def current_pbs_by_strat(pb_rows: list[dict]) -> dict:
     the identical thing in batch, and there is exactly ONE answer to "which of
     my saved times counts". It went through `min()` over raw attempts until
     2026-07-28, which paid MARELO out before the user clicked Save as PB
-    (task 0034)."""
-    out = {}
+    (task 0034).
+
+    With `running` named ("us"/"jp"), each slot follows its strategy's region
+    scope (`ranks/region_scope.py`, 2026-10-16): a REGIONAL strategy's PB is
+    the latest save on the running ROM, a SHARED one's the faster of the two
+    ROMs' latest saves, and a save naming no ROM counts for both. `db.current_pb`
+    answers the same question for one slot. Omitted, the latest save wins
+    whatever its ROM."""
+    out, by_slot = {}, {}
     for row in pb_rows:  # ordered by id: later rows win
         strat = row["strat_tag"]
         if not strat:
@@ -203,8 +250,24 @@ def current_pbs_by_strat(pb_rows: list[dict]) -> dict:
         key = (("segment", row["segment_id"], row["timer_mode"], strat)
                if row["segment_id"] is not None
                else (row["course_id"], row["star_id"], row["timer_mode"], strat))
-        out[key] = row
+        if running is None:
+            out[key] = row
+        else:
+            by_slot.setdefault(key, {})[pb_rom(row)] = row
+    for key, by_rom in by_slot.items():
+        ek = (entity_key(None, None, key[1]) if key[0] == "segment"
+              else entity_key(key[0], key[1]))
+        row = _slot_row(by_rom, region_scope.scope_of(ek, key[-1], ranks), running)
+        if row is not None:
+            out[key] = row
     return out
+
+
+def graded_pbs_by_strat(pb_rows: list[dict], ranks) -> dict:
+    """`current_pbs_by_strat` on the ROM being graded -- what every rank and
+    practice surface reads."""
+    return current_pbs_by_strat(pb_rows, running=ranks.grading_version if ranks else None,
+                                ranks=ranks)
 
 
 def _pb_row_json(row, attempt_by_id, igt_seen):
@@ -227,8 +290,29 @@ def _pb_row_json(row, attempt_by_id, igt_seen):
                                  igt_seen)}
 
 
+# Usamune STOP settings whose on-screen time is not the x-cam time this log
+# records: it froze at the grab, or it never stops.
+_STOPS_SHORT_OF_XCAM = frozenset({"grab", "none"})
+
+
+def usamune_stop_now(attempts) -> str | None:
+    """What Usamune's timer is set to stop at NOW, as far as the record says:
+    the newest star attempt whose grab reported it (`Attempt.usamune_stop`),
+    or None when no grab has. `attempts` in journal order (`db.attempts()`).
+
+    The practice log's timer hint (a warning triangle) is LIVE on this: a row is
+    hinted only while the current setting still disagrees with the log, so
+    the moment he sets GrabX and grabs one star, every hint disappears --
+    older rows included, because the advice is about his setting, not about
+    those rows' times (always x-cam)."""
+    for a in reversed(attempts):
+        if a.segment_id is None and a.usamune_stop is not None:
+            return a.usamune_stop
+    return None
+
+
 def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
-                  pbs_by_strat=None, active_strat=None):
+                  pbs_by_strat=None, active_strat=None, stop_now=None):
     # A row is MEASURED only when it belongs to the ACTIVE strategy, and then
     # against that strategy's own PB -- never the entity-wide one. A row on
     # any other strategy shows no delta at all (his ruling, 2026-08-22: "the
@@ -241,7 +325,8 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
     # with no strat_tag belongs to no ladder and shows nothing either; the
     # unassigned list passes no map at all, since its rows have no entity.
     pb = None
-    if pbs_by_strat is not None and a.strat_tag and a.strat_tag == active_strat:
+    foreign = foreign_rom(ranks, a)
+    if pbs_by_strat is not None and a.strat_tag and a.strat_tag == active_strat and not foreign:
         pb = pbs_by_strat.get(
             ("segment", a.segment_id, clock, a.strat_tag)
             if a.segment_id is not None
@@ -264,7 +349,7 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
     rank_clock = clock if rank_clock is None else rank_clock
     rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
     owns_strat_pb = bool(pb) and pb["attempt_id"] == a.id
-    pb_action_key, pb_blocked = pb_action(a, active_strat, owns_strat_pb)
+    pb_action_key, pb_blocked = pb_action(a, active_strat, owns_strat_pb, foreign_rom=foreign)
     return {"id": a.id,
             # Recency-comparable across BOTH id namespaces (spec 2026-07-28-
             # multi-step-segments, live report): a reattributed 100-coin
@@ -318,6 +403,14 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             # but every one of them still carries a time that measures the
             # wrong moment.
             "caveat": attempt_caveat(a),
+            # The timer hint beside the entry number: this grab's own
+            # Usamune setting showed him a different number from this row,
+            # and his CURRENT setting (`stop_now`, usamune_stop_now) still
+            # would. "All of our practice entries should be xcam times"
+            # (2026-10-17) -- the time is right regardless; this only tells
+            # him how to make the game agree.
+            "timer_hint": (a.usamune_stop in _STOPS_SHORT_OF_XCAM
+                           and stop_now in _STOPS_SHORT_OF_XCAM),
             # A VALID run (projection caveat 21): True/False once judged,
             # null for every row journaled before the rules that judge it.
             # `invalid_reason` is a caveats.py VALIDITY_CAVEATS key; the log
@@ -770,7 +863,7 @@ def build_entity_ranks(db, service) -> dict[str, dict]:
         elif a.course_id is not None:
             attempts_by_star.setdefault((a.course_id, a.star_id), []).append(a)
 
-    pbs_by_strat = current_pbs_by_strat(db.pbs())
+    pbs_by_strat = graded_pbs_by_strat(db.pbs(), service.ranks)
     rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
     if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
         rank_mode = classify.DEFAULT_RANK_MODE
@@ -863,7 +956,7 @@ def build_entity_strategies(db, service, ek: str) -> dict:
     rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
     if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
         rank_mode = classify.DEFAULT_RANK_MODE
-    pbs_by_strat = current_pbs_by_strat(db.pbs())
+    pbs_by_strat = graded_pbs_by_strat(db.pbs(), ranks)
 
     if kind == "star":
         course_id, star_id = ids
@@ -1032,7 +1125,8 @@ def classification_rank_baseline(db, service, attempt, strat_tag: str) -> dict:
                       if entity_key(row.course_id, row.star_id, row.segment_id) == ek),
                      key=lambda row: journal_id(row.id))
     pb = db.current_pb(attempt.course_id, attempt.star_id, clock,
-                       segment_id=attempt.segment_id, strat_tag=strat_tag)
+                       segment_id=attempt.segment_id, strat_tag=strat_tag,
+                       **pb_slot(ranks, ek, strat_tag))
     basis = _ranked_basis(ranks, ek, mode, pb, history, strat_tag, clock,
                           overall=True)
     _, pipe_grading = reds_pipe_segments(db.segment_defs())
@@ -1286,6 +1380,23 @@ def _armed_detail_for(d, seg_id: int, armed_arms: dict) -> dict | None:
             "steps": card_step_labels(d)}
 
 
+def _entity_histories(all_attempts) -> tuple[dict, dict]:
+    """ONE pass over all_attempts → per-entity lifetime histories (id order
+    preserved): `({(course_id, star_id): [...]}, {segment_id: [...]})`.
+    Shared by the section builders and every rank-mode average; the per-star
+    list-comp scans this replaces were O(stars × attempts) per view build and
+    ran even in pb mode, which discards the history entirely (final-review
+    finding, 2026-07-23)."""
+    by_star: dict = {}
+    by_seg: dict = {}
+    for a in all_attempts:
+        if a.segment_id is not None:
+            by_seg.setdefault(a.segment_id, []).append(a)
+        elif a.course_id is not None:
+            by_star.setdefault((a.course_id, a.star_id), []).append(a)
+    return by_star, by_seg
+
+
 @calibrated_view
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
@@ -1296,13 +1407,15 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     scoped = all_attempts if scope == "lifetime" else session_attempts
     pb_rows = db.pbs()
     pbs = _current_pbs(pb_rows)              # strategy-blind, for DISPLAY only
-    pbs_by_strat = current_pbs_by_strat(pb_rows)   # per-strategy, for RANKS
+    pbs_by_strat = graded_pbs_by_strat(pb_rows, service.ranks)   # per-strategy, for RANKS
     pb_ids = {(r["attempt_id"], r["timer_mode"]) for r in pb_rows}
     # A PB's saving attempt, for `caveats.caveat_for`. `.get()` everywhere it
     # is used: a pb row survives its attempt being wiped (db.py keeps the row
     # for its own `frames`), and an unclaimable PB is still unclaimable with
     # no attempt behind it.
     attempt_by_id = {a.id: a for a in all_attempts}
+    # Lifetime, whatever the scope: his Usamune setting is a fact about now.
+    stop_now = usamune_stop_now(all_attempts)
     sessions_list = db.sessions()
     session_meta = {s["id"]: s for s in sessions_list}
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
@@ -1342,18 +1455,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         hundred_coin_ids.add(d.id)
         hundred_coin_engine_for_star.setdefault(hc, d)
 
-    # ONE pass over all_attempts → per-entity lifetime histories (id order
-    # preserved). Shared by the section builders and every rank-mode average;
-    # the per-star list-comp scans this replaces were O(stars × attempts) per
-    # view build and ran even in pb mode, which discards the history entirely
-    # (final-review finding, 2026-07-23).
-    attempts_by_star: dict = {}
-    attempts_by_seg: dict = {}
-    for a in all_attempts:
-        if a.segment_id is not None:
-            attempts_by_seg.setdefault(a.segment_id, []).append(a)
-        elif a.course_id is not None:
-            attempts_by_star.setdefault((a.course_id, a.star_id), []).append(a)
+    attempts_by_star, attempts_by_seg = _entity_histories(all_attempts)
 
     deleted_strats = db.get_state("deleted_strats", {})
     # THE reading of "which strategy is this entity being practised with"
@@ -1627,7 +1729,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "pb_by_strat": pb_by_strat_json,
             "attempts": [_attempt_json(a, clock, service.ranks, rank_clock,
                                        pbs_by_strat=pbs_by_strat,
-                                       active_strat=star_strat)
+                                       active_strat=star_strat,
+                                       stop_now=stop_now)
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
             "strategies": star_strategies,
@@ -2208,13 +2311,15 @@ def _candidate_rank(db, service, c, mode, by_star, by_seg,
         clock = "rta"
         history = by_seg.get(c["segment_id"], [])
         pb = (db.current_pb(None, None, "rta", segment_id=c["segment_id"],
-                            strat_tag=strat) if strat else None)
+                            strat_tag=strat, **pb_slot(service.ranks, ek, strat))
+              if strat else None)
     else:
         grading_ek = entity_key(c["course"], c["star"])
         strat = active.for_star(c["course"], c["star"])
         clock = "igt"
         history = by_star.get((c["course"], c["star"]), [])
-        pb = (db.current_pb(c["course"], c["star"], "igt", strat_tag=strat)
+        pb = (db.current_pb(c["course"], c["star"], "igt", strat_tag=strat,
+                            **pb_slot(service.ranks, grading_ek, strat))
               if strat else None)
     return _strat_rank(service.ranks, grading_ek, strat,
                        _ranked_basis(service.ranks, grading_ek, mode, pb, history, strat, clock))

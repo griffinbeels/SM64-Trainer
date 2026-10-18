@@ -1,5 +1,6 @@
 # src/sm64_events/main.py
 """Composition root: registry -> memory -> poller -> detectors -> tracking -> app."""
+import asyncio
 import json
 import logging
 import shutil
@@ -37,6 +38,7 @@ from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
 from sm64_events.ghost.session import GhostSession
+from sm64_events.memory.ghost_layout import ghost_supported
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
@@ -300,7 +302,20 @@ def _build_tracker(broadcaster):
 
 
 
-def _build_replay(replay_cfg, layout, service, *, recorder_lock=None):
+def _ghost_capture_factory(layout):
+    """The recorder's pose capture for one build, or None where the native
+    ghost cannot capture that build yet."""
+    if not ghost_supported(layout.version):
+        return None
+    from sm64_events.ghost.capture import NativeCapture
+    from sm64_events.ghost.sound_player import SoundPlayerProcess
+    return lambda **kwargs: NativeCapture(
+        layout, sound_player=SoundPlayerProcess(), **kwargs)
+
+
+def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
+    """`layout_of()` is the running build's layout: the picture stamps and
+    the pose capture follow a ROM swap (`build`'s `follow_build`)."""
     from sm64_events.replay.encoder import pick_video_codec
     # Per-process loopback is PRIMARY: a replay must carry the game and
     # nothing else — no Discord call, no music (user report 2026-07-30).
@@ -337,13 +352,8 @@ def _build_replay(replay_cfg, layout, service, *, recorder_lock=None):
                 "ffmpeg probe failed - using in-process encoder")
     codec = pick_video_codec(_ffmpeg if video_sink_factory is not None else None)
     from sm64_events.replay.sourcefactory import SourceFactory
-    sources = SourceFactory(layout, replay_cfg, DwmSurfaceVideoSource)
-    ghost_capture_factory = None
-    if layout.version == "us":
-        from sm64_events.ghost.capture import NativeCapture
-        from sm64_events.ghost.sound_player import SoundPlayerProcess
-        ghost_capture_factory = lambda **kwargs: NativeCapture(
-            layout, sound_player=SoundPlayerProcess(), **kwargs)
+    sources = SourceFactory(layout_of, replay_cfg, DwmSurfaceVideoSource)
+    ghost_capture_factory = _ghost_capture_factory(layout_of())
 
     recorder_options = {}
     if recorder_lock is not None:
@@ -470,6 +480,44 @@ def _community_population(service):
     return population, account, CommunitySync(account, population)
 
 
+_BACKGROUND = set()
+
+
+def _in_background(coroutine):
+    """Run `coroutine` as its own task on the running loop, held until it
+    ends: the loop keeps only a weak reference to a task."""
+    task = asyncio.get_running_loop().create_task(coroutine)
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+
+
+def _log_boot_layout(version, reader, layout):
+    if isinstance(reader, UnreadyReader):
+        logging.getLogger("sm64.tracker").error(
+            "game version %s: %s", version, reader.reason)
+    else:
+        logging.getLogger("sm64.tracker").info(
+            "game version %s: %d/%d addresses in the layout", version,
+            len(LAYOUT_ROWS) - len(layout.missing()), len(LAYOUT_ROWS))
+
+
+def _build_follower(running, inputs, replay, service):
+    """The poller's `on_version_change`: the cartridge's build changed, so
+    every memory reader moves to its layout, and grading under AUTO follows
+    the cartridge. The poller has already swapped its own reader and rebuilds
+    the detectors after this returns; the regrade broadcasts, so it runs as
+    its own task on the poller's loop."""
+    def follow_build(new_version):
+        running["version"] = new_version
+        new_layout = layout_for(new_version)
+        inputs.set_layout(new_layout)
+        if replay is not None:
+            replay.recorder.set_ghost_capture_factory(_ghost_capture_factory(new_layout))
+            replay.recorder.retarget_capture()
+        _in_background(service.note_running_version(new_version))
+    return follow_build
+
+
 def build(*, recorder_lock=None):
     configure_logging()
     migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
@@ -480,13 +528,11 @@ def build(*, recorder_lock=None):
     version = _game_version()
     layout = layout_for(version)
     reader = reader_for(memory, version)
-    if isinstance(reader, UnreadyReader):
-        logging.getLogger("sm64.tracker").error(
-            "game version %s: %s", version, reader.reason)
-    else:
-        logging.getLogger("sm64.tracker").info(
-            "game version %s: %d/%d addresses in the layout", version,
-            len(LAYOUT_ROWS) - len(layout.missing()), len(LAYOUT_ROWS))
+    # THE RUNNING BUILD: which ROM's layout every memory reader uses right
+    # now. Boot starts from the setting/detection guess; the poller corrects
+    # it from the cartridge header and `follow_build` moves every reader.
+    running = {"version": version}
+    _log_boot_layout(version, reader, layout)
     broadcaster = Broadcaster()
     service, _db, db_retry = _build_tracker(broadcaster)
     # User-set storage limits (UI panel) overlay the code defaults.
@@ -496,14 +542,15 @@ def build(*, recorder_lock=None):
     # are on disk whatever the recorder does, and their filenames are the only
     # index to them.
     service.saved_clip_ids = lambda among=None: saved_attempt_ids(replay_cfg.save_root, among=among)
-    replay, codec = (_build_replay(replay_cfg, layout, service) if recorder_lock is None
-                     else _build_replay(replay_cfg, layout, service, recorder_lock=recorder_lock))
+    running_layout = lambda: layout_for(running["version"])  # noqa: E731
+    replay, codec = (_build_replay(replay_cfg, running_layout, service) if recorder_lock is None
+                     else _build_replay(replay_cfg, running_layout, service, recorder_lock=recorder_lock))
     compare, compilation = _comparison_services(replay, service, broadcaster, codec, replay_cfg)
     # NO target gate. This passed `target_active=lambda: service.target is not
     # None` (task 0087) until 2026-08-06, which made the recorder blind exactly
     # when it is used — see `build_detectors`' docstring and moment.py's.
     def detector_stream():
-        detectors = build_detectors(version=version)
+        detectors = build_detectors(version=running["version"])
         moments = [d for d in detectors
                    if isinstance(d, (MomentDetector, CausedMomentDetector))]
 
@@ -522,8 +569,10 @@ def build(*, recorder_lock=None):
     inputs = InputRuntime(service, memory, layout, replay)
     from sm64_events.ghost.native_session import NativeGhost
     ghost_frame = {"frame":None}
-    native_ghost = NativeGhost(replay, supported=layout.version == "us",
+    native_ghost = NativeGhost(replay, supported=lambda: ghost_supported(running["version"]),
         origin_of=lambda kind,key:service.native_rival_origin(kind,key,frame=ghost_frame["frame"]))
+
+    follow_build = _build_follower(running, inputs, replay, service)
 
     def note_ghost_snapshot(snapshot):
         ghost_frame["frame"] = snapshot.global_timer
@@ -535,7 +584,9 @@ def build(*, recorder_lock=None):
 
     poller = Poller(memory, detector_stream(), service, on_frame=service.settle_frame,
                     reader=reader, detector_factory=detector_stream,
-                    on_gap=ghost_capture_gap, on_snapshot=note_ghost_snapshot)
+                    on_gap=ghost_capture_gap, on_snapshot=note_ghost_snapshot,
+                    reader_factory=lambda v: reader_for(memory, v),
+                    on_version_change=follow_build)
     inputs.bind(poller)
     service.observed_game_version = lambda:poller.observed_game_version
     population, community_account, community_sync = _community_population(service)
@@ -548,8 +599,9 @@ def build(*, recorder_lock=None):
     _ghost_follows_pb(service, ghost)
     if replay is not None:
         # A real run on vanilla SM64, another hack or another game records
-        # nothing; unknown (no header read yet) keeps the old behaviour.
-        replay.recorder.set_capture_gate(lambda: poller.practice_rom is not False)
+        # nothing, and neither does a practice build whose layout is not
+        # verified yet; unknown (no header read yet) keeps the old behaviour.
+        replay.recorder.set_capture_gate(poller.capture_allowed)
     updater = UpdateService(current_version=__version__)
     capture_layer, setup_observer = _build_capture_layer(poller, replay)
     return create_app(poller, broadcaster, service=service, replay=replay,

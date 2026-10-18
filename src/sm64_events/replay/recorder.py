@@ -993,13 +993,27 @@ class ReplayRecorder:
     def set_capture_gate(self, allowed: Callable[[], bool] | None) -> None:
         """Capture only while `allowed()` holds: main.py passes the poller's
         practice ROM state, so a real run on another ROM records nothing --
-        no GPU request, no desktop grab, no audio (his ruling, 2026-09-16)."""
+        no GPU request, no desktop grab, no audio (his ruling, 2026-09-16).
+        A practice ROM whose build the poller cannot read yet is gated too."""
         self._capture_gate = allowed
+
+    def set_ghost_capture_factory(self, factory) -> None:
+        """The pose capture the NEXT capture start builds; None captures no
+        poses. Applied by `retarget_capture` (a ROM swap, main.py)."""
+        self._ghost_capture_factory = factory
+
+    def retarget_capture(self) -> None:
+        """The cartridge's build changed under the same window: end the
+        capture so the next attach cycle starts it again with the new build's
+        picture stamps and pose capture. Ring footage already written stays."""
+        self._window_lost.set()
+        self._attach_wake.set()
 
     def _gated(self, win):
         gated = self._capture_gate is not None and not self._capture_gate()
         if gated and not self._capture_gated:
-            log.info("replay capture off: the loaded ROM is not a practice ROM")
+            log.info("replay capture off: the loaded ROM is not a practice ROM "
+                     "the trainer can read")
         self._capture_gated = gated
         if not gated:
             return win

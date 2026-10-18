@@ -5,7 +5,16 @@ import {LIMITS} from "./config.js";
 const FORMATS = {4:[652,636,5],5:[1268,1252,6],6:[1276,1260,7],7:[1284,1268,8]};
 // Match ghost.portable._checked_recording_target and memory.addresses.
 const COURSE_BY_LEVEL={9:1,24:2,12:3,5:4,4:5,7:6,22:7,8:8,23:9,10:10,11:11,36:12,13:13,14:14,15:15,17:16,19:17,21:18,27:19,28:20,29:21,18:22,31:23,20:24};
+// gclip_header.rom_layout: the ROM the clip was captured on, as a catalog region.
+const REGION_BY_LAYOUT={1:"us",2:"jp"};
+// The trainer's own timing constants, mirrored from sm64_events.community.claims
+// (IgtClock.DISPLAY_TICK, ghost/archive.py DANCE_ENTRY_FRAMES and TAIL_ACTIONS,
+// ghost/clip.py CLOSING_TRANSITION_MAX). tests/test_community_wire.py runs both.
+const DISPLAY_TICK=1,DANCE_ENTRY_FRAMES=2,CLOSING_TRANSITION_MAX=30;
+// ACT_STAR_DANCE_EXIT/WATER/NO_EXIT, ACT_JUMBO_STAR_CUTSCENE; a tail may also fall (ACT_FALL_AFTER_STAR_GRAB).
+const DANCE_ACTIONS=new Set([0x1302,0x1303,0x1307,0x1909]),TAIL_ACTIONS=new Set([...DANCE_ACTIONS,0x1904]);
 const check = ok => requireThat(ok,"invalid_clip","The recording fails native structural validation.",422);
+const claim = (ok,code,message) => requireThat(ok,code,message,422);
 const zero = (b,lo,hi) => { for(let i=lo;i<hi;i++) if(b[i]) return false; return true; };
 const finite = (view, at, count, limit = 1e7) => {
   for(let i=0;i<count;i++) { const value=view.getFloat32(at+i*4,true); check(Number.isFinite(value) && Math.abs(value)<=limit); }
@@ -31,7 +40,7 @@ function checkFrame(r, valid) {
   check(!(valid&1) || (frame.level>=4 && frame.level<=36 && frame.area>=1 && frame.area<=8));
   check(Boolean(valid&8)===Boolean(action));
   check(status!==0 || (valid&31)===31);
-  return frame;
+  return {...frame,action};
 }
 // GC_VALID_POSE: a GC_ROOT_TRS root keeps its matrix zero; a scaled-modelview root needs the camera.
 function checkPose(r, valid) {
@@ -109,7 +118,7 @@ function record(bytes, version, header, previous) {
   if(version===7) checkPad(r,valid);
   if(previous) check(frame.sequence>previous.sequence && frame.dlist>previous.dlist && frame.qpc>=previous.qpc &&
     frame.timer>=previous.timer && clock.elapsed>=previous.elapsed && clock.continuity===previous.continuity);
-  return {...frame,...clock,playable:(valid&3)===3};
+  return {...frame,...clock,playable:(valid&3)===3,pad:version===7&&Boolean(valid&512)};
 }
 // The GHC1 envelope: the grant's size and hash, the magic, and the native sizes it declares.
 function checkEnvelope(encoded, grant) {
@@ -128,7 +137,7 @@ function checkHeaderLayout(hd, count, recordBytes) {
   const version=hd.u32(8),format=FORMATS[version];
   check(format && new TextDecoder().decode(hd.bytes.subarray(0,8))==="SM64GHO"+version &&
     hd.u32(12)===160 && hd.u32(16)===recordBytes && recordBytes===format[0] && hd.u32(20)===count &&
-    hd.u32(24)===1 && hd.u32(28)===format[2]);
+    Boolean(REGION_BY_LAYOUT[hd.u32(24)]) && hd.u32(28)===format[2]);
 }
 // gclip_header's capture identity, anchors, clock kind and flags.
 function checkHeaderCapture(hd) {
@@ -159,7 +168,7 @@ function inflateBlock(compressed, n, recordBytes) {
 // Every block in order: the records chain, the timeline stays in range, and some frame is playable.
 function checkRecords(encoded, e, hd, grant, {version,header,count,recordBytes}) {
   const digest=createHash("sha256").update(hd.bytes);
-  let offset=180,seen=0,first,last,playable=false,indexing=true;
+  let offset=180,seen=0,first,last,playable=false,indexing=true;const rows=[];
   while(seen<count) {
     check(offset+8<=encoded.length);
     const n=e.u32(offset),length=e.u32(offset+4);offset+=8;
@@ -173,11 +182,46 @@ function checkRecords(encoded, e, hd, grant, {version,header,count,recordBytes})
       check(coordinate>=0n&&coordinate<(1n<<64n));
       if(hd.u32(112)===1 && frame.origin!==first.origin) indexing=false;
       playable ||= indexing&&frame.playable;last=frame;
+      rows.push({timer:frame.timer,igt:frame.igt,elapsed:frame.elapsed,origin:frame.origin,action:frame.action,pad:frame.pad});
     }
     offset+=length;seen+=n;
   }
   check(offset===encoded.length && playable && digest.digest("hex")===grant.raw_sha256);
-  return {first,last};
+  return {first,last,rows};
+}
+// The rows the trainer can have closed its attempt on. Without a dance tail the
+// clip ends on its close. A tail is Mario's star dance after the close, which
+// is the dance's first row or at most DANCE_ENTRY_FRAMES before it.
+function closingRows(rows, danceTail) {
+  if(!danceTail) return [rows.length-1,rows.length-1];
+  let run=rows.length;while(run>0&&TAIL_ACTIONS.has(rows[run-1].action))run--;
+  let dance=run;while(dance<rows.length&&!DANCE_ACTIONS.has(rows[dance].action))dance++;
+  check(dance<rows.length);
+  let close=dance;while(close>0&&rows[dance].timer-rows[close-1].timer<=DANCE_ENTRY_FRAMES)close--;
+  return [close,dance];
+}
+// The time an upload names, against the clip's own clock: elapsed counts the
+// game's IGT counter from the origin row, which read first.igt.
+function claimedTimeAgrees(grant, hd, rows) {
+  const first=rows[0],frames=BigInt(grant.frames),counted=row=>row.elapsed-first.elapsed,[from,to]=closingRows(rows,hd.u32(124)&1);
+  if(grant.clock==="igt") {
+    // A star's time is Usamune's counter at the close plus its display tick, exactly.
+    for(let i=from;i<=to;i++) if((hd.u32(112)!==1||rows[i].origin===first.origin) &&
+      counted(rows[i])+BigInt(first.igt+DISPLAY_TICK)===frames) return true;
+    return false;
+  }
+  // A segment's time is that counter, or the frame span to a close up to
+  // CLOSING_TRANSITION_MAX untimed loading frames past the clip; never less
+  // than the counter's own span.
+  return grant.clock==="rta" && frames>=counted(rows[from]) &&
+    frames<=BigInt(rows[to].timer-first.timer+first.igt+CLOSING_TRANSITION_MAX+DISPLAY_TICK);
+}
+// What the upload claims about the clip, answered by the clip: its ROM, a pad
+// on every record, and its time.
+function checkClaims(grant, hd, version, rows) {
+  claim(REGION_BY_LAYOUT[hd.u32(24)]===grant.rom,"rom_mismatch","The recording was captured on a different ROM than the upload names.");
+  claim(version===7&&rows.every(row=>row.pad),"incomplete_inputs","The recording's controller inputs are not known on every frame.");
+  claim(claimedTimeAgrees(grant,hd,rows),"frames_mismatch","The upload's time disagrees with the recording's own clock.");
 }
 export function validateGHC1(encoded, grant) {
   const {e,recordBytes,count}=checkEnvelope(encoded,grant);
@@ -186,13 +230,13 @@ export function validateGHC1(encoded, grant) {
   checkHeaderCapture(hd);
   const header={configuration:hd.u32(32),epoch:hd.u32(36)};
   checkTarget(grant,hd);
-  const {first,last}=checkRecords(encoded,e,hd,grant,{version,header,count,recordBytes});
+  const {first,last,rows}=checkRecords(encoded,e,hd,grant,{version,header,count,recordBytes});
   check(hd.v.getInt32(104,true)===first.level && hd.v.getInt32(108,true)===first.area &&
     hd.u64(80)===first.sequence && hd.u64(88)===last.sequence && hd.u32(96)===first.timer && hd.u32(100)===last.timer &&
     hd.u32(116)===first.timer && hd.u32(120)===first.igt && hd.u64(128)===first.sequence &&
     hd.u64(136)===first.elapsed && hd.u64(144)===first.continuity);
   // There is no signed completion certificate in native bytes. These checks
-  // establish a playable origin and a plausible duration, not honest gameplay.
-  check(grant.frames<=last.timer-first.timer+first.igt+31);
+  // bind the upload's ROM, inputs and time to the clip, not honest gameplay.
+  checkClaims(grant,hd,version,rows);
   return {version,record_count:count,clock_kind:hd.u32(112),native_sha256:grant.raw_sha256};
 }

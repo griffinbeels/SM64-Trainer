@@ -8,12 +8,12 @@ import time
 import unicodedata
 from uuid import UUID, uuid4
 
-from sm64_events.ghost.clip import INCOMPLETE_INPUTS, blink_frames, decode_clip, inputs_complete
+from sm64_events.ghost.clip import blink_frames
 from sm64_events.ghost.portable import checked_author, checked_hash
 from sm64_events.ghost.sharing import PortableGhost
 from sm64_events.ghost.sharing_targets import bind, checked_target, describe
 
-from . import codec
+from . import claims, codec
 from .config import CommunityError
 
 MAX_METADATA = 1024
@@ -148,8 +148,12 @@ class CachedPopulation:
                     and (stored[0]["raw_sha256"], stored[0]["encoded_sha256"])
                     == (asset["raw_sha256"], asset["encoded_sha256"]))
 
-    def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None):
-        local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version, strategy=strategy)
+    def metadata_snapshot(self, kind, entity_key, *, clock, game_version, strategy=None, versions=None):
+        """`versions` names the recorded ROMs to return (`region_scope.servable_versions`);
+        omitted, only `game_version`'s. Every community row knows its ROM."""
+        local = self.local.metadata_snapshot(kind, entity_key, clock=clock, game_version=game_version,
+                                             strategy=strategy, versions=versions)
+        roms = (game_version,) if versions is None else versions
         with self._lock:
             if not self._active():
                 return local
@@ -161,7 +165,8 @@ class CachedPopulation:
                     row = self._row(metadata)
                 except LookupError:
                     continue
-                if (row["kind"], row["entity_key"], row["clock"], row["game_version"]) == (kind, entity_key, clock, game_version) and (strategy is None or row["strategy"] == strategy):
+                if ((row["kind"], row["entity_key"], row["clock"]) == (kind, entity_key, clock)
+                        and row["game_version"] in roms and (strategy is None or row["strategy"] == strategy)):
                     rows.append(row)
             return tuple(local) + tuple(rows)
 
@@ -268,11 +273,10 @@ class CachedPopulation:
                 or hashlib.sha256(raw).hexdigest() != row["raw_sha256"]
                 or hashlib.sha256(encoded).hexdigest() != row["encoded_sha256"]):
             raise CommunityError("asset_mismatch")
-        clip = decode_clip(raw)
-        if not inputs_complete(clip):
-            # His rule: a shared recording with any unknown pad never enters
-            # this cache, whatever the service accepted (ghost/clip.py).
-            raise CommunityError("incomplete_inputs", INCOMPLETE_INPUTS)
+        # His rule: a shared recording whose ROM, inputs or time its own bytes
+        # do not bear out never enters this cache, whatever the service
+        # accepted (community/claims.py).
+        clip = claims.check_claims(raw, game_version=row["game_version"], clock=row["clock"], frames=row["frames"])
         blinks = blink_frames(clip)
         expected_owner = owner or (self.account.snapshot().get('uid') if self.account else None)
         staged = []

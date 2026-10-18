@@ -67,6 +67,10 @@ def corpus():
         values.append(bytes(changed))
     values.extend(pad_cases())
     values.extend(held_cases())
+    # A JP capture: the same records under rom_layout 2, with JP's scripts.
+    values.append(encode_clip((frame(),), producer(rom_layout=2), clock_kind=STAR_CLOCK))
+    values.append(encode_clip((frame(1, held=(0x13003154, 1, 12)), frame(2)), producer(rom_layout=2),
+                              clock_kind=STAR_CLOCK))
     # Recorded shadow and sound: accepted shapes, then each native refusal.
     evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,), particles=((0x0401DD60, (1, 2, -300)),)),
                         frame(2, sounds=tuple(range(1, 9)), overflow=True, particles=())))

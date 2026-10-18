@@ -1,4 +1,5 @@
 #include "ghost_pose.h"
+#include "ghost_behaviours.h"
 #include "ghost_scene.h"
 #include <algorithm>
 #include <cmath>
@@ -22,26 +23,25 @@ bool sample_valid(const gc_sample &s, uint32_t required) {
     return s.bytes == sizeof(s) && s.version == GC_VERSION && s.epoch && s.sequence
         && s.dlist_serial && (s.valid_fields & required) == required;
 }
-// The held objects the model draws, by segmented behaviour (US; each agrees
-// with STROOP's map in data/behaviours_us.tsv, and the animated ones with the
-// LOAD_ANIMATIONS of their model's table in the ROM's behaviour segment).
-struct HeldModel { uint32_t behavior; uint32_t kind; };
-constexpr HeldModel held_models[] = {
-    {0x13003174u, SG_HELD_BOBOMB},      // bhvBobomb
-    {0x130020E8u, SG_HELD_PENGUIN},     // bhvSmallPenguin
-    {0x130001F4u, SG_HELD_KING_BOBOMB}, // bhvKingBobomb
-    {0x13000528u, SG_HELD_CHUCKYA},     // bhvChuckya
-    {0x13004218u, SG_HELD_BREAKABLE_BOX}, // bhvBreakableBoxSmall (the cork box)
-    {0x13001650u, SG_HELD_BREAKABLE_BOX}, // bhvJumpingBox (the crazy box, same model)
-    {0x130044FCu, SG_HELD_MIPS},        // bhvMips: its fur clamps (sg_tile)
-    {0x130033ECu, SG_HELD_HOOT},        // bhvHoot: usedObj while riding, its own TRS
-    {0x13001F3Cu, SG_HELD_KOOPA_SHELL}, // bhvKoopaShell: riddenObj, its own TRS
-    {0x13000F08u, SG_HELD_UKIKI},       // bhvUkiki
-    {0x13001CB0u, SG_HELD_UKIKI},       // bhvMacroUkiki: same animation table and geo
-};
-uint32_t held_kind(uint32_t behavior) {
-    for (const auto &held : held_models) if (held.behavior == behavior) return held.kind;
-    return SG_HELD_NONE;
+// The held objects the model draws, by behaviour symbol: the recorded
+// segmented script is named through the clip's own capture layout
+// (ghost_behaviours.h), so a JP clip draws its Bob-omb on a US cartridge too.
+uint32_t held_kind(uint32_t rom_layout, uint32_t behavior) {
+    using ghost_behaviours::Symbol;
+    switch (ghost_behaviours::symbol(rom_layout, behavior)) {
+        case Symbol::bobomb: return SG_HELD_BOBOMB;
+        case Symbol::small_penguin: return SG_HELD_PENGUIN;
+        case Symbol::king_bobomb: return SG_HELD_KING_BOBOMB;
+        case Symbol::chuckya: return SG_HELD_CHUCKYA;
+        case Symbol::breakable_box_small: // the cork box
+        case Symbol::jumping_box: return SG_HELD_BREAKABLE_BOX; // the crazy box, same model
+        case Symbol::mips: return SG_HELD_MIPS;   // its fur clamps (sg_tile)
+        case Symbol::hoot: return SG_HELD_HOOT;   // usedObj while riding, its own TRS
+        case Symbol::koopa_shell: return SG_HELD_KOOPA_SHELL; // riddenObj, its own TRS
+        case Symbol::ukiki:
+        case Symbol::macro_ukiki: return SG_HELD_UKIKI; // same animation table and geo
+        default: return SG_HELD_NONE;
+    }
 }
 void multiply(const float *a, const float *b, float *out) {
     // Same column-major operation as GLideN64 MultMatrix, with separate output.
@@ -230,7 +230,7 @@ bool shadow(sg_model *model, const gc_sample &recorded, const float view_project
 }
 Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
                 const ghost::WorldPass &world, float opacity, Scratch &scratch,
-                ghost_compositor::Pose &out) {
+                ghost_compositor::Pose &out, uint32_t rom_layout) {
     out = {}; scratch.evaluated = 0;
     // Historical framebuffer qualification does not invalidate captured Mario
     // state. The caller supplies the separately qualified LIVE world pass.
@@ -274,13 +274,14 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     // The object in his hand, when the model knows its geo; its billboards
     // face the live camera the ghost is drawn under.
     const gc_held &held = recorded.held;
-    if ((recorded.valid_fields & GC_VALID_HELD) && held_kind(held.behavior) != SG_HELD_NONE) {
+    const uint32_t kind = held_kind(rom_layout, held.behavior);
+    if ((recorded.valid_fields & GC_VALID_HELD) && kind != SG_HELD_NONE) {
         pose.fields |= SG_POSE_HELD;
-        pose.held_kind = held_kind(held.behavior);
+        pose.held_kind = kind;
         // Older capture wrote the object's stale animID (zero for Mips).
         // bhv_mips_held always chooses animation 4. Apply that canonical pose
         // only while he is actually held; released Mips keeps its recorded id.
-        pose.held_animation_id = held.behavior == 0x130044FCu && !held.released && held.animation_id == 0
+        pose.held_animation_id = kind == SG_HELD_MIPS && !held.released && held.animation_id == 0
             ? int16_t(4) : held.animation_id;
         pose.held_animation_frame = held.animation_frame;
         pose.held_anim_y_translation = held.anim_y_translation; pose.held_anim_state = held.anim_state;

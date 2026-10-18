@@ -9,6 +9,7 @@ import pytest
 from sm64_events.ghost import settings
 from sm64_events.ghost.native_session import LATE_JOIN_FRAMES, NATIVE_BUDGET_REASON, NativeGhost, budget_reason
 from sm64_events.ghost.native_layout import GP_WRONG_SCENE
+from sm64_events.memory.ghost_layout import ghost_supported
 from tests.test_ghost_session import a_session, mark
 from tests.test_ui_ghost_session import controls, run_node
 
@@ -251,7 +252,7 @@ def test_scope_switch_revokes_native_owner_before_population_failure(tmp_path):
     generations = {"prepared_generation": 1, "active_generation": 1}
     source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
 
-    def metadata_snapshot(_kind, _entity, *, clock, game_version, strategy=None):
+    def metadata_snapshot(_kind, _entity, *, clock, game_version, strategy=None, versions=None):
         if strategy is None:
             assert source.commands[-1] == {"enabled": False}
             assert native._asset is native._selected_asset is None
@@ -1188,3 +1189,29 @@ def test_an_asset_with_an_unknown_input_is_not_played_and_says_why(tmp_path):
         await session.stop()
 
     asyncio.run(check())
+
+
+def test_supported_follows_the_running_cartridge_on_every_resolve():
+    """The composition root passes a callable, asked on every resolve, so a
+    ROM swap changes the answer without a new session; a bool still works."""
+    running = {"version": "us"}
+    native = NativeGhost(SimpleNamespace(), supported=lambda: ghost_supported(running["version"]))
+    target = {"kind": "star", "entity_key": "2-2"}
+    assert native.resolve(target, [])["reason"] == "no_template"
+    running["version"] = "eu"
+    answer = native.resolve(target, [])
+    assert answer["reason"] == "unsupported_rom" and "US and JP" in answer["reason_text"]
+    running["version"] = "jp"
+    assert native.resolve(target, [])["reason"] == "no_template"
+    assert NativeGhost(SimpleNamespace(), supported=False).resolve(target, [])["reason"] == "unsupported_rom"
+
+
+def test_set_supported_is_the_rom_swap_door():
+    """The composition root calls set_supported(ghost_supported(version)) on
+    every ROM swap; it replaces whatever the constructor was given."""
+    native = NativeGhost(SimpleNamespace(), supported=lambda: True)
+    target = {"kind": "star", "entity_key": "2-2"}
+    native.set_supported(ghost_supported("eu"))
+    assert native.resolve(target, [])["reason"] == "unsupported_rom"
+    native.set_supported(ghost_supported("jp"))
+    assert native.resolve(target, [])["reason"] == "no_template"

@@ -109,6 +109,10 @@ class GameSnapshot:
     # reaches the engagement pointers above (measured, round 10), so what the
     # player caused has to be read off the object.
     caused: tuple = ()
+    # Usamune's TIMER -> STOP byte (layout `usamune_stop`): bit 0 = it writes
+    # the star result at the grab, bit 1 = at the x-cam. None where this
+    # build's layout has no verified address for it.
+    usamune_stop: int | None = None
 
 
 class SnapshotReader:
@@ -262,6 +266,8 @@ class SnapshotReader:
             landmark_home=landmark_home,
             landmark_pos=landmark_pos,
             caused=self._caused_states(),
+            usamune_stop=(m.read_u8(self.layout.usamune_stop)
+                          if self.layout.usamune_stop is not None else None),
         )
 
 

@@ -45,8 +45,18 @@ def test_every_gate_reason_can_be_drawn():
     how to print. The cross-language test owns the JS half; this is the
     Python-side half of the same claim, so a reason added here without a key
     goes red even with node unavailable."""
-    reasons = {pb_strat_gate(BASE, "3x LJ"), pb_strat_gate(BASE, None)}
+    reasons = {pb_strat_gate(BASE, "3x LJ"), pb_strat_gate(BASE, None),
+               pb_strat_gate(BASE, "Standard", foreign_rom=True)}
     assert reasons == set(PB_GATE_REASONS)
+
+
+def test_a_run_from_the_other_rom_of_a_regional_strategy_draws_nothing():
+    """Region scope (2026-10-16): such a run belongs to its own ROM's PB
+    slot, not the one on screen, so it neither saves nor undoes here."""
+    assert pb_action(BASE, "Standard", False, foreign_rom=True) == (
+        None, {"reason": "foreign_rom", "strat": "Standard"})
+    assert pb_action(BASE, "Standard", True, foreign_rom=True)[0] is None
+    assert pb_action(BASE, "Standard", False) == ("save", None)
 
 
 def test_the_strategy_gate_is_stated_before_an_illegal_quantity():

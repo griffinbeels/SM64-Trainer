@@ -17,7 +17,7 @@ import zlib
 import pytest
 
 from ghost_native_fixture import frame, producer
-from sm64_events.community import codec
+from sm64_events.community import claims, codec
 from sm64_events.community.config import CommunityError
 from sm64_events.community.sync import checked_catalog
 from sm64_events.core.childproc import quiet_spawn_kwargs
@@ -28,14 +28,23 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVICE = ROOT / "cloud/community"
 VERSIONS = (4, 5, 6, 7)
 COUNT = 257  # Exercise both a full shuffled block and the final one-record block.
-PADS = (None, (0, 0, 0), (-128, 127, 0xff3f))
+PADS = (None, (0, 0, 0), (-128, 127, 0xff3f))  # one unknown pad in three
+KNOWN_PADS = PADS[1:]
+# The fixture's counter reads 1 on the origin and climbs one per record, so
+# its last record reads COUNT; a star time is that plus Usamune's display tick.
+CLAIM = COUNT + 1
+REGION = {1: "us", 2: "jp"}  # gclip_header.rom_layout, written independently of claims.REGIONS
+SEGMENT = {"kind": "segment", "entity_key": "7", "signature": "0" * 64, "name": "Fixture segment", "strat": None}
 
 
-def _native(version, clock=1):
+def _native(version, clock=1, *, pads=KNOWN_PADS, actions=None, dance_tail=False, layout=1):
     raw = encode_clip(tuple(frame_from_bytes(frame(index,
-        pad=PADS[(index - 1) % 3] if version == 7 else None))
+        pad=pads[(index - 1) % len(pads)] if version == 7 else None,
+        action=None if actions is None else actions(index)))
         for index in range(1, COUNT + 1)), producer(), clock_kind=clock,
-        clip_id="22222222-2222-4222-8222-222222222222")
+        clip_id="22222222-2222-4222-8222-222222222222", dance_tail=dance_tail)
+    if layout != 1:
+        raw = raw[:24] + struct.pack("<I", layout) + raw[28:]
     if version == 7:
         return raw
     _, width, sample_width, sample_version = codec.FORMATS[f"SM64GHO{version}".encode()]
@@ -70,14 +79,72 @@ def _case(raw, encoded=None, **overrides):
         "encoded": base64.b64encode(encoded).decode("ascii"),
         "grant": {"raw_bytes": len(raw), "encoded_bytes": len(encoded),
             "raw_sha256": hashlib.sha256(raw).hexdigest(),
-            "encoded_sha256": hashlib.sha256(encoded).hexdigest(), "frames": 100,
+            "encoded_sha256": hashlib.sha256(encoded).hexdigest(), "frames": CLAIM,
+            "rom": REGION.get(struct.unpack_from("<I", raw, 24)[0], "us"), "clock": "igt",
             # Independent native fixture starts in Whomp's (level24, course2).
             "target": {"kind": "star", "entity_key": '2-6' if struct.unpack_from('<I', raw, 112)[0] == 2 else '2-1'},
             **overrides}}
 
 
+def _dancing(index):
+    """Rows COUNT-40..COUNT-38 fall after a midair grab, then Mario dances."""
+    return 0x0c400201 if index < COUNT - 40 else 0x1904 if index < COUNT - 37 else 0x1302
+
+
+# Row COUNT-37 is the dance entry; record n reads counter n, so its star time is n + 1.
+DANCE_CLAIM = COUNT - 37 + 1
+
+
+def _claims():
+    """Every claim an upload makes, and the verdict both sides must reach."""
+    raw, segment, jp = _native(7), _native(7, 2), _native(7, layout=2)
+    # Raw transport for clips the Python encoder itself refuses to send.
+    unchecked = lambda clip, **grant: _case(clip, _unchecked_encode(clip), **grant)
+    tail = _native(7, actions=_dancing, dance_tail=True)
+    cases = {
+        "us_clip_named_us": (_case(raw), None),
+        "jp_clip_named_jp": (unchecked(jp), None),
+        "us_clip_named_jp": (_case(raw, rom="jp"), "rom_mismatch"),
+        "jp_clip_named_us": (unchecked(jp, rom="us"), "rom_mismatch"),
+        "unknown_rom_layout": (unchecked(_native(7, layout=3), rom="us"), "invalid_clip"),
+        "one_pad_in_three_unknown": (_case(_native(7, pads=PADS)), "incomplete_inputs"),
+        **{f"format_{version}_has_no_pads": (_case(_native(version)), "incomplete_inputs") for version in (4, 5, 6)},
+        "one_frame_faster": (_case(raw, frames=CLAIM - 1), "frames_mismatch"),
+        "one_frame_slower": (_case(raw, frames=CLAIM + 1), "frames_mismatch"),
+        "hundred_coin_star_on_segment_clock": (_case(segment), None),
+        "hundred_coin_star_one_frame_faster": (_case(segment, frames=CLAIM - 1), "frames_mismatch"),
+        # The close is the dance entry, or a stale read at most two frames before it.
+        **{f"dance_entry_less_{early}": (_case(tail, frames=DANCE_CLAIM - early), None) for early in (0, 1, 2)},
+        "grab_frame_before_the_fall": (_case(tail, frames=DANCE_CLAIM - 3), "frames_mismatch"),
+        "inside_the_dance": (_case(tail, frames=DANCE_CLAIM + 1), "frames_mismatch"),
+        "end_of_the_dance_tail": (_case(tail, frames=CLAIM), "frames_mismatch"),
+        "tail_flag_without_a_dance": (_case(_native(7, dance_tail=True)), "invalid_clip"),
+        # A segment: never below the counter's span (COUNT-1), never above the
+        # frame span (COUNT-1) plus the origin counter, 30 loading frames and the tick.
+        **{f"segment_{name}": (_case(segment, clock="rta", target=SEGMENT, frames=frames), code)
+           for name, frames, code in (("below_its_counter", COUNT - 2, "frames_mismatch"),
+                                      ("at_its_counter", COUNT - 1, None),
+                                      ("after_a_closing_load", COUNT - 1 + 1 + 30 + 1, None),
+                                      ("past_a_closing_load", COUNT - 1 + 1 + 30 + 2, "frames_mismatch"))},
+    }
+    return {name: case for name, (case, _) in cases.items()}, {name: code for name, (_, code) in cases.items()}
+
+
+def _python_verdict(item):
+    """The trainer's verdict on one upload: its download door, then its claims."""
+    raw, grant = base64.b64decode(item["raw"]), item["grant"]
+    try:
+        codec.decode(base64.b64decode(item["encoded"]), raw_sha256=grant["raw_sha256"])
+        claims.check_claims(raw, game_version=grant["rom"], clock=grant["clock"], frames=grant["frames"])
+    except CommunityError as error:
+        return error.code
+    except ValueError:
+        return "invalid_clip"
+    return None
+
+
 def _malformed():
-    raw = _native(7)
+    raw = _native(7, pads=PADS)  # record 1 has an unknown pad for the pad mutations
     result = {}
     # Reserved/header identity and record identities must survive validation.
     mutations = {
@@ -147,20 +214,18 @@ const python = Object.fromEntries(Object.entries(input.python).map(([name,item])
 }));
 const service = [4,5,6,7].map(version => {
   const raw = nativeClip({version,count:257});
-  if(version === 7) for(let index=0;index<257;index++) {
-    if(index%3 === 0) continue;
-    const at=160+index*1284;raw.writeUInt32LE(31|512,at+28);
-    if(index%3 === 2) {
-      raw.writeInt16LE(-128,at+1276);raw.writeInt16LE(127,at+1278);raw.writeUInt16LE(0xff3f,at+1280);
-    }
+  if(version === 7) for(let index=2;index<257;index+=3) {
+    const at=160+index*1284;
+    raw.writeInt16LE(-128,at+1276);raw.writeInt16LE(127,at+1278);raw.writeUInt16LE(0xff3f,at+1280);
   }
   const encoded=ghc1(raw), grant={raw_bytes:raw.length,encoded_bytes:encoded.length,
-    raw_sha256:digest(raw),encoded_sha256:digest(encoded),frames:100,
+    raw_sha256:digest(raw),encoded_sha256:digest(encoded),frames:257,rom:'us',clock:'igt',
     target:{kind:'star',entity_key:'1-0'}};
   return {version,raw:raw.toString('base64'),encoded:encoded.toString('base64'),
     ...accepted({encoded:encoded.toString('base64'),grant})};
 });
 const rejected=Object.fromEntries(Object.entries(input.bad).map(([name,item])=>[name,accepted(item)]));
+const claims=Object.fromEntries(Object.entries(input.claims).map(([name,item])=>[name,accepted(item)]));
 const catalog=JSON.parse(readFileSync(root+'/catalog.json','utf8'));
 validateCatalog(catalog);
 await catalogFor({CATALOG_GENERATION:catalog.generation});
@@ -174,7 +239,7 @@ const identity=Object.fromEntries(unsupported.map(([name,...args])=>{
 }));
 let boolVersionAccepted=true;
 try { validateCatalog({...catalog,v:true}); } catch { boolVersionAccepted=false; }
-console.log(JSON.stringify({python,service,rejected,catalog:{generation:catalog.generation,
+console.log(JSON.stringify({python,service,rejected,claims,catalog:{generation:catalog.generation,
   entries:catalog.entries.length,identity,boolVersionAccepted}}));
 """
 
@@ -189,7 +254,8 @@ def wire():
     python = {f"{version}-{clock}": _case(_native(version, clock))
         for version in VERSIONS for clock in (1, 2)}
     bad = _malformed()
-    request = json.dumps({"python": python, "bad": bad}, separators=(",", ":"))
+    claimed, _ = _claims()
+    request = json.dumps({"python": python, "bad": bad, "claims": claimed}, separators=(",", ":"))
     assert len(request) < 20 << 20
     # The outer test runner owns the job, priority, and complete process tree.
     result = subprocess.run([node, "--input-type=module", "-e", NODE_PROBE, str(SERVICE)],
@@ -201,31 +267,54 @@ def wire():
 
 
 @pytest.mark.parametrize("version", VERSIONS)
-@pytest.mark.parametrize("clock", (1, 2), ids=("igt", "rta"))
+@pytest.mark.parametrize("clock", (1, 2), ids=("star_clock", "segment_clock"))
 def test_python_native_bytes_survive_real_worker_codec(version, clock, wire):
     python, _, result = wire
     case, actual = python[f"{version}-{clock}"], result["python"][f"{version}-{clock}"]
-    assert actual["ok"], {key: actual.get(key) for key in ('code', 'status')}
-    assert actual["metadata"] == {"version": version, "record_count": COUNT,
-        "clock_kind": clock, "native_sha256": case["grant"]["raw_sha256"]}
+    if version == 7:
+        assert actual["ok"], {key: actual.get(key) for key in ('code', 'status')}
+        assert actual["metadata"] == {"version": version, "record_count": COUNT,
+            "clock_kind": clock, "native_sha256": case["grant"]["raw_sha256"]}
+    else:  # Formats before exact pad capture transport losslessly but are never ghosts.
+        assert {key: actual.get(key) for key in ("ok", "code", "status")} == {
+            "ok": False, "code": "incomplete_inputs", "status": 422}
     raw = base64.b64decode(case["raw"])
     assert codec.decode(base64.b64decode(actual["encoded"]),
         raw_sha256=case["grant"]["raw_sha256"]) == raw
     pads = tuple(record.pad for record in decode_clip(raw).frames)
-    assert pads == tuple(PADS[index % 3] if version == 7 else None for index in range(COUNT))
+    assert pads == tuple(KNOWN_PADS[index % 2] if version == 7 else None for index in range(COUNT))
 
 
 @pytest.mark.parametrize("version", VERSIONS)
 def test_independent_service_native_fixtures_decode_exactly_in_python(version, wire):
     _, _, result = wire
     item = next(item for item in result["service"] if item["version"] == version)
-    assert item["ok"], {key: item.get(key) for key in ('code', 'status')}
     raw = base64.b64decode(item["raw"])
-    assert codec.decode(base64.b64decode(item["encoded"]),
-        raw_sha256=item["metadata"]["native_sha256"]) == raw
+    verdict = _python_verdict({**item, "grant": {"raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "rom": "us", "clock": "igt", "frames": 257}})
+    if version == 7:  # the Worker fixture's star time is its record count
+        assert item["ok"], {key: item.get(key) for key in ('code', 'status')}
+        assert verdict is None
+    else:
+        assert (item["code"], verdict) == ("incomplete_inputs", "incomplete_inputs")
+    assert codec.decode(base64.b64decode(item["encoded"]), raw_sha256=hashlib.sha256(raw).hexdigest()) == raw
     assert codec.decode(codec.encode(raw)) == raw
     pads = tuple(record.pad for record in decode_clip(raw).frames)
-    assert pads == tuple(PADS[index % 3] if version == 7 else None for index in range(COUNT))
+    assert pads == tuple(((-128, 127, 0xff3f) if index % 3 == 2 else (0, 0, 0)) if version == 7 else None
+                         for index in range(COUNT))
+
+
+@pytest.mark.parametrize("name", _claims()[1])
+def test_both_sides_reach_one_verdict_on_every_upload_claim(name, wire):
+    """The Worker (codec.js) and the trainer (community/claims.py) refuse the
+    same claims with the same code: a ROM the header contradicts, any unknown
+    pad, a time the clip's clock does not bear out."""
+    _, _, result = wire
+    cases, expected = _claims()
+    actual = result["claims"][name]
+    worker = None if actual["ok"] else actual["code"]
+    assert actual.get("status", 422) == 422
+    assert (worker, _python_verdict(cases[name])) == (expected[name], expected[name])
 
 
 @pytest.mark.parametrize("mutation", tuple(_malformed()))

@@ -29,6 +29,11 @@ paths:
   target's pid and keeps it while that process runs (`alive()`); an observation is
   one header read. A fresh reader per poll re-walked Project64's memory every
   second (38 attaches in one minute of play, 2026-09-28).
+- **A proven check holds through a gap:** `onboarding.SteadyChecks` keeps a
+  check true until it has been false for 3 s, keyed by Project64 pid, ROM and
+  plugin pid; another of any of those proves everything again. A real stall
+  therefore reads as not set up after about 6 s (3 s of movement freshness,
+  then 3 s of hold). One unreadable header keeps the game it just read.
 - **One clock:** server monotonic time bounds fresh evidence to three seconds;
   the browser separately acknowledges progress for about one second. Neither
   polling frequency nor persisted completion can establish current readiness.
@@ -50,7 +55,7 @@ paths:
 | 2 | Runtime observation | actual ROM identity and fresh counters belonging to the selected process | `src/sm64_events/core/setup_runtime.py` | GET /api/setup emu target, rom and checks; `tests/test_onboarding.py` | Runtime fakes in that test vary PID, ROM, counters and recorder source | PJ64 without ROM, wrong PID, desktop fallback (unless the adapter is unsupported) or stalled counters remain incomplete | A first counter observation or missing observer stays unverified |
 | 3 | Applicable readiness | verification.step, ready and limited | `src/sm64_events/core/onboarding.py` | `tests/test_onboarding.py` readiness cases | Remove one check at a time from observation() | A missing US check prevents completion; JP excludes unsupported tracking only | Making every check false still reports ready, so the probe missed its subject |
 | 4 | API and durable outcome | fresh verdict plus separate onboarding record | `src/sm64_events/server/setup_api.py` | GET /api/setup and completion response; `tests/test_onboarding.py` | Inject the observer; POST completion through TestClient | Premature finish returns 409 with no completion record | A test reads an old localStorage value instead of the server record |
-| 5 | Revealed page and feedback | current page/substep, review position, visible acknowledgment | `src/sm64_events/ui/setupflow.js`, `src/sm64_events/ui/components/setupmodal.js`, `src/sm64_events/ui/components/setupmotion.js`, `src/sm64_events/ui/components/setuppages.js` | `tests/test_ui_setup_modal.py` drives the real Header and modal and samples motion | serve_ui(capture_layer_status=..., setup_observer=...) with changing dictionaries | Future steps appear, Back auto-advances, or setup completes on header detection alone | Missing UI lab skips the render; syntax-only checks cannot prove paint or flow |
+| 5 | Revealed page and feedback | current page; the shown step and its setup stage (`setupflow.js` `shownNext`: progress at once, a step back after 2 s); review position; acknowledgment of a stage seen 1.5 s | `src/sm64_events/ui/setupflow.js`, `src/sm64_events/ui/components/setupmodal.js`, `src/sm64_events/ui/components/setupmotion.js`, `src/sm64_events/ui/components/setuppages.js` | `tests/test_ui_setup_modal.py` drives the real Header and modal, records every committed card and samples motion; `tests/test_ui_setup_stages.py` runs the machine poll by poll | serve_ui(capture_layer_status=..., setup_observer=...) with changing dictionaries, or a `PollScript` serving one observation per poll | Future steps appear, Back auto-advances, setup completes on header detection alone, or a one-poll flicker swaps a card | Missing UI lab skips the render; syntax-only checks cannot prove paint or flow |
 
 ## Counterfactual recipe
 
@@ -64,6 +69,23 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-10-17, hop 2: "the Setup Checked for some reason gets detected, then
+  undos itself ... We detected JP -- we're done. Move on." Each check needed
+  continuous fresh movement, and the recorder's idle-to-active turn restarts
+  its picture count: GET /api/setup at 4 Hz showed `pictures` false for 0.6 s
+  at each turn, while his first seconds in the game toggled idle four times.
+  `SteadyChecks` now holds a proven check through gaps under 3 s;
+  `test_a_brief_gap_never_moves_setup_back_but_a_new_game_starts_over` fails
+  without the hold.
+- 2026-10-17, hop 5, after that fix: "Wizard still is super sketchy, I think
+  it's because it's bouncing visually between so many steps?" The install page
+  swapped a card, with an acknowledgment, for each of six server steps, and
+  swapped back on any step back. It now shows four setup stages; a step back
+  shows only after 2 s; only a stage shown 1.5 s is acknowledged; the modal
+  paints nothing until the first observation picks its page.
+  `test_opening_with_everything_running_shows_one_calm_card` fails without
+  the grouping, the hold or that first-observation wait.
 
 - 2026-09-28, hop 1: his server and Project64 started together. The boot
   refresh found no Project64, Project64 then loaded both plugins (its log:

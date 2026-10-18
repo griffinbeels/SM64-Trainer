@@ -74,7 +74,9 @@ namespace ghost_stream {
 const gs_api *api();
 bool requested(); // render thread, one atomic load; no timing while idle
 void cancel(); // render thread: invalidate any provisional/finalized display candidate
-void rom(bool opened);
+// The opened practice cartridge's rom_layout (GC_ROM_US/GC_ROM_JP), 0 when
+// none is open. A config naming the other cartridge captures nothing.
+void rom(uint32_t cartridge);
 // Called inside the serialized renderer DList command, before RSP processing.
 bool begin(const uint8_t *rdram, uint32_t bytes, uint32_t context_generation, int64_t qpc,
            const uint32_t *segments = nullptr);

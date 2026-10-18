@@ -55,6 +55,7 @@ from sm64_events.memory.version_probe import detect_version
 from sm64_events.sync import registry
 from sm64_events.sync.gates import Gate, Verdict, gate_id_for_field
 from sm64_events.sync.report import Report, report_path
+from sm64_events.sync.rom_candidates import rom_candidate
 
 SNAPSHOT_HZ = 30.0
 _RUN_TEST_SERVER_PORT = 8066   # run-test-server.bat -- CLAUDE.md, the port he
@@ -99,8 +100,9 @@ class GateContext:
 
     def candidate(self, field: str) -> int | None:
         """A verified value beats a shipped one beats the STROOP map's own
-        guess -- the order an address gate's hunt walks its own candidates
-        in (sync/address_gates.py)."""
+        guess beats an address read off the ROM images (sync/rom_candidates.py)
+        -- the order an address gate's hunt walks its own candidates in
+        (sync/address_gates.py)."""
         verdict = self.report.verdicts.get(gate_id_for_field(field))
         if (verdict is not None and verdict.status == "verified"
                 and verdict.value is not None):
@@ -111,7 +113,7 @@ class GateContext:
         row = next((row for row in LAYOUT_ROWS if row.field == field), None)
         if row is not None and row.symbol is not None:
             return globals_map(self.version).get(row.symbol)
-        return None
+        return rom_candidate(self.version, field)
 
     def raw(self):
         return self.mem

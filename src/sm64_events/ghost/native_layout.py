@@ -16,6 +16,8 @@ block are named <BLOCK>_<FIELD>_AT and are relative to that block.
 # Versions and names
 CLIP_MAGIC, CLIP_VERSION = b"SM64GHO7", 7
 SAMPLE_VERSION = 8  # GC_VERSION: gc_sample, and the gc_layout it is read with
+# gc_layout/gclip_header rom_layout: the cartridge a clip was captured on
+ROM_US, ROM_JP = 1, 2
 IPC_MAGIC, IPC_VERSION = b"SM64GI14", 14
 IPC_PREFIX = "Local\\sm64_trainer_ghost_v14_"
 STREAM_VERSION, PLAYBACK_VERSION = 7, 11

@@ -42,6 +42,10 @@ def _native_pose_runtime(tmp_path, *, cpu_only=False):
     practice = os.environ.get("SM64_MODEL_PRACTICE_ROM")
     if practice:
         fixtures.append(("practice", practice))
+    # Usamune JP (SM64_USAMUNE_v1.93j.z64): the same model from its own offsets.
+    japanese = os.environ.get("SM64_MODEL_JP_ROM")
+    if japanese:
+        fixtures.append(("jp", japanese))
     evidence = []
     for label, supplied in fixtures:
         args = [str(target), supplied, *(["--cpu-only"] if cpu_only else [])]
@@ -61,6 +65,9 @@ def _native_pose_runtime(tmp_path, *, cpu_only=False):
                          "sha256": hashlib.sha256(Path(supplied).read_bytes()).hexdigest(),
                          "result": report})
     (tmp_path / "asset-witness.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+    # Each cartridge's own blocks decode to the same art: a JP block read from
+    # a wrong offset or shift would change it.
+    assert len({item["result"]["atlas_fnv"] for item in evidence}) == 1, evidence
     # The real model through the real ghost_pose: Mario holding each kind the
     # ghost draws, under the F3D lighting, on every supplied ROM.
     held = tmp_path / "held_pose_host.exe"

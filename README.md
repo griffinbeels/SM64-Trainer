@@ -46,15 +46,16 @@ only the first manual download does.)
   is installed; it's preinstalled on 11.
 - **Project64 1.6** — other versions are not supported, the memory addresses
   are 1.6-specific.
-- **Usamune v1.93u (US)**. Setup recognizes **JP** and lets you finish the
-  available installation, with a warning that JP tracking is not supported yet. The rank
-  standards already know both, and **Settings → Game → Game version**
-  (Auto-detect / JP / US) picks which one grades you, live — but every memory
-  address the trainer reads is kept per ROM version, and JP's are discovered
-  by playing through `tools/sync_version.py --version jp` with the JP ROM
-  loaded while `/ui/sync.html` shows US beside JP filling in live. Until that
-  run has been done and its report promoted, JP reads nothing. The runbook:
-  [`docs/version-sync.md`](docs/version-sync.md).
+- **Usamune v1.93u (US) or v1.93j (JP)**. The trainer detects the loaded ROM
+  and follows US↔JP swaps automatically, including tracking, inputs and ghosts.
+  Ghosts and practice PBs are shared where a strategy plays the same on both
+  versions; strategies with regional differences keep separate ghosts and PBs.
+  **Settings → Game → Game version** (Auto-detect / JP / US) controls grading;
+  Auto-detect follows the loaded ROM. MARELO remains your overall rating, with
+  each PB graded against its own region's standards. Scorecard **You** follows
+  the Scorecard's US/JP filter. Unverified ROM builds cannot record attempts,
+  PBs or publishable ghosts. Address verification for future builds is covered
+  in [`docs/version-sync.md`](docs/version-sync.md).
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 

@@ -22,7 +22,7 @@ function harness(env,model=catalog,ctx={}){
 const pool=(overrides={})=>'/v1/pool?'+new URLSearchParams({target:JSON.stringify(target),clock:'igt',rom:'us',scope:'strategy',strategy:'Standard',min_step:'2',max_step:'2',base_step:'2',...overrides});
 async function invite(store,value=token,{expiry=second+3600,revoked=0}={}){await store.sql('INSERT INTO beta_invitations(token_sha256,expires_at,revoked,created_at) VALUES(?,?,?,?)',await sha256(value),expiry,revoked,second).run();}
 async function published(h,{uid=alice,marker=1,frames=100,strategy='Standard'}={}){
-  const f=upload(nativeClip({marker}),frames);f.body.strategy=strategy;f.body.generation=h.model.generation;
+  const f=upload(nativeClip({marker,count:frames}));f.body.strategy=strategy;f.body.generation=h.model.generation;
   const grant=await h.call('/v1/uploads',{uid,method:'POST',body:f.body});assert.equal(grant.response.status,200,JSON.stringify(grant.json)+String(h.errors));
   const result=await h.call('/v1/uploads/'+grant.json.upload_id,{uid,method:'PUT',bytes:f.bytes});assert.equal(result.response.status,200,JSON.stringify(result.json)+String(h.errors));return result.json;
 }

@@ -14,8 +14,9 @@ from sm64_events.detectors import counter_epoch
 from sm64_events.detectors.anchors import IGT_WRAP_CEILING, NEAR_ZERO_IGT
 from sm64_events.memory import addresses as A
 from sm64_events.ghost import native_layout as L
-from sm64_events.memory.ghost_layout import GhostLayout
-from sm64_events.memory.layout import JP, US, LayoutIncomplete
+from jp_layout_fixture import JP_CANDIDATE
+from sm64_events.memory.ghost_layout import GhostLayout, ghost_supported
+from sm64_events.memory.layout import US, Layout, LayoutIncomplete
 from sm64_events.sync.address_gates import (
     _check_area_update_counter,
     _check_current_area_pointer,
@@ -33,7 +34,7 @@ NATIVE = ROOT / "plugin/gfxwrap"
 @pytest.fixture(scope="module")
 def capture_host(tmp_path_factory):
     work = tmp_path_factory.mktemp("ghost_capture")
-    inputs = [NATIVE / name for name in ("ghost_capture.cpp", "ghost_capture.h", "ghost_root.cpp", "ghost_root.h", "ghost_clock.cpp", "ghost_clock.h")]
+    inputs = [NATIVE / name for name in ("ghost_capture.cpp", "ghost_capture.h", "ghost_behaviours.h", "ghost_root.cpp", "ghost_root.h", "ghost_clock.cpp", "ghost_clock.h")]
     inputs += [ROOT / path for path in ("tests/native/ghost_capture_host.cpp", "tests/test_ghost_capture.py",
         "src/sm64_events/memory/ghost_layout.py", "src/sm64_events/memory/layout.py",
         "src/sm64_events/memory/addresses.py", "src/sm64_events/detectors/anchors.py",
@@ -60,6 +61,7 @@ def capture_host(tmp_path_factory):
                       f"/Fo{work / 'header.obj'}"], work)
     config = work / "layout.bin"
     config.write_bytes(GhostLayout.from_layout(US).to_bytes())
+    (work / "layout-jp.bin").write_bytes(GhostLayout.from_layout(JP_CANDIDATE).to_bytes())
     assert hashes == {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}, \
         "capture source changed during compilation"
     (work / "capture-source.json").write_text(json.dumps({"source_sha256": hashes,
@@ -68,19 +70,30 @@ def capture_host(tmp_path_factory):
     return target, config
 
 
-@pytest.mark.parametrize("scenario", [
-    "basic", "swizzle", "bounds", "graph", "duplicate", "limits",
-    "skip_objects", "values", "unsupported", "action", "warp", "epochs", "transitions", "arguments",
-    "sound", "held", "pad",
-])
-def test_compiled_capture(capture_host, scenario):
-    target, config = capture_host
+def run_capture(target, config, scenario):
     result = subprocess.run(
         [str(target), str(config), scenario], cwd=target.parent,
         capture_output=True, text=True, timeout=15, check=False, **quiet_spawn_kwargs(),
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"ghost capture passed: {scenario}; config={L.LAYOUT_BYTES} sample={L.SAMPLE_BYTES}" in result.stdout
+
+
+@pytest.mark.parametrize("scenario", [
+    "basic", "swizzle", "bounds", "graph", "duplicate", "limits",
+    "skip_objects", "values", "unsupported", "action", "warp", "epochs", "transitions", "arguments",
+    "sound", "held", "pad", "rom_layout",
+])
+def test_compiled_capture(capture_host, scenario):
+    target, config = capture_host
+    run_capture(target, config, scenario)
+
+
+@pytest.mark.parametrize("scenario", ["basic", "warp", "transitions", "pad", "jp_sound"])
+def test_compiled_capture_reads_the_jp_cartridge(capture_host, scenario):
+    """The same reader on a JP config: its roots, its play_sound words."""
+    target, _config = capture_host
+    run_capture(target, target.parent / "layout-jp.bin", scenario)
 
 
 def test_semantic_config_resolves_selected_layout():
@@ -93,12 +106,36 @@ def test_semantic_config_resolves_selected_layout():
     assert len(config.to_bytes()) == L.LAYOUT_BYTES
     assert struct.unpack_from("<II", config.to_bytes()) == (L.LAYOUT_BYTES, L.SAMPLE_VERSION)
     assert struct.unpack_from("<II", config.to_bytes(), 56) == (US.pending_warp_op, US.delayed_warp_timer)
-    with pytest.raises(LayoutIncomplete, match="US layout"):
-        GhostLayout.from_layout(JP)
+    # A build before its sync run: every root it lacks is named.
+    with pytest.raises(LayoutIncomplete, match="jp layout has no verified address for: global_timer"):
+        GhostLayout.from_layout(Layout(version="jp"))
+    with pytest.raises(LayoutIncomplete, match="no eu layout schema"):
+        GhostLayout.from_layout(Layout(version="eu"))
     with pytest.raises(LayoutIncomplete, match="current_area_pointer"):
         GhostLayout.from_layout(replace(US, current_area_pointer=None))
     with pytest.raises(LayoutIncomplete, match="pending_warp_op"):
         GhostLayout.from_layout(replace(US, pending_warp_op=None))
+
+
+def test_jp_config_names_the_jp_cartridge_and_its_roots():
+    us, jp = GhostLayout.from_layout(US).to_bytes(), GhostLayout.from_layout(JP_CANDIDATE).to_bytes()
+    assert len(jp) == L.LAYOUT_BYTES
+    assert struct.unpack_from("<5I", us) == (L.LAYOUT_BYTES, L.SAMPLE_VERSION, 1, 8 << 20, L.ROM_US)
+    assert struct.unpack_from("<5I", jp) == (L.LAYOUT_BYTES, L.SAMPLE_VERSION, 1, 8 << 20, L.ROM_JP)
+    roots = ("global_timer", "mario_struct", "mario_object", "current_area_pointer", "area_update_counter",
+             "curr_level", "curr_area", "usamune_overall", "object_pool", "pending_warp_op",
+             "delayed_warp_timer", "sound_code", "sound_producer", "sound_consumer", "sound_ring")
+    assert struct.unpack_from("<15I", jp, 20) == tuple(getattr(JP_CANDIDATE, name) for name in roots)
+    assert struct.unpack_from("<2I", jp, 184) == (JP_CANDIDATE.behaviour_base, JP_CANDIDATE.player1_controller)
+    # The clock block is the game's, not the cartridge's.
+    assert jp[80:184] == us[80:184]
+    with pytest.raises(ValueError, match="rom_layout"):
+        replace(GhostLayout.from_layout(US), rom_layout=3)
+
+
+def test_both_practice_cartridges_support_native_ghosts():
+    assert ghost_supported("us") and ghost_supported("jp")
+    assert not ghost_supported("eu") and not ghost_supported("")
 
 
 def test_clock_encoder_uses_existing_registries_in_native_field_order():

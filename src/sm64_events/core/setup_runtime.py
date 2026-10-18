@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 
-from sm64_events.core.onboarding import CounterWindow, identify_rom
+from sm64_events.core.onboarding import CounterWindow, SteadyChecks, identify_rom
 
 log = logging.getLogger("sm64.setup")
 
@@ -31,6 +31,11 @@ class SetupRuntime:
         self._cached = {}
         self._cached_layer = None
         self._window = CounterWindow(clock)
+        self._steady = SteadyChecks(clock)
+        # The last header this process answered with, kept through a read
+        # that fails once: a missing ROM for one poll moved the wizard back
+        # to "Open Usamune" and dropped every proven check with it.
+        self._last_rom: tuple[int, float, dict] | None = None   # (pid, when, identity)
         # ONE reader per Project64 process, kept while that process runs. The
         # setup screen observes once a second, and a fresh reader each time
         # attached anew: a process-list snapshot, a debug-privileged open and a
@@ -41,15 +46,21 @@ class SetupRuntime:
         self._refused: tuple[int, float] | None = None   # (pid, when) attach found no RDRAM
 
     def _rom(self, target) -> dict:
-        reader = self._reader_for(target.get("pid"))
+        pid = target.get("pid")
+        reader = self._reader_for(pid)
         if reader is None:
             return identify_rom(None)
         try:
-            return identify_rom(reader.rom_header())
+            rom = identify_rom(reader.rom_header())
         except (OSError, RuntimeError):
             log.warning("game identity is temporarily unreadable", exc_info=True)
             self._release_reader()
+            last = self._last_rom
+            if last is not None and last[0] == pid and self.clock() - last[1] < self._steady.hold_s:
+                return last[2]
             return identify_rom(None)
+        self._last_rom = (pid, self.clock(), rom)
+        return rom
 
     def _reader_for(self, pid):
         """This process's reader, attached once; None while there is no
@@ -144,11 +155,13 @@ class SetupRuntime:
                               and not self.poller.paused
                               and not getattr(self.poller, "hold_reason", None))
             pictures = gpu.pictures and captured
-        checks = {"plugin": bool(plugin), "pictures": bool(plugin and pictures),
-                  "inputs": bool(counters["inputs"] and rom["state"] == "supported"),
-                  "game": bool(counters["game"] and not self.poller.paused
-                               and not getattr(self.poller, "hold_reason", None)
-                               and rom["state"] == "supported")}
+        checks = self._steady.hold(
+            (target.get("pid"), rom["name"], rom["region"], layer.plugin_pid),
+            {"plugin": bool(plugin), "pictures": bool(plugin and pictures),
+             "inputs": bool(counters["inputs"] and rom["state"] == "supported"),
+             "game": bool(counters["game"] and not self.poller.paused
+                          and not getattr(self.poller, "hold_reason", None)
+                          and rom["state"] == "supported")})
         return {"target": target, "rom": rom, "checks": checks,
                 "capture_note": recorder.get("frame_source_note"),
                 "paused": self.poller.paused,

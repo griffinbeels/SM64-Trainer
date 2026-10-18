@@ -1,5 +1,6 @@
 """The behaviour SYMBOL is the identity; the pointer is per version."""
 from sm64_events.memory import behaviours as B
+from sm64_events.memory.layout import layout_for
 
 
 def test_both_catalogues_load_and_have_the_measured_sizes():
@@ -24,10 +25,10 @@ def test_us_pointer_roundtrip_through_the_shipped_base():
     assert B.symbol_of("us", 0x800EBC7C) == "bhvDoorWarp"
 
 
-def test_unknown_pointer_keys_as_ptr_and_jp_without_a_base_too():
+def test_unknown_pointer_keys_as_ptr_and_jp_reads_its_own_base():
     assert B.symbol_of("us", 0x12345678) == "ptr_12345678"
     assert B.symbol_of("jp", 0x80000000) == "ptr_80000000"
-    assert B.pointer_of("jp", "bhvBobomb") is None
+    assert B.pointer_of("jp", "bhvBobomb") == layout_for("jp").behaviour_base + 0x3154
     assert B.pointer_of("jp", "bhvBobomb", base=0x800EB000) == 0x800EB000 + 0x3154
     assert B.pointer_of("us", "bhvNotAThing") is None
 

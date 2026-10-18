@@ -811,3 +811,119 @@ def test_a_star_grabbed_after_leaving_its_subarea_publishes_the_whole_star_at_on
     # 1); what matters is that nothing is waited FOR.
     assert row.payload["published_after"] <= 1
     assert published_at - xcam <= 1
+
+
+# Usamune's TIMER → STOP is the player's menu, and most players never set it
+# (his ruling, 2026-10-17: "we should NEVER rely on the player to remember to
+# set up their timer mode correctly"). The x-cam number is ours under every
+# setting; what the setting decides is whether a write is coming to agree with
+# it. The detector reads the setting off Usamune's STOP byte, and where a build
+# has no address for it, off this grab's own writes.
+
+STOP_BYTE = {"none": 0, "grab": 1, "xcam": 2, "grabx": 3}
+
+
+def stop_grab(stop, *, at=GRAB_FRAME, base=GRAB_COUNTER, fall=10, prior=0,
+              byte=True):
+    """One grab under one STOP setting, sampled every frame from just before
+    the touch to past the watch, then Mario back on his feet.
+
+    The store holds `prior`, then: Grab writes the counter at the touch;
+    GrabX writes that, then the x-cam number one frame after the dance entry
+    (measured, journal 18818: [[0, 419], [1, 420]]); Xcam writes only the
+    latter; None writes nothing. `byte=False` is a build whose layout has no
+    address for the STOP byte."""
+    xcam_number = base + fall + 1           # the counter at the dance + the tick
+    stop_byte = STOP_BYTE[stop] if byte else None
+    snaps = []
+    for frame in range(at - 2, at + fall + StarGrabDetector.RESULT_SETTLE_FRAMES + 3):
+        offset = frame - at
+        result = prior
+        if stop in ("grab", "grabx") and offset >= 0:
+            result = base
+        if stop in ("grabx", "xcam") and offset >= fall + 1:
+            result = xcam_number
+        if offset < 0:
+            action, timer = ACT_IDLE, 0
+        elif offset < fall:
+            action, timer = A.ACT_FALL_AFTER_STAR_GRAB, offset
+        else:
+            action, timer = A.ACT_STAR_DANCE_EXIT, offset - fall
+        snaps.append(snap(global_timer=frame, igt_overall=base + offset,
+                          igt_result=result, mario_action=action,
+                          mario_action_timer=timer, usamune_stop=stop_byte))
+    last = snaps[-1]
+    snaps.append(replace(last, global_timer=last.global_timer + 1,
+                         mario_action=ACT_IDLE, mario_action_timer=0))
+    return snaps, xcam_number
+
+
+def grabs(*stops, **shape):
+    """Consecutive grabs on one detector, 400 frames apart."""
+    snaps, numbers = [], []
+    for n, stop in enumerate(stops):
+        more, number = stop_grab(stop, at=GRAB_FRAME + 400 * n,
+                                 base=GRAB_COUNTER + 400 * n, **shape)
+        snaps += more
+        numbers.append(number)
+    return emitted_at(snaps), numbers
+
+
+def test_a_timer_that_stops_at_the_grab_never_makes_a_row_wait():
+    for stop in ("grab", "none"):
+        [(published_at, row)], [number] = grabs(stop)
+        assert row.payload["igt_frames"] == number == GRAB_COUNTER + 11, stop
+        assert published_at == row.frame, stop                 # no wait at all
+        assert row.payload["igt_source"] == "counter"
+        assert row.payload["usamune_stop"] == stop
+
+
+def test_grabx_and_xcam_publish_on_usamunes_agreeing_write():
+    for stop in ("grabx", "xcam"):
+        events, numbers = grabs(stop, stop)
+        assert [ev.type for _, ev in events] == ["star_collected"] * 2, stop
+        for (published_at, row), number in zip(events, numbers, strict=True):
+            assert row.payload["igt_frames"] == number
+            assert row.payload["igt_source"] == "result"
+            assert row.payload["usamune_stop"] == "xcam"
+            assert published_at - row.frame == 1             # the write's own frame
+
+
+def test_a_ground_grab_under_grab_takes_the_xcam_not_the_touch():
+    """Under STOP=Grab a ground grab's touch write is one frame under the
+    x-cam and passes for agreement; the byte says no x-cam write is coming."""
+    [(_, row)], [number] = grabs("grab", fall=0)
+    assert row.payload["igt_frames"] == number == GRAB_COUNTER + 1
+    assert row.payload["usamune_stop"] == "grab"
+
+
+def test_switching_to_grabx_stamps_the_very_next_row_xcam():
+    """His report, 2026-10-17 (journal 20263): he set GrabX, took Shoot into
+    the Wild Blue, and the row still said "Set Timer → GrabX": it was
+    stamped with the earlier grabs' Grab."""
+    events, numbers = grabs("grab", "grabx")
+    assert [ev.payload["usamune_stop"] for _, ev in events] == ["grab", "xcam"]
+    assert events[1][1].payload["igt_frames"] == numbers[1]
+
+
+def test_without_the_byte_each_grab_reads_its_own_writes():
+    events, numbers = grabs("grab", "grabx", "none", byte=False)
+    rows = [ev for _, ev in events]
+    assert [ev.payload["usamune_stop"] for ev in rows] == ["grab", "xcam", "none"]
+    assert [ev.payload["igt_frames"] for ev in rows] == numbers
+    waits = [at - ev.frame for at, ev in events]
+    assert waits == [StarGrabDetector.PUBLISH_WAIT_FRAMES, 1,
+                     StarGrabDetector.PUBLISH_WAIT_FRAMES]
+
+
+def test_every_row_records_both_moments():
+    [(_, row)], _ = grabs("grabx")
+    assert row.payload["grab_igt_frames"] == GRAB_COUNTER        # Usamune at the touch
+    assert row.payload["derived_igt_frames"] == GRAB_COUNTER + 11  # our x-cam
+    assert row.payload["igt_frames"] == GRAB_COUNTER + 11
+
+
+def test_the_stop_byte_reads_as_what_the_timer_does():
+    from sm64_events.detectors.star_grab import stop_from_byte
+    readings = [stop_from_byte(v) for v in (0, 1, 2, 3, 4, None)]
+    assert readings == ["none", "grab", "xcam", "xcam", None, None]

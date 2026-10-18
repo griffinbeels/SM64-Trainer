@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from sm64_events.ghost.sharing_targets import canonical, checked_target
 
-from . import codec
+from . import claims, codec
 from .cache import checked_metadata, target_key, value_of
 from .config import CommunityError
 from .outbox import RetractionOutbox, SourceOutbox, checked_source, checked_strategy, retraction_key, source_key
@@ -32,11 +32,19 @@ CATALOG_RENEW_S = 3600
 
 
 def _prepare_source(source):
-    """Bound and revalidate the immutable local recording before encoding."""
+    """Bound and revalidate the immutable local recording before encoding.
+
+    Nothing leaves the machine that its own bytes do not bear out: the clip's
+    ROM, a pad on every record, and the run's time (community/claims.py). A
+    refusal discards the offer instead of retrying it."""
     with Path(source['path']).open('rb') as stream:
         raw = stream.read(codec.MAX_RAW + 1)
     if len(raw) > codec.MAX_RAW or hashlib.sha256(raw).hexdigest() != source['raw_sha256']:
         raise CommunityError('source_changed')
+    try:
+        claims.check_claims(raw, game_version=source['game_version'], clock=source['clock'], frames=source['frames'])
+    except ValueError as error:  # CommunityError, or the decoder's ClipError
+        raise CommunityError('invalid_source', str(error)) from None
     return raw, codec.encode(raw)
 
 
@@ -687,7 +695,8 @@ class CommunitySync:
         raw, encoded = await self._cpu(_prepare_source, source)
         if not self._source_active(source):
             return
-        body = {"target": source["target"], "clock": source["clock"], "rom": source["game_version"],
+        # The ROM comes from the clip header, never the attempt's own claim.
+        body = {"target": source["target"], "clock": source["clock"], "rom": claims.region_of(raw),
             "strategy": source["strategy"], "frames": source["frames"], "raw_sha256": source["raw_sha256"],
             "raw_bytes": len(raw), "encoded_sha256": hashlib.sha256(encoded).hexdigest(), "encoded_bytes": len(encoded),
             "codec": "ghc1", "generation": self._catalog_generation}
