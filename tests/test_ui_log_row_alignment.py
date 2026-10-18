@@ -36,6 +36,7 @@ Both log layouts are measured: the table (a wide pane) and the per-row grid
 (a pane of 700px or less -- his window at his zoom; 800 here).
 """
 import json
+import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -80,6 +81,10 @@ MEASURE = """(() => {
                  next: Math.min(sel ? sel.getBoundingClientRect().left : Infinity,
                                 tr.querySelector('.attempt-actions').getBoundingClientRect().left) }; })(),
       slotButton: !!tr.querySelector('.attempt-pb-slot > button'),
+      buttonBoxes: (() => { const slots = tr.querySelector('.attempt-action-slots');
+        return [slots.firstElementChild, slots.querySelector('.attempt-pb-slot button'), slots.lastElementChild]
+          .map(e => { const r = e.getBoundingClientRect();
+            return {width:r.width, height:r.height, mid:r.top+r.height/2}; }); })(),
       reason: (tr.querySelector('.attempt-pb-slot button.pb-unavailable') || {}).title || null,
       pb: tr.classList.contains('is-pb'),
       edge: getComputedStyle(tr.querySelector('td')).boxShadow,
@@ -130,7 +135,7 @@ STATUS = {"recording": False, "capture_state": "off", "capture_gated": False,
           "idle": False, "disk_bytes": 0, "max_buffer_bytes": 0}
 
 
-def _render(play, base, width, save_newest=False):
+def _render(play, base, width, save_newest=False, zoom=1, clear_one=False):
     browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
     try:
         page = browser.new_page(viewport={"width": width, "height": 1100})
@@ -138,6 +143,7 @@ def _render(play, base, width, save_newest=False):
         page.route("**/api/replay/status", lambda route: route.fulfill(
             status=200, content_type="application/json", body=json.dumps(STATUS)))
         page.goto(base)
+        page.evaluate("zoom => document.documentElement.style.zoom=zoom", zoom)
         page.locator(ROWS).nth(2).wait_for(timeout=20000)
         page.locator(".sidebar-status .recording-status .dot").wait_for(timeout=20000)
         if save_newest:
@@ -146,7 +152,17 @@ def _render(play, base, width, save_newest=False):
             page.locator(ROWS).nth(0).locator(".attempt-pb-slot button").click()
             page.locator(f"{ROWS}.is-pb .pb-save.is-shown").wait_for(timeout=20000)
             page.wait_for_timeout(1800)
+        if clear_one:
+            page.locator(f"{ROWS}:not(.is-pb) button[title='Clear this attempt as a mistake']").first.click()
+            page.locator(f"{CARD} .attempt-footer-tools button").click()
+            page.locator(f"{ROWS}.cleared button[aria-label='Restore attempt']").wait_for()
         page.wait_for_timeout(600)
+        if os.environ.get("SM64_ACTION_SIZE_EVIDENCE"):
+            output = Path(os.environ["SM64_ACTION_SIZE_EVIDENCE"])
+            output.mkdir(parents=True, exist_ok=True)
+            tag = "pb" if page.locator(f"{ROWS}.is-pb").count() else "unpicked"
+            page.locator(f"{CARD} .attempt-action-slots").first.screenshot(
+                path=str(output / f"{tag}-actions-{width}-{zoom}.png"))
         return page.evaluate(MEASURE), page.evaluate(RAIL)
     finally:
         browser.close()
@@ -154,6 +170,18 @@ def _render(play, base, width, save_newest=False):
 
 def _one(values, what, seen):
     assert len(set(values)) == 1, f"{what} moves between rows: {sorted(set(values))} {seen}"
+
+
+def _matching_action_frames(seen):
+    frames = [r["buttonBoxes"] for r in seen["rows"]]
+    assert frames and all(len(row) == 3 for row in frames), seen
+    for replay, pb, clear in frames:
+        assert min(replay["width"], replay["height"], pb["height"], clear["height"]) > 0, frames
+        assert abs(replay["width"] - replay["height"]) < .2, frames
+        assert abs(clear["width"] - clear["height"]) < .2, frames
+        assert max(b["height"] for b in (replay,pb,clear)) - min(b["height"] for b in (replay,pb,clear)) < .2, frames
+        assert max(b["mid"] for b in (replay,pb,clear)) - min(b["mid"] for b in (replay,pb,clear)) < .2, frames
+    assert max(row[0]["width"] for row in frames) - min(row[0]["width"] for row in frames) < .2, frames
 
 
 def _reset_then_finish(service, anchor):
@@ -184,6 +212,7 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
             unpicked, _ = _render(play, base, 800)
     assert not wide["narrow"] and narrow["narrow"], (wide["narrow"], narrow["narrow"])
     for seen in (wide, narrow):
+        _matching_action_frames(seen)
         rows = seen["rows"]
         assert any(r["success"] for r in rows) and any(not r["success"] for r in rows), rows
         for what in ("result", "delta", "strategy", "replay", "slot", "clear"):
@@ -228,6 +257,7 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
     # With no strategy picked every row still draws three frames, its Save
     # disabled and saying how to bring it back.
     assert all(r["slotButton"] and r["unavailable"] for r in unpicked["rows"]), unpicked["rows"]
+    _matching_action_frames(unpicked)
     assert all(r["reason"].startswith(("Pick", "Only a finished")) for r in unpicked["rows"]), (
         [r["reason"] for r in unpicked["rows"]])
     for what in ("replay", "slot", "clear"):
@@ -244,3 +274,16 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
     assert rail["dotMark"] in ("none", "normal"), rail
     assert abs(rail["recCentre"] - rail["box"]) < 0.75, rail
     assert abs(rail["above"] - rail["below"]) < 1.5, rail
+
+
+def test_action_frames_keep_their_size_at_zoom_and_when_a_row_is_removed():
+    with serve_ui_live() as (base, service):
+        _reset_then_finish(service, 30000)
+        with sync_playwright() as play:
+            first, _ = _render(play, base, 850, save_newest=True, clear_one=True)
+            _matching_action_frames(first)
+            for width, zoom in ((850, 1.25), (850, 1.5), (1500, 1.25), (1500, 1.5)):
+                seen, _ = _render(play, base, width, zoom=zoom)
+                _matching_action_frames(seen)
+                assert any(row["pb"] for row in seen["rows"]), seen
+                assert any(row["unavailable"] for row in seen["rows"]), seen

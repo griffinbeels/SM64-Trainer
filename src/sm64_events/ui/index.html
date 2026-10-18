@@ -3819,7 +3819,7 @@
   .attempt-strategy.same-strat select { opacity: 0; }
   .attempt-table tr:hover .attempt-strategy.same-strat select,
   .attempt-strategy.same-strat select:focus-visible { opacity: 1; }
-  .attempt-actions { width: 210px; white-space: nowrap; }
+  .attempt-actions { --attempt-action-size: 30px; width: 210px; white-space: nowrap; }
   /* THREE FIXED SLOTS, ▷ | PB | ×, right-aligned, and the PB slot is always
      there at one width (round 7: "the buttons are staggered / in totally
      different positions every time"). It holds Save, Undo, a disabled Save
@@ -3851,8 +3851,17 @@
      +0 / +1 / +3 px (measured 2026-08-23; his report: "the X button is
      slightly lower than the others"). Middle-aligning every button puts
      their centres on one line whatever each one contains. */
-  .attempt-actions button { min-height: 30px; padding: .25rem .45rem; font-size: .76rem; vertical-align: middle; }
-  .attempt-actions .icon-button { width: 31px; padding-inline: 0; }
+  .attempt-actions button {
+    height: var(--attempt-action-size); min-height: var(--attempt-action-size);
+    padding: .25rem .45rem; font-size: .76rem; vertical-align: middle;
+  }
+  /* One frame size in every row state, including Undo PB. Override the
+     global icon minimum too: width alone left these 34px wide but 30px tall.
+     Direct icons cannot shrink while the labelled PB slot keeps its width. */
+  .attempt-actions .icon-button {
+    width: var(--attempt-action-size); min-width: var(--attempt-action-size);
+    flex: 0 0 var(--attempt-action-size); padding-inline: 0;
+  }
   /* An imported row has no replay; the blank keeps its buttons in column. */
   .attempt-actions .attempt-no-replay { display: inline-block; visibility: hidden; }
   .save-pb-narrow { display: none; }
