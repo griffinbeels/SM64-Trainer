@@ -6,10 +6,12 @@ import threading
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import sync_playwright
 
 from frontend_runner import run_frontend
 from test_ui_beta_updates import ReleaseBoundary, ui_fixture, get_driver
-from test_ui_community import FixtureAccount, wait_until
+from test_ui_community import FixtureAccount
+from tests.browser_faults import no_faults, watch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -70,6 +72,18 @@ class StartupRelease(ReleaseBoundary):
         return super().status(force=force, repair=repair)
 
 
+def hold_refresh_probes(page):
+    """Guarantee the refresh retires a read and telemetry, not just status calls."""
+    held = []
+    page.route("**/*probe=startup-retire", lambda route: held.append(route.request))
+    for endpoint, method in (("/api/scorecard/entry_goals", "GET"), ("/api/uilog", "POST")):
+        probe = endpoint + "?probe=startup-retire"
+        options = {"method": method, **({"body": "{}"} if method == "POST" else {})}
+        with page.expect_request(lambda request, *, probe=probe: request.url.endswith(probe)):
+            page.evaluate(f"void fetch({json.dumps(probe)}, {json.dumps(options)}).catch(() => {{}})")
+    return held
+
+
 @pytest.mark.parametrize("width", (1500, 850))
 @pytest.mark.parametrize("account_status", ("signed_out", "new"))
 def test_checking_does_not_block_login_and_signup_but_a_real_offer_gets_priority(tmp_path, monkeypatch, width, account_status):
@@ -121,37 +135,50 @@ def test_refresh_is_usable_while_checking_and_stays_clear_without_an_offer(tmp_p
     try:
         with ui_fixture.serve_ui(tmp_path / "current.db") as base, contextlib.ExitStack() as cleanup:
             cleanup.callback(updater.release.set)
-            with get_driver().launch(headless=True, viewport=(width, 1100)) as page:
-                for _ in range(2):  # the initial load and an ordinary refresh
-                    page.goto(base)
-                    page.wait_for(".practice-page")
-                    assert updater.started.wait(5)
-                    assert not updater.release.is_set()
-                    assert page.count(".modal, .update-summary") == 0
-                    page.wait_for("button[aria-label='Settings']:visible,button[aria-label='Open settings']:visible")
-                    label = page.evaluate("""[...document.querySelectorAll('button')].find(b=>
-                      ['Settings','Open settings'].includes(b.getAttribute('aria-label'))
-                      && b.getClientRects().length)?.getAttribute('aria-label')""")
-                    assert label, "The Settings control must be present before testing its reachability"
+            # Raw requests retain document identity; uilab's string-only fault
+            # drain cannot distinguish this refresh from a same-page failure.
+            with sync_playwright() as play:
+                browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+                page = browser.new_page(viewport={"width": width, "height": 1100}, reduced_motion="no-preference")
+                page.set_default_timeout(15000)
+                seen, held = watch(page), []
+                try:
+                    for cycle in range(2):  # the initial load and an ordinary refresh
+                        page._retire_observed_requests()
+                        page.goto(base, wait_until="domcontentloaded")
+                        page.locator(".practice-page").first.wait_for()
+                        assert updater.started.wait(5)
+                        assert not updater.release.is_set()
+                        assert page.locator(".modal, .update-summary").count() == 0
+                        page.locator("button[aria-label='Settings']:visible,button[aria-label='Open settings']:visible").first.wait_for()
+                        label = page.evaluate("""[...document.querySelectorAll('button')].find(b=>
+                          ['Settings','Open settings'].includes(b.getAttribute('aria-label'))
+                          && b.getClientRects().length)?.getAttribute('aria-label')""")
+                        assert label, "The Settings control must be present before testing its reachability"
+                        page.click("button[aria-label=" + json.dumps(label) + "]")
+                        page.locator(".settings-drawer").first.wait_for()
+                        page.click("button[aria-label='Close settings']")
+                        page.locator(".settings-drawer").wait_for(state="detached")
+                        if cycle == 0:
+                            # Make the former assumption fail deterministically:
+                            # a refresh can retire reads and telemetry as well
+                            # as the two deliberately held updater requests.
+                            held = hold_refresh_probes(page)
+                    assert len(held) == 2 and all(request.failure == "net::ERR_ABORTED" for request in held)
+                    (artifacts / f"checking-silent-{width}.png").write_bytes(page.screenshot())
+                    updater.release.set()
                     page.click("button[aria-label=" + json.dumps(label) + "]")
-                    page.wait_for(".settings-drawer")
+                    # This control becomes enabled only after the actual update
+                    # hook receives status; observe the UI, not a guessed URL.
+                    page.locator("#receive-beta-updates:not([disabled])").first.wait_for()
                     page.click("button[aria-label='Close settings']")
-                    wait_until(page, "!document.querySelector('.settings-drawer')", "settings dismissal")
-                (artifacts / f"checking-silent-{width}.png").write_bytes(page.screenshot())
-                updater.release.set()
-                page.click("button[aria-label=" + json.dumps(label) + "]")
-                # This control becomes enabled only after the actual update
-                # hook receives status; observe the UI, not a guessed URL.
-                page.wait_for("#receive-beta-updates:not([disabled])")
-                page.click("button[aria-label='Close settings']")
-                wait_until(page, "!document.querySelector('.settings-drawer')", "settings dismissal")
-                assert page.count(".modal, .update-summary") == 0
-                (artifacts / f"no-offer-{width}.png").write_bytes(page.screenshot())
-                # The deliberate refresh aborts its previous page's two held
-                # status reads. Allow only those exact navigation cancellations.
-                problems = page.problems()
-                cancelled = f"requestfailed: {base}/api/update/status (net::ERR_ABORTED)"
-                assert len(problems) <= 2 and all(problem == cancelled for problem in problems), problems
+                    page.locator(".settings-drawer").wait_for(state="detached")
+                    assert page.locator(".modal, .update-summary").count() == 0
+                    (artifacts / f"no-offer-{width}.png").write_bytes(page.screenshot())
+                    no_faults(seen)
+                finally:
+                    page._retire_observed_requests()
+                    browser.close()
     finally:
         updater.release.set()
 
