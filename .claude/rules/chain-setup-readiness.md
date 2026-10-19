@@ -48,7 +48,11 @@ paths:
   An unsupported adapter (`replay/gpuadapter.py`) holds no GPU lease, so the
   recorder's `gpu_unsupported` status lets the desktop's written pictures
   (`pictures_fed`) plus a live control page naming this Project64 and moving
-  game/input counters stand in instead.
+  game/input counters stand in instead. Discovery may establish unsupported
+  hardware before GPU demand/channel startup only after a live matching
+  GPU-capable control identity is registered, and only when a nonempty complete
+  DXGI inventory rules out every adapter. Hybrid/unknown/failed inventories keep
+  the actual channel-LUID check. The verdict itself is never picture evidence.
 
 | # | hop | value is true here as | module | probe (reads it) | inject (forces it) | when the hop is broken, the probe shows | when the probe itself is broken, it shows |
 |---|-----|-----------------------|--------|------------------|--------------------|------------------------------------------|--------------------------------------------|

@@ -454,9 +454,11 @@ def discover(
     nominal_rate,
     control_factory=CaptureControl,
     retry_gate=None,
+    adapter_probe=None,
 ):
     """Read-only capability check, retaining a known GPU source during gaps."""
     identity = retry_gate.identity_for(expected_pid) if retry_gate is not None else None
+    live_gpu = False
     try:
         with control_factory() as control:
             status = control.status()
@@ -468,6 +470,7 @@ def discover(
                 identity = (
                     retry_gate.observe(status) if retry_gate is not None else None
                 )
+                live_gpu = True
             elif identity is None:
                 return None
             else:
@@ -488,6 +491,16 @@ def discover(
             return None
     if retry_gate is not None and retry_gate.unsupported_for(identity):
         return None  # Its adapter cannot record: the desktop grab stays.
+    if live_gpu and retry_gate is not None:
+        if adapter_probe is None:
+            from sm64_events.replay.gpuadapter import machine_unsupported_reason
+
+            adapter_probe = machine_unsupported_reason
+        reason = adapter_probe()
+        if reason is not None:
+            retry_gate.unsupported(identity, reason)
+            log.warning("GPU recording unavailable for this Project64: %s", reason)
+            return None
     return GpuCapture(
         expected_pid,
         layout,

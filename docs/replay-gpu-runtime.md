@@ -121,7 +121,12 @@ the UI which case it is, and onboarding never reopens for an automatic update.
 ## Owners and data flow
 
 `SourceFactory` is called only after `ReplayRecorder` acquires the machine-wide
-recorder lock. GPU discovery reads the small control page. The paired
+recorder lock. GPU discovery reads the small control page. After a live matching
+GPU-capable producer is registered with the retry gate, it checks the machine's
+complete DXGI adapter inventory. If every adapter is definitely unsupported,
+the same source-selection call keeps the desktop grab before creating GPU
+demand, waiting for a channel or starting a helper. A capability bit describes
+the wrapper's route; it does not prove the hardware can deliver it. The paired
 `GpuCapture`/`GpuSink` shares one capture coordinator and one bounded media sink;
 it starts no second encoder. Existing recordings and fragment readers keep
 their existing format and exact source-key lookup.
@@ -285,13 +290,28 @@ The lease supervisor allows five seconds from admitted request to ACTIVE. Helper
 Open uses its startup budget; ordinary native requests use the shorter call
 deadline. An unavailable backend ends the request explicitly. An adapter that
 can never open the encoder is a verdict, not a failure: `gpuadapter.py` asks
-DXGI and the driver before any helper starts (not NVIDIA, a software adapter,
-an NVENC API older than the encoder's 13.0), and an H.264 refusal by codec
-answers the same way. `gpusettings.py` remembers it per adapter and driver
+DXGI and the driver (AMD/Intel, a software adapter, a missing NVIDIA driver or
+an NVENC API older than the encoder's 13.0). Discovery can settle this before
+channel startup only when a nonempty, complete inventory rules out every
+possible capture adapter. Enumeration/description failures, its safety bound,
+unknown vendors and any plausible NVIDIA adapter retain the GPU route. A missing
+NVENC version answer cannot distinguish an absent driver from a failed query,
+so NVIDIA candidates retain the existing actual-LUID handling in that case. Only
+a successful query proving an old API rejects NVIDIA at discovery. Hybrid
+machines therefore still use the channel's actual GL adapter LUID, never the
+primary monitor or enumeration order. That actual-adapter check runs before
+the helper, and an H.264 refusal by codec answers the same way.
+`gpusettings.py` remembers the actual-adapter verdict per adapter and driver
 version; the retry gate arms no cooldown and discovery declines that producer,
 so the recorder's next attach keeps the desktop grab
-(`sourcefactory.DesktopForUnsupportedGpu`, status `gpu_unsupported`) and setup
-accepts its written pictures. An NVIDIA GPU without NVENC hardware still
+(`sourcefactory.DesktopForUnsupportedGpu`, status `gpu_unsupported`). The early
+machine verdict selects that fallback in the current call. Setup still requires
+its written pictures, live matching control and moving game/input evidence;
+the hardware verdict alone cannot complete setup. The 2026-10-19 AMD report
+showed repeated channel-startup deadlines before codec selection; this fixes
+the admission-order defect without identifying its native GL failure. Actual
+replay and setup completion on that tester's machine remain a live gate.
+An NVIDIA GPU without NVENC hardware still
 fails as a driver error at session open, indistinguishable from a transient
 one without a native change, and keeps the retry gate. Transient failures
 retry only after proved cleanup, with 10/20/40/60-second capped delays. A short
