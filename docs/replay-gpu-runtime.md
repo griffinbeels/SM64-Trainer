@@ -180,7 +180,7 @@ their existing format and exact source-key lookup.
 flowchart LR
   R[Renderer: picture plus input stamp] --> S[Bounded GPU snapshot]
   S --> G[GPU delivery worker]
-  G --> E[Isolated NVENC helper]
+  G --> E[Isolated hardware encoder helper]
   G --> M[Small sample and exact stamp]
   E --> P[Compressed packet]
   M --> A[Existing selector: sample and exact stamps]
@@ -319,8 +319,8 @@ the next offers. Startup cannot fill a source queue with cold codec construction
 
 Helper Open also settles WHICH CODEC this adapter records in. The session asks
 for AV1 first — 32% of H.264's bytes at equal quality and faster to encode
-(measured 2026-09-20) — and the encoder checks `nvEncGetEncodeGUIDs` before it
-configures anything. An adapter without an AV1 encoder answers `GBDLL_CODEC`,
+(measured on NVIDIA, 2026-09-20). NVENC checks `nvEncGetEncodeGUIDs`; the Windows
+backend enumerates the actual adapter's hardware MFTs. An adapter without an AV1 encoder answers `GBDLL_CODEC`,
 typed apart from every real fault, and the session asks the SAME helper for
 H.264 inside the same startup budget; `gpusettings.py` remembers the refusal
 per adapter LUID, so only the first capture of a launch pays the extra round
@@ -335,11 +335,12 @@ The lease supervisor allows five seconds from admitted request to ACTIVE. Helper
 Open uses its startup budget; ordinary native requests use the shorter call
 deadline. An unavailable backend ends the request explicitly. An adapter that
 can never open the encoder is a verdict, not a failure: `gpuadapter.py` asks
-DXGI and the driver (AMD/Intel, a software adapter, a missing NVIDIA driver or
+DXGI and the driver (a software adapter, a missing NVIDIA driver or
 an NVENC API older than the encoder's 13.0). Discovery can settle this before
 channel startup only when a nonempty, complete inventory rules out every
 possible capture adapter. Enumeration/description failures, its safety bound,
-unknown vendors and any plausible NVIDIA adapter retain the GPU route. A missing
+unknown vendors and any plausible hardware encoder retain the GPU route. AMD
+and Intel vendors alone are never an unsupported verdict. A missing
 NVENC version answer cannot distinguish an absent driver from a failed query,
 so NVIDIA candidates retain the existing actual-LUID handling in that case. Only
 a successful query proving an old API rejects NVIDIA at discovery. Hybrid

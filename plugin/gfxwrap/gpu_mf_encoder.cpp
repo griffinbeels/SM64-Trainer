@@ -1,5 +1,6 @@
 #include "gpu_mf_encoder.h"
 #include "gpu_mf_deadline.h"
+#include "gpu_mf_output.h"
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mferror.h>
@@ -64,6 +65,7 @@ struct MfEncoder::Impl {
     ComPtr<IMFDXGIDeviceManager> manager;ComPtr<IMFTransform> mft;
     ComPtr<IMFMediaEventGenerator> events;ComPtr<IMFActivate> activation;ComPtr<ICodecAPI> codec;
     std::vector<uint8_t> packet;ComPtr<Released> release;
+    MFT_OUTPUT_STREAM_INFO output_info{};DWORD output_alignment=0;
     HRESULT event_until(bool output,ULONGLONG deadline){
         if(!asynchronous)return S_OK;
         while(!(output?output_credit:input_credit)){
@@ -145,6 +147,8 @@ bool MfEncoder::prepare(ID3D11Device*device,ID3D11DeviceContext*context,const Mf
     MF_TRY(property(p.codec.Get(),CODECAPI_AVEncCommonQuality,VT_UI4,settings.quality));
     ComPtr<IMFMediaType> encoded,input;MF_TRY(type(&encoded,subtype,s,true));MF_TRY(type(&input,MFVideoFormat_NV12,s,false));
     MF_TRY(p.mft->SetOutputType(0,encoded.Get(),0));MF_TRY(p.mft->SetInputType(0,input.Get(),0));
+    MF_TRY(p.mft->GetOutputStreamInfo(0,&p.output_info));
+    MF_TRY(gpu_mf_output_policy(p.output_info,DWORD(p.packet.size()),&p.output_alignment));
     MF_TRY(device->QueryInterface(IID_PPV_ARGS(&p.video)));MF_TRY(context->QueryInterface(IID_PPV_ARGS(&p.video_context)));
     D3D11_VIDEO_PROCESSOR_CONTENT_DESC content{};content.InputFrameFormat=D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
     content.InputFrameRate={s.nominal_fps_num,s.nominal_fps_den};content.OutputFrameRate=content.InputFrameRate;
@@ -193,6 +197,8 @@ bool MfEncoder::encode_retained(uint64_t generation,uint64_t occurrence,uint64_t
 }
 bool MfEncoder::submit(uint64_t occurrence,uint64_t pts,uint64_t duration,bool idr){
     auto&p=*impl_;auto&s=p.settings.picture;ULONGLONG deadline=GetTickCount64()+1500;
+    MF_TRY(p.mft->GetOutputStreamInfo(0,&p.output_info));
+    MF_TRY(gpu_mf_output_policy(p.output_info,DWORD(p.packet.size()),&p.output_alignment));
     MF_TRY(p.event_until(false,deadline));
     const bool timed=s.idr_interval_ticks&&time_forced_<=pts/s.idr_interval_ticks;
     if(idr||timed)MF_TRY(property(p.codec.Get(),CODECAPI_AVEncVideoForceKeyFrame,VT_UI4,1));
@@ -204,11 +210,10 @@ bool MfEncoder::submit(uint64_t occurrence,uint64_t pts,uint64_t duration,bool i
     if(FAILED(hr))return fail(GBENC_DRIVER_ERROR,hr);if(p.asynchronous)--p.input_credit;++submitted_;
     if(timed)++time_forced_;last_pts_=pts;last_serial_=occurrence;have_pts_=true;
     hr=p.event_until(true,deadline);if(FAILED(hr))return fail(GBENC_DRIVER_ERROR,hr,true);
-    MFT_OUTPUT_STREAM_INFO info{};hr=p.mft->GetOutputStreamInfo(0,&info);if(FAILED(hr))return fail(GBENC_DRIVER_ERROR,hr,true);
     MFT_OUTPUT_DATA_BUFFER output{};ComPtr<IMFSample> supplied;
-    if(!(info.dwFlags&MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)){
+    if(!(p.output_info.dwFlags&MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)){
         hr=MFCreateSample(&supplied);ComPtr<IMFMediaBuffer> memory;
-        if(SUCCEEDED(hr))hr=MFCreateMemoryBuffer(DWORD(p.packet.size()),&memory);
+        if(SUCCEEDED(hr))hr=MFCreateAlignedMemoryBuffer(DWORD(p.packet.size()),p.output_alignment,&memory);
         if(SUCCEEDED(hr))hr=supplied->AddBuffer(memory.Get());if(FAILED(hr))return fail(GBENC_MEMORY_ERROR,hr,true);output.pSample=supplied.Get();}
     DWORD status=0;hr=p.mft->ProcessOutput(0,1,&output,&status);if(output.pEvents)output.pEvents->Release();
     ComPtr<IMFSample> result;if(output.pSample==supplied.Get())result=supplied;else result.Attach(output.pSample);

@@ -1,11 +1,24 @@
 /* Contract refusals run without creating any graphics device. */
 #include "gpu_platform_encoder.h"
 #include "gpu_mf_deadline.h"
+#include "gpu_mf_output.h"
 #include <stddef.h>
 #include <stdio.h>
 static_assert(sizeof(gbenc_options_v1)==128,"V1 options size unchanged");
 static_assert(offsetof(gbenc_options_v1,backend)==112&&offsetof(gbenc_options_v1,backend_quality)==116,"append-only backend words");
 int main(){
+    MFT_OUTPUT_STREAM_INFO output{};DWORD alignment=999;
+    if(FAILED(gpu_mf_output_policy(output,1024,&alignment))||alignment)return 4;
+    output.cbAlignment=16;output.cbSize=1024;
+    if(FAILED(gpu_mf_output_policy(output,1024,&alignment))||alignment!=15)return 5;
+    output.cbSize=1025;
+    if(gpu_mf_output_policy(output,1024,&alignment)!=MF_E_BUFFERTOOSMALL)return 6;
+    output.cbSize=1024;output.cbAlignment=3;
+    if(gpu_mf_output_policy(output,1024,&alignment)!=E_INVALIDARG)return 7;
+    output.cbAlignment=2048;
+    if(gpu_mf_output_policy(output,1024,&alignment)!=E_INVALIDARG)return 8;
+    output.dwFlags=MFT_OUTPUT_STREAM_PROVIDES_SAMPLES;output.cbAlignment=3;
+    if(FAILED(gpu_mf_output_policy(output,1024,&alignment))||alignment)return 9;
     if(gpu_mf_wait_ms(100,99)!=1||gpu_mf_wait_ms(100,100)!=0||gpu_mf_wait_ms(100,101)!=0||
        gpu_mf_wait_ms(UINT64_MAX,0)!=1500)return 3;
     const gbenc_sink_v1 sink{};
