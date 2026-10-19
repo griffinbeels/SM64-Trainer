@@ -60,6 +60,32 @@ def test_saved_backend_provenance_reaches_the_skip_decision(saved, monkeypatch):
     assert seen == ["windows"]
 
 
+@pytest.mark.parametrize("clean,copy,expected", [
+    ("windows", {}, "windows"),
+    ("windows", {"encoder_backend": None}, "windows"),
+    ("windows", {"encoder_backend": "nvenc"}, "nvenc"),
+    ("nvenc", {"encoder_backend": "windows"}, "windows"),
+    (None, {}, None),
+])
+def test_ghost_copy_uses_its_explicit_backend_or_the_clean_sessions(
+        saved, monkeypatch, clean, copy, expected):
+    import json
+
+    sidecar = saved.with_suffix(".json")
+    meta = json.loads(sidecar.read_text())
+    sidecar.write_text(json.dumps({**meta, "encoder_backend": clean, "ghost_copy": copy}))
+    shutil.copy2(saved, compress.ghost_copy_of(saved))
+    seen = []
+
+    def skip(_ffmpeg, _saved, _codecs, *, encoder_backend):
+        seen.append(encoder_backend)
+        return True
+
+    monkeypatch.setattr(compress, "_recorded_at_archive_quality", skip)
+    assert compress.shrink_ghost_copy("ffmpeg", saved)["state"] == "kept_original"
+    assert seen == [expected]
+
+
 @pytest.mark.parametrize("codec,constant,flag", [
     ("h264_amf", "ARCHIVE_AMF_H264_QP", "-qp_p"),
     ("av1_amf", "ARCHIVE_AMF_AV1_QP", "-qp_p"),

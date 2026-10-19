@@ -708,7 +708,12 @@ def shrink_ghost_copy(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=ru
     settled = block.get("media")
     if isinstance(settled, dict) and settled.get("state") in GHOST_SETTLED_STATES:
         return settled
-    if _recorded_at_archive_quality(ffmpeg, copy, codecs):
+    # A ghost copy normally shares the clean recording's native backend.
+    # Preserve an explicit copy identity if one was retained independently.
+    encoder_backend = block.get("encoder_backend")
+    if encoder_backend is None:
+        encoder_backend = meta.get("encoder_backend")
+    if _recorded_at_archive_quality(ffmpeg, copy, codecs, encoder_backend=encoder_backend):
         kept = {"version": MEDIA_VERSION, "state": "kept_original",
                 "reasons": ["recorded in the archive codec already"]}
         _record_ghost_copy(saved, kept)
