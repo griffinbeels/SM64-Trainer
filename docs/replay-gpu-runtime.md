@@ -98,9 +98,10 @@ Desktop fallback is availability only and does not establish optimized parity.
 
 The preserved old/new NVIDIA helper comparison used the same executable, options
 and 1600x1200 fixtures in ABBA order,180 timed pictures after20 warmup. AV1 median
-times were15.5649ms for both; H.26415.5911ms old versus15.5818ms new. Packet counts
-and encoded byte totals matched in all runs. This is helper-only synthetic
-evidence of no measured regression, not a new whole-game performance guarantee.
+times in the final-bundle run were15.4837ms old/15.6262ms new for AV1(+0.92%)
+and15.5818ms old/15.5340ms new for H.264(-0.31%). Packet counts and encoded byte
+totals matched in all runs. These helper-only synthetic measurements stayed
+within about1%; they are not a new whole-game performance guarantee.
 
 ## Shipped files and how they are built
 
