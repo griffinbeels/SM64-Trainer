@@ -520,8 +520,6 @@ def _build_follower(running, inputs, replay, service):
 
 
 def build(*, recorder_lock=None):
-    from sm64_events.core.reporting_setup import initialize_reporting
-    initialize_reporting()
     configure_logging()
     migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
     # Capture threads contend with encode/server threads for the GIL; the

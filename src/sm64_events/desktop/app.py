@@ -58,8 +58,6 @@ def _repair_interrupted_update() -> bool:
 
 
 def main() -> None:
-    from sm64_events.core.reporting_setup import initialize_reporting
-    initialize_reporting()
     configure_logging()
     if _repair_interrupted_update():
         return
