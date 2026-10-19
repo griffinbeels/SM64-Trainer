@@ -363,6 +363,9 @@ class ReplayService:
                     "start_utc": result.start_utc.isoformat(), "video_start_s": result.video_start_s,
                     "frame_times": [round(t, 6) for t in result.frame_times], "encode": "picture_feed",
                     "fragment_source": descriptor}
+            backend = getattr(result.media_run, "encoder_backend", None)
+            if backend is not None:
+                meta["encoder_backend"] = backend
             meta.update(self._ghost_copy_cut(result, meta["frame_times"], leases or local))
             self._map_from_feeds(meta, result)
         self.clips_dir.mkdir(parents=True, exist_ok=True)

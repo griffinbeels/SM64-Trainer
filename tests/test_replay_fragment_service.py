@@ -61,6 +61,18 @@ def fragment_service(tmp_path, recording, encoder):
         ledger.detach()
 
 
+def test_native_view_preserves_the_encoding_policy_for_later_save(fragment_service):
+    from dataclasses import replace
+
+    service = fragment_service
+    archive = service.fragments._runs["fixture"]
+    archive.run = replace(archive.run, encoder_backend="windows")
+    replay = service.view(42)
+    meta = json.loads(next(service.clips_dir.glob("*.json")).read_text())
+    assert meta["encoder_backend"] == "windows"
+    assert replay["frame_map"] == list(range(1015, 1060))
+
+
 def test_default_recorder_configures_fragment_publication_before_start(tmp_path):
     observed = []
     class InertSink(FfmpegAvSink):

@@ -109,6 +109,11 @@ class CaptureSession:
         if snapshot.lifecycle:
             return False
         if snapshot.state == "fault":
+            from sm64_events.replay.gpudiagnostics import unsupported_capture_reason
+
+            unsupported = unsupported_capture_reason(getattr(snapshot, "backend_reason", 0))
+            if unsupported is not None and not getattr(snapshot, "cleanup_error", ""):
+                raise GpuBackendUnsupported(unsupported)
             raise RuntimeError(snapshot.reason)
         return self.owner.want_capture() and snapshot.state != "stopped"
 
@@ -153,8 +158,8 @@ class CaptureSession:
     def _open_encoder(self):
         header = self.channel.header
         luid = (header.luid_high, header.luid_low)
-        # Before any helper starts: an adapter that can never open NVENC
-        # (not NVIDIA, a software adapter, a driver too old) is a verdict,
+        # Before any helper starts: a positively incompatible adapter
+        # (software or a known-too-old NVIDIA driver) is a verdict,
         # not a fault to retry every 10-60 s forever (gpuadapter.py).
         reason = backend_unsupported(luid)
         if reason is not None:
@@ -294,7 +299,10 @@ class CaptureSession:
 
         h, limits = self.channel.header, self.settings
         decoder = OfferDecoder(h, self.owner.layout, self.owner.clock)
-        run = MediaRun.starting_at(decoder.timestamp(offers[0].boundary_qpc))
+        options = bootstrap[0]["options"]
+        backend = "windows" if options.get("backend", 0) == 1 else "nvenc"
+        run = MediaRun.starting_at(decoder.timestamp(offers[0].boundary_qpc),
+                                  encoder_backend=backend)
         self.output.bind(run)
         self.mux = self.output
         self.media = GpuMedia(

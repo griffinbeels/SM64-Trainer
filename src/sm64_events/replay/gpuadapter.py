@@ -1,13 +1,9 @@
 """Can the adapter under the capture layer record at all? Asked before a helper starts.
 
-The GPU route encodes with NVENC (plugin/gfxwrap/gpu_bridge_encoder.cpp), so an
-AMD or Intel adapter, a software adapter, or an NVIDIA driver older than the
-encoder's API can never open it. The capture layer advertises GPU capture
-whatever the vendor, and before 2026-09-27 each of those machines retried the
-encoder every 10-60 s forever and recorded nothing. These are FACTS about the
-machine, answered here once; gpusettings.py remembers the verdict and the
-recorder keeps the desktop grab instead. Anything not certain is left to the
-encoder's own Open, whose failures stay retryable.
+NVIDIA retains the proven NVENC backend. Other hardware uses the Windows
+D3D11 encoder backend and answers its actual codec capabilities at Open.
+Only positive hardware/driver incompatibility is an early refusal; a vendor
+name alone cannot establish that hardware encoding is unavailable.
 
 Read-only: DXGI enumeration, and the driver's own NVENC version query, which
 NVIDIA documents for exactly this check. The encoder DLL loads the same file.
@@ -180,10 +176,20 @@ def unsupported_reason(facts: AdapterFacts | None) -> str | None:
     if facts is None:
         return None  # Unknown is not unsupported: the encoder's Open decides.
     if facts.software:
-        return f"{facts.name} is a software adapter; the capture layer needs an NVIDIA GPU"
+        return f"{facts.name} is a software adapter; the capture layer needs a hardware GPU"
     if facts.vendor_id != NVIDIA_VENDOR_ID:
-        return f"{facts.name} has no NVIDIA video encoder"
+        return None  # Its actual Windows hardware encoder decides by codec.
     return _driver_unsupported_reason(facts, nvenc_api_version())
+
+
+def encoder_backend(facts: AdapterFacts | None) -> int:
+    """Resolve the native backend for the renderer's adapter, not adapter zero."""
+    from sm64_events.replay.gpuencoder_abi import BACKEND_NVENC, BACKEND_WINDOWS
+
+    # Missing facts preserve legacy NVIDIA behavior. The helper still binds
+    # the exact channel LUID; it must never choose the first installed GPU.
+    return (BACKEND_WINDOWS if facts is not None
+            and facts.vendor_id != NVIDIA_VENDOR_ID else BACKEND_NVENC)
 
 
 def _driver_unsupported_reason(facts, api):

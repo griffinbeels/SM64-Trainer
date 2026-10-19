@@ -29,6 +29,7 @@ class DemandSnapshot:
     lifecycle: bool = False
     cancelled: bool = False
     cleanup_attempts: int = 0
+    backend_reason: int = 0
 
 
 class DemandFailure(RuntimeError):
@@ -300,6 +301,7 @@ class GpuDemand:
                                 and status.reason == C.FRESH_REQUEST
                             ),
                         )
+                        self._publish(backend_reason=status.reason)
                         if status.state == C.UNAVAILABLE and status.reason == 10016:
                             self._classify_image_loss(control, request, failure)
                         raise failure

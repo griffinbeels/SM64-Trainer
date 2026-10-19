@@ -39,3 +39,40 @@ def test_portable_quality_is_resolved_independently_at_call_time(monkeypatch):
     assert from_replay_config(**structural, backend=BACKEND_WINDOWS) == portable
     with pytest.raises(ValueError, match="backend"):
         from_replay_config(**structural, backend=999)
+
+
+@pytest.mark.parametrize("vendor, expected", [(0x10DE, 0), (0x1002, 1), (0x8086, 1)])
+def test_live_session_uses_the_actual_rendering_adapter(monkeypatch, vendor, expected):
+    from sm64_events.replay import gpuadapter
+    from sm64_events.replay.gpuencoder import Result
+    from test_gpu_codec_choice import Replies, session_for
+
+    facts = gpuadapter.AdapterFacts("actual renderer", vendor, False, None)
+    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: facts)
+    monkeypatch.setattr(config, "MF_QUALITY", 90, raising=False)
+    controller = Replies(Result.OK)
+    session = session_for(controller)
+    header = session.channel.header
+    resolved = session.settings.encoder(header, session.owner.cfg,
+                                        nominal_rate=session.owner.nominal_rate)
+    assert resolved["backend"] == expected
+    assert resolved["backend_quality"] == (90 if expected else 0)
+    # Routing and backend-specific driver requirements are separate decisions.
+    if expected:
+        assert gpuadapter.unsupported_reason(facts) is None
+
+
+def test_native_prechannel_refusal_is_precise_and_does_not_hide_cleanup():
+    from types import SimpleNamespace as NS
+    from sm64_events.replay.gpucapture import GpuBackendUnsupported
+    from test_gpu_codec_choice import Replies, session_for
+
+    session = session_for(Replies())
+    session.demand.snapshot = NS(lifecycle=False, state="fault", backend_reason=10031,
+                                 cleanup_error="", reason="native unavailable")
+    with pytest.raises(GpuBackendUnsupported, match="GL_EXT_win32_keyed_mutex"):
+        session._continue()
+    session.demand.snapshot.cleanup_error = "retained native resources"
+    with pytest.raises(RuntimeError, match="native unavailable") as failure:
+        session._continue()
+    assert not isinstance(failure.value, GpuBackendUnsupported)

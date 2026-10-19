@@ -366,7 +366,8 @@ class GhostCopyLane:
         if self.run is None:
             # Same origin as clean, so twin pts are clean pts: the twin run may
             # start at pts > 0, and a viewer pairs the two copies by UTC.
-            self.run = MediaRun(uuid4().hex, self.media.run.origin_ts)
+            self.run = MediaRun(uuid4().hex, self.media.run.origin_ts,
+                                self.media.run.encoder_backend)
             self.sink.bind(self.run)
         self.sink.publish_picture(
             EncodedPicture(command["serial"], head.pts, head.duration,

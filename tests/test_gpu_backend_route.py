@@ -5,7 +5,7 @@ developer's machine:
 
 - The installed app refused to start the encoder helper at all (v1.9.1), so
   it recorded nothing and EMU setup could never see pictures.
-- An adapter without a usable NVIDIA encoder (AMD, Intel, a software adapter,
+- An adapter without a usable hardware encoder (a software adapter,
   a driver older than the encoder's API, no codec at all) retried the GPU
   route every 10-60 s forever and recorded nothing either.
 - A source run started Python through the venv's launcher, which drops the
@@ -329,12 +329,13 @@ def test_the_required_nvenc_api_is_the_one_the_encoder_is_built_against():
     assert gpuadapter.REQUIRED_NVENC_API == (major, minor)
 
 
-def test_only_an_nvidia_hardware_adapter_with_a_new_enough_driver_may_record(monkeypatch):
+def test_portable_hardware_is_asked_and_nvidia_keeps_its_driver_requirement(monkeypatch):
     api = [(13, 1)]
     monkeypatch.setattr(gpuadapter, "nvenc_api_version", lambda: api[0])
     assert gpuadapter.unsupported_reason(None) is None  # unknown: the encoder decides
     assert gpuadapter.unsupported_reason(NVIDIA) is None
-    assert "no NVIDIA video encoder" in gpuadapter.unsupported_reason(AMD)
+    assert gpuadapter.unsupported_reason(AMD) is None
+    assert gpuadapter.unsupported_reason(INTEL) is None
     software = gpuadapter.AdapterFacts("Microsoft Basic Render Driver", 0x1414, True, None)
     assert "software adapter" in gpuadapter.unsupported_reason(software)
     api[0] = (12, 2)
@@ -356,10 +357,10 @@ def test_the_verdict_is_asked_once_per_adapter_and_driver(monkeypatch):
 
 
 def test_an_adapter_that_cannot_encode_is_a_verdict_before_any_helper(monkeypatch, encoder_asset):
-    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: AMD)
+    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: SOFTWARE)
     session = session_for(Replies())
     session.controller_factory = lambda **_: pytest.fail("a helper for an adapter that cannot encode")
-    with pytest.raises(GpuBackendUnsupported, match="no NVIDIA video encoder"):
+    with pytest.raises(GpuBackendUnsupported, match="software adapter"):
         session._open_encoder()
 
 
@@ -421,9 +422,8 @@ def preflight_factory(monkeypatch, inventory, api=(13, 1), control_factory=Contr
     return factory, desktops
 
 
-@pytest.mark.parametrize("facts,api", [([AMD], (13, 1)), ([INTEL], (13, 1)),
-    ([SOFTWARE], (13, 1)), ([AMD, INTEL, SOFTWARE], (13, 1)),
-    ([NVIDIA], (12, 2)), ([AMD, NVIDIA], (12, 2))])
+@pytest.mark.parametrize("facts,api", [([SOFTWARE], (13, 1)),
+    ([NVIDIA], (12, 2)), ([NVIDIA, SOFTWARE], (12, 2))])
 def test_all_unsupported_adapters_keep_the_desktop_in_the_first_create(monkeypatch, facts, api):
     inventory = tuple(((0, index), fact) for index, fact in enumerate(facts))
     factory, desktops = preflight_factory(monkeypatch, inventory, api)
@@ -444,10 +444,12 @@ def test_all_unsupported_adapters_keep_the_desktop_in_the_first_create(monkeypat
 
 
 @pytest.mark.parametrize("facts,api", [([AMD, NVIDIA], (13, 1)), ([NVIDIA, AMD], (13, 1)),
+    ([AMD], (13, 1)), ([INTEL], (13, 1)), ([AMD, INTEL, SOFTWARE], (13, 1)),
+    ([AMD, NVIDIA], (12, 2)),
     ([NVIDIA], (13, 1)), ([NVIDIA], None), ([AMD, NVIDIA], None),
     ([AMD, gpuadapter.AdapterFacts("Unknown graphics", 0, False, None)], (13, 1)),
     ([], (13, 1)), (None, (13, 1))])
-def test_plausible_nvidia_or_unknown_inventory_keeps_the_actual_luid_path(monkeypatch, facts, api):
+def test_plausible_hardware_or_unknown_inventory_keeps_the_actual_luid_path(monkeypatch, facts, api):
     inventory = tuple(((0, index), fact) for index, fact in enumerate(facts)) if facts is not None else None
     factory, desktops = preflight_factory(monkeypatch, inventory, api)
     assert isinstance(factory.create(NS(pid=42)), GpuCapture)
@@ -492,7 +494,7 @@ def test_a_driver_query_failure_keeps_the_gpu_path(monkeypatch):
 def test_an_adapter_that_cannot_encode_keeps_the_desktop_without_a_retry(monkeypatch):
     """Today's cost without it: a GPU attempt every 10-60 s, forever, and no
     replay at all. Now: one attempt, no cooldown armed, the desktop grab."""
-    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: AMD)
+    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: SOFTWARE)
     channel = NS(header=NS(luid_high=ONE[0], luid_low=ONE[1]), close=lambda: None)
     factory, win, gpu, desktops = factory_and_first_capture(monkeypatch, lambda owner, demand: CaptureSession(
         owner, demand, channel_factory=lambda **_: channel,
@@ -500,10 +502,10 @@ def test_an_adapter_that_cannot_encode_keeps_the_desktop_without_a_retry(monkeyp
     gate = factory.retry_gate
     assert gpu.error is None and gpu.status()["state"] == "unsupported"
     assert gate._failures == 0 and gate.blocked(gate.identity_for(42)) is None
-    assert (ONE, AMD.driver) in gpusettings._ADAPTER_VERDICTS
+    assert (ONE, SOFTWARE.driver) in gpusettings._ADAPTER_VERDICTS
     camera = factory.create(win)
     assert camera.frame_source == "desktop" and desktops == [win]
-    assert "no NVIDIA video encoder" in camera.gpu_unsupported
+    assert "software adapter" in camera.gpu_unsupported
     assert camera.gpu_unsupported in camera.frame_source_note
 
 
@@ -528,12 +530,15 @@ def test_stage_timings_are_logged_on_a_clean_stop_too(caplog):
     assert len(lines) == 1 and "error=None" in lines[0] and "'channel'" in lines[0]
 
 
-def test_the_active_line_names_the_codec_and_what_startup_cost(monkeypatch, caplog):
+@pytest.mark.parametrize("backend,name", [(0, "nvenc"), (1, "windows")])
+def test_the_active_line_names_the_codec_and_what_startup_cost(monkeypatch, caplog, backend, name):
     import sm64_events.replay.channelencoder as channelencoder
 
     monkeypatch.setattr(session_module, "OfferDecoder",
                         lambda *a: NS(timestamp=lambda qpc: 0.0, namespace="fixture"))
-    monkeypatch.setattr(session_module, "MediaRun", NS(starting_at=lambda t: NS(id="run-1")))
+    provenance = []
+    monkeypatch.setattr(session_module, "MediaRun", NS(starting_at=lambda t, **k:
+                        provenance.append(k) or NS(id="run-1")))
     monkeypatch.setattr(session_module, "GpuMedia", lambda *a, **k: None)
     monkeypatch.setattr(session_module, "GpuAudio", lambda *a, **k: None)
     monkeypatch.setattr(session_module, "ChannelSelection", lambda *a: None)
@@ -547,6 +552,8 @@ def test_the_active_line_names_the_codec_and_what_startup_cost(monkeypatch, capl
     session.output = NS(bind=lambda run: None, add_row=None, publish_picture=None)
     session.timings.measure("encoder", lambda: None)
     with caplog.at_level(logging.INFO, "sm64.replay"):
-        session._create_media(("Open", 1, NS(metadata={"identity": None})), [NS(boundary_qpc=0)])
+        session._create_media(({"options": {"backend": backend}}, 1,
+                               NS(metadata={"identity": None})), [NS(boundary_qpc=0)])
     line = next(r.getMessage() for r in caplog.records if "GPU recording active" in r.getMessage())
     assert "codec=av1" in line and "'encoder'" in line and "max_started_unix_s" in line
+    assert provenance == [{"encoder_backend": name}]
