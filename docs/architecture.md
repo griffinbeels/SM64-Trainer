@@ -19,6 +19,18 @@ only a spec could justify, that is a bug in this file — fix it here.
 
 ## Data flow
 
+Claimed player pages keep three owners distinct: current saved PB projection
+(`community/progress_snapshot.py`), publication lifecycle (`community/progress_sync.py`
+and the Worker v2 tables), and local evaluation (`server/player_comparison.py`
+through existing Scorecard/Rank readers). The cloud stores current facts and
+basic profile details; the viewer's private routes, exclusions and standard edits
+stay local. Public ghost inventory remains a separate, publication-gated recording
+source. [Protocol](community-protocol.md) and [API](api.md#community-account-localhost-only)
+own their wire contracts. Post-request mutation invalidation and an unchanged-hash
+local backstop cover notices emitted before a PB insert; no cloud request is
+needed for unchanged facts. Database methods own their non-reentrant locks;
+publication never nests that lock around the projector.
+
 Opt-in performance diagnostics are documented in [profiling](profiling.md).
 Backend stages use bounded inclusive wall-time histograms; the native graphics
 sidecar has its own version and producer identity and does not change the picture

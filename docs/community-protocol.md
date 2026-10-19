@@ -1,9 +1,18 @@
-# Community ghosts protocol, version 1
+# Community ghosts v1 and additive player pages v2
 
 The community service uses Cloudflare Workers, D1 metadata, private R2 objects and
 managed Supabase Auth. Public player names are mutable; the verified Auth
 issuer/subject owns data. A valid login does not prove honest emulator play.
 No ROMs, videos, passwords or complete practice histories are uploaded.
+
+Claimed player pages add separate `/v2/` endpoints and the explicit
+`progress-1` saved-PB disclosure. They do not expand strict v1 account/recording
+metadata or silently renew global ghost consent. Their exact wire schemas,
+additive migrations, D1 payload budget, revision/publisher fences and owner
+privacy routes are maintained in the [community service README](../cloud/community/README.md#current-player-pages-v2).
+The loopback page/settings adapters are documented in [the API](api.md#community-account-localhost-only).
+Current saved-PB snapshots are display/comparison facts, including manual and
+imported marks; they are not additional ghost evidence for rank calibration.
 
 New-account signup explains automatic sharing before explicit policy acknowledgement.
 Completing signup enables sharing; Settings can disable future uploads or withdraw

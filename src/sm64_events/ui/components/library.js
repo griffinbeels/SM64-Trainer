@@ -211,7 +211,7 @@ export function versionNote(versions, version, gradingVersion) {
     : `${only} only · you are graded on ${gradingVersion.toUpperCase()}`;
 }
 
-export function Library({ t, active, intent, clearIntent, enterCompare, openRunner }) {
+export function Library({ t, active, intent, clearIntent, enterCompare, openRunner, openPlayer }) {
   const [index, setIndex] = useState(null);
   const [status, setStatus] = useState(null);
   // FINAL REVIEW FIX (medium: two fetches fail into a permanent spinner). A
@@ -422,7 +422,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   const studyInCompare = items => studyTray(items, {t, enterCompare, setStudying, setStudyResult});
 
   return html`<${LibraryPage} ...${{
-    t, active, openRunner, index, status, statusError, hasGhost, versions,
+    t, active, openRunner, openPlayer, index, status, statusError, hasGhost, versions,
   setPickedVersions, version, effectiveVersion, setHasGhost, ghostRevision, setGhostRevision,
   refresh, refreshState, entryError, stage, tray, trimTrayItem, removeFromTray, setShowGrid,
   studyInCompare, studying, studyResult, navigation, entry, addToTray, trayKeys,
@@ -551,7 +551,7 @@ function LibraryTargetPage({navigation, setHasGhost, t, entry, version, versions
 }
 
 function LibraryPage({
-  t, active, openRunner, index, status, statusError, hasGhost, versions,
+  t, active, openRunner, openPlayer, index, status, statusError, hasGhost, versions,
   setPickedVersions, version, effectiveVersion, setHasGhost, ghostRevision, setGhostRevision,
   refresh, refreshState, entryError, stage, tray, trimTrayItem, removeFromTray, setShowGrid,
   studyInCompare, studying, studyResult, navigation, entry, addToTray, trayKeys,
@@ -576,7 +576,7 @@ function LibraryPage({
     ${hasGhost
       ? html`<${CommunityLibrary} key=${ghostRevision} active=${active}
           entity=${stage === "target" ? entry?.entityKey : null} versions=${versions}
-          onBrowseAll=${navigation.back} />`
+          onBrowseAll=${navigation.back} onOpenPlayer=${openPlayer} />`
       : stage === "target"
       ? html`<${LibraryTargetPage} ...${{navigation, setHasGhost, t, entry, version, versions, effectiveVersion,
   addToTray, trayKeys, openRunner, reloadRows, active}} />`

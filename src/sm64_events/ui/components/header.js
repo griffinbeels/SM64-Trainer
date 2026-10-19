@@ -107,7 +107,7 @@ function RunScopeWarning({ t, pending, onDone }) {
 
 // Existing settings shell exceeds these limits; onboarding keeps its new flow in SetupModal.
 // eslint-disable-next-line complexity, max-lines-per-function
-export function Header({ t, settingsOpen, closeSettings, setTab }) {
+export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer }) {
   // `undefined` = nothing pending. `null` is a real pick (Overall), which is
   // why this is not a boolean — the same distinction store.js draws for a
   // route intent.
@@ -584,7 +584,8 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
     ${onboardingStarted && html`<${OnboardingFlow} blocked=${updateFirst}>
       ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
       ${community.open && !setupOpen && html`<${CommunityAccountModal} community=${community}
-        onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh} />`}
+        onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh}
+        onOpenPlayer=${uid => { community.setOpen(false); closeSettings?.(); onOpenPlayer?.(uid); }} />`}
     <//>`}
   </header>`;
 }

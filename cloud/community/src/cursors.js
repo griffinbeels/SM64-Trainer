@@ -19,8 +19,11 @@ export async function decodeCursor(secret,text,identity){
 const summaryKey=after=>Array.isArray(after)&&after.length===4&&typeof after[0]==='string'&&after[0].length<=80&&['igt','rta'].includes(after[1])&&['us','jp'].includes(after[2])&&typeof after[3]==='string'&&after[3].length<=128;
 const recordingKey=after=>Array.isArray(after)&&after.length===2&&Number.isSafeInteger(after[0])&&after[0]>=1&&hex64(after[1]);
 export async function decodeLibraryCursor(secret,text,identity){
+  return decodeUnboundedCursor(secret,text,identity,identity.kind==='library-summary'?summaryKey:recordingKey);
+}
+export async function decodeUnboundedCursor(secret,text,identity,validAfter){
   requireThat(typeof text==='string'&&text.length<=2048&&/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(text),'invalid_cursor','Invalid cursor.');
   const d=await signedBody(secret,text);
-  const tuple=identity.kind==='library-summary'?summaryKey(d.after):recordingKey(d.after);
+  const tuple=validAfter(d.after);
   requireThat(canonical(d.identity)===canonical(identity)&&Number.isSafeInteger(d.page)&&d.page>=1&&Number.isFinite(d.expires)&&d.expires>=Date.now()/1000&&tuple,'invalid_cursor','Page expired or query changed.');return d;
 }

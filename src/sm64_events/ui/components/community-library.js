@@ -61,7 +61,7 @@ function PageFeedback({ page, noun, retry }) {
       ? html`<p class="community-library-empty meta">No shared ${noun} match these filters yet.</p>` : null}`;
 }
 
-function SeatPicker({ choice, busy, error, onChoose, onClose }) {
+export function SeatPicker({ choice, busy, error, onChoose, onClose }) {
   const row = choice.row;
   return html`<${Modal} title="Choose a rival to replace" icon="ghost"
       description=${`${targetName(row)} · ${methodLabel(row)}`}
@@ -119,7 +119,7 @@ function useSavedRivals(onChanged, alive) {
   return { knownPins, busy, choice, actionError, message, clear, change };
 }
 
-function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged }) {
+function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged, onOpenPlayer }) {
   const [summary, setSummary] = useState(() => ({ ...emptyPage(), loading: true }));
   const [selected, setSelected] = useState(null);
   const [recordings, setRecordings] = useState(emptyPage);
@@ -184,7 +184,9 @@ function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged }) {
         const added = pins ? pins.includes(row.id) : Number.isInteger(row.saved_slot) && row.saved_slot >= 0;
         const disabled = busy != null || (!added && (!row.can_add || !row.local_target));
         return html`<article key=${row.id} class="community-library-recording" data-recording-id=${row.id}>
-          <div class="community-library-player"><strong>${row.player_name}</strong>
+          <div class="community-library-player">${onOpenPlayer
+            ? html`<button type="button" class="textlink" onclick=${() => onOpenPlayer(row.player_id)}><strong>${row.player_name}</strong></button>`
+            : html`<strong>${row.player_name}</strong>`}
             <span class="community-library-provenance meta">Community recording</span></div>
           <div class="community-library-performance"><strong class="community-library-time">${fmtIgtShort(row.frames)}</strong>
             <span class="meta"><${Method} row=${row} /></span></div>
@@ -214,10 +216,10 @@ function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged }) {
   </section>`;
 }
 
-export function CommunityLibrary({ active, entity = null, versions, onBrowseAll, onChanged }) {
+export function CommunityLibrary({ active, entity = null, versions, onBrowseAll, onChanged, onOpenPlayer }) {
   if (!active) return null;
   const regions = [...new Set((Array.isArray(versions) ? versions : ["us"]).filter(value => value === "us" || value === "jp"))];
   const rom = regions.length === 1 ? regions[0] : null;
   return html`<${CommunityLibraryView} key=${JSON.stringify([entity, rom])}
-    entity=${entity} rom=${rom} onBrowseAll=${onBrowseAll} onChanged=${onChanged} />`;
+    entity=${entity} rom=${rom} onBrowseAll=${onBrowseAll} onChanged=${onChanged} onOpenPlayer=${onOpenPlayer} />`;
 }

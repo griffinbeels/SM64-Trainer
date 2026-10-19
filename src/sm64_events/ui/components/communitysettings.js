@@ -5,6 +5,7 @@ import { getJSON, send } from "../api.js";
 import { downloadAccountData } from "../community.js";
 import { NAME_HINT, normalizedPlayerName, playerNameError } from "../communityname.js";
 import { ScopeChips } from "./scopechips.js";
+import { ProgressSettings } from "./progresssettings.js";
 
 const html = htm.bind(h);
 
@@ -21,7 +22,7 @@ export function AccountSummary({ account }) {
   </div>`;
 }
 
-export function CommunitySettings({ account, busy, run, refresh, onClose }) {
+export function CommunitySettings({ account, busy, run, refresh, onClose, onOpenPlayer }) {
   const [name, setName] = useState(account.name || "");
   const [sharing, setSharing] = useState(account.sharing === true);
   const [confirm, setConfirm] = useState(null);
@@ -55,6 +56,7 @@ export function CommunitySettings({ account, busy, run, refresh, onClose }) {
       Existing shared ghosts stay available until you remove them below.</p>`}
     <div class="community-actions"><button class="primary-button" disabled=${busy || !!playerNameError(name)}
       onclick=${() => run(save)}>Done</button></div>
+    <${ProgressSettings} onOpenPlayer=${onOpenPlayer} />
     <details class="community-privacy"><summary>Privacy and account</summary>
       <div class="community-actions">
         <button disabled=${busy} onclick=${() => run(async () => downloadAccountData(await getJSON("/api/community/account/export")))}>Export account data</button>

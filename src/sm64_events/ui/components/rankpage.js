@@ -24,6 +24,7 @@ import { entityIconSrc, fallbackSlotForEntityKey,
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
 import { Scorecard } from "./scorecard.js";
 import { LeaderboardCard } from "./leaderboard.js";
+import { PlayerSearch } from "./playersearch.js";
 import { ExampleMedia } from "./librarytarget.js";
 import { ReplayPlayer } from "./replay.js";
 
@@ -941,12 +942,11 @@ export function CoverageStrip({ t, data, caption, readOnly = false, onOpenEntity
 // `openLibrary` (2026-08-23): the door from his OWN breakdown's entity names
 // -- "yes" to the fork left open since the first read -- opening the Library
 // on that entity and landing on his own PB's subdivision.
-export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
-  const [scopes, setScopes] = useState(null);
-  const [scopesErr, setScopesErr] = useState(null);
+export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null, onOpenPlayer, onScopeChange }) {
+  const [scopes, setScopes] = useState(null), [scopesErr, setScopesErr] = useState(null);
   const [scopeId, setScopeId] = useState(null);
-  const [data, setData] = useState(null);
-  const [dataErr, setDataErr] = useState(null);
+  const [data, setData] = useState(null), [dataErr, setDataErr] = useState(null);
+  useEffect(() => { if (scopeId) onScopeChange?.(scopeId); }, [scopeId]);
   const [replayable, setReplayable] = useState(new Set());
   const [points, setPoints] = useState([]);
   // Round 13's load gate. The page's sections used to appear as each fetch
@@ -1059,6 +1059,7 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
   return html`<div class="rank-page">
     <${ScopeChips} activeScopeId=${scopeId} onPick=${setScopeId} chips=${chips} />
     <${LeaderboardCard} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner} />
+    <${PlayerSearch} onOpenPlayer=${onOpenPlayer} />
     <div class="practice-card rank-card">
       <label class="route-focus-control">
         <${Icon} name="rank" size=${18} />

@@ -165,7 +165,7 @@ def _append_excluded_rows(service, scope_id: str, groups: list[dict],
                 "next_division": None})
 
 
-def _score_scope(service, scope_id: str) -> dict:
+def _score_scope(service, scope_id: str, *, pb_rows=None, mode=None) -> dict:
     """The pure scoring path for one scope: groups -> entity scores ->
     aggregate -> per-entity tier/division/gain -> excluded rows appended.
     Touches no watermark state. `_build_marelo` layers the watermark
@@ -174,9 +174,12 @@ def _score_scope(service, scope_id: str) -> dict:
     directly instead of `_build_marelo`."""
     groups = _groups(service, scope_id)
     keys = [key for group in groups for key in group["candidates"]]
-    scored = marelo_bridge.entity_scores(service.db.attempts(), service.ranks,
-                                         keys, _rank_mode(service),
-                                         service.db.pbs())
+    selected_mode = ("pb" if pb_rows is not None else _rank_mode(service)) if mode is None else mode
+    if pb_rows is not None and selected_mode != "pb":
+        raise ValueError("Published saved PBs cannot supply an average of practice attempts.")
+    rows = service.db.pbs() if pb_rows is None else pb_rows
+    attempts = service.db.attempts() if pb_rows is None else []
+    scored = marelo_bridge.entity_scores(attempts, service.ranks, keys, selected_mode, rows)
     out = scopes.aggregate(scored, groups)
     excluded = service.rank_excluded()
     # aggregate() graded tier/division/gain against the FULL tier table --
@@ -224,7 +227,7 @@ def _score_scope(service, scope_id: str) -> dict:
     # able to view any of my PBs on this page"). None when no PB exists;
     # whether a replay is actually obtainable is `/api/replay/available`'s
     # answer, read by the page.
-    your_pbs = board.you_pb_by_entity(service.db.pbs(), service.ranks, keys)
+    your_pbs = board.you_pb_by_entity(rows, service.ranks, keys)
     for entity in out["entities"]:
         entity["pb_attempt_id"] = your_pbs.get(entity["key"], {}).get("attempt_id")
     _append_excluded_rows(service, scope_id, groups, excluded, out)

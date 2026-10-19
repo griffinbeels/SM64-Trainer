@@ -102,9 +102,45 @@ mutations need the local request capability above. Cloud protocol:
 | `PUT /api/community/account` `{name, terms_version, privacy_version, sharing, sheet_runner?}` | Create the account: name, consent and sharing. |
 | `PUT /api/community/account/name` `{name}` | Rename (required after a moderation rename). |
 | `PUT /api/community/account/sharing` `{enabled}` | Turn automatic sharing on or off. |
-| `GET /api/community/account/export` | Download everything the cloud holds for the account. |
+| `GET /api/community/account/export` | Download ghost/account data plus `player_page` (profile, controls and current snapshot). Both reads bind the same UUID/auth session; a switch discards the result. Older services explicitly mark unavailable player-page export. |
 | `POST /api/community/account/withdraw` `{confirmation: "WITHDRAW"}` | Unpublish every shared ghost. |
 | `POST /api/community/account/delete` `{confirmation: "DELETE"}` | Delete the account and its cloud data. |
+
+Claimed player pages use additive cloud protocol v2; ghost/account v1 shapes
+remain strict and unchanged. A checkmark means the owner claimed their signed-in
+Trainer account. It never verifies legitimate gameplay or an unproven Sheet link.
+
+| Player endpoint | Contract |
+|---|---|
+| `GET /api/community/players?prefix=&cursor=` | Up to 20 UUID/name matches, `next_cursor` and `complete`; bounded prefix/keyset lookup. |
+| `GET /api/community/players/{uid}?scope=overall` | `{player,progress,comparison,partial_reason}`. UUID navigation survives rename. Header includes bounded bio/socials, exact claim explanation and proven Sheet association only. |
+| `GET /api/community/players/{uid}/recordings?cursor=` | At most 20 strict recording rows with the Library's local binding/Add-rival capability/saved slot. Current publication gates and owner epoch protect paging. Actual recording time stays separate from a current saved PB. |
+| `GET /api/community/progress` | Own publication state, local publisher/dirty/error/conflict, bounded preview counts/bytes/coverage, versioned consent text and public profile details. No current snapshot body queue or private routes/definitions are returned for upload. |
+| `POST /api/community/progress/control` | `{action:enable|disable|withdraw|switch,expected_revision,notice_version?}`. Enable/switch require the current explicit consent after preview. Disable pauses future updates; withdraw hides/deletes the retained snapshot. Switch deliberately replaces the sole publisher. |
+| `POST /api/community/progress/sync` | Recompute current facts, reconcile revision/hash/publisher and publish only a changed authorized snapshot. Conflicts require review; no automatic publisher takeover. |
+| `PUT /api/community/player-profile` | `{expected_revision,bio,socials:[{kind:twitch|youtube|website,url}]}`; independent profile revision, bounded HTTPS links without credentials, no remote asset fetching or autoplay. |
+| `GET /api/community/progress/privacy` | Own retained publication state for signed-in/stored owners, including lapsed/suspended accounts; no local DB or active browsing/upload permission is required. |
+| `POST /api/community/progress/privacy/control` | `{action:disable|withdraw,expected_revision}`; removal-only path that cannot enable publication, upload facts or edit a profile. Account/session and server revision fences still apply. |
+
+Comparison uses the viewer's selected Rank scope, exclusions, Scorecard regions,
+PB basis and effective local standards. The shared scope-row/GoalResolver/Rank
+readers accept supplied PB rows; there is no separate remote grader. Each column
+totals known cells, while differences use only comparable shared cells. A partial
+or unbindable publication does not receive a purported complete rank. Missing
+local rank resources leave the header/progress readable with comparison unavailable.
+Stamped ROMs remain original evidence; unstamped times are explicitly evaluated
+under the viewer's default ROM, with publisher default-ROM provenance retained.
+
+The full current snapshot preserves deliberate slower saves, Undo, deletion and
+reclassification. Raw saved `game_version`, joined `pb_version`, relative save
+order, stored frames and available original dates/source are distinct fields.
+Imports never acquire invented achievement dates or original centiseconds.
+Default publication withholds custom/edited segments; portable public seed
+signatures carry no local numeric IDs or detection definitions. Coverage names
+shared, withheld and unsupported rows. A 4096-row/1-MiB whole-request bound fails
+explicitly instead of truncating a complete profile. Protocol/storage/lifecycle
+details belong to [the community contract](community-protocol.md) and
+[the service README](../cloud/community/README.md).
 
 ## Event schema
 

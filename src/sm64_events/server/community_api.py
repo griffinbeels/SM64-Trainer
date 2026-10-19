@@ -188,8 +188,7 @@ def _mount_account(router, require_account, pending):
 
     @router.get("/account/export")
     async def export():
-        active = require_account()
-        return await _call(lambda: active.request_json("GET", "/v1/account/export"))
+        return await export_account(require_account())
 
     @router.post("/account/withdraw")
     async def withdraw(body: Confirmation):
@@ -208,3 +207,28 @@ def _mount_account(router, require_account, pending):
             json={'confirmation': 'DELETE MY ACCOUNT'}))
         await _call(active.sign_out)
         return result
+
+
+def _export_owner(account, owner, epoch):
+    if not owner or account.snapshot().get("uid") != owner or getattr(account, "_epoch", None) != epoch:
+        raise HTTPException(409, "Your account changed. Export again from the account you want to download.")
+
+
+async def export_account(active):
+    from sm64_events.community.config import CommunityError
+    owner, epoch = active.snapshot().get("uid"), getattr(active, "_epoch", None)
+    result = await _call(lambda: active.request_json("GET", "/v1/account/export"))
+    _export_owner(active, owner, epoch)
+    if not isinstance(result.get("account"), dict) or result["account"].get("uid") != owner:
+        raise HTTPException(503, "The account export identity could not be confirmed.")
+    try:
+        player = await active.request_json("GET", "/v2/account/player-export")
+    except CommunityError as error:
+        _export_owner(active, owner, epoch)
+        if error.status not in (404, 405):
+            raise HTTPException(503, "The saved-PB export could not be reached. Try again before downloading.") from error
+        player = {"available": False, "reason": "This service does not support player-page export yet."}
+    _export_owner(active, owner, epoch)
+    if player.get("available") is not False and player.get("uid") != owner:
+        raise HTTPException(503, "The player-page export identity could not be confirmed.")
+    return {**result, "player_page": player}

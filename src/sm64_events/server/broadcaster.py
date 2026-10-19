@@ -41,6 +41,12 @@ class Broadcaster:
     def __init__(self):
         self._clients: set = set()
         self._seq = 0
+        self._observers: set = set()
+
+    def observe(self, callback):
+        """Local observers do bounded work, never network I/O on this path."""
+        self._observers.add(callback)
+        return lambda: self._observers.discard(callback)
 
     @property
     def client_count(self) -> int:
@@ -53,6 +59,11 @@ class Broadcaster:
         self._clients.discard(ws)
 
     async def publish(self, event: Event) -> int:
+        for callback in tuple(self._observers):
+            try:
+                callback(event)
+            except Exception:  # noqa: BLE001 -- an observer cannot stop live tracking
+                log.warning("A local event observer could not update; tracking continues.")
         self._seq += 1
         wire = to_wire(event, self._seq)
         log.info("event %s", _log_line(wire))

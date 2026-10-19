@@ -26,6 +26,10 @@ try{
   await mf.ready;
   const db=await mf.getD1Database('DB');
   for(const migration of ['0001_community.sql','0002_friend_beta.sql','0003_auth_entry_budget.sql','0004_reusable_beta_invitation.sql','0005_library_discovery.sql'])for(const sql of readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8').split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
+  const progressMigration=readFileSync(new URL('../migrations/0006_player_progress.sql',import.meta.url),'utf8'),triggerStart=progressMigration.indexOf('CREATE TRIGGER');
+  for(const sql of progressMigration.slice(0,triggerStart).split(';').map(s=>s.replace(/--[^\n]*/g,'').trim()).filter(Boolean))await db.prepare(sql).run();
+  await db.prepare(progressMigration.slice(triggerStart)).run();
+  for(const sql of readFileSync(new URL('../migrations/0007_player_recording_epoch.sql',import.meta.url),'utf8').split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
   await db.prepare('UPDATE settings SET generation=? WHERE id=1').bind(model.generation).run();
   await db.prepare("INSERT INTO accounts(uid,issuer,subject,invited,status,name,name_key,sharing,terms_version,privacy_version,created_at,updated_at) VALUES(?,?,?,1,'active','Runtime','runtime',1,'test-1','test-1',0,0)").bind(alice,issuer,alice).run();
   async function call(path,{method='GET',body,bytes,bearer=token,key=crypto.randomUUID(),status=200}={}){
@@ -50,7 +54,25 @@ try{
   const library=await call('/v1/library/recordings?'+new URLSearchParams({target:JSON.stringify(entry.target),clock:'igt',rom:'us',strategy:entry.strategies[0].name}));
   assert.equal(library.json.recordings[0].id,id);assert.equal(library.json.complete,true);
   assert.equal((await db.prepare("SELECT ops FROM quotas WHERE owner='*'").first()).ops,9);
+  const playerWire=JSON.parse(readFileSync(new URL('./player-wire-fixture.json',import.meta.url),'utf8'));
+  const enabled=await call('/v2/account/progress/control',{method:'PUT',body:playerWire.enable});assert.equal(enabled.json.revision,1);
+  const progress=await call('/v2/account/progress/snapshot',{method:'PUT',body:playerWire.snapshot});assert.equal(progress.json.revision,2);
+  assert.deepEqual((await call('/v2/players/'+alice+'/progress')).json.content,playerWire.snapshot.content);
+  const disable={expected_revision:2,action:'disable',publisher:null,notice_version:null};
+  assert.equal((await call('/v2/account/progress/control',{method:'PUT',body:disable})).json.visible,true);
+  await call('/v2/account/progress/snapshot',{method:'PUT',body:playerWire.snapshot,status:409});
+  assert.equal((await call('/v2/account/progress/control',{method:'PUT',body:{...disable,expected_revision:3,action:'withdraw'}})).json.visible,false);
+  await call('/v2/players/'+alice+'/progress',{status:404});
+  const restored=await call('/v2/account/progress/control',{method:'PUT',body:{...playerWire.enable,expected_revision:4}});assert.equal(restored.json.revision,5);
+  await call('/v2/account/progress/snapshot',{method:'PUT',body:playerWire.snapshot,status:409});
+  await call('/v2/account/progress/snapshot',{method:'PUT',body:{...playerWire.snapshot,expected_revision:5,consent_revision:4}});
+  await call('/v2/account/player-profile',{method:'PUT',body:playerWire.player_profile});
+  assert.equal((await call('/v2/players/'+alice)).json.bio,playerWire.player_profile.bio);
+  assert.equal((await call('/v2/players?prefix=Runtime')).json.players[0].uid,alice);
+  assert.equal((await call('/v2/players/'+alice+'/recordings')).json.recordings[0].id,id);
+  assert.deepEqual((await call('/v2/account/player-export')).json.snapshot.content,playerWire.snapshot.content);
   await call('/v1/account/withdraw',{method:'POST',body:{confirmation:'WITHDRAW MY GHOSTS'}});
+  assert.equal((await call('/v2/players/'+alice+'/progress')).json.content_hash,playerWire.snapshot.content_hash);
   assert.deepEqual((await call('/v1/recordings/metadata',{method:'POST',body:{recording_ids:[id]}})).json.unavailable,[id]);
   assert.deepEqual((await call('/v1/library')).json.entries,[]);
   const denied=await mf.dispatchFetch('https://community.example.invalid/v1/recordings/'+id+'/asset',{headers:{authorization:'Bearer '+token}});assert.equal(denied.status,404);

@@ -1,6 +1,7 @@
 import {ServiceError,requireThat,fail,sha256,canonical} from "./errors.js";
 import {LIMITS} from "./config.js";
 import {checkedName} from "./names.js";
+import {removeSnapshotSQL} from './progress-store.js';
 const sec=()=>Math.floor(Date.now()/1000);
 // Identical bytes can legitimately have different strategy/timing metadata.
 // Deduplication and publication must agree on the full immutable identity.
@@ -234,6 +235,7 @@ export class Store {
       this.sql("INSERT INTO winners VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(uid,target_key,clock,rom,strategy,generation,step) DO UPDATE SET recording_id=excluded.recording_id,frames=excluded.frames WHERE excluded.frames<winners.frames",
         g.uid,g.target_key,g.clock,g.rom,g.strategy,g.generation,g.step,id,g.frames),
       this.sql("UPDATE grants SET state='complete',recording_id=?,disposition='published' WHERE id=?",id,g.id),
+      this.sql('UPDATE accounts SET recording_epoch=recording_epoch+1 WHERE uid=?',g.uid),
       this.sql("INSERT INTO scope_epochs(scope,epoch) VALUES(?,1) ON CONFLICT(scope) DO UPDATE SET epoch=epoch+1",g.target_key)]);
       return {disposition:"published",recording_id:id};
     } catch(error) {
@@ -337,7 +339,8 @@ export class Store {
       this.sql("UPDATE recordings SET published=0 WHERE uid=?",a.uid),
       this.sql("DELETE FROM winners WHERE uid=?",a.uid),
       this.sql("DELETE FROM pins WHERE recording_id IN (SELECT id FROM recordings WHERE uid=?) OR uid=?",a.uid,a.uid),
-      this.sql("UPDATE accounts SET sharing=0,updated_at=?"+(deleting?",status='deleted',name=NULL,name_key=NULL,sheet_runner=NULL,sheet_verified=0":"")+" WHERE uid=?",sec(),a.uid),
+      this.sql("UPDATE accounts SET sharing=0,updated_at=?,recording_epoch=recording_epoch+1"+(deleting?",status='deleted',name=NULL,name_key=NULL,sheet_runner=NULL,sheet_verified=0":"")+" WHERE uid=?",sec(),a.uid),
+      ...(deleting?removeSnapshotSQL(this,a.uid,{profile:true}):[]),
       this.sql("UPDATE settings SET global_epoch=global_epoch+1 WHERE id=1"),
       ...(deleting?[this.sql("INSERT INTO deletion_outbox(uid,created_at) VALUES(?,?) ON CONFLICT DO NOTHING",a.uid,sec())]:[]),
       this.receiptSQL(a.uid,deleting?"delete":"withdraw",key,digest,response)]);
@@ -352,6 +355,7 @@ export class Store {
     await this.tx("EXISTS(SELECT 1 FROM accounts WHERE uid=? AND status!='deleted')",[a.uid],[
       // The receipt counts live identities before the statements below retire them.
       this.sql("INSERT INTO mutation_receipts VALUES(?,?,?,?,json_object('retracted',(SELECT COUNT(*) FROM recordings WHERE "+live+")),?)",a.uid,"retract",key,digest,...args,sec()),
+      this.sql('UPDATE accounts SET recording_epoch=recording_epoch+1 WHERE uid=?',a.uid),
       this.sql("INSERT INTO scope_epochs(scope,epoch) SELECT DISTINCT target_key,1 FROM recordings WHERE "+live+" ON CONFLICT(scope) DO UPDATE SET epoch=epoch+1",...args),
       this.sql("DELETE FROM pins WHERE recording_id IN (SELECT id FROM recordings WHERE "+own+")",...args),
       this.sql("DELETE FROM winners WHERE recording_id IN (SELECT id FROM recordings WHERE "+own+")",...args),

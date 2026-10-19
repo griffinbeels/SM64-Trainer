@@ -1,0 +1,25 @@
+{
+  "enable": {
+    "expected_revision": 0,
+    "action": "enable",
+    "publisher": {"installation_id": "20000000-0000-4000-8000-000000000001", "profile_id": "30000000-0000-4000-8000-000000000001", "label": "My practice profile"},
+    "notice_version": "progress-1"
+  },
+  "snapshot": {
+    "uid": "10000000-0000-4000-8000-000000000001",
+    "expected_revision": 1,
+    "consent_revision": 1,
+    "publisher": {"installation_id": "20000000-0000-4000-8000-000000000001", "profile_id": "30000000-0000-4000-8000-000000000001"},
+    "captured_utc": "2026-10-19T12:00:06Z",
+    "content_hash": "c69c7503c01a3a392dc6d5cc2e3ab3bd5b5d1f5c5549a57b34ac44231b97ac34",
+    "content": {
+      "schema": 1,
+      "default_rom": "us",
+      "rows": [
+        {"target": {"kind": "star", "entity_key": "1-0", "name": "Fixture star"}, "strategy": "Standard", "clock": "igt", "frames": 397, "game_version": null, "pb_version": "jp", "save_order": 1, "source_kind": "played", "source_cs": null, "achieved_utc": "2026-10-19T12:00:00Z", "saved_utc": "2026-10-19T12:00:05Z"}
+      ],
+      "coverage": {"total_rows": 1, "shared_rows": 1, "withheld_rows": 0, "unsupported_rows": 0, "complete": true}
+    }
+  },
+  "player_profile": {"expected_revision": 0, "bio": "Practising one star at a time.", "socials": [{"kind": "twitch", "url": "https://www.twitch.tv/fixture_player"}]}
+}

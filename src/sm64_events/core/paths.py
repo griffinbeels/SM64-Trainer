@@ -121,6 +121,11 @@ def data_root() -> Path:
     return Path(".")
 
 
+def progress_installation_path() -> Path:
+    """Local publisher identity; separate from any database's profile UUID."""
+    return data_root() / "data" / "progress-installation.txt"
+
+
 def _absolute_override(name: str) -> Path | None:
     value = os.environ.get(name)
     if value is None:

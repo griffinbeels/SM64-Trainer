@@ -1679,6 +1679,30 @@ settings screen shows the name, the provider and the [[Rank tab]]'s own chip row
   `cloud/community/src/service.js` (the names check route)
 - **Not** — the Project64 setup wizard (`setupmodal.js`), which follows it.
 
+### Claimed player page
+
+A UUID-addressed page for a signed-in Trainer account, separate from a
+Sheet runner's imported projection. The checkmark confirms account ownership,
+not legitimate performances. An owner can add a bio and social links and
+explicitly share their current saved PBs independently of [[community ghost]]
+sharing. Available ghost times remain distinct from the saved PB snapshot.
+Comparison uses the viewing player's selected Rank scope and local standards;
+private or unavailable entries are missing with coverage, never a loss.
+
+- **Lives** — `ui/components/playerpage.js`, `server/player_api.py`,
+  `server/player_comparison.py` and `cloud/community/src/players.js`
+
+### Publishing profile
+
+The one installation/database profile explicitly selected to publish an
+account's current saved PB snapshot. Switching replaces that publisher after
+preview and consent; it does not merge devices. Pausing stops future updates,
+while withdrawal removes the retained shared snapshot. Neither changes local
+PBs or the independent ghost-sharing setting.
+
+- **Lives** — `community/progress_sync.py`, `community/progress_state.py` and
+  `cloud/community/src/progress-store.js`
+
 ### Community ghost
 
 A [[ghost]] shared by an authenticated, invited player. The service keeps that

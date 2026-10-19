@@ -44,12 +44,12 @@ from sm64_events.core.events import Event
 from sm64_events.core.modes import platform_of
 from sm64_events.ranks.classify import display_cs
 from sm64_events.ranks.scorecard import (
-    build_card, rows_for_course, rows_for_route, template_rows, without_keys)
-from sm64_events.tracking.views import (latest_pbs_by_strategy,
-                                        segment_courses)
+    build_card, without_keys)
+from sm64_events.tracking.views import latest_pbs_by_strategy
 from sm64_events.server.import_api import sheet_row_placer
 from sm64_events.server.jobs import JobBoard
 from sm64_events.server.scorecard_goals import prepare_goal
+from sm64_events.server.scorecard_rows import scope_rows as scorecard_scope_rows
 from sm64_events.server.scorecard_resolve import (
     CUSTOM_KEY, GOAL_KEY, REGIONS_KEY, VALID_REGIONS, GoalResolver, entry_goal,
     pin_of, require_entry_key)
@@ -411,46 +411,8 @@ def create_scorecard_router(service, library=None, adoptions=None,
         if service.db is None:
             raise HTTPException(503, "scorecard unavailable")
 
-    def _fight_segments() -> list[tuple[str, str, str | None]]:
-        """[(entity_key, name, seed_key)] for every Bowser fight -- BY
-        CATEGORY, the same fact `ranks/scopes.py::ranks_by_default` keys on,
-        so the card and the default-ranking rule can never disagree about
-        what counts as a fight (round 9: "all 120 stars, plus the bowser
-        fights"). The seed key is what pairs a fight with its Bowser's reds
-        star on the Bowser card (round 21)."""
-        return [(f"segment:{row['id']}", row["name"], row.get("seed_key"))
-                for row in service.db.segment_defs()
-                if row.get("category") == "Bowser Fights"]
-
-    def _fight_ids() -> dict[int, str | None]:
-        return {row["id"]: row.get("seed_key") for row in service.db.segment_defs()
-                if row.get("category") == "Bowser Fights"}
-
     def scope_rows(scope_id: str) -> list[dict]:
-        """The scope's row spec, or a 404 for a scope that does not exist --
-        the same deliberate 404 `/api/marelo` gives a stale route id, so a
-        deleted route reads as GONE rather than silently becoming a
-        different card (round 6: "whatever is in the scope is what we
-        generate a scorecard for")."""
-        if scope_id == "overall":
-            return template_rows(fight_segments=_fight_segments())
-        kind, _, rest = scope_id.partition(":")
-        if kind == "course" and rest.isdigit():
-            try:
-                return rows_for_course(int(rest))
-            except LookupError:
-                raise HTTPException(404, f"no scorecard for {scope_id!r}")
-        if kind == "route" and rest.isdigit():
-            route = next((row for row in service.db.routes()
-                          if row["id"] == int(rest)), None)
-            if route is not None:
-                labels = {row["id"]: row["name"]
-                          for row in service.db.segment_defs()}
-                return rows_for_route(
-                    route, segment_labels=labels,
-                    segment_courses=segment_courses(service.db),
-                    fight_segment_ids=_fight_ids())
-        raise HTTPException(404, f"unknown scope {scope_id!r}")
+        return scorecard_scope_rows(service, scope_id)
 
     def current_card(scope_id: str = "overall"):
         """`(card, goal_value)` -- the one door both `GET /api/scorecard`

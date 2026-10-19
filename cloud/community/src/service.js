@@ -8,6 +8,7 @@ import {checkedName,prefixRange} from './names.js';
 import {encodeCursor,decodeCursor} from './cursors.js';
 import {nativeAuthorize} from './portal-contract.js';
 import {policies} from './policies.js';
+import {playerRoute,lapsedPlayerAccess} from './players.js';
 import {renewMetadata,librarySummary,libraryRecordings} from './library.js';
 import {armMaintenance} from './maintenance.js';
 const now=()=>Math.floor(Date.now()/1000);
@@ -79,7 +80,7 @@ function lapsedAccess(c){
     // Persisted owners retain export/removal after invitation revocation or
     // suspension. Unknown identities have no owned data and must add no rows.
     const ownData=(url.pathname==='/v1/account/export'&&request.method==='GET')||
-    (['/v1/account/withdraw','/v1/account/delete','/v1/recordings/retract'].includes(url.pathname)&&request.method==='POST');
+    (['/v1/account/withdraw','/v1/account/delete','/v1/recordings/retract'].includes(url.pathname)&&request.method==='POST')||lapsedPlayerAccess(request,url);
     if(a.ephemeral||!ownData)s.active(a,true);
   }
   return null;
@@ -214,6 +215,7 @@ async function member(c,{auth,adminAuth,catalog}){
     armMaintenance(env,ctx);
   }
   const own=findRoute(ACCOUNT_ROUTES,request,url);if(own)return own(signed);
+  const player=await playerRoute(signed,catalog);if(player)return player;
   s.active(a);const model=await catalog(env);
   const library=findRoute(LIBRARY_ROUTES,request,url);if(library)return library({...signed,model});
   fail(404,'not_found','Route not found.');
