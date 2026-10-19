@@ -182,7 +182,7 @@ const BAND_ICON_SIZE = 20;
 // arithmetic -- see the report for what was actually checked.
 const CURRENT_RANK_ICON_SIZE = 26;
 
-function LadderBar({ value, tier, division }) {
+function LadderBar({ value, tier, division, markerLabel = "YOU" }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
   // Round 6 addendum (task 8, 2026-07-26 -- the user, after accepting the
   // hover interaction itself: "I would expect my big symbol to still be
@@ -284,8 +284,8 @@ function LadderBar({ value, tier, division }) {
              expanded state. -->
         ${isCurrentBand && html`<span class="rank-ladder-head" style=${`left:${markerFraction * 100}%`}></span>`}
         ${isCurrentBand && html`<span class="rank-ladder-mark is-you" style=${`left:${markerFraction * 100}%`}
-            title=${`You are here — ${toPoints(filled)} pts`}>
-          <b class="rank-ladder-you">YOU</b>
+            title=${`${markerLabel === "YOU" ? "You are" : "Player is"} here — ${toPoints(filled)} pts`}>
+          <b class="rank-ladder-you">${markerLabel}</b>
           <span class="rank-ladder-you-icon">
             <${RankIcon} tier=${tier} division=${division} size=${CURRENT_RANK_ICON_SIZE} flap=${true} />
           </span>
@@ -517,7 +517,7 @@ export function HistoryChart({ points }) {
 // ladder (server/ranks_api.py::_score_scope). Never re-derived here: a
 // second copy of the division math in JS is exactly the kind of drift that
 // would make this column disagree with the Hat icon.
-function nextRankLabel(entity) {
+function nextRankLabel(entity, readOnly) {
   // An entity you have never practiced has no rank to step up FROM, and the
   // server's `next_tier` for it is the Gold QUEST TARGET the Gain column is
   // measured against — printing that here read as a claim about its next
@@ -525,19 +525,21 @@ function nextRankLabel(entity) {
   // aren't even rank standards" — live report 2026-07-25 round 7). Say what
   // is true instead; the Gold target moves to the Gain cell's tooltip, next
   // to the number it actually explains.
-  if (entity.score == null) return "not practiced yet";
+  if (entity.score == null) return readOnly ? "no published PB" : "not practiced yet";
   if (!entity.next_tier) return "Maxed";
   return entity.next_division
     ? `→ ${capName(entity.next_tier)} ${divisionDigit(entity.next_division)}`
     : `→ ${capName(entity.next_tier)}`;
 }
 
-function gainTitle(entity) {
+function gainTitle(entity, readOnly) {
+  const subject = readOnly ? "this player" : "you";
+  const missing = readOnly ? "an entry without a published PB" : "an unpracticed entry";
   if (entity.score == null)
-    return `What this scope's rating would gain if you practiced this to `
-      + `${capName(entity.next_tier)} — that target is why an unpracticed entry shows `
+    return `What this scope's rating would gain if ${subject} practiced this to `
+      + `${capName(entity.next_tier)} — that target is why ${missing} shows `
       + `the biggest number in this column.`;
-  return `What this scope's rating would gain if you reached the next tier here.`;
+  return `What this scope's rating would gain if ${subject} reached the next tier here.`;
 }
 
 // A runner-variant row's own last column: how far your saved time is from
@@ -607,17 +609,42 @@ function runnerGapTitle(entity) {
 // the practice log's own `ReplayPlayer`, so his run and a runner's run are
 // inspected from the same seat ("I should be able to view any of my PBs on
 // this page the same way as the fake leaderboard", fifth read).
+function ExclusionControl({ entity, onToggle, readOnly }) {
+  if (readOnly) return null;
+  return html`<button type="button" class="chip"
+    onclick=${() => onToggle(entity.key, !entity.excluded)}
+    title=${entity.excluded ? "Include this in every rating again" : "Exclude this from every rating"}>
+    ${entity.excluded ? "Include" : "Ignore"}</button>`;
+}
+
+function RankPlayButton({ showVideo, onToggle, label }) {
+  const title = showVideo ? "Close the video" : label;
+  return html`<button type="button" class="icon-button rank-row-play" onclick=${onToggle}
+    title=${title} aria-label=${title} aria-expanded=${showVideo ? "true" : "false"}>
+    <${Icon} name=${showVideo ? "chevron" : "play"} size=${16} /></button>`;
+}
+
+function BreakdownVideo({ entity, data, isRunner }) {
+  return html`<tr class="replay-row rank-video-row"><td colspan=${isRunner ? 6 : 7}>
+    <div class="rank-video-box ${isRunner ? "" : "is-replay"}">
+      ${isRunner
+        ? html`<${ExampleMedia} entry=${{video:entity.video,runner:data.runner,time_cs:entity.time_cs}} autoplay />`
+        : html`<${ReplayPlayer} attemptId=${entity.pb_attempt_id} />`}
+    </div></td></tr>`;
+}
+
+function entityDoorTitle(data, entity, isRunner) {
+  if (isRunner) return `Open ${data.runner}'s entry for this in the Library`;
+  return entity.pb_attempt_id != null ? "Open your PB's entry in the Library" : "Open this in the Library";
+}
+
 function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity,
-                        replayable = null }) {
+                        replayable = null, readOnly }) {
   const [showVideo, setShowVideo] = useState(false);
   const canReplay = !isRunner && replayable && entity.pb_attempt_id != null
     && replayable.has(entity.pb_attempt_id);
-  const playButton = (label) => html`<button type="button" class="icon-button rank-row-play"
-      onclick=${() => setShowVideo(!showVideo)}
-      title=${showVideo ? "Close the video" : label}
-      aria-label=${showVideo ? "Close the video" : label}
-      aria-expanded=${showVideo ? "true" : "false"}>
-      <${Icon} name=${showVideo ? "chevron" : "play"} size=${16} /></button>`;
+  const playButton = label => html`<${RankPlayButton} showVideo=${showVideo} label=${label}
+    onToggle=${() => setShowVideo(!showVideo)} />`;
   const art = html`<${EntityArt} t=${t} entityKey=${entity.key} className="rank-row-icon" />`;
   // A runner's row is a door only where they have a time (an entry to land
   // on); his own row is always one -- the Library page exists for every
@@ -629,11 +656,7 @@ function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity,
     <td class="rank-cell-name">
       ${hasDoor
         ? html`<button type="button" class="rank-entity-link textlink"
-            title=${isRunner
-              ? `Open ${data.runner}'s entry for this in the Library`
-              : entity.pb_attempt_id != null
-                ? "Open your PB's entry in the Library"
-                : "Open this in the Library"}
+            title=${entityDoorTitle(data, entity, isRunner)}
             onclick=${() => onOpenEntity(entity)}>${art}${entity.label}</button>`
         : html`<span>${art}${entity.label}</span>`}</td>
     <td>${entity.tier
@@ -646,30 +669,17 @@ function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity,
           <td class="rank-cell-play">${entity.video
             ? playButton(`Watch ${data.runner}'s run`) : null}</td>`
       : html`<td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
-          <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
-          <td class="meta rank-cell-gain" title=${gainTitle(entity)}>+${toPoints(entity.gain)}</td>
-          <td><button type="button" class="chip"
-            onclick=${() => onToggle(entity.key, !entity.excluded)}
-            title=${entity.excluded
-              ? "Include this in every rating again"
-              : "Exclude this from every rating"}>
-            ${entity.excluded ? "Include" : "Ignore"}</button></td>
+          <td class="meta rank-cell-next">${nextRankLabel(entity, readOnly)}</td>
+          <td class="meta rank-cell-gain" title=${gainTitle(entity, readOnly)}>+${toPoints(entity.gain)}</td>
+          <td><${ExclusionControl} entity=${entity} onToggle=${onToggle} readOnly=${readOnly} /></td>
           <td class="rank-cell-play">${canReplay ? playButton("Watch your PB's replay") : null}</td>`}
   </tr>`;
-  const videoRow = showVideo
-    ? html`<tr class="replay-row rank-video-row"><td colspan=${isRunner ? 6 : 7}>
-        <div class="rank-video-box ${isRunner ? "" : "is-replay"}">
-          ${isRunner
-            ? html`<${ExampleMedia} entry=${{ video: entity.video, runner: data.runner,
-                                               time_cs: entity.time_cs }} autoplay />`
-            : html`<${ReplayPlayer} attemptId=${entity.pb_attempt_id} />`}
-        </div></td></tr>`
-    : null;
+  const videoRow = showVideo ? html`<${BreakdownVideo} entity=${entity} data=${data} isRunner=${isRunner} />` : null;
   return [row, videoRow];
 }
 
 export function Breakdown({ t, data, routeOrder, onToggle, variant = "yours",
-                            onOpenEntity = null, replayable = null }) {
+                            onOpenEntity = null, replayable = null, readOnly = false }) {
   const isRunner = variant === "runner";
   const [byGain, setByGain] = useState(false);
   const rows = byGain
@@ -698,7 +708,7 @@ export function Breakdown({ t, data, routeOrder, onToggle, variant = "yours",
       <tbody>
       ${rows.map((entity) => html`<${BreakdownRow} key=${entity.key} t=${t} data=${data}
           entity=${entity} isRunner=${isRunner} onToggle=${onToggle}
-          onOpenEntity=${onOpenEntity} replayable=${replayable} />`)}
+          onOpenEntity=${onOpenEntity} replayable=${replayable} readOnly=${readOnly} />`)}
       </tbody>
     </table>
   </div>`;
@@ -748,7 +758,7 @@ function EntityArt({ t, entityKey, className = "" }) {
        alt="" draggable="false" />`;
 }
 
-function EntityTile({ t, entity, size = 42, open, onToggle, onOpen, onEdit }) {
+function EntityTile({ t, entity, size = 42, open, onToggle, onOpen, onEdit, emptyLabel }) {
   const practiced = entity.score != null;
   const onClick = onToggle || onOpen || null;
   // Enter/Space on the ✎ must not also fire the tile's own click.
@@ -765,7 +775,7 @@ function EntityTile({ t, entity, size = 42, open, onToggle, onOpen, onEdit }) {
       tabindex=${onClick ? null : "-1"}
       title=${(practiced
         ? `${entity.label} — ${capName(entity.tier)} ${divisionDigit(entity.division)} · ${fmtPoints(entity.score)} pts`
-        : `${entity.label} — not practiced yet`)
+        : `${entity.label} — ${emptyLabel}`)
         + (onOpen ? " · open their entry in the Library" : "")}>
     <${EntityArt} t=${t} entityKey=${entity.key} className="entity-tile-icon" />
     ${onEdit ? html`<span class="editicon tile-editicon" role="button"
@@ -904,7 +914,8 @@ const COVERAGE_TILE_PX = 42;
 // for a tile the runner has a time on -- `entity.time_cs != null` -- which
 // is a different click from the detail panel and stands on its own. A tile
 // with no time has no entry to land on and stays `.is-static`.
-export function CoverageStrip({ t, data, caption, readOnly = false, onOpenEntity = null }) {
+export function CoverageStrip({ t, data, caption, readOnly = false, onOpenEntity = null,
+                                emptyLabel = "not practiced yet" }) {
   const [openKey, setOpenKey] = useState(null);
   // ONE icon picker for the whole strip, hoisted out of the tiles for the
   // same reason the banner hoists its own: a click inside the modal must
@@ -918,7 +929,7 @@ export function CoverageStrip({ t, data, caption, readOnly = false, onOpenEntity
   return html`<div class="rank-coverage">
     <div class="entity-strip rank-coverage-strip">
       ${rated.map((entity) => html`<${EntityTile} key=${entity.key} t=${t}
-        entity=${entity} size=${COVERAGE_TILE_PX} open=${entity.key === openKey}
+        entity=${entity} size=${COVERAGE_TILE_PX} open=${entity.key === openKey} emptyLabel=${emptyLabel}
         onToggle=${readOnly ? undefined
           : () => setOpenKey(entity.key === openKey ? null : entity.key)}
         onOpen=${onOpenEntity && entity.time_cs != null
@@ -930,6 +941,67 @@ export function CoverageStrip({ t, data, caption, readOnly = false, onOpenEntity
     ${open && html`<${EntityDetail} t=${t} entity=${open}
       onClose=${() => setOpenKey(null)} />`}
     ${!readOnly && pickerModal}
+  </div>`;
+}
+
+// One Rank card for local practice and claimed-account pages. The caller
+// supplies facts; read-only changes ownership labels and editing affordances.
+export function RankCard({ t, scopes, scopeId, onScope, data, dataErr = null,
+                           readOnly = false, rankReason = null, description = null,
+                           className = "" }) {
+  return html`<div class=${`practice-card rank-card ${className}`}>
+    <label class="route-focus-control">
+      <${Icon} name="rank" size=${18} /><span class="field-label">Scope</span>
+      <select value=${scopeId} onchange=${event => onScope(event.target.value)}>
+        ${scopes.map(scope => html`<option value=${scope.id}>${scope.label}</option>`)}
+      </select>
+    </label>
+    ${description ? html`<p class="meta rank-card-context">${description}</p>` : null}
+    ${dataErr ? html`<${InlineState} kind="error">${dataErr.status === 404
+        ? "This scope is gone — pick another from the list above." : dataErr.message}<//>`
+      : !data ? html`<${InlineState}>${rankReason || "Loading this scope…"}<//>`
+      : html`<${RankCardBody} t=${t} data=${data} readOnly=${readOnly} />`}
+  </div>`;
+}
+
+function RankCardBody({ t, data, readOnly }) {
+  // Both the number and the matching bar use the same tween.
+  const marelo = useTween(data.marelo), mastery = useTween(data.mastery);
+  return html`<div class="rank-card-main">
+    ${data.tier ? html`<span class="rank-icon-slot rank-card-icon">
+      <${RankIcon} tier=${data.tier} division=${data.division} size=${64} />
+    </span>` : "–"}
+    <div><h2>${data.tier ? `${capName(data.tier)} ${divisionDigit(data.division)}` : "Unranked"}</h2>
+      <p class="meta">MARELO ${fmtPoints(marelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p></div>
+  </div>
+  <div class="rank-ladder-wrap"><${LadderBar} value=${marelo} tier=${data.tier}
+    division=${data.division} markerLabel=${readOnly ? "PLAYER" : "YOU"} /></div>
+  <p class="meta rank-card-note">${readOnly
+    ? "Ranked from this player’s published saved PBs using your scope and rank standards."
+    : "MARELO grades every attempt automatically — it doesn't wait for a saved PB the way the practice card's rank banner does."}</p>
+  <${RankFactors} t=${t} data=${data} mastery=${mastery} readOnly=${readOnly} />
+  ${data.n < 5 && html`<p class="meta">Small scope — ${data.n} rated ${data.n === 1 ? "entry" : "entries"}.</p>`}`;
+}
+
+function RankFactors({ t, data, mastery, readOnly }) {
+  // Mastery is a mean score, not a rank: keep its plain meter off the ladder.
+  // DIV rows avoid labels forwarding hover/click to the first coverage tile.
+  return html`<div class="rank-factors">
+    <div class="rank-factor">Mastery
+      <div class="rank-progress-track"><i style=${`width:${mastery || 0}%;background:${rankColor(data.tier)}`}></i></div>
+      <span class="meta">${`${fmtScore(mastery)} / 100 — the average rank score of the ${data.practiced} `
+        + `${data.practiced === 1 ? "entry" : "entries"} `
+        + (readOnly ? "with published PBs" : "you have practiced")}</span>
+    </div>
+    <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data} readOnly=${readOnly}
+      emptyLabel=${readOnly ? "no published PB" : undefined}
+      caption=${`${data.practiced} of ${data.n} rated ${data.n === 1 ? "entry" : "entries"} `
+        + (readOnly ? "with published PBs — dim tiles have no published PB. "
+          : "practiced — dim tiles are the ones you have not run yet. ")
+        + "MARELO is mastery × coverage, so "
+        + (readOnly ? "an entry without a published PB costs rating even when the published entries are strong"
+          : "an unpracticed entry costs rating even when the ones you do practice are strong")} />
+    </div>
   </div>`;
 }
 
@@ -1030,18 +1102,6 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null, onOpe
     } catch (error) { setDataErr(error); }
   }
 
-  // The card's tweened surfaces (spec task F2): the rating itself and the
-  // Mastery ladder, each animated together with the number printed beside
-  // it, so a bar filling next to a number that already jumped to its new
-  // value can't read as two components disagreeing. Coverage lost its tween
-  // with its bar in round 8 — it is now a row of entity tiles, where the
-  // change is a tile lighting up rather than a length growing.
-  // Called unconditionally (rules of hooks) even while `data` is still
-  // loading or a scope switch has cleared it -- `null` passes straight
-  // through with no animation.
-  const tweenedMarelo = useTween(data ? data.marelo : null);
-  const tweenedMastery = useTween(data ? data.mastery : null);
-
   // The load gate (round 13). Everything this page's LAYOUT depends on has
   // to be in hand before any of it is drawn, or the sections arrive out of
   // order and shove each other around. `dataErr` counts as settled: an
@@ -1060,99 +1120,8 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null, onOpe
     <${ScopeChips} activeScopeId=${scopeId} onPick=${setScopeId} chips=${chips} />
     <${LeaderboardCard} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner} />
     <${PlayerSearch} onOpenPlayer=${onOpenPlayer} />
-    <div class="practice-card rank-card">
-      <label class="route-focus-control">
-        <${Icon} name="rank" size=${18} />
-        <span class="field-label">Scope</span>
-        <select value=${scopeId} onchange=${(event) => setScopeId(event.target.value)}>
-          ${scopes.map((scope) => html`<option value=${scope.id}>${scope.label}</option>`)}
-        </select>
-      </label>
-      ${dataErr
-        ? html`<${InlineState} kind="error">${dataErr.status === 404
-            ? "This scope is gone — pick another from the list above."
-            : dataErr.message}<//>`
-        : !data
-          ? html`<${InlineState}>Loading this scope…<//>`
-          : html`<div class="rank-card-main">
-              <!-- Unranked is an EXPLICIT empty state (final review I5,
-                   2026-07-25), matching PracticeCell's starrank "–" rather
-                   than calling Hat with no tier and drawing a plain grey
-                   cap. Round 5 (addendum, task 8, 2026-07-26, "sweep every
-                   container sized for the old disc"): wrapped in the
-                   shared rank-icon-slot class -- at size 64 the wing spill
-                   is ~24px a side, comfortably more than this row's 16px
-                   gap, and this card had never actually been rendered with
-                   a WINGED division in any prior round's fixture (Capless,
-                   the only tier tested so far, never wings) -- the gap
-                   alone would have crowded "Capless 1"/"MARELO … pts" the
-                   moment a real winged rank showed here. -->
-              ${data.tier ? html`<span class="rank-icon-slot rank-card-icon">
-                <${RankIcon} tier=${data.tier} division=${data.division} size=${64} />
-              </span>` : "–"}
-              <div>
-                <h2>${data.tier ? `${capName(data.tier)} ${divisionDigit(data.division)}` : "Unranked"}</h2>
-                <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>
-              </div>
-            </div>
-            <!-- Round 4 (addendum, task 8, 2026-07-26): the ladder plots
-                 MARELO now, not Mastery -- it lives here, beside the rank it
-                 draws, instead of buried in the Mastery factor row below
-                 (see LadderBar's own comment for the "a tier ladder with
-                 icons on it means 'this is your rank'" reasoning). -->
-            <div class="rank-ladder-wrap">
-              <${LadderBar} value=${tweenedMarelo} tier=${data.tier} division=${data.division} />
-            </div>
-            <!-- Task C.5 (live report 2026-07-25): a user saw PLATINUM on a
-                 strategy banner next to Iron I here and filed it as a bug --
-                 it wasn't. MARELO auto-grades whatever the active rank
-                 mode's basis is on EVERY view; the practice card's PB banner
-                 only moves when you press its manual Save button. Naming
-                 that difference here is what turns "these disagree" into
-                 "these answer different questions" -- the no-friction MARELO
-                 behavior was a deliberate choice, not a bug to quietly fix. -->
-            <p class="meta rank-card-note">MARELO grades every attempt automatically —
-              it doesn't wait for a saved PB the way the practice card's rank banner does.</p>
-            <!-- rank-factor is a DIV, not the label it started as: a label
-                 forwards hover and click to its first labelable descendant,
-                 and once these rows grew buttons (the coverage tiles) that
-                 meant hovering anywhere in the row — the caption, the empty
-                 space beside it — lit up the first tile, and clicking it
-                 would have opened that entity (live report 2026-07-25 round
-                 9). Nothing here labels a single control any more, so
-                 nothing should behave as though it does.
-                 (No backticks in a comment inside an htm template: the first
-                 one ENDS the template literal and the rest of the comment is
-                 parsed as JS. This exact comment did that, twice.) -->
-            <div class="rank-factors">
-              <!-- Mastery stays 0-100 (task C.4): it's a MEAN SCORE, not a
-                   rating on the tier ladder (marelo = mastery x coverage),
-                   so running it through toPoints would imply a fourth scale
-                   that doesn't exist. fmtScore on purpose, not fmtPoints.
-                   Round 4 (addendum, task 8, 2026-07-26): this used to be
-                   drawn on the SAME tier ladder as the card's own rank --
-                   two different numbers, a few pixels apart, on a scale
-                   whose whole point is "this is your rank" (the user caught
-                   it: Capless 5 on the card, the marker in Toad territory
-                   below). Mastery is one of the two factors MARELO is made
-                   of, not a rank of its own, so it gets a plain meter here
-                   instead -- the ladder above is the only rank-shaped
-                   drawing on this card now. -->
-              <div class="rank-factor">Mastery
-                <div class="rank-progress-track"><i style=${`width:${tweenedMastery || 0}%;background:${rankColor(data.tier)}`}></i></div>
-                <span class="meta">${`${fmtScore(tweenedMastery)} / 100 — the average `
-                  + `rank score of the ${data.practiced} `
-                  + `${data.practiced === 1 ? "entry" : "entries"} you have practiced`}</span></div>
-              <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data}
-                caption=${`${data.practiced} of ${data.n} rated `
-                  + `${data.n === 1 ? "entry" : "entries"} practiced — dim tiles are `
-                  + "the ones you have not run yet. MARELO is mastery × coverage, so "
-                  + "an unpracticed entry costs rating even when the ones you do "
-                  + "practice are strong"} /></div>
-            </div>
-            ${data.n < 5 && html`<p class="meta">Small scope — ${data.n} rated ${
-              data.n === 1 ? "entry" : "entries"}.</p>`}`}
-    </div>
+    <${RankCard} t=${t} scopes=${scopes} scopeId=${scopeId} onScope=${setScopeId}
+      data=${data} dataErr=${dataErr} />
     ${/* Directly below the scope rank card and above Progress (round 24:
         "move the scorecard to be directly below the scope rank card, above
         the Progress card"). It mounted last until then. */ ""}

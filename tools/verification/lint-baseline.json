@@ -401,9 +401,6 @@
     "bd35722cd000901d45742634ac856830492bb6db18cbda860608fd77250718ec",
     "071ac7b076fa1d6addc5e2e7cbd68f57054318f4206b7a6498f8cefc24857e9b",
     "7d4ec4c6f7acf9e9dc0d0a28060856d579ca24403f15827b4514e7962691ff21",
-    "8c559afe45e453988a501daf3fa39469059a51b028edbc5dcecee3359d500709",
-    "0b457abeb10ca6ab780735d8ab27f9f42837c6a997f869992255b8830fafcacc",
-    "5b402f72220bd81f509294a3047f305e986596ec10d8e8a1d122cd304087e8b8",
     "cb07dca1a7e5c69af6652fbda391ae326d43f56665826f93a4d68fdd8339810f",
     "220f65543fe0cc667219326c2ba69a3e708d42d329cd498a05a899402e565af0",
     "9b989d8f119e517d01ea53818da71e0123fa1b288621721c77bba0eaf79209d2",
@@ -2870,24 +2867,6 @@
       "message": "Function 'LogCard' has a complexity of 44. Maximum allowed is 15."
     },
     {
-      "path": "src/sm64_events/ui/components/rankpage.js",
-      "line": 608,
-      "rule": "complexity",
-      "message": "Function 'BreakdownRow' has a complexity of 22. Maximum allowed is 15."
-    },
-    {
-      "path": "src/sm64_events/ui/components/rankpage.js",
-      "line": 945,
-      "rule": "max-lines-per-function",
-      "message": "Function 'RankPage' has too many lines (173). Maximum allowed is 100."
-    },
-    {
-      "path": "src/sm64_events/ui/components/rankpage.js",
-      "line": 945,
-      "rule": "complexity",
-      "message": "Function 'RankPage' has a complexity of 27. Maximum allowed is 15."
-    },
-    {
       "path": "src/sm64_events/ui/components/ranks.js",
       "line": 216,
       "rule": "max-lines-per-function",
@@ -3700,6 +3679,36 @@
           "reason": "Nested scope resolver removed; shared owner raises from None and has no B904 finding."
         }
       ]
+    },
+    {
+      "source_commit": "9e6098fa",
+      "source_state": "Reviewed M2 Rank reuse correction",
+      "reviewer": "root; measured tools/verify_lint.py",
+      "findings": [],
+      "removed_allowances": [
+        {
+          "path": "src/sm64_events/ui/components/rankpage.js",
+          "line": 608,
+          "rule": "complexity",
+          "message": "Function 'BreakdownRow' has a complexity of 22. Maximum allowed is 15.",
+          "allowance": "8c559afe45e453988a501daf3fa39469059a51b028edbc5dcecee3359d500709"
+        },
+        {
+          "path": "src/sm64_events/ui/components/rankpage.js",
+          "line": 945,
+          "rule": "max-lines-per-function",
+          "message": "Function 'RankPage' has too many lines (173). Maximum allowed is 100.",
+          "allowance": "0b457abeb10ca6ab780735d8ab27f9f42837c6a997f869992255b8830fafcacc"
+        },
+        {
+          "path": "src/sm64_events/ui/components/rankpage.js",
+          "line": 945,
+          "rule": "complexity",
+          "message": "Function 'RankPage' has a complexity of 27. Maximum allowed is 15.",
+          "allowance": "5b402f72220bd81f509294a3047f305e986596ec10d8e8a1d122cd304087e8b8"
+        }
+      ],
+      "reason": "Shared RankCard and cohesive Rank row renderers remove all three prior rankpage.js complexity/length findings. No replacement or increased allowances."
     }
   ]
 }

@@ -44,6 +44,8 @@ class Progress:
 
 def client(owner=None, progress=True):
     owner = service([pb(frames=300), pb(2, star_id=6, frames=900)]) if owner is None else owner
+    if not hasattr(owner, "active_route"):
+        owner.active_route = lambda: None
     boundary = Progress(owner) if progress is True else progress
     app = FastAPI()
     app.include_router(create_player_router(owner, boundary))
@@ -79,6 +81,66 @@ def test_selected_viewer_scope_and_exclusions_apply_to_both_columns():
     assert comparison['context']['scope_id'] == 'course:1' and comparison['card']['total']['delta_cs'] == 0
 
 
+@pytest.mark.parametrize("large", [False, True])
+def test_player_chips_keep_own_summary_scope_order_and_cap_but_grade_the_published_player(large):
+    identifiers = [41, 17] if not large else [41, 17, 8, 25, 3, 70, 12]
+    routes = [{"id": identifier, "name": f"Main {identifier}", "category": "Main Categories/Fixture",
+               "steps": [{"need": 1, "candidates": [{"type": "star", "course": 1, "star": 0}]}]}
+              for identifier in identifiers]
+    active = {"id": 99, "name": "Side practice", "category": "Custom/Fixture",
+              "steps": [{"need": 1, "candidates": [{"type": "star", "course": 1, "star": 0}]}]}
+    routes.insert(1, active)
+    owner = service([pb(frames=300)], routes=routes)
+    owner.active_route = lambda: active
+    http, _owner, boundary = client(owner)
+    published = project(service([pb(frames=900)]))
+    boundary.saved["content"] = published
+    boundary.saved["content_hash"] = hashlib.sha256(canonical(published)).hexdigest()
+    with http:
+        response = http.get('/api/community/players/' + UID, params={"scope": "course:1"})
+    assert response.status_code == 200, response.text
+    comparison = response.json()["comparison"]
+    expected = (["overall"] + [f"route:{identifier}" for identifier in identifiers] + ["route:99"])[:6]
+    assert [chip["scope_id"] for chip in comparison["chips"]] == expected
+    assert all(set(chip) == {"scope_id", "label", "tier", "division", "marelo", "n", "practiced"}
+               for chip in comparison["chips"])
+    # Every fixture route names this same star. The displayed summary must
+    # follow the slower published PB, never the viewer's better local PB.
+    assert all(chip["marelo"] == comparison["player_rank"]["marelo"] for chip in comparison["chips"])
+    assert comparison["chips"][0]["marelo"] != comparison["you_rank"]["marelo"]
+    assert comparison["context"]["scope_id"] == "course:1" and not boundary.effects
+
+
+def test_unbound_published_segment_leaves_familiar_chips_empty_with_the_existing_reason():
+    from sm64_events.community.progress_snapshot import public_segments
+    http, _owner, boundary = client()
+    boundary.saved["content"]["rows"][0].update(target=next(iter(public_segments().values())), clock="rta")
+    boundary.saved["content_hash"] = hashlib.sha256(canonical(boundary.saved["content"])).hexdigest()
+    with http:
+        response = http.get('/api/community/players/' + UID)
+    assert response.status_code == 200, response.text
+    comparison = response.json()["comparison"]
+    assert comparison["coverage"]["unbound_rows"] == 1
+    assert comparison["chips"] == [] and comparison["player_rank"] is None and comparison["rank_reason"]
+
+
+def test_player_chips_add_no_cloud_reads_beyond_the_existing_header_and_saved_snapshot():
+    http, _owner, boundary = client()
+    calls = []
+    original_player, original_published = boundary.player, boundary.published
+    async def header(uid):
+        calls.append("header")
+        return await original_player(uid)
+    async def saved(uid):
+        calls.append("snapshot")
+        return await original_published(uid)
+    boundary.player, boundary.published = header, saved
+    with http:
+        response = http.get('/api/community/players/' + UID)
+    assert response.status_code == 200, response.text
+    assert response.json()["comparison"]["chips"] and calls == ["header", "snapshot"]
+
+
 def test_faster_published_pb_and_slower_ghost_are_kept_separate():
     http, _owner, boundary = client()
     boundary.recording_value['recordings'] = [recording(frames=450)]
@@ -107,6 +169,7 @@ def test_partial_or_private_progress_never_presents_unknown_facts_as_zero_rank(p
         assert value['comparison'] is None and not value['progress']['published']
     else:
         assert value['comparison']['player_rank'] is None
+        assert value['comparison']['chips'] == []
     assert value['partial_reason']
 
 

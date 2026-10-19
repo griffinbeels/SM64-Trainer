@@ -6,10 +6,8 @@ import { getJSON, send } from "../api.js";
 import { useIdentityFetch } from "../refetch.js";
 import { fmtIgtShort, fmtSeconds } from "../format.js";
 import { Icon } from "./icons.js";
-import { RankIcon } from "./rankicon.js";
-import { fmtPoints } from "./marelo.js";
 import { InlineState } from "./states.js";
-import { SearchSelect } from "./searchselect.js";
+import { Breakdown, RankCard, ScopeChips } from "./rankpage.js";
 import { ReadonlyScorecard } from "./scorecard.js";
 import { RegionFlag } from "./regionflag.js";
 import { SeatPicker } from "./community-library.js";
@@ -87,34 +85,21 @@ function PlayerIdentity({ player, progress, partialReason }) {
   </section>`;
 }
 
-function RankSummary({ rank, label, reason }) {
-  return html`<div class="player-rank-summary">
-    ${rank?.tier ? html`<span class="rank-icon-slot" style="--icon-size:42px">
-      <${RankIcon} tier=${rank.tier} division=${rank.division} size=${42} /></span>` : null}
-    <div><strong>${label}</strong><p class="meta">${rank?.marelo != null
-      ? `${fmtPoints(rank.marelo)} pts · ${rank.practiced}/${rank.n} graded entries`
-      : reason || "No graded PBs in this scope."}</p></div>
-  </div>`;
-}
-
 function Comparison({ t, comparison, player, scopes, scopeId, onScope, openLibrary }) {
   const context = comparison?.context;
-  const groups = [{label:"Ranked scopes", options:(scopes || []).map(scope => ({value:scope.id,label:scope.label}))}];
-  const selected = (scopes || []).find(scope => scope.id === scopeId);
+  const rank = comparison?.player_rank;
+  const description = context ? ["Your scope and exclusions", "Saved PBs",
+    (context.regions || []).map(region => region.toUpperCase()).join(" + "),
+    context.default_rom ? `Unstamped times: ${context.default_rom.toUpperCase()}` : null].filter(Boolean).join(" · ") : null;
   return html`<section class="player-comparison" data-scope=${scopeId}>
-    <div class="practice-card player-comparison-context">
-      <span class="meta">Your comparison scope</span>
-      <${SearchSelect} title="Your comparison scope" value=${scopeId}
-        valueLabel=${selected?.label || scopeId} groups=${groups} onChange=${onScope} />
-      ${context ? html`<p class="meta">${context.label || selected?.label || scopeId}${" · "}PB basis${" · "}${(context.regions || []).map(region => region.toUpperCase()).join(" + ")}
-        ${" · "}<span title=${context.calibration_revision || ""}>Using your Trainer’s rank standards</span></p>` : null}
-      ${comparison ? html`<div class="player-rank-pair">
-        <${RankSummary} rank=${comparison.you_rank} label="Your PB rank" />
-        <${RankSummary} rank=${comparison.player_rank} label=${`${player.name} · published PB rank`} reason=${comparison.rank_reason} />
-      </div>` : html`<p class="meta">A full comparison becomes available when saved PBs are shared.</p>`}
-    </div>
+    <${ScopeChips} activeScopeId=${scopeId} onPick=${onScope} chips=${comparison?.chips || []} />
+    <${RankCard} t=${t} data=${rank} scopes=${scopes || []} scopeId=${scopeId}
+      onScope=${onScope} readOnly description=${description} className="player-comparison-context"
+      rankReason=${comparison?.rank_reason || "A full rank becomes available when saved PBs are shared."} />
     ${comparison?.card ? html`<${ReadonlyScorecard} t=${t} card=${comparison.card}
       playerName=${player.name} openLibrary=${openLibrary} />` : null}
+    ${rank ? html`<div class="practice-card"><${Breakdown} key=${scopeId} t=${t}
+      data=${rank} routeOrder=${scopeId.startsWith("route:")} readOnly /></div>` : null}
   </section>`;
 }
 

@@ -126,7 +126,10 @@ Comparison uses the viewer's selected Rank scope, exclusions, Scorecard regions,
 PB basis and effective local standards. The shared scope-row/GoalResolver/Rank
 readers accept supplied PB rows; there is no separate remote grader. Each column
 totals known cells, while differences use only comparable shared cells. A partial
-or unbindable publication does not receive a purported complete rank. Missing
+or unbindable publication does not receive a purported complete rank. `comparison.chips`
+uses the Rank summary's canonical scope order and six-chip cap, evaluated from
+the published PB rows with no additional cloud request; incomplete publications
+return an empty chip list. Missing
 local rank resources leave the header/progress readable with comparison unavailable.
 Stamped ROMs remain original evidence; unstamped times are explicitly evaluated
 under the viewer's default ROM, with publisher default-ROM provenance retained.

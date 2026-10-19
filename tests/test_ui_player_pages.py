@@ -99,6 +99,31 @@ def capture(page,name,selector=PLAYER):
     (SCREENSHOTS/name).write_bytes(page.screenshot())
 
 
+def rank_shape(page):
+    """Compare the familiar rendered Rank surface through both real entry points."""
+    return page.evaluate("const card=document.querySelector('.rank-card');return {"
+        "padding:getComputedStyle(card).padding,"
+        "mainDisplay:getComputedStyle(card.querySelector('.rank-card-main')).display,"
+        "mainGap:getComputedStyle(card.querySelector('.rank-card-main')).gap,"
+        "bands:card.querySelectorAll('.rank-band').length,"
+        "factors:card.querySelectorAll('.rank-factors > .rank-factor').length,"
+        "tiles:card.querySelectorAll('.rank-coverage .entity-tile').length,"
+        "rows:document.querySelectorAll('.rank-breakdown tbody > tr').length}")
+
+
+def own_course_rank(page,width):
+    page.click(NAV+"[title='Rank']")
+    page.wait_for(".rank-card .route-focus-control select")
+    page.evaluate("const pick=document.querySelector('.rank-card select');"
+        "pick.value='course:2';pick.dispatchEvent(new Event('change',{bubbles:true}));")
+    page.wait_for(".scorecard-card[data-scope='course:2'] .score-line")
+    page.wait_for(".rank-card .rank-ladder")
+    result = rank_shape(page)
+    assert result["bands"]==9 and result["factors"]==2 and result["tiles"]>=6
+    capture(page,f"own-rank-round1-{width}.png",".rank-card")
+    return result
+
+
 def open_search(browser, *, course=False):
     page = browser.page
     page.click(NAV+"[title='Rank']")
@@ -147,11 +172,23 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     page = browser.page
     page.set_viewport(width,1100)
     before = browser.practice()
+    own_shape = own_course_rank(page,width)
     open_search(browser,course=True)
+    capture(page,f"player-page-round1-{width}.png")
+    capture(page,f"player-rank-round1-{width}.png",".rank-card")
     assert page.evaluate("return document.querySelector('.player-comparison').dataset.scope")=="course:2"
     assert page.evaluate("return document.querySelector('.player-page').dataset.playerId")==RIVAL
     assert page.evaluate("return document.querySelector('.player-profile-header h2').textContent")==LONG_PLAYER
     assert page.count(".player-claimed")==1
+    assert rank_shape(page)==own_shape
+    assert page.count(PLAYER+" .scope-chip")>=1
+    assert page.evaluate("return document.querySelector('.rank-ladder-you').textContent")=="PLAYER"
+    assert "with published PBs" in page.evaluate("return document.querySelector('.rank-factors').textContent")
+    assert "not run yet" not in page.evaluate("return document.querySelector('.rank-factors').textContent")
+    assert page.evaluate("return Array.from(document.querySelectorAll('.rank-breakdown .unpracticed .rank-cell-next')).every(cell=>cell.textContent==='no published PB')")
+    assert page.count(PLAYER+" .rank-coverage .entity-tile:not(.is-static),"+PLAYER+" .rank-coverage .editicon")==0
+    assert page.count(PLAYER+" .rank-breakdown tbody button.chip")==0
+    assert "Ignore" not in page.evaluate("return document.querySelector('.rank-breakdown').textContent")
     assert page.count(".player-scorecard .score-line")==6
     assert page.count(".player-scorecard .score-row-remove,.player-scorecard .score-detail-goal-btn,.player-scorecard .good,.player-scorecard .bad")==0
     assert '11"00 saved PB in this comparison' in page.evaluate("return document.querySelector('.player-ghosts').textContent")
@@ -159,8 +196,7 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     assert_rendered_log(browser,"player_page",lambda entry: entry["title"]==LONG_PLAYER and any(
         row.get("name")=="Fall onto the Caged Island" and row.get("time")=='12"00'
         and row.get("player")=='11"00' and row.get("delta")=="+1.00" for row in entry.get("rows",[])))
-    capture(page,f"player-page-{width}.png")
-    capture(page,f"player-ghosts-{width}.png",".player-ghosts")
+    capture(page,f"player-ghosts-round1-{width}.png",".player-ghosts")
     assert page.evaluate("const root=document.querySelector('.player-page');return root.scrollWidth<=root.clientWidth+1")
     page.click(".player-ghost-row button")
     page.wait_ms(150)
