@@ -935,6 +935,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     app.include_router(create_community_router(community_account))
     _mount_controls(app, poller, replay)
     _mount_diagnostics(app, poller, broadcaster, service, monitor)
+    from sm64_events.server.reporting_api import create_reporting_router
+    app.include_router(create_reporting_router())
     _mount_events(app, poller, broadcaster, debug_hooks)
     from sm64_events.server.local_access import mount_local_access
     mount_local_access(app, port=local_port or server_port(), protected=protect_local_api)

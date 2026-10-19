@@ -2,6 +2,9 @@
 // Failures surface the server's `detail` message (the api.py error
 // taxonomy: "name is required", "unknown trigger type…") — a bare
 // "409" hides the explanation the server already wrote.
+let failureReporter = null;
+export function setApiFailureReporter(reporter) { failureReporter = reporter; }
+
 async function httpError(url, r) {
   let detail = null;
   try { detail = (await r.json()).detail; } catch { /* non-JSON body */ }
@@ -13,6 +16,9 @@ async function httpError(url, r) {
   // must NOT throw away the user's selection. The message alone can't
   // distinguish them, so carry the status.
   err.status = r.status;
+  if (r.status >= 500 && !url.startsWith("/api/diagnostics/") && failureReporter) {
+    try { failureReporter(err, "api-failure"); } catch { /* diagnostics never change a request */ }
+  }
   return err;
 }
 let localAccess = null;

@@ -34,7 +34,7 @@ SEP = ";" if os.name == "nt" else ":"
 # analysis finds neither — without collecting it the shipped exe silently
 # falls back to device-wide loopback (i.e. records the whole desktop).
 COLLECT = ["av", "proctap", "pyaudiowpatch", "pycaw",
-           "comtypes", "pymem", "webview", "pystray", "numpy", "yt_dlp"]
+           "comtypes", "pymem", "webview", "pystray", "numpy", "yt_dlp", "sentry_sdk"]
 
 
 def needs_reexec(environ) -> bool:
@@ -53,6 +53,7 @@ def _source_date_epoch() -> str:
 
 def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
              metadata_path: "Path | None" = None,
+             reporting_path: "Path | None" = None,
              version_hook: "Path | None" = None,
              version_metadata: "Path | None" = None,
              distpath: "Path | None" = None, workpath: "Path | None" = None,
@@ -144,6 +145,7 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
         argv += ["--add-binary", f"{ffmpeg}{SEP}."]
     if metadata_path is not None:
         argv += ["--add-data", f"{metadata_path}{SEP}."]
+    argv += ["--add-data", f"{reporting_path or DATA_DIR / 'error-reporting.json'}{SEP}."]
     if version_hook is not None:
         argv += ["--runtime-hook", str(version_hook)]
     if version_metadata is not None:
@@ -221,6 +223,16 @@ def stage_version(work: Path, version: str) -> tuple[Path, Path]:
     return hook, metadata
 
 
+def stage_reporting(work: Path) -> Path:
+    """Embed only the public ingest DSN; an unset DSN makes reports inert."""
+    from sm64_events.core.reporting_setup import CONFIG_FILE, validate_dsn
+    dsn = validate_dsn(os.environ.get("SM64_SENTRY_DSN", ""))
+    work.mkdir(parents=True, exist_ok=True)
+    output = work / CONFIG_FILE
+    output.write_text(json.dumps({"schema": 1, "dsn": dsn}) + "\n", encoding="utf-8")
+    return output
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["app", "bootstrap", "all"],
@@ -276,7 +288,7 @@ def main() -> int:
         metadata.write_text(json.dumps(build.metadata(), sort_keys=True) + "\n", encoding="utf-8")
         from sm64_events.core.version import __version__
         hook, version_metadata = stage_version(work, args.version or __version__)
-        pyi.run(app_args(ffmpeg, metadata_path=metadata, version_hook=hook,
+        pyi.run(app_args(ffmpeg, metadata_path=metadata, reporting_path=stage_reporting(work), version_hook=hook,
                          version_metadata=version_metadata, distpath=args.distpath,
                          workpath=work / "app", specpath=work / "spec"))
         print("\nBuilt:", REPO / "dist" / "SM64Trainer")

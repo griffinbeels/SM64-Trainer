@@ -19,6 +19,7 @@ import { StreamOverlayDesigner } from "./streamoverlay.js";
 import { EMU, N64 } from "../platform.js";
 import { CommunityAccountModal } from "./communityaccount.js";
 import { useCommunityAccount } from "../community.js";
+import { ReportingSettings } from "./reporting.js";
 
 const html = htm.bind(h);
 
@@ -368,6 +369,8 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
           ${t.updateMsg && html`<p class="settings-note">${t.updateMsg}</p>`}
           ${reportMsg && html`<p class="settings-note">${reportMsg}</p>`}
         </section>
+
+        <${ReportingSettings} />
 
         <section class="settings-section">
           <h3>Updates</h3>

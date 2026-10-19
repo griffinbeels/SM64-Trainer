@@ -24,7 +24,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_FILENAME,
                                            read_metadata)  # noqa: E402
-from build_exe import COLLECT, SEP, _source_date_epoch, app_args, needs_reexec  # noqa: E402
+from build_exe import COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, stage_reporting  # noqa: E402
 from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
                          candidate_author, seed_descriptor)  # noqa: E402
@@ -95,7 +95,7 @@ def check_prerequisites(ffmpeg: str | None) -> str:
 
 def beta_args(ffmpeg: str, metadata_path: Path, *, dist: Path = DIST,
               work: Path = WORK) -> list[str]:
-    return app_args(ffmpeg, name=BETA_APP_DIR, metadata_path=metadata_path,
+    return app_args(ffmpeg, name=BETA_APP_DIR, metadata_path=metadata_path, reporting_path=stage_reporting(work),
                     distpath=dist, workpath=work / "pyinstaller", specpath=work / "spec")
 
 

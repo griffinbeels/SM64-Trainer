@@ -520,6 +520,8 @@ def _build_follower(running, inputs, replay, service):
 
 
 def build(*, recorder_lock=None):
+    from sm64_events.core.reporting_setup import initialize_reporting
+    initialize_reporting()
     configure_logging()
     migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
     # Capture threads contend with encode/server threads for the GIL; the
@@ -688,6 +690,8 @@ def run(*, recorder_lock=None) -> None:
     30 s = drain wedged; neither = a new layer, instrument before fixing.
     """
     import os
+    from sm64_events.core.reporting_setup import initialize_reporting
+    initialize_reporting()
     _build_stale_natives()
     if os.environ.pop("SM64_RESTART", None):
         # A restart relaunch: the old process is exiting — wait for the
