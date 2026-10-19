@@ -1,6 +1,6 @@
 #define GBDLL_BUILD
 #include "gpu_encoder_dll.h"
-#include "gpu_bridge_encoder.h"
+#include "gpu_platform_encoder.h"
 #include "gpu_encoder_lease.h"
 #include "gpu_encoder_open_receipt.h"
 #include <new>
@@ -36,7 +36,7 @@ struct Session {
  uint64_t token=0;DWORD owner=0;LUID adapter{};gbdll_state state=GBDLL_OPEN;
  uint32_t failure=GBDLL_OK;HRESULT hr=S_OK;uint64_t timeouts=0,last_pts=0;bool have_pts=false;
  Microsoft::WRL::ComPtr<ID3D11Device> device;Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
- Slot slots[GBDLL_SLOTS];BridgeEncoder encoder;
+ Slot slots[GBDLL_SLOTS];PlatformEncoder encoder;
 };
 Session*session=nullptr;uint64_t next_token=1;bool poisoned=false;
 uint32_t quarantine(Session&s,uint32_t failure,HRESULT hr) {

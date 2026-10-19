@@ -49,8 +49,8 @@ RUNTIME_SOURCES = (
 )
 # The encoder helper: a 64-bit DLL loaded by the isolated helper process,
 # never by Project64. Its NVENC header is the vendored nvEncodeAPI.h.
-ENCODER_SOURCES = ("gpu_encoder_dll", "gpu_bridge_encoder")
-ENCODER_LIBS = ["d3d11.lib", "dxgi.lib"]
+ENCODER_SOURCES = ("gpu_encoder_dll", "gpu_platform_encoder", "gpu_bridge_encoder", "gpu_mf_encoder")
+ENCODER_LIBS = ["d3d11.lib", "dxgi.lib", "mfplat.lib", "mfuuid.lib", "mf.lib", "ole32.lib", "oleaut32.lib"]
 
 
 def find_vcvars32() -> Path | None:
