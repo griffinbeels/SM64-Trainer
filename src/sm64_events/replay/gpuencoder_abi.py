@@ -49,12 +49,14 @@ class Options(C.Structure):
         # GBENC_CODEC_H264 is 0 deliberately: a caller that predates AV1 sends
         # a zeroed word and still gets H.264, and an encoder that predates AV1
         # refuses a nonzero one loudly instead of encoding the wrong codec.
-        + [("codec", U), ("reserved", U * 4)]
+        + [("codec", U), ("backend", U), ("backend_quality", U), ("reserved", U * 2)]
     )
 
 
 CODEC_H264 = 0
 CODEC_AV1 = 1
+BACKEND_NVENC = 0
+BACKEND_WINDOWS = 1
 # libav stream name per native codec; the one place the two vocabularies meet.
 CODEC_STREAM_NAMES = {CODEC_H264: "h264", CODEC_AV1: "av1"}
 
