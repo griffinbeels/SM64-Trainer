@@ -495,6 +495,9 @@ def test_an_adapter_that_cannot_encode_keeps_the_desktop_without_a_retry(monkeyp
     """Today's cost without it: a GPU attempt every 10-60 s, forever, and no
     replay at all. Now: one attempt, no cooldown armed, the desktop grab."""
     monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: SOFTWARE)
+    reports = []
+    monkeypatch.setattr("sm64_events.core.error_reporting.capture_problem",
+                        lambda message, **kwargs: reports.append((message, kwargs)))
     channel = NS(header=NS(luid_high=ONE[0], luid_low=ONE[1]), close=lambda: None)
     factory, win, gpu, desktops = factory_and_first_capture(monkeypatch, lambda owner, demand: CaptureSession(
         owner, demand, channel_factory=lambda **_: channel,
@@ -507,6 +510,9 @@ def test_an_adapter_that_cannot_encode_keeps_the_desktop_without_a_retry(monkeyp
     assert camera.frame_source == "desktop" and desktops == [win]
     assert "software adapter" in camera.gpu_unsupported
     assert camera.gpu_unsupported in camera.frame_source_note
+    assert len(reports) == 1
+    assert reports[0][0] == "Practice Replay GPU recording unavailable"
+    assert reports[0][1]["context"]["reason"] == camera.gpu_unsupported
 
 
 def test_a_transient_failure_still_retries_the_gpu_route(monkeypatch):

@@ -1,7 +1,7 @@
 # Renderer GPU recording
 
 The recorder connects the renderer boundary to the GPU delivery worker, an
-isolated NVIDIA encoder, and the existing input/audio/fragment system. It is
+isolated hardware encoder, and the existing input/audio/fragment system. It is
 the one shipped capture path (the legacy ReadScreen/frame-stream path was
 deleted on 2026-09-16 at his decision); without the installed layer the
 recorder photographs the desktop with no stamps. Griffin accepted the
@@ -57,13 +57,58 @@ Component contracts live beside this page:
   inside one 8x8 cell can hold the previous picture; removing the sample needs
   renderer-certified picture identity (rounds 39, 48).
 
+## Hardware backends and qualification
+
+Capture, immutable picture/input stamps, selection, D3D11 texture transport,
+bounded ownership, helper isolation, audio, fragments and review remain shared.
+`gpu_platform_encoder` selects the backend explicitly for the renderer's actual
+adapter LUID. NVIDIA keeps the existing NVENC implementation and settings.
+AMD and Intel use the Windows Media Foundation hardware encoder with D3D11
+surface input. Its video processor converts RGBA/BGRA to NV12 on the GPU;
+retained repeats reuse that surface after tracked input-sample release. No full
+picture passes through Python or a CPU readback/upload in this native route.
+
+The original occurrence, 90 kHz PTS and duration must match the completed
+packet before delivery. Codec availability is asked of that device: AV1 first,
+then H.264 after a typed codec refusal. Real faults never masquerade as a codec
+fallback. NVIDIA tuning and Windows quality are separate policies owned by
+`replay/config.py`; equal numeric quality settings would not establish parity.
+Backend identity survives the media run and saved sidecar, including ghost
+copies, so portable AV1 does not inherit the NVIDIA archive-quality shortcut.
+Saved compression also probes AMF/QSV hardware routes, keeping the existing
+picture, timing, audio and visual interchangeability proof before replacement.
+
+Windows media components are optional dependencies of the helper. Their absence
+refuses only the Windows backend; delay loading preserves NVIDIA helper loading
+on Windows editions without the Media Feature Pack. Pre-channel GL prerequisite
+failures have explicit append-only reasons10028–10033 rather than a startup
+timeout. Required OpenGL external-memory/keyed-mutex support is still checked;
+a vendor name alone neither proves nor disproves that support.
+
+Local evidence on 2026-10-19: actual AMD D3D11 textures through the production
+DLL passed independent picture/color decoding, irregular PTS (including adjacent
+ticks), retained generation/serial, keyframes and shared-key cleanup. The local
+AMD cannot encode AV1; its typed refusal selected H.264. AMD archive output
+passed every-slot Chromium seeking. Intel native code is implemented but has no
+available device qualification here. Full AMD renderer/OpenGL transport and
+gameplay pacing remain unqualified: this hybrid's AMD displays are disconnected
+and isolated OpenGL selection probes remained on NVIDIA. A NVIDIA GL context
+cannot stand in for AMD evidence; the hardware witness rejects the wrong vendor.
+Desktop fallback is availability only and does not establish optimized parity.
+
+The preserved old/new NVIDIA helper comparison used the same executable, options
+and 1600x1200 fixtures in ABBA order,180 timed pictures after20 warmup. AV1 median
+times were15.5649ms for both; H.26415.5911ms old versus15.5818ms new. Packet counts
+and encoded byte totals matched in all runs. This is helper-only synthetic
+evidence of no measured regression, not a new whole-game performance guarantee.
+
 ## Shipped files and how they are built
 
 | File | Role | Built by | Build id suffix |
 |---|---|---|---|
 | `GLideN64_SM64Trainer.dll` (label `LINK v4.2 [SM64 Trainer]`) | the renderer: LINK's GLideN64 v4.2 at the pinned commit plus the SourceV2/ContextV1 overlay from `plugin/gfxwrap/` | `tools/build_renderer.py` (pin, credits and the prebuilt-library recipe in `renderer/`) | `-renderer` |
 | `sm64_trainer_gfx.dll` (label `SM64 Trainer v1.0`) | the capture wrapper Project64 selects; loads the renderer named by `sm64_trainer_gfx.ini` | `tools/build_plugin.py` | `-gpu-runtime` |
-| `SM64GpuEncoderV1.dll` | the 64-bit NVENC helper the server's isolated encoder process loads | `tools/build_plugin.py` | `-gpu-encoder` |
+| `SM64GpuEncoderV1.dll` | the 64-bit hardware helper: unchanged NVENC plus shared Windows D3D11/MF encoding | `tools/build_plugin.py` | `-gpu-encoder` |
 
 All three are build outputs in `src/sm64_events/data/plugin/`, which git
 ignores, and are packaged by `tools/build_exe.py`. Each carries an embedded

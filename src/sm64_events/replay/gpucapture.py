@@ -224,6 +224,12 @@ class GpuCapture:
             if self.retry_gate is not None:
                 self.retry_gate.unsupported(self.producer_identity, self.unsupported)
             log.warning("GPU recording unavailable for this Project64: %s", self.unsupported)
+            from sm64_events.core.error_reporting import capture_problem
+
+            capture_problem("Practice Replay GPU recording unavailable", context={
+                "component": "gpu_recording", "operation": "startup",
+                "reason": self.unsupported,
+            })
         except Exception as exc:
             self._failed(exc)
             log.exception("GPU recording stopped")

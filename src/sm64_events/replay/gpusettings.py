@@ -16,11 +16,11 @@ log = logging.getLogger("sm64.replay")
 # WHICH CODEC THE RECORDER WRITES, per graphics adapter, and the one owner of
 # that question. AV1 is worth 32% of H.264's bytes at equal quality and encodes
 # FASTER (measured 2026-09-20), so Save publishes already-small bytes and the
-# compression pass never runs for that replay -- but only RTX 40-series and
-# newer have an AV1 encoder at all.
+# compression pass never runs for that NVIDIA replay. Other backends negotiate
+# their own AV1 availability and retain their independent archive-quality policy.
 #
 # The answer is not guessed from a model name and not borrowed from ffmpeg's
-# NVENC: it is asked of the exact adapter, through the exact encoder the
+# codec listing: it is asked of the exact adapter, through the exact encoder the
 # recorder will use, by opening an AV1 session. An adapter without one refuses
 # by codec (`Result.CODEC`), which is typed apart from every real fault, and
 # the refusal is remembered so the extra open happens once per adapter per
