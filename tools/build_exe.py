@@ -224,7 +224,7 @@ def stage_version(work: Path, version: str) -> tuple[Path, Path]:
 
 
 def stage_reporting(work: Path) -> Path:
-    """Embed only the public ingest DSN; an unset DSN makes reports inert."""
+    """Embed the public destination, with an explicit environment override."""
     from sm64_events.core.reporting_setup import CONFIG_FILE, read_config_dsn, validate_dsn
     override = os.environ.get("SM64_SENTRY_DSN")
     dsn = read_config_dsn(DATA_DIR / CONFIG_FILE) if override is None else validate_dsn(override)

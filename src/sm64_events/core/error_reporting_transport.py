@@ -83,6 +83,17 @@ def _signature(event: dict) -> str:
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
+def _event_envelope(event: dict) -> Envelope:
+    """Keep SDK identity in the envelope header so retries retain one event ID.
+
+    Relay assigns an identity when the header omits it, even if the JSON event
+    contains its own ID. A scrubbed rebuild must preserve this wire contract.
+    """
+    envelope = Envelope(headers={"event_id": event["event_id"]} if event.get("event_id") else {})
+    envelope.add_event(event)
+    return envelope
+
+
 class PersistentTransport(Transport):
     """Never wait for network or disk on the calling practice thread."""
 
@@ -129,8 +140,7 @@ class PersistentTransport(Transport):
                 event = Envelope.deserialize(payload).get_event()
                 if not event:
                     raise ValueError("Not an error event")
-                envelope = Envelope()
-                envelope.add_event(safe_event(event))
+                envelope = _event_envelope(safe_event(event))
                 self.pending[path.name] = envelope.serialize()
                 total += len(payload)
             except (OSError, ValueError, TypeError, KeyError):
@@ -160,8 +170,7 @@ class PersistentTransport(Transport):
             if not event:
                 return
             safe = safe_event(event)
-            output = Envelope()
-            output.add_event(safe)
+            output = _event_envelope(safe)
             payload = output.serialize()
             with self.lock:
                 if not self.enabled or self.stopping.is_set():

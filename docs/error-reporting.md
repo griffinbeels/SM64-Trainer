@@ -42,7 +42,12 @@ Background plugin refresh never prompts for administrator permission.
 
 Synthetic transport tests establish capture, scrubbing, queue/retry and opt-out.
 Offline browser tests establish Settings and the continuous Installing state.
-Installer tests use scratch files and controlled native boundaries. Production
-delivery still needs a configured Sentry project and an observed inbox event.
+Installer tests use scratch files and controlled native boundaries. The opt-in
+`tests/test_sentry_live_reporting.py` exercises normal startup and the real failed
+installation API with isolated fixture data. On 2026-10-19 its error was observed
+in Sentry with readable Python filenames, functions and line numbers; event identity
+was verified through ingestion and is retained across queue/retry. Normal test runs
+skip this live check unless `SM64_SENTRY_LIVE_VERIFY=1` is explicitly set.
+Packaged field delivery still requires verification against the distributed build.
 A real UAC prompt and affected-tester installation must be verified on an authorized
 interactive run; injected helper success is not that evidence.

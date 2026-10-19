@@ -39,6 +39,30 @@ def read_events(tmp_path):
     return [Envelope.deserialize(path.read_bytes()).get_event() for path in tmp_path.glob("*.envelope")]
 
 
+def test_event_identity_survives_scrubbing_persistence_and_retry(tmp_path):
+    configure(tmp_path)
+    expected = reporting.capture_problem("Synthetic stable delivery identity")
+    wait_for(lambda: len(list(tmp_path.glob("*.envelope"))) == 1)
+    path = next(tmp_path.glob("*.envelope"))
+    envelope = Envelope.deserialize(path.read_bytes())
+    assert envelope.headers["event_id"] == expected
+    assert envelope.get_event()["event_id"] == expected
+    reporting.shutdown()
+    sent = []
+
+    def retry_delivery(payload):
+        sent.append(Envelope.deserialize(payload))
+        return False, 0
+
+    transport = PersistentTransport({"dsn": DSN}, tmp_path, delivery=retry_delivery)
+    try:
+        wait_for(lambda: len(sent) == 1)
+        assert sent[0].headers["event_id"] == expected
+        assert sent[0].get_event()["event_id"] == expected
+    finally:
+        transport.kill()
+
+
 def test_caught_exception_keeps_type_stack_build_and_real_error_number(tmp_path):
     configure(tmp_path)
     try:
