@@ -1,7 +1,9 @@
 """Frozen self-check contracts; disposable files, no packaged app or workers."""
 import builtins
+import certifi
 from dataclasses import replace
 import json
+from pathlib import Path
 import struct
 import sys
 from types import SimpleNamespace
@@ -24,7 +26,7 @@ def pe(machine, *, dll):
 
 
 @pytest.fixture
-def runtime(tmp_path):
+def runtime(tmp_path, monkeypatch):
     build = BuildChannel(**{key: value for key, value in metadata().items() if key != "schema"})
     bundle = tmp_path / "bundle"
     bundle.mkdir()
@@ -33,6 +35,11 @@ def runtime(tmp_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"disposable asset")
     (bundle / "build-channel.json").write_text(json.dumps(build.metadata()), encoding="utf-8")
+    (bundle / probe.REPORTING_CONFIG).write_text(json.dumps({"schema": 1, "dsn": ""}), encoding="utf-8")
+    ca = bundle / "certifi" / "cacert.pem"
+    ca.parent.mkdir()
+    ca.write_bytes(Path(certifi.where()).read_bytes())
+    monkeypatch.setattr(certifi, "where", lambda: str(ca))
     for name, machine in probe._NATIVES:
         path = bundle / "sm64_events/data/plugin" / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +61,8 @@ def runtime(tmp_path):
 
 
 def importer(name):
+    if name == "certifi":
+        return certifi
     return SimpleNamespace(**{member: lambda: None for module, members in probe._IMPORTS
                               if module == name for member in members})
 
@@ -95,6 +104,89 @@ def test_normal_beta_verifies_every_asset_native_import_and_shared_runtime_ident
     assert all("native:" + name in checked for name, _ in probe._NATIVES)
     assert all("import:" + name in checked for name, _ in probe._IMPORTS)
     assert not normal_runtime.local_appdata.exists()
+
+
+@pytest.mark.parametrize("identity", ["runtime", "normal_runtime"])
+@pytest.mark.parametrize("dsn", ["", "https://public@o123.ingest.us.sentry.io/42"])
+def test_probe_accepts_explicit_enabled_and_disabled_reporting_without_echoing_destination(identity, dsn, request):
+    runtime = request.getfixturevalue(identity)
+    (runtime.bundle / probe.REPORTING_CONFIG).write_text(json.dumps({"schema": 1, "dsn": dsn}))
+    report = probe.collect_report(fixture=runtime, importer=importer)
+    assert report["ok"]
+    checked = {check["name"] for check in report["checks"] if check["ok"]}
+    assert {"reporting_configuration", "reporting_tls", "import:sentry_sdk"} <= checked
+    if dsn:
+        assert dsn not in json.dumps(report)
+
+
+@pytest.mark.parametrize("identity", ["runtime", "normal_runtime"])
+@pytest.mark.parametrize("fault", ["missing", "json", "schema", "destination", "extra"])
+def test_probe_rejects_missing_or_invalid_reporting_configuration(identity, fault, request):
+    runtime = request.getfixturevalue(identity)
+    config = runtime.bundle / probe.REPORTING_CONFIG
+    if fault == "missing":
+        config.unlink()
+    else:
+        config.write_text({"json": "not-json", "schema": '{"schema":true,"dsn":""}',
+                           "destination": '{"schema":1,"dsn":"private-invalid-destination"}',
+                           "extra": '{"schema":1,"dsn":"","extra":"private-setting"}'}[fault])
+    report = probe.collect_report(fixture=runtime, importer=importer)
+    assert not report["ok"]
+    assert {"name": "reporting_configuration", "ok": False} in report["checks"]
+    assert "private-" not in json.dumps(report)
+    assert not runtime.local_appdata.exists()
+
+
+@pytest.mark.parametrize("fault", ["missing-sdk", "missing-api", "missing-transport"])
+def test_probe_rejects_missing_reporting_sdk_or_entrypoints(runtime, fault):
+    def load(name):
+        if fault == "missing-sdk" and name == "sentry_sdk":
+            raise ImportError("private-import-details")
+        if fault == "missing-api" and name == "sentry_sdk":
+            return SimpleNamespace()
+        if fault == "missing-transport" and name == "sm64_events.core.error_reporting_transport":
+            raise ImportError("private-import-details")
+        return importer(name)
+    report = probe.collect_report(fixture=runtime, importer=load)
+    assert not report["ok"]
+    assert "private-import-details" not in json.dumps(report)
+    assert not runtime.local_appdata.exists()
+
+
+@pytest.mark.parametrize("fault", ["missing", "corrupt", "outside-bundle"])
+def test_probe_requires_usable_bundled_certificate_authorities(runtime, monkeypatch, tmp_path, fault):
+    ca = Path(certifi.where())
+    if fault == "missing":
+        ca.unlink()
+    elif fault == "corrupt":
+        ca.write_text("not a certificate")
+    else:
+        external = tmp_path / "outside.pem"
+        external.write_bytes(ca.read_bytes())
+        monkeypatch.setattr(certifi, "where", lambda: str(external))
+    report = probe.collect_report(fixture=runtime, importer=importer)
+    assert not report["ok"]
+    assert {"name": "reporting_tls", "ok": False} in report["checks"]
+    assert not runtime.local_appdata.exists()
+
+
+def test_actual_reporting_dependency_check_never_initializes_or_sends(runtime, monkeypatch):
+    import importlib
+    import sentry_sdk
+    from sm64_events.core import error_reporting, error_reporting_transport, reporting_setup
+    def forbidden(*args, **kwargs):
+        pytest.fail("The read-only self-check initialized reporting or attempted delivery")
+    monkeypatch.setattr(sentry_sdk, "init", forbidden)
+    monkeypatch.setattr(reporting_setup, "initialize_reporting", forbidden)
+    monkeypatch.setattr(error_reporting, "configure", forbidden)
+    monkeypatch.setattr(error_reporting_transport.Delivery, "__call__", forbidden)
+    def load(name):
+        if name == "sentry_sdk" or name.startswith("sm64_events.core.error_reporting"):
+            return importlib.import_module(name)
+        return importer(name)
+    report = probe.collect_report(fixture=runtime, importer=load)
+    assert report["ok"]
+    assert not runtime.local_appdata.exists()
 
 
 @pytest.mark.parametrize("fault", ["legacy_exe", "legacy_profile", "legacy_port", "disabled_updates"])

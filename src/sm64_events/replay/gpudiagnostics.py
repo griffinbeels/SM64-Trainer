@@ -27,6 +27,23 @@ _DELIVERY = dict(enumerate((
     "capture layer predates ghost copies",
 ), 10000))
 
+# Appended native delivery reasons remain readable before a picture channel
+# exists. Generic GL errors stay transient; only positive missing capabilities
+# establish this process cannot use the installed transport.
+_GL_UNSUPPORTED = {
+    10028: "OpenGL 4.5 is required for GPU recording",
+    10029: "GPU recording needs GL_EXT_memory_object",
+    10030: "GPU recording needs GL_EXT_memory_object_win32",
+    10031: "GPU recording needs GL_EXT_win32_keyed_mutex",
+    10032: "a required GPU recording OpenGL entry point is unavailable",
+    10033: "a required GPU snapshot OpenGL entry point is unavailable",
+}
+_DELIVERY.update(_GL_UNSUPPORTED)
+
+
+def unsupported_capture_reason(reason):
+    return _GL_UNSUPPORTED.get(reason)
+
 
 def native_reason(reason, *, channel=False):
     """Decode only known namespaces; channel Result 6 is not control reason 6."""

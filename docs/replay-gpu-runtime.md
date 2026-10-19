@@ -1,7 +1,7 @@
 # Renderer GPU recording
 
 The recorder connects the renderer boundary to the GPU delivery worker, an
-isolated NVIDIA encoder, and the existing input/audio/fragment system. It is
+isolated hardware encoder, and the existing input/audio/fragment system. It is
 the one shipped capture path (the legacy ReadScreen/frame-stream path was
 deleted on 2026-09-16 at his decision); without the installed layer the
 recorder photographs the desktop with no stamps. Griffin accepted the
@@ -57,13 +57,71 @@ Component contracts live beside this page:
   inside one 8x8 cell can hold the previous picture; removing the sample needs
   renderer-certified picture identity (rounds 39, 48).
 
+## Hardware backends and qualification
+
+Capture, immutable picture/input stamps, selection, D3D11 texture transport,
+bounded ownership, helper isolation, audio, fragments and review remain shared.
+`gpu_platform_encoder` selects the backend explicitly for the renderer's actual
+adapter LUID. NVIDIA keeps the existing NVENC implementation and settings.
+AMD and Intel use the Windows Media Foundation hardware encoder with D3D11
+surface input. Its video processor converts RGBA/BGRA to NV12 on the GPU;
+retained repeats reuse that surface after tracked input-sample release. No full
+picture passes through Python or a CPU readback/upload in this native route.
+
+The original occurrence, 90 kHz PTS and duration must match the completed
+packet before delivery. Codec availability is asked of that device: AV1 first,
+then H.264 after a typed codec refusal. Real faults never masquerade as a codec
+fallback. NVIDIA tuning and Windows quality are separate policies owned by
+`replay/config.py`; equal numeric quality settings would not establish parity.
+Backend identity survives the media run and saved sidecar, including ghost
+copies, so portable AV1 does not inherit the NVIDIA archive-quality shortcut.
+Saved compression also probes AMF/QSV hardware routes, keeping the existing
+picture, timing, audio and visual interchangeability proof before replacement.
+
+Windows media components are optional dependencies of the helper. Their absence
+refuses only the Windows backend; delay loading preserves NVIDIA helper loading
+on Windows editions without the Media Feature Pack. Pre-channel GL prerequisite
+failures have explicit append-only reasons10028–10033 rather than a startup
+timeout. Required OpenGL external-memory/keyed-mutex support is still checked;
+a vendor name alone neither proves nor disproves that support.
+
+The Windows media type has its own positive bitrate negotiation hint; quality
+mode and NVIDIA rate-control fields remain separate. Output handling accepts
+bounded event-only output and compatible configuration negotiation without
+submitting a second input occurrence. H.264 parameter sets and AV1 sequence
+OBUs make random-access packets self-describing. The first actual H.264 packet
+can supersede provisional advertised headers; after publication the effective
+configuration stays pinned. Unsupported av1C configuration is refused by codec
+before input. Malformed packets, incompatible format
+changes, wrong timestamps or unreleased input never count as delivered pictures.
+
+Local evidence on 2026-10-19: actual AMD D3D11 textures through the production
+DLL passed independent picture/color decoding, irregular PTS (including adjacent
+ticks), retained generation/serial, keyframes and shared-key cleanup. The local
+AMD cannot encode AV1; its typed refusal selected H.264. AMD archive output
+passed every-slot Chromium seeking. Intel native code is implemented but has no
+available device qualification here. Full AMD renderer/OpenGL transport and
+gameplay pacing remain unqualified: this hybrid's AMD displays are disconnected
+and isolated OpenGL selection probes remained on NVIDIA. A NVIDIA GL context
+cannot stand in for AMD evidence; the hardware witness rejects the wrong vendor.
+Desktop fallback is availability only and does not establish optimized parity.
+
+The final review's old/new NVIDIA helper comparison used the same executable,
+options and 1600x1200 fixtures in ABBA order, 180 timed pictures after 20 warmup.
+Mean paired-run medians were 15.628625 ms old/15.578275 ms new for AV1 (-0.32%)
+and 15.559175 ms old/15.593975 ms new for H.264 (+0.22%). All runs matched 200
+packets, 187 source copies, 13 repeats and encoded byte totals. These helper-only
+synthetic measurements stayed within 0.4%; they establish neither statistical
+equivalence nor a new whole-game performance guarantee. The preceding bundle's
+comparison (+0.92% AV1/-0.31% H.264) remains preserved as historical evidence.
+
 ## Shipped files and how they are built
 
 | File | Role | Built by | Build id suffix |
 |---|---|---|---|
 | `GLideN64_SM64Trainer.dll` (label `LINK v4.2 [SM64 Trainer]`) | the renderer: LINK's GLideN64 v4.2 at the pinned commit plus the SourceV2/ContextV1 overlay from `plugin/gfxwrap/` | `tools/build_renderer.py` (pin, credits and the prebuilt-library recipe in `renderer/`) | `-renderer` |
 | `sm64_trainer_gfx.dll` (label `SM64 Trainer v1.0`) | the capture wrapper Project64 selects; loads the renderer named by `sm64_trainer_gfx.ini` | `tools/build_plugin.py` | `-gpu-runtime` |
-| `SM64GpuEncoderV1.dll` | the 64-bit NVENC helper the server's isolated encoder process loads | `tools/build_plugin.py` | `-gpu-encoder` |
+| `SM64GpuEncoderV1.dll` | the 64-bit hardware helper: unchanged NVENC plus shared Windows D3D11/MF encoding | `tools/build_plugin.py` | `-gpu-encoder` |
 
 All three are build outputs in `src/sm64_events/data/plugin/`, which git
 ignores, and are packaged by `tools/build_exe.py`. Each carries an embedded
@@ -121,7 +179,12 @@ the UI which case it is, and onboarding never reopens for an automatic update.
 ## Owners and data flow
 
 `SourceFactory` is called only after `ReplayRecorder` acquires the machine-wide
-recorder lock. GPU discovery reads the small control page. The paired
+recorder lock. GPU discovery reads the small control page. After a live matching
+GPU-capable producer is registered with the retry gate, it checks the machine's
+complete DXGI adapter inventory. If every adapter is definitely unsupported,
+the same source-selection call keeps the desktop grab before creating GPU
+demand, waiting for a channel or starting a helper. A capability bit describes
+the wrapper's route; it does not prove the hardware can deliver it. The paired
 `GpuCapture`/`GpuSink` shares one capture coordinator and one bounded media sink;
 it starts no second encoder. Existing recordings and fragment readers keep
 their existing format and exact source-key lookup.
@@ -130,7 +193,7 @@ their existing format and exact source-key lookup.
 flowchart LR
   R[Renderer: picture plus input stamp] --> S[Bounded GPU snapshot]
   S --> G[GPU delivery worker]
-  G --> E[Isolated NVENC helper]
+  G --> E[Isolated hardware encoder helper]
   G --> M[Small sample and exact stamp]
   E --> P[Compressed packet]
   M --> A[Existing selector: sample and exact stamps]
@@ -269,8 +332,8 @@ the next offers. Startup cannot fill a source queue with cold codec construction
 
 Helper Open also settles WHICH CODEC this adapter records in. The session asks
 for AV1 first — 32% of H.264's bytes at equal quality and faster to encode
-(measured 2026-09-20) — and the encoder checks `nvEncGetEncodeGUIDs` before it
-configures anything. An adapter without an AV1 encoder answers `GBDLL_CODEC`,
+(measured on NVIDIA, 2026-09-20). NVENC checks `nvEncGetEncodeGUIDs`; the Windows
+backend enumerates the actual adapter's hardware MFTs. An adapter without an AV1 encoder answers `GBDLL_CODEC`,
 typed apart from every real fault, and the session asks the SAME helper for
 H.264 inside the same startup budget; `gpusettings.py` remembers the refusal
 per adapter LUID, so only the first capture of a launch pays the extra round
@@ -285,13 +348,29 @@ The lease supervisor allows five seconds from admitted request to ACTIVE. Helper
 Open uses its startup budget; ordinary native requests use the shorter call
 deadline. An unavailable backend ends the request explicitly. An adapter that
 can never open the encoder is a verdict, not a failure: `gpuadapter.py` asks
-DXGI and the driver before any helper starts (not NVIDIA, a software adapter,
-an NVENC API older than the encoder's 13.0), and an H.264 refusal by codec
-answers the same way. `gpusettings.py` remembers it per adapter and driver
+DXGI and the driver (a software adapter, a missing NVIDIA driver or
+an NVENC API older than the encoder's 13.0). Discovery can settle this before
+channel startup only when a nonempty, complete inventory rules out every
+possible capture adapter. Enumeration/description failures, its safety bound,
+unknown vendors and any plausible hardware encoder retain the GPU route. AMD
+and Intel vendors alone are never an unsupported verdict. A missing
+NVENC version answer cannot distinguish an absent driver from a failed query,
+so NVIDIA candidates retain the existing actual-LUID handling in that case. Only
+a successful query proving an old API rejects NVIDIA at discovery. Hybrid
+machines therefore still use the channel's actual GL adapter LUID, never the
+primary monitor or enumeration order. That actual-adapter check runs before
+the helper, and an H.264 refusal by codec answers the same way.
+`gpusettings.py` remembers the actual-adapter verdict per adapter and driver
 version; the retry gate arms no cooldown and discovery declines that producer,
 so the recorder's next attach keeps the desktop grab
-(`sourcefactory.DesktopForUnsupportedGpu`, status `gpu_unsupported`) and setup
-accepts its written pictures. An NVIDIA GPU without NVENC hardware still
+(`sourcefactory.DesktopForUnsupportedGpu`, status `gpu_unsupported`). The early
+machine verdict selects that fallback in the current call. Setup still requires
+its written pictures, live matching control and moving game/input evidence;
+the hardware verdict alone cannot complete setup. The 2026-10-19 AMD report
+showed repeated channel-startup deadlines before codec selection; this fixes
+the admission-order defect without identifying its native GL failure. Actual
+replay and setup completion on that tester's machine remain a live gate.
+An NVIDIA GPU without NVENC hardware still
 fails as a driver error at session open, indistinguishable from a transient
 one without a native change, and keeps the retry gate. Transient failures
 retry only after proved cleanup, with 10/20/40/60-second capped delays. A short
@@ -820,14 +899,42 @@ an existing log can belong to an earlier build, so verify its PID/build/time
 before attribution.
 Never restart the user's applications to collect diagnostics.
 
-The current native encoder is NVIDIA NVENC. No CUDA Toolkit installation is
-required. Other GPU encoders remain unqualified; an unsupported GPU keeps the
+NVIDIA uses the existing NVENC encoder; AMD and Intel use the Windows D3D11/MF
+encoder behind the shared packet/custody contract. No CUDA Toolkit installation
+is required. Hardware encoding and renderer interoperability require separate
+qualification; a positively unsupported GPU keeps the
 desktop grab rather than run blocking capture on the emulation thread. The
 installed app starts its helper as itself with `--gpu-helper` (`gui_entry.py`);
 a source run starts the base interpreter on the helper module
 (`core/childproc.py::python_child`), so the helper is the server's direct
 child and keeps STARTF_FORCEOFFFEEDBACK. The portable extension seam is the encoded packet and
 exact custody contract, not a second timing model.
+
+## Diagnostics for hardware qualification
+
+The Debug report includes the active route (`plugin` or `desktop`), recording
+state, and whether pictures carry renderer input/frame stamps or desktop time
+estimates. A successful desktop fallback does not establish native GPU parity.
+It includes the first terminal failure for the current producer/generation and
+the latest attempt, preserved across helper cleanup and fallback. Source and
+packaged build identities, actual channel LUID, adapter/driver facts when known,
+stage timings and known native Open/MF operation/error codes do not depend on
+the clipped log tail. A later success preserves that first failure until a new
+producer/generation or Trainer restart. Missing evidence stays unknown.
+
+An optional `SM64GPU1` version 1 receipt occupies ControlV1's former producer
+padding at offset 336. The page remains 4096 bytes; request 128 and build 256 do
+not move. The renderer samples bounded GL vendor/renderer/version and missing
+function once during startup, with nonce/generation/epoch and actual LUID when
+available. Atomic CPU words hand it to the control worker, which publishes it
+under the existing producer seqlock. Python only accepts a receipt matching its
+request nonce and generation. Readers perform no graphics calls or file I/O.
+Older/unknown receipt versions are optional missing evidence, not protocol faults.
+
+Only known bounded native receipt fields enter automatic Sentry context. Raw
+stderr, plugin logs, pictures and ROM data do not. Expected AV1 codec refusals
+are grouped with their own operation and excluded from terminal failure facts,
+so an H.264 attempt cannot inherit an earlier AV1 failure operation.
 
 ## What failed and why
 

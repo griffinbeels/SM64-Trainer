@@ -369,6 +369,7 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
         cfg=replay_cfg,
         window_finder=find_window,
         video_factory=sources.create,
+        capture_diagnostics=sources.diagnostics,
         # The ghost sound player is tapped only while Ghosts in recording is
         # on, for the ghost copy; the clean audio is the game alone
         # (replay/audio.py GhostTimeline). `recorder` binds late.
@@ -688,6 +689,8 @@ def run(*, recorder_lock=None) -> None:
     30 s = drain wedged; neither = a new layer, instrument before fixing.
     """
     import os
+    from sm64_events.core.reporting_setup import initialize_reporting
+    initialize_reporting()
     _build_stale_natives()
     if os.environ.pop("SM64_RESTART", None):
         # A restart relaunch: the old process is exiting — wait for the

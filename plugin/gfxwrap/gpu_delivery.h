@@ -26,7 +26,13 @@ enum gd_reason { GD_NONE=0, GD_CANCELLED=10000, GD_BAD_SOURCE, GD_BAD_REQUEST,
     // The ghost copy's causes: only ever in gc_twin_status.reason, never a
     // channel or runtime terminal reason. UNAVAILABLE: a SourceV3 renderer.
     GD_TWIN_SNAPSHOT_FAILED, GD_TWIN_IMPORT_FAILED, GD_TWIN_BRIDGE_FAILED,
-    GD_TWIN_KEY_ABANDONED, GD_TWIN_UNAVAILABLE };
+    GD_TWIN_KEY_ABANDONED, GD_TWIN_UNAVAILABLE,
+    // ControlV1 has one reason word and exists before the picture channel.
+    // runtime_delivery translates a GL prerequisite's reason/detail pair into
+    // these append-only receipts without widening either shared layout.
+    GD_GL_VERSION_UNSUPPORTED, GD_GL_MEMORY_OBJECT_UNSUPPORTED,
+    GD_GL_MEMORY_WIN32_UNSUPPORTED, GD_GL_KEYED_MUTEX_UNSUPPORTED,
+    GD_GL_ENTRY_POINT_UNAVAILABLE, GD_GL_SNAPSHOT_ENTRY_POINT_UNAVAILABLE };
 
 typedef struct {
     uint32_t bytes, version, max_slots, max_age_ms;

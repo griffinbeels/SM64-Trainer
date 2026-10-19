@@ -64,7 +64,8 @@ def _problems(log_lines: list[str]) -> str:
 def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
                  log_file: Path, ui_log_file: Path, perf_log_file: Path,
                  health: Callable[[], dict],
-                 events: Callable[[], list]) -> str:
+                 events: Callable[[], list], replay: Callable[[], dict] | None = None,
+                 setup: Callable[[], dict] | None = None, build: dict | None = None) -> str:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     head = (
         "# SM64 Trainer debug report\n\n"
@@ -110,6 +111,11 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
         head,
         _section("Health", lambda: "```json\n" + json.dumps(
             health(), indent=2, default=str) + "\n```"),
+        _section("Replay and GPU", lambda: "```json\n" + json.dumps(
+            replay() if replay else {"available": False}, indent=2, default=str) + "\n```"),
+        _section("Last observed setup", lambda: "```json\n" + json.dumps(
+            setup() if setup else None, indent=2, default=str) + "\n```"),
+        _section("Build", lambda: "```json\n" + json.dumps(build or {}, indent=2) + "\n```"),
         _section("Problems", lambda: _problems(log_lines)
                  if log_lines is not None else _log_body()),
         _section("Server log", _log_body),

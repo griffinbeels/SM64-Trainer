@@ -36,8 +36,11 @@ def test_index_serves_event_viewer():
         resp = client.get("/")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")
-        # New importmap shell: references app.js via importmap, not /ws/events inline
-        assert "/ui/app.js" in resp.text
+        # Reporting attaches before the app, through the served module bootstrap.
+        assert '/ui/boot.js' in resp.text
+        boot = client.get('/ui/boot.js')
+        assert boot.status_code == 200 and 'import("./app.js")' in boot.text
+        assert client.get('/ui/app.js').status_code == 200
         assert "importmap" in resp.text
 
 

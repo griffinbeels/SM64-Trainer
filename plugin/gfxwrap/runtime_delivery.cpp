@@ -1,6 +1,19 @@
 #include "runtime_delivery.h"
 #include "runtime_control.h"
+#include "gpu_render.h"
 namespace {
+uint32_t control_reason(const gd_status &observed){
+ if(observed.reason!=GD_GL_UNSUPPORTED)return observed.reason;
+ switch(render_capture::LoadError(observed.error)){
+ case render_capture::LoadError::version_45:return GD_GL_VERSION_UNSUPPORTED;
+ case render_capture::LoadError::memory_object:return GD_GL_MEMORY_OBJECT_UNSUPPORTED;
+ case render_capture::LoadError::memory_object_win32:return GD_GL_MEMORY_WIN32_UNSUPPORTED;
+ case render_capture::LoadError::keyed_mutex:return GD_GL_KEYED_MUTEX_UNSUPPORTED;
+ case render_capture::LoadError::entry_point:return GD_GL_ENTRY_POINT_UNAVAILABLE;
+ case render_capture::LoadError::snapshot_entry_point:return GD_GL_SNAPSHOT_ENTRY_POINT_UNAVAILABLE;
+ default:return observed.reason;
+ }
+}
 int __cdecl request(const gc_header *h,uint64_t bytes){const int result=gd_request(h,bytes);
  if(result==GD_ACCEPTED||result==GD_UNCHANGED)return RC_ACCEPTED;
  if(result==GD_BUSY)return RC_DEFERRED;
@@ -9,7 +22,7 @@ int __cdecl request(const gc_header *h,uint64_t bytes){const int result=gd_reque
  return result==GD_SYSTEM_ERROR?RC_SYSTEM_ERROR:RC_REJECTED;}
 int __cdecl status(uint32_t *state,uint32_t *reason){gd_status observed{};
  if(!gd_read_status(&observed))return 0;
- *reason=observed.reason;
+ *reason=control_reason(observed);
  if(observed.state==GD_BOOTSTRAP||observed.state==GD_PREPARING)*state=CONTROL_PREPARING;
  else if(observed.state==GD_ACTIVE)*state=CONTROL_ACTIVE;
  else {*state=CONTROL_UNAVAILABLE;if(!*reason)*reason=CONTROL_BACKEND_FAILED;}

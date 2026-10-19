@@ -19,6 +19,7 @@ struct Gl {
     // replace both with its diagnostic-preserving, state-invalidating gateway.
     bool (__cdecl *begin_capture)() = nullptr;
     bool (__cdecl *end_capture)() = nullptr;
+    const char *missing_entry_point = nullptr;
     // Caller must qualify the actual producer; a newer worker alone is insufficient.
     bool load(bool producer_core_dsa = false); // current worker; never per picture
 };

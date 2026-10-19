@@ -23,6 +23,11 @@
 #define GBENC_PRESET_P4 4u
 #define GBENC_TUNE_HQ 1u
 #define GBENC_RC_VBR 1u
+/* Backend extension consumes checked-zero reserved words without moving any
+   V1 field. Zero remains the existing NVENC contract. Older helpers refuse
+   nonzero words, rather than silently encoding with a different policy. */
+#define GBENC_BACKEND_NVENC 0u
+#define GBENC_BACKEND_WINDOWS 1u
 /* No quality defaults: caller resolves every field from its configuration owner.
    Strict V1 size/version and zero reserved fields; all units are explicit. */
 typedef struct gbenc_options_v1 {
@@ -40,7 +45,11 @@ typedef struct gbenc_options_v1 {
        and an encoder predating AV1 refuses a nonzero one instead of quietly
        encoding the wrong codec. */
     uint32_t codec;
-    uint32_t reserved[4];
+    uint32_t backend;
+    /* Independent Windows codec quality scale [0,100]; zero for NVENC.
+       NVENC's preset/tuning/rate_control/cq fields are zero for Windows. */
+    uint32_t backend_quality;
+    uint32_t reserved[2];
 } gbenc_options_v1;
 typedef struct gbenc_packet_v1 {
     uint32_t struct_size,version;
@@ -48,7 +57,7 @@ typedef struct gbenc_packet_v1 {
     uint32_t bytes,flags;
     uint64_t occurrence,pts,duration; /* 90kHz; no derived nominal-frame timestamps. */
 } gbenc_packet_v1;
-/* Runs synchronously on the single consumer owner thread AFTER NVENC unlock/unmap.
+/* Runs synchronously on the single consumer owner thread after backend release.
    Data is borrowed until return. Copy/enqueue into a bounded owner queue promptly.
    Return zero only after accepting the complete packet. Must not reenter encoder,
    retain data, throw, block indefinitely, or call renderer code. */
@@ -62,7 +71,7 @@ typedef enum gbenc_error_code {
     GBENC_OK=0,GBENC_INVALID_ARGUMENT=1,GBENC_INVALID_STATE=2,
     GBENC_API_UNAVAILABLE=3,GBENC_DRIVER_ERROR=4,GBENC_SINK_ERROR=5,
     GBENC_PACKET_ERROR=6,GBENC_MEMORY_ERROR=7,
-    /* The NVENC API is present and this adapter does not offer the requested
+    /* The backend API is present and this adapter does not offer the requested
        codec. Distinct from API_UNAVAILABLE so a caller can fall back to the
        other codec without masking a missing or too-old driver. */
     GBENC_CODEC_UNAVAILABLE=8

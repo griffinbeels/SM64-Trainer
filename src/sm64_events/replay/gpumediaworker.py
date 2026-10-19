@@ -233,7 +233,7 @@ class MediaWorker(io.RawIOBase):
             self.archive.offset_clock(picture.pts, micros)
             run = self._bound_run
             origin = (round(run.origin_ts * 1_000_000) + micros) / 1_000_000
-            self.mux.bind_run(MediaRun(run.id, origin))
+            self.mux.bind_run(MediaRun(run.id, origin, run.encoder_backend))
             self._first_pts = picture.pts
         return replace(picture, pts=picture.pts - self._first_pts)
 

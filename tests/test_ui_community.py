@@ -29,6 +29,8 @@ import ui_fixture  # noqa: E402
 WIDTHS = (1500, 850, 390)
 MODAL = ".modal-body"
 UID = "ec2f03ac-42db-4a29-8a68-dbc018aba020"
+PROGRESS_READS = {("remote", "GET", "/v2/account/progress"),
+                  ("remote", "GET", "/v2/account/player-profile")}
 
 
 class FixtureAccount:
@@ -106,8 +108,21 @@ class FixtureAccount:
 
     async def request_json(self, method, path, **kwargs):
         self.calls.append(("remote", method, path, kwargs.get("json")))
+        # These reads model M2's separate, initially unpublished saved-PB data.
+        publication = {"v": 2, "uid": self.uid, "revision": 0, "consent_revision": 0,
+                       "enabled": False, "visible": False, "publisher": None,
+                       "notice_version": "progress-1", "content_hash": None,
+                       "captured_utc": None, "synced_utc": None,
+                       "limits": {"rows": 4096, "bytes": 1048576}}
+        player_profile = {"v": 2, "uid": self.uid, "revision": 0, "bio": "", "socials": []}
+        reads = {"/v2/account/progress": publication,
+                 "/v2/account/player-profile": player_profile,
+                 "/v2/account/player-export": {"v": 2, "uid": self.uid, "profile": player_profile,
+                                               "publication": publication, "snapshot": None}}
+        if method == "GET" and path in reads:
+            return reads[path]
         if path == "/v1/account/export":
-            return {"v": 1, "profile": {"uid": self.uid}, "recordings": []}
+            return {"v": 1, "account": {"uid": self.uid}, "recordings": [], "complete": True}
         if path == "/v1/account/withdraw":
             self.update(sharing=False)
             return {"v": 1, "withdrawn": 0}
@@ -271,7 +286,7 @@ def test_sign_in_is_the_first_step_with_discord_and_twitch_only(monkeypatch, tmp
             page.evaluate("(() => { document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); return true; })()")
             page.wait_ms(100)
             assert page.count(".community-providers") == 1 and page.count(".setup-progress") == 0
-            assert not any(call[0] != "refresh" for call in account.calls)
+            assert all(call[0] == "refresh" or call[:3] in PROGRESS_READS for call in account.calls)
             assert page.problems() == []
 
 
@@ -326,7 +341,9 @@ def test_forced_rename_can_sign_out_without_changing_owned_data(monkeypatch, tmp
             page.wait_for(".community-provider.community-discord")
             assert account.uid == UID
             assert ("sign_out",) in account.calls
-            assert not any(call[0] in {"rename", "profile", "remote"} for call in account.calls)
+            assert not any(call[0] in {"rename", "profile"}
+                           or (call[0] == "remote" and call[:3] not in PROGRESS_READS)
+                           for call in account.calls)
             assert len(service.db.attempts()) == before
             assert page.count(".practice-page") == 1 and "Practice offline" not in modal_text(page)
             assert page.problems() == []
@@ -466,6 +483,7 @@ def test_privacy_actions_use_owner_routes_and_explicit_confirmation(monkeypatch,
             wait_until(page, """!Array.from(document.querySelectorAll('.modal-body button'))
                 .some(button => button.disabled)""", "account export to finish")
             assert ("remote", "GET", "/v1/account/export", None) in account.calls
+            assert ("remote", "GET", "/v2/account/player-export", None) in account.calls
             click_text(page, "Remove shared ghosts")
             page.wait_for(".community-form h3")
             assert "Previously downloaded copies may remain" in modal_text(page)

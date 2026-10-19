@@ -28,12 +28,17 @@ def picture_duration_filter(end_pts: int | None = None) -> str:
 class MediaRun:
     id: str
     origin_ts: float
+    # Codec name alone does not identify quality policy: portable AV1 must
+    # not inherit NVIDIA's archive-quality shortcut. None means legacy data.
+    encoder_backend: str | None = None
 
     @classmethod
-    def starting_at(cls, stamp: float) -> "MediaRun":
+    def starting_at(cls, stamp: float, *, encoder_backend: str | None = None) -> "MediaRun":
         # Segment UTC boundaries use datetime microseconds. Represent the
         # origin on that same grid so clamping to coverage cannot skip PTS 0.
-        return cls(uuid4().hex, round(stamp, 6))
+        if encoder_backend not in (None, "nvenc", "windows"):
+            raise ValueError("unknown native encoder provenance")
+        return cls(uuid4().hex, round(stamp, 6), encoder_backend)
 
     def microseconds_at(self, stamp: float) -> int:
         return round((stamp - self.origin_ts) * 1_000_000)

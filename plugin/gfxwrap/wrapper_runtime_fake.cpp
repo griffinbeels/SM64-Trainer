@@ -1,6 +1,7 @@
 /* CPU-only delivery fixture. Never compiled into the production runtime. */
 #include "gpu_delivery.h"
 #include "gpu_delivery_diagnostics.h"
+#include "gpu_startup.h"
 #include "stamp_adapter.h"
 #include <atomic>
 #include <stdio.h>
@@ -46,6 +47,8 @@ extern "C" int __cdecl gd_capture(const rb_record*r,rb_image*i){
 }
 extern "C" int __cdecl gd_completed(const rb_image*){return 1;}
 extern "C" HANDLE __cdecl gd_signal(){return signal;}
+// Optional renderer facts remain absent in the CPU-only delivery fixture.
+extern "C" int __cdecl gd_read_startup(gpu_startup_v1*){return 0;}
 extern "C" int __cdecl gd_read_status(gd_status*s){*s={};s->state=state.load();s->epoch=gate.load();return 1;}
 extern "C" unsigned __cdecl TestGate(){return gate.load();}
 extern "C" unsigned __cdecl TestConfigured(){return configured;}

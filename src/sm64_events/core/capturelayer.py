@@ -44,14 +44,17 @@ import json
 import logging
 import re
 import threading
-from contextlib import ExitStack
+import time
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
 from sm64_events.core.setup_gpu import GpuSetupEvidence
-from sm64_events.core.plugin_installation import DestinationInUse, in_use, sha256 as _sha256, verified_copy
+from sm64_events.core.plugin_installation import (
+    DestinationInUse, PluginInstallError, file_operation, in_use, sha256 as _sha256, verified_copy,
+)
 from sm64_events.core.plugin_ownership import FROZEN, build_stamp, not_older, owns
 
 log = logging.getLogger("sm64.capturelayer")
@@ -103,6 +106,7 @@ class LayerRefused(Exception):
 class Registry(Protocol):
     def get(self, subkey: str, name: str) -> str | int | None: ...
     def set(self, subkey: str, name: str, value: str) -> None: ...
+    def delete(self, subkey: str, name: str) -> None: ...
 
 
 class Processes(Protocol):
@@ -278,6 +282,9 @@ class CaptureLayer:
         # rollback snapshot can undo the other's finished copy.
         self._install_lock = threading.RLock()
         self._deferred = False  # a refresh is waiting on a held DLL (logged once)
+        self._refresh_blocked = None  # (bundle/target identity, reason); user gesture retries
+        self._last_status = None
+        self._status_observed = None
         self._refresh_stop = threading.Event()
         self._refresh_thread = None
 
@@ -362,6 +369,30 @@ class CaptureLayer:
 
     def _set_registry_graphics_dll(self, name: str) -> None:
         self._registry.set(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE, name)
+
+    @contextmanager
+    def _registry_install_transaction(self):
+        """Keep HKCU in the same transaction as the helper's final acknowledgment."""
+        previous = self._registry_graphics_dll()
+        attempted = False
+
+        def select_wrapper():
+            nonlocal attempted
+            attempted = True
+            self._set_registry_graphics_dll(WRAPPER_DLL)
+
+        try:
+            yield select_wrapper
+        except BaseException:
+            if attempted:
+                try:
+                    if previous is None:
+                        self._registry.delete(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE)
+                    else:
+                        self._set_registry_graphics_dll(previous)
+                except Exception:
+                    log.exception("could not restore Project64's previous graphics selection")
+            raise
 
     def _read_wrapped_name(self, ini_path: Path) -> str | None:
         try:
@@ -462,7 +493,7 @@ class CaptureLayer:
         steps = self._steps(state, running, source is not None and wrapper_present and not layer_current,
                             layer_alive, automatic)
 
-        return LayerStatus(
+        status = LayerStatus(
             pj64_dir=str(pj64_dir) if pj64_dir is not None else None,
             pj64_running=running,
             registry_graphics_dll=registry_graphics_dll,
@@ -485,6 +516,16 @@ class CaptureLayer:
             automatic_update=automatic,
             gpu_observation=gpu,
         )
+        self._last_status, self._status_observed = status, time.time()
+        return status
+
+    def diagnostic_status(self) -> dict | None:
+        """Last observed setup state only; never discover, install or refresh."""
+        status = self._last_status
+        if status is None:
+            return None
+        return {**status.as_dict(), "observed_unix_s": self._status_observed,
+                "refresh_error": self._refresh_blocked[1] if self._refresh_blocked else None}
 
     def install(self, consent: bool) -> LayerStatus:
         with self._install_lock:
@@ -503,8 +544,20 @@ class CaptureLayer:
         except DestinationInUse as exc:
             # Project64 started after the check above and loaded the plugin.
             raise LayerRefused("close Project64, then install") from exc
+        except PluginInstallError as exc:
+            plugin = self._plugin_dir(pj64_dir)
+            # Only a destination write denial earns a UAC retry. Per-user
+            # settings, source failures and background refresh never elevate.
+            eligible = {plugin, *(plugin / name for name in (WRAPPER_DLL, RENDERER_DLL, WRAPPER_INI))}
+            if exc.reason != "access_denied" or Path(exc.filename) not in eligible:
+                raise
+            if in_use(Path(exc.filename)):
+                raise LayerRefused("close Project64, then install") from exc
+            from sm64_events.core.plugin_elevation import file_failure
+            with file_failure("install Practice Replay as administrator", plugin):
+                return self._install_files(pj64_dir, elevated=True)
 
-    def _install_files(self, pj64_dir: Path) -> LayerStatus:
+    def _install_files(self, pj64_dir: Path, *, elevated=False) -> LayerStatus:
         source, renderer = self._source_dll(), self._renderer_dll()
         if source is None or renderer is None:
             raise LayerRefused("this build carries no capture layer")
@@ -515,7 +568,6 @@ class CaptureLayer:
                 raise LayerRefused(target["message"])
 
         plugin_dir = self._plugin_dir(pj64_dir)
-        plugin_dir.mkdir(parents=True, exist_ok=True)
         dll_path = plugin_dir / WRAPPER_DLL
         ini_path = plugin_dir / WRAPPER_INI
         renderer_path = plugin_dir / RENDERER_DLL
@@ -531,22 +583,43 @@ class CaptureLayer:
         overlay["wrapped"] = RENDERER_DLL
         overlay["previous_graphics_dll"] = previous
         overlay["uninstalled_at"] = None
-        with verified_copy(renderer, renderer_path, reason="explicit_install",
-                           rollback=(dll_path, ini_path, self._settings_path)) as renderer_receipt:
+        from sm64_events.core.setup_files import restore_on_failure
+        with self._registry_install_transaction() as select_wrapper, restore_on_failure([
+                self._settings_path]), self._install_plugin_files(
+                pj64_dir, source, renderer, elevated=elevated) as receipts:
+            renderer_receipt, receipt = receipts["renderer_receipt"], receipts["installation_receipt"]
             overlay["installed_renderer_sha256"] = renderer_receipt["after"]["sha256"]
             overlay["renderer_receipt"] = renderer_receipt
-            with verified_copy(source, dll_path, reason="explicit_install",
-                               rollback=(ini_path, self._settings_path)) as receipt:
-                overlay["installation_receipt"] = receipt
-                overlay["installed_by"] = self._installer
-                self._record_wrapper(overlay, receipt["after"]["sha256"], dll_path, renderer_path)
-                self._write_wrapped_name(ini_path, RENDERER_DLL)
-                self._save_overlay(overlay)
-                # Last write: if copying or persistence fails, Project64 keeps
-                # its previous graphics selection and the files are restored.
-                self._set_registry_graphics_dll(WRAPPER_DLL)
+            overlay["installation_receipt"] = receipt
+            overlay["installed_by"] = self._installer
+            self._record_wrapper(overlay, receipt["after"]["sha256"], dll_path, renderer_path)
+            self._save_overlay(overlay)
+            # HKCU always belongs to this original user, even if UAC used
+            # another administrator's credentials for the file transaction.
+            select_wrapper()
 
+        self._refresh_blocked = None
         return self.status()
+
+    @contextmanager
+    def _install_plugin_files(self, pj64_dir, source, renderer, *, elevated):
+        plugin = self._plugin_dir(pj64_dir)
+        if elevated:
+            from sm64_events.core.plugin_elevation import elevated_install
+            with elevated_install(pj64_dir, plugin, source, renderer) as receipts:
+                yield receipts
+            return
+        with file_operation("create plugin folder", plugin):
+            plugin.mkdir(parents=True, exist_ok=True)
+        dll, renderer_path, ini = plugin / WRAPPER_DLL, plugin / RENDERER_DLL, plugin / WRAPPER_INI
+        with verified_copy(renderer, renderer_path, reason="explicit_install",
+                           rollback=(dll, ini)) as renderer_receipt:
+            with verified_copy(source, dll, reason="explicit_install", rollback=(ini,)) as receipt:
+                with file_operation("write plugin configuration", ini):
+                    self._write_wrapped_name(ini, RENDERER_DLL)
+                    if self._read_wrapped_name(ini) != RENDERER_DLL:
+                        raise OSError("Plugin configuration verification failed")
+                yield {"renderer_receipt": renderer_receipt, "installation_receipt": receipt}
 
     def _steps(self, state: str, running: bool, stale: bool, layer_alive: bool, automatic: bool) -> list:
         """The ordered steps from this state to a live layer. Every step is
@@ -610,11 +683,23 @@ class CaptureLayer:
         if source is None or renderer is None:
             return False
         try:
+            key = self._refresh_key(pj64_dir, source, renderer)
+            if self._refresh_blocked is not None:
+                if self._refresh_blocked[0] == key:
+                    return False
+                self._refresh_blocked = None  # New target/bundle earns a fresh attempt.
             if _sha256(plugin_dir / WRAPPER_DLL) != expected:
                 return False
         except OSError:
             return False
         return not_older(source, plugin_dir / WRAPPER_DLL) and not_older(renderer, plugin_dir / RENDERER_DLL)
+
+    def _refresh_key(self, pj64_dir, source, renderer):
+        def identity(path):
+            stat = path.stat()
+            return str(path.resolve()), stat.st_size, stat.st_mtime_ns
+        return (str(pj64_dir.resolve()), str(self._plugin_dir(pj64_dir).resolve()),
+                identity(source), identity(renderer))
 
     def refresh_if_stale(self) -> bool:
         with self._install_lock:
@@ -671,11 +756,18 @@ class CaptureLayer:
             overlay["wrapped"] = RENDERER_DLL
         # Only the file that differs is copied; each copy is verified and
         # rolls the whole install back on failure.
+        refresh_key = self._refresh_key(pj64_dir, source, renderer)
         try:
             self._copy_stale(overlay, source, renderer, (dll_path, renderer_path, ini_path),
                              wrapper_stale, renderer_stale)
         except DestinationInUse as exc:
             return self._defer(Path(exc.filename))
+        except OSError as exc:
+            # Background refresh never opens UAC. Stop promising an automatic
+            # update after a write failure; the existing Install gesture owns
+            # a normal attempt and its permission-specific elevated retry.
+            self._refresh_blocked = (refresh_key, str(exc)[:512])
+            raise
         self._deferred = False
         return True
 
@@ -748,6 +840,7 @@ class CaptureLayer:
         overlay["uninstalled_at"] = _now_iso()
         overlay["consented_at"] = None
         self._save_overlay(overlay)
+        self._refresh_blocked = None
 
         return self.status()
 

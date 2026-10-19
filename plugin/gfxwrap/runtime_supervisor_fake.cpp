@@ -1,6 +1,7 @@
 /* A blocked independent CPU worker stands in for a driver call. No graphics. */
 #include "runtime_delivery.h"
 #include "runtime_control.h"
+#include "gpu_startup.h"
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,8 @@ DWORD WINAPI worker(void*){
 }
 }
 extern "C" HANDLE __cdecl gd_signal(){return changed;}
+// This CPU-only driver has no renderer startup facts to publish.
+extern "C" int __cdecl gd_read_startup(gpu_startup_v1*){return 0;}
 extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
  if(!h||h->bridge_count||h->producer_pid||h->epoch||h->width||h->height||budget!=(128ull<<20))return GD_INVALID;
  if(pause_request.load()){inside_request.store(true);WaitForSingleObject(release_request,10000);inside_request.store(false);}

@@ -1681,26 +1681,28 @@ settings screen shows the name, the provider and the [[Rank tab]]'s own chip row
 
 ### Claimed player page
 
-A UUID-addressed page for a signed-in Trainer account, separate from a
-Sheet runner's imported projection. The checkmark confirms account ownership,
-not legitimate performances. An owner can add a bio and social links and
-explicitly share their current saved PBs independently of [[community ghost]]
-sharing. Available ghost times remain distinct from the saved PB snapshot.
-Comparison uses the viewing player's selected Rank scope and local standards;
+A page inside the existing [[Rank tab]], addressed by a signed-in account's UUID,
+separate from a Sheet [[runner]]'s imported projection. The checkmark confirms
+account ownership, not legitimate performances. An owner can add a bio and social
+links and explicitly share current saved PBs independently of [[community ghost]]
+sharing. Available [[ghost]] times remain distinct from the shared saved PBs.
+Comparison uses the viewing player's selected [[scope]] and local [[standard]]s;
 private or unavailable entries are missing with coverage, never a loss.
 
-- **Lives** — `ui/components/playerpage.js`, `server/player_api.py`,
-  `server/player_comparison.py` and `cloud/community/src/players.js`
+- **Lives** — `src/sm64_events/ui/components/playerpage.js`,
+  `src/sm64_events/server/player_api.py`,
+  `src/sm64_events/server/player_comparison.py` and `cloud/community/src/players.js`
 
 ### Publishing profile
 
 The one installation/database profile explicitly selected to publish an
-account's current saved PB snapshot. Switching replaces that publisher after
+account's current saved PBs. Switching replaces that publisher after
 preview and consent; it does not merge devices. Pausing stops future updates,
-while withdrawal removes the retained shared snapshot. Neither changes local
-PBs or the independent ghost-sharing setting.
+while withdrawal removes the shared PB data. Neither changes local
+PBs or the independent [[ghost]]-sharing setting.
 
-- **Lives** — `community/progress_sync.py`, `community/progress_state.py` and
+- **Lives** — `src/sm64_events/community/progress_sync.py`,
+  `src/sm64_events/community/progress_state.py` and
   `cloud/community/src/progress-store.js`
 
 ### Community ghost
@@ -1714,16 +1716,19 @@ it does not certify that gameplay was legitimate. Sharing begins unchecked.
 
 ### Has ghost
 
-The [[Library]] filter for published [[community ghost]] recordings. It shows
-targets and strategies with shared recordings, including entries without video.
-Regions and the Library's current target narrow the results before paging.
-Opening an entry shows the player, time, strategy and ROM. **Add rival** saves
-that recording to the target's [[Lineup]] without changing current Practice.
-When every visible seat is saved, the player chooses which rival to replace.
+The Library page's filter for published [[community ghost]] recordings. It shows
+[[target]]s and their [[strategy]] choices with shared recordings, including entries
+without video. Regions and the Library's current [[target]] narrow the results
+before paging. Opening an entry shows the player, time, [[strategy]] and ROM.
+**Add rival** saves that recording to the [[target]]'s [[Lineup]] without changing
+current Practice. When every visible seat holds a saved recording, the player
+chooses which rival to replace.
 Publication and structural validation do not verify legitimate gameplay.
 
-- **Lives** — `ui/components/community-library.js`, `ghost/community_library.py`,
-  `ghost/rival_changes.py`, `server/community_library_api.py` and
+- **Lives** — `src/sm64_events/ui/components/community-library.js`,
+  `src/sm64_events/ghost/community_library.py`,
+  `src/sm64_events/ghost/rival_changes.py`,
+  `src/sm64_events/server/community_library_api.py` and
   `cloud/community/src/library.js`
 
 ### Rival pool

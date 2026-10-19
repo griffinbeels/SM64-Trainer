@@ -4,6 +4,16 @@ The live event feed, HTTP API, replay endpoints, and behavior notes. New to
 the project? Start with the [README](../README.md). Developing here? Read
 `CLAUDE.md` and `docs/architecture.md` first.
 
+## Automatic error reporting
+
+`GET /api/diagnostics/reporting` returns `configured`, `enabled`, `pending` and
+safe collection counters. `PUT /api/diagnostics/reporting` accepts `{enabled: boolean}`;
+disabling stops capture and removes queued uploads. `POST /api/diagnostics/browser-error`
+accepts bounded `message`, `stack` and `source` strings and returns 202. All mutations
+use the existing same-origin local request protection. Neither settings nor report
+responses expose the DSN or queued diagnostic contents. See [error reporting](error-reporting.md)
+for configuration, privacy boundaries and verification limits.
+
 ## Segment save scope
 
 `GET /api/segments/authoring` returns `{can_share, default_scope}`. Shared authoring

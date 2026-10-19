@@ -12,7 +12,7 @@ paths:
 
 Three shipped natives: the capture wrapper Project64 selects, the capture
 overlay compiled into LINK's GLideN64 v4.2 (the renderer), and the 64-bit
-NVENC helper. Why they are built this way, and what failed on the way:
+hardware encoder helper. Why they are built this way, and what failed on the way:
 [Renderer GPU recording](../../docs/replay-gpu-runtime.md).
 
 | To change... | Edit |
@@ -23,7 +23,7 @@ NVENC helper. Why they are built this way, and what failed on the way:
 | Native Mario ghost, exact attempt clocks and clean SourceV3 presentation | `ghost_capture.*`, `ghost_clock.*`, `ghost_origin.*`, `ghost_playback.*`, `ghost_draw.*`, `ghost_presentation.*`; worker transport in `ghost_ipc.*`, Python ownership in `ghost/capture.py` and `ghost/native_session.py`. [Runtime contracts](../../docs/ghost-native-runtime.md) own format versions, timing, refusal policy and live verification limits |
 | Delivery worker and the renderer-thread GPU steps (selection sample, bridge copy, GL state guard) | `gpu_delivery*`, `gpu_render.*`; doc `replay-gpu-runtime.md#first-capture-freeze`. Every GPU call stays on the renderer's thread: a GL context or D3D11 device on any other Project64 thread brings back the first-capture freeze, and the overlay publishes no shared context. Hardware witnesses build the shipped code through `gpu_render_witness_host.cpp` (renderer) and `gpu_render_witness_consumer.cpp` (helper role) |
 | Control page and capture lease | `control.h`, `control_worker.h`, `runtime_control.*`; Python reads the page by offset in `replay/capturecontrol.py`; doc `replay-capture-control.md` |
-| The NVENC helper | `gpu_encoder_dll.*`, `gpu_bridge_encoder*`; Python side `replay/gpuencoder*.py` and `replay/gpuprocess/`. It encodes H264 or AV1, named by `gbenc_options_v1.codec` (H264 is 0, taken from the checked-zero reserved words so old callers and old DLLs still mean H264). AV1 needs `repeatSeqHdr` for the same reason H264 needs `repeatSPSPPS`: the mux builds its sample description from the first key picture and never decodes. |
+| Hardware encoding | `gpu_encoder_dll.*` owns shared textures/keys; `gpu_platform_encoder.*` dispatches unchanged NVENC (`gpu_bridge_encoder*`) or Windows D3D11/MF (`gpu_mf_encoder.*`). Python `replay/gpuencoder*.py`, `gpusettings.py` and `gpuprocess/` preserve exact packet identity. Codec/backend/quality consume checked-zero reserved words without moving V1 offsets. Never reinterpret NVIDIA tuning as Windows quality. Real AMD/Intel graphics interop and gameplay qualification are separate from a passing hardware encoder test; see the runtime document. |
 
 - **Build ids hash the sources.** Any edit here changes the wrapper and
   encoder ids (`tools/build_plugin.py`); an overlay edit also changes the

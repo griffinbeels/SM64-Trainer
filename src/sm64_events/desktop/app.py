@@ -36,6 +36,8 @@ def _ask_takeover() -> bool:
 
 
 def _error(msg: str) -> None:
+    from sm64_events.core.error_reporting import capture_problem
+    capture_problem(msg, context={"component": "desktop_startup"})
     ctypes.windll.user32.MessageBoxW(None, msg, APP_DISPLAY_NAME, _MB_ICONERROR)
 
 

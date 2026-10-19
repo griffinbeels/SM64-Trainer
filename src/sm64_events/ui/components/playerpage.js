@@ -87,19 +87,19 @@ function PlayerIdentity({ player, progress, partialReason }) {
 
 function Comparison({ t, comparison, player, scopes, scopeId, onScope, openLibrary }) {
   const context = comparison?.context;
-  const rank = comparison?.player_rank;
+  const playerRank = comparison?.player_rank;
   const description = context ? ["Your scope and exclusions", "Saved PBs",
     (context.regions || []).map(region => region.toUpperCase()).join(" + "),
     context.default_rom ? `Unstamped times: ${context.default_rom.toUpperCase()}` : null].filter(Boolean).join(" · ") : null;
   return html`<section class="player-comparison" data-scope=${scopeId}>
     <${ScopeChips} activeScopeId=${scopeId} onPick=${onScope} chips=${comparison?.chips || []} />
-    <${RankCard} t=${t} data=${rank} scopes=${scopes || []} scopeId=${scopeId}
+    <${RankCard} t=${t} data=${playerRank} scopes=${scopes || []} scopeId=${scopeId}
       onScope=${onScope} readOnly description=${description} className="player-comparison-context"
       rankReason=${comparison?.rank_reason || "A full rank becomes available when saved PBs are shared."} />
     ${comparison?.card ? html`<${ReadonlyScorecard} t=${t} card=${comparison.card}
       playerName=${player.name} openLibrary=${openLibrary} />` : null}
-    ${rank ? html`<div class="practice-card"><${Breakdown} key=${scopeId} t=${t}
-      data=${rank} routeOrder=${scopeId.startsWith("route:")} readOnly /></div>` : null}
+    ${playerRank ? html`<div class="practice-card"><${Breakdown} key=${scopeId} t=${t}
+      data=${playerRank} routeOrder=${scopeId.startsWith("route:")} readOnly /></div>` : null}
   </section>`;
 }
 

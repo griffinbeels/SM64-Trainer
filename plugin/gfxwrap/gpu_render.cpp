@@ -34,35 +34,40 @@ bool Gl::load() {
     *this = {};
     GLint major = 0, minor = 0;
     glGetIntegerv(0x821B, &major); glGetIntegerv(0x821C, &minor);
-    if (major < 4 || (major == 4 && minor < 5)) return false;
-    if (!has_extension("GL_EXT_memory_object") || !has_extension("GL_EXT_memory_object_win32")
-        || !has_extension("GL_EXT_win32_keyed_mutex")) return false;
-    return load_proc(create_framebuffers, "glCreateFramebuffers")
-        && load_proc(delete_framebuffers, "glDeleteFramebuffers")
-        && load_proc(framebuffer_texture, "glNamedFramebufferTexture")
-        && load_proc(framebuffer_read_buffer, "glNamedFramebufferReadBuffer")
-        && load_proc(framebuffer_draw_buffer, "glNamedFramebufferDrawBuffer")
-        && load_proc(check_framebuffer, "glCheckNamedFramebufferStatus")
-        && load_proc(blit, "glBlitNamedFramebuffer")
-        && load_proc(create_textures, "glCreateTextures")
-        && load_proc(texture_storage, "glTextureStorage2D")
-        && load_proc(create_buffers, "glCreateBuffers")
-        && load_proc(buffer_storage, "glNamedBufferStorage")
-        && load_proc(delete_buffers, "glDeleteBuffers")
-        && load_proc(get_buffer, "glGetNamedBufferSubData")
-        && load_proc(bind_buffer, "glBindBuffer")
-        && load_proc(get_texture_image, "glGetTextureSubImage")
-        && load_proc(fence, "glFenceSync")
-        && load_proc(client_wait, "glClientWaitSync")
-        && load_proc(delete_sync, "glDeleteSync")
-        && load_proc(create_memory, "glCreateMemoryObjectsEXT")
-        && load_proc(delete_memory, "glDeleteMemoryObjectsEXT")
-        && load_proc(memory_parameter, "glMemoryObjectParameterivEXT")
-        && load_proc(import_name, "glImportMemoryWin32NameEXT")
-        && load_proc(texture_storage_memory, "glTextureStorageMem2DEXT")
-        && load_proc(acquire_key, "glAcquireKeyedMutexWin32EXT")
-        && load_proc(release_key, "glReleaseKeyedMutexWin32EXT")
-        && load_proc(get_unsigned_bytes, "glGetUnsignedBytevEXT");
+    if (major < 4 || (major == 4 && minor < 5)) { load_error = LoadError::version_45; return false; }
+    if (!has_extension("GL_EXT_memory_object")) { load_error = LoadError::memory_object; return false; }
+    if (!has_extension("GL_EXT_memory_object_win32")) { load_error = LoadError::memory_object_win32; return false; }
+    if (!has_extension("GL_EXT_win32_keyed_mutex")) { load_error = LoadError::keyed_mutex; return false; }
+    const auto require = [this](auto &target, const char *name) {
+        if (load_proc(target, name)) return true;
+        load_error = LoadError::entry_point; missing_entry_point = name; return false;
+    };
+    return require(create_framebuffers, "glCreateFramebuffers")
+        && require(delete_framebuffers, "glDeleteFramebuffers")
+        && require(framebuffer_texture, "glNamedFramebufferTexture")
+        && require(framebuffer_read_buffer, "glNamedFramebufferReadBuffer")
+        && require(framebuffer_draw_buffer, "glNamedFramebufferDrawBuffer")
+        && require(check_framebuffer, "glCheckNamedFramebufferStatus")
+        && require(blit, "glBlitNamedFramebuffer")
+        && require(create_textures, "glCreateTextures")
+        && require(texture_storage, "glTextureStorage2D")
+        && require(create_buffers, "glCreateBuffers")
+        && require(buffer_storage, "glNamedBufferStorage")
+        && require(delete_buffers, "glDeleteBuffers")
+        && require(get_buffer, "glGetNamedBufferSubData")
+        && require(bind_buffer, "glBindBuffer")
+        && require(get_texture_image, "glGetTextureSubImage")
+        && require(fence, "glFenceSync")
+        && require(client_wait, "glClientWaitSync")
+        && require(delete_sync, "glDeleteSync")
+        && require(create_memory, "glCreateMemoryObjectsEXT")
+        && require(delete_memory, "glDeleteMemoryObjectsEXT")
+        && require(memory_parameter, "glMemoryObjectParameterivEXT")
+        && require(import_name, "glImportMemoryWin32NameEXT")
+        && require(texture_storage_memory, "glTextureStorageMem2DEXT")
+        && require(acquire_key, "glAcquireKeyedMutexWin32EXT")
+        && require(release_key, "glReleaseKeyedMutexWin32EXT")
+        && require(get_unsigned_bytes, "glGetUnsignedBytevEXT");
 }
 
 StateGuard::StateGuard(const Gl &gl) : gl_(gl) {
