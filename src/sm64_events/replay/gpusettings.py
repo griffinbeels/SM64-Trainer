@@ -129,11 +129,12 @@ class GpuSettings:
             shutdown_timeout=1.0,
         )
 
-    def encoder(self, header, cfg, *, nominal_rate, codec=CODEC_H264):
+    def encoder(self, header, cfg, *, nominal_rate, codec=CODEC_H264, facts=None):
         # Structural values mirror the picture feed: no reordering, closed GOP
         # plus time-forced IDRs. Nominal rate is separate from actual VFR PTS.
         luid = (getattr(header, "luid_high", None), getattr(header, "luid_low", None))
-        facts = gpuadapter.adapter_facts(luid) if None not in luid else None
+        if facts is None:
+            facts = gpuadapter.adapter_facts(luid) if None not in luid else None
         return from_replay_config(
             backend=gpuadapter.encoder_backend(facts),
             codec=codec,

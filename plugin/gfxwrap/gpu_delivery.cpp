@@ -3,6 +3,7 @@
 #include "gpu_delivery_metrics.h"
 #include "source_snapshot.h"
 #include "gpu_render.h"
+#include "gpu_startup.h"
 #include "stamp_adapter.h"
 #include <atomic>
 #include <cstring>
@@ -75,6 +76,8 @@ struct Runtime {
     std::atomic<uint32_t> first_failure{GD_NONE};
     std::atomic<uint32_t> request_state{0},surface_state{0}; // 0 free,1 writing,2 ready,3 owned
     std::atomic<uint32_t> status_seq{0},status_words[sizeof(gd_status)/4]{};
+    std::atomic<uint32_t> startup_seq{0},startup_words[sizeof(gpu_startup_v1)/4]{};
+    gpu_startup_v1 startup{}; // renderer-thread writer only, once per preparation
     std::atomic<bool> exhausted{false};
     gc_header request{};uint64_t budget=0;uint32_t epoch=0;
     rb_surface mailbox{},surface{};uint32_t mailbox_epoch=0;
@@ -235,6 +238,12 @@ struct Runtime {
     void set_state(uint32_t next){if(state.exchange(next)!=next)SetEvent(changed);}
     uint32_t diagnostic_reason()const{
         const auto first=first_failure.load();return first?first:reason.load();
+    }
+    void publish_startup(){
+        const auto seq=startup_seq.load();startup_seq.store(seq+1);
+        const auto*words=reinterpret_cast<const uint32_t*>(&startup);
+        for(unsigned i=0;i<sizeof(startup)/4;++i)startup_words[i].store(words[i]);
+        startup_seq.store(seq+2);
     }
     void publish_status(){
         gd_status s{};s.state=state.load();s.reason=diagnostic_reason();s.error=error;s.epoch=epoch;
@@ -407,8 +416,25 @@ struct Runtime {
         if(!live())return false;
         // The renderer's own context is current: this is its thread (render_tick).
         prepare_steps.prepare_begin=qpc();
-        if(!gl.load()){fail(GD_GL_UNSUPPORTED,uint32_t(gl.load_error));return false;}
-        if(!copy_gl.load(true)){fail(GD_GL_UNSUPPORTED,uint32_t(render_capture::LoadError::snapshot_entry_point));return false;}
+        startup={};memcpy(startup.magic,GPU_STARTUP_MAGIC,8);
+        startup.version=GPU_STARTUP_VERSION;startup.bytes=sizeof startup;startup.epoch=epoch;
+        startup.control_generation=request.generation;startup.nonce_lo=request.nonce_lo;startup.nonce_hi=request.nonce_hi;
+        startup.width=surface.width;startup.height=surface.height;
+        const auto text=[](char*target,size_t capacity,const GLubyte*source){
+            if(!source)return;size_t n=0;while(n+1<capacity&&source[n]){target[n]=char(source[n]);++n;}target[n]=0;};
+        text(startup.vendor,sizeof startup.vendor,glGetString(GL_VENDOR));
+        text(startup.renderer,sizeof startup.renderer,glGetString(GL_RENDERER));
+        text(startup.gl_version,sizeof startup.gl_version,glGetString(GL_VERSION));
+        publish_startup(); // Preserve identity even if a later driver capability query stalls.
+        if(!gl.load()){startup.load_error=uint32_t(gl.load_error);
+            text(startup.missing_entry_point,sizeof startup.missing_entry_point,reinterpret_cast<const GLubyte*>(gl.missing_entry_point));
+            publish_startup();fail(GD_GL_UNSUPPORTED,uint32_t(gl.load_error));return false;}
+        // Renderer-thread Pool::prepare already requires copy_texture; do not
+        // change the separate-context pool's existing safe non-DSA fallback.
+        if(!copy_gl.load(true)||!copy_gl.copy_texture){startup.load_error=uint32_t(render_capture::LoadError::snapshot_entry_point);
+            text(startup.missing_entry_point,sizeof startup.missing_entry_point,reinterpret_cast<const GLubyte*>(copy_gl.missing_entry_point));
+            publish_startup();fail(GD_GL_UNSUPPORTED,startup.load_error);return false;}
+        publish_startup();
         TRACE("prepare snapshots");
         gpu_context=surface.context;gpu_context_generation=surface.context_generation;
         // At most RB_SLOTS-1 pictures are held, so one record slot always
@@ -429,6 +455,7 @@ struct Runtime {
         if(!render_capture::adapter_luid(gl,&adapter)){fail(GD_BRIDGE_FAILED,ERROR_NOT_SUPPORTED);return false;}
         prepare_steps.luid=qpc();
         config.luid_low=adapter.LowPart;config.luid_high=adapter.HighPart;
+        startup.luid_available=1;startup.luid_low=adapter.LowPart;startup.luid_high=adapter.HighPart;publish_startup();
         // The helper creates these two keyed-mutex textures; PREPARING imports them.
         for(unsigned i=0;i<GC_BRIDGES;++i){
             swprintf_s(texture_names[i],L"Local\\SM64GpuImage-%016llx%016llx-%u-texture-%u",request.nonce_hi,request.nonce_lo,epoch,i);
@@ -1055,6 +1082,14 @@ extern "C" int __cdecl gd_read_status(gd_status*out){
         if(before==r->status_seq.load()){memcpy(out,words,sizeof(*out));out->state=r->state.load();out->reason=r->diagnostic_reason();return 1;}
     }
     return 0;
+}
+extern "C" int __cdecl gd_read_startup(gpu_startup_v1*out){
+    const auto*r=runtime.load();if(!r||!out)return 0;
+    for(unsigned n=0;n<3;++n){const auto before=r->startup_seq.load();if(!before||before&1)continue;
+        uint32_t words[sizeof(*out)/4]{};
+        for(unsigned i=0;i<sizeof(*out)/4;++i)words[i]=r->startup_words[i].load();
+        if(before==r->startup_seq.load()){memcpy(out,words,sizeof(*out));return 1;}
+    }return 0;
 }
 #ifdef GD_TEST_HOST
 #include "gpu_delivery_retry_test.h"

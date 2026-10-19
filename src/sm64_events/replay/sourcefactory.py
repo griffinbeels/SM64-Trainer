@@ -47,6 +47,9 @@ class SourceFactory:
     def _desktop(self, win):
         return self.desktop_factory(win, fps=self.cfg.fps)
 
+    def diagnostics(self):
+        return self.retry_gate.diagnostics()
+
     def create(self, win):
         # Called only after the machine-wide recorder lock. GPU failure retains
         # this backend and its bounded retry gate, never activates raw fallback.

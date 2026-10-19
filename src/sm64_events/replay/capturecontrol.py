@@ -94,6 +94,7 @@ class CaptureStatus:
     #: as the baseline renderer and no capture can be requested
     #: (plugin/gfxwrap/practice_rom.h). `rom_open` stays False meanwhile.
     baseline_rom: bool = False
+    gpu_startup: dict | None = None
 
 
 class CaptureControl:
@@ -129,6 +130,9 @@ class CaptureControl:
             raw_status = C.string_at(self._view, REQUEST_OFFSET)
             values = _STATUS.unpack_from(raw_status)
             raw_build = C.string_at(self._view + 256, 80)
+            from sm64_events.replay.gpufielddiagnostics import STARTUP, STARTUP_OFFSET, startup_receipt
+
+            raw_startup = C.string_at(self._view + STARTUP_OFFSET, STARTUP.size)
             after = _U32.unpack(C.string_at(self._view + 16, 4))[0]
             if before != after:
                 continue
@@ -142,7 +146,7 @@ class CaptureControl:
                 raise RuntimeError("capture control protocol is not ready or supported")
             build_id = raw_build.split(b"\0", 1)[0].decode("ascii", "replace")
             status = CaptureStatus(*values[4:11], bool(values[11]), *values[12:14], build_id,
-                                   bool(values[14]))
+                                   bool(values[14]), startup_receipt(raw_startup))
             if _process_creation(self._k, status.producer_pid) != (
                     status.producer_created_lo, status.producer_created_hi):
                 from dataclasses import replace

@@ -68,8 +68,8 @@ def _driver_version(adapter) -> str | None:
     return ".".join(str((v >> shift) & 0xFFFF) for shift in (48, 32, 16, 0))
 
 
-def adapter_inventory() -> tuple[tuple[tuple[int, int], AdapterFacts], ...] | None:
-    """All DXGI adapters and their LUIDs, or None if enumeration is incomplete.
+def _adapter_inventory(target=None) -> tuple[tuple[tuple[int, int], AdapterFacts], ...] | None:
+    """Complete DXGI inventory, or stop at a positive exact-LUID match.
 
     Only DXGI_ERROR_NOT_FOUND proves the end. An error, failed description or
     the enumeration bound cannot prove that a usable adapter is absent.
@@ -99,9 +99,15 @@ def adapter_inventory() -> tuple[tuple[tuple[int, int], AdapterFacts], ...] | No
                 if _vtbl(adapter, 10, ctypes.c_long, ctypes.POINTER(_AdapterDesc1))(
                         adapter, ctypes.byref(desc)) != 0:       # GetDesc1
                     return None
+                try:
+                    driver = _driver_version(adapter)
+                except (OSError, AttributeError):
+                    driver = None  # Optional version diagnostics cannot erase proven vendor/LUID facts.
                 adapters.append(((desc.LuidHigh, desc.LuidLow), AdapterFacts(
                     desc.Description, desc.VendorId, bool(desc.Flags & _SOFTWARE_ADAPTER),
-                    _driver_version(adapter))))
+                    driver)))
+                if target is not None and adapters[-1][0] == target:
+                    return (adapters[-1],)  # Exact match needs no evidence about later adapters.
             finally:
                 _vtbl(adapter, 2, ctypes.c_ulong)(adapter)      # Release
     except (OSError, AttributeError):
@@ -111,10 +117,15 @@ def adapter_inventory() -> tuple[tuple[tuple[int, int], AdapterFacts], ...] | No
     return None
 
 
+def adapter_inventory() -> tuple[tuple[tuple[int, int], AdapterFacts], ...] | None:
+    """Complete inventory only; an incomplete prefix cannot reject a machine."""
+    return _adapter_inventory()
+
+
 def adapter_facts(luid) -> AdapterFacts | None:
     """The DXGI adapter with this (high, low) LUID, or None when unknown."""
-    inventory = adapter_inventory()
     key = (luid[0], luid[1] & 0xFFFFFFFF)
+    inventory = _adapter_inventory(key)
     return next((facts for found, facts in inventory if found == key), None) if inventory else None
 
 

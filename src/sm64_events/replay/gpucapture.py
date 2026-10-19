@@ -227,12 +227,13 @@ class GpuCapture:
             from sm64_events.core.error_reporting import capture_problem
 
             capture_problem("Practice Replay GPU recording unavailable", context={
+                **self._report_context(),
                 "component": "gpu_recording", "operation": "startup",
                 "reason": self.unsupported,
             })
         except Exception as exc:
             self._failed(exc)
-            log.exception("GPU recording stopped")
+            log.exception("GPU recording stopped", extra=self._report_context())
         finally:
             self.end_audio(self._pcm)
             self._status = ({"kind": "gpu", "state": "unsupported", "error": None,
@@ -250,6 +251,11 @@ class GpuCapture:
         self.error = str(exc)[:512]
         if self.retry_gate is not None:
             self.retry_gate.failed(self.producer_identity, self.error)
+
+    def _report_context(self):
+        from sm64_events.replay.gpufielddiagnostics import automatic_context
+
+        return automatic_context(getattr(self, "_last_diagnostic", {}))
 
     def _run_session(self, demand, session_factory):
         """Keep one session and lease owned through startup, failure and close."""

@@ -28,6 +28,18 @@ excluded. The collector bounds disk use, repeated errors and retries; a provider
 outage does not block practice. Turning reporting off stops capture and clears
 queued reports. Already uploaded reports remain subject to Sentry's retention.
 
+GPU failures include bounded scalar evidence: startup stage, selected encoder,
+actual adapter/driver when established, native capture build, Open result and
+known operation/HRESULT. OpenGL vendor/renderer/version and a missing function
+are sampled once on the existing renderer startup thread. These strings pass
+the same privacy scrubber. Raw helper stderr and native logs are never uploaded.
+Expected AV1 codec refusal followed by H.264 negotiation is not a failure report.
+The local Debug report separately includes the current recording route and its
+picture/input matching method, first failure retained through cleanup/fallback,
+latest attempt, and last observed setup status. Export reads cached facts; it
+does not enable capture or retry installation. Restarting Trainer clears this
+in-memory history; automatic reports already queued remain governed by retention.
+
 ## Practice Replay permission handling
 
 Install first tries the normal user's permissions. A qualifying denied plugin

@@ -887,14 +887,42 @@ an existing log can belong to an earlier build, so verify its PID/build/time
 before attribution.
 Never restart the user's applications to collect diagnostics.
 
-The current native encoder is NVIDIA NVENC. No CUDA Toolkit installation is
-required. Other GPU encoders remain unqualified; an unsupported GPU keeps the
+NVIDIA uses the existing NVENC encoder; AMD and Intel use the Windows D3D11/MF
+encoder behind the shared packet/custody contract. No CUDA Toolkit installation
+is required. Hardware encoding and renderer interoperability require separate
+qualification; a positively unsupported GPU keeps the
 desktop grab rather than run blocking capture on the emulation thread. The
 installed app starts its helper as itself with `--gpu-helper` (`gui_entry.py`);
 a source run starts the base interpreter on the helper module
 (`core/childproc.py::python_child`), so the helper is the server's direct
 child and keeps STARTF_FORCEOFFFEEDBACK. The portable extension seam is the encoded packet and
 exact custody contract, not a second timing model.
+
+## Diagnostics for hardware qualification
+
+The Debug report includes the active route (`plugin` or `desktop`), recording
+state, and whether pictures carry renderer input/frame stamps or desktop time
+estimates. A successful desktop fallback does not establish native GPU parity.
+It includes the first terminal failure for the current producer/generation and
+the latest attempt, preserved across helper cleanup and fallback. Source and
+packaged build identities, actual channel LUID, adapter/driver facts when known,
+stage timings and known native Open/MF operation/error codes do not depend on
+the clipped log tail. A later success preserves that first failure until a new
+producer/generation or Trainer restart. Missing evidence stays unknown.
+
+An optional `SM64GPU1` version 1 receipt occupies ControlV1's former producer
+padding at offset 336. The page remains 4096 bytes; request 128 and build 256 do
+not move. The renderer samples bounded GL vendor/renderer/version and missing
+function once during startup, with nonce/generation/epoch and actual LUID when
+available. Atomic CPU words hand it to the control worker, which publishes it
+under the existing producer seqlock. Python only accepts a receipt matching its
+request nonce and generation. Readers perform no graphics calls or file I/O.
+Older/unknown receipt versions are optional missing evidence, not protocol faults.
+
+Only known bounded native receipt fields enter automatic Sentry context. Raw
+stderr, plugin logs, pictures and ROM data do not. Expected AV1 codec refusals
+are grouped with their own operation and excluded from terminal failure facts,
+so an H.264 attempt cannot inherit an earlier AV1 failure operation.
 
 ## What failed and why
 

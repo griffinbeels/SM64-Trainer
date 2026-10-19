@@ -369,6 +369,7 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
         cfg=replay_cfg,
         window_finder=find_window,
         video_factory=sources.create,
+        capture_diagnostics=sources.diagnostics,
         # The ghost sound player is tapped only while Ghosts in recording is
         # on, for the ghost copy; the clean audio is the game alone
         # (replay/audio.py GhostTimeline). `recorder` binds late.

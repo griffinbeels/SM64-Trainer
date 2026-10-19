@@ -775,7 +775,7 @@ def _mount_controls(app, poller, replay) -> None:
         return {"restarting": True}
 
 
-def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
+def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, capture_layer=None) -> None:
     @app.get("/health")
     def health():
         latest = poller.latest
@@ -845,7 +845,10 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
             ui_log_file=uilog.log_path(),
             perf_log_file=monitor.log_path
             or data_root() / "data" / "perf_log.jsonl",
-            health=health, events=_events)
+            health=health, events=_events,
+            replay=getattr(getattr(replay, "recorder", None), "diagnostic_status", None),
+            setup=getattr(capture_layer, "diagnostic_status", None),
+            build={"channel": current_build().channel, "build_id": current_build().build_id})
         out = diagnostics.write_report(diagnostics_dir(), report)
         return {"path": str(out), "size_bytes": out.stat().st_size}
 
@@ -934,7 +937,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     from sm64_events.server.community_api import create_community_router
     app.include_router(create_community_router(community_account))
     _mount_controls(app, poller, replay)
-    _mount_diagnostics(app, poller, broadcaster, service, monitor)
+    _mount_diagnostics(app, poller, broadcaster, service, monitor, replay, capture_layer)
     from sm64_events.server.reporting_api import create_reporting_router
     app.include_router(create_reporting_router())
     _mount_events(app, poller, broadcaster, debug_hooks)

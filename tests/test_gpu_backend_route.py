@@ -271,7 +271,7 @@ def test_a_failed_or_truncated_inventory_cannot_reject_the_machine(dxgi, failure
     if failure == "truncated":
         dxgi.facts = [AMD] * gpuadapter._MAX_ADAPTERS
     assert gpuadapter.adapter_inventory() is None
-    assert gpuadapter.adapter_facts((0, 1)) is None  # Even an earlier match is incomplete.
+    assert gpuadapter.adapter_facts((0, 1)) == (AMD if failure in {"partial", "partial_description", "truncated"} else None)
     assert gpuadapter.machine_unsupported_reason() is None
     if failure not in {"create", "null_factory"}:
         assert dxgi.released[-1] == 1
@@ -284,6 +284,14 @@ def test_an_adapter_api_exception_is_unknown(dxgi, monkeypatch):
     monkeypatch.setattr(gpuadapter, "_vtbl", lambda obj, index, *args:
                         (lambda obj: None) if index == 2 else original(obj, index, *args))
     assert gpuadapter.adapter_inventory() is None
+
+
+def test_optional_driver_version_failure_cannot_erase_proven_target_identity(dxgi, monkeypatch):
+    dxgi.fail = "partial"
+    monkeypatch.setattr(gpuadapter, "_driver_version", lambda *_: (_ for _ in ()).throw(OSError("driver query failed")))
+    facts = gpuadapter.adapter_facts((0, 1))
+    assert facts == replace(AMD, driver=None)
+    assert gpuadapter.encoder_backend(facts) == 1
 
 CODEC_REFUSING_HELPER = """\
 import sys
@@ -365,7 +373,7 @@ def test_an_adapter_that_cannot_encode_is_a_verdict_before_any_helper(monkeypatc
 
 
 def test_no_usable_codec_is_a_verdict_and_a_real_fault_is_not(monkeypatch, encoder_asset):
-    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: None)
+    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: AMD)
     with pytest.raises(GpuBackendUnsupported, match="neither AV1 nor H.264"):
         session_for(Replies(Result.CODEC, Result.CODEC))._open_encoder()
     assert gpusettings.backend_unsupported(ONE) is not None  # remembered for this adapter
@@ -373,6 +381,15 @@ def test_no_usable_codec_is_a_verdict_and_a_real_fault_is_not(monkeypatch, encod
     with pytest.raises(RuntimeError) as fault:
         session_for(Replies(Result.ENCODER))._open_encoder()
     assert not isinstance(fault.value, GpuBackendUnsupported)
+
+
+def test_unknown_target_adapter_is_transient_and_never_guessed_as_nvidia(monkeypatch, encoder_asset):
+    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda luid: None)
+    session = session_for(Replies())
+    session.controller_factory = lambda **_: pytest.fail("no helper until the exact adapter is identified")
+    with pytest.raises(RuntimeError, match="adapter identity is unavailable") as caught:
+        session._open_encoder()
+    assert not isinstance(caught.value, GpuBackendUnsupported)
     assert gpusettings.backend_unsupported(ONE) is None
 
 

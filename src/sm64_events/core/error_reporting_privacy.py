@@ -25,6 +25,10 @@ _CONTEXT_KEYS = frozenset({
     "winerror", "error_type", "setup_state", "plugin_status", "platform",
     "version", "line", "column", "file", "browser_stack", "elevated",
     "status", "status_code", "method", "route", "source", "reason", "stack", "path",
+    "encoder_backend", "codec", "requested_codec", "capture_build", "gpu_vendor_id", "gpu_name", "gpu_driver",
+    "native_result", "native_stage", "native_operation", "native_hresult", "encoder_error", "driver_error",
+    "encoder_result", "native_reason",
+    "gl_vendor", "gl_renderer", "gl_version", "missing_entry_point",
 })
 
 
@@ -55,7 +59,10 @@ def safe_context(context: object) -> dict:
     if not isinstance(context, Mapping):
         return {}
     return {
-        key: value if isinstance(value, (bool, int, float)) else scrub_text(value)
+        key: value if isinstance(value, (bool, int, float)) or (
+            key == "capture_build" and isinstance(value, str)
+            and re.fullmatch(r"[0-9a-f]{64}-gpu-runtime", value)
+        ) else scrub_text(value)
         for key, value in context.items()
         if key in _CONTEXT_KEYS and isinstance(value, (str, bool, int, float))
     }

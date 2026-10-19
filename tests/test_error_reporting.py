@@ -98,6 +98,37 @@ def test_sdk_log_errors_are_collected_and_safe_app_logs_are_breadcrumbs(tmp_path
     assert any(crumb["message"] == "Synthetic install started" for crumb in event["breadcrumbs"]["values"])
 
 
+def test_gpu_owner_logging_carries_structured_native_failure_through_actual_sdk(tmp_path):
+    from types import SimpleNamespace as NS
+    from sm64_events.memory.layout import US
+    from sm64_events.replay.gpucapture import GpuCapture
+    from sm64_events.replay.gpudemand import DemandSnapshot
+
+    configure(tmp_path)
+    native_build = "0123456789abcdef" * 4 + "-gpu-runtime"
+    record = dict(stage="encoder", encoder_backend="windows", native_hresult=0xC00D36B4,
+                  native_stage="encoder_prepare", native_operation="sequence_header",
+                  gpu_vendor_id=0x1002, gpu_driver="32.0.21045.5002", capture_build=native_build,
+                  startup={"gl_renderer": r"AMD Radeon C:\Users\PrivateGpuUser\private.rom"})
+
+    def session(owner, demand):
+        owner._last_diagnostic = record
+        return NS(run=lambda: (_ for _ in ()).throw(RuntimeError("synthetic native encoder failure")))
+
+    capture = GpuCapture(42, US, nominal_rate=30, session_factory=session,
+                         demand_factory=lambda *_: NS(start=lambda: None, close=lambda **_: None,
+                                                       snapshot=DemandSnapshot("active")))
+    capture._run()
+    wait_for(lambda: len(read_events(tmp_path)) == 1)
+    event = read_events(tmp_path)[0]
+    assert event["extra"]["native_hresult"] == 0xC00D36B4
+    assert event["extra"]["native_operation"] == "sequence_header"
+    assert event["extra"]["capture_build"] == native_build
+    assert event["extra"]["gpu_driver"] == "32.0.21045.5002"
+    assert "PrivateGpuUser" not in json.dumps(event) and "private.rom" not in json.dumps(event)
+    assert event["exception"]["values"][-1]["type"] == "RuntimeError"
+
+
 @pytest.mark.parametrize("name", ["sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64_events.synthetic"])
 def test_actual_application_logger_names_supply_breadcrumbs(tmp_path, name):
     configure(tmp_path)

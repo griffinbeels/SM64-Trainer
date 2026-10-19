@@ -38,7 +38,7 @@ def encoder_asset(tmp_path, monkeypatch):
     """Fake controllers negotiate without a locally built encoder or real GPU.
 
     Keep the actual private-copy staging contract with temporary shipped bytes
-    and scratch root. Adapter discovery is unknown; no helper loads these bytes.
+    and scratch root. Adapter facts are inert; no helper loads these bytes.
     """
     shipped = tmp_path / "shipped" / "SM64GpuEncoderV1.dll"
     shipped.parent.mkdir()
@@ -46,7 +46,9 @@ def encoder_asset(tmp_path, monkeypatch):
     monkeypatch.setattr(gpucapture_session, "bundled_encoder_dll", lambda: shipped)
     monkeypatch.setattr(gpucapture_session, "staged_encoder_dll",
                         partial(staged_encoder_dll, root=tmp_path / "scratch"))
-    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda _luid: None)
+    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda _luid:
+                        gpuadapter.AdapterFacts("fixture NVIDIA", 0x10DE, False, "fixture"))
+    monkeypatch.setattr(gpuadapter, "nvenc_api_version", lambda: (13, 1))
     gpusettings.forget_adapter_codecs()
     yield shipped
     gpusettings.forget_adapter_codecs()
@@ -167,7 +169,8 @@ def test_fake_controller_receives_a_private_staged_encoder_asset(encoder_asset):
 
 
 def test_a_missing_encoder_asset_remains_a_fault_before_any_helper(monkeypatch):
-    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda _luid: None)
+    monkeypatch.setattr(gpuadapter, "adapter_facts", lambda _luid:
+                        gpuadapter.AdapterFacts("fixture AMD", 0x1002, False, "fixture"))
     monkeypatch.setattr(gpucapture_session, "bundled_encoder_dll", lambda: None)
     controller = Replies(Result.OK)
     with pytest.raises(RuntimeError, match="carries no SM64GpuEncoderV1.dll") as fault:

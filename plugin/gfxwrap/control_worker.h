@@ -54,6 +54,9 @@ static void control_publish(control_page_t *page, uint32_t state, uint32_t reaso
     page->rom_baseline = (uint32_t)InterlockedCompareExchange(&g_control_baseline, 0, 0);
     #ifdef GFXWRAP_GPU_RUNTIME
     page->capabilities = CONTROL_CAP_PASSIVE | rc_capabilities();
+    /* Bounded CPU snapshot only. No graphics, device or file operations. */
+    gpu_startup_v1 startup;
+    if (gd_read_startup(&startup)) page->gpu_startup = startup;
     #endif
     MemoryBarrier();
     InterlockedIncrement((volatile LONG *)&page->seq);
@@ -119,6 +122,7 @@ restart:
     #endif
     page->state = CONTROL_PASSIVE;
     strncpy_s(page->build_id, sizeof page->build_id, GFXWRAP_BUILD_ID, _TRUNCATE);
+    memset(&page->gpu_startup, 0, sizeof page->gpu_startup);
     MemoryBarrier();
     InterlockedExchange((volatile LONG *)&page->seq, (LONG)(publishing + 1));
     snprintf(name, sizeof name, "%s%s%s", start->name, CONTROL_SUFFIX,

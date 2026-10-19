@@ -5,6 +5,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include "gpu_startup.h"
 #define CONTROL_MAGIC "SM64CTL1"
 #define CONTROL_VERSION 1u
 #define CONTROL_BYTES 4096u
@@ -45,14 +46,17 @@ typedef struct {
     control_request_t request;
     uint8_t reserved_client[256 - 128 - sizeof(control_request_t)];
     char build_id[80];
-    uint8_t padding[CONTROL_BYTES - 336];
+    gpu_startup_v1 gpu_startup;
+    uint8_t padding[CONTROL_BYTES - 336 - sizeof(gpu_startup_v1)];
 } control_page_t;
 #ifdef __cplusplus
 static_assert(offsetof(control_page_t, request) == 128, "control request offset");
 static_assert(offsetof(control_page_t, build_id) == 256, "control build identity offset");
+static_assert(offsetof(control_page_t, gpu_startup) == 336, "optional GPU receipt offset");
 static_assert(sizeof(control_page_t) == CONTROL_BYTES, "control page size");
 #else
 _Static_assert(offsetof(control_page_t, request) == 128, "control request offset");
 _Static_assert(offsetof(control_page_t, build_id) == 256, "control build identity offset");
+_Static_assert(offsetof(control_page_t, gpu_startup) == 336, "optional GPU receipt offset");
 _Static_assert(sizeof(control_page_t) == CONTROL_BYTES, "control page size");
 #endif

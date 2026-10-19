@@ -97,6 +97,24 @@ class Request:
             assert f.close_release.wait(2)
 
 
+def test_startup_receipt_is_request_bound_and_survives_native_failure_cleanup():
+    f = Fixture()
+    d = f.demand().start()
+    try:
+        assert d.ready.wait(1)
+        f.change(ack_token=123, state=C.ACTIVE, gpu_startup={"nonce": "wrong", "control_generation": 4})
+        eventual(lambda: d.snapshot.state, lambda state: state == "active")
+        assert d.snapshot.native_startup is None
+        receipt = {"nonce": d.identity.nonce.hex(), "control_generation": 4,
+                   "gl_renderer": "AMD fixture", "missing_entry_point": "glFixture"}
+        f.change(gpu_startup=receipt, state=C.UNAVAILABLE, reason=10032)
+        assert d.done.wait(1)
+    finally:
+        d.close()
+    assert d.snapshot.native_startup == receipt
+    assert d.snapshot.capture_build == "fixture" and d.snapshot.backend_reason == 10032
+
+
 @pytest.mark.parametrize("unavailable_error", [FileNotFoundError, BlockingIOError])
 def test_construction_and_status_are_passive_then_wait_for_producer_and_rom(unavailable_error):
     f = Fixture(rom=False, available=False, unavailable_error=unavailable_error)
