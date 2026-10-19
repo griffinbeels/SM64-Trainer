@@ -1,10 +1,13 @@
 /* Contract refusals run without creating any graphics device. */
 #include "gpu_platform_encoder.h"
+#include "gpu_mf_deadline.h"
 #include <stddef.h>
 #include <stdio.h>
 static_assert(sizeof(gbenc_options_v1)==128,"V1 options size unchanged");
 static_assert(offsetof(gbenc_options_v1,backend)==112&&offsetof(gbenc_options_v1,backend_quality)==116,"append-only backend words");
 int main(){
+    if(gpu_mf_wait_ms(100,99)!=1||gpu_mf_wait_ms(100,100)!=0||gpu_mf_wait_ms(100,101)!=0||
+       gpu_mf_wait_ms(UINT64_MAX,0)!=1500)return 3;
     const gbenc_sink_v1 sink{};
     for(unsigned fault=0;fault<5;++fault){
         gbenc_options_v1 options{};options.struct_size=sizeof(options);options.version=GBENC_ABI_V1;

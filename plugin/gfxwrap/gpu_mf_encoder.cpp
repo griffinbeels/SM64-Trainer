@@ -1,4 +1,5 @@
 #include "gpu_mf_encoder.h"
+#include "gpu_mf_deadline.h"
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mferror.h>
@@ -215,7 +216,8 @@ bool MfEncoder::submit(uint64_t occurrence,uint64_t pts,uint64_t duration,bool i
     MF_TRY(bytes->Lock(&data,nullptr,&size));const bool valid=size&&size<=p.packet.size();if(valid)memcpy(p.packet.data(),data,size);
     hr=bytes->Unlock();if(FAILED(hr))return fail(GBENC_DRIVER_ERROR,hr,true);bytes.Reset();result.Reset();supplied.Reset();
     if(!valid)return fail(GBENC_PACKET_ERROR,E_UNEXPECTED,true);
-    if(WaitForSingleObject(p.release->event,DWORD(deadline>GetTickCount64()?deadline-GetTickCount64():0))!=WAIT_OBJECT_0)return fail(GBENC_DRIVER_ERROR,HRESULT_FROM_WIN32(WAIT_TIMEOUT),true);
+    const ULONGLONG release_now=GetTickCount64();
+    if(WaitForSingleObject(p.release->event,gpu_mf_wait_ms(deadline,release_now))!=WAIT_OBJECT_0)return fail(GBENC_DRIVER_ERROR,HRESULT_FROM_WIN32(WAIT_TIMEOUT),true);
     ++completed_;const gbenc_packet_v1 packet{sizeof(gbenc_packet_v1),GBENC_ABI_V1,p.packet.data(),size,clean?GBENC_PACKET_KEYFRAME:0,occurrence,pts,duration};
     state_=GBENC_DELIVERING;int accepted=GBENC_SINK_REJECTED;try{accepted=p.sink.on_packet(p.sink.user,&packet);}catch(...){accepted=GBENC_SINK_REJECTED;}
     if(accepted!=GBENC_SINK_ACCEPTED)return fail(GBENC_SINK_ERROR,E_FAIL);
