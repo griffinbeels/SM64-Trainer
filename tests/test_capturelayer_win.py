@@ -1,5 +1,8 @@
 """Project64 compatibility is not synonymous with a Windows version resource."""
 import hashlib
+from contextlib import nullcontext
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -48,3 +51,31 @@ def test_missing_or_unreadable_image_cannot_be_recognized(unversioned, monkeypat
         raise PermissionError("cannot read this executable")
     monkeypatch.setattr(type(unversioned), "read_bytes", denied)
     assert win.WinProcesses.check_folder(str(unversioned.parent))["state"] != "ready"
+
+
+@pytest.mark.parametrize("outcome", ["deleted", "already_absent", "denied"])
+def test_registry_delete_restores_absence_and_preserves_actual_failures(monkeypatch, outcome):
+    opened, deleted = [], []
+    handle = object()
+
+    def open_key(*args):
+        opened.append(args)
+        return nullcontext(handle)
+
+    def delete_value(key, name):
+        deleted.append((key, name))
+        if outcome == "already_absent":
+            raise FileNotFoundError("Value is already absent")
+        if outcome == "denied":
+            raise PermissionError("Current user's registry key is read-only")
+
+    monkeypatch.setitem(sys.modules, "winreg", SimpleNamespace(
+        HKEY_CURRENT_USER="original-user", KEY_SET_VALUE=2,
+        OpenKey=open_key, DeleteValue=delete_value))
+    if outcome == "denied":
+        with pytest.raises(PermissionError, match="read-only"):
+            win.WinRegistry().delete("PJ64/Dll", "Graphics Dll")
+    else:
+        win.WinRegistry().delete("PJ64/Dll", "Graphics Dll")
+    assert opened == [("original-user", "PJ64/Dll", 0, 2)]
+    assert deleted == [(handle, "Graphics Dll")]
