@@ -105,6 +105,7 @@ class LayerRefused(Exception):
 class Registry(Protocol):
     def get(self, subkey: str, name: str) -> str | int | None: ...
     def set(self, subkey: str, name: str, value: str) -> None: ...
+    def delete(self, subkey: str, name: str) -> None: ...
 
 
 class Processes(Protocol):
@@ -365,6 +366,30 @@ class CaptureLayer:
     def _set_registry_graphics_dll(self, name: str) -> None:
         self._registry.set(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE, name)
 
+    @contextmanager
+    def _registry_install_transaction(self):
+        """Keep HKCU in the same transaction as the helper's final acknowledgment."""
+        previous = self._registry_graphics_dll()
+        attempted = False
+
+        def select_wrapper():
+            nonlocal attempted
+            attempted = True
+            self._set_registry_graphics_dll(WRAPPER_DLL)
+
+        try:
+            yield select_wrapper
+        except BaseException:
+            if attempted:
+                try:
+                    if previous is None:
+                        self._registry.delete(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE)
+                    else:
+                        self._set_registry_graphics_dll(previous)
+                except Exception:
+                    log.exception("could not restore Project64's previous graphics selection")
+            raise
+
     def _read_wrapped_name(self, ini_path: Path) -> str | None:
         try:
             text = ini_path.read_text()
@@ -545,7 +570,8 @@ class CaptureLayer:
         overlay["previous_graphics_dll"] = previous
         overlay["uninstalled_at"] = None
         from sm64_events.core.setup_files import restore_on_failure
-        with restore_on_failure([self._settings_path]), self._install_plugin_files(
+        with self._registry_install_transaction() as select_wrapper, restore_on_failure([
+                self._settings_path]), self._install_plugin_files(
                 pj64_dir, source, renderer, elevated=elevated) as receipts:
             renderer_receipt, receipt = receipts["renderer_receipt"], receipts["installation_receipt"]
             overlay["installed_renderer_sha256"] = renderer_receipt["after"]["sha256"]
@@ -556,7 +582,7 @@ class CaptureLayer:
             self._save_overlay(overlay)
             # HKCU always belongs to this original user, even if UAC used
             # another administrator's credentials for the file transaction.
-            self._set_registry_graphics_dll(WRAPPER_DLL)
+            select_wrapper()
 
         return self.status()
 

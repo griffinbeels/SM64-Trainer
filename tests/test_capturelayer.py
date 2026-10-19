@@ -61,6 +61,9 @@ class FakeRegistry:
     def set(self, subkey, name, value):
         self._values[(subkey, name)] = value
 
+    def delete(self, subkey, name):
+        self._values.pop((subkey, name), None)
+
 
 class FakeProcesses:
     """A process list with exactly one settable fact: whether -- and where

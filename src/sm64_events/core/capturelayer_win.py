@@ -77,6 +77,15 @@ class WinRegistry:
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, subkey) as key:
             winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
 
+    def delete(self, subkey: str, name: str) -> None:
+        """Restore an originally absent selection without leaving an empty value."""
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, name)
+        except FileNotFoundError:
+            return  # An already absent value is the requested restored state.
+
 
 class WinProcesses:
     """The live process list, read only far enough to find Project64.exe's

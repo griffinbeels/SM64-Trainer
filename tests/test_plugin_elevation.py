@@ -45,6 +45,9 @@ def install(tmp_path):
         def set(self, key, name, value):
             self.selected = value
 
+        def delete(self, key, name):
+            self.selected = None
+
     class Processes:
         @staticmethod
         def pj64_image_path():
@@ -149,6 +152,59 @@ def test_terminal_admin_error_retains_actual_operation_path_and_windows_code(ins
     assert raised.value.operation == "copy plugin"
     assert raised.value.filename == str(pj64 / "Plugin" / RENDERER_DLL)
     assert raised.value.winerror == 112
+
+
+@pytest.mark.parametrize("original", ["original.dll", None])
+def test_helper_commit_failure_restores_original_user_selection_and_files(install, monkeypatch, original):
+    layer, registry, settings, pj64, source, renderer = install
+    registry.selected = original
+    before = settings.read_bytes()
+    deny_first_copy(monkeypatch)
+    terminal = PluginInstallError("commit administrator install", pj64 / "Plugin",
+                                 OSError("Administrator helper acknowledgment failed"))
+
+    @contextmanager
+    def failed_commit(*args):
+        with layer._install_plugin_files(pj64, source, renderer, elevated=False) as receipts:
+            yield receipts
+            assert registry.selected == WRAPPER_DLL
+            assert json.loads(settings.read_text())["consented_at"]
+            raise terminal
+
+    monkeypatch.setattr(plugin_elevation, "elevated_install", failed_commit)
+    with pytest.raises(PluginInstallError) as raised:
+        layer.install(True)
+    assert raised.value is terminal
+    assert registry.selected == original
+    assert settings.read_bytes() == before
+    assert not list((pj64 / "Plugin").iterdir())
+
+
+def test_registry_rollback_failure_logs_separately_and_preserves_root_error(install, monkeypatch, caplog):
+    layer, registry, _, pj64, source, renderer = install
+    deny_first_copy(monkeypatch)
+    terminal = PluginInstallError("commit administrator install", pj64 / "Plugin",
+                                 OSError("Root helper failure"))
+
+    def fail_restore(key, name, value):
+        if value != WRAPPER_DLL:
+            raise PermissionError("Registry rollback was refused")
+        registry.selected = value
+
+    @contextmanager
+    def failed_commit(*args):
+        with layer._install_plugin_files(pj64, source, renderer, elevated=False) as receipts:
+            yield receipts
+            raise terminal
+
+    monkeypatch.setattr(registry, "set", fail_restore)
+    monkeypatch.setattr(plugin_elevation, "elevated_install", failed_commit)
+    with pytest.raises(PluginInstallError) as raised:
+        layer.install(True)
+    assert raised.value is terminal
+    rollback = [record for record in caplog.records if "restore Project64's previous" in record.message]
+    assert len(rollback) == 1
+    assert isinstance(rollback[0].exc_info[1], PermissionError)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows mapped-image semantics")
