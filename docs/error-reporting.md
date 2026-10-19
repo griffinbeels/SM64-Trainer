@@ -38,6 +38,11 @@ and settings. A user cancellation or final failed retry produces its actual erro
 File use, unsupported targets and unavailable payloads retain distinct explanations.
 Background plugin refresh never prompts for administrator permission.
 
+Files roll back until the helper commits. If its final acknowledgment is lost
+after commit, the complete verified DLL pair may remain while the original user's
+settings and graphics selection restore. Setup does not claim success or select
+the wrapper in that ambiguous case; retrying installation is safe.
+
 ## Verification limits
 
 Synthetic transport tests establish capture, scrubbing, queue/retry and opt-out.

@@ -79,8 +79,10 @@ click; a declared transition or a settled screenshot alone cannot prove movement
   merely because the destination stayed unchanged. Explicit install now checks
   sharing/loaded-module evidence and retries eligible access failures through a
   scoped UAC helper while the page stays Installing. The original process owns
-  HKCU/settings; helper files and per-user selection roll back if the transaction
-  fails. Background refresh never prompts. `tests/test_plugin_elevation.py`
+  HKCU/settings; helper files roll back before commit, and per-user selection
+  restores on failure. A lost final acknowledgment can leave complete DLL files
+  without selecting the wrapper; see `docs/error-reporting.md`. Background refresh
+  never prompts. `tests/test_plugin_elevation.py`
   covers actual mapped DLLs, denied access, cancellation and privileged rollback;
   `tests/test_ui_reporting.py` covers the uninterrupted pending state. Real UAC
   interaction remains a separate verification boundary.
