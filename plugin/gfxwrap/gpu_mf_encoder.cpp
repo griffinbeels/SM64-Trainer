@@ -67,12 +67,13 @@ struct MfEncoder::Impl {
     HRESULT event_until(bool output,ULONGLONG deadline){
         if(!asynchronous)return S_OK;
         while(!(output?output_credit:input_credit)){
+            if(GetTickCount64()>=deadline)return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
             ComPtr<IMFMediaEvent> e;HRESULT hr=events->GetEvent(MF_EVENT_FLAG_NO_WAIT,&e);
             if(hr==MF_E_NO_EVENTS_AVAILABLE){if(GetTickCount64()>=deadline)return HRESULT_FROM_WIN32(WAIT_TIMEOUT);Sleep(1);continue;}
             if(FAILED(hr))return hr;HRESULT status=S_OK;e->GetStatus(&status);if(FAILED(status))return status;
             MediaEventType kind=MEUnknown;e->GetType(&kind);
-            if(kind==METransformNeedInput)++input_credit;
-            else if(kind==METransformHaveOutput)++output_credit;
+            if(kind==METransformNeedInput){if(input_credit==UINT_MAX)return E_UNEXPECTED;++input_credit;}
+            else if(kind==METransformHaveOutput){if(output_credit==UINT_MAX)return E_UNEXPECTED;++output_credit;}
             else if(kind==MEError)return E_FAIL;
         }return S_OK;
     }
@@ -99,7 +100,8 @@ bool MfEncoder::prepare(ID3D11Device*device,ID3D11DeviceContext*context,const Mf
        !s.width||!s.height||(s.width&1)||(s.height&1)||s.width>3840||s.height>2160||!s.nominal_fps_num||!s.nominal_fps_den||
        settings.quality>100||s.b_frames||!s.gop_frames||!s.max_packet_bytes||s.max_packet_bytes>(16u<<20)||
        (s.codec!=GBENC_CODEC_H264&&s.codec!=GBENC_CODEC_AV1)||s.profile!=(s.codec==GBENC_CODEC_H264?GBENC_H264_HIGH:GBENC_AV1_MAIN)||
-       s.backend_quality!=settings.quality||s.preset||s.tuning||s.rate_control||s.cq||s.vbv_buffer_bits||
+       s.backend!=GBENC_BACKEND_WINDOWS||s.backend_quality!=settings.quality||s.preset||s.tuning||s.rate_control||s.cq||s.max_bitrate||s.vbv_buffer_bits||
+       s.initial_qp_i||s.initial_qp_p||s.initial_qp_b||
        s.full_range>1||s.signal_color>1||(s.matrix!=5&&s.matrix!=1)||s.primaries!=2||s.transfer!=2||s.reserved[0]||s.reserved[1]||
        (s.input_format!=GBENC_INPUT_RGBA8&&s.input_format!=GBENC_INPUT_BGRA8)){
         error_=GBENC_INVALID_ARGUMENT;return false;}

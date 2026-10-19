@@ -43,7 +43,6 @@ int main(int argc,char**argv){
     s.input_format=GBENC_INPUT_RGBA8;s.signal_color=1;s.matrix=5;s.primaries=2;s.transfer=2;s.idr_interval_ticks=90000;s.max_packet_bytes=1<<20;settings.quality=90;s.backend_quality=90;s.backend=GBENC_BACKEND_WINDOWS;
     if(bgra)s.input_format=GBENC_INPUT_BGRA8;
     if(av1){s.codec=GBENC_CODEC_AV1;s.profile=GBENC_AV1_MAIN;}
-    if(argc>2&&!strcmp(argv[2],"bitrate-hint"))s.max_bitrate=20000000;
     gbenc_sink_v1 sink{sizeof(sink),1,packet,f};WitnessEncoder encoder;
     if(!encoder.prepare(device.Get(),context.Get(),settings,sink)){printf("prepare state=%u error=%u hr=%08x\n",encoder.state(),encoder.error(),encoder.driver_error());fclose(f);return 4;}
     printf("prepared D3D11->NV12->hardwareMF noCPUreadback=yes\n");
