@@ -36,7 +36,8 @@ def _failed_operation(error: OSError, operation: str) -> JSONResponse:
             "detail": "Installation cancelled at the Windows permission prompt. You can try again."})
     error_reporting.capture_exception(error, context={
         "component": "practice_replay_install", "operation": getattr(error, "operation", operation),
-        "winerror": getattr(error, "winerror", None), "path": error.filename})
+        "winerror": getattr(error, "winerror", None), "path": error.filename,
+        "file": Path(error.filename).name if error.filename else "unknown"})
     log.warning("Practice Replay %s failed: %s", operation, error)
     detail = str(error)
     return JSONResponse(status_code=409, content={

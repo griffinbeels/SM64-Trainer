@@ -245,6 +245,11 @@ and named movement (LBLJ, Lakitu Skip, MIPS…) wears a small Ukiki face beside
 its name — Ukikipedia's own icon — that opens its RTA Guide page; it appears
 only where the wiki actually has a page, so it never leads to a 404.
 
+**Automatic error reports.** Builds configured for Sentry send technical failures
+in the background. **Settings → Error reports** turns collection off and clears
+pending uploads. Reports filter personal paths and credentials and exclude screenshots
+and recordings. See [configuration and privacy](docs/error-reporting.md).
+
 **Debug report.** Something behaving oddly? **Settings → Debug report** writes
 a single file capturing what the trainer was doing (logs, recent events,
 health) and shows it in Explorer — attach it to your bug report.

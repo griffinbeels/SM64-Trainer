@@ -5,11 +5,14 @@ paths:
   - "src/sm64_events/core/logging_setup.py"
   - "src/sm64_events/core/paths.py"
   - "src/sm64_events/core/diagnostics.py"
+  - "src/sm64_events/core/error_reporting*.py"
+  - "src/sm64_events/core/reporting_setup.py"
 ---
 
 # Server layer & wiring — where to change what
 
 | To change... | Edit |
+| Automatic error collection, privacy and retries | `core/error_reporting.py` (SDK + preference), `error_reporting_privacy.py` (allowlisted payload), `error_reporting_transport.py` (bounded durable envelope queue); `reporting_setup.py` owns bundled DSN/startup, `server/reporting_api.py` owns local settings/browser ingestion. Configuration and limits: `docs/error-reporting.md`. |
 |---|---|
 | Poll loop, attach retry, layout sanity, session pause | `server/poller.py` — paced by `PollClock` (a high-resolution waitable timer awaited through the loop's completion port; **never `asyncio.sleep` for the tick**: on Windows it lands every 15.6 ms, 65/s, unless something else raised the timer resolution; `tests/test_poller_cadence.py`; `perf_stats()['poll_hz']` is the achieved rate). Also SYNTHESIZES `game_reset` on reattach: an F1 console reset makes RDRAM briefly implausible → detach nulls `_prev` → the backward-into-boot jump is lost, so on reattach it keeps `_last_timer` across the gap and emits `game_reset` when the timer dropped from ≥ BOOT_TIMER_MAX into it (live gate 2026-06-15; test_poller.py). Also carries the tracker's **frame heartbeat**: `on_frame` (constructor-injected, `main.py` passes `TrackerService.settle_frame`) is awaited with the live `global_timer` after each tick's events, so a judgement the matcher deferred by one frame is delivered by the CLOCK instead of by whatever the player happens to do next — standing still inside a course journals nothing, and that cost a correct segment cancel 27.7 s of screen time (`.claude/rules/tracking-storage.md`, the one-frame defer). Injected rather than duck-typed off the event sink, which is sometimes a plain `Broadcaster`; the wiring itself is pinned by `tests/test_composition.py`, since every unit below it passes unwired. Also the PRESENT WATCH (map v4, 2026-08-24): `_watch_presents` runs every tick — starts `memory/present.py`'s background hunt while frames advance, reads the found counter (4 bytes), marks each tick into the frame clock's present series (first value after (re)acquisition skipped: edge unobserved), and watchdogs the address — invalidated only when the game runs `PRESENT_FROZEN_FRAMES` past the last tick; a BACKWARD timer jump (F1 reset) re-baselines instead, because the emulator process and the counter's heap survive a console reset and a re-hunt costs half a minute of degraded maps. Detach keeps the address for the same reason |
 | WS fan-out, seq numbers | `server/broadcaster.py` |

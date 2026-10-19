@@ -25,7 +25,8 @@ def test_reporting_setting_and_automatic_browser_capture(tmp_path, monkeypatch, 
     current = {"configured": True, "enabled": True, "pending": 0}
     captured = []
     monkeypatch.setattr(reports, "status", lambda: dict(current))
-    monkeypatch.setattr(reports, "set_enabled", lambda value: current.update(enabled=value))
+    monkeypatch.setattr(reports, "set_enabled", lambda value: current.update(
+        enabled=value, preference_error=not value))
     monkeypatch.setattr(reports, "capture_problem", lambda message, **kw: captured.append((message, kw)))
     with serve_ui(db_path=tmp_path / "ui.db") as url, get_driver().launch(viewport=(width, 900)) as page:
         page.goto(url + "/ui/index.html")
@@ -38,8 +39,14 @@ def test_reporting_setting_and_automatic_browser_capture(tmp_path, monkeypatch, 
         page.click("#automatic-error-reports")
         wait_until(page, "!document.querySelector('#automatic-error-reports').checked", "reporting is disabled")
         assert current["enabled"] is False
+        assert "could not be saved" in page.evaluate("document.querySelector('.settings-drawer').innerText")
+        page.click('.settings-head button[aria-label="Close settings"]')
+        page.click('.settings-link[aria-label="Settings"]')
+        page.wait_for("#automatic-error-reports:not(:disabled)")
+        assert "could not be saved" in page.evaluate("document.querySelector('.settings-drawer').innerText")
         page.click("#automatic-error-reports")
         wait_until(page, "document.querySelector('#automatic-error-reports').checked", "reporting is enabled")
+        assert "could not be saved" not in page.evaluate("document.querySelector('.settings-drawer').innerText")
         page.evaluate("setTimeout(() => { throw new Error('Synthetic browser capture control'); }, 0)")
         for _ in range(100):
             if captured:

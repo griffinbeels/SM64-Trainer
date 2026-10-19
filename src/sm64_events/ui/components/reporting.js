@@ -19,7 +19,10 @@ export function ReportingSettings() {
   async function change(enabled) {
     setBusy(true);
     setMessage("");
-    try { setStatus(await send("PUT", "/api/diagnostics/reporting", { enabled })); }
+    try {
+      const value = await send("PUT", "/api/diagnostics/reporting", { enabled });
+      setStatus(value);
+    }
     catch { setMessage("Could not save error reporting preference. Try again."); }
     finally { setBusy(false); }
   }
@@ -31,9 +34,11 @@ export function ReportingSettings() {
           disabled=${!status || busy} onchange=${event => change(event.target.checked)} />
     </label>
     <p class="settings-note">Helps fix crashes and failed operations. Reports include technical
-      error details with personal paths and secrets removed. No screenshots or gameplay recordings.</p>
+      error details with personal paths and credentials filtered. No screenshots or gameplay recordings.</p>
     ${status && !status.configured && html`<p class="settings-note">Automatic reporting is not configured in this build.</p>`}
     ${status?.configured && status?.enabled && html`<p class="settings-note">Reports send automatically in the background.</p>`}
+    ${status?.preference_error && html`<p class="settings-note" role="status">
+      This choice applies for this session, but could not be saved. Check the app folder's permissions before restarting.</p>`}
     ${message && html`<p class="settings-note" role="status">${message}</p>`}
   </section>`;
 }
