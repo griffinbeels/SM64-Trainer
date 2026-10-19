@@ -44,6 +44,7 @@ keeps its original bytes; an adopted one rewrites only that block.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import os
@@ -56,6 +57,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
@@ -91,6 +93,7 @@ MIN_SSIM = 0.95
 MIN_SAVING = 0.10
 _ENCODE_TIMEOUT_S = 1800
 _BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+_NEW_HARDWARE_CODECS = frozenset(("av1_amf", "h264_amf", "av1_qsv", "h264_qsv"))
 
 
 class Unproven(Exception):
@@ -133,6 +136,9 @@ def run_child(args, *, timeout, **kwargs) -> subprocess.CompletedProcess:
     text = kwargs.pop("text", False)
     kwargs.pop("check", None)
     on_line = kwargs.pop("on_line", None)
+    source = kwargs.pop("input", None)
+    if source is not None:
+        kwargs["stdin"] = subprocess.PIPE
     if kwargs.pop("capture_output", False):
         kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     child = subprocess.Popen(args, text=text, **kwargs)
@@ -140,7 +146,7 @@ def run_child(args, *, timeout, **kwargs) -> subprocess.CompletedProcess:
         _CHILDREN.add(child)
     try:
         if on_line is None:
-            out, err = child.communicate(timeout=timeout)
+            out, err = child.communicate(input=source, timeout=timeout)
         else:
             out, err = _follow(child, on_line, timeout)
     except subprocess.TimeoutExpired:
@@ -363,6 +369,52 @@ def encode_args(ffmpeg: str, saved: Path, staged: Path, codec: str, end: int) ->
             "-movflags", "+faststart", "-f", "mp4", str(staged)]
 
 
+def _require_unreordered(source) -> None:
+    import av
+
+    with av.open(source, format="mp4") as container:
+        for packet in container.demux(video=0):
+            if packet.size and (packet.pts is None or packet.dts != packet.pts):
+                raise Unproven("encoder reordered pictures")
+
+
+@lru_cache(maxsize=32)
+def _archive_hardware_reason(ffmpeg: str, codec: str, quality: tuple[str, ...]) -> str | None:
+    """Qualify the actual child binary/driver once per archive quality policy.
+
+    The new hardware routes must preserve asymmetric colors, unequal picture
+    ticks and decode order before touching a real saved replay. The existing
+    NVIDIA routes keep their exact selection and encode path. This witness
+    never replaces each clip's own full timing, audio, size and SSIM proof.
+    """
+    import av
+
+    from sm64_events.replay.codecprobe import (
+        fragment_output_args, probe_input, validate_output,
+    )
+    from sm64_events.replay.config import raw_picture_args
+
+    try:
+        result = run_child(
+            [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-copyts",
+             "-f", "nut", "-i", "pipe:0", "-map", "0:v:0", "-an",
+             "-c:v", codec, *quality, *raw_picture_args(codec), "-bf", "0",
+             "-g", "60", "-fps_mode", "passthrough", "-enc_time_base", "demux",
+             "-bsf:v", picture_duration_filter(), *fragment_output_args()],
+            input=probe_input(), capture_output=True, timeout=8, **_spawn_kwargs())
+        if result.returncode:
+            return (f"hardware witness exited {result.returncode}: "
+                    f"{(result.stderr or b'')[-160:].decode(errors='replace').strip()}")
+        validate_output(result.stdout)
+        # The browser lost tail pictures with reordered output even when all
+        # decoded timestamps passed. Check actual packets, beyond the -bf flag.
+        _require_unreordered(io.BytesIO(result.stdout))
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError,
+            av.error.FFmpegError, Unproven) as failed:
+        return f"hardware witness rejected: {failed}"
+    return None
+
+
 def _tell(report, stage: str, fraction: float | None) -> None:
     if fraction is not None:
         report(stage, fraction)
@@ -378,11 +430,12 @@ def _picture_scale(ffmpeg: str, saved: Path, meta: dict) -> int:
     return pictures
 
 
-def _recorded_at_archive_quality(ffmpeg: str, saved: Path, codecs) -> bool:
+def _recorded_at_archive_quality(ffmpeg: str, saved: Path, codecs, *,
+                                encoder_backend: str | None = None) -> bool:
     """Did the recorder already write what this pass would have produced?
 
-    Only AV1 qualifies, and only while the ring and the archive name the SAME
-    target: a GPU with an AV1 encoder records at `VIDEO_AV1_CQ`, which the
+    Only NVENC AV1 qualifies, and only while the ring and archive name the SAME
+    target: that recorder uses `VIDEO_AV1_CQ`, which the
     archive row also asks for, so the two differ in preset (speed) and in
     nothing that changes the bytes' quality. H.264 never qualifies -- the ring
     records at cq20 for quality and the archive re-encodes at cq28 for size,
@@ -392,6 +445,11 @@ def _recorded_at_archive_quality(ffmpeg: str, saved: Path, codecs) -> bool:
     An unreadable clip answers False and takes the ordinary path, where the
     fingerprint's own failure reports the real cause.
     """
+    # Old native AV1 recordings were NVENC only. Preserve their optimization,
+    # but an explicitly different backend has its own quality scale: an AV1
+    # sample entry alone cannot establish that it already met NVENC's target.
+    if encoder_backend not in (None, "nvenc"):
+        return False
     # Read at the call, never captured at import: a table built at module load
     # is how the ring and the clip stopped following their own constants
     # (2026-09-20).
@@ -467,7 +525,8 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
         # Already answered for this clip. Re-encoding a compressed replay
         # would stack a second generation of loss on a PB for nothing.
         return settled
-    if _recorded_at_archive_quality(ffmpeg, saved, codecs):
+    if _recorded_at_archive_quality(ffmpeg, saved, codecs,
+                                   encoder_backend=meta.get("encoder_backend")):
         # RECORDED IN THE ARCHIVE'S OWN CODEC AND TARGET. On a GPU with an AV1
         # encoder the recorder writes what this pass would have produced, so
         # Save publishes already-small bytes and a second encode could only
@@ -505,6 +564,14 @@ def _encode_proven(ffmpeg: str, saved: Path, staged: Path, proof: Path, meta: di
                 raise original_f.exception()   # unreadable clip: no codec can help
             if cancelled():
                 break
+            if codec in _NEW_HARDWARE_CODECS:
+                reason = _archive_hardware_reason(
+                    ffmpeg, codec, tuple(video_quality_args(codec, "archive", CLIP_MAXRATE)))
+                if reason is not None:
+                    reasons.append(f"{codec}: {reason}")
+                    continue
+                if cancelled():
+                    break
             started = time.monotonic()
             result = _encode(run, encode_args(ffmpeg, saved, staged, codec, end),
                              report, pictures)
@@ -516,6 +583,8 @@ def _encode_proven(ffmpeg: str, saved: Path, staged: Path, proof: Path, meta: di
                 continue
             encoded = True
             try:
+                if codec in _NEW_HARDWARE_CODECS:
+                    _require_unreordered(str(staged))
                 candidate, similarity = prove(
                     ffmpeg, saved, staged, original_f.result, meta.get("frame_times"),
                     (lambda f: report("checking", f)) if report is not None else None,

@@ -85,6 +85,9 @@ VIDEO_CRF = 18             # libx264 equivalent (machines without NVENC)
 # not a claim that QP/ICQ 18 is visually equivalent to NVENC CQ 20.
 AMF_QP = 18
 QSV_ICQ = 18
+# Windows CodecAPI's 0..100 quality scale, independent of NVENC CQ/AMF QP/QSV
+# ICQ. This initial target must be qualified against decoded game pictures.
+MF_QUALITY = 90
 RING_MAXRATE = "30M"       # ring: bounded so the disk cap stays predictable
 CLIP_MAXRATE = "60M"       # saved clip: one file on disk, quality wins
 
@@ -98,10 +101,18 @@ CLIP_MAXRATE = "60M"       # saved clip: one file on disk, quality wins
 # the CPU was no smaller than hardware AV1 and worse on the worst pictures.
 # Tried in this order; the first the machine's ffmpeg can open AND whose output
 # proves interchangeable wins. All run without picture reordering.
-ARCHIVE_CODECS = ("av1_nvenc", "h264_nvenc", "libx264")
+ARCHIVE_CODECS = ("av1_nvenc", "h264_nvenc", "av1_amf", "h264_amf",
+                  "av1_qsv", "h264_qsv", "libx264")
 ARCHIVE_AV1_CQ = 36
 ARCHIVE_H264_CQ = 28
 ARCHIVE_CRF = 24
+# Conservative starting points, each on its own vendor/codec scale. Every
+# actual clip must still pass exact timing/audio and the visual/saving proof.
+# AMF AV1 uses a 0..255 quantizer, unlike its H.264 0..51 quantizer.
+ARCHIVE_AMF_H264_QP = 22
+ARCHIVE_AMF_AV1_QP = 80
+ARCHIVE_QSV_H264_ICQ = 22
+ARCHIVE_QSV_AV1_QUALITY = 22
 
 # THE RING IN AV1 (RTX 40-series and later). Measured 2026-09-20 on one real
 # saved replay re-encoded with the ring's own settings, VMAF against that
@@ -121,8 +132,8 @@ VIDEO_AV1_CQ = 36
 # slower preset for the same quality target.
 _NVENC_PRESET = {"realtime": "p4", "offline": "p6", "archive": "p7"}
 _X264_PRESET = {"realtime": "ultrafast", "offline": "veryfast", "archive": "slow"}
-_AMF_QUALITY = {"realtime": "balanced", "offline": "quality"}
-_QSV_PRESET = {"realtime": "medium", "offline": "slow"}
+_AMF_QUALITY = {"realtime": "balanced", "offline": "quality", "archive": "quality"}
+_QSV_PRESET = {"realtime": "medium", "offline": "slow", "archive": "slow"}
 
 
 # The quality NUMBERS are read at the call, never captured in a per-stage table.
@@ -141,6 +152,14 @@ def _av1_cq(stage: str) -> int:
 
 def _x264_crf(stage: str) -> int:
     return ARCHIVE_CRF if stage == "archive" else VIDEO_CRF
+
+
+def _amf_qp(stage: str) -> int:
+    return ARCHIVE_AMF_H264_QP if stage == "archive" else AMF_QP
+
+
+def _qsv_icq(stage: str) -> int:
+    return ARCHIVE_QSV_H264_ICQ if stage == "archive" else QSV_ICQ
 
 
 def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
@@ -167,11 +186,19 @@ def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
     if codec == "h264_amf":
         return ["-usage", "transcoding", "-quality", _AMF_QUALITY[stage],
                 "-profile:v", "high", "-rc", "cqp",
-                "-qp_i", str(AMF_QP), "-qp_p", str(AMF_QP),
-                "-qp_b", str(AMF_QP), "-frame_skipping", "0"]
+                "-qp_i", str(_amf_qp(stage)), "-qp_p", str(_amf_qp(stage)),
+                "-qp_b", str(_amf_qp(stage)), "-frame_skipping", "0"]
+    if codec == "av1_amf" and stage == "archive":
+        return ["-usage", "transcoding", "-quality", _AMF_QUALITY[stage],
+                "-rc", "cqp", "-qp_i", str(ARCHIVE_AMF_AV1_QP),
+                "-qp_p", str(ARCHIVE_AMF_AV1_QP), "-skip_frame", "0"]
     if codec == "h264_qsv":
         return ["-preset", _QSV_PRESET[stage], "-profile:v", "high",
-                "-global_quality", str(QSV_ICQ), "-look_ahead", "0", "-b:v", "0"]
+                "-global_quality", str(_qsv_icq(stage)), "-look_ahead", "0", "-b:v", "0"]
+    if codec == "av1_qsv" and stage == "archive":
+        return ["-preset", _QSV_PRESET[stage],
+                "-global_quality", str(ARCHIVE_QSV_AV1_QUALITY),
+                "-look_ahead_depth", "0", "-b:v", "0"]
     return []
 
 
@@ -179,7 +206,7 @@ def forced_idr_args(codec: str) -> list[str]:
     """Forced I pictures must be independent starts for the segment muxer."""
     if codec in ("h264_nvenc", "av1_nvenc"):
         return ["-forced-idr", "1"]
-    if codec in ("h264_amf", "h264_qsv"):
+    if codec in ("h264_amf", "h264_qsv", "av1_amf", "av1_qsv"):
         return ["-forced_idr", "1"]
     return []  # x264's closed GOP is already the default
 
@@ -193,7 +220,7 @@ def raw_picture_args(codec: str) -> list[str]:
     pixel conversion; plain output -color_range/-colorspace flags did not.
     The startup probe verifies the result on the installed build/driver.
     """
-    if codec == "h264_amf":
+    if codec in ("h264_amf", "av1_amf"):
         return ["-vf", "setparams=range=limited:colorspace=bt709"]
     return []
 
