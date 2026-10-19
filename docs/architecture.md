@@ -25,6 +25,12 @@ sidecar has its own version and producer identity and does not change the pictur
 stream ABI. Browser and system traces supply different evidence and must not be
 interpreted as substitutes for frame/audio/input correctness checks.
 
+Automatic technical failures use a shared local collector for normal Python
+startup, browser errors and terminal installer failures. The elevated installer
+does not initialize it; the original user process reports the final outcome.
+The public destination, privacy boundary and durable retry behavior belong to
+[automatic error reporting](error-reporting.md).
+
 ```
 Project64 1.6 process (Windows)
       │  ReadProcessMemory, ~60 Hz poll (game logic runs at 30 fps)
