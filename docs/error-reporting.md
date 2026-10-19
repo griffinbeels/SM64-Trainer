@@ -49,6 +49,9 @@ handles plugin files, while the original process keeps its own per-user registry
 and settings. A user cancellation or final failed retry produces its actual error.
 File use, unsupported targets and unavailable payloads retain distinct explanations.
 Background plugin refresh never prompts for administrator permission.
+A denied background refresh exposes the existing Install action and stops
+repeating the same denied writes for that bundle and target. Explicit successful
+installation clears the retained denial; a changed bundle can retry normally.
 
 Files roll back until the helper commits. If its final acknowledgment is lost
 after commit, the complete verified DLL pair may remain while the original user's

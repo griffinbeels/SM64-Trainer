@@ -85,6 +85,16 @@ failures have explicit append-only reasons10028–10033 rather than a startup
 timeout. Required OpenGL external-memory/keyed-mutex support is still checked;
 a vendor name alone neither proves nor disproves that support.
 
+The Windows media type has its own positive bitrate negotiation hint; quality
+mode and NVIDIA rate-control fields remain separate. Output handling accepts
+bounded event-only output and compatible configuration negotiation without
+submitting a second input occurrence. H.264 parameter sets and AV1 sequence
+OBUs make random-access packets self-describing. The first actual H.264 packet
+can supersede provisional advertised headers; after publication the effective
+configuration stays pinned. Unsupported av1C configuration is refused by codec
+before input. Malformed packets, incompatible format
+changes, wrong timestamps or unreleased input never count as delivered pictures.
+
 Local evidence on 2026-10-19: actual AMD D3D11 textures through the production
 DLL passed independent picture/color decoding, irregular PTS (including adjacent
 ticks), retained generation/serial, keyframes and shared-key cleanup. The local
@@ -96,12 +106,14 @@ and isolated OpenGL selection probes remained on NVIDIA. A NVIDIA GL context
 cannot stand in for AMD evidence; the hardware witness rejects the wrong vendor.
 Desktop fallback is availability only and does not establish optimized parity.
 
-The preserved old/new NVIDIA helper comparison used the same executable, options
-and 1600x1200 fixtures in ABBA order,180 timed pictures after20 warmup. AV1 median
-times in the final-bundle run were15.4837ms old/15.6262ms new for AV1(+0.92%)
-and15.5818ms old/15.5340ms new for H.264(-0.31%). Packet counts and encoded byte
-totals matched in all runs. These helper-only synthetic measurements stayed
-within about1%; they are not a new whole-game performance guarantee.
+The final review's old/new NVIDIA helper comparison used the same executable,
+options and 1600x1200 fixtures in ABBA order, 180 timed pictures after 20 warmup.
+Mean paired-run medians were 15.628625 ms old/15.578275 ms new for AV1 (-0.32%)
+and 15.559175 ms old/15.593975 ms new for H.264 (+0.22%). All runs matched 200
+packets, 187 source copies, 13 repeats and encoded byte totals. These helper-only
+synthetic measurements stayed within 0.4%; they establish neither statistical
+equivalence nor a new whole-game performance guarantee. The preceding bundle's
+comparison (+0.92% AV1/-0.31% H.264) remains preserved as historical evidence.
 
 ## Shipped files and how they are built
 
