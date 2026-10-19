@@ -24,3 +24,12 @@ def test_native_platform_contract(tmp_path):
         timeout=10, check=False, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stdout + result.stderr
     assert "refuse before device access" in result.stdout
+    # Inspect the produced loader contract, not the linker command string:
+    # Windows N must still load the NVIDIA helper without Media Foundation.
+    import pefile
+    helper = build.build_encoder_helper(tmp_path)
+    with pefile.PE(str(helper)) as image:
+        ordinary = {entry.dll.lower() for entry in image.DIRECTORY_ENTRY_IMPORT}
+        delayed = {entry.dll.lower() for entry in image.DIRECTORY_ENTRY_DELAY_IMPORT}
+    assert b"mfplat.dll" not in ordinary
+    assert b"mfplat.dll" in delayed

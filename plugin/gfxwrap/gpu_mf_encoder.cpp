@@ -56,7 +56,7 @@ uint64_t ticks(LONGLONG value){return uint64_t(value/1000)*9+(uint64_t(value%100
 }
 struct MfEncoder::Impl {
     MfEncoderSettings settings{};gbenc_sink_v1 sink{};
-    bool co=false,mf=false,streaming=false,asynchronous=false;UINT input_credit=0,output_credit=0;
+    bool co=false,mf=false,streaming=false,asynchronous=false;UINT input_credit=0,output_credit=0;HMODULE runtime=nullptr;
     ComPtr<ID3D11Device> device;ComPtr<ID3D11DeviceContext> context;
     ComPtr<ID3D11VideoDevice> video;ComPtr<ID3D11VideoContext> video_context;
     ComPtr<ID3D11VideoProcessorEnumerator> enumeration;ComPtr<ID3D11VideoProcessor> processor;
@@ -81,7 +81,7 @@ struct MfEncoder::Impl {
         events.Reset();codec.Reset();mft.Reset();if(activation)activation->ShutdownObject();activation.Reset();
         manager.Reset();output_view.Reset();nv12.Reset();processor.Reset();enumeration.Reset();
         video_context.Reset();video.Reset();context.Reset();device.Reset();release.Reset();
-        if(mf)MFShutdown();if(co)CoUninitialize();
+        if(mf)MFShutdown();if(runtime)FreeLibrary(runtime);if(co)CoUninitialize();
     }
 };
 bool MfEncoder::fail(gbenc_error_code e,HRESULT hr,bool quarantine){
@@ -108,6 +108,11 @@ bool MfEncoder::prepare(ID3D11Device*device,ID3D11DeviceContext*context,const Mf
     owner_=GetCurrentThreadId();impl_=new(std::nothrow)Impl;if(!impl_)return fail(GBENC_MEMORY_ERROR,E_OUTOFMEMORY);
     auto&p=*impl_;p.settings=settings;p.sink=sink;p.device=device;p.context=context;
     try{p.packet.resize(s.max_packet_bytes);}catch(...){return fail(GBENC_MEMORY_ERROR,E_OUTOFMEMORY);}
+    // Windows N can omit Media Foundation. It is a delayed dependency so
+    // NVIDIA never acquires a new runtime requirement merely by loading us.
+    p.runtime=LoadLibraryExW(L"MFPlat.DLL",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if(!p.runtime)return fail(GBENC_API_UNAVAILABLE,HRESULT_FROM_WIN32(GetLastError()));
+    if(!GetProcAddress(p.runtime,"MFTEnum2"))return fail(GBENC_API_UNAVAILABLE,HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND));
     HRESULT hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(hr))return fail(GBENC_API_UNAVAILABLE,hr);p.co=true;
     MF_TRY(MFStartup(MF_VERSION));p.mf=true;
     ComPtr<ID3D10Multithread> multithread;MF_TRY(device->QueryInterface(IID_PPV_ARGS(&multithread)));multithread->SetMultithreadProtected(TRUE);
