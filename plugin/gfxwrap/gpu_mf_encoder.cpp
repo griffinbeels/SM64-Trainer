@@ -1,6 +1,8 @@
 #include "gpu_mf_encoder.h"
 #include "gpu_mf_deadline.h"
 #include "gpu_mf_output.h"
+#include "gpu_mf_format.h"
+#include "gpu_mf_bitstream.h"
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mferror.h>
@@ -36,20 +38,6 @@ HRESULT property(ICodecAPI*api,const GUID&key,VARTYPE type,ULONG value){
     VARIANT v;VariantInit(&v);v.vt=type;if(type==VT_BOOL)v.boolVal=value?VARIANT_TRUE:VARIANT_FALSE;else v.ulVal=value;
     return api->SetValue(&key,&v);
 }
-HRESULT type(IMFMediaType**out,const GUID&subtype,const gbenc_options_v1&s,bool encoded){
-    ComPtr<IMFMediaType> t;HRESULT hr=MFCreateMediaType(&t);if(FAILED(hr))return hr;
-    t->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Video);t->SetGUID(MF_MT_SUBTYPE,subtype);
-    MFSetAttributeSize(t.Get(),MF_MT_FRAME_SIZE,s.width,s.height);
-    MFSetAttributeRatio(t.Get(),MF_MT_FRAME_RATE,s.nominal_fps_num,s.nominal_fps_den);
-    MFSetAttributeRatio(t.Get(),MF_MT_PIXEL_ASPECT_RATIO,1,1);
-    t->SetUINT32(MF_MT_INTERLACE_MODE,MFVideoInterlace_Progressive);
-    if(s.signal_color){
-        t->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE,s.full_range?MFNominalRange_0_255:MFNominalRange_16_235);
-        t->SetUINT32(MF_MT_YUV_MATRIX,s.matrix==1?MFVideoTransferMatrix_BT709:MFVideoTransferMatrix_BT601);
-    }
-    if(encoded){t->SetUINT32(MF_MT_AVG_BITRATE,s.max_bitrate);t->SetUINT32(MF_MT_MPEG2_PROFILE,s.codec==GBENC_CODEC_AV1?eAVEncAV1VProfile_Main_420_8:s.profile);}
-    *out=t.Detach();return S_OK;
-}
 // 90k <-> 100ns conversion with no floating point. Quantization is less than a
 // 90k tick and roundtrips; original opaque metadata is delivered only after it matches.
 LONGLONG hns(uint64_t ticks){return LONGLONG((ticks/9)*1000+((ticks%9)*1000+4)/9);}
@@ -65,6 +53,9 @@ struct MfEncoder::Impl {
     ComPtr<IMFDXGIDeviceManager> manager;ComPtr<IMFTransform> mft;
     ComPtr<IMFMediaEventGenerator> events;ComPtr<IMFActivate> activation;ComPtr<ICodecAPI> codec;
     std::vector<uint8_t> packet;ComPtr<Released> release;
+    mf_gpu::H264Configuration configuration;
+    mf_gpu::Av1Configuration av1_configuration;
+    const char*failure_operation="output";
     MFT_OUTPUT_STREAM_INFO output_info{};DWORD output_alignment=0;
     HRESULT event_until(bool output,ULONGLONG deadline){
         if(!asynchronous)return S_OK;
@@ -72,12 +63,81 @@ struct MfEncoder::Impl {
             if(GetTickCount64()>=deadline)return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
             ComPtr<IMFMediaEvent> e;HRESULT hr=events->GetEvent(MF_EVENT_FLAG_NO_WAIT,&e);
             if(hr==MF_E_NO_EVENTS_AVAILABLE){if(GetTickCount64()>=deadline)return HRESULT_FROM_WIN32(WAIT_TIMEOUT);Sleep(1);continue;}
-            if(FAILED(hr))return hr;HRESULT status=S_OK;e->GetStatus(&status);if(FAILED(status))return status;
-            MediaEventType kind=MEUnknown;e->GetType(&kind);
+            if(FAILED(hr))return hr;HRESULT status=S_OK;hr=e->GetStatus(&status);if(FAILED(hr))return hr;if(FAILED(status))return status;
+            MediaEventType kind=MEUnknown;hr=e->GetType(&kind);if(FAILED(hr))return hr;
             if(kind==METransformNeedInput){if(input_credit==UINT_MAX)return E_UNEXPECTED;++input_credit;}
             else if(kind==METransformHaveOutput){if(output_credit==UINT_MAX)return E_UNEXPECTED;++output_credit;}
             else if(kind==MEError)return E_FAIL;
         }return S_OK;
+    }
+    HRESULT current_format(){
+        failure_operation="output_format";
+        ComPtr<IMFMediaType> type;HRESULT hr=mft->GetOutputCurrentType(0,&type);
+        if(FAILED(hr))return hr;hr=mf_gpu::compatible_type(type.Get(),settings.picture);if(FAILED(hr))return hr;
+        failure_operation="sequence_header";
+        return settings.picture.codec==GBENC_CODEC_H264?configuration.read_type(type.Get()):av1_configuration.read_type(type.Get());
+    }
+    HRESULT renegotiate(){
+        failure_operation="output_format";
+        // Only an equivalent output description is admissible. In particular,
+        // a new sample description after publication cannot replace this run's.
+        HRESULT last=MF_E_INVALIDMEDIATYPE;
+        for(DWORD i=0;i<16;++i){
+            ComPtr<IMFMediaType> type;HRESULT hr=mft->GetOutputAvailableType(0,i,&type);
+            if(hr==MF_E_NO_MORE_TYPES)break;if(FAILED(hr))return hr;
+            if(FAILED(mf_gpu::compatible_type(type.Get(),settings.picture)))continue;
+            hr=mft->SetOutputType(0,type.Get(),0);if(FAILED(hr)){last=hr;continue;}
+            return current_format();
+        }return last;
+    }
+    HRESULT output_events(IMFCollection*collection){
+        if(!collection)return S_OK;DWORD count=0;HRESULT hr=collection->GetElementCount(&count);
+        if(FAILED(hr))return hr;if(count>32)return MF_E_INVALID_STREAM_DATA;
+        for(DWORD i=0;i<count;++i){
+            ComPtr<IUnknown> object;ComPtr<IMFMediaEvent> event;
+            hr=collection->GetElement(i,&object);if(FAILED(hr))return hr;
+            hr=object.As(&event);if(FAILED(hr))return hr;
+            HRESULT status=S_OK;hr=event->GetStatus(&status);if(FAILED(hr))return hr;if(FAILED(status))return status;
+            MediaEventType kind=MEUnknown;hr=event->GetType(&kind);if(FAILED(hr))return hr;
+            if(kind==MEError)return E_FAIL;
+        }return S_OK;
+    }
+    HRESULT output_sample(ULONGLONG deadline,ComPtr<IMFSample>&result){
+        // Events and a compatible first-output configuration are legal without
+        // a picture. They do not consume another input occurrence or reset its
+        // deadline. A hostile/faulty driver cannot generate an endless loop.
+        for(unsigned step=0;step<32;++step){
+            failure_operation="output_events";
+            if(GetTickCount64()>=deadline)return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+            HRESULT hr=event_until(true,deadline);if(FAILED(hr))return hr;
+            failure_operation="output_allocation";
+            hr=mft->GetOutputStreamInfo(0,&output_info);if(FAILED(hr))return hr;
+            hr=gpu_mf_output_policy(output_info,DWORD(packet.size()),&output_alignment);if(FAILED(hr))return hr;
+            MFT_OUTPUT_DATA_BUFFER output{};ComPtr<IMFSample> supplied;
+            if(!(output_info.dwFlags&MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)){
+                hr=MFCreateSample(&supplied);ComPtr<IMFMediaBuffer> memory;
+                if(SUCCEEDED(hr))hr=MFCreateAlignedMemoryBuffer(DWORD(packet.size()),output_alignment,&memory);
+                if(SUCCEEDED(hr))hr=supplied->AddBuffer(memory.Get());if(FAILED(hr))return hr;output.pSample=supplied.Get();}
+            DWORD status=0;hr=mft->ProcessOutput(0,1,&output,&status);
+            ComPtr<IMFCollection> in_band;in_band.Attach(output.pEvents);
+            ComPtr<IMFSample> sample;if(output.pSample==supplied.Get())sample=supplied;else sample.Attach(output.pSample);
+            if(asynchronous)--output_credit;
+            failure_operation="output_events";
+            const HRESULT event_status=output_events(in_band.Get());if(FAILED(event_status))return event_status;
+            const DWORD change=output.dwStatus&0x300;
+            if(status||change==MFT_OUTPUT_DATA_BUFFER_STREAM_END||
+               (output.dwStatus&~DWORD(0x300|MFT_OUTPUT_DATA_BUFFER_INCOMPLETE)))return MF_E_INVALID_STREAM_DATA;
+            if(hr==MF_E_TRANSFORM_STREAM_CHANGE||change==MFT_OUTPUT_DATA_BUFFER_FORMAT_CHANGE){
+                hr=renegotiate();if(FAILED(hr))return hr;continue;
+            }
+            failure_operation="output";if(FAILED(hr))return hr;
+            // One input must yield one complete packet. Partial/multiple output
+            // cannot be acknowledged as a complete captured picture.
+            if(output.dwStatus&MFT_OUTPUT_DATA_BUFFER_INCOMPLETE)return MF_E_INVALID_STREAM_DATA;
+            if(change==MFT_OUTPUT_DATA_BUFFER_NO_SAMPLE){if(!in_band)return E_UNEXPECTED;continue;}
+            if(!sample){if(in_band)continue;return E_UNEXPECTED;}
+            result=sample;return S_OK;
+        }return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
     }
     ~Impl(){
         if(mft){ComPtr<IMFShutdown> shutdown;if(SUCCEEDED(mft.As(&shutdown)))shutdown->Shutdown();}
@@ -92,6 +152,15 @@ bool MfEncoder::fail(gbenc_error_code e,HRESULT hr,bool quarantine){
     state_=quarantine?GBENC_QUARANTINED:GBENC_FAILED;return false;
 }
 MfEncoder::~MfEncoder(){if(state_!=GBENC_QUARANTINED)close();/* quarantined process owns unresolved resources */}
+bool MfEncoder::reject(gbenc_error_code code,const char*operation,HRESULT hr,bool quarantine){
+    fprintf(stderr,"SM64_GPU_MF operation=%s hresult=%08x\n",operation,unsigned(hr));return fail(code,hr,quarantine);
+}
+bool MfEncoder::check_format(){
+    const HRESULT hr=impl_->current_format();if(SUCCEEDED(hr))return true;
+    const bool unsupported=impl_->settings.picture.codec==GBENC_CODEC_AV1&&
+        hr==MF_E_UNSUPPORTED_REPRESENTATION&&!submitted_;
+    return reject(unsupported?GBENC_CODEC_UNAVAILABLE:GBENC_DRIVER_ERROR,impl_->failure_operation,hr,submitted_!=completed_);
+}
 #define MF_TRY(call) do{const HRESULT mf_status=(call);if(FAILED(mf_status)){ \
     fprintf(stderr,"SM64_GPU_MF operation=%s hresult=%08x\n",#call,unsigned(mf_status)); \
     return fail(GBENC_DRIVER_ERROR,mf_status,submitted_!=completed_);}}while(0)
@@ -145,8 +214,9 @@ bool MfEncoder::prepare(ID3D11Device*device,ID3D11DeviceContext*context,const Mf
     MF_TRY(property(p.codec.Get(),CODECAPI_AVEncMPVGOPSize,VT_UI4,s.gop_frames));
     MF_TRY(property(p.codec.Get(),CODECAPI_AVEncCommonRateControlMode,VT_UI4,eAVEncCommonRateControlMode_Quality));
     MF_TRY(property(p.codec.Get(),CODECAPI_AVEncCommonQuality,VT_UI4,settings.quality));
-    ComPtr<IMFMediaType> encoded,input;MF_TRY(type(&encoded,subtype,s,true));MF_TRY(type(&input,MFVideoFormat_NV12,s,false));
+    ComPtr<IMFMediaType> encoded,input;MF_TRY(mf_gpu::media_type(&encoded,subtype,s,true));MF_TRY(mf_gpu::media_type(&input,MFVideoFormat_NV12,s,false));
     MF_TRY(p.mft->SetOutputType(0,encoded.Get(),0));MF_TRY(p.mft->SetInputType(0,input.Get(),0));
+    if(!check_format())return false;
     MF_TRY(p.mft->GetOutputStreamInfo(0,&p.output_info));
     MF_TRY(gpu_mf_output_policy(p.output_info,DWORD(p.packet.size()),&p.output_alignment));
     MF_TRY(device->QueryInterface(IID_PPV_ARGS(&p.video)));MF_TRY(context->QueryInterface(IID_PPV_ARGS(&p.video_context)));
@@ -196,6 +266,11 @@ bool MfEncoder::encode_retained(uint64_t generation,uint64_t occurrence,uint64_t
     retained_=false;retained_=submit(occurrence,pts,duration,idr);if(retained_)++repeats_;return retained_;
 }
 bool MfEncoder::submit(uint64_t occurrence,uint64_t pts,uint64_t duration,bool idr){
+    ComPtr<IMFMediaBuffer> buffer;MF_TRY(MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D),impl_->nv12.Get(),0,FALSE,&buffer));
+    return submit_buffer(buffer.Detach(),occurrence,pts,duration,idr);
+}
+bool MfEncoder::submit_buffer(IMFMediaBuffer*owned_buffer,uint64_t occurrence,uint64_t pts,uint64_t duration,bool idr){
+    ComPtr<IMFMediaBuffer> buffer;buffer.Attach(owned_buffer);
     auto&p=*impl_;auto&s=p.settings.picture;ULONGLONG deadline=GetTickCount64()+1500;
     MF_TRY(p.mft->GetOutputStreamInfo(0,&p.output_info));
     MF_TRY(gpu_mf_output_policy(p.output_info,DWORD(p.packet.size()),&p.output_alignment));
@@ -203,38 +278,53 @@ bool MfEncoder::submit(uint64_t occurrence,uint64_t pts,uint64_t duration,bool i
     const bool timed=s.idr_interval_ticks&&time_forced_<=pts/s.idr_interval_ticks;
     if(idr||timed)MF_TRY(property(p.codec.Get(),CODECAPI_AVEncVideoForceKeyFrame,VT_UI4,1));
     ComPtr<IMFTrackedSample> tracked;MF_TRY(MFCreateTrackedSample(&tracked));ComPtr<IMFSample> sample;MF_TRY(tracked.As(&sample));
-    ComPtr<IMFMediaBuffer> buffer;MF_TRY(MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D),p.nv12.Get(),0,FALSE,&buffer));
     MF_TRY(sample->AddBuffer(buffer.Get()));MF_TRY(sample->SetSampleTime(hns(pts)));MF_TRY(sample->SetSampleDuration(hns(duration)));
     ResetEvent(p.release->event);MF_TRY(tracked->SetAllocator(p.release.Get(),nullptr));tracked.Reset();
     HRESULT hr=p.mft->ProcessInput(0,sample.Get(),0);sample.Reset();buffer.Reset();
     if(FAILED(hr))return fail(GBENC_DRIVER_ERROR,hr);if(p.asynchronous)--p.input_credit;++submitted_;
     if(timed)++time_forced_;last_pts_=pts;last_serial_=occurrence;have_pts_=true;
-    hr=p.event_until(true,deadline);if(FAILED(hr))return fail(GBENC_DRIVER_ERROR,hr,true);
-    MFT_OUTPUT_DATA_BUFFER output{};ComPtr<IMFSample> supplied;
-    if(!(p.output_info.dwFlags&MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)){
-        hr=MFCreateSample(&supplied);ComPtr<IMFMediaBuffer> memory;
-        if(SUCCEEDED(hr))hr=MFCreateAlignedMemoryBuffer(DWORD(p.packet.size()),p.output_alignment,&memory);
-        if(SUCCEEDED(hr))hr=supplied->AddBuffer(memory.Get());if(FAILED(hr))return fail(GBENC_MEMORY_ERROR,hr,true);output.pSample=supplied.Get();}
-    DWORD status=0;hr=p.mft->ProcessOutput(0,1,&output,&status);if(output.pEvents)output.pEvents->Release();
-    ComPtr<IMFSample> result;if(output.pSample==supplied.Get())result=supplied;else result.Attach(output.pSample);
-    if(p.asynchronous)--p.output_credit;
-    if(FAILED(hr)||!result)return fail(GBENC_DRIVER_ERROR,FAILED(hr)?hr:E_UNEXPECTED,true);
+    ComPtr<IMFSample> result;hr=p.output_sample(deadline,result);
+    if(FAILED(hr))return reject(GBENC_DRIVER_ERROR,p.failure_operation,hr,true);
     LONGLONG out_pts=0,out_duration=0;UINT32 clean=0;
     hr=result->GetSampleTime(&out_pts);if(SUCCEEDED(hr))hr=result->GetSampleDuration(&out_duration);
-    if(FAILED(hr)||out_pts<0||out_duration<=0||ticks(out_pts)!=pts||ticks(out_duration)!=duration)return fail(GBENC_PACKET_ERROR,FAILED(hr)?hr:E_UNEXPECTED,true);
+    if(FAILED(hr)||out_pts<0||out_duration<=0||ticks(out_pts)!=pts||ticks(out_duration)!=duration)return reject(GBENC_PACKET_ERROR,"packet_identity",FAILED(hr)?hr:E_UNEXPECTED,true);
     result->GetUINT32(MFSampleExtension_CleanPoint,&clean);
-    if((idr||timed)&&!clean)return fail(GBENC_PACKET_ERROR,E_UNEXPECTED,true);
+    if((idr||timed||!delivered_)&&!clean)return reject(GBENC_PACKET_ERROR,"packet_identity",E_UNEXPECTED,true);
     ComPtr<IMFMediaBuffer> bytes;MF_TRY(result->ConvertToContiguousBuffer(&bytes));BYTE*data=nullptr;DWORD size=0;
     MF_TRY(bytes->Lock(&data,nullptr,&size));const bool valid=size&&size<=p.packet.size();if(valid)memcpy(p.packet.data(),data,size);
-    hr=bytes->Unlock();if(FAILED(hr))return fail(GBENC_DRIVER_ERROR,hr,true);bytes.Reset();result.Reset();supplied.Reset();
-    if(!valid)return fail(GBENC_PACKET_ERROR,E_UNEXPECTED,true);
+    hr=bytes->Unlock();if(FAILED(hr))return fail(GBENC_DRIVER_ERROR,hr,true);bytes.Reset();result.Reset();
+    if(!valid)return reject(GBENC_PACKET_ERROR,"packet_bytes",E_UNEXPECTED,true);
+    if((clean||!delivered_)&&!check_format())return false;
+    hr=s.codec==GBENC_CODEC_H264?p.configuration.normalize(p.packet,size,clean!=0):p.av1_configuration.normalize(p.packet,size,clean!=0);
+    if(FAILED(hr))return reject(GBENC_PACKET_ERROR,"sequence_header",hr,true);
     const ULONGLONG release_now=GetTickCount64();
-    if(WaitForSingleObject(p.release->event,gpu_mf_wait_ms(deadline,release_now))!=WAIT_OBJECT_0)return fail(GBENC_DRIVER_ERROR,HRESULT_FROM_WIN32(WAIT_TIMEOUT),true);
+    if(WaitForSingleObject(p.release->event,gpu_mf_wait_ms(deadline,release_now))!=WAIT_OBJECT_0)return reject(GBENC_DRIVER_ERROR,"input_release",HRESULT_FROM_WIN32(WAIT_TIMEOUT),true);
     ++completed_;const gbenc_packet_v1 packet{sizeof(gbenc_packet_v1),GBENC_ABI_V1,p.packet.data(),size,clean?GBENC_PACKET_KEYFRAME:0,occurrence,pts,duration};
     state_=GBENC_DELIVERING;int accepted=GBENC_SINK_REJECTED;try{accepted=p.sink.on_packet(p.sink.user,&packet);}catch(...){accepted=GBENC_SINK_REJECTED;}
     if(accepted!=GBENC_SINK_ACCEPTED)return fail(GBENC_SINK_ERROR,E_FAIL);
     ++delivered_;state_=GBENC_READY;error_=GBENC_OK;hr_=S_OK;return true;
 }
+#ifdef GPU_MF_TEST_HOST
+// CPU-only injected MFT exercises the identical submit/output/identity/release
+// path. No test hook or alternative surface path exists in the shipped DLL.
+bool MfEncoder::test_prepare(IMFTransform*mft,const MfEncoderSettings&settings,const gbenc_sink_v1&sink){
+    if(impl_||state_!=GBENC_EMPTY||!mft)return false;owner_=GetCurrentThreadId();impl_=new(std::nothrow)Impl;
+    if(!impl_)return fail(GBENC_MEMORY_ERROR,E_OUTOFMEMORY);auto&p=*impl_;p.settings=settings;p.sink=sink;p.mft=mft;
+    try{p.packet.resize(settings.picture.max_packet_bytes);}catch(...){return fail(GBENC_MEMORY_ERROR,E_OUTOFMEMORY);}
+    ComPtr<IMFAttributes> attributes;MF_TRY(mft->GetAttributes(&attributes));UINT32 asynchronous=0;
+    MF_TRY(attributes->GetUINT32(MF_TRANSFORM_ASYNC,&asynchronous));p.asynchronous=asynchronous!=0;
+    if(p.asynchronous){MF_TRY(attributes->SetUINT32(MF_TRANSFORM_ASYNC_UNLOCK,TRUE));MF_TRY(p.mft.As(&p.events));}
+    MF_TRY(p.mft.As(&p.codec));if(!check_format())return false;
+    p.release.Attach(new(std::nothrow)Released);if(!p.release||!p.release->event)return fail(GBENC_MEMORY_ERROR,E_OUTOFMEMORY);
+    MF_TRY(mft->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,0));MF_TRY(mft->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM,0));
+    p.streaming=true;state_=GBENC_READY;return true;
+}
+bool MfEncoder::test_submit(uint64_t occurrence,uint64_t pts,uint64_t duration,bool idr){
+    if(owner_!=GetCurrentThreadId()||state_!=GBENC_READY)return false;
+    ComPtr<IMFMediaBuffer> buffer;MF_TRY(MFCreateMemoryBuffer(16,&buffer));
+    return submit_buffer(buffer.Detach(),occurrence,pts,duration,idr);
+}
+#endif
 #undef MF_TRY
 bool MfEncoder::close(){
     if(owner_&&owner_!=GetCurrentThreadId())return false;if(state_==GBENC_CLOSED)return true;

@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include "gpu_bridge_encoder_api.h"
 struct MfEncoderSettings { gbenc_options_v1 picture; uint32_t quality; };
+struct IMFTransform;
+struct IMFMediaBuffer;
 class MfEncoder {
     struct Impl; Impl* impl_=nullptr;
     gbenc_state state_=GBENC_EMPTY;gbenc_error_code error_=GBENC_OK;HRESULT hr_=S_OK;
@@ -13,7 +15,10 @@ class MfEncoder {
     uint64_t generation_=0,selected_serial_=0,last_serial_=0,last_pts_=0,time_forced_=0;
     bool retained_=false,have_pts_=false;
     bool fail(gbenc_error_code,HRESULT,bool quarantine=false);
+    bool reject(gbenc_error_code,const char*,HRESULT,bool quarantine=false);
+    bool check_format();
     bool submit(uint64_t,uint64_t,uint64_t,bool);
+    bool submit_buffer(IMFMediaBuffer*,uint64_t,uint64_t,uint64_t,bool);
 public:
     MfEncoder()=default;~MfEncoder();
     MfEncoder(const MfEncoder&)=delete;MfEncoder&operator=(const MfEncoder&)=delete;
@@ -21,6 +26,10 @@ public:
     bool encode(ID3D11Texture2D*,uint64_t,uint64_t,uint64_t,bool=false);
     bool encode_retained(uint64_t,uint64_t,uint64_t,uint64_t,bool=false);
     bool close();
+#ifdef GPU_MF_TEST_HOST
+    bool test_prepare(IMFTransform*,const MfEncoderSettings&,const gbenc_sink_v1&);
+    bool test_submit(uint64_t,uint64_t,uint64_t,bool=false);
+#endif
     void invalidate_retained(){retained_=false;}
     bool retained_valid()const{return retained_&&state_==GBENC_READY;}
     uint64_t retained_generation()const{return generation_;}
