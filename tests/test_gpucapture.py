@@ -362,7 +362,9 @@ def test_discovery_is_read_only_and_requires_matching_capable_producer():
             pytest.fail("discovery must not activate capture")
 
     assert isinstance(
-        discover(42, US_LAYOUT, nominal_rate=30, control_factory=Control), GpuCapture
+        discover(42, US_LAYOUT, nominal_rate=30, control_factory=Control,
+                 adapter_probe=lambda: pytest.fail("no verdict without a registered retry identity")),
+        GpuCapture,
     )
     assert discover(43, US_LAYOUT, nominal_rate=30, control_factory=Control) is None
     status.capabilities = 1

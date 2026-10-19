@@ -14,6 +14,7 @@ developer's machine:
 """
 
 from dataclasses import replace
+import ctypes
 import logging
 import os
 from functools import partial
@@ -30,9 +31,9 @@ import pytest
 from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
 from sm64_events.core.procmem import machine_snapshot
 from sm64_events.memory.layout import US as US_LAYOUT
-from sm64_events.replay import gpuadapter, gpusettings, sourcefactory
+from sm64_events.replay import gpuadapter, gpucapture, gpusettings, sourcefactory
 from sm64_events.replay import gpucapture_session as session_module
-from sm64_events.replay.capturecontrol import CAP_GPU, PASSIVE
+from sm64_events.replay.capturecontrol import CAP_GPU, CLOSED, PASSIVE
 from sm64_events.replay.gpucapture import GpuBackendUnsupported, GpuCapture, discover
 from sm64_events.replay.gpucapture_session import CaptureSession, helper_launch
 from sm64_events.replay.gpudemand import DemandSnapshot
@@ -205,6 +206,84 @@ def test_the_source_helper_starts_through_the_recorders_launch_and_answers():
 
 AMD = gpuadapter.AdapterFacts("AMD Radeon(TM) Graphics", 0x1002, False, "32.0.21045.5002")
 NVIDIA = gpuadapter.AdapterFacts("NVIDIA GeForce RTX 5090", 0x10DE, False, "32.0.16.1692")
+INTEL = gpuadapter.AdapterFacts("Intel UHD Graphics", 0x8086, False, "32.0.101.1")
+SOFTWARE = gpuadapter.AdapterFacts("Microsoft Basic Render Driver", 0x1414, True, None)
+
+
+@pytest.fixture
+def dxgi(monkeypatch):
+    """The COM boundary, including HRESULT failures after a successful prefix."""
+    state = NS(facts=[AMD, NVIDIA], fail=None, released=[])
+
+    def pointer(out, value):
+        ctypes.cast(out, ctypes.POINTER(ctypes.c_void_p))[0] = value
+
+    def create(_iid, out):
+        if state.fail == "create":
+            return -1
+        if state.fail != "null_factory":
+            pointer(out, 1)
+        return 0
+
+    def enum(_factory, index, out):
+        if (state.fail == "enum" and index == 0) or (state.fail == "partial" and index == 1):
+            return -1
+        if index == len(state.facts):
+            return ctypes.c_int32(0x887A0002).value
+        if state.fail != "null_adapter":
+            pointer(out, index + 100)
+        return 0
+
+    def describe(adapter, out):
+        index = adapter.value - 100
+        if state.fail == "description" or (state.fail == "partial_description" and index == 1):
+            return -1
+        facts = state.facts[index]
+        desc = ctypes.cast(out, ctypes.POINTER(gpuadapter._AdapterDesc1)).contents
+        desc.Description, desc.VendorId = facts.name, facts.vendor_id
+        desc.Flags = 2 if facts.software else 0
+        desc.LuidHigh, desc.LuidLow = 0, index + 1
+        return 0
+
+    def vtable(_obj, index, *_):
+        return {2: lambda obj: state.released.append(obj.value), 12: enum, 10: describe}[index]
+
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_: NS(CreateDXGIFactory1=create))
+    monkeypatch.setattr(gpuadapter, "_vtbl", vtable)
+    monkeypatch.setattr(gpuadapter, "_driver_version", lambda obj: state.facts[obj.value - 100].driver)
+    return state
+
+
+def test_inventory_requires_explicit_end_and_preserves_every_adapter(dxgi):
+    assert gpuadapter.adapter_inventory() == (((0, 1), AMD), ((0, 2), NVIDIA))
+    assert dxgi.released == [100, 101, 1]
+    assert gpuadapter.adapter_facts((0, 2)) == NVIDIA
+    assert gpuadapter.adapter_facts((0, 3)) is None
+    dxgi.facts = []
+    assert gpuadapter.adapter_inventory() == ()
+    assert gpuadapter.machine_unsupported_reason() is None
+
+
+@pytest.mark.parametrize("failure", ["create", "null_factory", "enum", "partial", "null_adapter",
+                                    "description", "partial_description", "truncated"])
+def test_a_failed_or_truncated_inventory_cannot_reject_the_machine(dxgi, failure):
+    dxgi.fail = failure
+    if failure == "truncated":
+        dxgi.facts = [AMD] * gpuadapter._MAX_ADAPTERS
+    assert gpuadapter.adapter_inventory() is None
+    assert gpuadapter.adapter_facts((0, 1)) is None  # Even an earlier match is incomplete.
+    assert gpuadapter.machine_unsupported_reason() is None
+    if failure not in {"create", "null_factory"}:
+        assert dxgi.released[-1] == 1
+
+
+def test_an_adapter_api_exception_is_unknown(dxgi, monkeypatch):
+    monkeypatch.setattr(gpuadapter, "_vtbl", lambda *_: (_ for _ in ()).throw(OSError("DXGI failed")))
+    # Release must remain callable even when another COM call raises.
+    original = gpuadapter._vtbl
+    monkeypatch.setattr(gpuadapter, "_vtbl", lambda obj, index, *args:
+                        (lambda obj: None) if index == 2 else original(obj, index, *args))
+    assert gpuadapter.adapter_inventory() is None
 
 CODEC_REFUSING_HELPER = """\
 import sys
@@ -317,7 +396,8 @@ def factory_and_first_capture(monkeypatch, session_factory):
     factory = sourcefactory.SourceFactory(
         US_LAYOUT, NS(fps=30), lambda win, fps: desktops.append(win) or NS(stop=lambda: None))
     factory.retry_gate = RetryGate(control_factory=Control)
-    monkeypatch.setattr(sourcefactory, "discover", partial(discover, control_factory=Control))
+    monkeypatch.setattr(sourcefactory, "discover", partial(discover, control_factory=Control,
+                                                         adapter_probe=lambda: None))
     win = NS(pid=42)
     gpu = factory.create(win)
     assert isinstance(gpu, GpuCapture)
@@ -328,6 +408,85 @@ def factory_and_first_capture(monkeypatch, session_factory):
     assert stopped.wait(5)
     gpu.finish()
     return factory, win, gpu, desktops
+
+
+def preflight_factory(monkeypatch, inventory, api=(13, 1), control_factory=Control):
+    monkeypatch.setattr(gpuadapter, "adapter_inventory", lambda: inventory)
+    monkeypatch.setattr(gpuadapter, "nvenc_api_version", lambda: api)
+    monkeypatch.setattr(sourcefactory, "discover", partial(discover, control_factory=control_factory))
+    desktops = []
+    factory = sourcefactory.SourceFactory(US_LAYOUT, NS(fps=30),
+        lambda win, fps: desktops.append(win) or NS(stop=lambda: None))
+    factory.retry_gate = RetryGate(control_factory=control_factory)
+    return factory, desktops
+
+
+@pytest.mark.parametrize("facts,api", [([AMD], (13, 1)), ([INTEL], (13, 1)),
+    ([SOFTWARE], (13, 1)), ([AMD, INTEL, SOFTWARE], (13, 1)),
+    ([NVIDIA], (12, 2)), ([AMD, NVIDIA], (12, 2))])
+def test_all_unsupported_adapters_keep_the_desktop_in_the_first_create(monkeypatch, facts, api):
+    inventory = tuple(((0, index), fact) for index, fact in enumerate(facts))
+    factory, desktops = preflight_factory(monkeypatch, inventory, api)
+    monkeypatch.setattr(gpucapture, "GpuCapture", lambda *a, **k:
+                        pytest.fail("unsupported machine constructed GPU capture before fallback"))
+    monkeypatch.setattr(CaptureSession, "_open_channel", lambda *a:
+                        pytest.fail("unsupported machine waited for a channel"))
+    monkeypatch.setattr("sm64_events.replay.gpudemand.GpuDemand", lambda *a, **k:
+                        pytest.fail("unsupported machine requested capture"))
+    win = NS(pid=42)
+    camera = factory.create(win)
+    gate = factory.retry_gate
+    assert isinstance(camera, sourcefactory.DesktopForUnsupportedGpu)
+    assert desktops == [win] and camera.gpu_unsupported
+    assert camera.gpu_unsupported in camera.frame_source_note
+    assert gate._failures == 0 and gate.blocked(gate.identity_for(42)) is None
+    assert gate.unsupported_for(gate.identity_for(42)) == camera.gpu_unsupported
+
+
+@pytest.mark.parametrize("facts,api", [([AMD, NVIDIA], (13, 1)), ([NVIDIA, AMD], (13, 1)),
+    ([NVIDIA], (13, 1)), ([NVIDIA], None), ([AMD, NVIDIA], None),
+    ([AMD, gpuadapter.AdapterFacts("Unknown graphics", 0, False, None)], (13, 1)),
+    ([], (13, 1)), (None, (13, 1))])
+def test_plausible_nvidia_or_unknown_inventory_keeps_the_actual_luid_path(monkeypatch, facts, api):
+    inventory = tuple(((0, index), fact) for index, fact in enumerate(facts)) if facts is not None else None
+    factory, desktops = preflight_factory(monkeypatch, inventory, api)
+    assert isinstance(factory.create(NS(pid=42)), GpuCapture)
+    assert desktops == [] and factory.retry_gate.unsupported_for(factory.retry_gate.identity_for(42)) is None
+
+
+@pytest.mark.parametrize("state", ["missing", "wrong_pid", "closed", "no_gpu", "cached_missing",
+                                  "cached_no_gpu"])
+def test_preflight_requires_positive_live_gpu_identity(monkeypatch, state):
+    class UnavailableControl(Control):
+        status_value = NS(**vars(Control.status_value))
+
+        def status(self):
+            if state in {"missing", "cached_missing"}:
+                raise FileNotFoundError("no live control")
+            return self.status_value
+
+    if state == "wrong_pid":
+        UnavailableControl.status_value.producer_pid = 43
+    elif state == "closed":
+        UnavailableControl.status_value.state = CLOSED
+    elif state in {"no_gpu", "cached_no_gpu"}:
+        UnavailableControl.status_value.capabilities = 0
+    factory, _desktops = preflight_factory(monkeypatch, (((0, 1), AMD),),
+                                            control_factory=UnavailableControl)
+    if state.startswith("cached_"):
+        factory.retry_gate.observe(Control.status_value)
+    monkeypatch.setattr(gpuadapter, "machine_unsupported_reason", lambda:
+                        pytest.fail("hardware probe without positive live GPU identity"))
+    camera = factory.create(NS(pid=42))
+    assert not isinstance(camera, sourcefactory.DesktopForUnsupportedGpu)
+    assert factory.retry_gate.unsupported_for(factory.retry_gate.identity_for(42)) is None
+
+
+def test_a_driver_query_failure_keeps_the_gpu_path(monkeypatch):
+    factory, desktops = preflight_factory(monkeypatch, (((0, 1), NVIDIA),))
+    monkeypatch.setattr(gpuadapter, "nvenc_api_version", lambda: (_ for _ in ()).throw(OSError("query failed")))
+    assert isinstance(factory.create(NS(pid=42)), GpuCapture)
+    assert desktops == []
 
 
 def test_an_adapter_that_cannot_encode_keeps_the_desktop_without_a_retry(monkeypatch):
