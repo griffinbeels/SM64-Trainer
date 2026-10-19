@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import time
 
 import pytest
@@ -592,7 +593,7 @@ def test_failed_publication_retries_without_another_pb_and_reuses_mutation_keys(
             now[0] += 31
             sync._contribution_wake.set()
             for _ in range(100):
-                if len(publish_keys) == 2:
+                if len(publish_keys) == 2 and not sync._offer_retry and sync.last_error is None:
                     break
                 await asyncio.sleep(.01)
             assert len(publish_keys) == len(grant_keys) == 2
@@ -692,6 +693,9 @@ def cadence_transport(calls, encoded):
             body = {"v": 1, "disposition": "published"}
         elif path.endswith("/asset"):
             return httpx.Response(200, content=encoded)
+        elif path == "/v1/recordings/metadata":
+            body = {"v": 1, "recordings": [recording(identifier) for identifier in json.loads(request.content)["recording_ids"]],
+                    "unavailable": []}
         elif path.startswith("/v1/recordings/"):
             body = {"v": 1, **recording(path.split("/")[-1])}
         else:
@@ -759,13 +763,14 @@ def test_eight_hours_with_four_chosen_rivals_and_twenty_uploads_fits_account_bud
         assert len([call for call in calls if call[1] == "/v1/pool"]) == 48
         assert len([call for call in calls if call[1] == "/v1/catalog"]) == 8
         assert len([call for call in calls if call[1] == "/v1/pins"]) == 1
-        assert len([call for call in calls if call[1].startswith("/v1/recordings/") and not call[1].endswith("/asset")]) == 192
+        assert len([call for call in calls if call[1] == "/v1/recordings/metadata"]) == 48
+        assert not any(call[0] == "GET" and call[1].startswith("/v1/recordings/") and not call[1].endswith("/asset") for call in calls)
         assert len([call for call in calls if call[1].endswith("/asset")]) == 4
         assert len([call for call in calls if call[1].startswith("/v1/uploads")]) == 40
         assert len([call for call in calls if call[1] == "/v1/account"]) == 8
         # The public config route precedes authentication/ticketing in the
         # service. OAuth provider calls never enter this Worker counter.
-        assert len([call for call in calls if call[1] != "/v1/config"]) == 301 < 500
+        assert len([call for call in calls if call[1] != "/v1/config"]) == 157 < 500
         await http.aclose()
     asyncio.run(scenario())
 

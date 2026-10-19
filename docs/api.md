@@ -1146,6 +1146,37 @@ Scope is optional for legacy clients; when supplied it must match the active
 scope. Changed targets, stale scopes or invalid queries return readable 422 errors. No cloud route
 or cloud authorization is implied by this loopback endpoint.
 
+The Library tab also browses current shared recordings without selecting a
+Practice target. `GET /api/library/community` accepts optional `entity`
+(`star:C:S` or a local `segment:N`), `rom=us|jp`, and `cursor`. It returns
+`{available, reason, generation, entries, next_cursor, complete}`. Each group
+includes portable `target`, `clock`, `game_version`, `strategy`, separate
+`recordings` and `players` counts, and `best_frames`. Filters apply before
+cloud pagination. Twenty rows form one page; continuation has no page-depth cap.
+
+`GET /api/library/community/recordings` takes portable target JSON, `clock`,
+`rom`, `strategy`, and optional `cursor`. Its `recordings` retain strict cloud
+metadata and add `local_target`, local Library `entity_key`, `can_add`,
+`unavailable_reason`, and `saved_slot` (integer or null). Summary rows carry
+the same binding/capability fields except `saved_slot`. Unmatched segment
+signatures and strategies without resolved local standards remain browseable
+with a reason. No read downloads recording bytes or changes the active pool.
+Without a usable account/session, reads return 200 with `available:false`,
+the reason, an empty collection, null cursor and `complete:false`.
+
+`POST /api/ghost/rivals/saved` takes `{target, action, id, version?, scope?, slot?}`.
+The target is local `{kind, entity_key, strat}`; action is `add` or `remove`.
+The existing rival owner validates identity and persists that target's chosen
+seat. Add refreshes the recording's publication metadata first. It does not
+switch Practice, enable playback, or reset another target's roster. Full
+visible pins return `state:needs_slot` and four `seats`; no choice is written
+until the caller supplies a visible slot. Cancel sends no second command.
+Responses contain `{state,target,scope,pins,seats,slot,id}`. Remove needs no
+cloud read, so an unavailable saved rival can still be removed. Duplicate
+players, incompatible recordings and stale choices fail with readable 422s.
+Explicit own-recording pins remain supported. Active-target changes use the
+normal ghost refresh/broadcast path; off-target changes do not cycle playback.
+
 | Collection route | Contract |
 |---|---|
 | `GET /api/saved-ghosts/{attempt_id}` | `{attempt_id, saved, available}` for the attempt drawer. Without a ghost session, reads return `saved: false, available: false`. |

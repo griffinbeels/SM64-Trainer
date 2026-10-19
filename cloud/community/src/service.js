@@ -8,6 +8,7 @@ import {checkedName,prefixRange} from './names.js';
 import {encodeCursor,decodeCursor} from './cursors.js';
 import {nativeAuthorize} from './portal-contract.js';
 import {policies} from './policies.js';
+import {renewMetadata,librarySummary,libraryRecordings} from './library.js';
 import {armMaintenance} from './maintenance.js';
 const now=()=>Math.floor(Date.now()/1000);
 async function mutation(r,s,uid,route,body){const key=r.headers.get('idempotency-key');requireThat(uuid(key),'idempotency_required','Use a UUID Idempotency-Key.');const digest=await sha256(canonical(body));return {key,digest,previous:await s.receipt(uid,route,key,digest)};}
@@ -180,6 +181,8 @@ async function setPins({request,url,s,a}){
 }
 const LIBRARY_ROUTES=[
   ['GET','/v1/catalog',readCatalog],
+  ['POST','/v1/recordings/metadata',renewMetadata],
+  ['GET','/v1/library',librarySummary],['GET','/v1/library/recordings',libraryRecordings],
   ['GET','/v1/pool',candidates],['GET','/v1/search',candidates],
   ['GET',/^\/v1\/recordings\/([a-f0-9]{64})(\/asset)?$/,recording],
   ['POST','/v1/uploads',admitUpload],

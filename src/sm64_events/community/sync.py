@@ -13,8 +13,8 @@ from uuid import uuid4
 from sm64_events.ghost.sharing_targets import canonical, checked_target
 from sm64_events.ranks.region_scope import REGIONAL, servable_versions
 
-from . import claims, codec
-from .cache import LEASE_RENEW_S, checked_metadata, target_key, value_of
+from . import claims, codec, library
+from .cache import LEASE_RENEW_S, account_owner, checked_metadata, target_key, value_of
 from .config import CommunityError
 from .outbox import RetractionOutbox, SourceOutbox, checked_source, checked_strategy, retraction_key, source_key
 
@@ -219,6 +219,8 @@ class CommunitySync:
         self._catalog_lock = asyncio.Lock()
         self._local_jobs = set()
         self._search_task = None
+        self._library_tasks = set()
+        self._batch_metadata_supported = True
         self._pins_leased = False
         self._pin_key, self._pins_until = None, 0
         self._pin_metadata_key = None
@@ -253,7 +255,7 @@ class CommunitySync:
             self._closing = True
             self._queue.clear()
             self._offer_retry.clear()
-        tasks = [task for task in (self._task, self._download_task, self._contribution_task, self._search_task)
+        tasks = [task for task in (self._task, self._download_task, self._contribution_task, self._search_task, *self._library_tasks)
                  if task and not task.done()]
         for task in tasks:
             task.cancel()
@@ -749,10 +751,76 @@ class CommunitySync:
         task.add_done_callback(self._local_jobs.discard)
         return await asyncio.shield(task)
 
-    async def _asset(self, identifier, *, identity_key=None, versions=None):
+    async def library_summary(self, cursor=None, *, target=None, game_version=None):
+        scope, query = library.summary_query(cursor, target, game_version)
+        return await self._library_page("/v1/library", query, summary=True, summary_scope=scope)
+
+    async def library_recordings(self, target, clock, game_version, strategy, cursor=None):
+        key, query = library.recordings_query(target, clock, game_version, strategy, cursor)
+        return await self._library_page("/v1/library/recordings", query, summary=False, identity_key=key)
+
+    async def _library_page(self, path, query, *, summary, identity_key=None, summary_scope=None):
+        try:
+            value, generation = await self._discovery_read(path, params=query)
+            page = library.checked_page(value, summary=summary, generation=generation)
+            if summary:
+                library.check_summary_scope(page["entries"], summary_scope)
+            else:
+                self._check_identity(page["recordings"], identity_key)
+                # Loose rows resolve explicit Add rival actions. They never
+                # become an automatic population or trigger asset downloads.
+                for row in page["recordings"]:
+                    self.population.renew_metadata(row)
+            return page
+        except CommunityError as error:
+            if error.code == "generation_changed":
+                self._catalog_until = 0
+            raise
+
+    async def recording_metadata(self, identifier):
+        """Recheck publication on an explicit save, without downloading a clip."""
+        identifier = library.checked_identifier(identifier)
+        try:
+            value, generation = await self._discovery_read("/v1/recordings/" + identifier)
+            row = library.checked_recording(value, identifier, generation)
+            self.population.renew_metadata(row)
+            return row
+        except CommunityError as error:
+            if error.code == "generation_changed":
+                self._catalog_until = 0
+            raise
+
+    async def _discovery_read(self, path, **kwargs):
+        owner = account_owner(self.account.snapshot())
+        if self._closing or owner is None:
+            raise CommunityError("closed" if self._closing else "sign_in_required")
+        current = asyncio.current_task()
+        self._library_tasks.add(current)
+        try:
+            await self._catalog_ready()
+            generation = self._catalog_generation
+            if self._closing or account_owner(self.account.snapshot()) != owner:
+                raise CommunityError("canceled")
+            value = await self._json("GET", path, **kwargs)
+            if self._closing or account_owner(self.account.snapshot()) != owner:
+                raise CommunityError("canceled")
+            if self._catalog_generation != generation:
+                raise CommunityError("generation_changed")
+            return value, generation
+        except CommunityError as error:
+            if error.code == "generation_changed":
+                self._catalog_until = 0
+            raise
+        finally:
+            self._library_tasks.discard(current)
+
+    async def _asset(self, identifier, *, identity_key=None, versions=None, metadata=None):
         owner = self.account.snapshot().get("uid")
-        value = await self._json("GET", "/v1/recordings/" + identifier)
-        row = checked_metadata({key: item for key, item in value.items() if key != "v"})
+        if metadata is None:
+            value = await self._json("GET", "/v1/recordings/" + identifier)
+            row = checked_metadata({key: item for key, item in value.items() if key != "v"})
+        else:
+            row = metadata
         if row["id"] != identifier:
             raise CommunityError("identity_mismatch")
         if identity_key is not None:
@@ -772,9 +840,37 @@ class CommunitySync:
             return
         await self._cpu(lambda: self.population.store_asset(row, encoded, raw, owner=owner))
 
+    async def _metadata_batch(self, identifiers, identity_key, versions):
+        if not self._batch_metadata_supported:
+            return None
+        generation = self._catalog_generation
+        try:
+            value = await self._json("POST", "/v1/recordings/metadata", json={"recording_ids": list(identifiers)})
+        except CommunityError as error:
+            if error.status not in (404, 405):
+                raise
+            self._batch_metadata_supported = False
+            return None
+        try:
+            if self._catalog_generation != generation:
+                raise CommunityError("generation_changed")
+            rows = library.checked_metadata_batch(value, identifiers, generation)
+            if identity_key is not None:
+                self._check_identity(rows.values(), identity_key, versions=versions)
+            return rows
+        except CommunityError as error:
+            if error.code == "generation_changed":
+                self._catalog_until = 0
+            raise
+
     async def _assets(self, identifiers, *, renew=False, identity_key=None, owner=None, versions=None):
         """Try bounded IDs independently, without hot-looping failed gates."""
         owner = owner or self.account.snapshot().get("uid")
+        if self._closing or account_owner(self.account.snapshot()) != owner:
+            return
+        identifiers = tuple(dict.fromkeys(identifiers))
+        metadata = (await self._metadata_batch(identifiers, identity_key, versions)
+                    if renew and 1 < len(identifiers) <= 4 else None)
         failed = False
         for identifier in identifiers:
             snapshot = self.account.snapshot()
@@ -787,7 +883,10 @@ class CommunitySync:
                 if max(self._asset_retry.get(key, 0), self._asset_unusable.get(key, 0)) > time.monotonic():
                     continue
             try:
-                await self._asset(identifier, identity_key=identity_key, versions=versions)
+                if metadata is not None and identifier not in metadata:
+                    raise CommunityError("not_found", status=404)
+                await self._asset(identifier, identity_key=identity_key, versions=versions,
+                                  metadata=None if metadata is None else metadata[identifier])
             except (CommunityError, ValueError, OSError) as error:
                 failed = True
                 with self._lock:

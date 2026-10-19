@@ -45,6 +45,20 @@ export function readGhostLibrary(root) {
       selected: Boolean(row.querySelector('input[type="checkbox"]')?.checked)}))};
 }
 
+export function readCommunityLibrary(root) {
+  return {surface: "community_library",
+    title: text(root.querySelector(".community-library-header h3")),
+    note: text(root.querySelector(".community-library-header p")) + " · "
+      + text(root.querySelector(".community-library-success, .community-library-feedback, .community-library-action-error")),
+    rows: [...root.querySelectorAll(".community-library-recording, .community-library-group")].map(row => ({
+      name: text(row.querySelector(".community-library-player strong, .community-library-target")),
+      time: text(row.querySelector(".community-library-time, .community-library-best")),
+      strategy: text(row.querySelector(".community-library-method")) + " · "
+        + (row.querySelector(".community-library-method img")?.alt || ""),
+      selected: Boolean(row.querySelector(".community-library-saved")),
+    }))};
+}
+
 // A cell's identity as the human sees it: the name under the art, plus
 // whether it is the highlighted one. `.starcell` / `.starname` /
 // `.active-star` are PracticeCell's own classes -- every cell in the

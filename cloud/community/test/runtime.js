@@ -25,7 +25,7 @@ const mf=new Miniflare(options);
 try{
   await mf.ready;
   const db=await mf.getD1Database('DB');
-  for(const migration of ['0001_community.sql','0002_friend_beta.sql','0003_auth_entry_budget.sql','0004_reusable_beta_invitation.sql'])for(const sql of readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8').split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
+  for(const migration of ['0001_community.sql','0002_friend_beta.sql','0003_auth_entry_budget.sql','0004_reusable_beta_invitation.sql','0005_library_discovery.sql'])for(const sql of readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8').split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
   await db.prepare('UPDATE settings SET generation=? WHERE id=1').bind(model.generation).run();
   await db.prepare("INSERT INTO accounts(uid,issuer,subject,invited,status,name,name_key,sharing,terms_version,privacy_version,created_at,updated_at) VALUES(?,?,?,1,'active','Runtime','runtime',1,'test-1','test-1',0,0)").bind(alice,issuer,alice).run();
   async function call(path,{method='GET',body,bytes,bearer=token,key=crypto.randomUUID(),status=200}={}){
@@ -43,7 +43,16 @@ try{
   const asset=await call('/v1/recordings/'+id+'/asset');assert.deepEqual(Buffer.from(await asset.response.arrayBuffer()),f.bytes);
   const objects=await mf.getR2Bucket('GHOSTS');assert.equal((await objects.list()).objects.length,1);
   const quota=await db.prepare("SELECT ops FROM quotas WHERE owner='*'").first();assert.equal(quota.ops,6);
+  const renewed=await call('/v1/recordings/metadata',{method:'POST',body:{recording_ids:[id,'f'.repeat(64)]}});
+  assert.equal(renewed.json.recordings[0].id,id);assert.deepEqual(renewed.json.unavailable,['f'.repeat(64)]);
+  const summary=await call('/v1/library?'+new URLSearchParams({target:JSON.stringify(entry.target),rom:'us'}));
+  assert.equal(summary.json.entries.length,1);assert.equal(summary.json.entries[0].recordings,1);assert.equal(summary.json.complete,true);
+  const library=await call('/v1/library/recordings?'+new URLSearchParams({target:JSON.stringify(entry.target),clock:'igt',rom:'us',strategy:entry.strategies[0].name}));
+  assert.equal(library.json.recordings[0].id,id);assert.equal(library.json.complete,true);
+  assert.equal((await db.prepare("SELECT ops FROM quotas WHERE owner='*'").first()).ops,9);
   await call('/v1/account/withdraw',{method:'POST',body:{confirmation:'WITHDRAW MY GHOSTS'}});
+  assert.deepEqual((await call('/v1/recordings/metadata',{method:'POST',body:{recording_ids:[id]}})).json.unavailable,[id]);
+  assert.deepEqual((await call('/v1/library')).json.entries,[]);
   const denied=await mf.dispatchFetch('https://community.example.invalid/v1/recordings/'+id+'/asset',{headers:{authorization:'Bearer '+token}});assert.equal(denied.status,404);
   const fresh='30000000-0000-4000-8000-000000000001';
   await db.prepare("UPDATE quotas SET ops=ops_limit WHERE owner='*'").run();

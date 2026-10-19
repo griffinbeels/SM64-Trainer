@@ -1688,6 +1688,20 @@ it does not certify that gameplay was legitimate. Sharing begins unchecked.
 
 - **Lives** — `cloud/community/` and `src/sm64_events/community/`
 
+### Has ghost
+
+The [[Library]] filter for published [[community ghost]] recordings. It shows
+targets and strategies with shared recordings, including entries without video.
+Regions and the Library's current target narrow the results before paging.
+Opening an entry shows the player, time, strategy and ROM. **Add rival** saves
+that recording to the target's [[Lineup]] without changing current Practice.
+When every visible seat is saved, the player chooses which rival to replace.
+Publication and structural validation do not verify legitimate gameplay.
+
+- **Lives** — `ui/components/community-library.js`, `ghost/community_library.py`,
+  `ghost/rival_changes.py`, `server/community_library_api.py` and
+  `cloud/community/src/library.js`
+
 ### Rival pool
 
 The bounded metadata list for a [[target]], ROM, clock and [[ghost matching scope]],

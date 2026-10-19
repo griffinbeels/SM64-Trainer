@@ -105,7 +105,8 @@ publisher list restricts visibility; setting it to `[]` means own ghosts only.
 Request, upload, storage, burst and authenticated-entry budgets remain intact.
 Public build metadata must omit `friend_invitation`; this server-only policy
 supports existing invitation-free clients. Deployment and real provider signup
-remain operator QA gates. No new database migration is needed beyond 0001-0004.
+remain operator QA gates. Library discovery additionally requires the additive
+0005 Library index.
 
 The policies page labels open versus private beta from this deployment setting
 and describes admitted players as recipients. Review the notice before changing
@@ -164,6 +165,34 @@ PUT returns published with recording_id or not_faster. JSON mutations require a
 UUID Idempotency-Key reused for one logical retry. Account mutation replays return
 current state. Binary retries bind their immutable grant. HMAC cursors bind exact
 identity/generation/epochs, canonical base64url and a five-minute expiry.
+
+Milestone 1 adds these admitted, budgeted read endpoints. They retain the existing
+strict recording metadata schema and the viewer/publisher visibility policy:
+
+| Endpoint | Contract |
+| --- | --- |
+| `POST /v1/recordings/metadata` | `{recording_ids:[...]}` with zero to four unique immutable IDs. Returns `{v:1,recordings,unavailable}` in requested order. This read needs no mutation key. Its single publication query shares the direct recording gate, including the viewer's unexpired pins. System failures fail the request instead of renewing a partial list. |
+| `GET /v1/library` | Optional `target` portable JSON, `rom` (`us` or `jp`) and `cursor`. Filters apply before pagination. Returns `{v:1,generation,entries,next_cursor,complete}`. Each entry is `{target,clock,game_version,strategy,recordings,players,best_frames}`. Counts distinguish recordings from distinct publishers. |
+| `GET /v1/library/recordings` | Required `target`, `clock`, `rom`, `strategy`, optional `cursor`. Returns `{v:1,generation,recordings,next_cursor,complete}` using unchanged recording metadata rows. No rank-band restriction. |
+
+Library pages return at most 20 rows with real keyset continuation and no page-depth
+ceiling. Signed cursors bind endpoint, viewer, generation, filters, publisher policy,
+global visibility epoch and the target's publication epoch when target-filtered,
+or the sum of retained publication scope epochs for an unfiltered summary.
+Account changes, relevant publication/retraction or catalog migration require a
+fresh page sequence; unrelated uploads preserve a target-filtered continuation.
+Both listings include only current-generation published winners whose accounts are
+visible and whose asset metadata is stored. An owner's pinned replaced recording
+remains renewable by ID but never inflates public Library discovery.
+
+The summary performs one ordered grouped query using the additive partial
+`recording_library` index. It does not call every target's pool. Continuation bounds
+the identity groups scanned; exact counts still read eligible rows inside each group.
+Region-only filtering uses that same ordered index. Recording pages use the existing
+`fastest_strategy` index. No extra R2 HEADs or asset downloads occur on these reads;
+the existing asset route checks immutable bytes. These are local query-shape facts,
+not measured production row-read or dollar savings. Production usage still needs a
+separate operator measurement. Apply migration 0005 before deploying this Worker.
 
 Pool pages scan 256 indexed rows across at most 45 inclusive subdivisions, with
 four pages maximum. Search returns 20 rows and scans at most 64 indexed names per

@@ -9,6 +9,9 @@ export function useCommunityAccount() {
   // Automatic sign-in/profile steps
   // follow accountRequired and disappear as soon as an active account arrives.
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("community-account-changed"));
+  }, [account.uid, account.status, account.authenticated]);
   const refresh = () => getJSON("/api/community/account").then(value => {
     setAccount(value); setLoading(false); return value;
   });

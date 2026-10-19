@@ -1,6 +1,7 @@
 """A bounded, synchronous community view layered over the local population."""
 from collections import OrderedDict
 import hashlib
+from itertools import islice
 import os
 from pathlib import Path
 import threading
@@ -9,6 +10,7 @@ import unicodedata
 from uuid import UUID, uuid4
 
 from sm64_events.ghost.clip import blink_frames
+from sm64_events.ghost.adaptive import MAX_RIVALS
 from sm64_events.ghost.portable import checked_author, checked_hash
 from sm64_events.ghost.sharing import PortableGhost
 from sm64_events.ghost.sharing_targets import bind, binding_index, checked_target, describe
@@ -292,7 +294,7 @@ class CachedPopulation:
     def keep(self, identifiers):
         """The recordings the lineup on screen uses: a download never evicts them."""
         with self._lock:
-            self._kept = frozenset(identifiers)
+            self._kept = frozenset(islice(identifiers, MAX_RIVALS))
 
     def lease_until(self, identity=None, *, recording=None):
         """When a held list (or one recording's freshest row) lapses; None when absent."""
@@ -307,7 +309,13 @@ class CachedPopulation:
 
     def _trim_rows(self):
         while len(self._rows) > MAX_METADATA:
-            self._rows.popitem(last=False)
+            # A Library page must not remove the publication row backing an
+            # active manually chosen rival outside its automatic pool. Keep
+            # still honors the original lease; only a fresh gate renews it.
+            oldest = next((identifier for identifier in self._rows if identifier not in self._kept), None)
+            if oldest is None:
+                break  # At most MAX_RIVALS protected rows, even with a tiny cap.
+            self._rows.pop(oldest)
 
     def remember_page(self, identity, page, *, prefix=None, cursor=None):
         with self._lock:

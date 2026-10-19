@@ -256,12 +256,18 @@ export class Store {
       codec:"ghc1",generation:r.generation,step:r.response_step??r.step,provenance:"community-unverified",structurally_valid:true,full_start:true};
   }
   async recording(a,id) {
-    this.active(a);
-    const owners=this.visibleOwners(a),ownerSQL=owners===null?'':' AND r.uid IN ('+owners.map(()=>'?').join(',')+')';
-    const r=await this.one("SELECT r.*,a.name,a.status,x.state AS asset_state FROM recordings r JOIN accounts a ON a.uid=r.uid JOIN assets x ON x.key=r.asset_key "+
-      "WHERE r.id=? AND r.published=1 AND a.invited=1 AND a.status IN ('active','rename_required') AND x.state='stored' AND "+
-      "(EXISTS(SELECT 1 FROM winners w WHERE w.recording_id=r.id) OR EXISTS(SELECT 1 FROM pins p WHERE p.recording_id=r.id AND p.uid=? AND p.expires_at>?))"+ownerSQL,id,a.uid,sec(),...(owners||[]));
+    const r=(await this.recordings(a,[id]))[0];
     requireThat(r,"not_found","Recording unavailable.",404);return r;
+  }
+  // Single-record and bounded renewal reads share this publication gate. A
+  // missing ID is not permission to hide a database failure as unavailability.
+  async recordings(a,ids) {
+    this.active(a);
+    if(!ids.length)return [];
+    const owners=this.visibleOwners(a),ownerSQL=owners===null?'':' AND r.uid IN ('+owners.map(()=>'?').join(',')+')';
+    return this.rows("SELECT r.*,a.name,a.status,x.state AS asset_state FROM recordings r JOIN accounts a ON a.uid=r.uid JOIN assets x ON x.key=r.asset_key "+
+      "WHERE r.id IN ("+ids.map(()=>'?').join(',')+") AND r.published=1 AND a.invited=1 AND a.status IN ('active','rename_required') AND x.state='stored' AND "+
+      "(EXISTS(SELECT 1 FROM winners w WHERE w.recording_id=r.id) OR EXISTS(SELECT 1 FROM pins p WHERE p.recording_id=r.id AND p.uid=? AND p.expires_at>?))"+ownerSQL,...ids,a.uid,sec(),...(owners||[]));
   }
   async candidates(query) {
     const column=query.scope==="strategy"?"r.step":"r.overall_step";

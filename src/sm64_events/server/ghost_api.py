@@ -97,6 +97,8 @@ def create_ghost_router(session=None) -> APIRouter:
             raise HTTPException(422,str(error)) from error
     from sm64_events.server.ghost_sharing_api import mount_collection_routes
     mount_collection_routes(router, _session)
+    from sm64_events.server.community_library_api import mount_community_library_routes
+    mount_community_library_routes(router, session, _session)
 
     @router.put("/ghost")
     async def set_ghost(body: dict):
