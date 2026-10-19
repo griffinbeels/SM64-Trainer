@@ -37,11 +37,8 @@ def validate_dsn(value: str) -> str:
     return value
 
 
-def configured_dsn() -> str:
-    if not getattr(sys, "frozen", False):
-        return validate_dsn(os.environ.get("SM64_SENTRY_DSN", ""))
-    bundle = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
-    path = bundle / CONFIG_FILE
+def read_config_dsn(path: Path) -> str:
+    """Read the public client destination, keeping legacy missing files inert."""
     try:
         if path.stat().st_size > 4096:
             raise ValueError("Packaged error reporting configuration is too large.")
@@ -52,6 +49,13 @@ def configured_dsn() -> str:
             or type(data["schema"]) is not int or data["schema"] != 1):
         raise ValueError("Invalid packaged error reporting configuration.")
     return validate_dsn(data["dsn"])
+
+
+def configured_dsn() -> str:
+    if not getattr(sys, "frozen", False):
+        return validate_dsn(os.environ.get("SM64_SENTRY_DSN", ""))
+    bundle = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return read_config_dsn(bundle / CONFIG_FILE)
 
 
 def initialize_reporting() -> None:

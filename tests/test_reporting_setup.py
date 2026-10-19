@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from sm64_events.core import reporting_setup as setup
+from pathlib import Path
 
 DSN = "https://public@o123.ingest.us.sentry.io/42"
 
@@ -43,10 +44,25 @@ def test_source_reporting_is_explicit(monkeypatch):
 
 
 def test_builder_bundles_the_validated_public_configuration(monkeypatch, tmp_path):
-    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "tools"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
     from build_exe import app_args, stage_reporting, SEP
     monkeypatch.setenv("SM64_SENTRY_DSN", DSN)
     config = stage_reporting(tmp_path)
     assert json.loads(config.read_text())["dsn"] == DSN
     assert f"{config}{SEP}." in app_args(None, reporting_path=config)
     assert "sentry_sdk" in app_args(None)
+
+
+def test_builder_uses_the_checked_in_public_destination_when_unset(monkeypatch, tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+    from build_exe import DATA_DIR, stage_reporting
+    monkeypatch.delenv("SM64_SENTRY_DSN", raising=False)
+    expected = setup.read_config_dsn(DATA_DIR / setup.CONFIG_FILE)
+    assert json.loads(stage_reporting(tmp_path).read_text())["dsn"] == expected
+
+
+def test_build_can_explicitly_disable_reporting(monkeypatch, tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+    from build_exe import stage_reporting
+    monkeypatch.setenv("SM64_SENTRY_DSN", "")
+    assert json.loads(stage_reporting(tmp_path).read_text())["dsn"] == ""

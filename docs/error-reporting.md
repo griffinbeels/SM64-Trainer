@@ -10,9 +10,11 @@ available for support. A build without a configured DSN sends nothing and says s
 
 Create a Sentry Developer account and Python project. Copy its **public DSN** from
 the project's Client Keys page. No administrative API token belongs in the app.
-Set `SM64_SENTRY_DSN` in the build environment before running the existing build
-or release tools. The builder validates it and embeds `error-reporting.json` in the
-bundle. Source runs may read that same environment variable explicitly; packaged
+The checked-in public client destination in `src/sm64_events/data/error-reporting.json`
+is the default for builds. `SM64_SENTRY_DSN` can override it in the build environment;
+an explicit empty value disables reporting for that build. The builder validates the
+destination and embeds `error-reporting.json` in the bundle. Source runs read that
+environment variable explicitly; packaged
 apps ignore environment overrides and use their own bundle. Both normal and legacy
 beta builders stage the configuration. Configure email alerts in Sentry; the free
 plan's current allowance is 5,000 error events per month and one dashboard user.
