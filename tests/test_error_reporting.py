@@ -74,6 +74,31 @@ def test_sdk_log_errors_are_collected_and_safe_app_logs_are_breadcrumbs(tmp_path
     assert any(crumb["message"] == "Synthetic install started" for crumb in event["breadcrumbs"]["values"])
 
 
+@pytest.mark.parametrize("name", ["sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64_events.synthetic"])
+def test_actual_application_logger_names_supply_breadcrumbs(tmp_path, name):
+    configure(tmp_path)
+    logger = logging.getLogger(name)
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info("Synthetic operation started")
+        reporting.capture_problem("Synthetic operation failed")
+    finally:
+        logger.setLevel(previous)
+    wait_for(lambda: len(read_events(tmp_path)) == 1)
+    assert any(crumb["category"] == name and crumb["message"] == "Synthetic operation started"
+               for crumb in read_events(tmp_path)[0]["breadcrumbs"]["values"])
+
+
+def test_exact_sha_release_survives_privacy_scrubbing(tmp_path):
+    commit = "0123456789abcdef" * 2 + "01234567"
+    reporting.configure(dsn=DSN, release=f"sm64-trainer@{commit}", environment="beta", directory=tmp_path)
+    reporting.capture_problem("Synthetic failure")
+    wait_for(lambda: len(read_events(tmp_path)) == 1)
+    assert read_events(tmp_path)[0]["release"] == f"sm64-trainer@{commit}"
+    assert read_events(tmp_path)[0]["environment"] == "beta"
+
+
 def test_sdk_unhandled_hook_captures_before_original_hook(tmp_path, monkeypatch):
     import sys
     configure(tmp_path)
@@ -345,3 +370,38 @@ def test_capture_never_waits_for_spool_disk_io(tmp_path, monkeypatch):
     finally:
         release.set()
         transport.kill()
+
+
+@pytest.mark.parametrize("busy_sender", [False, True])
+def test_real_uncaught_process_exit_persists_final_report(tmp_path, busy_sender):
+    import subprocess
+    from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
+    script = '''
+import sys
+import threading
+from sm64_events.core import error_reporting as reporting
+from sm64_events.core import error_reporting_transport as transports
+
+started = threading.Event()
+blocked = sys.argv[2] == "True"
+def offline_delivery(payload):
+    started.set()
+    if blocked:
+        threading.Event().wait(10)
+    return False, 0
+transports.Delivery = lambda dsn: offline_delivery
+reporting.configure(dsn="https://public@example.invalid/123", release="exit-test", environment="test", directory=sys.argv[1])
+if blocked:
+    reporting.capture_problem("Synthetic earlier queued report")
+    assert started.wait(2)
+raise RuntimeError("Synthetic uncaught process exit")
+'''
+    command, environment = python_child("sm64_events.core.error_reporting", "--unused", site_packages=True)
+    result = subprocess.run(
+        [command[0], "-c", script, str(tmp_path), str(busy_sender)], env=environment,
+        capture_output=True, text=True, timeout=8, check=False, **quiet_spawn_kwargs(),
+    )
+    assert result.returncode != 0
+    events = read_events(tmp_path)
+    assert any(event.get("exception", {}).get("values", [{}])[-1].get("value") == "Synthetic uncaught process exit"
+               for event in events), result.stderr

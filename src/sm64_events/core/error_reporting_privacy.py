@@ -85,7 +85,7 @@ def _frames(stacktrace: object) -> dict:
 def safe_breadcrumb(crumb: dict, _hint: object = None) -> dict | None:
     """Only application logs provide breadcrumbs; network/log bodies stay out."""
     category = str(crumb.get("category", ""))
-    if not category.startswith("sm64_events"):
+    if not category.startswith(("sm64.", "sm64_events.")):
         return None
     return {
         "category": scrub_text(category, 120),
@@ -95,10 +95,21 @@ def safe_breadcrumb(crumb: dict, _hint: object = None) -> dict | None:
     }
 
 
+def _build_identity(event: dict) -> dict:
+    # These identities come from trusted startup/build configuration. A commit
+    # SHA is essential evidence, despite looking like an opaque access token.
+    result = {}
+    for key in ("release", "environment"):
+        value = event.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._+@/-]{1,160}", value):
+            result[key] = value
+    return result
+
+
 def safe_event(event: dict) -> dict:
     """Rebuild an SDK event from safe fields instead of blacklisting payloads."""
-    result = {}
-    for key in ("event_id", "timestamp", "platform", "level", "release", "environment", "logger"):
+    result = _build_identity(event)
+    for key in ("event_id", "timestamp", "platform", "level", "logger"):
         if key in event and isinstance(event[key], (str, int, float)):
             result[key] = scrub_text(event[key], 160)
     if "message" in event:
