@@ -1,5 +1,6 @@
 """Disposable packaging fixtures; no real PyInstaller, compiler or app launch."""
 import hashlib
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -31,6 +32,7 @@ def artifact(tmp_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"disposable-artifact-fixture")
     (folder / "_internal" / "build-channel.json").write_text(json.dumps(build.metadata()))
+    (folder / "_internal" / "error-reporting.json").write_text(json.dumps({"schema": 1, "dsn": ""}))
     return folder, build
 
 
@@ -90,6 +92,43 @@ def test_artifact_refuses_missing_asset_and_different_build_configuration(artifa
     (folder / "_internal" / "ffmpeg.exe").unlink()
     with pytest.raises(RuntimeError, match="ffmpeg"):
         build_beta.validate_artifact(folder, build)
+
+
+@pytest.fixture(params=["legacy", "normal"])
+def reporting_artifact(artifact, request):
+    folder, build = artifact
+    if request.param == "normal":
+        build = replace(build, installation="normal")
+        (folder / "SM64TrainerBeta.exe").rename(folder / "SM64Trainer.exe")
+        (folder / "_internal" / "python313.dll").write_bytes(b"fixture-runtime")
+        (folder / "_internal" / "build-channel.json").write_text(json.dumps(build.metadata()))
+    return folder, build
+
+
+def test_every_candidate_requires_explicit_reporting_configuration(reporting_artifact):
+    folder, build = reporting_artifact
+    (folder / "_internal" / build_beta.REPORTING_CONFIG).unlink()
+    with pytest.raises(RuntimeError, match="missing.*error-reporting"):
+        build_beta.validate_artifact(folder, build)
+
+
+@pytest.mark.parametrize("payload", [b"not-json", b"\xff", b"{}",
+    b'{"schema":true,"dsn":""}', b'{"schema":1,"dsn":null}',
+    b'{"schema":1,"dsn":"private-invalid-destination"}',
+    b'{"schema":1,"dsn":"","extra":"private-setting"}'])
+def test_every_candidate_refuses_bad_reporting_configuration_without_echoing_it(reporting_artifact, payload):
+    folder, build = reporting_artifact
+    (folder / "_internal" / build_beta.REPORTING_CONFIG).write_bytes(payload)
+    with pytest.raises(RuntimeError, match="invalid error reporting configuration") as failure:
+        build_beta.validate_artifact(folder, build)
+    assert "private-" not in str(failure.value)
+
+
+@pytest.mark.parametrize("dsn", ["", "https://public@o123.ingest.us.sentry.io/42"])
+def test_every_candidate_accepts_valid_enabled_or_explicitly_disabled_reporting(reporting_artifact, dsn):
+    folder, build = reporting_artifact
+    (folder / "_internal" / build_beta.REPORTING_CONFIG).write_text(json.dumps({"schema": 1, "dsn": dsn}))
+    build_beta.validate_artifact(folder, build)
 
 
 def approved_collection(tmp_path, *, author="griffman1212"):

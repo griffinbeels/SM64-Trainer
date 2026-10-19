@@ -7,17 +7,19 @@ import json
 import os
 from pathlib import Path
 import struct
+import ssl
 import sys
 from typing import Callable
 
 from sm64_events.core.build_channel import (
     BETA_APP_DIR, CONFIG_FILENAME, STABLE_APP_DIR, BuildChannel, read_metadata,
 )
+from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn
 
 FLAG = "--beta-self-check"
 _UI = "sm64_events/ui/"
 _ASSETS = (
-    CONFIG_FILENAME, "ukiki.ico", "rank_standards.seed.json", "defaults.seed.json",
+    CONFIG_FILENAME, REPORTING_CONFIG, "ukiki.ico", "rank_standards.seed.json", "defaults.seed.json",
     "sheet_ladders.seed.json", "sheet_library.seed.json.gz", "library_overrides.json",
     "video_checks.seed.json.gz", "behaviours_us.tsv", "behaviours_jp.tsv",
     "symbols_us.tsv", "symbols_jp.tsv",
@@ -47,6 +49,10 @@ _IMPORTS = (
     ("sm64_events.library.background", ("worker_main",)),
     ("sm64_events.replay.gpuprocess.process_worker", ("main",)),
     ("sm64_events.ghost.sound_player", ("main",)),
+    ("sm64_events.core.plugin_elevation_worker", ("main",)),
+    ("sentry_sdk", ("init", "capture_exception", "capture_message", "get_client", "new_scope")),
+    ("sm64_events.core.error_reporting", ("configure", "capture_exception", "capture_problem", "status", "shutdown")),
+    ("sm64_events.core.error_reporting_transport", ("Delivery", "PersistentTransport")),
 )
 
 
@@ -111,11 +117,28 @@ def _file(bundle, relative):
     return path.resolve().is_relative_to(bundle.resolve()) and path.is_file() and path.stat().st_size > 0
 
 
+def _reporting_configuration(bundle):
+    # The runtime tolerates missing files for older releases; this candidate
+    # gate requires the explicit file, even if its DSN is empty.
+    if not _file(bundle, REPORTING_CONFIG):
+        return False
+    read_config_dsn(bundle / REPORTING_CONFIG)
+    return True
+
+
+def _reporting_tls(bundle, load):
+    # Verify the actual bundled CA and TLS dependency without connecting,
+    # constructing a reporter, or changing a user's reporting preference.
+    ca = Path(load("certifi").where()).resolve()
+    return (ca.is_relative_to(bundle.resolve()) and ca.is_file()
+            and ssl.create_default_context(cafile=str(ca)).cert_store_stats()["x509_ca"] > 0)
+
+
 def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
     """Collect bounded checks. Unit fixtures are never selected by CLI or env."""
     report = {"schema": 1, "kind": "frozen-beta-self-check", "ok": False,
               "scope": "bundle imports, assets and isolated runtime settings",
-              "not_exercised": ["desktop", "server", "recording", "OAuth", "helper execution"],
+              "not_exercised": ["desktop", "server", "recording", "OAuth", "helper execution", "error delivery"],
               "checks": []}
 
     def check(name, work):
@@ -157,6 +180,7 @@ def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
           == (runtime.local_appdata / STABLE_APP_DIR / "data/capture_layer.json").resolve())
     for relative in _ASSETS:
         check("asset:" + relative, lambda relative=relative: _file(bundle, relative))
+    check("reporting_configuration", lambda: _reporting_configuration(bundle))
     resolvers = ("bundled_plugin_dll", "bundled_renderer_dll", "bundled_encoder_dll")
     for (name, machine), resolver in zip(_NATIVES, resolvers, strict=True):
         path = bundle / "sm64_events/data/plugin" / name
@@ -184,6 +208,7 @@ def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
             module = load(name)
             return all(callable(getattr(module, member, None)) for member in members)
         check("import:" + name, imported)
+    check("reporting_tls", lambda: _reporting_tls(bundle, load))
     report["ok"] = all(item["ok"] for item in report["checks"])
     return report
 
