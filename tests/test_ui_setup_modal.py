@@ -773,3 +773,41 @@ def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, mon
         assert state["verification"]["step"] == "reopen"
         (tmp_path / "source-build-explicitly-installed.png").write_bytes(page.screenshot())
         assert page.problems() == []
+
+
+def test_denied_packaged_refresh_reveals_a_reachable_install_action(tmp_path, monkeypatch):
+    """A protected upgrade cannot remain hidden behind automatic-update copy."""
+    import shutil
+    import ui_fixture
+    from test_capturelayer import build, make_layer, renderer_for
+    from test_capturelayer_refresh_recovery import TwoTicks, deny_wrapper
+    from sm64_events.core.capturelayer import WRAPPER_DLL
+
+    folder = tmp_path / "PJ64"
+    (folder / "Plugin").mkdir(parents=True)
+    bundled = tmp_path / WRAPPER_DLL
+    bundled.write_bytes(build(b"previous wrapper"))
+    renderer_for(bundled).write_bytes(build(b"renderer"))
+    layer, _, _ = make_layer(folder, bundled, tmp_path / "capture.json")
+    layer.install(True)
+    bundled.write_bytes(build(b"updated wrapper with portable GPU support"))
+    attempts, real_copy = deny_wrapper(monkeypatch, folder)
+    layer.refresh_loop(TwoTicks())
+    assert len(attempts) == 1
+    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    observed = dict(target=dict(state="ready", pid=None), rom=dict(MISSING_ROM), checks={})
+    with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
+        page.goto(url + "/ui/index.html")
+        wait_page(page, "install")
+        wait_step(page, "install")
+        button = f"{CURRENT} .setup-install-action button"
+        page.wait_for(button)
+        assert page.evaluate(f"!document.querySelector({button!r}).disabled")
+        assert "will update it automatically" not in body(page)
+        (tmp_path / "protected-refresh-install-action.png").write_bytes(page.screenshot())
+        monkeypatch.setattr(shutil, "copyfile", real_copy)
+        page.click(button)
+        wait_step(page, "reopen")
+        state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
+        assert state["installation_verified"] and state["automatic_update"]
+        assert page.problems() == []

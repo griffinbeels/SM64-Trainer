@@ -44,6 +44,7 @@ import json
 import logging
 import re
 import threading
+import time
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -281,6 +282,9 @@ class CaptureLayer:
         # rollback snapshot can undo the other's finished copy.
         self._install_lock = threading.RLock()
         self._deferred = False  # a refresh is waiting on a held DLL (logged once)
+        self._refresh_blocked = None  # (bundle/target identity, reason); user gesture retries
+        self._last_status = None
+        self._status_observed = None
         self._refresh_stop = threading.Event()
         self._refresh_thread = None
 
@@ -489,7 +493,7 @@ class CaptureLayer:
         steps = self._steps(state, running, source is not None and wrapper_present and not layer_current,
                             layer_alive, automatic)
 
-        return LayerStatus(
+        status = LayerStatus(
             pj64_dir=str(pj64_dir) if pj64_dir is not None else None,
             pj64_running=running,
             registry_graphics_dll=registry_graphics_dll,
@@ -512,6 +516,16 @@ class CaptureLayer:
             automatic_update=automatic,
             gpu_observation=gpu,
         )
+        self._last_status, self._status_observed = status, time.time()
+        return status
+
+    def diagnostic_status(self) -> dict | None:
+        """Last observed setup state only; never discover, install or refresh."""
+        status = self._last_status
+        if status is None:
+            return None
+        return {**status.as_dict(), "observed_unix_s": self._status_observed,
+                "refresh_error": self._refresh_blocked[1] if self._refresh_blocked else None}
 
     def install(self, consent: bool) -> LayerStatus:
         with self._install_lock:
@@ -584,6 +598,7 @@ class CaptureLayer:
             # another administrator's credentials for the file transaction.
             select_wrapper()
 
+        self._refresh_blocked = None
         return self.status()
 
     @contextmanager
@@ -668,11 +683,23 @@ class CaptureLayer:
         if source is None or renderer is None:
             return False
         try:
+            key = self._refresh_key(pj64_dir, source, renderer)
+            if self._refresh_blocked is not None:
+                if self._refresh_blocked[0] == key:
+                    return False
+                self._refresh_blocked = None  # New target/bundle earns a fresh attempt.
             if _sha256(plugin_dir / WRAPPER_DLL) != expected:
                 return False
         except OSError:
             return False
         return not_older(source, plugin_dir / WRAPPER_DLL) and not_older(renderer, plugin_dir / RENDERER_DLL)
+
+    def _refresh_key(self, pj64_dir, source, renderer):
+        def identity(path):
+            stat = path.stat()
+            return str(path.resolve()), stat.st_size, stat.st_mtime_ns
+        return (str(pj64_dir.resolve()), str(self._plugin_dir(pj64_dir).resolve()),
+                identity(source), identity(renderer))
 
     def refresh_if_stale(self) -> bool:
         with self._install_lock:
@@ -729,11 +756,18 @@ class CaptureLayer:
             overlay["wrapped"] = RENDERER_DLL
         # Only the file that differs is copied; each copy is verified and
         # rolls the whole install back on failure.
+        refresh_key = self._refresh_key(pj64_dir, source, renderer)
         try:
             self._copy_stale(overlay, source, renderer, (dll_path, renderer_path, ini_path),
                              wrapper_stale, renderer_stale)
         except DestinationInUse as exc:
             return self._defer(Path(exc.filename))
+        except OSError as exc:
+            # Background refresh never opens UAC. Stop promising an automatic
+            # update after a write failure; the existing Install gesture owns
+            # a normal attempt and its permission-specific elevated retry.
+            self._refresh_blocked = (refresh_key, str(exc)[:512])
+            raise
         self._deferred = False
         return True
 
@@ -806,6 +840,7 @@ class CaptureLayer:
         overlay["uninstalled_at"] = _now_iso()
         overlay["consented_at"] = None
         self._save_overlay(overlay)
+        self._refresh_blocked = None
 
         return self.status()
 
