@@ -11,7 +11,6 @@ from pathlib import Path
 import secrets
 import socket
 import struct
-import sys
 import time
 
 from sm64_events.core.plugin_installation import PluginInstallError, sha256
@@ -52,17 +51,12 @@ def receive_packet(connection, secret: bytes) -> dict:
 
 
 def helper_argv(port: int, secret: bytes) -> list[str]:
+    from sm64_events.core.childproc import isolated_python_child
     args = [str(port), secret.hex(), str(os.getpid())]
-    if getattr(sys, "frozen", False):
-        return [sys.executable, ADMIN_INSTALL_FLAG, *args]
     # Isolated Python ignores inherited PYTHONPATH/site customization when
     # privileged. The script inserts only its own canonical source directory.
-    interpreter = Path(getattr(sys, "_base_executable", sys.executable))
-    windowless = interpreter.with_name("pythonw.exe")
-    if not windowless.is_file():
-        raise OSError("This Python installation has no windowless administrator helper")
     worker = Path(__file__).with_name("plugin_elevation_worker.py")
-    return [str(windowless), "-I", "-S", str(worker), *args]
+    return isolated_python_child(worker, ADMIN_INSTALL_FLAG, args)
 
 
 def _failure(result):
