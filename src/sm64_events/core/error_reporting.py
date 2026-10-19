@@ -6,6 +6,7 @@ ROM, recording, raw log or screenshot attachments are collected.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import sys
@@ -161,3 +162,9 @@ def shutdown():
             _client.close(timeout=0)
         _transport = None
         _client = None
+
+
+# Default SDK integrations are intentionally disabled, including its exit hook.
+# Uncaught main-thread exceptions reach sys.excepthook immediately before exit;
+# persist that final incoming report even when its daemon has not run yet.
+atexit.register(shutdown)

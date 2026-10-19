@@ -17,7 +17,7 @@ from pathlib import Path
 
 import certifi
 import urllib3
-from sentry_sdk.consts import VERSION
+from sentry_sdk.consts import VERSION, EndpointType
 from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 from sentry_sdk.utils import Dsn
@@ -45,7 +45,7 @@ class Delivery:
 
     def __call__(self, payload: bytes) -> tuple[bool, float]:
         response = self.pool.request(
-            "POST", self.auth.get_api_url(), body=payload,
+            "POST", self.auth.get_api_url(EndpointType.ENVELOPE), body=payload,
             headers={"X-Sentry-Auth": self.auth.to_header(),
                      "Content-Type": "application/x-sentry-envelope"},
             redirect=False, preload_content=False,
@@ -93,6 +93,7 @@ class PersistentTransport(Transport):
         self.clock = clock
         self.enabled = enabled
         self.lock = threading.RLock()
+        self.persist_lock = threading.Lock()
         self.wake = threading.Event()
         self.stopping = threading.Event()
         self.incoming = deque()
@@ -179,6 +180,10 @@ class PersistentTransport(Transport):
             self.counters["dropped"] += 1
 
     def _persist(self):
+        with self.persist_lock:
+            self._write_pending()
+
+    def _write_pending(self):
         with self.lock:
             incoming = list(self.incoming)
             self.incoming.clear()
@@ -256,8 +261,14 @@ class PersistentTransport(Transport):
             return {"pending": len(self.pending), **self.counters}
 
     def kill(self):
+        if self.stopping.is_set():
+            return
         self.stopping.set()
         self.wake.set()
+        # An uncaught exception can enqueue immediately before process exit,
+        # while this daemon is unscheduled or busy sending an older report.
+        # Drain on the exiting thread; never depend on another worker turn.
+        self._persist()
         self.worker.join(timeout=4)
 
     def flush(self, timeout, callback=None):
