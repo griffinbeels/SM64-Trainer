@@ -2,6 +2,7 @@
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,57 @@ import ui_fixture
 from ui_fixture import serve_ui
 from test_ui_setup_modal import (INSTALLED, click_text, connect, scenario,
                                  wait_page, wait_step, wait_until)
+
+
+def test_debug_report_button_exports_the_recording_route_and_retained_failure(tmp_path, monkeypatch):
+    """The tester's existing gesture reaches the new cached evidence."""
+    import sm64_events.server.app as app_module
+    from sm64_events.replay.recorder import ReplayRecorder
+
+    recorder = ReplayRecorder.__new__(ReplayRecorder)
+    recorder.status = lambda **kw: {"recording": True, "frame_source": "desktop"}
+    recorder._capture_diagnostics = lambda: {
+        "first_failure": {"stage": "encoder", "encoder_backend": "windows",
+                          "gpu_vendor_id": 0x1002, "native_hresult": 0xC00D36B4},
+        "latest": {"stage": "encoder"},
+    }
+    mount = app_module._mount_diagnostics
+
+    def with_cached_evidence(app, poller, broadcaster, service, monitor, *args):
+        mount(app, poller, broadcaster, service, monitor,
+              replay=SimpleNamespace(recorder=recorder),
+              capture_layer=SimpleNamespace(diagnostic_status=lambda: {"state": "needs_restart"}))
+
+    monkeypatch.setattr(app_module, "_mount_diagnostics", with_cached_evidence)
+    monkeypatch.setattr(app_module, "diagnostics_dir", lambda: tmp_path / "reports")
+    create = ui_fixture.create_app
+    revealed = []
+
+    def fixture_app(*args, **kwargs):
+        app = create(*args, **kwargs)
+
+        @app.post("/api/replay/reveal")
+        def reveal(body: dict):
+            revealed.append(Path(body["path"]))  # Observe the gesture without opening Explorer.
+            return {"ok": True}
+
+        return app
+
+    monkeypatch.setattr(ui_fixture, "create_app", fixture_app)
+    with serve_ui(db_path=tmp_path / "report.db") as url, get_driver().launch(viewport=(1280, 900)) as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_for('.settings-link[aria-label="Settings"]')
+        page.click('.settings-link[aria-label="Settings"]')
+        page.wait_for(".settings-drawer")
+        page.click('.settings-drawer button[title^="Write a debug report"]')
+        wait_until(page, "document.querySelector('.settings-drawer').textContent.includes('Report saved:')", "report is saved")
+        assert len(revealed) == 1 and revealed[0].is_file()
+        report = revealed[0].read_text(encoding="utf-8")
+        assert "desktop_time_estimate" in report and "first_failure" in report
+        assert "windows" in report and "3222091444" in report
+        assert "needs_restart" in report
+        assert page.problems() == []
+        (tmp_path / "debug-report-saved.png").write_bytes(page.screenshot())
 
 
 @pytest.mark.parametrize("width", [850, 1280])

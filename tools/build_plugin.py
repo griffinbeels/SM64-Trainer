@@ -1,5 +1,5 @@
 """Build THE CAPTURE LAYER (plugin/gfxwrap -> sm64_trainer_gfx.dll, 32-bit),
-the 64-bit NVENC encoder helper the server spawns (SM64GpuEncoderV1.dll)
+the 64-bit GPU encoder helper the server spawns (SM64GpuEncoderV1.dll)
 and, with --test-host, the host that drives the wrapper without Project64.
 The renderer the wrapper wraps is built by tools/build_renderer.py.
 
