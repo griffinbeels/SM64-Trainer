@@ -22,6 +22,25 @@ SMALL = (12, 10, 1, 2, 9, 7, 6)
 LARGE = (324, 244, 1, 2, 320, 240, 6)
 
 
+def test_gpu_witness_refuses_wrong_actual_vendor(tmp_path, monkeypatch):
+    """The hardware guard sees the GL context, rather than inventory branding."""
+    import subprocess
+    from sm64_events.core.childproc import quiet_spawn_kwargs
+
+    build, vc32 = witness.toolchain()
+    producer = witness.build_producer(build, vc32, tmp_path)
+    actual = subprocess.run([str(producer), "capabilities"], capture_output=True,
+                            text=True, timeout=10, check=True, **quiet_spawn_kwargs())
+    wrong = "amd" if "vendor=NVIDIA" in actual.stdout else "nvidia"
+    monkeypatch.setenv("SM64_TEST_GPU_VENDOR", wrong)
+    refused = subprocess.run([str(producer), "capabilities"], capture_output=True,
+                             text=True, timeout=10, check=False, **quiet_spawn_kwargs())
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert "renderer vendor mismatch:" in refused.stderr
+    assert "renderer adapter_luid=" in actual.stdout
+    assert "renderer adapter_luid=" not in refused.stdout
+
+
 @pytest.mark.parametrize("mode", ["pixels", "omit-copy", "nvenc", "nvenc-av1"])
 def test_gpu_bridge(tmp_path, mode):
     build, vc32 = witness.toolchain()

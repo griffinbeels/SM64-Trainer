@@ -5,6 +5,8 @@ capture step in its one GL context; the x64 consumer
 (`gpu_render_witness_consumer.cpp`) plays the encoder helper, which creates the
 bridge textures. Shared by test_gpu_bridge, test_gpu_fidelity and
 test_gpu_selection.
+SM64_TEST_GPU_VENDOR=amd|intel|nvidia requires that actual GL implementation;
+a mixed machine's default NVIDIA context cannot qualify an AMD/Intel run.
 """
 from __future__ import annotations
 

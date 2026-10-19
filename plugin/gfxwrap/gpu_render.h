@@ -18,6 +18,12 @@
 namespace render_capture {
 using GLsync = struct __GLsync *;
 using GLuint64 = unsigned long long;
+// gd_status.error when reason is GD_GL_UNSUPPORTED. runtime_delivery projects
+// known details into append-only ControlV1 reasons before a picture channel.
+enum class LoadError : uint32_t {
+    none = 0, version_45 = 1, memory_object = 2, memory_object_win32 = 3,
+    keyed_mutex = 4, entry_point = 5, snapshot_entry_point = 6,
+};
 struct Gl {
     void (APIENTRY *create_framebuffers)(GLsizei, GLuint *) = nullptr;
     void (APIENTRY *delete_framebuffers)(GLsizei, const GLuint *) = nullptr;
@@ -47,6 +53,8 @@ struct Gl {
     GLboolean (APIENTRY *acquire_key)(GLuint, GLuint64, GLuint) = nullptr;
     GLboolean (APIENTRY *release_key)(GLuint, GLuint64) = nullptr;
     void (APIENTRY *get_unsigned_bytes)(GLenum, GLubyte *) = nullptr;
+    LoadError load_error = LoadError::none;
+    const char *missing_entry_point = nullptr; // process-local diagnostic only
     // Current context; false when it lacks GL 4.5 DSA or the external-memory,
     // keyed-mutex extensions the helper handoff needs.
     bool load();

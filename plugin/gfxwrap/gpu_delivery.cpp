@@ -407,8 +407,8 @@ struct Runtime {
         if(!live())return false;
         // The renderer's own context is current: this is its thread (render_tick).
         prepare_steps.prepare_begin=qpc();
-        if(!gl.load()){fail(GD_GL_UNSUPPORTED);return false;}
-        if(!copy_gl.load(true)){fail(GD_GL_UNSUPPORTED);return false;}
+        if(!gl.load()){fail(GD_GL_UNSUPPORTED,uint32_t(gl.load_error));return false;}
+        if(!copy_gl.load(true)){fail(GD_GL_UNSUPPORTED,uint32_t(render_capture::LoadError::snapshot_entry_point));return false;}
         TRACE("prepare snapshots");
         gpu_context=surface.context;gpu_context_generation=surface.context_generation;
         // At most RB_SLOTS-1 pictures are held, so one record slot always
