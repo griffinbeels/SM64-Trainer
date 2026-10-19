@@ -9,7 +9,8 @@ import tempfile
 # This hook runs before gui_entry. These entry points never use audio/COM;
 # importing it here would add a cache directory and unrelated startup work.
 if (getattr(sys, "frozen", False)
-        and sys.argv[1:2] not in (["--library-refresh-worker"], ["--beta-self-check"])):
+        and sys.argv[1:2] not in (["--library-refresh-worker"], ["--beta-self-check"],
+                                  ["--install-practice-replay-admin"], ["--gpu-helper"])):
     gen = tempfile.mkdtemp(prefix="ctgen_")
     os.environ.setdefault("COMTYPES_GEN_DIR", gen)
     try:
