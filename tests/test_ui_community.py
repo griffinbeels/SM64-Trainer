@@ -5,6 +5,7 @@ The fixture replaces only the remote account boundary. The actual app, assets,
 local account router, request capability and practice database remain in use.
 No browser fetch is intercepted, and every test reads its own checkout's UI.
 """
+import asyncio
 import contextlib
 import json
 import sys
@@ -211,6 +212,35 @@ def modal_text(page):
     return page.evaluate("document.querySelector('.modal-body')?.innerText || ''")
 
 
+def assert_progress_cleanup_faults(faults, base):
+    """Only the current settings owner's canceled read may finish at unmount."""
+    expected = f"requestfailed: {base.rstrip('/')}/api/community/progress (net::ERR_ABORTED)"
+    assert faults in ([], [expected]), faults
+
+
+def assert_settings_unmounted(page, base, account, *, signed_out=False):
+    assert page.count(".progress-settings") == 0
+    if signed_out:
+        assert not account.snapshot()["authenticated"] and ("sign_out",) in account.calls
+        assert page.count(".community-providers") == 1
+    else:
+        assert page.count(".modal-body") == 0 and account.snapshot()["authenticated"]
+    faults = page.problems()
+    assert_progress_cleanup_faults(faults, base)
+    return faults
+
+
+@pytest.mark.parametrize("fault", [
+    "HTTP 500 http://127.0.0.1:12345/api/community/progress",
+    "requestfailed: http://127.0.0.1:12345/api/community/account (net::ERR_ABORTED)",
+    "requestfailed: http://127.0.0.1:12345/api/community/progress (net::ERR_FAILED)",
+    "pageerror: Unexpected progress failure",
+])
+def test_settings_cleanup_guard_retains_http_and_unknown_failures(fault):
+    with pytest.raises(AssertionError):
+        assert_progress_cleanup_faults([fault], "http://127.0.0.1:12345")
+
+
 def capture_widths(page, name):
     """Private screenshots are fixture evidence, never a live auth receipt."""
     folder = REPO / ".iteration" / "adaptive-ghosts" / "round19-community-ui"
@@ -409,16 +439,19 @@ def test_settings_use_registered_name_sharing_and_sign_out_routes(monkeypatch, t
             page.wait_for(".community-privacy")
             set_name(page, "Changed fixture name")
             page.click(".community-form > .community-check input[type=checkbox]")
+            assert page.problems() == []
             click_text(page, "Done")
             wait_until(page, "!document.querySelector('.modal-body')", "settings save")
             assert ("rename", "Changed fixture name") in account.calls
             assert ("sharing", True) in account.calls
+            assert_settings_unmounted(page, base, account)
             open_account(page)
             page.wait_for(".community-privacy")
+            assert page.problems() == []
             click_text(page, "Sign out")
             page.wait_for(".community-provider.community-discord")  # signed out: the sign-in step returns (round 41)
             assert ("sign_out",) in account.calls
-            assert page.problems() == []
+            assert_settings_unmounted(page, base, account, signed_out=True)
 
 
 def test_sharing_opt_out_explains_effect_and_cancel_preserves_choice(monkeypatch, tmp_path):
@@ -435,18 +468,21 @@ def test_sharing_opt_out_explains_effect_and_cancel_preserves_choice(monkeypatch
             assert "Existing shared ghosts stay available" in modal_text(page)
             capture_widths(page, "sharing-off-pending")
             assert account.state["sharing"] is True
+            assert page.problems() == []
             page.click(".modal-close")
             wait_until(page, "!document.querySelector('.modal-body')", "cancelled settings")
             assert not any(call[0] == "sharing" for call in account.calls)
+            assert_settings_unmounted(page, base, account)
             open_account(page)
             page.wait_for(".community-privacy")
             assert page.evaluate("document.querySelector('.community-form > .community-check input').checked")
             page.click(".community-form > .community-check input[type=checkbox]")
+            assert page.problems() == []
             click_text(page, "Done")
             wait_until(page, "!document.querySelector('.modal-body')", "saved opt-out")
             assert ("sharing", False) in account.calls
             assert account.state["sharing"] is False
-            assert page.problems() == []
+            assert_settings_unmounted(page, base, account)
 
 
 def test_profile_bounds_normalized_name_before_submission(monkeypatch, tmp_path):
@@ -496,6 +532,7 @@ def test_privacy_actions_use_owner_routes_and_explicit_confirmation(monkeypatch,
             click_text(page, "Remove shared ghosts")
             page.wait_for(".community-privacy")
             assert ("remote", "POST", "/v1/account/withdraw", {"confirmation": "WITHDRAW MY GHOSTS"}) in account.calls
+            assert page.problems() == []
             page.click(".community-privacy summary")
             click_text(page, "Delete account")
             page.wait_for(".community-form h3")
@@ -504,7 +541,52 @@ def test_privacy_actions_use_owner_routes_and_explicit_confirmation(monkeypatch,
             page.wait_for(".community-providers")
             assert ("remote", "POST", "/v1/account/delete", {"confirmation": "DELETE MY ACCOUNT"}) in account.calls
             assert ("sign_out",) in account.calls
-            assert page.problems() == []
+            assert_settings_unmounted(page, base, account, signed_out=True)
+
+
+def test_confirmed_owner_delete_cancels_only_the_pending_settings_progress_read(monkeypatch, tmp_path):
+    """Hold a real local GET until the actual confirmation unmount aborts it."""
+    from sm64_events.server import player_api
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    original = player_api.publication_state
+
+    async def pending_progress(progress):
+        entered.set()
+        try:
+            assert await asyncio.to_thread(release.wait, 15), "Pending progress read was never released"
+            return await original(progress)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(player_api, "publication_state", pending_progress)
+    account = FixtureAccount("active")
+    try:
+        with community_app(monkeypatch, tmp_path, account) as (base, _), contextlib.ExitStack() as cleanup:
+            cleanup.callback(release.set)
+            with get_driver().launch(headless=True, viewport=(850, 1000)) as page:
+                page.goto(base)
+                page.wait_for(".practice-page")
+                open_account(page)
+                page.wait_for(".progress-settings")
+                assert entered.wait(3), "The real settings progress GET did not reach its barrier"
+                assert page.problems() == []
+                page.click(".community-privacy summary")
+                click_text(page, "Delete account")
+                page.wait_for(".community-form h3")
+                assert page.count(".progress-settings") == 0
+                assert not any(call[:3] == ("remote", "POST", "/v1/account/delete") for call in account.calls)
+                click_text(page, "Delete account")
+                page.wait_for(".community-providers")
+                assert ("remote", "POST", "/v1/account/delete", {"confirmation": "DELETE MY ACCOUNT"}) in account.calls
+                faults = assert_settings_unmounted(page, base, account, signed_out=True)
+                assert faults == [f"requestfailed: {base}/api/community/progress (net::ERR_ABORTED)"]
+                release.set()
+                assert finished.wait(3), "The canceled server read did not finish cleanup"
+                assert page.count(".progress-settings") == 0 and page.count(".community-providers") == 1
+                assert page.problems() == []
+    finally:
+        release.set()
 
 
 @pytest.mark.parametrize("provider", ["discord", "twitch"])
