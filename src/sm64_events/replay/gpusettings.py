@@ -16,11 +16,11 @@ log = logging.getLogger("sm64.replay")
 # WHICH CODEC THE RECORDER WRITES, per graphics adapter, and the one owner of
 # that question. AV1 is worth 32% of H.264's bytes at equal quality and encodes
 # FASTER (measured 2026-09-20), so Save publishes already-small bytes and the
-# compression pass never runs for that replay -- but only RTX 40-series and
-# newer have an AV1 encoder at all.
+# compression pass never runs for that NVIDIA replay. Other backends negotiate
+# their own AV1 availability and retain their independent archive-quality policy.
 #
 # The answer is not guessed from a model name and not borrowed from ffmpeg's
-# NVENC: it is asked of the exact adapter, through the exact encoder the
+# codec listing: it is asked of the exact adapter, through the exact encoder the
 # recorder will use, by opening an AV1 session. An adapter without one refuses
 # by codec (`Result.CODEC`), which is typed apart from every real fault, and
 # the refusal is remembered so the extra open happens once per adapter per
@@ -45,8 +45,8 @@ def note_codec_unavailable(luid: tuple[int, int], codec: int) -> bool:
 
 # WHETHER THE ADAPTER CAN RECORD THROUGH THE CAPTURE LAYER AT ALL, per
 # adapter and driver version: a verdict reason, or None when it may. Same
-# per-process memo as the codec: an unsupported adapter (not NVIDIA, a
-# software adapter, a driver older than the encoder's NVENC API, or no codec
+# per-process memo as the codec: an unsupported adapter (a
+# software adapter, a driver older than its encoder API, or no codec
 # the encoder can open) is asked once, and the recorder keeps the desktop grab
 # for it (gpuadapter.py). A driver update is a new key, so it is asked again.
 _ADAPTER_VERDICTS: dict[tuple, str | None] = {}
@@ -129,10 +129,14 @@ class GpuSettings:
             shutdown_timeout=1.0,
         )
 
-    def encoder(self, header, cfg, *, nominal_rate, codec=CODEC_H264):
+    def encoder(self, header, cfg, *, nominal_rate, codec=CODEC_H264, facts=None):
         # Structural values mirror the picture feed: no reordering, closed GOP
         # plus time-forced IDRs. Nominal rate is separate from actual VFR PTS.
+        luid = (getattr(header, "luid_high", None), getattr(header, "luid_low", None))
+        if facts is None:
+            facts = gpuadapter.adapter_facts(luid) if None not in luid else None
         return from_replay_config(
+            backend=gpuadapter.encoder_backend(facts),
             codec=codec,
             width=header.even_width,
             height=header.even_height,

@@ -55,6 +55,7 @@ class Profile(_Named):
     privacy_version: str = Field(min_length=1, max_length=80)
     sharing: bool = False
     sheet_runner: str | None = Field(default=None, max_length=128)
+    share_pbs: bool | None = None
 
 
 class Rename(_Named):
@@ -89,7 +90,7 @@ def _private_response(response: Response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
 
 
-def create_community_router(account):
+def create_community_router(account, progress=None):
     router = APIRouter(prefix="/api/community", tags=["community"], dependencies=[Depends(_private_response)])
     pending = {"attempt_id": None}
 
@@ -104,7 +105,7 @@ def create_community_router(account):
         return account
 
     _mount_auth(router, require_account, pending)
-    _mount_account(router, require_account, pending)
+    _mount_account(router, require_account, pending, progress)
     return router
 
 
@@ -144,7 +145,18 @@ def _mount_auth(router, require_account, pending):
                             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
                                      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'"})
 
-def _mount_account(router, require_account, pending):
+async def _complete_profile(active, body, progress):
+    if progress is not None:
+        progress.prepare_profile_choice(body.share_pbs)
+    elif body.share_pbs is False and active.snapshot().get("status") == "new":
+        raise HTTPException(503, "Open a local Trainer profile before choosing saved-PB sharing.")
+    await active.complete_profile(**body.model_dump(exclude={"share_pbs"}))
+    if progress is not None:
+        await progress.profile_completed()
+    return active.snapshot()
+
+
+def _mount_account(router, require_account, pending, progress=None):
     @router.get("/names/check")
     async def check_name(name: str = Query(min_length=1, max_length=128)):
         """The live availability check while a name is typed (round 41).
@@ -162,8 +174,7 @@ def _mount_account(router, require_account, pending):
     @router.put("/account")
     async def profile(body: Profile):
         active = require_account()
-        await _call(lambda: active.complete_profile(**body.model_dump()))
-        return active.snapshot()
+        return await _call(lambda: _complete_profile(active, body, progress))
 
     @router.put("/account/name")
     async def rename(body: Rename):
@@ -188,8 +199,7 @@ def _mount_account(router, require_account, pending):
 
     @router.get("/account/export")
     async def export():
-        active = require_account()
-        return await _call(lambda: active.request_json("GET", "/v1/account/export"))
+        return await export_account(require_account())
 
     @router.post("/account/withdraw")
     async def withdraw(body: Confirmation):
@@ -208,3 +218,28 @@ def _mount_account(router, require_account, pending):
             json={'confirmation': 'DELETE MY ACCOUNT'}))
         await _call(active.sign_out)
         return result
+
+
+def _export_owner(account, owner, epoch):
+    if not owner or account.snapshot().get("uid") != owner or getattr(account, "_epoch", None) != epoch:
+        raise HTTPException(409, "Your account changed. Export again from the account you want to download.")
+
+
+async def export_account(active):
+    from sm64_events.community.config import CommunityError
+    owner, epoch = active.snapshot().get("uid"), getattr(active, "_epoch", None)
+    result = await _call(lambda: active.request_json("GET", "/v1/account/export"))
+    _export_owner(active, owner, epoch)
+    if not isinstance(result.get("account"), dict) or result["account"].get("uid") != owner:
+        raise HTTPException(503, "The account export identity could not be confirmed.")
+    try:
+        player = await active.request_json("GET", "/v2/account/player-export")
+    except CommunityError as error:
+        _export_owner(active, owner, epoch)
+        if error.status not in (404, 405):
+            raise HTTPException(503, "The saved-PB export could not be reached. Try again before downloading.") from error
+        player = {"available": False, "reason": "This service does not support player-page export yet."}
+    _export_owner(active, owner, epoch)
+    if player.get("available") is not False and player.get("uid") != owner:
+        raise HTTPException(503, "The player-page export identity could not be confirmed.")
+    return {**result, "player_page": player}

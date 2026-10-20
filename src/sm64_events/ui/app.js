@@ -20,6 +20,7 @@ import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
 import { RunnerPage } from "./components/runnerpage.js";
+import { PlayerPage } from "./components/playerpage.js";
 import { RankUpCelebration } from "./components/marelocelebrate.js";
 
 const html = htm.bind(h);
@@ -228,6 +229,8 @@ function App() {
   // runner's entry) keeps the page, so the Rank tab brings him back to the
   // runner he left, not to the board.
   const [openRunnerName, setOpenRunnerName] = useState(null);
+  const [openPlayerUid, setOpenPlayerUid] = useState(null);
+  const [comparisonScope, setComparisonScope] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => {
@@ -237,13 +240,14 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [moreOpen]);
   const setTab = (name, { keepRunner = false } = {}) => {
-    if (name !== "Rank" && !keepRunner) setOpenRunnerName(null);
+    if (name !== "Rank" && !keepRunner) { setOpenRunnerName(null); setOpenPlayerUid(null); }
     setTabState(name); setMoreOpen(false);
   };
   // The Library's own door onto a runner's page (task 5) -- sets the tab
   // first, so a click while ALREADY on Rank still lands on the runner (the
   // clear above only fires for a DIFFERENT destination).
-  const openRunner = (name) => { setTab("Rank"); setOpenRunnerName(name); };
+  const openRunner = (name) => { setTab("Rank"); setOpenPlayerUid(null); setOpenRunnerName(name); };
+  const openPlayer = (uid) => { setTab("Rank"); setOpenRunnerName(null); setOpenPlayerUid(uid); };
   // The Compare PANE's own entry point -- unchanged from before Task 6
   // (the pane never moves, this is still the one thing that opens it).
   // Renamed from `openCompare` because that name is
@@ -252,7 +256,7 @@ function App() {
   const enterCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
   const openLibrary = (intent) => {
     setLibraryIntent(intent);
-    setTab("Library", { keepRunner: !!intent.runner });
+    setTab("Library", { keepRunner: !!intent.runner || !!openPlayerUid });
   };
   // Task 6: Compare's own nav entry is gone (the Library absorbed it), so
   // every caller that used to open the Compare tab directly -- today that is
@@ -273,7 +277,7 @@ function App() {
     <${MobileTop} t=${t} openSettings=${() => setSettingsOpen(true)} />
     <main class="app-main">
       <${Header} t=${t} settingsOpen=${settingsOpen}
-        closeSettings=${() => setSettingsOpen(false)} setTab=${setTab} />
+        closeSettings=${() => setSettingsOpen(false)} setTab=${setTab} onOpenPlayer=${openPlayer} />
       <div class="workspace ${tab === "Practice" ? "practice-workspace" : ""}">
         ${/* Compare stays mounted across tab switches so loaded media and sync
              survive leaving and returning. */""}
@@ -288,7 +292,7 @@ function App() {
         <div class="view-pane" style=${tab === "Library" ? "" : "display:none"}>
           <${Library} t=${t} intent=${libraryIntent}
             clearIntent=${() => setLibraryIntent(null)} active=${tab === "Library"}
-            enterCompare=${enterCompare} openRunner=${openRunner} />
+            enterCompare=${enterCompare} openRunner=${openRunner} openPlayer=${openPlayer} />
         </div>
         ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
             openCompare=${openCompare} openLibrary=${openLibrary} /></div>`
@@ -296,10 +300,15 @@ function App() {
               <${Segments} t=${t} /></div>`
           : tab === "Routes" ? html`<div class="view-pane"><${Routes} t=${t} /></div>`
           : tab === "Run" ? html`<div class="view-pane"><${Run} t=${t} /></div>`
-          : tab === "Rank" ? html`<div class="view-pane">${openRunnerName
+          : tab === "Rank" ? html`<div class="view-pane">${openPlayerUid
+              ? html`<${PlayerPage} t=${t} uid=${openPlayerUid}
+                  initialScope=${comparisonScope} onScopeChange=${setComparisonScope}
+                  onClose=${() => setOpenPlayerUid(null)} openLibrary=${openLibrary} />`
+              : openRunnerName
               ? html`<${RunnerPage} t=${t} runnerName=${openRunnerName}
                   onClose=${() => setOpenRunnerName(null)} openLibrary=${openLibrary} />`
-              : html`<${RankPage} t=${t} onOpenRunner=${setOpenRunnerName}
+              : html`<${RankPage} t=${t} onOpenRunner=${openRunner} onOpenPlayer=${openPlayer}
+                  onScopeChange=${setComparisonScope}
                   openLibrary=${openLibrary} />`}</div>`
           : tab === "Live feed" ? html`<div class="view-pane"><${Feed} t=${t} /></div>`
           : null}

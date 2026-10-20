@@ -465,6 +465,69 @@
      (sections run beginner -> expert, ui/components/librarymodel.js's
      `sectionOrder`). */
   .library-target-page { display: grid; gap: .7rem; }
+  .library-ghost-filter { display: inline-flex; align-items: center; gap: .45rem;
+    min-height: 34px; white-space: nowrap; font-weight: 650; }
+  .library-ghost-filter input { width: 17px; height: 17px; accent-color: var(--gold); }
+  .library-ghost-door { justify-self: start; }
+  .community-library { display: grid; gap: 1rem; min-width: 0; }
+  .community-library-header { display: flex; flex-wrap: wrap; align-items: center;
+    justify-content: space-between; gap: .65rem 1rem; }
+  .community-library-header h3 { margin: 0 0 .3rem; }
+  .community-library-header p { margin: 0; }
+  .community-library-groups, .community-library-recordings, .community-library-seats {
+    display: grid; gap: .6rem; min-width: 0; }
+  .community-library-group { display: grid; grid-template-columns: minmax(0,1fr) auto;
+    gap: .35rem .75rem; padding: 1rem; text-align: left; justify-content: stretch;
+    border: 1px solid var(--border-soft); background: var(--surface-2); border-radius: 8px; }
+  .community-library-target { grid-column: 1 / -1; font-size: 1rem; font-weight: 750; }
+  .community-library-group > .community-library-method { grid-column: 1 / -1; }
+  .community-library-method { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
+  .community-library-best { font-variant-numeric: tabular-nums; color: var(--gold); }
+  .community-library-recording { display: flex; flex-wrap: wrap; align-items: center;
+    gap: .7rem 1.2rem; padding: 1rem; border: 1px solid var(--border-soft);
+    border-radius: 8px; background: var(--surface-2); min-width: 0; }
+  .community-library-player { display: grid; gap: .3rem; flex: 1 1 180px; min-width: 0; }
+  .community-library-performance { display: grid; gap: .3rem; flex: 1 1 150px; min-width: 0; }
+  .community-library-time { font-variant-numeric: tabular-nums; font-size: 1.15rem; color: var(--green); }
+  .community-library-actions { display: grid; gap: .3rem; margin-left: auto; }
+  .community-library-actions button { justify-content: center; gap: .4rem; }
+  .community-library-unavailable { flex-basis: 100%; grid-column: 1 / -1; margin: 0; }
+  .community-library-target, .community-library-method, .community-library-player strong,
+  .community-library-unavailable, .community-library-success, .community-library-seat-title {
+    overflow-wrap: anywhere; }
+  .community-library-status, .community-library-empty, .community-library-feedback p { margin: 0; }
+  .community-library-feedback { display: grid; justify-items: start; gap: .5rem; }
+  .community-library-more { justify-self: center; }
+  .community-library-success { color: var(--green); margin: 0; }
+  .community-library-seat { display: grid; justify-content: stretch; text-align: left;
+    gap: .35rem; padding: .75rem; }
+  .community-library-seat-title { font-weight: 700; }
+  .community-library-player .textlink { justify-self: start; text-align: left; }
+  .player-page-tools, .player-section-head { display: flex; flex-wrap: wrap;
+    align-items: center; justify-content: space-between; gap: .75rem; }
+  .player-profile-header h2 { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin: 0; }
+  .player-claimed { display: inline-flex; align-items: center; color: var(--gold); }
+  .player-profile-header p, .player-profile-header a, .player-section-head h3 { overflow-wrap: anywhere; }
+  .player-socials { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+  .player-socials a { color: var(--gold); }
+  .player-comparison { display: contents; }
+  .player-page .practice-card { align-self: stretch; width: 100%; box-sizing: border-box; }
+  .player-scorecard .score-gap { color: inherit; }
+  .hint.community-library-add-hint::after { left: auto; right: 0; transform: none; }
+  .community-library-add-hint > button { pointer-events: none; }
+  .player-ghosts { display: grid; gap: .75rem; }
+  .player-ghosts p, .player-section-head h3 { margin: 0; }
+  .player-ghost-row .community-library-performance strong { font-variant-numeric: tabular-nums; }
+  .progress-settings { display: grid; gap: .75rem; padding-top: 1rem; border-top: 1px solid var(--border-soft); }
+  .progress-sharing-preview { padding: .75rem; border: 1px solid var(--border-soft); border-radius: 8px; }
+  .progress-sharing-preview h4 { margin: 0; }
+  .progress-profile-details textarea { resize: vertical; min-height: 70px; }
+  .player-search { display: grid; gap: .6rem; }
+  .player-search h3, .player-search p { margin: 0; }
+  .player-search label { display: grid; gap: .35rem; }
+  .player-search input { max-width: 420px; width: 100%; }
+  .player-search-results { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .player-search-results button { display: inline-flex; align-items: center; gap: .5rem; }
   .library-target-header {
     display: flex; align-items: center; gap: .7rem; margin-bottom: .2rem;
   }
@@ -9744,7 +9807,8 @@
 .community-form input[type=text] {width:100%;min-height:46px;box-sizing:border-box;}
 .community-sheet {border:1px solid var(--border);padding:16px;border-radius:8px;display:grid;gap:12px;}
 .community-check {display:flex;align-items:flex-start;gap:12px;line-height:1.5;}
-.community-check input {width:20px;height:20px;flex-shrink:0;}
+/* Reset the global input minimum and padding before aligning the actual checkbox to its first text line. */
+.community-check input {width:20px;height:20px;min-height:0;padding:0;box-sizing:border-box;flex-shrink:0;margin:calc((1lh - 20px)/2) 0 0;font:inherit;}
 .community-check small {display:block;color:var(--muted);}
 .community-actions {display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;margin-top:18px;}
 .community-actions button {min-height:44px;}
@@ -9760,5 +9824,5 @@
 </style></head>
 <body>
 <div id="app"></div>
-<script type="module" src="/ui/app.js"></script>
+<script type="module" src="/ui/boot.js"></script>
 </body></html>

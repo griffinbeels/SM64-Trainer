@@ -179,12 +179,37 @@ int wmain(int argc, wchar_t **argv) {
     WNDCLASSW wc{}; wc.style = CS_OWNDC; wc.lpfnWndProc = DefWindowProcW;
     wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"SnapshotHiddenHost"; CHECK(RegisterClassW(&wc));
     Window renderer; CHECK(wglMakeCurrent(renderer.dc, renderer.rc));
+    const auto *vendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
+    const auto *device = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
+    CHECK(vendor && device);
+    printf("renderer vendor=%s device=%s\n", vendor, device); fflush(stdout);
+    // An opt-in AMD/Intel run must not quietly qualify the default NVIDIA
+    // context on a mixed machine. The consumer independently opens this actual
+    // GL LUID and checks delivered pixels, not merely adapter inventory names.
+    const char *expected = getenv("SM64_TEST_GPU_VENDOR");
+    if (expected && *expected) {
+        const bool matched = (!strcmp(expected, "nvidia") && strstr(vendor, "NVIDIA"))
+            || (!strcmp(expected, "amd") && (strstr(vendor, "ATI") || strstr(vendor, "AMD")))
+            || (!strcmp(expected, "intel") && strstr(vendor, "Intel"));
+        if (!matched) {
+            fprintf(stderr, "renderer vendor mismatch: expected=%s actual=%s\n", expected, vendor);
+            CHECK(wglMakeCurrent(nullptr, nullptr)); return 2;
+        }
+    }
     glDisable(GL_DITHER); glDisable(0x8DB9);
-    render_capture::Gl gl; CHECK(gl.load());
+    render_capture::Gl gl;
+    if (!gl.load()) {
+        fprintf(stderr, "renderer GL prerequisite failed: detail=%u entry_point=%s\n",
+                unsigned(gl.load_error), gl.missing_entry_point ? gl.missing_entry_point : "");
+        CHECK(wglMakeCurrent(nullptr, nullptr)); return 3;
+    }
+    LUID adapter{}; CHECK(render_capture::adapter_luid(gl, &adapter));
+    printf("renderer adapter_luid=%08lx:%08lx\n", adapter.HighPart, adapter.LowPart); fflush(stdout);
     bind_buffer = proc<Bind>("glBindBuffer"); texture_sub_image = proc<SubImage>("glTextureSubImage2D");
     proc<void (APIENTRY *)(GLsizei, GLuint *)>("glGenBuffers")(1, &hostile_pack);
     int result = 1;
-    if (!wcscmp(argv[1], L"selection") && argc == 4) result = selection(argv[2], argv[3], gl);
+    if (!wcscmp(argv[1], L"capabilities") && argc == 2) result = 0;
+    else if (!wcscmp(argv[1], L"selection") && argc == 4) result = selection(argv[2], argv[3], gl);
     else if (!wcscmp(argv[1], L"bridge") && argc == 10) result = bridge(argv, gl);
     else CHECK(false);
     CHECK(wglMakeCurrent(nullptr, nullptr));

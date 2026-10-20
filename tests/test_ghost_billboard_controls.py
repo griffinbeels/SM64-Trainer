@@ -112,8 +112,8 @@ def test_label_bound_keeps_the_credit_intact_and_does_not_invent_one():
     assert len(label_bytes(label)) == LABEL_BYTES - 1
     assert label_bytes(label).split(b"\0", 1)[0].decode("ascii") == label
     assert other.author == author
-    assert ghost_label(imported(author="  A\nB  " + "é" * 90)) == "RIVAL 1"
-    assert ghost_label(imported(author="")) == "RIVAL 1"
+    assert ghost_label(imported(author="  A\nB  " + "é" * 90)) == "GHOST 1"
+    assert ghost_label(imported(author="")) == "GHOST 1"
 
 
 @pytest.mark.parametrize("label", [None, 12, "a\0b", "a\nb", "x" * LABEL_BYTES, "\ud800"])

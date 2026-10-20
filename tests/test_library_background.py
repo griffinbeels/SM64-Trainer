@@ -131,7 +131,8 @@ def test_worker_snapshot_is_bounded_and_revision_checked(tmp_path, monkeypatch):
         bg._read_prepared(path, {"sheet_revision": "new"})
 
 
-@pytest.mark.parametrize("flag", [None, bg.WORKER_FLAG, "--beta-self-check"])
+@pytest.mark.parametrize("flag", [None, bg.WORKER_FLAG, "--beta-self-check",
+                                 "--install-practice-replay-admin", "--gpu-helper"])
 def test_frozen_runtime_hook_only_initializes_com_for_the_app(tmp_path, monkeypatch, flag):
     import runpy
     import tempfile

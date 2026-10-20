@@ -120,7 +120,7 @@ class ReplayRecorder:
                  video_sink_factory=None,
                  recorder_lock_factory=acquire_recorder_lock,
                  scratch_protection: Callable[[], Iterable[Path]] | None = None,
-                 ghost_capture_factory=None):
+                 ghost_capture_factory=None, capture_diagnostics=None):
         self._cfg = cfg
         # machine-wide single-recorder guard (injectable for tests): only the
         # instance holding this lock actually captures; others run viewer-only.
@@ -133,6 +133,7 @@ class ReplayRecorder:
         self._lock_warned = False    # log the viewer-only notice once
         self._window_finder = window_finder
         self._video_factory = video_factory
+        self._capture_diagnostics = capture_diagnostics
         self._audio_factory = audio_factory
         self._fallback_audio_factory = fallback_audio_factory
         self._clock_factory = clock_factory
@@ -1280,6 +1281,15 @@ class ReplayRecorder:
     def _recording_active(self):
         return (self._recording and self.recording_enabled and not self._stopping
                 and getattr(self._video_source, "recording_active", True))
+
+    def diagnostic_status(self) -> dict:
+        """Read cached route evidence; never acquire capture, graphics or file resources."""
+        current = self.status(nonblocking=True)
+        source = current.get("frame_source")
+        return {"recorder": current,
+                "picture_input_matching": "renderer_stamped" if source == "plugin" and current.get("recording") else
+                "desktop_time_estimate" if source == "desktop" else "not_recording",
+                "gpu": self._capture_diagnostics() if self._capture_diagnostics else None}
 
     def status(self, *, nonblocking: bool = False) -> dict:
         # M3: reads of _recording/_window_found/_audio_mode/_codec are unlocked;

@@ -24,7 +24,8 @@ sys.path.insert(0, str(REPO / "src"))
 
 from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_FILENAME,
                                            read_metadata)  # noqa: E402
-from build_exe import COLLECT, SEP, _source_date_epoch, app_args, needs_reexec  # noqa: E402
+from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn  # noqa: E402
+from build_exe import COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, stage_reporting  # noqa: E402
 from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
                          candidate_author, seed_descriptor)  # noqa: E402
@@ -95,7 +96,7 @@ def check_prerequisites(ffmpeg: str | None) -> str:
 
 def beta_args(ffmpeg: str, metadata_path: Path, *, dist: Path = DIST,
               work: Path = WORK) -> list[str]:
-    return app_args(ffmpeg, name=BETA_APP_DIR, metadata_path=metadata_path,
+    return app_args(ffmpeg, name=BETA_APP_DIR, metadata_path=metadata_path, reporting_path=stage_reporting(work),
                     distpath=dist, workpath=work / "pyinstaller", specpath=work / "spec")
 
 
@@ -115,7 +116,8 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
     internal = folder / "_internal"
     app_name = "SM64Trainer" if build.installation == "normal" else BETA_APP_DIR
     required = [folder / f"{app_name}.exe", internal / "ffmpeg.exe",
-                internal / CONFIG_FILENAME, internal / "sm64_events" / "ui" / "index.html",
+                internal / CONFIG_FILENAME, internal / REPORTING_CONFIG,
+                internal / "sm64_events" / "ui" / "index.html",
                 *[internal / "sm64_events" / "data" / "plugin" / name
                   for name in ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")],
                 *[internal / name for name in ("ukiki.ico", "behaviours_us.tsv", "behaviours_jp.tsv",
@@ -125,6 +127,12 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
     for path in required:
         if not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError(f"beta artifact is missing: {path.relative_to(folder)}")
+    try:
+        # Missing files are inert at runtime for old builds, but new candidates
+        # must carry an explicit validated destination (empty means disabled).
+        read_config_dsn(internal / REPORTING_CONFIG)
+    except (OSError, ValueError):
+        raise RuntimeError("beta artifact has invalid error reporting configuration") from None
     if build.installation == "normal" and not any(
             path.is_file() and path.stat().st_size > 0 for path in internal.glob("python[0-9]*.dll")):
         raise RuntimeError("normal artifact is missing the Python runtime DLL")

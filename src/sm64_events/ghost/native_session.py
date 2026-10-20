@@ -101,7 +101,7 @@ def ghost_label(ghost, number=1) -> str:
     author = getattr(ghost, "author", None)
     label = " ".join(author.split()) if isinstance(author, str) else ""
     if not label or any(char not in LABEL_CHARACTERS for char in label):
-        return f"RIVAL {number}"
+        return f"GHOST {number}"
     # Legacy portable credits remain intact in metadata. Mark wire shortening;
     # the native layout still fits the display to its actual pixel budget.
     return label if len(label) < LABEL_BYTES else label[:LABEL_BYTES - 4] + "..."

@@ -64,7 +64,7 @@ def rank_entity_key(identity: PracticeIdentity) -> str:
     if identity.kind == "star":
         course, star = map(int, identity.entity_key.split("-"))
         return entity_key(course, star)
-    raise ValueError("A rival belongs to a star or segment.")
+    raise ValueError("A ghost belongs to a star or segment.")
 
 
 def _read_context(ranks):
@@ -108,21 +108,21 @@ def rank_frames(ranks, identity: PracticeIdentity, frames: int, *, version=_IDEN
 def checked_options(value: dict) -> dict:
     """Validate the complete settings draft without changing its caller."""
     if not isinstance(value, dict) or set(value) - (DEFAULT_OPTIONS.keys() | {"strategy_only"}):
-        raise ValueError("Choose valid rival settings.")
+        raise ValueError("Choose valid ghost settings.")
     if "strategy_only" in value and type(value["strategy_only"]) is not bool:
-        raise ValueError("Choose valid rival settings.")
+        raise ValueError("Choose valid ghost settings.")
     # Old persisted drafts keep their other choices; every strategy now has its
     # own rivals, so the former opt-in field no longer controls selection.
     result = DEFAULT_OPTIONS | {key: item for key, item in value.items() if key != "strategy_only"}
     if result["mode"] not in ("adaptive", "fixed"):
-        raise ValueError("Choose how the rival range follows your practice.")
+        raise ValueError("Choose how the ghost range follows your practice.")
     if type(result["include_pb"]) is not bool:
-        raise ValueError("Choose valid rival settings.")
+        raise ValueError("Choose valid ghost settings.")
     limits = {"count": (1, MAX_RIVALS), "min_ahead": (0, MAX_AHEAD), "max_ahead": (0, MAX_AHEAD),
               "min_step": (0, MAX_STEP), "max_step": (0, MAX_STEP)}
     for key, (low, high) in limits.items():
         if type(result[key]) is not int or not low <= result[key] <= high:
-            raise ValueError("Choose a rival range within the available ranks.")
+            raise ValueError("Choose a ghost range within the available ranks.")
     if result["min_ahead"] > result["max_ahead"] or result["min_step"] > result["max_step"]:
         raise ValueError("Minimum rank cannot exceed maximum rank.")
     return result
@@ -131,7 +131,7 @@ def checked_options(value: dict) -> dict:
 def _bounded(rows):
     result = tuple(islice(rows, MAX_CANDIDATES + 1))
     if len(result) > MAX_CANDIDATES:
-        raise ValueError("This rival metadata snapshot exceeds its limit.")
+        raise ValueError("This ghost metadata snapshot exceeds its limit.")
     return result
 
 
@@ -215,9 +215,9 @@ def rank_recordings(rows, ranks, identity: PracticeIdentity) -> tuple[dict, ...]
 def _checked_pins(pins):
     if not isinstance(pins, dict) or any(key not in {str(slot) for slot in range(MAX_RIVALS)}
                                         or not isinstance(value, str) or not value for key, value in pins.items()):
-        raise ValueError("Choose a rival for an available slot.")
+        raise ValueError("Choose a ghost for an available slot.")
     if len(set(pins.values())) != len(pins):
-        raise ValueError("Each rival can occupy one chosen slot.")
+        raise ValueError("Each ghost can occupy one chosen slot.")
     return pins
 
 
@@ -234,7 +234,7 @@ def _range(pb, options):
     if options["mode"] == "fixed":
         return options["min_step"], options["max_step"]
     if pb is not None and not _valid_basis(pb):
-        raise ValueError("The rival range needs a valid saved personal best.")
+        raise ValueError("The ghost range needs a valid saved personal best.")
     if pb is None:
         # Nothing to be ahead of yet: show the bottom two tiers, spread out.
         return 0, NO_PB_TOP_STEP
@@ -268,10 +268,10 @@ def _placed(row, slot, pinned):
 
 
 def _missing_pin(identity, slot):
-    return _placed({"id": identity, "player_name": "Chosen rival", "strategy": None,
+    return _placed({"id": identity, "player_name": "Chosen ghost", "strategy": None,
                     "frames": None, "tier": None, "division": None, "step": None,
                     "ghost": None, "available": False,
-                    "reason_text": "This chosen rival is unavailable. Reset or replace it."}, slot, True)
+                    "reason_text": "This chosen ghost is unavailable. Reset or replace it."}, slot, True)
 
 
 def _ahead(row, pb):
@@ -435,7 +435,7 @@ def _place_pins(pins, candidates, count, used, players):
         else:
             result[slot] = _missing_pin(identity, slot)
             if duplicate:
-                result[slot]["reason_text"] = "This player already has a chosen rival. Reset or replace this slot."
+                result[slot]["reason_text"] = "This player already has a chosen ghost. Reset or replace this slot."
         used.add(identity)
     return result
 
@@ -486,10 +486,10 @@ def _deal(automatic, result, seats, count):
 def add_slot(roster, count: int, replacement_slot: int | None = None) -> int:
     """Add uses a vacancy or slowest automatic slot; direct replacement is explicit."""
     if type(count) is not int or not 1 <= count <= MAX_RIVALS:
-        raise ValueError("Choose how many rivals to show.")
+        raise ValueError("Choose how many ghosts to show.")
     if replacement_slot is not None:
         if type(replacement_slot) is not int or not 0 <= replacement_slot < count:
-            raise ValueError("Choose a visible rival to replace.")
+            raise ValueError("Choose a visible ghost to replace.")
         return replacement_slot
     rows = {row["slot"]: row for row in _bounded(roster)
             if type(row.get("slot")) is int and 0 <= row["slot"] < count}
@@ -498,5 +498,5 @@ def add_slot(roster, count: int, replacement_slot: int | None = None) -> int:
         return empty
     automatic = [row for row in rows.values() if not row.get("pinned") and type(row.get("frames")) is int]
     if not automatic:
-        raise ValueError("Every rival is chosen by you. Select a rival to replace it.")
+        raise ValueError("Every ghost is chosen by you. Select a ghost to replace it.")
     return min(automatic, key=lambda row: (-row["frames"], row["slot"]))["slot"]

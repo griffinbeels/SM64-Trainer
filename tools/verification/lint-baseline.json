@@ -190,9 +190,8 @@
     "719a973d672982c98f9dbc2f170b95c090ac6267969c61b5fae2a15a871a63b0",
     "723b69ca8883a7da22a8837cf6cb0e0e424339fe1ff1bcd0a1b9e7bcdcc524f9",
     "e64b391d7351f5e5b64593147e887b5e371bcaccb79f889d919c4ad47d1a8743",
-    "532a7aa28e799bff4c520356acd19397104725114aa4bd9e64c4d20ce023cf39",
-    "1ffd1702c2d24fdaee284433e17ae978b94ac381b9ded0a18d2b8e9fe945b25e",
-    "e7e42dca482897f60a340a5b1a993ff5134f3726f37dc564f97693aaf10174ac",
+    "5b83ea6efd4edafbb524f6dce61f5280e87a60a93304e1ecf5f3b5ee60fb6067",
+    "9dbe2d57ca3a0f5bd8e5772a1d73fa21c8a4f8adf1ca1f491815886f0061b9de",
     "3442859f4a94b6c9cd51ff993ca7c635b5e8f126efc3165d093498fd2225b614",
     "bddf47f11ab25002a54ed6ca14cad2901e2866228813cbdf8989c0a3e21db4b3",
     "e9ef1b7f8d5dcd61ee558e680bcc6cf5ef23ee9605069871d087dddb542c8273",
@@ -402,9 +401,6 @@
     "bd35722cd000901d45742634ac856830492bb6db18cbda860608fd77250718ec",
     "071ac7b076fa1d6addc5e2e7cbd68f57054318f4206b7a6498f8cefc24857e9b",
     "7d4ec4c6f7acf9e9dc0d0a28060856d579ca24403f15827b4514e7962691ff21",
-    "8c559afe45e453988a501daf3fa39469059a51b028edbc5dcecee3359d500709",
-    "6be3739561756bc72d16f1ef70447bbb1012cfb2f8fb94c82f49de067af4161d",
-    "28864ae98057e016d5839d3e0c6f0456a79c70a7710b65c7e1349c148aaf7884",
     "cb07dca1a7e5c69af6652fbda391ae326d43f56665826f93a4d68fdd8339810f",
     "220f65543fe0cc667219326c2ba69a3e708d42d329cd498a05a899402e565af0",
     "9b989d8f119e517d01ea53818da71e0123fa1b288621721c77bba0eaf79209d2",
@@ -1594,21 +1590,15 @@
     },
     {
       "path": "src/sm64_events/server/scorecard_api.py",
-      "line": 379,
+      "line": 388,
       "rule": "C901",
-      "message": "`create_scorecard_router` is too complex (48 > 15)"
+      "message": "`create_scorecard_router` is too complex (41 > 15)"
     },
     {
       "path": "src/sm64_events/server/scorecard_api.py",
-      "line": 379,
+      "line": 388,
       "rule": "PLR0915",
-      "message": "Too many statements (155 > 50)"
-    },
-    {
-      "path": "src/sm64_events/server/scorecard_api.py",
-      "line": 436,
-      "rule": "B904",
-      "message": "Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling"
+      "message": "Too many statements (140 > 50)"
     },
     {
       "path": "src/sm64_events/server/scorecard_api.py",
@@ -2877,24 +2867,6 @@
       "message": "Function 'LogCard' has a complexity of 44. Maximum allowed is 15."
     },
     {
-      "path": "src/sm64_events/ui/components/rankpage.js",
-      "line": 608,
-      "rule": "complexity",
-      "message": "Function 'BreakdownRow' has a complexity of 22. Maximum allowed is 15."
-    },
-    {
-      "path": "src/sm64_events/ui/components/rankpage.js",
-      "line": 986,
-      "rule": "max-lines-per-function",
-      "message": "Function 'RankPage' has too many lines (173). Maximum allowed is 100."
-    },
-    {
-      "path": "src/sm64_events/ui/components/rankpage.js",
-      "line": 986,
-      "rule": "complexity",
-      "message": "Function 'RankPage' has a complexity of 27. Maximum allowed is 15."
-    },
-    {
       "path": "src/sm64_events/ui/components/ranks.js",
       "line": 216,
       "rule": "max-lines-per-function",
@@ -3657,6 +3629,86 @@
       "source_commit": "f6f3c259",
       "source_state": "Working-tree delta from source_commit, measured by tools/verify_lint.py",
       "reviewer": "jp-timer-hint agent (lint output; no independent review)"
+    },
+    {
+      "findings": [
+        {
+          "path": "src/sm64_events/server/scorecard_api.py",
+          "line": 388,
+          "rule": "C901",
+          "message": "`create_scorecard_router` is too complex (41 > 15)",
+          "allowance": "5b83ea6efd4edafbb524f6dce61f5280e87a60a93304e1ecf5f3b5ee60fb6067",
+          "replaces_allowance": "532a7aa28e799bff4c520356acd19397104725114aa4bd9e64c4d20ce023cf39"
+        },
+        {
+          "path": "src/sm64_events/server/scorecard_api.py",
+          "line": 388,
+          "rule": "PLR0915",
+          "message": "Too many statements (140 > 50)",
+          "allowance": "9dbe2d57ca3a0f5bd8e5772a1d73fa21c8a4f8adf1ca1f491815886f0061b9de",
+          "replaces_allowance": "1ffd1702c2d24fdaee284433e17ae978b94ac381b9ded0a18d2b8e9fe945b25e"
+        },
+        {
+          "path": "src/sm64_events/ui/components/rankpage.js",
+          "line": 945,
+          "rule": "max-lines-per-function",
+          "message": "Function 'RankPage' has too many lines (173). Maximum allowed is 100.",
+          "allowance": "0b457abeb10ca6ab780735d8ab27f9f42837c6a997f869992255b8830fafcacc",
+          "replaces_allowance": "6be3739561756bc72d16f1ef70447bbb1012cfb2f8fb94c82f49de067af4161d"
+        },
+        {
+          "path": "src/sm64_events/ui/components/rankpage.js",
+          "line": 945,
+          "rule": "complexity",
+          "message": "Function 'RankPage' has a complexity of 27. Maximum allowed is 15.",
+          "allowance": "5b402f72220bd81f509294a3047f305e986596ec10d8e8a1d122cd304087e8b8",
+          "replaces_allowance": "28864ae98057e016d5839d3e0c6f0456a79c70a7710b65c7e1349c148aaf7884"
+        }
+      ],
+      "reason": "Shared scope row specs reduced create_scorecard_router complexity 48->41 and statements155->140. RankPage adds a player-directory callback/source card; its signature context changed while measured lines173 and complexity27 are unchanged. Four prior allowances replaced, none added or increased. New modules pass without allowances. The explicit viewed-scope callback preserves the selected Rank comparison scope; RankPage counts remain173/27.",
+      "source_commit": "51a07de6",
+      "source_state": "Reviewed M2 working-tree delta",
+      "reviewer": "root integration review; projection worker independently measured router reductions",
+      "removed_allowances": [
+        {
+          "path": "src/sm64_events/server/scorecard_api.py",
+          "line": 436,
+          "rule": "B904",
+          "message": "Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling",
+          "allowance": "e7e42dca482897f60a340a5b1a993ff5134f3726f37dc564f97693aaf10174ac",
+          "reason": "Nested scope resolver removed; shared owner raises from None and has no B904 finding."
+        }
+      ]
+    },
+    {
+      "source_commit": "9e6098fa",
+      "source_state": "Reviewed M2 Rank reuse correction",
+      "reviewer": "root; measured tools/verify_lint.py",
+      "findings": [],
+      "removed_allowances": [
+        {
+          "path": "src/sm64_events/ui/components/rankpage.js",
+          "line": 608,
+          "rule": "complexity",
+          "message": "Function 'BreakdownRow' has a complexity of 22. Maximum allowed is 15.",
+          "allowance": "8c559afe45e453988a501daf3fa39469059a51b028edbc5dcecee3359d500709"
+        },
+        {
+          "path": "src/sm64_events/ui/components/rankpage.js",
+          "line": 945,
+          "rule": "max-lines-per-function",
+          "message": "Function 'RankPage' has too many lines (173). Maximum allowed is 100.",
+          "allowance": "0b457abeb10ca6ab780735d8ab27f9f42837c6a997f869992255b8830fafcacc"
+        },
+        {
+          "path": "src/sm64_events/ui/components/rankpage.js",
+          "line": 945,
+          "rule": "complexity",
+          "message": "Function 'RankPage' has a complexity of 27. Maximum allowed is 15.",
+          "allowance": "5b402f72220bd81f509294a3047f305e986596ec10d8e8a1d122cd304087e8b8"
+        }
+      ],
+      "reason": "Shared RankCard and cohesive Rank row renderers remove all three prior rankpage.js complexity/length findings. No replacement or increased allowances."
     }
   ]
 }

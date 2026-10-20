@@ -1279,7 +1279,7 @@ camera and terrain depth. Opacity and tint apply to the displayed ghost.
 Playback binds the exact recorded and live [[attempt]] origins and applies
 the [[nudge]]. Missing poses or clock identity have a readable refusal. A
 recording whose controller input is unknown on any [[frame]] is not a ghost at
-all: every door a recording enters through (bundled collection, rival
+all: every door a recording enters through (bundled collection, ghost
 admission, community upload and download, collection import and export, your
 own PB, saved and template ghosts) refuses it with one reason (his rule,
 2026-10-12: "If it's not a perfectly recorded ghost, it doesn't belong in the
@@ -1293,13 +1293,13 @@ and plays on either. The practice card's [[ghost toggle]] calls it Ghost Overlay
 ### Lineup
 
 The active practice card's row of the people you race: your own seat first,
-then each [[rival slot]], slowest to fastest, centred at every width (his
+then each [[ghost slot]], slowest to fastest, centred at every width (his
 words, 2026-10-16: "our pb on far left, then times get faster as we go to the
 right"). A seat is a [[rank]] cap inside a ring in that [[ghost]]'s in-game
 colour, the time and the name; a name wraps where the handle divides and is
 never cut off. A dashed ring is a [[ghost]] that cannot race yet (yours before
-your first time, a rival still downloading); a lock on a ring is a pinned
-rival, who stays even once beaten, to your left. The [[lineup track]] threads
+your first time, a [[ghost]] still downloading); a lock on a ring is a pinned
+[[ghost]], which stays even once beaten, to your left. The [[lineup track]] threads
 the rings. With no [[strategy]] the row offers every one of the [[strategies]]
 as a button, all one width, in rows of equal length.
 Inside one lineup every change slides; a different [[star]], [[strategy]] or
@@ -1313,7 +1313,7 @@ Inside one lineup every change slides; a different [[star]], [[strategy]] or
 ### Lineup track
 
 The rail through the [[lineup]]'s rings. The one stretch from your seat to the
-next faster rival lights up and carries how much faster that rival's time is,
+next faster [[ghost]] lights up and carries how much faster that [[ghost]]'s time is,
 in the hundredths both seats show ("−0.13") — the gap your next [[attempt]]
 has to close, never a comparison with the last one.
 
@@ -1578,9 +1578,11 @@ many more recordings than the [[ghost set]] can race at once.
 - **Lives** — `src/sm64_events/ghost/portable.py` and `src/sm64_events/ghost/sharing.py`;
   `src/sm64_events/ui/components/ghostlibrary.js`
 
-### Rival slot
+<a id="rival-slot"></a>
 
-One place in the adaptive [[ghost set]] for the current [[target]] and [[ghost matching scope]]. The trainer
+### Ghost slot
+
+One place in the adaptive [[ghost set]] for the current [[target]] and [[ghost matching scope]]. All app controls and messages call these [[ghost]]s (his correction,2026-10-19). The trainer
 chooses a compatible recording above the saved [[personal best]], or protects
 the player's exact manual choice until they clear it. Every seat, including
 manual choices and recordings waiting to download, holds one recording per
@@ -1609,7 +1611,7 @@ beaten. With no [[strategy]] there are no slots, no pins and no cloud request.
 ### Ghost matching scope
 
 The [[Strategy]] or Overall choice on the practice card. [[Strategy]] restricts
-[[rival slot]]s to the current [[strategy]]; `Overall` admits other strategies
+[[ghost slot]]s to the current [[strategy]]; `Overall` admits other strategies
 and grades them on the [[Overall curve]]. Both use the current [[strategy]]'s saved
 [[personal best]] as their starting basis. Each choice remembers its own manual
 choices, and every [[ghost]] keeps its recorded [[strategy]] label.
@@ -1645,7 +1647,7 @@ A separate practice database with its own player identity, the original
 [[segment]] definitions and calibration, and a local [[ghost]] population.
 The default developer simulation starts with zero practice and no
 [[personal best]], with unchanged saved clips credited to `gtest` opponents.
-It presets four [[rival slot]]s across all [[rank]]s. The earlier seeded Wild Blue
+It presets four [[ghost slot]]s across all [[rank]]s. The earlier seeded Wild Blue
 experiment remains available explicitly. The launcher tests progression without
 changing original history.
 
@@ -1679,6 +1681,32 @@ settings screen shows the name, the provider and the [[Rank tab]]'s own chip row
   `cloud/community/src/service.js` (the names check route)
 - **Not** — the Project64 setup wizard (`setupmodal.js`), which follows it.
 
+### Claimed player page
+
+A page inside the existing [[Rank tab]], addressed by a signed-in account's UUID,
+separate from a Sheet [[runner]]'s imported projection. The checkmark confirms
+account ownership, not legitimate performances. An owner can add a bio and social
+links and explicitly share current saved PBs independently of [[community ghost]]
+sharing. Available [[ghost]] times remain distinct from the shared saved PBs.
+Comparison uses the viewing player's selected [[scope]] and local [[standard]]s;
+private or unavailable entries are missing with coverage, never a loss.
+
+- **Lives** — `src/sm64_events/ui/components/playerpage.js`,
+  `src/sm64_events/server/player_api.py`,
+  `src/sm64_events/server/player_comparison.py` and `cloud/community/src/players.js`
+
+### Publishing profile
+
+The one installation/database profile explicitly selected to publish an
+account's current saved PBs. Switching replaces that publisher after
+preview and consent; it does not merge devices. Pausing stops future updates,
+while withdrawal removes the shared PB data. Neither changes local
+PBs or the independent [[ghost]]-sharing setting.
+
+- **Lives** — `src/sm64_events/community/progress_sync.py`,
+  `src/sm64_events/community/progress_state.py` and
+  `cloud/community/src/progress-store.js`
+
 ### Community ghost
 
 A [[ghost]] shared by an authenticated, invited player. The service keeps that
@@ -1688,11 +1716,28 @@ it does not certify that gameplay was legitimate. Sharing begins unchecked.
 
 - **Lives** — `cloud/community/` and `src/sm64_events/community/`
 
+### Has ghost
+
+The Library page's filter for published [[community ghost]] recordings. It shows
+[[target]]s and their [[strategy]] choices with shared recordings, including entries
+without video. Regions and the Library's current [[target]] narrow the results
+before paging. Opening an entry shows the player, time, [[strategy]] and ROM.
+**Add rival** saves that recording to the [[target]]'s [[Lineup]] without changing
+current Practice. When every visible seat holds a saved recording, the player
+chooses which rival to replace.
+Publication and structural validation do not verify legitimate gameplay.
+
+- **Lives** — `src/sm64_events/ui/components/community-library.js`,
+  `src/sm64_events/ghost/community_library.py`,
+  `src/sm64_events/ghost/rival_changes.py`,
+  `src/sm64_events/server/community_library_api.py` and
+  `cloud/community/src/library.js`
+
 ### Rival pool
 
 The bounded metadata list for a [[target]], ROM, clock and [[ghost matching scope]],
 covering the whole [[rank]] [[ladder]]. The cloud can reuse it across players. The trainer
-selects [[rival slot]]s locally and downloads only their recordings, each once, so
+selects [[ghost slot]]s locally and downloads only their recordings, each once, so
 a new [[personal best]] needs no new list. The trainer asks for each list once, holds
 it under the cloud's 10-minute publication lease (so a withdrawn [[ghost]] leaves every
 screen), and renews it only for the [[star]] on screen with the overlay on; switching
@@ -1703,7 +1748,7 @@ are separate states.
 
 ### Ghost ceiling
 
-The slowest time a [[run]] may have and still fill a [[rival slot]] or become a
+The slowest time a [[run]] may have and still fill a [[ghost slot]] or become a
 shared [[ghost]]: its [[strategy]]'s slowest named cutoff (the edge of the
 lowest named [[division]], Capless 4) plus 10%. The trainer never makes a
 slower [[run]] a rival recording or offers it to the cloud, and tells the

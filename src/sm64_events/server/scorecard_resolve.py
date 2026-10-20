@@ -165,7 +165,7 @@ class GoalResolver:
         self.adoptions = adoptions
         self._runner_times_memo: dict = {}
 
-    def your_times(self, keys: list[str], regions: list[str]) -> dict[str, int]:
+    def your_times(self, keys: list[str], regions: list[str], *, pb_rows=None) -> dict[str, int]:
         """Your FASTEST current PB per key across every strategy and every
         ROM in `regions` (the card's own region setting, the same list a
         runner goal offers times from), on the entity's own clock -- igt for
@@ -187,7 +187,8 @@ class GoalResolver:
         strategy alone the later (US) row shadowed the faster JP one -- WDW
         and TTC's 100-coin tiles read +0.73 and +1.30 against his own
         column. `regions` is the merge the goal side already runs."""
-        best = fastest_current_pbs(self.service.db.pbs(), regions=regions)
+        rows = self.service.db.pbs() if pb_rows is None else pb_rows
+        best = fastest_current_pbs(rows, regions=regions)
         you = {}
         for key in keys:
             parts = key.split(":")

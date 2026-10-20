@@ -5,6 +5,7 @@ The fixture replaces only the remote account boundary. The actual app, assets,
 local account router, request capability and practice database remain in use.
 No browser fetch is intercepted, and every test reads its own checkout's UI.
 """
+import asyncio
 import contextlib
 import json
 import sys
@@ -25,10 +26,13 @@ if _MISSING:
 
 from uilab.driver import default_wait_ms, get_driver  # noqa: E402
 import ui_fixture  # noqa: E402
+from tests.player_pages_fixture import Account as ProgressAccount  # noqa: E402
 
 WIDTHS = (1500, 850, 390)
 MODAL = ".modal-body"
 UID = "ec2f03ac-42db-4a29-8a68-dbc018aba020"
+PROGRESS_READS = {("remote", "GET", "/v2/account/progress"),
+                  ("remote", "GET", "/v2/account/player-profile")}
 
 
 class FixtureAccount:
@@ -41,6 +45,12 @@ class FixtureAccount:
         self.slow_profile = slow_profile
         self.uid = UID
         self.taken = {"taken"}
+        self.progress = ProgressAccount(virgin=status == "new")
+        self.progress.publication.update(uid=UID)
+        self.progress.profile.update(uid=UID)
+        if status != "new":
+            # Established accounts have already chosen to pause PB updates.
+            self.progress.publication.update(revision=1,consent_revision=1)
         self.state = {
             "enabled": True, "authenticated": status != "signed_out", "stored": status != "signed_out",
             "provider": "twitch" if status != "signed_out" else None,
@@ -106,8 +116,13 @@ class FixtureAccount:
 
     async def request_json(self, method, path, **kwargs):
         self.calls.append(("remote", method, path, kwargs.get("json")))
+        if method == "GET" and path == "/v2/account/player-export":
+            return {"v":2,"uid":self.uid,"profile":self.progress.profile,
+                    "publication":self.progress.publication,"snapshot":None}
+        if path.startswith("/v2/account/"):
+            return self.progress._route(method,path,kwargs.get("json"),kwargs.get("params",{}))
         if path == "/v1/account/export":
-            return {"v": 1, "profile": {"uid": self.uid}, "recordings": []}
+            return {"v": 1, "account": {"uid": self.uid}, "recordings": [], "complete": True}
         if path == "/v1/account/withdraw":
             self.update(sharing=False)
             return {"v": 1, "withdrawn": 0}
@@ -197,6 +212,35 @@ def modal_text(page):
     return page.evaluate("document.querySelector('.modal-body')?.innerText || ''")
 
 
+def assert_progress_cleanup_faults(faults, base):
+    """Only the current settings owner's canceled read may finish at unmount."""
+    expected = f"requestfailed: {base.rstrip('/')}/api/community/progress (net::ERR_ABORTED)"
+    assert faults in ([], [expected]), faults
+
+
+def assert_settings_unmounted(page, base, account, *, signed_out=False):
+    assert page.count(".progress-settings") == 0
+    if signed_out:
+        assert not account.snapshot()["authenticated"] and ("sign_out",) in account.calls
+        assert page.count(".community-providers") == 1
+    else:
+        assert page.count(".modal-body") == 0 and account.snapshot()["authenticated"]
+    faults = page.problems()
+    assert_progress_cleanup_faults(faults, base)
+    return faults
+
+
+@pytest.mark.parametrize("fault", [
+    "HTTP 500 http://127.0.0.1:12345/api/community/progress",
+    "requestfailed: http://127.0.0.1:12345/api/community/account (net::ERR_ABORTED)",
+    "requestfailed: http://127.0.0.1:12345/api/community/progress (net::ERR_FAILED)",
+    "pageerror: Unexpected progress failure",
+])
+def test_settings_cleanup_guard_retains_http_and_unknown_failures(fault):
+    with pytest.raises(AssertionError):
+        assert_progress_cleanup_faults([fault], "http://127.0.0.1:12345")
+
+
 def capture_widths(page, name):
     """Private screenshots are fixture evidence, never a live auth receipt."""
     folder = REPO / ".iteration" / "adaptive-ghosts" / "round19-community-ui"
@@ -271,12 +315,12 @@ def test_sign_in_is_the_first_step_with_discord_and_twitch_only(monkeypatch, tmp
             page.evaluate("(() => { document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); return true; })()")
             page.wait_ms(100)
             assert page.count(".community-providers") == 1 and page.count(".setup-progress") == 0
-            assert not any(call[0] != "refresh" for call in account.calls)
+            assert all(call[0] == "refresh" or call[:3] in PROGRESS_READS for call in account.calls)
             assert page.problems() == []
 
 
-@pytest.mark.parametrize("status", ["new", "consent_required"])
-def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_path, status):
+@pytest.mark.parametrize("status,share_pbs", [("new",True),("new",False),("consent_required",None)])
+def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_path, status, share_pbs):
     account = FixtureAccount(status)
     with community_app(monkeypatch, tmp_path, account) as (base, _):
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
@@ -284,11 +328,14 @@ def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_
             page.wait_for(".practice-page")
             open_account(page)
             page.wait_for(".community-sheet .search-select-trigger")
-            assert page.evaluate("""Array.from(document.querySelectorAll(
-                '.community-form input[type=checkbox]')).every(box => !box.checked)""")
+            pb_choice = ".community-form .community-pb-sharing input"
+            assert page.count(pb_choice) == int(status == "new")
+            if status == "new":
+                assert page.evaluate("document.querySelector("+json.dumps(pb_choice)+").checked")
+                if not share_pbs:
+                    page.click(pb_choice)
             assert page.evaluate("document.querySelector('.community-form button[type=submit]').disabled")
             assert ("shared automatically" if status == "new" else "sharing stays off") in modal_text(page)
-            assert not page.evaluate("Array.from(document.querySelectorAll('.community-check')).some(label => label.innerText.includes('Automatically share'))")
             page.click(".community-sheet .search-select-trigger")
             page.wait_for(".community-sheet .search-menu-option")
             chosen = page.evaluate("document.querySelector('.community-sheet .search-menu-option').dataset.value")
@@ -296,8 +343,7 @@ def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_
             page.wait_for(".community-sheet input[type=checkbox]")
             assert page.evaluate("!document.querySelector('.community-sheet input[type=checkbox]').checked")
             assert "does not create ghosts or verify name ownership" in modal_text(page)
-            assert page.evaluate("""Array.from(document.querySelectorAll(
-                '.community-form input[type=checkbox]')).every(box => !box.checked)""")
+            assert not page.evaluate("document.querySelector('.community-sheet input[type=checkbox]').checked")
             capture_widths(page, f"profile-defaults-{status}")
             # Consent enables the disclosed default; import stays unselected.
             consent = ".community-form > .community-check:last-of-type input"
@@ -307,6 +353,10 @@ def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_
             wait_until(page, "!document.querySelector('.modal-body')", "profile completion")
             assert ("profile", chosen, {"terms_version": "t1", "privacy_version": "p1",
                                        "sharing": status == "new", "sheet_runner": chosen}) in account.calls
+            if status == "new":
+                control = [call for call in account.calls if call[:3] == ("remote","PUT","/v2/account/progress/control")]
+                assert control and control[0][3]["action"] == ("enable" if share_pbs else "disable")
+                assert account.progress.publication["enabled"] == share_pbs
             assert not page.count(".modal-body"), "Unchecked Sheet import unexpectedly kept its flow open"
             assert page.problems() == []
 
@@ -326,7 +376,9 @@ def test_forced_rename_can_sign_out_without_changing_owned_data(monkeypatch, tmp
             page.wait_for(".community-provider.community-discord")
             assert account.uid == UID
             assert ("sign_out",) in account.calls
-            assert not any(call[0] in {"rename", "profile", "remote"} for call in account.calls)
+            assert not any(call[0] in {"rename", "profile"}
+                           or (call[0] == "remote" and call[:3] not in PROGRESS_READS)
+                           for call in account.calls)
             assert len(service.db.attempts()) == before
             assert page.count(".practice-page") == 1 and "Practice offline" not in modal_text(page)
             assert page.problems() == []
@@ -386,17 +438,20 @@ def test_settings_use_registered_name_sharing_and_sign_out_routes(monkeypatch, t
             open_account(page)
             page.wait_for(".community-privacy")
             set_name(page, "Changed fixture name")
-            page.click(".community-check input[type=checkbox]")
+            page.click(".community-form > .community-check input[type=checkbox]")
+            assert page.problems() == []
             click_text(page, "Done")
             wait_until(page, "!document.querySelector('.modal-body')", "settings save")
             assert ("rename", "Changed fixture name") in account.calls
             assert ("sharing", True) in account.calls
+            assert_settings_unmounted(page, base, account)
             open_account(page)
             page.wait_for(".community-privacy")
+            assert page.problems() == []
             click_text(page, "Sign out")
             page.wait_for(".community-provider.community-discord")  # signed out: the sign-in step returns (round 41)
             assert ("sign_out",) in account.calls
-            assert page.problems() == []
+            assert_settings_unmounted(page, base, account, signed_out=True)
 
 
 def test_sharing_opt_out_explains_effect_and_cancel_preserves_choice(monkeypatch, tmp_path):
@@ -408,23 +463,26 @@ def test_sharing_opt_out_explains_effect_and_cancel_preserves_choice(monkeypatch
             page.wait_for(".practice-page")
             open_account(page)
             page.wait_for(".community-privacy")
-            page.click(".community-check input[type=checkbox]")
+            page.click(".community-form > .community-check input[type=checkbox]")
             assert "won't receive your new ghosts" in modal_text(page)
             assert "Existing shared ghosts stay available" in modal_text(page)
             capture_widths(page, "sharing-off-pending")
             assert account.state["sharing"] is True
+            assert page.problems() == []
             page.click(".modal-close")
             wait_until(page, "!document.querySelector('.modal-body')", "cancelled settings")
             assert not any(call[0] == "sharing" for call in account.calls)
+            assert_settings_unmounted(page, base, account)
             open_account(page)
             page.wait_for(".community-privacy")
-            assert page.evaluate("document.querySelector('.community-check input').checked")
-            page.click(".community-check input[type=checkbox]")
+            assert page.evaluate("document.querySelector('.community-form > .community-check input').checked")
+            page.click(".community-form > .community-check input[type=checkbox]")
+            assert page.problems() == []
             click_text(page, "Done")
             wait_until(page, "!document.querySelector('.modal-body')", "saved opt-out")
             assert ("sharing", False) in account.calls
             assert account.state["sharing"] is False
-            assert page.problems() == []
+            assert_settings_unmounted(page, base, account)
 
 
 def test_profile_bounds_normalized_name_before_submission(monkeypatch, tmp_path):
@@ -466,6 +524,7 @@ def test_privacy_actions_use_owner_routes_and_explicit_confirmation(monkeypatch,
             wait_until(page, """!Array.from(document.querySelectorAll('.modal-body button'))
                 .some(button => button.disabled)""", "account export to finish")
             assert ("remote", "GET", "/v1/account/export", None) in account.calls
+            assert ("remote", "GET", "/v2/account/player-export", None) in account.calls
             click_text(page, "Remove shared ghosts")
             page.wait_for(".community-form h3")
             assert "Previously downloaded copies may remain" in modal_text(page)
@@ -473,6 +532,7 @@ def test_privacy_actions_use_owner_routes_and_explicit_confirmation(monkeypatch,
             click_text(page, "Remove shared ghosts")
             page.wait_for(".community-privacy")
             assert ("remote", "POST", "/v1/account/withdraw", {"confirmation": "WITHDRAW MY GHOSTS"}) in account.calls
+            assert page.problems() == []
             page.click(".community-privacy summary")
             click_text(page, "Delete account")
             page.wait_for(".community-form h3")
@@ -481,7 +541,52 @@ def test_privacy_actions_use_owner_routes_and_explicit_confirmation(monkeypatch,
             page.wait_for(".community-providers")
             assert ("remote", "POST", "/v1/account/delete", {"confirmation": "DELETE MY ACCOUNT"}) in account.calls
             assert ("sign_out",) in account.calls
-            assert page.problems() == []
+            assert_settings_unmounted(page, base, account, signed_out=True)
+
+
+def test_confirmed_owner_delete_cancels_only_the_pending_settings_progress_read(monkeypatch, tmp_path):
+    """Hold a real local GET until the actual confirmation unmount aborts it."""
+    from sm64_events.server import player_api
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    original = player_api.publication_state
+
+    async def pending_progress(progress):
+        entered.set()
+        try:
+            assert await asyncio.to_thread(release.wait, 15), "Pending progress read was never released"
+            return await original(progress)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(player_api, "publication_state", pending_progress)
+    account = FixtureAccount("active")
+    try:
+        with community_app(monkeypatch, tmp_path, account) as (base, _), contextlib.ExitStack() as cleanup:
+            cleanup.callback(release.set)
+            with get_driver().launch(headless=True, viewport=(850, 1000)) as page:
+                page.goto(base)
+                page.wait_for(".practice-page")
+                open_account(page)
+                page.wait_for(".progress-settings")
+                assert entered.wait(3), "The real settings progress GET did not reach its barrier"
+                assert page.problems() == []
+                page.click(".community-privacy summary")
+                click_text(page, "Delete account")
+                page.wait_for(".community-form h3")
+                assert page.count(".progress-settings") == 0
+                assert not any(call[:3] == ("remote", "POST", "/v1/account/delete") for call in account.calls)
+                click_text(page, "Delete account")
+                page.wait_for(".community-providers")
+                assert ("remote", "POST", "/v1/account/delete", {"confirmation": "DELETE MY ACCOUNT"}) in account.calls
+                faults = assert_settings_unmounted(page, base, account, signed_out=True)
+                assert faults == [f"requestfailed: {base}/api/community/progress (net::ERR_ABORTED)"]
+                release.set()
+                assert finished.wait(3), "The canceled server read did not finish cleanup"
+                assert page.count(".progress-settings") == 0 and page.count(".community-providers") == 1
+                assert page.problems() == []
+    finally:
+        release.set()
 
 
 @pytest.mark.parametrize("provider", ["discord", "twitch"])

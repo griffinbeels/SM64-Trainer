@@ -19,6 +19,7 @@ import { StreamOverlayDesigner } from "./streamoverlay.js";
 import { EMU, N64 } from "../platform.js";
 import { CommunityAccountModal } from "./communityaccount.js";
 import { useCommunityAccount } from "../community.js";
+import { ReportingSettings } from "./reporting.js";
 
 const html = htm.bind(h);
 
@@ -107,7 +108,7 @@ function RunScopeWarning({ t, pending, onDone }) {
 
 // Existing settings shell exceeds these limits; onboarding keeps its new flow in SetupModal.
 // eslint-disable-next-line complexity, max-lines-per-function
-export function Header({ t, settingsOpen, closeSettings, setTab }) {
+export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer }) {
   // `undefined` = nothing pending. `null` is a real pick (Overall), which is
   // why this is not a boolean — the same distinction store.js draws for a
   // route intent.
@@ -369,6 +370,8 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
           ${reportMsg && html`<p class="settings-note">${reportMsg}</p>`}
         </section>
 
+        <${ReportingSettings} />
+
         <section class="settings-section">
           <h3>Updates</h3>
           <label class="settings-field" for="receive-beta-updates">
@@ -584,7 +587,8 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
     ${onboardingStarted && html`<${OnboardingFlow} blocked=${updateFirst}>
       ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
       ${community.open && !setupOpen && html`<${CommunityAccountModal} community=${community}
-        onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh} />`}
+        onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh}
+        onOpenPlayer=${uid => { community.setOpen(false); closeSettings?.(); onOpenPlayer?.(uid); }} />`}
     <//>`}
   </header>`;
 }

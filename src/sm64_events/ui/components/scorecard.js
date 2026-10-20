@@ -181,8 +181,8 @@ function GoalCell({ tile, onGoalOverride }) {
 // always (visibility, not display) so hovering never reflows a wrapped
 // name.
 function ScoreLine({ t, tile, onGoalOverride, onOpenLibrary,
-                     sourceTitle = null }) {
-  const gapCls = tile.delta_cs != null
+                     sourceTitle = null, readOnly = false, neutral = false }) {
+  const gapCls = !neutral && tile.delta_cs != null
     ? (tile.delta_cs <= 0 ? "good" : "bad") : "";
   const iconSrc = entityIconSrc(t, tile.key);
   const openLine = onOpenLibrary
@@ -228,11 +228,16 @@ function ScoreLine({ t, tile, onGoalOverride, onOpenLibrary,
         ? fmtSeconds(tile.you_cs / 100) : "—"}</span>
     </span>
     <span class="score-line-goal">
-      <${GoalCell} tile=${tile} onGoalOverride=${onGoalOverride} />
+      <${ScoreGoalTime} tile=${tile} readOnly=${readOnly} onGoalOverride=${onGoalOverride} />
     </span>
     <span class="score-gap ${gapCls}">${tile.delta_cs != null
       ? fmtGapCs(tile.delta_cs) : "—"}</span>
   </div>`;
+}
+
+function ScoreGoalTime({ tile, readOnly, onGoalOverride }) {
+  return readOnly ? (tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "—")
+    : html`<${GoalCell} tile=${tile} onGoalOverride=${onGoalOverride} />`;
 }
 
 // The dot after a line's name: which goal source set its time. A goal PINNED
@@ -256,7 +261,7 @@ function lineSourceMark(tile, sourceTitle) {
 // "n/6" chip saying how many that is. A side the server sent as null has
 // no line at all -- an em-dash, never an invented 0'00"00
 // (`.claude/rules/acceptance.md`'s "cannot logically be compared" rule).
-function CardFoot({ row }) {
+function CardFoot({ row, neutral = false }) {
   const sum = row.sum;
   const hasDelta = sum.delta_cs != null;
   const behind = hasDelta && sum.delta_cs > 0;
@@ -266,7 +271,7 @@ function CardFoot({ row }) {
       ? fmtSeconds(sum.you_cs / 100) : "—"}</span></span>
     <span class="score-line-goal">${sum.goal_cs != null
       ? fmtSeconds(sum.goal_cs / 100) : "—"}</span>
-    <span class="score-gap ${hasDelta ? (behind ? "bad" : "good") : ""}">
+    <span class="score-gap ${!neutral && hasDelta ? (behind ? "bad" : "good") : ""}">
       ${hasDelta ? fmtGapCs(sum.delta_cs) : "—"}</span>
     ${sum.counted < sum.total
       ? html`<span class="score-sum-coverage">${sum.counted}/${sum.total}</span>` : ""}
@@ -312,7 +317,8 @@ function cardTint(row) {
 
 function ScoreCard({ t, row, removing,
                      onRemove, onGoalOverride, onOpenLibrary,
-                     sourceNames = [] }) {
+                     sourceNames = [], readOnly = false, neutral = false,
+                     youLabel = "You", goalLabel = "Goal" }) {
   // The remove control writes the SAME exclusion the Rank tab's own
   // breakdown writes (`POST /api/marelo/exclude`), never a second
   // scorecard-only ignore list -- round 7 settled that this card and the
@@ -329,25 +335,57 @@ function ScoreCard({ t, row, removing,
       ${isCourse ? html`<img class="score-card-art" alt=""
           src=${entityIconSrc(t, `course:${row.course_id}`)} />` : ""}
       <span class="score-card-name">${row.label}</span>
-      <span class="score-gap ${headGap != null
+      <span class="score-gap ${!neutral && headGap != null
         ? (headGap > 0 ? "bad" : "good") : ""}">${headGap != null
         ? fmtGapCs(headGap) : ""}</span>
-      <button type="button" class="score-row-remove" title=${removeTitle}
+      ${!readOnly ? html`<button type="button" class="score-row-remove" title=${removeTitle}
           aria-label=${removeTitle} disabled=${removing}
-          onclick=${() => onRemove(row)}>×</button>
+          onclick=${() => onRemove(row)}>×</button>` : null}
     </div>
     <div class="score-labels" aria-hidden="true">
-      <span class="score-label-you">You</span>
-      <span class="score-label-goal">Goal</span>
+      <span class="score-label-you">${youLabel}</span>
+      <span class="score-label-goal">${goalLabel}</span>
       <span class="score-label-gap">Δ</span>
     </div>
     <div class="score-lines">
       ${row.tiles.map((tile) => html`<${ScoreLine} key=${tile.key} t=${t}
           tile=${tile}
+          readOnly=${readOnly} neutral=${neutral}
           sourceTitle=${sourceNames[tile.goal_source] || null}
           onGoalOverride=${onGoalOverride} onOpenLibrary=${onOpenLibrary} />`)}
     </div>
-    <${CardFoot} row=${row} />
+    <${CardFoot} row=${row} neutral=${neutral} />
+  </section>`;
+}
+
+// Local goals and published-player comparisons share the same placement,
+// artwork, time formatting and per-column totals. Comparison changes only
+// labels, editing affordances and the tone of its signed differences.
+function ScorecardGrid({ t, data, openLibrary, sourceNames = [], readOnly = false,
+                         neutral = false, youLabel = "You", goalLabel = "Goal",
+                         removing, onRemove, onGoalOverride }) {
+  const [setCardsElement, cardsWidth] = useMeasuredWidth(0);
+  const columns = columnCountFor(cardsWidth);
+  const layout = cardLayout(data.rows, columns);
+  const properties = {t, removing, onRemove, onGoalOverride, onOpenLibrary:openLibrary,
+    sourceNames, readOnly, neutral, youLabel, goalLabel};
+  return html`<div class="score-cards" ref=${setCardsElement} data-cols=${String(columns)}
+      style=${`--score-rows:${Math.max(1, ...layout.columns.map(column => column.rows.length))}`}>
+    ${layout.columns.map((column, index) => html`<div key=${index} class="score-col">
+      ${column.rows.map(row => html`<${ScoreCard} key=${row.label} row=${row} ...${properties} />`)}
+    </div>`)}
+  </div>
+  ${layout.centred.length ? html`<div class="score-centred" style=${`--score-cols:${columns}`}>
+    ${layout.centred.map(row => html`<${ScoreCard} key=${row.label} row=${row} ...${properties} />`)}
+  </div>` : null}`;
+}
+
+export function ReadonlyScorecard({ t, card, playerName, openLibrary = null }) {
+  return html`<section class="practice-card scorecard-card player-scorecard">
+    <h3>Scorecard</h3>
+    <p class="meta" title="Totals include known times. Differences compare shared entries only.">You and ${playerName}${" · "}saved PBs</p>
+    <${ScorecardGrid} t=${t} data=${card} openLibrary=${openLibrary} readOnly neutral
+      youLabel="You" goalLabel="Player" />
   </section>`;
 }
 
@@ -739,14 +777,24 @@ function useScorecardData(scopeId, staleKey) {
     goalError, pendingGoal, refresh, writeGoal };
 }
 
+function useScorecardRunners() {
+  const [runners, setRunners] = useState(null);
+  function loadRunnersOnce() {
+    if (runners != null) return;
+    getJSON("/api/library/runners")
+      .then((body) => setRunners(body.runners || []))
+      .catch(() => setRunners([]));
+  }
+  return {runners,loadRunnersOnce};
+}
+
 export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   const { data, error, setError, goalError, pendingGoal, refresh, writeGoal }
     = useScorecardData(scopeId, t.mareloRev);
   const pickerGoal = pendingGoal === undefined ? data && data.goal : pendingGoal;
   // null = not fetched yet (the Runners group is lazy, see the header
   // comment); [] once fetched even if the sheet somehow named nobody.
-  const [runners, setRunners] = useState(null);
-  const [setCardsElement, cardsWidth] = useMeasuredWidth(0);
+  const {runners,loadRunnersOnce} = useScorecardRunners();
   // The picks' own names, by the index the server attributes tiles with --
   // so a dot's tooltip says WHICH pick set that star without any surface
   // re-deriving the winner.
@@ -759,13 +807,6 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   const [saveBusy, setSaveBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [saveError, setSaveError] = useState(null);
-
-  function loadRunnersOnce() {
-    if (runners != null) return;
-    getJSON("/api/library/runners")
-      .then((body) => setRunners(body.runners || []))
-      .catch(() => setRunners([]));
-  }
 
   const groups = useMemo(() => goalGroups(runners, data && data.custom_goals),
     [runners, data && data.custom_goals]);
@@ -868,60 +909,35 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
     }
   }
 
-  const pendingCount = Object.keys(pendingOverrides).length;
-
   return html`<div class="practice-card scorecard-card" data-scope=${data && data.scope}>
     ${error
       ? html`<${InlineState} kind="error">${error.message}<//>`
       : !data
         ? html`<${InlineState}>Loading your scorecard…<//>`
-        : html`<${ScorecardHead} goal=${pickerGoal} groups=${groups}
-              onOpen=${loadRunnersOnce} scopeId=${scopeId}
-              coverage=${data.goal_coverage} onGoalChange=${onGoalChange}
-              onNewSet=${() => { discardOverrides(); setEditingSet(""); }} />
-            ${goalError ? html`<${InlineState} kind="error">${goalError}<//>` : ""}
-            <${ScorecardSubhead} regions=${data.regions || ["us"]}
-              detectedRegion=${data.detected_region || "us"}
-              onRegionsChange=${onRegionsChange}
-              goal=${pickerGoal} onRemove=${removeSource} />
-            ${editingSet !== null
-              ? html`<${ScorecardSaveBar} pendingCount=${pendingCount}
-                    initialName=${editingSet || ""}
-                    busy=${saveBusy} error=${saveError}
-                    onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
-              : ""}
-            <div class="score-cards" ref=${setCardsElement}
-                data-cols=${String(columnCountFor(cardsWidth))}
-                style=${`--score-rows:${Math.max(1, ...cardLayout(
-                  displayData.rows, columnCountFor(cardsWidth))
-                  .columns.map((column) => column.rows.length))}`}>
-              ${cardLayout(displayData.rows, columnCountFor(cardsWidth))
-                .columns.map((column, columnIndex) => html`<div
-                  key=${columnIndex} class="score-col">
-                ${column.rows.map((row) => html`<${ScoreCard} key=${row.label}
-                    t=${t} row=${row} removing=${removing}
-                    onRemove=${removeRow} onGoalOverride=${handleGoalOverride}
-                    onOpenLibrary=${openLibrary} sourceNames=${sourceNames} />`)}
-              </div>`)}
-            </div>
-            ${/* Round 32: the odd card (Bowser) sits centred beneath the
-                 stacks, one card wide -- "centered between the two columns
-                 here when the page is narrower"; "centered between all 4
-                 columns (centered under SSL + TTM)". */""}
-            ${cardLayout(displayData.rows, columnCountFor(cardsWidth)).centred.length
-              ? html`<div class="score-centred"
-                    style=${`--score-cols:${columnCountFor(cardsWidth)}`}>
-                ${cardLayout(displayData.rows, columnCountFor(cardsWidth)).centred
-                  .map((row) => html`<${ScoreCard} key=${row.label}
-                    t=${t} row=${row} removing=${removing}
-                    onRemove=${removeRow} onGoalOverride=${handleGoalOverride}
-                    onOpenLibrary=${openLibrary} sourceNames=${sourceNames} />`)}
-              </div>` : ""}
-            ${/* Round 25: the export sits UNDER the cards, not in the head --
-                 "The button should go at the bottom, underneath all the
-                 cards. I just think it would look better there." Its error
-                 slot travels with it, so the reason a copy failed still
-                 lands where the click did. */""}
-            <${ScorecardExports} staleKey=${t.mareloRev} />`}
+        : html`<${ScorecardContents} ...${{t,data,displayData,pickerGoal,groups,goalError,loadRunnersOnce,
+            scopeId,onGoalChange,onRegionsChange,removeSource,editingSet,saveBusy,saveError,
+            saveCustomGoal,discardOverrides,removing,removeRow,handleGoalOverride,openLibrary,sourceNames}}
+            pendingCount=${Object.keys(pendingOverrides).length}
+            onNewSet=${() => { discardOverrides(); setEditingSet(""); }} />`}
   </div>`;
+}
+
+function ScorecardContents({ t,data,displayData,pickerGoal,groups,goalError,loadRunnersOnce,
+                            scopeId,onGoalChange,onRegionsChange,removeSource,editingSet,
+                            saveBusy,saveError,saveCustomGoal,discardOverrides,removing,
+                            removeRow,handleGoalOverride,openLibrary,sourceNames,pendingCount,onNewSet }) {
+  return html`<${ScorecardHead} goal=${pickerGoal} groups=${groups}
+      onOpen=${loadRunnersOnce} scopeId=${scopeId}
+      coverage=${data.goal_coverage} onGoalChange=${onGoalChange} onNewSet=${onNewSet} />
+    ${goalError ? html`<${InlineState} kind="error">${goalError}<//>` : ""}
+    <${ScorecardSubhead} regions=${data.regions || ["us"]}
+      detectedRegion=${data.detected_region || "us"} onRegionsChange=${onRegionsChange}
+      goal=${pickerGoal} onRemove=${removeSource} />
+    ${editingSet !== null ? html`<${ScorecardSaveBar} pendingCount=${pendingCount}
+      initialName=${editingSet || ""} busy=${saveBusy} error=${saveError}
+      onSave=${saveCustomGoal} onDiscard=${discardOverrides} />` : ""}
+    <${ScorecardGrid} t=${t} data=${displayData} removing=${removing}
+      onRemove=${removeRow} onGoalOverride=${handleGoalOverride}
+      openLibrary=${openLibrary} sourceNames=${sourceNames} />
+    <${ScorecardExports} staleKey=${t.mareloRev} />`;
 }

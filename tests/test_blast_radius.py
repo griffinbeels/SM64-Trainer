@@ -69,7 +69,11 @@ def test_a_python_change_no_map_has_seen_picks_the_tests_importing_it():
 
 
 def test_a_component_change_reaches_its_importers_page_and_no_other():
-    picked = chosen({LEADERBOARD: "M"})
+    result = radius.select(ROOT, "HEAD", changed={LEADERBOARD: "M"},
+                           coverage=NO_MAP, last_failed=set())
+    # Shared RankCard now also reaches claimed-player pages. The separate cap
+    # tests decide local versus GitHub scheduling; this contract checks reach.
+    picked = set(result.selection()) | set(result.deferred)
     assert RANK_TEST in picked, "its own classes"
     assert RANK_PAGE_TEST in picked, "the page that imports it: reached only through the importer"
     assert LIBRARY_TEST not in picked, "a different surface"
@@ -79,7 +83,9 @@ def test_a_component_change_reaches_its_importers_page_and_no_other():
 def test_a_rule_for_one_surfaces_class_picks_that_surface_and_no_other():
     """The stylesheet is one block in index.html; the RULE that changed
     decides, not the file."""
-    picked = chosen({INDEX: "M"}, before=before_editing("\n  .leaderboard-row {"))
+    result = radius.select(ROOT, "HEAD", changed={INDEX: "M"}, coverage=NO_MAP,
+                           last_failed=set(), before=before_editing("\n  .leaderboard-row {"))
+    picked = set(result.selection()) | set(result.deferred)
     assert RANK_TEST in picked
     assert RANK_PAGE_TEST in picked, "the class's component's page"
     assert LIBRARY_TEST not in picked

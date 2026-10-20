@@ -115,6 +115,7 @@ def test_chosen_remote_pin_is_requested_after_cache_and_controller_restart(tmp_p
     root = tmp_path / "cache"
     population = CachedPopulation(local, root=root, account=account)
     metadata = remote_recording("f" * 64, frames=1800)
+    metadata["player_id"] = "22222222-2222-4222-8222-222222222222"
     metadata["target"] = dict(TARGET)
     population.renew_metadata(metadata)
     rivals.population = population

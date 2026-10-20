@@ -1,15 +1,49 @@
-# Community ghosts protocol, version 1
+# Community ghosts v1 and additive player pages v2
 
 The community service uses Cloudflare Workers, D1 metadata, private R2 objects and
 managed Supabase Auth. Public player names are mutable; the verified Auth
 issuer/subject owns data. A valid login does not prove honest emulator play.
 No ROMs, videos, passwords or complete practice histories are uploaded.
 
+Claimed player pages add separate `/v2/` endpoints and the explicit
+`progress-1` saved-PB disclosure. They do not expand strict v1 account/recording
+metadata or silently renew global ghost consent. Their exact wire schemas,
+additive migrations, D1 payload budget, revision/publisher fences and owner
+privacy routes are maintained in the [community service README](../cloud/community/README.md#current-player-pages-v2).
+The loopback page/settings adapters are documented in [the API](api.md#community-account-localhost-only).
+Current saved-PB snapshots are display/comparison facts, including manual and
+imported marks; they are not additional ghost evidence for rank calibration.
+
 New-account signup explains automatic sharing before explicit policy acknowledgement.
 Completing signup enables sharing; Settings can disable future uploads or withdraw
 existing shared ghosts. Consent renewal preserves the existing sharing choice.
-The local API's omitted-sharing default remains off; the UI submits its disclosed
+The local API's omitted ghost-sharing default remains off; the UI submits its disclosed
 choice explicitly. Sheet time imports remain optional and unchecked.
+
+Saved-PB sharing uses its own default-on choice. New signup shows a checked PB
+sharing box; opting out is persisted before account activation. The local
+background publisher initializes only an untouched remote progress control
+(revision zero, no publisher or snapshot), through the existing revision fence.
+Existing pauses, withdrawals and selected publishers survive upgrades. Settings
+can pause updates or remove the published snapshot. This local choice never
+expands the strict v1 account body. Progress status GETs remain read-only.
+
+Library and player pages retain your own recordings, with Add ghost disabled:
+your PB ghost already participates automatically. The server rejects active and
+saved-rival additions for canonical owned identities, including replacement
+requests. Display names do not establish ownership. Existing pins remain removable.
+The disabled control exposes its reason on hover and keyboard focus. A ghost row
+shows its recording time; saved-PB comparisons stay in the Scorecard.
+
+Publication completeness and ranked-scope completeness are separate. The current
+snapshot projector withholds private/custom or edited segment targets; unsupported
+rows have unknown identities. The comparison adapter checks omissions against
+actual ranked members after exclusions, using the projector's portable-target
+policy. Unrelated withheld segments cannot hide a rank made from stars and
+canonical public segments. Relevant private/edited members, ambiguous matching
+public segments and unknown unsupported rows still prevent a complete rank.
+Each summary chip applies that same check. Rank calculation uses only published
+PB rows, never a fallback to the viewer's PBs or a claim that private rows are zero.
 
 Account names allow20 Unicode code points and63 UTF-8 bytes after NFKC normalization.
 The October8 Library snapshot contains454 names; its longest is

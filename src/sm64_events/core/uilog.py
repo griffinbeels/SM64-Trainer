@@ -61,7 +61,8 @@ CLIENT_FIELDS = ("surface", "client_utc", "title", "note", "cells", "cards",
 # reader posted correctly for a while and this list ate every record, with no
 # error anywhere. `tests/test_ui_log_records_the_real_page.py` is what catches
 # that, because it asserts the records LAND rather than that they were sent.
-SURFACES = ("selector", "target", "log", "recorder", "ghost_library")
+SURFACES = ("selector", "target", "log", "recorder", "ghost_library", "community_library",
+            "player_page", "progress_publication")
 
 MAX_TEXT = 200
 MAX_CELLS = 40

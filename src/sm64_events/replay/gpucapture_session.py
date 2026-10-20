@@ -103,12 +103,23 @@ class CaptureSession:
         self.state = "preparing"
         self.error = None
         self.timings = CaptureTimings()
+        self._stage = "channel"
+        self._report_failure = False
+        self._attempted_options = None
+        self._adapter_facts = None
+        self._failure_snapshot = None
+        self._helper_identity = None
 
     def _continue(self):
         snapshot = self.demand.snapshot
         if snapshot.lifecycle:
             return False
         if snapshot.state == "fault":
+            from sm64_events.replay.gpudiagnostics import unsupported_capture_reason
+
+            unsupported = unsupported_capture_reason(getattr(snapshot, "backend_reason", 0))
+            if unsupported is not None and not getattr(snapshot, "cleanup_error", ""):
+                raise GpuBackendUnsupported(unsupported)
             raise RuntimeError(snapshot.reason)
         return self.owner.want_capture() and snapshot.state != "stopped"
 
@@ -153,8 +164,13 @@ class CaptureSession:
     def _open_encoder(self):
         header = self.channel.header
         luid = (header.luid_high, header.luid_low)
-        # Before any helper starts: an adapter that can never open NVENC
-        # (not NVIDIA, a software adapter, a driver too old) is a verdict,
+        from sm64_events.replay.gpuadapter import adapter_facts
+
+        self._adapter_facts = adapter_facts(luid)
+        if self._adapter_facts is None:
+            raise RuntimeError("capture adapter identity is unavailable; GPU recording will retry")
+        # Before any helper starts: a positively incompatible adapter
+        # (software or a known-too-old NVIDIA driver) is a verdict,
         # not a fault to retry every 10-60 s forever (gpuadapter.py).
         reason = backend_unsupported(luid)
         if reason is not None:
@@ -186,9 +202,10 @@ class CaptureSession:
             names=list(self.channel.texture_names),
             options=self.settings.encoder(
                 header, self.owner.cfg,
-                nominal_rate=self.owner.nominal_rate, codec=codec,
+                nominal_rate=self.owner.nominal_rate, codec=codec, facts=self._adapter_facts,
             ),
         )
+        self._attempted_options = command["options"]
         request_id = self.controller.enqueue(command)
         if type(request_id) is not int:
             raise RuntimeError("encoder bootstrap admission refused")
@@ -248,10 +265,11 @@ class CaptureSession:
                     failure.operation = "Open"
                     raise failure
                 self.codec = CODEC_STREAM_NAMES[codec]
+                self._helper_identity = reply.metadata.get("identity")
                 # Native has names/contexts ready but has captured no pixels yet.
                 # Cold AAC/filter/format preparation must finish before source
                 # admission. Its pool holds milliseconds, not a startup backlog.
-                if not self.timings.measure("sink_prepare", self._prepare_sink):
+                if not self._measure_stage("sink_prepare", self._prepare_sink):
                     return None
                 self.handoff = self.owner.begin_audio()
                 self.channel.encoder_ready()
@@ -294,7 +312,10 @@ class CaptureSession:
 
         h, limits = self.channel.header, self.settings
         decoder = OfferDecoder(h, self.owner.layout, self.owner.clock)
-        run = MediaRun.starting_at(decoder.timestamp(offers[0].boundary_qpc))
+        options = bootstrap[0]["options"]
+        backend = "windows" if options.get("backend", 0) == 1 else "nvenc"
+        run = MediaRun.starting_at(decoder.timestamp(offers[0].boundary_qpc),
+                                  encoder_backend=backend)
         self.output.bind(run)
         self.mux = self.output
         self.media = GpuMedia(
@@ -343,17 +364,27 @@ class CaptureSession:
             self.timings.summary(),
         )
 
+    def _measure_stage(self, name, operation, *args):
+        self._stage = name
+        return self.timings.measure(name, operation, *args)
+
+    def _record_failure(self, error):
+        self.error = str(error)[:512]
+        self._report_failure = True
+
     def run(self):
         try:
-            if not self.timings.measure("channel", self._open_channel):
+            if not self._measure_stage("channel", self._open_channel):
                 return
-            bootstrap = self.timings.measure("encoder", self._open_encoder)
+            bootstrap = self._measure_stage("encoder", self._open_encoder)
             if bootstrap is None:
                 return
-            offers = self.timings.measure("first_offer", self._first_offers)
+            offers = self._measure_stage("first_offer", self._first_offers)
             if not offers:
                 return
-            self.timings.measure("media_setup", self._create_media, bootstrap, offers)
+            self._measure_stage("media_setup", self._create_media, bootstrap, offers)
+            self._stage = "recording"
+            self._retain_diagnostic()
             while self._continue():
                 self.timings.measure("tick", self.tick)
                 self.owner.wait(self.settings.poll_s)
@@ -361,10 +392,10 @@ class CaptureSession:
             # Project64 loaded a capture layer from another build (it was
             # running when this build's refresh came). No retry can succeed
             # until it restarts, which is when the refresh installs ours.
-            self.error = str(exc)[:512]
+            self._record_failure(exc)
             raise GpuBackendUnsupported(str(exc)) from exc
         except GpuBackendUnsupported as exc:
-            self.error = str(exc)[:512]
+            self._record_failure(exc)
             raise  # A verdict about the adapter; GpuCapture routes it, unwrapped.
         except Exception as exc:
             self.error = str(exc)[:512]
@@ -387,6 +418,8 @@ class CaptureSession:
                 log.info(retirement_line(snapshot, cancelled and not retired))
                 return
             log.info("GPU capture failure before cleanup: %s", before_cleanup)
+            self._failure_snapshot = before_cleanup
+            self._report_failure = True
             # GpuCapture logs once at the owning boundary. Preserve the lease
             # supervisor's reason as well as the media symptom; native channel
             # closure can precede that supervisor's next bounded poll.
@@ -400,12 +433,64 @@ class CaptureSession:
             except PublicationError:
                 raise  # Finished writer failure is not unproved resource disposal.
             except Exception as exc:
+                self._report_failure = True
+                self.error = self.error or str(exc)[:512]
                 raise GpuCleanupError("GPU capture cleanup unproved") from exc
             finally:
+                self._retain_diagnostic()
                 # Every stop, clean ones included: a failure-only record
                 # weights every startup and tick distribution toward failures.
                 log.info("GPU capture stage timings at stop: codec=%s error=%s %s",
                          self.codec, self.error, self.timings.summary())
+
+    def _retain_diagnostic(self):
+        """After helper stderr drain, keep scalar evidence outside source lifetime."""
+        from sm64_events.replay.gpufielddiagnostics import native_failure_receipt
+
+        try:
+            snapshot = self.demand.snapshot
+            options = self._attempted_options or {}
+            record = dict(observed_unix_s=time.time(), stage=self._stage,
+                          reason=self.error, codec=self.codec,
+                          requested_codec=CODEC_STREAM_NAMES.get(options.get("codec")),
+                          encoder_backend="windows" if options.get("backend") == 1 else "nvenc" if options else "unknown",
+                          capture_build=getattr(snapshot, "capture_build", ""),
+                          native_reason=getattr(snapshot, "backend_reason", 0),
+                          startup=getattr(snapshot, "native_startup", None),
+                          stage_timings=self.timings.summary())
+            facts = self._adapter_facts
+            if self.channel is not None:
+                h = getattr(self.channel, "header", None)
+                if h is not None:
+                    record["adapter_luid"] = [h.luid_high, h.luid_low]
+            if facts is not None:
+                record.update(gpu_name=facts.name, gpu_vendor_id=facts.vendor_id, gpu_driver=facts.driver)
+            if self._failure_snapshot is not None:
+                record["failure"] = self._failure_snapshot
+                encoder = self._failure_snapshot.get("encoder_failure") or {}
+                if encoder.get("result") is not None:
+                    record["encoder_result"] = encoder["result"]
+                status = encoder.get("native_status") or {}
+                for name, key in (("hresult", "native_hresult"), ("encoder_error", "encoder_error"), ("nv_status", "driver_error")):
+                    if isinstance(status.get(name), int):
+                        record[key] = status[name]
+            if self.controller is not None:
+                try:
+                    helper = self.controller.status()
+                    receipt = native_failure_receipt(helper.get("stderr_tail")) if self._report_failure else {}
+                    record.update(receipt)
+                    record["native_receipt_available"] = bool(receipt)
+                except Exception:  # noqa: BLE001 - retain other evidence when a diagnostic source fails.
+                    record["native_receipt_available"] = False
+            identity = self._helper_identity or {}
+            if isinstance(identity.get("dll_sha256"), str):
+                record["helper_dll_sha256"] = identity["dll_sha256"][:64]
+            self.owner._last_diagnostic = record
+            gate = getattr(self.owner, "retry_gate", None)
+            if gate is not None:
+                gate.note_diagnostic(self.owner.producer_identity, record, failed=self._report_failure)
+        except Exception:  # noqa: BLE001 - diagnostics cannot replace the capture/cleanup outcome.
+            log.debug("GPU diagnostic receipt unavailable", exc_info=True)
 
     def tick(self):
         now = time.monotonic()

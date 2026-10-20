@@ -623,6 +623,24 @@ def test_the_export_credit_alone_identifies_the_bundled_author_offline(tmp_path,
         tracker.db.close()
 
 
+def test_explicit_rival_ownership_ignores_legacy_bundled_name_but_recognizes_verified_id(tmp_path, monkeypatch):
+    population = BundledRows()
+    rivals, tracker = seated(tmp_path, monkeypatch, population, signed_in(AUTHOR), author=AUTHOR)
+    try:
+        # The old automatic schema1 rule stays untouched, but an equal credit
+        # cannot establish ownership for the new explicit Add capability.
+        row = population.rows[0]
+        assert row["player_id"] in rivals._owned_players()
+        assert not rivals.is_owned_recording(row)
+        population.author_identity = {"issuer": "https://example.test/auth/v1", "subject": UID}
+        reviewed = {**row, "player_id": UID, "player_name": "Renamed author"}
+        assert rivals.is_owned_recording(reviewed)
+        with pytest.raises(ValueError, match="PB ghost is included"):
+            rivals.check_rival_owner(reviewed)
+    finally:
+        tracker.db.close()
+
+
 def test_a_community_recording_under_the_signed_in_account_is_never_an_automatic_rival(tmp_path, monkeypatch):
     population = CloudPopulation()
     population.rows[0] = {**population.rows[0], "player_id": UID}
@@ -667,7 +685,7 @@ def test_known_local_and_account_self_ids_share_one_pin_without_aliasing_an_equa
         assert {row["id"] for row in playable} == {local["id"], stranger["id"]}
         assert rivals.rows[1]["available"] is False
         assert all("_owned" not in wire(row) for row in rivals.rows)
-        with pytest.raises(ValueError, match="player is already"):
+        with pytest.raises(ValueError, match="PB ghost is included"):
             rivals.checked({"action": "add", "id": extra["id"], "slot": 2}, TARGET)
     finally:
         tracker.db.close()

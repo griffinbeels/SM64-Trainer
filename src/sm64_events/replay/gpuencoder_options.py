@@ -1,7 +1,9 @@
 """Explicit resolved options; replay.config remains the sole quality owner."""
 
 import re
-from .gpuencoder_abi import CODEC_AV1, CODEC_H264, Options, initialize
+from .gpuencoder_abi import (
+    BACKEND_NVENC, BACKEND_WINDOWS, CODEC_AV1, CODEC_H264, Options, initialize,
+)
 
 # Which ffmpeg encoder row in the quality registry describes each native codec,
 # and which of its flags the native encoder can actually represent. AV1 NVENC
@@ -28,6 +30,10 @@ def uint(value, bits, name, *, positive=False):
 
 
 def pod_options(resolved):
+    # Existing V1 protocol callers predate the checked-zero backend words.
+    # Omitting both retains byte-identical NVENC behavior; a portable request
+    # must supply its backend and independently resolved quality explicitly.
+    resolved = {"backend": BACKEND_NVENC, "backend_quality": 0, **resolved}
     names = {n for n, _ in Options._fields_} - {"struct_size", "version", "reserved"}
     if set(resolved) != names:
         raise ValueError(
@@ -38,6 +44,12 @@ def pod_options(resolved):
         setattr(
             result, name, uint(value, 64 if name == "idr_interval_ticks" else 32, name)
         )
+    if result.backend not in (BACKEND_NVENC, BACKEND_WINDOWS):
+        raise ValueError("unsupported native encoder backend")
+    if result.backend_quality > 100 or (
+        result.backend == BACKEND_NVENC and result.backend_quality != 0
+    ):
+        raise ValueError("quality outside native backend contract")
     if not 0 < result.max_packet_bytes <= 16 * 1024 * 1024:
         raise ValueError("packet byte bound outside native limit")
     return result
@@ -63,9 +75,31 @@ def from_replay_config(
     primaries,
     transfer,
     max_packet_bytes,
+    backend=BACKEND_NVENC,
 ):
     # Caller must resolve structural/rate/conversion values from qualified evidence.
     from sm64_events.replay import config
+
+    if backend == BACKEND_WINDOWS:
+        if codec not in NVENC_ENCODER:
+            raise ValueError("unsupported native codec")
+        resolved = dict(
+            codec=codec, width=width, height=height,
+            nominal_fps_num=nominal_fps_num, nominal_fps_den=nominal_fps_den,
+            b_frames=b_frames, gop_frames=gop_frames,
+            initial_qp_p=0, initial_qp_i=0, initial_qp_b=0,
+            idr_interval_ticks=idr_interval_ticks, input_format=input_format,
+            signal_color=signal_color, full_range=full_range, matrix=matrix,
+            primaries=primaries, transfer=transfer, max_packet_bytes=max_packet_bytes,
+            profile=AV1_MAIN_PROFILE if codec == CODEC_AV1 else H264_PROFILES["high"],
+            preset=0, tuning=0, rate_control=0, cq=0,
+            max_bitrate=0, vbv_buffer_bits=0,
+            backend=BACKEND_WINDOWS, backend_quality=config.MF_QUALITY,
+        )
+        pod_options(resolved)
+        return resolved
+    if backend != BACKEND_NVENC:
+        raise ValueError("unsupported native encoder backend")
 
     if codec not in NVENC_ENCODER:
         raise ValueError("unsupported native codec")
@@ -117,6 +151,8 @@ def from_replay_config(
             cq=int(quality["-cq"]),
             max_bitrate=bitrate(quality["-maxrate"]),
             vbv_buffer_bits=bitrate(quality["-bufsize"]),
+            backend=BACKEND_NVENC,
+            backend_quality=0,
         )
     except (KeyError, ValueError) as exc:
         raise ValueError(

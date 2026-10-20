@@ -1,7 +1,7 @@
 # Community service beta
 
 One Worker, D1 metadata, private immutable R2 assets and maintained Supabase Auth
-implement [protocol v1](../../docs/community-protocol.md). This checkout is disabled
+implement [ghost protocol v1 and additive player protocol v2](../../docs/community-protocol.md). This checkout is disabled
 with placeholders. Actual beta bindings and provisioning receipts are private
 operator artifacts; this portable config does not describe their live state. Login proves
 account ownership. Recordings remain **community-unverified**. Structural native
@@ -29,9 +29,9 @@ Never use remote storage for local checks.
 Explicit approval is required before resource/account changes. Keep R2 public
 access, r2.dev and custom-domain object access disabled. Only the default Worker
 gets a public route. MetadataCache and AssetCache are private loopback exports.
-Apply migrations in order to a new staging D1 database. An existing 0001 database
-gets migrations/0002_friend_beta.sql and 0003_auth_entry_budget.sql; never replace
-its initial schema. An existing 0002 database receives only 0003.
+Apply migrations in order to a new staging D1 database. Existing databases receive
+only their missing numbered migrations through `0007_player_recording_epoch.sql`;
+never replace the initial schema or reapply completed migrations.
 Fill D1/R2 bindings and public
 vars in wrangler.jsonc for one owned HTTPS service origin. Supply actual operator
 name/contact and published policy URL on that same origin. Keep SERVICE_ENABLED
@@ -105,7 +105,8 @@ publisher list restricts visibility; setting it to `[]` means own ghosts only.
 Request, upload, storage, burst and authenticated-entry budgets remain intact.
 Public build metadata must omit `friend_invitation`; this server-only policy
 supports existing invitation-free clients. Deployment and real provider signup
-remain operator QA gates. No new database migration is needed beyond 0001-0004.
+remain operator QA gates. Library discovery additionally requires the additive
+0005 Library index.
 
 The policies page labels open versus private beta from this deployment setting
 and describes admitted players as recipients. Review the notice before changing
@@ -165,6 +166,34 @@ UUID Idempotency-Key reused for one logical retry. Account mutation replays retu
 current state. Binary retries bind their immutable grant. HMAC cursors bind exact
 identity/generation/epochs, canonical base64url and a five-minute expiry.
 
+Milestone 1 adds these admitted, budgeted read endpoints. They retain the existing
+strict recording metadata schema and the viewer/publisher visibility policy:
+
+| Endpoint | Contract |
+| --- | --- |
+| `POST /v1/recordings/metadata` | `{recording_ids:[...]}` with zero to four unique immutable IDs. Returns `{v:1,recordings,unavailable}` in requested order. This read needs no mutation key. Its single publication query shares the direct recording gate, including the viewer's unexpired pins. System failures fail the request instead of renewing a partial list. |
+| `GET /v1/library` | Optional `target` portable JSON, `rom` (`us` or `jp`) and `cursor`. Filters apply before pagination. Returns `{v:1,generation,entries,next_cursor,complete}`. Each entry is `{target,clock,game_version,strategy,recordings,players,best_frames}`. Counts distinguish recordings from distinct publishers. |
+| `GET /v1/library/recordings` | Required `target`, `clock`, `rom`, `strategy`, optional `cursor`. Returns `{v:1,generation,recordings,next_cursor,complete}` using unchanged recording metadata rows. No rank-band restriction. |
+
+Library pages return at most 20 rows with real keyset continuation and no page-depth
+ceiling. Signed cursors bind endpoint, viewer, generation, filters, publisher policy,
+global visibility epoch and the target's publication epoch when target-filtered,
+or the sum of retained publication scope epochs for an unfiltered summary.
+Account changes, relevant publication/retraction or catalog migration require a
+fresh page sequence; unrelated uploads preserve a target-filtered continuation.
+Both listings include only current-generation published winners whose accounts are
+visible and whose asset metadata is stored. An owner's pinned replaced recording
+remains renewable by ID but never inflates public Library discovery.
+
+The summary performs one ordered grouped query using the additive partial
+`recording_library` index. It does not call every target's pool. Continuation bounds
+the identity groups scanned; exact counts still read eligible rows inside each group.
+Region-only filtering uses that same ordered index. Recording pages use the existing
+`fastest_strategy` index. No extra R2 HEADs or asset downloads occur on these reads;
+the existing asset route checks immutable bytes. These are local query-shape facts,
+not measured production row-read or dollar savings. Production usage still needs a
+separate operator measurement. Apply migration 0005 before deploying this Worker.
+
 Pool pages scan 256 indexed rows across at most 45 inclusive subdivisions, with
 four pages maximum. Search returns 20 rows and scans at most 64 indexed names per
 page; an empty page can be incomplete with a next cursor. coverage.complete=false
@@ -176,6 +205,93 @@ manual searches do not use this fallback. No unsupported ROM is relabeled.
 Stale upload generations return 409 generation_changed before storage admission.
 
 ## Visibility, quotas and recovery
+
+### Current player pages (v2)
+
+Apply additive migrations `0006_player_progress.sql` and
+`0007_player_recording_epoch.sql` before this Worker. They add
+separate publication controls, one current JSON snapshot per owner, a small
+bio/social profile and retained D1 payload accounting. It does not add fields to
+the strict v1 account or recording envelopes. Canonical caller examples live in
+[`test/player-wire-fixture.json`](test/player-wire-fixture.json).
+
+`GET /v2/account/progress` reads current revision, consent fence, selected
+installation/profile, visibility and acknowledgement hash without creating rows.
+`PUT /v2/account/progress/control` enables, disables, withdraws or deliberately
+switches that publisher. Progress consent is separate version `progress-1`,
+disclosed at `/policies#progress`; existing ghost Terms/Privacy versions are not
+changed. Off retains the last visible snapshot. Withdrawal removes it. Switching
+removes the former snapshot and enables the explicitly selected publisher.
+Re-enable alone cannot make a withdrawn body public.
+
+Trainer defaults saved-PB sharing on only for remote controls with no previous
+choice (revision zero, no publisher or snapshot). A checked signup control allows
+opting out before activation; the local-only `share_pbs` field never reaches the
+strict v1 profile schema. Explicit pauses, withdrawals and existing publishers
+remain authoritative. Default initialization uses the same CAS/notice fence as
+manual enabling, runs outside status GETs, and needs no schema migration.
+
+`PUT /v2/account/progress/snapshot` replaces the whole current state. Its exact
+content preserves current save order, raw and effective PB regions separately,
+nullable strategy/source/dates, stored frames and explicit partial coverage.
+It is not a fastest-ever append feed, ghost admission decision or calibration
+input. There are no per-PB cloud rows or writes. The canonical hash covers content,
+excluding capture UTC and transport/publisher fields. An identical visible
+content hash needs only a new replay receipt, without rewriting the body or
+claiming a newer capture time.
+
+All v2 writes require an Idempotency-Key. Publication checks account status,
+policies, both revisions, enabled consent and exact publisher in the same D1
+transaction as body replacement and receipt. Replays answer current state.
+CAS/publisher conflicts require reconciliation rather than an automatic takeover.
+Moderation advances a durable fence even if the account is subsequently restored.
+Account deletion removes these bodies, bios/socials and private publisher labels,
+while retaining the minimal account/publication revision tombstones. Ghost-only
+withdrawal retains its original separate meaning.
+
+Snapshots accept at most 4096 rows and a one-MiB total request. Oversize requests
+return 413 without changing the prior body; chunking or silent trimming is not
+implemented. The conservative request bound stays below D1's
+[2,000,000-byte string/row limit](https://developers.cloudflare.com/d1/platform/limits/).
+The global retained logical payload budget defaults to 128MiB and includes both
+canonical snapshots and bio/social payloads. `PROGRESS_STORAGE_BYTES` can set a
+reviewed decimal-byte cap from 1MiB through 1GiB. Replacements and refunds are
+atomic, use their own singleton and never change R2 accounting. This is a logical
+payload bound, not an estimate of physical D1 pages or the database's overall size.
+Ordinary authenticated-entry and account/global request limits still apply.
+
+`GET|PUT /v2/account/player-profile` reads/edits a bounded plain-text bio and at
+most five HTTPS social links using an independent revision. There are no remote
+preview fetches, rich HTML, avatar uploads or stream autoplay. Owner export at
+`GET /v2/account/player-export` includes this profile, publication controls and
+parsed current snapshot; its bounded combined response can slightly exceed the
+one-MiB upload, so its client read limit is twoMiB. Persisted lapsed/suspended
+owners retain export and progress removal; unknown identities retain no rows.
+
+`GET /v2/players?prefix=...` returns 20 indexed prefix matches with keyset
+continuation. UUID navigation at `/v2/players/{uid}` survives rename and returns
+only claimed account ownership, bio/socials, separately verified Sheet reference
+when one exists, and progress freshness/coverage availability. The checkmark does
+not certify performance. `/v2/players/{uid}/progress` reads current visible facts
+under the current account gate, without private installation/profile identifiers.
+`/v2/players/{uid}/recordings` returns 20 owner-indexed current visible winner rows
+per page, using unchanged ghost metadata and no R2 HEAD/download calls. Existing
+publisher allowlists apply to all player reads. No profile uses a name to merge
+accounts or invent a proven Sheet association.
+
+Inventory cursors also bind the owner's private `recording_epoch`, read in the
+existing account gate. A winning publication or logical retraction adds one
+indexed account-row update inside its transaction. Withdrawal/deletion increment
+it in their existing account update. Nothing writes on page reads or game frames.
+Unrelated publishers do not invalidate this owner's page sequence. Moderation and
+catalog migration retain their existing global visibility/generation fences.
+Combining the owner/settings gate allows a final gate check at the same total
+query count, so a publication arriving during a page also requires a reload.
+
+The local query-budget fixture measures six prepared statements for a public
+snapshot read including auth/account/tickets, seven for prefix search, eight for
+player ghost inventory, and no per-row lookups. Production usage, D1 row-read
+charges, physical storage and dollar savings remain unmeasured.
 
 Admitted user/admin gateway calls, including cache hits, consume exact account and
 global D1 tickets. One atomic batch inserts and advances both daily rows;

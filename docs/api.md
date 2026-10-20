@@ -4,6 +4,16 @@ The live event feed, HTTP API, replay endpoints, and behavior notes. New to
 the project? Start with the [README](../README.md). Developing here? Read
 `CLAUDE.md` and `docs/architecture.md` first.
 
+## Automatic error reporting
+
+`GET /api/diagnostics/reporting` returns `configured`, `enabled`, `pending` and
+safe collection counters. `PUT /api/diagnostics/reporting` accepts `{enabled: boolean}`;
+disabling stops capture and removes queued uploads. `POST /api/diagnostics/browser-error`
+accepts bounded `message`, `stack` and `source` strings and returns 202. All mutations
+use the existing same-origin local request protection. Neither settings nor report
+responses expose the DSN or queued diagnostic contents. See [error reporting](error-reporting.md)
+for configuration, privacy boundaries and verification limits.
+
 ## Segment save scope
 
 `GET /api/segments/authoring` returns `{can_share, default_scope}`. Shared authoring
@@ -99,12 +109,51 @@ mutations need the local request capability above. Cloud protocol:
 | `POST /api/community/auth/sign-out` | Forget the stored credential; the sign-in step returns. |
 | `POST /api/community/account/refresh` | Re-read the account from the cloud. |
 | `GET /api/community/names/check?name=` | `{name, available}`: whether a player name is free (`available: null` when the cloud cannot say). |
-| `PUT /api/community/account` `{name, terms_version, privacy_version, sharing, sheet_runner?}` | Create the account: name, consent and sharing. |
+| `PUT /api/community/account` `{name, terms_version, privacy_version, sharing, sheet_runner?, share_pbs?}` | Create the account: name, consent and ghost sharing. The optional local-only PB choice defaults on for a new account; false is saved before activation. It is stripped from the strict cloud v1 profile body. |
 | `PUT /api/community/account/name` `{name}` | Rename (required after a moderation rename). |
 | `PUT /api/community/account/sharing` `{enabled}` | Turn automatic sharing on or off. |
-| `GET /api/community/account/export` | Download everything the cloud holds for the account. |
+| `GET /api/community/account/export` | Download ghost/account data plus `player_page` (profile, controls and current snapshot). Both reads bind the same UUID/auth session; a switch discards the result. Older services explicitly mark unavailable player-page export. |
 | `POST /api/community/account/withdraw` `{confirmation: "WITHDRAW"}` | Unpublish every shared ghost. |
 | `POST /api/community/account/delete` `{confirmation: "DELETE"}` | Delete the account and its cloud data. |
+
+Claimed player pages use additive cloud protocol v2; ghost/account v1 shapes
+remain strict and unchanged. A checkmark means the owner claimed their signed-in
+Trainer account. It never verifies legitimate gameplay or an unproven Sheet link.
+
+| Player endpoint | Contract |
+|---|---|
+| `GET /api/community/players?prefix=&cursor=` | Up to 20 UUID/name matches, `next_cursor` and `complete`; bounded prefix/keyset lookup. |
+| `GET /api/community/players/{uid}?scope=overall` | `{player,progress,comparison,partial_reason}`. UUID navigation survives rename. Header includes bounded bio/socials, exact claim explanation and proven Sheet association only. Comparison coverage adds `scope_complete`: unrelated withheld targets do not hide a valid rank, while publication-wide coverage remains unchanged. |
+| `GET /api/community/players/{uid}/recordings?cursor=` | At most 20 strict recording rows with the Library's local binding/Add-ghost capability/saved slot and `is_own`. Canonical own recordings remain visible with `can_add:false` and a reason exposed by the action tooltip; existing pins can be removed. Current publication gates and owner epoch protect paging. Actual ghost time appears on the row; PB comparisons stay in the Scorecard. |
+| `GET /api/community/progress` | Own publication state, local publisher/dirty/error/conflict, bounded preview counts/bytes/coverage, versioned consent text and public profile details. No current snapshot body queue or private routes/definitions are returned for upload. |
+| `POST /api/community/progress/control` | `{action:enable|disable|withdraw|switch,expected_revision,notice_version?}`. Enable/switch carry the current disclosure version. Sharing defaults on only for untouched remote controls; explicit pauses, withdrawals and publishers survive upgrades. Status GETs never initialize defaults. Disable pauses future updates; withdraw hides/deletes the retained snapshot. Switch deliberately replaces the sole publisher after confirmation. |
+| `POST /api/community/progress/sync` | Recompute current facts, reconcile revision/hash/publisher and publish only a changed authorized snapshot. Conflicts require review; no automatic publisher takeover. |
+| `PUT /api/community/player-profile` | `{expected_revision,bio,socials:[{kind:twitch|youtube|website,url}]}`; independent profile revision, bounded HTTPS links without credentials, no remote asset fetching or autoplay. |
+| `GET /api/community/progress/privacy` | Own retained publication state for signed-in/stored owners, including lapsed/suspended accounts; no local DB or active browsing/upload permission is required. |
+| `POST /api/community/progress/privacy/control` | `{action:disable|withdraw,expected_revision}`; removal-only path that cannot enable publication, upload facts or edit a profile. Account/session and server revision fences still apply. |
+
+Comparison uses the viewer's selected Rank scope, exclusions, Scorecard regions,
+PB basis and effective local standards. The shared scope-row/GoalResolver/Rank
+readers accept supplied PB rows; there is no separate remote grader. Each column
+totals known cells, while differences use only comparable shared cells. A partial
+or unbindable publication does not receive a purported complete rank. `comparison.chips`
+uses the Rank summary's canonical scope order and six-chip cap, evaluated from
+the published PB rows with no additional cloud request; incomplete publications
+return an empty chip list. Missing
+local rank resources leave the header/progress readable with comparison unavailable.
+Stamped ROMs remain original evidence; unstamped times are explicitly evaluated
+under the viewer's default ROM, with publisher default-ROM provenance retained.
+
+The full current snapshot preserves deliberate slower saves, Undo, deletion and
+reclassification. Raw saved `game_version`, joined `pb_version`, relative save
+order, stored frames and available original dates/source are distinct fields.
+Imports never acquire invented achievement dates or original centiseconds.
+Default publication withholds custom/edited segments; portable public seed
+signatures carry no local numeric IDs or detection definitions. Coverage names
+shared, withheld and unsupported rows. A 4096-row/1-MiB whole-request bound fails
+explicitly instead of truncating a complete profile. Protocol/storage/lifecycle
+details belong to [the community contract](community-protocol.md) and
+[the service README](../cloud/community/README.md).
 
 ## Event schema
 
@@ -1145,6 +1194,37 @@ alongside certified population rows; they never acquire automatic certification.
 Scope is optional for legacy clients; when supplied it must match the active
 scope. Changed targets, stale scopes or invalid queries return readable 422 errors. No cloud route
 or cloud authorization is implied by this loopback endpoint.
+
+The Library tab also browses current shared recordings without selecting a
+Practice target. `GET /api/library/community` accepts optional `entity`
+(`star:C:S` or a local `segment:N`), `rom=us|jp`, and `cursor`. It returns
+`{available, reason, generation, entries, next_cursor, complete}`. Each group
+includes portable `target`, `clock`, `game_version`, `strategy`, separate
+`recordings` and `players` counts, and `best_frames`. Filters apply before
+cloud pagination. Twenty rows form one page; continuation has no page-depth cap.
+
+`GET /api/library/community/recordings` takes portable target JSON, `clock`,
+`rom`, `strategy`, and optional `cursor`. Its `recordings` retain strict cloud
+metadata and add `local_target`, local Library `entity_key`, `can_add`,
+`unavailable_reason`, and `saved_slot` (integer or null). Summary rows carry
+the same binding/capability fields except `saved_slot`. Unmatched segment
+signatures and strategies without resolved local standards remain browseable
+with a reason. No read downloads recording bytes or changes the active pool.
+Without a usable account/session, reads return 200 with `available:false`,
+the reason, an empty collection, null cursor and `complete:false`.
+
+`POST /api/ghost/rivals/saved` takes `{target, action, id, version?, scope?, slot?}`.
+The target is local `{kind, entity_key, strat}`; action is `add` or `remove`.
+The existing rival owner validates identity and persists that target's chosen
+seat. Add refreshes the recording's publication metadata first. It does not
+switch Practice, enable playback, or reset another target's roster. Full
+visible pins return `state:needs_slot` and four `seats`; no choice is written
+until the caller supplies a visible slot. Cancel sends no second command.
+Responses contain `{state,target,scope,pins,seats,slot,id}`. Remove needs no
+cloud read, so an unavailable saved rival can still be removed. Duplicate
+players, incompatible recordings and stale choices fail with readable 422s.
+Explicit own-recording pins remain supported. Active-target changes use the
+normal ghost refresh/broadcast path; off-target changes do not cycle playback.
 
 | Collection route | Contract |
 |---|---|

@@ -38,6 +38,7 @@ internal_notes/
 # test_every_private_dir_is_actually_ignored says so. Nothing was exposed (no
 # .tasks file has ever been tracked); the rule was simply missing.
 .tasks/
+/.worktrees/
 
 # Working notes: kept on disk, never shared. This is a PUBLIC repo, and the
 # specs/plans under here quote the author directly and name his other projects

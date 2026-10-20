@@ -29,6 +29,9 @@ class DemandSnapshot:
     lifecycle: bool = False
     cancelled: bool = False
     cleanup_attempts: int = 0
+    backend_reason: int = 0
+    native_startup: dict | None = None
+    capture_build: str = ""
 
 
 class DemandFailure(RuntimeError):
@@ -261,6 +264,14 @@ class GpuDemand:
                 break
         raise failure
 
+    def _observe_startup(self, status, identity):
+        startup = getattr(status, "gpu_startup", None)
+        if (startup and startup.get("nonce") == identity.nonce.hex()
+                and startup.get("control_generation") == identity.control_generation):
+            self._publish(native_startup=startup, capture_build=status.build_id)
+        else:
+            self._publish(capture_build=getattr(status, "build_id", ""))
+
     def _monitor(self, control, request):
         started = last_renew = self._clock()
         acknowledged = active = False
@@ -284,6 +295,7 @@ class GpuDemand:
                         raise
                     self.stop_event.wait(self.CLOSING_POLL_S)
                     continue
+                self._observe_startup(status, request.identity)
                 capability_lost_at = None
                 if status.ack_token == request.identity.token:
                     acknowledged = True
@@ -300,6 +312,7 @@ class GpuDemand:
                                 and status.reason == C.FRESH_REQUEST
                             ),
                         )
+                        self._publish(backend_reason=status.reason)
                         if status.state == C.UNAVAILABLE and status.reason == 10016:
                             self._classify_image_loss(control, request, failure)
                         raise failure

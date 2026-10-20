@@ -6,6 +6,7 @@ import {beginCommunitySignIn} from '../community.js';
 import {Modal} from './modal.js';
 import {CommunityProfile} from './communityprofile.js';
 import {CommunitySettings} from './communitysettings.js';
+import {ProgressPrivacy} from './progressprivacy.js';
 import {ImportOutcome, useImportFlow} from './importflow.js';
 import {ProgressLine} from './states.js';
 
@@ -73,7 +74,7 @@ function useAccountActions(community, onClose) {
     close: () => { cancel(); onClose(); }};
 }
 
-export function CommunityAccountModal({community, onClose, onPracticeRefresh}) {
+export function CommunityAccountModal({community, onClose, onPracticeRefresh, onOpenPlayer}) {
   const {account, refresh} = community;
   const actions = useAccountActions(community, onClose);
   const runner = useRef(null), [importing, setImporting] = useState(false);
@@ -110,7 +111,7 @@ export function CommunityAccountModal({community, onClose, onPracticeRefresh}) {
     !account.authenticated ? (account.enabled ? 'Sign in' : 'Community ghosts')
     : account.status === 'new' ? 'Choose your name' : 'Community account';
   return html`<${Modal} title=${title} onClose=${forced || actions.busy || flow.phase === 'working' ? undefined : actions.close}>
-    <${AccountContent} account=${account} refresh=${refresh} actions=${actions} importing=${importing} flow=${flow} save=${save} onClose=${onClose} />
+    <${AccountContent} account=${account} refresh=${refresh} actions=${actions} importing=${importing} flow=${flow} save=${save} onClose=${onClose} onOpenPlayer=${onOpenPlayer} />
     ${actions.error && html`<p class="community-error" role="alert">${actions.error}</p>`}
     ${rename && html`<div class="community-center"><button disabled=${actions.busy} onClick=${() => actions.run(async () => {
       await send('POST', '/api/community/auth/sign-out'); await refresh(); onClose();
@@ -118,7 +119,7 @@ export function CommunityAccountModal({community, onClose, onPracticeRefresh}) {
   <//>`;
 }
 
-function AccountContent({account, refresh, actions, importing, flow, save, onClose}) {
+function AccountContent({account, refresh, actions, importing, flow, save, onClose, onOpenPlayer}) {
   if (importing) return html`${flow.progress && html`<${ProgressLine} progress=${flow.progress.progress} message=${flow.progress.message} running=${flow.phase === 'working'} />`}<${ImportOutcome} flow=${flow} />
       <div class="community-actions"><button disabled=${actions.busy || flow.phase === 'working'} onClick=${onClose}>Start practicing</button></div>`;
   if (actions.pending) return html`<p>Finish signing in in your browser.</p>
@@ -133,8 +134,16 @@ function AccountContent({account, refresh, actions, importing, flow, save, onClo
       <button disabled=${actions.busy} onClick=${() => actions.run(async () => {
         await send('POST', '/api/community/auth/sign-out'); await refresh(); onClose();
       })}>Sign out</button>`;
-  if (['rename_required', 'new', 'consent_required'].includes(account.status)) return html`<${CommunityProfile} account=${account} busy=${actions.busy} onSave=${save} />`;
-  if (account.status === 'active') return html`<${CommunitySettings} account=${account} busy=${actions.busy} run=${actions.run} refresh=${refresh} onClose=${onClose} />`;
-  return html`<p>This beta account needs an invitation. Ask the person who sent you the build.</p>
+  if (['rename_required', 'new', 'consent_required'].includes(account.status)) return html`<${CommunityProfile} account=${account} busy=${actions.busy} onSave=${save} />
+    ${account.status !== 'new' && account.uid ? html`<${ProgressPrivacy} account=${account} />` : null}`;
+  if (account.status === 'active') return html`<${CommunitySettings} account=${account} busy=${actions.busy} run=${actions.run} refresh=${refresh} onClose=${onClose} onOpenPlayer=${onOpenPlayer} />`;
+  return html`<${LapsedAccount} account=${account} actions=${actions} refresh=${refresh} onClose=${onClose} />`;
+}
+
+function LapsedAccount({account, actions, refresh, onClose}) {
+  return html`<p>${account.status === 'suspended' ? 'Community access is paused for this account.'
+    : account.status === 'deleted' ? 'This community account has been deleted.'
+    : 'This beta account needs an invitation. Ask the person who sent you the build.'}</p>
+        ${account.uid && account.name ? html`<${ProgressPrivacy} account=${account} />` : null}
         <button onClick=${() => actions.run(async () => { await send('POST', '/api/community/auth/sign-out'); await refresh(); onClose(); })}>Sign out</button>`;
 }

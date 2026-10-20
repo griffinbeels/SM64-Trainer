@@ -100,9 +100,9 @@ def validate_changes(changes: dict) -> dict:
         raise ValueError("The ghost target follows the current practice target.")
     if "rivals" in changes:
         if "ghosts" in changes:
-            raise ValueError("Choose rivals or a library ghost set in one request.")
+            raise ValueError("Choose ghosts or a library ghost set in one request.")
         if not isinstance(changes["rivals"],dict) or not isinstance(changes.get("target"),dict):
-            raise ValueError("Choose rivals for the current practice target.")
+            raise ValueError("Choose ghosts for the current practice target.")
         checked["rivals"] = dict(changes["rivals"])
         checked["target"] = dict(changes["target"])
     return checked
@@ -657,17 +657,17 @@ class GhostSession:
     def _queue_update(self, checked, target):
         if "rivals" in checked:
             if self._rivals is None:
-                raise ValueError("Adaptive rivals are unavailable in this window.")
+                raise ValueError("Adaptive ghosts are unavailable in this window.")
             checked["rivals"] = self._rivals.checked(checked["rivals"],target)
             if checked.pop("target") != target:
-                raise ValueError("The practice target changed. Choose rivals for the current target.")
+                raise ValueError("The practice target changed. Choose ghosts for the current target.")
         if "ghosts" in checked:
             if target is None or checked.pop("target") != target:
                 raise ValueError("The practice target changed. Choose a ghost for the current target.")
             if self._rivals is not None:
                 count = len(checked["ghosts"]["attempts"])+len(checked["ghosts"].get("imports",[]))
                 if count>4 or count+int(checked["ghosts"]["pb"])>self._rivals.library_limit(target):
-                    raise ValueError("Choose up to four rivals; a historical PB may also need a rival slot.")
+                    raise ValueError("Choose up to four ghosts; a historical PB may also need a ghost slot.")
             offered = {ghost.attempt_id for ghost in
                        self.library().ghosts_for(target["kind"], target["entity_key"])}
             if any(number not in offered for number in checked["ghosts"]["attempts"]):
@@ -774,7 +774,7 @@ class GhostSession:
 
     async def search_rivals(self, target, player, cursor=None, *, scope=None):
         if self._rivals is None:
-            raise ValueError("Adaptive rivals are unavailable in this window.")
+            raise ValueError("Adaptive ghosts are unavailable in this window.")
         async with self._lock:
             identity = self._rivals.identity_for(target)
             if target != self._rivals.target or identity is None or scope is not None and scope != identity.scope:
@@ -789,6 +789,69 @@ class GhostSession:
         async with self._lock:
             return await asyncio.to_thread(self._rivals.search,target,player,cursor,scope=scope)
 
+
+    def _library_owner(self, expected=None):
+        state = self._community.account.snapshot() if self._community is not None else {}
+        owner = state.get("uid")
+        if (not owner or state.get("status") != "active" or state.get("enabled") is False
+                or expected is not None and owner != expected):
+                raise ValueError("Your community account changed. Choose the ghost again.")
+        return owner
+
+    def _library_work(self, operation, *args, owner=None, **kwargs):
+        # A canceled HTTP task can leave its thread finishing. Shutdown joins
+        # this same lock before closing the population and database handles.
+        with self._lifecycle_lock:
+            if self._closing:
+                raise ValueError("The Trainer is closing. Try again in its next window.")
+            if owner is not None:
+                self._library_owner(owner)
+            result = operation(*args, **kwargs)
+            if owner is not None:
+                self._library_owner(owner)
+            return result
+
+    async def library_ghost_summary(self, *, cursor=None, entity=None, version=None):
+        from sm64_events.ghost.community_library import decorate_page, portable_filter
+        owner = self._library_owner()
+        target = await asyncio.to_thread(self._library_work, portable_filter, entity, self._tracker)
+        page = await self._community.library_summary(cursor, target=target, game_version=version)
+        async with self._lock:
+            return await asyncio.to_thread(self._library_work, decorate_page, page, self._tracker, self._rivals, "entries", owner=owner)
+
+    async def library_ghost_recordings(self, target, *, clock, version, strategy, cursor=None):
+        owner = self._library_owner()
+        page = await self._community.library_recordings(target, clock, version, strategy, cursor)
+        from sm64_events.ghost.community_library import decorate_page
+        async with self._lock:
+            return await asyncio.to_thread(self._library_work, decorate_page, page, self._tracker, self._rivals, "recordings", owner=owner)
+
+    async def save_library_rival(self, target, changes, *, version=None):
+        """A current cloud gate precedes a serialized target-addressed save."""
+        if self._rivals is None:
+                raise ValueError("Saving ghosts is unavailable in this Trainer window.")
+        if version is not None and version not in ("us", "jp"):
+            raise ValueError("Choose a supported game region.")
+        if changes.get("action") == "add":
+            if self._community is None:
+                raise ValueError("Sign in to add a shared recording as a ghost.")
+            from sm64_events.ghost.portable import checked_hash
+            identifier = checked_hash(changes.get("id"))
+            owner = self._library_owner()
+            await self._community.recording_metadata(identifier)
+            async with self._lock:
+                result = await asyncio.to_thread(self._library_work, self._rivals.change_saved,
+                                                target, changes, version=version, owner=owner)
+        else:
+            async with self._lock:
+                result = await asyncio.to_thread(self._library_work, self._rivals.change_saved,
+                                                target, changes, version=version)
+        # An off-target save never cycles Practice or touches native playback.
+        # The active namespace follows the normal refresh/publication door.
+        if (result["state"] != "needs_slot" and target == self._target
+                and result["scope"] == self._rivals.scope_for(target)):
+            await self.refresh(resolve=False)
+        return result
 
     # -- the wire -------------------------------------------------------------
 

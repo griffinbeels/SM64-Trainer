@@ -16,7 +16,8 @@ from sm64_events.ranks.standards import entity_key
 STATE_KEY = "ghost_rivals_v1"
 MAX_REMOTE_CHOICES = 1024
 LIMITS = {"last_step":MAX_STEP, "max_ahead":MAX_AHEAD, "counts":list(range(1,MAX_RIVALS+1))}
-NO_STRATEGY = "Choose a strategy to race rivals."
+NO_STRATEGY = "Choose a strategy to race ghosts."
+OWN_RECORDING_REASON = "Your PB ghost is included automatically."
 
 
 def wire(row):
@@ -96,7 +97,7 @@ class Rivals:
         from sm64_events.ghost.community_rivals import CommunityRivals
         self.community = CommunityRivals(community, population)
 
-    def identity_for(self, target, *, version=None):
+    def identity_for(self, target, *, version=None, scope=None):
         ranks = self.tracker.ranks
         version = self.version_of() if version is None else version
         if target is None or ranks is None or version not in ("us", "jp"):
@@ -108,7 +109,7 @@ class Rivals:
         else:
             ek = entity_key(None,None,int(target["entity_key"]))
             signature = self._signature(target)
-        scope = self.scope_for(target)
+        scope = self.scope_for(target) if scope is None else scope
         # Strategy tab: that strategy's region scope. Overall tab: fetch both
         # ROMs when any strategy could serve, then judge each ghost by its own.
         regional = (region_scope.scope_of(ek,target.get("strat"),ranks) if scope=="strategy"
@@ -149,7 +150,10 @@ class Rivals:
         return changed_identity
 
     def _key(self, target):
-        if self.scope_for(target)=="overall":
+        return self._scope_key(target,self.scope_for(target))
+
+    def _scope_key(self, target, scope):
+        if scope=="overall":
             return json.dumps([target["kind"],target["entity_key"],"overall",None],separators=(",",":"))
         return self._strategy_key(target)
 
@@ -375,7 +379,7 @@ class Rivals:
         stamp = (id(self.loaded_db),identity,enabled,source,controls["hue_degrees"],getattr(self.population,"generation",None),
                  getattr(self.tracker.ranks,"calibration_revision",None),
                  getattr(sharing,"generation",None),self.community.refused(),
-                 json.dumps(self.options,sort_keys=True),json.dumps(self.pins,sort_keys=True))
+                 json.dumps(self.options,sort_keys=True),json.dumps(self.pins.get(self._key(target),{}),sort_keys=True))
         if force or stamp != self.fingerprint:
             pb, desired = self._desired(identity, target)
             self.rows = self.community.stage(desired, fetch=enabled)
@@ -422,7 +426,7 @@ class Rivals:
             self.rows, self.pb = (),None
             self.fingerprint = self.prepared_key = None
             self.native.cancel_preparation()
-            self.status = "Load a compatible practice ROM to choose rivals." if target else None
+            self.status = "Load a compatible practice ROM to choose ghosts." if target else None
             return {"available":False,"reason":"unknown_rom" if target else "no_target",
                     "reason_text":self.status,"ghosts":[]}
         if not has_strategy(target):
@@ -481,7 +485,7 @@ class Rivals:
                 self.remote_choices.update((value,owner) for value in remote if value not in self.local_choices)
                 self._store()
 
-    def _owned_players(self):
+    def _owned_players(self, *, legacy_names=True):
         """Every player identity that is the current player's; none is an automatic rival.
 
         The local recorder identity, the signed-in community account, and each
@@ -489,7 +493,8 @@ class Rivals:
         when the player goes by its author's name)."""
         own = self.tracker.db.get_state('ghost_player_id', None)
         method = getattr(self.population, 'owned_player_ids', None)
-        owned = set(method(own, names=self._own_names()) if method else ())
+        names = self._own_names() if legacy_names else ()
+        owned = set(method(own, names=names) if method else ())
         owned.update((own, self.community.owner()))
         return frozenset(value for value in owned if value)
 
@@ -509,6 +514,18 @@ class Rivals:
         owners = self._owned_players() if owners is None else owners
         local = row.get("manual_only") is True and isinstance(row.get("ghost"), AttemptGhost)
         return {**row, "_owned": local or row.get("player_id") in owners}
+
+    def is_owned_recording(self, row):
+        """Explicit Add uses established identities, never a matching credit or name.
+
+        Automatic populations retain their historical schema1 collection rule.
+        A reviewed schema2 collection already identifies its author by account ID.
+        """
+        return self._seat_row(row, self._owned_players(legacy_names=False))["_owned"]
+
+    def check_rival_owner(self, row):
+        if self.is_owned_recording(row):
+            raise ValueError(OWN_RECORDING_REASON)
 
     def lineup_state(self):
         """(state, reason) for the lineup: no_strategy, loading or ready.
@@ -658,7 +675,7 @@ class Rivals:
         def own_pb(ghost):
             return getattr(ghost,"pb",False) and dedicated is not None and ghost.origin==dedicated
         if sum(not own_pb(ghost) for ghost in ghosts)>MAX_RIVALS:
-            raise ValueError("Choose up to four rivals; this historical PB also needs a rival slot.")
+            raise ValueError("Choose up to four ghosts; this historical PB also needs a ghost slot.")
         return identity,dedicated
 
     def choose_library(self, target, ghosts, include_pb):
@@ -701,28 +718,28 @@ class Rivals:
         row = self._seat_row(row)
         if any(item.get("ghost") is not None and item["slot"] != slot
                and player_key(self._seat_row(item)) == player_key(row) for item in self.rows):
-            raise ValueError("That player is already in your rivals. Replace their current slot.")
+            raise ValueError("A ghost from that player is already selected. Replace their current slot.")
 
     def checked(self, body, target):
         if not isinstance(body,dict) or set(body)-{"options","action","id","slot","scope"}:
-            raise ValueError("Choose rival settings or a saved ghost.")
+            raise ValueError("Choose ghost settings or a saved ghost.")
         if target != self.target or self.identity is None:
-            raise ValueError("The practice target changed. Choose rivals for the current target.")
+            raise ValueError("The practice target changed. Choose ghosts for the current target.")
         result = self._checked_scope(body,target)
         if "options" in body:
             result["options"] = checked_options(body["options"])
         action = body.get("action")
         if action is not None:
             if action not in ("add","reset"):
-                raise ValueError("Choose or reset a rival.")
+                raise ValueError("Choose or reset a ghost.")
             if not has_strategy(target):
                 raise ValueError(NO_STRATEGY)
             slot = body.get("slot")
             if slot is not None and (type(slot) is not int or not 0<=slot<self.options["count"]):
-                raise ValueError("Choose a visible rival slot.")
+                raise ValueError("Choose a visible ghost slot.")
             if action == "reset":
                 if slot is None:
-                    raise ValueError("Choose the rival to reset.")
+                    raise ValueError("Choose the ghost to reset.")
                 result.update(action=action,slot=slot)
             else:
                 result.update(self._checked_add(body.get("id"),target,slot))
@@ -731,29 +748,49 @@ class Rivals:
     def _checked_add(self, identity, target, slot):
         if not isinstance(identity,str) or len(identity)!=64 or any(char not in "0123456789abcdef" for char in identity):
             raise ValueError("Choose a saved ghost identity.")
-        try:
-            row = self.population.get(identity)
-            if row.get("source_status") == "bundled-author-recording" and row.get("game_version") is None:
-                # The exact packaged recording keeps its historical ROM
-                # unknown. Its trusted snapshot provides playback context.
-                rows = self.population.metadata_snapshot(self.identity.kind, self.identity.entity_key,
-                    clock=self.identity.clock, game_version=self.identity.game_version,
-                    strategy=self.identity.strategy if self.identity.scope == "strategy" else None,
-                    versions=region_scope.servable_versions(self.identity.region_scope,self.identity.game_version))
-                row = next((item for item in rows if item["id"] == identity), row)
-            ranked = rank_recordings([row],self.tracker.ranks,self.identity)
-        except LookupError:
-            row = self._private_record(identity,self.identity)
-            ranked = (row,) if row else ()
-        if not ranked:
+        row = self._compatible_record(identity,self.identity)
+        if row is None:
             raise ValueError("That ghost is not compatible with this target.")
+        self.check_rival_owner(row)
         if any(item.get("id")==row["id"] for item in self.rows):
-            raise ValueError("That ghost is already in your rivals.")
+            raise ValueError("That ghost is already selected.")
         if row["id"] in self.pins.get(self._key(target),{}).values():
-            raise ValueError("That ghost is already chosen in a hidden rival slot. Increase the rival count to replace it.")
+            raise ValueError("That ghost is already chosen in a hidden ghost slot. Increase the ghost count to replace it.")
         slot = add_slot(self.rows,self.options["count"],slot)
         self._check_player_slot(row, slot)
         return {"action":"add","slot":slot,"id":row["id"]}
+
+    def _compatible_record(self, identifier, context):
+        """Resolve one explicit choice against its actual target and grading context."""
+        try:
+            row = self.population.get(identifier)
+            if row.get("source_status") == "bundled-author-recording" and row.get("game_version") is None:
+                # The exact packaged recording keeps its historical ROM
+                # unknown. Its trusted snapshot provides playback context.
+                rows = self.population.metadata_snapshot(context.kind, context.entity_key,
+                    clock=context.clock, game_version=context.game_version,
+                    strategy=context.strategy if context.scope == "strategy" else None,
+                    versions=region_scope.servable_versions(context.region_scope,context.game_version))
+                row = next((item for item in rows if item["id"] == identifier), row)
+            ranked = rank_recordings([row],self.tracker.ranks,context)
+        except LookupError:
+            row = self._private_record(identifier,context)
+            ranked = (row,) if row else ()
+        return ranked[0] if ranked else None
+
+    def change_saved(self, target, body, *, version=None):
+        """Persist an arbitrary target's choices without switching or preparing Practice.
+
+        The session serializes this synchronous owner under its lock. Community
+        metadata must already be cached; this operation never fetches it.
+        """
+        from sm64_events.ghost.rival_changes import change_saved
+        return change_saved(self,target,body,version=version)
+
+    def saved_availability(self, target, *, version=None, scope=None, expected_clock=None):
+        """Report grading capability and a detached copy of this scope's saved pins."""
+        from sm64_events.ghost.rival_changes import saved_availability
+        return saved_availability(self,target,version=version,scope=scope,expected_clock=expected_clock)
 
     def apply(self, body):
         if "scope" in body:

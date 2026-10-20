@@ -45,6 +45,33 @@ export function readGhostLibrary(root) {
       selected: Boolean(row.querySelector('input[type="checkbox"]')?.checked)}))};
 }
 
+export function readCommunityLibrary(root) {
+  return {surface: "community_library",
+    title: text(root.querySelector(".community-library-header h3")),
+    note: text(root.querySelector(".community-library-header p")) + " · "
+      + text(root.querySelector(".community-library-success, .community-library-feedback, .community-library-action-error")),
+    rows: [...root.querySelectorAll(".community-library-recording, .community-library-group")].map(row => ({
+      name: text(row.querySelector(".community-library-player strong, .community-library-target")),
+      time: text(row.querySelector(".community-library-time, .community-library-best")),
+      strategy: text(row.querySelector(".community-library-method")) + " · "
+        + (row.querySelector(".community-library-method img")?.alt || ""),
+      selected: Boolean(row.querySelector(".community-library-saved")),
+    }))};
+}
+
+export function readPlayerPage(root) {
+  return {surface: "player_page", title: text(root.querySelector(".player-profile-header h2")),
+    note: text(root.querySelector(".player-comparison-context")),
+    rows: [...root.querySelectorAll(".player-scorecard .score-line")].map(row => ({
+      name: text(row.querySelector(".score-line-name")), time: text(row.querySelector(".score-line-you")),
+      player: text(row.querySelector(".score-line-goal")), delta: text(row.querySelector(".score-gap"))}))};
+}
+
+export function readProgressPublication(root) {
+  return {surface: "progress_publication", title: text(root.querySelector(".player-section-head h3")),
+    note: text(root.querySelector(".progress-publication-summary"))};
+}
+
 // A cell's identity as the human sees it: the name under the art, plus
 // whether it is the highlighted one. `.starcell` / `.starname` /
 // `.active-star` are PracticeCell's own classes -- every cell in the

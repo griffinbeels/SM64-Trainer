@@ -137,15 +137,15 @@ class CommunityRivals:
     def status(self, identity):
         """One sentence about this lineup's own list; another request's failure never shows here."""
         if self.downloading:
-            return 'Downloading rivals…'
+            return 'Downloading ghosts…'
         coverage = self.coverage(identity)
         if coverage is not None and not coverage['complete']:
             failure = self._pool_status(identity)
             if failure == 'unsupported':
                 return None
             if failure == 'offline':
-                return 'Community rivals are unavailable. Your saved ghosts still work.'
-            return 'Showing a partial rival list.' if coverage['generation'] else 'Finding rivals…'
+                return 'Community ghosts are unavailable. Your saved ghosts still work.'
+            return 'Showing a partial ghost list.' if coverage['generation'] else 'Finding ghosts…'
         return None
 
     def stage(self, desired, *, fetch=True):

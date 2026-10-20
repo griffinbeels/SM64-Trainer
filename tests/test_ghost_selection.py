@@ -138,7 +138,10 @@ def test_candidates_validate_files_without_changing_the_native_selection(tmp_pat
     assert not rows[run_of(absent)]["native_available"] and rows[run_of(absent)]["native_reason_text"]
     for _ in range(10):
         drive(session)
-    assert calls == [8, 9, 7]
+    assert calls[0] == run_of(chosen)
+    # Equal save timestamps do not order the remaining candidate lookups.
+    # Every file is still checked exactly once, with the selected one first.
+    assert sorted(calls) == sorted([run_of(first), run_of(chosen), run_of(absent)])
     # A renderer/model failure cannot relabel a validated saved file as invalid.
     capture.snapshot_status = lambda **_: {
         "available": True, "state": 5, "reason": 11,

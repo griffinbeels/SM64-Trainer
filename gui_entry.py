@@ -5,6 +5,10 @@ import sys
 
 
 def main():
+    # UAC helper must not import desktop, claim the live instance, or migrate data.
+    if len(sys.argv) > 1 and sys.argv[1] == '--install-practice-replay-admin':
+        from sm64_events.core.plugin_elevation_worker import main as install_helper_main
+        return install_helper_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == '--beta-self-check':
         from sm64_events.desktop.beta_probe import main as beta_self_check
         return beta_self_check(sys.argv[2:])
@@ -30,6 +34,8 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == SOUND_PLAYER_FLAG:
         from sm64_events.ghost.sound_player import main as sound_player_main
         return sound_player_main(sys.argv[2:])
+    from sm64_events.core.reporting_setup import initialize_reporting
+    initialize_reporting()
     from sm64_events.desktop.app import main as desktop_main
     return desktop_main()
 

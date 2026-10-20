@@ -27,6 +27,7 @@ import { LibraryTarget } from "./librarytarget.js";
 import { LibraryTray, LibraryGrid } from "./librarytray.js";
 import { Icon } from "./icons.js";
 import { RegionSwitch, primaryRegion } from "./versionswitch.js";
+import { CommunityLibrary } from "./community-library.js";
 
 const html = htm.bind(h);
 
@@ -210,7 +211,7 @@ export function versionNote(versions, version, gradingVersion) {
     : `${only} only · you are graded on ${gradingVersion.toUpperCase()}`;
 }
 
-export function Library({ t, active, intent, clearIntent, enterCompare, openRunner }) {
+export function Library({ t, active, intent, clearIntent, enterCompare, openRunner, openPlayer }) {
   const [index, setIndex] = useState(null);
   const [status, setStatus] = useState(null);
   // FINAL REVIEW FIX (medium: two fetches fail into a permanent spinner). A
@@ -266,6 +267,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // stays mounted behind `display:none` when he leaves the tab, so that
   // choice survives a tab switch too.
   const [pickedVersions, setPickedVersions] = useState(null);
+  const {hasGhost, setHasGhost, ghostRevision, setGhostRevision} = useGhostFilter();
   const effectiveVersion = (t && t.view && t.view.game_version
     && t.view.game_version.effective) || "us";
   const versions = pickedVersions || ["us", "jp"];
@@ -290,16 +292,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // Both fetch-and-set, clear their own error on success -- shared by the
   // mount effect below and by `refresh()`'s own success branch, which used to
   // repeat the same unguarded `getJSON(...).then(...).catch(() => {})` pair.
-  function loadIndex() {
-    return getJSON("/api/library")
-      .then((data) => { setIndex(data); setIndexError(null); })
-      .catch((err) => setIndexError(err.message || String(err)));
-  }
-  function loadStatus() {
-    return getJSON("/api/library/status")
-      .then((data) => { setStatus(data); setStatusError(null); })
-      .catch((err) => setStatusError(err.message || String(err)));
-  }
+  const {loadIndex, loadStatus} = libraryReaders(setIndex, setIndexError, setStatus, setStatusError);
 
   useEffect(() => { loadIndex(); loadStatus(); }, []);
 
@@ -307,68 +300,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // deep links) into LibraryTarget's `focusStrat`/`focusTier` props. Read
   // once at open time: `intent` is cleared right after this runs (below), so
   // capturing it into `entry` is the only way it survives past that clear.
-  function openEntity(entityKey, focus = {}) {
-    return navigation.open(`/api/library/entity/${encodeURIComponent(entityKey)}`,
-      (data) => {
-        setEntry({ entityKey, rows: data.targets || [],
-                   focusStrat: focus.strat || null, focusTier: focus.tier || null,
-                   // Round 3 of task 0098: a standards-table time link lands
-                   // on the EXACT entry it exemplifies — the subdivision to
-                   // auto-open and the entry card to blink ride the intent.
-                   focusDivision: focus.division || null,
-                   focusEntryUrl: focus.entryUrl || null,
-                   // 2026-08-22 (round 1 of the leaderboard): the [[Runner
-                   // page]] lands on ONE runner's entry -- the one the
-                   // breakdown graded, named by runner + its time_cs.
-                   focusRunner: focus.runner || null,
-                   focusTimeCs: focus.timeCs ?? null,
-                   // 2026-08-28 (round 11, the scorecard's line doors): land
-                   // on the example CLOSEST to the goal time -- the active
-                   // strategy's approach when one is picked, else anywhere.
-                   focusGoalCs: focus.goalCs ?? null,
-                   // 2026-08-23 (his own Rank tab's doors): land on the
-                   // reader's OWN standing -- the subdivision his PB sits
-                   // in on the section he is graded on.
-                   focusYou: !!focus.you,
-                   // 2026-08-14: a LINKED entity resolves to the target its
-                   // rows are adopted onto (server-side, same door), and
-                   // `focus_row_key` names the piece the link points at --
-                   // LibraryTarget opens that piece and centers his standing.
-                   focusRow: data.focus_row_key || null,
-                   // FINAL REVIEW FIX (important: blank-titled book mark). An
-                   // entity the sheet never maps (78 of every 84 segments,
-                   // measured) returns `{targets: []}` here -- `rows[0]` never
-                   // exists, so librarytarget.js's own `label` fell back to
-                   // "" and the target page rendered a real "No community
-                   // times recorded here yet." paragraph under an EMPTY
-                   // `<h3>`. `entityLabel` is the same best-effort name
-                   // `mixedEntityNote` below already resolves off the current
-                   // session view -- carried only as a FALLBACK; a real sheet
-                   // label always wins inside LibraryTarget.
-                   fallbackLabel: entityLabel(t, entityKey) });
-        setStage("target");
-      });
-  }
-
-  // The course grid hands back an entity key when a target has one, else its
-  // numeric index into the index we already fetched (librarynav.js's own
-  // contract). A Castle Movement / stage RTA target has no entity to look up
-  // by, but it still needs its FULL shape (approaches/subsections as real
-  // arrays, not `GET /api/library`'s own summary counts) -- exactly the
-  // door `GET /api/library/target/{index}` gives, which library_api.py
-  // already spreads as
-  // `{index, ...target}`, the same full shape `/api/library/entity/{key}`'s
-  // own `targets` array carries. One shape either door produces is what lets
-  // librarytarget.js stay ignorant of which door it came through.
-  function handlePick(value) {
-    autoOpenedRef.current = true;
-    if (typeof value === "string") { openEntity(value); return; }
-    navigation.open(`/api/library/target/${value}`, (row) => {
-        setEntry({ entityKey: null, rows: [row], focusStrat: null, focusTier: null,
-                   fallbackLabel: null });
-        setStage("target");
-      });
-  }
+  const {openEntity, handlePick} = libraryOpening(navigation, t, setEntry, setStage, autoOpenedRef);
 
   // Round 5: after a link/unlink the open page re-reads its rows, so
   // `adopted` always comes from the server rather than a client-side guess.
@@ -415,6 +347,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   useEffect(() => {
     if (!active || !intent) return;
     if (intent.kind === "target") {
+      setHasGhost(false);
       // A real navigation of the Library's OWN page -- suppress the "land on
       // whatever was last practiced" auto-open below, or it would race a
       // fetch this activation is about to abandon anyway.
@@ -486,110 +419,119 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // one this task adds. FIX ROUND 1: `mixedEntityNote` says so on-screen
   // (controller ruling) rather than leaving it to be discovered by opening
   // "load existing" and wondering where the rest went.
-  async function studyInCompare(items) {
-    if (!items.length) return;
-    setStudying(true);
-    setStudyResult(null);
-    const failures = [];
-    // {entity_key, strat, comparisonId} per item that actually landed --
-    // comparisonId is null on the (rare) branch where the job reported
-    // "done" with no `comparison` at all, which still counts as imported
-    // for the "N of M" count but has nothing to open.
-    const succeeded = [];
-    for (const item of items) {
-      const { body, edit } = trayToImport(item);
-      try {
-        const { job_id } = await send("POST", "/api/compare/import", body);
-        const status = await pollImportJob(job_id);
-        if (status.state === "error") {
-          failures.push({ label: body.name, detail: status.message || "import failed" });
-          continue;
-        }
-        // Non-null `edit` only: an untrimmed tray item must inherit whatever
-        // trim the comparison already has saved (server-side dedupe on
-        // `source_ref` within (entity_key, strat) reuses the existing row),
-        // never blank it out. Do not "simplify" this condition away.
-        if (status.comparison && edit) {
-          await send("PUT", `/api/compare/videos/${status.comparison.id}`, edit);
-        }
-        // `body.strat`, not `item.strat || null` -- `trayToImport` already
-        // resolved the item's strat to what it actually IMPORTED under
-        // (its own "Standard" default), and routing must land on that same
-        // bucket or the strategy picker on the Compare pane would show "no
-        // strategy" beside videos saved under "Standard". Caught while
-        // building this fix round's own render test: the two independently
-        // re-derived the same fallback and would have drifted the moment a
-        // future caller ever passes a real per-approach strat.
-        succeeded.push({ entity_key: item.entity_key, strat: body.strat,
-                          comparisonId: status.comparison ? status.comparison.id : null });
-      } catch (err) {
-        failures.push({ label: body.name, detail: err.message || String(err) });
-      }
-    }
-    setStudying(false);
-    let mixedEntityNote = null;
-    if (succeeded.length) {
-      // FIX ROUND 1, CRITICAL: land on the first item's (entity, strat) AND
-      // actually OPEN what imported there -- `enterCompare`'s `openIds` is
-      // the door compare.js's own `openComp` already opens saved
-      // comparisons through ("call the existing door", now applied to the
-      // fix too). Before this fix Study routed to the right pane and
-      // opened nothing in it.
-      const primary = succeeded[0];
-      const openIds = succeeded
-        .filter((s) => s.entity_key === primary.entity_key && s.strat === primary.strat
-                     && s.comparisonId != null)
-        .map((s) => s.comparisonId);
-      const otherKeys = [...new Set(succeeded
-        .filter((s) => s.entity_key !== primary.entity_key)
-        .map((s) => s.entity_key))];
-      if (otherKeys.length) {
-        mixedEntityNote = `Showing ${entityLabel(t, primary.entity_key)} here — also imported `
-          + `for ${otherKeys.map((k) => entityLabel(t, k)).join(", ")}; open those from their `
-          + `own target page to see them.`;
-      }
-      enterCompare({ entity: primary.entity_key, strat: primary.strat, openIds });
-    }
-    setStudyResult({ total: items.length, failures, mixedEntityNote });
-  }
+  const studyInCompare = items => studyTray(items, {t, enterCompare, setStudying, setStudyResult});
 
-  return html`<div class="practice-card workshop-card library-page">
-    <div class="workshop-hero">
+  return html`<${LibraryPage} ...${{
+    t, active, openRunner, openPlayer, index, status, statusError, hasGhost, versions,
+  setPickedVersions, version, effectiveVersion, setHasGhost, ghostRevision, setGhostRevision,
+  refresh, refreshState, entryError, stage, tray, trimTrayItem, removeFromTray, setShowGrid,
+  studyInCompare, studying, studyResult, navigation, entry, addToTray, trayKeys,
+  reloadRows, indexError, loadIndex, handlePick, iconFor, showGrid
+  }} />`;
+}
+
+async function studyTray(items, {t, enterCompare, setStudying, setStudyResult}) {
+  if (!items.length) return;
+  setStudying(true);
+  setStudyResult(null);
+  const failures = [];
+  // {entity_key, strat, comparisonId} per item that actually landed --
+  // comparisonId is null on the (rare) branch where the job reported
+  // "done" with no `comparison` at all, which still counts as imported
+  // for the "N of M" count but has nothing to open.
+  const succeeded = [];
+  for (const item of items) {
+    const { body, edit } = trayToImport(item);
+    try {
+      const { job_id } = await send("POST", "/api/compare/import", body);
+      const status = await pollImportJob(job_id);
+      if (status.state === "error") {
+        failures.push({ label: body.name, detail: status.message || "import failed" });
+        continue;
+      }
+      // Non-null `edit` only: an untrimmed tray item must inherit whatever
+      // trim the comparison already has saved (server-side dedupe on
+      // `source_ref` within (entity_key, strat) reuses the existing row),
+      // never blank it out. Do not "simplify" this condition away.
+      if (status.comparison && edit) {
+        await send("PUT", `/api/compare/videos/${status.comparison.id}`, edit);
+      }
+      // `body.strat`, not `item.strat || null` -- `trayToImport` already
+      // resolved the item's strat to what it actually IMPORTED under
+      // (its own "Standard" default), and routing must land on that same
+      // bucket or the strategy picker on the Compare pane would show "no
+      // strategy" beside videos saved under "Standard". Caught while
+      // building this fix round's own render test: the two independently
+      // re-derived the same fallback and would have drifted the moment a
+      // future caller ever passes a real per-approach strat.
+      succeeded.push({ entity_key: item.entity_key, strat: body.strat,
+                        comparisonId: status.comparison ? status.comparison.id : null });
+    } catch (err) {
+      failures.push({ label: body.name, detail: err.message || String(err) });
+    }
+  }
+  setStudying(false);
+  let mixedEntityNote = null;
+  if (succeeded.length) {
+    // FIX ROUND 1, CRITICAL: land on the first item's (entity, strat) AND
+    // actually OPEN what imported there -- `enterCompare`'s `openIds` is
+    // the door compare.js's own `openComp` already opens saved
+    // comparisons through ("call the existing door", now applied to the
+    // fix too). Before this fix Study routed to the right pane and
+    // opened nothing in it.
+    const primary = succeeded[0];
+    const openIds = succeeded
+      .filter((s) => s.entity_key === primary.entity_key && s.strat === primary.strat
+                   && s.comparisonId != null)
+      .map((s) => s.comparisonId);
+    const otherKeys = [...new Set(succeeded
+      .filter((s) => s.entity_key !== primary.entity_key)
+      .map((s) => s.entity_key))];
+    if (otherKeys.length) {
+      mixedEntityNote = `Showing ${entityLabel(t, primary.entity_key)} here — also imported `
+        + `for ${otherKeys.map((k) => entityLabel(t, k)).join(", ")}; open those from their `
+        + `own target page to see them.`;
+    }
+    enterCompare({ entity: primary.entity_key, strat: primary.strat, openIds });
+  }
+  setStudyResult({ total: items.length, failures, mixedEntityNote });
+}
+
+function LibraryHeader({hasGhost, status, statusError, versions, setPickedVersions, version,
+  effectiveVersion, setHasGhost, setGhostRevision, refresh, refreshState}) {
+  return html`<div class="workshop-hero">
       <div class="workshop-title">
         <span class="workshop-title-icon"><${Icon} name="library" size=${22} /></span>
         <div>
           <h2>Library</h2>
-          <p>${statusLine(status, statusError)}</p>
+          <p>${hasGhost ? "Shared ghosts to race in your Lineup" : statusLine(status, statusError)}</p>
         </div>
       </div>
       <div class="workshop-hero-actions">
+        <label class="library-ghost-filter">
+          <input type="checkbox" checked=${hasGhost}
+              onchange=${event => setHasGhost(event.currentTarget.checked)} /> Has ghost
+        </label>
         <${RegionSwitch} values=${versions} onChange=${setPickedVersions}
             label="Regions shown" note=${versionNote(versions, version, effectiveVersion)} />
-        <button type="button" class="primary-button" onclick=${refresh}
-            disabled=${refreshState === "loading"}>
+        <button type="button" class="primary-button"
+            onclick=${hasGhost ? () => setGhostRevision(value => value + 1) : refresh}
+            disabled=${!hasGhost && refreshState === "loading"}>
           <${Icon} name="restart" size=${15} />
-          ${refreshState === "loading" ? "Refreshing…" : "Refresh"}
+          ${!hasGhost && refreshState === "loading" ? "Refreshing…" : "Refresh"}
         </button>
       </div>
-    </div>
-    <${RefreshMessage} state=${refreshState} />
-    ${/* FINAL REVIEW FIX (medium: two fetches fail into a permanent
-         spinner). A failed navigation (a 404/500 opening a book mark or a
-         browse-grid pick) used to be a click that silently did nothing --
-         this is the one message surface for it, shown only on the browse
-         page (the target page itself renders its own real content once a
-         later attempt succeeds, which already clears this). */""}
-    ${entryError && stage === "browse"
-      ? html`<p class="library-refresh-msg is-error">Could not open that target: ${entryError}</p>`
-      : null}
-    <${LibraryTray} items=${tray} onTrim=${trimTrayItem} onRemove=${removeFromTray}
-        onPlayAll=${() => setShowGrid(true)} onStudy=${studyInCompare} studying=${studying} />
-    <${StudyMessage} result=${studyResult} />
-    ${stage === "target"
-      ? html`<div class="library-target-page">
+    </div>`;
+}
+
+function LibraryTargetPage({navigation, setHasGhost, t, entry, version, versions, effectiveVersion,
+  addToTray, trayKeys, openRunner, reloadRows, active}) {
+  return html`<div class="library-target-page">
           <button type="button" class="entity-back" onclick=${navigation.back}>
             <${Icon} name="chevron" size=${15} /> Back
           </button>
+          <button type="button" class="quiet-button library-ghost-door"
+              onclick=${() => setHasGhost(true)}>Browse shared ghosts for this target</button>
           <${LibraryTarget} t=${t} targets=${entry ? entry.rows : []}
               version=${version} versions=${versions} gradingVersion=${effectiveVersion}
               onAdd=${addToTray} trayKeys=${trayKeys} onOpenRunner=${openRunner}
@@ -605,7 +547,39 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
               fallbackLabel=${entry ? entry.fallbackLabel : null}
               onRelink=${reloadRows} active=${active}
               resolveEntityLabel=${(key) => entityLabel(t, key)} />
-        </div>`
+        </div>`;
+}
+
+function LibraryPage({
+  t, active, openRunner, openPlayer, index, status, statusError, hasGhost, versions,
+  setPickedVersions, version, effectiveVersion, setHasGhost, ghostRevision, setGhostRevision,
+  refresh, refreshState, entryError, stage, tray, trimTrayItem, removeFromTray, setShowGrid,
+  studyInCompare, studying, studyResult, navigation, entry, addToTray, trayKeys,
+  reloadRows, indexError, loadIndex, handlePick, iconFor, showGrid
+}) {
+  return html`<div class="practice-card workshop-card library-page">
+    <${LibraryHeader} ...${{hasGhost, status, statusError, versions, setPickedVersions, version,
+  effectiveVersion, setHasGhost, setGhostRevision, refresh, refreshState}} />
+    ${!hasGhost && html`<${RefreshMessage} state=${refreshState} />`}
+    ${/* FINAL REVIEW FIX (medium: two fetches fail into a permanent
+         spinner). A failed navigation (a 404/500 opening a book mark or a
+         browse-grid pick) used to be a click that silently did nothing --
+         this is the one message surface for it, shown only on the browse
+         page (the target page itself renders its own real content once a
+         later attempt succeeds, which already clears this). */""}
+    ${entryError && stage === "browse"
+      ? html`<p class="library-refresh-msg is-error">Could not open that target: ${entryError}</p>`
+      : null}
+    <${LibraryTray} items=${tray} onTrim=${trimTrayItem} onRemove=${removeFromTray}
+        onPlayAll=${() => setShowGrid(true)} onStudy=${studyInCompare} studying=${studying} />
+    <${StudyMessage} result=${studyResult} />
+    ${hasGhost
+      ? html`<${CommunityLibrary} key=${ghostRevision} active=${active}
+          entity=${stage === "target" ? entry?.entityKey : null} versions=${versions}
+          onBrowseAll=${navigation.back} onOpenPlayer=${openPlayer} />`
+      : stage === "target"
+      ? html`<${LibraryTargetPage} ...${{navigation, setHasGhost, t, entry, version, versions, effectiveVersion,
+  addToTray, trayKeys, openRunner, reloadRows, active}} />`
       : indexError
         ? html`<div class="library-load-error">
             <p class="library-refresh-msg is-error">Could not load the library: ${indexError}</p>
@@ -617,4 +591,97 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
       ? html`<${LibraryGrid} items=${tray} onClose=${() => setShowGrid(false)} />`
       : null}
   </div>`;
+}
+
+function libraryOpening(navigation, t, setEntry, setStage, autoOpenedRef) {
+  function openEntity(entityKey, focus = {}) {
+    return navigation.open(`/api/library/entity/${encodeURIComponent(entityKey)}`,
+      (data) => {
+        setEntry({ entityKey, rows: data.targets || [],
+                   focusStrat: focus.strat || null, focusTier: focus.tier || null,
+                   // Round 3 of task 0098: a standards-table time link lands
+                   // on the EXACT entry it exemplifies — the subdivision to
+                   // auto-open and the entry card to blink ride the intent.
+                   focusDivision: focus.division || null,
+                   focusEntryUrl: focus.entryUrl || null,
+                   // 2026-08-22 (round 1 of the leaderboard): the [[Runner
+                   // page]] lands on ONE runner's entry -- the one the
+                   // breakdown graded, named by runner + its time_cs.
+                   focusRunner: focus.runner || null,
+                   focusTimeCs: focus.timeCs ?? null,
+                   // 2026-08-28 (round 11, the scorecard's line doors): land
+                   // on the example CLOSEST to the goal time -- the active
+                   // strategy's approach when one is picked, else anywhere.
+                   focusGoalCs: focus.goalCs ?? null,
+                   // 2026-08-23 (his own Rank tab's doors): land on the
+                   // reader's OWN standing -- the subdivision his PB sits
+                   // in on the section he is graded on.
+                   focusYou: !!focus.you,
+                   // 2026-08-14: a LINKED entity resolves to the target its
+                   // rows are adopted onto (server-side, same door), and
+                   // `focus_row_key` names the piece the link points at --
+                   // LibraryTarget opens that piece and centers his standing.
+                   focusRow: data.focus_row_key || null,
+                   // FINAL REVIEW FIX (important: blank-titled book mark). An
+                   // entity the sheet never maps (78 of every 84 segments,
+                   // measured) returns `{targets: []}` here -- `rows[0]` never
+                   // exists, so librarytarget.js's own `label` fell back to
+                   // "" and the target page rendered a real "No community
+                   // times recorded here yet." paragraph under an EMPTY
+                   // `<h3>`. `entityLabel` is the same best-effort name
+                   // `mixedEntityNote` below already resolves off the current
+                   // session view -- carried only as a FALLBACK; a real sheet
+                   // label always wins inside LibraryTarget.
+                   fallbackLabel: entityLabel(t, entityKey) });
+        setStage("target");
+      });
+  }
+
+  // The course grid hands back an entity key when a target has one, else its
+  // numeric index into the index we already fetched (librarynav.js's own
+  // contract). A Castle Movement / stage RTA target has no entity to look up
+  // by, but it still needs its FULL shape (approaches/subsections as real
+  // arrays, not `GET /api/library`'s own summary counts) -- exactly the
+  // door `GET /api/library/target/{index}` gives, which library_api.py
+  // already spreads as
+  // `{index, ...target}`, the same full shape `/api/library/entity/{key}`'s
+  // own `targets` array carries. One shape either door produces is what lets
+  // librarytarget.js stay ignorant of which door it came through.
+  function handlePick(value) {
+    autoOpenedRef.current = true;
+    if (typeof value === "string") { openEntity(value); return; }
+    navigation.open(`/api/library/target/${value}`, (row) => {
+        setEntry({ entityKey: null, rows: [row], focusStrat: null, focusTier: null,
+                   fallbackLabel: null });
+        setStage("target");
+      });
+  }
+
+  return {openEntity, handlePick};
+}
+
+function useGhostFilter() {
+  const [hasGhost, setHasGhost] = useState(false);
+  const [ghostRevision, setGhostRevision] = useState(0);
+  useEffect(() => {
+    const changed = () => setGhostRevision(value => value + 1);
+    window.addEventListener("community-account-changed", changed);
+    return () => window.removeEventListener("community-account-changed", changed);
+  }, []);
+  return {hasGhost, setHasGhost, ghostRevision, setGhostRevision};
+}
+
+function libraryReaders(setIndex, setIndexError, setStatus, setStatusError) {
+  function loadIndex() {
+    return getJSON("/api/library")
+      .then((data) => { setIndex(data); setIndexError(null); })
+      .catch((err) => setIndexError(err.message || String(err)));
+  }
+  function loadStatus() {
+    return getJSON("/api/library/status")
+      .then((data) => { setStatus(data); setStatusError(null); })
+      .catch((err) => setStatusError(err.message || String(err)));
+  }
+
+  return {loadIndex, loadStatus};
 }

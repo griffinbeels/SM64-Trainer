@@ -88,7 +88,7 @@ def create_ghost_router(session=None) -> APIRouter:
         try:
             parsed = json.loads(target)
             if not isinstance(parsed,dict):
-                raise ValueError("Choose a star or segment before searching rivals.")
+                raise ValueError("Choose a star or segment before searching ghosts.")
             after = json.loads(cursor) if cursor is not None else None
             if scope is None:
                 return await _session().search_rivals(parsed,player,after)
@@ -97,6 +97,8 @@ def create_ghost_router(session=None) -> APIRouter:
             raise HTTPException(422,str(error)) from error
     from sm64_events.server.ghost_sharing_api import mount_collection_routes
     mount_collection_routes(router, _session)
+    from sm64_events.server.community_library_api import mount_community_library_routes
+    mount_community_library_routes(router, session, _session)
 
     @router.put("/ghost")
     async def set_ghost(body: dict):

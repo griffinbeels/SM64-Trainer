@@ -19,11 +19,29 @@ only a spec could justify, that is a bug in this file — fix it here.
 
 ## Data flow
 
+Claimed player pages keep three owners distinct: current saved PB projection
+(`community/progress_snapshot.py`), publication lifecycle (`community/progress_sync.py`
+and the Worker v2 tables), and local evaluation (`server/player_comparison.py`
+through existing Scorecard/Rank readers). The cloud stores current facts and
+basic profile details; the viewer's private routes, exclusions and standard edits
+stay local. Public ghost inventory remains a separate, publication-gated recording
+source. [Protocol](community-protocol.md) and [API](api.md#community-account-localhost-only)
+own their wire contracts. Post-request mutation invalidation and an unchanged-hash
+local backstop cover notices emitted before a PB insert; no cloud request is
+needed for unchanged facts. Database methods own their non-reentrant locks;
+publication never nests that lock around the projector.
+
 Opt-in performance diagnostics are documented in [profiling](profiling.md).
 Backend stages use bounded inclusive wall-time histograms; the native graphics
 sidecar has its own version and producer identity and does not change the picture
 stream ABI. Browser and system traces supply different evidence and must not be
 interpreted as substitutes for frame/audio/input correctness checks.
+
+Automatic technical failures use a shared local collector for normal Python
+startup, browser errors and terminal installer failures. The elevated installer
+does not initialize it; the original user process reports the final outcome.
+The public destination, privacy boundary and durable retry behavior belong to
+[automatic error reporting](error-reporting.md).
 
 ```
 Project64 1.6 process (Windows)
@@ -1617,7 +1635,16 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-10-18 for the Lineup and release hygiene: **94,871 lines,
+Latest reading, 2026-10-19 for M1/M2 and integrated graphics, installation and
+reporting fixes: **98,646 lines, 2,775 public names, 35.5 lines per public name,
+122 pass-through (4.4%)**. Against the integrated Lineup base, this adds3,775
+lines,137public names and6pass-through names; the rounded forwarding share is
+unchanged. Current PB projection, fenced publication and scoped comparison have
+separate owners. The shared Rank components remain the renderer; the shared
+ghost action owns disabled hover/focus feedback. The observed changes do not
+justify another module split before release.
+
+Previous reading, 2026-10-18 for the Lineup and release hygiene: **94,871 lines,
 2,638 public names, 36.0 lines per public name, 116 pass-through (4.4%)**.
 Against integrated main before the Lineup, this branch adds 1,053 lines and
 24 public names with no new forwarders. The Lineup's model, DOM motion and

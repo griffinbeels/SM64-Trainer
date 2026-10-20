@@ -48,6 +48,21 @@ def quiet_spawn_kwargs() -> dict:
             "startupinfo": startupinfo}
 
 
+def isolated_python_child(script: Path, frozen_flag: str, args=()) -> list[str]:
+    """Arguments for a user-requested privileged helper with no site/PYTHONPATH.
+
+    The caller owns UAC. Interpreter choice stays here, alongside background
+    Python children; the venv launcher must not add another process or window.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, frozen_flag, *args]
+    interpreter = Path(getattr(sys, "_base_executable", sys.executable))
+    windowless = interpreter.with_name("pythonw.exe")
+    if not windowless.is_file():
+        raise OSError("This Python installation has no windowless administrator helper")
+    return [str(windowless), "-I", "-S", str(script), *args]
+
+
 def python_child(module: str, frozen_flag: str, args=(), *,
                  site_packages: bool = False) -> tuple[list[str], dict | None]:
     """(argv, env) that run `module` as a direct child interpreter.

@@ -56,7 +56,9 @@ async def bounded_request(http, method, url, *, limit=2 << 20, deadline=120, **k
             candidate = result.json().get("error", {}).get("code")
             if candidate in {"not_invited", "rename_required", "suspended", "deleted", "unauthorized",
                              "name_unavailable", "policy_required", "consent_required", "rate_limited", "budget_exhausted",
-                             "unsupported_identity", "not_found", "grant_expired", "upload_expired", "invite_unavailable", "generation_changed"}:
+                             "unsupported_identity", "not_found", "grant_expired", "upload_expired", "invite_unavailable", "generation_changed",
+                             "revision_conflict", "publisher_conflict", "progress_consent_required", "progress_disabled",
+                             "progress_unavailable", "snapshot_too_large", "invalid_progress", "invalid_profile", "storage_limit", "invalid_cursor"}:
                 code = candidate
         except (ValueError, AttributeError, TypeError):
             pass
@@ -80,6 +82,14 @@ class _OAuth(AsyncOAuth2Client):
     async def request(self, method, url, **kwargs):
         kwargs.pop("withhold_token", None)
         return await bounded_request(self._injected, method, url, limit=32768, **kwargs)
+
+
+def _json_limit(method, path):
+    if method.upper() == "GET" and path == "/v1/catalog":
+        return 4 << 20
+    if method.upper() == "GET" and path == "/v2/account/player-export":
+        return 2 << 20  # Snapshot plus bounded owner profile/control metadata.
+    return 1 << 20
 
 
 def _profile(value):
@@ -300,19 +310,20 @@ class CommunityAccount:
             if not any(str(key).lower() == "idempotency-key" for key in headers):
                 headers["Idempotency-Key"] = str(uuid4())
         response = await self.request_bytes(method, path, authenticated=authenticated, http=http,
-                                            limit=4 << 20 if method.upper() == "GET" and path == "/v1/catalog" else 1 << 20,
+                                            limit=_json_limit(method, path),
                                             headers=headers, **kwargs)
         try:
             value = json.loads(response)
         except (ValueError, UnicodeDecodeError, RecursionError):
             raise CommunityError("invalid_response") from None
-        if not isinstance(value, dict) or type(value.get("v")) is not int or value["v"] != 1:
+        version = 2 if path.startswith("/v2/") else 1
+        if not isinstance(value, dict) or type(value.get("v")) is not int or value["v"] != version:
             raise CommunityError("invalid_response")
         return value
 
     async def request_bytes(self, method, path, *, authenticated=True, http=None, limit=2 << 20, **kwargs):
         self._enabled()
-        if not isinstance(path, str) or not path.startswith("/v1/") or "?" in path or "#" in path or ".." in path:
+        if not isinstance(path, str) or not path.startswith(("/v1/", "/v2/")) or "?" in path or "#" in path or ".." in path:
             raise CommunityError("invalid_route")
         headers = {"Accept": "application/json", **dict(kwargs.pop("headers", {}) or {})}
         if authenticated:

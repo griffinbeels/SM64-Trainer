@@ -33,10 +33,17 @@ bool Gl::load(bool producer_core_dsa) {
     // Core DSA removes texture-binding mutation entirely on GL 4.5+.
     GLint major=0, minor=0;
     glGetIntegerv(0x821B, &major); glGetIntegerv(0x821C, &minor);
-    if (producer_core_dsa && (major > 4 || (major == 4 && minor >= 5)))
-        load_proc(copy_texture, "glCopyTextureSubImage2D");
-    return load_proc(bind_framebuffer, "glBindFramebuffer") && load_proc(fence, "glFenceSync")
-        && load_proc(wait, "glClientWaitSync") && load_proc(delete_sync, "glDeleteSync");
+    if (producer_core_dsa && (major > 4 || (major == 4 && minor >= 5))) {
+        if (!load_proc(copy_texture, "glCopyTextureSubImage2D")) {
+            missing_entry_point="glCopyTextureSubImage2D";
+        }
+    }
+    const auto require = [this](auto &target, const char *name) {
+        if (load_proc(target, name)) return true;
+        missing_entry_point = name;return false;
+    };
+    return require(bind_framebuffer, "glBindFramebuffer") && require(fence, "glFenceSync")
+        && require(wait, "glClientWaitSync") && require(delete_sync, "glDeleteSync");
 }
 bool Pool::worker() const {
     return GetCurrentThreadId() == worker_thread && wglGetCurrentContext() == worker_context;

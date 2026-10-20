@@ -8,6 +8,9 @@ from sm64_events.core.paths import logs_dir
 
 
 def configure_logging(log_dir: Path | None = None) -> None:
+    # Both normal entry points come here; privileged/native helpers do not.
+    from sm64_events.core.reporting_setup import initialize_reporting
+    initialize_reporting()
     # Route through core.paths so a frozen exe logs to %LOCALAPPDATA% (not the
     # cwd it was double-clicked from); from source this is still ./logs.
     log_dir = logs_dir() if log_dir is None else log_dir

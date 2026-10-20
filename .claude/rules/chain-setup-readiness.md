@@ -3,6 +3,7 @@ paths:
   - "src/sm64_events/core/capturelayer.py"
   - "src/sm64_events/core/capturelayer_win.py"
   - "src/sm64_events/core/plugin_installation.py"
+  - "src/sm64_events/core/plugin_elevation*.py"
   - "src/sm64_events/core/plugin_ownership.py"
   - "tools/graphics_diagnostics.py"
   - "src/sm64_events/core/paths.py"
@@ -47,7 +48,11 @@ paths:
   An unsupported adapter (`replay/gpuadapter.py`) holds no GPU lease, so the
   recorder's `gpu_unsupported` status lets the desktop's written pictures
   (`pictures_fed`) plus a live control page naming this Project64 and moving
-  game/input counters stand in instead.
+  game/input counters stand in instead. Discovery may establish unsupported
+  hardware before GPU demand/channel startup only after a live matching
+  GPU-capable control identity is registered, and only when a nonempty complete
+  DXGI inventory rules out every adapter. Hybrid/unknown/failed inventories keep
+  the actual channel-LUID check. The verdict itself is never picture evidence.
 
 | # | hop | value is true here as | module | probe (reads it) | inject (forces it) | when the hop is broken, the probe shows | when the probe itself is broken, it shows |
 |---|-----|-----------------------|--------|------------------|--------------------|------------------------------------------|--------------------------------------------|
@@ -69,6 +74,18 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-10-19, hop 1: denied DLL writes were classified as a running emulator
+  merely because the destination stayed unchanged. Explicit install now checks
+  sharing/loaded-module evidence and retries eligible access failures through a
+  scoped UAC helper while the page stays Installing. The original process owns
+  HKCU/settings; helper files roll back before commit, and per-user selection
+  restores on failure. A lost final acknowledgment can leave complete DLL files
+  without selecting the wrapper; see `docs/error-reporting.md`. Background refresh
+  never prompts. `tests/test_plugin_elevation.py`
+  covers actual mapped DLLs, denied access, cancellation and privileged rollback;
+  `tests/test_ui_reporting.py` covers the uninterrupted pending state. Real UAC
+  interaction remains a separate verification boundary.
 
 - 2026-10-17, hop 2: "the Setup Checked for some reason gets detected, then
   undos itself ... We detected JP -- we're done. Move on." Each check needed
@@ -93,7 +110,7 @@ click; a declared transition or a settled screenshot alone cannot prove movement
   never touched, which Project64 also held, and three tracebacks reached his
   console. A held destination is now the same "not now" as a running
   Project64 (`plugin_installation.in_use` before copying, `DestinationInUse`
-  when the copy's own open is refused): one INFO line, the refresh loop
+  when sharing/loaded-module evidence confirms the refusal): one INFO line, the refresh loop
   retries, and `restore_on_failure` only rewrites files the block changed.
   `test_a_refresh_waits_quietly_while_project64_holds_the_dlls` holds the
   files as a loaded plugin does.

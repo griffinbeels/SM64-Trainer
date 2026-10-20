@@ -372,7 +372,7 @@ def _prepare_startup_confirmation(app, updater, bootstrap_cleanup_path):
 def _create_lifespan(poller, service, replay, monitor, db_retry,
                      refresh_library_on_start, on_db_attached=None, capture_layer=None,
                      ghost=None, community_account=None, community_sync=None,
-                     updater=None, bootstrap_cleanup_path=None):
+                     updater=None, bootstrap_cleanup_path=None, progress=None):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await _start_app_service(service)
@@ -433,7 +433,47 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
                 on_stop()
         with suppress(Exception):
             pidfile_path().unlink()
-    return lifespan
+    return _with_progress(lifespan, service, progress)
+
+
+def broadcaster_observer(service, progress):
+    return service.broadcaster.observe(progress.observe) if progress is not None else lambda: None
+
+
+def _with_progress(lifespan, service, progress):
+    if progress is None:
+        return lifespan
+
+    @asynccontextmanager
+    async def combined(app):
+        async with lifespan(app):
+            stop_observing = broadcaster_observer(service, progress)
+            await progress.start()
+            try:
+                yield
+            finally:
+                stop_observing()
+                await progress.stop()
+    return combined
+
+
+def _install_progress_invalidation(app, progress):
+    if progress is None:
+        return
+
+    @app.middleware("http")
+    async def after_mutation(request, call_next):
+        response = await call_next(request)
+        # An import's time_imported notice precedes insert_pb. Invalidate
+        # again after the route finishes, even if that notice was consumed.
+        if (request.method not in ("GET", "HEAD", "OPTIONS") and 200 <= response.status_code < 300
+                and request.url.path.startswith("/api/")
+                and not request.url.path.startswith(("/api/community/", "/api/uilog"))):
+            try:
+                progress.invalidate()
+            except Exception:  # noqa: BLE001 -- publication cannot fail a completed local mutation
+                log.warning("Saved-PB publication could not be marked dirty; its local backstop will reconcile.")
+        return response
 
 
 async def _start_community(account, sync):
@@ -775,7 +815,7 @@ def _mount_controls(app, poller, replay) -> None:
         return {"restarting": True}
 
 
-def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
+def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, capture_layer=None) -> None:
     @app.get("/health")
     def health():
         latest = poller.latest
@@ -845,7 +885,10 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
             ui_log_file=uilog.log_path(),
             perf_log_file=monitor.log_path
             or data_root() / "data" / "perf_log.jsonl",
-            health=health, events=_events)
+            health=health, events=_events,
+            replay=getattr(getattr(replay, "recorder", None), "diagnostic_status", None),
+            setup=getattr(capture_layer, "diagnostic_status", None),
+            build={"channel": current_build().channel, "build_id": current_build().build_id})
         out = diagnostics.write_report(diagnostics_dir(), report)
         return {"path": str(out), "size_bytes": out.stat().st_size}
 
@@ -918,10 +961,12 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # test clicking the link door can never write into the real data dir.
     # None (production) resolves to core.paths.library_adoptions_path().
     monitor = _create_monitor(poller, replay)
+    from sm64_events.community.progress_sync import ProgressSync
+    progress = ProgressSync(service, community_account) if service is not None and community_account is not None else None
     lifespan = _create_lifespan(poller, service, replay, monitor, db_retry,
                                 refresh_library_on_start, on_db_attached, capture_layer,
                                 ghost, community_account, community_sync,
-                                updater, bootstrap_cleanup_path)
+                                updater, bootstrap_cleanup_path, progress)
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
     _mount_ui_routes(app, broadcaster)
     _mount_library_routes(app, service, library_path, library_bundled_path,
@@ -932,9 +977,15 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     from sm64_events.server.ghost_api import mount_ghost_routes
     mount_ghost_routes(app, session=ghost)
     from sm64_events.server.community_api import create_community_router
-    app.include_router(create_community_router(community_account))
+    app.include_router(create_community_router(community_account, progress))
+    from sm64_events.server.player_api import create_player_router
+    app.include_router(create_player_router(service, progress, ghost, community_account))
+    app.state.progress = progress
+    _install_progress_invalidation(app, progress)
     _mount_controls(app, poller, replay)
-    _mount_diagnostics(app, poller, broadcaster, service, monitor)
+    _mount_diagnostics(app, poller, broadcaster, service, monitor, replay, capture_layer)
+    from sm64_events.server.reporting_api import create_reporting_router
+    app.include_router(create_reporting_router())
     _mount_events(app, poller, broadcaster, debug_hooks)
     from sm64_events.server.local_access import mount_local_access
     mount_local_access(app, port=local_port or server_port(), protected=protect_local_api)

@@ -114,7 +114,7 @@ function face(ctx, p, fresh) {
   if (p.frames == null) time.setAttribute("aria-label", "No time yet");
   const name = el("span", "lineup-name");
   const text = el("span", "lineup-name-text");
-  text.append(p.you ? "You" : breakName(p.name || "Chosen rival"));
+  text.append(p.you ? "You" : breakName(p.name || "Chosen ghost"));
   name.append(text);
   if (p.verified) name.append(tick());
   f.append(cap, time, name);
@@ -143,7 +143,7 @@ function lock(ctx, p) {
 }
 
 function seatLabel(p, fmt) {
-  if (p.placeholder) return "Finding a rival";
+  if (p.placeholder) return "Finding a ghost";
   const time = p.frames == null ? "no time yet" : fmt(p.frames);
   if (p.you) return `You, ${time}`;
   return `${p.name}, ${time}${p.pinned ? ", pinned" : ""}${p.pending ? ", downloading" : ""}`;

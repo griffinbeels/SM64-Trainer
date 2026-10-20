@@ -12,6 +12,7 @@ it arms no cooldown, and discovery declines that producer from then on.
 import threading
 import time
 import re
+from copy import deepcopy
 
 from sm64_events.replay.capturecontrol import CaptureControl, CLOSED, CAP_GPU
 
@@ -48,6 +49,26 @@ class RetryGate:
         self._exhausted_birth = None
         self._unsupported_birth = None
         self._unsupported_reason = None
+        self._diagnostics = {}
+
+    def diagnostics(self):
+        """Cached CPU evidence survives capture teardown and desktop fallback."""
+        with self._lock:
+            unsupported = (self._unsupported_reason if self._identity is not None
+                           and self._unsupported_birth == self._identity[:3] else None)
+            return {**deepcopy(self._diagnostics), "unsupported_reason": unsupported,
+                    "failures": self._failures, "retry_in_s": max(0.0, self._until - self.clock())}
+
+    def note_diagnostic(self, identity, record, *, failed=False):
+        """Keep first failure per producer/generation plus the latest attempt."""
+        with self._lock:
+            if identity is None or identity != self._identity:
+                return
+            if self._diagnostics.get("producer") != list(identity):
+                self._diagnostics = {"producer": list(identity)}
+            self._diagnostics["latest"] = deepcopy(record)
+            if failed:
+                self._diagnostics.setdefault("first_failure", deepcopy(record))
 
     def observe(self, status):
         identity = producer_key(status)
@@ -58,6 +79,8 @@ class RetryGate:
                 self._identity = identity
                 self._failures, self._until, self._reason = 0, 0.0, ""
             self._saw_closed = not status.rom_open
+            if self._diagnostics.get("producer") != list(identity):
+                self._diagnostics = {"producer": list(identity)}
         return identity
 
     def failed(self, identity, reason):

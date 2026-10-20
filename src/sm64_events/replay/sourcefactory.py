@@ -9,8 +9,8 @@ ends itself when the backend appears, so the order he opens things in does
 not matter.
 
 One exception keeps the desktop for good: a producer whose adapter can never
-record through the layer (gpuadapter.py: not NVIDIA, a software adapter, a
-driver older than the encoder). Discovery declines it, and the desktop source
+record through the layer (gpuadapter.py: a software adapter or a
+driver older than its encoder). Discovery declines it, and the desktop source
 says why (`gpu_unsupported`) so setup can accept its pictures instead.
 """
 
@@ -46,6 +46,9 @@ class SourceFactory:
 
     def _desktop(self, win):
         return self.desktop_factory(win, fps=self.cfg.fps)
+
+    def diagnostics(self):
+        return self.retry_gate.diagnostics()
 
     def create(self, win):
         # Called only after the machine-wide recorder lock. GPU failure retains

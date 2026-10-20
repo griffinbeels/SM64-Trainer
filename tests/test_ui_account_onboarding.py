@@ -16,6 +16,7 @@ from test_ui_community import (FixtureAccount, community_app, get_driver,
 from test_ui_setup_modal import FRESH
 
 ARTIFACTS = Path(__file__).resolve().parents[1] / ".iteration/adaptive-ghosts/round54-ui"
+CONSENT = ".community-form > .community-check:has(a) input"
 
 
 def trace_account_forms(page):
@@ -88,8 +89,12 @@ def test_new_account_chooses_name_then_setup_with_sharing_default_on(monkeypatch
             page.goto(base)
             page.wait_for(".community-form input[autofocus]")
             assert page.count(".setup-modal") == 0
-            assert not page.evaluate("[...document.querySelectorAll('.community-check')].some(n => n.textContent.includes('Automatically share'))")
-            page.click(".community-form > .community-check input")
+            assert page.evaluate("document.querySelector('.community-pb-sharing input').checked")
+            assert "Automatically share my PBs" in page.evaluate("document.querySelector('.community-pb-sharing').innerText")
+            assert "best ghost in each subdivision and strategy is shared automatically" in page.evaluate("document.querySelector('.community-form').innerText")
+            assert not page.evaluate("document.querySelector("+json.dumps(CONSENT)+").checked")
+            assert page.evaluate("document.querySelector('.community-form button[type=submit]').disabled")
+            page.click(CONSENT)
             page.wait_for(".community-form button[type=submit]:not([disabled])")
             assert page.evaluate("document.querySelector('.community-form button[type=submit]').textContent.trim()") == "Continue"
             page.click(".community-form button[type=submit]")
@@ -216,7 +221,7 @@ def test_opted_in_sheet_import_finishes_before_emulator_setup(monkeypatch, tmp_p
             page.wait_for(".community-sheet .search-menu-option")
             page.click(".community-sheet .search-menu-option:first-child")
             page.click(".community-sheet input[type=checkbox]")
-            page.click(".community-form > .community-check input")
+            page.click(CONSENT)
             page.wait_for(".community-form button[type=submit]:not([disabled])")
             page.click(".community-form button[type=submit]")
             page.wait_for(".community-actions button:text-is('Start practicing')")

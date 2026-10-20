@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from sm64_events.core.capturelayer import CaptureLayer, LayerRefused
+from sm64_events.core import error_reporting
 from sm64_events.core.modes import (ModeConfig, TrackerMode,
                                     load_mode_config, save_mode_config)
 from sm64_events.core.onboarding import SetupRecord, identify_rom, readiness
@@ -26,6 +27,21 @@ class PlatformBody(BaseModel):
 
 class ConsentBody(BaseModel):
     consent: bool
+
+
+def _failed_operation(error: OSError, operation: str) -> JSONResponse:
+    # Windows cancellation is an intentional choice, not an application fault.
+    if getattr(error, "winerror", None) == 1223:
+        return JSONResponse(status_code=409, content={
+            "detail": "Installation cancelled at the Windows permission prompt. You can try again."})
+    error_reporting.capture_exception(error, context={
+        "component": "practice_replay_install", "operation": getattr(error, "operation", operation),
+        "winerror": getattr(error, "winerror", None), "path": error.filename,
+        "file": Path(error.filename).name if error.filename else "unknown"})
+    log.warning("Practice Replay %s failed: %s", operation, error)
+    detail = str(error)
+    return JSONResponse(status_code=409, content={
+        "detail": f"Practice Replay {operation} failed: {detail}"})
 
 
 def setup_json(mode_cfg: ModeConfig, capture_layer: CaptureLayer,
@@ -86,10 +102,8 @@ def create_setup_router(capture_layer: CaptureLayer, mode_path: Path | None = No
             record.write(started=True, completed_at=None)
         except LayerRefused as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
-        except OSError:
-            log.exception("setup installation failed")
-            return JSONResponse(status_code=409, content={
-                "detail": "Couldn't write to the Project64 folder. Check its permissions, then try again."})
+        except OSError as error:
+            return _failed_operation(error, "installation")
         return payload()
 
     @router.delete("/setup/capture-layer")
@@ -99,10 +113,8 @@ def create_setup_router(capture_layer: CaptureLayer, mode_path: Path | None = No
             record.write(started=True, completed_at=None)
         except LayerRefused as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
-        except OSError:
-            log.exception("setup removal failed")
-            return JSONResponse(status_code=409, content={
-                "detail": "Couldn't restore your graphics setting. Close Project64 and try again."})
+        except OSError as error:
+            return _failed_operation(error, "removal")
         return payload()
 
     return router
