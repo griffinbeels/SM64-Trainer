@@ -18,6 +18,7 @@ from uilab_project import _SETUP_SETUP
 from sm64_events.core.onboarding import JP_WARNING
 
 CURRENT = ".setup-modal > .setup-swap > .setup-swap-in"
+SETTINGS_CONTROL = '.nav-item.settings-link, button[aria-label="Open settings"]'
 FRESH = dict(state="not_installed", pj64_dir=None, pj64_running=False,
              consented_at=None, wrapper_present=False, wrapper_current=False,
              wrapper_selected=False, layer_alive=False)
@@ -33,6 +34,13 @@ def scenario():
 def wait_page(page, name):
     page.wait_for(f'.setup-modal[data-page="{name}"]')
     page.wait_ms(360)  # settle the outgoing view before strict selector clicks
+
+
+def open_setup(page):
+    # DOMContentLoaded does not mean the app has rendered its controls. The
+    # shared story returns if its entry control is still absent.
+    page.wait_for(SETTINGS_CONTROL)
+    page.evaluate(_SETUP_SETUP)
 
 
 def wait_step(page, name):
@@ -329,7 +337,7 @@ def test_opening_with_everything_running_shows_one_calm_card(tmp_path):
         assert page.count(".setup-modal") == 0
         assert page.evaluate(_WATCH)
         script.arm(verify, ready, verify, ready, no_game, ready, ready)
-        page.evaluate(_SETUP_SETUP)
+        open_setup(page)
         wait_until(page, "!!document.querySelector('.setup-arrow-ready')", "Setup checked offers Forward")
         (tmp_path / "opened-checked-850.png").write_bytes(page.screenshot())
         while script.frames != [ready]:
@@ -438,7 +446,7 @@ def test_manual_entry_keeps_management_available_and_motion_has_real_intermediat
         page.goto(url + "/ui/index.html")
         page.wait_ms(1500)
         assert page.count(".setup-modal") == 0
-        page.evaluate(_SETUP_SETUP)
+        open_setup(page)
         wait_page(page, "install")
         click_text(page, "Manage Practice Replay")
         remove = ("Array.from(document.querySelectorAll('.setup-modal button'))"
@@ -501,7 +509,7 @@ def test_existing_install_skips_first_use_or_enters_repair_directly(current):
         if current:
             page.wait_ms(1500)
             assert page.count(".setup-modal") == 0
-            page.evaluate(_SETUP_SETUP)
+            open_setup(page)
             wait_page(page, "install")
             wait_step(page, "rom")
             assert page.count(".setup-install-action") == 0
@@ -531,8 +539,7 @@ def test_existing_install_rechecks_unresolved_emulator_before_step_three(tmp_pat
                 "rom": dict(MISSING_ROM), "checks": {}}
     with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
-        page.wait_ms(500)
-        page.evaluate(_SETUP_SETUP)
+        open_setup(page)
         wait_page(page, "connect")
         assert page.count(".setup-install") == 0
         assert page.count('.setup-dot.is-done') == 1
@@ -577,7 +584,7 @@ def test_afk_recording_pause_keeps_setup_checked(tmp_path):
     with serve_ui(capture_layer_status=layer, setup_observer=observe) as url, get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
         page.wait_ms(1000)
-        page.evaluate(_SETUP_SETUP)
+        open_setup(page)
         wait_page(page, "install")
         wait_step(page, "ready")
         recorder["idle"] = gpu_recorder["idle"] = True
@@ -610,12 +617,33 @@ def test_afk_recording_pause_keeps_setup_checked(tmp_path):
         assert page.problems() == []
 
 
+def test_manual_setup_entry_waits_for_the_settings_control():
+    with serve_ui() as url, get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_for(SETTINGS_CONTROL)
+        # Hold the real entry controls back beyond the old 500 ms startup
+        # pause. Their event handlers survive restoration on the same nodes.
+        assert page.evaluate("""(() => {
+          const controls = Array.from(document.querySelectorAll(
+            '.nav-item.settings-link, button[aria-label="Open settings"]'));
+          const held = controls.map(control => {
+            const place = document.createComment('delayed settings control');
+            control.replaceWith(place);
+            return {control, place};
+          });
+          setTimeout(() => held.forEach(({control, place}) => place.replaceWith(control)), 800);
+          return controls.length > 0 && held.every(({control}) => !control.isConnected);
+        })()""")
+        open_setup(page)
+        wait_page(page, "install")
+        assert page.problems() == []
+
+
 @pytest.mark.parametrize("width", [850, 1440])
 def test_symbols_are_centered_and_footer_survives_text_growth(tmp_path, width):
     with serve_ui() as url, get_driver().launch(viewport=(width, 600)) as page:
         page.goto(url + "/ui/index.html")
-        page.wait_ms(500)
-        page.evaluate(_SETUP_SETUP)
+        open_setup(page)
         wait_page(page, "install")
         centers = symbol_centers(page)
         assert len(centers) >= 3
