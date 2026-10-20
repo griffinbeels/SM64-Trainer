@@ -28,7 +28,7 @@ class Account:
     def __init__(self, *, virgin=False):
         self._epoch = 0
         self.calls,self.writes,self.receipts = [],[],{}
-        self.offline,self.partial,self.private = False,False,False
+        self.offline,self.partial,self.private,self.unsupported = False,False,False,False
         self.state = {"uid":UID,"name":"My claimed account","authenticated":True,"stored":True,
             "enabled":True,"status":"active","sharing":True,"provider":"discord",
             "terms_url":"https://example.test/terms","privacy_url":"https://example.test/privacy",
@@ -120,9 +120,10 @@ class Account:
         if uid not in self.snapshots or uid==RIVAL and self.private:
             raise CommunityError("progress_unavailable",status=404)
         value = deepcopy(self.snapshots[uid])
-        if uid==RIVAL and self.partial:
-            value["content"]["coverage"].update(total_rows=len(value["content"]["rows"])+1,
-                withheld_rows=1,complete=False)
+        if uid==RIVAL and (self.partial or self.unsupported):
+            value["content"]["coverage"].update(
+                total_rows=len(value["content"]["rows"])+int(self.partial)+int(self.unsupported),
+                withheld_rows=int(self.partial),unsupported_rows=int(self.unsupported),complete=False)
         return {"v":2,"uid":uid,**value,"content_hash":hashlib.sha256(canonical(value["content"])).hexdigest()}
 
     def player(self, uid):

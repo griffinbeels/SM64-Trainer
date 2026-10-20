@@ -100,9 +100,9 @@ def validate_changes(changes: dict) -> dict:
         raise ValueError("The ghost target follows the current practice target.")
     if "rivals" in changes:
         if "ghosts" in changes:
-            raise ValueError("Choose rivals or a library ghost set in one request.")
+            raise ValueError("Choose ghosts or a library ghost set in one request.")
         if not isinstance(changes["rivals"],dict) or not isinstance(changes.get("target"),dict):
-            raise ValueError("Choose rivals for the current practice target.")
+            raise ValueError("Choose ghosts for the current practice target.")
         checked["rivals"] = dict(changes["rivals"])
         checked["target"] = dict(changes["target"])
     return checked
@@ -657,17 +657,17 @@ class GhostSession:
     def _queue_update(self, checked, target):
         if "rivals" in checked:
             if self._rivals is None:
-                raise ValueError("Adaptive rivals are unavailable in this window.")
+                raise ValueError("Adaptive ghosts are unavailable in this window.")
             checked["rivals"] = self._rivals.checked(checked["rivals"],target)
             if checked.pop("target") != target:
-                raise ValueError("The practice target changed. Choose rivals for the current target.")
+                raise ValueError("The practice target changed. Choose ghosts for the current target.")
         if "ghosts" in checked:
             if target is None or checked.pop("target") != target:
                 raise ValueError("The practice target changed. Choose a ghost for the current target.")
             if self._rivals is not None:
                 count = len(checked["ghosts"]["attempts"])+len(checked["ghosts"].get("imports",[]))
                 if count>4 or count+int(checked["ghosts"]["pb"])>self._rivals.library_limit(target):
-                    raise ValueError("Choose up to four rivals; a historical PB may also need a rival slot.")
+                    raise ValueError("Choose up to four ghosts; a historical PB may also need a ghost slot.")
             offered = {ghost.attempt_id for ghost in
                        self.library().ghosts_for(target["kind"], target["entity_key"])}
             if any(number not in offered for number in checked["ghosts"]["attempts"]):
@@ -774,7 +774,7 @@ class GhostSession:
 
     async def search_rivals(self, target, player, cursor=None, *, scope=None):
         if self._rivals is None:
-            raise ValueError("Adaptive rivals are unavailable in this window.")
+            raise ValueError("Adaptive ghosts are unavailable in this window.")
         async with self._lock:
             identity = self._rivals.identity_for(target)
             if target != self._rivals.target or identity is None or scope is not None and scope != identity.scope:
@@ -795,7 +795,7 @@ class GhostSession:
         owner = state.get("uid")
         if (not owner or state.get("status") != "active" or state.get("enabled") is False
                 or expected is not None and owner != expected):
-            raise ValueError("Your community account changed. Choose the rival again.")
+                raise ValueError("Your community account changed. Choose the ghost again.")
         return owner
 
     def _library_work(self, operation, *args, owner=None, **kwargs):
@@ -829,12 +829,12 @@ class GhostSession:
     async def save_library_rival(self, target, changes, *, version=None):
         """A current cloud gate precedes a serialized target-addressed save."""
         if self._rivals is None:
-            raise ValueError("Saving rivals is unavailable in this Trainer window.")
+                raise ValueError("Saving ghosts is unavailable in this Trainer window.")
         if version is not None and version not in ("us", "jp"):
             raise ValueError("Choose a supported game region.")
         if changes.get("action") == "add":
             if self._community is None:
-                raise ValueError("Sign in to add a shared recording as a rival.")
+                raise ValueError("Sign in to add a shared recording as a ghost.")
             from sm64_events.ghost.portable import checked_hash
             identifier = checked_hash(changes.get("id"))
             owner = self._library_owner()

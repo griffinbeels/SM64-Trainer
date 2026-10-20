@@ -219,7 +219,7 @@ def test_pending_seats_show_at_once_but_only_downloaded_ones_race(tmp_path, monk
                 break
         payload = rivals.payload()
         assert payload["state"] == "ready" and len(payload["rows"]) == 4
-        assert all(row["pending"] for row in payload["rows"]) and payload["status"] == "Downloading rivals…"
+        assert all(row["pending"] for row in payload["rows"]) and payload["status"] == "Downloading ghosts…"
         assert all(not prepared[1] for prepared in native.preparations)
         gate.set()
         await settle(sync, rivals, STANDARD)
@@ -387,7 +387,7 @@ def test_one_lineups_failure_never_marks_another_unavailable(tmp_path, monkeypat
 
     async def scenario(rivals, tracker, population, sync, native):
         await settle(sync, rivals, STANDARD)
-        assert rivals.payload()["status"] == "Showing a partial rival list."
+        assert rivals.payload()["status"] == "Showing a partial ghost list."
         await settle(sync, rivals, missing)
         assert (rivals.payload()["state"], rivals.payload()["reason"]) == ("ready", "nobody")
         assert rivals.payload()["status"] is None
@@ -395,7 +395,7 @@ def test_one_lineups_failure_never_marks_another_unavailable(tmp_path, monkeypat
         await settle(sync, rivals, STANDARD)
         payload = rivals.payload()
         assert payload["state"] == "ready" and len(payload["rows"]) == 4
-        assert payload["status"] == "Showing a partial rival list."
+        assert payload["status"] == "Showing a partial ghost list."
     run(tmp_path, cloud, scenario)
 
 
@@ -444,7 +444,7 @@ def test_shared_list_state_includes_other_rom_but_regional_state_does_not(tmp_pa
         assert community.list_state(identity) == "pending" and not community.complete(identity)
         statuses["jp"] = "offline"
         assert community.list_state(identity) == "offline"
-        assert community.status(identity) == "Community rivals are unavailable. Your saved ghosts still work."
+        assert community.status(identity) == "Community ghosts are unavailable. Your saved ghosts still work."
         regional = replace(identity, region_scope="regional")
         assert community.list_state(regional) == "held" and community.complete(regional)
         assert community.status(regional) is None

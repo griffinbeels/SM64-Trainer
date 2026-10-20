@@ -63,23 +63,39 @@ function PageFeedback({ page, noun, retry }) {
 
 export function SeatPicker({ choice, busy, error, onChoose, onClose }) {
   const row = choice.row;
-  return html`<${Modal} title="Choose a rival to replace" icon="ghost"
+  return html`<${Modal} title="Choose a ghost to replace" icon="ghost"
       description=${`${targetName(row)} · ${methodLabel(row)}`}
       onClose=${busy ? undefined : onClose}
       footer=${html`<button type="button" disabled=${busy} onclick=${onClose}>Cancel</button>`}>
     <div class="community-library-seats">
-      <p class="meta">Your visible seats are saved rivals. Choose which one ${row.player_name} replaces.</p>
+      <p class="meta">Your visible seats are saved ghosts. Choose which one ${row.player_name} replaces.</p>
       ${(choice.seats || []).map(seat => html`<button key=${seat.slot} type="button"
           class="community-library-seat" disabled=${busy || !seat.visible}
           onclick=${() => onChoose(seat.slot)}>
-        <span class="community-library-seat-title">Seat ${seat.slot + 1}${" · "}${seat.player_name || (seat.id ? "Saved rival unavailable" : "Empty")}</span>
-        <span class="community-library-seat-detail meta">${seat.frames != null ? `${fmtIgtShort(seat.frames)} · ` : ""}${seat.pinned ? "Saved rival" : "Automatic rival"}${!seat.visible ? " · Hidden seat" : ""}</span>
+        <span class="community-library-seat-title">Seat ${seat.slot + 1}${" · "}${seat.player_name || (seat.id ? "Saved ghost unavailable" : "Empty")}</span>
+        <span class="community-library-seat-detail meta">${seat.frames != null ? `${fmtIgtShort(seat.frames)} · ` : ""}${seat.pinned ? "Saved ghost" : "Automatic ghost"}${!seat.visible ? " · Hidden seat" : ""}</span>
         ${seat.reason_text ? html`<span class="meta">${seat.reason_text}</span>` : null}
-        ${!seat.visible ? html`<span class="meta">Increase the rivals shown in Practice to use this seat.</span>` : null}
+        ${!seat.visible ? html`<span class="meta">Increase the ghosts shown in Practice to use this seat.</span>` : null}
       </button>`)}
       ${error ? html`<p class="error" role="alert">${error}</p>` : null}
     </div>
   </${Modal}>`;
+}
+
+export function GhostAction({ row, added, disabled, onClick, children, className, context = "library" }) {
+  const own = !added && row.is_own === true;
+  const reason = row.unavailable_reason || "Your PB ghost is included automatically.";
+  const description = `ghost-action-${context}-${row.id}`;
+  const button = html`<button type="button" class=${className} disabled=${disabled || own}
+    aria-describedby=${own ? description : undefined} onclick=${onClick}>${children}</button>`;
+  return own ? html`<span class="hint community-library-add-hint" tabindex="0" role="group"
+    aria-label="Add ghost unavailable" aria-describedby=${description} data-tip=${reason}>
+    ${button}<span id=${description} class="sr-only">${reason}</span></span>` : button;
+}
+
+export function GhostUnavailable({ row, added }) {
+  if (added || row.can_add || row.is_own) return null;
+  return html`<p class="community-library-unavailable meta">${row.unavailable_reason || "This recording cannot be added to a local Lineup."}</p>`;
 }
 
 function useSavedRivals(onChanged, alive) {
@@ -108,10 +124,10 @@ function useSavedRivals(onChanged, alive) {
         setMessage(`${row.player_name} ${data.state === "added" ? "saved to" : "removed from"} ${targetName(row)} · ${methodLabel(row)} Lineup.`);
         onChanged?.(data);
       } else {
-        throw new Error("The saved rival could not be confirmed. Refresh this list before trying again.");
+        throw new Error("The saved ghost could not be confirmed. Refresh this list before trying again.");
       }
     } catch (error) {
-      if (alive.current) setActionError(error.message || "This rival could not be saved. Try again.");
+      if (alive.current) setActionError(error.message || "This ghost could not be saved. Try again.");
     } finally {
       settled();
     }
@@ -190,12 +206,13 @@ function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged, onOpenPlaye
             <span class="community-library-provenance meta">Community recording</span></div>
           <div class="community-library-performance"><strong class="community-library-time">${fmtIgtShort(row.frames)}</strong>
             <span class="meta"><${Method} row=${row} /></span></div>
-          <div class="community-library-actions"><button type="button" class=${added ? "quiet-button" : "primary primary-button"}
-              disabled=${disabled} onclick=${() => change(row, added ? "remove" : "add")}>
-            <${Icon} name=${added ? "minus" : "ghost"} />${busy === row.id ? "Saving…" : added ? "Remove" : "Add rival"}
-          </button>
+          <div class="community-library-actions"><${GhostAction} row=${row} added=${added}
+              className=${added ? "quiet-button" : "primary primary-button"}
+              disabled=${disabled} onClick=${() => change(row, added ? "remove" : "add")}>
+            <${Icon} name=${added ? "minus" : "ghost"} />${busy === row.id ? "Saving…" : added ? "Remove" : "Add ghost"}
+          </${GhostAction}>
           ${added ? html`<span class="community-library-saved meta">Saved for this strategy</span>` : null}</div>
-          ${!added && !row.can_add ? html`<p class="community-library-unavailable meta">${row.unavailable_reason || "This recording cannot be added to a local Lineup."}</p>` : null}
+          <${GhostUnavailable} row=${row} added=${added} />
         </article>`;
       })}
     </div>` : html`<div class="community-library-groups">

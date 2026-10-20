@@ -211,7 +211,7 @@ class BundledPopulation:
         key = lambda row: (unicodedata.normalize("NFKC", row["player_name"]).casefold(), row["frames"], row["id"])
         if cursor is not None:
             if not isinstance(cursor, list) or len(cursor) != 3:
-                raise ValueError("This rival search cursor is invalid.")
+                raise ValueError("This ghost search cursor is invalid.")
             seeds = [row for row in seeds if key(row) > tuple(cursor)]
         merged = {row["id"]: row for row in (*local["records"], *seeds)}
         records = sorted(merged.values(), key=key)
@@ -226,7 +226,7 @@ class BundledPopulation:
         if (not target or (row["kind"], row["entity_key"]) != (target["kind"], target["entity_key"])
                 or target.get("scope", "strategy") == "strategy"
                 and row["strategy"] != target.get("strat")):
-            raise ValueError("This rival belongs to another practice target.")
+            raise ValueError("This ghost belongs to another practice target.")
         with self._lock:
             if self.collection.is_symlink() or self._collection_stamp() != self._stamp:
                 raise ValueError("The packaged beta ghost collection changed after verification.")

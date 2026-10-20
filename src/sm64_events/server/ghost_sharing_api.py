@@ -124,7 +124,7 @@ def _mount_race(router, session_of, sharing):
                 count = len(selection["attempts"])+len(selection.get("imports",[]))
                 capacity = getattr(session._rivals,"library_limit",lambda _target:MAX_RIVALS+1)(body["target"])
                 if count>MAX_RIVALS or count+int(selection["pb"])>capacity:
-                    raise ValueError(f"Choose up to {MAX_RIVALS} rivals plus your personal best.")
+                    raise ValueError(f"Choose up to {MAX_RIVALS} ghosts plus your personal best.")
             choice = await run_in_threadpool(sharing().prepare_race, body["ghosts"], body["target"])
         except (LookupError, ValueError, OSError) as error:
             raise HTTPException(422, str(error)) from error

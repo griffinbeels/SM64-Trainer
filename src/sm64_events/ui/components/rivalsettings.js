@@ -21,14 +21,14 @@ export function RivalOptions({ rivals, draft, setDraft }) {
   const { pb, limits } = rivals;
   const change = (name, delta) => setDraft(value => stepRange(value, pb, limits, name, delta));
   const adaptive = draft.mode === "adaptive";
-  return html`<section class="rival-options" aria-label="Rivals">
-    <h4 class="ghost-settings-heading">Rivals</h4>
+  return html`<section class="rival-options" aria-label="Ghosts">
+    <h4 class="ghost-settings-heading">Ghosts</h4>
     <div class="rival-settings-top">
       <label>Challenge<select value=${draft.mode} onchange=${event => setDraft(rangeDraft({ ...draft, mode: event.target.value }, pb, limits))}>
         <option value="adaptive">Follow my progress</option><option value="fixed">Choose a rank range</option>
       </select></label>
-      <label>Rivals<select value=${draft.count} onchange=${event => setDraft({ ...draft, count: Number(event.target.value) })}>
-        ${limits.counts.map(count => html`<option value=${count}>${count} ${count === 1 ? "rival" : "rivals"}</option>`)}
+      <label>Ghosts<select value=${draft.count} onchange=${event => setDraft({ ...draft, count: Number(event.target.value) })}>
+        ${limits.counts.map(count => html`<option value=${count}>${count} ${count === 1 ? "ghost" : "ghosts"}</option>`)}
       </select></label>
     </div>
     <label class="rival-check"><input type="checkbox" checked=${draft.include_pb}

@@ -29,13 +29,13 @@ def test_supported_credit_remains_readable_and_wire_valid(author):
 @pytest.mark.parametrize("author", ["ガミル", "Zoë", "Runner🎮", "slash/name", "a\u200bb", "", None])
 def test_unsupported_credit_uses_slot_number_without_guessing_identity(author):
     ghost = imported(author, rival_slot=3)
-    assert ghost_label(ghost, 1) == "RIVAL 4"
+    assert ghost_label(ghost, 1) == "GHOST 4"
     assert ghost.author == author
 
 
 @pytest.mark.parametrize("slot", [None, True, -1, GHOSTS, "3"])
 def test_unassigned_or_invalid_slot_uses_the_rosters_non_pb_ordinal(slot):
-    assert ghost_label(imported("ガミル", rival_slot=slot), 2) == "RIVAL 2"
+    assert ghost_label(imported("ガミル", rival_slot=slot), 2) == "GHOST 2"
 
 
 @pytest.mark.parametrize("author", ["W" * 63, "W" * 64, "W" * 128])
@@ -86,10 +86,10 @@ def test_real_imports_keep_exact_credit_while_prepared_command_uses_readable_lab
         {"kind": "star", "entity_key": "2-1", "strat": "10 coin"}, ghosts,
         {"hue_degrees": 48}, 1)
     assert [(row["author"], row["label"]) for row in answer["ghosts"]] == [
-        (None, "YOUR PB"), ("ガミル", "RIVAL 4"), ("WaterproofTeabag_", "WaterproofTeabag_")]
-    assert [clip["label"] for clip in source.commands[-1]["clips"]] == ["RIVAL 4", "WaterproofTeabag_"]
+        (None, "YOUR PB"), ("ガミル", "GHOST 4"), ("WaterproofTeabag_", "WaterproofTeabag_")]
+    assert [clip["label"] for clip in source.commands[-1]["clips"]] == ["GHOST 4", "WaterproofTeabag_"]
     assert {ghost.author for ghost in sharing.imports_for("star", "2-1")} == set(originals)
     # Legacy callers without a slot remain deterministic and exclude the PB.
     answer = native.resolve({"kind": "star", "entity_key": "2-1"}, [pb, originals["ガミル"]])
-    assert answer["ghosts"][1]["label"] == "RIVAL 1"
+    assert answer["ghosts"][1]["label"] == "GHOST 1"
     native.stop()

@@ -22,6 +22,8 @@ from uilab import driver  # noqa: E402
 from uilab.driver import default_wait_ms  # noqa: E402
 from sm64_events.core import paths, uilog  # noqa: E402
 from sm64_events.community.progress_state import PROFILE_KEY  # noqa: E402
+from sm64_events.community.progress_snapshot import resolve_rows, unavailable_segment_keys  # noqa: E402
+from sm64_events.server.player_comparison import compare  # noqa: E402
 from tests.community_library_fixture import LibrarySession  # noqa: E402
 from tests.player_pages_fixture import Account, INSTALLATION, LONG_PLAYER, OWN_RECORDING, PROFILE, PlayerBrowser, RIVAL, SAVED, UID  # noqa: E402
 
@@ -66,7 +68,9 @@ def browser(tmp_path,monkeypatch,request):
     monkeypatch.setattr(ui_fixture,"create_app",create)
     monkeypatch.setattr(paths,"progress_installation_path",lambda:tmp_path/"installation-id")
     monkeypatch.setattr(uilog,"log_path",lambda:tmp_path/"ui_log.jsonl")
-    with ui_fixture.serve_ui(seed=False,db_path=tmp_path/"practice.db") as base:
+    # Real startup reconciles canonical definitions before publishing. Legacy
+    # bootstrap definitions otherwise look like edited/private ranked segments.
+    with ui_fixture.serve_ui(seed=False,db_path=tmp_path/"practice.db",reconcile_full_corpus=True) as base:
         ui_fixture._run_coro(holder["service"].set_target(2,1,"Standard"))
         with driver.get_driver().launch(headless=True,viewport=(1400,1100)) as page:
             page.goto(base+"/ui/index.html")
@@ -173,6 +177,47 @@ def assert_own_row_disabled(browser,row,button="button"):
     writes_before = len(browser.session.requests)
     page.evaluate("document.querySelector("+json.dumps(selector)+").click()")
     assert len(browser.session.requests)==writes_before
+    assert page.count(row+" .community-library-unavailable")==0
+    verify_own_tooltip(page,row)
+
+
+def verify_own_tooltip(page,row):
+    hint = row+" .community-library-add-hint"
+    accessible = page.evaluate("const hint=document.querySelector("+json.dumps(hint)+");return {tab:hint.tabIndex,"
+        "reason:document.getElementById(hint.getAttribute('aria-describedby')).textContent}")
+    assert accessible=={"tab":0,"reason":"Your PB ghost is included automatically."}
+    width = page.evaluate("return window.innerWidth")
+    surface = "player" if row.startswith(".player") else "library"
+    page.hover(row+" .community-library-performance")
+    assert page.evaluate("return getComputedStyle(document.querySelector("+json.dumps(hint)+"),'::after').visibility")=="hidden"
+    page.hover(hint)
+    page.wait_ms(150)
+    assert_tooltip_visible(page,hint)
+    (SCREENSHOTS/f"own-{surface}-tooltip-hover-round3-{width}.png").write_bytes(page.screenshot())
+    page.hover(row+" .community-library-performance")
+    page.evaluate("document.querySelector("+json.dumps(hint)+").focus({focusVisible:true})")
+    page.wait_ms(150)
+    assert page.evaluate("return document.activeElement===document.querySelector("+json.dumps(hint)+")")
+    assert_tooltip_visible(page,hint)
+    (SCREENSHOTS/f"own-{surface}-tooltip-focus-round3-{width}.png").write_bytes(page.screenshot())
+    page.evaluate("document.activeElement.blur()")
+
+
+def assert_tooltip_visible(page,hint):
+    result = page.evaluate("const hint=document.querySelector("+json.dumps(hint)+");const css=getComputedStyle(hint,'::after');"
+        "const box=hint.getBoundingClientRect(),n=name=>parseFloat(css.getPropertyValue(name))||0;"
+        "const width=n('width')+(css.boxSizing==='border-box'?0:n('padding-left')+n('padding-right')+n('border-left-width')+n('border-right-width'));"
+        "const shift=css.transform==='none'?0:new DOMMatrix(css.transform).m41;"
+        "const rawLeft=parseFloat(css.left),anchor=Number.isFinite(rawLeft)?box.left+rawLeft:box.right-n('right')-width;"
+        "const left=anchor+shift;return {visibility:css.visibility,opacity:css.opacity,text:css.content,"
+        "cssLeft:css.left,cssRight:css.right,transform:css.transform,focus:document.activeElement===hint,"
+        "rules:Array.from(document.querySelectorAll('style')).flatMap(tag=>Array.from(tag.sheet.cssRules)).filter(rule=>rule.selectorText?.includes('community-library-add-hint')).map(rule=>rule.cssText),"
+        "left,right:left+width,viewport:document.documentElement.clientWidth,windowWidth:window.innerWidth}")
+    name = "player" if hint.startswith(".player") else "library"
+    (SCREENSHOTS/f"own-{name}-tooltip-metrics-round3-{result['windowWidth']}.json").write_text(json.dumps(result,indent=2),encoding="utf-8")
+    assert result["visibility"]=="visible" and float(result["opacity"])>.99,result
+    assert "Your PB ghost is included automatically." in result["text"]
+    assert result["left"]>=0 and result["right"]<=result["viewport"]+1,result
 
 
 def own_course_rank(page,width):
@@ -184,7 +229,7 @@ def own_course_rank(page,width):
     page.wait_for(".rank-card .rank-ladder")
     result = rank_shape(page)
     assert result["bands"]==9 and result["factors"]==2 and result["tiles"]>=6
-    capture(page,f"own-rank-round2-{width}.png",".rank-card")
+    capture(page,f"own-rank-round3-{width}.png",".rank-card")
     return result
 
 
@@ -248,8 +293,8 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     before = browser.practice()
     own_shape = own_course_rank(page,width)
     open_search(browser,course=True)
-    capture(page,f"player-page-round2-{width}.png")
-    capture(page,f"player-rank-round2-{width}.png",".rank-card")
+    capture(page,f"player-page-round3-{width}.png")
+    capture(page,f"player-rank-round3-{width}.png",".rank-card")
     verify_card_alignment_guard(page,width)
     assert page.evaluate("return document.querySelector('.player-comparison').dataset.scope")=="course:2"
     assert page.evaluate("return document.querySelector('.player-page').dataset.playerId")==RIVAL
@@ -266,12 +311,13 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     assert "Ignore" not in page.evaluate("return document.querySelector('.rank-breakdown').textContent")
     assert page.count(".player-scorecard .score-line")==6
     assert page.count(".player-scorecard .score-row-remove,.player-scorecard .score-detail-goal-btn,.player-scorecard .good,.player-scorecard .bad")==0
-    assert '11"00 saved PB in this comparison' in page.evaluate("return document.querySelector('.player-ghosts').textContent")
-    assert '20"00 recorded' in page.evaluate("return document.querySelector('.player-ghosts').textContent")
+    assert page.evaluate("return document.querySelector('.player-ghost-row .community-library-performance').textContent.trim()")== '20"00'
+    ghost_words = page.evaluate("return document.querySelector('.player-ghosts').textContent")
+    assert "saved PB in this comparison" not in ghost_words and "Recording times may differ" not in ghost_words
     assert_rendered_log(browser,"player_page",lambda entry: entry["title"]==LONG_PLAYER and any(
         row.get("name")=="Fall onto the Caged Island" and row.get("time")=='12"00'
         and row.get("player")=='11"00' and row.get("delta")=="+1.00" for row in entry.get("rows",[])))
-    capture(page,f"player-ghosts-round2-{width}.png",".player-ghosts")
+    capture(page,f"player-ghosts-round3-{width}.png",".player-ghosts")
     assert page.evaluate("const root=document.querySelector('.player-page');return root.scrollWidth<=root.clientWidth+1")
     page.click(".player-ghost-row button")
     page.wait_ms(150)
@@ -279,7 +325,7 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     assert browser.practice()==before
     page.click(".player-ghost-row button")
     page.wait_ms(150)
-    assert page.evaluate("return document.querySelector('.player-ghost-row button').textContent")=="Add rival"
+    assert page.evaluate("return document.querySelector('.player-ghost-row button').textContent")=="Add ghost"
     # The second entry door is the actual player name on a Library recording.
     page.click(NAV+"[title='Library']")
     page.wait_for(".library-ghost-filter input")
@@ -327,7 +373,9 @@ def test_explicit_publication_checkbox_self_preview_pause_and_withdraw(browser):
     shared = page.evaluate("return Array.from(document.querySelectorAll('.player-scorecard .score-line .score-gap')).map(el=>el.textContent.trim()).filter(value=>value!=='—')")
     assert len(shared)==2 and set(shared)=={"+0.00"}
     assert page.count(".player-scorecard .score-card")==17
-    assert_own_row_disabled(browser,".player-ghost-row[data-recording-id='"+OWN_RECORDING+"']")
+    for width in (850,1400):
+        page.set_viewport(width,1100)
+        assert_own_row_disabled(browser,".player-ghost-row[data-recording-id='"+OWN_RECORDING+"']")
     capture(page,"player-self-overall-round2-1400.png")
     assert browser.practice()==before
     open_account(browser)
@@ -383,7 +431,9 @@ def test_publication_conflict_requires_a_fresh_deliberate_publisher_switch(brows
     assert browser.account.publication==before
     click_text(page,ACCOUNT+" button","Publish from this profile")
     consent(page,"Use this profile")
-    page.wait_for(ACCOUNT+" .progress-sharing-controls > .community-check input:checked")
+    # The previous publisher already had sharing checked. Wait for this
+    # switch's acknowledged result, including the completed snapshot upload.
+    page.wait_for(ACCOUNT+" .progress-sharing-controls:not(:has(.progress-sharing-preview)) > .community-check input:checked")
     assert browser.account.publication["publisher"]["installation_id"]==INSTALLATION
     assert browser.account.publication["visible"]
     assert page.problems()==[]
@@ -393,8 +443,13 @@ def test_partial_private_and_offline_are_distinct_read_states(browser):
     page = browser.page
     browser.account.partial=True
     open_search(browser)
-    assert "Some PBs are unavailable. Full rank unavailable." in page.evaluate("return document.querySelector('.rank-card').textContent")
+    assert page.count(".rank-card .rank-ladder")==1,partial_rank_diagnostics(browser)
+    assert "Full rank unavailable" not in page.evaluate("return document.querySelector('.rank-card').textContent")
     assert "publication" not in page.evaluate("return document.querySelector('.player-profile-header').textContent")
+    browser.account.partial,browser.account.unsupported = False,True
+    page.click(PLAYER+" button[aria-label='Refresh shared page']")
+    page.wait_for(".rank-card:has-text('Full rank unavailable.')")
+    assert page.count(".rank-card .rank-ladder")==0
     browser.account.private=True
     page.click(PLAYER+" button[aria-label='Refresh shared page']")
     page.wait_ms(180)
@@ -410,6 +465,18 @@ def test_partial_private_and_offline_are_distinct_read_states(browser):
     page.wait_ms(180)
     assert page.count(PLAYER+" [role='alert']")==0
     assert page.problems()==[]
+
+
+def partial_rank_diagnostics(browser):
+    content = browser.account.published(RIVAL)["content"]
+    definitions = browser.service.db.segment_defs()
+    rows,_unbound = resolve_rows(content,definitions)
+    unavailable = unavailable_segment_keys(content,definitions,rows)
+    result = compare(browser.service,content,"overall")
+    members = [row for row in result["you_rank"]["entities"] if row["key"] in unavailable and not row["excluded"]]
+    return {"coverage":result["coverage"],"rank_reason":result["rank_reason"],
+        "blocking_members":members[:10],"definitions":[{key:row.get(key) for key in ("id","name","seed_key","enabled")}
+            for row in definitions if f"segment:{row['id']}" in {member["key"] for member in members}]}
 
 
 def test_lapsed_owner_can_export_pause_and_remove_a_hidden_stored_snapshot(browser):

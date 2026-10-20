@@ -38,7 +38,7 @@ export function CommunitySettings({ account, busy, run, refresh, onClose, onOpen
   if (confirm) return html`<div class="community-form">
     <h3>${confirm === "DELETE" ? "Delete community account?" : "Remove your shared ghosts?"}</h3>
     <p>${confirm === "DELETE" ? "Your community profile and published ghosts will be removed."
-      : "Your ghosts will stop appearing in searches and automatic rivals."}</p>
+      : "Your ghosts will stop appearing in searches and automatic ghosts."}</p>
     <p>Local practice data stays on this computer. Previously downloaded copies may remain with other players.</p>
     <div class="community-actions"><button disabled=${busy} onclick=${() => setConfirm(null)}>Cancel</button>
       <button class="danger" disabled=${busy} onclick=${() => run(remove)}>

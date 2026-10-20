@@ -88,7 +88,7 @@ def create_ghost_router(session=None) -> APIRouter:
         try:
             parsed = json.loads(target)
             if not isinstance(parsed,dict):
-                raise ValueError("Choose a star or segment before searching rivals.")
+                raise ValueError("Choose a star or segment before searching ghosts.")
             after = json.loads(cursor) if cursor is not None else None
             if scope is None:
                 return await _session().search_rivals(parsed,player,after)

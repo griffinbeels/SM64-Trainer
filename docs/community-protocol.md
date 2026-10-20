@@ -28,10 +28,22 @@ Existing pauses, withdrawals and selected publishers survive upgrades. Settings
 can pause updates or remove the published snapshot. This local choice never
 expands the strict v1 account body. Progress status GETs remain read-only.
 
-Library and player pages retain your own recordings, with Add rival disabled:
+Library and player pages retain your own recordings, with Add ghost disabled:
 your PB ghost already participates automatically. The server rejects active and
 saved-rival additions for canonical owned identities, including replacement
 requests. Display names do not establish ownership. Existing pins remain removable.
+The disabled control exposes its reason on hover and keyboard focus. A ghost row
+shows its recording time; saved-PB comparisons stay in the Scorecard.
+
+Publication completeness and ranked-scope completeness are separate. The current
+snapshot projector withholds private/custom or edited segment targets; unsupported
+rows have unknown identities. The comparison adapter checks omissions against
+actual ranked members after exclusions, using the projector's portable-target
+policy. Unrelated withheld segments cannot hide a rank made from stars and
+canonical public segments. Relevant private/edited members, ambiguous matching
+public segments and unknown unsupported rows still prevent a complete rank.
+Each summary chip applies that same check. Rank calculation uses only published
+PB rows, never a fallback to the viewer's PBs or a claim that private rows are zero.
 
 Account names allow20 Unicode code points and63 UTF-8 bytes after NFKC normalization.
 The October8 Library snapshot contains454 names; its longest is

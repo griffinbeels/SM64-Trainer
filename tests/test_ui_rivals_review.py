@@ -375,7 +375,7 @@ def ghost_settings(page):
 
 
 def rival_count(sheet):
-    return sheet.locator(".rival-options").get_by_role("combobox", name=re.compile("^Rivals"))
+    return sheet.locator(".rival-options").get_by_role("combobox", name=re.compile("^Ghosts"))
 
 
 def edit_rivals(page, sheet):

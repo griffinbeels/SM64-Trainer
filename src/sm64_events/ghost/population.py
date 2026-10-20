@@ -47,9 +47,9 @@ def _admissible(attempt, clock, game_version, full_start):
             or getattr(attempt, "outcome", None) != "success" or getattr(attempt, "cleared", True)
             or save_state_run(attempt) or pb_blocked_by(attempt)
             or getattr(attempt, "timed_by", None) == "imported"):
-        raise ValueError("Automatic rivals require a certified full, valid successful run.")
+        raise ValueError("Automatic ghosts require a certified full, valid successful run.")
     if clock not in ("igt", "rta") or game_version not in ("us", "jp"):
-        raise ValueError("Automatic rivals require a known clock and ROM version.")
+        raise ValueError("Automatic ghosts require a known clock and ROM version.")
     observed = getattr(attempt, "game_version", None)
     if observed != game_version:
         raise ValueError("The source certificate disagrees with this run's ROM version.")
@@ -70,12 +70,12 @@ def _admissible(attempt, clock, game_version, full_start):
         identity = PracticeIdentity(kind=kind, entity_key=key, clock=clock,
                                     game_version=game_version, strategy=attempt.strat_tag)
         if not predicate(attempt, identity):
-            raise ValueError("This run does not qualify for automatic rivals.")
+            raise ValueError("This run does not qualify for automatic ghosts.")
     if clock == "igt" and getattr(attempt, "timed_by", None) != "igt":
         raise ValueError("This run was not measured on its declared clock.")
     frames = getattr(attempt, f"{clock}_frames", None)
     if type(frames) is not int or not 0 < frames <= 30 * 60 * 60 * 24 or not getattr(attempt, "strat_tag", None):
-        raise ValueError("Automatic rivals require a measured time and strategy.")
+        raise ValueError("Automatic ghosts require a measured time and strategy.")
     attempt_origin(attempt)
     return frames
 
@@ -302,7 +302,7 @@ class LocalPopulation:
         with self._lock:
             row = self._db.execute("SELECT document FROM recordings WHERE id=?", (checked_hash(identity),)).fetchone()
         if row is None:
-            raise LookupError("That rival recording is no longer in the local population.")
+            raise LookupError("That ghost recording is no longer in the local population.")
         return self._row(row)
 
     def search(self, identity, player_prefix, *, cursor=None, limit=20):
@@ -330,7 +330,7 @@ class LocalPopulation:
         if cursor is not None:
             if (not isinstance(cursor, list) or len(cursor) != 3 or not isinstance(cursor[0], str)
                     or not cursor[0].startswith(prefix) or type(cursor[1]) is not int):
-                raise ValueError("This rival search cursor is invalid.")
+                raise ValueError("This ghost search cursor is invalid.")
             checked_hash(cursor[2])
             after = tuple(cursor)
         where = " AND (normalized,frames,id) > (?,?,?)" if after else ""
@@ -348,10 +348,10 @@ class LocalPopulation:
         row = self.get(ghost.id)
         if (target is None or (row["kind"], row["entity_key"]) != (target["kind"], target["entity_key"])
                 or target.get("scope","strategy")=="strategy" and row["strategy"] != target.get("strat")):
-            raise ValueError("This rival belongs to another practice target.")
+            raise ValueError("This ghost belongs to another practice target.")
         path = self.root / "clips" / f"{checked_hash(row['sha256'])}.ghost"
         if not path.resolve().is_relative_to(self.root):
-            raise ValueError("This rival recording is outside the population folder.")
+            raise ValueError("This ghost recording is outside the population folder.")
         stamp = path.stat()
         key = stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns
         with self._lock:

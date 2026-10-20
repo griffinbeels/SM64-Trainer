@@ -111,7 +111,7 @@ def test_player_chips_keep_own_summary_scope_order_and_cap_but_grade_the_publish
     assert comparison["context"]["scope_id"] == "course:1" and not boundary.effects
 
 
-def test_unbound_published_segment_leaves_familiar_chips_empty_with_the_existing_reason():
+def test_unbound_segment_does_not_hide_star_only_rank_or_summary_chips():
     from sm64_events.community.progress_snapshot import public_segments
     http, _owner, boundary = client()
     boundary.saved["content"]["rows"][0].update(target=next(iter(public_segments().values())), clock="rta")
@@ -121,7 +121,8 @@ def test_unbound_published_segment_leaves_familiar_chips_empty_with_the_existing
     assert response.status_code == 200, response.text
     comparison = response.json()["comparison"]
     assert comparison["coverage"]["unbound_rows"] == 1
-    assert comparison["chips"] == [] and comparison["player_rank"] is None and comparison["rank_reason"]
+    assert comparison["chips"] and comparison["player_rank"] is not None
+    assert comparison["coverage"]["scope_complete"] and comparison["rank_reason"] is None
 
 
 def test_player_chips_add_no_cloud_reads_beyond_the_existing_header_and_saved_snapshot():
@@ -159,7 +160,7 @@ def test_partial_or_private_progress_never_presents_unknown_facts_as_zero_rank(p
     if private:
         boundary.header['progress']['available'] = False
     else:
-        boundary.saved['content']['coverage'].update(total_rows=3, withheld_rows=1, complete=False)
+        boundary.saved['content']['coverage'].update(total_rows=3, unsupported_rows=1, complete=False)
         boundary.saved['content_hash'] = hashlib.sha256(canonical(boundary.saved['content'])).hexdigest()
     with http:
         response = http.get('/api/community/players/' + UID)

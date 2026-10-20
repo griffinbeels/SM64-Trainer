@@ -743,7 +743,7 @@ def test_conflicting_saved_pins_keep_first_player_and_explain_the_unavailable_sl
     chosen = select_rivals(rows, basis(), {}, {"0": "first", "1": "second"})
     assert [row["id"] for row in chosen if row.get("ghost") is not None] == ["first", "other"]
     assert chosen[1]["id"] == "second" and chosen[1]["pinned"] and chosen[1]["available"] is False
-    assert "already has a chosen rival" in chosen[1]["reason_text"]
+    assert "already has a chosen ghost" in chosen[1]["reason_text"]
     # A hidden conflicting pin remains deterministic when the count expands.
     pins = {"0": "first", "3": "second"}
     assert len(select_rivals(rows, basis(), {"count": 1}, pins)) == 1

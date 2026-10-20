@@ -23,7 +23,7 @@ export const LINEUP_WORDS = {
   noStrategyOff: "Pick your strategy",
   noStrategies: "Create a strategy to race ghosts",
   nobody: "No ghosts available.",
-  offline: "Rivals return when you're back online.",
+  offline: "Ghosts return when you're back online.",
   signedOut: "Sign in to race community ghosts.",
   unknownRom: "Load a compatible practice ROM to race ghosts.",
   unreachable: "Ghost controls couldn't load.",
@@ -47,7 +47,7 @@ export function youSeat(rivals) {
 // A pinned run of your own says so by identity (`own`, from the server), never
 // by whatever name a recording carries -- an import credited "You" is not you.
 function rivalSeat(row) {
-  return { key: `s${row.slot}`, id: row.id, name: row.own === true ? "Your run" : (row.player_name || "Chosen rival"),
+  return { key: `s${row.slot}`, id: row.id, name: row.own === true ? "Your run" : (row.player_name || "Chosen ghost"),
     frames: Number.isInteger(row.frames) ? row.frames : null, tier: row.tier, division: row.division,
     hue: row.hue_degrees, pinned: Boolean(row.pinned), pending: Boolean(row.pending),
     verified: row.verified === true, slot: row.slot };

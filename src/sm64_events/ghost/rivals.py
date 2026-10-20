@@ -16,7 +16,7 @@ from sm64_events.ranks.standards import entity_key
 STATE_KEY = "ghost_rivals_v1"
 MAX_REMOTE_CHOICES = 1024
 LIMITS = {"last_step":MAX_STEP, "max_ahead":MAX_AHEAD, "counts":list(range(1,MAX_RIVALS+1))}
-NO_STRATEGY = "Choose a strategy to race rivals."
+NO_STRATEGY = "Choose a strategy to race ghosts."
 OWN_RECORDING_REASON = "Your PB ghost is included automatically."
 
 
@@ -426,7 +426,7 @@ class Rivals:
             self.rows, self.pb = (),None
             self.fingerprint = self.prepared_key = None
             self.native.cancel_preparation()
-            self.status = "Load a compatible practice ROM to choose rivals." if target else None
+            self.status = "Load a compatible practice ROM to choose ghosts." if target else None
             return {"available":False,"reason":"unknown_rom" if target else "no_target",
                     "reason_text":self.status,"ghosts":[]}
         if not has_strategy(target):
@@ -675,7 +675,7 @@ class Rivals:
         def own_pb(ghost):
             return getattr(ghost,"pb",False) and dedicated is not None and ghost.origin==dedicated
         if sum(not own_pb(ghost) for ghost in ghosts)>MAX_RIVALS:
-            raise ValueError("Choose up to four rivals; this historical PB also needs a rival slot.")
+            raise ValueError("Choose up to four ghosts; this historical PB also needs a ghost slot.")
         return identity,dedicated
 
     def choose_library(self, target, ghosts, include_pb):
@@ -718,28 +718,28 @@ class Rivals:
         row = self._seat_row(row)
         if any(item.get("ghost") is not None and item["slot"] != slot
                and player_key(self._seat_row(item)) == player_key(row) for item in self.rows):
-            raise ValueError("That player is already in your rivals. Replace their current slot.")
+            raise ValueError("A ghost from that player is already selected. Replace their current slot.")
 
     def checked(self, body, target):
         if not isinstance(body,dict) or set(body)-{"options","action","id","slot","scope"}:
-            raise ValueError("Choose rival settings or a saved ghost.")
+            raise ValueError("Choose ghost settings or a saved ghost.")
         if target != self.target or self.identity is None:
-            raise ValueError("The practice target changed. Choose rivals for the current target.")
+            raise ValueError("The practice target changed. Choose ghosts for the current target.")
         result = self._checked_scope(body,target)
         if "options" in body:
             result["options"] = checked_options(body["options"])
         action = body.get("action")
         if action is not None:
             if action not in ("add","reset"):
-                raise ValueError("Choose or reset a rival.")
+                raise ValueError("Choose or reset a ghost.")
             if not has_strategy(target):
                 raise ValueError(NO_STRATEGY)
             slot = body.get("slot")
             if slot is not None and (type(slot) is not int or not 0<=slot<self.options["count"]):
-                raise ValueError("Choose a visible rival slot.")
+                raise ValueError("Choose a visible ghost slot.")
             if action == "reset":
                 if slot is None:
-                    raise ValueError("Choose the rival to reset.")
+                    raise ValueError("Choose the ghost to reset.")
                 result.update(action=action,slot=slot)
             else:
                 result.update(self._checked_add(body.get("id"),target,slot))
@@ -753,9 +753,9 @@ class Rivals:
             raise ValueError("That ghost is not compatible with this target.")
         self.check_rival_owner(row)
         if any(item.get("id")==row["id"] for item in self.rows):
-            raise ValueError("That ghost is already in your rivals.")
+            raise ValueError("That ghost is already selected.")
         if row["id"] in self.pins.get(self._key(target),{}).values():
-            raise ValueError("That ghost is already chosen in a hidden rival slot. Increase the rival count to replace it.")
+            raise ValueError("That ghost is already chosen in a hidden ghost slot. Increase the ghost count to replace it.")
         slot = add_slot(self.rows,self.options["count"],slot)
         self._check_player_slot(row, slot)
         return {"action":"add","slot":slot,"id":row["id"]}

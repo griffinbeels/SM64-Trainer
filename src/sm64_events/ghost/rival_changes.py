@@ -23,7 +23,7 @@ def _target_context(rivals, target, version, scope=None):
         raise ValueError("Choose Strategy or Overall ghosts.")
     identity = rivals.identity_for(target,version=version,scope=scope)
     if identity is None:
-        raise ValueError("Choose a compatible practice ROM for this rival.")
+        raise ValueError("Choose a compatible practice ROM for this ghost.")
     return identity
 
 
@@ -53,9 +53,9 @@ def saved_availability(rivals, target, *, version=None, scope=None, expected_clo
 
 def _context(rivals, target, body, version):
     if not isinstance(body,dict) or set(body)-{"action","id","slot","scope"}:
-        raise ValueError("Choose a saved rival to add or remove.")
+        raise ValueError("Choose a saved ghost to add or remove.")
     if body.get("action") not in ("add","remove"):
-        raise ValueError("Choose a saved rival to add or remove.")
+        raise ValueError("Choose a saved ghost to add or remove.")
     checked_hash(body.get("id"))
     if "scope" in body and body["scope"] not in ("strategy","overall"):
         raise ValueError("Choose Strategy or Overall ghosts.")
@@ -64,7 +64,7 @@ def _context(rivals, target, body, version):
         raise ValueError(reason)
     slot = body.get("slot")
     if slot is not None and (type(slot) is not int or not 0<=slot<MAX_RIVALS):
-        raise ValueError("Choose an available rival slot.")
+        raise ValueError("Choose an available ghost slot.")
     return identity,rivals._scope_key(target,identity.scope)
 
 
@@ -81,7 +81,7 @@ def _records(rivals, context, choices):
             row = None
         rows[int(slot)] = ({**rivals._seat_row(row),"slot":int(slot),"pinned":True} if row else
                            {"id":identifier,"slot":int(slot),"pinned":True,"available":False,
-                            "reason_text":"This saved rival is unavailable for this target."})
+                            "reason_text":"This saved ghost is unavailable for this target."})
     return rows
 
 
@@ -107,16 +107,16 @@ def _add(rivals, context, choices, rows, identifier, slot):
         raise ValueError("That ghost is not compatible with this target.")
     rivals.check_rival_owner(row)
     if identifier in choices.values():
-        raise ValueError("That ghost is already chosen in a rival slot, including hidden slots.")
+        raise ValueError("That ghost is already chosen in a ghost slot, including hidden slots.")
     if any(item.get("id")==identifier for item in rows.values()):
-        raise ValueError("That ghost is already in your rivals.")
+        raise ValueError("That ghost is already selected.")
     candidate = rivals._seat_row(row)
     # A replacement can release this player's current seat, but neither a
     # hidden pin nor a different automatic seat may become a second player.
     duplicate = [number for number,item in rows.items() if item.get("ghost") is not None
                  and player_key(rivals._seat_row(item))==player_key(candidate)]
     if any(number!=slot for number in duplicate):
-        raise ValueError("That player is already in your rivals. Replace their current slot.")
+        raise ValueError("A ghost from that player is already selected. Replace their current slot.")
     if slot is not None:
         selected = add_slot(rows.values(),rivals.options["count"],slot)
     elif all(str(number) in choices for number in range(rivals.options["count"])):
@@ -145,7 +145,7 @@ def change_saved(rivals, target, body, *, version=None):
     else:
         found = next((int(number) for number,value in choices.items() if value==identifier),None)
         if found is None or slot is not None and slot!=found:
-            raise ValueError("That saved rival changed. Reopen its choices.")
+            raise ValueError("That saved ghost changed. Reopen its choices.")
         slot = found
         choices.pop(str(slot))
         state = "removed"

@@ -4,13 +4,13 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { useIdentityFetch } from "../refetch.js";
-import { fmtIgtShort, fmtSeconds } from "../format.js";
+import { fmtIgtShort } from "../format.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { Breakdown, RankCard, ScopeChips } from "./rankpage.js";
 import { ReadonlyScorecard } from "./scorecard.js";
 import { RegionFlag } from "./regionflag.js";
-import { SeatPicker } from "./community-library.js";
+import { GhostAction, GhostUnavailable, SeatPicker } from "./community-library.js";
 import { readPlayerPage, useUiLog } from "../uilog.js";
 
 const html = htm.bind(h);
@@ -118,7 +118,7 @@ function usePlayerGhosts(uid) {
         const key = savedTargetKey(row);
         setPage(previous => ({...previous,rows:previous.rows.map(item => savedTargetKey(item) === key
           ? {...item,saved_slot:pinSlot(result.pins,item.id)} : item)}));
-      } else throw new Error("The saved rival could not be confirmed. Refresh these recordings.");
+      } else throw new Error("The saved ghost could not be confirmed. Refresh these recordings.");
     } catch (problem) { if (alive.current) setActionError(problem.message); }
     finally { settled(); }
   }
@@ -134,19 +134,15 @@ function pinSlot(pins, id) {
   return slot === undefined ? null : Number(slot);
 }
 
-function PlayerGhostRow({ row, tiles, busy, change }) {
-  const key = row.local_target?.kind === "star" ? `star:${row.local_target.entity_key.replace("-",":")}`
-    : row.local_target?.kind === "segment" ? `segment:${row.local_target.entity_key}` : null;
-  const saved = tiles.find(tile => tile.key === key)?.goal_cs;
+function PlayerGhostRow({ row, busy, change }) {
   const added = Number.isInteger(row.saved_slot) && row.saved_slot >= 0;
   return html`<article class="community-library-recording player-ghost-row" data-recording-id=${row.id}>
     <div class="community-library-player"><strong>${row.target?.name || "Shared practice target"}</strong>
       <span class="meta">${row.strategy}${" · "}<${RegionFlag} version=${row.game_version} size=${18} />${" · "}${row.clock.toUpperCase()}</span></div>
-    <div class="community-library-performance"><strong>${fmtIgtShort(row.frames)} recorded</strong>
-      ${saved != null ? html`<span class="meta">${fmtSeconds(saved/100)} saved PB in this comparison</span>` : null}</div>
-    <button type="button" disabled=${busy || (!added && !row.can_add)}
-      onclick=${() => change(row,added ? "remove" : "add")}>${added ? "Remove" : "Add rival"}</button>
-    ${!added && !row.can_add ? html`<p class="meta community-library-unavailable">${row.unavailable_reason}</p>` : null}
+    <div class="community-library-performance"><strong>${fmtIgtShort(row.frames)}</strong></div>
+    <${GhostAction} row=${row} added=${added} context="player" disabled=${busy || (!added && !row.can_add)}
+      onClick=${() => change(row,added ? "remove" : "add")}>${added ? "Remove" : "Add ghost"}</${GhostAction}>
+    <${GhostUnavailable} row=${row} added=${added} />
   </article>`;
 }
 
@@ -157,16 +153,14 @@ function GhostListFeedback({ page, retry }) {
   return !page.rows.length ? html`<p class="meta">No shared ghosts are available.</p>` : null;
 }
 
-function PlayerGhosts({ uid, comparison }) {
+function PlayerGhosts({ uid }) {
   const {page,busy,choice,actionError,notice,load,change,close} = usePlayerGhosts(uid);
-  const tiles = (comparison?.card?.rows || []).flatMap(row => row.tiles);
   return html`<section class="practice-card player-ghosts">
     <div class="player-section-head"><h3>Available ghosts</h3><button type="button" class="icon-button" disabled=${busy || page.loading}
       title="Refresh ghosts" aria-label="Refresh ghosts" onclick=${() => load()}><${Icon} name="restart" /></button></div>
-    <p class="meta">Recording times may differ from saved PBs.</p>
     <${GhostListFeedback} page=${page} retry=${() => load()} />
     <div class="community-library-recordings">${page.rows.map(row => html`<${PlayerGhostRow}
-      key=${row.id} row=${row} tiles=${tiles} busy=${busy} change=${change} />`)}</div>
+      key=${row.id} row=${row} busy=${busy} change=${change} />`)}</div>
     ${page.cursor ? html`<button type="button" disabled=${page.loading || busy} onclick=${() => load(page.cursor)}>Load more</button>` : null}
     ${notice ? html`<p class="meta" role="status">${notice}</p>` : null}
     ${actionError && !choice ? html`<p class="error" role="alert">${actionError}</p>` : null}
@@ -190,7 +184,7 @@ function PlayerPageView({ t, uid, onClose, openLibrary, initialScope, onScopeCha
     ${data ? html`<${PlayerIdentity} player=${data.player} />
       <${Comparison} t=${t} comparison=${data.comparison} player=${data.player} scopes=${scopes}
         scopeId=${scopeId} onScope=${setScopeId} openLibrary=${openLibrary} />
-      <${PlayerGhosts} key=${uid} uid=${uid} comparison=${data.comparison} />` : null}
+      <${PlayerGhosts} key=${uid} uid=${uid} />` : null}
   </div>`;
 }
 

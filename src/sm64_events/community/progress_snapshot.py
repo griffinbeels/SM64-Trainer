@@ -64,6 +64,31 @@ def _portable_target(row, definitions, public, bindings):
     return dict(descriptor)
 
 
+def unavailable_segment_keys(content, definitions, resolved):
+    """Local ranked targets whose PBs may be hidden by this publication.
+
+    Withheld v1 rows are custom/edited segments, outside the public target
+    contract used by _portable_target. Unbound published segments affect only
+    local definitions sharing their signature. No private identities are sent.
+    """
+    index = binding_index(definitions)
+    unavailable = set()
+    if content["coverage"]["withheld_rows"]:
+        public = public_segments()
+        for definition in definitions:
+            try:
+                target = _portable_target({"segment_id":definition["id"]},definitions,public,index)
+            except ValueError:
+                target = None
+            if target is None:
+                unavailable.add(f"segment:{definition['id']}")
+    bound = {row["id"] for row in resolved}
+    for row in content["rows"]:
+        if row["save_order"] not in bound and row["target"]["kind"] == "segment":
+            unavailable.update(f"segment:{key}" for key in index.get(row["target"]["signature"], ()))
+    return unavailable
+
+
 def _source(row, attempt):
     imported = row.get("imported_from")
     if imported == "manual":

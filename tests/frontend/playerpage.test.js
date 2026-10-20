@@ -64,7 +64,7 @@ test("the shared comparison cards are read-only and signed differences have a ne
   expect(view.queryByRole("button")).toBeNull();
 });
 
-test("a claimed page starts in the viewer scope and separates a saved PB from its slower ghost", async () => {
+test("a claimed page starts in the viewer scope and keeps only the actual ghost time in its inventory", async () => {
   const reads = [],writes = [];
   const row = ghost();
   stubPlayerServer(async (path,options={}) => {
@@ -75,10 +75,11 @@ test("a claimed page starts in the viewer scope and separates a saved PB from it
     return ok(player());
   });
   const view = render(h(PlayerPage,{t,uid:UID,onClose:vi.fn()}));
-  const button = await view.findByRole("button",{name:"Add rival"});
+  const button = await view.findByRole("button",{name:"Add ghost"});
   expect(reads).toContain(`/api/community/players/${UID}?scope=course%3A2`);
-  expect(view.container.textContent).toContain('9"00 saved PB in this comparison');
-  expect(view.container.textContent).toContain('13"33 recorded');
+  expect(view.container.querySelector(".player-ghost-row .community-library-performance").textContent).toBe('13"33');
+  expect(view.container.querySelector(".player-ghosts").textContent).not.toContain("saved PB in this comparison");
+  expect(view.container.querySelector(".player-ghosts").textContent).not.toContain("Recording times may differ");
   expect(view.getByLabelText("Claimed Trainer account")).toBeTruthy();
   expect(view.container.textContent).toContain("Some PBs are unavailable. Full rank unavailable.");
   expect(view.container.querySelector(".player-profile-header").textContent).not.toContain("publication");
@@ -205,7 +206,7 @@ test("a stale publication revision is shown and reconciled without automatically
   expect(view.container.textContent).toContain("Review it again");
 });
 
-test("an own recording stays visible with a disabled action and no rival write", async () => {
+test("an own recording stays visible with a described disabled action and no ghost write", async () => {
   const writes = [];
   const row = {...ghost(),can_add:false,is_own:true,unavailable_reason:"Your PB ghost is included automatically."};
   stubPlayerServer((path,options={}) => {
@@ -215,10 +216,28 @@ test("an own recording stays visible with a disabled action and no rival write",
     return ok(player());
   });
   const view = render(h(PlayerPage,{t,uid:UID,onClose:vi.fn()}));
-  const action = await view.findByRole("button",{name:"Add rival"});
+  const action = await view.findByRole("button",{name:"Add ghost"});
   expect(action.disabled).toBe(true);
   expect(view.container.querySelectorAll(".player-ghost-row")).toHaveLength(1);
-  expect(view.container.textContent).toContain("Your PB ghost is included automatically.");
+  expect(view.container.querySelector(".player-ghost-row .community-library-unavailable")).toBeNull();
+  const hint = view.getByRole("group",{name:"Add ghost unavailable"});
+  expect(hint.tabIndex).toBe(0);
+  const reason = document.getElementById(hint.getAttribute("aria-describedby"));
+  expect(reason.textContent).toBe("Your PB ghost is included automatically.");
+  expect(action.getAttribute("aria-describedby")).toBe(reason.id);
   action.click();
   expect(writes).toEqual([]);
+});
+
+test("a different player's unavailable ghost keeps its visible explanation", async () => {
+  const row = {...ghost(),can_add:false,is_own:false,unavailable_reason:"This target has no local rank standards yet."};
+  stubPlayerServer(path => {
+    if (path==="/api/marelo/scopes") return ok({active:"overall",scopes:[{id:"overall",label:"Overall"}]});
+    if (path.includes("/recordings")) return ok({recordings:[row],next_cursor:null,complete:true});
+    return ok(player());
+  });
+  const view = render(h(PlayerPage,{t,uid:UID,onClose:vi.fn()}));
+  expect((await view.findByRole("button",{name:"Add ghost"})).disabled).toBe(true);
+  expect(view.container.querySelector(".player-ghost-row .community-library-unavailable").textContent).toBe(row.unavailable_reason);
+  expect(view.queryByRole("group",{name:"Add ghost unavailable"})).toBeNull();
 });

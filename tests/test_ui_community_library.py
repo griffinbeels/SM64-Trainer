@@ -149,7 +149,7 @@ def test_discover_save_refresh_restore_and_remove_without_changing_practice(brow
     assert page.evaluate("return document.querySelector('.community-library-actions button').textContent.trim()") == "Remove"
     page.click(RECORD+":first-child .community-library-actions button")
     page.wait_ms(160)
-    assert page.evaluate("return document.querySelector('.community-library-actions button').textContent.trim()") == "Add rival"
+    assert page.evaluate("return document.querySelector('.community-library-actions button').textContent.trim()") == "Add ghost"
     assert session._rivals.pins[session._rivals._scope_key(TARGET,"strategy")] == {}
     assert browser.practice_snapshot()==before
     assert page.problems()==[]
@@ -217,7 +217,7 @@ def test_replacing_us_pin_with_jp_updates_both_region_views_of_the_same_lineup(b
     assert session._rivals.pins[session._rivals._scope_key(TARGET,"strategy")] == {"0":jp["id"]}
     back()
     open_region("US")
-    assert page.evaluate("return document.querySelector('.community-library-actions button').textContent.trim()") == "Add rival"
+    assert page.evaluate("return document.querySelector('.community-library-actions button').textContent.trim()") == "Add ghost"
     back()
     open_region("JP")
     assert page.evaluate("return document.querySelector('.community-library-actions button').textContent.trim()") == "Remove"

@@ -39,7 +39,7 @@ def decorate_page(page, tracker, rivals, collection):
             reason = capability["reason"]
             pins = capability["pins"]
         elif target is not None:
-            reason = "Saving rivals is unavailable in this Trainer window."
+            reason = "Saving ghosts is unavailable in this Trainer window."
         entity = (f"star:{key.replace('-', ':')}" if portable["kind"] == "star"
                   else f"segment:{key}") if key is not None else None
         saved = ({"saved_slot": next((int(slot) for slot, identifier in pins.items()
