@@ -176,11 +176,41 @@ def _feed_pictures(sink, ledger, seconds: float, first_frame: int = 1000,
             sink.submit_audio(np.repeat(tone[:, None], 2, axis=1).tobytes())
             phase += samples
             last_audio = now
-        next_at += period
+        # This is a live picture source, not a backlog of missed captures.
+        # A stalled producer waits for its next picture instead of emitting
+        # a catch-up burst with colliding wall-clock capture timestamps.
+        next_at = max(next_at + period, time.perf_counter() + period)
         delay = next_at - time.perf_counter()
         if delay > 0:
             time.sleep(delay)
     return index
+
+
+def test_picture_source_delays_after_a_stall_instead_of_bursting(monkeypatch):
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(now=0.0)
+    clock.perf_counter = lambda: clock.now
+    clock.time = lambda: 1000.0 + clock.now
+
+    def sleep(seconds):
+        clock.now += seconds
+
+    clock.sleep = sleep
+    monkeypatch.setattr(__name__ + ".time", clock)
+    captures = []
+
+    def submit(_picture, tag):
+        captures.append(tag[1])
+        if len(captures) == 2:
+            clock.now += 0.2  # The producer missed several capture deadlines.
+
+    sink = SimpleNamespace(submit=submit, submit_audio=lambda _pcm: None)
+    period = 1 / 30
+    count = _feed_pictures(sink, PictureLedger(), 0.5, period=period)
+    assert count == len(captures) and count >= 4
+    assert all(b - a >= period - 1e-9
+               for a, b in zip(captures, captures[1:], strict=False)), captures
 
 
 def test_the_ring_holds_one_frame_per_picture_and_the_log_names_each(tmp_path):
@@ -251,17 +281,12 @@ def test_a_cut_keeps_every_picture_at_its_own_time_and_the_map_reads_off_the_log
         lambda row: (row["frame"]
                      if row.get("exact") else None))
     assert built is not None, stats
-    # Nearly every frame matches its feed entry. A CPU-starved worker under the
-    # 16-way door delivers a few frames late (real-time capture), which the
-    # real clip 5814 showed too (31 of 718 unmatched), so this tolerates a
-    # small fraction rather than demanding 0 -- the MEDIAN residual stays sub-ms
-    # (a late frame moves the max, never the median).
-    assert stats["unmatched"] <= max(3, len(built) // 20), stats
+    # Every encoded picture retains an exact source identity. Scheduling
+    # delays do not excuse an ambiguous or missing captured row.
     assert stats["method"] == "source_pts", stats
     assert stats["unmatched"] == 0, stats
     advances = [b - a for a, b, rep in zip(built, built[1:], repeats[1:], strict=False) if not rep]
-    # Consecutive pictures are consecutive frames; an unmatched frame can leave
-    # a +2 step around it, which is honest bookkeeping, not a shear.
+    # Consecutive pictures retain the captured frame stamps.
     assert set(advances) <= {1, 2}, advances
     assert advances.count(1) >= len(advances) * 0.9, advances
     assert built[0] >= 7000
