@@ -22,7 +22,9 @@ def test_fixture_serves_the_real_ui_and_api(tmp_path):
         page = _get(f"{base}/ui/index.html")
         assert b"<style>" in page, "not the real index.html"
         assert b"practice-page" in page
-        assert b"app.js" in page
+        assert b'<script type="module" src="/ui/boot.js"></script>' in page
+        assert b'import("./app.js")' in _get(f"{base}/ui/boot.js")
+        assert _get(f"{base}/ui/app.js"), "the boot module's app import is not served"
         assert json.loads(_get(f"{base}/health")), "/health returned no object"
 
 
