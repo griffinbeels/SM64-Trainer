@@ -237,9 +237,14 @@ def test_target_region_hidden_and_feedback_states_reach_real_endpoints(browser):
     assert session._community.calls[-1][0]=="summary"
     assert session._community.calls[-1][2]["entity_key"]=="2-4"
     # Both regions start visible; hiding JP asks the actual service for US.
+    region_start = len(session._community.calls)
     page.click(".library-page .version-switch[aria-label='Regions shown'] button[aria-label='JP']")
-    page.wait_ms(160)
-    assert session._community.calls[-1][3]=="us"
+    # This remount schedules its read after paint. Wait for the US answer's
+    # rendered acknowledgement, rather than sampling the previous request.
+    page.wait_for(SURFACE+"[data-entity='star:2:4'][data-rom='us'][aria-busy='false'] .community-library-group")
+    reads = session._community.calls[region_start:]
+    assert reads and all(call[0]=="summary" and call[2]["entity_key"]=="2-4" and call[3]=="us" for call in reads),reads
+    assert any(path=="/api/library/community" and "rom=us" in query for _method,path,query in session.requests)
     before = len(session._community.calls)
     page.click(".app-sidebar .nav-item[title='Practice']")
     page.wait_ms(700)

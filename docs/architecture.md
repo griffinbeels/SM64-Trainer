@@ -1635,7 +1635,16 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-10-18 for the Lineup and release hygiene: **94,871 lines,
+Latest reading, 2026-10-19 for M1/M2 and integrated graphics, installation and
+reporting fixes: **98,646 lines, 2,775 public names, 35.5 lines per public name,
+122 pass-through (4.4%)**. Against the integrated Lineup base, this adds3,775
+lines,137public names and6pass-through names; the rounded forwarding share is
+unchanged. Current PB projection, fenced publication and scoped comparison have
+separate owners. The shared Rank components remain the renderer; the shared
+ghost action owns disabled hover/focus feedback. The observed changes do not
+justify another module split before release.
+
+Previous reading, 2026-10-18 for the Lineup and release hygiene: **94,871 lines,
 2,638 public names, 36.0 lines per public name, 116 pass-through (4.4%)**.
 Against integrated main before the Lineup, this branch adds 1,053 lines and
 24 public names with no new forwarders. The Lineup's model, DOM motion and

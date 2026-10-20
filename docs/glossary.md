@@ -1298,8 +1298,8 @@ words, 2026-10-16: "our pb on far left, then times get faster as we go to the
 right"). A seat is a [[rank]] cap inside a ring in that [[ghost]]'s in-game
 colour, the time and the name; a name wraps where the handle divides and is
 never cut off. A dashed ring is a [[ghost]] that cannot race yet (yours before
-your first time, a ghost still downloading); a lock on a ring is a pinned
-ghost, which stays even once beaten, to your left. The [[lineup track]] threads
+your first time, a [[ghost]] still downloading); a lock on a ring is a pinned
+[[ghost]], which stays even once beaten, to your left. The [[lineup track]] threads
 the rings. With no [[strategy]] the row offers every one of the [[strategies]]
 as a button, all one width, in rows of equal length.
 Inside one lineup every change slides; a different [[star]], [[strategy]] or
@@ -1313,7 +1313,7 @@ Inside one lineup every change slides; a different [[star]], [[strategy]] or
 ### Lineup track
 
 The rail through the [[lineup]]'s rings. The one stretch from your seat to the
-next faster ghost lights up and carries how much faster that ghost's time is,
+next faster [[ghost]] lights up and carries how much faster that [[ghost]]'s time is,
 in the hundredths both seats show ("−0.13") — the gap your next [[attempt]]
 has to close, never a comparison with the last one.
 
@@ -1582,7 +1582,7 @@ many more recordings than the [[ghost set]] can race at once.
 
 ### Ghost slot
 
-One place in the adaptive [[ghost set]] for the current [[target]] and [[ghost matching scope]]. All app controls and messages call these ghosts (his correction,2026-10-19: "they're called GHOSTS not rivals"). The trainer
+One place in the adaptive [[ghost set]] for the current [[target]] and [[ghost matching scope]]. All app controls and messages call these [[ghost]]s (his correction,2026-10-19). The trainer
 chooses a compatible recording above the saved [[personal best]], or protects
 the player's exact manual choice until they clear it. Every seat, including
 manual choices and recordings waiting to download, holds one recording per
