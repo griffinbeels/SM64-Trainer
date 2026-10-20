@@ -34,7 +34,7 @@ function player(uid = UID) {
     claim_explanation:"A claimed Trainer account, not performance verification.",bio:"Practice and explore.",
     socials:[{kind:"twitch",url:"https://www.twitch.tv/example"},{kind:"website",url:"javascript:alert(1)"}],sheet_verified:false},
     progress:{published:true,revision:3,synced_utc:"2026-10-20T12:00:00Z",coverage:{complete:false,shared_rows:2,withheld_rows:1,unsupported_rows:0}},
-    comparison:{card:card(),player_rank:null,you_rank:null,context:{scope_id:"course:2",label:"Whomp's Fortress",regions:["us"],basis:"pb",calibration_revision:"fixture-edition"}},
+    comparison:{card:card(),player_rank:null,you_rank:null,rank_reason:"Some custom segments are private.",context:{scope_id:"course:2",label:"Whomp's Fortress",regions:["us"],basis:"pb",calibration_revision:"fixture-edition"}},
     partial_reason:"Some custom segments are private."};
 }
 
@@ -80,7 +80,9 @@ test("a claimed page starts in the viewer scope and separates a saved PB from it
   expect(view.container.textContent).toContain('9"00 saved PB in this comparison');
   expect(view.container.textContent).toContain('13"33 recorded');
   expect(view.getByLabelText("Claimed Trainer account")).toBeTruthy();
-  expect(view.container.textContent).toContain("Partial publication");
+  expect(view.container.textContent).toContain("Some PBs are unavailable. Full rank unavailable.");
+  expect(view.container.querySelector(".player-profile-header").textContent).not.toContain("publication");
+  expect(view.getByRole("button",{name:"Refresh shared page"}).textContent).toBe("");
   expect(view.container.querySelectorAll("a[href^='javascript:']")).toHaveLength(0);
   fireEvent.click(button);
   await view.findByRole("button",{name:"Remove"});
@@ -105,7 +107,7 @@ test("switching UUID drops a pending previous player instead of relabelling thei
   expect(view.container.querySelector(".player-page").dataset.playerId).toBe(OTHER);
 });
 
-test("PB sharing previews consent before writes and pause leaves removal as a separate choice", async () => {
+test("the PB sharing checkbox enables directly and pausing preserves the separate removal choice", async () => {
   const state = publication(),writes = [];
   stubPlayerServer((path,options={}) => {
     if (!options.method) return ok(state);
@@ -117,22 +119,57 @@ test("PB sharing previews consent before writes and pause leaves removal as a se
     return ok(state);
   });
   const view = render(h(ProgressSettings,{onOpenPlayer:vi.fn()}));
-  fireEvent.click(await view.findByRole("button",{name:"Share saved PBs"}));
-  let dialog = within(view.getByRole("dialog"));
-  expect(dialog.getByRole("button",{name:"Share saved PBs"}).disabled).toBe(true);
-  expect(dialog.getByText(/1 withheld/)).toBeTruthy();
-  fireEvent.click(dialog.getByRole("button",{name:"Cancel"}));
+  const checkbox = await view.findByRole("checkbox",{name:/Automatically share my PBs/});
+  expect(checkbox.checked).toBe(false);
   expect(writes).toHaveLength(0);
-  fireEvent.click(view.getByRole("button",{name:"Share saved PBs"}));
-  dialog = within(view.getByRole("dialog"));
-  fireEvent.click(dialog.getByRole("checkbox"));
-  fireEvent.click(dialog.getByRole("button",{name:"Share saved PBs"}));
-  await view.findByRole("button",{name:"Pause PB updates"});
+  fireEvent.click(checkbox);
+  await waitFor(() => expect(checkbox.checked).toBe(true));
+  expect(view.queryByRole("dialog")).toBeNull();
   expect(writes[0]).toEqual({path:"/api/community/progress/control",body:{action:"enable",expected_revision:7,notice_version:"progress-1"}});
-  fireEvent.click(view.getByRole("button",{name:"Pause PB updates"}));
-  await waitFor(() => expect(view.queryByRole("button",{name:"Pause PB updates"})).toBeNull());
+  fireEvent.click(checkbox);
+  await waitFor(() => expect(checkbox.checked).toBe(false));
+  expect(writes[1]).toEqual({path:"/api/community/progress/control",body:{action:"disable",expected_revision:8}});
   expect(view.getByRole("button",{name:"Remove shared PBs"})).toBeTruthy();
   expect(view.container.textContent).toContain("Previously shared PBs stay visible");
+});
+
+test("pending default-on sharing stays checked and refreshes to the canonical publication without writes", async () => {
+  const state = publication(),writes = [];
+  Object.assign(state.publication,{revision:0,consent_revision:0});
+  Object.assign(state.local,{default_pending:true,share_pbs:true});
+  let reads = 0,finishRead;
+  stubPlayerServer((path,options={}) => {
+    if (options.method) { writes.push({path,body:JSON.parse(options.body)}); return ok(state); }
+    reads++;
+    return reads===1 ? ok(state) : new Promise(resolve => { finishRead = resolve; });
+  });
+  const view = render(h(ProgressSettings,{}));
+  const checkbox = await view.findByRole("checkbox",{name:/Automatically share my PBs/});
+  expect(checkbox.checked).toBe(true);
+  expect(view.container.textContent).toContain("PB sharing is on. Waiting for the first sync.");
+  expect(writes).toEqual([]);
+  await waitFor(() => expect(finishRead).toBeTypeOf("function"),{timeout:3500});
+  Object.assign(state.publication,{revision:2,consent_revision:1,enabled:true,visible:true,
+    publisher:state.local.publisher,content_hash:"a".repeat(64)});
+  state.local.default_pending=false;
+  finishRead(ok(state));
+  await view.findByRole("button",{name:"Sync now"});
+  expect(checkbox.checked).toBe(true);
+  expect(view.container.textContent).not.toContain("Waiting for the first sync");
+  expect(reads).toBe(2);
+  expect(writes).toEqual([]);
+});
+
+test("an unavailable publication remains readable without a local default state", async () => {
+  const writes = [];
+  stubPlayerServer((path,options={}) => {
+    if (options.method) writes.push(path);
+    return ok({available:false,reason:"This Trainer window cannot publish saved PBs."});
+  });
+  const view = render(h(ProgressSettings,{}));
+  await view.findByText("This Trainer window cannot publish saved PBs.");
+  expect(view.queryByRole("checkbox")).toBeNull();
+  expect(writes).toEqual([]);
 });
 
 test("oversize preview blocks new publication but never blocks withdrawal or invents a zero-row preview", async () => {
@@ -161,12 +198,27 @@ test("a stale publication revision is shown and reconciled without automatically
     return failed(409,"Publication changed on another Trainer. Review it again.");
   });
   const view = render(h(ProgressSettings,{}));
-  fireEvent.click(await view.findByRole("button",{name:"Share saved PBs"}));
-  const dialog = within(view.getByRole("dialog"));
-  fireEvent.click(dialog.getByRole("checkbox"));
-  fireEvent.click(dialog.getByRole("button",{name:"Share saved PBs"}));
+  fireEvent.click(await view.findByRole("checkbox",{name:/Automatically share my PBs/}));
   await view.findByRole("alert");
   await waitFor(() => expect(view.queryByRole("dialog")).toBeNull());
   expect(writes).toHaveLength(1);
   expect(view.container.textContent).toContain("Review it again");
+});
+
+test("an own recording stays visible with a disabled action and no rival write", async () => {
+  const writes = [];
+  const row = {...ghost(),can_add:false,is_own:true,unavailable_reason:"Your PB ghost is included automatically."};
+  stubPlayerServer((path,options={}) => {
+    if (options.method) { writes.push(path); return ok({}); }
+    if (path==="/api/marelo/scopes") return ok({active:"overall",scopes:[{id:"overall",label:"Overall"}]});
+    if (path.includes("/recordings")) return ok({recordings:[row],next_cursor:null,complete:true});
+    return ok(player());
+  });
+  const view = render(h(PlayerPage,{t,uid:UID,onClose:vi.fn()}));
+  const action = await view.findByRole("button",{name:"Add rival"});
+  expect(action.disabled).toBe(true);
+  expect(view.container.querySelectorAll(".player-ghost-row")).toHaveLength(1);
+  expect(view.container.textContent).toContain("Your PB ghost is included automatically.");
+  action.click();
+  expect(writes).toEqual([]);
 });

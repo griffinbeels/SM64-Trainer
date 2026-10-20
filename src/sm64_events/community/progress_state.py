@@ -6,11 +6,37 @@ from .config import CommunityError
 
 KEY = "community_progress_v1"
 PROFILE_KEY = "community_progress_profile_v1"
+DEFAULT_CHOICES_KEY = "community_progress_default_choices_v1"
 NOTICE = "progress-1"
-NOTICE_TEXT = ("Share your current saved personal bests, their strategies, game regions and available source/dates "
+NOTICE_TEXT = ("Your current saved personal bests are shared by default, with their strategies, game regions and available source/dates "
                "on your claimed player page. Other players can compare them with their own times. "
                "This does not share your attempts, practice history, private segment definitions or recordings. "
                "Pausing stops future updates; removing published PBs hides the saved snapshot.")
+
+
+def virgin_publication(value):
+    """Only an untouched server control can acquire the new default policy."""
+    return (value.get("revision") == 0 and value.get("consent_revision") == 0 and value.get("publisher") is None
+            and not value.get("enabled") and not value.get("visible") and value.get("content_hash") is None)
+
+
+def default_choice(database, owner):
+    values = database.get_state(DEFAULT_CHOICES_KEY, {})
+    value = values.get(owner) if isinstance(values, dict) else None
+    return value if type(value) is bool else None
+
+
+def remember_choice(database, owner, choice):
+    checked_uuid(owner)
+    if type(choice) is not bool:
+        raise CommunityError("invalid_progress", "Choose whether to share your saved PBs.")
+    values = database.get_state(DEFAULT_CHOICES_KEY, {})
+    values = dict(values) if isinstance(values, dict) else {}
+    if values.get(owner) is not choice:
+        values[owner] = choice
+        database.set_state(DEFAULT_CHOICES_KEY, values)
+        return True
+    return False
 
 
 def display_error(code):

@@ -21,10 +21,11 @@ PROFILE = WIRE["enable"]["publisher"]["profile_id"]
 RIVAL = "40000000-0000-4000-8000-000000000001"
 LONG_PLAYER = "RenéPatientRunner123"
 SAVED = "2026-10-19T12:00:05Z"
+OWN_RECORDING = "b" * 64
 
 
 class Account:
-    def __init__(self):
+    def __init__(self, *, virgin=False):
         self._epoch = 0
         self.calls,self.writes,self.receipts = [],[],{}
         self.offline,self.partial,self.private = False,False,False
@@ -33,7 +34,10 @@ class Account:
             "terms_url":"https://example.test/terms","privacy_url":"https://example.test/privacy",
             "terms_version":"terms-1","privacy_version":"privacy-1",
             "terms_version_current":"terms-1","privacy_version_current":"privacy-1"}
-        self.publication = {"v":2,"uid":UID,"revision":0,"consent_revision":0,"enabled":False,
+        # Most scenarios begin with an explicit previous opt-out. Only the
+        # default-sharing case starts with genuinely unchosen cloud controls.
+        revision = 0 if virgin else 1
+        self.publication = {"v":2,"uid":UID,"revision":revision,"consent_revision":revision,"enabled":False,
             "visible":False,"publisher":None,"notice_version":"progress-1","content_hash":None,
             "captured_utc":None,"synced_utc":None,"limits":{"rows":4096,"bytes":1048576}}
         self.profile = {"v":2,"uid":UID,"revision":0,"bio":"","socials":[]}
@@ -61,6 +65,10 @@ class Account:
                    target={"kind":"star","entity_key":"2-4","name":"Whomp's Fortress · Fall onto the Caged Island","strat":"TJ Owlless"})
         self.metadata = [row]
         session.rows[0].update(row)
+        own = recording(OWN_RECORDING,frames=420)
+        own.update(player_id=UID,player_name=self.state["name"],strategy=row["strategy"],target=deepcopy(row["target"]))
+        self.metadata.append(own)
+        session.rows.append({**deepcopy(session.rows[0]),**own})
         session._community.account = self
 
     def retain_owner_snapshot(self, service):

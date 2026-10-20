@@ -17,6 +17,7 @@ STATE_KEY = "ghost_rivals_v1"
 MAX_REMOTE_CHOICES = 1024
 LIMITS = {"last_step":MAX_STEP, "max_ahead":MAX_AHEAD, "counts":list(range(1,MAX_RIVALS+1))}
 NO_STRATEGY = "Choose a strategy to race rivals."
+OWN_RECORDING_REASON = "Your PB ghost is included automatically."
 
 
 def wire(row):
@@ -484,7 +485,7 @@ class Rivals:
                 self.remote_choices.update((value,owner) for value in remote if value not in self.local_choices)
                 self._store()
 
-    def _owned_players(self):
+    def _owned_players(self, *, legacy_names=True):
         """Every player identity that is the current player's; none is an automatic rival.
 
         The local recorder identity, the signed-in community account, and each
@@ -492,7 +493,8 @@ class Rivals:
         when the player goes by its author's name)."""
         own = self.tracker.db.get_state('ghost_player_id', None)
         method = getattr(self.population, 'owned_player_ids', None)
-        owned = set(method(own, names=self._own_names()) if method else ())
+        names = self._own_names() if legacy_names else ()
+        owned = set(method(own, names=names) if method else ())
         owned.update((own, self.community.owner()))
         return frozenset(value for value in owned if value)
 
@@ -512,6 +514,18 @@ class Rivals:
         owners = self._owned_players() if owners is None else owners
         local = row.get("manual_only") is True and isinstance(row.get("ghost"), AttemptGhost)
         return {**row, "_owned": local or row.get("player_id") in owners}
+
+    def is_owned_recording(self, row):
+        """Explicit Add uses established identities, never a matching credit or name.
+
+        Automatic populations retain their historical schema1 collection rule.
+        A reviewed schema2 collection already identifies its author by account ID.
+        """
+        return self._seat_row(row, self._owned_players(legacy_names=False))["_owned"]
+
+    def check_rival_owner(self, row):
+        if self.is_owned_recording(row):
+            raise ValueError(OWN_RECORDING_REASON)
 
     def lineup_state(self):
         """(state, reason) for the lineup: no_strategy, loading or ready.
@@ -737,6 +751,7 @@ class Rivals:
         row = self._compatible_record(identity,self.identity)
         if row is None:
             raise ValueError("That ghost is not compatible with this target.")
+        self.check_rival_owner(row)
         if any(item.get("id")==row["id"] for item in self.rows):
             raise ValueError("That ghost is already in your rivals.")
         if row["id"] in self.pins.get(self._key(target),{}).values():

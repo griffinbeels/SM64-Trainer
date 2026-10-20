@@ -19,6 +19,8 @@ UID = "11111111-1111-4111-8111-111111111111"
 
 
 class Community:
+    refused_assets = staticmethod(frozenset)
+
     def __init__(self, row):
         self.state = {"uid": UID, "enabled": True, "status": "active"}
         self.account = SimpleNamespace(snapshot=lambda: dict(self.state))
@@ -106,6 +108,42 @@ def test_save_remove_for_b_while_a_is_active_never_cycles_practice(library):
     command["action"] = "remove"
     assert client.post("/api/ghost/rivals/saved", json=command).json()["state"] == "removed"
     assert session._community.calls == reads_before_remove and live_state(session._rivals, native) == before
+
+
+@pytest.mark.parametrize("identity", ["local-owner", UID])
+def test_own_recordings_stay_visible_but_forged_add_and_replace_cannot_write(library, identity):
+    client, session, row, native, _ = library
+    session._community.state.update(authenticated=True, name="Same name")
+    session._rivals.community.sync = session._community
+    session._tracker.db.set_state("ghost_player_id", "local-owner")
+    row.update(player_id=identity, player_name="Same name")
+    key = session._rivals._key(OTHER)
+    session._rivals.pins[key] = {"3": row["id"]}
+    session._rivals._store()
+    before = live_state(session._rivals, native), session._tracker.db.get_state("ghost_rivals_v1", None)
+    response = client.get("/api/library/community/recordings", params={
+        "target": json.dumps(row["target"]), "clock": "igt", "rom": "us", "strategy": "Standard"})
+    own = response.json()["recordings"][0]
+    assert own["id"] == row["id"] and own["is_own"] and own["saved_slot"] == 3
+    assert not own["can_add"] and "PB ghost is included" in own["unavailable_reason"]
+    for slot in (None, 0):
+        response = client.post("/api/ghost/rivals/saved", json={
+            "target": OTHER, "action": "add", "id": row["id"], "slot": slot})
+        assert response.status_code == 422 and "PB ghost is included" in response.json()["detail"]
+        assert (live_state(session._rivals, native), session._tracker.db.get_state("ghost_rivals_v1", None)) == before
+    response = client.post("/api/ghost/rivals/saved", json={"target": OTHER, "action": "remove", "id": row["id"]})
+    assert response.status_code == 200 and response.json()["state"] == "removed"
+    assert response.json()["pins"] == {} and live_state(session._rivals, native) == before[0]
+
+
+def test_matching_account_name_does_not_disable_a_strangers_recording(library):
+    client, session, row, _, _ = library
+    session._community.state.update(authenticated=True, name=row["player_name"])
+    session._rivals.community.sync = session._community
+    result = decorate_page({"recordings": [row]}, session._tracker, session._rivals, "recordings")
+    assert result["recordings"][0]["can_add"] and not result["recordings"][0]["is_own"]
+    response = client.post("/api/ghost/rivals/saved", json={"target": OTHER, "action": "add", "id": row["id"]})
+    assert response.status_code == 200 and response.json()["state"] == "added"
 
 
 def test_active_saved_namespace_uses_normal_refresh_door(library):

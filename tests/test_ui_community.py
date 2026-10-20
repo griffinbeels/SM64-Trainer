@@ -25,6 +25,7 @@ if _MISSING:
 
 from uilab.driver import default_wait_ms, get_driver  # noqa: E402
 import ui_fixture  # noqa: E402
+from tests.player_pages_fixture import Account as ProgressAccount  # noqa: E402
 
 WIDTHS = (1500, 850, 390)
 MODAL = ".modal-body"
@@ -43,6 +44,12 @@ class FixtureAccount:
         self.slow_profile = slow_profile
         self.uid = UID
         self.taken = {"taken"}
+        self.progress = ProgressAccount(virgin=status == "new")
+        self.progress.publication.update(uid=UID)
+        self.progress.profile.update(uid=UID)
+        if status != "new":
+            # Established accounts have already chosen to pause PB updates.
+            self.progress.publication.update(revision=1,consent_revision=1)
         self.state = {
             "enabled": True, "authenticated": status != "signed_out", "stored": status != "signed_out",
             "provider": "twitch" if status != "signed_out" else None,
@@ -108,19 +115,11 @@ class FixtureAccount:
 
     async def request_json(self, method, path, **kwargs):
         self.calls.append(("remote", method, path, kwargs.get("json")))
-        # These reads model M2's separate, initially unpublished saved-PB data.
-        publication = {"v": 2, "uid": self.uid, "revision": 0, "consent_revision": 0,
-                       "enabled": False, "visible": False, "publisher": None,
-                       "notice_version": "progress-1", "content_hash": None,
-                       "captured_utc": None, "synced_utc": None,
-                       "limits": {"rows": 4096, "bytes": 1048576}}
-        player_profile = {"v": 2, "uid": self.uid, "revision": 0, "bio": "", "socials": []}
-        reads = {"/v2/account/progress": publication,
-                 "/v2/account/player-profile": player_profile,
-                 "/v2/account/player-export": {"v": 2, "uid": self.uid, "profile": player_profile,
-                                               "publication": publication, "snapshot": None}}
-        if method == "GET" and path in reads:
-            return reads[path]
+        if method == "GET" and path == "/v2/account/player-export":
+            return {"v":2,"uid":self.uid,"profile":self.progress.profile,
+                    "publication":self.progress.publication,"snapshot":None}
+        if path.startswith("/v2/account/"):
+            return self.progress._route(method,path,kwargs.get("json"),kwargs.get("params",{}))
         if path == "/v1/account/export":
             return {"v": 1, "account": {"uid": self.uid}, "recordings": [], "complete": True}
         if path == "/v1/account/withdraw":
@@ -290,8 +289,8 @@ def test_sign_in_is_the_first_step_with_discord_and_twitch_only(monkeypatch, tmp
             assert page.problems() == []
 
 
-@pytest.mark.parametrize("status", ["new", "consent_required"])
-def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_path, status):
+@pytest.mark.parametrize("status,share_pbs", [("new",True),("new",False),("consent_required",None)])
+def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_path, status, share_pbs):
     account = FixtureAccount(status)
     with community_app(monkeypatch, tmp_path, account) as (base, _):
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
@@ -299,11 +298,14 @@ def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_
             page.wait_for(".practice-page")
             open_account(page)
             page.wait_for(".community-sheet .search-select-trigger")
-            assert page.evaluate("""Array.from(document.querySelectorAll(
-                '.community-form input[type=checkbox]')).every(box => !box.checked)""")
+            pb_choice = ".community-form .community-pb-sharing input"
+            assert page.count(pb_choice) == int(status == "new")
+            if status == "new":
+                assert page.evaluate("document.querySelector("+json.dumps(pb_choice)+").checked")
+                if not share_pbs:
+                    page.click(pb_choice)
             assert page.evaluate("document.querySelector('.community-form button[type=submit]').disabled")
             assert ("shared automatically" if status == "new" else "sharing stays off") in modal_text(page)
-            assert not page.evaluate("Array.from(document.querySelectorAll('.community-check')).some(label => label.innerText.includes('Automatically share'))")
             page.click(".community-sheet .search-select-trigger")
             page.wait_for(".community-sheet .search-menu-option")
             chosen = page.evaluate("document.querySelector('.community-sheet .search-menu-option').dataset.value")
@@ -311,8 +313,7 @@ def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_
             page.wait_for(".community-sheet input[type=checkbox]")
             assert page.evaluate("!document.querySelector('.community-sheet input[type=checkbox]').checked")
             assert "does not create ghosts or verify name ownership" in modal_text(page)
-            assert page.evaluate("""Array.from(document.querySelectorAll(
-                '.community-form input[type=checkbox]')).every(box => !box.checked)""")
+            assert not page.evaluate("document.querySelector('.community-sheet input[type=checkbox]').checked")
             capture_widths(page, f"profile-defaults-{status}")
             # Consent enables the disclosed default; import stays unselected.
             consent = ".community-form > .community-check:last-of-type input"
@@ -322,6 +323,10 @@ def test_profile_discloses_new_sharing_and_keeps_import_opt_in(monkeypatch, tmp_
             wait_until(page, "!document.querySelector('.modal-body')", "profile completion")
             assert ("profile", chosen, {"terms_version": "t1", "privacy_version": "p1",
                                        "sharing": status == "new", "sheet_runner": chosen}) in account.calls
+            if status == "new":
+                control = [call for call in account.calls if call[:3] == ("remote","PUT","/v2/account/progress/control")]
+                assert control and control[0][3]["action"] == ("enable" if share_pbs else "disable")
+                assert account.progress.publication["enabled"] == share_pbs
             assert not page.count(".modal-body"), "Unchecked Sheet import unexpectedly kept its flow open"
             assert page.problems() == []
 
@@ -403,7 +408,7 @@ def test_settings_use_registered_name_sharing_and_sign_out_routes(monkeypatch, t
             open_account(page)
             page.wait_for(".community-privacy")
             set_name(page, "Changed fixture name")
-            page.click(".community-check input[type=checkbox]")
+            page.click(".community-form > .community-check input[type=checkbox]")
             click_text(page, "Done")
             wait_until(page, "!document.querySelector('.modal-body')", "settings save")
             assert ("rename", "Changed fixture name") in account.calls
@@ -425,7 +430,7 @@ def test_sharing_opt_out_explains_effect_and_cancel_preserves_choice(monkeypatch
             page.wait_for(".practice-page")
             open_account(page)
             page.wait_for(".community-privacy")
-            page.click(".community-check input[type=checkbox]")
+            page.click(".community-form > .community-check input[type=checkbox]")
             assert "won't receive your new ghosts" in modal_text(page)
             assert "Existing shared ghosts stay available" in modal_text(page)
             capture_widths(page, "sharing-off-pending")
@@ -435,8 +440,8 @@ def test_sharing_opt_out_explains_effect_and_cancel_preserves_choice(monkeypatch
             assert not any(call[0] == "sharing" for call in account.calls)
             open_account(page)
             page.wait_for(".community-privacy")
-            assert page.evaluate("document.querySelector('.community-check input').checked")
-            page.click(".community-check input[type=checkbox]")
+            assert page.evaluate("document.querySelector('.community-form > .community-check input').checked")
+            page.click(".community-form > .community-check input[type=checkbox]")
             click_text(page, "Done")
             wait_until(page, "!document.querySelector('.modal-body')", "saved opt-out")
             assert ("sharing", False) in account.calls

@@ -224,6 +224,13 @@ changed. Off retains the last visible snapshot. Withdrawal removes it. Switching
 removes the former snapshot and enables the explicitly selected publisher.
 Re-enable alone cannot make a withdrawn body public.
 
+Trainer defaults saved-PB sharing on only for remote controls with no previous
+choice (revision zero, no publisher or snapshot). A checked signup control allows
+opting out before activation; the local-only `share_pbs` field never reaches the
+strict v1 profile schema. Explicit pauses, withdrawals and existing publishers
+remain authoritative. Default initialization uses the same CAS/notice fence as
+manual enabling, runs outside status GETs, and needs no schema migration.
+
 `PUT /v2/account/progress/snapshot` replaces the whole current state. Its exact
 content preserves current save order, raw and effective PB regions separately,
 nullable strategy/source/dates, stored frames and explicit partial coverage.

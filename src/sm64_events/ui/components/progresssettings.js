@@ -1,4 +1,4 @@
-// Saved-PB publication has its own consent, publisher and withdrawal controls.
+// Saved-PB sharing defaults on; explicit choices and publisher ownership persist.
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
@@ -36,6 +36,11 @@ function useProgressState() {
     return () => { alive.current = false; generation.current++; request.current?.abort();
       window.removeEventListener("community-account-changed",changed); };
   },[]);
+  useEffect(() => {
+    if (!data?.local?.default_pending || data.local.last_error || busy) return undefined;
+    const timer = setTimeout(() => refresh(),2000);
+    return () => clearTimeout(timer);
+  },[data,busy]);
   function settled() { writing.current = false; if (alive.current) setBusy(false); }
   async function run(operation) {
     if (writing.current) return {ok:false};
@@ -56,6 +61,14 @@ function useProgressState() {
   return {data,error,busy,loading,refresh,run};
 }
 
+function publicationMessage({ publication, local }, mine) {
+  if (local.default_pending) return local.share_pbs
+    ? "PB sharing is on. Waiting for the first sync." : "Saving sharing preference…";
+  if (!publication.enabled) return "PB updates are paused. Previously shared PBs stay visible until you remove them.";
+  return mine ? "This practice profile publishes saved PB changes automatically."
+    : "Another practice profile publishes this account’s saved PBs.";
+}
+
 function PublicationSummary({ data }) {
   const publication = data.publication, local = data.local;
   const published = publication.visible && Boolean(publication.content_hash);
@@ -63,10 +76,7 @@ function PublicationSummary({ data }) {
   const updated = stamp(publication.synced_utc);
   return html`<div class="progress-publication-summary">
     <p>${published ? `Shared saved PBs${updated ? ` · Last synced ${updated}` : ""}` : "No saved PBs are currently public."}</p>
-    <p class="meta">${publication.enabled
-      ? mine ? "This practice profile publishes saved PB changes automatically."
-        : "Another practice profile publishes this account’s saved PBs."
-      : "PB updates are paused. Previously shared PBs stay visible until you remove them."}</p>
+    <p class="meta">${publicationMessage(data,mine)}</p>
     ${publication.publisher ? html`<p class="meta">Publishing profile: ${publication.publisher.label || "Another Trainer profile"}</p>` : null}
     ${local.dirty && publication.enabled && mine ? html`<p class="meta" role="status">Your latest saved PB changes are waiting to sync.</p>` : null}
     ${local.last_error ? html`<p class="error" role="alert">${typeof local.last_error === "string" ? local.last_error
@@ -149,11 +159,19 @@ function ProfileDetails({ profile, busy, run }) {
   </form>`;
 }
 
+function PbSharingToggle({ data, busy, onChange }) {
+  const {publication,local,preview} = data;
+  return html`<label class="community-check"><input type="checkbox"
+    checked=${local.default_pending ? local.share_pbs : publication.enabled}
+    disabled=${busy || !publication.enabled && preview.oversize}
+    onchange=${event => onChange(event.currentTarget.checked)} />
+    <span>Automatically share my PBs<small>Saved best times appear on your player page.</small></span></label>`;
+}
+
 function ProgressControls({ data, busy, error, run, onOpenPlayer }) {
   const [choice,setChoice] = useState(null), [notice,setNotice] = useState(null);
   const publication = data.publication;
   const mine = samePublisher(publication.publisher,data.local.publisher);
-  const publishingAction = choosePublisherAction(publication,mine);
   const choose = action => { setNotice(null); setChoice({action,revision:publication.revision}); };
   async function control(action, revision, accepted = false) {
     const result = await run(() => send("POST",`${STATUS}/control`,{action,expected_revision:revision,
@@ -161,14 +179,19 @@ function ProgressControls({ data, busy, error, run, onOpenPlayer }) {
     if (result.ok) { setChoice(null); setNotice(action === "withdraw" ? "Shared PBs removed." : "Publication settings saved."); }
     else if (result.status === 409) setChoice(null);
   }
+  function setSharing(enabled) {
+    if (!enabled) return control("disable",publication.revision);
+    if (publication.publisher && !mine) return choose("switch");
+    return control("enable",publication.revision,true);
+  }
   return html`<div class="progress-sharing-controls">
+    <${PbSharingToggle} data=${data} busy=${busy} onChange=${setSharing} />
     <${PublicationSummary} data=${data} />
     ${data.preview.oversize ? html`<p class="error" role="alert">${data.preview.reason || "This profile exceeds the saved-PB publication limits."}</p>` : null}
     <div class="community-actions">
       <button type="button" disabled=${busy} onclick=${() => onOpenPlayer?.(data.uid)}>Preview shared page</button>
-      ${!publication.enabled || !mine ? html`<button type="button" class="primary-button" disabled=${busy || data.preview.oversize}
-        onclick=${() => choose(publishingAction)}>${publishingAction === "switch" ? "Publish from this profile" : "Share saved PBs"}</button>` : null}
-      ${publication.enabled ? html`<button type="button" disabled=${busy} onclick=${() => control("disable",publication.revision)}>Pause PB updates</button>` : null}
+      ${publication.publisher && !mine ? html`<button type="button" disabled=${busy || data.preview.oversize}
+        onclick=${() => choose("switch")}>Publish from this profile</button>` : null}
       ${publication.enabled && mine ? html`<button type="button" disabled=${busy || data.preview.oversize}
         onclick=${() => run(() => send("POST",`${STATUS}/sync`))}>Sync now</button>` : null}
       ${publication.visible && publication.content_hash ? html`<button type="button" class="danger" disabled=${busy}
@@ -179,10 +202,6 @@ function ProgressControls({ data, busy, error, run, onOpenPlayer }) {
     ${choice ? html`<${PublicationConfirm} choice=${choice} data=${data} busy=${busy} error=${error}
       onClose=${() => setChoice(null)} onCommit=${(selected,accepted) => control(selected.action,selected.revision,accepted)} />` : null}
   </div>`;
-}
-
-function choosePublisherAction(publication, mine) {
-  return publication.publisher && !mine ? "switch" : "enable";
 }
 
 export function ProgressSettings({ onOpenPlayer }) {

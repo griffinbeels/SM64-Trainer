@@ -105,6 +105,7 @@ def _add(rivals, context, choices, rows, identifier, slot):
     row = rivals._compatible_record(identifier,context)
     if row is None or identifier in rivals.community.refused():
         raise ValueError("That ghost is not compatible with this target.")
+    rivals.check_rival_owner(row)
     if identifier in choices.values():
         raise ValueError("That ghost is already chosen in a rival slot, including hidden slots.")
     if any(item.get("id")==identifier for item in rows.values()):

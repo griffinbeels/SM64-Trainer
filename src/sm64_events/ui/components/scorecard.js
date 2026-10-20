@@ -383,8 +383,7 @@ function ScorecardGrid({ t, data, openLibrary, sourceNames = [], readOnly = fals
 export function ReadonlyScorecard({ t, card, playerName, openLibrary = null }) {
   return html`<section class="practice-card scorecard-card player-scorecard">
     <h3>Scorecard</h3>
-    <p class="meta">You and ${playerName}${" · "}saved PBs in the same comparison context.</p>
-    <p class="meta">Each column totals its known times. Differences use only entries you both share.</p>
+    <p class="meta" title="Totals include known times. Differences compare shared entries only.">You and ${playerName}${" · "}saved PBs</p>
     <${ScorecardGrid} t=${t} data=${card} openLibrary=${openLibrary} readOnly neutral
       youLabel="You" goalLabel="Player" />
   </section>`;

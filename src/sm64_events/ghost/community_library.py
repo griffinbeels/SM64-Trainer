@@ -1,5 +1,6 @@
 """Local bindings and rival capability for community Library read models."""
 from sm64_events.ghost.sharing_targets import bind, binding_index, describe
+from sm64_events.ghost.rivals import OWN_RECORDING_REASON
 
 
 def definitions(tracker):
@@ -43,7 +44,10 @@ def decorate_page(page, tracker, rivals, collection):
                   else f"segment:{key}") if key is not None else None
         saved = ({"saved_slot": next((int(slot) for slot, identifier in pins.items()
                                       if identifier == row["id"]), None)} if collection == "recordings" else {})
+        owned = collection == "recordings" and rivals is not None and rivals.is_owned_recording(row)
+        if owned:
+            reason = OWN_RECORDING_REASON
         decorated.append({**row, **saved, "local_target": target, "entity_key": entity,
                           "can_add": target is not None and reason is None,
-                          "unavailable_reason": reason})
+                          "unavailable_reason": reason, "is_own": owned})
     return {**page, collection: decorated, "available": True, "reason": None}

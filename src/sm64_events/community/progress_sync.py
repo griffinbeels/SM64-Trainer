@@ -157,7 +157,13 @@ class ProgressSync:
                 if time.monotonic() >= self._cooldown:
                     if value.get("needs_refresh") or not publication:
                         publication = await self.refresh()
-                    if publication.get("enabled"):
+                    pending_pause = self._local(owner).get("pending_pause_revision")
+                    if type(pending_pause) is int and publication.get("revision") == pending_pause:
+                        pending_action = self._local(owner).get("pending_privacy_action", "disable")
+                        await self.control("withdraw" if pending_action == "withdraw" else "disable", pending_pause)
+                    elif state.virgin_publication(publication):
+                        await self.initialize_defaults(publication=publication)
+                    elif publication.get("enabled"):
                         await self.synchronize()
             except CommunityError as error:
                 if error.code in ("sign_in_required", "local_profile_unavailable"):
@@ -214,6 +220,11 @@ class ProgressSync:
         previous = local.get("publication")
         if previous and previous["revision"] > value["revision"]:
             raise CommunityError("revision_conflict", "Publication changed. Refresh before trying again.")
+        pending = local.get("pending_pause_revision")
+        fulfilled = (not value["enabled"] and (local.get("pending_privacy_action") != "withdraw"
+                     or not value["visible"] and value["content_hash"] is None))
+        if type(pending) is int and (value["revision"] > pending or fulfilled and not state.virgin_publication(value)):
+            local = {**local, "pending_pause_revision": None, "pending_privacy_action": None}
         self._store({**local, "publication": value, "needs_refresh": False, "last_error": None})
         return value
 
@@ -222,6 +233,59 @@ class ProgressSync:
         owner, database = context[:2]
         value = await self._request("GET", "/v2/account/progress", owner=owner, context=context)
         return self._accept(value, owner, database, context=context)
+
+    def prepare_profile_choice(self, choice):
+        """Persist an explicit new-account opt-out before activation can wake IO."""
+        if choice is None or self.account.snapshot().get("status") != "new":
+            return
+        self.remember_choice(choice)
+
+    def remember_choice(self, choice, *, revision=None, action="disable"):
+        """Local intent survives offline removal; it never authorizes takeover."""
+        snapshot = self.account.snapshot()
+        if snapshot.get("enabled") is False or not (snapshot.get("authenticated") or snapshot.get("stored")):
+            raise CommunityError("sign_in_required", "Sign in to choose saved-PB sharing.")
+        if state.remember_choice(self._database(), state.checked_uuid(snapshot.get("uid")), choice):
+            self._fence += 1
+            self.invalidate()
+        if revision is not None:
+            owner = state.checked_uuid(snapshot.get("uid"))
+            self._store({**self._local(owner), "dirty": True,
+                         "pending_pause_revision": revision if choice is False else None,
+                         "pending_privacy_action": action if choice is False else None})
+
+    async def profile_completed(self):
+        """Default initialization is best effort; account completion still succeeds."""
+        if self._wake is not None:
+            self._wake.set()
+        try:
+            await self.initialize_defaults()
+        except CommunityError as error:
+            self._remember_error(error)
+        except Exception:  # noqa: BLE001 -- a background publication fault cannot undo account completion
+            self._remember_error(CommunityError("progress_unavailable"))
+
+    async def initialize_defaults(self, *, publication=None):
+        """Apply the default only to virgin controls, using the existing CAS fence."""
+        context = self._context()
+        owner, database = context[:2]
+        if publication is None:
+            publication = await self.refresh(context=context)
+        self._guard(context)
+        if not state.virgin_publication(publication):
+            return publication
+        enabled = state.default_choice(database, owner) is not False
+        try:
+            result = await self.control("enable" if enabled else "disable", publication["revision"],
+                                        state.NOTICE if enabled else None, _default_context=context)
+            return result["publication"]
+        except CommunityError as error:
+            if error.code != "revision_conflict":
+                raise
+            current = self._context()
+            if current[0] != owner or current[1] is not database or current[3] != context[3]:
+                raise CommunityError("canceled", "Your account or local profile changed. Review its sharing settings.") from None
+            return await self.refresh(context=current)  # Another explicit choice won; never overwrite it.
 
     async def _content(self):
         if self._project is None:
@@ -288,7 +352,11 @@ class ProgressSync:
             conflict = bool(publication["publisher"] and not state.same_publisher(publication["publisher"], publisher))
             return {"available": True, "reason": None, "uid": owner, "publication": publication,
                     "local": {"publisher": publisher, "dirty": local["dirty"],
-                              "last_error": state.display_error(local.get("last_error")), "conflict": conflict},
+                              "last_error": state.display_error(local.get("last_error")), "conflict": conflict,
+                              "share_pbs": (state.default_choice(context[1], owner) is not False
+                                            if state.virgin_publication(publication) else publication["enabled"]),
+                              "pause_pending": type(local.get("pending_pause_revision")) is int,
+                              "default_pending": state.virgin_publication(publication)},
                     "preview": preview,
                     "consent": {"version": state.NOTICE, "text": state.NOTICE_TEXT},
                     "player_profile": self._profile[1]}
@@ -305,12 +373,14 @@ class ProgressSync:
                 "captured_utc": utc_now(), "content_hash": hashlib.sha256(canonical(content)).hexdigest(),
                 "content": content}
 
-    async def control(self, action, revision, notice=None):
+    async def control(self, action, revision, notice=None, *, _default_context=None):
         if action not in ("enable", "disable", "withdraw", "switch") or type(revision) is not int or revision < 0:
             raise CommunityError("invalid_progress", "Choose a publication action from its current preview.")
         if action in ("enable", "switch") and notice != state.NOTICE:
             raise CommunityError("progress_consent_required", "Review and accept what will be shared first.")
         async with self._control_lock:
+            if _default_context is not None:
+                self._guard(_default_context)
             context = self._context()
             owner, database = context[:2]
             if action in ("enable", "switch"):
@@ -319,6 +389,9 @@ class ProgressSync:
                                                        {"revision": revision, "consent_revision": 0}, content, owner))
                 if serial != self._serial:
                     raise CommunityError("invalid_progress", "Saved PBs changed while the preview loaded. Review it again.")
+            # An offline pause/withdraw is still an explicit opt-out. Keep it
+            # before HTTP so a later virgin-state retry cannot turn sharing on.
+            self.remember_choice(action in ("enable", "switch"), revision=revision, action=action)
             self._fence += 1
             context = self._context()
             # Persist only uncertainty about a control result, never a body.
@@ -345,6 +418,8 @@ class ProgressSync:
         async with self._sync_lock:
             context = self._context()
             owner, database = context[:2]
+            if type(self._local(owner).get("pending_pause_revision")) is int:
+                return  # A pending local opt-out never publishes while offline or awaiting its server fence.
             content, serial = await self._read_content(context)
             if serial != self._serial:
                 self._finish(context, serial, clean=False)

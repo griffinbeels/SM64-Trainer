@@ -109,7 +109,7 @@ mutations need the local request capability above. Cloud protocol:
 | `POST /api/community/auth/sign-out` | Forget the stored credential; the sign-in step returns. |
 | `POST /api/community/account/refresh` | Re-read the account from the cloud. |
 | `GET /api/community/names/check?name=` | `{name, available}`: whether a player name is free (`available: null` when the cloud cannot say). |
-| `PUT /api/community/account` `{name, terms_version, privacy_version, sharing, sheet_runner?}` | Create the account: name, consent and sharing. |
+| `PUT /api/community/account` `{name, terms_version, privacy_version, sharing, sheet_runner?, share_pbs?}` | Create the account: name, consent and ghost sharing. The optional local-only PB choice defaults on for a new account; false is saved before activation. It is stripped from the strict cloud v1 profile body. |
 | `PUT /api/community/account/name` `{name}` | Rename (required after a moderation rename). |
 | `PUT /api/community/account/sharing` `{enabled}` | Turn automatic sharing on or off. |
 | `GET /api/community/account/export` | Download ghost/account data plus `player_page` (profile, controls and current snapshot). Both reads bind the same UUID/auth session; a switch discards the result. Older services explicitly mark unavailable player-page export. |
@@ -124,9 +124,9 @@ Trainer account. It never verifies legitimate gameplay or an unproven Sheet link
 |---|---|
 | `GET /api/community/players?prefix=&cursor=` | Up to 20 UUID/name matches, `next_cursor` and `complete`; bounded prefix/keyset lookup. |
 | `GET /api/community/players/{uid}?scope=overall` | `{player,progress,comparison,partial_reason}`. UUID navigation survives rename. Header includes bounded bio/socials, exact claim explanation and proven Sheet association only. |
-| `GET /api/community/players/{uid}/recordings?cursor=` | At most 20 strict recording rows with the Library's local binding/Add-rival capability/saved slot. Current publication gates and owner epoch protect paging. Actual recording time stays separate from a current saved PB. |
+| `GET /api/community/players/{uid}/recordings?cursor=` | At most 20 strict recording rows with the Library's local binding/Add-rival capability/saved slot and `is_own`. Canonical own recordings remain visible with `can_add:false` and a reason; existing pins can be removed. Current publication gates and owner epoch protect paging. Actual recording time stays separate from a current saved PB. |
 | `GET /api/community/progress` | Own publication state, local publisher/dirty/error/conflict, bounded preview counts/bytes/coverage, versioned consent text and public profile details. No current snapshot body queue or private routes/definitions are returned for upload. |
-| `POST /api/community/progress/control` | `{action:enable|disable|withdraw|switch,expected_revision,notice_version?}`. Enable/switch require the current explicit consent after preview. Disable pauses future updates; withdraw hides/deletes the retained snapshot. Switch deliberately replaces the sole publisher. |
+| `POST /api/community/progress/control` | `{action:enable|disable|withdraw|switch,expected_revision,notice_version?}`. Enable/switch carry the current disclosure version. Sharing defaults on only for untouched remote controls; explicit pauses, withdrawals and publishers survive upgrades. Status GETs never initialize defaults. Disable pauses future updates; withdraw hides/deletes the retained snapshot. Switch deliberately replaces the sole publisher after confirmation. |
 | `POST /api/community/progress/sync` | Recompute current facts, reconcile revision/hash/publisher and publish only a changed authorized snapshot. Conflicts require review; no automatic publisher takeover. |
 | `PUT /api/community/player-profile` | `{expected_revision,bio,socials:[{kind:twitch|youtube|website,url}]}`; independent profile revision, bounded HTTPS links without credentials, no remote asset fetching or autoplay. |
 | `GET /api/community/progress/privacy` | Own retained publication state for signed-in/stored owners, including lapsed/suspended accounts; no local DB or active browsing/upload permission is required. |

@@ -103,6 +103,7 @@ function useProfileForm(account, busy, onSave) {
   const [runner, setRunner] = useState(renewing ? account.sheet_runner || "" : "");
   const [importTimes, setImportTimes] = useState(false);
   const [consent, setConsent] = useState(false);
+  const [sharePbs, setSharePbs] = useState(true);
   const sharing = renewing ? account.sharing === true : true;
   const nameState = useNameCheck(name, { original: renewing ? account.name : null });
   const policies = !account.policies_loading && account.terms_version_current && account.privacy_version_current;
@@ -113,12 +114,13 @@ function useProfileForm(account, busy, onSave) {
     nameState.ensure().then(checked => {
       if (checked.ok) onSave({ name: normalizedPlayerName(name), sharing,
         terms_version: account.terms_version_current, privacy_version: account.privacy_version_current,
-        sheet_runner: runner || null }, importTimes);
+        sheet_runner: runner || null,
+        ...(account.status === "new" ? {share_pbs:sharePbs} : {}) }, importTimes);
     });
   };
   const pickRunner = value => { setRunner(value); setName(value); setImportTimes(false); };
   return { rename, name, setName, runner, pickRunner, importTimes, setImportTimes, consent, setConsent,
-           sharing, nameState, policies, valid, save };
+           sharing, sharePbs, setSharePbs, nameState, policies, valid, save };
 }
 
 export function CommunityProfile({ account, busy, onSave }) {
@@ -133,6 +135,9 @@ export function CommunityProfile({ account, busy, onSave }) {
     <${NameState} state=${form.nameState} />
     ${!form.rename && html`<${SheetSection} groups=${groups} runner=${form.runner} importTimes=${form.importTimes}
       busy=${busy} onPick=${form.pickRunner} onImport=${form.setImportTimes} />
+    ${account.status === "new" ? html`<label class="community-check community-pb-sharing"><input type="checkbox" checked=${form.sharePbs}
+      disabled=${busy} onchange=${event => form.setSharePbs(event.currentTarget.checked)} />
+      <span>Automatically share my PBs<small>Your saved best times appear on your player page. Change this in Settings.</small></span></label>` : null}
     <${ConsentSection} account=${account} sharing=${form.sharing} consent=${form.consent} busy=${busy}
       policies=${form.policies} onConsent=${form.setConsent} />`}
     <div class="community-actions"><button class="primary-button" type="submit" disabled=${!form.valid || busy}>

@@ -94,7 +94,7 @@ def test_full_pins_request_explicit_slot_and_keep_hidden_and_other_namespace(tmp
         tracker.db.close()
 
 
-def test_hidden_duplicate_player_and_known_self_alias_are_not_duplicate_names(tmp_path, monkeypatch):
+def test_own_recordings_cannot_be_added_or_replaced_but_equal_names_are_allowed(tmp_path, monkeypatch):
     rivals,tracker,native,population,_ = controller(tmp_path,monkeypatch)
     rows = [other_record(population,number,player_name="Same name",player_id=player)
             for number,player in ((90,"local-owner"),(91,UID),(92,"stranger"),(93,UID))]
@@ -103,19 +103,22 @@ def test_hidden_duplicate_player_and_known_self_alias_are_not_duplicate_names(tm
         account=SimpleNamespace(snapshot=lambda:{
             "authenticated":True,"status":"active","uid":UID,"name":"Same name"}))
     rivals.options["count"] = 1
-    rivals.pins[rivals._key(OTHER)] = {"3":rows[0]["id"]}
+    rivals._store()
     try:
-        with pytest.raises(ValueError,match="already chosen"):
-            rivals.change_saved(OTHER,{"action":"add","id":rows[0]["id"]})
-        with pytest.raises(ValueError,match="player is already"):
-            rivals.change_saved(OTHER,{"action":"add","id":rows[1]["id"]})
+        before = deepcopy(rivals.pins),tracker.db.get_state(STATE_KEY,None),live_state(rivals,native)
+        for own in (rows[0],rows[1],rows[3]):
+            for slot in (None,0):
+                with pytest.raises(ValueError,match="PB ghost is included"):
+                    rivals.change_saved(OTHER,{"action":"add","id":own["id"],"slot":slot})
+                assert (rivals.pins,tracker.db.get_state(STATE_KEY,None),live_state(rivals,native)) == before
         result = rivals.change_saved(OTHER,{"action":"add","id":rows[2]["id"]})
         assert result["state"] == "added" and not result["seats"][0]["own"]
-        assert result["seats"][3]["own"]
-        # Explicitly replacing the same player's visible seat is legitimate.
-        rivals.options["count"] = 4
-        result = rivals.change_saved(OTHER,{"action":"add","id":rows[3]["id"],"slot":3})
-        assert result["seats"][3]["own"]
+        # Old own pins remain removable even when hidden.
+        rivals.pins[rivals._key(OTHER)]["3"] = rows[0]["id"]
+        rivals._store()
+        result = rivals.change_saved(OTHER,{"action":"remove","id":rows[0]["id"]})
+        assert result["state"] == "removed" and result["slot"] == 3
+        assert result["pins"] == {"0":rows[2]["id"]}
     finally:
         tracker.db.close()
 

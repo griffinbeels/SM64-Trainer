@@ -130,6 +130,8 @@ def _mount_privacy(router, account, progress):
         if progress is not None:
             progress._fence += 1
         try:
+            if progress is not None and getattr(getattr(progress, "service", None), "db", None) is not None:
+                progress.remember_choice(False, revision=body.expected_revision, action=body.action)
             result = await privacy.control(body.action, body.expected_revision)
         except CommunityError as error:
             raise http_error(error) from error

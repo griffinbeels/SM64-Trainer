@@ -15,8 +15,6 @@ import { readPlayerPage, useUiLog } from "../uilog.js";
 
 const html = htm.bind(h);
 const PUBLIC_PLAYERS = "/api/community/players";
-const timeLabel = value => value && Number.isFinite(Date.parse(value))
-  ? new Date(value).toLocaleString() : null;
 
 function safeSocials(socials) {
   return (Array.isArray(socials) ? socials : []).filter(social => {
@@ -54,33 +52,17 @@ function usePlayerData(uid, revision, initialScope) {
     error, retry:() => setRetry(value => value + 1)};
 }
 
-function PublicationState({ progress, partialReason }) {
-  const updated = timeLabel(progress?.synced_utc);
-  const coverage = progress?.coverage;
-  return html`<p class="meta player-publication-state">${progress?.published
-      ? `Published saved PBs${updated ? ` · Last synced ${updated}` : ""}`
-      : "This player has not shared saved PBs. Their available ghosts are shown below."}</p>
-    ${coverage && coverage.complete === false ? html`<p class="meta player-partial-coverage">
-      Partial publication${Number.isInteger(coverage.shared_rows) ? ` · ${coverage.shared_rows} shared PB rows` : ""}
-      ${Number.isInteger(coverage.withheld_rows) ? ` · ${coverage.withheld_rows} withheld` : ""}
-      ${Number.isInteger(coverage.unsupported_rows) ? ` · ${coverage.unsupported_rows} unsupported` : ""}.
-    </p>` : null}
-    ${partialReason ? html`<p class="meta player-partial-reason">${partialReason}</p>` : null}`;
-}
-
-function PlayerIdentity({ player, progress, partialReason }) {
+function PlayerIdentity({ player }) {
   const socials = safeSocials(player.socials);
   const explanation = player.claim_explanation || "This player has claimed their Trainer account. This does not verify a performance.";
   return html`<section class="practice-card player-profile-header">
     <h2>${player.name}${player.claimed ? html`<span class="player-claimed" title=${explanation}
       aria-label="Claimed Trainer account"><${Icon} name="check" size=${18} /></span>` : null}</h2>
-    ${player.claimed ? html`<p class="meta player-claim-explanation">${explanation}</p>` : null}
     ${player.bio ? html`<p class="player-bio">${player.bio}</p>` : null}
     ${socials.length ? html`<nav class="player-socials" aria-label="Player links">
       ${socials.map(social => html`<a key=${social.kind} href=${social.url}
         target="_blank" rel="noopener noreferrer">${({twitch:"Twitch",youtube:"YouTube",website:"Website"})[social.kind]}</a>`)}
     </nav>` : null}
-    <${PublicationState} progress=${progress} partialReason=${partialReason} />
     ${player.sheet_verified && player.sheet_runner ? html`<p class="meta">Linked Sheet runner: ${player.sheet_runner}</p>` : null}
   </section>`;
 }
@@ -88,14 +70,13 @@ function PlayerIdentity({ player, progress, partialReason }) {
 function Comparison({ t, comparison, player, scopes, scopeId, onScope, openLibrary }) {
   const context = comparison?.context;
   const playerRank = comparison?.player_rank;
-  const description = context ? ["Your scope and exclusions", "Saved PBs",
-    (context.regions || []).map(region => region.toUpperCase()).join(" + "),
-    context.default_rom ? `Unstamped times: ${context.default_rom.toUpperCase()}` : null].filter(Boolean).join(" · ") : null;
+  const description = context ? ["Saved PBs",
+    (context.regions || []).map(region => region.toUpperCase()).join(" + ")].filter(Boolean).join(" · ") : null;
   return html`<section class="player-comparison" data-scope=${scopeId}>
     <${ScopeChips} activeScopeId=${scopeId} onPick=${onScope} chips=${comparison?.chips || []} />
     <${RankCard} t=${t} data=${playerRank} scopes=${scopes || []} scopeId=${scopeId}
       onScope=${onScope} readOnly description=${description} className="player-comparison-context"
-      rankReason=${comparison?.rank_reason || "A full rank becomes available when saved PBs are shared."} />
+      rankReason=${comparison?.rank_reason ? "Some PBs are unavailable. Full rank unavailable." : "No shared PBs yet."} />
     ${comparison?.card ? html`<${ReadonlyScorecard} t=${t} card=${comparison.card}
       playerName=${player.name} openLibrary=${openLibrary} />` : null}
     ${playerRank ? html`<div class="practice-card"><${Breakdown} key=${scopeId} t=${t}
@@ -180,9 +161,9 @@ function PlayerGhosts({ uid, comparison }) {
   const {page,busy,choice,actionError,notice,load,change,close} = usePlayerGhosts(uid);
   const tiles = (comparison?.card?.rows || []).flatMap(row => row.tiles);
   return html`<section class="practice-card player-ghosts">
-    <div class="player-section-head"><h3>Available ghosts</h3><button type="button" disabled=${busy || page.loading}
-      onclick=${() => load()}>Refresh</button></div>
-    <p class="meta">These are playable recording times. A saved PB can be faster or use another strategy.</p>
+    <div class="player-section-head"><h3>Available ghosts</h3><button type="button" class="icon-button" disabled=${busy || page.loading}
+      title="Refresh ghosts" aria-label="Refresh ghosts" onclick=${() => load()}><${Icon} name="restart" /></button></div>
+    <p class="meta">Recording times may differ from saved PBs.</p>
     <${GhostListFeedback} page=${page} retry=${() => load()} />
     <div class="community-library-recordings">${page.rows.map(row => html`<${PlayerGhostRow}
       key=${row.id} row=${row} tiles=${tiles} busy=${busy} change=${change} />`)}</div>
@@ -201,11 +182,12 @@ function PlayerPageView({ t, uid, onClose, openLibrary, initialScope, onScopeCha
   useEffect(() => { if (scopeId) onScopeChange?.(scopeId); }, [scopeId]);
   return html`<div ref=${root} class="rank-page player-page" data-player-id=${uid}>
     <div class="player-page-tools"><button type="button" class="entity-back" onclick=${onClose}><${Icon} name="chevron" size=${15} /> Back</button>
-      <button type="button" onclick=${retry}>Refresh shared page</button></div>
+      <button type="button" class="icon-button" title="Refresh shared page" aria-label="Refresh shared page"
+        onclick=${retry}><${Icon} name="restart" /></button></div>
     ${error ? html`<section class="practice-card"><p class="error" role="alert">${error.message}</p>
       <button type="button" onclick=${retry}>Retry</button></section>` : null}
     ${!data && !error ? html`<section class="practice-card"><${InlineState}>Loading this player’s shared progress…<//></section>` : null}
-    ${data ? html`<${PlayerIdentity} player=${data.player} progress=${data.progress} partialReason=${data.partial_reason} />
+    ${data ? html`<${PlayerIdentity} player=${data.player} />
       <${Comparison} t=${t} comparison=${data.comparison} player=${data.player} scopes=${scopes}
         scopeId=${scopeId} onScope=${setScopeId} openLibrary=${openLibrary} />
       <${PlayerGhosts} key=${uid} uid=${uid} comparison=${data.comparison} />` : null}

@@ -977,7 +977,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     from sm64_events.server.ghost_api import mount_ghost_routes
     mount_ghost_routes(app, session=ghost)
     from sm64_events.server.community_api import create_community_router
-    app.include_router(create_community_router(community_account))
+    app.include_router(create_community_router(community_account, progress))
     from sm64_events.server.player_api import create_player_router
     app.include_router(create_player_router(service, progress, ghost, community_account))
     app.state.progress = progress

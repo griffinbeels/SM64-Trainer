@@ -511,6 +511,7 @@
   .player-socials { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
   .player-socials a { color: var(--gold); }
   .player-comparison { display: contents; }
+  .player-page .practice-card { align-self: stretch; width: 100%; box-sizing: border-box; }
   .player-scorecard .score-gap { color: inherit; }
   .player-ghosts { display: grid; gap: .75rem; }
   .player-ghosts p, .player-section-head h3 { margin: 0; }
@@ -9804,7 +9805,8 @@
 .community-form input[type=text] {width:100%;min-height:46px;box-sizing:border-box;}
 .community-sheet {border:1px solid var(--border);padding:16px;border-radius:8px;display:grid;gap:12px;}
 .community-check {display:flex;align-items:flex-start;gap:12px;line-height:1.5;}
-.community-check input {width:20px;height:20px;flex-shrink:0;}
+/* Reset the global input minimum and padding before aligning the actual checkbox to its first text line. */
+.community-check input {width:20px;height:20px;min-height:0;padding:0;box-sizing:border-box;flex-shrink:0;margin:calc((1lh - 20px)/2) 0 0;font:inherit;}
 .community-check small {display:block;color:var(--muted);}
 .community-actions {display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;margin-top:18px;}
 .community-actions button {min-height:44px;}

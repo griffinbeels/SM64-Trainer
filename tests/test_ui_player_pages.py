@@ -23,7 +23,7 @@ from uilab.driver import default_wait_ms  # noqa: E402
 from sm64_events.core import paths, uilog  # noqa: E402
 from sm64_events.community.progress_state import PROFILE_KEY  # noqa: E402
 from tests.community_library_fixture import LibrarySession  # noqa: E402
-from tests.player_pages_fixture import Account, INSTALLATION, LONG_PLAYER, PROFILE, PlayerBrowser, RIVAL, SAVED, UID  # noqa: E402
+from tests.player_pages_fixture import Account, INSTALLATION, LONG_PLAYER, OWN_RECORDING, PROFILE, PlayerBrowser, RIVAL, SAVED, UID  # noqa: E402
 
 SCREENSHOTS = ROOT/".tasks"/"m2-player-pages"/"screenshots"
 PLAYER = ".player-page"
@@ -33,9 +33,9 @@ NAV = ".app-sidebar .nav-item"
 
 
 @pytest.fixture
-def browser(tmp_path,monkeypatch):
+def browser(tmp_path,monkeypatch,request):
     original,holder = ui_fixture.create_app,{}
-    account = Account()
+    account = Account(virgin=getattr(request,"param",{}).get("virgin",False))
 
     def create(*args,**kwargs):
         service = kwargs["service"]
@@ -111,6 +111,70 @@ def rank_shape(page):
         "rows:document.querySelectorAll('.rank-breakdown tbody > tr').length}")
 
 
+def card_edges(page):
+    return page.evaluate("return Array.from(document.querySelectorAll('.player-page .practice-card')).map(card=>{"
+        "const box=card.getBoundingClientRect();return {name:card.className,left:box.left,right:box.right,width:box.width};})")
+
+
+def assert_card_alignment(edges):
+    assert len(edges)==5,edges
+    assert max(row["left"] for row in edges)-min(row["left"] for row in edges)<=1,edges
+    assert max(row["right"] for row in edges)-min(row["right"] for row in edges)<=1,edges
+
+
+def verify_card_alignment_guard(page,width):
+    """The actual five cards must align; removing the shipped fix must fail."""
+    aligned = card_edges(page)
+    assert_card_alignment(aligned)
+    removed = page.evaluate("for(const sheet of document.styleSheets){const rules=Array.from(sheet.cssRules);"
+        "const index=rules.findIndex(rule=>rule.selectorText==='.player-page .practice-card');"
+        "if(index>=0){window.__playerAlignmentRule={sheet,index,text:rules[index].cssText};sheet.deleteRule(index);return true;}}return false")
+    assert removed,"The scoped alignment rule was not reached"
+    try:
+        broken = card_edges(page)
+        with pytest.raises(AssertionError):
+            assert_card_alignment(broken)
+    finally:
+        page.evaluate("const saved=window.__playerAlignmentRule;saved.sheet.insertRule(saved.text,saved.index);delete window.__playerAlignmentRule")
+    assert_card_alignment(card_edges(page))
+    (SCREENSHOTS/f"player-card-edges-round2-{width}.json").write_text(
+        json.dumps({"aligned":aligned,"without_scoped_rule":broken},indent=2),encoding="utf-8")
+
+
+def checkbox_alignment(page):
+    return page.evaluate("return Array.from(document.querySelectorAll('.community-check')).filter(label=>label.getBoundingClientRect().height).map(label=>{"
+        "const input=label.querySelector('input'),span=label.querySelector('span');"
+        "const text=Array.from(span.childNodes).find(node=>node.nodeType===Node.TEXT_NODE&&node.textContent.trim());"
+        "const range=document.createRange();range.selectNodeContents(text);const lines=Array.from(range.getClientRects());"
+        "const box=input.getBoundingClientRect(),first=lines[0],style=getComputedStyle(input);return {text:text.textContent.trim(),lines:lines.length,"
+        "offset:Math.abs(box.top+box.height/2-first.top-first.height/2),input:{top:box.top,height:box.height,marginTop:style.marginTop,"
+        "padding:style.padding,lineHeight:style.lineHeight,boxSizing:style.boxSizing},first:{top:first.top,height:first.height}};})")
+
+
+def verify_checkbox_alignment(page):
+    geometry = checkbox_alignment(page)
+    capture(page,"progress-checkbox-current-round2-850.png",".community-form > .community-check")
+    (SCREENSHOTS/"progress-checkbox-current-round2-850.json").write_text(json.dumps(geometry,indent=2),encoding="utf-8")
+    assert len(geometry)==2 and all(row["offset"]<=1.5 for row in geometry),geometry
+    page.evaluate("for(const span of document.querySelectorAll('.community-check > span'))span.style.maxWidth='180px'")
+    wrapped = checkbox_alignment(page)
+    assert all(row["lines"]>=2 and row["offset"]<=1.5 for row in wrapped),wrapped
+    capture(page,"progress-checkbox-wrapped-round2-850.png",".progress-settings")
+    page.evaluate("for(const span of document.querySelectorAll('.community-check > span'))span.style.removeProperty('max-width')")
+    (SCREENSHOTS/"progress-checkbox-geometry-round2-850.json").write_text(
+        json.dumps({"normal":geometry,"wrapped":wrapped},indent=2),encoding="utf-8")
+
+
+def assert_own_row_disabled(browser,row,button="button"):
+    page = browser.page
+    selector = row+" "+button
+    assert page.evaluate("return document.querySelector("+json.dumps(selector)+").disabled")
+    assert "PB ghost is included automatically" in page.evaluate("return document.querySelector("+json.dumps(row)+").textContent")
+    writes_before = len(browser.session.requests)
+    page.evaluate("document.querySelector("+json.dumps(selector)+").click()")
+    assert len(browser.session.requests)==writes_before
+
+
 def own_course_rank(page,width):
     page.click(NAV+"[title='Rank']")
     page.wait_for(".rank-card .route-focus-control select")
@@ -120,7 +184,7 @@ def own_course_rank(page,width):
     page.wait_for(".rank-card .rank-ladder")
     result = rank_shape(page)
     assert result["bands"]==9 and result["factors"]==2 and result["tiles"]>=6
-    capture(page,f"own-rank-round1-{width}.png",".rank-card")
+    capture(page,f"own-rank-round2-{width}.png",".rank-card")
     return result
 
 
@@ -153,6 +217,16 @@ def consent(page,label):
     click_text(page,PUBLICATION+" > .modal-actions button",label)
 
 
+def set_pb_sharing(page,enabled):
+    selector = ACCOUNT+" .progress-sharing-controls > .community-check input"
+    if page.evaluate("return document.querySelector("+json.dumps(selector)+").checked") != enabled:
+        page.click(selector)
+    page.wait_for(selector+(":checked" if enabled else ":not(:checked)"))
+    page.wait_for(selector+":not(:disabled)")
+    page.wait_for(ACCOUNT+(" button:has-text('Sync now')" if enabled
+        else " .progress-publication-summary p:has-text('PB updates are paused')"))
+
+
 def assert_no_viewer_writes(browser):
     forbidden = {"/api/target","/api/scorecard/goal","/api/scorecard/regions","/api/marelo/exclude","/api/ranks/mode"}
     assert not [request for request in browser.session.requests if request[1] in forbidden]
@@ -174,8 +248,9 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     before = browser.practice()
     own_shape = own_course_rank(page,width)
     open_search(browser,course=True)
-    capture(page,f"player-page-round1-{width}.png")
-    capture(page,f"player-rank-round1-{width}.png",".rank-card")
+    capture(page,f"player-page-round2-{width}.png")
+    capture(page,f"player-rank-round2-{width}.png",".rank-card")
+    verify_card_alignment_guard(page,width)
     assert page.evaluate("return document.querySelector('.player-comparison').dataset.scope")=="course:2"
     assert page.evaluate("return document.querySelector('.player-page').dataset.playerId")==RIVAL
     assert page.evaluate("return document.querySelector('.player-profile-header h2').textContent")==LONG_PLAYER
@@ -196,7 +271,7 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     assert_rendered_log(browser,"player_page",lambda entry: entry["title"]==LONG_PLAYER and any(
         row.get("name")=="Fall onto the Caged Island" and row.get("time")=='12"00'
         and row.get("player")=='11"00' and row.get("delta")=="+1.00" for row in entry.get("rows",[])))
-    capture(page,f"player-ghosts-round1-{width}.png",".player-ghosts")
+    capture(page,f"player-ghosts-round2-{width}.png",".player-ghosts")
     assert page.evaluate("const root=document.querySelector('.player-page');return root.scrollWidth<=root.clientWidth+1")
     page.click(".player-ghost-row button")
     page.wait_ms(150)
@@ -212,6 +287,8 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     page.wait_for(".community-library-group")
     page.click(".community-library-group:first-child")
     page.wait_for(".community-library-player button.textlink")
+    own_row = ".community-library-recording[data-recording-id='"+OWN_RECORDING+"']"
+    assert_own_row_disabled(browser,own_row,".community-library-actions button")
     page.click(".community-library-recording:first-child .community-library-player button")
     page.wait_for(PLAYER+" .player-ghost-row")
     assert page.evaluate("return document.querySelector('.player-page').dataset.playerId")==RIVAL
@@ -220,7 +297,7 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     assert page.problems()==[]
 
 
-def test_explicit_publication_cancel_enable_self_preview_pause_and_withdraw(browser):
+def test_explicit_publication_checkbox_self_preview_pause_and_withdraw(browser):
     page = browser.page
     before = browser.practice()
     open_account(browser)
@@ -235,17 +312,13 @@ def test_explicit_publication_cancel_enable_self_preview_pause_and_withdraw(brow
     assert all(path=="/v2/account/player-profile" for path,_body in browser.account.writes)
     details_writes = len(browser.account.writes)
     page.set_viewport(850,1100)
-    capture(page,"progress-settings-850.png",".progress-settings")
+    verify_checkbox_alignment(page)
+    capture(page,"progress-settings-round2-850.png",".progress-settings")
     assert page.evaluate("const el=document.querySelector('.progress-settings');return el.scrollWidth<=el.clientWidth+1")
     page.set_viewport(1400,1100)
-    click_text(page,ACCOUNT+" button","Share saved PBs")
-    page.wait_for(".progress-sharing-preview")
-    assert page.evaluate("return document.querySelector("+json.dumps(PUBLICATION+" > .modal-actions .primary-button")+").disabled")
-    click_text(page,PUBLICATION+" > .modal-actions button","Cancel")
     assert len(browser.account.writes)==details_writes
-    click_text(page,ACCOUNT+" button","Share saved PBs")
-    consent(page,"Share saved PBs")
-    page.wait_for(ACCOUNT+" button:has-text('Pause PB updates')")
+    set_pb_sharing(page,True)
+    assert page.count(".progress-sharing-preview")==0
     assert browser.account.publication["visible"] and UID in browser.account.snapshots
     assert [path for path,_ in browser.account.writes[details_writes:]]==["/v2/account/progress/control","/v2/account/progress/snapshot"]
     click_text(page,ACCOUNT+" button","Preview shared page")
@@ -254,11 +327,11 @@ def test_explicit_publication_cancel_enable_self_preview_pause_and_withdraw(brow
     shared = page.evaluate("return Array.from(document.querySelectorAll('.player-scorecard .score-line .score-gap')).map(el=>el.textContent.trim()).filter(value=>value!=='—')")
     assert len(shared)==2 and set(shared)=={"+0.00"}
     assert page.count(".player-scorecard .score-card")==17
-    capture(page,"player-self-overall-1400.png")
+    assert_own_row_disabled(browser,".player-ghost-row[data-recording-id='"+OWN_RECORDING+"']")
+    capture(page,"player-self-overall-round2-1400.png")
     assert browser.practice()==before
     open_account(browser)
-    click_text(page,ACCOUNT+" button","Pause PB updates")
-    page.wait_ms(180)
+    set_pb_sharing(page,False)
     assert not browser.account.publication["enabled"] and browser.account.publication["visible"]
     click_text(page,ACCOUNT+" button","Remove shared PBs")
     page.wait_for(".modal:has(.modal-heading h2)")
@@ -270,13 +343,34 @@ def test_explicit_publication_cancel_enable_self_preview_pause_and_withdraw(brow
     assert page.problems()==[]
 
 
+@pytest.mark.parametrize("browser",[{"virgin":True}],indirect=True)
+def test_unchosen_account_defaults_to_sharing_and_an_explicit_uncheck_survives_reinitialization(browser):
+    page = browser.page
+    open_account(browser)
+    deadline = time.monotonic()+5
+    while not browser.account.publication["enabled"] and time.monotonic()<deadline:
+        page.wait_ms(100)
+    assert browser.account.publication["enabled"],{
+        "publication":browser.account.publication,"calls":browser.account.calls,
+        "task":None if browser.progress._task is None else browser.progress._task.done()}
+    page.wait_for(ACCOUNT+" .progress-sharing-controls > .community-check input:checked")
+    page.wait_for(ACCOUNT+" button:has-text('Sync now')")
+    assert browser.account.publication["visible"] and UID in browser.account.snapshots
+    assert page.count(".progress-sharing-preview")==0
+    assert [body["action"] for path,body in browser.account.writes if path=="/v2/account/progress/control"]==["enable"]
+    set_pb_sharing(page,False)
+    before = len(browser.account.writes)
+    ui_fixture._run_coro(browser.progress.initialize_defaults())
+    assert not browser.account.publication["enabled"] and browser.account.publication["visible"]
+    assert len(browser.account.writes)==before
+    assert page.problems()==[]
+
+
 def test_publication_conflict_requires_a_fresh_deliberate_publisher_switch(browser):
     page = browser.page
     open_account(browser)
-    click_text(page,ACCOUNT+" button","Share saved PBs")
-    page.wait_for(".progress-sharing-preview")
     browser.account.external_publisher()
-    consent(page,"Share saved PBs")
+    page.click(ACCOUNT+" .progress-sharing-controls > .community-check input")
     page.wait_for(ACCOUNT+" [role='alert']")
     assert len(browser.account.writes)==1
     expected = page.problems()
@@ -284,12 +378,12 @@ def test_publication_conflict_requires_a_fresh_deliberate_publisher_switch(brows
     click_text(page,ACCOUNT+" button","Publish from this profile")
     page.wait_for(".progress-sharing-preview")
     before = deepcopy(browser.account.publication)
-    capture(page,"publishing-switch-preview-1400.png",PUBLICATION)
+    capture(page,"publishing-switch-preview-round2-1400.png",PUBLICATION)
     click_text(page,PUBLICATION+" > .modal-actions button","Cancel")
     assert browser.account.publication==before
     click_text(page,ACCOUNT+" button","Publish from this profile")
     consent(page,"Use this profile")
-    page.wait_for(ACCOUNT+" button:has-text('Pause PB updates')")
+    page.wait_for(ACCOUNT+" .progress-sharing-controls > .community-check input:checked")
     assert browser.account.publication["publisher"]["installation_id"]==INSTALLATION
     assert browser.account.publication["visible"]
     assert page.problems()==[]
@@ -299,15 +393,15 @@ def test_partial_private_and_offline_are_distinct_read_states(browser):
     page = browser.page
     browser.account.partial=True
     open_search(browser)
-    assert "Partial publication" in page.evaluate("return document.querySelector('.player-profile-header').textContent")
-    assert "complete published rank cannot be shown" in page.evaluate("return document.querySelector('.player-profile-header').textContent")
+    assert "Some PBs are unavailable. Full rank unavailable." in page.evaluate("return document.querySelector('.rank-card').textContent")
+    assert "publication" not in page.evaluate("return document.querySelector('.player-profile-header').textContent")
     browser.account.private=True
-    click_text(page,PLAYER+" button","Refresh shared page")
+    page.click(PLAYER+" button[aria-label='Refresh shared page']")
     page.wait_ms(180)
     assert page.count(".player-scorecard")==0 and page.count(".player-ghost-row")==1
-    assert "has not shared saved PBs" in page.evaluate("return document.querySelector('.player-profile-header').textContent")
+    assert "No shared PBs yet." in page.evaluate("return document.querySelector('.rank-card').textContent")
     browser.account.offline=True
-    click_text(page,PLAYER+" button","Refresh shared page")
+    page.click(PLAYER+" button[aria-label='Refresh shared page']")
     page.wait_for(PLAYER+" [role='alert']")
     expected = page.problems()
     assert expected and all("503" in problem for problem in expected),expected
