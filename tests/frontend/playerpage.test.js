@@ -57,7 +57,7 @@ function publication() {
 test("the shared comparison cards are read-only and signed differences have a neutral tone", () => {
   const view = render(h(ReadonlyScorecard,{t,card:card(),playerName:"Patient Runner"}));
   expect(view.container.querySelectorAll(".score-line")).toHaveLength(2);
-  expect(view.container.querySelector(".score-label-goal").textContent).toBe("Player");
+  expect(view.container.querySelector(".score-label-goal").textContent).toBe("Patient Runner");
   expect(view.container.querySelector(".score-label-you").textContent).toBe("You");
   expect(view.container.querySelectorAll(".score-row-remove,.score-detail-goal-btn,.good,.bad")).toHaveLength(0);
   expect(view.container.querySelector(".score-card-foot").textContent).toContain('29"00');
@@ -103,6 +103,7 @@ test("switching UUID drops a pending previous player instead of relabelling thei
   await waitFor(() => expect(finishFirst).toBeTypeOf("function"));
   view.rerender(h(PlayerPage,{...props,uid:OTHER}));
   await view.findByRole("heading",{name:/Another Player/});
+  await waitFor(() => expect(view.container.querySelector(".score-label-goal").textContent).toBe("Another Player"));
   finishFirst(ok(player(UID)));
   await waitFor(() => expect(view.container.textContent).not.toContain("Patient Runner"));
   expect(view.container.querySelector(".player-page").dataset.playerId).toBe(OTHER);

@@ -197,7 +197,12 @@ def test_late_update_preserves_signup_draft_and_keyboard_focus(tmp_path, monkeyp
                 page.evaluate("""(() => { const field = document.querySelector('.community-form input[type=text]');
                   field.value = 'KeepMyDraft'; field.dispatchEvent(new Event('input', {bubbles:true}));
                   field.focus(); })()""")
-                page.click(".community-form input[type=checkbox]")
+                consent = '.community-form label:has(a[href]) input[type=checkbox]'
+                sharing = '.community-form .community-pb-sharing input[type=checkbox]'
+                assert page.count(consent) == 1
+                assert page.evaluate(f"document.querySelector({json.dumps(sharing)}).checked")
+                page.click(sharing)  # Retain an explicit PB-sharing opt-out too.
+                page.click(consent)
                 updater.release.set()
                 page.wait_for(".update-summary")
                 assert page.count(".modal:visible") == 1
@@ -213,7 +218,8 @@ def test_late_update_preserves_signup_draft_and_keyboard_focus(tmp_path, monkeyp
                 page.wait_for(".community-form")
                 assert_painted_onboarding_owns_focus(page, "late-signup")
                 assert page.evaluate("document.querySelector('.community-form input[type=text]').value") == "KeepMyDraft"
-                assert page.evaluate("document.querySelector('.community-form input[type=checkbox]').checked")
+                assert page.evaluate(f"document.querySelector({json.dumps(consent)}).checked")
+                assert not page.evaluate(f"document.querySelector({json.dumps(sharing)}).checked")
                 assert page.evaluate("document.querySelector('.community-form').contains(document.activeElement)")
                 assert page.problems() == []
     finally:

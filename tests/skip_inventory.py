@@ -40,6 +40,16 @@ ALLOWED = (
      "timing-sensitive. Run by hand after a native contract change.",
      "tests/test_gpu_bridge.py, test_gpu_cadence.py, test_gpu_fidelity.py, "
      "test_gpu_selection.py"),
+    ("real GPU archive qualification requires a serialized probe slot",
+     "Archive vendor qualification uses real adapter encoders and needs an "
+     "explicit serialized hardware probe. Lifts with SM64_TEST_GPU_ARCHIVE=1 "
+     "on the vendor's hardware; ordinary archive contracts still run offline.",
+     "tests/test_replay_archive_hardware.py::test_real_archive_vendor_is_interchangeable"),
+    ("explicit live Sentry verification only",
+     "This witness sends real startup and failed-install events to Sentry. "
+     "Lifts only with SM64_SENTRY_LIVE_VERIFY=1 for an authorized live check; "
+     "ordinary reporting contracts run without vendor delivery.",
+     "tests/test_sentry_live_reporting.py::test_real_startup_and_failed_install_reach_sentry"),
     ("SM64_TEST_GHOST_",
      "The hidden desktop OpenGL ghost witnesses require explicit hardware "
      "admission and include GPU timing. Run them enabled after native ghost "

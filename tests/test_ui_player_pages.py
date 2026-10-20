@@ -310,6 +310,8 @@ def test_claimed_page_preserves_viewer_scope_and_practice_with_faster_pb_slower_
     assert page.count(PLAYER+" .rank-breakdown tbody button.chip")==0
     assert "Ignore" not in page.evaluate("return document.querySelector('.rank-breakdown').textContent")
     assert page.count(".player-scorecard .score-line")==6
+    assert page.evaluate("return Array.from(document.querySelectorAll('.player-scorecard .score-label-goal')).map(el=>el.textContent)")==[LONG_PLAYER]
+    capture(page,f"player-scorecard-name-beta24-{width}.png",".player-scorecard")
     assert page.count(".player-scorecard .score-row-remove,.player-scorecard .score-detail-goal-btn,.player-scorecard .good,.player-scorecard .bad")==0
     assert page.evaluate("return document.querySelector('.player-ghost-row .community-library-performance').textContent.trim()")== '20"00'
     ghost_words = page.evaluate("return document.querySelector('.player-ghosts').textContent")

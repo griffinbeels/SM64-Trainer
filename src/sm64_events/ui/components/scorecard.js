@@ -385,7 +385,7 @@ export function ReadonlyScorecard({ t, card, playerName, openLibrary = null }) {
     <h3>Scorecard</h3>
     <p class="meta" title="Totals include known times. Differences compare shared entries only.">You and ${playerName}${" · "}saved PBs</p>
     <${ScorecardGrid} t=${t} data=${card} openLibrary=${openLibrary} readOnly neutral
-      youLabel="You" goalLabel="Player" />
+      youLabel="You" goalLabel=${playerName} />
   </section>`;
 }
 

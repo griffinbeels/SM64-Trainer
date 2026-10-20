@@ -54,6 +54,7 @@ READ_GAME_SECTION = """
       names,
       gameIndex,
       trainerIndex: names.indexOf('Trainer'),
+      reportingIndex: names.indexOf('Error reports'),
       updatesIndex: names.indexOf('Updates'),
       value: select ? select.value : null,
       disabled: select ? select.disabled : null,
@@ -155,7 +156,9 @@ def test_game_section_follows_updates_and_reads_auto_on_first_open(
 
     state = _wait_for_game_state(page, "state.disabled === false")
     assert state["gameIndex"] >= 0, state["names"]
-    assert state["updatesIndex"] == state["trainerIndex"] + 1, state["names"]
+    assert state["trainerIndex"] >= 0, state["names"]
+    assert state["reportingIndex"] == state["trainerIndex"] + 1, state["names"]
+    assert state["updatesIndex"] == state["reportingIndex"] + 1, state["names"]
     assert state["gameIndex"] == state["updatesIndex"] + 1, state["names"]
     assert state["options"] == ["Auto-detect", "JP", "US"], state["options"]
     assert state["value"] == "auto", state
