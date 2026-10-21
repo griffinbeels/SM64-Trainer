@@ -504,11 +504,14 @@ The PUT response and GETs that observe `starting`, `stopping`, or `off`
 use cached buffer coverage without acquiring media storage locks. Other GETs
 refresh coverage; an active poll already querying storage can still wait there,
 then reports the latest capture state when that query finishes.
-Unlike session Pause, this switch closes capture owners. It preserves tracking,
-saved replays, buffered media and the separate session pause setting. It does
-stop the native pose source, Only Mario ghost playback and its native sound
-player. Ghost Overlay preferences stay unchanged; native ghosts can resume when
-recording starts and the current attempt has a valid origin.
+This switch closes footage owners. It preserves tracking, saved replays,
+buffered media, native Mario pose capture, Only Mario ghost playback/sound and
+the separate session pause setting. Ghost Overlay preferences stay unchanged.
+`pose_source_owned` and `pose_capture_paused` expose the independent pose lifetime;
+ownership alone is not proof that native poses are arriving. A scoped desktop
+recovery after GPU startup failure exposes `gpu_fallback` and
+`gpu_fallback_active`, separately from `gpu_unsupported`. Desktop pictures never
+claim a renderer-stamped frame map.
 
 While the server runs it records the PJ64 window (DWM shared-surface
 capture — modern window capture sees frozen content for PJ64's D3D8, and

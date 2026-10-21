@@ -40,6 +40,14 @@ build match; old-process history is not presented as current proof. Each source
 has a read time, while retained observations keep their own times. These fields
 are eventually consistent, not one atomic emulator snapshot.
 
+Pre-channel failures retain the native request-acceptance/surface receipt,
+receipt availability, callback progress/pacing and actual capture-stage timings.
+Automatic GL evidence is restricted to numeric codes/dimensions, a major.minor
+version and known missing entry-point names. Driver/vendor/renderer freeform,
+request nonces and adapter LUIDs are excluded. Boolean fallback/pose-owner/pause
+facts distinguish footage recovery from the independent ghost lifetime; owner
+presence is not evidence of delivered poses or visible playback.
+
 Errors automatically receive this snapshot before being queued. Unexpected native
 ghost model/pose/playback faults also report when no Python exception occurs;
 ordinary preparation, another scene and waiting for an attempt do not. There is
