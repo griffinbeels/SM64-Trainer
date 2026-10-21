@@ -41,9 +41,12 @@ from sm64_events.core.procmem import (MachineSnapshot, address_space,
                                       sample, system_memory, thread_cpu,
                                       top_type_growth, tree_summary)
 
+from sm64_events.core.diagnostic_retention import PERF_LOG_MAX_BYTES
+
 log = logging.getLogger("sm64.procmem")
 
 _MiB = 1024 ** 2
+DEFAULT_LOG_MAX_BYTES = PERF_LOG_MAX_BYTES  # one current file and one .prev
 _DEFAULT_LOG = Path("data") / "perf_log.jsonl"
 _USE_DEFAULT = object()  # sentinel: resolve _DEFAULT_LOG at call time, so tests
                          # (conftest) can redirect it and never write the real
@@ -130,7 +133,7 @@ def start_new_session_log(path: Path | None) -> None:
 
 
 def write_perf_record(path: Path, record: dict, *,
-                      max_bytes: int = 50 * 1024 * 1024) -> None:
+                      max_bytes: int = DEFAULT_LOG_MAX_BYTES) -> None:
     """Append one JSONL line, rotating to .prev when the file passes max_bytes
     (bounds disk to ~2x the cap — the diagnostic must never fill the volume).
     Best-effort: a write failure logs and is swallowed."""
@@ -238,7 +241,7 @@ class PerfMonitor:
                  perf_log_path=_USE_DEFAULT,
                  gauges: Callable[[], dict] | None = None,
                  self_pid: int | None = None,
-                 max_log_bytes: int = 50 * 1024 * 1024,
+                 max_log_bytes: int = DEFAULT_LOG_MAX_BYTES,
                  watch_processes=("Project64.exe",),
                  enabled: bool = True, deep: bool | None = None,
                  stall_watch: bool = True, stall_followup_s: float = 2.0):
