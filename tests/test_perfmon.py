@@ -17,7 +17,8 @@ def test_perf_record_trims_types_and_is_json_serialisable():
         "children": {"count": 1, "rss_bytes": 400 * 1024**2, "by_name": {}},
         "types": {f"t{i}": i for i in range(100)},
         "os_threads": 52, "cpu": {"process_pct": 12.5},
-        "machine": {"top_cpu": [{"exe": "a.exe", "pid": 1, "cpu_pct": 90.0}]},
+        "machine": {"busy_pct": 70, "dpc_pct": 2,
+                    "top_cpu": [{"exe": "a.exe", "pid": 1, "cpu_pct": 90.0}]},
     }
     growers = [{"type": "numpy.ndarray", "baseline": 10, "current": 99,
                 "delta": 89}]
@@ -27,7 +28,7 @@ def test_perf_record_trims_types_and_is_json_serialisable():
     assert rec["uptime_s"] == 61.4 and rec["handles"] == 900
     assert rec["gauges"] == {"ring_bytes": 7}
     assert rec["os_threads"] == 52 and rec["cpu"] == {"process_pct": 12.5}
-    assert rec["machine"]["top_cpu"][0]["exe"] == "a.exe"
+    assert rec["machine"] == {"busy_pct": 70, "dpc_pct": 2}
     assert rec["top_growers"] == growers
     assert len(rec["top_types"]) == 30          # trimmed from 100
     json.dumps(rec)                              # must not raise
@@ -249,7 +250,7 @@ def test_minute_record_attributes_process_cpu_to_named_threads():
     named = sum(cpu["threads"].values())
     assert abs(named - cpu["process_pct"]) <= 0.1 * cpu["process_pct"]
     assert rec["os_threads"] >= threading.active_count()
-    assert rec["machine"]["top_cpu"] and "busy_pct" in rec["machine"]
+    assert "top_cpu" not in rec["machine"] and "busy_pct" in rec["machine"]
     assert rec["stalls"] is None                          # the watch never ran
     json.dumps(rec)
 
@@ -384,7 +385,7 @@ def test_a_real_stall_writes_a_record_naming_who_was_busy(tmp_path):
     stall = found[0]
     assert stall["late_ms"] >= 500
     assert stall["before"]["self"]["threads"]["MainThread"] >= 50
-    assert stall["before"]["top_cpu"] and stall["after"]["window_s"] > 0
+    assert "top_cpu" not in stall["before"] and stall["after"]["window_s"] > 0
     assert stall["system"] and stall["capture_ms"] > 0
     assert not mon._stalls.running           # shutdown ended the heartbeat
 

@@ -366,10 +366,36 @@ so the recorder's next attach keeps the desktop grab
 (`sourcefactory.DesktopForUnsupportedGpu`, status `gpu_unsupported`). The early
 machine verdict selects that fallback in the current call. Setup still requires
 its written pictures, live matching control and moving game/input evidence;
-the hardware verdict alone cannot complete setup. The 2026-10-19 AMD report
-showed repeated channel-startup deadlines before codec selection; this fixes
-the admission-order defect without identifying its native GL failure. Actual
-replay and setup completion on that tester's machine remain a live gate.
+the hardware verdict alone cannot complete setup. The beta24 AMD report on
+2026-10-21 still showed repeated channel-startup deadlines before codec selection.
+An AMD/Intel encoder change does not establish that this earlier gate works.
+
+An admitted request that reaches its startup deadline before publishing any
+picture channel now receives a separate, scoped recovery. `CaptureSession`
+classifies only that no-channel deadline after checking normal lifecycle and
+cancellation. `GpuCapture` authorizes desktop fallback only after the channel,
+encoder and lease owners prove closed. `SourceFactory` then records through the
+existing desktop video/audio path (`gpu_fallback`, separate from hardware
+`gpu_unsupported`). It preserves the original failure for automatic diagnostics
+and avoids repeated GPU startups in the same producer/ROM lifetime. A passive
+watcher permits a fresh GPU request after a qualified new producer, control
+generation or observed ROM close/reopen. Unproved cleanup never admits fallback.
+
+Desktop pictures retain time-based association: no renderer frame stamps or
+frame-exact input map are invented. Setup requires actual written pictures plus
+the live matching plugin process and moving game/input counters for JP and US.
+Ghost capture/playback keeps its separate native pose owner through video failure.
+The actual recorder/encoder/fragments/View test independently decodes the MP4's
+picture barcodes and audio (`tests/test_gpu_startup_footage.py`). It uses inert OS
+channel/window boundaries and does not certify the tester's AMD driver.
+
+The existing fixed-size native startup receipt is now published at request
+acceptance, with zero surface dimensions. The renderer fills dimensions when its
+surface arrives, before the source gateway begins capture. Empty GL fields at
+that point are explicit missing evidence; accepted demand alone proves neither
+graphics initialization nor a delivered picture. The beta24 report cannot
+identify the original native refusal retrospectively. Actual native AMD transport,
+ghost rendering and setup completion on that tester remain live proof gates.
 An NVIDIA GPU without NVENC hardware still
 fails as a driver error at session open, indistinguishable from a transient
 one without a native change, and keeps the retry gate. Transient failures

@@ -3,8 +3,110 @@
 Packaged builds can send unexpected Python errors, browser errors, startup failures
 and terminal Practice Replay installation errors to a private Sentry project.
 Players do not need accounts or to submit reports. Settings -> Error reports turns
-collection off and deletes pending uploads. The existing Debug report export remains
-available for support. A build without a configured DSN sends nothing and says so.
+collection off and deletes pending uploads and breadcrumbs. Reporting is enabled by
+default in configured builds; an unreadable preference fails closed. The existing
+Debug report export remains available independently. A build without a configured
+DSN sends nothing and says so.
+
+## What a failure needs
+
+Debugging capture requires the app and native build identities, current producer
+and protocol state, the last successful stage, native error/refusal codes, queue
+counts and stage timing. Ghost failures also need the requested overlay state,
+native preparation/playback state, displayed flag and refusal counts. Setup needs
+its actual ROM region and individual picture, plugin, game and input checks.
+Input *contents*, account names and unrelated applications do not answer those
+questions.
+
+`core/diagnostic_snapshot.py` assembles these passive facts for both consumers:
+
+| Evidence | Automatic Sentry error | Local Debug report |
+| --- | --- | --- |
+| Build, capture stage, native codes, first/latest GPU failure | Yes | Yes |
+| Ghost enabled/target-present, native playback/display state, counts | Yes | Yes |
+| Cached setup checks, ROM region, polling/input health counters | Yes | Yes |
+| Own memory/handle/thread counts | Yes | Yes |
+| Recognized native log events and numeric/enum fields | Latest 32, within 16 KiB snapshot | Bounded recognized records from known log tails |
+| Local journal/UI observations | No | Counts, clocks and states; display labels omitted |
+| Raw native messages, account/profile/roster labels or arbitrary log fields | No | No |
+| ROMs, video, inputs, databases, screenshots, environment, request bodies, locals | No | No file contents or attachments |
+
+The native reader opens the existing control page read-only and reads only fixed
+wrapper log filenames under the last observed installation, including Windows UAC
+VirtualStore paths. It does not search drives, install plugins, enumerate programs,
+attach game memory, enable capture or renew a lease. Missing, busy or failed
+sources remain explicit. A native log row states whether PID, process birth and
+build match; old-process history is not presented as current proof. Each source
+has a read time, while retained observations keep their own times. These fields
+are eventually consistent, not one atomic emulator snapshot.
+
+Pre-channel failures retain the native request-acceptance/surface receipt,
+receipt availability, callback progress/pacing and actual capture-stage timings.
+Automatic GL evidence is restricted to numeric codes/dimensions, a major.minor
+version and known missing entry-point names. Driver/vendor/renderer freeform,
+request nonces and adapter LUIDs are excluded. Boolean fallback/pose-owner/pause
+facts distinguish footage recovery from the independent ghost lifetime; owner
+presence is not evidence of delivered poses or visible playback.
+
+Errors automatically receive this snapshot before being queued. Unexpected native
+ghost model/pose/playback faults also report when no Python exception occurs;
+ordinary preparation, another scene and waiting for an attempt do not. There is
+no background diagnostic sampler or automatic report-file generation.
+
+## Privacy boundaries
+
+`core/diagnostic_privacy.py` is the complete automatic snapshot allowlist. The SDK
+callback, transport admission and restart/retry each rebuild the allowed payload.
+Unknown nested fields and native freeform detail are discarded. Path, credential,
+email and IP patterns are scrubbed from retained error text. Native nonces and
+request tokens, player/account identities, machine names and persistent device
+identifiers are excluded. Ephemeral producer PID/generation identifies a runtime,
+not a player. No administrative Sentry credential is bundled.
+
+Only named operational loggers supply breadcrumbs. Gameplay event wires, unrelated
+process rankings and community/account logs are excluded. Turning reporting off
+also prevents breadcrumb collection and clears prior breadcrumbs, so re-enabling
+cannot upload prior log history from the disabled period. Automatic native/GPU
+history is also bounded to the current reporting period. Normal performance records keep
+aggregate machine load and Trainer/emulator resources; unrelated program names
+are not retained in logs or `/health`.
+
+Tracing, session replay, continuous profiling, SDK request integrations and
+automatic session tracking remain disabled. A Sentry Trace page can therefore
+show an error without a waterfall. The error's technical snapshot, timestamped
+breadcrumbs and native phase timings provide the relevant capture history.
+Enabling generic HTTP tracing would not supply native renderer state.
+
+Sentry necessarily receives the network connection used to send an error. Client
+PII filtering alone does **not** establish that Sentry stores no IP-derived
+location: configure the project's **Security & Privacy** settings to prevent IP
+storage and remove user/geo fields. Verify the stored event after that change.
+The connector used for error inspection does not expose those settings. See
+[Sentry data collection](https://docs.sentry.io/platforms/python/data-management/data-collected/)
+and [server-side scrubbing](https://docs.sentry.io/security-legal-pii/scrubbing/advanced-datascrubbing/).
+Cloud retention is controlled by the Sentry account and is separate from the
+app's 24-hour local cleanup. Opt-out cannot retract an already accepted upload.
+
+## Local storage limits
+
+| Disposable artifact | Bound and cleanup |
+| --- | --- |
+| Exported reports | 24 hours, at most 3 files, at most 1 MiB each; cleanup at normal startup and export |
+| Unsent automatic envelopes and abandoned upload temporaries | 24 hours, at most 20 / 1 MiB total; expiry during active sessions, shutdown and restart |
+| Python server log | 1 MiB plus one backup; stale/oversized legacy debug logs removed at startup |
+| Performance log | 1 MiB plus one previous file; stale/oversized files removed at startup |
+| UI observation log | Existing 2 MB bound; stale file removed at normal startup |
+| Native wrapper logs | Existing approximately 12.5 MiB total bound; stale inactive owned files pruned by the native writer at startup and once a minute |
+
+Native file-age cleanup does not promise every line is younger than a day: an
+actively written rotating file can contain older lines until rotation. The byte
+bound still applies. Cleanup checks exact owned filenames, refuses link escapes
+and contains denied filesystem operations. An export refuses redirected folders
+or a new file when its quota cannot be reclaimed. It never deletes recordings, practice
+databases, account settings or arbitrary user files. No cleanup runs on renderer
+callbacks. A provider outage does not block practice or create unbounded files.
+Cooldown and admission budgets remain one matching failure per hour, ten errors
+per day and fifty per month per installation.
 
 ## Connect the free service
 
@@ -32,7 +134,7 @@ GPU failures include bounded scalar evidence: startup stage, selected encoder,
 actual adapter/driver when established, native capture build, Open result and
 known operation/HRESULT. OpenGL vendor/renderer/version and a missing function
 are sampled once on the existing renderer startup thread. These strings pass
-the same privacy scrubber. Raw helper stderr and native logs are never uploaded.
+the same privacy scrubber. Raw helper stderr and native log text are never uploaded.
 Expected AV1 codec refusal followed by H.264 negotiation is not a failure report.
 The local Debug report separately includes the current recording route and its
 picture/input matching method, first failure retained through cleanup/fallback,
@@ -68,6 +170,23 @@ installation API with isolated fixture data. On 2026-10-19 its error was observe
 in Sentry with readable Python filenames, functions and line numbers; event identity
 was verified through ingestion and is retained across queue/retry. Normal test runs
 skip this live check unless `SM64_SENTRY_LIVE_VERIFY=1` is explicitly set.
+On 2026-10-21 the expanded synthetic snapshot was observed in stored event
+`21b172b875884e7fbf8e0b03b9b1fb45`, including capture, ghost, setup and input
+health fields without the injected player-label sentinel. The stored event also
+confirmed that Sentry still enriches location from the connection; cloud-side
+scrubbing needs settings verification before claiming that metadata is absent.
+
+The organization settings saved on 2026-10-21 require the data scrubber/default
+scrubbers and prevent IP storage. A fresh synthetic event
+`b6b801af8009443599eebdc11fd9d7b8` still contained `user.geo`, as Sentry's
+[documented geographic processing](https://docs.sentry.io/security-legal-pii/scrubbing/server-side-scrubbing/#geographic-information)
+predicts. Removing location additionally requires the Advanced Data Scrubbing
+rule **Remove / Anything / `$user.geo.**`**; verify a new event afterward.
+Keep Global Safe Fields empty. Optional narrow Global Sensitive Fields are
+`username`, `user_id`, `account_id`, `email`, `ip_address`, `hostname`,
+`computer_name` and `command_line`. Avoid broad names such as `name`, `id`,
+`user`, `state` or `reason`: sensitive-field terms also match field values and
+can hide useful technical facts. Griffin is managing the cloud settings.
 Packaged field delivery still requires verification against the distributed build.
 A real UAC prompt and affected-tester installation must be verified on an authorized
 interactive run; injected helper success is not that evidence.

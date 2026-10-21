@@ -66,6 +66,14 @@ def resampled_busy_host(tmp_path_factory):
     return _build_host(tmp_path_factory.mktemp("gpu-delivery-resampled-busy"), resample_busy=True)
 
 
+def test_accepted_request_and_refused_gateway_leave_distinct_receipts_cpu(host):
+    result = subprocess.run(
+        [str(host), "--bootstrap-receipt-cpu"], capture_output=True, text=True,
+        timeout=5, check=True, **quiet_spawn_kwargs(),
+    )
+    assert result.stdout.strip() == "bootstrap receipt accepted 0 0 surface 17 11 gateway unavailable"
+
+
 @pytest.mark.parametrize("busy_count", [1, 64, 4096])
 def test_busy_publication_samples_immutable_head_once_cpu(host, busy_count):
     result = subprocess.run(

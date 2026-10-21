@@ -815,7 +815,14 @@ def _mount_controls(app, poller, replay) -> None:
         return {"restarting": True}
 
 
-def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, capture_layer=None) -> None:
+def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, capture_layer=None,
+                       ghost=None, setup_observer=None) -> None:
+    from sm64_events.server.diagnostics_runtime import make_snapshot, with_diagnostics
+    snapshot = make_snapshot(poller=poller, service=service, monitor=monitor, replay=replay,
+        capture_layer=capture_layer, ghost=ghost, setup_observer=setup_observer,
+        polling_state=lambda: _polling_state(app))
+    app.state.diagnostic_snapshot = snapshot
+    app.router.lifespan_context = with_diagnostics(app.router.lifespan_context, snapshot)
     @app.get("/health")
     def health():
         latest = poller.latest
@@ -888,6 +895,7 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, 
             health=health, events=_events,
             replay=getattr(getattr(replay, "recorder", None), "diagnostic_status", None),
             setup=getattr(capture_layer, "diagnostic_status", None),
+            snapshot=lambda: snapshot.collect(local=True),
             build={"channel": current_build().channel, "build_id": current_build().build_id})
         out = diagnostics.write_report(diagnostics_dir(), report)
         return {"path": str(out), "size_bytes": out.stat().st_size}
@@ -983,7 +991,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     app.state.progress = progress
     _install_progress_invalidation(app, progress)
     _mount_controls(app, poller, replay)
-    _mount_diagnostics(app, poller, broadcaster, service, monitor, replay, capture_layer)
+    _mount_diagnostics(app, poller, broadcaster, service, monitor, replay, capture_layer, ghost, setup_observer)
     from sm64_events.server.reporting_api import create_reporting_router
     app.include_router(create_reporting_router())
     _mount_events(app, poller, broadcaster, debug_hooks)

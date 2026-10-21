@@ -77,7 +77,9 @@ struct Runtime {
     std::atomic<uint32_t> request_state{0},surface_state{0}; // 0 free,1 writing,2 ready,3 owned
     std::atomic<uint32_t> status_seq{0},status_words[sizeof(gd_status)/4]{};
     std::atomic<uint32_t> startup_seq{0},startup_words[sizeof(gpu_startup_v1)/4]{};
-    gpu_startup_v1 startup{}; // renderer-thread writer only, once per preparation
+    // Request admission initializes CPU identity while request_state=1 owns
+    // the empty runtime. Subsequent writes belong to the renderer thread.
+    gpu_startup_v1 startup{};
     std::atomic<bool> exhausted{false};
     gc_header request{};uint64_t budget=0;uint32_t epoch=0;
     rb_surface mailbox{},surface{};uint32_t mailbox_epoch=0;
@@ -391,7 +393,14 @@ struct Runtime {
         gateway_open=true;return true;
     }
     bool bootstrap_ready(){
-        if(surface_state.load()!=2 || !gpu())return false;
+        if(surface_state.load()!=2)return false;
+        // Preserve a source callback even if its GL gateway refuses capture.
+        // Zero dimensions distinguish an accepted request with no surface;
+        // GL strings remain empty until the gateway actually opens.
+        if(startup.width!=mailbox.width || startup.height!=mailbox.height){
+            startup.width=mailbox.width;startup.height=mailbox.height;publish_startup();
+        }
+        if(!gpu())return false;
         unsigned ready=2;if(!surface_state.compare_exchange_strong(ready,3))return false;
         surface=mailbox;const auto e=mailbox_epoch;prepare_steps.surface_qpc=mailbox_qpc;surface_state.store(0);
         if(e!=epoch || !live())return false;
@@ -416,10 +425,6 @@ struct Runtime {
         if(!live())return false;
         // The renderer's own context is current: this is its thread (render_tick).
         prepare_steps.prepare_begin=qpc();
-        startup={};memcpy(startup.magic,GPU_STARTUP_MAGIC,8);
-        startup.version=GPU_STARTUP_VERSION;startup.bytes=sizeof startup;startup.epoch=epoch;
-        startup.control_generation=request.generation;startup.nonce_lo=request.nonce_lo;startup.nonce_hi=request.nonce_hi;
-        startup.width=surface.width;startup.height=surface.height;
         const auto text=[](char*target,size_t capacity,const GLubyte*source){
             if(!source)return;size_t n=0;while(n+1<capacity&&source[n]){target[n]=char(source[n]);++n;}target[n]=0;};
         text(startup.vendor,sizeof startup.vendor,glGetString(GL_VENDOR));
@@ -1040,6 +1045,12 @@ extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     // every graphics allocation/operation remains on the delivery worker.
     r->started=qpc();r->channel_started=r->drain_started=0;r->offer_token=r->bridge_token=r->twin_bridge_token=0;
     r->frontier_qpc=r->frontier_occurrence=0;r->refusal_generation=0;r->status_time=0;r->error=0;
+    // No graphics call: make request/surface/gateway absence distinguishable
+    // before a stalled source or renderer can prevent channel publication.
+    r->startup={};memcpy(r->startup.magic,GPU_STARTUP_MAGIC,8);
+    r->startup.version=GPU_STARTUP_VERSION;r->startup.bytes=sizeof r->startup;r->startup.epoch=e;
+    r->startup.control_generation=h->generation;r->startup.nonce_lo=h->nonce_lo;r->startup.nonce_hi=h->nonce_hi;
+    r->publish_startup();
     r->set_state(GD_BOOTSTRAP);r->publish_status();
     if(r->exhausted.load()){r->request_state.store(2);SetEvent(r->wake);return GD_EXHAUSTED;}
     r->gate.store(e);
@@ -1093,6 +1104,25 @@ extern "C" int __cdecl gd_read_startup(gpu_startup_v1*out){
 }
 #ifdef GD_TEST_HOST
 #include "gpu_delivery_retry_test.h"
+// The accepted-request API and bootstrap path, with the source refusing its
+// gateway. No worker, context, surface discovery or GPU allocation is started.
+extern "C" int gd_test_bootstrap_receipt(gpu_startup_v1*out){
+    if(!out || runtime.load())return 0;
+    Runtime r;r.source.disarm=[](){};r.source.activate=[]()->uint32_t{return 17;};
+    r.source.begin_capture=[](){return false;};
+    r.limits.max_slots=1;r.limits.snapshot_bytes=4u<<20;r.limits.channel_bytes=1u<<20;
+    r.wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r.changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    if(!r.wake || !r.changed){if(r.wake)CloseHandle(r.wake);if(r.changed)CloseHandle(r.changed);return 0;}
+    r.startup.width=999;memcpy(r.startup.vendor,"stale vendor",13);
+    runtime.store(&r);
+    gc_header h{};h.owner_pid=GetCurrentProcessId();h.owner_birth=gpu_channel::process_birth(GetCurrentProcess());
+    h.nonce_lo=23;h.nonce_hi=29;h.generation=7;h.offer_count=h.table_count=h.packet_count=1;h.table[0]={0,4};
+    h.packet_bytes=h.pending_bytes=1024;h.ram_budget=1u<<20;
+    int valid=gd_request(&h,4u<<20)==GD_ACCEPTED && gd_read_startup(&out[0]);
+    r.in_render=true;r.mailbox.width=17;r.mailbox.height=11;r.surface_state.store(2);
+    valid=valid && !r.bootstrap_ready() && gd_read_startup(&out[1]);
+    gd_disarm(GD_CANCELLED);runtime.store(nullptr);CloseHandle(r.wake);CloseHandle(r.changed);return valid;
+}
 // No configured runtime, renderer, window, GPU, sleep or worker. Source records
 // are recycled synchronously on release to prove cadence reads occur while lent.
 extern "C" int gd_test_healthy_snapshot(gd_diagnostic*out){

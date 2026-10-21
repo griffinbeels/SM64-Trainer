@@ -221,7 +221,7 @@ def test_recording_off_retains_pose_and_machine_lease_until_sound_retires(tmp_pa
         assert not source._thread.is_alive()
 
 
-def test_native_card_explains_recording_off_before_stale_source_dies_then_resumes(tmp_path):
+def test_native_card_keeps_ghosts_with_footage_off_and_recovers_source_independently(tmp_path):
     session, source, _ = native_session(tmp_path)
     recorder = session._native._replay.recorder
     recorder.recording_enabled = True
@@ -232,22 +232,25 @@ def test_native_card_explains_recording_off_before_stale_source_dies_then_resume
         before = dict(session._values)
         assert session.payload()["window"]["visible"]
         recorder.recording_enabled = False
-        # The old source still reports displayed, but manual desire is real.
+        # Disabling footage leaves this native race and its display evidence.
         card = session.payload()["window"]
-        assert not card["running"] and not card["visible"]
-        assert "Start recording" in card["reason"]
+        assert card["running"] and card["visible"]
+        assert card["reason"] is None
         session._native.note()
-        assert source.commands[-1] == {"enabled": False}
+        assert source.commands[-1]["enabled"]
         recorder.ghost_capture = None
         await session.refresh(resolve=False)
-        assert "Start recording" in session.payload()["window"]["reason"]
+        card = session.payload()["window"]
+        assert not card["running"] and not card["visible"]
+        assert "Start recording" not in card["reason"]
         assert session._values == before
-        recorder.recording_enabled = True
+        # Recovery does not require turning footage back on.
         fresh = recorder.ghost_capture = Capture()
         fresh.displayed = True
         await session.refresh(resolve=False)
         session._native.note()
         assert fresh.commands[-1]["enabled"] and session.payload()["window"]["visible"]
         assert session._values == before
+        assert recorder.recording_enabled is False
         await session.stop()
     asyncio.run(check())

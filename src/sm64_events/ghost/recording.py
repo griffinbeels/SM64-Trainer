@@ -9,9 +9,15 @@ class PoseRecording:
         self.source = None
         self._factory, self._pid = factory, producer_pid
         self._allowed, self._accepting = allowed, False
+        self._stopped = False
 
     def start(self):
         self.source = self._factory(on_batch=self._batch, producer_pid=self._pid)
+        if self._stopped:
+            cancel = getattr(self.source, "request_stop", None)
+            if cancel is not None:
+                cancel()
+            return
         self._accepting = True
         self.source.start()
 
@@ -22,7 +28,11 @@ class PoseRecording:
             self.archive.ingest(producer, frames)
 
     def request_stop(self):
+        self._stopped = True
         self._accepting = False
+        cancel = getattr(self.source, "request_stop", None)
+        if cancel is not None:
+            cancel()
 
     def stop(self):
         self.request_stop()

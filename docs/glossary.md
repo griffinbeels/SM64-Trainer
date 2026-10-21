@@ -1276,6 +1276,8 @@ delete the one you do not want instead of cropping it.
 The recorded [[attempt]] you race beside your current play. Its captured
 graphics pose is rebuilt through libsm64 inside GLideN64, using the live
 camera and terrain depth. Opacity and tint apply to the displayed ghost.
+Stopping gameplay video storage leaves native pose capture, ghost creation and
+playback running. A failed video encoder does not revoke the [[ghost source]].
 Playback binds the exact recorded and live [[attempt]] origins and applies
 the [[nudge]]. Missing poses or clock identity have a readable refusal. A
 recording whose controller input is unknown on any [[frame]] is not a ghost at
@@ -2846,7 +2848,9 @@ record every [[event]] twice.
 
 One markdown file capturing what the trainer was doing when something went
 wrong: capped tails of the server log, the [[journal]], the [[UI log]] and the
-perf samples, plus the server's health readout and install facts. The Debug report
+perf samples, plus the server's health readout, install facts, recognized native
+log records and [[ghost]] playback state. The builder omits private paths and
+custom display labels. The Debug report
 button in the settings drawer writes one and opens Explorer with it selected,
 so a user can attach evidence to a bug report instead of a description of it.
 

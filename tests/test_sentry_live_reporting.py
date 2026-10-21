@@ -10,6 +10,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace as NS
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -20,6 +21,21 @@ pytestmark = pytest.mark.skipif(os.environ.get("SM64_SENTRY_LIVE_VERIFY") != "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from ui_fixture import _FixtureCaptureLayer, serve_ui
+
+
+def _synthetic_snapshot(app):
+    snapshot = app.state.diagnostic_snapshot
+    snapshot._sources.update(
+        capture=lambda: {"recorder": {"recording": False, "pictures_fed": 0},
+                         "gpu": {"latest": {"stage": "channel", "native_reason": 0}}},
+        ghost=lambda: {"enabled": True, "has_target": True, "label": "NEVER_SEND_PLAYER",
+                       "native": {"state": 5, "reason": 8, "displayed": False}},
+        setup=lambda: {"state": "needs_restart", "runtime": {"rom": {"region": "jp"},
+                        "checks": {"pictures": False, "game": True}}},
+        pipeline=lambda: {"inputs": {"frames": 123, "sink_failures": 0}},
+        resources=lambda: {"rss_mib": 100})
+    snapshot._native = NS(snapshot=lambda layer: {"available": False}, close=lambda: None)
+    return app
 
 
 def test_real_startup_and_failed_install_reach_sentry(tmp_path, monkeypatch):
@@ -47,6 +63,9 @@ def test_real_startup_and_failed_install_reach_sentry(tmp_path, monkeypatch):
 
     monkeypatch.setattr(error_reporting, "capture_exception", observe_capture)
     monkeypatch.setattr(_FixtureCaptureLayer, "install", deliberate_install_failure)
+    import ui_fixture
+    create = ui_fixture.create_app
+    monkeypatch.setattr(ui_fixture, "create_app", lambda *args, **kwargs: _synthetic_snapshot(create(*args, **kwargs)))
     try:
         with serve_ui(db_path=tmp_path / "isolated.db", seed=False) as url:
             request = Request(url + "/api/setup/capture-layer", data=b'{"consent":true}',

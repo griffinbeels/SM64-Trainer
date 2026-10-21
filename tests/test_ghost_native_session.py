@@ -709,14 +709,16 @@ def test_the_card_toggle_and_dpad_up_hide_and_resume_the_lineups_race_without_pr
 
 
 @pytest.mark.parametrize("hidden", [False, True])
-def test_recording_off_still_blocks_a_hidden_or_shown_race(tmp_path, monkeypatch, hidden):
+def test_recording_off_preserves_a_hidden_or_shown_race(tmp_path, monkeypatch, hidden):
     native, source, state, generations, switch, prepare = switch_session(tmp_path, monkeypatch)
     prepare()
     switch(True)
     native.note()
     native._replay.recorder.recording_enabled = False
     switch(not hidden)
-    assert source.commands[-1] == {"enabled": False}
+    assert source.commands[-1]["enabled"]
+    assert source.commands[-1]["hidden"] is hidden
+    assert "Recording is off" not in (native.state()["reason"] or "")
     native.stop()
 
 

@@ -10,7 +10,7 @@ import time
 
 from sm64_events.core.childproc import python_child
 from sm64_events.core.paths import bundled_encoder_dll
-from sm64_events.replay.gpucapture import GpuBackendUnsupported, GpuCleanupError
+from sm64_events.replay.gpucapture import GpuBackendUnsupported, GpuCleanupError, GpuStartupUnavailable
 from sm64_events.replay import gpuchannel
 from sm64_events.replay.gpuinput import OfferDecoder, ChannelSelection
 from sm64_events.replay.ghostcopy import GhostCopyLane
@@ -372,6 +372,18 @@ class CaptureSession:
         self.error = str(error)[:512]
         self._report_failure = True
 
+    def _failure_exception(self, exc, snapshot):
+        """Keep native cause and classify only the observed no-channel deadline."""
+        if snapshot.reason:
+            self.error = f"{self.error}; demand={snapshot.state}:{snapshot.reason}"[:512]
+        if (self._stage == "channel" and self.channel is None and not snapshot.cancelled
+                and self.owner.want_capture()
+                and (snapshot.reason == "capture_setup_deadline"
+                     or snapshot.backend_reason == 10012  # native GD_DEADLINE
+                     or isinstance(exc, TimeoutError) and str(exc) == "GPU recording startup deadline")):
+            return GpuStartupUnavailable(self.error)
+        return RuntimeError(self.error) if snapshot.reason else None
+
     def run(self):
         try:
             if not self._measure_stage("channel", self._open_channel):
@@ -423,9 +435,9 @@ class CaptureSession:
             # GpuCapture logs once at the owning boundary. Preserve the lease
             # supervisor's reason as well as the media symptom; native channel
             # closure can precede that supervisor's next bounded poll.
-            if snapshot.reason:
-                self.error = f"{self.error}; demand={snapshot.state}:{snapshot.reason}"[:512]
-                raise RuntimeError(self.error) from exc
+            failure = self._failure_exception(exc, snapshot)
+            if failure is not None:
+                raise failure from exc
             raise
         finally:
             try:

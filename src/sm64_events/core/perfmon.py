@@ -15,15 +15,12 @@ The log is size-capped (rotates to .prev) so the diagnostic can never be the
 thing that fills the disk. All sampling is best-effort: a probe failure logs
 and the loop continues; the server is never put at risk by its own monitor.
 
-STALLS (2026-09-27): on 09-25 a machine-wide stall (Project64 frames up to
-3.5 s, a 4.8 s server GC, three failed recordings) left no trace of its
-cause, because every sample looked only at this server. Each minute's record
-now names this server's busiest threads, the whole helper tree, the
-machine's top CPU/memory/disk consumers and Project64's address-space
-headroom, from one process snapshot that is cheaper than the probe it
-replaced. Between samples a StallWatch heartbeat notices when this server
-could not run on time and writes a `"kind": "stall"` record naming who was
-busy across the stall and just after it."""
+STALLS: each minute records this server's busiest threads, its helper tree,
+Project64's address-space headroom and aggregate machine busy/DPC/interrupt
+load. No unrelated application names or process rankings enter retained
+snapshots, logs or /health. The OS snapshot is reduced immediately to our
+process family and the configured emulator. A StallWatch heartbeat records
+the same limited evidence across a stall and just after it."""
 import json
 import logging
 import os
@@ -41,14 +38,73 @@ from sm64_events.core.procmem import (MachineSnapshot, address_space,
                                       sample, system_memory, thread_cpu,
                                       top_type_growth, tree_summary)
 
+from sm64_events.core.diagnostic_retention import PERF_LOG_MAX_BYTES
+
 log = logging.getLogger("sm64.procmem")
 
 _MiB = 1024 ** 2
+DEFAULT_LOG_MAX_BYTES = PERF_LOG_MAX_BYTES  # one current file and one .prev
 _DEFAULT_LOG = Path("data") / "perf_log.jsonl"
 _USE_DEFAULT = object()  # sentinel: resolve _DEFAULT_LOG at call time, so tests
                          # (conftest) can redirect it and never write the real
                          # diagnostic file — a test sample would corrupt the
                          # human's session data the analyzer reads.
+_MACHINE_FIELDS = ("window_s", "busy_pct", "dpc_pct", "interrupt_pct")
+_KNOWN_HELPERS = frozenset({"sm64trainer.exe", "python.exe", "pythonw.exe", "ffmpeg.exe",
+                            "ffprobe.exe", "msedgewebview2.exe", "conhost.exe"})
+
+
+def _machine_fields(value) -> dict | None:
+    """Only anonymous aggregate load enters a diagnostic record."""
+    if not isinstance(value, dict):
+        return None
+    return {key: value[key] for key in _MACHINE_FIELDS
+            if isinstance(value.get(key), (int, float))}
+
+
+def _child_fields(value) -> dict | None:
+    """Keep owned child resources while hiding unexpected executable names."""
+    if not isinstance(value, dict):
+        return None
+    result = {key: value[key] for key in ("count", "rss_bytes", "private_bytes", "threads")
+              if isinstance(value.get(key), (int, float))}
+    named = {}
+    for name, amount in (value.get("by_name") or {}).items():
+        label = name if name.lower() in _KNOWN_HELPERS else "app-child"
+        if isinstance(amount, (int, float)):
+            named[label] = named.get(label, 0) + amount
+    result["by_name"] = named
+    members = []
+    for member in (value.get("members") or [])[:12]:
+        row = {key: member[key] for key in ("pid", "ppid", "private_mib", "rss_mib", "threads", "cpu_pct")
+               if isinstance(member.get(key), (int, float))}
+        name = member.get("exe", "")
+        row["exe"] = name if name.lower() in _KNOWN_HELPERS else "app-child"
+        members.append(row)
+    result["members"] = members
+    return result
+
+
+def _scope_snapshot(machine: MachineSnapshot, pid: int, watch, sticky):
+    """Discard unrelated process names before retaining a sample or baseline."""
+    members = descendants(machine, pid, sticky)
+    watched = {name.lower() for name in watch}
+    child_ids = {child.pid for child in members}
+    allowed = child_ids | {pid} | {p.pid for p in machine.procs.values() if p.exe.lower() in watched}
+    procs = {}
+    for identity in allowed:
+        process = machine.procs.get(identity)
+        if process is None:
+            continue
+        if process.exe.lower() not in _KNOWN_HELPERS | watched:
+            process = process._replace(exe="Trainer" if identity == pid else "app-child")
+        procs[identity] = process
+    scoped = MachineSnapshot(machine.t, procs, {pid: machine.threads[pid]} if pid in machine.threads else {}, machine.cpus)
+    return scoped, [procs[child.pid] for child in members]
+
+
+def _machine_totals(previous: MachineSnapshot, current: MachineSnapshot) -> dict:
+    return _machine_fields(machine_summary(previous, current, n=0)) or {}
 
 
 def _mib_reading(value) -> str:
@@ -104,10 +160,10 @@ def perf_record(snap: dict, gauges: dict, *, uptime_s: float, t_utc: str,
         "scratch_mib": (round(snap["scratch_bytes"] / _MiB, 1)
                         if "scratch_bytes" in snap else None),
         "system": snap.get("system"),
-        "children": snap.get("children"),
+        "children": _child_fields(snap.get("children")),
         "gpu": snap.get("gpu"),
         "processes": snap.get("processes"),
-        "machine": snap.get("machine"),
+        "machine": _machine_fields(snap.get("machine")),
         "gauges": gauges or {},
         "top_growers": top_growers,
         "top_types": top_types,
@@ -130,7 +186,7 @@ def start_new_session_log(path: Path | None) -> None:
 
 
 def write_perf_record(path: Path, record: dict, *,
-                      max_bytes: int = 50 * 1024 * 1024) -> None:
+                      max_bytes: int = DEFAULT_LOG_MAX_BYTES) -> None:
     """Append one JSONL line, rotating to .prev when the file passes max_bytes
     (bounds disk to ~2x the cap — the diagnostic must never fill the volume).
     Best-effort: a write failure logs and is swallowed."""
@@ -238,7 +294,7 @@ class PerfMonitor:
                  perf_log_path=_USE_DEFAULT,
                  gauges: Callable[[], dict] | None = None,
                  self_pid: int | None = None,
-                 max_log_bytes: int = 50 * 1024 * 1024,
+                 max_log_bytes: int = DEFAULT_LOG_MAX_BYTES,
                  watch_processes=("Project64.exe",),
                  enabled: bool = True, deep: bool | None = None,
                  stall_watch: bool = True, stall_followup_s: float = 2.0):
@@ -295,10 +351,12 @@ class PerfMonitor:
         """Routine sampling does not grow with heap size or retained files."""
         machine = machine_snapshot(thread_pids=(self._pid,))
         if machine is None:  # off Windows: the stateless probes alone
-            return sample(self._scratch_dir if self._deep else None,
+            snap = sample(self._scratch_dir if self._deep else None,
                           count_objects=self._deep, resources=True,
                           children_of=self._pid, histogram=self._deep,
                           gpu=self._deep, processes=self._watch)
+            snap["children"] = _child_fields(snap.get("children"))
+            return snap
         snap = sample(self._scratch_dir if self._deep else None,
                       count_objects=self._deep, resources=True,
                       histogram=self._deep, gpu=self._deep)
@@ -308,11 +366,11 @@ class PerfMonitor:
     def _machine_view(self, machine: MachineSnapshot) -> dict:
         """What one snapshot answers against the previous minute's: this
         server's threads, its whole helper tree, the watched processes (with
-        Project64's address-space headroom) and the machine's top consumers."""
+        Project64's address-space headroom) and aggregate machine load."""
         with self._state_lock:
+            machine, members = _scope_snapshot(machine, self._pid, self._watch, self._tree_seen)
             prev, self._minute_prev = self._minute_prev, machine
             self._recent.append(machine)
-            members = descendants(machine, self._pid, self._tree_seen)
             self._tree_seen = frozenset((p.pid, p.created) for p in members)
         watched = named_processes(machine, self._watch, prev)
         for exe, slot in watched.items():
@@ -327,7 +385,7 @@ class PerfMonitor:
                 "os_threads": me.threads if me is not None else None}
         if prev is not None:
             view["cpu"] = thread_cpu(prev, machine, self._pid, self._labeler())
-            view["machine"] = machine_summary(prev, machine)
+            view["machine"] = _machine_totals(prev, machine)
         return view
 
     def _labeler(self) -> Callable[[int, int], str]:
@@ -363,6 +421,8 @@ class PerfMonitor:
         now = machine_snapshot(thread_pids=(self._pid,))
         if now is None:
             return None
+        with self._state_lock:
+            now, _ = _scope_snapshot(now, self._pid, self._watch, self._tree_seen)
         base = self._stall_baseline(now.t - late_s)
         with self._state_lock:
             self._recent.append(now)
@@ -371,7 +431,7 @@ class PerfMonitor:
                         "uptime_s": round(time.monotonic() - self._t0, 1),
                         "late_ms": round(late_s * 1000)}
         if base is not None:
-            record["before"] = machine_summary(base, now)
+            record["before"] = _machine_totals(base, now)
             record["before"]["self"] = thread_cpu(base, now, self._pid,
                                                   self._labeler())
         record["system"] = system_memory()
@@ -380,17 +440,16 @@ class PerfMonitor:
             resumed = time.perf_counter()
             after = machine_snapshot(thread_pids=(self._pid,))
             if after is not None:
-                record["after"] = machine_summary(now, after)
                 with self._state_lock:
+                    after, _ = _scope_snapshot(after, self._pid, self._watch, self._tree_seen)
                     self._recent.append(after)
+                record["after"] = _machine_totals(now, after)
             cost += time.perf_counter() - resumed
         record["capture_ms"] = round(cost * 1000, 1)
-        top = (record.get("before") or {}).get("top_cpu") or []
-        log.warning("stall: this server could not run for %d ms; busiest over "
-                    "the %s s before: %s", record["late_ms"],
-                    (record.get("before") or {}).get("window_s", "?"),
-                    ", ".join(f"{r['exe']} {r['cpu_pct']}%" for r in top[:3])
-                    or "unmeasured")
+        before = record.get("before") or {}
+        log.warning("stall: this server could not run for %d ms; machine busy %s%% "
+                    "over %s s; server %s%%", record["late_ms"], before.get("busy_pct", "?"),
+                    before.get("window_s", "?"), (before.get("self") or {}).get("process_pct", "?"))
         self._persist(record)
         return record
 
@@ -491,13 +550,12 @@ def _log_sample(snap: dict, growers: list) -> None:
         sysd.get("load_pct", "?"), _mib_reading(snap.get("scratch_bytes")))
     cpu, machine = snap.get("cpu") or {}, snap.get("machine") or {}
     if cpu or machine:
-        log.info("cpu: server %s%% (%s); machine busy %s%%, top %s",
+        log.info("cpu: server %s%% (%s); machine busy %s%%, DPC %s%%, interrupt %s%%",
                  cpu.get("process_pct", "?"),
                  ", ".join(f"{k} {v}%" for k, v in
                            list((cpu.get("threads") or {}).items())[:4]),
-                 machine.get("busy_pct", "?"),
-                 ", ".join(f"{r['exe']} {r['cpu_pct']}%"
-                           for r in (machine.get("top_cpu") or [])[:3]))
+                 machine.get("busy_pct", "?"), machine.get("dpc_pct", "?"),
+                 machine.get("interrupt_pct", "?"))
     if growers:
         log.info("mem growers vs baseline: %s", ", ".join(
             f"{g['type']} +{g['delta']}" for g in growers[:6]))

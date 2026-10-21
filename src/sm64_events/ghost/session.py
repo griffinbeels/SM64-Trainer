@@ -165,6 +165,14 @@ class GhostSession:
 
     # -- what anyone reads ---------------------------------------------------
 
+    def diagnostic_status(self) -> dict:
+        """Cached logical state only: no labels, roster paths or playback commands."""
+        return {"enabled": bool(self._values.get("enabled")), "has_target": self._target is not None,
+                "candidates_count": len(self._candidates),
+                "playing_count": sum(bool(row.get("available")) for row in self._native_answer.get("ghosts", [])),
+                "source_available": bool(self._source.get("available")),
+                "source_reason": self._source.get("reason")}
+
     def payload(self) -> dict:
         """Preferences, chosen ghosts, readiness and native visibility."""
         return {**{name: settings.copied(value) for name, value in self._values.items()},

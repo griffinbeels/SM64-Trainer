@@ -8,7 +8,7 @@ the project? Start with the [README](../README.md). Developing here? Read
 
 `GET /api/diagnostics/reporting` returns `configured`, `enabled`, `pending` and
 safe collection counters. `PUT /api/diagnostics/reporting` accepts `{enabled: boolean}`;
-disabling stops capture and removes queued uploads. `POST /api/diagnostics/browser-error`
+disabling stops collection and removes queued uploads and breadcrumbs. `POST /api/diagnostics/browser-error`
 accepts bounded `message`, `stack` and `source` strings and returns 202. All mutations
 use the existing same-origin local request protection. Neither settings nor report
 responses expose the DSN or queued diagnostic contents. See [error reporting](error-reporting.md)
@@ -47,7 +47,7 @@ No recorder restart or capture-rate change occurs. See [profiling](profiling.md)
 | `GET /health` | Liveness: `{status, emulator_attached, held, clients, last_frame, db, session_id, memory, inputs}`. `inputs` is the pad sampler's counters (`samples, straddles, frames, edge_checks, edge_mismatches, skips, skipped_frames, worst_skip`) or null on a layout with no controller row; `edge_mismatches` must read 0 after play — the game's own buttonPressed confirming every frame number the capture assigned. The `skip` trio counts the other failure, the one a person sees as "No capture on this frame": the counter advancing by more than one between observed samples, so nobody read the frames in between and their input is gone (the game keeps no history to recover it from). It needs the poll loop to stall past a whole game frame, since eight samples land inside one at 250 Hz; measured over his journal 2026-08-31 at 84 frames of 93,958, 0.089%. A counter restart is not a skip. `held` is null normally; it is the reason string when the chosen game version's memory layout is not verified yet (JP before its sync run) — the poller then reads NOTHING and stays detached rather than reading US addresses off a JP ROM, and the string names the command that fills the layout (`tools/sync_version.py --version jp`) and the dashboard that shows what is missing (`/ui/sync.html`). |
 | `POST /api/admin/shutdown` | Graceful shutdown — the desktop "close the other instance" takeover path. `{"shutting_down": true}` |
 | `POST /api/admin/restart` | Full-process relaunch — the one-click "Restart server" button; picks up edited backend code. `{"restarting": true}` |
-| `POST /api/diagnostics` | One-button debug report — capped tails of the server log, journal, UI log and perf samples, plus the `/health` payload, in ONE markdown file under the replays `diagnostics/` dir (newest 5 kept). Sections degrade individually: an unreadable source names its failure instead of failing the report. Open the file via `POST /api/replay/reveal`. `{"path", "size_bytes"}` |
+| `POST /api/diagnostics` | Redacted support report with capture/GPU, ghost playback, cached setup checks, recognized native log records and bounded local diagnostic observations. No capture or installation is started. At most 3 files / 1 MiB each, expiring after 24 hours; cleanup runs at normal startup and export. Sources fail independently. Open via `POST /api/replay/reveal`. Response remains `{"path", "size_bytes"}`. [Evidence/privacy contract](error-reporting.md) |
 
 `GET /health` reports `polling: {state, error, last_error, failures, restarts,
 retry_in_s}`. The supervisor uses `starting`, `running`, `recovering`, and
@@ -495,19 +495,23 @@ rotation and server restart until explicitly enabled.
 
 Both this response and `GET /api/replay/status` report `capture_state`: `off`,
 `stopping`, `starting`, `waiting`, `recording`, `paused`, or `error`. `off`
-requires no startup in flight and successful closure of every recorder-owned
-video, WASAPI audio, native pose, sink/encoder and machine lease. Startup
+requires no media startup in flight and successful closure of video, WASAPI
+audio and sink/encoder workers. Native pose capture and ghost playback continue
+under the same machine lease, independently of this footage setting. Startup
 cancellation, retained workers or failed cleanup remain `stopping`; the
 existing `recovery.error` explains a failure. HTTP never joins capture workers.
 The PUT response and GETs that observe `starting`, `stopping`, or `off`
 use cached buffer coverage without acquiring media storage locks. Other GETs
 refresh coverage; an active poll already querying storage can still wait there,
 then reports the latest capture state when that query finishes.
-Unlike session Pause, this switch closes capture owners. It preserves tracking,
-saved replays, buffered media and the separate session pause setting. It does
-stop the native pose source, Only Mario ghost playback and its native sound
-player. Ghost Overlay preferences stay unchanged; native ghosts can resume when
-recording starts and the current attempt has a valid origin.
+This switch closes footage owners. It preserves tracking, saved replays,
+buffered media, native Mario pose capture, Only Mario ghost playback/sound and
+the separate session pause setting. Ghost Overlay preferences stay unchanged.
+`pose_source_owned` and `pose_capture_paused` expose the independent pose lifetime;
+ownership alone is not proof that native poses are arriving. A scoped desktop
+recovery after GPU startup failure exposes `gpu_fallback` and
+`gpu_fallback_active`, separately from `gpu_unsupported`. Desktop pictures never
+claim a renderer-stamped frame map.
 
 While the server runs it records the PJ64 window (DWM shared-surface
 capture — modern window capture sees frozen content for PJ64's D3D8, and
