@@ -151,8 +151,11 @@ class PersistentTransport(Transport):
                 if not event:
                     raise ValueError("Not an error event")
                 envelope = _event_envelope(safe_event(event))
-                self.pending[path.name] = envelope.serialize()
+                cleaned = envelope.serialize()
+                self.pending[path.name] = cleaned
                 self.created[path.name] = min(metadata.st_mtime, self.clock())
+                if cleaned != payload:
+                    self.incoming.append((path.name, cleaned))
                 if metadata.st_mtime > self.clock():
                     os.utime(path, (self.created[path.name], self.created[path.name]))
                 total += len(payload)

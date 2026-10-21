@@ -43,7 +43,7 @@ def _remove(path: Path) -> None:
         pass  # A denied cleanup cannot break practice or report export.
 
 
-def prune_reports(directory: Path, *, now: float | None = None) -> None:
+def prune_reports(directory: Path, *, now: float | None = None, keep: int = REPORT_KEEP) -> None:
     """Keep three recent bounded reports; only app-owned report names qualify."""
     root = _directory(Path(directory))
     if root is None:
@@ -59,10 +59,25 @@ def prune_reports(directory: Path, *, now: float | None = None) -> None:
                 _remove(path)
             else:
                 reports.append((metadata.st_mtime, path.name, path))
-        for _, _, path in sorted(reports, reverse=True)[REPORT_KEEP:]:
+        for _, _, path in sorted(reports, reverse=True)[max(0, min(keep, REPORT_KEEP)):]:
             _remove(path)
     except OSError:
         pass
+
+
+def report_directory(directory: Path, *, keep: int = REPORT_KEEP) -> Path:
+    """Reserve a slot through the same guarded cleanup path before writing."""
+    path = Path(directory).absolute()
+    if any(item.is_symlink() or item.is_junction() for item in (path, *path.parents)):
+        raise OSError("Debug report folder contains a redirected path.")
+    path.mkdir(parents=True, exist_ok=True)
+    root = _directory(path)
+    if root is None:
+        raise OSError("Debug report folder is unavailable.")
+    prune_reports(root, keep=max(0, min(keep, REPORT_KEEP) - 1))
+    if sum(_metadata(item) is not None for item in root.glob("debug-report-*.md")) >= keep:
+        raise OSError("The debug-report limit is full; old exports could not be removed.")
+    return root
 
 
 def prune_debug_logs(log_directory: Path, *, data_directory: Path | None = None,

@@ -48,3 +48,27 @@ def test_db_less_server_still_reports(tmp_path, monkeypatch):
     assert resp.status_code == 200
     text = Path(resp.json()["path"]).read_text(encoding="utf-8")
     assert "journal unavailable" in text     # named, not crashed
+
+
+def test_report_contains_native_and_ghost_evidence_without_private_labels(tmp_path, monkeypatch):
+    from types import SimpleNamespace as NS
+    from sm64_events.core.native_diagnostics import technical_events
+    monkeypatch.setattr("sm64_events.server.app.diagnostics_dir", lambda: tmp_path / "diag")
+    line = ("2026-10-21T18:01:00.000Z pid=42 tid=1 build=development-unidentified "
+            "event=gpu_failure reason=10005 detail=4 author=PrivatePlayer path=C:\\Users\\PrivateName\\ROM.z64\n")
+    native = {"available": True, "logs": [{"source": "plugin_dir", "file": "sm64_trainer_gfx.log", "tail": line}],
+              "events": technical_events(line)}
+    monkeypatch.setattr("sm64_events.core.native_diagnostics.NativeDiagnostics.snapshot", lambda self, layer: native)
+    recorder = NS(diagnostic_status=lambda: {"recorder": {"pictures_fed": 0}},
+                  ghost_capture=NS(snapshot_status=lambda **kwargs: {"state": 5, "reason": 8, "displayed": False}))
+    ghost = NS(diagnostic_status=lambda: {"enabled": True, "has_target": True, "label": "PrivatePlayer"})
+    layer = NS(diagnostic_status=lambda: {"state": "needs_restart", "pj64_dir": "C:\\Users\\PrivateName"})
+    broadcaster = Broadcaster()
+    app = create_app(Poller(OfflineMemory(), [], broadcaster), broadcaster,
+        replay=NS(recorder=recorder, cfg=NS(scratch_dir=tmp_path)), capture_layer=layer, ghost=ghost)
+    response = TestClient(app).post("/api/diagnostics")
+    assert response.status_code == 200
+    text = Path(response.json()["path"]).read_text(encoding="utf-8")
+    assert "Native plugin log records" in text and "gpu_failure" in text and "10005" in text
+    assert '"ghost"' in text and '"displayed": false' in text and '"reason": 8' in text
+    assert not any(value in text for value in ("PrivatePlayer", "PrivateName", "ROM.z64"))

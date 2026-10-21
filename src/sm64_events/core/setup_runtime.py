@@ -29,6 +29,7 @@ class SetupRuntime:
         self._lock = threading.Lock()
         self._next_read = 0.0
         self._cached = {}
+        self._diagnostic_observed_at = None
         self._cached_layer = None
         self._window = CounterWindow(clock)
         self._steady = SteadyChecks(clock)
@@ -61,6 +62,10 @@ class SetupRuntime:
             return identify_rom(None)
         self._last_rom = (pid, self.clock(), rom)
         return rom
+
+    def diagnostic_status(self) -> dict:
+        """Last committed observation; never discover processes or attach memory."""
+        return {**self._cached, "observed_unix_s": self._diagnostic_observed_at}
 
     def _reader_for(self, pid):
         """This process's reader, attached once; None while there is no
@@ -103,6 +108,7 @@ class SetupRuntime:
                 return self._cached
             result = self._observe(layer)
             self._cached = result
+            self._diagnostic_observed_at = time.time()
             self._cached_layer = identity
             self._next_read = self.clock() + 0.75
             return result

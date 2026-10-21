@@ -169,6 +169,7 @@ class NativeCapture:
         self._playback = {"enabled": False}
         self._revision = 1
         self._status = {"available": False, "reason": "not_started"}
+        self._reported_native_fault = None
         self._channel = None
         self._pending_cleanup = None
         self._warn = RateLimitedWarning(log)
@@ -249,8 +250,10 @@ class NativeCapture:
                  "waiting for it: %s", error)
 
     def _report(self, **status):
+        status["observed_unix_s"] = time.time()
         with self._lock:
             self._status = status
+        self._report_native_fault(status.get("state"), status.get("reason"))
 
     def _discover(self):
         if self._pid is not None:
@@ -392,3 +395,19 @@ class NativeCapture:
                     while not self._stop.is_set() and not self._close_channel():
                         self._stop.wait(0.25)
                 self._stop.wait(0.5)
+
+    def _report_native_fault(self, state, reason):
+        """A model/pose/playback failure is an error even without a Python exception.
+
+        Preparing, another scene, unsupported cartridges and waiting for an
+        attempt clock are ordinary states. Only unexpected native FAULT codes
+        report, once per distinct fault transition; transport also deduplicates.
+        """
+        key = (state, reason)
+        if state != 5 or reason not in {6, 7, 8, 11}:
+            self._reported_native_fault = None
+        elif key != getattr(self, "_reported_native_fault", None):
+            self._reported_native_fault = key
+            from sm64_events.core.error_reporting import capture_problem
+            capture_problem("Native ghost playback failed", context={
+                "component": "native_ghost", "stage": "ghost_playback", "native_reason": reason})

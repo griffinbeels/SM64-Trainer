@@ -6,19 +6,22 @@ user identities, source lines and attachments never become automatic reports.
 from __future__ import annotations
 
 import re
+import ipaddress
 from collections.abc import Mapping
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 _SECRET = re.compile(
-    r"(?i)\b(?:authorization|cookie|password|passwd|secret|token|api[_-]?key|dsn)"
-    r'''\s*[=:]\s*(?:bearer\s+)?(?:"[^"]*"|'[^']*'|[^\s,;]+)'''
+    r'''(?i)(?<!\w)["']?(?:authorization|cookie|password|passwd|secret|token|api[_-]?key|dsn|username|user_id|account_id|display_name)["']?'''
+    r'''\s*[=:]\s*(?:bearer\s+)?(?:"[^"]*"|'[^']*'|[^\s,;}]+)'''
 )
 _BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*")
 _URL = re.compile(r"(?i)\b(?:https?|file)://[^\s\"'<>)]+")
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _WIN_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\)[^\r\n\"'<>|]*")
-_POSIX_PATH = re.compile(r"(?<![\w:])/(?:Users|home|tmp|var|mnt|media|private)/[^\s\"'<>]*")
+_POSIX_PATH = re.compile(r"(?<![\w:/])/(?!ui/)[^\s\"'<>;,]+")
+_IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
+_IPV6 = re.compile(r"(?<![\w])\[?(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\]?(?![\w])")
 _OPAQUE = re.compile(r"\b(?=[A-Za-z0-9_+/=-]*[0-9])[A-Za-z0-9_+/=-]{40,}\b")
 _CONTEXT_KEYS = frozenset({
     "operation", "component", "stage", "phase", "action", "code", "errno",
@@ -48,10 +51,18 @@ def scrub_text(value: object, limit: int = 600) -> str:
     text = str(value)[:4000]
     for pattern, replacement in (
         (_SECRET, "[credential]"), (_BEARER, "[credential]"), (_URL, _safe_url), (_EMAIL, "[email]"),
-        (_WIN_PATH, "[path]"), (_POSIX_PATH, "[path]"), (_OPAQUE, "[value]"),
+        (_WIN_PATH, "[path]"), (_POSIX_PATH, "[path]"), (_IPV4, _safe_ip), (_IPV6, _safe_ip), (_OPAQUE, "[value]"),
     ):
         text = pattern.sub(replacement, text)
     return text[:limit]
+
+
+def _safe_ip(match: re.Match) -> str:
+    try:
+        ipaddress.ip_address(match.group().strip("[]"))
+        return "[ip]"
+    except ValueError:
+        return match.group()
 
 
 def safe_context(context: object) -> dict:
@@ -90,16 +101,24 @@ def _frames(stacktrace: object) -> dict:
 
 
 def safe_breadcrumb(crumb: dict, _hint: object = None) -> dict | None:
-    """Only application logs provide breadcrumbs; network/log bodies stay out."""
+    """Only operational logs: event wires, profiles and process inventories stay local."""
     category = str(crumb.get("category", ""))
-    if not category.startswith(("sm64.", "sm64_events.")):
+    if category not in {"sm64.replay", "sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64.ghost.capture"}:
         return None
-    return {
+    result = {
         "category": scrub_text(category, 120),
         "message": scrub_text(crumb.get("message", ""), 220),
         "level": scrub_text(crumb.get("level", "info"), 20),
         "type": "default",
     }
+    stamp = crumb.get("timestamp")
+    if isinstance(stamp, (float, int)):
+        result["timestamp"] = stamp
+    elif isinstance(stamp, str) and re.fullmatch(r"[\dTZ:.+\-]{1,40}", stamp):
+        result["timestamp"] = stamp
+    elif hasattr(stamp, "isoformat"):
+        result["timestamp"] = stamp.isoformat()
+    return result
 
 
 def _build_identity(event: dict) -> dict:
@@ -135,6 +154,10 @@ def safe_event(event: dict) -> dict:
     if values:
         result["exception"] = {"values": values}
     context = safe_context(event.get("extra", {}))
+    extra = event.get("extra", {})
+    if isinstance(extra, Mapping) and isinstance(extra.get("diagnostics"), Mapping):
+        from .diagnostic_privacy import safe_snapshot
+        context["diagnostics"] = safe_snapshot(extra["diagnostics"])
     if context:
         result["extra"] = context
     contexts = event.get("contexts", {})

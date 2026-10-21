@@ -84,7 +84,7 @@ def test_caught_exception_keeps_type_stack_build_and_real_error_number(tmp_path)
 
 def test_sdk_log_errors_are_collected_and_safe_app_logs_are_breadcrumbs(tmp_path):
     configure(tmp_path)
-    logger = logging.getLogger("sm64_events.synthetic")
+    logger = logging.getLogger("sm64.replay")
     previous = logger.level
     logger.setLevel(logging.INFO)
     try:
@@ -129,7 +129,7 @@ def test_gpu_owner_logging_carries_structured_native_failure_through_actual_sdk(
     assert event["exception"]["values"][-1]["type"] == "RuntimeError"
 
 
-@pytest.mark.parametrize("name", ["sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64_events.synthetic"])
+@pytest.mark.parametrize("name", ["sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64.replay"])
 def test_actual_application_logger_names_supply_breadcrumbs(tmp_path, name):
     configure(tmp_path)
     logger = logging.getLogger(name)
