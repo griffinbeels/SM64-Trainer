@@ -8,6 +8,7 @@
  *   helper <nonce lo> <nonce hi>       the ghost copy's helper, its own process */
 #include "gpu_delivery.h"
 #include "gpu_delivery_diagnostics.h"
+#include "gpu_startup.h"
 #include "stamp_adapter.h"
 #include "runtime_control.h"
 #include "runtime_delivery.h"
@@ -33,6 +34,7 @@ extern "C" int gd_test_channel_retry(unsigned,uint32_t*);
 extern "C" int gd_test_sample_retry(unsigned,uint32_t*);
 extern "C" int gd_test_failure_snapshot(gd_diagnostic*,uint32_t*);
 extern "C" int gd_test_healthy_snapshot(gd_diagnostic*);
+extern "C" int gd_test_bootstrap_receipt(gpu_startup_v1*);
 extern "C" void gd_test_bridge_fault_once(uint32_t);
 extern "C" void gd_test_twin_bridge_fault_once(uint32_t);
 namespace {
@@ -348,6 +350,16 @@ extern "C" int __cdecl sa_probe_quiescent(uint64_t through,sa_frontier*out){
     if(s!=transaction.load()||gd_epoch())return 0;*out={s,0,0,0,high,now};return 1;
 }
 int main(int argc,char**argv){
+    if(argc==2 && !strcmp(argv[1],"--bootstrap-receipt-cpu")){
+        gpu_startup_v1 receipts[2]{};CHECK(gd_test_bootstrap_receipt(receipts));
+        for(const auto&r:receipts){
+            CHECK(!memcmp(r.magic,GPU_STARTUP_MAGIC,8) && r.version==1 && r.bytes==sizeof r);
+            CHECK(r.epoch==17 && r.control_generation==7 && r.nonce_lo==23 && r.nonce_hi==29);
+            CHECK(!r.vendor[0] && !r.renderer[0] && !r.gl_version[0] && !r.luid_available && !r.load_error);
+        }
+        CHECK(!receipts[0].width && !receipts[0].height && receipts[1].width==17 && receipts[1].height==11);
+        printf("bootstrap receipt accepted 0 0 surface 17 11 gateway unavailable\n");return 0;
+    }
     if(argc==2 && !strcmp(argv[1],"--healthy-snapshot-cpu")){
         gd_diagnostic windows[3]{};CHECK(gd_test_healthy_snapshot(windows));
         const auto&a=windows[0];const auto&b=windows[1];const auto&failure=windows[2];
