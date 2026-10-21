@@ -398,7 +398,7 @@ function RecordingSwitch({st, onStatus, refresh}) {
     <button disabled=${!supported || busy || st.capture_state === "stopping"}
       onclick=${toggle}>${st.recording_enabled === false ? "Start recording" : "Stop recording"}</button>
     <p>${supported
-      ? "Stops video, audio, recorded Mario poses and Only Mario ghosts. Practice tracking continues."
+      ? "Stops saving gameplay video and audio. Practice tracking, recorded Mario poses and Only Mario ghosts continue."
       : "Restart the trainer to enable these recording controls."}</p>
     ${error && html`<p role="alert">${error}</p>`}
     ${problem && html`<p role="alert">${problem}</p>`}

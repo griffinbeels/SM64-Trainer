@@ -35,6 +35,12 @@ with no stamps. The raw FrameStream/ReadScreen path was deleted on 2026-09-16.
 Current ownership, timing, setup and hardware limits belong to
 [Renderer GPU recording](../../docs/replay-gpu-runtime.md).
 
+The gameplay recording switch controls footage, not native ghosts. Pose capture
+and playback share the machine lease but survive video teardown/retry/off. ROM
+retarget and window loss replace both owners; shutdown retains failed cleanup.
+`tests/test_ghost_recording_independence.py` checks these boundaries and actual
+pose-only clip publication. Do not restore a recording_enabled playback gate.
+
 | To change... | Edit |
 |---|---|
 | Replay orchestration (attach loop, source wiring, ring, idle gate) | `replay/recorder.py` + player-input tap `replay/activity.py`; `replay/clock.py` is THE QPC↔UTC contract. On the GPU route `GpuCapture` feeds its paired `GpuSink` (compressed packets plus PCM); the desktop grab routes both streams into the single AV sink (`_on_frame`→`submit`, `_on_pcm`→`submit_audio`); the in-process `SegmentWriter` is a no-ffmpeg fallback only. Automatic idle keeps healthy paired GPU capture alive and retains bounded encoded pre-roll (`fragmentretention.py`); explicit session pause revokes GPU demand. The desktop grab still throttles its grabs, and its fragment sink discards only extents born after explicit pause; the ring byte-cap is free-disk-gated (`ring.effective_cap`) |

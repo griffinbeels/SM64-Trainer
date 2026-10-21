@@ -495,8 +495,9 @@ rotation and server restart until explicitly enabled.
 
 Both this response and `GET /api/replay/status` report `capture_state`: `off`,
 `stopping`, `starting`, `waiting`, `recording`, `paused`, or `error`. `off`
-requires no startup in flight and successful closure of every recorder-owned
-video, WASAPI audio, native pose, sink/encoder and machine lease. Startup
+requires no media startup in flight and successful closure of video, WASAPI
+audio and sink/encoder workers. Native pose capture and ghost playback continue
+under the same machine lease, independently of this footage setting. Startup
 cancellation, retained workers or failed cleanup remain `stopping`; the
 existing `recovery.error` explains a failure. HTTP never joins capture workers.
 The PUT response and GETs that observe `starting`, `stopping`, or `off`

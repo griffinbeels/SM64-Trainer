@@ -194,8 +194,12 @@ class NativeCapture:
                 self._cleanup_complete.set()
             raise
 
-    def stop(self, timeout_s: float = 3.0) -> bool:
+    def request_stop(self):
+        """Cancel discovery even when the producer has not started yet."""
         self._stop.set()
+
+    def stop(self, timeout_s: float = 3.0) -> bool:
+        self.request_stop()
         if self._thread is None:
             return self._cleanup_complete.is_set()
         self._thread.join(timeout_s)

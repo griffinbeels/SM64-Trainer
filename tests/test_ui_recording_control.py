@@ -81,7 +81,7 @@ def test_manual_recording_control_waits_for_actual_stop_and_resume(tmp_path):
             page.wait_for_function("document.querySelector('.recording-switch [role=status]').textContent === 'Stopping recording…'")
             assert writes == [{"enabled": False}]
             assert not switch.get_by_role("button", name="Start recording").is_enabled()
-            assert "Practice tracking continues." in switch.inner_text()
+            assert "Practice tracking, recorded Mario poses and Only Mario ghosts continue." in switch.inner_text()
             assert "Only Mario ghosts" in switch.inner_text()
             assert button_label(page) == "Stopping recording…"
             state.update(capture_state="off")

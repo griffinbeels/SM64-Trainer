@@ -1276,6 +1276,8 @@ delete the one you do not want instead of cropping it.
 The recorded [[attempt]] you race beside your current play. Its captured
 graphics pose is rebuilt through libsm64 inside GLideN64, using the live
 camera and terrain depth. Opacity and tint apply to the displayed ghost.
+Stopping gameplay video storage leaves native pose capture, ghost creation and
+playback running. A failed video encoder does not revoke the [[ghost source]].
 Playback binds the exact recorded and live [[attempt]] origins and applies
 the [[nudge]]. Missing poses or clock identity have a readable refusal. A
 recording whose controller input is unknown on any [[frame]] is not a ghost at

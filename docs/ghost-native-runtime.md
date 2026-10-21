@@ -7,6 +7,17 @@ companion window are removed; older video-only recordings remain playable as
 replays but cannot supply ghost poses. See [session.py](../src/sm64_events/ghost/session.py) and
 [native_session.py](../src/sm64_events/ghost/native_session.py).
 
+Gameplay recording controls footage storage only. Native Mario pose capture,
+saved ghost creation, playback and ghost sound continue when footage is off or
+the video source fails. `ReplayRecorder` keeps their source and bounded pose
+archive under its machine-wide lease while retiring only video/audio/encoder
+workers. A ROM/window change replaces the pose source; session pause stops pose
+ingestion, and app shutdown must prove every owner closed before releasing the
+lease. Starting the pose owner never opens video/audio sources or probes a codec.
+Template/PB preservation already commits native clips without extracting video.
+Controller inputs alone cannot recreate these graphics poses; both the native
+pose source and complete, correctly identified input coverage remain required.
+
 The **Your rivals** list automatically chooses compatible native recordings,
 with protected manual slots and a separate PB. Its local population, range,
 preparation/adoption and fresh-climb contracts live in
