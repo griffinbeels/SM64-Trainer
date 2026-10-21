@@ -9,6 +9,7 @@
 #include "ghost_behaviours.h"
 #include "ghost_particle_pose.h"
 #include "ghost_compositor.h"
+#include "ghost_live_render.h"
 #include "ghost_annotation_assets.h"
 #include "ghost_path.h"
 #include <algorithm>
@@ -56,7 +57,7 @@ struct Clip {
 } clips[GP_CLIP_SLOTS];
 struct Model {
     std::atomic<uint32_t> state{GP_MODEL_EMPTY};
-    uint32_t cancellation=0;
+    uint32_t cancellation=0,lifetime=0;
     uint64_t id=0;
     sg_model *value=nullptr;
     ghost_annotation::Assets annotations; // worker builds; renderer borrows with the model
@@ -65,10 +66,15 @@ struct Model {
 std::atomic_flag worker_gate=ATOMIC_FLAG_INIT;
 DWORD worker_thread=0; // protected by worker_gate
 std::atomic<uint32_t> cancellation{1}, context_serial{1};
+std::atomic<uint32_t> model_lifetime{1}; // hard lifecycle cancellation, not saved stop
 std::atomic<bool> exhausted{false};
 std::atomic<uint64_t> desired_model{0}, enabled_revision{0}, resident_bytes{0};
+struct LiveDemand {uint64_t id=0;uint32_t rom=0,configuration=0;};
+Mailbox<LiveDemand> live_demands;
+std::atomic<uint64_t> live_model_id{0};
+LiveDemand render_live_demand{}; // render owner only
 std::atomic<uint64_t> terminal_revision{0}; // renderer publishes; worker checks same applied lease
-static_assert(GP_GHOSTS==ghost_compositor::max_poses,"one batch draws every displayed ghost");
+static_assert(GP_GHOSTS<=ghost_compositor::max_poses,"saved ghosts fit the shared batch");
 static_assert(uint64_t(GP_CLIP_SLOTS)*GP_LONG_GHOST_FRAMES*(sizeof(gclip_frame)+sizeof(uint32_t))
               <=GP_CLIP_BUDGET,"a full set of long ghosts and its replacement fit the clip budget");
 std::atomic<uint32_t> evaluations{0}, rendered{0}, gaps{0}, refusals{0}, adoption_busy{0};
@@ -239,6 +245,17 @@ void __cdecl revoke(uint32_t) {
     enabled_revision.store(0,std::memory_order_release);
     desired_model.store(0,std::memory_order_release);
     if(cancellation.fetch_add(1,std::memory_order_acq_rel)>=UINT32_MAX-1) exhausted.store(true);
+    if(model_lifetime.fetch_add(1,std::memory_order_acq_rel)>=UINT32_MAX-1)exhausted.store(true);
+}
+void cancel_saved() {
+    enabled_revision.store(0,std::memory_order_release);
+    desired_model.store(live_model_id.load(std::memory_order_acquire),std::memory_order_release);
+    if(cancellation.fetch_add(1,std::memory_order_acq_rel)>=UINT32_MAX-1)exhausted.store(true);
+}
+bool model_valid(uint32_t current_cancel) {
+    return model.lifetime==model_lifetime.load(std::memory_order_acquire)
+        && model.id==desired_model.load(std::memory_order_acquire)
+        && (model.cancellation==current_cancel || model.id==live_model_id.load(std::memory_order_acquire));
 }
 void __cdecl withdraw() {enabled_revision.store(0,std::memory_order_release);}
 bool id_equal(const uint8_t *a,const uint8_t *b) {return std::memcmp(a,b,16)==0;}
@@ -268,7 +285,7 @@ int reclaim_model() {
     const int result=sg_model_close(&model.value);
     if(result!=SG_OK) {model_error.store(result);return GP_DEFERRED;}
     model.reclaim_owned=false;
-    model.id=0; model.cancellation=0;
+    model.id=0; model.cancellation=model.lifetime=0;
     model.state.store(GP_MODEL_EMPTY,std::memory_order_release); return GP_OK;
 }
 int collect_impl() {
@@ -283,7 +300,7 @@ int collect_impl() {
         if(clip.state.compare_exchange_strong(expected,Reclaiming)) free_clip(clip);
     }
     if(model.state.load(std::memory_order_acquire)==GP_MODEL_READY &&
-            (model.cancellation!=current_cancel || model.id!=desired_model.load())) {
+            !model_valid(current_cancel)) {
         uint32_t expected=GP_MODEL_READY;
         model.state.compare_exchange_strong(expected,GP_MODEL_RETIRED);
     }
@@ -296,16 +313,17 @@ int32_t __cdecl collect() {
 int32_t __cdecl prepare_model(uint64_t id,const uint8_t *rom,uint32_t bytes) {
     const int entered=worker_enter(); if(entered!=GP_OK)return entered;
     if(!id || !rom || bytes!=8u*1024u*1024u || exhausted.load()) return worker_leave(GP_INVALID);
-    const auto before=cancellation.load(); desired_model.store(id);
+    if(live_model_id.load() && live_model_id.load()!=id)return worker_leave(GP_INVALID);
+    const auto before=cancellation.load();const auto lifetime=model_lifetime.load();desired_model.store(id);
     collect_impl();
     auto state=model.state.load(std::memory_order_acquire);
     if(state==GP_MODEL_READY || state==GP_MODEL_RENDER_OWNED) {
-        return worker_leave(model.id==id && model.cancellation==before?GP_OK:GP_DEFERRED);
+        return worker_leave(model.id==id && model_valid(before)?GP_OK:GP_DEFERRED);
     }
     uint32_t expected=GP_MODEL_EMPTY;
     if(!model.state.compare_exchange_strong(expected,GP_MODEL_BUILDING)) return worker_leave(GP_DEFERRED);
     int result=sg_model_open(rom,bytes,&model.value);
-    if(result==SG_OK && cancellation.load()!=before) {
+    if(result==SG_OK && (cancellation.load()!=before || model_lifetime.load()!=lifetime)) {
         sg_model_close(&model.value); result=SG_BUSY;
     }
     if(result==SG_OK) result=sg_model_detach(model.value);
@@ -327,7 +345,7 @@ int32_t __cdecl prepare_model(uint64_t id,const uint8_t *rom,uint32_t bytes) {
         const auto loader=annotation_loader.load(std::memory_order_acquire);
         if(loader)loader(model.annotations,rom,bytes);else model.annotations.load(rom,bytes);
     }catch(const std::bad_alloc&) {model.annotations.ready=false;}
-    model.id=id; model.cancellation=before; model_error.store(SG_OK);
+    model.id=id; model.cancellation=before;model.lifetime=lifetime;model_error.store(SG_OK);
     model.state.store(GP_MODEL_READY,std::memory_order_release); return worker_leave(GP_OK);
 }
 
@@ -652,7 +670,7 @@ int32_t __cdecl configure(const gp_request *request) {
     if(!request || !valid_request(*request)) {revoke(GP_INVALID);return worker_leave(GP_INVALID);}
     if(exhausted.load()) return worker_leave(GP_EXHAUSTED);
     if(request->revision<=last_revision) return worker_leave(GP_INVALID);
-    if(!request->enabled) revoke(GP_DISABLED);
+    if(!request->enabled) cancel_saved();
     if(!requests.put(PublishedRequest{*request,request->enabled?before:cancellation.load(),0})) {
         exhausted.store(true); revoke(GP_EXHAUSTED); return worker_leave(GP_EXHAUSTED);
     }
@@ -663,7 +681,7 @@ int32_t __cdecl configure(const gp_request *request) {
 int32_t __cdecl release_worker() {
     const int entered=worker_enter(); if(entered!=GP_OK)return entered;
     collect_impl();
-    if(enabled_revision.load() || model.state.load()!=GP_MODEL_EMPTY) return worker_leave(GP_DEFERRED);
+    if(enabled_revision.load() || live_model_id.load() || model.state.load()!=GP_MODEL_EMPTY) return worker_leave(GP_DEFERRED);
     for(auto &clip:clips)if(clip.state.load()!=Empty)return worker_leave(GP_DEFERRED);
     worker_thread=0; return worker_leave(GP_OK);
 }
@@ -771,6 +789,20 @@ bool retire_model() {
     const int result=sg_model_detach(model.value);
     if(result!=SG_OK) {model_error.store(result);if(result==SG_BUSY)adoption_busy.fetch_add(1);return false;}
     have_model=false;model.state.store(GP_MODEL_RETIRED,std::memory_order_release);return true;
+}
+void adopt_model(uint64_t id,uint32_t current_cancel) {
+    if(have_model)return;
+    uint32_t expected=GP_MODEL_READY;
+    if(!model.state.compare_exchange_strong(expected,GP_MODEL_RENDER_OWNED))return;
+    if(model.id!=id || !model_valid(current_cancel))model.state.store(GP_MODEL_RETIRED,std::memory_order_release);
+    else {
+        const int result=sg_model_adopt(model.value);
+        if(result==SG_OK)have_model=true;
+        else {
+            model_error.store(result);if(result==SG_BUSY)adoption_busy.fetch_add(1);
+            model.state.store(result==SG_BUSY?GP_MODEL_READY:GP_MODEL_RETIRED,std::memory_order_release);
+        }
+    }
 }
 bool same_origin(const gp_request& a,const gp_request& b) {
     return a.owner_token==b.owner_token && a.rom_generation==b.rom_generation
@@ -1245,6 +1277,40 @@ uint32_t hidden_refusals(const gclip_header& header,const gclip_frame *frames) {
 const gp_api *api() {return &api_v2;}
 void set_sound_sink(const SoundSink *sink) {sound_sink.store(sink,std::memory_order_release);}
 void set_annotation_loader(AnnotationLoader loader) {annotation_loader.store(loader,std::memory_order_release);}
+int set_live_model_demand(uint64_t id,uint32_t rom,uint32_t configuration) {
+    const int entered=worker_enter();if(entered!=GP_OK)return entered;
+    if((id && (!rom || !configuration)) || (!id && (rom || configuration)))return worker_leave(GP_INVALID);
+    if(id && exhausted.load())return worker_leave(GP_EXHAUSTED);
+    if(id && enabled_revision.load() && desired_model.load() && desired_model.load()!=id)return worker_leave(GP_INVALID);
+    if(!live_demands.put(LiveDemand{id,rom,configuration})) {
+        exhausted.store(true);revoke(GP_EXHAUSTED);return worker_leave(GP_EXHAUSTED);
+    }
+    live_model_id.store(id,std::memory_order_release);
+    if(id)desired_model.store(id,std::memory_order_release);
+    else {
+        // withdraw hides a saved request while intentionally retaining its
+        // prepared assets. Its zero enabled_revision is not model retirement.
+        PublishedRequest saved{};
+        const bool retained=requests.get(saved) && saved.value.enabled
+            && saved.cancellation==cancellation.load(std::memory_order_acquire);
+        desired_model.store(retained?saved.value.model_id:0,std::memory_order_release);
+    }
+    return worker_leave(GP_OK);
+}
+bool model_current(const ghost_live::ModelBinding &binding) {
+    return renderer_owner() && have_model && !exhausted.load() && model.value==binding.model
+        && model.id==binding.model_id && binding.rom_generation==live_rom
+        && binding.configuration==live_configuration && model_valid(cancellation.load());
+}
+bool shared_model(uint32_t context,ghost_live::ModelBinding &out) {
+    out={};
+    if(!renderer_owner() || !have_model || exhausted.load() || !context
+            || render_live_demand.id!=live_model_id.load() || !render_live_demand.id
+            || render_live_demand.rom!=live_rom || render_live_demand.configuration!=live_configuration)return false;
+    ghost_live::ModelBinding binding{model.value,model.id,live_rom,live_configuration,context};
+    if(!model_current(binding))return false;
+    out=binding;return true;
+}
 void safe_boundary(uint32_t rom,uint32_t configuration) {
     const auto thread=GetCurrentThreadId();
     if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return;}
@@ -1252,11 +1318,18 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     next_boundary();
     PublishedRequest published{};const bool received=requests.get(published);
     const auto &next=published.value; const auto current_cancel=cancellation.load();
+    live_demands.get(render_live_demand);
+    const bool live_wanted=!exhausted.load() && rom && configuration && render_live_demand.id
+        && render_live_demand.id==live_model_id.load() && render_live_demand.id==desired_model.load()
+        && render_live_demand.rom==rom && render_live_demand.configuration==configuration;
     const bool wanted=!exhausted.load() && rom && configuration && received && next.enabled
         && published.cancellation==current_cancel
         && next.rom_generation==rom && next.configuration==configuration;
     if(!wanted) {
-        retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.detach();
+        retire_clips();
+        if(!live_wanted || (have_model && !model_valid(current_cancel)))retire_model();
+        if(live_wanted)adopt_model(render_live_demand.id,current_cancel);
+        have_request=false;clear_timeline();live_recovery.detach();
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
     if(enabled_revision.load()!=next.revision) {
@@ -1267,7 +1340,8 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         retire_unwanted(false);
         // Withdrawal retains reusable assets, but an explicit worker model
         // replacement must still be released at this safe render boundary.
-        if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();
+        if(have_model && !model_valid(current_cancel))retire_model();
+        if(live_wanted)adopt_model(render_live_demand.id,current_cancel);
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
     if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.detach();}
@@ -1283,7 +1357,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(!repair)clear_timeline();
         have_timeline=true;timeline_request=next;
     }
-    if(have_model && (model.id!=next.model_id || model.cancellation!=current_cancel || model.id!=desired_model.load()))
+    if(have_model && (model.id!=next.model_id || !model_valid(current_cancel)))
         if(!retire_model()) {decide_all(GP_PREPARING);return;}
     const bool changed=touch_revision!=next.revision;
     const bool first=!have_request;
@@ -1318,21 +1392,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     sound_control(!(next.suspended && live_recovery.restored==suspend_mark),next.volume);
     report={};report.revision=next.revision;report.owner_token=next.owner_token;report.model_id=next.model_id;
     report.clip_count=next.clip_count;report.rom_generation=rom;report.configuration=configuration;
-    if(!have_model) {
-        uint32_t expected=GP_MODEL_READY;
-        if(model.state.compare_exchange_strong(expected,GP_MODEL_RENDER_OWNED)) {
-            if(model.id!=next.model_id || model.cancellation!=current_cancel || model.id!=desired_model.load())
-                model.state.store(GP_MODEL_RETIRED,std::memory_order_release);
-            else {
-                const int result=sg_model_adopt(model.value);
-                if(result==SG_OK)have_model=true;
-                else {
-                    model_error.store(result);if(result==SG_BUSY)adoption_busy.fetch_add(1);
-                    model.state.store(result==SG_BUSY?GP_MODEL_READY:GP_MODEL_RETIRED,std::memory_order_release);
-                }
-            }
-        }
-    }
+    adopt_model(next.model_id,current_cancel);
     // Bind the displayed set (including a held terminal set), then retire
     // storage no longer needed by it. No frame references reclaimed clips.
     bool listed[GP_CLIP_SLOTS]{};
@@ -1374,6 +1434,9 @@ bool annotations(ghost_annotation::View* out,uint64_t* id) {
     if(!out || !id || !renderer_owner() || !have_model || exhausted.load())return false;
     *out=model.annotations.view();if(!out->rgba)return false;
     *id=model.id;return true;
+}
+uint8_t annotation_font() {
+    return renderer_owner() && have_model?model.annotations.font:ghost_annotation::font::us;
 }
 bool drawing() {
     return renderer_owner() && have_request && have_model && active_count() && !exhausted.load()

@@ -154,7 +154,7 @@ class NativeCapture:
     """
 
     def __init__(self, layout, on_batch: Callable[[Producer, tuple[bytes, ...]], None],
-                 *, producer_pid: int | None = None, sound_player=None):
+                 *, producer_pid: int | None = None, sound_player=None, live_source=None, live_input=None):
         config = layout if isinstance(layout, GhostLayout) else GhostLayout.from_layout(layout)
         self._layout = config.to_bytes()
         self._rom_layout = config.rom_layout  # every clip records its capture cartridge
@@ -179,6 +179,12 @@ class NativeCapture:
         # started with each channel, ended with this capture. None plays nothing.
         self._sound = sound_player
         self._sound_closed = sound_player is None
+        # Optional room handoff, never a network callback. Only this pump binds
+        # its writer; a single tuple lets stop withdraw the matching grant.
+        self._live_requested, self._live_binding, self._live_failed = live_source, None, None
+        self._live_status = None
+        self._live_input_requested, self._live_input = live_input, None
+        self._live_mount, self._live_adopted, self._native_endpoint = object(), None, None
 
     def start(self):
         if self._thread is not None:
@@ -193,12 +199,157 @@ class NativeCapture:
                 self._cleanup_complete.set()
             raise
 
-    def stop(self, timeout_s: float = 3.0) -> bool:
+    def request_stop(self) -> None:
+        """Retire acquisition/publication even if start has not launched yet."""
         self._stop.set()
+        self.withdraw_live_source()
+        with self._lock:
+            self._native_endpoint = self._live_input = None
+
+    def stop(self, timeout_s: float = 3.0) -> bool:
+        self.request_stop()
         if self._thread is None:
             return self._cleanup_complete.is_set()
         self._thread.join(timeout_s)
         return not self._thread.is_alive() and self._cleanup_complete.is_set()
+
+    def withdraw_live_source(self) -> None:
+        """Lifecycle control: withdraw delivery before waiting for the pump.
+
+        This retires only its capture grant; a retained room can attach a new
+        source after this source has joined and released that writer.
+        """
+        binding = self._live_binding
+        if binding is not None:
+            try:
+                binding[0].withdraw_capture(binding[1])
+            except Exception as error:  # noqa: BLE001 - optional live publication cannot strand recording
+                self._live_warning(error)
+
+    def set_live_source(self, source) -> None:
+        """Queue a room tap without replacing the native channel or archive.
+
+        Room control must revoke its handoff before leaving for immediate room
+        withdrawal. This method only requests the pump's attachment transition.
+        It does not acquire a source or change the recording preference.
+        """
+        self._set_live_pair(source=source)
+
+    def set_live_input(self, incoming) -> None:
+        self._set_live_pair(incoming=incoming)
+
+    def set_live_session(self, outgoing=None, incoming=None) -> None:
+        self._set_live_pair(source=outgoing, incoming=incoming)
+
+    _UNCHANGED = object()
+
+    def _set_live_pair(self, *, source=_UNCHANGED, incoming=_UNCHANGED) -> None:
+        with self._lock:
+            outgoing = self._live_requested if source is self._UNCHANGED else source
+            receiver = self._live_input_requested if incoming is self._UNCHANGED else incoming
+            if outgoing is self._live_requested and receiver is self._live_input_requested:
+                return
+            withdraw = outgoing is not self._live_requested
+            if receiver is not self._live_input_requested:
+                self._native_endpoint = self._live_input = None
+            self._live_requested, self._live_input_requested = outgoing, receiver
+            self._live_mount = object()
+        if withdraw:
+            self.withdraw_live_source()
+
+    def native_live_endpoint(self, incoming):
+        """Private room-worker capability; never included in public status."""
+        with self._lock:
+            if not self._stop.is_set() and incoming is not None and incoming is self._live_input:
+                return self._native_endpoint
+            return None
+
+    def _live_warning(self, error) -> None:
+        self._warn("live ghost handoff unavailable", f"{type(error).__name__}: {error}"[:512])
+
+    def _end_live_source(self) -> None:
+        binding, self._live_binding = self._live_binding, None
+        self._live_status = None
+        if binding is None:
+            return
+        source, owner = binding
+        try:
+            source.end_capture(owner)
+        except Exception as error:  # noqa: BLE001 - retirement must not skip channel/sound cleanup
+            self._live_warning(error)
+            try:
+                source.withdraw_capture(owner)
+            except Exception as withdrawal:  # noqa: BLE001 - preserve the existing recording cleanup path
+                self._live_warning(withdrawal)
+
+    def _adopt_live_source(self, requested, incoming, mount) -> None:
+        if self._live_adopted is mount:
+            return
+        failed = requested is not None and requested is self._live_failed
+        self._end_live_source()
+        if not failed:
+            self._live_failed = None
+        with self._lock:
+            self._live_adopted, self._live_input = mount, incoming
+        if requested is None or self._stop.is_set() or failed:
+            return
+        try:
+            owner = requested.begin_capture()
+            self._live_binding = requested, owner
+            if self._stop.is_set() or self._live_mount is not mount:
+                requested.withdraw_capture(owner)
+        except Exception as error:  # noqa: BLE001 - refused optional admission never reconnects recording
+            self._live_failed = requested
+            self._live_warning(error)
+
+    def _unavailable_live_source(self) -> None:
+        binding = self._live_binding
+        if binding is None:
+            return
+        try:
+            binding[0].source_unavailable(binding[1])
+        except Exception as error:  # noqa: BLE001 - retain local capture if the optional handoff fails
+            self._live_failed = binding[0]
+            self._live_warning(error)
+            self._end_live_source()
+
+    def _publish_live(self, producer, batch) -> None:
+        binding = self._live_binding
+        if binding is None:
+            return
+        try:
+            binding[0].observe(binding[1], producer, batch, received_ns=time.monotonic_ns())
+        except ValueError as error:
+            self._live_warning(error)
+            self._unavailable_live_source()
+        except Exception as error:  # noqa: BLE001 - an optional live fault cannot drop archive rows
+            self._live_failed = binding[0]
+            self._live_warning(error)
+            self._end_live_source()
+
+    def _observe_live_status(self, producer, dropped) -> None:
+        if self._live_binding is None:
+            return
+        from sm64_events.multiplayer.live_state import SourceIdentity
+        try:
+            status = SourceIdentity.from_producer(producer), dropped
+        except ValueError:
+            status = None
+        # A changed source, including an empty poll, or known native queue
+        # loss cannot leave an old taken publication current. Lost source
+        # evidence is a presentation gap; network sequence loss alone is not.
+        if status is None or self._live_status is not None and status != self._live_status:
+            self._unavailable_live_source()
+        self._live_status = status
+
+    def _note_live_endpoint(self, status) -> None:
+        if self._live_input is None:
+            return
+        endpoint = getattr(self._channel, "live_endpoint", None)
+        value = endpoint(status) if endpoint is not None else None
+        with self._lock:
+            if not self._stop.is_set() and self._live_input is self._live_input_requested:
+                self._native_endpoint = value
 
     def set_playback(self, *, blocking=True, **controls) -> bool:
         """Control changes only; poll callbacks skip a contended publication."""
@@ -259,6 +410,9 @@ class NativeCapture:
             return control.status().producer_pid
 
     def _close_channel(self) -> bool:
+        self._unavailable_live_source()
+        with self._lock:
+            self._native_endpoint = None
         try:
             if self._pending_cleanup is not None:
                 self._pending_cleanup.close()
@@ -282,6 +436,7 @@ class NativeCapture:
         try:
             self._pump()
         finally:
+            self._end_live_source()
             # Retire independently: a retained channel must not strand the
             # sound child. Only this worker retries its nested owners.
             while not self._finish_cleanup():
@@ -318,6 +473,20 @@ class NativeCapture:
         except Exception as error:  # noqa: BLE001 - ghost sound is optional; poses keep recording
             self._warn("ghost sound player could not start", f"{type(error).__name__}: {error}")
 
+    def _deliver_batches(self, producer, frames) -> None:
+        for identity, batch in grouped(producer, frames):
+            if self._stop.is_set():
+                break
+            self._publish_live(identity, batch)
+            try:
+                self._on_batch(identity, batch)
+            except ClipError as error:
+                # Archive refusal is not channel failure. Reconnecting would
+                # drop queued poses and blink playback without fixing the data.
+                self._refused += 1
+                self._refused_reason = str(error)
+                self._warn("Mario poses refused by the archive; batch dropped", str(error))
+
     def _pump(self):
         sent_revision = 0
         while not self._stop.is_set():
@@ -329,24 +498,15 @@ class NativeCapture:
                 with self._lock:
                     revision = self._revision
                     control = dict(self._playback) if revision != sent_revision else None
+                    requested_live = self._live_requested
+                    incoming, mount = self._live_input_requested, self._live_mount
+                self._adopt_live_source(requested_live, incoming, mount)
                 status, frames = self._channel.poll(control)
+                self._note_live_endpoint(status)
                 sent_revision = revision
                 producer = Producer.from_status(status, self._rom_layout)
-                for identity, batch in grouped(producer, frames):
-                    if self._stop.is_set():
-                        break
-                    try:
-                        self._on_batch(identity, batch)
-                    except ClipError as error:
-                        # The archive refused this batch's data; the channel
-                        # is fine. Reconnecting (the old path, silently) cannot
-                        # fix data, only drop the queued poses with it and
-                        # revoke the ghost's display: a blink every 0.5 s for
-                        # a recurring refusal. Drop this batch, keep the
-                        # channel, and say why.
-                        self._refused += 1
-                        self._refused_reason = str(error)
-                        self._warn("Mario poses refused by the archive; batch dropped", str(error))
+                self._observe_live_status(producer, status.dropped)
+                self._deliver_batches(producer, frames)
                 self._hook_summary = self._hooks.observe(status) or self._hook_summary
                 self._start_sound(self._channel)  # a player that died comes back (rate-limited)
                 self._absent = False

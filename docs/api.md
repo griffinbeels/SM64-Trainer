@@ -1288,6 +1288,20 @@ change the command without reloading a browser page. The obsolete `view` field,
 stored `ghost_view` does not select another renderer. Native clips and collection
 files remain versioned independently of these removed prototype endpoints.
 
+## Private friends rooms
+
+`GET /api/multiplayer` returns cached availability, phase, room (local host flag,
+four-seat member list), received invitations, source state, safe error text and
+invite availability. It never starts identity, the SDK or capture. Public state
+uses local opaque aliases and excludes player codes/provider references/nonces.
+
+All room responses use `Cache-Control: no-store`. Mutations require the normal
+local origin/request capability. `POST /api/multiplayer/identity` returns the
+private `{code}` for a deliberate copy gesture. Other POSTs are `host` and
+`leave` (empty bodies), `invite` (`{code}`), `join` and `decline` (`{invite_id}`),
+and host-only `kick` (`{member_id}`). They return updated public snapshots.
+Invalid requests never echo pasted codes. See [runtime contracts](multiplayer-runtime.md).
+
 ## Behavior notes
 
 - If a Usamune timer reset races the star touch (reset within ~1 s of the

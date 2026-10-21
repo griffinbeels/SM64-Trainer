@@ -1776,6 +1776,15 @@ as public names. Both were wrong; the conclusion was not. Re-derive with the
 tool rather than trusting either figure.
 
 
+## Private live ghosts
+
+The M3 Friends room uses one existing native pose source and an independent
+MIT transport helper. Media recording, saved playback, provider admission and
+live rendering have separate lifetimes. The provider sees opaque bounded
+payloads; the game renderer sees validated fixed local snapshots. See
+[multiplayer runtime](multiplayer-runtime.md) for owners, replacement boundaries
+and current proof limits.
+
 ## Public website and downloads
 
 The public website is a static presentation in `website/`. `tools/build_website.py` binds its download links and release details to validated GitHub release assets. The website shares the asset-name registry with the installer and updater; it does not run the trainer or store practice data. Community authentication stays with its existing service on `auth.sm64trainer.app`. Editing, screenshot provenance and safe local review belong to [the website maintenance guide](../website/README.md). Hosting and release-driven publishing belong to [the website deployment guide](website-deployment.md).

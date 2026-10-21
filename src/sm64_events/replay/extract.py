@@ -36,6 +36,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.paths import bundled_ffmpeg
@@ -254,7 +255,7 @@ def contiguous_run(segments, s: datetime):
 
 
 class ClipExtractor:
-    def __init__(self, cfg: ReplayConfig, codec: str, ffmpeg: str | None = None, fragments=None):
+    def __init__(self, cfg: ReplayConfig, codec: str | Callable[[], str], ffmpeg: str | None = None, fragments=None):
         self.fragments = fragments
         self._cfg = cfg
         self._codec = codec
@@ -376,9 +377,12 @@ class ClipExtractor:
         # Unknown/reordered sources keep the established transcode path.
         preroll = (seek_pts - copy_pts) / MEDIA_HZ if copy_pts is not None else 0.0
         cut_ss, cut_duration = ss - preroll, dur + preroll
+        # Native packet copies do not need a fallback encoder. Resolve its
+        # hardware capabilities only when this cut actually transcodes.
+        codec = self._codec() if copy_pts is None and callable(self._codec) else self._codec
         video_args = (["-c:v", "copy"] if copy_pts is not None else [
-            "-c:v", self._codec, "-g", str(max(1, fps // 2)),
-            "-force_key_frames", "expr:gte(t,n_forced*0.5)", *self._codec_opts()])
+            "-c:v", codec, "-g", str(max(1, fps // 2)),
+            "-force_key_frames", "expr:gte(t,n_forced*0.5)", *self._codec_opts(codec)])
         args = [
             self._ffmpeg, "-hide_banner", "-loglevel", "error",
             *(["-copyts"] if media_run else []),
@@ -445,7 +449,7 @@ class ClipExtractor:
                             if "K" in p["flags"] and p["pts"] <= seek_pts), default=None)
         return seek_pts, copy_pts
 
-    def _codec_opts(self) -> list[str]:
+    def _codec_opts(self, codec=None) -> list[str]:
         """Quality settings for the cut, from the ONE registry in config.py.
 
         These used to be bare presets with no rate control, which handed the
@@ -453,6 +457,8 @@ class ClipExtractor:
         detail on the way out (see config.py for the measurement). The cut must
         be transparent w.r.t. its source: the segment holds all the detail a
         clip can ever contain."""
-        opts = video_quality_args(self._codec, "offline", CLIP_MAXRATE)
+        if codec is None:
+            codec = self._codec() if callable(self._codec) else self._codec
+        opts = video_quality_args(codec, "offline", CLIP_MAXRATE)
         opts += ["-bf", "0"]  # preserve PTS with every supported encoder
         return opts

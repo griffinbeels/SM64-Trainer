@@ -69,6 +69,7 @@ def test_ghost_glue_gateway_reads_and_error_owners(tmp_path):
         print(json.dumps({"before": {key: before[key] for key in ("finished", "drawn", "shapes")},
                           "after": {key: report[key] for key in ("finished", "drawn", "shapes")}}))
     assert report["ok"] and not report["baseline"] and report["driver_queries"] == 0
+    assert report["union"] == {"saved": 16, "live": 3, "sorted": True, "contributor_and": True}
     assert report["transitions"] == {
         "initial_prewarm": True, "drawable_rebuilds": 0, "extent_prepares": 1,
         "generation_rebuilds": 1, "foreign_deletes": 0,

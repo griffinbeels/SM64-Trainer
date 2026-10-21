@@ -1290,6 +1290,28 @@ and plays on either. The practice card's [[ghost toggle]] calls it Ghost Overlay
   the [[target]]; `src/sm64_events/ghost/native_session.py` publishes native playback
 - **Not** — the [[overlay layer]], which writes a video file for an editor.
 
+### Live ghost
+
+A friend's current Mario pose in a private [[practice room]]. Each person's game
+and clock stay independent. The local [[renderer]] rebuilds the pose with its camera
+and world; it never controls local Mario or changes the local game's pace. Old or unavailable
+poses disappear. Saved [[ghost]] recordings remain independent.
+
+- **Lives** — `src/sm64_events/multiplayer/` owns source, room and receiver state;
+  `integrations/eos-transport/` transports opaque bytes through EOS relays;
+  `plugin/gfxwrap/ghost_live_session.cpp` validates and draws three remote seats.
+
+### Practice room
+
+An invite-only group of at most four players, opened from Friends. A player sends
+their player code to a room member, receives an invitation and explicitly accepts it.
+The room survives navigation, practice [[target]] changes and local [[reset]]s. Closing
+the Friends panel keeps the room; Leave room ends participation. Display names
+are labels, not verified account or performance claims.
+
+- **Lives** — `src/sm64_events/multiplayer/room.py` owns membership and lifetime;
+  `src/sm64_events/ui/components/friends.js` owns the panel.
+
 ### Lineup
 
 The active practice card's row of the people you race: your own seat first,

@@ -14,11 +14,13 @@ from sm64_events.bootstrap.beta_payload import checked_members  # noqa: E402
 from sm64_events.core.build_channel import CONFIG_FILENAME, STABLE_PORT, parse_metadata  # noqa: E402
 from sm64_events.core.release_contract import version_key  # noqa: E402
 from sm64_events.core.update_plan import parse_manifest, validate_release_manifest  # noqa: E402
+from bundle_policy import (check_bundle_path, tracked_ui_paths, COLLECTION_NAME,
+                           SEED_DESCRIPTOR, NATIVE_FILES)  # noqa: E402
 
 RECORD = "candidate.json"
 VERIFICATION = "candidate-verification.json"
 PUBLIC_FIELDS = ("community_url", "supabase_url", "supabase_publishable_key", "oauth_client_id")
-NATIVES = ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")
+NATIVES = NATIVE_FILES
 
 
 def digest(path: Path) -> str:
@@ -116,11 +118,51 @@ def _verify_identity(archive, record):
                 raise ValueError("candidate native provenance disagrees")
 
 
+def _reviewed_collection(archive) -> bool:
+    """Only the exact curated file with a bounded, hash-bound descriptor is exempt."""
+    from sm64_events.ghost.bundled_beta import AUTHOR, MAX_COLLECTION_BYTES, checked_author_identity
+    from sm64_events.ghost.portable import MAX_ENTRIES, checked_hash
+    descriptor_name = "_internal/" + SEED_DESCRIPTOR
+    names = set(archive.namelist())
+    if not names & {descriptor_name, COLLECTION_NAME}:
+        return False
+    if not {descriptor_name, COLLECTION_NAME} <= names:
+        raise ValueError("candidate curated ghost inputs are incomplete")
+    descriptor = archive.getinfo(descriptor_name)
+    collection = archive.getinfo(COLLECTION_NAME)
+    if not 0 < descriptor.file_size <= 4096 or not 0 < collection.file_size <= MAX_COLLECTION_BYTES:
+        raise ValueError("candidate curated ghost inputs exceed their limits")
+    try:
+        value = json.loads(archive.read(descriptor))
+        fields = {"schema", "file", "author", "sha256", "count"}
+        if (not isinstance(value, dict) or type(value.get("schema")) is not int or value["schema"] not in (1, 2)
+                or set(value) != fields | ({"author_identity"} if value["schema"] == 2 else set())
+                or value["file"] != COLLECTION_NAME or value["author"] != AUTHOR
+                or type(value["count"]) is not int or not 1 <= value["count"] <= MAX_ENTRIES):
+            raise ValueError()
+        expected = checked_hash(value["sha256"])
+        if value["schema"] == 2:
+            checked_author_identity(value["author_identity"])
+    except (ValueError, TypeError, KeyError):
+        raise ValueError("candidate curated ghost descriptor is invalid") from None
+    with archive.open(collection) as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
+            raise ValueError("candidate curated ghost collection disagrees with its descriptor")
+    return True
+
+
 def _verify_archive(directory, manifest, record):
     with zipfile.ZipFile(directory / "SM64Trainer-full.zip") as archive:
         members = checked_members(archive)
         if {m.filename for m in members if not m.is_dir()} != {e.path for e in manifest.files}:
             raise ValueError("candidate archive and manifest disagree")
+        ui_paths = tracked_ui_paths(REPO)
+        curated = _reviewed_collection(archive)
+        entries = {entry.path: entry for entry in manifest.files}
+        for member in members:
+            entry = entries.get(member.filename)
+            check_bundle_path(member.filename.rstrip("/"), ui_paths=ui_paths, is_dir=member.is_dir(),
+                              digest=entry.sha256 if entry else None, reviewed_collection=curated)
         for entry in manifest.files:
             with archive.open(entry.path) as stream:
                 if hashlib.file_digest(stream, "sha256").hexdigest() != entry.sha256:

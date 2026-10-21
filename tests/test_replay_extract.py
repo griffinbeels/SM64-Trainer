@@ -25,6 +25,36 @@ CFG = ReplayConfig(fps=60)
 SEG_S = 2.0
 
 
+@pytest.mark.parametrize("native_copy", [False, True])
+def test_lazy_codec_is_not_selected_for_native_packet_copy(tmp_path, monkeypatch, native_copy):
+    from sm64_events.replay import extract
+    from sm64_events.replay.media import MediaRun
+    selected, commands = [], []
+
+    def codec():
+        selected.append(True)
+        return "libx264"
+
+    def run(args, **kwargs):
+        commands.append(args)
+        Path(args[-1]).write_bytes(b"finished")
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr(extract.subprocess, "run", run)
+    monkeypatch.setattr(extract, "video_start_of", lambda *_: 0.0)
+    source = tmp_path / "source.ts"
+    source.write_bytes(b"existing encoded samples")
+    ring = SegmentRing(None, 10**6)
+    ring.add(SegmentInfo(source, "video", T0, T0 + timedelta(seconds=2),
+                         source.stat().st_size, (320, 240), MediaRun("native", T0.timestamp())))
+    extractor = ClipExtractor(ReplayConfig(picture_feed=False), codec, "ffmpeg")
+    monkeypatch.setattr(extractor, "_source_seek", lambda *_: (45000, 45000 if native_copy else None))
+    assert selected == []
+    extractor.extract(ring, T0 + timedelta(seconds=.5), T0 + timedelta(seconds=1.5), tmp_path / "out.mp4")
+    assert selected == ([] if native_copy else [True])
+    assert commands[0][commands[0].index("-c:v") + 1] == ("copy" if native_copy else "libx264")
+
+
 def _ffmpeg() -> str:
     ff = bundled_ffmpeg() or shutil.which("ffmpeg")
     if not ff:

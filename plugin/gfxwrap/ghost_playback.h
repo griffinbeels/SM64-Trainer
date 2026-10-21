@@ -185,8 +185,15 @@ namespace ghost { struct WorldPass; }
 namespace ghost_compositor { struct Pose; }
 namespace ghost_annotation {struct View;struct Assets;}
 namespace ghost_path { struct Frame; }
+namespace ghost_live {struct ModelBinding;}
 namespace ghost_playback {
 const gp_api *api();
+/* Same worker/model custody as saved playback, independent live demand. A zero
+ * id withdraws only live demand. Caller withdraws before hard gp_api.revoke.
+ * Borrow/current are render-only and never transfer model ownership. */
+int set_live_model_demand(uint64_t id, uint32_t rom, uint32_t configuration);
+bool shared_model(uint32_t context, ghost_live::ModelBinding &);
+bool model_current(const ghost_live::ModelBinding &);
 /* Refused rows of a valid clip that playback hides rather than bridging:
  * where the ghost blinks. UINT32_MAX for a clip prepare_clip refuses. Any
  * thread; reads only its arguments. ghost/clip.py blink_frames states it too. */
@@ -200,6 +207,7 @@ bool atlas(sg_atlas_view *out, uint64_t *model_id);
 /* The prepared model's ROM particle frames and atlas; false when it has none. */
 bool particles(sg_particle_view *out, uint64_t *model_id);
 bool annotations(ghost_annotation::View *out, uint64_t *model_id);
+uint8_t annotation_font(); // renderer-only, from the borrowed prepared atlas
 /* FOLLOW uses exact elapsed-origin differences plus the resolved origin.offset and
  * nudge; FIXED uses an explicit uint32 coordinate without a live arm. Each clip
  * then selects its first exact coordinate INCLUDING refused poses and compares

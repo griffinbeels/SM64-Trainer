@@ -24,6 +24,7 @@ not in this map.
 | Need | Command / reference |
 | --- | --- |
 | Dependencies (once per new worktree; the merge check refuses without them) | `uv sync`, `npm ci --prefix tools/verification --ignore-scripts`, `npm ci --prefix tests/frontend --ignore-scripts` |
+| Pinned source-security detector (once per checkout; never silently downloaded by verification) | `python tools/secret_scan.py --install` |
 | Draft checks / wrap verification | `python tools/verify.py quick` (lint, types) / `python tools/verify.py full` (adds the merge check). Wrap runs `full` once, reusing a content-keyed receipt from any checkout; [setup and scope](docs/local-verification.md) |
 | Focused check: exactly these tests, browser ones too; never queues | `uv run python tools/run_tests.py tests/test_<module>.py "tests/test_x.py::test_y"` |
 | Merge check: the blast radius of this change since the last green full run | A change reaching more than 20 browser files runs the canary and the pages that name it; the rest run on GitHub after the push, which blocks release. Wrap runs it once. Don't pre-run `uv run python tools/run_tests.py`: it leaves no receipt, so wrap repeats it. For an early result, `python tools/verify.py full` writes the receipt wrap reuses (unless merging main changes the tree); `--why --dry-run` shows the pick without running. No local full-suite runs |
@@ -99,6 +100,20 @@ not in this map.
    of a shipped tuning default or preference; check its coherence and valid range.
 
 ## Work ownership and verification
+
+This repository and its releases are public. Before adding or changing an
+external service, read [the credential and packaging contract](docs/security.md).
+The current service budget is $0 ongoing fees. A metered free allowance is not a
+hard cap; any funded upgrade needs separate authorization. Check this project's
+GPL license against the actual SDK/dependency distribution before bundling it.
+Never commit or bundle privileged keys, local service setup, player tokens or
+room invitations. A desktop client is untrusted: shipped credentials are
+recoverable and must grant only the reviewed player permissions. Keep privileged
+operations and their credentials on the backend. Do not print secret values in
+logs, commands, agent output or test reports. Run `python tools/secret_scan.py
+--staged` before committing and the source scan before pushing. Scanner failure
+or absence is a failed check, not a clean scan. SDK trees are private build inputs;
+only explicitly approved runtime files and notices may enter a release.
 
 Use one isolated worktree per writing task; keep the primary checkout on main.
 Coordinate these shared contracts before parallel edits: `core/events.py`,

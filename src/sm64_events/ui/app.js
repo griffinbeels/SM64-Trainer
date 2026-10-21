@@ -21,6 +21,7 @@ import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
 import { RunnerPage } from "./components/runnerpage.js";
 import { PlayerPage } from "./components/playerpage.js";
+import { FriendsEntry, useFriends } from "./components/friends.js";
 import { RankUpCelebration } from "./components/marelocelebrate.js";
 
 const html = htm.bind(h);
@@ -109,7 +110,11 @@ function ConnectionStatus({ t, mobile = false }) {
   </div>`;
 }
 
-function Sidebar({ t, tab, setTab, openSettings }) {
+function FriendsSlot({ narrow, mobile = false, state }) {
+  return narrow === mobile ? html`<${FriendsEntry} state=${state} className=${mobile ? "icon-button" : "nav-item"} />` : null;
+}
+
+function Sidebar({ t, tab, setTab, openSettings, friends }) {
   return html`<aside class="app-sidebar" aria-label="Primary navigation">
     <div class="app-brand">
       <img src="/ui/assets/sm64_tracker.png" alt="" />
@@ -124,6 +129,7 @@ function Sidebar({ t, tab, setTab, openSettings }) {
       </div>`)}
     </div>
     <div class="sidebar-footer">
+      ${friends}
       <button type="button" class="nav-item settings-link" aria-label="Settings" onclick=${openSettings}>
         <${Icon} name="settings" size=${21} /><span>Settings</span>
       </button>
@@ -132,13 +138,14 @@ function Sidebar({ t, tab, setTab, openSettings }) {
   </aside>`;
 }
 
-function MobileTop({ t, openSettings }) {
+function MobileTop({ t, openSettings, friends }) {
   return html`<header class="mobile-appbar">
     <div class="mobile-brand">
       <img src="/ui/assets/sm64_tracker.png" alt="" />
       <span>SM64 Trainer</span>
     </div>
     <${ConnectionStatus} t=${t} mobile=${true} />
+    ${friends}
     <button type="button" class="icon-button" aria-label="Open settings"
         onclick=${openSettings}><${Icon} name="settings" size=${20} /></button>
   </header>`;
@@ -187,6 +194,14 @@ function MobileMore({ open, close, tab, setTab, openSettings }) {
 }
 
 function App() {
+  const friends = useFriends();
+  const [narrowShell, setNarrowShell] = useState(() => window.matchMedia("(max-width: 760px)").matches);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const changed = () => setNarrowShell(media.matches);
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
   const tracker = useTracker();
   // The Daily Star rides on `t` so every surface reads one copy; it lives
   // outside the store because only this layer knows the local date.
@@ -273,8 +288,10 @@ function App() {
 
   return html`<div class="app-shell">
     <${Sidebar} t=${t} tab=${tab} setTab=${setTab}
+      friends=${html`<${FriendsSlot} narrow=${narrowShell} state=${friends} />`}
       openSettings=${() => setSettingsOpen(true)} />
-    <${MobileTop} t=${t} openSettings=${() => setSettingsOpen(true)} />
+    <${MobileTop} t=${t} openSettings=${() => setSettingsOpen(true)}
+      friends=${html`<${FriendsSlot} narrow=${narrowShell} mobile=${true} state=${friends} />`} />
     <main class="app-main">
       <${Header} t=${t} settingsOpen=${settingsOpen}
         closeSettings=${() => setSettingsOpen(false)} setTab=${setTab} onOpenPlayer=${openPlayer} />

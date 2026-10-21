@@ -1,6 +1,9 @@
 ---
 paths:
   - "src/sm64_events/ghost/**"
+  - "src/sm64_events/multiplayer/**"
+  - "src/sm64_events/server/multiplayer_api.py"
+  - "integrations/eos-transport/**"
   - "src/sm64_events/server/ghost_api.py"
   - "src/sm64_events/server/ghost_sharing_api.py"
   - "src/sm64_events/ui/ghostsession.js"
@@ -13,6 +16,8 @@ paths:
 # Ghost — where to change what
 
 Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../docs/ghost-native-runtime.md).
+Private friends rooms, source/media demand, provider boundary and verification
+limits: [multiplayer runtime](../../docs/multiplayer-runtime.md).
 
 | To change... | Edit |
 |---|---|

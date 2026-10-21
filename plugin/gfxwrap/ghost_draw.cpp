@@ -4,6 +4,7 @@
 #include "ghost_compositor.h"
 #include "ghost_dispatch.h"
 #include "ghost_playback.h"
+#include "ghost_live_session.h"
 #include "ghost_annotation.h"
 #include "ghost_presentation.h"
 #include "ghost_stream.h"
@@ -27,6 +28,8 @@ uint32_t width = 0, height = 0, prepared_width = 0, prepared_height = 0;
 uint32_t configuration = 0, clean_fbo = 0, clean_texture = 0;
 uint64_t model_id = 0, particle_model = 0, annotation_model = 0, occurrence = 0;
 gp_draw_token draw_token{};
+ghost_live_session::Token live_token{};
+bool saved_contributor=false,live_contributor=false;
 bool provisional = false, hud = false, ready = false, layer = false;
 // This list draws a ghost: playback chose one from the list's own sample
 // (ghost_playback::plan) on the prepared model. The translucent world layer
@@ -52,6 +55,15 @@ using Clock = std::chrono::steady_clock;
 gs_hook_cost cost{};
 uint64_t query_nanos = 0;
 Clock::time_point hud_start{};
+uint64_t now_ns() {
+    const auto value=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+    return value<0?0:uint64_t(value);
+}
+bool contributors_current() {
+    return (saved_contributor || live_contributor)
+        && (!saved_contributor || ghost_playback::current(draw_token))
+        && (!live_contributor || ghost_live_session::current(live_token,now_ns()));
+}
 uint32_t since(Clock::time_point start) {
     const auto us = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count();
     return us < 0 ? 0u : us > INT32_MAX ? uint32_t(INT32_MAX) : uint32_t(us);
@@ -109,7 +121,7 @@ bool same(const renderer::Identity &a, const renderer::Identity &b) {
 }
 bool valid_image(const ghost_presentation::GhostViImage &image) {
     return ready && image.occurrence == occurrence && image.configuration == configuration
-        && image.context_generation == owner.context_generation && ghost_playback::current(draw_token);
+        && image.context_generation == owner.context_generation && contributors_current();
 }
 bool image_for_vi(const ghost_presentation::ViSource &source, ghost_presentation::GhostViImage *out) {
     if (out) *out = {};
@@ -119,12 +131,13 @@ bool image_for_vi(const ghost_presentation::ViSource &source, ghost_presentation
     const auto display = ghost_compositor::display(compositor);
     ghost_presentation::GhostViImage image{display.texture, display.width, display.height,
         configuration, owner.context_generation, display.occurrence, display.framebuffer,
-        ghost_playback::records_display() ? 1u : 0u};
+        ((saved_contributor && ghost_playback::records_display())
+            || (live_contributor && ghost_live_session::records_display())) ? 1u : 0u};
     if (!valid_image(image) || display.width != source.width || display.height != source.height) return false;
     *out = image; return true;
 }
 void presented(const ghost_presentation::GhostViImage &image, uint64_t, bool displayed) {
-    ghost_ipc::presented(displayed && valid_image(image) ? draw_token.revision : 0);
+    ghost_ipc::presented(displayed && valid_image(image) && saved_contributor ? draw_token.revision : 0);
 }
 bool image_writes_disabled() {
     // The pinned combiner's depth_compare returns before any image access when
@@ -170,14 +183,14 @@ bool close_display() {
 }
 void forget_scopes() {
     provisional = ready = hud = layer = display_scope = layer_scope = layer_color = false;
-    occurrence = 0; draw_token = {};
+    occurrence = 0; draw_token = {};live_token={};saved_contributor=live_contributor=false;
 }
 }
 void cancel() {
     if (hud) end_hud();
     ghost_compositor::abort(compositor);
     close_display();
-    provisional = ready = false; occurrence = 0; draw_token = {};
+    provisional = ready = false; occurrence = 0; draw_token = {};live_token={};saved_contributor=live_contributor=false;
 }
 void context_lost() {
     renderer::Identity identity{};snapshot::RestoreBindings ignored{};
@@ -188,6 +201,7 @@ void context_lost() {
         // A scope from another generation cannot restore bindings here.
         forget_scopes();
     }
+    ghost_live_session::retire_on_context_loss();
     ghost_playback::retire_on_context_loss();
     if (compositor) {
         if (owned) ghost_compositor::destroy(compositor);
@@ -211,7 +225,9 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         prepared_width = prepared_height = 0; model_id = particle_model = annotation_model = 0;
     }
     will_draw = false;
+    ghost_live_session::retire_list();
     ghost_playback::safe_boundary(rom, config_id);
+    ghost_live_session::begin(rom,config_id,identified?identity.context_generation:0,sample,now_ns());
     configuration = config_id;
     if (!ghost_presentation::clean_consumer()) return;
     if (!identified) return;
@@ -242,7 +258,7 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
     if (compositor && width && height && (width != prepared_width || height != prepared_height || model_id != wanted_model)) {
         if (!replay_gl::BeginCapture()) return;
         // One vertex range per displayed ghost; begin_batch shares the buffer.
-        const auto result = ghost_compositor::prepare(compositor, width, height, GP_GHOSTS * SG_MODEL_MAX_VERTICES,
+        const auto result = ghost_compositor::prepare(compositor, width, height, ghost_compositor::max_poses * SG_MODEL_MAX_VERTICES,
                                                      atlas.rgba, atlas.width, atlas.height);
         const bool clean = replay_gl::EndCapture();
         if (result == ghost_compositor::Result::ok && clean) {
@@ -265,7 +281,8 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         const auto result=ghost_compositor::prepare_annotations(compositor,annotations.rgba,annotations.width,annotations.height);
         if(replay_gl::EndCapture() && result==ghost_compositor::Result::ok)annotation_model=model_id;
     }
-    will_draw = compositor && model_id && model_id == wanted_model && sample && ghost_playback::plan(*sample);
+    const bool saved=sample && ghost_playback::plan(*sample);
+    will_draw = compositor && model_id && model_id == wanted_model && (saved || ghost_live_session::plan());
 }
 void observe(const ghost::RasterTarget &target) {
     if (target.width && target.height && target.width <= 8192 && target.height <= 8192) {
@@ -281,8 +298,19 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_h
     if (!buffer || !buffer->m_pTexture || uint32_t(buffer->m_FBO) != world.target.color) return;
     // Zero visible ghosts and no path leaves this frame exactly as a hidden
     // single ghost did.
-    ghost_compositor::Pose poses[GP_GHOSTS]{}; uint32_t count = 0;
-    if (!ghost_playback::evaluate(sample, world, poses, count, draw_token)) return;
+    ghost_compositor::Pose poses[ghost_compositor::max_poses]{};uint32_t count=0,live_count=0;
+    saved_contributor=ghost_playback::evaluate(sample,world,poses,count,draw_token);
+    live_contributor=ghost_live_session::evaluate(sample,world,now_ns(),poses+count,live_count,live_token);
+    count+=live_count;
+    if(!saved_contributor && !live_contributor)return;
+    if(!contributors_current()) {cancel();return;}
+    // One stable ordering across saved and live contributions; neither group
+    // can be concatenated after the other when their depths interleave.
+    for(uint32_t i=1;i<count;++i) {
+        const auto value=poses[i];uint32_t j=i;
+        for(;j && poses[j-1].view_projection[15]<value.view_projection[15];--j)poses[j]=poses[j-1];
+        poses[j]=value;
+    }
     // His ask, 2026-10-02: "when in the usamune menu, we should hide the input
     // display in the bottom left ... because the normal player's input display
     // is also hidden." The stack follows his display; names and bodies do not.
@@ -326,7 +354,7 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_h
     } else cancel();
 }
 void finish(const ghost::WorldPass *world) {
-    if (!provisional || !world || world->list_serial != occurrence || !ghost_playback::current(draw_token)
+    if (!provisional || !world || world->list_serial != occurrence || !contributors_current()
             || !close_display()) {
         cancel(); return;
     }

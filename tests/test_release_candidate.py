@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import runpy
 import sys
+import zipfile
 
 import pytest
 
@@ -58,6 +59,28 @@ def test_candidate_detects_artifact_changed_after_preparation(tmp_path):
     (directory / "SM64Trainer.exe").write_bytes(b"REPLACED BOOTSTRAP")
     with pytest.raises(ValueError, match="changed"):
         candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.release_assets(directory)])
+
+
+@pytest.mark.parametrize("path", [
+    "_internal/local-service.json", "_internal/sm64_events/data/local-service.json",
+    "_internal/sm64_events/ui/local-settings.js", "_internal/SM64_EVENTS/data/local-service.json",
+    "_internal/eos-private/client.json", "_internal/eos-sdk/SDK/header.h",
+])
+def test_candidate_checks_zip_paths_even_with_consistent_manifests_and_receipts(tmp_path, path):
+    directory, _, _ = prepared(tmp_path)
+    archive_path = directory / "SM64Trainer-full.zip"
+    with zipfile.ZipFile(archive_path, "a") as archive:
+        archive.writestr(path, b"synthetic incidental local input")
+    (directory / "manifest.json").write_text(make_manifest(archive_path, "1.10.0-beta.1"))
+    for name in ("SM64Trainer-full.zip", "manifest.json", "SM64Trainer.exe"):
+        release.write_sha(directory / name)
+    record = candidate.read_record(directory)
+    assets = release.release_assets(directory)
+    record["artifacts"] = {asset.name: {"sha256": candidate.digest(asset), "size": asset.stat().st_size}
+                           for asset in assets}
+    (directory / candidate.RECORD).write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="unexpected"):
+        candidate.verify_artifacts(directory, expected_assets=[asset.name for asset in assets])
 
 
 def test_candidate_rejects_manifest_bound_to_another_version(tmp_path):

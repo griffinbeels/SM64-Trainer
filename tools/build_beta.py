@@ -30,26 +30,10 @@ from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
                          candidate_author, seed_descriptor)  # noqa: E402
 from sm64_events.bootstrap.beta_payload import append_payload  # noqa: E402
+from bundle_policy import check_bundle_path, tracked_ui_paths, VENDOR_HIDDEN, SEED_DESCRIPTOR  # noqa: E402
 
 DIST = REPO / "dist" / "private-beta"
 WORK = REPO / "build" / "private-beta"
-SEED_DESCRIPTOR = "beta-ghost-seed.json"
-_FORBIDDEN_NAMES = {"tracker.db", "tracker.lock", "server.pid", "window.json",
-                    "update_state.json", "capture_layer.json", "replay_settings.json",
-                    "ui_log.jsonl", "library_adoptions.json", "tracker_mode.json",
-                    "climb-profile.json", "developer-simulation.json"}
-_FORBIDDEN_DIRS = {"replays", "logs", "replay_buffer", "ghost_population",
-                   "community_cache", "compare_cache"}
-_FORBIDDEN_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".gho", ".ghost", ".ghc1",
-                       ".sm64ghosts", ".mp4", ".mkv"}
-# PyInstaller's NumPy collection includes these two immutable vendor fixtures.
-# Exempt their exact bytes only from the hidden-name guard; private guards remain.
-_VENDOR_HIDDEN = {
-    "_internal/numpy/f2py/tests/src/assumed_shape/.f2py_f2cmap":
-        "cdfb8e4a19aea2dcdc2c84039d515a011c2f33aea22eb398ce9aae2060db88a5",
-    "_internal/numpy/f2py/tests/src/f2cmap/.f2py_f2cmap":
-        "7f0b33ca669685c58edbdeaee538475b9c8c02416107a12d1d6aaaa5cf450152",
-}
 README = """SM64 Trainer Beta - private test build
 
 Extract the complete ZIP into a writable folder. Keep SM64TrainerBeta.exe and
@@ -147,22 +131,22 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
         if (not descriptor.is_file() or descriptor.stat().st_size > 4096
                 or json.loads(descriptor.read_text(encoding="utf-8")) != expected):
             raise RuntimeError("packaged beta ghost seed does not match the reviewed collection")
+    ui_paths = tracked_ui_paths(REPO)
     for path in folder.rglob("*"):
         relative = path.relative_to(folder)
-        lowered = {part.lower() for part in relative.parts}
-        name = path.name.lower()
-        vendor_hash = _VENDOR_HIDDEN.get(relative.as_posix())
-        known_vendor = (vendor_hash is not None and path.is_file() and 0 < path.stat().st_size <= 4096
-                        and hashlib.sha256(path.read_bytes()).hexdigest() == vendor_hash)
+        digest = (hashlib.sha256(path.read_bytes()).hexdigest()
+                  if relative.as_posix() in VENDOR_HIDDEN and path.is_file() and path.stat().st_size <= 4096 else None)
         reviewed_ghosts = (ghosts is not None and relative.as_posix() == COLLECTION_NAME
                           and matches(path, ghosts))
-        if (path.is_symlink() or not path.resolve().is_relative_to(folder.resolve())
-                or lowered & _FORBIDDEN_DIRS
-                or any(part.startswith(".") for part in relative.parts) and not known_vendor
-                or name in _FORBIDDEN_NAMES or path.suffix.lower() in _FORBIDDEN_SUFFIXES and not reviewed_ghosts
-                or name.startswith("sm64trainersetup")
-                or name == "sm64trainer.exe" and build.installation != "normal"):
+        if (path.is_symlink() or path.is_junction() or not path.resolve().is_relative_to(folder.resolve())
+                or path.name.lower() == "sm64trainer.exe" and build.installation != "normal"):
             raise RuntimeError("beta artifact contains an unexpected private or public-release file")
+        try:
+            reviewed_seed = ghosts is not None and relative.as_posix() == "_internal/" + SEED_DESCRIPTOR
+            check_bundle_path(relative.as_posix(), ui_paths=ui_paths, is_dir=path.is_dir(), digest=digest,
+                              reviewed_collection=reviewed_ghosts or reviewed_seed)
+        except ValueError:
+            raise RuntimeError("beta artifact contains an unexpected private or public-release file") from None
 
 
 def package_beta(folder: Path, build: BuildChannel, destination: Path, *, ghosts: ApprovedCollection | None = None,

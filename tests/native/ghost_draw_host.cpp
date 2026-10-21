@@ -13,6 +13,7 @@
 #include "ghost_ipc.h"
 #include "ghost_link.h"
 #include "ghost_playback.h"
+#include "ghost_live_session.h"
 #include "ghost_presentation.h"
 #include "ghost_stream.h"
 #include "link_dispatch.h"
@@ -73,6 +74,9 @@ bool usamune_hidden = false; // the list's Usamune HUD hides the player's displa
 int usamune_values = -1;      // its Stick (0) / Values (1) setting, -1 unknown
 bool model_ready = true; // playback has built Mario's model
 bool chooses = true; // the list's plan chose a ghost
+bool live_chooses=false,live_current=true;
+uint32_t saved_count=1,last_batch_count=0,prepared_capacity=0;
+bool last_batch_sorted=true;
 bool layer_broken = false, begun = false, in_hud = false, layer_active = false;
 uint64_t layer_generation = 0;
 unsigned checks = 0;
@@ -128,7 +132,8 @@ namespace { Instance instance; }
 Instance *create(const Dispatch &, uint64_t) {
     ++seen.created; begun = in_hud = finalized = layer_active = false; return &instance;
 }
-Result prepare(Instance *, uint32_t w, uint32_t h, uint32_t, const uint8_t *, uint32_t, uint32_t) {
+Result prepare(Instance *, uint32_t w, uint32_t h, uint32_t capacity, const uint8_t *, uint32_t, uint32_t) {
+    prepared_capacity=capacity;
     ++seen.prepared; seen.prepared_width = w; seen.prepared_height = h; return Result::ok;
 }
 Result prepare_particles(Instance *, const uint8_t *, uint32_t, uint32_t) { return Result::unsupported; }
@@ -137,6 +142,9 @@ Result warm(Instance *) { ++seen.warmed; return Result::ok; }
 Result begin_batch(Instance *, const Target &target, const Pose *poses, uint32_t count, const Known *,
                    const ghost_path::Frame *) {
     if (faults.batch) fail_gl(Owner::ghost);
+    last_batch_count=count;last_batch_sorted=true;
+    for(uint32_t i=1;i<count;++i)last_batch_sorted=last_batch_sorted
+        && poses[i-1].view_projection[15]>=poses[i].view_projection[15];
     for (uint32_t i = 0; i < count; ++i) {seen.stacked += poses[i].annotation.hud; seen.values += poses[i].annotation.values;}
     shown = {target.occurrence, target.generation, 22, 23, target.width, target.height};
     begun = count != 0; finalized = false; return begun ? Result::ok : Result::invalid;
@@ -193,13 +201,31 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &, ghost_compositor::Pos
               gp_draw_token &token) {
     count = 0; token = {};
     if (!chooses) return false;
-    out[0] = {}; out[0].annotation.hud = true; count = 1; token.revision = 1;
+    for(unsigned i=0;i<saved_count;++i) {
+        out[i]={};out[i].annotation.hud=true;out[i].view_projection[15]=float(2*i);
+    }
+    count = saved_count; token.revision = 1;
     return true;
 }
 bool current(const gp_draw_token &token) { return token_current && token.revision != 0; }
 bool records_display() { return false; }
 const ghost_path::Frame *path() { return nullptr; }
 void retire_on_context_loss() {}
+}
+namespace ghost_live_session {
+bool begin(uint32_t,uint32_t,uint32_t,const gc_sample*,uint64_t) noexcept {return live_chooses;}
+bool plan() noexcept {return live_chooses;}
+bool evaluate(const gc_sample&,const ghost::WorldPass&,uint64_t,ghost_compositor::Pose *out,
+              uint32_t &count,Token &token) noexcept {
+    count=0;token={};if(!live_chooses)return false;
+    const float depths[]={1,17,31};
+    for(unsigned i=0;i<3;++i) {out[i]={};out[i].view_projection[15]=depths[i];}
+    count=3;token.revision=1;return true;
+}
+bool current(const Token &token,uint64_t) noexcept {return live_current && token.revision!=0;}
+bool records_display() noexcept {return false;}
+void retire_list() noexcept {}
+void retire_on_context_loss() noexcept {}
 }
 namespace ghost_presentation {
 bool clean_consumer() { return true; }
@@ -295,6 +321,26 @@ void scenario(const char *name, bool comma, Faults fault) {
     check(!gl.drained_renderer, "a renderer error is never drained");
 }
 #ifndef GHOST_DRAW_BASELINE
+void union_cases() {
+    reset();saved_count=GP_GHOSTS;live_chooses=true;live_current=token_current=true;
+    check(run_list(0,0).drawn==1 && last_batch_count==19 && last_batch_sorted,
+          "saved sixteen and live three share one globally sorted batch");
+    check(prepared_capacity>=19*SG_MODEL_MAX_VERTICES,"draw capacity preserves all nineteen poses");
+    ghost_presentation::ViSource source{screen,color.name,width,height,1,
+        identity().context_generation,identity().drawable_generation};
+    ghost_presentation::GhostViImage image{};
+    check(image_provider(source,&image),"mixed candidate eligible while both contributors current");
+    token_current=false;
+    check(!image_validity(image) && !image_provider(source,&image),"live validity cannot rescue withdrawn saved pixels");
+    token_current=true;live_current=false;
+    check(!image_validity(image) && !image_provider(source,&image),"saved validity cannot rescue withdrawn live pixels");
+    live_current=true;chooses=false;
+    check(run_list(0,0).drawn==1 && last_batch_count==3 && image_provider(source,&image),"live-only draws with zero saved clips");
+    token_current=false;check(image_validity(image),"absent saved group imposes no validity condition");
+    token_current=true;chooses=true;live_chooses=false;live_current=false;saved_count=1;
+    check(run_list(0,0).drawn==1 && image_provider(source,&image),"saved-only remains independent of absent live group");
+    live_current=true;
+}
 void transitions() {
     ghost_presentation::ViSource source{screen, color.name, width, height, 1,
         identity().context_generation, identity().drawable_generation};
@@ -384,6 +430,7 @@ int main() {
           usamune_values = 1; run_list(0, 0); check(seen.values == shown + 1, "his HUD's Values mode reaches every ghost");
           usamune_values = 0; run_list(0, 0); check(seen.values == shown + 1, "his HUD's Stick mode reaches every ghost");
           usamune_values = -1; }
+        union_cases();
 #endif
         reset();
         std::printf("{\"ok\":true,\"baseline\":%s,",
@@ -394,6 +441,7 @@ int main() {
 #endif
         );
 #ifndef GHOST_DRAW_BASELINE
+        std::printf("\"union\":{\"saved\":16,\"live\":3,\"sorted\":true,\"contributor_and\":true},");
         std::printf("\"transitions\":{\"initial_prewarm\":true,\"drawable_rebuilds\":0,\"extent_prepares\":1,"
                     "\"generation_rebuilds\":1,\"foreign_deletes\":0,\"stale_images_refused\":true,\"revoked_token_refused\":true,"
                     "\"loss_foreign_deletes\":0,\"owned_loss_destroys\":1,\"missed_loss_foreign_restores\":0},");

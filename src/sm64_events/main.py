@@ -3,8 +3,11 @@
 import asyncio
 import json
 import logging
+import os
 import shutil
 import sys
+import threading
+from pathlib import Path
 
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
@@ -314,6 +317,14 @@ def _ghost_capture_factory(layout):
         layout, sound_player=SoundPlayerProcess(), **kwargs)
 
 
+def _live_capture_factory(layout):
+    """The same recorder-owned pose source without replay media or sound."""
+    if not ghost_supported(layout.version):
+        return None
+    from sm64_events.ghost.capture import NativeCapture
+    return lambda **kwargs: NativeCapture(layout, **kwargs)
+
+
 def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
     """`layout_of()` is the running build's layout: the picture stamps and
     the pose capture follow a ROM swap (`build`'s `follow_build`)."""
@@ -335,23 +346,31 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
     video_sink_factory = None
     _ffmpeg = bundled_ffmpeg() or _shutil.which("ffmpeg")
     if _ffmpeg:
-        try:
-            from sm64_events.core.childproc import quiet_spawn_kwargs
-            _sp.run([_ffmpeg, "-version"], capture_output=True,
-                    timeout=10, check=True, **quiet_spawn_kwargs())
+        def video_sink_factory(cfg, on_seg, codec):
             from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
-            # codec: the recorder passes pick_video_codec()'s answer, so
-            # the sink encodes with what THIS machine has (hardcoded
-            # nvenc flashed a non-NVIDIA user's cursor, 2026-08-07).
-            video_sink_factory = (
-                lambda cfg, on_seg, codec, _f=_ffmpeg: FfmpegAvSink(
-                    cfg, on_seg, ffmpeg=_f, codec=codec))
-            logging.getLogger("sm64.replay").info(
-                "replay backend: single ffmpeg A+V mux (%s)", _ffmpeg)
-        except Exception:
-            logging.getLogger("sm64.replay").exception(
-                "ffmpeg probe failed - using in-process encoder")
-    codec = pick_video_codec(_ffmpeg if video_sink_factory is not None else None)
+            return FfmpegAvSink(cfg, on_seg, ffmpeg=_ffmpeg, codec=codec)
+
+    codec_lock, selected = threading.Lock(), []
+
+    def codec():
+        # One answer is shared by recording and explicit offline encodes.
+        # Merely opening Trainer, or starting live-only ghosts, does no
+        # FFmpeg/PyAV capability probe and starts no media process.
+        with codec_lock:
+            if not selected:
+                backend = _ffmpeg
+                if backend:
+                    try:
+                        from sm64_events.core.childproc import quiet_spawn_kwargs
+                        _sp.run([backend, "-version"], capture_output=True,
+                                timeout=10, check=True, **quiet_spawn_kwargs())
+                    except Exception:
+                        logging.getLogger("sm64.replay").exception(
+                            "ffmpeg probe failed - using in-process encoder")
+                        backend = None
+                        recorder.set_video_sink_factory(None)
+                selected.append(pick_video_codec(backend))
+            return selected[0]
     from sm64_events.replay.sourcefactory import SourceFactory
     sources = SourceFactory(layout_of, replay_cfg, DwmSurfaceVideoSource)
     ghost_capture_factory = _ghost_capture_factory(layout_of())
@@ -378,9 +397,10 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
             extra_pid=lambda: recorder.ghost_sound_pid()),
         fallback_audio_factory=lambda pid: SystemAudioSource(
             rate=replay_cfg.audio_rate, pid=pid),
-        codec=codec,
+        codec_factory=codec,
         video_sink_factory=video_sink_factory,
-        ghost_capture_factory=ghost_capture_factory, **recorder_options)
+        ghost_capture_factory=ghost_capture_factory,
+        live_capture_factory=_live_capture_factory(layout_of()), **recorder_options)
     replay = _replay_service(replay_cfg, recorder, codec, service)
     return replay, codec
 
@@ -482,6 +502,36 @@ def _community_population(service):
     return population, account, CommunitySync(account, population)
 
 
+def _build_multiplayer(replay, community_account=None, *, appearance=None):
+    """Compose a dormant room. The source launcher supplies private paths.
+
+    No SDK/config discovery or identity operation occurs on app startup.
+    Packaged support needs its own approved resource/configuration contract.
+    """
+    from sm64_events.multiplayer.eos_process import EOSProcess, Runtime, TransportError
+    from sm64_events.multiplayer.room import RoomService
+
+    helper = os.environ.get("SM64_EOS_HELPER")
+    config = os.environ.get("SM64_EOS_CONFIG")
+    cache = os.environ.get("SM64_EOS_CACHE")
+    paths = [Path(value) for value in (helper, config, cache) if value]
+    runtime = Runtime(*paths) if len(paths) == 3 and all(path.is_absolute() for path in paths) else None
+
+    def transport_factory(on_event):
+        if runtime is None:
+            raise TransportError("transport_unavailable")
+        return EOSProcess(runtime, on_event)
+
+    def player_name():
+        state = community_account.snapshot() if community_account is not None else {}
+        return state.get("name") or "Guest"
+
+    recorder = replay.recorder if replay is not None else None
+    available = recorder is not None and runtime is not None and runtime.available()
+    return RoomService(recorder, transport_factory, player_name=player_name,
+                       available=available, appearance=appearance)
+
+
 _BACKGROUND = set()
 
 
@@ -515,6 +565,7 @@ def _build_follower(running, inputs, replay, service):
         inputs.set_layout(new_layout)
         if replay is not None:
             replay.recorder.set_ghost_capture_factory(_ghost_capture_factory(new_layout))
+            replay.recorder.set_live_capture_factory(_live_capture_factory(new_layout))
             replay.recorder.retarget_capture()
         _in_background(service.note_running_version(new_version))
     return follow_build
@@ -621,7 +672,9 @@ def build(*, recorder_lock=None):
                       db_retry=db_retry, capture_layer=capture_layer,
                       setup_observer=setup_observer, ghost=ghost,
                       refresh_library_on_start=True, community_account=community_account,
-                      community_sync=community_sync, protect_local_api=True, local_port=server_port())
+                      community_sync=community_sync,
+                      multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
+                      protect_local_api=True, local_port=server_port())
 
 
 _app = None

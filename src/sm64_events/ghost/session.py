@@ -165,6 +165,21 @@ class GhostSession:
 
     # -- what anyone reads ---------------------------------------------------
 
+    def live_appearance(self):
+        """Cached display preferences for friends; no selection or storage IO.
+
+        Hiding the overlay affects incoming presentation only. The room's
+        outgoing pose sharing has its own explicit pause/leave lifetime.
+        """
+        from dataclasses import fields
+        from sm64_events.multiplayer.native_protocol import Appearance
+        values = dict(self._values)
+        controls = settings.native_controls(values)
+        defaults = Appearance()
+        appearance = Appearance(**{row.name: controls.get(row.name, getattr(defaults, row.name))
+                                   for row in fields(Appearance)})
+        return appearance, not values["enabled"]
+
     def payload(self) -> dict:
         """Preferences, chosen ghosts, readiness and native visibility."""
         return {**{name: settings.copied(value) for name, value in self._values.items()},

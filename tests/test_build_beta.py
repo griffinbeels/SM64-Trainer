@@ -72,7 +72,10 @@ def test_friend_zip_contains_complete_folder_and_matches_sha_receipt(artifact, t
                                  "library_adoptions.json", "tracker_mode.json",
                                  "climb-profile.json", "developer-simulation.json",
                                  "ghost_population/manifest.json", "community_cache/index.json",
-                                 "compare_cache/private.json"])
+                                 "compare_cache/private.json", "_internal/local-service.json",
+                                 "_internal/sm64_events/data/local-service.json",
+                                 "_internal/sm64_events/ui/local-settings.js",
+                                 "_internal/eos-private/client.json", "_internal/eos-sdk/header.h"])
 def test_artifact_refuses_private_data_hidden_files_and_public_executables(artifact, path):
     folder, build = artifact
     extra = folder / path

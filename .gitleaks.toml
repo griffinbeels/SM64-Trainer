@@ -1,0 +1,6 @@
+title = "SM64 Trainer public-source secret detection"
+
+# Keep the maintained upstream detectors. Do not exclude tests, fixtures or
+# whole source files: synthetic examples must be harmless placeholders.
+[extend]
+useDefault = true

@@ -67,6 +67,7 @@ def test_native_ghost_ipc_lifecycle(tmp_path):
         str(ROOT / "tests/native/ghost_ipc_worker.cpp"), str(ROOT / "plugin/gfxwrap/ghost_assets.cpp"),
         str(ROOT / "plugin/gfxwrap/ghost_origin.cpp"),
         str(ROOT / "plugin/gfxwrap/ghost_rom.cpp"),
+        str(ROOT / "plugin/gfxwrap/ghost_live_ipc.cpp"),
         str(ROOT / "tests/native/ghost_ipc_host.cpp"), f"/Fe:{library}", f"/Fo{tmp_path}\\",
         "/link", "/OPT:REF", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'",
         *compiler.LIBS], tmp_path)

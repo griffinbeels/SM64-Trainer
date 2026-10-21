@@ -46,6 +46,9 @@ env:
   RECORD_COVERAGE: ${{ github.event_name == 'schedule' || inputs.record_coverage == true }}
 
 jobs:
+  security:
+    uses: ./.github/workflows/security.yml
+
   plan:
     runs-on: ubuntu-latest
     outputs:

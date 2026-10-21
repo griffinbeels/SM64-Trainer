@@ -79,6 +79,28 @@ def test_single_clip_is_copied_not_concatenated(tmp_path, monkeypatch):
     assert out.read_bytes() == b"stub"
 
 
+def test_codec_supplier_is_used_only_for_a_real_concat(tmp_path, monkeypatch):
+    selected = []
+
+    def codec():
+        selected.append(True)
+        return "libx264"
+
+    def fake_run(args, **kw):
+        if "-filter_complex" in args:
+            assert args[args.index("-c:v") + 1] == "libx264"
+            Path(args[-1]).write_bytes(b"joined")
+        return subprocess.CompletedProcess(args, 0, b"", b"Video: h264, 320x240")
+
+    _install(monkeypatch, fake_run)
+    builder = comp.CompilationBuilder(FakeExtractor(), codec, fps=60, ffmpeg="ffmpeg")
+    assert selected == []
+    for count in (1, 2):
+        builder.build([_spec(i) for i in range(count)], None, tmp_path / f"parts{count}",
+                      tmp_path / f"out{count}.mp4", lambda _: None, lambda *_: None)
+        assert len(selected) == count - 1
+
+
 def test_runtime_extract_failure_is_skipped(tmp_path, monkeypatch):
     def fake_run(args, **kw):
         if "-filter_complex" in args:

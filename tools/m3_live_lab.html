@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>M3 simulated loopback lab</title>
+<link rel="icon" href="/ui/favicon.png">
+<style>
+body{font:16px system-ui;background:#09131e;color:#e7edf5;max-width:1000px;margin:32px auto;padding:0 20px}h1{font-size:25px}p{line-height:1.5;color:#b8c7d8}strong{color:#ffdc72}form,.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;padding:20px;border:1px solid #41617b;border-radius:12px;margin:20px 0}label{display:flex;flex-direction:column;gap:6px}input,button{font:inherit;color:inherit;background:#14263a;border:1px solid #55718d;border-radius:6px;padding:9px}button{cursor:pointer;min-height:44px}button:focus-visible,input:focus-visible{outline:3px solid #8ebaff;outline-offset:3px}.outages{display:flex;gap:18px;flex-wrap:wrap}.outages label{flex-direction:row;align-items:center}.actions{display:flex;gap:12px}#error{color:#ffb5ad;min-height:24px}pre{font:13px ui-monospace,monospace;white-space:pre-wrap;max-height:330px;overflow:auto;background:#101f2d;padding:16px}dt{color:#a6bad0;font-size:14px}dd{margin:4px 0;font-size:23px;font-variant-numeric:tabular-nums}
+</style>
+<h1><strong>SIMULATED LOOPBACK</strong> · M3 developer lab</h1>
+<p>This copies your actual captured pose into 1–3 labelled LAB seats. It does not use EOS, remote players, matchmaking, saved ghosts or timing nudges. Close other Trainer instances before using it.</p>
+<p>Open <a href="/" style="color:#a6cfff" target="_blank" rel="noopener">this lab’s Trainer page</a> to check recording, pause and ROM changes. At zero delay the copies overlap your Mario; your proximity settings may hide them.</p>
+<form id="settings">
+<label>LAB seats<input name="seats" type="number" min="1" max="3" value="1" required></label>
+<label>Simulated delay (ms)<input name="delay_ms" type="number" min="0" max="1500" value="0" required></label>
+<label>Random jitter ± (ms)<input name="jitter_ms" type="number" min="0" max="500" value="0" required></label>
+<label>Simulated loss (%)<input name="loss_percent" type="number" min="0" max="100" value="0" required></label>
+<label>Extra 100 ms holds (%)<input name="reorder_percent" type="number" min="0" max="100" value="0" required></label>
+<label>Duplicate copies (%)<input name="duplicate_percent" type="number" min="0" max="100" value="0" required></label>
+<label>Repeatable fault seed<input name="seed" type="number" min="0" max="4294967295" value="42" required></label>
+</form>
+<div class="outages"><span>Block arrivals:</span><label><input type="checkbox" id="outage0">LAB 1</label><label><input type="checkbox" id="outage1">LAB 2</label><label><input type="checkbox" id="outage2">LAB 3</label></div>
+<p>Start applies these settings as a fresh lab run. Restarting or stopping clears simulated in-flight packets. Pause, source loss and ROM changes also clear them.</p>
+<div class="actions"><button id="start">Start / restart</button><button id="stop">Stop and withdraw</button><span id="status" role="status">Stopped</span></div>
+<p id="error" role="alert"></p>
+<dl class="metrics" id="metrics"></dl>
+<p>Capture age uses the local pose’s QPC stamp and its source frequency; an invalid or future stamp is unknown. Pump receipt age starts when the capture pump published locally. Queue age is local simulated in-flight time. Native submissions count successful writes to the local receiver page. None measures internet latency, native acceptance or rendered pixel age.</p>
+<details><summary>Bounded deterministic fault trace (last 128 decisions)</summary><pre id="trace"></pre></details>
+<script>
+let token = null, busy = false;
+const get = async path => { const r = await fetch(path, {cache:"no-store"}); if (!r.ok) throw Error("Lab request failed."); return r.json(); };
+async function mutate(action, body) {
+  if (!token) token = (await get("/api/local-access")).request_token;
+  const r = await fetch("/api/m3-lab/" + action, {method:"POST", headers:{"Content-Type":"application/json","X-SM64-Request-Token":token}, body:JSON.stringify(body)});
+  const result = await r.json(); if (!r.ok) throw Error(typeof result.detail === "string" ? result.detail : "Check the lab settings."); return result;
+}
+function render(s) {
+  document.querySelector("#status").textContent = s.active ? "Running · simulated LOOPBACK" : s.cleanup_pending ? "Finishing native cleanup" : "Stopped";
+  document.querySelector("#error").textContent = s.error || "";
+  const ms = value => value == null ? "—" : value.toFixed(1) + " ms";
+  const counts = s.queue.counts;
+  const metrics = [["Last capture age",ms(s.capture_age_ms)],["Pump receipt age",ms(s.pump_receipt_age_ms)],["Queued packets",s.queue.queued],["Oldest queue age",ms(s.queue.oldest_queued_age_ms)],["Native page submissions",s.native_submissions],["Since last submission",ms(s.since_native_submission_ms)],["Inbox accepted / refused",s.inbox_accepted + " / " + s.inbox_rejected],["Simulated loss / outage",(counts.loss || 0) + " / " + (counts.outage || 0)],["Overflow / cleared",(counts.overflow || 0) + " / " + (counts.cleared || 0)]];
+  const panel = document.querySelector("#metrics"); panel.replaceChildren();
+  for (const [label,value] of metrics) { const box=document.createElement("div"),dt=document.createElement("dt"),dd=document.createElement("dd");dt.textContent=label;dd.textContent=value;box.append(dt,dd);panel.append(box); }
+  document.querySelector("#trace").textContent = s.queue.trace.map(row=>JSON.stringify(row)).join("\n");
+}
+async function act(action) {
+  if (busy) return; busy = true;
+  try { const body = {}; if (action === "start") { const form=document.querySelector("#settings");if (!form.reportValidity()) return;for(const [key,value] of new FormData(form))body[key]=Number(value);body.outages=[0,1,2].map(i=>document.querySelector("#outage"+i).checked); }render(await mutate(action,body)); }
+  catch(error) { document.querySelector("#error").textContent=error.message; }
+  finally { busy=false; }
+}
+document.querySelector("#start").onclick=()=>act("start");document.querySelector("#stop").onclick=()=>act("stop");
+async function poll(){try{if(!busy)render(await get("/api/m3-lab"));}catch{document.querySelector("#error").textContent="Lab server is unavailable.";}setTimeout(poll,250);}poll();
+</script></html>

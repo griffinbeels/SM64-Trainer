@@ -159,6 +159,11 @@ class Frame:
         return bool(self.valid_fields & POSE) and self.refusal != 0
 
     @property
+    def pose_hidden(self) -> bool:
+        """GC8 hidden byte immediately precedes refusal; usable poses may hide."""
+        return bool(self.raw[REFUSAL_AT - 1])
+
+    @property
     def has_shadow(self) -> bool:
         return bool(self.valid_fields & SHADOW)
 

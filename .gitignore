@@ -104,3 +104,24 @@ src/sm64_events/data/plugin/
 
 # Inert local/CI website review artifacts.
 .website-preview/
+
+# Private service setup never belongs in source or distributable app data.
+# Examples contain placeholders only; ignore rules do not untrack old files.
+.env
+.env.*
+!.env.example
+!.env.*.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+!.dev.vars.*.example
+/.local-services/
+.wrangler/
+*.local.json
+*.local.toml
+*.key
+*.p12
+*.pfx
+# Local EOS SDK archives/trees: stage reviewed redistributable files explicitly.
+EOS-SDK*/
+EOS-SDK*.zip

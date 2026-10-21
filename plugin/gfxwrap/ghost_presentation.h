@@ -85,6 +85,8 @@ void abandon(Instance*); // lost context; no GL calls
 void set_provider(ImageProvider,PresentationNotice,ImageValidity);
 void clean_consumer(bool negotiated);
 bool clean_consumer();
+// Independent display demand; never negotiates or starts a recording source.
+void live_consumer(bool active);
 // The ghost copy's lane: any thread. Off, record_display copies nothing.
 void display_consumer(bool active);
 bool display_consumer();

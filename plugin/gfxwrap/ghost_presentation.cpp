@@ -23,7 +23,7 @@ struct Instance {
     explicit Instance(const Dispatch& d,uint32_t generation):dispatch(d),context_generation(generation) {}
 };
 namespace {
-std::atomic<bool> negotiated{false},display_wanted{false};
+std::atomic<bool> negotiated{false},display_wanted{false},live_wanted{false};
 ImageProvider provider=nullptr;
 PresentationNotice notice=nullptr;
 ImageValidity validity=nullptr;
@@ -281,7 +281,8 @@ void destroy(Instance* p) {
 void abandon(Instance* p){delete p;}
 void set_provider(ImageProvider value,PresentationNotice completed,ImageValidity current){provider=value;notice=completed;validity=current;}
 void clean_consumer(bool value){negotiated.store(value,std::memory_order_release);}
-bool clean_consumer(){return negotiated.load(std::memory_order_acquire);}
+bool clean_consumer(){return negotiated.load(std::memory_order_acquire) || live_wanted.load(std::memory_order_acquire);}
+void live_consumer(bool value){live_wanted.store(value,std::memory_order_release);}
 void display_consumer(bool value){display_wanted.store(value,std::memory_order_release);}
 bool display_consumer(){return display_wanted.load(std::memory_order_acquire);}
 }

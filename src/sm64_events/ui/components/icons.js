@@ -6,6 +6,7 @@ const html = htm.bind(h);
 // Small, dependency-free outline icon set for the zero-build UI.  Icons are
 // decorative companions to visible labels; controls provide their own names.
 const PATHS = {
+  friends: "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-3a7 7 0 0 1 14 0v3M17 3a4 4 0 0 1 0 8m2 3a6 6 0 0 1 3 5v2",
   practice: "M12 2l1.7 4.9L19 8.6l-4.2 3.1 1.6 5.1-4.4-3-4.4 3 1.6-5.1L5 8.6l5.3-1.7L12 2zM19 2v4M17 4h4",
   run: "M8 5v14l11-7L8 5z",
   compare: "M3 5h7v14H3V5zm11 0h7v14h-7V5zM10 9h4m-4 6h4",

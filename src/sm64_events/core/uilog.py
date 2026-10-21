@@ -62,7 +62,7 @@ CLIENT_FIELDS = ("surface", "client_utc", "title", "note", "cells", "cards",
 # error anywhere. `tests/test_ui_log_records_the_real_page.py` is what catches
 # that, because it asserts the records LAND rather than that they were sent.
 SURFACES = ("selector", "target", "log", "recorder", "ghost_library", "community_library",
-            "player_page", "progress_publication")
+            "player_page", "progress_publication", "friends")
 
 MAX_TEXT = 200
 MAX_CELLS = 40
@@ -96,6 +96,18 @@ def sanitize(body: dict) -> dict | None:
         return None
     if body.get("surface") not in SURFACES:
         return None
+    if body["surface"] == "friends":
+        # Room diagnostics are counts and a fixed phase only. Never accept
+        # free text, player labels, identity codes, provider refs or payloads.
+        phase = body.get("phase")
+        if phase not in ("loading", "idle", "starting", "hosting", "joining", "connected",
+                          "reconnecting", "leaving", "error"):
+            return None
+        counts = {key: body.get(key) for key in ("members", "invitations")}
+        if any(type(value) is not int or not 0 <= value <= (4 if key == "members" else 16)
+               for key, value in counts.items()):
+            return None
+        return {"surface": "friends", "phase": phase, **counts}
     return {key: _clip(body[key]) for key in CLIENT_FIELDS if key in body}
 
 

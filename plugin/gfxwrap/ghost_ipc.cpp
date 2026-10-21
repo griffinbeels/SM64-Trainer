@@ -6,6 +6,8 @@
 #include "ghost_playback.h"
 #include "ghost_annotation.h"
 #include "ghost_path.h"
+#include "ghost_live_ipc.h"
+#include "ghost_presentation.h"
 #include <windows.h>
 #include <atomic>
 #include <algorithm>
@@ -385,6 +387,9 @@ struct Session {
         else if(previous.token) recovery_cache.clear();
         recovery.clear();
         capture->disable();
+        if(why==GIPC_OWNER_GONE || why==GIPC_PROTOCOL)ghost_live_session::worker_revoke();
+        else ghost_live_session::worker_suspend();
+        ghost_presentation::live_consumer(false);
         if (live || applied) { play->revoke(why); model_retired(); }
         live = false; applied = 0; configuration = 0; awaiting_configuration = false;
         forget_prepared();
@@ -462,6 +467,7 @@ struct Session {
             // path which retires this Session and starts a replacement worker.
             if(rom && rom!=current_rom)park_recovery(true);
             const bool same_cartridge=rom && rom==current_rom && rom_ready;
+            ghost_live_session::worker_suspend();
             play->revoke(GP_WRONG_IDENTITY); model_retired();
             forget_prepared();
             origins.clear();
@@ -755,6 +761,30 @@ struct Session {
         }
         restore_cache(loaded);
     }
+    // Live display borrows the same trusted local ROM/model. No clip/path,
+    // audio engine, archive or second capture reader is needed for this demand.
+    void receive_live(ghost_live_ipc::Receiver &receiver,uint32_t generation) {
+        ghost_live_session::LocalOwner trusted{};
+        if(live && configuration && accepted.capture_enabled && owner.value
+                && WaitForSingleObject(owner.value,0)==WAIT_TIMEOUT
+                && uint32_t(GetTickCount()-renewed)<GIPC_LEASE_MS
+                && opened.load(std::memory_order_acquire)==rom) {
+            trusted={accepted.owner_pid,accepted.owner_created_lo,accepted.owner_created_hi,
+                generation,rom,configuration,accepted.token,accepted.model_id?accepted.model_id:1};
+        }
+        if(!receiver.pump(trusted,ghost_live_ipc::now_ns()))return;
+        gp_status status{};
+        if(play->status(&status,sizeof(status))==GP_OK && built_model==trusted.model_id
+                && (status.model_state==GP_MODEL_READY || status.model_state==GP_MODEL_RENDER_OWNED))return;
+        if(rom_bytes.empty()) {
+            if(!read_live_rom(rom,rom_bytes))return;
+            cached_rom_generation=rom;rom_ready=true;
+            cartridge_verified=ghost_assets::sha256(rom_bytes,cartridge_digest);
+            if(!cartridge_verified) {release_rom_bytes();return;}
+        }
+        auto local=accepted;local.model_id=trusted.model_id;
+        model_ready(local); // deferred ownership is retried by this worker
+    }
     void load_rom() {
         bool rom_loaded = false;
         if (loaded.rom_path[0]) {
@@ -890,12 +920,14 @@ DWORD WINAPI worker(void *argument) {
                     } else WaitForSingleObject(lifecycle_signal.load(), 16);
                 }
                 Session session(source_clock);
+                ghost_live_ipc::Receiver live_receiver(source_clock);
                 while (generation) {
                     gipc_request request{};
                     bool received = false, published = false;
                     { Lock guard(mutex.value); if (guard.held) { request = view.page->request; received = true; } }
                     if (received) {
                         const bool load = session.demand(request, generation);
+                        session.receive_live(live_receiver,generation);
                         session.play->collect();
                         { Lock guard(mutex.value);
                             if (guard.held && same_command(request, view.page->request)) {
@@ -906,13 +938,13 @@ DWORD WINAPI worker(void *argument) {
                         if (load) { session.load_assets(); continue; }
                     }
                     if (!opened.load(std::memory_order_acquire)) {
-                        session.revoke(GIPC_NO_ROM); session.play->collect();
-                        if (session.play->release_worker() == GP_OK) break;
+                        live_receiver.revoke();session.revoke(GIPC_NO_ROM); session.play->collect();
+                        if (ghost_live_session::worker_release() == GP_OK) break;
                     }
-                    HANDLE events[2] = {wake.value, lifecycle_signal.load()};
+                    HANDLE events[3] = {wake.value, lifecycle_signal.load(),live_receiver.wake()};
                     // Revocation can make the session idle before a reader
                     // releases the page. Retry its status before sleeping forever.
-                    WaitForMultipleObjects(2, events, FALSE,
+                    WaitForMultipleObjects(events[2]?3:2, events, FALSE,
                         !received || !published || session.live || !opened.load() ? 16 : INFINITE);
                 }
                 // Publish closure before releasing producer ownership. Clients
@@ -932,9 +964,10 @@ DWORD WINAPI worker(void *argument) {
             }
         }
     } catch (...) {
-        ghost_stream::api()->disable(); ghost_playback::api()->revoke(GIPC_PROTOCOL);
+        ghost_stream::api()->disable();ghost_live_session::worker_revoke();
+        ghost_presentation::live_consumer(false);ghost_playback::api()->revoke(GIPC_PROTOCOL);
         // Retain the DLL and worker if render-owned storage has not retired.
-        while (ghost_playback::api()->release_worker() != GP_OK) {
+        while (ghost_live_session::worker_release() != GP_OK) {
             ghost_playback::api()->collect(); WaitForSingleObject(lifecycle_signal.load(), 100);
         }
     }
