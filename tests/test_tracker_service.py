@@ -167,14 +167,15 @@ def test_save_pb_rejects_missing_attempt(tmp_path):
 
 
 def two_successes(db, svc):
-    """Two successes on the same star: igt 343 then 350. Returns their ids."""
+    """Two recorded successes; return slower then faster for PB/Undo tests."""
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1350, igt=343)))
     asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1760, igt=350)))
     first = next(a.id for a in db.attempts() if a.igt_frames == 343)
     second = next(a.id for a in db.attempts() if a.igt_frames == 350)
-    return first, second
+    asyncio.run(svc.set_strat(2, 2, "Standard", save_adopted=False))
+    return second, first
 
 
 def test_undo_pb_restores_previous_pb(tmp_path):
@@ -183,8 +184,8 @@ def test_undo_pb_restores_previous_pb(tmp_path):
     save_pb(svc, db, first, "igt")
     save_pb(svc, db, second, "igt")      # supersedes first
     out = undo_pb(svc, db, second, "igt")
-    assert out["frames"] == 350
-    assert out["restored_frames"] == 343 and out["restored_attempt_id"] == first
+    assert out["frames"] == 343
+    assert out["restored_frames"] == 350 and out["restored_attempt_id"] == first
     [row] = db.pbs()
     assert row["attempt_id"] == first            # first is current again
     assert "pb_undone" in [e.type for e in db.events()]
@@ -2171,7 +2172,7 @@ def test_deleting_a_session_leaves_another_sessions_PB_alone(tmp_path):
     asyncio.run(svc.publish(star(1300)))
     asyncio.run(svc.new_session())
     asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
-    asyncio.run(svc.publish(star(5400)))
+    asyncio.run(svc.publish(star(5400, igt=342)))
     kept = db.attempts()[-1]
     save_pb(svc, db, kept.id, "igt")
 

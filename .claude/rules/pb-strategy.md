@@ -7,6 +7,9 @@ paths:
   - "tests/test_pbaction.py"
   - "src/sm64_events/ui/components/attemptlog.js"
   - "src/sm64_events/ui/components/practicelog.js"
+  - "src/sm64_events/ui/components/pbreplay.js"
+  - "tests/test_pb_improvements.py"
+  - "tests/test_ui_pb_replay.py"
   - "tests/test_ui_other_strat_dim.py"
   - "src/sm64_events/ui/pbcrown.js"
   - "tests/test_ui_pb_row.py"
@@ -18,6 +21,14 @@ Three questions the practice log and the PB commands both ask, one module
 each -- and the two practice-log surfaces that draw the answers. Lifted out
 of `.claude/rules/tracking-storage.md` (2026-08-22) and `ui-practice.md`
 (2026-08-23) when each passed its size ceiling; nothing was summarised.
+
+Normal Save requires a strictly faster time than the comparable current PB,
+using the same clock/strategy/region slot in service and view. Equal/slower rows
+carry `pb_blocked.reason=not_faster` and a disabled Save. Current-owner Undo
+remains available for correcting an incorrect save; historical PB rows are not
+rewritten. A slower playable run uses replay input tools → Save as ghost, which
+preserves/selects it without changing the PB or input template. Tests:
+`test_pb_improvements.py`, `test_ui_pb_replay.py`, `test_ghost_pb_rivals_ready.py`.
 
 | To change... | Edit |
 |---|---|
