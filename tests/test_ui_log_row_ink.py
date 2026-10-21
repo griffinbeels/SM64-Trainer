@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from ui_fixture import FIXTURE_COURSE, FIXTURE_STAR, _run_coro, serve_ui_live  # noqa: E402
+from ui_fixture import FIXTURE_COURSE, FIXTURE_STAR, FIXTURE_STRAT, _run_coro, serve_ui_live  # noqa: E402
 from test_tracker_service import ev  # noqa: E402
 
 CARD = ".log-card.log-card-active"
@@ -69,6 +69,10 @@ def test_time_gold_and_margin_ink_share_the_whole_row_center():
         output.mkdir(parents=True, exist_ok=True)
     captures, errors, failures = [], [], []
     with serve_ui_live() as (base, service):
+        # This pixel probe needs the exact 436 -> 397-frame margin. Explicitly
+        # undo the fixture PB before establishing that historical baseline.
+        previous = service.db.current_pb(FIXTURE_COURSE, FIXTURE_STAR, "igt", strat_tag=FIXTURE_STRAT)
+        _run_coro(service.undo_pb(previous["attempt_id"], "igt"))
         old = _finish(service, 30000, 436)
         _run_coro(service.save_pb(old, "igt"))
         _finish(service, 31000, 397)

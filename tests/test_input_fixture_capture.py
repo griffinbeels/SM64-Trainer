@@ -54,8 +54,11 @@ def test_reopening_a_scratch_snapshot_does_not_seed_inputs_into_its_history(tmp_
         before = [tuple(row) for row in tracker.db._conn.execute(
             "SELECT * FROM input_chunks WHERE session_id=? ORDER BY id", (original_owner,))]
         assert before
+        saved_pbs = tracker.db.pbs()
+        assert saved_pbs
     with serve_ui_live(db_path=path, target=target) as (_, tracker):
         assert tracker.session_id != original_owner
         after = [tuple(row) for row in tracker.db._conn.execute(
             "SELECT * FROM input_chunks WHERE session_id=? ORDER BY id", (original_owner,))]
         assert after == before
+        assert tracker.db.pbs() == saved_pbs

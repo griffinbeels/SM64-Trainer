@@ -442,6 +442,7 @@ def test_a_save_state_success_is_absent_from_progress_even_with_a_saved_pb(tmp_p
 def test_progress_superseded_pbs_stay_gold(tmp_path):
     db, svc = make(tmp_path)
     seed(svc)
+    asyncio.run(svc.set_strat(2, 2, "Standard", save_adopted=False))
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
     a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
     save_pb(svc, db, a350, "igt")
@@ -462,6 +463,10 @@ def test_the_undo_action_follows_the_latest_save_and_the_clock(tmp_path):
     seed(svc)
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
     a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    # Clear the automatically saved faster run before constructing the
+    # slower→faster history whose Undo ownership this test exercises.
+    if db.current_pb(2, 2, "igt", strat_tag="Standard"):
+        asyncio.run(svc.undo_pb(a343, "igt"))
     save_pb(svc, db, a350, "igt")
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
@@ -471,7 +476,7 @@ def test_the_undo_action_follows_the_latest_save_and_the_clock(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
     actions = {a["id"]: a["pb_action"] for a in sec["attempts"]}
-    assert actions[a343] == "undo" and actions[a350] == "save"
+    assert actions[a343] == "undo" and actions[a350] is None
     # per-clock: nothing is saved on rta, so no rta row is "current"
     view = build_session_view(db, svc, clock="rta")
     [sec] = view["stars"]
@@ -488,6 +493,7 @@ def test_hiding_an_attempt_undoes_the_pb_it_saved(tmp_path):
     resurrect the save — the row is gone, Save as PB is one click."""
     db, svc = make(tmp_path)
     seed(svc)
+    asyncio.run(svc.set_strat(2, 2, "Standard", save_adopted=False))
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
     a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
     save_pb(svc, db, a350, "igt")
@@ -1669,7 +1675,7 @@ def test_hiding_a_pb_attempt_regrades_off_the_earlier_save(tmp_path):
     db, svc = make(tmp_path)
     seed(svc)
     svc.ranks = _mode_ranks(tmp_path)
-    asyncio.run(svc.set_strat(2, 2, "fast"))
+    asyncio.run(svc.set_strat(2, 2, "fast", save_adopted=False))
     db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
     db._conn.commit()
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)

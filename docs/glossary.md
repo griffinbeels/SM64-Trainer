@@ -366,6 +366,8 @@ Choosing a [[strategy]] for unclassified practice history automatically saves
 its fastest eligible success as GOLD. Correcting the newest [[attempt]]'s
 [[strategy]] also saves it when it improves that [[strategy]]'s PB. [[Star]]s
 use the displayed clock; [[segment]]s use RTA. Ties preserve the existing PB.
+Ordinary Save also refuses slower times. Undo or hiding an incorrect saved
+[[attempt]] permits correction. Keeping a [[ghost]] never requires lowering a PB.
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]], and the gold GOLD!! row that marks
