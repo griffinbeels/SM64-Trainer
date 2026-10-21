@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from test_ui_community import (FixtureAccount, community_app, get_driver,
-                               open_account, wait_until)
+                               open_account, ui_fixture, wait_until)
 from test_ui_setup_modal import FRESH
 
 ARTIFACTS = Path(__file__).resolve().parents[1] / ".iteration/adaptive-ghosts/round54-ui"
@@ -132,25 +132,37 @@ def test_returning_login_from_settings_also_skips_account_editing(monkeypatch, t
 def test_setup_waits_for_initial_account_state(monkeypatch, tmp_path):
     account = FixtureAccount()
     release = threading.Event()
-    armed = threading.Event()
-    original = account.snapshot
+    requested = threading.Event()
+    create_app = ui_fixture.create_app
 
-    def delayed_account():
-        if armed.is_set():
-            assert release.wait(15), "The initial account request was never released"
-        return original()
+    def delayed_app(*args, **kwargs):
+        app = create_app(*args, **kwargs)
 
-    monkeypatch.setattr(account, "snapshot", delayed_account)
+        @app.middleware("http")
+        async def delay_account_response(request, call_next):
+            # Delay only this response. snapshot() is also read synchronously
+            # by ProgressSync; blocking it stalls unrelated local requests.
+            if request.method == "GET" and request.url.path == "/api/community/account":
+                requested.set()
+                assert await asyncio.to_thread(release.wait, 15), "The initial account request was never released"
+            return await call_next(request)
+
+        return app
+
+    monkeypatch.setattr(ui_fixture, "create_app", delayed_app)
     try:
         with community_app(monkeypatch, tmp_path, account,
                            capture_layer_status=dict(FRESH)) as (base, _):
-            armed.set()
             with get_driver().launch(headless=True, viewport=(850, 1100)) as page:
                 page.goto(base)
                 page.wait_for(".practice-page")
                 # The setup response has resolved while account is still pending.
                 wait_until(page, "performance.getEntriesByType('resource').some(e => e.name.endsWith('/api/setup'))",
                            "setup discovery before account resolution")
+                assert requested.wait(3), "The initial account request never reached the server"
+                # Cross the periodic progress read while account discovery is
+                # pending; the rest of the real server must remain responsive.
+                page.evaluate("new Promise(resolve => setTimeout(resolve, 2500))")
                 assert page.count(".setup-modal") == 0
                 release.set()
                 page.wait_for(".community-providers")

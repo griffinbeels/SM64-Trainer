@@ -623,7 +623,9 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
     rows = [a for star in attempts.get("stars", [])
             if star.get("course_id") == course_id and star.get("star_id") == star_id
             for a in star.get("attempts", []) if a.get("outcome") == "success"]
-    if rows:
+    # Reopening a scratch profile keeps its existing PB. An equal/slower
+    # fresh fixture run cannot replace it, just as in the shipping app.
+    if rows and rows[0].get("pb_action") == "save":
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "igt"})
     # A SECOND strategy on one of the rows, so the practice log renders the
     # MIXED action column the 2026-08-20 gate produces: some rows offering

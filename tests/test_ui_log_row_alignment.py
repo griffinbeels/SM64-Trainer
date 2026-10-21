@@ -236,11 +236,13 @@ def test_the_log_lines_up_in_both_layouts_and_the_rail_dot_is_centred():
         assert all(r["mark"] for r in rows), rows
         assert not any(r["words"].startswith("✔") for r in rows), rows
         # Every row draws its PB slot's button (round 11): a failure and a
-        # run on another strategy wear a disabled Save; a finish on the
-        # practised strategy never does.
+        # run on another strategy wear a disabled Save. A finished run on the
+        # practised strategy also does when it cannot improve the current PB.
         assert all(r["slotButton"] for r in rows), rows
         assert all(r["unavailable"] for r in rows if not r["success"] or r["other"]), rows
-        assert not any(r["unavailable"] for r in rows if r["success"] and not r["other"]), rows
+        assert all(not r["unavailable"] or r["reason"].startswith("This time doesn't beat")
+                   for r in rows if r["success"] and not r["other"]), rows
+        assert all(not r["unavailable"] for r in rows if r["pb"]), rows
         assert any(r["other"] for r in rows), "the fixture shows no other-strategy row"
         # GOLD!! sits on the time's mid-line (round 11: "in line with the rest of the row").
         golds = [r["goldBox"] for r in rows if r["goldBox"]]
