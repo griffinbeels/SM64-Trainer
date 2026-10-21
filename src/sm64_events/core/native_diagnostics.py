@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime
+from collections.abc import Mapping
+import math
 import os
 from pathlib import Path
 import re
@@ -23,7 +25,8 @@ EVENT_NAMES = frozenset({
     "init_begin", "init_result", "wrapper_loaded", "wrapped_loaded", "wrapped_info",
     "rom_open_begin", "rom_open_end", "rom_closed_begin", "rom_closed_end",
     "gpu_request", "gpu_prepare", "gpu_failure", "gpu_source_refusal", "gpu_phase",
-    "gpu_cadence", "gpu_summary", "callback_summary", "callback_final_window", "callback_stall",
+    "gpu_cadence", "gpu_summary", "gpu_summary_phase", "gpu_summary_cadence",
+    "callback_summary", "callback_final_window", "callback_stall", "callback_progress", "callback_pacing",
     "diagnostics_stop", "close_begin", "close_end",
 })
 NUMBER_FIELDS = frozenset({
@@ -38,11 +41,37 @@ NUMBER_FIELDS = frozenset({
     "window_calls", "mean_ms", "p99_ms", "max_ms", "total_ms", "begin_qpc", "end_qpc",
     "watched", "dropped_records", "snapshot_bytes", "bridge_bytes", "sample_calls", "sample_reuses",
     "publish_busy", "refused", "peak_pending", "peak_bridges",
+    "version", "started_qpc", "last_completed_qpc", "age_ticks", "last_qpc", "generation", "resets", "samples",
+    "snapshot_busy", "durations", "duration_max_ticks", "duration_max_started_qpc", "gaps", "gap_max_ticks",
+    "gap_max_started_qpc", "cpu_samples", "cpu_invalid", "cpu_thread_changes", "cpu_commit_busy",
+    "queued_samples", "unsent_samples", "in_flight", "window_started_qpc", "previous_emit_ticks",
 })
-ENUM_VALUES = frozenset({"ProcessDList", "UpdateScreen", "ProcessRDPList", "wait", "take", "sample",
-                         "decisions", "copy", "bridge_returns", "reap", "frontier", "unavailable"})
-_PREFIX = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:.]+Z) pid=(\d+) tid=\d+ build=([\w.-]{1,100}) event=(\w+) ")
+ENUM_FIELDS = {
+    "callback": frozenset({"ProcessDList", "UpdateScreen", "ProcessRDPList"}),
+    "phase": frozenset({"wait", "take", "sample", "decisions", "copy", "bridge_returns", "reap", "frontier"}),
+    "first_refusal": frozenset({"unavailable"}),
+    "state": frozenset({"in_flight", "no_new_callback", "queued", "unsent", "empty"}),
+    "coverage": frozenset({"callback"}),
+}
+_PREFIX = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:.]+Z) pid=(\d+) tid=\d+ (?:tid_role=submitter )?build=([\w.-]{1,100}) event=(\w+) ")
 _PAIR = re.compile(r"\b([a-z_]+)=([^\s]+)")
+
+
+def technical_fields(value: object) -> dict:
+    """One typed boundary for parsed lines and directly supplied SDK events."""
+    if not isinstance(value, Mapping):
+        return {}
+    result = {}
+    for key, item in value.items():
+        if key in NUMBER_FIELDS:
+            if isinstance(item, str) and re.fullmatch(r"-?\d{1,20}(?:\.\d{1,6})?", item):
+                item = float(item) if "." in item else int(item)
+            if type(item) in (int, float) and abs(item) < 2 ** 64 and math.isfinite(item):
+                result[key] = item
+                continue
+        if key in ENUM_FIELDS and isinstance(item, str) and item in ENUM_FIELDS[key]:
+            result[key] = item
+    return result
 
 
 def bounded_tail(path: Path, limit: int = TAIL_BYTES) -> tuple[str, int]:
@@ -73,13 +102,7 @@ def technical_events(text: str, *, producer_pid=None, build_id=None, producer_bi
         matches = bool(bound and int(match[2]) == producer_pid and match[3] == build_id and timestamp >= born)
         row = dict(timestamp=match[1], event=match[4], producer_matches=matches,
                    identity_bound=bound, capture_build=match[3])
-        fields = {}
-        for key, value in _PAIR.findall(line[match.end():]):
-            if key in NUMBER_FIELDS and re.fullmatch(r"-?\d{1,20}(?:\.\d{1,6})?", value):
-                fields[key] = float(value) if "." in value else int(value)
-            elif key in {"callback", "phase", "first_refusal"} and value in ENUM_VALUES:
-                fields[key] = value
-        row["fields"] = fields
+        row["fields"] = technical_fields(dict(_PAIR.findall(line[match.end():])))
         rows.append(row)
     return rows[-32:]
 
