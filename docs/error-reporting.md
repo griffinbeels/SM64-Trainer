@@ -166,7 +166,19 @@ On 2026-10-21 the expanded synthetic snapshot was observed in stored event
 `21b172b875884e7fbf8e0b03b9b1fb45`, including capture, ghost, setup and input
 health fields without the injected player-label sentinel. The stored event also
 confirmed that Sentry still enriches location from the connection; cloud-side
-scrubbing needs signed-in settings verification before claiming that metadata is absent.
+scrubbing needs settings verification before claiming that metadata is absent.
+
+The organization settings saved on 2026-10-21 require the data scrubber/default
+scrubbers and prevent IP storage. A fresh synthetic event
+`b6b801af8009443599eebdc11fd9d7b8` still contained `user.geo`, as Sentry's
+[documented geographic processing](https://docs.sentry.io/security-legal-pii/scrubbing/server-side-scrubbing/#geographic-information)
+predicts. Removing location additionally requires the Advanced Data Scrubbing
+rule **Remove / Anything / `$user.geo.**`**; verify a new event afterward.
+Keep Global Safe Fields empty. Optional narrow Global Sensitive Fields are
+`username`, `user_id`, `account_id`, `email`, `ip_address`, `hostname`,
+`computer_name` and `command_line`. Avoid broad names such as `name`, `id`,
+`user`, `state` or `reason`: sensitive-field terms also match field values and
+can hide useful technical facts. Griffin is managing the cloud settings.
 Packaged field delivery still requires verification against the distributed build.
 A real UAC prompt and affected-tester installation must be verified on an authorized
 interactive run; injected helper success is not that evidence.
