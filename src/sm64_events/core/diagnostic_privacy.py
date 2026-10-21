@@ -128,6 +128,9 @@ def safe_snapshot(value) -> dict:
     result["capture"] = {"recorder": pick(recorder, ("recording_enabled", "capture_state", "recording", "window_found",
         "audio_mode", "frame_source", "idle", "pictures_fed", "encode_backlog", "publication_error"))}
     result["capture"].update(pick(capture, ("picture_input_matching",)))
+    result["capture"]["recorder"].update({key: recorder[key]
+        for key in ("gpu_fallback_active", "pose_source_owned", "pose_capture_paused")
+        if type(recorder.get(key)) is bool})
     for key in ("recovery", "audio_health", "frame_source_health"):
         result["capture"]["recorder"][key] = pick(recorder.get(key), ("kind", "state", "pending", "attempts", "failures",
             "error", "retry_in_s", "attach_alive", "automatic_idle", "sessions_started"))

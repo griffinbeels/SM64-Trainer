@@ -79,6 +79,7 @@ def test_video_constructor_failure_does_not_close_ghosts(tmp_path):
 
 
 def test_pose_only_attempt_commits_and_is_discoverable_without_video(tmp_path):
+    from sm64_events.ghost.clip import check_manifest, inputs_complete
     service, row, archive = native_service(tmp_path)
     archive.close()
     rec, *_ = make(tmp_path / "capture")
@@ -92,6 +93,7 @@ def test_pose_only_attempt_commits_and_is_discoverable_without_video(tmp_path):
         assert result["native_ghost"] and result["native_ghost_reason"] is None
         found = service.find_native(row.id)
         assert found and found[0].is_file()
+        assert inputs_complete(check_manifest(found[0], found[1], attempt=row, target=service._native_target(row)))
         assert not service.extractor.calls and service.find_saved(row.id) is None
     finally:
         rec.stop(cleanup=False)

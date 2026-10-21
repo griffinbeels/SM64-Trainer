@@ -1412,6 +1412,9 @@ class ReplayRecorder:
             # Project64 (sourcefactory.DesktopForUnsupportedGpu), else None.
             "gpu_unsupported": getattr(source, "gpu_unsupported", None),
             "gpu_fallback": getattr(source, "gpu_fallback", None),
+            "gpu_fallback_active": bool(getattr(source, "gpu_fallback", None)),
+            "pose_source_owned": self._pose_owner is not None,
+            "pose_capture_paused": self._session_paused,
             "pictures_fed": self._pictures_fed,
             "frame_source_health": (source.status()
                                     if hasattr(source, "status")

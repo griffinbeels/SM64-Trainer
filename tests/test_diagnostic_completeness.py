@@ -16,6 +16,21 @@ BIRTH = int((datetime(2026, 10, 21, 18, tzinfo=timezone.utc).timestamp() + 11644
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_video_and_pose_lifetimes_are_visible_as_booleans_without_raw_fallback_text():
+    state = {"recording_enabled": False, "gpu_fallback_active": True, "pose_source_owned": True,
+             "pose_capture_paused": False, "gpu_fallback": "PrivateDriver C:\\Users\\PrivateName"}
+    result = safe_snapshot({"capture": {"recorder": state}})
+    assert result["capture"]["recorder"]["gpu_fallback_active"] is True
+    assert result["capture"]["recorder"]["pose_source_owned"] is True
+    assert result["capture"]["recorder"]["pose_capture_paused"] is False
+    assert "Private" not in json.dumps(result)
+    assert safe_snapshot(result) == result
+    state.update(gpu_fallback_active="PrivateName", pose_source_owned=42, pose_capture_paused=None)
+    result = safe_snapshot({"capture": {"recorder": state}})
+    assert all(key not in result["capture"]["recorder"] for key in
+               ("gpu_fallback_active", "pose_source_owned", "pose_capture_paused"))
+
+
 def producer_line(path, event, strings):
     """Render the real native printf format without running a renderer or GPU."""
     source = (ROOT / path).read_text(encoding="utf-8")
