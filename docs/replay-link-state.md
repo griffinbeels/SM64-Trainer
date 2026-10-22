@@ -20,6 +20,18 @@ in [the renderer build](../renderer/README.md).
 
 ## Explicit source command API
 
+Practice-ROM window creation prefers an actual RGB8 Windows pixel format when
+the driver's closest choice uses different RGB sizes. The selector preserves an
+already-supported choice, existing window storage, depth/stencil requirements,
+requested alpha and baseline cartridges. Windows permits one format per window;
+an existing non-RGB8 window keeps its storage until a fresh window is created.
+The later GL component-type/color-encoding checks still qualify capture; a
+Windows descriptor never establishes those GL facts. The renderer's ghost scopes
+and fixed-RGBA8 presentation rollback retain their existing admission rules.
+See [Windows format matching](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-choosepixelformat).
+Real-driver ghost tests exercise an actual non-RGB8 candidate, the corrected
+selection, preserved pixels/state, and a deliberately restored bad selection.
+
 `--boundary` also stages a versioned `SM64ReplaySourceV2` export. Registration
 is immutable before ROM startup; callbacks have explicit x86 calling conventions
 and their modules remain pinned across detached-renderer completion. A malformed

@@ -14,7 +14,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("SM64_TEST_GHOST_COMPOSITOR") != 
     reason="explicit desktop OpenGL 4.3 witness: set SM64_TEST_GHOST_COMPOSITOR=1")
 
 
-def run_compositor(tmp_path, source=SOURCE / "ghost_compositor.cpp"):
+def run_compositor(tmp_path, source=SOURCE / "ghost_compositor.cpp", *, repair_window=False, broken_choice=False):
     spec = importlib.util.spec_from_file_location("compositor_build", ROOT / "tools/build_plugin.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
@@ -22,11 +22,21 @@ def run_compositor(tmp_path, source=SOURCE / "ghost_compositor.cpp"):
     if vc is None:
         pytest.skip("x86 MSVC unavailable")
     executable = tmp_path / "ghost_compositor_host.exe"
+    host = ROOT / "tests/native/ghost_compositor_host.cpp"
+    if broken_choice:
+        original = (SOURCE / "renderer_pixel_format.h").read_text(encoding="utf-8")
+        assert original.count("return index;") == 1
+        (tmp_path / "broken_pixel_format.h").write_text(original.replace("return index;", "return original;"), encoding="utf-8")
+        # Give the compiler a changed explicit input as well as a new header.
+        # A cache hit from before an include shadow existed could hide mutation.
+        changed = host.read_text(encoding="utf-8").replace('"renderer_pixel_format.h"', '"broken_pixel_format.h"')
+        host = tmp_path / "ghost_compositor_host.cpp"
+        host.write_text(changed, encoding="utf-8")
     flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
-    build._cl(vc, flags + ["/std:c++17", "/EHsc", f"/I{SOURCE}",
-        str(source), str(ROOT / "tests/native/ghost_compositor_host.cpp"),
+    build._cl(vc, flags + ["/std:c++17", "/EHsc", f"/I{tmp_path}", f"/I{SOURCE}",
+        str(source), str(host),
         f"/Fe:{executable}", f"/Fo{tmp_path}\\", "/link", "opengl32.lib", "gdi32.lib", "user32.lib"], tmp_path)
-    result = subprocess.run([str(executable)], capture_output=True, text=True, cwd=tmp_path,
+    result = subprocess.run([str(executable), *(["--repair-window-format"] if repair_window else [])], capture_output=True, text=True, cwd=tmp_path,
         timeout=40, check=False, **quiet_spawn_kwargs())
     return result
 
@@ -41,6 +51,19 @@ def test_real_compositor(tmp_path):
     assert "known=nothing_asked" in result.stdout
     assert "vanish=noise_body_only" in result.stdout
     assert "annotations=private,depth,opacity,terminal,hud" in result.stdout
+
+
+def test_non_rgb8_driver_choice_recovers_real_ghost_pixels_and_state(tmp_path):
+    result = run_compositor(tmp_path, repair_window=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "compositor passed:" in result.stdout
+    assert "clean=unchanged hud=exact state=restored" in result.stdout
+
+
+def test_original_non_rgb8_choice_is_a_real_driver_negative_control(tmp_path):
+    result = run_compositor(tmp_path, repair_window=True, broken_choice=True)
+    assert result.returncode != 0
+    assert "RGB8 selection replaces unsupported closest choice" in result.stderr
 
 
 @pytest.mark.parametrize("before,after,failure", [

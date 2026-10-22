@@ -230,7 +230,7 @@ class NativeGhost:
                 assets.append((*asset, result["label"], getattr(template, "frames", None)))
         self._asset = tuple(assets) or None
         first = next((answer for answer in answers if answer["available"]), answers[0])
-        return {**first, "ghosts": [
+        return {**first, "retryable": any(answer.get("retryable", False) for answer in answers), "ghosts": [
             {"template_id": answer["template_id"], "attempt_id": answer["attempt_id"],
              "import_id": answer["import_id"], "author": answer["author"], "label": answer["label"],
              "pb": bool(getattr(template, "pb", False)),
@@ -348,7 +348,9 @@ class NativeGhost:
             return {**answer, "reason_text": "This imported ghost is not available for this target."}, None
         try:
             path, manifest = self._portable.resolve(ghost, target)
-        except (ValueError, LookupError, OSError) as error:
+        except OSError as error:
+            return {**answer, "reason_text": str(error), "retryable": True}, None
+        except (ValueError, LookupError) as error:
             return {**answer, "reason_text": str(error)}, None
         return {**answer, "available": True, "reason": None, "reason_text": None,
                 "exactness": "native_pose", "blinks": manifest["blink_frames"]}, (path, manifest)

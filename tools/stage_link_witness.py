@@ -85,6 +85,15 @@ def buffered_drawer_overlay(data: bytes) -> bytes:
         "\tif (buffer.data != nullptr) {\n\t\t_updateBuffer(buffer, _params.verticesCount, dataSize, _params.vertices);")
 
 
+def pixel_format_overlay(data: bytes) -> bytes:
+    """Prefer supported RGB8 storage for practice ghosts; retain baseline ROMs."""
+    data = replace_once(data, '#include "../renderer_context_profile.h"',
+                        '#include "../renderer_context_profile.h"\n#include "../renderer_pixel_format.h"')
+    return replace_once(data, "\tif ((pixelFormat = ChoosePixelFormat(hDC, &pfd )) == 0) {",
+        GUARD + "\tpixelFormat = renderer_pixel_format::choose(HEADER, hDC, &pfd);\n#else\n"
+        "\tpixelFormat = ChoosePixelFormat(hDC, &pfd);\n#endif\n\tif (pixelFormat == 0) {")
+
+
 def boundary_overlay(source: Path) -> dict[str, bytes]:
     edited = {}
     api_header = "src/PluginAPI.h"
@@ -200,7 +209,7 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
         "\tGL_GET_PROC_ADR(PFNGLEGLIMAGETARGETTEXTURE2DOESPROC, glEGLImageTargetTexture2DOES);\n"
         + GUARD + "\treplay_gl::InstallDispatch();\n#endif")
     key = GL + "windows/windows_DisplayWindow.cpp"
-    data = context_profile_overlay((source / key).read_bytes())
+    data = pixel_format_overlay(context_profile_overlay((source / key).read_bytes()))
     for anchor in ["bool DisplayWindowWindows::_start()\n{", "void DisplayWindowWindows::_stop()\n{"]:
         data = replace_once(data, anchor, anchor + "\n" + GUARD + "\treplay_gl::ContextLost();\n#endif")
     data = replace_once(data, "\treturn _resizeWindow();", GUARD +
@@ -231,7 +240,7 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
     for relative, data in edited.items():
         (output / relative).write_bytes(data)
     for name in ["link_dispatch.h", "link_dispatch.cpp", "renderer_gl_state.h", "gl_snapshot.h", "source_format.h",
-                 "practice_rom.h", "renderer_context_profile.h"]:
+                 "practice_rom.h", "renderer_context_profile.h", "renderer_pixel_format.h"]:
         shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
     if context_lifetime:
         for name in ["context_lifetime.h", "context_lifetime.cpp"]:

@@ -366,6 +366,7 @@ class Rivals:
         self._update_identity(target,controls,changed_target)
         identity = self.identity
         self.sharing = sharing
+        retry_preparation = force or enabled and not self.enabled
         self.enabled = enabled
         if self.manual:
             return None
@@ -401,13 +402,18 @@ class Rivals:
                 # renderer already holds races on hidden (native_session.py).
                 self.status = None
                 return self._answer(ghosts, None)
-            if prepared_key == self.prepared_key:
+            # Successful rosters resume without reloading. A transient lazy
+            # clip/cache failure must not pin an unavailable answer forever;
+            # retry on the bounded safety refresh or a deliberate overlay-on.
+            incomplete = bool(ghosts) and (self.prepared_answer is None
+                or self.prepared_answer.get("retryable", False))
+            if prepared_key == self.prepared_key and not (retry_preparation and incomplete):
                 self._pb_playback(self.prepared_answer)
                 return self._answer(ghosts, self.prepared_answer)
-            self.prepared_key = prepared_key
             self.generation += 1
             self.native.set_portable(RivalProvider(self.population,sharing))
             answer = self.native.prepare(self.native_target(target),ghosts,controls,self.generation)
+            self.prepared_key = prepared_key
             self.prepared_answer = answer
             self._pb_playback(answer)
             self.status = "Updates on your next attempt." if ghosts and answer and answer.get("available") else None
