@@ -50,10 +50,14 @@ def setup_json(mode_cfg: ModeConfig, capture_layer: CaptureLayer,
     observed = observer(layer) if observer else {
         "target": {"state": "unknown", "message": "Waiting for the setup connection."},
         "rom": identify_rom(None), "checks": {}}
+    onboarding = record.read() if record else {}
+    note = getattr(observer, "note_setup_state", None)
+    if note is not None:
+        note(onboarding)
     return {"platform": mode_cfg.mode.value,
             TrackerMode.EMU.value: {**layer.as_dict(), **observed,
                     "verification": readiness(layer, observed)},
-            "onboarding": record.read() if record else {},
+            "onboarding": onboarding,
             TrackerMode.N64.value: {"available": False}}
 
 

@@ -51,7 +51,54 @@ presence is not evidence of delivered poses or visible playback.
 Errors automatically receive this snapshot before being queued. Unexpected native
 ghost model/pose/playback faults also report when no Python exception occurs;
 ordinary preparation, another scene and waiting for an attempt do not. There is
-no background diagnostic sampler or automatic report-file generation.
+no background native/log sampler or automatic report-file generation.
+
+## Silent failures with evidence of expected work
+
+`core/silent_failures.py` observes cached operational counters once a second on
+one app-lifetime worker. It sends an error through the same SDK and bounded queue
+when expected work makes no progress for at least 20 seconds of fresh, moving
+game observations with recent player activity:
+
+- Recording is enabled, not gated/paused/storage-limited, and the player is
+  active, but the current media source delivers no new pictures.
+- A validated saved-ghost command has an active attempt origin and is neither
+  hidden, suspended nor zero-opacity, but native preparation/activation stops
+  progressing or GP_READY playback produces no qualified display receipt.
+- Setup was explicitly started and remains incomplete, the verified installation
+  has a supported game running, and freshly polled game checks move while required
+  plugin, picture or input checks remain missing.
+
+Player activity comes from the existing ActivityTap's actual IGT/action/reset or
+level-entry evidence. A static Usamune menu's advancing global timer does not
+establish missing picture progress. This reporting qualification does not make
+controller input a new requirement for normal setup completion.
+
+Picture counts, native state/generation/preparation changes and setup-check
+changes restart the grace period. Source/ROM changes, clock resets, stale or
+missing observations, app sleep and reporting consent changes discard prior
+waits. Completed or unmounted setup, a closed emulator, no ROM, unsupported
+cartridges, manual pause, hidden ghosts, unavailable clips, absent attempt clocks,
+another scene and finished ghosts are ordinary states, not failures. An intentional
+idle/static desktop picture is not evidence of an encoding fault. Windows
+permission prompts retain their existing bounded operation/error reporting;
+merely leaving a prompt open does not create a new setup-stall report.
+
+Healthy observations do not scan native mappings/log files, resolve recordings,
+acquire capture or upload a telemetry stream. Only an actual admitted error gets
+the passive technical snapshot above. Opaque local scope markers and counter
+history stay in memory and never enter reports. The observer attempts at most one
+report per category per hour; existing durable daily/monthly budgets still apply.
+Turning Error reports off immediately retires observation timers. A temporary
+consent marker is consumed before event projection so an in-flight or previously
+timed failure cannot upload after opt-out/re-enable. A saved opt-out is never
+overridden by the default-on setting, and an unreadable preference stays off.
+
+These are operational invariants, not visual recognition. A short intermittent
+no-show, failed work without enough current native evidence, or UI progress before a running
+game cannot all be classified honestly. Existing browser/operation exceptions
+still report, but this detector does not claim every invisible failure is
+observable or that an absent receipt proves a particular GPU root cause.
 
 ## Privacy boundaries
 

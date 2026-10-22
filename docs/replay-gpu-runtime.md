@@ -957,6 +957,29 @@ under the existing producer seqlock. Python only accepts a receipt matching its
 request nonce and generation. Readers perform no graphics calls or file I/O.
 Older/unknown receipt versions are optional missing evidence, not protocol faults.
 
+Native startup retains its five-second bootstrap and post-channel preparation
+budgets. The Python supervisor starts its post-channel budget only when its
+media worker opens the actual identity-validated channel. A nonce-matched LUID
+receipt precedes channel creation and cannot establish that phase. Duplicate or
+retired-request notifications cannot extend the budget. Python permits one
+bounded second for native/control status publication and scheduling; the channel
+opener permits the same grace. This is not a hard-real-time guarantee, and a
+deferred native admission can still have a different starting instant.
+
+The final bounded control observation is processed before a Python deadline,
+so already-published activation, lifecycle or a specific refusal wins. Native
+reason/detail is one atomic pair, retained through cancellation and reset on
+fresh admission. Passive reads revalidate that pair, the status sequence and
+request admission; no wire offsets change. Deferred sample faults from a
+quiescent old epoch are cleared at fresh admission, while a new fault still
+quarantines the affected capture normally.
+
+A bootstrap deadline distinguishes no qualified source surface (10034) from a
+surface observed with its capture gateway still unavailable (10035). These
+numeric facts do not identify the refusing source predicate or a GPU driver
+cause. They retain the original deadline, safety gates and scoped desktop
+recovery after proved cleanup. Neither is a permanent unsupported-adapter verdict.
+
 Only known bounded native receipt fields enter automatic Sentry context. Raw
 stderr, plugin logs, pictures and ROM data do not. Expected AV1 codec refusals
 are grouped with their own operation and excluded from terminal failure facts,

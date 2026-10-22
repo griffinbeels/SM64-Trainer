@@ -86,9 +86,10 @@ def run_failed_start(factory, *, scenario="deadline"):
         session = CaptureSession(owner, demand, channel_factory=missing_channel)
         if scenario == "native deadline":
             demand.snapshot = replace(demand.snapshot, state="fault", reason="capture_setup_deadline")
-        elif scenario == "native delivery deadline":
-            demand.snapshot = replace(demand.snapshot, state="fault", reason="native_capture_ended:3:10012",
-                                      backend_reason=10012)
+        elif scenario in ("native delivery deadline", "no source surface", "refused gateway"):
+            reason = {"native delivery deadline": 10012, "no source surface": 10034, "refused gateway": 10035}[scenario]
+            demand.snapshot = replace(demand.snapshot, state="fault", reason=f"native_capture_ended:3:{reason}",
+                                      backend_reason=reason)
         elif scenario == "lifecycle":
             demand.snapshot = replace(demand.snapshot, state="fault", reason="producer_closed", lifecycle=True)
         elif scenario == "cancelled":
@@ -118,20 +119,23 @@ def run_failed_start(factory, *, scenario="deadline"):
     return owner, demands
 
 
-@pytest.mark.parametrize("scenario", ["deadline", "native deadline", "native delivery deadline"])
+@pytest.mark.parametrize("scenario", ["deadline", "native deadline", "native delivery deadline",
+                                      "no source surface", "refused gateway"])
 def test_no_channel_deadline_keeps_desktop_footage_and_original_failure(monkeypatch, scenario):
     factory, cameras = setup_factory(monkeypatch)
     owner, demands = run_failed_start(factory, scenario=scenario)
+    expected_reason = {"native delivery deadline": 10012, "no source surface": 10034,
+                       "refused gateway": 10035}.get(scenario, 0)
+    retained_cause = str(expected_reason) if expected_reason else "deadline"
     assert len(demands) == 1 and demands[0].closed and owner.cleanup_error is None
-    assert owner.error and ("deadline" in owner.error or "10012" in owner.error)
+    assert owner.error and retained_cause in owner.error
     identity = factory.retry_gate.identity_for(42)
     assert factory.retry_gate.unsupported_for(identity) is None
     assert factory.retry_gate.fallback_for(identity)
     first = factory.diagnostics()["first_failure"]
     assert first["stage"] == "channel" and first["codec"] is None and first["startup"] is None
-    expected_reason = 10012 if scenario == "native delivery deadline" else 0
     assert first["native_reason"] == expected_reason
-    assert "deadline" in first["reason"] or "10012" in first["reason"]
+    assert retained_cause in first["reason"]
     for _ in range(3):
         camera = factory.create(NS(pid=42))
         assert isinstance(camera, sourcefactory.DesktopAfterGpuStartup)

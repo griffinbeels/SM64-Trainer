@@ -139,6 +139,8 @@ def safe_snapshot(value) -> dict:
                                 "latest": _gpu(gpu.get("latest")), "first_failure": _gpu(gpu.get("first_failure"))}
     ghost = mapping(value.get("ghost"))
     result["ghost"] = pick(ghost, ("enabled", "has_target", "candidates_count", "playing_count", "source_available", "source_reason"))
+    result["ghost"].update({key: ghost[key] for key in ("expected_display", "overlay_hidden", "owner_suspended")
+                           if type(ghost.get(key)) is bool})
     result["ghost"]["native"] = pick(ghost.get("native") if isinstance(ghost, Mapping) else None, (
         "available", "error_type", "reason", "state", "dropped", "playback_state", "playback_reason", "displayed",
         "prepared_generation", "active_generation", "clips_prepared", "refused_batches", "hook_micros", "hook_gl_queries", "observed_unix_s"))
