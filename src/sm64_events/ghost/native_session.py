@@ -9,6 +9,7 @@ from sm64_events.ghost.clip import INCOMPLETE_INPUTS, OLDER_POSE_FORMAT_TEXT
 from sm64_events.ghost.native_layout import GHOSTS, GP_WRONG_SCENE, LABEL_BYTES
 from sm64_events.ghost.pb import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON
+from sm64_events.ghost import settings
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
 
 #: Hue step between simultaneous ghosts: the golden angle, so any number of
@@ -562,7 +563,7 @@ class NativeGhost:
             status = (self._source.snapshot_status(blocking=False) or {}) if self._source is not None else {}
             producer = status.get("producer")
             shown = bool(self._requested and not self._hidden and not self._owner_suspended
-                         and self._origin is not None and (self._controls or {}).get("opacity", 1) > 0)
+                         and self._origin is not None and (self._controls or {}).get("opacity", settings.DEFAULT_OPACITY) > 0)
             playing = bool(shown and self._enabled and self._selected_asset)
             preparing = bool(shown and not self._preparation_canceled and self._adaptive_generation
                              and self._pending_asset and (self._sent or {}).get("prepare_generation") == self._adaptive_generation)

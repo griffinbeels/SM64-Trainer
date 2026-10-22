@@ -39,6 +39,8 @@ _GL_UNSUPPORTED = {
     10033: "a required GPU snapshot OpenGL entry point is unavailable",
 }
 _DELIVERY.update(_GL_UNSUPPORTED)
+_DELIVERY.update({10034: "capture startup had no qualified source surface",
+                  10035: "renderer capture gateway remained unavailable"})
 
 
 def unsupported_capture_reason(reason):

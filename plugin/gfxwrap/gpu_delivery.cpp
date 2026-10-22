@@ -71,9 +71,10 @@ struct Runtime {
     rs_api source{};rs_api_v3 source3{};rs_api_v4 source4{}; rcl_api contexts{}; gd_limits limits{};
     HANDLE wake=nullptr,changed=nullptr;
     std::atomic<uint32_t> gate{0},cancel{1},session_cancel{0},state{GD_OFF},reason{GD_NONE};
-    // Worker-owned diagnostic, readable by the watchdog. Later disarms still
-    // update cancellation state but cannot erase the first worker failure.
-    std::atomic<uint32_t> first_failure{GD_NONE};
+    // Publish reason/detail together before callbacks or cancellation. A reader
+    // must never classify a new refusal with a previous snapshot's detail.
+    // Low32=reason, high32=detail; later disarms preserve the first failure.
+    std::atomic<uint64_t> first_failure{0};
     std::atomic<uint32_t> request_state{0},surface_state{0}; // 0 free,1 writing,2 ready,3 owned
     std::atomic<uint32_t> status_seq{0},status_words[sizeof(gd_status)/4]{};
     std::atomic<uint32_t> startup_seq{0},startup_words[sizeof(gpu_startup_v1)/4]{};
@@ -109,7 +110,7 @@ struct Runtime {
     uint64_t frequency=0,started=0,channel_started=0,drain_started=0,accounted=0,taken_through=0,offer_token=0,bridge_token=0;
     uint64_t status_time=0,frontier_qpc=0,frontier_occurrence=0;
     uint32_t status_records=0,status_bridges=0; // the counts the status last carried
-    uint32_t refusal_generation=0,error=0;
+    uint32_t refusal_generation=0;
     bool prepared=false,bridge_attempted=false,sampler_attempted=false,quarantine=false;
     DWORD worker_thread=0; // the delivery thread (drain, deadlines); ticks also run on the renderer's
     uint32_t diagnostic_epoch=0,phase=GD_PHASE_WAIT;
@@ -239,7 +240,7 @@ struct Runtime {
     unsigned bridge_count() const {unsigned n=0;for(const auto&b:credits)n+=b.token!=0;return n;}
     void set_state(uint32_t next){if(state.exchange(next)!=next)SetEvent(changed);}
     uint32_t diagnostic_reason()const{
-        const auto first=first_failure.load();return first?first:reason.load();
+        const auto first=uint32_t(first_failure.load());return first?first:reason.load();
     }
     void publish_startup(){
         const auto seq=startup_seq.load();startup_seq.store(seq+1);
@@ -248,7 +249,9 @@ struct Runtime {
         startup_seq.store(seq+2);
     }
     void publish_status(){
-        gd_status s{};s.state=state.load();s.reason=diagnostic_reason();s.error=error;s.epoch=epoch;
+        const auto failure=first_failure.load();
+        gd_status s{};s.state=state.load();s.reason=failure?uint32_t(failure):reason.load();
+        s.error=uint32_t(failure>>32);s.epoch=epoch;
         s.generation=request.generation;s.producer_pid=GetCurrentProcessId();s.owner_pid=request.owner_pid;
         s.nonce_lo=request.nonce_lo;s.nonce_hi=request.nonce_hi;
         s.snapshot_bytes=snapshots.images().counters().texture_bytes;
@@ -273,7 +276,8 @@ struct Runtime {
         SetEvent(wake);SetEvent(changed);
     }
     void fail(uint32_t why,uint32_t detail=0,bool poison=false){
-        if(!first_failure.load()){first_failure.store(why);error=detail;emit_diagnostic(why,detail);}
+        uint64_t empty=0;
+        if(first_failure.compare_exchange_strong(empty,(uint64_t(detail)<<32)|why))emit_diagnostic(why,detail);
         quarantine|=poison;revoke(why);
     }
     bool channel_ok(ChannelResult result){
@@ -735,7 +739,13 @@ struct Runtime {
 #ifdef GD_TEST_HOST
         test_deadline_visits.fetch_add(1);
 #endif
-        if(live() && state.load()!=GD_ACTIVE && qpc()-(channel_started?channel_started:started)>frequency*setup_deadline_ms/1000)fail(GD_DEADLINE);
+        if(live() && state.load()!=GD_ACTIVE && qpc()-(channel_started?channel_started:started)>frequency*setup_deadline_ms/1000){
+            // Existing admission/surface evidence distinguishes the two quiet
+            // bootstrap waits. Keep the deadline and every safety gate intact.
+            const auto why=state.load()==GD_BOOTSTRAP
+                ? (startup.width?GD_SETUP_GATEWAY_REFUSED:GD_SETUP_NO_SURFACE):GD_DEADLINE;
+            fail(why);
+        }
         return false;
     }
     // A paused emulator stops calling back; the pause is not the pictures' age.
@@ -1039,12 +1049,15 @@ extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     for(unsigned n=0;n<table.count;++n)table.rows[n]={h->table[n].offset,h->table[n].length};
     if(!sa_publish_table(&table)){r->source.disarm();r->request_state.store(0);return GD_INVALID;}
     r->request=*h;r->budget=budget;r->epoch=e;r->reason.store(GD_NONE);r->first_failure.store(GD_NONE);r->session_cancel.store(cancelled);
+    // Prior source callbacks are quiescent before fresh admission. Their last
+    // deferred sample fault must not quarantine the new epoch on its first VI.
+    r->sample_fault.store(0);r->twin_capture_fault.store(0);
     // request_state=1 exclusively owns the now-empty worker state. Publish the
     // fresh identity and BOOTSTRAP synchronously, before the supervisor can read
     // an old OFF/FAULT status after ACCEPTED. This is bounded CPU metadata only;
     // every graphics allocation/operation remains on the delivery worker.
     r->started=qpc();r->channel_started=r->drain_started=0;r->offer_token=r->bridge_token=r->twin_bridge_token=0;
-    r->frontier_qpc=r->frontier_occurrence=0;r->refusal_generation=0;r->status_time=0;r->error=0;
+    r->frontier_qpc=r->frontier_occurrence=0;r->refusal_generation=0;r->status_time=0;
     // No graphics call: make request/surface/gateway absence distinguishable
     // before a stalled source or renderer can prevent channel publication.
     r->startup={};memcpy(r->startup.magic,GPU_STARTUP_MAGIC,8);
@@ -1090,7 +1103,12 @@ extern "C" int __cdecl gd_read_status(gd_status*out){
     for(unsigned n=0;n<3;++n){const auto before=r->status_seq.load();if(before&1)continue;
         uint32_t words[sizeof(*out)/4]{};words[0]=before;
         for(unsigned i=1;i<sizeof(*out)/4;++i)words[i]=r->status_words[i].load();
-        if(before==r->status_seq.load()){memcpy(out,words,sizeof(*out));out->state=r->state.load();out->reason=r->diagnostic_reason();return 1;}
+        const auto failure=r->first_failure.load();
+        const auto state=r->state.load();const auto why=failure?uint32_t(failure):r->reason.load();
+        // Admission replaces the request identity before its complete snapshot.
+        // Revalidate after reading the atomic tuple to avoid mixing epochs.
+        if(failure!=r->first_failure.load() || before!=r->status_seq.load() || r->request_state.load()==1)continue;
+        memcpy(out,words,sizeof(*out));out->state=state;out->reason=why;out->error=uint32_t(failure>>32);return 1;
     }
     return 0;
 }
@@ -1104,6 +1122,81 @@ extern "C" int __cdecl gd_read_startup(gpu_startup_v1*out){
 }
 #ifdef GD_TEST_HOST
 #include "gpu_delivery_retry_test.h"
+extern "C" int __cdecl rc_test_delivery_status(uint32_t*,uint32_t*);
+extern "C" int gd_test_bootstrap_deadline(int surface_seen,uint32_t*out){
+    if(!out || runtime.load())return 0;
+    Runtime r;r.source.disarm=[](){};r.source.activate=[]()->uint32_t{return 17;};
+    r.source.take=[]()->const rb_record*{return nullptr;};
+    r.limits.max_slots=1;r.limits.snapshot_bytes=4u<<20;r.limits.channel_bytes=1u<<20;
+    LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);r.frequency=uint64_t(frequency.QuadPart);
+    r.wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r.changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    if(!r.wake || !r.changed){if(r.wake)CloseHandle(r.wake);if(r.changed)CloseHandle(r.changed);return 0;}
+    runtime.store(&r);
+    gc_header h{};h.owner_pid=GetCurrentProcessId();h.owner_birth=gpu_channel::process_birth(GetCurrentProcess());
+    h.nonce_lo=23;h.generation=7;h.offer_count=h.table_count=h.packet_count=1;h.table[0]={0,4};
+    h.packet_bytes=h.pending_bytes=1024;h.ram_budget=1u<<20;
+    int valid=gd_request(&h,4u<<20)==GD_ACCEPTED;
+    if(surface_seen){r.startup.width=17;r.startup.height=11;r.publish_startup();}
+    r.started=qpc()-r.frequency*6; // Test-owned elapsed phase; no sleeps or GPU.
+    r.iterate(false);
+    gd_status observed{};valid=valid && gd_read_status(&observed);
+    out[0]=observed.reason;out[1]=observed.error;
+    uint32_t state=0;valid=valid && rc_test_delivery_status(&state,&out[2]);
+    gd_disarm(GD_CANCELLED);runtime.store(nullptr);CloseHandle(r.wake);CloseHandle(r.changed);return valid;
+}
+extern "C" int gd_test_request_fault_reset(uint32_t*out){
+    if(!out || runtime.load())return 0;
+    Runtime r;r.source.disarm=[](){};r.source.activate=[]()->uint32_t{return 17;};
+    r.source.take=[]()->const rb_record*{return nullptr;};
+    r.limits.max_slots=1;r.limits.snapshot_bytes=4u<<20;r.limits.channel_bytes=1u<<20;
+    LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);r.frequency=uint64_t(frequency.QuadPart);
+    r.wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r.changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    if(!r.wake || !r.changed){if(r.wake)CloseHandle(r.wake);if(r.changed)CloseHandle(r.changed);return 0;}
+    runtime.store(&r);
+    // A cancelled old epoch ended without another renderer tick to consume them.
+    r.sample_fault.store(ERROR_INVALID_DATA);r.twin_capture_fault.store(GD_TWIN_SNAPSHOT_FAILED);
+    gc_header h{};h.owner_pid=GetCurrentProcessId();h.owner_birth=gpu_channel::process_birth(GetCurrentProcess());
+    h.nonce_lo=23;h.generation=7;h.offer_count=h.table_count=h.packet_count=1;h.table[0]={0,4};
+    h.packet_bytes=h.pending_bytes=1024;h.ram_budget=1u<<20;
+    int valid=gd_request(&h,4u<<20)==GD_ACCEPTED;
+    r.render_tick(rb_surface{}); // Metadata-only bootstrap: no surface, GL or GPU work.
+    out[0]=r.diagnostic_reason();out[1]=r.exhausted.load();out[2]=r.twin_capture_fault.load();
+    r.sample_fault.store(ERROR_INVALID_DATA); // A genuine fault in this new epoch still fails.
+    r.render_tick(rb_surface{});
+    out[3]=r.diagnostic_reason();out[4]=r.exhausted.load();
+    gd_disarm(GD_CANCELLED);runtime.store(nullptr);CloseHandle(r.wake);CloseHandle(r.changed);return valid;
+}
+// Observe real fail() inside its callback, before revoke/drain can publish a
+// replacement status. No worker, context, renderer or live control page exists.
+extern "C" int gd_test_failure_status_coherence(gd_status*out,uint32_t*controls){
+    if(!out || !controls || runtime.load())return 0;
+    Runtime r;r.source.disarm=[](){};r.source.activate=[]()->uint32_t{return 17;};
+    r.limits.max_slots=1;r.limits.snapshot_bytes=4u<<20;r.limits.channel_bytes=1u<<20;
+    r.wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r.changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    if(!r.wake || !r.changed){if(r.wake)CloseHandle(r.wake);if(r.changed)CloseHandle(r.changed);return 0;}
+    runtime.store(&r);
+    gc_header h{};h.owner_pid=GetCurrentProcessId();h.owner_birth=gpu_channel::process_birth(GetCurrentProcess());
+    h.nonce_lo=23;h.nonce_hi=29;h.generation=7;h.offer_count=h.table_count=h.packet_count=1;h.table[0]={0,4};
+    h.packet_bytes=h.pending_bytes=1024;h.ram_budget=1u<<20;
+    int valid=gd_request(&h,4u<<20)==GD_ACCEPTED;
+    static gd_status*rows=nullptr;static uint32_t*projected=nullptr;static bool callback_ok=false;
+    rows=out;projected=controls;callback_ok=false;
+    gd_set_diagnostic([](const gd_diagnostic*){
+        uint32_t state=0;callback_ok=gd_read_status(&rows[0]) && rc_test_delivery_status(&state,&projected[0]);
+    });
+    r.fail(GD_GL_UNSUPPORTED,uint32_t(render_capture::LoadError::keyed_mutex));
+    gd_set_diagnostic(nullptr);
+    valid=valid && callback_ok;
+    r.fail(GD_DEADLINE,18);gd_disarm(GD_OWNER_GONE);
+    uint32_t state=0;
+    valid=valid && gd_read_status(&out[1]) && rc_test_delivery_status(&state,&controls[1]);
+    // Stand in only for completed CPU retirement, then use real admission/reset.
+    r.request_state.store(0);r.epoch=0;r.set_state(GD_OFF);
+    h.nonce_lo=31;h.generation=8;
+    valid=valid && gd_request(&h,4u<<20)==GD_ACCEPTED && gd_read_status(&out[2])
+        && rc_test_delivery_status(&state,&controls[2]);
+    gd_disarm(GD_CANCELLED);runtime.store(nullptr);CloseHandle(r.wake);CloseHandle(r.changed);return valid;
+}
 // The accepted-request API and bootstrap path, with the source refusing its
 // gateway. No worker, context, surface discovery or GPU allocation is started.
 extern "C" int gd_test_bootstrap_receipt(gpu_startup_v1*out){

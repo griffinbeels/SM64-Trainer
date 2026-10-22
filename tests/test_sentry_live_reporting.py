@@ -101,7 +101,7 @@ def _initialize_progress_probe(tmp_path, monkeypatch, marker):
     monkeypatch.setattr("sm64_events.core.paths.migrate_legacy_data_dir", lambda: None)
     monkeypatch.setattr(build_channel, "current_build", lambda: build_channel.BuildChannel(
         installation="normal", channel="beta", build_id=marker))
-    monkeypatch.setattr(version, "__version__", "1.10.0-beta.25")
+    monkeypatch.setattr(version, "__version__", "1.10.0-beta.27")
     configure_logging(tmp_path / "logs")
     assert error_reporting.status()["configured"] and error_reporting.status()["enabled"]
 
@@ -113,7 +113,7 @@ def test_real_active_progress_watch_reaches_sentry_and_optout_stops_it(tmp_path,
     import sm64_events.server.diagnostics_runtime as runtime
     import ui_fixture
 
-    marker = "m3-r6-verification-" + time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    marker = "m3-r7-verification-" + time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     _initialize_progress_probe(tmp_path, monkeypatch, marker)
     captured = []
     original_capture, create = error_reporting.capture_problem, ui_fixture.create_app

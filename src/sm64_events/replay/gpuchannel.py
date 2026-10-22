@@ -563,7 +563,13 @@ class Client:
         if not self._view:
             raise C.WinError(C.get_last_error())
         h = self._stable(0, Header)
-        _require(h is not None, "torn header")
+        if h is None or not h.seq:
+            # CreateFileMapping exposes a zero-filled section before the producer
+            # seals its immutable header. A preempted first copy is also pending.
+            # The session retries within its existing deadline; __init__ closes
+            # this partial mapping before returning. Published headers still pass
+            # every protocol/identity/size check below, without relaxed validation.
+            raise BlockingIOError("GPU channel header not published yet")
         self.texture_names = validate_header(h, MAX_MAP)
         self.twin_texture_names = twin_texture_names(h)
         _require(

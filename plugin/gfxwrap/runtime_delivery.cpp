@@ -34,3 +34,7 @@ extern "C" int __cdecl rc_bind_delivery(const gd_limits *limits){
  const rc_backend api{sizeof(rc_backend),RC_VERSION,request,gd_disarm,status,gd_signal};
  return rc_configure(&api,limits->max_slots,limits->snapshot_bytes);
 }
+#ifdef GD_TEST_HOST
+// Exercise the production projection without publishing a machine control page.
+extern "C" int __cdecl rc_test_delivery_status(uint32_t *state,uint32_t *reason){return status(state,reason);}
+#endif

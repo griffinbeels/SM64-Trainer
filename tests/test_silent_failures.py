@@ -372,6 +372,25 @@ def test_recording_probe_is_cached_and_silent_room_does_not_request_media(tmp_pa
         close(rec)
 
 
+def test_recording_probe_is_cached_and_disabled_footage_does_not_request_media(tmp_path, monkeypatch):
+    from test_ghost_recording_independence import cycle
+    from test_ghost_recording import Source
+    from test_replay_startup_order import make
+    rec, video, audio, *_ = make(tmp_path)
+    rec._ghost_capture_factory = Source
+    rec.set_recording_enabled(False)
+    cycle(rec)
+    monkeypatch.setattr(rec._scratch, "prepare", lambda *_: pytest.fail("probe prepared scratch"))
+    try:
+        before = set(rec._cfg.scratch_dir.rglob("*"))
+        result = rec.silent_failure_status()
+        assert result["recording_enabled"] is False
+        assert set(rec._cfg.scratch_dir.rglob("*")) == before
+        assert result["pictures"] == 0 and video.starts == 0 and audio.on_pcm is None
+    finally:
+        rec.stop(cleanup=False)
+
+
 def test_setup_entry_point_forwards_existing_completion_record_without_extra_reads():
     from sm64_events.core.modes import ModeConfig
     from sm64_events.server.setup_api import setup_json

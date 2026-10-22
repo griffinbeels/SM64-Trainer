@@ -14,7 +14,7 @@ const char *label(Result r) {
     return names[unsigned(r)];
 }
 int main(int argc, char **argv) {
-    if (argc != 8) return 2;
+    if (argc != 8 && argc != 9) return 2;
     gc_header h{};
     h.owner_pid = strtoul(argv[1], nullptr, 10); h.owner_birth = _strtoui64(argv[2], nullptr, 10);
     h.nonce_lo = _strtoui64(argv[3], nullptr, 10); h.nonce_hi = _strtoui64(argv[4], nullptr, 10);
@@ -28,6 +28,14 @@ int main(int argc, char **argv) {
     const wchar_t *twins[2] = {L"Local\\SM64.GpuChannel.fixture.copy.a", L"Local\\SM64.GpuChannel.fixture.copy.b"};
     for (unsigned i = 0; i < 2; ++i) memcpy(h.twin_texture_names[i], twins[i], (wcslen(twins[i])+1)*2);
     gpu_channel::Producer producer;
+    if (argc == 9 && !strcmp(argv[8], "defer-header")) {
+        producer.test_before_header = [](void *) {
+            std::cout << "{\"result\":\"pending_header\",\"pid\":" << GetCurrentProcessId()
+                << ",\"birth\":" << gpu_channel::process_birth(GetCurrentProcess()) << "}" << std::endl;
+            std::string command;
+            return bool(std::getline(std::cin, command)) && command == "publish_header";
+        };
+    }
     Result created = producer.create(h);
     std::cout << "{\"result\":\"" << label(created) << "\",\"pid\":" << GetCurrentProcessId()
         << ",\"birth\":" << gpu_channel::process_birth(GetCurrentProcess()) << ",\"pointer_bytes\":" << sizeof(void *)

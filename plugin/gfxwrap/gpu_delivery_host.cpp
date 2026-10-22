@@ -27,6 +27,9 @@ extern "C" void gd_test_set_iteration_probe(void (__cdecl *)());
 extern "C" void gd_test_set_retired_probe(void (__cdecl *)());
 extern "C" uint32_t gd_test_deadline_visits();
 extern "C" int gd_test_terminal_diagnostics(gd_status*,uint32_t*);
+extern "C" int gd_test_failure_status_coherence(gd_status*,uint32_t*);
+extern "C" int gd_test_request_fault_reset(uint32_t*);
+extern "C" int gd_test_bootstrap_deadline(int,uint32_t*);
 extern "C" int gd_test_take_omissions(const rs_api*,uint64_t*);
 extern "C" int gd_test_pressure_omissions(const rs_api*,uint64_t*,uint64_t*);
 extern "C" int gd_test_retire_record(const rs_api*,uint32_t*);
@@ -426,6 +429,22 @@ int main(int argc,char**argv){
         source.disarm=[](){};
         uint64_t accounted=0,refused=0;CHECK(gd_test_pressure_omissions(&source,&accounted,&refused));
         printf("pressure omissions %llu %llu\n",accounted,refused);return 0;
+    }
+    if(argc==3 && !strcmp(argv[1],"--bootstrap-deadline-cpu")){
+        uint32_t out[3]{};CHECK(gd_test_bootstrap_deadline(atoi(argv[2]),out));
+        printf("bootstrap deadline %u %u %u\n",out[0],out[1],out[2]);return 0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--request-fault-reset-cpu")){
+        uint32_t out[5]{};CHECK(gd_test_request_fault_reset(out));
+        printf("request fault reset %u %u %u %u %u\n",out[0],out[1],out[2],out[3],out[4]);return 0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--diagnostic-race-cpu")){
+        gd_status rows[3]{};uint32_t projected[3]{};CHECK(gd_test_failure_status_coherence(rows,projected));
+        CHECK(rows[0].generation==7 && rows[0].nonce_lo==23 && rows[0].nonce_hi==29);
+        CHECK(rows[1].generation==7 && rows[1].nonce_lo==23 && rows[1].nonce_hi==29);
+        CHECK(rows[2].generation==8 && rows[2].nonce_lo==31 && rows[2].nonce_hi==29);
+        printf("failure coherence %u %u %u %u %u %u %u %u %u\n",rows[0].reason,rows[0].error,projected[0],
+            rows[1].reason,rows[1].error,projected[1],rows[2].reason,rows[2].error,projected[2]);return 0;
     }
     if(argc==2 && !strcmp(argv[1],"--diagnostic-cpu")){
         gd_status results[2]{};uint32_t revoked=0;CHECK(gd_test_terminal_diagnostics(results,&revoked));

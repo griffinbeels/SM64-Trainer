@@ -94,7 +94,8 @@ bool recovery(const std::string&mode){
     }
     REQUIRE(state==CONTROL_PREPARING && why==0 && f.r.state.load()==GD_BOOTSTRAP);
     REQUIRE(activations==2 && f.r.epoch!=old_epoch && gd_epoch()==f.r.epoch && f.no_graphics());
-    REQUIRE(f.r.first_failure.load()==GD_NONE && f.r.error==0);
+    gd_status fresh{};REQUIRE(gd_read_status(&fresh));
+    REQUIRE(f.r.first_failure.load()==GD_NONE && fresh.error==0);
     if(mode=="recover"){
         REQUIRE(f.r.request.nonce_lo==200);
         for(unsigned i=0;i<3;++i){next.demand(state,why);REQUIRE(state==CONTROL_PREPARING && why==0);}
@@ -137,10 +138,12 @@ bool gap(const std::string&mode){
         f.r.source.release=[](rb_ticket){return 1;};
         f.r.take_records(false);
         if(cancel_on_take){
-            REQUIRE(!f.r.live() && f.r.first_failure.load()==GD_NONE && f.r.error==0);
+            gd_status clean{};REQUIRE(gd_read_status(&clean));
+            REQUIRE(!f.r.live() && f.r.first_failure.load()==GD_NONE && clean.error==0);
             REQUIRE(f.r.drain_tick() && f.no_graphics());return true;
         }
-        REQUIRE(f.r.diagnostic_reason()==10016 && f.r.error==47);
+        gd_status failed{};REQUIRE(gd_read_status(&failed));
+        REQUIRE(f.r.diagnostic_reason()==10016 && failed.error==47);
     }else if(mode=="record-gap"){
         rb_record record{};record.epoch=f.r.epoch+1;record.occurrence=1;
         record.outcome=RB_OBSERVED;record.image.ownership=RB_IMAGE_SUBMITTED;

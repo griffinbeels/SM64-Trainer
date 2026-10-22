@@ -177,6 +177,10 @@ Result Producer::create(const gc_header &config) {
     swprintf_s(event_name, L"%s.producer", name_); result_ = CreateEventW(nullptr, FALSE, FALSE, event_name);
     swprintf_s(event_name, L"%s.client", name_); wake_ = CreateEventW(nullptr, FALSE, FALSE, event_name);
     if (!result_ || !wake_) { close(); return Result::system_error; }
+#ifdef GC_TEST_HOST
+    // Pause the actual new mapping before its first header publication.
+    if (test_before_header && !test_before_header(view_)) { close(); return Result::closed; }
+#endif
     // Publish initial status BEFORE immutable header allows the reader to open.
     gc_status initial{}; initial.state = GC_PREPARING;
     initial.nonce_lo = h.nonce_lo; initial.nonce_hi = h.nonce_hi;
