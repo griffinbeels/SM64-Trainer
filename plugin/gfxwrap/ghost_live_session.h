@@ -45,6 +45,22 @@ static_assert(sizeof(Update) == 1692 && offsetof(Update, peers) == 120, "live up
 // equal revision may offer newer payloads only. present offers a latest value,
 // not a fresh receipt: repeated bytes retain their original received_ns.
 int worker_update(const Update &, uint64_t now_ns) noexcept;
+enum class PresentationReason : uint32_t {waiting,hidden,different_scene,unsupported,ineligible,
+    setup_pending,gateway_refused,compositor_refused,ready,displayed};
+struct PresentationStatus {
+    PresentationReason reason=PresentationReason::waiting;
+    uint32_t eligible_mask=0,selected_mask=0,displayed_mask=0;
+    uint64_t presentations=0;
+    uint32_t gl_major=0,gl_minor=0,ineligible_mask=0;
+};
+PresentationStatus presentation_status(uint64_t now_ns) noexcept; // bounded atomic observation, no authority
+uint64_t worker_refusals() noexcept; // fixed rejected-pose counter, serialized worker
+void presentation(PresentationReason,bool displayed=false) noexcept; // actual renderer only
+void presentation_environment(uint32_t gl_major,uint32_t gl_minor,uint32_t ineligible_mask) noexcept;
+void presentation_ineligible(uint32_t mask) noexcept;
+#if defined(SM64_GHOST_TEST_HOOKS)
+void test_drop_next_publication() noexcept;
+#endif
 void worker_revoke() noexcept; // permanent room/app-owner retirement; before hard gp_api.revoke
 // Local capture/model lease ended, while the same app and logical room remain.
 // Retains admitted source identities and their replay fences through retarget.

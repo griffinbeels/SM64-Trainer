@@ -187,6 +187,9 @@ namespace ghost_annotation {struct View;struct Assets;}
 namespace ghost_path { struct Frame; }
 namespace ghost_live {struct ModelBinding;}
 namespace ghost_playback {
+#if defined(SM64_GHOST_TEST_HOOKS)
+void test_miss_next_request() noexcept;
+#endif
 const gp_api *api();
 /* Same worker/model custody as saved playback, independent live demand. A zero
  * id withdraws only live demand. Caller withdraws before hard gp_api.revoke.

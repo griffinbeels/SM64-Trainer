@@ -8,6 +8,7 @@ namespace gc=ghost_compositor;
 namespace gl=ghost_compositor::gl;
 static unsigned calls=0,copies=0,opened=0,ended=0,next_name=1,draws=0;
 static bool gpu_open=false,refuse_second_open=false,refuse_next_open=false;
+static bool refuse_extent=false;static int32_t maximum_buffers=1;
 static void require(bool okay,const char* message) {
     if(!okay){std::fprintf(stderr,"FAILED: %s\n",message);std::exit(1);}
 }
@@ -18,11 +19,11 @@ GC_GL_FUNCTIONS(CPU_STUB)
 #undef CPU_STUB
 static void GC_GL_CALL integer(uint32_t name,int32_t* out) {
     ++calls;*out=name==gl::MAJOR_VERSION?4:name==gl::MINOR_VERSION?3:
-        name==0x8824?1:name==gl::ACTIVE_TEXTURE?gl::TEXTURE0:
+        name==0x8824?maximum_buffers:name==gl::ACTIVE_TEXTURE?gl::TEXTURE0:
         name==gl::DRAW_BUFFER0 || name==gl::READ_BUFFER?gl::BACK:0;
 }
 static void GC_GL_CALL names(int32_t count,uint32_t* out){++calls;while(count--)*out++=next_name++;}
-static uint32_t GC_GL_CALL complete(uint32_t){++calls;return gl::FRAMEBUFFER_COMPLETE;}
+static uint32_t GC_GL_CALL complete(uint32_t){++calls;return refuse_extent?0:gl::FRAMEBUFFER_COMPLETE;}
 static void GC_GL_CALL copy(uint32_t,int32_t,int32_t,int32_t,int32_t,int32_t,int32_t,int32_t){++calls;++copies;}
 static void GC_GL_CALL buffers(int32_t,const uint32_t*){++calls;}
 static gp::Dispatch dispatch() {
@@ -93,6 +94,13 @@ int main() {
     refuse_next_open=true;gp::record_display(p);refuse_next_open=false;gp::swap_completed(p,true);
     require(gp::surface(p).framebuffer && gp::surface(p).update_occurrence==11 && copies==1 &&
             !gp::display(p).presentation_serial,"refused display copy preserves qualified private clean picture only");
+    refuse_extent=true;require(!gp::prepare(p,4,800,600,640,480),"transient gamma extent allocation refusal");refuse_extent=false;
+    gp::begin_update(p,12);require(!gp::replace_vi(p,image,0x3000,false,raster),"unprepared presentation cannot modify BACK");
+    require(gp::before_swap(p,0x3000,raster),"unprepared optional ghost resources preserve untouched clean BACK");swapped(p);
+    require(!gp::surface(p).framebuffer && gp::surface(p).width==800 && gp::surface(p).update_occurrence==12,
+        "optional allocation refusal still qualifies clean front under existing extent");
+    require(gp::prepare(p,4,800,600,640,480),"next extent preparation recovers");
     gp::display_consumer(false);gp::destroy(p);require(!gpu_open && opened==ended,"balanced final gateway");
+    maximum_buffers=32;p=gp::create(dispatch(),8);require(p!=nullptr,"larger driver draw-buffer limit uses bounded supported slots");gp::destroy(p);
     std::puts("CPU presentation passed: plain_gl_calls=0 plain_copies=0 plain_osd_mirrors=0 ghost_copies=2 identity=qualified failed_display=clean_preserved");
 }

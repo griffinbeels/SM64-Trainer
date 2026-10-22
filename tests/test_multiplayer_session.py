@@ -27,7 +27,7 @@ def test_live_and_saved_native_sessions_share_one_model_and_cancel_independently
     target = tmp_path / "ghost_live_session_host.exe"
     sources = ("ghost_playback.cpp", "ghost_origin.cpp", "ghost_annotation_assets.cpp",
                "ghost_live_codec.cpp", "ghost_live_input.cpp", "ghost_live_render.cpp", "ghost_live_session.cpp")
-    compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy",
+    compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy", "/DSM64_GHOST_TEST_HOOKS",
         f"/I{native}", f"/I{ROOT / 'renderer/model'}", *[str(native / name) for name in sources],
         str(ROOT / "tests/native/ghost_live_session_host.cpp"), f"/Fe:{target}", f"/Fo{tmp_path}\\",
         "/link", "/OPT:REF", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *compiler.LIBS], tmp_path)

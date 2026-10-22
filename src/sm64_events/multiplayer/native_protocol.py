@@ -14,7 +14,7 @@ from sm64_events.multiplayer.protocol import PACKET_BYTES
 
 PREFIX = "Local\\sm64_trainer_live_v1_"
 MAGIC = int.from_bytes(b"SMLI", "little")
-VERSION, PAGE_BYTES, REQUEST_OFFSET, UPDATE_BYTES = 1, 4096, 256, 1692
+VERSION, PAGE_BYTES, REQUEST_OFFSET, UPDATE_BYTES = 2, 4096, 256, 1692
 STALE_AFTER_NS = 250_000_000
 LABEL_BYTES, MAX_PEERS = 64, 3
 
@@ -53,7 +53,16 @@ class Header(C.LittleEndianStructure):
     _fields_ = [(name, C.c_uint32) for name in (
         "magic", "version", "bytes", "request_bytes", "producer_pid", "producer_created_lo",
         "producer_created_hi", "generation", "state", "reason")
-    ] + [("applied_revision", C.c_uint64), ("reserved", C.c_uint32 * 52)]
+    ] + [("applied_revision", C.c_uint64), ("receipt_room", C.c_ubyte * 16),
+        ("receipt_owner", LocalOwner)] + [(name, C.c_uint32) for name in (
+            "presentation_reason", "eligible_mask", "selected_mask", "displayed_mask")
+        ] + [(name, C.c_uint64) for name in ("updates", "refusals", "drops", "presentations")
+        ] + [(name, C.c_uint32) for name in ("gl_major", "gl_minor", "ineligible_mask")
+        ] + [("reserved", C.c_uint32 * 23)]
+
+
+PRESENTATION_REASONS = ("waiting", "hidden", "different_scene", "unsupported", "ineligible",
+    "setup_pending", "gateway_refused", "compositor_refused", "ready", "displayed")
 
 
 assert C.sizeof(LocalOwner) == 40 and C.sizeof(Controls) == 48

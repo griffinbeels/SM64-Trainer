@@ -233,4 +233,5 @@ def test_one_and_three_decoded_live_values_use_actual_pose_and_scene_math(native
     source = tmp_path / "three-admitted-peers.bin"
     source.write_bytes(b"".join(packets))
     report = run_native(native, f"pose{count}", source)
-    assert report["peers"] == count and report["evaluations"] == count + 1 and report["scene"] is True
+    assert report["peers"] == count and report["evaluations"] == count + 1 + (3 if count == 3 else 0)
+    assert report["scene"] is True

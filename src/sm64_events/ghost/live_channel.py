@@ -35,6 +35,38 @@ class LiveEndpoint:
             self.generation, self.rom_generation, self.configuration, self.token, 0)
 
 
+@dataclass(frozen=True)
+class ReceiverReceipt:
+    """Bounded native observation; applied means accepted, not visible pixels."""
+    state: str = "pending"
+    native_reason: int = 0
+    presentation_reason: str = "waiting"
+    eligible_mask: int = 0
+    selected_mask: int = 0
+    displayed_mask: int = 0
+    updates: int = 0
+    refusals: int = 0
+    drops: int = 0
+    presentations: int = 0
+    gl_major: int = 0
+    gl_minor: int = 0
+    ineligible_mask: int = 0
+
+
+def _receipt(header: P.Header, value: P.Update) -> ReceiverReceipt:
+    if (header.applied_revision != value.revision or bytes(header.receipt_room) != bytes(value.room)
+            or bytes(header.receipt_owner) != bytes(value.owner)):
+        return ReceiverReceipt()
+    if header.state not in (0, 1, 2) or header.presentation_reason >= len(P.PRESENTATION_REASONS):
+        return ReceiverReceipt()
+    mask = (1 << P.MAX_PEERS) - 1
+    return ReceiverReceipt(("pending", "applied", "refused")[header.state], header.reason,
+        P.PRESENTATION_REASONS[header.presentation_reason], header.eligible_mask & mask,
+        header.selected_mask & mask, header.displayed_mask & mask,
+        header.updates, header.refusals, header.drops, header.presentations,
+        header.gl_major, header.gl_minor, header.ineligible_mask & 63)
+
+
 class LiveChannel:
     def __init__(self, endpoint: LiveEndpoint):
         self.endpoint, self._k = endpoint, _kernel()
@@ -82,16 +114,17 @@ class LiveChannel:
             raise ProcessLookupError("Live ghost receiver protocol changed.")
         return value
 
-    def write(self, view: NativeView) -> None:
+    def write(self, view: NativeView) -> ReceiverReceipt:
         if type(view) is not NativeView or len(view.wire) != P.UPDATE_BYTES:
             raise ValueError("Live ghost update is invalid.")
         value = bind_owner(view, self.endpoint.owner())
         with self._locked():
-            self._checked_header()
+            header = self._checked_header()
             C.memmove(self._view + P.REQUEST_OFFSET, bytes(value), P.UPDATE_BYTES)
             if not self._k.SetEvent(self._wake):
                 raise C.WinError(C.get_last_error())
             self._last = value
+            return _receipt(header, value)
 
     def close(self):
         """Suspend this local connection; room departure writes its revoked view.

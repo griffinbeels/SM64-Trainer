@@ -81,6 +81,11 @@ std::atomic<uint32_t> evaluations{0}, rendered{0}, gaps{0}, refusals{0}, adoptio
 std::atomic<int32_t> model_error{SG_OK};
 struct PublishedRequest {gp_request value{};uint32_t cancellation=0,reserved=0;};
 Mailbox<PublishedRequest> requests;
+PublishedRequest retained_request{}; // renderer-owned last complete bounded read
+bool have_retained_request=false;
+#if defined(SM64_GHOST_TEST_HOOKS)
+std::atomic<bool> miss_next_request{false};
+#endif
 Mailbox<gp_status> reports;
 uint64_t last_revision=0;
 
@@ -1265,6 +1270,9 @@ bool same_list(const Plan& list,const gc_sample& live) {
 }
 
 namespace ghost_playback {
+#if defined(SM64_GHOST_TEST_HOOKS)
+void test_miss_next_request() noexcept {miss_next_request.store(true);}
+#endif
 uint32_t hidden_refusals(const gclip_header& header,const gclip_frame *frames) {
     uint32_t indexed=0;
     if(!valid_clip(header,frames,indexed))return UINT32_MAX;
@@ -1316,7 +1324,14 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return;}
     render_thread=thread;live_rom=rom;live_configuration=configuration;path_ready=false;
     next_boundary();
-    PublishedRequest published{};const bool received=requests.get(published);
+    PublishedRequest published{};
+    bool received=false;
+#if defined(SM64_GHOST_TEST_HOOKS)
+    if(!miss_next_request.exchange(false))
+#endif
+        received=requests.get(published);
+    if(received) {retained_request=published;have_retained_request=true;}
+    else if(have_retained_request) {published=retained_request;received=true;}
     const auto &next=published.value; const auto current_cancel=cancellation.load();
     live_demands.get(render_live_demand);
     const bool live_wanted=!exhausted.load() && rom && configuration && render_live_demand.id
@@ -1731,11 +1746,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     }
     // begin_batch draws in array order: farthest root first. Insertion sort
     // keeps equal depths in request order and never allocates.
-    for(uint32_t i=1;i<count;++i) {
-        const auto value=out[i];uint32_t j=i;
-        for(;j && out[j-1].view_projection[15]<value.view_projection[15];--j)out[j]=out[j-1];
-        out[j]=value;
-    }
+    ghost_compositor::sort_back_to_front(out,count);
     // Every ghost has fallen, faded or finished, not merely gone from this
     // frame (a pause menu may hide them all; the defeat resumes after it).
     bool finished=true;

@@ -127,16 +127,17 @@ InputResult Input::ingest(unsigned seat, const void *packet, size_t original_byt
     return InputResult::ok;
 }
 bool Input::expire(uint64_t now_ns) noexcept {
-    for (const auto &seat : seats_)
-        if (seat.snapshot.present && now_ns < seat.snapshot.received_ns) return false;
     for (unsigned i = 0; i < GLIVE_MAX_PEERS; ++i) {
         const auto &s = seats_[i].snapshot;
-        if (s.present && now_ns - s.received_ns > stale_after_ns_) clear(i);
+        if (s.present && (now_ns < s.received_ns || now_ns - s.received_ns > stale_after_ns_)) clear(i);
     }
     return true;
 }
 bool Input::publish(uint64_t now_ns) noexcept {
     if (!expire(now_ns)) { reject(InputResult::bad_time); return false; }
+#if defined(SM64_GHOST_TEST_HOOKS)
+    if(test_drop_) {test_drop_=false;count(stats_.dropped);return false;}
+#endif
     Slot *chosen = nullptr; bool replaced = false;
     // Single producer; claim exclusive custody before touching ordinary bytes.
     // A consumer can own at most one Reading slot. These finite scans still

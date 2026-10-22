@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.multiplayer import native_protocol as P
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,3 +31,5 @@ def test_receiver_mapping_local_owner_replacement_and_receipt_age(tmp_path):
     report = json.loads(result.stdout)
     assert report["ok"] and report["checks"] >= 14
     assert report["header"] == 256 and report["update"] == 1692
+    assert report["offsets"] == [getattr(P.Header, name).offset for name in (
+        "receipt_room", "receipt_owner", "presentation_reason", "updates", "reserved")]

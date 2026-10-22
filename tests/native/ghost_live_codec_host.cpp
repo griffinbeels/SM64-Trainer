@@ -113,6 +113,9 @@ void pose_checks(const std::vector<uint8_t> &bytes, unsigned count) {
                 require(near(applied.throw_matrix[12 + a], input.sample.pose.root_matrix[12 + a]
                              + input.sample.camera.position[a]), "recorded camera removed under transparent view shell");
         }
+        const auto *root=(applied.fields&SG_POSE_THROW_MATRIX)?applied.throw_matrix+12:applied.position;
+        require(near(pose.sort_depth,local.camera.position[2]-root[2]),
+            "actual pose sort depth includes world root under independently translated live camera");
         require(!std::memcmp(&values[seat], &before, sizeof(before)), "decoded value immutable through evaluation");
         if (seat) require(pose.vertices != scratch[seat - 1].vertices, "seats do not alias scratch");
     }
@@ -139,6 +142,27 @@ void pose_checks(const std::vector<uint8_t> &bytes, unsigned count) {
     require(ghost_pose::evaluate(model, record(tunnel), local, world, 1, scratch[0], tunnel_pose,
                                 tunnel.header.rom_layout) == ghost_pose::Result::wrong_scene
             && !tunnel_pose.vertices && !tunnel_pose.count, "incompatible scene clears output");
+    if(count==3) {
+        ghost_compositor::Pose sorted[3]{};local.level=values[0].sample.level;local.area=values[0].sample.area;
+        const float roots[]={0,100,50};
+        for(unsigned seat=0;seat<3;++seat) {
+            auto input=record(values[seat]);input.sample.pose.root_kind=GC_ROOT_TRS;
+            std::memset(input.sample.pose.root_matrix,0,sizeof(input.sample.pose.root_matrix));
+            input.sample.pose.position[2]=roots[seat];
+            require(ghost_pose::evaluate(model,input,local,world,1,scratch[seat],sorted[seat],
+                values[seat].header.rom_layout)==ghost_pose::Result::ok,"actual synthetic world roots evaluate");
+            sorted[seat].annotation.slot=uint8_t(seat);
+        }
+        require(sorted[0].view_projection[15]==sorted[1].view_projection[15]
+            && sorted[1].view_projection[15]==sorted[2].view_projection[15],"camera-only matrix cannot provide root ordering");
+        ghost_compositor::sort_back_to_front(sorted,3);
+        require(sorted[0].annotation.slot==0 && sorted[1].annotation.slot==2 && sorted[2].annotation.slot==1,
+            "shared batch sorts real poses by farthest world root and keeps metadata attached");
+        sorted[0].sort_depth=sorted[1].sort_depth=sorted[2].sort_depth=1;
+        ghost_compositor::sort_back_to_front(sorted,3);
+        require(sorted[0].annotation.slot==0 && sorted[1].annotation.slot==2 && sorted[2].annotation.slot==1,
+            "equal-depth batch is stable");
+    }
     std::printf("{\"peers\":%u,\"evaluations\":%u,\"scene\":true,\"checks\":%u}\n", count, evaluations, checks);
 }
 }

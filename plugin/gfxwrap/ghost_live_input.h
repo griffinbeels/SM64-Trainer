@@ -45,6 +45,9 @@ public:
     bool publish(uint64_t now_ns) noexcept;
     InputStats stats() const noexcept { return stats_; } // worker only
     bool exhausted() const noexcept { return exhausted_; } // worker only
+#if defined(SM64_GHOST_TEST_HOOKS)
+    void test_drop_next_publication() noexcept {test_drop_=true;}
+#endif
 
     // One renderer only; adopted is renderer-owned and initially {}. Bounded
     // CAS/copy work; no waits, allocation, IO or access to mutable worker data.
@@ -52,6 +55,7 @@ public:
     // Call current AGAIN before actual presentation, not just at pose selection.
     bool consume(Snapshot &adopted, uint64_t now_ns) noexcept;
     bool current(const Snapshot &adopted, unsigned seat, uint64_t now_ns) const noexcept;
+    uint64_t gate(unsigned seat) const noexcept {return seat<GLIVE_MAX_PEERS?gates_[seat].load(std::memory_order_acquire):0;}
 
 private:
     friend struct InputWitness; // defined only by the native counter-boundary host
@@ -75,6 +79,9 @@ private:
     const uint64_t stale_after_ns_;
     uint64_t revision_ = 0;
     bool exhausted_ = false;
+#if defined(SM64_GHOST_TEST_HOOKS)
+    bool test_drop_ = false;
+#endif
     Seat seats_[GLIVE_MAX_PEERS]{};
     struct Admission {uint8_t room_scope[16]{},incarnation[16]{};};
     Admission nonce_history_[nonce_history_capacity]{};

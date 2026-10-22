@@ -107,7 +107,63 @@ def test_busy_mutex_is_bounded_and_does_not_release_an_unacquired_lock(kernel):
 
 
 def test_failed_constructor_retires_only_its_owned_handles(kernel):
-    kernel.header.version = 2
+    kernel.header.version = P.VERSION + 1
     with pytest.raises(ProcessLookupError):
         module.LiveChannel(endpoint())
     assert len(kernel.closed) == 4
+
+
+def acknowledge(kernel, value, *, state=1, reason=0):
+    h = kernel.header
+    h.state, h.reason, h.applied_revision = state, reason, value.revision
+    h.receipt_room[:] = value.room
+    h.receipt_owner = value.owner
+    h.presentation_reason = 8
+    h.eligible_mask, h.selected_mask, h.displayed_mask = 7, 3, 0
+    h.updates, h.refusals, h.drops, h.presentations = 40, 2, 1, 0
+    h.gl_major, h.gl_minor, h.ineligible_mask = 4, 3, 2
+
+
+def test_scoped_receiver_receipt_is_immutable_and_does_not_claim_pixels(kernel):
+    from dataclasses import FrozenInstanceError
+
+    channel = module.LiveChannel(endpoint())
+    view = NativeInbox(b"r" * 16).snapshot(now_ns=1)
+    assert channel.write(view).state == "pending"
+    acknowledge(kernel, request(kernel))
+    receipt = channel.write(view)
+    assert receipt.state == "applied" and receipt.presentation_reason == "ready"
+    assert receipt.selected_mask == 3 and receipt.displayed_mask == receipt.presentations == 0
+    assert receipt.updates == 40 and receipt.refusals == 2 and receipt.drops == 1
+    assert (receipt.gl_major, receipt.gl_minor, receipt.ineligible_mask) == (4, 3, 2)
+    with pytest.raises(FrozenInstanceError):
+        receipt.state = "displayed"
+    acknowledge(kernel, request(kernel), state=2, reason=5)
+    refused = channel.write(view)
+    assert refused.state == "refused" and refused.native_reason == 5
+    acknowledge(kernel, request(kernel), state=0, reason=6)
+    assert channel.write(view).state == "pending"
+    channel.close()
+
+
+@pytest.mark.parametrize("field", ["room", "revision", "token", "generation", "rom_generation", "configuration", "pid"])
+def test_old_receiver_ack_cannot_cross_room_or_source_capability(kernel, field):
+    channel = module.LiveChannel(endpoint())
+    view = NativeInbox(b"r" * 16).snapshot(now_ns=1)
+    channel.write(view)
+    acknowledge(kernel, request(kernel))
+    if field == "room":
+        kernel.header.receipt_room[0] ^= 1
+    elif field == "revision":
+        kernel.header.applied_revision += 1
+    else:
+        setattr(kernel.header.receipt_owner, field, getattr(kernel.header.receipt_owner, field) + 1)
+    assert channel.write(view) == module.ReceiverReceipt()
+    channel.close()
+
+
+def test_header_preserves_fixed_mapping_layout():
+    assert P.VERSION == 2 and C.sizeof(P.Header) == 256 and P.PAGE_BYTES == 4096
+    assert (P.Header.receipt_room.offset, P.Header.receipt_owner.offset,
+            P.Header.presentation_reason.offset, P.Header.updates.offset, P.Header.reserved.offset) == (48, 64, 104, 120, 164)
+    assert (P.Header.gl_major.offset, P.Header.gl_minor.offset, P.Header.ineligible_mask.offset) == (152, 156, 160)

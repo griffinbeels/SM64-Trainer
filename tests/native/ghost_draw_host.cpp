@@ -73,6 +73,7 @@ bool finalized = false, token_current = true;
 bool usamune_hidden = false; // the list's Usamune HUD hides the player's display
 int usamune_values = -1;      // its Stick (0) / Values (1) setting, -1 unknown
 bool model_ready = true; // playback has built Mario's model
+bool identity_available=true;
 bool chooses = true; // the list's plan chose a ghost
 bool live_chooses=false,live_current=true;
 uint32_t saved_count=1,last_batch_count=0,prepared_capacity=0;
@@ -92,7 +93,7 @@ bool Raster(RasterState *s) {
     return true;
 }
 bool CandidateBindings(renderer::Identity *out, snapshot::RestoreBindings *bindings) {
-    if (!gl.nominal || !out) return false;
+    if (!identity_available || !gl.nominal || !out) return false;
     *out = identity(); if (bindings) *bindings = {};
     return true;
 }
@@ -144,7 +145,7 @@ Result begin_batch(Instance *, const Target &target, const Pose *poses, uint32_t
     if (faults.batch) fail_gl(Owner::ghost);
     last_batch_count=count;last_batch_sorted=true;
     for(uint32_t i=1;i<count;++i)last_batch_sorted=last_batch_sorted
-        && poses[i-1].view_projection[15]>=poses[i].view_projection[15];
+        && poses[i-1].sort_depth>=poses[i].sort_depth;
     for (uint32_t i = 0; i < count; ++i) {seen.stacked += poses[i].annotation.hud; seen.values += poses[i].annotation.values;}
     shown = {target.occurrence, target.generation, 22, 23, target.width, target.height};
     begun = count != 0; finalized = false; return begun ? Result::ok : Result::invalid;
@@ -185,7 +186,10 @@ Cost take_cost(Instance *) { return {}; }
 void destroy(Instance *) { ++seen.destroyed; }
 void abandon(Instance *) { ++seen.abandoned; }
 }
-namespace ghost_dispatch { bool load(ghost_compositor::Dispatch &) { ++seen.dispatch_loads; return true; } }
+namespace ghost_dispatch {
+void GC_GL_CALL setup_integer(uint32_t name,int32_t *out){*out=name==0x821B?4:3;}
+bool load(ghost_compositor::Dispatch &out) { ++seen.dispatch_loads;out.GetIntegerv=setup_integer;return true; }
+}
 namespace ghost_playback {
 bool drawing() { return true; } // a displayed request holds its clips, finished or not
 bool plan(const gc_sample &) { return chooses; }
@@ -202,7 +206,7 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &, ghost_compositor::Pos
     count = 0; token = {};
     if (!chooses) return false;
     for(unsigned i=0;i<saved_count;++i) {
-        out[i]={};out[i].annotation.hud=true;out[i].view_projection[15]=float(2*i);
+        out[i]={};out[i].annotation.hud=true;out[i].view_projection[15]=1;out[i].sort_depth=float(2*i);
     }
     count = saved_count; token.revision = 1;
     return true;
@@ -219,20 +223,24 @@ bool evaluate(const gc_sample&,const ghost::WorldPass&,uint64_t,ghost_compositor
               uint32_t &count,Token &token) noexcept {
     count=0;token={};if(!live_chooses)return false;
     const float depths[]={1,17,31};
-    for(unsigned i=0;i<3;++i) {out[i]={};out[i].view_projection[15]=depths[i];}
+    for(unsigned i=0;i<3;++i) {out[i]={};out[i].view_projection[15]=1;out[i].sort_depth=depths[i];}
     count=3;token.revision=1;return true;
 }
 bool current(const Token &token,uint64_t) noexcept {return live_current && token.revision!=0;}
 bool records_display() noexcept {return false;}
 void retire_list() noexcept {}
 void retire_on_context_loss() noexcept {}
+void presentation(PresentationReason,bool) noexcept {}
+void presentation_environment(uint32_t,uint32_t,uint32_t) noexcept {}
 }
 namespace ghost_presentation {
 bool clean_consumer() { return true; }
 void set_provider(ImageProvider provider, PresentationNotice, ImageValidity validity) {
     image_provider = provider; image_validity = validity;
 }
-void context_ready() { ++seen.presentation_ready; }
+bool context_ready() { ++seen.presentation_ready;return true; }
+bool eligible() {return !config.video.multisampling;}
+uint32_t ineligible_reasons() {return config.video.multisampling?1:0;}
 }
 namespace ghost_ipc { void presented(uint64_t) {} }
 namespace ghost_link {
@@ -394,6 +402,14 @@ void transitions() {
     ghost_draw::begin(7, 4, &pending);ghost_draw::observe(world.target);
     gSP.geometryMode = 0;ghost_draw::seal(pending, world, false, -1);
     check(ghost_draw::begin_hud() && gl.open, "old display and HUD scopes are open for missed-loss case");
+    const Seen before_miss=seen;identity_available=false;
+    ghost_draw::begin(7,4,&pending);ghost_draw::seal(pending,world,false,-1);ghost_draw::finish(&world);
+    check(!ghost_draw::begin_hud() && gl.open && seen.abandoned==before_miss.abandoned && !seen.foreign_restores,
+        "unknown identity skips downstream ghost GL and retains its open owned scopes");
+    identity_available=true;ghost_draw::begin(7,4,&pending);
+    check(!gl.open && seen.created==before_miss.created && seen.abandoned==before_miss.abandoned,
+        "restored identity closes old scopes and retains the compositor");
+    ghost_draw::seal(pending,world,false,-1);check(ghost_draw::begin_hud() && gl.open,"renew scopes before true missed-loss probe");
     ++active_identity.context_generation;gl.open = false; // the new dispatch has no old gateway scope
     ghost_draw::begin(7, 4, &pending);
     check(!seen.foreign_restores && !gl.open, "begin abandons old display scopes without foreign restoration");

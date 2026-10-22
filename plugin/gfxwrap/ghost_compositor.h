@@ -191,7 +191,16 @@ struct Pose {
     bool noise_alpha = false;
     float noise_scale = 1.0f; // framebuffer pixels per N64 pixel, not aspect correction
     ghost_annotation::Payload annotation{}; // carried with this body through sorting
+    float sort_depth=0; // positive distance ahead of the live camera at this body's world root
 };
+inline void sort_back_to_front(Pose *poses,uint32_t count) noexcept {
+    // Stable, allocation-free ordering shared by saved and mixed live batches.
+    for(uint32_t i=1;i<count;++i) {
+        const auto value=poses[i];uint32_t j=i;
+        for(;j && poses[j-1].sort_depth<value.sort_depth;--j)poses[j]=poses[j-1];
+        poses[j]=value;
+    }
+}
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };
 struct Instance;
 

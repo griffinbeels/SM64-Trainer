@@ -62,6 +62,13 @@ bool Renderer::plan() const noexcept {
         if ((selected_ & (1u << seat)) && input_.current(adopted_, seat, begun_ns_)) return true;
     return false;
 }
+uint32_t Renderer::available_mask() const noexcept {
+    if(!owner() || !active_)return 0;
+    uint32_t mask=0;
+    for(unsigned i=0;i<GLIVE_MAX_PEERS;++i)
+        if(adopted_.seats[i].visible && input_.current(adopted_,i,begun_ns_))mask|=1u<<i;
+    return mask;
+}
 bool Renderer::evaluate(const gc_sample &local, const ghost::WorldPass &world, uint64_t now_ns,
                         float opacity, ghost_compositor::Pose *out, uint32_t &count,
                         DrawToken &token) noexcept {
@@ -128,5 +135,10 @@ void Renderer::retire() noexcept {
     if (!owner()) return;
     invalidate(); active_ = false; selected_ = 0; binding_ = {};
     advance(boundary_);
+}
+bool Renderer::receipt(const DrawToken &token,unsigned seat,uint64_t &gate,uint64_t &received_ns) const noexcept {
+    gate=received_ns=0;
+    if(!owner() || seat>=GLIVE_MAX_PEERS || !(token.included_seats&(1u<<seat)) || !current(token,evaluated_ns_))return false;
+    gate=drawn_.seats[seat].gate;received_ns=drawn_.seats[seat].received_ns;return true;
 }
 }

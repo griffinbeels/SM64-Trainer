@@ -18,7 +18,7 @@ Receiver::Receiver(const gipc_status &source) noexcept {
     swprintf_s(suffix,L"%s_wake",name);event=CreateEventW(nullptr,FALSE,FALSE,suffix);
     mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,sizeof(Page),name);
     if(mapping)page=static_cast<Page*>(MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(Page)));
-    initial.magic=0x494c4d53;initial.version=1;initial.bytes=sizeof(Page);initial.request_bytes=sizeof(ghost_live_session::Update);
+    initial.magic=0x494c4d53;initial.version=2;initial.bytes=sizeof(Page);initial.request_bytes=sizeof(ghost_live_session::Update);
     initial.producer_pid=source.producer_pid;initial.producer_created_lo=source.producer_created_lo;
     initial.producer_created_hi=source.producer_created_hi;initial.generation=source.generation;
     initialize();
@@ -62,12 +62,24 @@ bool Receiver::pump(const ghost_live_session::LocalOwner &trusted,uint64_t now) 
     }
     value.owner=trusted;value.revision=native_revision;
     const auto result=ghost_live_session::worker_update(value,now);
-    active=result==GP_OK && value.enabled;
+    active=(result==GP_OK || result==GP_BUSY) && value.enabled;
+    if(updates!=UINT64_MAX)++updates;
+    if(result==GP_BUSY) {if(drops!=UINT64_MAX)++drops;}
+    else if(result!=GP_OK && refusals!=UINT64_MAX)++refusals;
     bool members=false;for(const auto &peer:value.peers)members|=peer.member!=0;
     ghost_presentation::live_consumer(active && members);
     if(lock(mutex)) {
-        page->header.state=active?1:0;page->header.reason=result<0?uint32_t(-result):0;
-        page->header.applied_revision=offered_revision;ReleaseMutex(mutex);
+        auto &h=page->header;
+        h.state=result==GP_OK?1:result==GP_BUSY?0:2;h.reason=result<0?uint32_t(-result):0;
+        h.applied_revision=offered_revision;std::memcpy(h.receipt_room,value.room,16);h.receipt_owner=expected;
+        const auto status=ghost_live_session::presentation_status(now);
+        h.presentation_reason=uint32_t(status.reason);h.eligible_mask=status.eligible_mask;
+        h.selected_mask=status.selected_mask;h.displayed_mask=status.displayed_mask;
+        h.gl_major=status.gl_major;h.gl_minor=status.gl_minor;h.ineligible_mask=status.ineligible_mask;
+        const auto rejected=ghost_live_session::worker_refusals();
+        h.updates=updates;h.refusals=rejected>UINT64_MAX-refusals?UINT64_MAX:rejected+refusals;
+        h.drops=drops;h.presentations=status.presentations;
+        ReleaseMutex(mutex);
     }
     return active && members;
 }

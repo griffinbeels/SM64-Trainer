@@ -36,6 +36,7 @@ public:
      * plan may choose before the local camera/world is qualified at the seal. */
     bool begin(const ModelBinding &, const gc_sample &local, uint64_t now_ns) noexcept;
     bool plan() const noexcept;
+    uint32_t available_mask() const noexcept;
     /* out has room for GLIVE_MAX_PEERS values and does not alias this object.
      * Output is in increasing included-seat order. Geometry borrows this
      * object's per-seat scratch until the next evaluate,
@@ -51,6 +52,7 @@ public:
     // Copy only an included source from the exact retained evaluation, for
     // annotation/proximity. Caller still rechecks current at presentation.
     bool source(const DrawToken &, unsigned seat, gc_sample &out) const noexcept;
+    bool receipt(const DrawToken &,unsigned seat,uint64_t &gate,uint64_t &received_ns) const noexcept;
     void retire() noexcept; // same render owner, before borrowed-resource release
 
 private:

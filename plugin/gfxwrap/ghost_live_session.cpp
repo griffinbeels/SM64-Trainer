@@ -45,11 +45,16 @@ alignas(8) std::atomic<uint64_t> enabled_revision{0};
 std::atomic<uint32_t> worker_thread{0};
 Command previous{},active{}; // worker / render respectively
 uint64_t last_revision=0,receipt_floor=0;bool have_time=false,worker_exhausted=false;
+uint64_t pose_refusals=0;
 bool had_present[GLIVE_MAX_PEERS]{}; // worker only; absence withdraws, never retires membership
 uint8_t receiver_history[receiver_history_capacity][16]{},active_room[16]{};
 unsigned receiver_history_count=0;bool room_active=false; // worker only; no namespace reuse after permanent leave
 DWORD render_thread=0;uint64_t render_generation=1;bool render_exhausted=false,chosen=false;
 ghost_live::ModelBinding binding{};
+std::atomic<uint32_t> presentation_reason{0},eligible_mask{0},selected_mask{0},displayed_mask{0};
+std::atomic<uint32_t> gl_major{0},gl_minor{0},ineligible_mask{0};
+alignas(8) std::atomic<uint64_t> presentation_revision{0},presentation_count{0};
+alignas(8) std::atomic<uint64_t> presentation_gates[GLIVE_MAX_PEERS]{},presentation_receipts[GLIVE_MAX_PEERS]{};
 
 bool worker_owner() noexcept {
     auto expected=uint32_t(0);const auto thread=GetCurrentThreadId();
@@ -141,8 +146,7 @@ int worker_update(const Update &value,uint64_t now_ns) noexcept {
     for(unsigned i=0;i<GLIVE_MAX_PEERS;++i) {
         const auto &peer=value.peers[i];
         if(peer.member>1 || peer.present>1 || peer.hue_degrees>359 || !ghost_annotation::valid_label(peer.label)
-                || (peer.member && !nonzero(peer.incarnation,16)) || (peer.present && !peer.member)
-                || (peer.present && peer.received_ns>now_ns))return fail(GP_INVALID);
+                || (peer.member && !nonzero(peer.incarnation,16)) || (peer.present && !peer.member))return fail(GP_INVALID);
         for(unsigned j=0;j<i;++j)if(peer.member && value.peers[j].member
                 && !std::memcmp(peer.incarnation,value.peers[j].incarnation,16))return fail(GP_INVALID);
     }
@@ -171,18 +175,32 @@ int worker_update(const Update &value,uint64_t now_ns) noexcept {
             }
         }
         if(peer.present) {
+            // now may have been sampled just before the bounded page copy.
+            // A newer receipt is not evidence that room authority was revoked.
+            if(peer.received_ns>now_ns) {input.clear(i);had_present[i]=false;continue;}
             const auto result=input.ingest(i,&peer.packet,sizeof(peer.packet),peer.received_ns);
             if(result==ghost_live::InputResult::ok)had_present[i]=true;
-            if(result!=ghost_live::InputResult::ok && result!=ghost_live::InputResult::not_newer
+            if(result==ghost_live::InputResult::exhausted)return fail(GP_EXHAUSTED);
+            if(result==ghost_live::InputResult::bad_packet || result==ghost_live::InputResult::source_changed) {
+                // Clear only this presentation. Keep admission and source/sequence
+                // fences so malformed data cannot make a prior pose replayable.
+                input.clear(i);had_present[i]=false;
+                if(pose_refusals!=UINT64_MAX)++pose_refusals;
+            } else if(result!=ghost_live::InputResult::ok && result!=ghost_live::InputResult::not_newer
                     && result!=ghost_live::InputResult::old_source && result!=ghost_live::InputResult::bad_time)
-                return fail(result==ghost_live::InputResult::exhausted?GP_EXHAUSTED:GP_INVALID);
+                return fail(GP_INVALID);
         } else if(had_present[i]) {input.clear(i);had_present[i]=false;}
     }
-    if(!input.publish(now_ns))return fail(input.exhausted()?GP_EXHAUSTED:GP_BUSY);
     if(changed && !commands.put(next)) {worker_exhausted=true;return fail(GP_EXHAUSTED);}
     previous=next;last_revision=value.revision;enabled_revision.store(value.revision,std::memory_order_release);
+    // Metadata/admission has committed even if the bounded latest-value seam
+    // loses its CAS race. The next poll retries; it must not retire this room.
+    if(!input.publish(now_ns))return input.exhausted()?fail(GP_EXHAUSTED):GP_BUSY;
     return GP_OK;
 }
+#if defined(SM64_GHOST_TEST_HOOKS)
+void test_drop_next_publication() noexcept {input.test_drop_next_publication();}
+#endif
 void worker_revoke() noexcept {if(worker_owner())revoke_impl();}
 void worker_suspend() noexcept {
     if(!worker_owner())return;
@@ -205,10 +223,49 @@ bool begin(uint32_t rom,uint32_t configuration,uint32_t context,const gc_sample 
     const auto thread=GetCurrentThreadId();if(render_thread && render_thread!=thread)return false;
     render_thread=thread;chosen=false;
     retire_list(); // invalidate every previous list even when controls refuse
-    if(render_exhausted || !commands.get(active) || !control_current() || !local
+    eligible_mask.store(0);selected_mask.store(0);displayed_mask.store(0);
+    presentation_revision.store(enabled_revision.load());
+    presentation_reason.store(uint32_t(PresentationReason::waiting));
+    const bool received=commands.get(active);
+    if(received && active.hidden)
+        presentation_reason.store(uint32_t(PresentationReason::hidden));
+    if(render_exhausted || !received || !control_current() || !local
             || active.owner.rom_generation!=rom || active.owner.configuration!=configuration
             || !ghost_playback::shared_model(context,binding) || binding.model_id!=active.owner.model_id)return false;
-    chosen=renderer.begin(binding,*local,now_ns);return chosen;
+    chosen=renderer.begin(binding,*local,now_ns);
+    eligible_mask.store(renderer.available_mask());
+    if(!chosen && renderer.available_mask())presentation_reason.store(uint32_t(PresentationReason::different_scene));
+    return chosen;
+}
+PresentationStatus presentation_status(uint64_t now_ns) noexcept {
+    PresentationStatus out{};
+    if(presentation_revision.load()!=enabled_revision.load() || !enabled_revision.load())return out;
+    out.reason=PresentationReason(presentation_reason.load());out.eligible_mask=eligible_mask.load();
+    out.gl_major=gl_major.load();out.gl_minor=gl_minor.load();out.ineligible_mask=ineligible_mask.load();
+    out.selected_mask=selected_mask.load();out.displayed_mask=displayed_mask.load();
+    for(unsigned i=0;i<GLIVE_MAX_PEERS;++i)if(out.selected_mask&(1u<<i)) {
+        const auto received=presentation_receipts[i].load();
+        if(input.gate(i)!=presentation_gates[i].load() || now_ns<received || now_ns-received>stale_after_ns) {
+            out.selected_mask=out.displayed_mask=0;out.reason=PresentationReason::waiting;break;
+        }
+    }
+    if(presentation_revision.load()!=enabled_revision.load())return {};
+    out.presentations=presentation_count.load();return out;
+}
+uint64_t worker_refusals() noexcept {return pose_refusals;}
+void presentation(PresentationReason reason,bool displayed) noexcept {
+    if(!render_owner())return;
+    presentation_reason.store(uint32_t(reason));
+    displayed_mask.store(displayed?selected_mask.load():0);
+    if(displayed && selected_mask.load() && presentation_count.load()!=UINT64_MAX)++presentation_count;
+}
+void presentation_environment(uint32_t major,uint32_t minor,uint32_t mask) noexcept {
+    if(!render_owner())return;
+    gl_major.store(major);gl_minor.store(minor);ineligible_mask.store(mask&63);
+}
+void presentation_ineligible(uint32_t mask) noexcept {
+    if(!render_owner())return;
+    ineligible_mask.fetch_or(mask&63);presentation(PresentationReason::ineligible);
 }
 bool plan() noexcept {return control_current() && chosen && renderer.plan();}
 bool evaluate(const gc_sample &local,const ghost::WorldPass &world,uint64_t now_ns,
@@ -231,6 +288,12 @@ bool evaluate(const gc_sample &local,const ghost::WorldPass &world,uint64_t now_
     }
     token.draw=draw;token.model=binding;token.revision=active.revision;token.render_generation=render_generation;
     if(!current(token,now_ns)) {count=0;token={};return false;}
+    for(unsigned i=0;i<GLIVE_MAX_PEERS;++i)if(draw.included_seats&(1u<<i)) {
+        uint64_t gate=0,received_ns=0;
+        if(!renderer.receipt(draw,i,gate,received_ns)) {count=0;token={};return false;}
+        presentation_gates[i].store(gate);presentation_receipts[i].store(received_ns);
+    }
+    selected_mask.store(draw.included_seats);
     return count!=0;
 }
 bool current(const Token &token,uint64_t now_ns) noexcept {
@@ -240,10 +303,14 @@ bool current(const Token &token,uint64_t now_ns) noexcept {
 bool records_display() noexcept {return control_current() && active.controls.record_ghosts!=0;}
 void retire_list() noexcept {
     if(!render_owner())return;
+    presentation_revision.store(0);selected_mask.store(0);displayed_mask.store(0);
+    presentation_reason.store(uint32_t(PresentationReason::waiting));
     renderer.retire();chosen=false;binding={};
 }
 void retire_on_context_loss() noexcept {
     if(!render_owner())return;
+    retire_list();
+    gl_major.store(0);gl_minor.store(0);ineligible_mask.store(0);
     renderer.retire();chosen=false;binding={};active={};
     if(render_generation==UINT64_MAX)render_exhausted=true;else ++render_generation;
     // Old render owner has stopped using Scratch before this explicit boundary.
