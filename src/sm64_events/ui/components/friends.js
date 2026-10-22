@@ -142,6 +142,16 @@ function FriendsReady({ model, state, copy, privateCode }) {
       value=${privateCode} onfocus=${event => event.currentTarget.select()} /></label>` : null}`;
 }
 
+function FriendsProblem({ state }) {
+  const issue = state.error || state.snapshot?.error;
+  if (!issue) return null;
+  const retry = Boolean(state.snapshot?.error);
+  return html`<div class="friends-error" role="alert"><span>${issue}</span>
+    ${state.snapshot?.display?.retryable !== false ? html`<button type="button" disabled=${Boolean(state.busy)}
+      onclick=${retry ? () => state.act("retry", {}) : state.refresh}>${retry ? "Retry" : "Refresh"}</button>` : null}
+  </div>`;
+}
+
 function FriendsPanel({ state, onClose }) {
   const model = friendsModel(state.snapshot);
   const [copy, setCopy] = useState(null), [privateCode, setPrivateCode] = useState(null);
@@ -154,17 +164,13 @@ function FriendsPanel({ state, onClose }) {
     try { await navigator.clipboard.writeText(result.code); setCopy("Player code copied."); }
     catch { setPrivateCode(result.code); setCopy("Select your player code and copy it."); }
   }
-  const issue = state.error || state.snapshot?.error;
   return html`<${Modal} title="Friends" icon="friends" size="large" onClose=${onClose}
       footer=${state.snapshot?.available ? html`<${FriendsFooter} state=${state} model=${model} copyIdentity=${copyIdentity} />` : null}>
     <div ref=${root} class="friends-surface" data-phase=${state.snapshot ? model.phase : "loading"}>
       ${!state.snapshot ? html`<p class="friends-loading" role="status">${state.error ? "Friends couldn’t load." : "Loading Friends…"}</p>`
         : !model.available ? html`<p class="friends-unavailable">${state.snapshot.unavailable_reason || "Friends is unavailable in this build."}</p>`
         : html`<${FriendsReady} model=${model} state=${state} copy=${copy} privateCode=${privateCode} />`}
-      ${issue ? html`<div class="friends-error" role="alert"><span>${issue}</span>
-        <button type="button" disabled=${Boolean(state.busy)}
-          onclick=${state.snapshot?.error ? () => state.act("retry", {}) : state.refresh}>
-          ${state.snapshot?.error ? "Retry" : "Refresh"}</button></div>` : null}
+      <${FriendsProblem} state=${state} />
     </div>
   </${Modal}>`;
 }

@@ -201,7 +201,7 @@ class RoomService:
             "source": source, "error": _message(self._error) if self._available else None,
             "can_invite": room is not None and len(self._peers) < 3 and not self._leaving}
         if room is not None:
-            value['display'] = {'reason': self._display_reason}
+            value['display'] = {'reason': self._display_reason, 'retryable': self._error != 'native_receiver_exhausted'}
         with self._lock:
             self._cache = value
             self._progress_cache = {'scope': (self._incoming, self._endpoint, self._generation),
@@ -212,7 +212,7 @@ class RoomService:
                     and any(p.state == 'playing' for p in self._peers.values())),
                 'progress': self._receiver_status.get('presentations'), 'observed_unix_s': time.time()}
         self._diagnostics.observe({'phase': phase, 'error': self._error, 'generation': self._generation,
-            'members': len(self._peers), 'operation': self._active_action.name if self._active_action else None,
+            'members': len(self._peers) + int(room is not None), 'operation': self._active_action.name if self._active_action else None,
             'peers': {state: sum(p.state == state for p in self._peers.values())
                       for state in ('playing', 'paused', 'waiting', 'connecting', 'reconnecting', 'disconnected')},
             'transport': self._transport_stats, 'native': self._receiver_status})
@@ -874,6 +874,8 @@ class RoomService:
             'gateway_refused': 'Waiting for the graphics connection.',
             'compositor_refused': 'Live ghosts couldn’t be drawn.',
             'different_scene': 'Waiting for a matching area.'}.get(reason)
+        if reason == 'ineligible':
+            self._display_reason = _graphics_setting_message(receipt.ineligible_mask)
         if state == 'refused':
             self._error = 'native_receiver_exhausted' if receipt.native_reason == 5 else 'native_receiver_refused'
         elif state == 'applied' and self._error in ('native_receiver_unavailable',
@@ -1117,6 +1119,21 @@ def _unique_object(pairs):
             raise ValueError("duplicate_field")
         value[key] = item
     return value
+
+
+def _graphics_setting_message(mask):
+    if mask & 3:
+        names = '/'.join(name for bit, name in ((1, 'MSAA'), (2, 'FXAA')) if mask & bit)
+        return f'Turn off {names} in the graphics plugin to see live ghosts.'
+    if mask & 8:
+        return 'Turn off overscan in the graphics plugin to see live ghosts.'
+    if mask & 4:
+        return 'The blit screen workaround prevents live ghosts.'
+    if mask & 16:
+        return 'Live ghosts are unavailable in this screen layout.'
+    if mask & 32:
+        return 'Waiting for the graphics size to settle.'
+    return 'Live ghosts are unavailable with the current graphics settings.'
 
 
 def _message(reason):

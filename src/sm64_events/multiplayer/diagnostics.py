@@ -27,7 +27,7 @@ _FAULTS = TRANSPORT_FAULTS | frozenset({'room_timeout', 'room_operation_failed',
 _REASONS = _FAULTS | frozenset({'invitation_expired', 'invalid_identity', 'cannot_invite', 'cannot_invite_self',
     'cannot_remove_player', 'cannot_retry_player', 'already_in_room', 'invalid_room_action', 'room_closed', 'room_busy'})
 _NATIVE_NUMBERS = frozenset({'native_reason', 'eligible_mask', 'selected_mask', 'displayed_mask',
-                            'updates', 'refusals', 'drops', 'presentations'})
+                            'updates', 'refusals', 'drops', 'presentations', 'gl_major', 'gl_minor', 'ineligible_mask'})
 _STATS = frozenset({'sent', 'received', 'rejected', 'skipped', 'data_queue_clears', 'sdk_result',
                     'outgoing_bytes', 'outgoing_packets', 'incoming_bytes', 'incoming_packets'})
 log = logging.getLogger('sm64.multiplayer')

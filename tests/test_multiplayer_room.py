@@ -56,6 +56,9 @@ class Receipt:
     refusals: int = 0
     drops: int = 0
     presentations: int = 0
+    gl_major: int = 0
+    gl_minor: int = 0
+    ineligible_mask: int = 0
 
 
 class Recorder:
