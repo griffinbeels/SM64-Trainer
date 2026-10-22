@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 from concurrent.futures import Future
 from dataclasses import dataclass
+import io
 import json
 import os
 from pathlib import Path
@@ -37,7 +38,9 @@ class EOSProcess:
         self.runtime, self._event, self._clock = runtime, on_event, clock
         self._job_factory = job_factory
         self._job = self._child = None
+        self._stdout = None
         self._lock = threading.RLock()
+        self._cleanup_lock = threading.Lock()
         self._control = queue.Queue(32)
         self._latest, self._pending = {}, {}
         self._next = 0
@@ -60,6 +63,9 @@ class EOSProcess:
             self._child = self._job.spawn([str(self.runtime.executable), "--config", str(self.runtime.config),
                 "--parent-pid", str(os.getpid()), "--cache-dir", str(self.runtime.cache)],
                 cwd=self.runtime.executable.parent)
+            # OwnedJob deliberately exposes raw pipes. FileIO.readline would
+            # issue a read per byte; only the reader uses this bounded buffer.
+            self._stdout = io.BufferedReader(self._child.stdout, buffer_size=65536)
             self._last_output = self._clock()
             for name, work in (("eos-events", self._read), ("eos-commands", self._write),
                                ("eos-errors", self._drain_errors), ("eos-watchdog", self._watch)):
@@ -137,7 +143,7 @@ class EOSProcess:
     def _read(self):
         try:
             while not self._stop.is_set():
-                raw = self._child.stdout.readline(4097)
+                raw = self._stdout.readline(4097)
                 if not raw:
                     if not self._stop.is_set() and not self._closing:
                         self._fail("transport_stopped")
@@ -212,7 +218,17 @@ class EOSProcess:
             if expired or stalled:
                 self._fail("transport_timeout"); return
 
-    def close(self):
+    def close(self, *, timeout=2):
+        # Concurrent callers must not close a pipe while another cleanup owns
+        # it. A refused/unfinished disposal keeps every owner for the next call.
+        if not self._cleanup_lock.acquire(timeout=timeout):
+            raise TransportError("transport_cleanup_pending")
+        try:
+            self._close(timeout)
+        finally:
+            self._cleanup_lock.release()
+
+    def _close(self, timeout):
         if self._job is None:
             return
         self._closing = True
@@ -232,14 +248,23 @@ class EOSProcess:
             if not future.done():
                 future.set_exception(TransportError("transport_stopped"))
         self._job.stop()
+        deadline = time.monotonic() + timeout
         for thread in self._threads:
             if thread is not threading.current_thread():
-                thread.join(2)
-        deadline = time.monotonic() + 2
-        while not self._job.snapshot()["empty"] and time.monotonic() < deadline:
+                thread.join(max(0, deadline - time.monotonic()))
+        while True:
+            disposal = self._job.snapshot()
+            disposed = disposal["empty"] and disposal["handle_closed"]
+            if disposed or time.monotonic() >= deadline:
+                break
             time.sleep(.01)
-        if not self._job.snapshot()["empty"] or any(t.is_alive() for t in self._threads):
+        if not disposed or any(t.is_alive() for t in self._threads):
             raise TransportError("transport_cleanup_pending")
-        pipes = (self._child.stdin, self._child.stdout, self._child.stderr) if self._child is not None else ()
-        for pipe in pipes:
-            pipe.close()
+        pipes = (self._child.stdin, self._stdout or self._child.stdout, self._child.stderr) if self._child is not None else ()
+        try:
+            for pipe in pipes:
+                pipe.close()
+        except (OSError, ValueError) as error:
+            raise TransportError("transport_cleanup_pending") from error
+        self._stdout = self._child = self._job = None
+        self._threads.clear()

@@ -110,6 +110,9 @@ inline int Engine::run() {
         if (now >= pipes.heartbeat_qpc && now - pipes.heartbeat_qpc > 10 * frequency) { fail("parent_lease_expired"); break; }
         if (!authenticated && now > auth_until) { fail("authentication_timeout"); break; }
         if (!pending_operation.empty() && now > operation_until) { fail("operation_timeout"); break; }
+        if (invite_query.timed_out(now)) {
+            reply(invite_query.expire(), false, "operation_timeout"); invites_dirty = true;
+        }
         EOS_Platform_Tick(platform_handle);
         for (unsigned at = 0; at < 8 && !ending && !fatal; ++at) {
             std::string line; if (!pipes.take(line)) break;
@@ -122,7 +125,7 @@ inline int Engine::run() {
         }
         if (authenticated && !ending && !fatal) {
             if (!lobby.empty() && (roster_dirty || now >= next_roster)) { reconcile(); next_roster = now + frequency; }
-            if (invites_dirty && pending_operation.empty()) query_invites(0);
+            if (invites_dirty && !invite_query.active && pending_operation.empty()) query_invites(0);
             if (!lobby.empty()) networking(now);
             if (now >= next_stats) {
                 emit("stats", ",\"sent\":" + integer(sent) + ",\"received\":" + integer(received) + ",\"rejected\":" + integer(rejected) +

@@ -15,14 +15,8 @@ namespace eos_transport {
 using Result = EOS_EResult;
 constexpr Result Success = Result::EOS_Success;
 struct Invite { uint64_t ref = 0; std::string token, owner; uint32_t count = 0; };
-struct Peer {
+struct Peer : PeerState {
     EOS_ProductUserId user = nullptr;
-    uint64_t ref = 0, member_epoch = 0, transport_epoch = 1, reconnect_until = 0;
-    Session session;
-    std::vector<uint8_t> latest;
-    uint64_t sample_id = 0, sample_qpc = 0, sent_sample = 0, pending_since = 0;
-    bool published_ready = false, failed = false, kicked = false;
-    Budget incoming_data{12, 120}, incoming_control{8, 8};
 };
 class Engine {
     Configuration configuration;
@@ -39,6 +33,7 @@ class Engine {
     std::array<Peer, 3> peers{};
     std::array<EOS_ProductUserId, 3> joined_events{};
     std::vector<Invite> invites;
+    InviteQuery invite_query;
     std::string lobby, pending_operation;
     std::string leaving_lobby;
     EOS_HLobbyDetails joining_details = nullptr;
@@ -48,7 +43,7 @@ class Engine {
     uint64_t last_sdk_result = 0, next_stats = 0, next_roster = 0;
     bool initialized = false, authenticated = false, ending = false, fatal = false, roster_dirty = false, invites_dirty = false;
     bool seed_roster = false;
-    Budget data_packets{6, 120}, data_bytes{12288, 131072}, handshake_packets{12, 12}, control_packets{6, 16}, control_bytes{3072, 8192};
+    Budget data_packets{6, 120}, data_bytes{12288, 131072}, handshake_packets{12, 12}, control_packets{ControlPacketBurst, ControlPacketRate}, control_bytes{3072, 8192};
     EOS_P2P_PacketQueueInfo queue{};
 
     std::string code(EOS_ProductUserId user) const {
@@ -109,11 +104,9 @@ class Engine {
         }
     }
     void reset(Peer& peer, const char* reason, bool close_connection = false) {
-        const bool was_active = peer.session.bound || peer.published_ready;
-        peer.session.invalidate(); peer.latest.clear(); peer.sample_id = peer.sample_qpc = peer.sent_sample = peer.pending_since = 0;
-        peer.published_ready = false; pipes.discard_data(peer.ref);
-        if (was_active || close_connection) {
-            ++peer.transport_epoch; peer.reconnect_until = qpc() + 15 * frequency;
+        const bool new_epoch = peer.reset(qpc(), frequency, close_connection);
+        pipes.discard_data(peer.ref);
+        if (new_epoch) {
             emit("peer_unready", peer_fields(peer) + ",\"reason\":" + quote(reason));
             emit("peer", peer_fields(peer) + ",\"user_code\":" + quote(code(peer.user)) + ",\"state\":\"awaiting_binding\"");
         }
@@ -212,15 +205,16 @@ class Engine {
     void on_rejected(const EOS_Lobby_RejectInviteCallbackInfo& info) { finish(info.ResultCode); invites_dirty = true; }
     void on_kicked(const EOS_Lobby_KickMemberCallbackInfo& info) {
         if (!EOS_EResult_IsOperationComplete(info.ResultCode)) return;
-        if (info.ResultCode != Success) for (auto& peer : peers) if (peer.user && peer.kicked) {
-            peer.kicked = false; emit("peer", peer_fields(peer) + ",\"user_code\":" + quote(code(peer.user)) + ",\"state\":\"awaiting_binding\"");
-        }
+        if (info.ResultCode != Success) for (auto& peer : peers) if (peer.user)
+            peer.failed_kick([&] { reset(peer, "kick_failed", true); });
         finish(info.ResultCode); roster_dirty = true;
     }
     void on_left(const EOS_Lobby_LeaveLobbyCallbackInfo& info) { finish(info.ResultCode); }
     void on_invites(const EOS_Lobby_QueryInvitesCallbackInfo& info) {
         if (!EOS_EResult_IsOperationComplete(info.ResultCode)) return;
-        if (info.ResultCode == Success) {
+        const auto completed = invite_query.finish();
+        last_sdk_result = static_cast<uint64_t>(info.ResultCode);
+        if (completed.publish && info.ResultCode == Success) {
             EOS_Lobby_GetInviteCountOptions count_options{}; count_options.ApiVersion = EOS_LOBBY_GETINVITECOUNT_API_LATEST; count_options.LocalUserId = local;
             // Matches the parent inbox bound and stays below the 4096-byte
             // private event limit even at maximum reference/name lengths.
@@ -244,7 +238,7 @@ class Engine {
             invites = std::move(next); array += ']'; ++invite_revision;
             emit("invitations", ",\"revision\":" + integer(invite_revision) + ",\"entries\":" + array);
         }
-        invites_dirty = false; finish(info.ResultCode);
+        reply(completed.request, info.ResultCode == Success, info.ResultCode == Success ? "none" : "sdk_failure");
     }
     // Continuation methods below are kept on this same SDK thread.
     void notifications();

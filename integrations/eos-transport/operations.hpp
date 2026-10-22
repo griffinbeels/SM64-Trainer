@@ -80,7 +80,8 @@ inline void Engine::notifications() {
     for (auto notification : notices) need(notification != EOS_INVALID_NOTIFICATIONID);
 }
 inline void Engine::query_invites(uint64_t id) {
-    begin(id, "refresh_invites");
+    if (!invite_query.begin(id, qpc(), frequency)) { reply(id, false, "busy"); return; }
+    invites_dirty = false;
     EOS_Lobby_QueryInvitesOptions options{}; options.ApiVersion = EOS_LOBBY_QUERYINVITES_API_LATEST; options.LocalUserId = local;
     EOS_Lobby_QueryInvites(lobbies, &options, this, callback<EOS_Lobby_QueryInvitesCallbackInfo, &Engine::on_invites>);
 }

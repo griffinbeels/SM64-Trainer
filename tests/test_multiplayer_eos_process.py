@@ -1,5 +1,7 @@
 """Private transport process boundaries without an SDK, app or emulator."""
+import io
 import json
+import math
 import queue
 import threading
 import time
@@ -9,17 +11,30 @@ import pytest
 from sm64_events.multiplayer.eos_process import EOSProcess, Runtime, TransportError
 
 
-class Pipe:
+class Pipe(io.RawIOBase):
     def __init__(self):
+        super().__init__()
         self.lines = queue.Queue()
         self.writes = bytearray()
-        self.closed = False
+        self.unread = bytearray()
+        self.eof = False
+        self.raw_reads = 0
 
-    def readline(self, _limit):
-        return self.lines.get(timeout=5)
+    def readable(self):
+        return True
 
-    def read(self, _limit):
-        return self.lines.get(timeout=5)
+    def writable(self):
+        return True
+
+    def readinto(self, buffer):
+        self.raw_reads += 1
+        if not self.unread and not self.eof:
+            self.unread.extend(self.lines.get(timeout=5))
+            self.eof = not self.unread
+        count = min(len(buffer), len(self.unread))
+        buffer[:count] = self.unread[:count]
+        del self.unread[:count]
+        return count
 
     def write(self, value):
         # Exercise real partial-write handling instead of an all-or-nothing mock.
@@ -29,9 +44,6 @@ class Pipe:
 
     def flush(self):
         pass
-
-    def close(self):
-        self.closed = True
 
 
 class Child:
@@ -48,6 +60,7 @@ class Job:
         self.child = Child()
         self.stopped = False
         self.command = None
+        self.handle_closable = True
 
     def spawn(self, command, cwd):
         self.command = command
@@ -60,7 +73,7 @@ class Job:
         self.child.stderr.lines.put(b"")
 
     def snapshot(self):
-        return {"empty": self.stopped}
+        return {"empty": self.stopped, "handle_closed": self.stopped and self.handle_closable}
 
 
 def wait(predicate):
@@ -85,6 +98,96 @@ def process(tmp_path):
 def test_cached_construction_does_not_start_a_child(process):
     value, job, _events = process
     assert job.command is None and value.runtime.available()
+
+
+def test_raw_pipe_fake_obeys_read_size_and_exposes_bytewise_readline():
+    pipe = Pipe()
+    pipe.lines.put(b"abcdef\n")
+    assert pipe.readline(4) == b"abcd"
+    assert pipe.raw_reads == 4 and pipe.read(2) == b"ef"
+
+
+def test_helper_reader_amortizes_raw_reads_for_many_live_pose_events(process):
+    value, job, events = process
+    lines = [json.dumps({"v": 1, "type": "data_received", "sequence": at,
+                         "payload_b64": "A" * 768}).encode() + b"\n" for at in range(120)]
+    raw = b"".join(lines)
+    job.child.stdout.lines.put(raw)
+    job.child.stdout.lines.put(b"")
+    value.start()
+    wait(lambda: len(events) >= len(lines))
+    assert sum(event["type"] == "data_received" for event in events) == len(lines)
+    assert job.child.stdout.raw_reads <= math.ceil(len(raw) / 65536) + 1
+
+
+def test_close_retains_all_owners_until_empty_job_handle_is_closed(process):
+    value, job, _events = process
+    value.start()
+    job.child.returncode = 0
+    job.handle_closable = False
+    with pytest.raises(TransportError, match="transport_cleanup_pending"):
+        value.close()
+    assert value._job is job and value._child is job.child
+    assert value._threads and all(not thread.is_alive() for thread in value._threads)
+    assert all(not pipe.closed for pipe in (job.child.stdin, job.child.stdout, job.child.stderr))
+    job.handle_closable = True
+    value.close(timeout=.2)
+    assert all(pipe.closed for pipe in (job.child.stdin, job.child.stdout, job.child.stderr))
+    assert value._job is None and value._child is None and value._threads == []
+
+
+def test_close_retains_buffer_and_pipes_until_blocked_reader_returns(process):
+    value, job, _events = process
+    entered, release = threading.Event(), threading.Event()
+
+    def consumer(_event):
+        entered.set()
+        release.wait(3)
+
+    value._event = consumer
+    value.start()
+    job.child.stdout.lines.put(b'{"v":1,"type":"ready"}\n')
+    assert entered.wait(1)
+    buffer = value._stdout
+    job.child.returncode = 0
+    try:
+        with pytest.raises(TransportError, match="transport_cleanup_pending"):
+            value.close(timeout=.02)
+        assert value._stdout is buffer and value._job is job
+        assert value._threads and any(thread.is_alive() for thread in value._threads)
+        assert all(not pipe.closed for pipe in (job.child.stdin, job.child.stdout, job.child.stderr))
+    finally:
+        release.set()
+        value.close(timeout=.5)
+    assert buffer.closed and job.child.stdout.closed
+
+
+def test_close_keeps_owners_when_pipe_close_refuses_and_retries(process):
+    value, job, _events = process
+    value.start()
+    job.child.returncode = 0
+    close = job.child.stderr.close
+
+    def refuse():
+        raise OSError("inert close refusal")
+
+    job.child.stderr.close = refuse
+    with pytest.raises(TransportError, match="transport_cleanup_pending"):
+        value.close(timeout=.2)
+    assert value._job is job and value._child is job.child and value._stdout is not None
+    job.child.stderr.close = close
+    value.close(timeout=.2)
+    assert job.child.stderr.closed and value._job is None
+
+
+def test_buffered_reader_preserves_maximum_accepted_line_size(process):
+    value, job, events = process
+    prefix, suffix = b'{"v":1,"type":"ready","padding":"', b'"}\n'
+    wire = prefix + b"x" * (4096 - len(prefix) - len(suffix)) + suffix
+    value.start()
+    job.child.stdout.lines.put(wire)
+    wait(lambda: len(events) == 1)
+    assert len(wire) == 4096 and events[0]["type"] == "ready" and not value._failed
 
 
 def test_failed_spawn_still_retires_the_created_job_accounting_handle(process):

@@ -85,8 +85,73 @@ void challenge_tests() {
     Budget budget(2, 2); check(budget.take(1, 100, 100)); check(budget.take(1, 100, 100));
     check(!budget.take(1, 100, 100)); check(budget.take(1, 150, 100)); check(!budget.take(1, 150, 100));
 }
+void failed_kick_tests() {
+    PeerState peer;
+    check(peer.session.bind(nonce(1)));
+    peer.session.relayed = {true, true}; peer.session.remote = nonce(2); peer.session.acknowledged = {true, true};
+    peer.latest = {1, 2}; peer.published_ready = true;
+    peer.kicked = true; check(peer.reset(100, 100, true));
+    const auto rejected_epoch = peer.transport_epoch;
+    check(peer.latest.empty() && !peer.session.ready());
+    unsigned callbacks = 0;
+    // The same callback seam Engine::on_kicked uses: the flag must be clear
+    // before reset emits an announcement that the parent immediately binds.
+    peer.failed_kick([&] {
+        ++callbacks;
+        check(!peer.kicked && peer.reset(200, 100, true));
+        check(peer.transport_epoch > rejected_epoch);
+        check(!peer.session.bind(nonce(1)) && peer.session.bind(nonce(3)));
+    });
+    check(callbacks == 1 && peer.session.bound && peer.session.local == nonce(3));
+    const auto recovered_epoch = peer.transport_epoch;
+    peer.failed_kick([&] { ++callbacks; });
+    check(callbacks == 1 && peer.transport_epoch == recovered_epoch);
+}
+void control_budget_tests() {
+    Budget sender{ControlPacketBurst, ControlPacketRate};
+    PeerState receiver;
+    constexpr uint64_t frequency = 1600;
+    uint64_t now = frequency;
+    for (unsigned burst = 0; burst < static_cast<unsigned>(ControlPacketBurst); ++burst) {
+        check(sender.take(1, now, frequency));
+        check(receiver.incoming_control.take(1, now, frequency));
+    }
+    check(!sender.take(1, now, frequency));
+    // All global sends can target one peer, including the initial burst and
+    // a full minute at the admitted rate. The receiver must accept them all.
+    for (unsigned packet = 0; packet < 60 * static_cast<unsigned>(ControlPacketRate); ++packet) {
+        now += frequency / static_cast<uint64_t>(ControlPacketRate);
+        check(sender.take(1, now, frequency));
+        check(receiver.incoming_control.take(1, now, frequency));
+    }
+    PeerState excess;
+    const auto burst = static_cast<unsigned>(excess.incoming_control.capacity);
+    check(burst < 64);
+    for (unsigned packet = 0; packet < burst; ++packet) check(excess.incoming_control.take(1, now, frequency));
+    check(!excess.incoming_control.take(1, now, frequency));
+}
+void invitation_query_tests() {
+    InviteQuery query;
+    check(query.begin(0, 100, 100));
+    check(!query.begin(7, 100, 100));  // One SDK query, even after timeout.
+    check(!query.timed_out(1100) && query.timed_out(1101));
+    check(query.expire() == 0 && query.active && !query.timed_out(2500));
+    check(!query.begin(8, 2500, 100));
+    const auto late_background = query.finish();
+    check(!late_background.publish && !late_background.request && !query.active);
+    check(query.begin(9, 2600, 100));
+    const auto foreground = query.finish();
+    check(foreground.publish && foreground.request == 9 && !query.active);
+    check(query.begin(10, 3000, 100));
+    check(query.timed_out(4001) && query.expire() == 10);
+    check(query.active && !query.begin(11, 4001, 100));
+    const auto late_foreground = query.finish();
+    check(!late_foreground.publish && !late_foreground.request);
+    check(query.begin(12, 5000, 100));
+    const auto next = query.finish(); check(next.publish && next.request == 12);
+}
 }
 int main() {
-    try { json_tests(); encoding_tests(); challenge_tests(); std::cout << "{\"test\":\"eos_transport_core\",\"checks\":" << checks << ",\"passed\":true}\n"; return 0; }
+    try { json_tests(); encoding_tests(); challenge_tests(); failed_kick_tests(); control_budget_tests(); invitation_query_tests(); std::cout << "{\"test\":\"eos_transport_core\",\"checks\":" << checks << ",\"passed\":true}\n"; return 0; }
     catch (...) { std::cout << "{\"test\":\"eos_transport_core\",\"checks\":" << checks << ",\"passed\":false}\n"; return 1; }
 }

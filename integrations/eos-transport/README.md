@@ -37,6 +37,14 @@ request_id; source publication sample_id increases within the current peer epoch
 Replies contain request_id, ok and a fixed error string (none on success).
 One room mutation is active at a time; busy may be retried boundedly with a new
 request ID. send_control success means SDK queue admission, not remote delivery.
+Invitation reads use a separate single-query slot with a 10 s result lease. A
+timeout answers an explicit refresh once, discards its eventual result and keeps
+that SDK call owned until callback; it cannot occupy the mutation slot or end the
+room. Notices received during a read request a later refresh. A never-returning
+read prevents another read, keeping outstanding SDK work bounded.
+The parent's 12 s command lease deliberately precedes the helper's 20 s mutation
+lease: an uncertain mutation retires that process generation before late state
+can arrive. It does not admit another mutation into the same generation.
 
 | op | Additional fields |
 | --- | --- |
@@ -98,6 +106,10 @@ instead of silently discarding metadata. Latest source samples coalesce to one
 slot per peer and expire after100ms; missed/stale sends never form a backlog.
 All operations/queues/rates are bounded. Runtime counters do not establish
 network-loss rates, ranked integrity, one-way latency or rendered Mario delay.
+Reliable control admits a global burst of 6 and 16 packets/s. Each peer can receive
+that full rate with an 8 packet burst bound; aggregate SDK queue protection remains
+in force. Failed host removal starts a new transport epoch after clearing its
+pending-removal flag, so a replacement parent nonce can bind immediately.
 
 sample_qpc and received_qpc use raw Windows machine-local QPC; ready supplies the
 frequency. Parent source frequency must be validated. received_qpc is stamped
@@ -105,6 +117,10 @@ immediately at native SDK dequeue before parsing/private output, retaining age
 through a stalled stdout pipe. EOS does not expose original network-arrival
 timestamps, so earlier SDK/network residence is unknown. Never compare these
 values across PCs or call them synchronized capture timestamps.
+The parent reads stdout through a bounded 64 KiB buffer and retains the 4096 byte
+line limit. Cleanup retains the job, pipe buffer and threads until the whole job
+is empty, its accounting handle is closed and pipe owners have returned. A
+failed handle/pipe close stays retryable through the same owner.
 
 Build with MSVC x64 /std:c++17 /EHsc /W4 /MT /O2, only this directory and the
 approved SDK Include/Win64 import library. Windows libraries include the standard
