@@ -999,3 +999,30 @@ def test_unexpected_source_detach_failure_retains_executor_and_blocks_replacemen
         blocked[0] = False
     wait_for(lambda: not service._source_detach_pending)
     assert service.host()['room'] is not None and len(transports) == 2
+
+
+@pytest.mark.parametrize("record_ghosts", [False, True])
+def test_recording_preference_does_not_hide_live_ghosts_but_overlay_switch_does(rooms, record_ghosts):
+    from sm64_events.multiplayer.native_protocol import Appearance
+
+    hidden = [False]
+    service, recorder, transports, channels = rooms(
+        appearance=lambda: (Appearance(record_ghosts=record_ghosts), hidden[0]))
+    service.host()
+    incoming = recorder.pair[1]
+    transport = transports[0]
+    fields = peer_ready(service, transport)
+    source_info(transport, fields)
+    pose(transport, fields)
+    wait_for(lambda: present(channels))
+    visible = channels[-1].views[-1]
+    assert visible.enabled and not visible.hidden
+    assert bool(visible.controls.record_ghosts) is record_ghosts
+
+    hidden[0] = True
+    wait_for(lambda: channels[-1].views[-1].hidden)
+    assert recorder.pair[1] is incoming and service.snapshot()["room"] is not None
+    hidden[0] = False
+    pose(transport, fields, packet_sequence=2, transport_sequence=2)
+    wait_for(lambda: present(channels) and not channels[-1].views[-1].hidden)
+    assert recorder.pair[1] is incoming

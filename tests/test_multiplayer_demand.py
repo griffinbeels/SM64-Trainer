@@ -706,3 +706,45 @@ def test_local_and_live_retarget_retain_failed_owner_before_replacing_both(tmp_p
     assert archive.status()["closed"] and not source.alive
     assert len(harness.sources) == 2 and rec.pose_archive is not archive
     close(rec)
+
+
+def test_qualified_gpu_fallback_keeps_live_endpoints_archive_and_sharing(tmp_path, monkeypatch):
+    """The real startup-failure route cannot trade ghost demand for footage."""
+    from sm64_events.replay.sourcefactory import DesktopAfterGpuStartup
+    from test_gpu_startup_fallback import setup_factory, run_failed_start
+
+    factory, _ = setup_factory(monkeypatch)
+    failed, _ = run_failed_start(factory)
+    assert failed.error and failed.cleanup_error is None
+    factory.desktop_factory = lambda *_args, **_kwargs: FakeVideoSource()
+    harness = Harness(tmp_path, enabled=True, local_archive=True)
+    rec, pair = harness.rec, room()
+    rec._video_factory = factory.create
+    rec.set_live_session(*pair)
+    try:
+        rec._begin_capture(WIN)
+        assert isinstance(rec._video_source, DesktopAfterGpuStartup)
+        assert rec.status()["recording"] and rec.status()["frame_source"] == "desktop"
+        source, archive, lease = rec.ghost_capture, rec.pose_archive, harness.lease
+        assert source.session == pair and rec.live_session_status()["incoming"]
+        source.emit(1)
+        assert pair[0].take_latest(now_ns=1) is not None and archive.status()["records"] == 1
+
+        # An unavailable video source and the user's recording switch are both
+        # media-only changes. They must not retire or replace the room source.
+        rec._source_stopped(rec._video_source)
+        tick(rec)
+        rec.set_recording_enabled(False)
+        tick(rec)
+        source.emit(2)
+        assert not rec.status()["recording"] and source.session == pair
+        rec.set_recording_enabled(True)
+        tick(rec)
+        source.emit(3)
+        assert rec.status()["recording"] and rec.ghost_capture is source
+        assert rec.pose_archive is archive and archive.status()["records"] == 3
+        assert pair[0].take_latest(now_ns=3) is not None
+        assert harness.lease is lease and not lease.closed and harness.acquisitions == 1
+        assert len(harness.sources) == 1 and source.session == pair
+    finally:
+        close(rec)

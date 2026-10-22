@@ -13,6 +13,15 @@ available. Video recording is independent. No remote input or RAM writes,
 rollback, synchronized emulator clock, casual-race scoring or ranked matchmaking
 is part of M3. Display names do not verify account ownership or performance.
 
+GPU recording is preferred. If recording falls back to the Project64 window,
+ghosts remain visible and sharing continues. Window footage includes visible
+ghosts even with **Ghosts in recording** off; that preference cannot remove
+ghosts from a photograph of the window. Recording fallback never changes the
+Ghost Overlay switch or room membership. Qualified GPU startup failures retain
+their cause and retry after a ROM reopen or a new producer generation/process;
+unsupported hardware keeps usable window footage. Cleanup must finish before
+another GPU capture starts. See `replay/sourcefactory.py` and `replay/gpuretry.py`.
+
 ## Ownership and transport
 
 - `multiplayer/room.py` owns ephemeral rooms, current membership, source identity,
