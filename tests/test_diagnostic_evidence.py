@@ -196,6 +196,20 @@ def test_real_sdk_carries_current_fault_evidence_through_both_scrubbers(reporter
     unbind()
 
 
+def test_source_refusal_detail_survives_actual_sdk_and_transport_projection(reporter):
+    sample = sample_snapshot()
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    sample["native"]["events"] = technical_events(native_line(stamp=stamp, details="reason=10034 detail=1397882882"))
+    unbind = reporting.set_diagnostic_source(lambda: sample)
+    try:
+        reporting.capture_problem("Synthetic source admission refusal")
+        event = captured_event(reporter)
+        fields = event["extra"]["diagnostics"]["native"]["events"][0]["fields"]
+        assert fields == {"reason": 10034, "detail": 0x53520002}
+    finally:
+        unbind()
+
+
 def test_direct_transport_and_reloaded_envelopes_cannot_bypass_the_schema(tmp_path):
     from sm64_events.core.error_reporting_transport import PersistentTransport
     raw = Envelope(headers={"event_id": "b" * 32})

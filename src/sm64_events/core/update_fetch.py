@@ -11,7 +11,9 @@ back to fetch_full_zip, which streams the whole asset and extracts the
 planned files. BOTH paths verify every staged file's SHA-256 against the
 manifest before it is ever eligible to be applied."""
 import hashlib
+from http.client import HTTPException
 import shutil
+import urllib.error
 import urllib.request
 import zipfile
 import zlib
@@ -66,11 +68,23 @@ def _ranged_get(http, url: str, offset: int, length: int) -> bytes:
     req = urllib.request.Request(url, headers={
         "User-Agent": _UA,
         "Range": f"bytes={offset}-{offset + length - 1}"})
-    with http(req) as resp:
-        status = getattr(resp, "status", 206)
-        if status != 206:
-            raise RangeUnsupported(f"expected 206 partial content, got {status}")
-        data = resp.read()
+    try:
+        with http(req) as resp:
+            status = getattr(resp, "status", 206)
+            if status != 206:
+                raise RangeUnsupported(f"expected 206 partial content, got {status}")
+            data = resp.read()
+    except urllib.error.HTTPError as error:
+        # urllib raises before exposing the response for a rejected Range.
+        # Authentication, missing assets and rate limits keep their own errors.
+        if error.code != 416:
+            raise
+        raise RangeUnsupported("server rejected the requested byte range") from error
+    except (OSError, HTTPException) as error:
+        # Some proxies reset or truncate partial responses while ordinary GETs
+        # work. Retrying only Range repeats that failure forever. The existing
+        # full download still verifies the archive and every planned file.
+        raise RangeUnsupported("partial download was interrupted") from error
     if len(data) != length:
         raise RangeUnsupported(f"range returned {len(data)} bytes, "
                                f"wanted {length}")

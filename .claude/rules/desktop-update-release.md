@@ -40,3 +40,9 @@ paths:
 Live-instance reminder: the user's running app is the onedir install at
 `%LOCALAPPDATA%\Programs\SM64Trainer\` (data/logs in `%LOCALAPPDATA%\SM64Trainer`);
 the repo `data/` is dev-only. Fixes reach the user via release/in-app update.
+
+Raised partial-transfer failures (including HTTP 416, resets and incomplete
+reads) must reach the verified full-ZIP fallback. Keep other HTTP statuses and
+local staging errors distinct. Updater failure context and bounded retry reports
+are documented in [error reporting](../../docs/error-reporting.md); an SDK-envelope
+test must prove the context survives collection, serialization and reload.

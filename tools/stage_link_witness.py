@@ -237,7 +237,7 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
         for name in ["context_lifetime.h", "context_lifetime.cpp"]:
             shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
     if boundary:
-        for name in ["renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp", "source_descriptor3.h"]:
+        for name in ["renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp", "source_descriptor3.h", "source_refusal.h"]:
             shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
     _stage_ghost(output, ghost)
     print(f"Staged the capture overlay: {output}; pinned LINK {PIN}")
