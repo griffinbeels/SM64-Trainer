@@ -42,8 +42,9 @@ class Harness:
             if moving:
                 self.data["game"]["frame"] += 30
             if refresh:
-                for key in ("ghost", "setup"):
-                    self.data[key]["observed_unix_s"] = self.now
+                for key in ("ghost", "setup", 'multiplayer'):
+                    if key in self.data:
+                        self.data[key]["observed_unix_s"] = self.now
             self.watch.step()
 
 
@@ -52,7 +53,7 @@ def test_three_genuine_stalls_report_once_and_use_fixed_safe_contexts():
     h.tick(count=4)
     assert not h.events
     h.tick()
-    assert {row[0] for row in h.events} == set(MESSAGES.values())
+    assert {row[0] for row in h.events} == {MESSAGES[key] for key in ('recording', 'ghost', 'setup')}
     assert all(row[1]["expected_generation"] == 1 for row in h.events)
     assert all(row[1]["context"]["stalled_for_s"] == 3 for row in h.events)
     h.tick(count=10)
@@ -109,7 +110,7 @@ def test_fresh_incomplete_setup_and_native_ready_in_an_inactive_static_menu_do_n
     assert not h.events
     h.data["capture"]["player_active"] = True
     h.tick(count=4)
-    assert {row[0] for row in h.events} == set(MESSAGES.values())
+    assert {row[0] for row in h.events} == {MESSAGES[key] for key in ('recording', 'ghost', 'setup')}
 
 
 def test_preparation_and_activation_progress_and_source_changes_restart_grace():
@@ -125,7 +126,7 @@ def test_preparation_and_activation_progress_and_source_changes_restart_grace():
     h.tick(count=3)
     assert not h.events
     h.tick()
-    assert {row[0] for row in h.events} == set(MESSAGES.values())
+    assert {row[0] for row in h.events} == {MESSAGES[key] for key in ('recording', 'ghost', 'setup')}
 
 
 def test_sleep_missing_samples_and_consent_changes_cannot_backfill_an_old_wait():
@@ -140,6 +141,43 @@ def test_sleep_missing_samples_and_consent_changes_cannot_backfill_an_old_wait()
     assert not h.events
     h.tick()
     assert len(h.events) == 3 and all(row[1]["expected_generation"] == 2 for row in h.events)
+
+
+def live_harness():
+    h = Harness()
+    h.data['capture']['recording_enabled'] = False  # live ghosts do not require footage
+    h.data['ghost']['expected_display'] = False
+    h.data['setup']['pending'] = False
+    h.data['multiplayer'] = {'scope': object(), 'progress': 0, 'expected_display': True}
+    return h
+
+
+def test_live_selection_without_presentation_reports_and_progress_restarts_grace():
+    h = live_harness()
+    h.tick(count=4)
+    assert not h.events
+    h.data['multiplayer']['progress'] = 1
+    h.tick(count=3)
+    assert not h.events
+    h.tick()
+    assert [row[0] for row in h.events] == [MESSAGES['multiplayer']]
+    assert h.events[0][1]['context']['stage'] == 'multiplayer'
+    assert 'scope' not in json.dumps(h.events)
+    h.tick(count=10)
+    assert len(h.events) == 1
+
+
+@pytest.mark.parametrize('ordinary', ['inapplicable', 'stale', 'static_game', 'no_activity', 'consent'])
+def test_live_waiting_hidden_scene_gap_and_missing_current_evidence_do_not_report(ordinary):
+    h = live_harness()
+    if ordinary == 'inapplicable':
+        h.data['multiplayer']['expected_display'] = False
+    elif ordinary == 'no_activity':
+        h.data['capture']['player_active'] = False
+    elif ordinary == 'consent':
+        h.epoch = None
+    h.tick(count=10, refresh=ordinary != 'stale', moving=ordinary != 'static_game')
+    assert not h.events
 
 
 def native_probe(**changes):
@@ -286,7 +324,7 @@ def test_fresh_default_reports_use_real_sdk_snapshot_and_existing_optout_stays_p
     try:
         h.tick(count=5)
         rows = events(reporter, count=3)
-        assert len(rows) == 3 and {row["message"] for row in rows} == set(MESSAGES.values())
+        assert len(rows) == 3 and {row["message"] for row in rows} == {MESSAGES[key] for key in ('recording', 'ghost', 'setup')}
         assert rows[0]["extra"]["diagnostics"]["capture"]["recorder"]["pictures_fed"] == 0
         assert all(row["extra"]["diagnostics"]["ghost"]["expected_display"] is True for row in rows)
         assert "Private" not in json.dumps(rows) and "private-token" not in json.dumps(rows)

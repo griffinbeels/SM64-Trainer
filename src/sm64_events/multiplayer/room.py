@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import json
 import queue
 import re
@@ -18,6 +18,7 @@ import threading
 import time
 
 from sm64_events.core.qpcclock import qpc_ns
+from sm64_events.multiplayer.diagnostics import RoomDiagnostics, TRANSPORT_FAULTS
 from sm64_events.multiplayer.eos_process import TransportError
 from sm64_events.multiplayer.native_inbox import NativeInbox, display_name
 from sm64_events.multiplayer.native_protocol import STALE_AFTER_NS
@@ -158,6 +159,10 @@ class RoomService:
         self._action_timeout = action_timeout_s
         self._active_action = None
         self._cache = {}
+        self._diagnostics = RoomDiagnostics()
+        self._transport_stats, self._receiver_status = {}, {}
+        self._display_reason = None
+        self._progress_cache = {}
         self._source_status = {"state": "off", "sharing": False, "paused": False, "source_attached": False}
         self._publish()
 
@@ -165,6 +170,14 @@ class RoomService:
         """Cached public state. Reading never starts identity, capture or IO."""
         with self._lock:
             return deepcopy(self._cache)
+
+    def diagnostic_status(self):
+        return self._diagnostics.snapshot()
+
+    def silent_failure_status(self):
+        """Cached local scope/progress only; opaque scope never enters reports."""
+        with self._lock:
+            return dict(self._progress_cache)
 
     def _publish(self):
         room = None
@@ -186,8 +199,24 @@ class RoomService:
                             for key, value in self._invites.items()],
             "source": source, "error": _message(self._error) if self._available else None,
             "can_invite": room is not None and len(self._peers) < 3 and not self._leaving}
+        if room is not None:
+            value['display'] = {'reason': self._display_reason}
         with self._lock:
             self._cache = value
+            self._progress_cache = {'scope': (self._incoming, self._endpoint, self._generation),
+                'expected_display': bool(self._incoming is not None
+                    and self._receiver_status.get('state') == 'applied'
+                    and self._receiver_status.get('presentation_reason') in {'ready', 'displayed'}
+                    and self._receiver_status.get('selected_mask')
+                    and any(p.state == 'playing' for p in self._peers.values())),
+                'progress': self._receiver_status.get('presentations'), 'observed_unix_s': time.time()}
+        self._diagnostics.observe({'phase': phase, 'error': self._error, 'generation': self._generation,
+            'members': len(self._peers), 'operation': self._active_action.name if self._active_action else None,
+            'peers': {state: sum(p.state == state for p in self._peers.values())
+                      for state in ('playing', 'paused', 'waiting', 'connecting', 'reconnecting', 'disconnected')},
+            'transport': self._transport_stats, 'native': self._receiver_status})
+        if self._error:
+            self._diagnostics.problem(self._error)
 
     def _post(self, action, *arguments):
         with self._lock:
@@ -588,10 +617,13 @@ class RoomService:
         if kind in ("data_received", "control_received"):
             self._receive(event, kind == "control_received")
         elif kind == "fatal":
-            self._transport_failed("transport_failed")
+            code = event.get('code')
+            self._transport_failed(code if type(code) is str and code in TRANSPORT_FAULTS else 'transport_failed')
+        elif kind == 'stats':
+            self._transport_stats = event
         elif kind in handlers:
             handlers[kind](event)
-        elif kind != "stats":
+        else:
             raise ValueError("unknown_event")
 
     def _ready_event(self, event):
@@ -802,15 +834,33 @@ class RoomService:
                 inbox.appearance(appearance, hidden=hidden)
             view = inbox.snapshot(now_ns=self._clock())
             if inbox.current(view):
-                self._channel.write(view)
-                if self._error in ("native_receiver_unavailable", "native_receiver_cleanup_pending", "native_clock_mismatch"):
-                    self._error = None
+                receipt = self._channel.write(view)
+                self._observe_receiver(receipt)
         except CleanupPending as error:
             self._channel = retain(self._channel, error) if self._channel is not None else error.owner
             self._channel_retiring = True
             self._error = "native_receiver_cleanup_pending"
         except (OSError, RuntimeError, ValueError):
             self._close_channel(); self._error = "native_receiver_unavailable"
+
+    def _observe_receiver(self, receipt):
+        if receipt is None:
+            return  # an older inert adapter does not certify native acceptance
+        self._receiver_status = asdict(receipt)
+        state, reason = receipt.state, receipt.presentation_reason
+        self._display_reason = {'unsupported': 'This graphics setup can’t show live ghosts.',
+            'ineligible': 'Live ghosts are unavailable with the current graphics settings.',
+            'setup_pending': 'Preparing live ghosts…',
+            'gateway_refused': 'Waiting for the graphics connection.',
+            'compositor_refused': 'Live ghosts couldn’t be drawn.',
+            'different_scene': 'Waiting for a matching area.'}.get(reason)
+        if state == 'refused':
+            self._error = 'native_receiver_exhausted' if receipt.native_reason == 5 else 'native_receiver_refused'
+        elif state == 'applied' and self._error in ('native_receiver_unavailable',
+                'native_receiver_cleanup_pending', 'native_clock_mismatch', 'native_receiver_refused', 'native_receiver_exhausted'):
+            self._error = None
+        if state == 'applied':
+            self._diagnostics.problem(reason, category='presentation')
 
     def _close_channel(self):
         channel = self._channel
@@ -833,6 +883,8 @@ class RoomService:
                 self._error = "native_receiver_cleanup_pending"
                 return False
         self._channel = None
+        self._receiver_status = {}
+        self._display_reason = None
         self._channel_retiring = False
         self._channel_writer = None
         return True
@@ -862,6 +914,7 @@ class RoomService:
         self._ready, self._identity, self._frequency = False, None, 0
         self._room_epoch = 0  # epoch scope is the retired helper, not a replacement helper
         self._invites.clear(); self._invite_revision = 0
+        self._transport_stats = {}
         with self._lock:
             self._latest_events.clear()
         self._phase, self._error = "error", reason
@@ -1058,5 +1111,7 @@ def _message(reason):
         "native_clock_mismatch": "Ghosts are unavailable for this game.",
         "source_clock_mismatch": "Waiting for the game’s clock to reconnect.",
         "native_receiver_cleanup_pending": "Finishing the previous ghost connection.",
+        "native_receiver_refused": "Live ghosts couldn’t connect to this game. Leave the room and try again.",
+        "native_receiver_exhausted": "Restart Project64 to reconnect live ghosts.",
         "transport_cleanup_pending": "Finishing the previous connection.",
     }.get(reason, "The connection stopped. Try again.")

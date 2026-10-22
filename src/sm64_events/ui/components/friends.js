@@ -136,6 +136,7 @@ function FriendsReady({ model, state, copy, privateCode }) {
       : html`<${FriendsStart} model=${model} state=${state} />`}
     ${["reconnecting", "leaving", "joining", "starting"].includes(model.phase) && model.room ? html`<p class="friends-phase" role="status">${model.title}</p>` : null}
     ${model.room && reason ? html`<p class="friends-source meta">${reason}</p>` : null}
+    ${model.room && state.snapshot.display?.reason ? html`<p class="friends-source meta" role="status">${state.snapshot.display.reason}</p>` : null}
     ${copy ? html`<p class="friends-copy-state" role="status">${copy}</p>` : null}
     ${privateCode ? html`<label class="friends-code-label">Your player code<input readonly data-private-input="true"
       value=${privateCode} onfocus=${event => event.currentTarget.select()} /></label>` : null}`;

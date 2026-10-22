@@ -29,7 +29,7 @@ def scene(name="idle"):
         state.update(available=False, unavailable_reason="Sign in to your Trainer account to use Friends.")
     if name == "invites":
         state["invitations"] = [{"id": "fixture-invite", "from_name": NAMES[1], "member_count": 2}]
-    if name in {"hosting", "full", "reconnecting", "disconnected", "error"}:
+    if name in {"hosting", "full", "reconnecting", "disconnected", "display_problem", "error"}:
         count = 1 if name == "hosting" else 4
         members = [{"id": f"fixture-player-{index}", "name": NAMES[index], "state": "playing", "self": index == 0}
                    for index in range(count)]
@@ -41,6 +41,8 @@ def scene(name="idle"):
         state["room"]["members"][2]["state"] = "disconnected"
     if name == "error":
         state.update(phase="error", error="Couldn’t reconnect. Leave this room and try again.")
+    if name == 'display_problem':
+        state['display'] = {'reason': 'Live ghosts are unavailable with the current graphics settings.'}
     return state
 
 

@@ -18,6 +18,7 @@ MESSAGES = {
     "recording": "Gameplay recording made no picture progress",
     "ghost": "Expected ghost playback has no display receipt",
     "setup": "Active setup verification made no progress",
+    'multiplayer': 'Expected live ghosts have no presentation progress',
 }
 
 
@@ -107,6 +108,9 @@ class SilentFailureMonitor:
                                or ghost.get("display_pending") is True)
                           and ghost.get("displayed") is False and self._fresh(ghost))
         checks = setup.get("checks") or {}
+        live = sample.get('multiplayer') or {}
+        live_expected = (capture.get('player_active') is True and live.get('expected_display') is True
+                         and self._fresh(live))
         setup_expected = (recording and setup.get("pending") is True and self._fresh(setup)
                           and setup.get("installed") is True and setup.get("running") is True
                           and setup.get("rom_supported") is True and checks.get("game") is True
@@ -115,6 +119,7 @@ class SilentFailureMonitor:
             "recording": (capture.get("scope"), capture.get("pictures"), recording),
             "ghost": (ghost.get("scope"), ghost.get("progress"), ghost_expected),
             "setup": (setup.get("scope"), tuple(checks.get(k) for k in ("plugin", "pictures", "inputs")), setup_expected),
+            'multiplayer': (live.get('scope'), live.get('progress'), live_expected),
         }
 
     def _fresh(self, row):

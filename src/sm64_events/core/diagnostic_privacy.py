@@ -12,6 +12,7 @@ import re
 
 from sm64_events.core.error_reporting_privacy import scrub_text
 from sm64_events.core.native_diagnostics import EVENT_NAMES, technical_fields
+from sm64_events.multiplayer.diagnostics import safe_multiplayer
 
 MAX_SNAPSHOT_BYTES = 16 * 1024
 _CAPTURE_STAGES = ("channel", "encoder", "sink_prepare", "first_offer", "media_setup", "tick", "between_ticks",
@@ -121,7 +122,7 @@ def safe_snapshot(value) -> dict:
     result = {"schema": 1, **pick(value, ("captured_utc", "error_type", "truncated"))}
     sources = value.get("sources", {})
     result["sources"] = {key: pick(sources.get(key), ("available", "error_type", "read_utc", "observed_unix_s"))
-                         for key in ("capture", "ghost", "setup", "pipeline", "resources", "native")
+                         for key in ("capture", "ghost", "setup", "pipeline", "resources", "native", "multiplayer")
                          if isinstance(sources, Mapping) and key in sources}
     capture = mapping(value.get("capture"))
     recorder = mapping(capture.get("recorder"))
@@ -161,6 +162,7 @@ def safe_snapshot(value) -> dict:
     resources = mapping(value.get("resources"))
     result["resources"] = pick(resources, ("t_utc", "uptime_s", "rss_mib", "private_mib", "handles", "gdi", "user", "threads", "os_threads"))
     result["native"] = _native(value.get("native"))
+    result['multiplayer'] = safe_multiplayer(value.get('multiplayer'))
     if len(json.dumps(result).encode()) > MAX_SNAPSHOT_BYTES:
         result["native"]["events"] = result["native"].get("events", [])[-8:]
         result["truncated"] = True

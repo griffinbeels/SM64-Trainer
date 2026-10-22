@@ -158,8 +158,16 @@ def machine_unsupported_reason() -> str | None:
     return "; ".join(dict.fromkeys(reasons))
 
 
+class _DriverMissing(OSError):
+    """The system loader could not find the encoder driver or its dependency."""
+
+
 def nvenc_api_version() -> tuple[int, int] | None:
-    """The newest NVENC API the installed driver offers; None without one."""
+    """Newest driver API; None means an inconclusive export/version probe.
+
+    A missing system module is distinct from access errors or a failed query.
+    Only the former can qualify the existing desktop route before encoder Open.
+    """
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.LoadLibraryExW.argtypes = [wt.LPCWSTR, wt.HANDLE, wt.DWORD]
     kernel.LoadLibraryExW.restype = wt.HMODULE
@@ -168,6 +176,8 @@ def nvenc_api_version() -> tuple[int, int] | None:
     kernel.FreeLibrary.argtypes = [wt.HMODULE]
     module = kernel.LoadLibraryExW("nvEncodeAPI64.dll", None, _LOAD_LIBRARY_SEARCH_SYSTEM32)
     if not module:
+        if ctypes.get_last_error() == 126:  # ERROR_MOD_NOT_FOUND, including a missing dependency
+            raise _DriverMissing('NVIDIA encoder driver module unavailable')
         return None
     try:
         address = kernel.GetProcAddress(module, b"NvEncodeAPIGetMaxSupportedVersion")
@@ -190,7 +200,10 @@ def unsupported_reason(facts: AdapterFacts | None) -> str | None:
         return f"{facts.name} is a software adapter; the capture layer needs a hardware GPU"
     if facts.vendor_id != NVIDIA_VENDOR_ID:
         return None  # Its actual Windows hardware encoder decides by codec.
-    return _driver_unsupported_reason(facts, nvenc_api_version())
+    try:
+        return _driver_unsupported_reason(facts, nvenc_api_version())
+    except _DriverMissing:
+        return f"the NVIDIA video encoder driver for {facts.name} could not be loaded"
 
 
 def encoder_backend(facts: AdapterFacts | None) -> int:
@@ -205,7 +218,7 @@ def encoder_backend(facts: AdapterFacts | None) -> int:
 
 def _driver_unsupported_reason(facts, api):
     if api is None:
-        return f"{facts.name} has no NVIDIA video encoder driver installed"
+        return None  # A failed probe is not evidence that this adapter cannot encode.
     if api < REQUIRED_NVENC_API:
         return (f"the NVIDIA driver for {facts.name} is too old (video encoder "
                 f"{api[0]}.{api[1]}, needs {REQUIRED_NVENC_API[0]}.{REQUIRED_NVENC_API[1]})")

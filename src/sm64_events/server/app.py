@@ -830,7 +830,7 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, 
     from sm64_events.server.diagnostics_runtime import make_snapshot, with_diagnostics
     snapshot = make_snapshot(poller=poller, service=service, monitor=monitor, replay=replay,
         capture_layer=capture_layer, ghost=ghost, setup_observer=setup_observer,
-        polling_state=lambda: _polling_state(app))
+        polling_state=lambda: _polling_state(app), multiplayer=getattr(app.state, 'multiplayer', None))
     app.state.diagnostic_snapshot = snapshot
     app.router.lifespan_context = with_diagnostics(app.router.lifespan_context, snapshot)
     @app.get("/health")

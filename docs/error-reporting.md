@@ -24,6 +24,7 @@ questions.
 | --- | --- | --- |
 | Build, capture stage, native codes, first/latest GPU failure | Yes | Yes |
 | Ghost enabled/target-present, native playback/display state, counts | Yes | Yes |
+| Friends phase, fixed failure codes, peer counts, transport counters and scoped native receiver status | Yes | Yes |
 | Cached setup checks, ROM region, polling/input health counters | Yes | Yes |
 | Own memory/handle/thread counts | Yes | Yes |
 | Recognized native log events and numeric/enum fields | Latest 32, within 16 KiB snapshot | Bounded recognized records from known log tails |
@@ -53,6 +54,13 @@ ghost model/pose/playback faults also report when no Python exception occurs;
 ordinary preparation, another scene and waiting for an attempt do not. There is
 no background native/log sampler or automatic report-file generation.
 
+Friends reports fixed provider, room-observation and native-receiver failures
+through the same consent fence and queue, at most once per category per hour.
+Normal waiting, pause, another area and preparation do not report. Its cached
+snapshot retains only fixed states and numeric counters; names, player codes,
+invitation references, room nonces, payloads and raw SDK errors are excluded.
+Native application acceptance alone does not prove that a ghost was visible.
+
 ## Silent failures with evidence of expected work
 
 `core/silent_failures.py` observes cached operational counters once a second on
@@ -68,6 +76,9 @@ game observations with recent player activity:
 - Setup was explicitly started and remains incomplete, the verified installation
   has a supported game running, and freshly polled game checks move while required
   plugin, picture or input checks remain missing.
+- Friends has a current native-applied, selected live contribution and a fresh
+  playing peer, but its presentation counter stops while the local game moves.
+  Hidden, mismatched-area, pending or unsupported graphics withdraw that expectation.
 
 Player activity comes from the existing ActivityTap's actual IGT/action/reset or
 level-entry evidence. A static Usamune menu's advancing global timer does not

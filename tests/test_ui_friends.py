@@ -296,3 +296,15 @@ def test_service_error_retry_mutates_instead_of_only_refreshing(browser):
     click(page, 'Retry')
     wait(page, "!document.querySelector('.friends-error')")
     assert state.actions == [('retry', {})]
+
+
+@pytest.mark.parametrize('browser', [{'scene': 'display_problem', 'width': 850}], indirect=True)
+def test_graphics_refusal_is_visible_without_hiding_room_controls(browser):
+    page, _, directory = browser
+    open_panel(page)
+    page.wait_for('.friends-source')
+    assert page.evaluate("return document.querySelector('.friends-source').textContent") == \
+        'Live ghosts are unavailable with the current graphics settings.'
+    assert page.count('.friends-seat.is-occupied') == 4
+    assert not page.evaluate('return document.documentElement.scrollWidth>innerWidth')
+    (directory / 'friends-graphics-refusal.png').write_bytes(page.screenshot())

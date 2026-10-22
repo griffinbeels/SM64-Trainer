@@ -80,6 +80,28 @@ model. Every included contributor must still be current before presentation.
 The render path performs no networking, file IO, waits or model allocation.
 Independent live presentation demand does not negotiate/start a video recorder.
 
+Room actions have one absolute request deadline, including startup, retries and
+backoff. An expired action retires its uncertain helper generation before late
+events can mount a source. The room worker survives passive observation faults
+and keeps a cleanup-only executor until retained handles actually close. Public
+shutdown remains bounded. A failed leave also retires uncertain provider state.
+
+Terminal peer loss is distinct from reconnecting. Friends offers Reconnect using
+the current membership and a fresh transport epoch; source replay fences survive.
+Pose events coalesce to at most three latest peer samples after the private pipe,
+while membership and control events keep their bounded ordered queue. The pipe
+reader buffers raw stdout instead of performing a read per byte.
+
+Python capture receipts, room freshness and the developer lab share raw QPC
+nanoseconds through `core/qpcclock.py`. Python 3.12's `monotonic_ns` has a different
+Windows clock origin and is not used for those comparisons. Request deadlines
+and retry timers remain local duration clocks.
+
+The room's passive diagnostic projection exposes fixed phases, failure codes,
+counts and native receiver evidence. It excludes provider/player identities,
+invitations, source capabilities and packet data. The same projection feeds
+automatic reports and the local Debug report; see [error reporting](error-reporting.md).
+
 ## Private setup and verification limits
 
 Source/private launchers explicitly provide `SM64_EOS_HELPER`, `SM64_EOS_CONFIG`

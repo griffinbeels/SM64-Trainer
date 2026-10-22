@@ -1316,6 +1316,31 @@ Invalid requests never echo pasted codes. See [runtime contracts](multiplayer-ru
   `igt_reconstructed: true`. In that scenario the API is deliberately more
   accurate than Usamune's own frozen display.
 
+## Private Friends rooms
+
+`GET /api/multiplayer` reads cached state without starting identity, transport
+or capture. A configured private build exposes phase, room members, invitation
+references, local sharing state and fixed error/display explanations. Player
+identity codes appear only in the explicit identity response.
+
+Mutations use the local request capability and run off the ASGI loop:
+
+| Endpoint | Body | Effect |
+| --- | --- | --- |
+| `POST /api/multiplayer/identity` | `{}` | Get this device's player code |
+| `POST /api/multiplayer/host` | `{}` | Start a private room |
+| `POST /api/multiplayer/invite` | `{code}` | Invite a player |
+| `POST /api/multiplayer/join` / `decline` | `{invite_id}` | Accept or decline a current invitation |
+| `POST /api/multiplayer/leave` | `{}` | Revoke local sharing and leave |
+| `POST /api/multiplayer/kick` | `{member_id}` | Host removes a current member |
+| `POST /api/multiplayer/retry` | `{}` | Retry the connection without implicitly hosting or joining |
+| `POST /api/multiplayer/retry_peer` | `{member_id}` | Rebind a failed current peer with a fresh transport epoch |
+
+Private responses are no-store. Invalid bodies and provider failures return
+fixed codes, never pasted values or raw SDK text. A native-applied update is
+distinct from eligible, selected or displayed graphics evidence. Scope and
+verification limits: [multiplayer runtime](multiplayer-runtime.md).
+
 ## Known limitations
 
 - Loading a savestate that was *saved during* a star dance re-emits that

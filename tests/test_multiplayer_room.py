@@ -44,6 +44,20 @@ class Endpoint:
     generation: int = 1
 
 
+@dataclass(frozen=True)
+class Receipt:
+    state: str = 'applied'
+    native_reason: int = 0
+    presentation_reason: str = 'waiting'
+    eligible_mask: int = 0
+    selected_mask: int = 0
+    displayed_mask: int = 0
+    updates: int = 0
+    refusals: int = 0
+    drops: int = 0
+    presentations: int = 0
+
+
 class Recorder:
     def __init__(self):
         self.pair = None, None
@@ -78,6 +92,7 @@ class Channel:
                 self.disable_failures -= 1
                 raise BlockingIOError("test disabled view temporarily busy")
         self.views.append(value)
+        return Receipt()
 
     def close(self):
         if self.close_failures:
@@ -939,3 +954,20 @@ def test_pose_burst_coalesces_without_overflowing_membership_controls(rooms):
     assert not transport.closed and recorder.pair[1] is not None
     latest = channels[-1].views[-1].peers[0]
     assert decode_pose(bytes(latest.packet), expected_incarnation=REMOTE_SOURCE).frame.sequence == 300
+
+
+def test_live_progress_expectation_requires_applied_selection_and_fresh_playing_peer(rooms):
+    service, _, transports, channels = rooms()
+    service.host(); transport = transports[0]
+    fields = peer_ready(service, transport); source_info(transport, fields)
+    channel = wait_for(lambda: channels and channels[0])
+    channel.write = lambda _: Receipt(presentation_reason='ready', selected_mask=1, presentations=7, updates=999)
+    assert not service.silent_failure_status()['expected_display']
+    pose(transport, fields)
+    wait_for(lambda: service.silent_failure_status()['expected_display'])
+    assert service.silent_failure_status()['progress'] == 7
+    channel.write = lambda _: Receipt(presentation_reason='hidden', selected_mask=1, presentations=7)
+    wait_for(lambda: not service.silent_failure_status()['expected_display'])
+    channel.write = lambda _: Receipt(state='pending', presentation_reason='ready', selected_mask=1)
+    time.sleep(.025)
+    assert not service.silent_failure_status()['expected_display']

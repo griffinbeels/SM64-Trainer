@@ -13,8 +13,10 @@ from sm64_events.core.native_diagnostics import NativeDiagnostics
 
 
 class DiagnosticSnapshot:
-    def __init__(self, *, capture=None, ghost=None, setup=None, pipeline=None, resources=None, native=None, progress=None):
-        self._sources = dict(capture=capture, ghost=ghost, setup=setup, pipeline=pipeline, resources=resources)
+    def __init__(self, *, capture=None, ghost=None, setup=None, pipeline=None, resources=None,
+                 native=None, progress=None, multiplayer=None):
+        self._sources = dict(capture=capture, ghost=ghost, setup=setup, pipeline=pipeline, resources=resources,
+                             multiplayer=multiplayer)
         self._native = native if native is not None else NativeDiagnostics()
         self._lock = threading.Lock()
         self._closed = False
