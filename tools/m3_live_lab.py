@@ -13,11 +13,11 @@ import secrets
 from pathlib import Path
 import sys
 import threading
-import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from sm64_events.core.qpcclock import qpc_ns  # noqa: E402
 from sm64_events.multiplayer.native_inbox import NativeInbox  # noqa: E402
 from sm64_events.multiplayer.protocol import decode_pose, encode_pose  # noqa: E402
 from sm64_events.multiplayer.room import RoomError  # noqa: E402
@@ -73,7 +73,7 @@ class LabHandoff(SourceHandoff):
 class LabService:
     """One lab worker and the recorder's existing native source lease."""
     def __init__(self, recorder, *, appearance=None, channel_factory=None,
-                 clock_ns=time.monotonic_ns, spawn_worker=True):
+                 clock_ns=qpc_ns, spawn_worker=True):
         self._recorder, self._appearance = recorder, appearance
         self._channel_factory, self._clock, self._spawn_worker = channel_factory, clock_ns, spawn_worker
         self._lock, self._wake = threading.RLock(), threading.Event()

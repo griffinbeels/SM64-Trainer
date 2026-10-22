@@ -29,7 +29,7 @@ def scene(name="idle"):
         state.update(available=False, unavailable_reason="Sign in to your Trainer account to use Friends.")
     if name == "invites":
         state["invitations"] = [{"id": "fixture-invite", "from_name": NAMES[1], "member_count": 2}]
-    if name in {"hosting", "full", "reconnecting", "error"}:
+    if name in {"hosting", "full", "reconnecting", "disconnected", "error"}:
         count = 1 if name == "hosting" else 4
         members = [{"id": f"fixture-player-{index}", "name": NAMES[index], "state": "playing", "self": index == 0}
                    for index in range(count)]
@@ -37,6 +37,8 @@ def scene(name="idle"):
     if name == "reconnecting":
         state["phase"] = "reconnecting"
         state["room"]["members"][2]["state"] = "reconnecting"
+    if name == "disconnected":
+        state["room"]["members"][2]["state"] = "disconnected"
     if name == "error":
         state.update(phase="error", error="Couldn’t reconnect. Leave this room and try again.")
     return state
@@ -80,6 +82,12 @@ class FriendsFixture:
                 members = self.data["room"]["members"]
                 self.data["room"]["members"] = [row for row in members if row["id"] != body["member_id"]]
                 self.data["can_invite"] = True
+            elif action == "retry_peer":
+                member = next(row for row in self.data['room']['members'] if row['id'] == body['member_id'])
+                member['state'] = 'reconnecting'
+            elif action == "retry":
+                self.data['error'] = None
+                self.data['phase'] = 'hosting' if self.data['room'] else 'idle'
             elif action != "invite":
                 raise HTTPException(404, "Unknown fixture action")
             return {"queued": True, "snapshot": deepcopy(self.data)}

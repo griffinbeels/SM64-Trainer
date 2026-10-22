@@ -42,6 +42,8 @@
 .friends-self { color: #9cc8ef; font-size: .76rem; }
 .friends-seat.is-empty { color: var(--muted); background: rgba(6, 18, 30, .25); }
 .friends-seat.is-empty > .ui-icon { color: #6b8197; }
+.friends-seat-actions { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.friends-seat-actions > button { min-height: 30px; padding: .15rem .45rem; font-size: .72rem; }
 .friends-remove { grid-column: 2; justify-self: start; min-height: 30px; padding: .15rem .45rem; font-size: .72rem; background: transparent; color: var(--muted); }
 .friends-invite-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
 .friends-code-label { display: grid; gap: 7px; min-width: 0; font-size: .8rem; }

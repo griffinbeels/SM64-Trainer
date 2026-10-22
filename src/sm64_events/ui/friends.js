@@ -6,7 +6,8 @@ const PHASES = {
   idle: "Friends", starting: "Starting room…", hosting: "Your room", joining: "Joining…",
   connected: "Practice room", reconnecting: "Reconnecting…", leaving: "Leaving…", error: "Connection problem",
 };
-const MEMBER_STATES = { playing: "Playing", paused: "Paused", waiting: "Waiting for game", reconnecting: "Reconnecting…" };
+const MEMBER_STATES = { playing: "Playing", paused: "Paused", waiting: "Waiting for game", reconnecting: "Reconnecting…",
+  disconnected: "Connection lost" };
 
 function badgeInfo(invitations, room, count, phase) {
   if (["reconnecting", "error"].includes(phase)) return { badge: "!", badgeLabel: PHASES[phase] };

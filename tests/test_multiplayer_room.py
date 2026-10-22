@@ -10,6 +10,7 @@ import time
 import pytest
 
 from ghost_native_fixture import frame, producer
+from sm64_events.core.qpcclock import qpc_ns
 from sm64_events.multiplayer.eos_process import TransportError
 from sm64_events.multiplayer.native_protocol import Update, STALE_AFTER_NS
 from sm64_events.multiplayer.protocol import PACKET_BYTES, PoseError, decode_pose, encode_pose
@@ -182,7 +183,7 @@ def peer_ready(service, transport, *, epoch=1, ref=1, member=1, transport_epoch=
 
 def source_info(transport, fields, *, sequence=1, source=REMOTE_SOURCE, name="Remote name", state="playing", **extra):
     value = {"v": 1, "type": "SOURCE_INFO", "source_nonce": source.hex(), "name": name, **extra}
-    received = time.monotonic_ns()
+    received = qpc_ns()
     transport.event("control_received", **fields, sequence=sequence, received_qpc=received,
                     payload_b64=base64.b64encode(json.dumps(value).encode()).decode())
     if state is not None and not extra:
@@ -195,7 +196,7 @@ def source_state(transport, fields, *, sequence, serial, source=REMOTE_SOURCE, s
                  source_generation=1, continuity=1, floor=1, **extra):
     value = {"v": 1, "type": "SOURCE_STATE", "source_nonce": source.hex(), "serial": serial,
              "state": state, "source_generation": source_generation, "continuity": continuity, "sequence": floor, **extra}
-    transport.event("control_received", **fields, sequence=sequence, received_qpc=time.monotonic_ns(),
+    transport.event("control_received", **fields, sequence=sequence, received_qpc=qpc_ns(),
                     payload_b64=base64.b64encode(json.dumps(value).encode()).decode())
 
 
@@ -204,7 +205,7 @@ def pose(transport, fields, *, packet_sequence=1, transport_sequence=1, received
     packet = encode_pose(native_frame(packet_sequence), participant_incarnation=source,
         source_generation=source_generation, elapsed_ns=packet_sequence, continuity=continuity, rom_layout=1, rom_generation=3)
     transport.event("data_received", **fields, sequence=transport_sequence,
-        received_qpc=time.monotonic_ns() if received is None else received,
+        received_qpc=qpc_ns() if received is None else received,
         payload_b64=base64.b64encode(packet).decode())
     return packet
 
@@ -238,7 +239,7 @@ def test_host_membership_control_and_native_mapping_are_reachable(rooms):
     assert len(service.snapshot()["room"]["members"]) == 2
     source_info(transport, fields)
     wait_for(lambda: service.snapshot()["room"]["members"][1]["name"] == "Remote name")
-    stamp = time.monotonic_ns();pose(transport, fields, received=stamp)
+    stamp = qpc_ns();pose(transport, fields, received=stamp)
     native = wait_for(lambda: channels and channels[-1].views and
         next((v for v in reversed(channels[-1].views) if v.peers[0].present), None))
     assert native.peers[0].received_ns == stamp
@@ -269,7 +270,7 @@ def test_source_info_cannot_create_members_and_unknown_fields_are_rejected(rooms
 def test_local_dequeue_receipt_is_not_replaced_by_parent_processing_time(rooms):
     service, _, transports, channels = rooms();service.host();transport = transports[0]
     fields = peer_ready(service, transport);source_info(transport, fields)
-    old = time.monotonic_ns() - STALE_AFTER_NS - 10_000_000
+    old = qpc_ns() - STALE_AFTER_NS - 10_000_000
     pose(transport, fields, received=old)
     time.sleep(.04)
     assert not any(v.peers[0].present for c in channels for v in c.views)
@@ -347,7 +348,7 @@ def test_busy_control_retry_is_bounded_and_leave_revokes_before_sdk(rooms):
             assert recorder.pair == (None, None)
             with pytest.raises(PoseError):
                 outgoing.begin_capture()
-            assert not incoming.current(incoming.snapshot(now_ns=time.monotonic_ns()))
+            assert not incoming.current(incoming.snapshot(now_ns=qpc_ns()))
         return original(op, **fields)
 
     transport.submit = checked
@@ -359,9 +360,9 @@ def test_outgoing_uses_current_handoff_without_another_source_consumer(rooms):
     service, recorder, transports, _ = rooms();service.host();transport = transports[0]
     fields = peer_ready(service, transport)
     outgoing = recorder.pair[0];owner = outgoing.begin_capture()
-    captured = time.monotonic_ns() - 20_000_000
+    captured = qpc_ns() - 20_000_000
     outgoing.observe(owner, producer(rom_layout=1, qpc_frequency=FREQUENCY), (native_frame(qpc=captured),),
-                     received_ns=time.monotonic_ns())
+                     received_ns=qpc_ns())
     payload, sent = wait_for(lambda: transport.sent and transport.sent[-1])
     assert len(payload) == PACKET_BYTES and sent["sample_id"] == 1 and sent["sample_qpc"] == captured
     outgoing.source_unavailable(owner)
@@ -437,7 +438,7 @@ def test_source_clock_must_match_verified_helper_clock(rooms):
     service, recorder, transports, _ = rooms();service.host();transport = transports[0]
     peer_ready(service, transport)
     outgoing = recorder.pair[0];owner = outgoing.begin_capture()
-    outgoing.observe(owner, producer(rom_layout=1, qpc_frequency=30), (native_frame(),), received_ns=time.monotonic_ns())
+    outgoing.observe(owner, producer(rom_layout=1, qpc_frequency=30), (native_frame(),), received_ns=qpc_ns())
     wait_for(lambda: service.snapshot()["error"] is not None)
     assert not transport.sent
 
@@ -478,7 +479,7 @@ def test_generated_bind_is_submitted_before_info_state_and_data(rooms):
     assert [json.loads(payload)["type"] for payload, _ in transport.controls] == ["SOURCE_INFO"]
     outgoing = recorder.pair[0];owner = outgoing.begin_capture()
     outgoing.observe(owner, producer(rom_layout=1, qpc_frequency=FREQUENCY),
-        (native_frame(5, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+        (native_frame(5, qpc=qpc_ns()),), received_ns=qpc_ns())
     time.sleep(.03)
     assert not transport.sent and not controls(transport, "SOURCE_STATE")
     transport.control_futures[0].set_result(None)
@@ -596,7 +597,7 @@ def test_state_floor_never_regresses_generation_continuity_or_sequence(rooms):
 
 class Clock:
     def __init__(self):
-        self.now = time.monotonic_ns() + 1_000_000_000
+        self.now = qpc_ns() + 1_000_000_000
 
     def __call__(self):
         return self.now
@@ -645,7 +646,7 @@ def test_sender_resume_uses_first_actual_new_publication_and_no_fake_pose(rooms)
     peer_ready(service, transport)
     outgoing = recorder.pair[0];owner = outgoing.begin_capture()
     source = producer(rom_layout=1, qpc_frequency=FREQUENCY)
-    outgoing.observe(owner, source, (native_frame(10, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+    outgoing.observe(owner, source, (native_frame(10, qpc=qpc_ns()),), received_ns=qpc_ns())
     wait_for(lambda: transport.sent)
     outgoing.withdraw_capture(owner);outgoing.end_capture(owner);recorder.paused = True
     paused = wait_for(lambda: [v for v in controls(transport, "SOURCE_STATE") if v["state"] == "paused"])[-1]
@@ -655,7 +656,7 @@ def test_sender_resume_uses_first_actual_new_publication_and_no_fake_pose(rooms)
     count = len(transport.sent);time.sleep(.03)
     assert len(transport.sent) == count
     owner = outgoing.begin_capture()
-    outgoing.observe(owner, source, (native_frame(20, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+    outgoing.observe(owner, source, (native_frame(20, qpc=qpc_ns()),), received_ns=qpc_ns())
     packet, _fields = wait_for(lambda: len(transport.sent) > count and transport.sent[-1])
     state = controls(transport, "SOURCE_STATE")[-1]
     decoded = decode_pose(packet, expected_incarnation=bytes.fromhex(state["source_nonce"]))
@@ -668,11 +669,11 @@ def test_fast_source_withdraw_resume_sets_fresh_floor_even_when_pause_boolean_is
     service, recorder, transports, _ = rooms();service.host();transport = transports[0]
     peer_ready(service, transport)
     outgoing = recorder.pair[0];owner = outgoing.begin_capture();source = producer(rom_layout=1, qpc_frequency=FREQUENCY)
-    outgoing.observe(owner, source, (native_frame(10, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+    outgoing.observe(owner, source, (native_frame(10, qpc=qpc_ns()),), received_ns=qpc_ns())
     wait_for(lambda: transport.sent)
     outgoing.withdraw_capture(owner);outgoing.end_capture(owner)
     owner = outgoing.begin_capture()
-    outgoing.observe(owner, source, (native_frame(30, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+    outgoing.observe(owner, source, (native_frame(30, qpc=qpc_ns()),), received_ns=qpc_ns())
     wait_for(lambda: len(transport.sent) == 2)
     state = controls(transport, "SOURCE_STATE")[-1]
     assert not recorder.paused and state["state"] == "playing" and state["sequence"] == 30 and state["continuity"] == 2
@@ -689,18 +690,18 @@ def test_actual_source_handoff_state_and_pose_cross_two_room_workers_without_sta
         nonlocal forwarded
         while forwarded < len(sent.controls):
             payload, _ = sent.controls[forwarded];forwarded += 1
-            received.event("control_received", **fields, sequence=forwarded, received_qpc=time.monotonic_ns(),
+            received.event("control_received", **fields, sequence=forwarded, received_qpc=qpc_ns(),
                            payload_b64=base64.b64encode(payload).decode())
 
     def relay_pose(packet, sequence):
-        received.event("data_received", **fields, sequence=sequence, received_qpc=time.monotonic_ns(),
+        received.event("data_received", **fields, sequence=sequence, received_qpc=qpc_ns(),
                        payload_b64=base64.b64encode(packet).decode())
 
     outgoing = recorder.pair[0];owner = outgoing.begin_capture();source = producer(rom_layout=1, qpc_frequency=FREQUENCY)
-    outgoing.observe(owner, source, (native_frame(10, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+    outgoing.observe(owner, source, (native_frame(10, qpc=qpc_ns()),), received_ns=qpc_ns())
     wait_for(lambda: sent.sent);relay_controls();relay_pose(sent.sent[-1][0], 1)
     wait_for(lambda: present(channels))
-    outgoing.observe(owner, source, (native_frame(11, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+    outgoing.observe(owner, source, (native_frame(11, qpc=qpc_ns()),), received_ns=qpc_ns())
     wait_for(lambda: len(sent.sent) == 2)
     delayed = sent.sent[-1][0]
     outgoing.withdraw_capture(owner);outgoing.end_capture(owner);recorder.paused = True
@@ -708,7 +709,7 @@ def test_actual_source_handoff_state_and_pose_cross_two_room_workers_without_sta
     relay_controls()
     wait_for(lambda: not present(channels) and receiver.snapshot()["room"]["members"][1]["state"] == "paused")
     recorder.paused = False;owner = outgoing.begin_capture()
-    outgoing.observe(owner, source, (native_frame(20, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+    outgoing.observe(owner, source, (native_frame(20, qpc=qpc_ns()),), received_ns=qpc_ns())
     wait_for(lambda: len(sent.sent) == 3);relay_controls()
     relay_pose(delayed, 2)
     time.sleep(.025)
@@ -738,7 +739,7 @@ def test_unsent_source_boundaries_coalesce_behind_ordered_inflight_controls(room
     for sequence in range(1, 9):
         if sequence > 1:
             outgoing.source_unavailable(owner)
-        outgoing.observe(owner, source, (native_frame(sequence, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+        outgoing.observe(owner, source, (native_frame(sequence, qpc=qpc_ns()),), received_ns=qpc_ns())
         wait_for(lambda expected=sequence: service._source_state.sequence == expected)
         assert len(service._controls) <= 2
     assert not transport.sent and not controls(transport, "SOURCE_STATE")
@@ -746,7 +747,7 @@ def test_unsent_source_boundaries_coalesce_behind_ordered_inflight_controls(room
     wait_for(lambda: controls(transport, "SOURCE_STATE"))
     for sequence in range(9, 17):
         outgoing.source_unavailable(owner)
-        outgoing.observe(owner, source, (native_frame(sequence, qpc=time.monotonic_ns()),), received_ns=time.monotonic_ns())
+        outgoing.observe(owner, source, (native_frame(sequence, qpc=qpc_ns()),), received_ns=qpc_ns())
         wait_for(lambda expected=sequence: service._source_state.sequence == expected)
         assert len(service._controls) <= 2
     assert not transport.sent

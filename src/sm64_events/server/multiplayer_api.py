@@ -12,7 +12,7 @@ _HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 _ERRORS = {
     "invalid_identity": 400,
     "already_in_room": 409, "invitation_expired": 409, "cannot_invite": 409,
-    "cannot_invite_self": 409, "cannot_remove_player": 409, "invalid_room_action": 409,
+    "cannot_invite_self": 409, "cannot_remove_player": 409, "cannot_retry_player": 409, "invalid_room_action": 409,
     "room_closed": 409, "room_busy": 409,
     "transport_unavailable": 503, "transport_timeout": 503, "room_timeout": 503,
     "room_operation_failed": 503, "room_cleanup_pending": 503,
@@ -58,23 +58,24 @@ def unavailable_state():
             "error": None, "can_invite": False}
 
 
+async def _call(service, method, *arguments):
+    if service is None:
+        raise HTTPException(503, "transport_unavailable", headers=_HEADERS)
+    try:
+        return await asyncio.to_thread(getattr(service, method), *arguments)
+    except RoomError as error:
+        reason = str(error)
+        if reason not in _ERRORS:
+            reason = "room_operation_failed"
+        raise HTTPException(_ERRORS[reason], reason, headers=_HEADERS) from None
+    except Exception:  # noqa: BLE001 -- provider exceptions may contain private identities
+        raise HTTPException(503, "room_operation_failed", headers=_HEADERS) from None
+
+
 def create_multiplayer_router(service=None):
     # The app's LocalAccessMiddleware guards every mutation with the same
     # loopback origin/request capability as the other local API routers.
     router = APIRouter(prefix="/api/multiplayer", tags=["multiplayer"], route_class=_PrivateRoute)
-
-    async def call(method, *arguments):
-        if service is None:
-            raise HTTPException(503, "transport_unavailable", headers=_HEADERS)
-        try:
-            return await asyncio.to_thread(getattr(service, method), *arguments)
-        except RoomError as error:
-            reason = str(error)
-            if reason not in _ERRORS:
-                reason = "room_operation_failed"
-            raise HTTPException(_ERRORS[reason], reason, headers=_HEADERS) from None
-        except Exception:  # noqa: BLE001 -- provider exceptions may contain private identities
-            raise HTTPException(503, "room_operation_failed", headers=_HEADERS) from None
 
     @router.get("")
     def status():
@@ -82,30 +83,38 @@ def create_multiplayer_router(service=None):
 
     @router.post("/identity")
     async def identity(body: _Body | None = None):
-        return {"code": await call("identity")}
+        return {"code": await _call(service, "identity")}
 
     @router.post("/host")
     async def host(body: _Body | None = None):
-        return await call("host")
+        return await _call(service, "host")
 
     @router.post("/invite")
     async def invite(body: InviteBody):
-        return await call("invite", body.code)
+        return await _call(service, "invite", body.code)
 
     @router.post("/join")
     async def join(body: InvitationBody):
-        return await call("join", body.invite_id)
+        return await _call(service, "join", body.invite_id)
 
     @router.post("/decline")
     async def decline(body: InvitationBody):
-        return await call("decline", body.invite_id)
+        return await _call(service, "decline", body.invite_id)
 
     @router.post("/leave")
     async def leave(body: _Body | None = None):
-        return await call("leave")
+        return await _call(service, "leave")
 
     @router.post("/kick")
     async def kick(body: MemberBody):
-        return await call("kick", body.member_id)
+        return await _call(service, "kick", body.member_id)
+
+    @router.post("/retry")
+    async def retry(body: _Body | None = None):
+        return await _call(service, "retry")
+
+    @router.post("/retry_peer")
+    async def retry_peer(body: MemberBody):
+        return await _call(service, "retry_peer", body.member_id)
 
     return router

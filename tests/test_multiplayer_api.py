@@ -70,6 +70,7 @@ def test_unconfigured_app_and_unavailable_room_have_the_same_public_shape():
     ("join", {"invite_id": "opaque-invitation"}, ("opaque-invitation",)),
     ("decline", {"invite_id": "opaque-invitation"}, ("opaque-invitation",)),
     ("leave", {}, ()), ("kick", {"member_id": "opaque-member"}, ("opaque-member",)),
+    ("retry", {}, ()), ("retry_peer", {"member_id": "opaque-member"}, ("opaque-member",)),
 ])
 def test_controls_reach_the_room_off_the_event_loop(action, body, arguments):
     room = Room()

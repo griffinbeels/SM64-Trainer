@@ -17,6 +17,7 @@ import secrets
 import threading
 import time
 
+from sm64_events.core.qpcclock import qpc_ns
 from sm64_events.multiplayer.eos_process import TransportError
 from sm64_events.multiplayer.native_inbox import NativeInbox, display_name
 from sm64_events.multiplayer.native_protocol import STALE_AFTER_NS
@@ -124,7 +125,7 @@ class _Action:
 
 class RoomService:
     def __init__(self, recorder, transport_factory, *, player_name=lambda: "You", channel_factory=None,
-                 clock_ns=time.monotonic_ns, qpc_frequency=_qpc_frequency, available=True, appearance=None,
+                 clock_ns=qpc_ns, qpc_frequency=_qpc_frequency, available=True, appearance=None,
                  action_timeout_s=35):
         self._recorder, self._factory, self._name = recorder, transport_factory, player_name
         self._channel_factory = channel_factory

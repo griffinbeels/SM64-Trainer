@@ -272,3 +272,27 @@ def test_friends_member_can_invite_without_host_removal_controls(browser):
     click(page, "Invite friend")
     wait(page, "document.querySelector('.friends-invite-note').textContent.includes('Waiting for your friend')")
     assert [action for action, _body in state.actions] == ["join", "invite"]
+
+
+@pytest.mark.parametrize('browser', [{'scene': 'disconnected', 'width': 850},
+                                    {'scene': 'disconnected', 'width': 1400}], indirect=True)
+def test_terminal_peer_failure_has_a_working_reconnect_control(browser):
+    page, state, directory = browser
+    open_panel(page)
+    page.wait_for('.friends-seat.is-occupied')
+    assert page.evaluate("return [...document.querySelectorAll('.friends-member-state')].some(el=>el.textContent==='Connection lost')")
+    assert not page.evaluate('return document.documentElement.scrollWidth>innerWidth')
+    (directory / 'friends-connection-lost.png').write_bytes(page.screenshot())
+    page.click('button[aria-label=' + json.dumps('Reconnect ' + NAMES[2]) + ']')
+    wait(page, "!document.querySelector('button[aria-label^=Reconnect]')")
+    assert state.actions == [('retry_peer', {'member_id': 'fixture-player-2'})]
+    assert page.evaluate("return [...document.querySelectorAll('.friends-member-state')].some(el=>el.textContent==='Reconnecting…')")
+
+
+@pytest.mark.parametrize('browser', [{'scene': 'error'}], indirect=True)
+def test_service_error_retry_mutates_instead_of_only_refreshing(browser):
+    page, state, _ = browser
+    open_panel(page)
+    click(page, 'Retry')
+    wait(page, "!document.querySelector('.friends-error')")
+    assert state.actions == [('retry', {})]

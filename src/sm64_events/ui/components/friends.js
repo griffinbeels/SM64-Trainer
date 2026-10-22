@@ -69,7 +69,7 @@ function Invitations({ model, busy, act }) {
     </div>`)}</section>`;
 }
 
-function Room({ model, busy, onKick }) {
+function Room({ model, busy, act }) {
   return html`<section class="friends-room" aria-label="Practice room">
     <div class="friends-section-head"><h3>${model.owner ? "Your room" : "Practice room"}</h3><span class="meta">${model.count}/4 players</span></div>
     <div class="friends-slots" role="list">
@@ -81,9 +81,14 @@ function Room({ model, busy, onKick }) {
           <span class="friends-member-state">${member ? memberState(member) : "Waiting for a friend"}</span>
           ${member?.self ? html`<span class="friends-self">${model.owner ? "You · Host" : "You"}</span>` : null}
         </div>
-        ${member && !member.self && model.owner ? html`<button type="button" class="friends-remove"
-          aria-label=${`Remove ${member.name}`} disabled=${Boolean(busy) || model.transitioning}
-          onclick=${() => onKick(member)}>Remove</button>` : null}
+        ${member && !member.self ? html`<div class="friends-seat-actions">
+          ${member.state === "disconnected" ? html`<button type="button" aria-label=${`Reconnect ${member.name}`}
+            disabled=${Boolean(busy) || model.transitioning}
+            onclick=${() => act("retry_peer", { member_id: member.id })}>Reconnect</button>` : null}
+          ${model.owner ? html`<button type="button" class="friends-remove" aria-label=${`Remove ${member.name}`}
+            disabled=${Boolean(busy) || model.transitioning}
+            onclick=${() => act("kick", { member_id: member.id })}>Remove</button>` : null}
+        </div>` : null}
       </div>`)}
     </div>
   </section>`;
@@ -126,7 +131,7 @@ function FriendsStart({ model, state }) {
 function FriendsReady({ model, state, copy, privateCode }) {
   const reason = state.snapshot.source?.reason;
   return html`<${Invitations} model=${model} busy=${state.busy} act=${state.act} />
-    ${model.room ? html`<${Room} model=${model} busy=${state.busy} onKick=${member => state.act("kick", { member_id: member.id })} />
+    ${model.room ? html`<${Room} model=${model} busy=${state.busy} act=${state.act} />
         <${InviteForm} model=${model} busy=${state.busy} act=${state.act} />`
       : html`<${FriendsStart} model=${model} state=${state} />`}
     ${["reconnecting", "leaving", "joining", "starting"].includes(model.phase) && model.room ? html`<p class="friends-phase" role="status">${model.title}</p>` : null}
@@ -156,7 +161,9 @@ function FriendsPanel({ state, onClose }) {
         : !model.available ? html`<p class="friends-unavailable">${state.snapshot.unavailable_reason || "Friends is unavailable in this build."}</p>`
         : html`<${FriendsReady} model=${model} state=${state} copy=${copy} privateCode=${privateCode} />`}
       ${issue ? html`<div class="friends-error" role="alert"><span>${issue}</span>
-        <button type="button" disabled=${Boolean(state.busy)} onclick=${state.refresh}>Retry</button></div>` : null}
+        <button type="button" disabled=${Boolean(state.busy)}
+          onclick=${state.snapshot?.error ? () => state.act("retry", {}) : state.refresh}>
+          ${state.snapshot?.error ? "Retry" : "Refresh"}</button></div>` : null}
     </div>
   </${Modal}>`;
 }
