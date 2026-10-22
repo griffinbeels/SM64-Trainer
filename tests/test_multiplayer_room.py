@@ -971,3 +971,28 @@ def test_live_progress_expectation_requires_applied_selection_and_fresh_playing_
     channel.write = lambda _: Receipt(state='pending', presentation_reason='ready', selected_mask=1)
     time.sleep(.025)
     assert not service.silent_failure_status()['expected_display']
+
+
+def test_unexpected_source_detach_failure_retains_executor_and_blocks_replacement(rooms):
+    service, recorder, transports, _ = rooms()
+    service.host()
+    original = recorder.set_live_session
+    blocked = [True]
+
+    def detach(outgoing=None, incoming=None):
+        if outgoing is None and incoming is None and blocked[0]:
+            raise TypeError('Private recorder bookkeeping failure')
+        original(outgoing, incoming)
+
+    recorder.set_live_session = detach
+    transports[0].event('fatal', code='transport_failed')
+    wait_for(lambda: service._source_detach_pending)
+    try:
+        assert service._thread.is_alive()
+        with pytest.raises(RoomError, match='room_cleanup_pending'):
+            service.host()
+        assert len(transports) == 1
+    finally:
+        blocked[0] = False
+    wait_for(lambda: not service._source_detach_pending)
+    assert service.host()['room'] is not None and len(transports) == 2

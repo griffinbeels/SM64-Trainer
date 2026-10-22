@@ -156,6 +156,7 @@ class RoomService:
         self._state_serial = self._heartbeat_at = 0
         self._publication = self._pose = None
         self._leaving = False
+        self._source_detach_pending = False
         self._action_timeout = action_timeout_s
         self._active_action = None
         self._cache = {}
@@ -294,13 +295,26 @@ class RoomService:
     def _local_revoke(self):
         with self._lock:
             outgoing, incoming = self._outgoing, self._incoming
-        if outgoing is not None:
-            outgoing.revoke()
-        if incoming is not None:
-            incoming.revoke()
-        if outgoing is not None or incoming is not None:
-            self._recorder.set_live_session(None, None)
+            if outgoing is not None:
+                outgoing.revoke()
+            if incoming is not None:
+                incoming.revoke()
+            if outgoing is not None or incoming is not None:
+                self._source_detach_pending = True
+                self._detach_source()
         self._wake.set()
+
+    def _detach_source(self):
+        with self._lock:
+            if not self._source_detach_pending:
+                return True
+            try:
+                self._recorder.set_live_session(None, None)
+            except Exception:  # noqa: BLE001 - retain revocation/retry when recorder bookkeeping fails
+                self._error = 'room_cleanup_pending'
+                return False
+            self._source_detach_pending = False
+            return True
 
     def _notify(self, generation, event):
         if self._stop.is_set() or generation != self._generation:
@@ -324,6 +338,8 @@ class RoomService:
 
     def _start_transport(self):
         self._check_action()
+        if not self._detach_source():
+            raise RoomError('room_cleanup_pending')
         if self._transport is not None:
             return
         if not self._close_retiring_transport():
@@ -883,7 +899,7 @@ class RoomService:
                 self._channel = retain(channel, error)
                 self._error = "native_receiver_cleanup_pending"
                 return False
-            except (OSError, RuntimeError, ValueError):
+            except Exception:  # noqa: BLE001 - failed cleanup retains this exact receiver owner
                 self._error = "native_receiver_cleanup_pending"
                 return False
         self._channel = None
@@ -931,7 +947,7 @@ class RoomService:
         if transport is not None:
             try:
                 transport.close()
-            except (TransportError, OSError):
+            except Exception:  # noqa: BLE001 - a disposal bug cannot discard the retained provider
                 self._error = "transport_cleanup_pending"
                 return False
         self._retiring_transport = None
@@ -939,6 +955,8 @@ class RoomService:
 
     def _tick(self):
         self._close_retiring_transport()
+        if not self._detach_source():
+            self._publish(); return
         if self._overflow.is_set():
             self._overflow.clear(); self._transport_failed("transport_event_overflow")
         self._drain_events()
@@ -1063,7 +1081,8 @@ class RoomService:
         while True:
             channel_closed = self._close_channel()
             transport_closed = self._close_retiring_transport()
-            if channel_closed and transport_closed:
+            source_detached = self._detach_source()
+            if channel_closed and transport_closed and source_detached:
                 break
             self._phase = "closing"; self._publish()
             self._wake.wait(.25); self._wake.clear()
@@ -1077,7 +1096,7 @@ class RoomService:
             self._publish()
 
     def close(self, timeout_s=15):
-        self._local_revoke(); self._stop.set(); self._wake.set()
+        self._stop.set(); self._local_revoke(); self._wake.set()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout_s)
