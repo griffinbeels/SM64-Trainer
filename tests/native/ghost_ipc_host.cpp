@@ -23,6 +23,8 @@
 // behavior has its separate compiled witness; the receiver page is real here.
 namespace ghost_live_session {
 int worker_update(const Update &,uint64_t) noexcept {return GP_OK;}
+PresentationStatus presentation_status(uint64_t) noexcept {return {};}
+uint64_t worker_refusals() noexcept {return 0;}
 void worker_revoke() noexcept {}
 void worker_suspend() noexcept {}
 int worker_release() noexcept {return ghost_playback::api()->release_worker();}
