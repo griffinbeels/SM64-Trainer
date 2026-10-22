@@ -239,9 +239,13 @@ class RoomService:
             # Future.cancel cannot stop a running action. Admission checks this
             # exact cancellation while holding the same lock before mounting.
             with self._lock:
+                if request.future.done():
+                    return request.future.result()
                 request.cancelled.set()
+                running = request.future.running()
                 request.future.cancel()
-            self._local_revoke()
+            if running:
+                self._local_revoke()
             self._wake.set()
             raise RoomError("room_timeout") from error
 
@@ -1027,7 +1031,9 @@ class RoomService:
                 try:
                     self._check_action()
                     result = self._execute(request.name, request.arguments)
-                    self._check_action()
+                    with self._lock:
+                        self._check_action()
+                        future.set_result(result)
                 except RoomError as error:
                     self._error = str(error)
                     if self._phase in ("starting", "joining", "leaving"):
@@ -1037,8 +1043,6 @@ class RoomService:
                 except Exception:  # noqa: BLE001 - a private provider cannot stop recorder ownership
                     self._transport_failed("room_operation_failed")
                     future.set_exception(RoomError("room_operation_failed"))
-                else:
-                    future.set_result(result)
                 finally:
                     self._active_action = None
                 self._observe_tick()

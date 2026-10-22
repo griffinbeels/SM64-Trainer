@@ -79,6 +79,8 @@ class RoomDiagnostics:
         epoch = error_reporting.collection_epoch()
         category = category or ('native_receiver' if reason.startswith('native_') else
             'observation' if reason == 'room_observation_failed' else 'transport')
+        if type(category) is not str or category not in {'native_receiver', 'observation', 'transport', 'presentation'}:
+            return
         now = time.monotonic()
         _, prior_time = self._reported.get(category, (None, float('-inf')))
         if now - prior_time < 3600:
