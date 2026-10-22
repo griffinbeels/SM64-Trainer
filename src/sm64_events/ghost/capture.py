@@ -8,6 +8,7 @@ import time
 from dataclasses import replace
 from typing import Callable
 
+from sm64_events.core.qpcclock import qpc_ns
 from sm64_events.ghost.clip import ClipError
 from sm64_events.ghost.native_channel import NativeChannel, RejectedControl
 from sm64_events.ghost.native_protocol import RECORD_BYTES, Producer
@@ -220,7 +221,12 @@ class NativeCapture:
         This retires only its capture grant; a retained room can attach a new
         source after this source has joined and released that writer.
         """
-        binding = self._live_binding
+        with self._lock:
+            binding = self._live_binding
+        self._withdraw_live_binding(binding)
+
+    def _withdraw_live_binding(self, binding) -> None:
+        """Withdraw this exact grant, even if the pump already replaced it."""
         if binding is not None:
             try:
                 binding[0].withdraw_capture(binding[1])
@@ -250,13 +256,14 @@ class NativeCapture:
             receiver = self._live_input_requested if incoming is self._UNCHANGED else incoming
             if outgoing is self._live_requested and receiver is self._live_input_requested:
                 return
-            withdraw = outgoing is not self._live_requested
+            # After unlock the pump may replace this grant. Never rediscover
+            # the binding while withdrawing this requested transition.
+            predecessor = self._live_binding if outgoing is not self._live_requested else None
             if receiver is not self._live_input_requested:
                 self._native_endpoint = self._live_input = None
             self._live_requested, self._live_input_requested = outgoing, receiver
             self._live_mount = object()
-        if withdraw:
-            self.withdraw_live_source()
+        self._withdraw_live_binding(predecessor)
 
     def native_live_endpoint(self, incoming):
         """Private room-worker capability; never included in public status."""
@@ -319,7 +326,7 @@ class NativeCapture:
         if binding is None:
             return
         try:
-            binding[0].observe(binding[1], producer, batch, received_ns=time.monotonic_ns())
+            binding[0].observe(binding[1], producer, batch, received_ns=qpc_ns())
         except ValueError as error:
             self._live_warning(error)
             self._unavailable_live_source()
