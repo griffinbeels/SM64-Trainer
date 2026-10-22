@@ -4,6 +4,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 import json
 import struct
+import threading
 import time
 
 import pytest
@@ -119,6 +120,10 @@ class Transport:
         elif op == "leave":
             self.event("room", room_epoch=self.room_epoch, state="left", owner_code="",
                        local_is_owner=False, member_count=0)
+        elif op == "reset_peer":
+            current = {**fields, 'transport_epoch': fields['transport_epoch'] + 1}
+            self.event('peer_unready', **current, reason='explicit_reset')
+            self.event('peer', **current, user_code=REMOTE, state='awaiting_binding')
         future.set_result(None)
         return future
 
@@ -816,3 +821,120 @@ def test_temporary_same_endpoint_channel_reopen_keeps_room_authority_and_replay_
     assert channels[-1].views[-1].peers[0].received_ns == receipt
     pose(transport, fields, packet_sequence=10, transport_sequence=3)
     wait_for(lambda: channels[-1].views[-1].peers[0].received_ns > receipt)
+
+
+def test_one_action_budget_cannot_admit_a_late_room_after_busy_retries(rooms):
+    service, recorder, transports, _ = rooms(action_timeout_s=.08)
+    assert service.identity() == LOCAL  # timely control uses the same entry point
+    transport = transports[0]
+    transport.failures['create_room'] = ['busy', 'busy']
+    with pytest.raises(RoomError, match='room_timeout'):
+        service.host()
+    transport.event('room', room_epoch=1, state='joined', owner_code=LOCAL,
+                    local_is_owner=True, member_count=1)
+    wait_for(lambda: transport.closed)
+    time.sleep(.15)
+    assert service.snapshot()['room'] is None and recorder.pair == (None, None)
+    assert service.host()['room'] is not None and len(transports) == 2
+
+
+def test_background_tick_failure_keeps_executor_and_explicit_recovery(rooms):
+    service, recorder, transports, _ = rooms()
+    service.host()
+    original = recorder.live_session_status
+    failed = threading.Event()
+
+    def fail_once():
+        recorder.live_session_status = original
+        failed.set()
+        raise RuntimeError('private synthetic observation failure')
+
+    recorder.live_session_status = fail_once
+    assert failed.wait(2)
+    wait_for(lambda: service.snapshot()['phase'] == 'error')
+    assert service.snapshot()['room'] is None and transports[0].closed
+    assert service._thread.is_alive()
+    assert service.identity() == LOCAL
+    assert service.host()['room'] is not None and len(transports) == 2
+
+
+def test_shutdown_retains_cleanup_executor_past_the_old_retry_window(rooms):
+    service, recorder, _, channels = rooms()
+    service.host()
+    channel = wait_for(lambda: channels and channels[-1])
+    channel.close_failures = 1000
+    with pytest.raises(RoomError, match='room_cleanup_pending'):
+        service.close(timeout_s=.05)
+    assert recorder.pair == (None, None) and service._thread.is_alive()
+    channel.close_failures = 0
+    wait_for(lambda: channel.closed)
+    service.close(timeout_s=2)
+    assert not service._thread.is_alive() and service._channel is None
+
+
+def test_failed_leave_does_not_poison_the_next_room(rooms):
+    service, recorder, transports, _ = rooms()
+    service.host()
+    transport = transports[0]
+    transport.failures['leave'] = ['sdk_failure']
+    with pytest.raises(RoomError):
+        service.leave()
+    assert recorder.pair == (None, None)
+    assert not service._leaving
+    assert transport.closed  # uncertain provider membership must be retired
+    assert service.host()['room'] is not None and len(transports) == 2
+
+
+def test_terminal_peer_failure_is_visible_and_retry_rebinds_the_same_membership(rooms):
+    service, recorder, transports, channels = rooms()
+    service.host(); transport = transports[0]
+    fields = peer_ready(service, transport); source_info(transport, fields)
+    pose(transport, fields, packet_sequence=9)
+    wait_for(lambda: present(channels))
+    incoming = recorder.pair[1]
+    transport.event('peer', **{key: fields[key] for key in ('room_epoch', 'peer_ref', 'member_epoch', 'transport_epoch')},
+                    user_code=REMOTE, state='failed')
+    wait_for(lambda: service.snapshot()['room']['members'][1]['state'] == 'disconnected')
+    assert not present(channels)
+    member = service.snapshot()['room']['members'][1]['id']
+    service.retry_peer(member)
+    binding = wait_for(lambda: next((f for op, f in transport.calls if op == 'bind_peer' and f['transport_epoch'] == 2), None))
+    assert binding['local_nonce'] != fields['local_nonce']
+    second = {**{key: binding[key] for key in ('room_epoch', 'peer_ref', 'member_epoch', 'transport_epoch')},
+              'local_nonce': binding['local_nonce'], 'remote_nonce': '66' * 16}
+    transport.event('peer_ready', **second, route='relay')
+    wait_for(lambda: any(f['transport_epoch'] == 2 for _, f in transport.controls))
+    source_info(transport, second, sequence=2, state=None)
+    source_state(transport, second, sequence=3, serial=4, continuity=2, floor=20)
+    pose(transport, second, packet_sequence=19, transport_sequence=1, continuity=2)
+    time.sleep(.025)
+    assert not present(channels) and recorder.pair[1] is incoming
+    pose(transport, second, packet_sequence=20, transport_sequence=2, continuity=2)
+    wait_for(lambda: present(channels))
+
+
+def test_pose_burst_coalesces_without_overflowing_membership_controls(rooms):
+    service, recorder, transports, channels = rooms()
+    service.host(); transport = transports[0]
+    fields = peer_ready(service, transport); source_info(transport, fields)
+    entered, release = threading.Event(), threading.Event()
+    original = recorder.live_session_status
+
+    def stalled_observer():
+        entered.set()
+        assert release.wait(3)
+        return original()
+
+    recorder.live_session_status = stalled_observer
+    assert entered.wait(2)
+    try:
+        for sequence in range(1, 301):
+            pose(transport, fields, packet_sequence=sequence, transport_sequence=sequence)
+        assert len(service._latest_events) == 1 and not service._overflow.is_set()
+    finally:
+        recorder.live_session_status = original
+        release.set()
+    wait_for(lambda: present(channels))
+    assert not transport.closed and recorder.pair[1] is not None
+    latest = channels[-1].views[-1].peers[0]
+    assert decode_pose(bytes(latest.packet), expected_incarnation=REMOTE_SOURCE).frame.sequence == 300

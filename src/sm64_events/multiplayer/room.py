@@ -113,15 +113,26 @@ class _Control:
     when: int = 0
 
 
+@dataclass
+class _Action:
+    name: str
+    arguments: tuple = field(repr=False)
+    deadline: float
+    future: Future = field(default_factory=Future, repr=False)
+    cancelled: threading.Event = field(default_factory=threading.Event, repr=False)
+
+
 class RoomService:
     def __init__(self, recorder, transport_factory, *, player_name=lambda: "You", channel_factory=None,
-                 clock_ns=time.monotonic_ns, qpc_frequency=_qpc_frequency, available=True, appearance=None):
+                 clock_ns=time.monotonic_ns, qpc_frequency=_qpc_frequency, available=True, appearance=None,
+                 action_timeout_s=35):
         self._recorder, self._factory, self._name = recorder, transport_factory, player_name
         self._channel_factory = channel_factory
         self._clock, self._local_frequency, self._appearance = clock_ns, qpc_frequency, appearance
         self._lock = threading.RLock()
         self._wake, self._stop = threading.Event(), threading.Event()
         self._events, self._actions = queue.Queue(128), queue.Queue(8)
+        self._latest_events = {}
         self._overflow = threading.Event()
         self._thread = self._transport = None
         self._retiring_transport = None
@@ -143,6 +154,8 @@ class RoomService:
         self._state_serial = self._heartbeat_at = 0
         self._publication = self._pose = None
         self._leaving = False
+        self._action_timeout = action_timeout_s
+        self._active_action = None
         self._cache = {}
         self._source_status = {"state": "off", "sharing": False, "paused": False, "source_attached": False}
         self._publish()
@@ -157,7 +170,7 @@ class RoomService:
         if self._outgoing is not None:
             local_state = self._source_state.state
             members = [{"id": "self", "name": self._local_name, "state": local_state, "self": True}]
-            states = {"playing": "playing", "paused": "paused", "reconnecting": "reconnecting", "disconnected": "reconnecting"}
+            states = {"playing": "playing", "paused": "paused", "reconnecting": "reconnecting", "disconnected": "disconnected"}
             members.extend({"id": p.id, "name": p.name, "state": states.get(p.state, "waiting"), "self": False}
                            for p in self._peers.values())
             room = {"owner": bool(self._local_owner), "members": members, "max_members": 4}
@@ -181,9 +194,9 @@ class RoomService:
                 raise RoomError("room_closed")
             if not self._available:
                 raise RoomError("transport_unavailable")
-            future = Future()
+            request = _Action(action, arguments, time.monotonic() + self._action_timeout)
             try:
-                self._actions.put_nowait((action, arguments, future))
+                self._actions.put_nowait(request)
             except queue.Full as error:
                 raise RoomError("room_busy") from error
             if self._thread is None:
@@ -191,10 +204,26 @@ class RoomService:
                 self._thread.start()
         self._wake.set()
         try:
-            return future.result(timeout=35)
+            return request.future.result(timeout=max(0, request.deadline - time.monotonic()))
         except FutureTimeout as error:
-            future.cancel()
+            # Future.cancel cannot stop a running action. Admission checks this
+            # exact cancellation while holding the same lock before mounting.
+            with self._lock:
+                request.cancelled.set()
+                request.future.cancel()
+            self._local_revoke()
+            self._wake.set()
             raise RoomError("room_timeout") from error
+
+    def _check_action(self):
+        action = self._active_action
+        if action is not None and (action.cancelled.is_set() or time.monotonic() >= action.deadline):
+            # The remote mutation's outcome may be unknown. Retire its generation
+            # before draining any late room event or starting a replacement.
+            self._transport_failed("room_timeout")
+            raise RoomError("room_timeout")
+        if self._stop.is_set():
+            raise RoomError("room_closed")
 
     def identity(self):
         return self._post("identity")
@@ -222,6 +251,12 @@ class RoomService:
     def kick(self, member_id):
         return self._post("kick", member_id)
 
+    def retry(self):
+        return self._post("retry")
+
+    def retry_peer(self, member_id):
+        return self._post("retry_peer", member_id)
+
     def _local_revoke(self):
         with self._lock:
             outgoing, incoming = self._outgoing, self._incoming
@@ -236,6 +271,16 @@ class RoomService:
     def _notify(self, generation, event):
         if self._stop.is_set() or generation != self._generation:
             return
+        if type(event) is dict and event.get("type") == "data_received" and type(event.get("peer_ref")) is int:
+            # Membership/control keeps its ordered bounded queue. Pose samples
+            # retain only the latest per peer, including after the helper pipe.
+            with self._lock:
+                key = generation, event["peer_ref"]
+                if key not in self._latest_events and len(self._latest_events) == 3:
+                    self._latest_events.pop(next(iter(self._latest_events)))
+                self._latest_events[key] = event
+            self._wake.set()
+            return
         try:
             self._events.put_nowait((generation, event))
         except queue.Full:
@@ -244,6 +289,7 @@ class RoomService:
         self._wake.set()
 
     def _start_transport(self):
+        self._check_action()
         if self._transport is not None:
             return
         if not self._close_retiring_transport():
@@ -269,6 +315,7 @@ class RoomService:
             raise RoomError("transport_unavailable") from error
         deadline = self._clock() + 15_000_000_000
         while not self._ready or self._identity is None:
+            self._check_action()
             self._drain_events()
             if self._transport is None or self._stop.is_set():
                 raise RoomError(self._error or "room_closed")
@@ -280,17 +327,20 @@ class RoomService:
 
     def _command(self, op, **fields):
         for attempt in range(6):
+            self._check_action()
             if self._transport is None or self._stop.is_set():
                 raise RoomError("transport_unavailable")
             try:
                 future = self._transport.submit(op, **fields)
                 deadline = self._clock() + 12_000_000_000
                 while not future.done():
+                    self._check_action()
                     self._tick()
                     if self._clock() >= deadline or self._stop.is_set():
                         self._transport_failed("transport_timeout")
                         raise RoomError("transport_timeout")
                     self._wake.wait(.01); self._wake.clear()
+                self._check_action()
                 future.result()
                 self._drain_events()
                 return
@@ -299,6 +349,7 @@ class RoomService:
                     raise RoomError("room_operation_failed") from error
                 until = self._clock() + (attempt + 1) * 50_000_000
                 while self._clock() < until and not self._stop.is_set():
+                    self._check_action()
                     self._tick(); self._wake.wait(.01); self._wake.clear()
         raise RoomError("room_busy")
 
@@ -328,17 +379,40 @@ class RoomService:
                 raise RoomError("cannot_remove_player")
             self._incoming.clear(peer.id); peer.ready = False; peer.state = "disconnecting"
             self._command("kick", room_epoch=self._room_epoch, peer_ref=peer.ref, member_epoch=peer.member_epoch)
+        elif action in ("retry", "retry_peer"):
+            self._retry_connections(arguments[0] if action == "retry_peer" else None)
         elif action == "leave":
-            epoch = self._room_epoch
-            self._leaving = True; self._phase = "leaving";self._publish()
-            self._end_room()
-            if epoch:
-                self._command("leave", room_epoch=epoch)
-            self._phase = "idle"; self._leaving = False
+            self._leave_room()
         else:
             raise RoomError("invalid_room_action")
         self._publish()
         return self.snapshot()
+
+    def _retry_connections(self, member_id):
+        peers = [p for p in self._peers.values() if p.state == "disconnected"
+                 and (member_id is None or p.id == member_id)]
+        if member_id is not None and not peers:
+            raise RoomError("cannot_retry_player")
+        for peer in peers:
+            self._command("reset_peer", **self._fields(peer))
+        if member_id is None:
+            self._close_channel()
+        self._phase = "hosting" if self._outgoing is not None and self._local_owner else \
+            "connected" if self._outgoing is not None else "idle"
+
+    def _leave_room(self):
+        epoch = self._room_epoch
+        self._leaving = True; self._phase = "leaving"; self._publish()
+        try:
+            self._end_room()
+            if epoch:
+                self._command("leave", room_epoch=epoch)
+        except RoomError:
+            self._transport_failed("room_operation_failed")
+            raise
+        finally:
+            self._leaving = False
+        self._phase = "idle"
 
     def _invitation_action(self, action, reference):
         invitation = self._invites.get(reference) if type(reference) is str else None
@@ -578,6 +652,13 @@ class RoomService:
         self._phase = "hosting" if self._local_owner else "connected"
 
     def _admit_room(self, epoch):
+        # Coordinate with caller cancellation. A timed-out request cannot mount
+        # a capture handoff after its caller has revoked local room authority.
+        with self._lock:
+            self._check_action()
+            self._mount_room(epoch)
+
+    def _mount_room(self, epoch):
         self._room_epoch = epoch
         self._source_nonce = secrets.token_bytes(16)
         self._outgoing = SourceHandoff(self._source_nonce, stale_after_ns=STALE_AFTER_NS)
@@ -613,18 +694,21 @@ class RoomService:
             self._reset_peer_transport(peer)
             peer.ready = False
         if event["state"] == "awaiting_binding":
+            if peer.state == "disconnected":
+                return  # only a fresh transport epoch may leave a terminal failure
             peer.state = "reconnecting" if peer.source_nonce is not None else "connecting"
             if peer.local_nonce is None:
                 peer.local_nonce = secrets.token_hex(16)
                 self._queue_control("bind_peer", {**self._fields(peer), "local_nonce": peer.local_nonce})
         elif event["state"] == "failed":
             peer.ready, peer.state = False, "disconnected"; self._incoming.clear(peer.id)
+            self._controls = [item for item in self._controls if item.fields.get("peer_ref") != peer.ref]
         else:
             raise ValueError("invalid_peer_state")
 
     def _peer_ready_event(self, event):
         peer = self._peer(event)
-        if peer is None or _nonce(event["local_nonce"]) != peer.local_nonce or event["route"] != "relay" or peer.ready:
+        if peer is None or peer.state == "disconnected" or _nonce(event["local_nonce"]) != peer.local_nonce or event["route"] != "relay" or peer.ready:
             return
         peer.remote_nonce = _nonce(event["remote_nonce"])
         peer.ready = True
@@ -663,10 +747,22 @@ class RoomService:
 
     def _drain_events(self):
         for _ in range(128):
+            self._check_action()
             try:
                 generation, event = self._events.get_nowait()
             except queue.Empty:
                 break
+            if generation != self._generation:
+                continue
+            try:
+                self._handle(event)
+            except (KeyError, ValueError, TypeError, OverflowError, RecursionError):
+                self._transport_failed("transport_protocol_error")
+                break
+        with self._lock:
+            latest, self._latest_events = self._latest_events, {}
+        for (generation, _), event in latest.items():
+            self._check_action()
             if generation != self._generation:
                 continue
             try:
@@ -765,6 +861,8 @@ class RoomService:
         self._ready, self._identity, self._frequency = False, None, 0
         self._room_epoch = 0  # epoch scope is the retired helper, not a replacement helper
         self._invites.clear(); self._invite_revision = 0
+        with self._lock:
+            self._latest_events.clear()
         self._phase, self._error = "error", reason
         if transport is not None:
             self._retiring_transport = transport
@@ -865,13 +963,17 @@ class RoomService:
         try:
             while not self._stop.is_set():
                 try:
-                    action, arguments, future = self._actions.get_nowait()
+                    request = self._actions.get_nowait()
                 except queue.Empty:
-                    self._tick(); self._wake.wait(.01); self._wake.clear(); continue
+                    self._observe_tick(); self._wake.wait(.01); self._wake.clear(); continue
+                future = request.future
                 if not future.set_running_or_notify_cancel():
                     continue
+                self._active_action = request
                 try:
-                    result = self._execute(action, arguments)
+                    self._check_action()
+                    result = self._execute(request.name, request.arguments)
+                    self._check_action()
                 except RoomError as error:
                     self._error = str(error)
                     if self._phase in ("starting", "joining", "leaving"):
@@ -883,33 +985,49 @@ class RoomService:
                     future.set_exception(RoomError("room_operation_failed"))
                 else:
                     future.set_result(result)
-                self._tick()
+                finally:
+                    self._active_action = None
+                self._observe_tick()
         finally:
-            self._end_room()
-            for _ in range(20):
-                if self._close_channel():
-                    break
-                self._wake.wait(.01); self._wake.clear()
-            transport, self._transport = self._transport, None
-            if transport is not None:
-                self._retiring_transport = transport
-            self._close_retiring_transport()
-            while not self._actions.empty():
-                _, _, future = self._actions.get_nowait()
-                if not future.done():
-                    future.set_exception(RoomError("room_closed"))
-            self._phase = "closed"; self._publish()
+            self._finish_shutdown()
 
-    def close(self):
+    def _finish_shutdown(self):
+        self._end_room()
+        transport, self._transport = self._transport, None
+        if transport is not None:
+            self._retiring_transport = transport
+        while not self._actions.empty():
+            future = self._actions.get_nowait().future
+            if not future.done():
+                future.set_exception(RoomError("room_closed"))
+        # A bounded public join may report pending, but this sole executor
+        # keeps the exact retained owners until release really succeeds.
+        while True:
+            channel_closed = self._close_channel()
+            transport_closed = self._close_retiring_transport()
+            if channel_closed and transport_closed:
+                break
+            self._phase = "closing"; self._publish()
+            self._wake.wait(.25); self._wake.clear()
+        self._phase = "closed"; self._publish()
+
+    def _observe_tick(self):
+        try:
+            self._tick()
+        except Exception:  # noqa: BLE001 - a passive observation cannot kill the room executor
+            self._transport_failed("room_observation_failed")
+            self._publish()
+
+    def close(self, timeout_s=15):
         self._local_revoke(); self._stop.set(); self._wake.set()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
-            thread.join(15)
+            thread.join(timeout_s)
             if thread.is_alive():
                 raise RoomError("room_cleanup_pending")
             if self._channel is not None:
                 raise RoomError("room_cleanup_pending")
-            if not self._close_retiring_transport():
+            if self._retiring_transport is not None:
                 raise RoomError("room_cleanup_pending")
         if thread is None:
             self._phase = "closed"; self._publish()
