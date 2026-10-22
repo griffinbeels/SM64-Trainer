@@ -1040,3 +1040,19 @@ entries live in the chain catalogues:
   witnesses (they need `SM64_TEST_GPU_BRIDGE=1` or `SM64_TEST_GPU_SELECTION=1`),
   so nothing went red. After any native contract change, run them with their
   flags on this machine's NVIDIA GPU.
+
+
+### Opening a newly created picture channel
+
+Windows exposes a new zero-filled channel mapping before its producer has
+published the immutable header. Sequence zero, or an unstable first copy, is
+therefore pending publication. The client closes its partial view/handle and
+raises BlockingIOError so CaptureSession retries within the existing startup
+deadline while still observing producer/ROM retirement. A stable nonzero even
+header must pass all existing version, size, identity and layout checks.
+Invalid published headers are never retried as an unsupported codec.
+
+The actual x86 Producer::create publication boundary is held by a test-only
+gate in tests/test_gpu_channel.py. It reproduces the old ProtocolError, proves
+publication permits a subsequent open, checks bounded waiting and pending
+open retirement, and retains malformed published-header refusal coverage.
