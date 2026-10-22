@@ -550,6 +550,45 @@ class NativeGhost:
             self._served_by = served = None
         return served is not None
 
+    def silent_failure_status(self):
+        """Current command expectation, without resolving clips or discovering a process.
+
+        The opaque scope is used only by the local observer. It must never be
+        copied into automatic diagnostics or treated as account identity.
+        """
+        if not self._control_lock.acquire(blocking=False):
+            return {}
+        try:
+            status = (self._source.snapshot_status(blocking=False) or {}) if self._source is not None else {}
+            producer = status.get("producer")
+            shown = bool(self._requested and not self._hidden and not self._owner_suspended
+                         and self._origin is not None and (self._controls or {}).get("opacity", 1) > 0)
+            playing = bool(shown and self._enabled and self._selected_asset)
+            preparing = bool(shown and not self._preparation_canceled and self._adaptive_generation
+                             and self._pending_asset and (self._sent or {}).get("prepare_generation") == self._adaptive_generation)
+            expected = playing or preparing
+            # GIPC_READY acknowledges configure(), before the renderer's safe
+            # boundary necessarily adopts it. Disabled/preparing playback can
+            # still be a missing acknowledgment of this armed visible command.
+            waiting = bool(expected and status.get("reason") == 0
+                           and (status.get("state") in (1, 2, 3)
+                                or status.get("state") == 4 and status.get("playback_reason") in (0, 1)))
+            return {"expected_display": expected, "overlay_hidden": bool(self._hidden),
+                    "owner_suspended": bool(self._owner_suspended),
+                    "awaiting_preparation": waiting,
+                    "display_pending": bool(playing and status.get("state") == 4
+                                            and status.get("playback_reason") == 2 and not status.get("displayed")),
+                    "available": status.get("available") is True, "state": status.get("state"),
+                    "decision": status.get("playback_reason"), "displayed": status.get("displayed") is True,
+                    "progress": tuple(status.get(key) for key in
+                        ("state", "reason", "playback_state", "playback_reason", "prepared_generation",
+                         "active_generation", "clips_prepared")),
+                    "observed_unix_s": status.get("observed_unix_s"),
+                    "scope": (id(self._source), self._target, self._adaptive_generation,
+                              getattr(producer, "configuration", None), getattr(producer, "epoch", None))}
+        finally:
+            self._control_lock.release()
+
     def state(self):
         status = (self._source.snapshot_status() or {}) if self._source is not None else {}
         self._remember_renderer(status)

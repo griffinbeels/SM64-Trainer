@@ -32,6 +32,7 @@ _CONTEXT_KEYS = frozenset({
     "native_result", "native_stage", "native_operation", "native_hresult", "encoder_error", "driver_error",
     "encoder_result", "native_reason",
     "gl_vendor", "gl_renderer", "gl_version", "missing_entry_point",
+    "stalled_for_s",
 })
 
 

@@ -104,6 +104,14 @@ def test_worker_failure_survives_disarm_and_resets_on_accepted_request_cpu(host)
     assert result.stdout.strip() == "diagnostic 10010 17 10011 10000 0"
 
 
+def test_terminal_reason_and_detail_are_coherent_before_drain_publication_cpu(host):
+    result = subprocess.run([str(host), "--diagnostic-race-cpu"], capture_output=True, text=True,
+                            timeout=5, check=True, **quiet_spawn_kwargs())
+    # Actual fail callback -> gd_read_status -> production control projection.
+    # Later cancellation preserves the pair; accepted new identity clears both.
+    assert result.stdout.strip() == "failure coherence 10005 4 10031 10005 4 10031 0 0 0"
+
+
 def test_omission_frontier_uses_identity_before_source_record_release_cpu(host):
     result = subprocess.run(
         [str(host), "--omission-custody-cpu"], capture_output=True, text=True,

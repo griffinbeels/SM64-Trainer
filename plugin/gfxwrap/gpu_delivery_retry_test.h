@@ -150,5 +150,5 @@ extern "C" int gd_test_failure_snapshot(gd_diagnostic*out,uint32_t*receipts){
     });
     r.fail(GD_SOURCE_REFUSED,7);r.fail(GD_DEADLINE,8);gd_set_diagnostic(nullptr);
     receipts[0]=calls;receipts[1]=gate_at_callback;
-    return r.first_failure.load()==GD_SOURCE_REFUSED && r.error==7 && !r.gate.load();
+    return r.first_failure.load()==((uint64_t(7)<<32)|GD_SOURCE_REFUSED) && !r.gate.load();
 }

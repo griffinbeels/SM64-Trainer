@@ -167,11 +167,17 @@ class GhostSession:
 
     def diagnostic_status(self) -> dict:
         """Cached logical state only: no labels, roster paths or playback commands."""
+        expectation = self.silent_failure_status()
         return {"enabled": bool(self._values.get("enabled")), "has_target": self._target is not None,
                 "candidates_count": len(self._candidates),
                 "playing_count": sum(bool(row.get("available")) for row in self._native_answer.get("ghosts", [])),
                 "source_available": bool(self._source.get("available")),
-                "source_reason": self._source.get("reason")}
+                "source_reason": self._source.get("reason"),
+                **{key: expectation.get(key, False) for key in
+                   ("expected_display", "overlay_hidden", "owner_suspended")}}
+
+    def silent_failure_status(self) -> dict:
+        return self._native.silent_failure_status() if self._native is not None else {}
 
     def payload(self) -> dict:
         """Preferences, chosen ghosts, readiness and native visibility."""

@@ -197,6 +197,46 @@ def test_preparing_is_valid_but_has_independent_setup_deadline():
     d.close()
 
 
+@pytest.mark.parametrize(("case", "changes", "expected"), [
+    ("active", {"state": C.ACTIVE}, None),
+    ("typed_refusal", {"state": C.UNAVAILABLE, "reason": 10031}, "native_capture_ended:3:10031"),
+    ("changed_process", {"producer_pid": 78}, "producer_pid_changed"),
+    ("changed_generation", {"generation": 5}, "producer_identity_changed"),
+    ("closed_rom", {"rom_open": False}, "rom_closed"),
+    ("lost_capability", {"capabilities": 0}, "gpu_capture_unavailable"),
+    ("preparing", {"state": C.PREPARING}, "capture_setup_deadline"),
+    ("stale_ack", {"state": C.ACTIVE, "ack_token": 999}, "capture_setup_deadline"),
+    ("contended", {}, "capture_setup_deadline"),
+])
+def test_final_startup_observation_wins_over_an_elapsed_deadline(monkeypatch, case, changes, expected):
+    """Read the actual last control observation; don't lengthen the time budget."""
+    f = Fixture()
+    request = Request(f)
+    f.change(ack_token=request.identity.token, **{k: v for k, v in changes.items() if k != "ack_token"})
+    if "ack_token" in changes:
+        f.change(ack_token=changes["ack_token"])
+    clocks = iter((0.0, 5.0))
+    d = f.demand(clock=lambda: next(clocks, 5.0))
+    status = f.status
+    def observe():
+        if case == "contended":
+            f.log("status")
+            raise BlockingIOError("control publication in progress")
+        result = status()
+        if case == "active":
+            d.stop_event.set()  # End this synchronous fixture after the success observation.
+        return result
+    monkeypatch.setattr(f, "status", observe)
+    if expected is None:
+        d._monitor(f, request)
+        assert d.snapshot.state == "active"
+    else:
+        with pytest.raises(D.DemandFailure, match=expected):
+            d._monitor(f, request)
+        assert not f.renews
+    assert [name for name, _ in f.calls].count("status") == 1
+
+
 def test_admission_rechecks_status_inside_request_prepare():
     f = Fixture()
     f.before_acquire = lambda: f.change(rom_open=False)

@@ -278,8 +278,7 @@ class GpuDemand:
         capability_lost_at = None
         while not self.stop_event.is_set():
             now = self._clock()
-            if not active and now - started >= self._setup_timeout:
-                raise DemandFailure("capture_setup_deadline")
+            setup_expired = not active and now - started >= self._setup_timeout
             try:
                 status = control.status()
             except BlockingIOError:
@@ -291,7 +290,7 @@ class GpuDemand:
                     if str(failure) != "gpu_capture_unavailable":
                         raise
                     capability_lost_at = now if capability_lost_at is None else capability_lost_at
-                    if now - capability_lost_at >= self.CLOSING_GRACE_S:
+                    if setup_expired or now - capability_lost_at >= self.CLOSING_GRACE_S:
                         raise
                     self.stop_event.wait(self.CLOSING_POLL_S)
                     continue
@@ -322,6 +321,11 @@ class GpuDemand:
                     self._publish(state="active" if active else "preparing")
                 elif acknowledged:
                     raise DemandFailure("native_request_replaced")
+            # A final nonblocking observation may already contain activation,
+            # a typed refusal or a retired producer. Do not discard it merely
+            # because this poll arrived at the deadline; grant no extra wait.
+            if setup_expired and not active:
+                raise DemandFailure("capture_setup_deadline")
             if now - last_renew >= self._renew:
                 if not request.renew():
                     raise DemandFailure("capture_lease_lost")

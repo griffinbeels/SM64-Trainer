@@ -13,11 +13,25 @@ from sm64_events.core.native_diagnostics import NativeDiagnostics
 
 
 class DiagnosticSnapshot:
-    def __init__(self, *, capture=None, ghost=None, setup=None, pipeline=None, resources=None, native=None):
+    def __init__(self, *, capture=None, ghost=None, setup=None, pipeline=None, resources=None, native=None, progress=None):
         self._sources = dict(capture=capture, ghost=ghost, setup=setup, pipeline=pipeline, resources=resources)
         self._native = native if native is not None else NativeDiagnostics()
         self._lock = threading.Lock()
         self._closed = False
+        self._progress = progress
+
+    @property
+    def has_progress(self):
+        return self._progress is not None
+
+    def progress(self):
+        """Private cached counters only; never native/file scans or automatic payloads."""
+        if not self._lock.acquire(blocking=False):
+            return None
+        try:
+            return self._progress() if not self._closed and self._progress is not None else None
+        finally:
+            self._lock.release()
 
     def collect(self, *, local=False):
         if not self._lock.acquire(blocking=False):

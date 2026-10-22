@@ -1337,6 +1337,22 @@ class ReplayRecorder:
         return (self._recording and self.recording_enabled and not self._stopping
                 and getattr(self._video_source, "recording_active", True))
 
+    def silent_failure_status(self) -> dict:
+        """Private cached progress for the observer; scope never enters a report."""
+        status = self.status(nonblocking=True)
+        health = status.get("frame_source_health") or {}
+        receipt = health.get("capture_receipt") or {}
+        pictures = (receipt.get("delivered", health.get("delivered", 0))
+                    if status["frame_source"] == "plugin" else
+                    self._pictures_fed if self._picture_feed else self._stat_written)
+        return {"scope": (self._recording_revision, self._capture_window,
+                          id(self._video_source), health.get("sessions_started")),
+                "recording_enabled": status["recording_enabled"],
+                "paused": self._session_paused, "gated": self._capture_gated,
+                "storage_pressure": self.ring.storage_pressure,
+                "player_active": (not self._idle and time.monotonic() - self._last_player_active <= 5.0),
+                "pictures": pictures}
+
     def diagnostic_status(self) -> dict:
         """Read cached route evidence; never acquire capture, graphics or file resources."""
         current = self.status(nonblocking=True)

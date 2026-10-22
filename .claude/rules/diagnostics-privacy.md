@@ -2,6 +2,7 @@
 paths:
   - "src/sm64_events/core/diagnostic*.py"
   - "src/sm64_events/core/native_diagnostics.py"
+  - "src/sm64_events/core/silent_failures.py"
   - "src/sm64_events/core/error_reporting*.py"
   - "src/sm64_events/core/logging_setup.py"
   - "src/sm64_events/core/perfmon.py"
