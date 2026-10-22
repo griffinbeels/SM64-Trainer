@@ -123,7 +123,7 @@ def sample_snapshot():
                               "stage_timings": {"channel": {"total_ms": 5000, "count": 1}}}}},
         "ghost": {"enabled": True, "has_target": True, "label": "PrivatePlayer",
                   "native": {"state": 5, "reason": 8, "displayed": False, "clip_path": "private.z64"}},
-        "setup": {"state": "needs_restart", "pj64_dir": "C:\\Users\\PrivateName", "runtime": {
+        "setup": {"state": "needs_restart", "configuration_consistent": False, "pj64_dir": "C:\\Users\\PrivateName", "runtime": {
                   "checks": {"pictures": False, "game": True}, "rom": {"region": "jp", "name": "PrivateROM"}}},
         "resources": {"rss_mib": 300, "machine": {"top_cpu": ["PrivateProgram"]}},
         "native": {"events": technical_events(native_line()), "raw": "PrivateLog"}}
@@ -192,6 +192,7 @@ def test_real_sdk_carries_current_fault_evidence_through_both_scrubbers(reporter
     reporting.capture_problem("Synthetic capture startup failure")
     event = captured_event(reporter)
     assert event["extra"]["diagnostics"]["ghost"]["native"]["reason"] == 8
+    assert event["extra"]["diagnostics"]["setup"]["configuration_consistent"] is False
     assert "Private" not in json.dumps(event)
     unbind()
 
