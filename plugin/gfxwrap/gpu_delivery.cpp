@@ -739,7 +739,13 @@ struct Runtime {
 #ifdef GD_TEST_HOST
         test_deadline_visits.fetch_add(1);
 #endif
-        if(live() && state.load()!=GD_ACTIVE && qpc()-(channel_started?channel_started:started)>frequency*setup_deadline_ms/1000)fail(GD_DEADLINE);
+        if(live() && state.load()!=GD_ACTIVE && qpc()-(channel_started?channel_started:started)>frequency*setup_deadline_ms/1000){
+            // Existing admission/surface evidence distinguishes the two quiet
+            // bootstrap waits. Keep the deadline and every safety gate intact.
+            const auto why=state.load()==GD_BOOTSTRAP
+                ? (startup.width?GD_SETUP_GATEWAY_REFUSED:GD_SETUP_NO_SURFACE):GD_DEADLINE;
+            fail(why);
+        }
         return false;
     }
     // A paused emulator stops calling back; the pause is not the pictures' age.
@@ -1043,6 +1049,9 @@ extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     for(unsigned n=0;n<table.count;++n)table.rows[n]={h->table[n].offset,h->table[n].length};
     if(!sa_publish_table(&table)){r->source.disarm();r->request_state.store(0);return GD_INVALID;}
     r->request=*h;r->budget=budget;r->epoch=e;r->reason.store(GD_NONE);r->first_failure.store(GD_NONE);r->session_cancel.store(cancelled);
+    // Prior source callbacks are quiescent before fresh admission. Their last
+    // deferred sample fault must not quarantine the new epoch on its first VI.
+    r->sample_fault.store(0);r->twin_capture_fault.store(0);
     // request_state=1 exclusively owns the now-empty worker state. Publish the
     // fresh identity and BOOTSTRAP synchronously, before the supervisor can read
     // an old OFF/FAULT status after ACCEPTED. This is bounded CPU metadata only;
@@ -1114,6 +1123,49 @@ extern "C" int __cdecl gd_read_startup(gpu_startup_v1*out){
 #ifdef GD_TEST_HOST
 #include "gpu_delivery_retry_test.h"
 extern "C" int __cdecl rc_test_delivery_status(uint32_t*,uint32_t*);
+extern "C" int gd_test_bootstrap_deadline(int surface_seen,uint32_t*out){
+    if(!out || runtime.load())return 0;
+    Runtime r;r.source.disarm=[](){};r.source.activate=[]()->uint32_t{return 17;};
+    r.source.take=[]()->const rb_record*{return nullptr;};
+    r.limits.max_slots=1;r.limits.snapshot_bytes=4u<<20;r.limits.channel_bytes=1u<<20;
+    LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);r.frequency=uint64_t(frequency.QuadPart);
+    r.wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r.changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    if(!r.wake || !r.changed){if(r.wake)CloseHandle(r.wake);if(r.changed)CloseHandle(r.changed);return 0;}
+    runtime.store(&r);
+    gc_header h{};h.owner_pid=GetCurrentProcessId();h.owner_birth=gpu_channel::process_birth(GetCurrentProcess());
+    h.nonce_lo=23;h.generation=7;h.offer_count=h.table_count=h.packet_count=1;h.table[0]={0,4};
+    h.packet_bytes=h.pending_bytes=1024;h.ram_budget=1u<<20;
+    int valid=gd_request(&h,4u<<20)==GD_ACCEPTED;
+    if(surface_seen){r.startup.width=17;r.startup.height=11;r.publish_startup();}
+    r.started=qpc()-r.frequency*6; // Test-owned elapsed phase; no sleeps or GPU.
+    r.iterate(false);
+    gd_status observed{};valid=valid && gd_read_status(&observed);
+    out[0]=observed.reason;out[1]=observed.error;
+    uint32_t state=0;valid=valid && rc_test_delivery_status(&state,&out[2]);
+    gd_disarm(GD_CANCELLED);runtime.store(nullptr);CloseHandle(r.wake);CloseHandle(r.changed);return valid;
+}
+extern "C" int gd_test_request_fault_reset(uint32_t*out){
+    if(!out || runtime.load())return 0;
+    Runtime r;r.source.disarm=[](){};r.source.activate=[]()->uint32_t{return 17;};
+    r.source.take=[]()->const rb_record*{return nullptr;};
+    r.limits.max_slots=1;r.limits.snapshot_bytes=4u<<20;r.limits.channel_bytes=1u<<20;
+    LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);r.frequency=uint64_t(frequency.QuadPart);
+    r.wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r.changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    if(!r.wake || !r.changed){if(r.wake)CloseHandle(r.wake);if(r.changed)CloseHandle(r.changed);return 0;}
+    runtime.store(&r);
+    // A cancelled old epoch ended without another renderer tick to consume them.
+    r.sample_fault.store(ERROR_INVALID_DATA);r.twin_capture_fault.store(GD_TWIN_SNAPSHOT_FAILED);
+    gc_header h{};h.owner_pid=GetCurrentProcessId();h.owner_birth=gpu_channel::process_birth(GetCurrentProcess());
+    h.nonce_lo=23;h.generation=7;h.offer_count=h.table_count=h.packet_count=1;h.table[0]={0,4};
+    h.packet_bytes=h.pending_bytes=1024;h.ram_budget=1u<<20;
+    int valid=gd_request(&h,4u<<20)==GD_ACCEPTED;
+    r.render_tick(rb_surface{}); // Metadata-only bootstrap: no surface, GL or GPU work.
+    out[0]=r.diagnostic_reason();out[1]=r.exhausted.load();out[2]=r.twin_capture_fault.load();
+    r.sample_fault.store(ERROR_INVALID_DATA); // A genuine fault in this new epoch still fails.
+    r.render_tick(rb_surface{});
+    out[3]=r.diagnostic_reason();out[4]=r.exhausted.load();
+    gd_disarm(GD_CANCELLED);runtime.store(nullptr);CloseHandle(r.wake);CloseHandle(r.changed);return valid;
+}
 // Observe real fail() inside its callback, before revoke/drain can publish a
 // replacement status. No worker, context, renderer or live control page exists.
 extern "C" int gd_test_failure_status_coherence(gd_status*out,uint32_t*controls){

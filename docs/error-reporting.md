@@ -95,8 +95,7 @@ timed failure cannot upload after opt-out/re-enable. A saved opt-out is never
 overridden by the default-on setting, and an unreadable preference stays off.
 
 These are operational invariants, not visual recognition. A short intermittent
-no-show, failed work without enough current native evidence, an incoming live
-peer without a per-peer presentation receipt, or UI progress before a running
+no-show, failed work without enough current native evidence, or UI progress before a running
 game cannot all be classified honestly. Existing browser/operation exceptions
 still report, but this detector does not claim every invisible failure is
 observable or that an absent receipt proves a particular GPU root cause.

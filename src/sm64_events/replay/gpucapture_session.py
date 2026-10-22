@@ -12,6 +12,7 @@ from sm64_events.core.childproc import python_child
 from sm64_events.core.paths import bundled_encoder_dll
 from sm64_events.replay.gpucapture import GpuBackendUnsupported, GpuCleanupError, GpuStartupUnavailable
 from sm64_events.replay import gpuchannel
+from sm64_events.replay.gpudemand import STARTUP_PUBLICATION_GRACE_S
 from sm64_events.replay.gpuinput import OfferDecoder, ChannelSelection
 from sm64_events.replay.ghostcopy import GhostCopyLane
 from sm64_events.replay.gpumedia import GpuMedia
@@ -137,7 +138,7 @@ class CaptureSession:
             identity = self.demand.identity
             if identity is not None:
                 if deadline is None:
-                    deadline = time.monotonic() + self.settings.startup_s
+                    deadline = time.monotonic() + self.settings.startup_s + STARTUP_PUBLICATION_GRACE_S
                 try:
                     self.channel = self.channel_factory(
                         nonce=struct.unpack("<QQ", identity.nonce),
@@ -145,6 +146,9 @@ class CaptureSession:
                         producer_pid=identity.producer_pid,
                         producer_birth=identity.producer_birth,
                     )
+                    notify = getattr(self.demand, "note_channel_opened", None)
+                    if notify is not None and not notify(identity):
+                        return False  # The owner changed/stopped while the channel opened.
                     # The native worker signals this event on every offer,
                     # bridge and status publication: wake the tick on it
                     # instead of sleeping out the timer period.
@@ -379,7 +383,7 @@ class CaptureSession:
         if (self._stage == "channel" and self.channel is None and not snapshot.cancelled
                 and self.owner.want_capture()
                 and (snapshot.reason == "capture_setup_deadline"
-                     or snapshot.backend_reason == 10012  # native GD_DEADLINE
+                     or snapshot.backend_reason in (10012, 10034, 10035)  # Typed native startup waits.
                      or isinstance(exc, TimeoutError) and str(exc) == "GPU recording startup deadline")):
             return GpuStartupUnavailable(self.error)
         return RuntimeError(self.error) if snapshot.reason else None

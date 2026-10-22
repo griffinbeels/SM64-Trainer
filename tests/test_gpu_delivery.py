@@ -112,6 +112,19 @@ def test_terminal_reason_and_detail_are_coherent_before_drain_publication_cpu(ho
     assert result.stdout.strip() == "failure coherence 10005 4 10031 10005 4 10031 0 0 0"
 
 
+def test_retired_sample_fault_cannot_poison_a_new_capture_epoch_cpu(host):
+    result = subprocess.run([str(host), "--request-fault-reset-cpu"], capture_output=True, text=True,
+                            timeout=5, check=True, **quiet_spawn_kwargs())
+    assert result.stdout.strip() == "request fault reset 0 0 0 10007 1"
+
+
+@pytest.mark.parametrize(("surface_seen", "reason"), [(0, 10034), (1, 10035)])
+def test_bootstrap_deadline_distinguishes_surface_and_gateway_waits_cpu(host, surface_seen, reason):
+    result = subprocess.run([str(host), "--bootstrap-deadline-cpu", str(surface_seen)],
+                            capture_output=True, text=True, timeout=5, check=True, **quiet_spawn_kwargs())
+    assert result.stdout.strip() == f"bootstrap deadline {reason} 0 {reason}"
+
+
 def test_omission_frontier_uses_identity_before_source_record_release_cpu(host):
     result = subprocess.run(
         [str(host), "--omission-custody-cpu"], capture_output=True, text=True,

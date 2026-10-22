@@ -17,6 +17,10 @@ from sm64_events.replay.gpudiagnostics import native_reason
 from sm64_events.replay.ownedclose import CleanupPending, retain
 
 log = logging.getLogger("sm64.replay")
+# Native preparation owns five seconds per phase. Allow its terminal verdict
+# to traverse the control worker and supervisor poll before a Python timeout.
+# This is bounded scheduling slack, not a hard-real-time delivery guarantee.
+STARTUP_PUBLICATION_GRACE_S = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +61,7 @@ class GpuDemand:
         poll_seconds=0.1,
         renew_seconds=0.5,
         setup_timeout=5.0,
+        publication_grace=STARTUP_PUBLICATION_GRACE_S,
     ):
         if type(expected_pid) is not int or expected_pid <= 0:
             raise ValueError("expected producer PID required")
@@ -64,6 +69,8 @@ class GpuDemand:
             raise ValueError("poll and renewal intervals exceed lease safety bounds")
         if not 0 < setup_timeout <= 5.0:
             raise ValueError("setup deadline must be within five seconds")
+        if not 0 <= publication_grace <= STARTUP_PUBLICATION_GRACE_S:
+            raise ValueError("startup publication grace must be within one second")
         self.expected_pid, self.table, self.limits = expected_pid, tuple(table), limits
         self.control_name = control_name
         self.stop_event = stop_event if stop_event is not None else threading.Event()
@@ -72,6 +79,8 @@ class GpuDemand:
         self._control_factory, self._request_factory = control_factory, request_factory
         self._clock, self._poll, self._renew = clock, poll_seconds, renew_seconds
         self._setup_timeout = setup_timeout
+        self._publication_grace = publication_grace
+        self._channel_opened_at = None
         self._lock, self._thread = threading.Lock(), None
         self._snapshot = DemandSnapshot()
         self._stop_reason = ""
@@ -91,6 +100,26 @@ class GpuDemand:
     def _publish(self, **changes):
         with self._lock:
             self._snapshot = replace(self._snapshot, **changes)
+
+    def note_channel_opened(self, identity):
+        """Once per request, after the media worker validates the real channel."""
+        with self._lock:
+            if (self.stop_event.is_set() or self._snapshot.identity != identity
+                    or self._snapshot.state in ("ending", "fault", "stopped")):
+                return False
+            if self._channel_opened_at is None:
+                self._channel_opened_at = self._clock()
+            return True
+
+    def _startup_expired(self, started, now):
+        """Reconcile phase notification and the final timeout decision atomically."""
+        with self._lock:
+            phase_started = started if self._channel_opened_at is None else self._channel_opened_at
+            if now - phase_started < self._setup_timeout + self._publication_grace:
+                return False
+            # A notification after this decision cannot revive this request.
+            self._snapshot = replace(self._snapshot, state="ending")
+            return True
 
     def start(self):
         with self._lock:
@@ -278,7 +307,6 @@ class GpuDemand:
         capability_lost_at = None
         while not self.stop_event.is_set():
             now = self._clock()
-            setup_expired = not active and now - started >= self._setup_timeout
             try:
                 status = control.status()
             except BlockingIOError:
@@ -290,7 +318,8 @@ class GpuDemand:
                     if str(failure) != "gpu_capture_unavailable":
                         raise
                     capability_lost_at = now if capability_lost_at is None else capability_lost_at
-                    if setup_expired or now - capability_lost_at >= self.CLOSING_GRACE_S:
+                    if (not active and self._startup_expired(started, now)
+                            or now - capability_lost_at >= self.CLOSING_GRACE_S):
                         raise
                     self.stop_event.wait(self.CLOSING_POLL_S)
                     continue
@@ -324,7 +353,7 @@ class GpuDemand:
             # A final nonblocking observation may already contain activation,
             # a typed refusal or a retired producer. Do not discard it merely
             # because this poll arrived at the deadline; grant no extra wait.
-            if setup_expired and not active:
+            if not active and self._startup_expired(started, now):
                 raise DemandFailure("capture_setup_deadline")
             if now - last_renew >= self._renew:
                 if not request.renew():

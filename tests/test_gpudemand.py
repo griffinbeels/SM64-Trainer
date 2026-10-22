@@ -71,6 +71,7 @@ class Fixture:
         return self.request
 
     def demand(self, **kwargs):
+        kwargs.setdefault("publication_grace", 0.0)  # Pin this fixture's exact deadline; phase tests cover slack.
         return D.GpuDemand(77, TABLE, LIMITS, control_factory=self.control,
                            request_factory=self.acquire, poll_seconds=0.01,
                            renew_seconds=0.03, **kwargs)
