@@ -202,6 +202,7 @@ public:
     void adopt() { worker_ = GetCurrentThreadId(); }
 #ifdef GC_TEST_HOST
     void *test_view() const { return view_; }
+    bool (*test_before_header)(void *) = nullptr;
 #endif
 private:
     Result check();

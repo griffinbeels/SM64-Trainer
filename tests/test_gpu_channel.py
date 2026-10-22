@@ -98,6 +98,7 @@ class Host:
         height=480,
         *,
         nonce=None,
+        defer_header=False,
         generation=1,
         owner_pid=None,
         birth=None,
@@ -115,6 +116,7 @@ class Host:
                 str(width),
                 str(height),
                 str(generation),
+                *(["defer-header"] if defer_header else []),
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -1183,3 +1185,112 @@ def test_header_refuses_a_twin_block_off_the_contract(mutation):
         h.total_bytes -= G.TWIN_BYTES  # a version-2 size with a version-3 header
     with pytest.raises(G.ProtocolError):
         G.validate_header(h, G.MAX_MAP)
+
+
+def test_native_mapping_exists_before_header_publication_then_opens(native):
+    """Pause the shipped x86 producer at the actual publication boundary."""
+    with Host(native, defer_header=True) as host:
+        assert host.info["result"] == "pending_header"
+        for _ in range(3):
+            with pytest.raises(BlockingIOError, match="header"):
+                host.client()
+        host.info = host.ask("publish_header")
+        assert host.info["result"] == "ok"
+        with host.client() as client:
+            assert client.header.seq == 2 and client.header.epoch == 7
+
+
+@pytest.mark.parametrize("sequence", [0, 1])
+def test_pending_header_never_reaches_field_validation(native, sequence):
+    with Host(native, defer_header=True) as host:
+        name = f"{G.NAMESPACE}{host.nonce[1]:016x}{host.nonce[0]:016x}"
+        with mmap.mmap(-1, G.HEADER_BYTES, tagname=name) as observer:
+            observer[:4] = struct.pack("<I", sequence)
+            with pytest.raises(BlockingIOError, match="header"):
+                host.client()
+            observer[:4] = bytes(4)
+        host.info = host.ask("publish_header")
+        with host.client():
+            pass
+
+
+@pytest.mark.parametrize("mutation", ["magic", "version", "header_bytes"])
+def test_published_bad_header_is_never_reclassified_as_pending(native, mutation):
+    with Host(native, defer_header=True) as host:
+        name = f"{G.NAMESPACE}{host.nonce[1]:016x}{host.nonce[0]:016x}"
+        with mmap.mmap(-1, G.HEADER_BYTES, tagname=name) as observer:
+            h = G.Header(seq=2, version=G.VERSION, header_bytes=G.HEADER_BYTES)
+            C.memmove(h.magic, G.MAGIC, len(G.MAGIC))
+            if mutation == "magic":
+                C.memset(h.magic, 0, len(G.MAGIC))
+            elif mutation == "version":
+                h.version -= 1
+            else:
+                h.header_bytes += 8
+            observer[:] = bytes(h)
+            expected = G.LayerVersionMismatch if mutation == "version" else G.ProtocolError
+            with pytest.raises(expected):
+                host.client()
+            observer[:] = bytes(G.HEADER_BYTES)
+
+
+@pytest.mark.parametrize("ending", ["publish", "pj64_close", "rom_close", "rom_switch", "recorder_stop"])
+def test_pending_channel_open_obeys_retirement_and_new_session(native, ending):
+    from types import SimpleNamespace as NS
+    from sm64_events.replay.gpucapture_session import CaptureSession
+    from sm64_events.replay.gpudemand import DemandSnapshot
+    from sm64_events.replay.gpusettings import GpuSettings
+
+    with Host(native, defer_header=True) as host:
+        identity = NS(nonce=struct.pack("<QQ", *host.nonce), control_generation=1,
+                      producer_pid=host.info["pid"], producer_birth=host.info["birth"])
+        admitted, watched, waits = [], [], []
+        demand = NS(identity=identity, snapshot=DemandSnapshot("preparing"),
+                    note_channel_opened=lambda value: admitted.append(value) or True)
+        wanted = [True]
+
+        def waiting(_seconds):
+            waits.append(True)
+            if ending == "publish":
+                host.info = host.ask("publish_header")
+            elif ending == "recorder_stop":
+                wanted[0] = False
+            else:
+                if ending == "pj64_close":
+                    host.process.stdin.write("quit\n")
+                    host.process.stdin.flush()
+                    host.process.wait(timeout=3)
+                demand.snapshot = DemandSnapshot("stopped", ending, lifecycle=True)
+
+        owner = NS(settings=GpuSettings(), want_capture=lambda: wanted[0],
+                   wait=waiting, watch=watched.append)
+        session = CaptureSession(owner, demand)
+        try:
+            assert session._open_channel() is (ending == "publish")
+            assert len(waits) == 1
+            assert len(admitted) == len(watched) == (1 if ending == "publish" else 0)
+        finally:
+            if session.channel is not None:
+                session.channel.close()
+    # Retired/partially opened mappings never block the next producer/ROM epoch.
+    with Host(native) as next_host, next_host.client() as client:
+        assert client.header.producer_pid == next_host.info["pid"]
+
+
+def test_unpublished_header_wait_still_has_a_startup_deadline(native):
+    from dataclasses import replace
+    from types import SimpleNamespace as NS
+    from sm64_events.replay import gpucapture_session as S
+    from sm64_events.replay.gpudemand import DemandSnapshot
+    from sm64_events.replay.gpusettings import GpuSettings
+
+    with Host(native, defer_header=True) as host:
+        demand = NS(identity=NS(nonce=struct.pack("<QQ", *host.nonce), control_generation=1,
+                    producer_pid=host.info["pid"], producer_birth=host.info["birth"]),
+                    snapshot=DemandSnapshot("preparing"))
+        owner = NS(settings=replace(GpuSettings(), startup_s=0.01),
+                   want_capture=lambda: True, wait=lambda delay: time.sleep(delay))
+        started = time.monotonic()
+        with pytest.raises(TimeoutError, match="startup deadline"):
+            S.CaptureSession(owner, demand)._open_channel()
+        assert time.monotonic() - started < 3
