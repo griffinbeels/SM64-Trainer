@@ -30,6 +30,7 @@ class SetupRuntime:
         self._next_read = 0.0
         self._cached = {}
         self._diagnostic_observed_at = None
+        self._setup_pending = False
         self._cached_layer = None
         self._window = CounterWindow(clock)
         self._steady = SteadyChecks(clock)
@@ -66,6 +67,20 @@ class SetupRuntime:
     def diagnostic_status(self) -> dict:
         """Last committed observation; never discover processes or attach memory."""
         return {**self._cached, "observed_unix_s": self._diagnostic_observed_at}
+
+    def note_setup_state(self, record):
+        """The setup router's already-read progress; no extra file/OS observation."""
+        self._setup_pending = bool(record.get("started") and not record.get("completed_at"))
+
+    def silent_failure_status(self, layer):
+        runtime = self.diagnostic_status()
+        rom, target = runtime.get("rom") or {}, runtime.get("target") or {}
+        return {"pending": self._setup_pending, "observed_unix_s": runtime.get("observed_unix_s"),
+                "scope": (target.get("pid"), rom.get("region")),
+                "installed": layer.get("installation_verified") is True,
+                "running": layer.get("pj64_running") is True,
+                "rom_supported": rom.get("state") == "supported",
+                "checks": runtime.get("checks") or {}}
 
     def _reader_for(self, pid):
         """This process's reader, attached once; None while there is no

@@ -39,6 +39,10 @@ def _before_send(event, _hint):
     if not _enabled:
         return None
     generation = _consent_generation
+    extra = event.get("extra")
+    requested = extra.pop("_reporting_epoch", None) if isinstance(extra, dict) else None
+    if requested is not None and requested != generation:
+        return None
     crumbs = event.get("breadcrumbs", {})
     if isinstance(crumbs, dict):
         crumbs["values"] = [crumb for crumb in crumbs.get("values", [])
@@ -175,13 +179,24 @@ def capture_exception(error, *, context=None):
         return None
 
 
-def capture_problem(message, *, context=None):
+def collection_epoch():
+    """An ephemeral consent fence for optional observers; never a player identity."""
+    with _lock:
+        return _consent_generation if _client is not None and _enabled else None
+
+
+def capture_problem(message, *, context=None, expected_generation=None):
     """Capture detectable failures which did not throw an exception."""
-    if _client is None or not _enabled:
+    generation = _consent_generation if expected_generation is None else expected_generation
+    client = _client
+    if client is None or not _enabled or generation != _consent_generation:
         return None
     try:
         with sentry_sdk.new_scope() as scope:
-            scope.set_client(_client)
+            scope.set_client(client)
+            # The callback consumes this before projection. Never hold the
+            # preference lock across diagnostic IO: opt-out must stay prompt.
+            scope.set_extra("_reporting_epoch", generation)
             for key, value in safe_context(context).items():
                 scope.set_extra(key, value)
             return sentry_sdk.capture_message(message, level="error")

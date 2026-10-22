@@ -21,9 +21,11 @@ import zipfile
 try:
     from tools.bundle_policy import check_bundle_path, ui_inputs
     from tools.build_eos_transport import DLL_SHA256
+    from tools.m3_test_instructions import portable_documents
 except ModuleNotFoundError:  # Direct `python tools/prepare_m3_test.py`.
     from bundle_policy import check_bundle_path, ui_inputs
     from build_eos_transport import DLL_SHA256
+    from m3_test_instructions import portable_documents
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_FILES = ("eos-transport.exe", "EOSSDK-Win64-Shipping.dll",
@@ -222,7 +224,10 @@ def _write_kit(workspace, out, copied, config_body, script, selected, *, portabl
     if not portable:
         readme += "This launcher works only on this machine, using the existing checkout and installed VC runtime.\nIt does not copy the checkout or its private configuration.\n"
     else:
-        readme += "The EOS DLL uses the three included VC runtime DLLs and the Windows 10+ Universal CRT.\n"
+        readme += ("Read START-HERE.txt for first-time Project64/Usamune setup and joining a room.\n"
+                   "The EOS DLL uses the three included VC runtime DLLs and the Windows 10+ Universal CRT.\n")
+        for name, body in portable_documents().items():
+            (out / member_name(name)).write_bytes(body.encode("utf-8"))
     (out / "README-M3-TEST.txt").write_text(readme, encoding="utf-8")
     entries = {name: {"bytes": path.stat().st_size, "sha256": digest(path)} for name, path in files_in(workspace, out)}
     manifest = {"schema": 1, "kind": "private-m3-test", "mode": "portable" if portable else "source",

@@ -76,6 +76,22 @@ def test_portable_launcher_resolves_all_paths_from_its_own_directory(inputs):
     assert "taskkill" not in body.lower() and "git " not in body.lower()
 
 
+def test_fresh_pc_guide_and_deliberate_shortcuts_are_in_the_verified_original_zip(inputs):
+    report = module.assemble(**inputs, archive=True)
+    out = inputs["out"]
+    with zipfile.ZipFile(out.with_name(out.name + ".zip")) as archive:
+        for name, body in module.portable_documents().items():
+            assert archive.read(name) == body.encode("utf-8")
+            assert report["files"][name]["sha256"] == module.digest(out / name)
+        guide = archive.read("START-HERE.txt").decode("utf-8")
+        assert "Project64 1.6 exactly" in guide and "v1.93u US on both PCs" in guide
+        assert "no game ROM" in guide and "not a copy re-zipped" in guide
+        assert "Install Practice Replay" in guide and "Copy my player code" in guide
+        assert "saved opt-out stays respected" in guide and "No Python" in guide
+        assert all("cache" not in name and not name.endswith((".z64", ".n64", ".v64"))
+                   for name in archive.namelist())
+
+
 def test_source_mode_is_a_nonportable_pointer_not_a_checkout_or_private_data_copy(inputs):
     source = inputs["workspace"] / "source-checkout"
     (source / ".venv/Scripts").mkdir(parents=True)
