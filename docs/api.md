@@ -8,7 +8,7 @@ the project? Start with the [README](../README.md). Developing here? Read
 
 `GET /api/diagnostics/reporting` returns `configured`, `enabled`, `pending` and
 safe collection counters. `PUT /api/diagnostics/reporting` accepts `{enabled: boolean}`;
-disabling stops capture and removes queued uploads. `POST /api/diagnostics/browser-error`
+disabling stops collection and removes queued uploads and breadcrumbs. `POST /api/diagnostics/browser-error`
 accepts bounded `message`, `stack` and `source` strings and returns 202. All mutations
 use the existing same-origin local request protection. Neither settings nor report
 responses expose the DSN or queued diagnostic contents. See [error reporting](error-reporting.md)
@@ -47,7 +47,7 @@ No recorder restart or capture-rate change occurs. See [profiling](profiling.md)
 | `GET /health` | Liveness: `{status, emulator_attached, held, clients, last_frame, db, session_id, memory, inputs}`. `inputs` is the pad sampler's counters (`samples, straddles, frames, edge_checks, edge_mismatches, skips, skipped_frames, worst_skip`) or null on a layout with no controller row; `edge_mismatches` must read 0 after play — the game's own buttonPressed confirming every frame number the capture assigned. The `skip` trio counts the other failure, the one a person sees as "No capture on this frame": the counter advancing by more than one between observed samples, so nobody read the frames in between and their input is gone (the game keeps no history to recover it from). It needs the poll loop to stall past a whole game frame, since eight samples land inside one at 250 Hz; measured over his journal 2026-08-31 at 84 frames of 93,958, 0.089%. A counter restart is not a skip. `held` is null normally; it is the reason string when the chosen game version's memory layout is not verified yet (JP before its sync run) — the poller then reads NOTHING and stays detached rather than reading US addresses off a JP ROM, and the string names the command that fills the layout (`tools/sync_version.py --version jp`) and the dashboard that shows what is missing (`/ui/sync.html`). |
 | `POST /api/admin/shutdown` | Graceful shutdown — the desktop "close the other instance" takeover path. `{"shutting_down": true}` |
 | `POST /api/admin/restart` | Full-process relaunch — the one-click "Restart server" button; picks up edited backend code. `{"restarting": true}` |
-| `POST /api/diagnostics` | One-button debug report — capped tails of the server log, journal, UI log and perf samples, plus the `/health` payload, in ONE markdown file under the replays `diagnostics/` dir (newest 5 kept). Sections degrade individually: an unreadable source names its failure instead of failing the report. Open the file via `POST /api/replay/reveal`. `{"path", "size_bytes"}` |
+| `POST /api/diagnostics` | Redacted support report with capture/GPU, ghost playback, cached setup checks, recognized native log records and bounded local diagnostic observations. No capture or installation is started. At most 3 files / 1 MiB each, expiring after 24 hours; cleanup runs at normal startup and export. Sources fail independently. Open via `POST /api/replay/reveal`. Response remains `{"path", "size_bytes"}`. [Evidence/privacy contract](error-reporting.md) |
 
 `GET /health` reports `polling: {state, error, last_error, failures, restarts,
 retry_in_s}`. The supervisor uses `starting`, `running`, `recovering`, and
@@ -144,7 +144,7 @@ local rank resources leave the header/progress readable with comparison unavaila
 Stamped ROMs remain original evidence; unstamped times are explicitly evaluated
 under the viewer's default ROM, with publisher default-ROM provenance retained.
 
-The full current snapshot preserves deliberate slower saves, Undo, deletion and
+The full current snapshot preserves legacy deliberate slower saves, Undo, deletion and
 reclassification. Raw saved `game_version`, joined `pb_version`, relative save
 order, stored frames and available original dates/source are distinct fields.
 Imports never acquire invented achievement dates or original centiseconds.
@@ -399,7 +399,7 @@ All endpoints are under `/api`. JSON in, JSON out.
 | `POST /api/attempts/{id}/clear` `{reason?}` | Tombstone an attempt (triggers re-projection). Also **undoes any PB the attempt saved**, both clocks — a pb row carries its own frames and would keep grading a hidden run; the previous save becomes current again, exactly as `/api/pb/undo` leaves it |
 | `POST /api/attempts/{id}/restore` | Undo a tombstone (triggers re-projection). Does NOT restore a PB the tombstone undid — that row is gone; re-save it with `/api/pb` |
 | `POST /api/attempts/{id}/strat` `{strat_tag}` | Reclassify one recorded attempt's strategy (`null` = no strategy); journaled, the row's own column retagged directly (no journal replay — that cost ~1 s on a live-sized journal, 2026-09-01), moves any PB the attempt saved, and broadcasts `attempts_invalidated` so every open page refetches. Older rows edit history only; reclassifying the entity's NEWEST non-cleared attempt also sets the active strategy ("that run was actually X" = "X is what I'm practicing"; `null` never propagates). `POST /api/strat` sets what to practice next directly |
-| `POST /api/pb` `{attempt_id, timer_mode}` | Save a personal best from a success attempt. A save only counts while its attempt is **visible**: hide the attempt and the PB stops grading, whichever way it was hidden (`/clear`, or a validity-bounds change auto-ignoring it). **A PB is per (target, strategy)** and may only be saved under the strategy the entity is currently being practised with: 409 with `foreign_strat` when the attempt carries a different (or no) `strat_tag`, and with `no_active_strat` when the entity has no strategy selected at all. Change the attempt's strategy (`/api/attempts/{id}/strat`) or the entity's (`/api/strat`) and retry — a PB no ladder can grade is unreachable by design |
+| `POST /api/pb` `{attempt_id, timer_mode}` | Save a strictly faster personal best from a success attempt. Equal/slower comparable times are refused with `not_faster`; the row's Save is disabled with a reason. Comparison uses the same clock/strategy/region slot as the PB header. Explicit Undo/clear remains available to correct an incorrect save. Saving a slower ghost is independent: View replay → input tools → Save as ghost. A save only counts while its attempt is **visible**: hiding it stops that PB grading. The active strategy must match (`foreign_strat`/`no_active_strat` otherwise). |
 | `POST /api/pb/undo` `{attempt_id, timer_mode}` | Undo the attempt's PB save (409 unless it is the current PB **for its own strategy**, and unless that strategy is the active one) — the previous save on that strategy becomes current again. Per strategy since 2026-08-20: a later save on ANOTHER strategy no longer buries this one |
 | `POST /api/import/manual` `{entity_key, strat_tag, time_cs, game_version?}` | Record a personal best you set before this tool watched you — an **imported time**. `entity_key` must name a star (`star:<course>:<star>`) or an existing local segment (`segment:<id>`); the entity's clock is selected automatically (normally IGT for stars, RTA for segments). The time is converted to frames by rounding UP to the next displayable centisecond, and lands **only if it beats your current best for that target and strategy** — so pressing this twice costs nothing. `game_version` (`"us"`/`"jp"`) is the ROM that set it and is what the rank grades against; omit it to grade on the running version. Returns `{source, found, imported, already_faster, unmappable, without_strategy, rejected, held}` (both lists are always `[]` for this door — nothing here can be dropped or held for a placement reason, unlike the sheet door below). Each landed time IS journaled — one `time_imported` event — and the projector derives a real practice-log attempt row from it, so it can be deleted or undone exactly like any played attempt (this reverses the tool's original v1 rule, which read "no attempt is created, it would break replay"). Every entity a batch lands on that has NO active strategy also gets its fastest current PB's strategy auto-selected — a normal journaled strategy pick, so it survives replay and dies with a lifetime `kind:"all"` wipe; an existing selection is never displaced. Applies to every import door |
 | `POST /api/import/sheet` `{runner, refresh?}` | Land a whole runner's Ultimate Sheet column as imported times. `refresh` defaults to **true** and re-downloads the live sheet first, so what lands is their most recent entries (503 with a reason if the sheet is unreachable — never a silent empty column); `false` reads the bundled snapshot. Names come from `GET /api/library/runners`. Approach rows only. The sheet's six Bowser rows (each stage's Course = its No Reds pipe-entry movement, Battle = Bowser 1/2/3) land on THIS database's row for the same seeded movement, resolved by seed_key, on the RTA clock. Subsections, targets with no entity key, a Bowser movement this database no longer holds, and a star row the sheet times on a real-time clock are HELD rather than dropped (round 28, 2026-09-04: "maximize compatibility with the sheet") — kept beside the journal as **held times** under this source, so the column export prints them back as written, their Library rows show them, and linking a row lands its time at once. `held` NAMES every one — one row apiece, `text` = the target (with its ROM version where the sheet opens one per version), the approach or piece where it says more than the target, and the sheet's own time (`{text: "Bowser in the Sky Course — 0'48\"00", reason: "segments", row_key}`), the same `{text, reason}` shape every door's `rejected` uses (`reason` is one of `subsections`, `no_entity`, `segments`, `real_time`). They were counted by kind until round 3 (2026-08-23), which hid exactly the rows he wants to review; `rejected` is always `[]` for this door now. **A refresh that lands a newer sheet also re-derives the sheet-fitted rank standards** (round 33: every star approach with a fitted ladder, under the slot the import files it in — the star's own row is its Standard, a matched row its vetted twin's name — plus the user's adoptions; vetted ladders still win on read) and absorbs the re-grade so no celebration fires for it. **A runner's own platform legend is read back** (round 29 item 2): where rows 2 and 3 of the runner's column read "Emu" and "N64" in two different fills, every timed cell wearing one of those fills (or a near shade, within a small RGB distance) lands with that platform stamp on its attempt, so the column export can colour it back the way the runner had it; a column with no such legend — 471 of 473 on 2026-09-04 — stamps nothing, and an absent stamp reads as the emulator. Returns the manual summary plus `{rejected, held, sheet_revision}` |
@@ -495,19 +495,23 @@ rotation and server restart until explicitly enabled.
 
 Both this response and `GET /api/replay/status` report `capture_state`: `off`,
 `stopping`, `starting`, `waiting`, `recording`, `paused`, or `error`. `off`
-requires no startup in flight and successful closure of every recorder-owned
-video, WASAPI audio, native pose, sink/encoder and machine lease. Startup
+requires no media startup in flight and successful closure of video, WASAPI
+audio and sink/encoder workers. Native pose capture and ghost playback continue
+under the same machine lease, independently of this footage setting. Startup
 cancellation, retained workers or failed cleanup remain `stopping`; the
 existing `recovery.error` explains a failure. HTTP never joins capture workers.
 The PUT response and GETs that observe `starting`, `stopping`, or `off`
 use cached buffer coverage without acquiring media storage locks. Other GETs
 refresh coverage; an active poll already querying storage can still wait there,
 then reports the latest capture state when that query finishes.
-Unlike session Pause, this switch closes capture owners. It preserves tracking,
-saved replays, buffered media and the separate session pause setting. It does
-stop the native pose source, Only Mario ghost playback and its native sound
-player. Ghost Overlay preferences stay unchanged; native ghosts can resume when
-recording starts and the current attempt has a valid origin.
+This switch closes footage owners. It preserves tracking, saved replays,
+buffered media, native Mario pose capture, Only Mario ghost playback/sound and
+the separate session pause setting. Ghost Overlay preferences stay unchanged.
+`pose_source_owned` and `pose_capture_paused` expose the independent pose lifetime;
+ownership alone is not proof that native poses are arriving. A scoped desktop
+recovery after GPU startup failure exposes `gpu_fallback` and
+`gpu_fallback_active`, separately from `gpu_unsupported`. Desktop pictures never
+claim a renderer-stamped frame map.
 
 While the server runs it records the PJ64 window (DWM shared-surface
 capture — modern window capture sees frozen content for PJ64's D3D8, and
@@ -1297,9 +1301,11 @@ uses local opaque aliases and excludes player codes/provider references/nonces.
 
 All room responses use `Cache-Control: no-store`. Mutations require the normal
 local origin/request capability. `POST /api/multiplayer/identity` returns the
-private `{code}` for a deliberate copy gesture. Other POSTs are `host` and
-`leave` (empty bodies), `invite` (`{code}`), `join` and `decline` (`{invite_id}`),
-and host-only `kick` (`{member_id}`). They return updated public snapshots.
+private `{code}` for a deliberate copy gesture. `POST /api/multiplayer/host` and
+`POST /api/multiplayer/leave` take empty bodies. `POST /api/multiplayer/invite`
+takes `{code}`; `POST /api/multiplayer/join` and `POST /api/multiplayer/decline`
+take `{invite_id}`. Host-only `POST /api/multiplayer/kick` takes `{member_id}`.
+They return updated public snapshots.
 Invalid requests never echo pasted codes. See [runtime contracts](multiplayer-runtime.md).
 
 ## Behavior notes

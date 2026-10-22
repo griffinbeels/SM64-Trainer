@@ -154,6 +154,10 @@ def test_db_reattach_upgrades_broadcast_only(tmp_path, monkeypatch):
 
 def test_db_retry_exception_backs_off_and_stays_degraded(tmp_path, monkeypatch):
     """A broken database stays visible while retries back off, not a hot loop."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import pytest
     import sm64_events.server.app as app_mod
     from sm64_events.tracking.service import TrackerService
 
@@ -162,16 +166,28 @@ def test_db_retry_exception_backs_off_and_stays_degraded(tmp_path, monkeypatch):
     svc = TrackerService(None, broadcaster)
     poller = Poller(OfflineMemory(), [StarGrabDetector()], svc)
     calls: list[int] = []
+    delays = []
 
     def db_retry():
         calls.append(1)
         raise RuntimeError("db is broken")
 
-    app = create_app(poller, broadcaster, service=svc, db_retry=db_retry)
+    async def sleep(delay):
+        delays.append(delay)
+        if len(delays) == 5:
+            raise asyncio.CancelledError
+
+    # Observe the actual loop's scheduled waits, independent of logger/import
+    # or worker contention. Only this module's asyncio reference is replaced.
+    with monkeypatch.context() as scope:
+        scope.setattr(app_mod, "asyncio", SimpleNamespace(sleep=sleep))
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(app_mod._db_reattach_loop(svc, db_retry))
+    assert delays == [0.01, 0.02, 0.04, 0.08, 0.16] and len(calls) == 4
+
+    app = create_app(poller, broadcaster, service=svc)
     with TestClient(app) as client:
-        time.sleep(0.2)
         assert client.get("/health").json()["db"] == "error"
-    assert 2 <= len(calls) <= 5
 
 
 # -- force-exit watchdog (CTRL+C stall incidents 2026-06-12 / 2026-06-13) ----

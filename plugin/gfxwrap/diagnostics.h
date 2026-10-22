@@ -12,13 +12,17 @@
 #endif
 #define LOG_CAPACITY 64u
 #define LOG_LINE_BYTES 1024u
-/* The live file plus .1 and .2. Healthy capture writes about 0.15 MB/h
- * (gpu_summary once a minute), so 12 MiB keeps days; a noisy session keeps
- * hours. Tests shrink the sizes to exercise rotation. */
+/* The live file plus .1 and .2 cap storage at 12 MiB plus bounded line overhead.
+ * The writer expires inactive files after 24 hours. Current low-volume logs
+ * can contain older lines until rotation; this is a file-age policy, not an
+ * event-by-event purge. Tests shrink the sizes to exercise rotation. */
 #ifndef LOG_MAX_BYTES
 #define LOG_MAX_BYTES (4u * 1024u * 1024u)
 #endif
 #define LOG_ROTATED 2u
+#ifndef LOG_MAX_AGE_SECONDS
+#define LOG_MAX_AGE_SECONDS (24u * 60u * 60u)
+#endif
 /* sm64_trainer_gfx.activation.log holds only this process's startup and
  * capture-start lines (activation_event), so the main log's rotation cannot
  * take them. The previous Project64 process keeps .1; past the cap, sidecar
@@ -158,13 +162,42 @@ static void log_write_line(log_session_t *session, const char *line, int sidecar
 
 #include "callback_pacing_log.h"
 
+/* Only the I/O writer expires these exact owned names. Reparse points never
+ * nominate a target to delete, and denied deletes cannot affect rendering. */
+static void log_prune_path(const wchar_t *path, ULONGLONG now) {
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &data) ||
+            (data.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) return;
+    ULARGE_INTEGER written;
+    written.LowPart = data.ftLastWriteTime.dwLowDateTime;
+    written.HighPart = data.ftLastWriteTime.dwHighDateTime;
+    const ULONGLONG age = (ULONGLONG)LOG_MAX_AGE_SECONDS * 10000000u;
+    if (written.QuadPart <= now && now - written.QuadPart >= age) DeleteFileW(path);
+}
+
+static void log_prune_stale(log_session_t *session) {
+    FILETIME clock;
+    ULARGE_INTEGER now;
+    GetSystemTimeAsFileTime(&clock);
+    now.LowPart = clock.dwLowDateTime;
+    now.HighPart = clock.dwHighDateTime;
+    log_prune_path(session->path, now.QuadPart);
+    for (unsigned n = 0; n < LOG_ROTATED; ++n) log_prune_path(session->rotated[n], now.QuadPart);
+    log_prune_path(session->activation, now.QuadPart);
+    log_prune_path(session->activation_previous, now.QuadPart);
+}
+
 static DWORD WINAPI log_worker(LPVOID parameter) {
     log_session_t *session = parameter;
+    log_prune_stale(session);
+    ULONGLONG pruned_at = GetTickCount64();
     for (;;) {
         /* Also notice a callback which never returns. This reads three
          * atomic timestamps, performs no GPU work, and reports at most
          * once per callback per five seconds. Idle/loading is not a defect. */
         WaitForSingleObject(session->event, 250);
+        const ULONGLONG tick = GetTickCount64();
+        if (tick - pruned_at >= 60000u) { log_prune_stale(session); pruned_at = tick; }
         callback_pacing_drain(session);
         callback_progress_drain(session);
         for (;;) {

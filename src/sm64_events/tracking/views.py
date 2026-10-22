@@ -350,7 +350,8 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
     rank_clock = clock if rank_clock is None else rank_clock
     rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
     owns_strat_pb = bool(pb) and pb["attempt_id"] == a.id
-    pb_action_key, pb_blocked = pb_action(a, active_strat, owns_strat_pb, foreign_rom=foreign)
+    pb_action_key, pb_blocked = pb_action(a, active_strat, owns_strat_pb, foreign_rom=foreign,
+                                       frames=frames, current_frames=pb["frames"] if pb else None)
     return {"id": a.id,
             # Recency-comparable across BOTH id namespaces (spec 2026-07-28-
             # multi-step-segments, live report): a reattributed 100-coin

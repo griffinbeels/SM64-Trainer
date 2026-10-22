@@ -1,5 +1,8 @@
 /* Optional, bounded ControlV1 producer-tail receipt. Older readers ignore it.
- * The renderer samples once during startup; readers perform CPU copies only. */
+ * Admission publishes identity with zero dimensions; a renderer surface adds
+ * dimensions before its gateway opens, then GL facts follow inside the gateway.
+ * These are progress receipts, not proof of a delivered picture. Readers copy
+ * CPU metadata only. The layout and version remain compatible with V1 readers. */
 #pragma once
 #include <stdint.h>
 #define GPU_STARTUP_MAGIC "SM64GPU1"

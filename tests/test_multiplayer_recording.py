@@ -336,7 +336,9 @@ def test_stop_during_factory_retains_startup_and_never_starts_retired_source(tmp
     finally:
         release.set()
         worker.join(3)
-    assert not worker.is_alive() and errors == ["native pose source startup retired"]
+    # Cancellation is an ordinary return; the source still cannot start and
+    # the archive stays owned until the in-flight factory has returned.
+    assert not worker.is_alive() and not errors
     assert owner.source.starts == 0 and owner.source.calls == ["withdraw"]
     owner.stop()
     assert owner.archive.status()["closed"]

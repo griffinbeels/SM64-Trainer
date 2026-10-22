@@ -7,7 +7,7 @@ on it, so the door and the decoration cannot disagree -- the browser
 combining two predicates itself would be a second copy of the precedence,
 and drift there is a button offering what the server rejects.
 
-Two predicates, two questions, one precedence:
+Strategy and quantity precede the ordinary-save improvement check:
 
   * `caveats.pb_blocked_by` -- is this TIME a legal quantity (a grab-timed
     star is not, whatever you retag it to);
@@ -46,6 +46,10 @@ land here and only here. The browser draws a gate reason as a disabled
 Save whose tooltip names the fix (`ui/components/pbreplay.js::
 unavailableReason`), and the API's refusal message states the same reason;
 `docs/api.md` names them.
+
+Since 2026-10-21, a normal Save must strictly improve the comparable PB on the
+selected clock. Equal/slower times are disabled with `not_faster`; the current
+owner can still Undo. Ghost saving is separate from PB correction.
 """
 from sm64_events.tracking.caveats import pb_blocked_by
 
@@ -71,7 +75,8 @@ def pb_strat_gate(attempt, active_strat: str | None,
 
 
 def pb_action(attempt, active_strat: str | None,
-              owns_strat_pb: bool, *, foreign_rom: bool = False) -> tuple[str | None, dict | None]:
+              owns_strat_pb: bool, *, foreign_rom: bool = False,
+              frames: int | None = None, current_frames: int | None = None) -> tuple[str | None, dict | None]:
     """`("save" | "undo" | None, {"reason", "strat"} | None)` for one row.
 
     Pure, so `views._attempt_json` can call it per row from the maps the
@@ -96,4 +101,9 @@ def pb_action(attempt, active_strat: str | None,
     blocked = pb_blocked_by(attempt)
     if blocked is not None:
         return None, {"reason": blocked, "strat": None}
+    # Normal Save means a strict improvement. Correction remains explicit:
+    # undo or clear an incorrect PB, then save the intended run. Ghost saving
+    # is independent and must never require lowering the recorded PB.
+    if not owns_strat_pb and frames is not None and current_frames is not None and frames >= current_frames:
+        return None, {"reason": "not_faster", "strat": None}
     return ("undo" if owns_strat_pb else "save"), None

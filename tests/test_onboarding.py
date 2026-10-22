@@ -285,7 +285,9 @@ def test_idle_without_a_gpu_observation_needs_fresh_pictures():
     assert not probe(installed())["checks"]["pictures"]
 
 
-def test_an_adapter_that_cannot_record_finishes_setup_on_desktop_pictures():
+@pytest.mark.parametrize("fallback_field", ["gpu_unsupported", "gpu_fallback"])
+@pytest.mark.parametrize("header", [LIVE_USAMUNE_BE, _jp_header()], ids=["us", "jp"])
+def test_an_adapter_that_cannot_record_finishes_setup_on_desktop_pictures(fallback_field, header):
     """AMD, Intel, a software adapter or a too-old NVIDIA driver: the recorder
     keeps the desktop grab for good (replay/sourcefactory.py), holds no GPU
     lease, and the control page's heartbeat never moves. Setup takes the
@@ -293,9 +295,10 @@ def test_an_adapter_that_cannot_record_finishes_setup_on_desktop_pictures():
     2026-09-27 such a machine could never finish setup."""
     from sm64_events.core.setup_gpu import GpuSetupEvidence
 
-    probe, now, _, inputs, recorder, _, poller = runtime()
-    recorder.update(frame_source="desktop", frame_source_health=None, pictures_fed=100,
-                    gpu_unsupported="AMD Radeon(TM) Graphics has no NVIDIA video encoder")
+    probe, now, _, inputs, recorder, memory, poller = runtime()
+    memory.raw = header
+    recorder.update(frame_source="desktop", frame_source_health=None, pictures_fed=100)
+    recorder[fallback_field] = "GPU recording unavailable on this producer"
     layer = replace(installed(gpu_observation=GpuSetupEvidence(123, None, None, False, False, False)),
                     layer_alive=False)
     probe(layer)
@@ -309,7 +312,7 @@ def test_an_adapter_that_cannot_record_finishes_setup_on_desktop_pictures():
     poller.latest.global_timer += 1
     assert readiness(layer, probe(layer))["ready"]
     now[0] = 5.1                        # past SteadyChecks' hold of the proof above
-    recorder["gpu_unsupported"] = None  # a capable adapter still needs GPU pictures
+    recorder[fallback_field] = None  # an unqualified fallback cannot prove readiness
     recorder["pictures_fed"] += 1       # ... however many desktop pictures move
     inputs["frames"] += 1
     poller.latest.global_timer += 1

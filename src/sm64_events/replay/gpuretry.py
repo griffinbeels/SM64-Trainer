@@ -7,6 +7,10 @@ Native resource exhaustion is an exception: it persists until a new producer
 process birth, even across an observed ROM reload. So does an adapter that can
 never record (gpucapture.GpuBackendUnsupported), which is not a failure at all:
 it arms no cooldown, and discovery declines that producer from then on.
+
+A proved picture-channel startup deadline keeps unstamped desktop footage for
+that ROM generation. It retains the actual GPU failure and never marks the
+adapter unsupported. A new process/generation or observed ROM reopen retries.
 """
 
 import threading
@@ -49,6 +53,8 @@ class RetryGate:
         self._exhausted_birth = None
         self._unsupported_birth = None
         self._unsupported_reason = None
+        self._fallback_identity = None
+        self._fallback_reason = None
         self._diagnostics = {}
 
     def diagnostics(self):
@@ -56,7 +62,8 @@ class RetryGate:
         with self._lock:
             unsupported = (self._unsupported_reason if self._identity is not None
                            and self._unsupported_birth == self._identity[:3] else None)
-            return {**deepcopy(self._diagnostics), "unsupported_reason": unsupported,
+            fallback = self._fallback_reason if self._fallback_identity == self._identity else None
+            return {**deepcopy(self._diagnostics), "unsupported_reason": unsupported, "fallback_reason": fallback,
                     "failures": self._failures, "retry_in_s": max(0.0, self._until - self.clock())}
 
     def note_diagnostic(self, identity, record, *, failed=False):
@@ -78,6 +85,7 @@ class RetryGate:
             if identity != self._identity or (self._saw_closed and status.rom_open):
                 self._identity = identity
                 self._failures, self._until, self._reason = 0, 0.0, ""
+                self._fallback_identity = self._fallback_reason = None
             self._saw_closed = not status.rom_open
             if self._diagnostics.get("producer") != list(identity):
                 self._diagnostics = {"producer": list(identity)}
@@ -123,6 +131,23 @@ class RetryGate:
                 return self._identity
         return None
 
+    def fallback(self, identity, reason):
+        """Keep video after a proved startup failure, for this ROM generation.
+
+        Unlike unsupported hardware this does not judge the adapter. A new
+        producer/generation or observed ROM close/open earns another GPU try.
+        The caller must first prove all media and native owners closed.
+        """
+        with self._lock:
+            if identity is not None and identity == self._identity and self._exhausted_birth != identity[:3]:
+                self._fallback_identity, self._fallback_reason = identity, str(reason)[:512]
+
+    def fallback_for(self, identity):
+        with self._lock:
+            if identity is not None and identity == self._fallback_identity:
+                return self._fallback_reason
+        return None
+
     def blocked(self, identity):
         with self._lock:
             if identity != self._identity:
@@ -136,7 +161,7 @@ class RetryGate:
 
     def wait(self, owner, identity):
         while owner.want_capture():
-            if self.unsupported_for(identity):
+            if self.unsupported_for(identity) or self.fallback_for(identity):
                 return False
             reason = self.blocked(identity)
             # This is the media worker, after its prior helper/lease were closed.

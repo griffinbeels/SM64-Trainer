@@ -190,7 +190,7 @@ def test_running_get_returns_current_stop_state_after_its_coverage_wait(tmp_path
         rec.stop(cleanup=False)
 
 
-def test_existing_attach_owner_wakes_to_close_all_sources(tmp_path, monkeypatch):
+def test_existing_attach_owner_closes_media_and_preserves_poses(tmp_path, monkeypatch):
     rec, video, audio, _, lease, calls, *_ = make(tmp_path)
     poses = []
 
@@ -209,8 +209,12 @@ def test_existing_attach_owner_wakes_to_close_all_sources(tmp_path, monkeypatch)
     monkeypatch.setattr("sm64_events.ghost.recording.PoseRecording", PoseOwner)
     rec._ghost_capture_factory = object()
     closed = threading.Event()
-    close = lease.close
-    lease.close = lambda: (close(), closed.set())
+    close = rec._teardown_capture
+    def teardown(**kwargs):
+        close(**kwargs)
+        if not rec.recording_enabled:
+            closed.set()
+    rec._teardown_capture = teardown
     rec.start()
     worker = rec._thread
     try:
@@ -218,11 +222,12 @@ def test_existing_attach_owner_wakes_to_close_all_sources(tmp_path, monkeypatch)
         rec.set_recording_enabled(False)
         assert closed.wait(1), "existing worker did not wake from its attach poll"
         assert rec._thread is worker and worker.is_alive()
-        assert audio.stopped and video.stopped and poses[0].started and poses[0].stopped
-        assert not poses[0].allowed()
+        assert audio.stopped and video.stopped and poses[0].started and not poses[0].stopped
+        assert poses[0].allowed() and not lease.closed
         assert rec.status()["capture_state"] == "off"
     finally:
         rec.stop(cleanup=False)
+    assert poses[0].stopped and lease.closed
 
 
 @pytest.mark.parametrize("failing", ["audio", "poses", "lease"])

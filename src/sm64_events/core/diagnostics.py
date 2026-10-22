@@ -13,12 +13,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from sm64_events.core.diagnostic_export import native_export, report_line, report_value
+from sm64_events.core.diagnostic_privacy import safe_snapshot
+from sm64_events.core.diagnostic_retention import REPORT_KEEP as KEEP_REPORTS, REPORT_MAX_BYTES, report_directory
+from sm64_events.core.error_reporting_privacy import scrub_text
+from sm64_events.core.native_diagnostics import bounded_tail
+
 LOG_TAIL_LINES = 400
 JOURNAL_TAIL = 100
 UILOG_TAIL = 50
 PERF_TAIL = 30
 LINE_CLIP = 500      # one pathological line cannot eat the size budget
-KEEP_REPORTS = 5
 
 # Import time == server start (server/app.py imports this module when the
 # process boots), so this is the process clock the header's uptime reads.
@@ -29,8 +34,8 @@ UILOG_EMPTY = ("empty — the page posts these itself, so silence means the "
 
 
 def _tail(path: Path, count: int) -> list[str]:
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return [line[:LINE_CLIP] for line in lines[-count:]]
+    text, _ = bounded_tail(path, limit=256 * 1024)
+    return [report_line(line)[:LINE_CLIP] for line in text.splitlines()[-count:]]
 
 
 def _fence(lines: list[str]) -> str:
@@ -40,8 +45,8 @@ def _fence(lines: list[str]) -> str:
 def _section(title: str, body_fn: Callable[[], str]) -> str:
     try:
         body = body_fn()
-    except Exception as err:  # a dead source is a finding, never a crash
-        body = f"unavailable: {err!r}"
+    except Exception as err:  # noqa: BLE001 - a dead source is a finding, never a crash.
+        body = f"unavailable: {type(err).__name__}: {scrub_text(err)}"
     return f"## {title}\n\n{body}\n"
 
 
@@ -65,18 +70,23 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
                  log_file: Path, ui_log_file: Path, perf_log_file: Path,
                  health: Callable[[], dict],
                  events: Callable[[], list], replay: Callable[[], dict] | None = None,
-                 setup: Callable[[], dict] | None = None, build: dict | None = None) -> str:
+                 setup: Callable[[], dict] | None = None, build: dict | None = None,
+                 snapshot: Callable[[], dict] | None = None) -> str:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     head = (
         "# SM64 Trainer debug report\n\n"
-        f"Generated {now} (UTC). Paths in this file include your Windows "
-        "username; it leaves your machine only when you share it.\n\n"
+        f"Generated {now} (UTC). Private paths and display labels are omitted. "
+        "This export leaves your machine only when you share it.\n\n"
         f"- version: {version}\n"
         f"- install: {'packaged exe' if frozen else 'from source (dev)'}\n"
         f"- port: {port}\n"
         f"- platform: {platform.platform()}\n"
         f"- uptime_s: {int(time.monotonic() - _STARTED_MONO)}\n"
-        f"- data dir: {data_dir}\n")
+        "- data dir: [path omitted]\n")
+    try:
+        captured = snapshot() if snapshot else {"available": False}
+    except Exception as error:  # noqa: BLE001 - still export every other section.
+        captured = {"available": False, "error_type": type(error).__name__}
 
     try:
         log_lines: list[str] | None = _tail(log_file, LOG_TAIL_LINES)
@@ -94,7 +104,7 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
             return "no events recorded"
         return _fence([
             f"{r.wall_time_utc} f{r.frame} {r.type} "
-            f"{json.dumps(r.payload)[:LINE_CLIP]}" for r in rows])
+            f"{json.dumps(report_value(r.payload))[:LINE_CLIP]}" for r in rows])
 
     def _uilog_body() -> str:
         if not ui_log_file.exists():
@@ -110,11 +120,14 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
     return "\n".join([
         head,
         _section("Health", lambda: "```json\n" + json.dumps(
-            health(), indent=2, default=str) + "\n```"),
+            report_value(health()), indent=2, default=str) + "\n```"),
         _section("Replay and GPU", lambda: "```json\n" + json.dumps(
-            replay() if replay else {"available": False}, indent=2, default=str) + "\n```"),
+            safe_snapshot({"capture": replay()})["capture"] if replay else {"available": False}, indent=2, default=str) + "\n```"),
         _section("Last observed setup", lambda: "```json\n" + json.dumps(
-            setup() if setup else None, indent=2, default=str) + "\n```"),
+            report_value(setup() if setup else None), indent=2, default=str) + "\n```"),
+        _section("Trainer diagnostic snapshot", lambda: "```json\n" + json.dumps(
+            {key: value for key, value in captured.items() if key != "native_log_tails"}, indent=2, default=str) + "\n```"),
+        _section("Native plugin log records", lambda: "```json\n" + native_export(captured) + "\n```"),
         _section("Build", lambda: "```json\n" + json.dumps(build or {}, indent=2) + "\n```"),
         _section("Problems", lambda: _problems(log_lines)
                  if log_lines is not None else _log_body()),
@@ -128,12 +141,15 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
 def write_report(report_dir: Path, markdown: str, *,
                  keep: int = KEEP_REPORTS) -> Path:
     """Write one timestamp-named report and prune to the newest `keep`."""
-    report_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    keep = max(1, min(keep, KEEP_REPORTS))
+    report_dir = report_directory(report_dir, keep=keep)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%fZ")
     out = report_dir / f"debug-report-{stamp}.md"
-    out.write_text(markdown, encoding="utf-8", newline="")
-    for stale in sorted(report_dir.glob("debug-report-*.md"))[:-keep]:
-        stale.unlink()
+    raw = markdown.encode("utf-8")
+    suffix = b"\n\n[Report truncated at the 1 MiB size limit.]\n"
+    if len(raw) > REPORT_MAX_BYTES:
+        raw = raw[:REPORT_MAX_BYTES - len(suffix)].decode("utf-8", "ignore").encode("utf-8") + suffix
+    out.write_bytes(raw)
     # Resolved: the path is shown to the user and handed to the reveal
     # endpoint, and from source data_root() is cwd-relative.
     return out.resolve()

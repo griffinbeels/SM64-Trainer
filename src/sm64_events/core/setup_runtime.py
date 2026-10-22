@@ -29,6 +29,7 @@ class SetupRuntime:
         self._lock = threading.Lock()
         self._next_read = 0.0
         self._cached = {}
+        self._diagnostic_observed_at = None
         self._cached_layer = None
         self._window = CounterWindow(clock)
         self._steady = SteadyChecks(clock)
@@ -61,6 +62,10 @@ class SetupRuntime:
             return identify_rom(None)
         self._last_rom = (pid, self.clock(), rom)
         return rom
+
+    def diagnostic_status(self) -> dict:
+        """Last committed observation; never discover processes or attach memory."""
+        return {**self._cached, "observed_unix_s": self._diagnostic_observed_at}
 
     def _reader_for(self, pid):
         """This process's reader, attached once; None while there is no
@@ -103,6 +108,7 @@ class SetupRuntime:
                 return self._cached
             result = self._observe(layer)
             self._cached = result
+            self._diagnostic_observed_at = time.time()
             self._cached_layer = identity
             self._next_read = self.clock() + 0.75
             return result
@@ -117,6 +123,7 @@ class SetupRuntime:
         # This Project64's adapter can never record through the layer, so the
         # recorder keeps the desktop grab: ITS written pictures are the proof.
         unsupported = recorder.get("gpu_unsupported")
+        desktop_fallback = bool(unsupported or recorder.get("gpu_fallback"))
         sampler = getattr(self.poller, "input_sampler", None)
         inputs = sampler.health() if sampler else {}
         latest = getattr(self.poller, "latest", None)
@@ -124,7 +131,7 @@ class SetupRuntime:
         counters = self._window.observe(
             (target.get("pid"), rom["name"], rom["region"], layer.plugin_pid,
              gpu.identity if gpu else None),
-            delivered=recorder.get("pictures_fed") if unsupported else health.get("delivered"),
+            delivered=recorder.get("pictures_fed") if desktop_fallback else health.get("delivered"),
             inputs=inputs.get("frames"),
             game=latest.global_timer if latest else None)
         same_process = target.get("pid") is not None and target["pid"] == layer.plugin_pid
@@ -132,7 +139,7 @@ class SetupRuntime:
         captured = (recorder.get("recording") and recorder.get("frame_source") == "plugin"
                     and counters["delivered"])
         pictures = captured
-        if unsupported:
+        if desktop_fallback:
             # No GPU lease means the control page's heartbeat never moves, so
             # the layer is proved the way the passive exception below proves
             # it: its page names this Project64 and the game and inputs move.

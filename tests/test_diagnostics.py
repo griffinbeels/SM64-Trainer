@@ -3,6 +3,10 @@
 Every section is independently wrapped; a dead source names itself."""
 from collections import namedtuple
 from pathlib import Path
+import os
+import subprocess
+
+import pytest
 
 from sm64_events.core import diagnostics
 
@@ -12,7 +16,7 @@ Row = namedtuple("Row", "id session_id seq type frame wall_time_utc payload")
 def _healthy_kwargs(tmp_path: Path) -> dict:
     log = tmp_path / "sm64_events.log"
     log.write_text("\n".join(
-        [f"2026-08-06T12:00:{i % 60:02d}Z INFO sm64.test line {i}"
+        [f"2026-08-06T12:00:{i % 60:02d}Z INFO sm64.replay line {i}"
          for i in range(500)]
         + ["2026-08-06T12:09:00Z ERROR sm64.poller read failed",
            "2026-08-06T12:09:01Z WARNING sm64.replay ring low"]),
@@ -70,10 +74,40 @@ def test_write_report_prunes_to_keep(tmp_path):
     out = diagnostics.write_report(tmp_path, "# new", keep=5)
     survivors = sorted(p.name for p in tmp_path.glob("debug-report-*.md"))
     assert out.name in survivors
-    assert len(survivors) == 5
+    assert len(survivors) == 3  # A caller cannot raise the app's retention cap.
     assert "debug-report-20260800-000000Z.md" not in survivors
 
 
 def test_diagnostics_dir_sits_inside_the_reveal_root():
     from sm64_events.core.paths import diagnostics_dir, replays_root
     assert diagnostics_dir().resolve().is_relative_to(replays_root().resolve())
+
+
+def test_export_refuses_to_grow_when_owned_old_reports_cannot_be_removed(tmp_path, monkeypatch):
+    for index in range(3):
+        (tmp_path / f"debug-report-{index}.md").write_text("old")
+    def denied(*args, **kwargs):
+        raise PermissionError("synthetic denied deletion")
+    monkeypatch.setattr(Path, "unlink", denied)
+    with pytest.raises(OSError, match="limit is full"):
+        diagnostics.write_report(tmp_path, "new")
+    assert len(list(tmp_path.glob("*.md"))) == 3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows junction boundary")
+def test_export_never_deletes_through_a_junction_ancestor(tmp_path):
+    from sm64_events.core.childproc import quiet_spawn_kwargs
+    target, junction = tmp_path / "target", tmp_path / "redirect"
+    report_dir = target / "reports"
+    report_dir.mkdir(parents=True)
+    old = report_dir / "debug-report-owned-looking.md"
+    old.write_text("keep exactly")
+    result = subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(junction), str(target)],
+        capture_output=True, text=True, check=False, **quiet_spawn_kwargs())
+    assert result.returncode == 0, result.stderr
+    try:
+        with pytest.raises(OSError, match="redirected"):
+            diagnostics.write_report(junction / "reports", "new")
+        assert old.read_text() == "keep exactly" and len(list(report_dir.iterdir())) == 1
+    finally:
+        junction.rmdir()

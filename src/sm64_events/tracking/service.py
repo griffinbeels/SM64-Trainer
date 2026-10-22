@@ -2536,7 +2536,9 @@ class TrackerService:
                             strat_tag=attempt.strat_tag, **self._pb_slot(attempt))
         owns = row is not None and row["attempt_id"] == attempt.id
         return pb_action(attempt, active.for_attempt(attempt), owns,
-                         foreign_rom=foreign_rom(self.ranks, attempt))
+                         foreign_rom=foreign_rom(self.ranks, attempt),
+                         frames=attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames,
+                         current_frames=row["frames"] if row else None)
 
     def _pb_attempt(self, attempt_id: int, timer_mode: str):
         db = self._require_db()

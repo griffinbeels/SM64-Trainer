@@ -21,6 +21,14 @@ class GpuCleanupError(RuntimeError):
     """An owned worker/resource may survive; recorder must retain scratch."""
 
 
+class GpuStartupUnavailable(RuntimeError):
+    """A live producer never published a picture channel within its deadline.
+
+    This establishes failed startup, not an unsupported adapter. After proved
+    cleanup the recorder can keep footage through its unstamped desktop route.
+    """
+
+
 class GpuBackendUnsupported(RuntimeError):
     """This Project64 process can never record through the GPU route: its
     adapter cannot open the encoder (gpuadapter.py), or it loaded a capture
@@ -251,6 +259,9 @@ class GpuCapture:
         self.error = str(exc)[:512]
         if self.retry_gate is not None:
             self.retry_gate.failed(self.producer_identity, self.error)
+            if isinstance(exc, GpuStartupUnavailable) and self.cleanup_error is None and self.want_capture():
+                self.retry_gate.fallback(self.producer_identity,
+                                         "GPU picture delivery did not start; recording the game window by time")
 
     def _report_context(self):
         from sm64_events.replay.gpufielddiagnostics import automatic_context
@@ -501,8 +512,8 @@ def discover(
     except (FileNotFoundError, OSError, BlockingIOError):
         if identity is None:
             return None
-    if retry_gate is not None and retry_gate.unsupported_for(identity):
-        return None  # Its adapter cannot record: the desktop grab stays.
+    if retry_gate is not None and (retry_gate.unsupported_for(identity) or retry_gate.fallback_for(identity)):
+        return None  # A qualified verdict/failure keeps the desktop grab.
     if live_gpu and retry_gate is not None:
         if adapter_probe is None:
             from sm64_events.replay.gpuadapter import machine_unsupported_reason

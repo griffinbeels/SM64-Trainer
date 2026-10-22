@@ -3,12 +3,16 @@
 Only scrubbed error envelopes are accepted. This is deliberately separate from
 the SDK HTTP transport: that transport swallows delivery errors and cannot tell
 a persistent spool whether an event was accepted. SDK Envelope/Dsn APIs retain
-the maintained wire format; our sender checks the actual HTTP response.
+the maintained wire format; our sender checks the actual HTTP response. Pending
+errors expire after 24 hours, including while the app remains running; retry and
+delayed persistence preserve the original enqueue age.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import threading
 import time
 import uuid
@@ -27,7 +31,7 @@ from .error_reporting_privacy import safe_event
 MAX_PENDING = 20
 MAX_ENVELOPE_BYTES = 64 * 1024
 MAX_SPOOL_BYTES = 1024 * 1024
-MAX_AGE = 7 * 86400
+MAX_AGE = 86400
 DAILY_LIMIT = 10
 MONTHLY_LIMIT = 50
 SIGNATURE_COOLDOWN = 3600
@@ -109,12 +113,15 @@ class PersistentTransport(Transport):
         self.stopping = threading.Event()
         self.incoming = deque()
         self.pending: dict[str, bytes] = {}
+        self.created: dict[str, float] = {}
         self.signatures: dict[str, float] = {}
         self.budget = {"day": "", "month": "", "daily": 0, "monthly": 0}
-        self.counters = {"accepted": 0, "sent": 0, "dropped": 0, "delivery_errors": 0, "storage_errors": 0}
+        self.counters = {"accepted": 0, "sent": 0, "dropped": 0, "expired": 0,
+                         "delivery_errors": 0, "storage_errors": 0}
         self.next_attempt = 0.0
         self.backoff = 5.0
         self.dirty = False
+        self._next_temporary_cleanup = 0.0
         self._load()
         self.worker = threading.Thread(target=self._run, name="automatic-diagnostics", daemon=True)
         self.worker.start()
@@ -130,8 +137,11 @@ class PersistentTransport(Transport):
         except (OSError, ValueError, TypeError):
             self.counters["storage_errors"] += 1
         total = 0
+        self._prune_temporaries()
         for path in sorted(self.directory.glob("*.envelope")):
             try:
+                if path.is_symlink() or not path.is_file():
+                    continue
                 metadata = path.stat()
                 if not self.enabled or metadata.st_size > MAX_ENVELOPE_BYTES or len(self.pending) >= MAX_PENDING or total + metadata.st_size > MAX_SPOOL_BYTES or metadata.st_mtime < self.clock() - MAX_AGE:
                     path.unlink(missing_ok=True)
@@ -141,11 +151,52 @@ class PersistentTransport(Transport):
                 if not event:
                     raise ValueError("Not an error event")
                 envelope = _event_envelope(safe_event(event))
-                self.pending[path.name] = envelope.serialize()
+                cleaned = envelope.serialize()
+                self.pending[path.name] = cleaned
+                self.created[path.name] = min(metadata.st_mtime, self.clock())
+                if cleaned != payload:
+                    self.incoming.append((path.name, cleaned))
+                if metadata.st_mtime > self.clock():
+                    os.utime(path, (self.created[path.name], self.created[path.name]))
                 total += len(payload)
             except (OSError, ValueError, TypeError, KeyError):
                 self.counters["storage_errors"] += 1
-                path.unlink(missing_ok=True)
+                self._unlink(path)
+        self._next_temporary_cleanup = 0.0
+        self._prune_temporaries()
+
+    def _unlink(self, path):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            self.counters["storage_errors"] += 1
+
+    def _prune_temporaries(self):
+        now = self.clock()
+        if now < self._next_temporary_cleanup:
+            return
+        self._next_temporary_cleanup = now + 60
+        with self.lock:
+            active = {Path(name).with_suffix(".tmp").name for name in self.pending}
+            total = sum(map(len, self.pending.values()))
+            count = len(self.pending)
+        candidates = []
+        for temporary in self.directory.glob("*.tmp"):
+            try:
+                if (re.fullmatch(r"[0-9a-f]{32}\.tmp", temporary.name)
+                        and temporary.name not in active and not temporary.is_symlink()
+                        and temporary.is_file()):
+                    metadata = temporary.stat()
+                    candidates.append((metadata.st_mtime, metadata.st_size, temporary))
+            except OSError:
+                self.counters["storage_errors"] += 1
+        for stamp, size, temporary in sorted(candidates, reverse=True):
+            if (stamp <= now - MAX_AGE or size > MAX_ENVELOPE_BYTES
+                    or count >= MAX_PENDING or total + size > MAX_SPOOL_BYTES):
+                self._unlink(temporary)
+            else:
+                count += 1
+                total += size
 
     def _admit(self, event: dict) -> bool:
         now = self.clock()
@@ -181,6 +232,7 @@ class PersistentTransport(Transport):
                     return
                 name = f"{uuid.uuid4().hex}.envelope"
                 self.pending[name] = payload
+                self.created[name] = self.clock()
                 self.incoming.append((name, payload))
                 self.counters["accepted"] += 1
                 self.dirty = True
@@ -190,7 +242,25 @@ class PersistentTransport(Transport):
 
     def _persist(self):
         with self.persist_lock:
+            self._expire_pending()
             self._write_pending()
+
+    def _expire_pending(self):
+        """Expiry continues during long sessions and never resets on retry."""
+        with self.lock:
+            cutoff = self.clock() - MAX_AGE
+            expired = [name for name, stamp in self.created.items() if stamp <= cutoff]
+            for name in expired:
+                self.pending.pop(name, None)
+                self.created.pop(name, None)
+            if expired:
+                self.incoming = deque((name, payload) for name, payload in self.incoming
+                                      if name in self.pending)
+                self.counters["expired"] += len(expired)
+        for name in expired:
+            self._unlink(self.directory / name)
+            self._unlink((self.directory / name).with_suffix(".tmp"))
+        self._prune_temporaries()
 
     def _write_pending(self):
         with self.lock:
@@ -204,8 +274,10 @@ class PersistentTransport(Transport):
                 with self.lock:
                     if name not in self.pending:
                         continue
+                    created = self.created[name]
                 temporary = target.with_suffix(".tmp")
                 temporary.write_bytes(payload)
+                os.utime(temporary, (created, created))
                 temporary.replace(target)
                 with self.lock:
                     keep = name in self.pending
@@ -222,6 +294,7 @@ class PersistentTransport(Transport):
                 self.counters["storage_errors"] += 1
 
     def _deliver_one(self):
+        self._expire_pending()
         with self.lock:
             if not self.enabled or not self.pending or self.clock() < self.next_attempt:
                 return
@@ -231,8 +304,11 @@ class PersistentTransport(Transport):
         except Exception:  # noqa: BLE001 -- transport failures never recursively log/report
             accepted, retry_after = False, 0
         with self.lock:
+            if name not in self.pending:
+                return  # Expiry/opt-out during an in-flight send keeps it retired.
             if accepted:
                 self.pending.pop(name, None)
+                self.created.pop(name, None)
                 self.counters["sent"] += 1
                 self.backoff = 5.0
                 self.next_attempt = self.clock() + retry_after
@@ -260,6 +336,7 @@ class PersistentTransport(Transport):
             if not enabled:
                 self.incoming.clear()
                 self.pending.clear()
+                self.created.clear()
         if not enabled:
             for path in self.directory.glob("*.envelope"):
                 path.unlink(missing_ok=True)

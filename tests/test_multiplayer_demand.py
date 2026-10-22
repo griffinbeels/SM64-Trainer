@@ -99,14 +99,17 @@ class Native:
 
 
 class Harness:
-    def __init__(self, tmp_path, *, enabled=False, denied=False):
+    def __init__(self, tmp_path, *, enabled=False, denied=False, local_archive=False):
         self.lease, self.acquisitions, self.sources = None, 0, []
         self.media_calls = []
+        # Silent transport tests have no local archival consumer. The actual
+        # app also registers one independently of its footage preference.
+        self.local_factory = lambda **kw: Native(self, "local", **kw)
         cfg = ReplayConfig(scratch_dir=tmp_path / "buffer", recording_enabled=enabled, attach_poll_s=0.01)
         self.rec = ReplayRecorder(cfg, lambda _: WIN, self.video, self.audio,
             codec="libx264", video_sink_factory=self.sink, recorder_lock_factory=lambda: self.acquire(denied),
             clock_factory=lambda: CaptureClock(anchor_qpc_100ns=0, anchor_utc=T0),
-            ghost_capture_factory=lambda **kw: Native(self, "media", **kw),
+            ghost_capture_factory=self.local_factory if local_archive else None,
             live_capture_factory=lambda **kw: Native(self, "live", **kw))
 
     def acquire(self, denied=False):
@@ -145,6 +148,13 @@ def tick(rec, before=None):
 
 def close(rec):
     rec.stop(cleanup=False)
+
+
+def begin_capture(rec, errors):
+    try:
+        rec._begin_capture(WIN)
+    except Exception as error:  # noqa: BLE001 - surface owned startup errors
+        errors.append(error)
 
 
 def test_no_room_defaults_preserve_disabled_discovery_and_capture(tmp_path):
@@ -211,11 +221,11 @@ def test_denied_machine_lease_constructs_no_source_archive_or_media(tmp_path, en
 
 
 def test_media_and_live_share_one_native_owner_and_hotmount_without_media_restart(tmp_path):
-    harness = Harness(tmp_path, enabled=True)
+    harness = Harness(tmp_path, enabled=True, local_archive=True)
     rec = harness.rec
     rec._begin_capture(WIN)
     source, archive = rec.ghost_capture, rec.pose_archive
-    assert source.profile == "media" and archive is not None
+    assert source.profile == "local" and archive is not None
     media_calls = list(harness.media_calls)
     pair = room()
     rec.set_live_session(*pair)
@@ -230,8 +240,8 @@ def test_media_and_live_share_one_native_owner_and_hotmount_without_media_restar
     close(rec)
 
 
-def test_profile_handovers_rebind_same_room_under_same_lease_and_keep_closed_archive(tmp_path):
-    harness = Harness(tmp_path, enabled=True)
+def test_local_consumer_removal_hands_over_to_silent_room_under_same_lease(tmp_path):
+    harness = Harness(tmp_path, enabled=True, local_archive=True)
     rec = harness.rec
     pair = room()
     rec.set_live_session(*pair)
@@ -239,6 +249,7 @@ def test_profile_handovers_rebind_same_room_under_same_lease_and_keep_closed_arc
     old, archive, lease = rec.ghost_capture, rec.pose_archive, harness.lease
     old.emit(10)
     before = pair[0].take_latest(now_ns=10)
+    rec.set_ghost_capture_factory(None)
     rec.set_recording_enabled(False)
     tick(rec)
     live = rec.ghost_capture
@@ -251,9 +262,10 @@ def test_profile_handovers_rebind_same_room_under_same_lease_and_keep_closed_arc
     new_pose = decode_pose(after.packet, expected_incarnation=INCARNATION)
     assert new_pose.source_generation == old_pose.source_generation and new_pose.continuity > old_pose.continuity
     assert archive.status()["records"] == 1
+    rec.set_ghost_capture_factory(harness.local_factory)
     rec.set_recording_enabled(True)
     tick(rec)
-    assert rec.ghost_capture.profile == "media" and not live.alive
+    assert rec.ghost_capture.profile == "local" and not live.alive
     assert rec.pose_archive is not archive and harness.lease is lease and harness.acquisitions == 1
     assert rec._recording and rec.recording_enabled
     close(rec)
@@ -333,12 +345,13 @@ def test_failed_live_close_retains_exact_owner_and_lease_and_reports_media_off(t
 
 
 def test_failed_media_to_live_handover_retries_same_cleanup_then_reuses_lease(tmp_path):
-    harness = Harness(tmp_path, enabled=True)
+    harness = Harness(tmp_path, enabled=True, local_archive=True)
     rec = harness.rec
     rec.set_live_session(*room())
     rec._begin_capture(WIN)
     source, lease = rec.ghost_capture, harness.lease
     source.joined = False
+    rec.set_ghost_capture_factory(None)
     rec.set_recording_enabled(False)
     tick(rec)
     assert rec._capture_cleanup_failed and not lease.closed and len(harness.sources) == 1
@@ -467,12 +480,7 @@ def test_blocked_live_factory_cannot_resurrect_retired_demand(tmp_path, action):
         assert release.wait(3)
         return Native(harness, "delayed", **kwargs)
     rec.set_live_capture_factory(delayed_factory)
-    def begin():
-        try:
-            rec._begin_capture(WIN)
-        except Exception as error:  # noqa: BLE001 - surface owned startup errors
-            errors.append(error)
-    worker = threading.Thread(target=begin, name="owned-demand-start", daemon=True)
+    worker = threading.Thread(target=begin_capture, args=(rec, errors), name="owned-demand-start", daemon=True)
     stopper = None
     worker.start()
     try:
@@ -482,6 +490,7 @@ def test_blocked_live_factory_cannot_resurrect_retired_demand(tmp_path, action):
         elif action == "replace":
             rec.set_live_session(*room())
         elif action == "media":
+            rec.set_ghost_capture_factory(harness.local_factory)
             rec.set_recording_enabled(True)
         else:
             requested = threading.Event()
@@ -532,7 +541,7 @@ def test_rapid_live_leave_rejoin_retires_old_writer_before_replacement(tmp_path)
 
 
 def test_media_none_same_burst_forwards_both_mounts_and_invalidates_taken_value(tmp_path):
-    harness = Harness(tmp_path, enabled=True)
+    harness = Harness(tmp_path, enabled=True, local_archive=True)
     rec = harness.rec
     pair = room()
     rec.set_live_session(*pair)
@@ -581,8 +590,9 @@ def test_session_rotation_after_media_handover_preserves_live_source_and_lease(t
     close(rec)
 
 
-def test_media_disabled_during_cold_start_hands_over_without_reacquiring_lease(tmp_path):
-    harness = Harness(tmp_path, enabled=True)
+@pytest.mark.parametrize("remove_local", [False, True])
+def test_media_disabled_during_cold_start_preserves_remaining_consumers_and_lease(tmp_path, remove_local):
+    harness = Harness(tmp_path, enabled=True, local_archive=True)
     rec = harness.rec
     rec.set_live_session(*room())
     entered, release, errors = threading.Event(), threading.Event(), []
@@ -592,22 +602,107 @@ def test_media_disabled_during_cold_start_hands_over_without_reacquiring_lease(t
             assert release.wait(3)
             super().start(on_pcm)
     rec._audio_factory = lambda _pid: DelayedAudio()
-    def begin():
-        try:
-            rec._begin_capture(WIN)
-        except Exception as error:  # noqa: BLE001 - surface owned startup errors
-            errors.append(error)
-    worker = threading.Thread(target=begin, name="owned-cold-media-handover", daemon=True)
+    worker = threading.Thread(target=begin_capture, args=(rec, errors), name="owned-cold-media-handover", daemon=True)
     worker.start()
     try:
         assert entered.wait(1)
         lease = harness.lease
+        source, archive = rec.ghost_capture, rec.pose_archive
+        if remove_local:
+            rec.set_ghost_capture_factory(None)
         rec.set_recording_enabled(False)
     finally:
         release.set()
         worker.join(3)
     assert not worker.is_alive() and not errors and not lease.closed
-    assert not harness.sources[0].alive and not rec._recording
+    assert not rec._recording
     tick(rec)
-    assert rec.ghost_capture.profile == "live" and harness.lease is lease and harness.acquisitions == 1
+    if remove_local:
+        assert not source.alive and archive.status()["closed"] and rec.ghost_capture.profile == "live"
+    else:
+        assert rec.ghost_capture is source and rec.pose_archive is archive and source.alive
+        source.emit(1)
+        assert archive.status()["records"] == 1
+        rec.set_recording_enabled(True)
+        tick(rec)
+        assert rec._recording and rec.ghost_capture is source and rec.pose_archive is archive
+    assert harness.lease is lease and harness.acquisitions == 1
+    close(rec)
+
+
+def test_local_archive_and_room_keep_one_source_through_media_failure_off_on_and_leave(tmp_path):
+    harness = Harness(tmp_path, local_archive=True)
+    rec, pair = harness.rec, room()
+    rec._codec = None
+    rec._codec_factory = lambda: pytest.fail("pose-only source probed codec")
+    rec.set_live_capture_factory(None)  # the existing local owner supplies both endpoints
+    rec.set_live_session(*pair)
+    tick(rec)
+    source, archive, lease = rec.ghost_capture, rec.pose_archive, harness.lease
+    assert source.profile == "local" and rec.live_session_status()["state"] == "attached"
+    source.emit(1)
+    assert archive.status()["records"] == 1 and pair[0].take_latest(now_ns=1) is not None
+    assert not harness.media_calls and rec.status()["capture_state"] == "off"
+
+    rec._codec_factory = lambda: "libx264"
+    rec.set_recording_enabled(True)
+    tick(rec)
+    video = rec._video_source
+    source.emit(2)
+    rec._source_stopped(video)
+    tick(rec)
+    assert rec._recording and rec._video_source is not video
+    rec.set_recording_enabled(False)
+    tick(rec)
+    source.emit(3)
+    assert not rec._recording and rec.ghost_capture is source and rec.pose_archive is archive
+    assert harness.lease is lease and not lease.closed and harness.acquisitions == 1
+
+    rec.set_session_paused(True)
+    source.emit(4)
+    assert archive.status()["records"] == 3 and source.session == (None, pair[1])
+    rec.set_session_paused(False)
+    source.emit(5)
+    publication = pair[0].take_latest(now_ns=5)
+    rec.set_live_session()
+    rec.set_live_session(*pair)
+    assert not pair[0].current(publication, now_ns=6) and rec.ghost_capture is source
+    rec.set_live_session()
+    tick(rec)
+    source.emit(6)
+    assert archive.status()["records"] == 5 and rec.ghost_capture is source and not lease.closed
+    rec.set_recording_enabled(True)
+    tick(rec)
+    assert rec._recording and rec.ghost_capture is source and len(harness.sources) == 1
+    close(rec)
+    assert archive.status()["closed"] and lease.closes == 1
+
+
+@pytest.mark.parametrize("change", ["rom", "window", "gate"])
+def test_local_and_live_retarget_retain_failed_owner_before_replacing_both(tmp_path, change):
+    harness = Harness(tmp_path, local_archive=True)
+    rec, pair = harness.rec, room()
+    rec.set_live_session(*pair)
+    tick(rec)
+    source, archive, lease = rec.ghost_capture, rec.pose_archive, harness.lease
+    source.emit(1)
+    publication = pair[0].take_latest(now_ns=1)
+    source.joined = False
+    if change == "rom":
+        rec.retarget_capture()
+    elif change == "window":
+        rec._window_finder = lambda _: replace(WIN, pid=43, hwnd=124)
+    else:
+        rec.set_capture_gate(lambda: False)
+    tick(rec)
+    assert rec._capture_cleanup_failed and not archive.status()["closed"]
+    assert not pair[0].current(publication, now_ns=2) and not lease.closed
+    tick(rec)
+    assert len(harness.sources) == 1 and not lease.closed
+    source.joined = True
+    if change == "gate":
+        rec.set_capture_gate(lambda: True)
+    tick(rec)
+    assert archive.status()["closed"] and not source.alive
+    assert len(harness.sources) == 2 and rec.pose_archive is not archive
     close(rec)

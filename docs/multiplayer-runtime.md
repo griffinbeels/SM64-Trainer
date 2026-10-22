@@ -45,12 +45,18 @@ poses or refresh their receipt age.
 
 ## Source, receiver and rendering
 
-`ReplayRecorder` chooses none, silent live capture, or ordinary media recording.
-The silent mode opens no encoder, audio player, scratch/archive or media store.
-Media and live capture share the same `NativeCapture` and machine lease. The sole
-pose pump publishes to `SourceHandoff` before archive callbacks. Room IO never
+`ReplayRecorder` combines independent footage, local saved-ghost and room demand.
+A registered local ghost consumer retains its pose archive and playback source
+through footage off/failure and room leave. Room endpoints hot-mount on that
+same source. Without a local archival consumer, the separate silent live mode
+opens no encoder, audio player, scratch/archive or media store. All consumers
+share one `NativeCapture` and machine lease. The sole pose pump publishes to
+`SourceHandoff` before archive callbacks. Room IO never
 runs on that pump or on an emulation/render/GPU encoding thread. Codec probing
 is deferred until actual media work needs it.
+`tests/test_ghost_recording_independence.py` covers local pose-only publication;
+`tests/test_multiplayer_demand.py` covers both truly silent rooms and the combined
+local archive/room lifecycle, including retained cleanup and ROM/window changes.
 
 SMLV version 0 is a fixed 424-byte pose. Python and native validation both check
 bounds, representation, current source identity and monotonic source occurrences.

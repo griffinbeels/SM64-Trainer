@@ -55,6 +55,7 @@ export function unavailableReason(attempt) {
     return strat ? `Switch to ${strat} to save this as its PB` : "Give this run a strategy to save it as a PB";
   }
   if (gate === "foreign_rom") return "Open this run's game version to save it as its PB";
+  if (gate === "not_faster") return "This time doesn't beat your PB. Use Save as ghost in the replay's input tools to race it.";
   return "This run can't be saved as a PB";
 }
 

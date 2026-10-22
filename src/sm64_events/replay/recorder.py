@@ -239,6 +239,8 @@ class ReplayRecorder:
                 return None
             if self._recording_enabled:
                 return "media"
+            if self._ghost_capture_factory is not None:
+                return "poses"
             if any(value is not None for value in self._live_session) and self._live_capture_factory is not None:
                 return "live"
             return None
@@ -292,7 +294,7 @@ class ReplayRecorder:
                 state = "off"
             elif self._stopping or self._capture_cleanup_failed:
                 state = "stopping"
-            elif not self._recording_enabled and self._live_capture_factory is None:
+            elif not self._recording_enabled and self._live_capture_factory is None and self._ghost_capture_factory is None:
                 state = "unavailable"
             elif self._session_paused and outgoing is not None and incoming is None:
                 state = "paused"
@@ -313,10 +315,11 @@ class ReplayRecorder:
             enabled = self._recording_enabled
             starting = self._capture_start_revision is not None
             quiet = (not starting and not self._capture_tearing_down and self._capture_closed
-                     and not getattr(self, "_capture_retained", {}) and self._rec_lock is None
+                     and not getattr(self, "_capture_retained", {})
+                     and (self._rec_lock is None or self._pose_owner is not None)
                      and all(owner is None for owner in
                              (self._video_source, self._audio_source, self._video_sink,
-                              self._writer, self._pose_owner)))
+                              self._writer)))
             stale = (self._capture_revision is not None
                      and self._capture_revision != self._recording_revision)
             stale = stale or (starting and self._capture_start_revision != self._recording_revision)
@@ -342,6 +345,8 @@ class ReplayRecorder:
         self._ghost_capture_factory = factory
         self._pose_owner = None
         self.pose_archive = None
+        self._pose_window = None
+        self._pose_retarget = False
 
     def _configure_live_capture(self, factory):
         self._live_capture_factory = factory
@@ -460,30 +465,27 @@ class ReplayRecorder:
     def _run_attach_loop(self) -> None:
         while not self._stop_event.is_set():
             self._attach_wake.clear()
+            if self._pose_retarget:
+                # Consume before media teardown: a ROM change arriving during
+                # close remains pending for the next iteration.
+                self._pose_retarget = False
+                self._teardown_capture()
             desired = self._desired_source_profile()
-            media_retired = self._source_profile != "live" and not self._capture_allowed()
-            live_retired = self._source_profile == "live" and desired != "live"
-            if media_retired or live_retired or desired is None:
-                # The attach owner performs the full stop (including WASAPI,
-                # passive native poses, sink/encoder and machine lease).
-                if not self._capture_closed or self._rec_lock is not None:
-                    handover = ((self._source_profile == "media" and desired == "live")
-                                or (self._source_profile == "live" and desired == "media")
-                                or self._profile_handover and desired is not None)
-                    self._teardown_capture(keep_owner=handover)
-                if desired is None:
-                    if self._capture_cleanup_failed:
-                        delay = self._recovery_delay(self._recovery_error or "capture cleanup pending")
-                    else:
-                        self._recovery_error = None
-                        self._recovery_retry_at = 0.0
-                        delay = self._cfg.attach_poll_s
-                    self._wait_attach(delay)
-                    continue
+            self._reconcile_source_profile(desired)
+            if desired is None:
+                if self._capture_cleanup_failed:
+                    delay = self._recovery_delay(self._recovery_error or "capture cleanup pending")
+                else:
+                    self._recovery_error = None
+                    self._recovery_retry_at = 0.0
+                    delay = self._cfg.attach_poll_s
+                self._wait_attach(delay)
+                continue
             if self._capture_cleanup_failed:
                 # Retry the retained objects, not their constructors. The
                 # machine lease and scratch stay owned until each close passes.
-                self._teardown_capture(keep_owner=self._profile_handover and desired is not None)
+                self._teardown_capture(keep_owner=self._profile_handover and desired is not None,
+                    keep_poses=self._source_profile != "live" and self._ghost_capture_factory is not None)
                 if self._capture_cleanup_failed:
                     delay = self._recovery_delay(self._recovery_error or "capture cleanup pending")
                     self._wait_attach(delay)
@@ -491,20 +493,26 @@ class ReplayRecorder:
             self._maintain_media_storage()
             if self.ring.storage_pressure and self._recording:
                 log.warning("replay capture paused: disk free-space floor cannot be restored")
-                self._teardown_capture(keep_owner=True)
+                self._teardown_capture(keep_owner=True, keep_poses=True)
             win = self._window_finder(self._cfg.window_title)
             self._window_found = win is not None
             win = self._gated(win)
 
             identity = (win.pid, win.hwnd) if win is not None else None
             if (self._window_lost.is_set()
-                    or (self._capture_window is not None and identity != self._capture_window)):
+                    or (self._capture_window is not None and identity != self._capture_window)
+                    or (self._pose_owner is not None and identity != self._pose_window)):
                 # A fast process restart can replace the window before the old
                 # video source notices. Audio is process-bound: replace BOTH.
                 log.info("capture source ended or window changed; reconnecting")
-                self._teardown_capture(keep_owner=self._source_profile == "live" and desired is not None)
+                self._teardown_capture(keep_owner=self._source_profile == "live" and desired is not None,
+                    keep_poses=self._source_profile != "live" and not self._pose_retarget
+                               and identity is not None and identity == self._pose_window)
 
-            if (win is not None and not self._recording and self._pose_owner is None
+            if win is not None:
+                self._ensure_pose_capture(win)
+
+            if (win is not None and not self._recording
                     and (desired == "live" or not self.ring.storage_pressure or self._rec_lock is None)):
                 self._begin_capture(win)
 
@@ -517,6 +525,20 @@ class ReplayRecorder:
                 self._recovery_error = None
                 self._recovery_retry_at = 0.0
             self._wait_attach(self._cfg.attach_poll_s)
+
+    def _reconcile_source_profile(self, desired):
+        media_retired = self._source_profile == "media" and not self._capture_allowed()
+        live_retired = self._source_profile == "live" and desired != "live"
+        poses_retired = self._source_profile == "poses" and self._ghost_capture_factory is None
+        if not (media_retired or live_retired or poses_retired or desired is None):
+            return
+        if not self._capture_closed or self._rec_lock is not None:
+            handover = ((self._source_profile == "media" and desired == "live")
+                        or (self._source_profile == "live" and desired in {"media", "poses"})
+                        or self._profile_handover and desired is not None)
+            self._teardown_capture(keep_owner=handover,
+                keep_poses=desired is not None and self._source_profile != "live"
+                           and self._ghost_capture_factory is not None)
 
     def _maintain_media_storage(self):
         # Free-space pressure stops the encoder but retains media scratch and
@@ -563,8 +585,6 @@ class ReplayRecorder:
         # fallback codec probe (main may already have supplied a codec).
         self._scratch.prepare(self._protected_scratch())
         self.ring.reset()
-        if self._codec is None:
-            self._codec = self._codec_factory() if self._codec_factory is not None else pick_video_codec()
         self._scratch_ready = True
         self._scratch.resume_deletion()
 
@@ -600,7 +620,7 @@ class ReplayRecorder:
             # Say what happened either way. Two sessions in a row left their
             # whole buffer behind and the log could not tell a stop that never
             # ran from a cleanup that declined (2026-09-18).
-            refusal = ("still recording" if self._recording
+            refusal = ("still recording" if self._recording or self._pose_owner is not None
                        else "capture not proved closed" if not self._capture_closed
                        else "buffer owned by another session" if not self._scratch.owns()
                        else None)
@@ -657,7 +677,7 @@ class ReplayRecorder:
                 if not self._scratch.owns():  # ownership could change before acquisition
                     self._release_recorder()
                     return False
-            resume = self._recording
+            resume = self._recording or self._pose_owner is not None
             self._close_capture(keep_owner=True)
             if not self._capture_closed:
                 return False
@@ -666,8 +686,9 @@ class ReplayRecorder:
             if resume and not self._stopping:
                 win = self._window_finder(self._cfg.window_title)
                 if win is not None:
+                    self._ensure_pose_capture(win)
                     self._begin_capture(win)
-            if not self.recording_enabled and self._capture_closed:
+            if not self.recording_enabled and self._capture_closed and self._pose_owner is None:
                 self._release_recorder()
             return True
 
@@ -689,7 +710,7 @@ class ReplayRecorder:
         if desired == "live":
             self._begin_live_capture(win)
             return
-        if desired is None:
+        if desired != "media":
             return
         with self._capture_lock:
             if self._source_profile == "live":
@@ -697,7 +718,7 @@ class ReplayRecorder:
             if self._recording:
                 if self._capture_allowed():
                     return
-                self._teardown_capture()
+                self._teardown_capture(keep_poses=True)
             with self._recording_control_lock:
                 if not self._recording_enabled or self._stopping or self._capture_cleanup_failed:
                     return
@@ -705,11 +726,12 @@ class ReplayRecorder:
             try:
                 self._start_capture(win)
                 if not self._capture_allowed():
-                    self._teardown_capture(keep_owner=self._desired_source_profile() == "live")
+                    self._teardown_capture(keep_owner=self._desired_source_profile() == "live",
+                        keep_poses=self._ghost_capture_factory is not None)
                 elif self._recording:
                     self._capture_revision = self._capture_start_revision
             except BaseException:
-                self._teardown_capture()
+                self._teardown_capture(keep_poses=self._ghost_capture_factory is not None)
                 raise
             finally:
                 with self._recording_control_lock:
@@ -718,6 +740,7 @@ class ReplayRecorder:
     def _live_start_allowed(self, revision) -> bool:
         with self._recording_control_lock:
             return (not self._stopping and not self._recording_enabled
+                    and self._ghost_capture_factory is None
                     and self._live_revision == revision and self._live_capture_factory is not None
                     and any(value is not None for value in self._live_session))
 
@@ -781,6 +804,8 @@ class ReplayRecorder:
 
         self._source_profile = "media"
         self._prepare_scratch()
+        if self._codec is None:
+            self._codec = self._codec_factory() if self._codec_factory is not None else pick_video_codec()
         if not self._capture_allowed():
             return
         self.ring.maintain()
@@ -987,7 +1012,7 @@ class ReplayRecorder:
                     try:
                         audio.stop()
                     except Exception:
-                        self._teardown_capture()  # Retains any owner that cannot close.
+                        self._teardown_capture(keep_poses=True)  # Retain failed media owners.
                         raise
                     with self._lock:
                         self._audio_source = None
@@ -998,11 +1023,11 @@ class ReplayRecorder:
             if self._writer is not None:
                 # The legacy count-based PCM writer cannot represent a live
                 # audio gap. Retire its run instead of shifting old samples.
-                self._teardown_capture()
+                self._teardown_capture(keep_poses=True)
                 return
             self._start_audio(win, self._clock, initializing=False)
             if not self._capture_allowed():
-                self._teardown_capture()
+                self._teardown_capture(keep_poses=True)
 
     def _source_stopped(self, source: VideoSource) -> None:
         with self._lock:
@@ -1040,7 +1065,7 @@ class ReplayRecorder:
 
     def _start_pose_capture(self, win, *, live_only=False):
         factory = self._live_capture_factory if live_only else self._ghost_capture_factory
-        if factory is None or not live_only and not self._capture_allowed():
+        if factory is None or self._stopping or self._pose_owner is not None:
             return
         from sm64_events.ghost.recording import PoseRecording
         owner = None
@@ -1051,14 +1076,16 @@ class ReplayRecorder:
                        if value is not None}
             path = None if live_only else self._cfg.scratch_dir / self._pose_archive_name
             owner = PoseRecording(path, factory, producer_pid=win.pid,
-                                  allowed=lambda: self._capture_allowed() and not self._session_paused, **options)
+                                  allowed=lambda: not self._stopping and not self._session_paused, **options)
             with self._recording_control_lock:
                 self._pose_owner = owner
+                self._pose_window = (win.pid, win.hwnd)
                 self._pose_live_session = live_session
                 if owner.archive is not None:
                     self.pose_archive = owner.archive
                 self._sync_live_session_locked()
-            if not live_only and not self._capture_allowed():
+            if self._stopping or self._pose_retarget:
+                owner.request_stop()
                 return
             if live_only and not self._live_start_allowed(self._live_start_revision):
                 owner.request_stop()
@@ -1069,23 +1096,41 @@ class ReplayRecorder:
                 log.exception("native ghost source unavailable")
             if owner is not None:
                 # Cleanup failure must still retain ownership and block replacement.
-                owner.stop()
+                try:
+                    owner.stop()
+                except Exception:
+                    self._capture_retained = {**getattr(self, "_capture_retained", {}), "poses": owner}
+                    self._pose_owner = None
+                    self._capture_cleanup_failed = True
+                    raise
             self._pose_owner = None
+            self._pose_window = None
             if not live_only:
                 self.pose_archive = None
 
-    def _teardown_capture(self, *, keep_owner: bool = False) -> None:
+    def _ensure_pose_capture(self, win) -> None:
+        with self._capture_lock:
+            if (self._ghost_capture_factory is None or self._pose_owner is not None
+                    or self._stopping or self._capture_cleanup_failed):
+                return
+            if self._acquire_recorder():
+                self._prepare_scratch()
+                self._start_pose_capture(win)
+                if self._pose_owner is not None and not self._recording:
+                    self._source_profile = "poses"
+
+    def _teardown_capture(self, *, keep_owner: bool = False, keep_poses: bool = False) -> None:
         with self._capture_lock:
             with self._recording_control_lock:
                 self._capture_tearing_down = True
             try:
-                self._close_capture(keep_owner=keep_owner)
+                self._close_capture(keep_owner=keep_owner, keep_poses=keep_poses)
             finally:
                 with self._recording_control_lock:
                     self._capture_tearing_down = False
 
-    def _request_capture_stop(self) -> None:
-        if self._pose_owner is not None:
+    def _request_capture_stop(self, *, keep_poses: bool = False) -> None:
+        if self._pose_owner is not None and not keep_poses:
             self._pose_owner.request_stop()
         source = self._video_source
         if source is not None and hasattr(source, "request_stop"):
@@ -1094,21 +1139,25 @@ class ReplayRecorder:
             except Exception:
                 log.exception("capture demand revocation failed")
 
-    def _close_capture(self, *, keep_owner: bool = False) -> None:
+    def _close_capture(self, *, keep_owner: bool = False, keep_poses: bool = False) -> None:
         """Stop sources and close writer. Safe to call when already idle."""
-        self._request_capture_stop()
+        keep_poses = keep_poses and not self._stopping
+        self._request_capture_stop(keep_poses=keep_poses)
         # Failed owners are separate from active callback routes. The fixed
         # fixed keys retain actual objects for a later, explicit close attempt.
         owners = dict(getattr(self, "_capture_retained", {}))
         with self._lock:
             for name, owner in (("video", self._video_source), ("audio", self._audio_source),
                                 ("sink", self._video_sink), ("writer", self._writer),
-                                ("ledger", self.ledger if self._scratch_ready else None), ("poses", self._pose_owner)):
+                                ("ledger", self.ledger),
+                                ("poses", None if keep_poses else self._pose_owner)):
                 if owner is not None:
                     owners[name] = owner
             self._capture_retained = owners
             self._video_source = None
-            self._pose_owner = None
+            if not keep_poses:
+                self._pose_owner = None
+                self._pose_window = None
             self._window_lost.clear()
             self._capture_window = None
             self._writer = None
@@ -1136,7 +1185,7 @@ class ReplayRecorder:
         self._capture_closed = not owners
         self._capture_cleanup_failed = not self._capture_closed
         self._retained_profile = (self._source_profile or self._retained_profile) if owners else None
-        self._source_profile = None
+        self._source_profile = "poses" if keep_poses and self._pose_owner is not None else None
         self._profile_handover = keep_owner
         self._recording = False
         self._capture_revision = None
@@ -1148,7 +1197,7 @@ class ReplayRecorder:
         # over recording (e.g. PJ64 closed here, or this instance is shutting
         # down). Re-acquired on the next _begin_capture if we capture again.
         # Keep the machine lease until every retained owner proves quiet.
-        if not keep_owner and self._capture_closed:
+        if not keep_owner and self._capture_closed and self._pose_owner is None:
             self._release_recorder()
         # _audio_mode intentionally kept as last-known value so status() can
         # report which mode was active even after stop; cleared only on
@@ -1196,6 +1245,7 @@ class ReplayRecorder:
         """The cartridge's build changed under the same window: end the
         capture so the next attach cycle starts it again with the new build's
         picture stamps and pose capture. Ring footage already written stays."""
+        self._pose_retarget = True
         self._window_lost.set()
         self._attach_wake.set()
 
@@ -1207,7 +1257,7 @@ class ReplayRecorder:
         self._capture_gated = gated
         if not gated:
             return win
-        if self._recording or self._source_profile == "live":
+        if self._recording or self._pose_owner is not None:
             self._teardown_capture(keep_owner=True)
         return None
 
@@ -1270,6 +1320,8 @@ class ReplayRecorder:
         if self._source_profile == "live":
             return False
         if getattr(self, "_capture_retained", None):
+            return False
+        if self._pose_owner is not None and not self._session_paused:
             return False
         source = self._video_source
         if source is None and not self._capture_closed:
@@ -1549,6 +1601,10 @@ class ReplayRecorder:
             # Why the capture layer's GPU route can never run for this
             # Project64 (sourcefactory.DesktopForUnsupportedGpu), else None.
             "gpu_unsupported": getattr(source, "gpu_unsupported", None),
+            "gpu_fallback": getattr(source, "gpu_fallback", None),
+            "gpu_fallback_active": bool(getattr(source, "gpu_fallback", None)),
+            "pose_source_owned": self._pose_owner is not None,
+            "pose_capture_paused": self._session_paused,
             "pictures_fed": self._pictures_fed,
             "frame_source_health": (source.status()
                                     if hasattr(source, "status")

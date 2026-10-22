@@ -17,6 +17,11 @@ wrappers see [local verification](local-verification.md).
 | **Merge check** | `uv run python tools/run_tests.py` (`--why` shows the selection) | the **blast radius**: the tests this change can affect | for one of two slots |
 | **Full run** | GitHub Actions, every push to main; `uv run python tools/full_run.py status` | the whole suite, browser tests included, split across parallel jobs | not on this machine |
 
+The admission lock and runner registry in `tools/test_resources.py` use
+`tempfile.gettempdir()`. Keep the normal shared `TEMP`/`TMP` location across
+worktrees; pytest's `--basetemp` places case artifacts without splitting that
+machine-wide coordination.
+
 The merge check gates a merge; the full run gates a release (`tools/release.py`
 waits for a green one on the commit it releases). **Wrap runs the merge check
 once; don't run it yourself first.** A direct `run_tests.py` run leaves no

@@ -11,6 +11,7 @@ import json
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 
 import sentry_sdk
@@ -28,11 +29,21 @@ _directory: Path | None = None
 _enabled = False
 _configuration_error = False
 _preference_error = False
+_diagnostic_source = None
+_collecting = threading.local()
+_consent_generation = 0
+_consent_since = 0.0
 
 
 def _before_send(event, _hint):
     if not _enabled:
         return None
+    generation = _consent_generation
+    crumbs = event.get("breadcrumbs", {})
+    if isinstance(crumbs, dict):
+        crumbs["values"] = [crumb for crumb in crumbs.get("values", [])
+                            if isinstance(crumb, dict) and isinstance(crumb.get("data"), dict)
+                            and crumb["data"].get("reporting_generation") == generation]
     event["contexts"] = {"runtime": {
         "name": sys.implementation.name,
         "version": ".".join(str(part) for part in sys.version_info[:3]),
@@ -40,7 +51,64 @@ def _before_send(event, _hint):
     if sys.platform == "win32":
         version = sys.getwindowsversion()
         event["contexts"]["os"]["version"] = f"{version.major}.{version.minor}.{version.build}"
-    return safe_event(event)
+    source = _diagnostic_source
+    if source is not None and not getattr(_collecting, "active", False):
+        _collecting.active = True
+        try:
+            event.setdefault("extra", {})["diagnostics"] = _current_history(source())
+        except Exception:  # noqa: BLE001 -- preserve the error even when evidence is unavailable.
+            event.setdefault("extra", {})["diagnostics"] = {"error_type": "Unavailable"}
+        finally:
+            _collecting.active = False
+    return safe_event(event) if _enabled and generation == _consent_generation else None
+
+
+def _current_history(snapshot):
+    """Do not backfill old native history after an opt-out/re-enable cycle."""
+    from datetime import datetime
+    from .diagnostic_privacy import safe_snapshot
+    result = safe_snapshot(snapshot)
+    native = result.get("native", {})
+    recent = []
+    for row in native.get("events", []):
+        try:
+            if datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp() >= _consent_since:
+                recent.append(row)
+        except (KeyError, ValueError, TypeError):
+            pass
+    native["events"] = recent
+    gpu = result.get("capture", {}).get("gpu", {})
+    for name in ("first_failure", "latest"):
+        stamp = gpu.get(name, {}).get("observed_unix_s")
+        if isinstance(stamp, (int, float)) and stamp < _consent_since:
+            gpu[name] = {}
+    return result
+
+
+def set_diagnostic_source(source):
+    """Bind one app lifetime; an older app cannot unregister its replacement."""
+    global _diagnostic_source
+    _diagnostic_source = source
+    def unbind():
+        global _diagnostic_source
+        if _diagnostic_source is source:
+            _diagnostic_source = None
+    return unbind
+
+
+def _before_breadcrumb(crumb, hint):
+    generation = _consent_generation
+    result = safe_breadcrumb(crumb, hint) if _enabled else None
+    if not _enabled or generation != _consent_generation:
+        return None
+    if result is not None:
+        result["data"] = {"reporting_generation": generation}
+    return result
+
+
+def _clear_breadcrumbs():
+    for scope in (sentry_sdk.get_current_scope(), sentry_sdk.get_isolation_scope(), sentry_sdk.get_global_scope()):
+        scope.clear_breadcrumbs()
 
 
 def _read_preference(directory: Path, default: bool) -> bool:
@@ -56,9 +124,12 @@ def _read_preference(directory: Path, default: bool) -> bool:
 
 def configure(*, dsn, release, environment, directory, enabled=True):
     """Configure once at normal startup; absent/invalid DSNs remain offline."""
-    global _client, _transport, _directory, _enabled, _configuration_error
+    global _client, _transport, _directory, _enabled, _configuration_error, _consent_generation, _consent_since
     shutdown()
     with _lock:
+        _clear_breadcrumbs()
+        _consent_generation += 1
+        _consent_since = time.time()
         _directory = Path(directory)
         _enabled = _read_preference(_directory, bool(enabled))
         _configuration_error = False
@@ -77,7 +148,7 @@ def configure(*, dsn, release, environment, directory, enabled=True):
                               LoggingIntegration(level=logging.INFO, event_level=logging.ERROR, sentry_logs_level=None)],
                 send_default_pii=False, include_local_variables=False,
                 include_source_context=False, attach_stacktrace=False, max_breadcrumbs=20,
-                before_send=_before_send, before_breadcrumb=safe_breadcrumb,
+                before_send=_before_send, before_breadcrumb=_before_breadcrumb,
                 traces_sample_rate=0, profiles_sample_rate=0, auto_session_tracking=False,
                 send_client_reports=False, enable_logs=False, shutdown_timeout=0,
             )
@@ -120,9 +191,14 @@ def capture_problem(message, *, context=None):
 
 def set_enabled(enabled):
     """Persist the user's choice; disabling drops all unsent reports."""
-    global _enabled, _preference_error
+    global _enabled, _preference_error, _consent_generation, _consent_since
     with _lock:
+        if bool(enabled) != _enabled:
+            _consent_generation += 1
+            _consent_since = time.time()
         _enabled = bool(enabled)
+        if not _enabled:
+            _clear_breadcrumbs()
         _preference_error = False
         try:
             if _transport:

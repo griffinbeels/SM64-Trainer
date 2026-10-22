@@ -37,7 +37,7 @@ class PoseRecording:
                 stopping = self._stopping
             if stopping:
                 self.request_stop()
-                raise RuntimeError("native pose source startup retired")
+                return
             source.start()
         finally:
             with self._control:

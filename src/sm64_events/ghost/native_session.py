@@ -479,7 +479,6 @@ class NativeGhost:
 
     def _send(self, *, blocking=True):
         source = self._source
-        recording_enabled = getattr(getattr(self._replay, "recorder", None), "recording_enabled", True) is not False
         command = {"enabled": False}
         status = source.snapshot_status(blocking=blocking) if source is not None else {}
         if status is None:
@@ -488,13 +487,13 @@ class NativeGhost:
         producer = status.get("producer")
         origin = self._origin
         assets = self._pending_asset if self._adaptive_generation else self._selected_asset
-        if (recording_enabled and self._requested and self._selected_asset is not None and origin is not None
+        if (self._requested and self._selected_asset is not None and origin is not None
                 and (producer is None or not producer.configuration or not producer.epoch)):
             # RomClosed/RomOpen temporarily removes the producer namespace.
             # Keep the requested binding through it; sending OFF here would
             # erase the native recovery cache before the same ROM reopens.
             return
-        if (recording_enabled and self._requested and assets is not None and source is not None
+        if (self._requested and assets is not None and source is not None
                 and (origin is not None or self._adaptive_generation) and producer is not None
                 and producer.configuration and producer.epoch):
             instant = datetime.fromisoformat(origin["utc"].replace("Z", "+00:00")) if origin else None
@@ -554,20 +553,16 @@ class NativeGhost:
     def state(self):
         status = (self._source.snapshot_status() or {}) if self._source is not None else {}
         self._remember_renderer(status)
-        recorder = getattr(self._replay, "recorder", None)
-        recording_disabled = getattr(recorder, "recording_enabled", True) is False
         # A race hidden by the overlay switch is neither running nor waiting
         # for anything the card should mention.
         shown = self._requested and not self._hidden
-        ready = bool(not recording_disabled and self._enabled and not self._owner_suspended and shown
+        ready = bool(self._enabled and not self._owner_suspended and shown
                      and status.get("available") and status.get("state") == 4)
         # A generated pose is not display evidence. Only the renderer's last
         # qualified swap can say this command reached the game window.
         visible = ready and bool(status.get("displayed"))
         reason = None
-        if shown and recording_disabled:
-            reason = "Recording is off. Start recording to show Only Mario ghosts and play their sounds."
-        elif ready and not visible and status.get("playback_reason") == GP_WRONG_SCENE:
+        if ready and not visible and status.get("playback_reason") == GP_WRONG_SCENE:
             reason = "Ghost is in another area."
         elif shown and not ready:
             if status.get("state") == 5 and status.get("reason") != 10:
