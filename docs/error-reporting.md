@@ -29,7 +29,7 @@ questions.
 | Own memory/handle/thread counts | Yes | Yes |
 | Recognized native log events and numeric/enum fields | Latest 32 within a 24 KiB snapshot; absent log files only counted | Bounded recognized records from known log tails |
 | The Debug report itself | Attached to the first error of each issue, at most 5 per session | Exported on request |
-| Operational log lines (the report's server-log filter) | INFO as up to 100 breadcrumbs; WARNING and above as Sentry Logs | Last 400 lines |
+| Operational log lines (the report's server-log filter) | INFO as up to 100 breadcrumbs; WARNING and above as Sentry Logs | Last 400 lines, successful requests skipped |
 | Local journal/UI observations | Only inside the attached report | Counts, clocks and states; display labels omitted |
 | Raw native messages, account/profile/roster labels or arbitrary log fields | No | No |
 | ROMs, video, inputs, databases, screenshots, environment, request bodies, locals | No | No file contents or attachments |
@@ -134,8 +134,10 @@ request tokens, player/account identities, machine names and persistent device
 identifiers are excluded. Ephemeral producer PID/generation identifies a runtime,
 not a player. No administrative Sentry credential is bundled.
 
-Only named operational loggers (`OPERATIONAL_LOGGERS`) supply breadcrumbs and
-Sentry Logs; the report's server-log section adds only uvicorn's own lines.
+Only named operational loggers, uvicorn's own included (`OPERATIONAL_LOGGERS`),
+supply breadcrumbs, Sentry Logs and the report's server-log lines. One rule
+(`operational_log`) drops successful request lines (1xx-3xx) from all three and
+keeps failing ones (4xx/5xx), so the page's polling cannot fill the 400-line tail.
 Gameplay event wires, unrelated
 process rankings and community/account logs are excluded. Turning reporting off
 also prevents breadcrumb collection and clears prior breadcrumbs, so re-enabling

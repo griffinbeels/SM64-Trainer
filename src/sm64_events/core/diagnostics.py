@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from sm64_events.core.diagnostic_export import native_export, report_line, report_value
+from sm64_events.core.diagnostic_export import native_export, report_line, report_value, routine_line
 from sm64_events.core.diagnostic_privacy import safe_snapshot
 from sm64_events.core.diagnostic_retention import REPORT_KEEP as KEEP_REPORTS, bounded_report, report_directory
 from sm64_events.core.error_reporting_privacy import scrub_text
@@ -33,9 +33,15 @@ UILOG_EMPTY = ("empty — the page posts these itself, so silence means the "
                "open tab is running old JS, or no page was open")
 
 
-def _tail(path: Path, count: int) -> list[str]:
+def _tail(path: Path, count: int, *, skip: Callable[[str], bool] | None = None) -> list[str]:
     text, _ = bounded_tail(path, limit=256 * 1024)
-    return [report_line(line)[:LINE_CLIP] for line in text.splitlines()[-count:]]
+    lines = [line for line in text.splitlines() if skip is None or not skip(line)]
+    return [report_line(line)[:LINE_CLIP] for line in lines[-count:]]
+
+
+def _server_log(path: Path) -> list[str]:
+    # Successful requests are skipped before counting, so the tail is operational.
+    return _tail(path, LOG_TAIL_LINES, skip=routine_line)
 
 
 def _fence(lines: list[str]) -> str:
@@ -92,13 +98,13 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
         captured = {"available": False, "error_type": type(error).__name__}
 
     try:
-        log_lines: list[str] | None = _tail(log_file, LOG_TAIL_LINES)
-    except Exception:
+        log_lines: list[str] | None = _server_log(log_file)
+    except Exception:  # noqa: BLE001 - the Server log section re-raises and names the reason.
         log_lines = None
 
     def _log_body() -> str:
         if log_lines is None:
-            _tail(log_file, LOG_TAIL_LINES)  # re-raise the real reason
+            _server_log(log_file)  # re-raise the real reason
         return _fence(log_lines)
 
     def _journal_body() -> str:

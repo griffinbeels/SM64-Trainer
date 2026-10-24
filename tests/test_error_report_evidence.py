@@ -249,6 +249,23 @@ def test_the_spool_rebuilds_log_batches_it_did_not_project_itself(tmp_path):
     assert not any(value in delivered[0] for value in (b"SyntheticHost", b"SyntheticArg", b"SyntheticAccount", b"synthetic-secret"))
 
 
+def test_breadcrumbs_apply_the_reports_request_rule(tmp_path, sent):
+    configure(tmp_path)
+    logger = logging.getLogger("uvicorn.access")
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        for status in (200, 304, 500):
+            logger.info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:50385", "GET", "/api/session", "1.1", status)
+        reporting.capture_problem("Synthetic failing endpoint")
+    finally:
+        logger.setLevel(previous)
+    wait_for(lambda: items(sent, "event"))
+    event = json.loads(items(sent, "event")[0].payload.get_bytes())
+    access = [crumb["message"] for crumb in event["breadcrumbs"]["values"] if crumb["category"] == "uvicorn.access"]
+    assert access == ['[ip]:50385 - "GET [path] HTTP/1.1" 500']
+
+
 def test_breadcrumbs_keep_the_operational_lead_up_beyond_twenty_lines(tmp_path, sent):
     configure(tmp_path)
     logger = logging.getLogger("sm64.poller")

@@ -48,6 +48,25 @@ def test_healthy_report_has_every_section_and_caps(tmp_path):
     assert report.count('{"surface": "selector"}') == diagnostics.UILOG_TAIL
 
 
+def test_successful_requests_cannot_push_operational_lines_out_of_the_tail(tmp_path):
+    # A beta.30 tester's 400-line tail held 194 access-200 lines from the page's polling.
+    lines = []
+    for index in range(300):
+        lines.append('2026-10-24T22:36:44Z INFO uvicorn.access 127.0.0.1:50385 - "GET /health HTTP/1.1" 200')
+        if index % 2 == 0:
+            lines.append(f"2026-10-24T22:36:45Z INFO sm64.replay stage timing step {index // 2}")
+    lines += ['2026-10-24T22:36:46Z INFO uvicorn.access 127.0.0.1:50385 - "GET /ui/app.js HTTP/1.1" 304',
+              '2026-10-24T22:36:47Z INFO uvicorn.access 127.0.0.1:50385 - "POST /api/target HTTP/1.1" 409',
+              '2026-10-24T22:36:48Z INFO uvicorn.access 127.0.0.1:50385 - "GET /api/session HTTP/1.1" 500']
+    kwargs = _healthy_kwargs(tmp_path)
+    kwargs["log_file"].write_text("\n".join(lines), encoding="utf-8")
+    server_log = diagnostics.build_report(**kwargs).split("## Server log", 1)[1].split("## Recent game events", 1)[0]
+    assert all(f"stage timing step {step}\n" in server_log for step in range(150))
+    assert server_log.count("uvicorn.access") == 2
+    assert '" 409' in server_log and '" 500' in server_log
+    assert '" 200' not in server_log and '" 304' not in server_log
+
+
 def test_every_broken_source_names_itself_instead_of_raising(tmp_path):
     kwargs = _healthy_kwargs(tmp_path)
     kwargs["log_file"] = tmp_path / "missing.log"

@@ -38,9 +38,11 @@ _CONTEXT_KEYS = frozenset({
 })
 # Operational loggers only: gameplay event wires, profiles, community/account
 # and process inventories stay local. Breadcrumbs, Sentry Logs and the Debug
-# report's server-log section all filter through this one set.
+# report's server-log section all filter through `operational_log`.
 OPERATIONAL_LOGGERS = frozenset({"sm64.replay", "sm64.setup", "sm64.capturelayer", "sm64.desktop",
-                                 "sm64.ghost.capture", "sm64.updater", "sm64.poller"})
+                                 "sm64.ghost.capture", "sm64.updater", "sm64.poller",
+                                 "uvicorn.error", "uvicorn.access"})
+_ACCESS_STATUS = re.compile(r'"\s+([1-5][0-9]{2})\s*$')
 LOG_LINE_LIMIT = 600
 BREADCRUMB_LIMIT = 100
 BREADCRUMB_BYTES = 24 * 1024
@@ -69,6 +71,18 @@ def scrub_text(value: object, limit: int = 600) -> str:
     ):
         text = pattern.sub(replacement, text)
     return text[:limit]
+
+
+def routine_access(name: object, message: object) -> bool:
+    """A request that succeeded (1xx-3xx). The page polls, so these bury the
+    evidence; a failing endpoint (4xx/5xx) or an unparsed line is kept."""
+    status = _ACCESS_STATUS.search(str(message)) if name == "uvicorn.access" else None
+    return status is not None and int(status[1]) < 400
+
+
+def operational_log(name: object, message: object) -> bool:
+    """The one keep rule for breadcrumbs, Sentry Logs and the report's server log."""
+    return name in OPERATIONAL_LOGGERS and not routine_access(name, message)
 
 
 def _safe_ip(match: re.Match) -> str:
@@ -136,7 +150,7 @@ def _frames(stacktrace: object) -> dict:
 def safe_breadcrumb(crumb: dict, _hint: object = None) -> dict | None:
     """Only operational logs: event wires, profiles and process inventories stay local."""
     category = str(crumb.get("category", ""))
-    if category not in OPERATIONAL_LOGGERS:
+    if not operational_log(category, crumb.get("message", "")):
         return None
     result = {
         "category": scrub_text(category, 120),
@@ -239,7 +253,7 @@ def _log_attributes(attributes: Mapping) -> dict:
 
 def _operational_log(name: object, severity: object, body: object, attributes: Mapping):
     """The Debug report's server-log filter, for WARNING and above (OTel severity 13+)."""
-    if name not in OPERATIONAL_LOGGERS or type(severity) is not int or severity < 13:
+    if not operational_log(name, body) or type(severity) is not int or severity < 13:
         return None
     return scrub_text(body, LOG_LINE_LIMIT), {"logger.name": name, **_log_attributes(attributes)}
 
