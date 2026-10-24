@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -146,8 +147,10 @@ class LayerStatus:
     #: closed (packaged build, our own earlier install); the UI must not
     #: reopen onboarding for a stale layer it will update anyway
     automatic_update: bool = False
-    # Internal typed evidence; the public setup response retains its old shape.
+    # Internal typed evidence is excluded from the public setup response.
     gpu_observation: GpuSetupEvidence | None = field(default=None, repr=False)
+    # A legacy x86 process may read its VirtualStore INI before the real file.
+    configuration_consistent: bool = True
 
     def as_dict(self) -> dict:
         result = asdict(self)
@@ -157,7 +160,7 @@ class LayerStatus:
     @property
     def installation_verified(self) -> bool:
         """Current files/configuration, independent of this checkout's history."""
-        return (self.wrapper_current and self.renderer_current
+        return (self.wrapper_current and self.renderer_current and self.configuration_consistent
                 and _configured(self.wrapper_present, self.wrapper_selected, self.wrapped_name,
                                 self.renderer_present))
 
@@ -219,7 +222,7 @@ def _files_match(path_a: Path, path_b: Path) -> bool:
 
 def _problems(state: str, pj64_dir, running: bool, wrapper_selected: bool, registry_graphics_dll,
               wrapper_present: bool, wrapped_name, renderer_present: bool, layer_current: bool,
-              automatic: bool) -> list[str]:
+              automatic: bool, configuration_consistent: bool) -> list[str]:
     """Fixable sentences, in order, for the setup screen."""
     problems: list[str] = []
     if state == NOT_INSTALLED and pj64_dir is None:
@@ -232,6 +235,9 @@ def _problems(state: str, pj64_dir, running: bool, wrapper_selected: bool, regis
         problems.append(
             f"another graphics plugin is selected ({registry_graphics_dll}); "
             "re-install to restore the capture layer")
+    elif state == REGRESSED and not configuration_consistent:
+        problems.append("Windows has a different per-user capture configuration; "
+                        "close Project64, then re-install the capture layer to repair it")
     elif state == REGRESSED and wrapper_present and (
             not renderer_present or (wrapped_name or "").lower() != RENDERER_DLL.lower()):
         problems.append(
@@ -271,6 +277,9 @@ class CaptureLayer:
         self._settings_path = settings_path
         self._dll_source = dll_source
         self._renderer_source = renderer_source
+        # Resolve in the original process, never under a file helper's alternate
+        # administrator account. That helper owns only the protected plugin files.
+        self._local_appdata = os.environ.get("LOCALAPPDATA")
         self._gpu_observation = gpu_observation or (lambda: None)
         # A worktree's bundled bytes may be older than a manually installed
         # candidate. Hash inequality proves difference, never update ordering:
@@ -397,15 +406,43 @@ class CaptureLayer:
     def _read_wrapped_name(self, ini_path: Path) -> str | None:
         try:
             text = ini_path.read_text()
-        except OSError:
+        except (OSError, UnicodeError):
             return None
+        wrapped = None
         for line in text.splitlines():
+            # Match gfxwrap.c::read_ini: leading indentation is accepted and
+            # the last wrapped= line wins. Setup must inspect what PJ64 reads.
+            line = line.rstrip(" \r\n").lstrip(" \t")
             if line.startswith("wrapped="):
-                return line[len("wrapped="):].strip()
-        return None
+                wrapped = line[len("wrapped="):]
+        return wrapped
 
     def _write_wrapped_name(self, ini_path: Path, name: str | None) -> None:
         ini_path.write_text(f"wrapped={name or ''}\n")
+
+    def _shadow_ini(self, plugin_dir: Path) -> Path | None:
+        """Only the existing per-user counterpart of our one owned INI.
+
+        Windows searches this copy first for a virtualized legacy application.
+        A manifested/elevated Project64 may instead read the physical file, so
+        both copies must agree. Never create a VirtualStore file or scan a tree.
+        """
+        if not self._local_appdata or not plugin_dir.is_absolute() or plugin_dir.drive.startswith("\\\\"):
+            return None
+        appdata = Path(self._local_appdata)
+        if not appdata.is_absolute():
+            return None
+        plugin_dir = Path(os.path.abspath(plugin_dir))
+        shadow = appdata / "VirtualStore" / plugin_dir.relative_to(plugin_dir.anchor) / WRAPPER_INI
+        return shadow if shadow.is_file() else None
+
+    def _reconcile_shadow(self, shadow: Path | None) -> None:
+        if shadow is None:
+            return
+        with file_operation("write per-user plugin configuration", shadow):
+            self._write_wrapped_name(shadow, RENDERER_DLL)
+            if self._read_wrapped_name(shadow) != RENDERER_DLL:
+                raise OSError("Per-user plugin configuration verification failed")
 
     # -- public surface ------------------------------------------------
 
@@ -458,7 +495,11 @@ class CaptureLayer:
                              and registry_graphics_dll.lower() == WRAPPER_DLL.lower())
         wrapper_present, wrapper_current, wrapped_name, renderer_present, renderer_current = (
             self._installed_files(pj64_dir, source, renderer))
-        configured = _configured(wrapper_present, wrapper_selected, wrapped_name, renderer_present)
+        shadow = self._shadow_ini(self._plugin_dir(pj64_dir)) if pj64_dir else None
+        configuration_consistent = shadow is None or (
+            (self._read_wrapped_name(shadow) or "").lower() == (wrapped_name or "").lower())
+        configured = configuration_consistent and _configured(
+            wrapper_present, wrapper_selected, wrapped_name, renderer_present)
         layer_current = wrapper_current and renderer_current
 
         # The only liveness evidence is the GPU route's control page and its
@@ -489,7 +530,8 @@ class CaptureLayer:
             state = NEEDS_RESTART
 
         problems = _problems(state, pj64_dir, running, wrapper_selected, registry_graphics_dll,
-                             wrapper_present, wrapped_name, renderer_present, layer_current, automatic)
+                             wrapper_present, wrapped_name, renderer_present, layer_current, automatic,
+                             configuration_consistent)
         steps = self._steps(state, running, source is not None and wrapper_present and not layer_current,
                             layer_alive, automatic)
 
@@ -515,6 +557,7 @@ class CaptureLayer:
             previous_graphics_dll=self._previous_graphics_dll(overlay, wrapped_name),
             automatic_update=automatic,
             gpu_observation=gpu,
+            configuration_consistent=configuration_consistent,
         )
         self._last_status, self._status_observed = status, time.time()
         return status
@@ -571,6 +614,7 @@ class CaptureLayer:
         dll_path = plugin_dir / WRAPPER_DLL
         ini_path = plugin_dir / WRAPPER_INI
         renderer_path = plugin_dir / RENDERER_DLL
+        shadow = self._shadow_ini(plugin_dir)
 
         overlay = self._load_overlay()
         # The plugin undo returns to. A re-install finds OUR wrapper in the
@@ -585,7 +629,7 @@ class CaptureLayer:
         overlay["uninstalled_at"] = None
         from sm64_events.core.setup_files import restore_on_failure
         with self._registry_install_transaction() as select_wrapper, restore_on_failure([
-                self._settings_path]), self._install_plugin_files(
+                self._settings_path, *([shadow] if shadow is not None else [])]), self._install_plugin_files(
                 pj64_dir, source, renderer, elevated=elevated) as receipts:
             renderer_receipt, receipt = receipts["renderer_receipt"], receipts["installation_receipt"]
             overlay["installed_renderer_sha256"] = renderer_receipt["after"]["sha256"]
@@ -593,6 +637,7 @@ class CaptureLayer:
             overlay["installation_receipt"] = receipt
             overlay["installed_by"] = self._installer
             self._record_wrapper(overlay, receipt["after"]["sha256"], dll_path, renderer_path)
+            self._reconcile_shadow(shadow)
             self._save_overlay(overlay)
             # HKCU always belongs to this original user, even if UAC used
             # another administrator's credentials for the file transaction.
@@ -733,11 +778,13 @@ class CaptureLayer:
                                              plugin_dir / WRAPPER_INI)
         ini_wrapped = self._read_wrapped_name(ini_path)
         wraps_ours = (ini_wrapped or "").lower() == RENDERER_DLL.lower()
+        shadow = self._shadow_ini(plugin_dir)
+        shadow_current = shadow is None or (self._read_wrapped_name(shadow) or "").lower() == RENDERER_DLL.lower()
         if not dll_path.exists():
             return False
         wrapper_stale = not _files_match(dll_path, source)
         renderer_stale = not renderer_path.exists() or not _files_match(renderer_path, renderer)
-        if not (wrapper_stale or renderer_stale or not wraps_ours):
+        if not (wrapper_stale or renderer_stale or not wraps_ours or not shadow_current):
             self._deferred = False
             return False
         # A running Project64 maps both DLLs, and the process list can miss it
@@ -782,7 +829,10 @@ class CaptureLayer:
 
     def _copy_stale(self, overlay, source, renderer, paths, wrapper_stale, renderer_stale):
         dll_path, renderer_path, ini_path = paths
-        with ExitStack() as copies:
+        shadow = self._shadow_ini(ini_path.parent)
+        from sm64_events.core.setup_files import restore_on_failure
+        rollback = [ini_path, self._settings_path, *([shadow] if shadow is not None else [])]
+        with restore_on_failure(rollback), ExitStack() as copies:
             if renderer_stale:
                 renderer_receipt = copies.enter_context(verified_copy(
                     renderer, renderer_path, reason="automatic_refresh",
@@ -795,6 +845,7 @@ class CaptureLayer:
                 overlay["installation_receipt"] = receipt
             self._record_wrapper(overlay, _sha256(dll_path), dll_path, renderer_path)
             self._write_wrapped_name(ini_path, RENDERER_DLL)
+            self._reconcile_shadow(shadow)
             self._save_overlay(overlay)
 
     def refresh_loop(self, stop, interval_s: float = 2.0, log=None) -> None:

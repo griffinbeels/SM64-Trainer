@@ -24,16 +24,18 @@ def abi_host(tmp_path_factory):
     (work / "GLFunctions.h").write_bytes(b"""#pragma once
 #include <windows.h>
 #include <stdint.h>
+extern unsigned refusal;
 namespace renderer { struct Identity { uintptr_t context,read_drawable; uint32_t owner_thread,context_generation,drawable_generation; }; }
 namespace snapshot { struct RestoreBindings { unsigned read_framebuffer,texture_2d,source_read_buffer; }; }
 namespace replay_gl { inline bool CandidateBindings(renderer::Identity *i,snapshot::RestoreBindings *b) {
-*i={123,456,GetCurrentThreadId(),1,1};*b={17,19,0x405};return true;}
-inline bool DrawableExtent(unsigned *w,unsigned *h){*w=640;*h=480;return true;}
-inline uint32_t SourceFormat(){return 1;}
+*i={123,456,GetCurrentThreadId(),1,1};*b={17,19,0x405};return refusal!=1;}
+inline bool DrawableExtent(unsigned *w,unsigned *h){*w=refusal==6?1:640;*h=480;return refusal!=3;}
+inline uint32_t SourceFormat(){return refusal==2?0:1;}
 inline bool __cdecl BeginCapture(){return true;} inline bool __cdecl EndCapture(){return true;} }
 """)
     (work / "DisplayWindow.h").write_bytes(b"""#pragma once
-struct Display { unsigned getWidth(){return 320;} unsigned getHeight(){return 240;}
+extern unsigned refusal;
+struct Display { unsigned getWidth(){return refusal==4?0:320;} unsigned getHeight(){return 240;}
 unsigned getHeightOffset(){return 0;} unsigned getBuffersSwapCount(){return 1;} };
 inline Display &dwnd(){static Display d;return d;}
 """)
@@ -45,7 +47,9 @@ inline PluginAPI &api(){static PluginAPI p;return p;}
 """)
     (work / "platform.cpp").write_bytes(b"""#include "N64.h"
 #include "renderer_boundary.h"
-unsigned origin=123; Registers REG{&origin};
+unsigned origin=123,refusal=0; Registers REG{&origin};
+extern "C" void __cdecl SourceTestRefusal(unsigned mode) {refusal=mode;REG.VI_ORIGIN=mode==5?nullptr:&origin;}
+#pragma comment(linker,"/EXPORT:SourceTestRefusal=_SourceTestRefusal")
 extern "C" void __cdecl SourceTestLifecycle(int mode) {if(mode==1)rb_rom_open();else if(mode==0)rb_rom_closed();else rb_close();}
 #pragma comment(linker,"/EXPORT:SourceTestLifecycle=_SourceTestLifecycle")
 """)
@@ -73,7 +77,7 @@ extern "C" unsigned __cdecl Completed(){return completions;}
     return target
 
 
-@pytest.mark.parametrize("mode", ["normal", "late", "closed"])
+@pytest.mark.parametrize("mode", ["normal", "late", "closed", "refusals"])
 def test_public_source_registration(abi_host, mode):
     result = subprocess.run([str(abi_host), mode], capture_output=True, text=True, timeout=10,
                             cwd=abi_host.parent, **quiet_spawn_kwargs(), check=False)

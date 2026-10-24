@@ -132,6 +132,9 @@ not mutate the tracked version, tag, push, deploy or publish. PyInstaller embeds
 a staged version hook and metadata; the frozen runtime self-check must prove the
 target version, normal identity, port and updater baseline. Preparation rechecks
 HEAD, working-tree status and `uv.lock` before writing the candidate record.
+A built candidate then waits for its source's full run on GitHub: "Ready for
+manual QA" (exit 0) means the run passed; exit 3 means it did not, so the
+candidate goes to no human, because publication would refuse it anyway.
 
 Public preparation with `--public --ghosts COLLECTION` also requires
 `--ghost-author REVIEWED_AUTHOR.json`. This bounded schema1 input names `author`,
@@ -246,7 +249,8 @@ for the running app, bootstrap repair and release tools.
 
 1. Freeze a committed source candidate and run checks for its affected behavior.
    Identify desktop, native, cloud and schema changes separately. Record the
-   source and environment actually tested.
+   source and environment actually tested. Run the
+   [Credits and About review](#credits-and-about-review) before freezing.
 2. For backend changes, verify the candidate on an isolated staging service first.
    Deploy compatible APIs to the permanent community before a real-user beta
    client depends on them. New production behavior stays restricted to the
@@ -284,6 +288,36 @@ The currently shared private friend EXE remains private and unchanged. Its embed
 invitation must never enter a public GitHub release. Private delivery can continue
 until the unified application's public release is approved. Opting into public
 beta updates is a preference, not an authorization bypass for restricted services.
+
+## Credits and About review
+
+Every Ship beta and every release reviews what changed since the previous
+published tag, so the Credits and the How it works lesson ship true. Griffin
+asked for this on 2026-10-24: "whenever we release a build, we also double
+check any credits / update any documentation".
+
+Two tests already gate this on every merge and full run:
+`tests/test_credits.py` fails when a shipped dependency, vendored file, font
+or native DLL has no credits row, or a vendored one has no license text in
+`licenses/`, and `tests/test_about_lesson.py` fails when an address, action
+code or message the lesson shows no longer matches the code. The build
+itself refuses a bundled Python package with no license file, and an
+ffmpeg.exe or PyAV that `licenses/README.md` does not describe
+(`tools/third_party_notices.py`). The review covers what none can see:
+
+1. **People:** a new tester or contributor gets a row in `TESTERS` or
+   `CREDIT_GROUPS` (`src/sm64_events/ui/credits.js`).
+2. **Sources:** a new community site, sheet or scraper the change reads from
+   gets a credit row naming who runs it, from its own page.
+3. **How it works:** if detection, saving, sending or replay capture changed,
+   reread `src/sm64_events/ui/howitworks.js` and correct any stop that no
+   longer describes the trainer.
+4. **Resources:** recheck any rule or link the change touched in
+   `src/sm64_events/ui/resources.js`.
+5. **Website:** assess public-capability changes through `website/README.md`.
+
+Record "credits reviewed: no change" or the commit that updated them in the
+candidate's receipt.
 
 ## Release approved beta
 

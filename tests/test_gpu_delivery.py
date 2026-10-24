@@ -125,6 +125,20 @@ def test_bootstrap_deadline_distinguishes_surface_and_gateway_waits_cpu(host, su
     assert result.stdout.strip() == f"bootstrap deadline {reason} 0 {reason}"
 
 
+@pytest.mark.parametrize(("witness", "outcome", "stale", "expected"), [
+    (0x53520002, 4, 0, 0x53520002),  # Later format refusal replaces transient bindings.
+    (0x53520006, 4, 0, 0x53520006),
+    (0x53520002, 4, 1, 0x53520001),  # Retired epoch cannot replace current evidence.
+    (0, 4, 0, 0),                  # An unclassified refusal stays unknown.
+    (42, 4, 0, 0),                 # Successful/test witness is not a refusal enum.
+    (0, 3, 0, 0x53520007),         # Source callback never observed this ticket.
+])
+def test_latest_bootstrap_refusal_reaches_status_and_diagnostic_cpu(host, witness, outcome, stale, expected):
+    result = subprocess.run([str(host), "--source-refusal-cpu", str(witness), str(outcome), str(stale)],
+                            capture_output=True, text=True, timeout=5, check=True, **quiet_spawn_kwargs())
+    assert result.stdout.strip() == f"source refusal 10034 {expected} {expected}"
+
+
 def test_omission_frontier_uses_identity_before_source_record_release_cpu(host):
     result = subprocess.run(
         [str(host), "--omission-custody-cpu"], capture_output=True, text=True,

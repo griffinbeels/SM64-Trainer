@@ -1,6 +1,7 @@
 /* Real DLL registration/lifetime witness; renderer surface is a fixture.
  * Compiled /Gz deliberately, while production source DLL uses /Gd. */
 #include "link_source_api.h"
+#include "source_refusal.h"
 #include <cstdio>
 #include <cstring>
 #include <type_traits>
@@ -50,6 +51,24 @@ int main(int argc,char **argv) {
     CHECK(FreeLibrary(callbacks) && FreeLibrary(source));
     CHECK(GetModuleHandleW(L"source_callbacks.dll")==callbacks && GetModuleHandleW(L"source_api.dll")==source);
     CHECK(!api->activate());
+    if(std::strcmp(argv[1],"refusals")==0){
+        auto refuse=reinterpret_cast<void (__cdecl *)(unsigned)>(GetProcAddress(source,"SourceTestRefusal"));
+        CHECK(refuse);lifecycle(1);CHECK(api->activate());
+        for(unsigned gate=1;gate<=6;++gate){
+            refuse(gate);
+            rb_stamp stamp{};stamp.bytes[0]=77;
+            auto token=api->stage(&stamp);CHECK(token.occurrence);
+            rs_request request{sizeof(request),RS_ABI_V2,{0,0},token};api->update(&request);api->finish(token);
+            const auto* record=api->take();CHECK(record && record->outcome==RB_SURFACE_FAILED);
+            CHECK(record->surface.witness==(0x53520000u|gate) && record->image.ownership==RB_IMAGE_NONE);
+            CHECK(captured()==gate-1 && api->release(token));
+            refuse(0);token=api->stage(&stamp);request.ticket=token;api->update(&request);api->finish(token);
+            record=api->take();CHECK(record && record->outcome==RB_OBSERVED && !record->surface.witness);
+            CHECK(captured()==gate && api->release(token));
+        }
+        api->disarm();lifecycle(0);
+        std::puts("source ABI passed: six refusal gates and successful recovery");return 0;
+    }
     for(unsigned cycle=0;cycle<3;cycle++) {
         if(cycle==0 || cycle==2)lifecycle(1); CHECK(api->activate());
         rb_stamp stamp{}; stamp.bytes[0]=77; stamp.lists_since=1; stamp.table_count=1; stamp.lengths[0]=1;

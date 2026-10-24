@@ -26,6 +26,14 @@ paths:
   qualify an existing installation, independently of a consent timestamp. Its
   folder/installation record is shared per Windows user, while gameplay readiness
   and checkout-local completion are separate. A matching install suppresses first use.
+- **Legacy per-user configuration:** an existing VirtualStore copy of the wrapper
+  INI must agree with the physical file. A legacy x86 Project64 can read that
+  copy first; physical file identity alone does not prove its effective setting.
+  Install and permitted refresh reconcile only this existing owned INI, under the
+  original user even when a helper installs protected files as another account.
+  Both copies and settings roll back on failure. No shadow is created and no
+  repair runs while Project64 is known to be running. The wrapper's configurable
+  loader and undo's previous selection remain unchanged.
 - **One reader per process:** `setup_runtime.py` attaches one `Pj64Memory` by the
   target's pid and keeps it while that process runs (`alive()`); an observation is
   one header read. A fresh reader per poll re-walked Project64's memory every
@@ -77,6 +85,17 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-10-22, hop 1: disposable-file reproduction of installation with an older
+  VirtualStore wrapper INI returned `installation_verified: true`, left the older
+  renderer selected in that shadow, and skipped automatic refresh because physical
+  files were current. The friend report contained virtualized plugin logs, but
+  omitted the INI contents, so this repairs a demonstrated setup class without
+  assigning that machine's ghost failure to it. `test_capturelayer_shadow.py`
+  covers install, configuration-only refresh, mismatch status, original-user UAC
+  commit/rollback, registry failure, missing shadows, unrelated files and live-game
+  protection. Windows' legacy read precedence is documented in
+  [User Account Control for Game Developers](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/user-account-control-for-game-developers).
 
 - 2026-10-19, hop 1: denied DLL writes were classified as a running emulator
   merely because the destination stayed unchanged. Explicit install now checks

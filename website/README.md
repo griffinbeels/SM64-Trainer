@@ -132,7 +132,7 @@ alone. Detailed exit codes and operator recovery live in the runbook.
 ## Change copy or add a feature section
 
 1. Establish what the downloaded app version actually supports. Use the
-   [app README](../README.md), relevant implementation/docs, and the published
+   [user guide](../docs/user-guide.md), relevant implementation/docs, and the published
    [privacy policy](https://auth.sm64trainer.app/policies). If a new claim needs
    a newer app release, coordinate copy and the minimum version deliberately.
 2. Edit `index.html` using the existing semantic sections. Give new sections

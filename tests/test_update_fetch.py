@@ -1,5 +1,7 @@
 import hashlib
+import http.client
 import io
+import urllib.error
 import zlib
 from pathlib import Path
 
@@ -151,6 +153,65 @@ def test_fetch_plan_raises_when_range_ignored(tmp_path):
     with pytest.raises(RangeUnsupported):
         fetch_plan(plan, "https://dl/z.zip", tmp_path / "st",
                    http=_range_http(blob, honor_range=False))
+
+
+@pytest.mark.parametrize("failure", [
+    urllib.error.HTTPError("https://dl/z.zip", 416, "range rejected", {}, None),
+    urllib.error.URLError(TimeoutError("partial request timed out")),
+    ConnectionResetError("partial request reset"),
+    http.client.IncompleteRead(b"partial", 12),
+])
+@pytest.mark.parametrize("during_read", [False, True])
+def test_interrupted_range_selects_full_download(tmp_path, failure, during_read):
+    blob, entries = _fake_zip([("a", b"AAA")])
+    plan = UpdatePlan(fetch=tuple(entries), delete=(), download_bytes=len(blob))
+    responses = []
+
+    class Interrupted(_Resp):
+        def read(self, *_args):
+            raise failure
+
+    def interrupted(req):
+        if not during_read:
+            raise failure
+        response = Interrupted(b"", status=206)
+        responses.append(response)
+        return response
+
+    with pytest.raises(RangeUnsupported) as caught:
+        fetch_plan(plan, "https://dl/z.zip", tmp_path / "st", http=interrupted)
+    assert caught.value.__cause__ is failure
+    assert not (tmp_path / "st" / "a").exists()
+    assert all(response.closed for response in responses)
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 429, 500, 503])
+def test_other_http_errors_keep_their_original_meaning(tmp_path, status):
+    blob, entries = _fake_zip([("a", b"AAA")])
+    plan = UpdatePlan(fetch=tuple(entries), delete=(), download_bytes=len(blob))
+    failure = urllib.error.HTTPError("https://dl/z.zip", status, "refused", {}, None)
+
+    def refused(req):
+        raise failure
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        fetch_plan(plan, "https://dl/z.zip", tmp_path / "st", http=refused)
+    assert caught.value is failure
+
+
+def test_staging_permission_error_is_not_a_range_failure(tmp_path, monkeypatch):
+    from sm64_events.core import update_fetch
+    blob, entries = _fake_zip([("a", b"AAA")])
+    plan = UpdatePlan(fetch=tuple(entries), delete=(), download_bytes=len(blob))
+    failure = PermissionError("staging is read-only")
+
+    def cannot_stage(*_args):
+        raise failure
+
+    monkeypatch.setattr(update_fetch, "_stage", cannot_stage)
+    with pytest.raises(PermissionError) as caught:
+        fetch_plan(plan, "https://dl/z.zip", tmp_path / "st", http=_range_http(blob))
+    assert caught.value is failure
 
 
 # --- fetch_full_zip ---

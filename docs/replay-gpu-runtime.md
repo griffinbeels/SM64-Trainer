@@ -976,8 +976,16 @@ quarantines the affected capture normally.
 
 A bootstrap deadline distinguishes no qualified source surface (10034) from a
 surface observed with its capture gateway still unavailable (10035). These
-numeric facts do not identify the refusing source predicate or a GPU driver
-cause. They retain the original deadline, safety gates and scoped desktop
+numeric reasons alone do not identify the refusing source predicate or a GPU driver
+cause. A no-surface deadline additionally carries the latest current-epoch source
+refusal in `gpu_failure.detail`, using the existing diagnostic-only failed
+`rb_surface.witness`: `0x53520001` bindings, `02` source format, `03` drawable
+extent, `04` geometry, `05` missing VI register, `06` crop bounds, and `07` a
+ticket the renderer did not observe. Zero is unknown, including older producers.
+The bindings gate still does not identify its underlying state-invalidation cause.
+Later refusals replace transient startup evidence; accepted requests reset it.
+Successful pictures retain their witness semantics and no Source layout changes.
+These observations retain the original deadline, safety gates and scoped desktop
 recovery after proved cleanup. Neither is a permanent unsupported-adapter verdict.
 
 Only known bounded native receipt fields enter automatic Sentry context. Raw

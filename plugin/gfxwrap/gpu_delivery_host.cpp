@@ -29,7 +29,7 @@ extern "C" uint32_t gd_test_deadline_visits();
 extern "C" int gd_test_terminal_diagnostics(gd_status*,uint32_t*);
 extern "C" int gd_test_failure_status_coherence(gd_status*,uint32_t*);
 extern "C" int gd_test_request_fault_reset(uint32_t*);
-extern "C" int gd_test_bootstrap_deadline(int,uint32_t*);
+extern "C" int gd_test_bootstrap_deadline(int,uint32_t*,uint32_t=0,uint32_t=RB_SURFACE_FAILED,bool=false);
 extern "C" int gd_test_take_omissions(const rs_api*,uint64_t*);
 extern "C" int gd_test_pressure_omissions(const rs_api*,uint64_t*,uint64_t*);
 extern "C" int gd_test_retire_record(const rs_api*,uint32_t*);
@@ -431,8 +431,12 @@ int main(int argc,char**argv){
         printf("pressure omissions %llu %llu\n",accounted,refused);return 0;
     }
     if(argc==3 && !strcmp(argv[1],"--bootstrap-deadline-cpu")){
-        uint32_t out[3]{};CHECK(gd_test_bootstrap_deadline(atoi(argv[2]),out));
+        uint32_t out[4]{};CHECK(gd_test_bootstrap_deadline(atoi(argv[2]),out));
         printf("bootstrap deadline %u %u %u\n",out[0],out[1],out[2]);return 0;
+    }
+    if(argc==5 && !strcmp(argv[1],"--source-refusal-cpu")){
+        uint32_t out[4]{};CHECK(gd_test_bootstrap_deadline(2,out,strtoul(argv[2],nullptr,0),atoi(argv[3]),atoi(argv[4])!=0));
+        printf("source refusal %u %u %u\n",out[0],out[1],out[3]);return 0;
     }
     if(argc==2 && !strcmp(argv[1],"--request-fault-reset-cpu")){
         uint32_t out[5]{};CHECK(gd_test_request_fault_reset(out));

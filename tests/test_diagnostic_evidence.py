@@ -123,7 +123,7 @@ def sample_snapshot():
                               "stage_timings": {"channel": {"total_ms": 5000, "count": 1}}}}},
         "ghost": {"enabled": True, "has_target": True, "label": "PrivatePlayer",
                   "native": {"state": 5, "reason": 8, "displayed": False, "clip_path": "private.z64"}},
-        "setup": {"state": "needs_restart", "pj64_dir": "C:\\Users\\PrivateName", "runtime": {
+        "setup": {"state": "needs_restart", "configuration_consistent": False, "pj64_dir": "C:\\Users\\PrivateName", "runtime": {
                   "checks": {"pictures": False, "game": True}, "rom": {"region": "jp", "name": "PrivateROM"}}},
         "resources": {"rss_mib": 300, "machine": {"top_cpu": ["PrivateProgram"]}},
         "native": {"events": technical_events(native_line()), "raw": "PrivateLog"}}
@@ -192,8 +192,23 @@ def test_real_sdk_carries_current_fault_evidence_through_both_scrubbers(reporter
     reporting.capture_problem("Synthetic capture startup failure")
     event = captured_event(reporter)
     assert event["extra"]["diagnostics"]["ghost"]["native"]["reason"] == 8
+    assert event["extra"]["diagnostics"]["setup"]["configuration_consistent"] is False
     assert "Private" not in json.dumps(event)
     unbind()
+
+
+def test_source_refusal_detail_survives_actual_sdk_and_transport_projection(reporter):
+    sample = sample_snapshot()
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    sample["native"]["events"] = technical_events(native_line(stamp=stamp, details="reason=10034 detail=1397882882"))
+    unbind = reporting.set_diagnostic_source(lambda: sample)
+    try:
+        reporting.capture_problem("Synthetic source admission refusal")
+        event = captured_event(reporter)
+        fields = event["extra"]["diagnostics"]["native"]["events"][0]["fields"]
+        assert fields == {"reason": 10034, "detail": 0x53520002}
+    finally:
+        unbind()
 
 
 def test_direct_transport_and_reloaded_envelopes_cannot_bypass_the_schema(tmp_path):

@@ -76,6 +76,10 @@ Read the **full** log including bodies — this repo's commit messages explain t
 If there are **no commits** since the last tag, there's nothing to release — tell
 the user and stop.
 
+From the same log, run the
+[Credits and About review](../../../docs/release-pipeline.md#credits-and-about-review)
+before building, and commit any update it needs.
+
 ## Step 2 — choose the next version
 
 Versions are `MAJOR.MINOR.PATCH` (the latest is in `src/sm64_events/core/version.py`).

@@ -61,6 +61,16 @@ snapshot retains only fixed states and numeric counters; names, player codes,
 invitation references, room nonces, payloads and raw SDK errors are excluded.
 Native application acceptance alone does not prove that a ghost was visible.
 
+Updater failures carry the running release plus the installed and target versions,
+failed phase, attempt/count, planned download bytes and available OS/HTTP error
+numbers. Versions and counters form a small `extra.update` group so the SDK's
+dictionary-width limit cannot discard later fields before privacy projection.
+The first failed retry reports immediately, even if the player closes the app
+before retries finish. A terminal failure keeps its exception and safe updater
+breadcrumbs. The retry report uses a distinct message so deduplication cannot
+suppress the terminal exception. Normal reporting preferences and rate limits
+apply; request URLs, headers and installation paths are excluded.
+
 ## Silent failures with evidence of expected work
 
 `core/silent_failures.py` observes cached operational counters once a second on

@@ -3,6 +3,8 @@
 #include <windows.h>
 #include <GL/gl.h>
 #include "ghost_compositor_gl.h"
+#include "renderer_pixel_format.h"
+#include "practice_rom_fixture.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +16,9 @@
 
 namespace gc=ghost_compositor;
 namespace cgl=ghost_compositor::gl;
+static bool repair_window_format=false;
+static int closest_format=0;
+static int WINAPI closest_choice(HDC,const PIXELFORMATDESCRIPTOR*){return closest_format;}
 static void require(bool value,const char* what) {if(!value){std::fprintf(stderr,"FAILED: %s (GL=%x)\n",what,glGetError());std::exit(1);}}
 static void no_error(const char* what) {
     const auto error=glGetError();
@@ -38,7 +43,30 @@ struct Window {
         require(window && !IsWindowVisible(window),"window hidden");dc=GetDC(window);
         PIXELFORMATDESCRIPTOR pfd{};pfd.nSize=sizeof(pfd);pfd.nVersion=1;pfd.dwFlags=PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER;
         pfd.iPixelType=PFD_TYPE_RGBA;pfd.cColorBits=32;pfd.cDepthBits=24;pfd.cStencilBits=8;
-        int format=ChoosePixelFormat(dc,&pfd);require(format && SetPixelFormat(dc,format,&pfd),"pixel format");
+        int format=ChoosePixelFormat(dc,&pfd);
+        if(repair_window_format){
+            PIXELFORMATDESCRIPTOR candidate{};const int count=DescribePixelFormat(dc,1,sizeof(candidate),&candidate);
+            closest_format=0;
+            for(int index=1;index<=count && index<=4096;++index){
+                if(!DescribePixelFormat(dc,index,sizeof(candidate),&candidate))continue;
+                const DWORD flags=PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER;
+                if((candidate.dwFlags&flags)==flags && !(candidate.dwFlags&(PFD_GENERIC_FORMAT|PFD_STEREO))
+                        && candidate.iPixelType==PFD_TYPE_RGBA && candidate.cRedBits && candidate.cGreenBits && candidate.cBlueBits
+                        && !renderer_pixel_format::rgb8(candidate)){closest_format=index;break;}
+            }
+            require(closest_format!=0,"real driver exposes non-RGB8 closest choice");
+            unsigned char rom[0x40];PRACTICE_FIXTURE_USAMUNE(rom);
+            format=renderer_pixel_format::choose(rom,dc,&pfd,closest_choice);
+            if(format==closest_format){
+                DescribePixelFormat(dc,format,sizeof(candidate),&candidate);
+                std::fprintf(stderr,"unreplaced format=%d rgb=%u/%u/%u alpha=%u depth=%u stencil=%u flags=%lu\n",
+                    format,candidate.cRedBits,candidate.cGreenBits,candidate.cBlueBits,candidate.cAlphaBits,
+                    candidate.cDepthBits,candidate.cStencilBits,candidate.dwFlags);
+            }
+            require(DescribePixelFormat(dc,format,sizeof(candidate),&candidate)!=0
+                    && renderer_pixel_format::rgb8(candidate),"RGB8 selection replaces unsupported closest choice");
+        }
+        require(format && SetPixelFormat(dc,format,&pfd),"pixel format");
         context=wglCreateContext(dc);require(context && wglMakeCurrent(dc,context),"context current");
         using CreateContext=HGLRC (WINAPI*)(HDC,HGLRC,const int*);
         auto create=reinterpret_cast<CreateContext>(wglGetProcAddress("wglCreateContextAttribsARB"));
@@ -434,7 +462,8 @@ static void annotation_witness(const gc::Dispatch& g) {
     }
     gc::destroy(compositor);no_error("annotation witness cleanup");
 }
-int main() {
+int main(int argc,char**argv) {
+    repair_window_format=argc==2 && !std::strcmp(argv[1],"--repair-window-format");
     const auto foreground=GetForegroundWindow();
     Window window;auto g=dispatch();Scene scene(g,32,32);Bindings bindings(g);auto vertices=mesh();
     uint8_t atlas[4]={0,0,0,0};

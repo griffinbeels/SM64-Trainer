@@ -326,17 +326,69 @@ def test_overlay_off_does_not_prepare_clip_bytes(tmp_path,monkeypatch):
     rivals.refresh(TARGET,CONTROLS,enabled=False)
     assert len(native.preparations)==count
     assert rivals.payload()["status"] is None
-    # Switched back on, the renderer still holds this roster and its race
-    # resumes (his ask, 2026-10-17): nothing is prepared again.
+    # Switched back on, a successfully prepared race resumes immediately.
     rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
     assert (len(native.preparations),rivals.generation)==(count,generation)
     assert rivals.payload()["status"] is None
-    # A renderer that no longer holds it (a new capture) prepares once on.
     rivals.source_of=lambda:"new-capture"
     rivals.refresh(TARGET,CONTROLS,enabled=False)
     assert len(native.preparations)==count
     rivals.refresh(TARGET,CONTROLS,enabled=True)
     assert len(native.preparations)==count+1 and rivals.generation==generation+1
+
+
+@pytest.mark.parametrize("retry", ["safety refresh", "overlay on"])
+def test_failed_roster_preparation_recovers_without_replacing_capture_source(tmp_path, monkeypatch, retry):
+    rivals, _tracker, native, _population, _clock = controller(tmp_path, monkeypatch)
+    calls = []
+    prepare = native.prepare
+
+    def temporary_failure(*args):
+        calls.append(args)
+        return ({"available": False, "reason": "no_native_poses", "ghosts": [], "retryable": True}
+                if len(calls) == 1 else prepare(*args))
+
+    native.prepare = temporary_failure
+    rivals.prepared_key = None
+    assert rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)["available"] is False
+    generation = rivals.generation
+    rivals.refresh(TARGET, CONTROLS, enabled=True)
+    assert len(calls) == 1  # Quiet polls do not turn a failure into a hot retry loop.
+    if retry == "overlay on":
+        rivals.refresh(TARGET, CONTROLS, enabled=False)
+        answer = rivals.refresh(TARGET, CONTROLS, enabled=True)
+    else:
+        answer = rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+    assert answer["available"] and len(calls) == 2
+    assert rivals.generation == generation + 1
+    rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+    assert len(calls) == 2  # A recovered roster keeps the normal resume contract.
+
+
+@pytest.mark.parametrize("reason, retries", [("no_native_poses", True), ("duplicate_clip", False)])
+def test_partial_roster_failure_retries_but_duplicate_identity_does_not(tmp_path, monkeypatch, reason, retries):
+    rivals, _tracker, native, _population, _clock = controller(tmp_path, monkeypatch)
+    rivals.prepared_answer = {"available": True, "ghosts": [
+        {"available": True}, {"available": False, "reason": reason}], "retryable": retries}
+    before = len(native.preparations)
+    rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+    assert len(native.preparations) == before + int(retries)
+
+
+def test_thrown_roster_preparation_does_not_cache_an_unprepared_identity(tmp_path, monkeypatch):
+    rivals, _tracker, native, _population, _clock = controller(tmp_path, monkeypatch)
+    prepare = native.prepare
+    rivals.prepared_key = None
+
+    def refused(*args):
+        raise PermissionError("temporary clip cache refusal")
+
+    native.prepare = refused
+    with pytest.raises(PermissionError):
+        rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)
+    assert rivals.prepared_key is None
+    native.prepare = prepare
+    assert rivals.refresh(TARGET, CONTROLS, enabled=True, force=True)["available"]
 
 
 def test_wire_omits_private_playback_and_local_lineage():

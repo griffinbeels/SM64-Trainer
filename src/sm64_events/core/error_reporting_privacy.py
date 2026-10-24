@@ -70,7 +70,7 @@ def safe_context(context: object) -> dict:
     """Retain documented diagnostic fields only; callers cannot add raw data."""
     if not isinstance(context, Mapping):
         return {}
-    return {
+    result = {
         key: value if isinstance(value, (bool, int, float)) or (
             key == "capture_build" and isinstance(value, str)
             and re.fullmatch(r"[0-9a-f]{64}-gpu-runtime", value)
@@ -78,6 +78,22 @@ def safe_context(context: object) -> dict:
         for key, value in context.items()
         if key in _CONTEXT_KEYS and isinstance(value, (str, bool, int, float))
     }
+    # The SDK truncates wide dictionaries before before_send. A small nested
+    # group preserves update versions/counts beside the technical error codes.
+    update = context.get("update")
+    if isinstance(update, Mapping):
+        clean = {}
+        for key in ("current_version", "target_version"):
+            value = update.get(key)
+            if isinstance(value, str) and re.fullmatch(r"v?\d{1,8}\.\d{1,8}\.\d{1,8}(?:[-+][A-Za-z0-9.-]{1,60})?", value):
+                clean[key] = value
+        for key in ("attempt", "attempts", "download_bytes"):
+            value = update.get(key)
+            if type(value) is int and 0 <= value < 2 ** 64:
+                clean[key] = value
+        if clean:
+            result["update"] = clean
+    return result
 
 
 def _frames(stacktrace: object) -> dict:
@@ -104,7 +120,7 @@ def _frames(stacktrace: object) -> dict:
 def safe_breadcrumb(crumb: dict, _hint: object = None) -> dict | None:
     """Only operational logs: event wires, profiles and process inventories stay local."""
     category = str(crumb.get("category", ""))
-    if category not in {"sm64.replay", "sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64.ghost.capture"}:
+    if category not in {"sm64.replay", "sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64.ghost.capture", "sm64.updater"}:
         return None
     result = {
         "category": scrub_text(category, 120),
