@@ -1,9 +1,9 @@
 """Arm, read and replay scene-tap sessions (plugin/gfxwrap/scene_tap.cpp).
 
-    tap.py arm [--seconds N] [--no-reference] [--full-every N] [--version us|jp]
+    tap.py arm [--seconds N] [--no-reference] [--reference-every N] [--full-every N] [--version us|jp]
     tap.py disarm
     tap.py summary <session>
-    tap.py frames <session> <out> [--pattern 0xA5] [--limit N]
+    tap.py frames <session> <out> [--pattern 0xA5] [--limit N] [--pair origin|next]
 
 `arm` writes the one-shot arming file the wrapper consumes when a practice ROM
 next opens; its identity reads (gGlobalTimer, level, area) come from
@@ -111,7 +111,7 @@ def word_value(extras: list, address: int, size: int) -> int | None:
 def arm(args) -> int:
     layout = layout_for(args.version)
     lines = [f"seconds={args.seconds}", f"reference={0 if args.no_reference else 1}",
-             f"full_every={args.full_every}"]
+             f"reference_every={args.reference_every}", f"full_every={args.full_every}"]
     names = []
     for name, size in IDENTITY_FIELDS.items():
         address = getattr(layout, name)
@@ -183,7 +183,9 @@ def frames(args) -> int:
         if not isinstance(record, Present) or not pending:
             continue
         # The picture shows the newest task drawn into the image VI now scans.
-        shown = [task for task in pending if abs(record.vi["origin"] - task.fields["last_cimg"]) < 0x1000]
+        # --pair next (offline hosts whose VI origin is synthetic) takes the newest task.
+        shown = pending if args.pair == "next" else [
+            task for task in pending if abs(record.vi["origin"] - task.fields["last_cimg"]) < 0x1000]
         if not shown:
             continue
         task = shown[-1]
@@ -228,6 +230,7 @@ def main() -> int:
     p = sub.add_parser("arm")
     p.add_argument("--seconds", type=int, default=20)
     p.add_argument("--no-reference", action="store_true")
+    p.add_argument("--reference-every", type=int, default=1)
     p.add_argument("--full-every", type=int, default=0)
     p.add_argument("--version", choices=("us", "jp"), default="us")
     p.set_defaults(run=arm)
@@ -240,6 +243,7 @@ def main() -> int:
     p.add_argument("out")
     p.add_argument("--pattern", type=lambda value: int(value, 0), default=0xA5)
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--pair", choices=("origin", "next"), default="origin")
     p.set_defaults(run=frames)
     args = parser.parse_args()
     return args.run(args)

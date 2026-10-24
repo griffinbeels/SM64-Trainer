@@ -6,6 +6,7 @@
  * arming records once) and reads key=value lines:
  *   seconds=<n>       recording length from the first task (default 20, max 600)
  *   reference=0|1     after each new VI origin, ReadScreen the presented picture
+ *   reference_every=<n> read only every n-th new picture (default 1; disk is ~3 bytes/pixel)
  *                     (reference instrumentation: a synchronous GPU readback
  *                     that slows emulation; never part of the producer cost)
  *   full_every=<n>    also copy all of RDRAM on the first and every n-th task
@@ -47,7 +48,7 @@ constexpr uint32_t kMaxExtras = 16, kMaxExtraBytes = 4096;
 constexpr uint64_t kRingBytes = 128ull << 20, kSmallRingBytes = 48ull << 20;
 
 struct Config {
-    uint32_t seconds = 20, reference = 1, full_every = 0, extras = 0;
+    uint32_t seconds = 20, reference = 1, reference_every = 1, full_every = 0, extras = 0;
     uint32_t extra_begin[kMaxExtras], extra_bytes[kMaxExtras];
 };
 
@@ -157,6 +158,7 @@ void parse_config(const wchar_t *path, Config &config) {
     while (fgets(line, sizeof line, file)) {
         unsigned a = 0, b = 0;
         if (sscanf(line, "seconds=%u", &a) == 1) config.seconds = a < 600 ? a : 600;
+        else if (sscanf(line, "reference_every=%u", &a) == 1) config.reference_every = a ? a : 1;
         else if (sscanf(line, "reference=%u", &a) == 1) config.reference = a != 0;
         else if (sscanf(line, "full_every=%u", &a) == 1) config.full_every = a;
         else if (sscanf(line, "extra=%x:%u", &a, &b) == 2 && config.extras < kMaxExtras
@@ -314,7 +316,7 @@ extern "C" void __cdecl st_update_screen(fn_readscreen read_screen) {
     void *pixels = nullptr;
     long width = 0, height = 0;
     uint32_t read_ns = 0;
-    if (t.config.reference && read_screen) {
+    if (t.config.reference && read_screen && t.presents.load(std::memory_order_relaxed) % t.config.reference_every == 0) {
         read_screen(&pixels, &width, &height);
         read_ns = ns(qpc() - when);
         if (!pixels || width <= 0 || height <= 0 || width > 8192 || height > 8192) { width = height = 0; }
