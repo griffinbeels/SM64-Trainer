@@ -8,10 +8,14 @@ the one real-world failure looked (a TLS timeout mid-download, live log
 2026-08-01): the worker must retry on its own and only report failure once
 every attempt is spent."""
 import io
+import http.client
+import json
 import threading
 import time
 import urllib.error
 from pathlib import Path
+
+import pytest
 
 from sm64_events.core.update_apply import BACKUP_DIR, read_journal
 from sm64_events.core.update_plan import INSTALLED_MANIFEST
@@ -166,7 +170,7 @@ def test_a_transient_network_failure_is_retried_without_telling_the_user(tmp_pat
     assert svc.begin_apply(done.set)["state"] == "downloading"
     assert done.wait(timeout=10)
     st = svc.status()
-    assert st["attempt"] == 3                     # two outages, then through
+    assert st["attempt"] == 2                     # Range + full fail, then through
     assert calls["zip"] > 2                       # it really re-downloaded
     assert (root / "SM64Trainer.exe").read_bytes() == b"EXE-V2"
     # The user was never shown a failure: the state only ever moved forward.
@@ -178,7 +182,8 @@ def test_the_error_state_arrives_only_after_every_attempt_is_spent(tmp_path):
     svc.begin_apply(lambda: None)
     assert _wait_for_state(svc, "error")
     st = svc.status()
-    assert calls["zip"] == st["attempts"] == 5     # five tries, then the truth
+    assert st["attempts"] == 5
+    assert calls["zip"] == 2 * st["attempts"]     # Range + full per bounded attempt
     assert st["attempt"] == 5
 
 
@@ -211,3 +216,68 @@ def test_a_failed_restart_is_never_retried(tmp_path):
     assert svc.status()["attempt"] == 1           # it stopped after the swap
     assert calls["zip"] > 0
     assert (root / "SM64Trainer.exe").read_bytes() == b"EXE-V2"
+
+
+@pytest.mark.parametrize("failure", ["range rejected", "reset", "truncated"])
+def test_persistent_partial_download_failure_recovers_in_the_same_attempt(tmp_path, failure):
+    routes_v1 = _fake_release(tmp_path / "r1", "v1.0.0", V1)
+    routes_v2 = _fake_release(tmp_path / "r2", "v2.0.0", V2)
+    root = _install_v1(tmp_path, routes_v1)
+    inner = _range_http(routes_v2)
+    requests = []
+
+    class Truncated(_Resp):
+        def read(self, *_args):
+            raise http.client.IncompleteRead(b"partial", 12)
+
+    def partial_only_failure(req):
+        if req.full_url == ZIP_URL:
+            partial = bool(req.get_header("Range"))
+            requests.append("range" if partial else "full")
+            if partial:
+                if failure == "range rejected":
+                    raise urllib.error.HTTPError(ZIP_URL, 416, "range rejected", {}, None)
+                if failure == "reset":
+                    raise ConnectionResetError("partial request reset")
+                return Truncated(b"", status=206)
+        return inner(req)
+
+    svc = UpdateService(current_version="1.0.0", http=partial_only_failure,
+                        exe_path=root / "SM64Trainer.exe",
+                        state_path=tmp_path / "state.json", frozen=True,
+                        retry_delays=(0, 0, 0, 0))
+    done = threading.Event()
+    assert svc.begin_apply(done.set)["state"] == "downloading"
+    assert done.wait(timeout=10), svc.status()
+    assert requests == ["range", "full"]
+    assert svc.status()["attempt"] == 1
+    for rel, expected in V2.items():
+        assert (root / rel).read_bytes() == expected
+    assert not (root / "_internal/old.pyd").exists()
+    assert json.loads((root / INSTALLED_MANIFEST).read_text()) == json.loads(routes_v2["https://dl/manifest.json"])
+
+
+def test_interrupted_range_cannot_bypass_full_archive_verification(tmp_path):
+    routes_v1 = _fake_release(tmp_path / "r1", "v1.0.0", V1)
+    routes_v2 = _fake_release(tmp_path / "r2", "v2.0.0", V2)
+    root = _install_v1(tmp_path, routes_v1)
+    original = {path: (root / path).read_bytes() for path in (*V1, INSTALLED_MANIFEST)}
+    inner = _range_http(routes_v2)
+
+    def corrupt_fallback(req):
+        if req.full_url == ZIP_URL:
+            if req.get_header("Range"):
+                raise ConnectionResetError("partial request reset")
+            return _Resp(b"corrupt full archive")
+        return inner(req)
+
+    done = threading.Event()
+    svc = UpdateService(current_version="1.0.0", http=corrupt_fallback,
+                        exe_path=root / "SM64Trainer.exe", state_path=tmp_path / "state.json",
+                        frozen=True, retry_delays=())
+    svc.begin_apply(done.set)
+    assert _wait_for_state(svc, "error")
+    assert "checksum mismatch" in svc.status()["error"]
+    assert not done.is_set()
+    assert {path: (root / path).read_bytes() for path in original} == original
+    assert not (root / "_internal/fresh.dat").exists()

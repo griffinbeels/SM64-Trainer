@@ -4132,6 +4132,245 @@
     border: 1px solid #38536d; border-radius: 999px;
     color: #bed0e1; background: #102036; font-size: .74rem;
   }
+  /* ---- Resources tab (components/resourcespage.js) -------------------
+     Cards flow by auto-fill, so the grid answers its own width with no
+     container query: two columns where two 360px cards fit, else one. A
+     wide card (the rules) spans the whole row either way. */
+  .res-grid {
+    display: grid; gap: 12px; align-items: start;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  }
+  .res-card.is-wide { grid-column: 1 / -1; }
+  .res-list, .res-videos { display: grid; gap: 4px; }
+  .res-row, .res-video {
+    display: flex; align-items: center; gap: .75rem; min-width: 0;
+    padding: .5rem .55rem; border-radius: 8px; color: var(--text);
+    text-decoration: none;
+  }
+  .res-row:hover, .res-video:hover { background: rgba(105,151,204,.12); }
+  .res-mark {
+    width: 34px; height: 34px; flex: 0 0 auto; display: inline-flex;
+    align-items: center; justify-content: center; border-radius: 8px;
+    background: #16294a; color: var(--blue);
+  }
+  .res-mark img { width: 20px; height: 20px; object-fit: contain; }
+  .res-text { min-width: 0; display: grid; gap: .1rem; flex: 1 1 auto; }
+  .res-text b { font-weight: 650; line-height: 1.25; }
+  .res-text span { color: var(--muted); font-size: .8rem; line-height: 1.3; }
+  .res-out { color: var(--muted-2); }
+  .res-row:hover .res-out { color: var(--blue); }
+  .res-thumb {
+    position: relative; width: 128px; aspect-ratio: 16 / 9; flex: 0 0 auto;
+    overflow: hidden; border-radius: 6px; background: #16294a;
+  }
+  .res-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .res-play {
+    position: absolute; right: 6px; bottom: 6px; width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%; background: rgba(5,12,22,.82); color: #fff;
+  }
+  .rule-grid {
+    display: grid; gap: 10px 18px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  }
+  .rule-block {
+    min-width: 0; padding: .7rem .8rem; border: 1px solid var(--border-soft);
+    border-radius: 8px; background: rgba(8,20,33,.45);
+  }
+  .rule-block h4 { margin-bottom: .45rem; color: var(--gold-soft); }
+  .rule-block ul, .rule-banned ul { margin: 0; }
+  .rule-block li, .rule-banned li {
+    position: relative; margin: 0 0 .35rem; padding-left: .95rem;
+    font-size: .84rem; line-height: 1.4; color: #d3dde8;
+  }
+  .rule-block li::before, .rule-banned li::before {
+    content: ""; position: absolute; left: .1rem; top: .58em; width: 5px;
+    height: 5px; border-radius: 50%; background: var(--muted-2);
+  }
+  .rule-source {
+    display: inline-flex; align-items: center; gap: .3rem; margin-top: .2rem;
+    font-size: .8rem; text-decoration: none;
+  }
+  .rule-banned {
+    margin-top: 10px; padding: .55rem .8rem; border: 1px solid var(--border-soft);
+    border-radius: 8px;
+  }
+  .rule-banned summary { cursor: pointer; font-weight: 600; font-size: .86rem; }
+  .rule-banned[open] summary { margin-bottom: .5rem; }
+
+  /* ---- About tab: Credits (components/aboutpage.js) ------------------ */
+  .credit-grid {
+    display: grid; gap: 12px; align-items: start;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+  }
+  .credit-testers { grid-column: 1 / -1; }
+  .credit-lead { margin: 0 0 .6rem; color: var(--muted); font-size: .84rem; line-height: 1.4; }
+  .credit-list { margin: 0; display: grid; gap: .2rem; }
+  .credit-row { margin: 0; padding: .45rem .2rem; border-bottom: 1px solid var(--border-soft); }
+  .credit-row:last-child { border-bottom: 0; }
+  .credit-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: .2rem .55rem; }
+  .credit-head a, .credit-head b { font-weight: 650; text-decoration: none; }
+  .credit-by { color: var(--gold-soft); font-size: .8rem; }
+  .credit-row p { margin: .15rem 0 0; color: var(--muted); font-size: .8rem; line-height: 1.4; }
+  .credit-list.is-compact .credit-row { padding-block: .3rem; }
+  .tester-list {
+    margin: 0; display: grid; gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  }
+  .tester-list li { margin: 0; }
+  .tester {
+    display: grid; grid-template-columns: 34px 1fr; column-gap: .65rem;
+    align-items: center; padding: .55rem .7rem; border-radius: 8px;
+    border: 1px solid #4b3a78; background: rgba(145,70,255,.12);
+    color: var(--text); text-decoration: none;
+  }
+  .tester:hover { background: rgba(145,70,255,.24); }
+  .tester img {
+    grid-row: span 2; width: 34px; height: 34px; padding: 7px;
+    border-radius: 8px; background: #9146ff;
+  }
+  .tester b { font-weight: 700; }
+  .tester span { color: #c9b8f5; font-size: .76rem; }
+
+  /* ---- About tab: How it works (components/howitworks.js) ------------
+     The rail is the journey; the stage below swaps one stop's words and
+     visual. The stage keeps a floor height so stepping does not jump the
+     Back/Next buttons around under the pointer. */
+  .hiw { display: grid; gap: 14px; }
+  .hiw-rail, .hiw-frames { padding: 0; }
+  .hiw-rail {
+    margin: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    position: relative;
+  }
+  .hiw-rail::before {
+    content: ""; position: absolute; left: 7%; right: 7%; top: 16px; height: 2px;
+    background: var(--border);
+  }
+  .hiw-rail li { margin: 0; position: relative; }
+  .hiw-rail button {
+    width: 100%; min-height: 0; display: grid; justify-items: center; gap: .3rem;
+    padding: 0 .1rem; border: 0; background: transparent; color: var(--muted);
+  }
+  .hiw-dot {
+    width: 32px; height: 32px; display: inline-flex; align-items: center;
+    justify-content: center; border-radius: 50%; border: 2px solid var(--border);
+    background: var(--surface-2); font-weight: 750; font-size: .85rem;
+    transition: background-color 200ms ease, border-color 200ms ease;
+  }
+  .hiw-rail .is-past .hiw-dot { border-color: var(--green); color: var(--green); }
+  .hiw-rail .is-at .hiw-dot { background: var(--gold); border-color: var(--gold-soft); color: #1b1607; }
+  .hiw-rail .is-at button { color: var(--text); }
+  .hiw-rail-label { font-size: .76rem; font-weight: 650; white-space: nowrap; }
+  .hiw-stage {
+    min-height: 360px; display: grid; gap: 18px; align-items: start;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  }
+  .hiw-copy h3 { margin: .1rem 0 .5rem; font-size: 1.3rem; }
+  .hiw-copy p { margin: 0 0 .6rem; line-height: 1.5; color: #d3dde8; max-width: 60ch; }
+  .hiw-term {
+    padding: .5rem .7rem; border-left: 3px solid var(--blue);
+    background: rgba(104,173,242,.08); border-radius: 0 6px 6px 0; font-size: .86rem;
+  }
+  .hiw-built { font-size: .82rem; color: var(--muted) !important; }
+  .hiw-built button {
+    min-height: 0; display: inline; padding: 0; border: 0; background: none;
+    color: var(--blue); font: inherit; cursor: pointer; text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .hiw-visual {
+    min-width: 0; padding: 14px; border: 1px solid var(--border-soft);
+    border-radius: 10px; background: rgba(5,12,22,.55);
+  }
+  .hiw-nav { display: flex; justify-content: space-between; gap: .6rem; }
+  .hiw-cells {
+    display: grid; grid-template-columns: repeat(16, 1fr); gap: 3px; margin-bottom: 12px;
+  }
+  .hiw-cell { aspect-ratio: 1; border-radius: 2px; background: #13243a; }
+  .hiw-cell.is-known { background: #2a4566; }
+  .hiw-cell.is-picked { background: var(--gold); box-shadow: 0 0 0 2px rgba(240,189,50,.35); }
+  .hiw-cell-picker { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 10px; }
+  .hiw-pill {
+    min-height: 30px; padding: .2rem .7rem; border-radius: 999px;
+    border: 1px solid var(--border-soft); background: var(--surface-2);
+    color: var(--muted); font-size: .8rem; font-weight: 650;
+  }
+  .hiw-pill[aria-pressed="true"] { background: var(--gold); border-color: var(--gold-soft); color: #1b1607; }
+  .hiw-cell-detail { display: grid; gap: .25rem; font-size: .86rem; line-height: 1.4; }
+  .hiw-addr, .hiw-compare, .hiw-live dd, .hiw-frame-n {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .hiw-addr { color: var(--gold-soft); font-size: 1rem; }
+  .hiw-live.is-empty { color: var(--muted); font-size: .88rem; line-height: 1.45; }
+  .hiw-live-head {
+    display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem;
+    font-weight: 700; font-size: .85rem;
+  }
+  .hiw-live-head .status-light {
+    width: 9px; height: 9px; border-radius: 50%; background: var(--green);
+  }
+  .hiw-live dl { margin: 0; display: grid; gap: .3rem; }
+  .hiw-live dl > div {
+    display: flex; justify-content: space-between; gap: 1rem;
+    padding: .3rem 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .hiw-live dt { color: var(--muted); font-size: .84rem; }
+  .hiw-live dd { margin: 0; text-align: right; }
+  .hiw-frames { margin: 0 0 10px; display: grid; gap: 4px; }
+  .hiw-frames li { margin: 0; }
+  .hiw-frames button {
+    width: 100%; min-height: 32px; justify-content: space-between; gap: .8rem;
+    padding: .25rem .6rem; border-color: transparent; background: #0f1f33;
+    color: var(--muted); font-size: .82rem;
+  }
+  .hiw-frames .is-grab button { box-shadow: inset 3px 0 0 var(--blue); }
+  .hiw-frames .is-xcam button { box-shadow: inset 3px 0 0 var(--gold); }
+  .hiw-frames .is-at button { background: #1d3552; color: var(--text); border-color: #3c5f86; }
+  .hiw-frame-act { font-weight: 650; }
+  .hiw-verdict {
+    min-height: 4.4em; display: grid; gap: .25rem; padding: .55rem .7rem;
+    border-radius: 8px; background: #102238; margin-bottom: 10px;
+  }
+  .hiw-compare { color: var(--muted); font-size: .8rem; }
+  .hiw-verdict b { font-weight: 650; line-height: 1.35; }
+  .hiw-stepper { display: flex; justify-content: space-between; gap: .5rem; }
+  .hiw-window { margin: 0; overflow: hidden; border-radius: 8px; border: 1px solid #3a4f68; }
+  .hiw-window figcaption {
+    display: flex; align-items: center; gap: .3rem; padding: .35rem .55rem;
+    background: #1b2a3c; color: var(--muted); font-size: .76rem;
+  }
+  .hiw-window figcaption span {
+    width: 9px; height: 9px; border-radius: 50%; background: #3a4f68;
+  }
+  .hiw-window figcaption span:last-of-type { margin-right: .35rem; }
+  .hiw-window img { display: block; width: 100%; aspect-ratio: 16 / 9; max-height: 240px; object-fit: cover; }
+  .hiw-frames-demo { display: grid; gap: .7rem; }
+  .hiw-big-time {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums; font-size: 2.6rem; font-weight: 750;
+    color: var(--gold-soft); text-align: center;
+  }
+  .hiw-slider { display: grid; gap: .3rem; font-size: .82rem; color: var(--muted); }
+  .hiw-slider input { width: 100%; accent-color: var(--gold); }
+  .hiw-frames-demo p { margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.45; }
+  .hiw-caption { display: block; margin-bottom: .45rem; color: var(--muted); font-size: .8rem; }
+  .hiw-message pre {
+    margin: 0; padding: .7rem .8rem; overflow-x: auto; border-radius: 8px;
+    background: #081322; color: #cfe3f7; font-size: .8rem; line-height: 1.45;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  .hiw-road { display: grid; justify-items: center; gap: .35rem; text-align: center; }
+  .hiw-node {
+    display: inline-block; padding: .45rem .75rem; border-radius: 8px;
+    border: 1px solid var(--border); background: #102238; font-size: .84rem;
+  }
+  .hiw-node.is-gold { border-color: var(--gold-soft); color: var(--gold-soft); font-weight: 650; }
+  .hiw-arrow { display: block; color: var(--muted); font-size: 1.1rem; line-height: 1; }
+  .hiw-split {
+    width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: .6rem;
+  }
+  .hiw-split > div { display: grid; justify-items: center; gap: .35rem; }
+
   .workshop-empty {
     min-height: 460px; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: .55rem;
@@ -6575,6 +6814,14 @@
     .nav-group { padding-block: .4rem; }
     .sidebar-footer { gap: .4rem; }
     .sidebar-status { padding: .5rem .6rem; gap: .4rem; }
+  }
+  /* Shorter still: the four group labels go, as they already do in the rail
+     (the dividers keep the grouping). The Community group's two rows pushed
+     the status block off a 620px-tall window without this step. */
+  @media (max-height: 700px) {
+    .nav-group-label { display: none; }
+    .nav-group { padding-block: .28rem; }
+    .nav-item { min-height: 33px; padding-block: .25rem; }
   }
 
   @media (prefers-reduced-motion: reduce) {

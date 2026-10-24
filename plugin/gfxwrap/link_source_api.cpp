@@ -1,6 +1,7 @@
 /* Built into the source renderer, never loaded by patching its binary. */
 #include "GLFunctions.h"
 #include "link_source_api.h"
+#include "source_refusal.h"
 #include "PluginAPI.h"
 #include "DisplayWindow.h"
 #include "N64.h"
@@ -15,15 +16,16 @@ uint64_t update_occurrence=0;
 uint32_t before_swaps=0;
 int surface(rb_surface *out) {
     renderer::Identity identity{}; snapshot::RestoreBindings bindings{};
-    if (!replay_gl::CandidateBindings(&identity,&bindings)) return 0;
+    if (!replay_gl::CandidateBindings(&identity,&bindings)) {out->witness=RS_SURFACE_BINDINGS;return 0;}
     const auto format=replay_gl::SourceFormat();
-    if (format==RB_SOURCE_UNKNOWN) return 0;
+    if (format==RB_SOURCE_UNKNOWN) {out->witness=RS_SURFACE_FORMAT;return 0;}
     unsigned drawable_width=0, drawable_height=0;
-    if (!replay_gl::DrawableExtent(&drawable_width,&drawable_height)) return 0;
+    if (!replay_gl::DrawableExtent(&drawable_width,&drawable_height)) {out->witness=RS_SURFACE_EXTENT;return 0;}
     auto &window=dwnd();
     const auto width=window.getWidth(), height=window.getHeight(), offset=window.getHeightOffset();
-    if (!width || !height || width>3840 || height>2160 || offset>2160 || !REG.VI_ORIGIN) return 0;
-    if (width>drawable_width || uint64_t(offset)+height>drawable_height) return 0;
+    if (!width || !height || width>3840 || height>2160 || offset>2160) {out->witness=RS_SURFACE_GEOMETRY;return 0;}
+    if (!REG.VI_ORIGIN) {out->witness=RS_SURFACE_VI_REGISTER;return 0;}
+    if (width>drawable_width || uint64_t(offset)+height>drawable_height) {out->witness=RS_SURFACE_CROP;return 0;}
     out->width=width; out->height=height; out->bottom_offset=offset;
     out->context=identity.context; out->renderer_thread=identity.owner_thread;
     out->context_generation=identity.context_generation;

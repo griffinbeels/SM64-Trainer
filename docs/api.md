@@ -744,9 +744,14 @@ Runtime fields in `emu`:
 
 - `installation_verified`: installed wrapper and renderer match this build by
   embedded build id, the wrapper is
-  selected in Project64, and has a wrapping configuration in its actual INI.
+  selected in Project64, and its physical INI names the renderer. Any existing
+  per-user VirtualStore copy must agree (`configuration_consistent: true`).
   This does not require a local consent timestamp and does not imply live readiness.
   A verified installation in supported Project64 suppresses automatic onboarding.
+- `configuration_consistent`: the physical wrapper INI and any existing per-user
+  VirtualStore copy name the same renderer. A mismatch offers re-installation;
+  install and permitted automatic refresh repair the existing copy with Project64
+  closed. An absent per-user copy is never created.
 - `target`: Project64 executable path, PID, file version, state and recovery message.
   `build` identifies an exact known unversioned build by SHA-256; `version` stays
   null when Windows version metadata is absent. Names alone never qualify a build.

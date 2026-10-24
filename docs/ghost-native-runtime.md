@@ -1,5 +1,14 @@
 # Native ghost runtime contracts
 
+Transient portable-clip filesystem failures are retryable during the existing
+safety refresh or when ghosts are switched back on. `NativeGhost.resolve` keeps
+that fact across a mixed roster; `Rivals` retains successful preparations and
+does not repeatedly reload stable missing-pose PBs, invalid clips or duplicates.
+The preparation key is published only after `prepare` returns.
+[Retry tests](../tests/test_ghost_prepare_retry.py) and
+[roster tests](../tests/test_ghost_rivals.py) cover classification, mixed
+availability, toggles, exceptions and successful-roster retention.
+
 Ghosts evaluate recorded graphics poses with the libsm64 C model and draw them
 inside the pinned GLideN64 renderer under the live camera. This is the sole
 supported ghost renderer. The retired video overlay, browser crop page and

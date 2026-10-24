@@ -22,6 +22,8 @@ import { RankPage } from "./components/rankpage.js";
 import { RunnerPage } from "./components/runnerpage.js";
 import { PlayerPage } from "./components/playerpage.js";
 import { RankUpCelebration } from "./components/marelocelebrate.js";
+import { ResourcesPage } from "./components/resourcespage.js";
+import { AboutPage } from "./components/aboutpage.js";
 
 const html = htm.bind(h);
 
@@ -48,6 +50,12 @@ const NAV_GROUPS = [
     ["Sessions", "sessions"],
     ["Live feed", "feed"],
   ]],
+  // Outward (where the community lives, the rules a time must meet) and
+  // inward (how the trainer works, whose work it stands on).
+  ["Community", [
+    ["Resources", "resources"],
+    ["About", "about"],
+  ]],
 ];
 
 // Every destination the shell has, flat. The narrow layouts DERIVE from this
@@ -71,6 +79,13 @@ const NAV_ITEMS = NAV_GROUPS.flatMap(([, items]) => items);
 const MOBILE_BAR = ["Practice", "Run", "Library"];
 
 const inBar = ([name]) => MOBILE_BAR.includes(name);
+
+// Tabs whose page needs nothing but the store: mounted on visit, one row
+// each. Tabs with intents or kept-mounted state stay explicit in App.
+const PLAIN_TABS = {
+  "Segments": Segments, "Routes": Routes, "Run": Run, "Live feed": Feed,
+  "Resources": ResourcesPage, "About": AboutPage,
+};
 
 function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {
   // FINAL REVIEW FIX (minor: Compare is an orphan destination). Compare's own
@@ -296,10 +311,6 @@ function App() {
         </div>
         ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
             openCompare=${openCompare} openLibrary=${openLibrary} /></div>`
-          : tab === "Segments" ? html`<div class="view-pane">
-              <${Segments} t=${t} /></div>`
-          : tab === "Routes" ? html`<div class="view-pane"><${Routes} t=${t} /></div>`
-          : tab === "Run" ? html`<div class="view-pane"><${Run} t=${t} /></div>`
           : tab === "Rank" ? html`<div class="view-pane">${openPlayerUid
               ? html`<${PlayerPage} t=${t} uid=${openPlayerUid}
                   initialScope=${comparisonScope} onScopeChange=${setComparisonScope}
@@ -310,7 +321,7 @@ function App() {
               : html`<${RankPage} t=${t} onOpenRunner=${openRunner} onOpenPlayer=${openPlayer}
                   onScopeChange=${setComparisonScope}
                   openLibrary=${openLibrary} />`}</div>`
-          : tab === "Live feed" ? html`<div class="view-pane"><${Feed} t=${t} /></div>`
+          : PLAIN_TABS[tab] ? html`<div class="view-pane"><${PLAIN_TABS[tab]} t=${t} /></div>`
           : null}
       </div>
     </main>

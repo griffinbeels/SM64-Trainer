@@ -150,7 +150,10 @@ INVARIANTS = (
     ),
     SingleSource(
         concept="a link into Ukikipedia",
-        owners=frozenset({"links.py"}),
+        # resources.js and credits.js are data registries holding ONE fixed
+        # page (the RTA Guide), never a per-target link; a target's page
+        # still comes only from links.py.
+        owners=frozenset({"links.py", "resources.js", "credits.js"}),
         tokens=("ukikipedia.net/wiki",),
         files=(*python_sources(), *ui_js()),
         why="links.py::ukikipedia_url resolves a target against the wiki's "

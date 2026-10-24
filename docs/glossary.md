@@ -2379,6 +2379,28 @@ a page for it.
 - **Not** — the [[Practice tab]]. The Library never sets your [[target]]; it
   only shows what the community has recorded.
 
+### Resources tab
+
+The screen pointing outward, to the community: its Discord servers, learning
+videos, reference sites and sheets, the rules and settings a submitted time
+must meet, and this project's own links. Each card is one row of a registry,
+so reordering or adding a link is a data edit.
+
+- **Lives** — `src/sm64_events/ui/resources.js` (the registry) drawn by
+  `src/sm64_events/ui/components/resourcespage.js`
+- **Not** — the official rules. Each rules block summarizes and links the
+  page that is.
+
+### About tab
+
+The "?" screen pointing inward. It opens on Credits, naming the people,
+projects and testers the trainer stands on; How it works, a step-through
+lesson from playing to the time appearing on screen, is the other view.
+
+- **Lives** — `src/sm64_events/ui/components/aboutpage.js`; the lesson's
+  words in `src/sm64_events/ui/howitworks.js`; the credits and testers in
+  `src/sm64_events/ui/credits.js`
+
 ### Tray
 
 The Library's comparison basket. Adding an [[sheet entry]] docks it here, keyed on

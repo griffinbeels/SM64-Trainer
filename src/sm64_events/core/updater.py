@@ -188,6 +188,7 @@ class UpdateService:
         self._check_lock = threading.RLock()
         self._feed = ReleaseFeed(http=http, repo=repo, api_base=GITHUB_API)
         self._state = "idle"        # idle | downloading | installing | error
+        self._apply_stage = "idle"
         self._progress = 0.0
         # Injected so a test can drive all five attempts without sleeping.
         self._retry_delays = tuple(retry_delays)
@@ -445,18 +446,40 @@ class UpdateService:
                 self._state = "error"
                 return
             except Exception as error:
+                context = self._failure_context(info, plan, error)
                 if attempt == self._attempts:
                     log.exception("update apply failed after %d attempts",
-                                  attempt)
+                                  attempt, extra=context)
                     self._state = "error"
                     self._error = str(error)
                     return
                 delay = self._retry_delays[attempt - 1]
-                log.warning("update attempt %d/%d failed; retrying in %.0fs",
-                            attempt, self._attempts, delay, exc_info=True)
+                # A player can close the app during retries. Report the first
+                # failed attempt now; terminal failure has its own ERROR log.
+                if attempt == 1:
+                    from sm64_events.core.error_reporting import capture_problem
+                    # A distinct message keeps this bounded retry report from
+                    # deduplicating the later terminal exception for an hour.
+                    capture_problem("Automatic update attempt failed; retrying", context=context)
+                log.warning("update attempt %d/%d failed at %s (%s -> %s); retrying in %.0fs",
+                            attempt, self._attempts, context["stage"], self.current,
+                            info.version, delay, exc_info=True, extra=context)
                 self._state = "downloading"
                 self._progress = 0.0
                 time.sleep(delay)
+
+    def _failure_context(self, info, plan, error):
+        """Bounded operational evidence; no request URLs, headers or file paths."""
+        context = dict(component="updater", operation="apply", stage=self._apply_stage,
+                       error_type=type(error).__name__, update={
+                           "current_version": self.current, "target_version": info.version,
+                           "attempt": self._attempt, "attempts": self._attempts,
+                           "download_bytes": plan.download_bytes})
+        for key, field in (("status_code", "code"), ("errno", "errno"), ("winerror", "winerror")):
+            value = getattr(error, field, None)
+            if type(value) is int:
+                context[key] = value
+        return context
 
     def _apply_once(self, info, plan, manifest_text, on_success, can_apply=None) -> None:
         """One attempt: stage -> fetch -> verify -> swap -> restart. Raises on
@@ -466,37 +489,45 @@ class UpdateService:
         staging = root / STAGING_DIR
         applied = False
         try:
+            self._apply_stage = "staging"
             shutil.rmtree(staging, ignore_errors=True)
             staging.mkdir(parents=True)
             needed = sum(entry.size for entry in plan.fetch)
             if not free_disk_ok(root, needed):
                 raise RuntimeError("not enough free disk space for the update")
             try:
+                self._apply_stage = "range_download"
                 fetch_plan(plan, info.zip_url, staging, http=self._http,
                            progress=self._set_progress)
-            except RangeUnsupported:
+            except RangeUnsupported as error:
                 log.info("ranged download unavailable — full zip fallback")
+                self._apply_stage = "full_checksum"
                 published = self._fetch_text(info.zip_sha_url).split()
                 if not published:
-                    raise ValueError("zip sha256 file is empty")
+                    raise ValueError("zip sha256 file is empty") from error
+                self._apply_stage = "full_download"
                 fetch_full_zip(plan, info.zip_url, published[0], staging,
                                http=self._http, progress=self._set_progress)
             # The verified manifest text becomes the new installed record,
             # swapped in atomically WITH the files it describes.
+            self._apply_stage = "manifest_stage"
             (staging / INSTALLED_MANIFEST).write_text(manifest_text)
             if can_apply and (reason := can_apply()):
                 raise _UnsafeApply(reason)
             if not self._eligible_apply(info, repair=self._repair):
                 raise _UnsafeApply("Beta updates were disabled during download.")
             self._state = "installing"
+            self._apply_stage = "swap"
             apply_plan(root, staging,
                        replace=[entry.path for entry in plan.fetch]
                        + [INSTALLED_MANIFEST],
                        delete=list(plan.delete))
             applied = True
             self._files_changed = True
+            self._apply_stage = "record_installed"
             record_installed(self._state_path, info.version)
             shutil.rmtree(staging, ignore_errors=True)
+            self._apply_stage = "restart"
             on_success()
         except Exception as err:
             shutil.rmtree(staging, ignore_errors=True)
@@ -508,7 +539,8 @@ class UpdateService:
                 # inaccurate for this corner; the new version simply runs on
                 # the next manual launch (final review, minor 6).
                 log.exception("update applied but the restart failed — the "
-                              "new version runs on next launch")
+                              "new version runs on next launch",
+                              extra=self._failure_context(info, plan, err))
                 raise _RestartFailed from err
             raise
 
