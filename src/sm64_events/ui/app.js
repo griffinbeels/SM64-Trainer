@@ -22,6 +22,8 @@ import { RankPage } from "./components/rankpage.js";
 import { RunnerPage } from "./components/runnerpage.js";
 import { PlayerPage } from "./components/playerpage.js";
 import { RankUpCelebration } from "./components/marelocelebrate.js";
+import { ResourcesPage } from "./components/resourcespage.js";
+import { AboutPage } from "./components/aboutpage.js";
 
 const html = htm.bind(h);
 
@@ -47,6 +49,12 @@ const NAV_GROUPS = [
   ["Library", [
     ["Sessions", "sessions"],
     ["Live feed", "feed"],
+  ]],
+  // Outward (where the community lives, the rules a time must meet) and
+  // inward (how the trainer works, whose work it stands on).
+  ["Community", [
+    ["Resources", "resources"],
+    ["About", "about"],
   ]],
 ];
 
@@ -311,6 +319,8 @@ function App() {
                   onScopeChange=${setComparisonScope}
                   openLibrary=${openLibrary} />`}</div>`
           : tab === "Live feed" ? html`<div class="view-pane"><${Feed} t=${t} /></div>`
+          : tab === "Resources" ? html`<div class="view-pane"><${ResourcesPage} /></div>`
+          : tab === "About" ? html`<div class="view-pane"><${AboutPage} t=${t} /></div>`
           : null}
       </div>
     </main>

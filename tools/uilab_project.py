@@ -584,6 +584,20 @@ await sleep(400);   // the fold's open run must land before anything measures
 # already open (app.js's `openRunnerName` survives across viewport passes as
 # long as nothing navigates away from "Rank"), so the guard skips straight to
 # the wait instead of clicking a row that no longer exists.
+def _tab_setup(title: str, ready: str) -> str:
+    """Open a sidebar tab by its nav title and wait for its page to mount."""
+    return _script(f"""
+const btn = document.querySelector('button.nav-item[title="{title}"]');
+if (btn && btn.getAttribute('aria-current') !== 'page') btn.click();
+if (!await waitFor(() => !!document.querySelector('{ready}'), SHELL_WAIT))
+  throw new Error('{title} tab did not mount {ready}');
+""")
+
+
+_RESOURCES_SETUP = _tab_setup("Resources", ".resources-page .res-card")
+_ABOUT_SETUP = _tab_setup("About", ".about-page")
+
+
 _RUNNER_PAGE_SETUP = _script("""
 const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
 if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
@@ -726,6 +740,10 @@ STORIES = [
     # `_EXPAND_ALL` heals the tab back to Practice on the next viewport pass,
     # so nothing after this needs to clean up either.
     Story(name="runner-page", at=".runner-page", setup=_RUNNER_PAGE_SETUP),
+    # The Community tabs: static pages, healed back to Practice by the next
+    # viewport's "page" story like the Rank stories above.
+    Story(name="resources", at=".resources-page", setup=_RESOURCES_SETUP),
+    Story(name="about", at=".about-page", setup=_ABOUT_SETUP),
     # The four SEGMENTS-tab stories below are last on purpose: `_EXPAND_ALL`
     # (the "page" story's own setup, which runs first on every viewport) is
     # what returns the app to Practice for the next pass, so nothing after
