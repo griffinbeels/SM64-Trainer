@@ -90,6 +90,21 @@ def promotion_source(candidate: Path, approval: Path, stable_version: str, confi
     return approved
 
 
+def _qa_ready(directory: Path) -> tuple[bool, str]:
+    """(ready, why) for handing a built candidate to a human: its source's full run passed.
+
+    Publication already refuses a red run, but a candidate handed over first
+    spends his manual check on bytes that can never ship (beta.29 r1,
+    2026-10-24: checked while its full run was going, which then failed). A run
+    still going is waited for, so the build overlaps it instead of preceding it.
+    """
+    from full_run import GhUnavailable, release_gate
+    try:
+        return release_gate(read_record(directory)["source_commit"], wait=True)
+    except (GhUnavailable, subprocess.CalledProcessError) as error:
+        return False, f"could not read the full run: {error}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest="action", required=True)
@@ -123,9 +138,13 @@ def main(argv: list[str] | None = None) -> int:
         release.prepare_candidate(args.version, args.destination, config=args.config, ffmpeg=args.ffmpeg,
                                   ghosts=args.ghosts, ghost_author=args.ghost_author, private=private, check_only=args.check,
                                   service_provenance=provenance, promoted_from=promoted)
-        print("Prerequisites verified; no build run." if args.check else
-              "Candidate prepared and verified. No tag, push, release or deployment was performed.")
-        return 0
+        if args.check:
+            print("Prerequisites verified; no build run.")
+            return 0
+        print("Candidate prepared and verified. No tag, push, release or deployment was performed.")
+        ready, why = _qa_ready(args.destination)
+        print(("Ready for manual QA: " if ready else "NOT ready for manual QA, do not hand it over: ") + why)
+        return 0 if ready else 3
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError):
         # Configuration can contain a one-use invitation; do not print external
         # exception bodies, process output or supplied values.

@@ -143,9 +143,27 @@ def test_ship_beta_coordinator_only_delegates_to_shared_preparation(tmp_path, mo
     prepared_calls = []
     monkeypatch.setattr(release, "prepare_candidate", lambda version, destination, **kw:
                         prepared_calls.append((version, destination, kw)))
+    monkeypatch.setattr(release_flow, "_qa_ready", lambda directory: (True, "full run passed"))
     assert release_flow.main(["ship-beta", "1.10.0-beta.1", str(tmp_path), "--config", str(tmp_path / "config.json")]) == 0
     assert prepared_calls[0][:2] == ("1.10.0-beta.1", tmp_path)
     assert prepared_calls[0][2]["private"] is True
+
+
+def test_a_built_candidate_is_not_ready_for_qa_until_its_sources_full_run_passes(tmp_path, monkeypatch, capsys):
+    import full_run
+    (tmp_path / "candidate.json").write_text(json.dumps({"schema": 1, "version": "1.10.0-beta.1",
+        "installation": "normal", "distribution": "public", "source_commit": "b" * 40}), encoding="utf-8")
+    monkeypatch.setattr(release, "prepare_candidate", lambda *args, **kw: None)
+    asked = []
+    verdict = [(False, "the full run for bbbbbbbbbb failure")]
+    monkeypatch.setattr(full_run, "release_gate", lambda sha, wait: asked.append((sha, wait)) or verdict[0])
+    command = ["ship-beta", "1.10.0-beta.1", str(tmp_path), "--config", str(tmp_path / "config.json")]
+    assert release_flow.main(command) == 3
+    assert "NOT ready for manual QA" in capsys.readouterr().out
+    assert asked == [("b" * 40, True)]   # the candidate's own source, waited for
+    verdict[0] = (True, "full run passed for bbbbbbbbbb")
+    assert release_flow.main(command) == 0
+    assert "Ready for manual QA" in capsys.readouterr().out
 
 
 def test_public_beta_coordinator_forwards_reviewed_author_binding(tmp_path, monkeypatch):

@@ -132,6 +132,9 @@ not mutate the tracked version, tag, push, deploy or publish. PyInstaller embeds
 a staged version hook and metadata; the frozen runtime self-check must prove the
 target version, normal identity, port and updater baseline. Preparation rechecks
 HEAD, working-tree status and `uv.lock` before writing the candidate record.
+A built candidate then waits for its source's full run on GitHub: "Ready for
+manual QA" (exit 0) means the run passed; exit 3 means it did not, so the
+candidate goes to no human, because publication would refuse it anyway.
 
 Public preparation with `--public --ghosts COLLECTION` also requires
 `--ghost-author REVIEWED_AUTHOR.json`. This bounded schema1 input names `author`,
