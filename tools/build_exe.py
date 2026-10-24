@@ -14,7 +14,11 @@ main() re-execs itself with PYTHONHASHSEED=1 + SOURCE_DATE_EPOCH=<HEAD
 commit time> so unchanged sources produce identical bytes across releases.
 
 ffmpeg is bundled automatically: --ffmpeg PATH wins, else the ffmpeg on
-PATH. Releases MUST bundle ffmpeg."""
+PATH. Releases MUST bundle ffmpeg.
+
+After PyInstaller, tools/third_party_notices.py stages _internal/licenses/
+and refuses the build when a bundled component's license is missing or
+describes another version (licenses/README.md)."""
 import argparse
 import json
 import os
@@ -292,7 +296,16 @@ def main() -> int:
         pyi.run(app_args(ffmpeg, metadata_path=metadata, reporting_path=stage_reporting(work), version_hook=hook,
                          version_metadata=version_metadata, distpath=args.distpath,
                          workpath=work / "app", specpath=work / "spec"))
-        print("\nBuilt:", REPO / "dist" / "SM64Trainer")
+        # PyInstaller's default distpath is ./dist under the working directory.
+        app_dir = (args.distpath or Path.cwd() / "dist") / "SM64Trainer"
+        import third_party_notices
+        try:
+            third_party_notices.stage(app_dir / "_internal",
+                                      third_party_notices.bundled_import_names(app_dir), Path(ffmpeg))
+        except RuntimeError as failure:
+            print(f"Build refused: {failure}", file=sys.stderr)
+            return 2
+        print("\nBuilt:", app_dir)
     if args.mode in ("bootstrap", "all"):
         work = args.workpath or REPO / "build" / "normal-release"
         sys.path.insert(0, str(REPO / "src"))

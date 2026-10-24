@@ -298,9 +298,12 @@ check any credits / update any documentation".
 
 Two tests already gate this on every merge and full run:
 `tests/test_credits.py` fails when a shipped dependency, vendored file, font
-or native DLL has no credits row, and `tests/test_about_lesson.py` fails when
-an address, action code or message the lesson shows no longer matches the
-code. The review covers what neither can see:
+or native DLL has no credits row, or a vendored one has no license text in
+`licenses/`, and `tests/test_about_lesson.py` fails when an address, action
+code or message the lesson shows no longer matches the code. The build
+itself refuses a bundled Python package with no license file, and an
+ffmpeg.exe or PyAV that `licenses/README.md` does not describe
+(`tools/third_party_notices.py`). The review covers what none can see:
 
 1. **People:** a new tester or contributor gets a row in `TESTERS` or
    `CREDIT_GROUPS` (`src/sm64_events/ui/credits.js`).

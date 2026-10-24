@@ -134,7 +134,8 @@ failure, then reverting it. Tests alone do not establish visual correctness.
 - Update the glossary for changed domain nouns, chain rules for moved value
   hops, the rule index for changed routes, architecture for cross-cutting facts,
   API docs for endpoints, README for consumer-facing changes, and
-  `ui/credits.js` for a new dependency, data source or tester.
+  `ui/credits.js` for a new dependency, data source or tester (with its
+  license text in `licenses/` when it is vendored by hand).
 - When a shipped feature changes public capabilities or UI pictured on the
   website, assess its website impact through [website/README.md](website/README.md).
   Update affected copy or screenshots where appropriate; unrelated fixes need no refresh.

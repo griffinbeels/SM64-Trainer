@@ -23,6 +23,10 @@ def built_offer(tmp_path, monkeypatch, version, *, legacy=False):
     monkeypatch.setenv("PYTHONHASHSEED", "1")
     monkeypatch.setattr(build_defaults_seed, "main", lambda _: 0)
     monkeypatch.setattr(build_natives, "ensure", lambda **_: None)
+    import third_party_notices    # staged after PyInstaller, on its output
+    monkeypatch.setattr(third_party_notices, "bundled_import_names", lambda _: set())
+    staged = []
+    monkeypatch.setattr(third_party_notices, "stage", lambda *args: staged.append(args))
     captured = []
     monkeypatch.setattr(pyi, "run", lambda args: captured.append(args))
     work = tmp_path / "build"
@@ -51,6 +55,9 @@ def built_offer(tmp_path, monkeypatch, version, *, legacy=False):
         app_args = captured[0]
         assert str(work / "release-version.json") + build_exe.SEP + "." in app_args
         assert json.loads((work / "release-version.json").read_text())["version"] == version
+        # The license notices land in the folder PyInstaller just built.
+        assert [(args[0].parts[-2:], args[2]) for args in staged] == [
+            (("SM64Trainer", "_internal"), tmp_path / "ffmpeg.exe")]
     return path
 
 
