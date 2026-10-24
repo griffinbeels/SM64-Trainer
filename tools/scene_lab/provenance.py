@@ -122,7 +122,7 @@ def attribute(frame: Path, loads: list[dict]) -> dict:
             # Cheap reject before counting: the first 64 bytes must agree.
             if ram[:64] != load["data"][:64]:
                 continue
-            mismatched = sum(a != b for a, b in zip(ram, load["data"]))
+            mismatched = sum(a != b for a, b in zip(ram, load["data"], strict=False))
             if best is None or mismatched < best[0]:
                 best = (mismatched, load, size)
         if best:

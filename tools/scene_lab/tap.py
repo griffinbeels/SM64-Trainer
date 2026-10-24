@@ -71,7 +71,7 @@ def read_records(path: Path):
             raise ValueError(f"corrupt tap record at byte {at}")
         body = memoryview(data)[at + 32:at + size]
         if kind == REC_TASK:
-            fields = dict(zip(TASK_FIELDS, struct.unpack_from("<12I", body, 0)))
+            fields = dict(zip(TASK_FIELDS, struct.unpack_from("<12I", body, 0), strict=True))
             task = struct.unpack_from("<16I", body, 48)
             offset = 112
             runs = [struct.unpack_from("<II", body, offset + 8 * i) for i in range(fields["runs"])]
@@ -87,7 +87,7 @@ def read_records(path: Path):
                 offset += padded
             yield Task(sequence, qpc, fields, task, runs, run_bytes, extras)
         elif kind == REC_PRESENT:
-            vi = dict(zip(VI_NAMES, struct.unpack_from("<14I", body, 0)))
+            vi = dict(zip(VI_NAMES, struct.unpack_from("<14I", body, 0), strict=True))
             width, height, read_ns, _format = struct.unpack_from("<4I", body, 56)
             yield Present(sequence, qpc, vi, width, height, read_ns, bytes(body[72:72 + width * height * 3]))
         elif kind == REC_FULL:
@@ -213,7 +213,7 @@ def frames(args) -> int:
             "task": dict(zip(("type", "flags", "ucode_boot", "ucode_boot_size", "ucode", "ucode_size",
                               "ucode_data", "ucode_data_size", "dram_stack", "dram_stack_size",
                               "output_buff", "output_buff_size", "data_ptr", "data_size",
-                              "yield_data_ptr", "yield_data_size"), task.task)),
+                              "yield_data_ptr", "yield_data_size"), task.task, strict=True)),
             "tap": task.fields,
             "reference": {"width": record.width, "height": record.height, "format": "bgr24-bottom-up"},
         }, indent=2) + "\n", encoding="utf-8")

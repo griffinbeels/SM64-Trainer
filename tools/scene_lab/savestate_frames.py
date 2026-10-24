@@ -51,7 +51,7 @@ def read_savestate(path: Path) -> dict:
         raise ValueError(f"unexpected savestate header length {head}")
     return {
         "rom_header": data[_HEADER_OFFSET:_HEADER_OFFSET + 0x40],
-        "vi": dict(zip(VI_NAMES, struct.unpack_from("<14I", data, _VI_OFFSET))),
+        "vi": dict(zip(VI_NAMES, struct.unpack_from("<14I", data, _VI_OFFSET), strict=True)),
         "rdram": data[head:head + rdram_size],
         "dmem": data[head + rdram_size:head + rdram_size + 0x1000],
     }
@@ -63,7 +63,7 @@ def graphics_tasks(rdram: bytes) -> list[tuple[int, dict]]:
     found = []
     for index in range(0, len(words) - 16):
         if words[index] == M_GFXTASK and words[index + 5] == 0x1000 and words[index + 7] == 0x800:
-            task = dict(zip(TASK_NAMES, words[index:index + 16]))
+            task = dict(zip(TASK_NAMES, words[index:index + 16], strict=True))
             if task["data_ptr"] >> 24 == 0x80 and 0 < task["data_size"] < (1 << 20):
                 found.append((0x80000000 | index * 4, task))
     return found
