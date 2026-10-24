@@ -117,6 +117,28 @@ def test_real_startup_receipt_keeps_progress_and_capability_without_driver_or_re
     assert safe_snapshot(result) == result
 
 
+def test_a_no_surface_startup_names_its_gpu_and_first_bindings_invalidation():
+    """beta.30's AMD tester: 10034 every session, and neither Sentry nor the
+    report could say which GPU or which check refused. The automatic snapshot
+    now keeps both, scrubbed like every other string."""
+    startup = {"epoch": 14, "load_error": 0, "width": 0, "height": 0, "control_generation": 1,
+               "context_identity": "context_created", "context_gl_vendor": "ATI Technologies Inc.",
+               "context_gl_renderer": "AMD Radeon RX 6700 XT C:\\Users\\PrivateName",
+               "context_gl_version": "4.6.14830 Compatibility Profile Context 24.9.1",
+               "bindings_site": 14, "bindings_site_name": "gateway_open_error",
+               "bindings_cause": "the first capture gateway found a GL error pending (GL_INVALID_ENUM)",
+               "bindings_gl_error": 0x500, "bindings_flags": 0xFF, "bindings_invalidations": 1,
+               "bindings_after_ms": 0, "bindings_contexts": 1, "nonce": "PrivateNonce"}
+    kept = safe_snapshot({"capture": {"gpu": {"latest": {"startup": startup}}}})["capture"]["gpu"]["latest"]["startup"]
+    assert kept["context_gl_vendor"] == "ATI Technologies Inc."
+    assert kept["context_gl_renderer"].startswith("AMD Radeon RX 6700 XT")
+    assert kept["context_gl_version"] == "4.6"
+    assert (kept["bindings_site_name"], kept["bindings_gl_error"], kept["bindings_flags"]) == ("gateway_open_error", 0x500, 0xFF)
+    assert kept["bindings_cause"].endswith("(GL_INVALID_ENUM)")
+    assert "Private" not in json.dumps(kept)
+    assert safe_snapshot({"capture": {"gpu": {"latest": {"startup": kept}}}})["capture"]["gpu"]["latest"]["startup"] == kept
+
+
 @pytest.mark.parametrize(("width", "height"), [(0, 0), (640, 480)])
 def test_accepted_request_without_a_surface_is_distinct_from_surface_arrival(width, height):
     receipt = {"epoch": 4, "load_error": 0, "width": width, "height": height, "control_generation": 3}

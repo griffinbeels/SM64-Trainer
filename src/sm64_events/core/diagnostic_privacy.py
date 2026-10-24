@@ -56,14 +56,25 @@ def _numbers(value, keys) -> dict:
 
 
 def _startup(value):
-    """Keep pre-channel progress, never raw GL identity or request nonces."""
+    """Keep pre-channel progress and the GPU it ran on, never request nonces.
+    The vendor/renderer strings name the adapter (as `gpu_name` already
+    does): a no-surface startup (10034) is otherwise unattributable."""
     value = mapping(value)
     result = {key: item for key, item in value.items()
-              if key in {"epoch", "load_error", "width", "height", "control_generation"}
+              if key in {"epoch", "load_error", "width", "height", "control_generation",
+                         "bindings_site", "bindings_gl_error", "bindings_flags", "bindings_invalidations",
+                         "bindings_after_ms", "bindings_contexts"}
               and type(item) is int and 0 <= item <= 0xffffffff}
-    version = value.get("gl_version")
-    if isinstance(version, str) and (match := re.match(r"^([0-9]{1,2})\.([0-9]{1,2})(?=[.\s]|$)", version)):
-        result["gl_version"] = f"{int(match[1])}.{int(match[2])}"
+    for key in ("gl_version", "context_gl_version"):
+        version = value.get(key)
+        if isinstance(version, str) and (match := re.match(r"^([0-9]{1,2})\.([0-9]{1,2})(?=[.\s]|$)", version)):
+            result[key] = f"{int(match[1])}.{int(match[2])}"
+    result.update(pick(value, ("context_gl_vendor", "context_gl_renderer", "bindings_cause")))
+    if value.get("context_identity") in ("context_created", "first_refusal"):
+        result["context_identity"] = value["context_identity"]
+    site = value.get("bindings_site_name")
+    if isinstance(site, str) and re.fullmatch(r"[a-z_]{1,40}", site):
+        result["bindings_site_name"] = site
     entry = value.get("missing_entry_point")
     if isinstance(entry, str) and entry in _ENTRY_POINTS:
         result["missing_entry_point"] = entry

@@ -46,8 +46,11 @@ are eventually consistent, not one atomic emulator snapshot.
 Pre-channel failures retain the native request-acceptance/surface receipt,
 receipt availability, callback progress/pacing and actual capture-stage timings.
 Automatic GL evidence is restricted to numeric codes/dimensions, a major.minor
-version and known missing entry-point names. Driver/vendor/renderer freeform,
-request nonces and adapter LUIDs are excluded. Boolean fallback/pose-owner/pause
+version, known missing entry-point names, and the context's GL vendor/renderer
+strings (scrubbed, 140 characters) with the first bindings invalidation behind a
+no-surface startup (10034): without them that failure named neither the GPU nor
+the refusing check (beta.30's AMD tester). Driver version text, request nonces
+and adapter LUIDs are excluded. Boolean fallback/pose-owner/pause
 facts distinguish footage recovery from the independent ghost lifetime; owner
 presence is not evidence of delivered poses or visible playback.
 
