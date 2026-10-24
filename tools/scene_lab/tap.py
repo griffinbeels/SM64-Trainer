@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mmap
 import os
 import struct
 import sys
@@ -63,37 +64,97 @@ class Present:
 
 
 def read_records(path: Path):
-    data = path.read_bytes()
-    at = 0
-    while at + 32 <= len(data):
-        magic, kind, size, sequence, qpc = struct.unpack_from("<IIIIq", data, at)
-        if magic != MAGIC or size < 32 or at + size > len(data):
-            raise ValueError(f"corrupt tap record at byte {at}")
-        body = memoryview(data)[at + 32:at + size]
-        if kind == REC_TASK:
-            fields = dict(zip(TASK_FIELDS, struct.unpack_from("<12I", body, 0), strict=True))
-            task = struct.unpack_from("<16I", body, 48)
-            offset = 112
-            runs = [struct.unpack_from("<II", body, offset + 8 * i) for i in range(fields["runs"])]
-            offset += 8 * fields["runs"]
-            extra_spec = [struct.unpack_from("<II", body, offset + 8 * i) for i in range(fields["extras"])]
-            offset += 8 * fields["extras"]
-            run_bytes = bytes(body[offset:offset + fields["closure_bytes"]])
-            offset += fields["closure_bytes"]
-            extras = []
-            for address, length in extra_spec:
-                padded = (length + 3) & ~3
-                extras.append((address & ~3, bytes(body[offset:offset + padded])))
-                offset += padded
-            yield Task(sequence, qpc, fields, task, runs, run_bytes, extras)
-        elif kind == REC_PRESENT:
-            vi = dict(zip(VI_NAMES, struct.unpack_from("<14I", body, 0), strict=True))
-            width, height, read_ns, _format = struct.unpack_from("<4I", body, 56)
-            yield Present(sequence, qpc, vi, width, height, read_ns, bytes(body[72:72 + width * height * 3]))
-        elif kind == REC_FULL:
-            (rdram_size,) = struct.unpack_from("<I", body, 0)
-            yield ("full", sequence, bytes(body[16:16 + rdram_size]))
-        at += size
+    """Stream tap.bin's records. The file is mapped, not read whole: a session
+    with reference pictures runs to gigabytes, and only the caller's records stay."""
+    if not path.stat().st_size:
+        return
+    with path.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        at = 0
+        while at + 32 <= len(data):
+            magic, kind, size, sequence, qpc = struct.unpack_from("<IIIIq", data, at)
+            if magic != MAGIC or size < 32 or at + size > len(data):
+                raise ValueError(f"corrupt tap record at byte {at}")
+            with memoryview(data)[at + 32:at + size] as body:
+                record = _parse_record(kind, sequence, qpc, body)
+            if record is not None:
+                yield record
+            at += size
+
+
+def _parse_record(kind: int, sequence: int, qpc: int, body: memoryview):
+    """One record as owned objects (copies), so the mapping can close behind it."""
+    if kind == REC_TASK:
+        fields = dict(zip(TASK_FIELDS, struct.unpack_from("<12I", body, 0), strict=True))
+        task = struct.unpack_from("<16I", body, 48)
+        offset = 112
+        runs = [struct.unpack_from("<II", body, offset + 8 * i) for i in range(fields["runs"])]
+        offset += 8 * fields["runs"]
+        extra_spec = [struct.unpack_from("<II", body, offset + 8 * i) for i in range(fields["extras"])]
+        offset += 8 * fields["extras"]
+        run_bytes = bytes(body[offset:offset + fields["closure_bytes"]])
+        offset += fields["closure_bytes"]
+        extras = []
+        for address, length in extra_spec:
+            padded = (length + 3) & ~3
+            extras.append((address & ~3, bytes(body[offset:offset + padded])))
+            offset += padded
+        return Task(sequence, qpc, fields, task, runs, run_bytes, extras)
+    if kind == REC_PRESENT:
+        vi = dict(zip(VI_NAMES, struct.unpack_from("<14I", body, 0), strict=True))
+        width, height, read_ns, _format = struct.unpack_from("<4I", body, 56)
+        return Present(sequence, qpc, vi, width, height, read_ns, bytes(body[72:72 + width * height * 3]))
+    if kind == REC_FULL:
+        (rdram_size,) = struct.unpack_from("<I", body, 0)
+        return ("full", sequence, bytes(body[16:16 + rdram_size]))
+    return None
+
+
+def session_header(session: Path) -> dict:
+    """session.txt as key=value strings (rdram_size, rom_header, qpc_frequency...)."""
+    header = {}
+    for line in (session / "session.txt").read_text(encoding="ascii").splitlines():
+        key, _, value = line.partition("=")
+        header[key] = value
+    return header
+
+
+def identity_spec(session: Path) -> list[tuple[str, int, int]]:
+    """The identity extras the arming tool named: (name, physical address, bytes)."""
+    identity = []
+    for line in (session / "armed.txt").read_text(encoding="ascii").splitlines():
+        if line.startswith("# identity="):
+            for item in filter(None, line.removeprefix("# identity=").split(",")):
+                name, address, size = item.split(":")
+                identity.append((name, int(address, 16), int(size)))
+    return identity
+
+
+def paired(records, pair: str = "origin"):
+    """Every task once, in record order, with the present that showed it or None.
+
+    The picture shows the newest task drawn into the image VI now scans; tasks
+    a later picture overtook were never shown. --pair next (offline hosts whose
+    VI origin is synthetic) takes the newest task.
+    """
+    pending: list[Task] = []
+    for record in records:
+        if isinstance(record, Task):
+            pending.append(record)
+            continue
+        if not isinstance(record, Present) or not pending:
+            continue
+        shown = pending if pair == "next" else [
+            task for task in pending if abs(record.vi["origin"] - task.fields["last_cimg"]) < 0x1000]
+        if not shown:
+            continue
+        task = shown[-1]
+        for earlier in pending:
+            if earlier.sequence < task.sequence:
+                yield earlier, None
+        yield task, record
+        pending = [later for later in pending if later.sequence > task.sequence]
+    for task in pending:
+        yield task, None
 
 
 def word_value(extras: list, address: int, size: int) -> int | None:
@@ -162,34 +223,14 @@ def summary(args) -> int:
 
 def frames(args) -> int:
     session, out = Path(args.session), Path(args.out)
-    header = {}
-    for line in (session / "session.txt").read_text(encoding="ascii").splitlines():
-        key, _, value = line.partition("=")
-        header[key] = value
+    header = session_header(session)
     rdram_size = int(header["rdram_size"])
     pattern = bytes([args.pattern]) * rdram_size
-    identity = []
-    for line in (session / "armed.txt").read_text(encoding="ascii").splitlines():
-        if line.startswith("# identity="):
-            for item in filter(None, line.removeprefix("# identity=").split(",")):
-                name, address, size = item.split(":")
-                identity.append((name, int(address, 16), int(size)))
-    pending: list[Task] = []
+    identity = identity_spec(session)
     written = 0
-    for record in read_records(session / "tap.bin"):
-        if isinstance(record, Task):
-            pending.append(record)
+    for task, record in paired(read_records(session / "tap.bin"), args.pair):
+        if record is None:
             continue
-        if not isinstance(record, Present) or not pending:
-            continue
-        # The picture shows the newest task drawn into the image VI now scans.
-        # --pair next (offline hosts whose VI origin is synthetic) takes the newest task.
-        shown = pending if args.pair == "next" else [
-            task for task in pending if abs(record.vi["origin"] - task.fields["last_cimg"]) < 0x1000]
-        if not shown:
-            continue
-        task = shown[-1]
-        pending = [later for later in pending if later.sequence > task.sequence]
         rdram = bytearray(pattern)
         at = 0
         for begin, end in task.runs:

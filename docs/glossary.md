@@ -1172,6 +1172,24 @@ input the [[renderer]] can redraw offline.
 - **Not** -- the [[recorder]], which encodes video of play; the scene tap is
   an M4 probe that writes nothing unless armed
 
+### Scene package
+
+An M4 experiment's portable file of the graphics tasks a [[scene tap]]
+recorded, carrying no ROM bytes. Each [[task closure]] byte the viewer's own
+ROM reproduces travels as a reference to the load the game made it from: a
+level-script load, a MIO0 block, the boot copy of the main program, or a ROM
+window the writer finds by content. The reader rebuilds each load from its
+own ROM and checks its hash. Only bytes no load explains travel raw, mostly
+the display lists the game builds for each task, and tasks that repeat them
+share one copy. Any task decodes without visiting the others; the reader
+refuses a package made from a different ROM, a truncated one or a corrupt
+one. On savestate tasks about 95% of a closure is a reference, and a 175 KB
+closure packs to about 2 KB (2026-10-24).
+
+- **Lives** -- `tools/scene_lab/package.py` (write, read, verify)
+- **Not** -- what the [[scene tap]] itself writes, which holds raw memory
+  images and pictures and stays private on the machine that recorded it
+
 ### Practice ROM
 
 The cartridge the practice tooling works on: Usamune v1.93u (US) or a JP
