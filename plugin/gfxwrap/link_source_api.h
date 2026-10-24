@@ -67,6 +67,8 @@ const rs_api_v4 *__cdecl SM64ReplaySourceV4(uint32_t version,uint32_t bytes);
 void rs_before_update(void);
 #ifdef __cplusplus
 }
+#include "source_refusal.h"
+#include <cstring>
 static_assert(sizeof(rs_request)==32, "source request ABI layout");
 static_assert(offsetof(rs_request,ticket)==16, "source request ticket offset");
 static_assert(sizeof(void*)==4, "source ABI requires Windows x86");
@@ -79,6 +81,20 @@ static_assert(sizeof(rs_callbacks)==24 && sizeof(rs_api)==60, "SourceV2 API layo
 static_assert(sizeof(rs_api_v3)==84,"SourceV3 API layout");
 static_assert(sizeof(rs_api_v4)==108 && offsetof(rs_api_v4,v3)==16 && offsetof(rs_api_v4,query_display)==100
     && offsetof(rs_api_v4,display_consumer)==104,"SourceV4 API layout");
+/* A BINDINGS refusal carries its rs_bindings_cause in the 24 bytes from
+ * read_drawable on, which a refused surface never uses. Identity, origin,
+ * swap count and source_format stay zero; an older renderer leaves zeros. */
+static_assert(offsetof(rb_surface,read_drawable)==52 && offsetof(rb_surface,read_drawable)+sizeof(rs_bindings_cause)
+    ==offsetof(rb_surface,source_format),"refused-surface bindings cause bytes");
+inline void rs_write_bindings_cause(rb_surface *s,const rs_bindings_cause &cause) {
+    memcpy(reinterpret_cast<char*>(s)+offsetof(rb_surface,read_drawable),&cause,sizeof cause);
+}
+inline rs_bindings_cause rs_read_bindings_cause(const rb_surface &s) {
+    rs_bindings_cause cause{};
+    if(s.witness==RS_SURFACE_BINDINGS)
+        memcpy(&cause,reinterpret_cast<const char*>(&s)+offsetof(rb_surface,read_drawable),sizeof cause);
+    return cause;
+}
 inline bool rs_valid_v3(const rs_api_v3* p) {
     return p && p->bytes==sizeof(*p) && p->version==RS_ABI_V3 && !p->reserved &&
         p->capabilities==(RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT|RS_CAP_CLEAN_PRESENTATION) &&

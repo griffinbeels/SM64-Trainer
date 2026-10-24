@@ -3,6 +3,7 @@
 #pragma once
 #include "renderer_gl_state.h"
 #include "source_format.h"
+#include "source_refusal.h"
 #ifdef SM64_REPLAY_CONTEXT_LIFETIME
 #include "context_lifetime.h"
 #endif
@@ -42,6 +43,10 @@ bool ActiveUnit(unsigned *unit);
 // Nominal state only: copy validity/device-loss/source qualification are separate
 // prerequisites. Never promote this alone to a verified replay picture.
 bool CandidateBindings(renderer::Identity *, snapshot::RestoreBindings *);
+// Why CandidateBindings is false (source_refusal.h), for a BINDINGS refusal.
+// Copies already-known values. Once per process, a context ContextCreated never
+// saw has its GL identity read here instead: three glGetString calls, no other GL.
+void BindingsCause(rs_bindings_cause *);
 uint32_t SourceFormat(); // observed once on fresh default framebuffer; no driver query
 // Called only for an admitted snapshot, before mutation and after restoration/
 // fence/flush, BEFORE image publication. One raw error read each; no drain.

@@ -86,6 +86,17 @@ public:
         if (!out || !unit_known_) return false;
         *out = unit_; return true;
     }
+    // Which parts default_bindings needs are known: the bindings cause only.
+    struct Known { bool identity, read, default_read, unit, texture; };
+    Known known(Identity identity) const {
+        const bool same = identity.context && identity.context == identity_.context
+            && identity.read_drawable == identity_.read_drawable
+            && identity.context_generation == identity_.context_generation
+            && identity.drawable_generation == identity_.drawable_generation
+            && identity.owner_thread == identity_.owner_thread;
+        return {same, read_known_, default_known_, unit_known_,
+                unit_known_ && unit_ < texture_units && (known_textures_ & (1u << unit_)) != 0};
+    }
     // Any unobserved mutation/error invalidates the witness until reconstructed.
     void unknown() { read_known_ = unit_known_ = default_known_ = false;
                      known_textures_ = 0; }

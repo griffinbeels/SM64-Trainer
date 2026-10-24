@@ -139,6 +139,40 @@ def test_latest_bootstrap_refusal_reaches_status_and_diagnostic_cpu(host, witnes
     assert result.stdout.strip() == f"source refusal 10034 {expected} {expected}"
 
 
+@pytest.mark.parametrize(("latest_format", "cause"), [
+    # The LATEST bindings refusal's cause (site 14, GL_INVALID_OPERATION), not the first one's.
+    (0, "1397882881 diagnostic 14 1282 15 4 5 6 receipt 14 1282 15 4 5 6"),
+    # A later format refusal replaces the bindings evidence: no cause is claimed.
+    (1, "1397882882 diagnostic 0 0 0 0 0 0 receipt 0 0 0 0 0 0"),
+])
+def test_no_surface_deadline_carries_the_latest_bindings_cause_and_context_gpu_cpu(host, latest_format, cause):
+    result = subprocess.run([str(host), "--bindings-cause-cpu", str(latest_format)],
+                            capture_output=True, text=True, timeout=5, check=True, **quiet_spawn_kwargs())
+    # Admission and the deadline both name the renderer's GPU, bounded and printable.
+    assert result.stdout.strip() == (f"bindings cause 10034 {cause} identity 1 1 ATI Technologies Inc.? 127 "
+                                     "4.6.0 Compatibility Profile Context")
+
+
+def test_bindings_failure_line_fits_the_logger_and_reaches_the_automatic_schema_cpu(tmp_path):
+    from sm64_events.core.native_diagnostics import technical_events
+    spec = importlib.util.spec_from_file_location("diagnostic_build", ROOT / "tools/build_plugin.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    exe = tmp_path / "diagnostic_failure.exe"
+    build._cl(build.find_vcvars32(), build.COMMON_FLAGS + [
+        str(SOURCE / "gpu_diagnostic_log_host.c"), f"/I{SOURCE}", f"/Fe:{exe}",
+        f"/Fo{tmp_path}\\", "/link", "kernel32.lib"], tmp_path)
+    # Every counter at its widest: the formatter exits 2 rather than truncate.
+    result = subprocess.run([str(exe), "--bindings-failure"], capture_output=True, text=True,
+                            timeout=5, check=True, **quiet_spawn_kwargs())
+    failure = next(line for line in result.stdout.splitlines() if " event=gpu_failure " in line)
+    row, = technical_events(failure)
+    assert {key: value for key, value in row["fields"].items() if key.startswith("bindings_")} == {
+        "bindings_site": 14, "bindings_gl_error": 0x502, "bindings_flags": 0xFFFFFFFF,
+        "bindings_invalidations": 0xFFFFFFFF, "bindings_after_ms": 0xFFFFFFFF, "bindings_contexts": 0xFFFFFFFF}
+    assert row["fields"]["reason"] == 10034 and row["fields"]["detail"] == 0x53520001
+
+
 def test_omission_frontier_uses_identity_before_source_record_release_cpu(host):
     result = subprocess.run(
         [str(host), "--omission-custody-cpu"], capture_output=True, text=True,

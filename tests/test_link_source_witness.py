@@ -62,7 +62,7 @@ def test_real_link_dispatch(tmp_path, source_build, mutation):
         assert dispatch.count(marker) == 1
         dispatch = dispatch.replace(marker, b"// deliberately missing core observation")
     elif mutation == "miss_error_gateway":
-        marker = b"if (error != GL_NO_ERROR) invalidate();"
+        marker = b"if (error != GL_NO_ERROR) invalidate(RS_BINDINGS_RENDERER_ERROR, error);"
         assert dispatch.count(marker) == 1
         dispatch = dispatch.replace(marker, b"// deliberately missing diagnostic invalidation")
     changed = tmp_path / "link_dispatch.cpp"

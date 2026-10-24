@@ -103,6 +103,25 @@ verified-picture path until those gates and source composition are established.
 Raw capture operations must bypass cache/observer calls and restore exact known
 state; failed/incomplete restoration must invalidate source admission.
 
+## Bindings cause
+
+Every route to a false `CandidateBindings` reports the same `0x53520001`
+refusal, so the overlay also records why (`source_refusal.h`). Each of the
+twenty sites that leave the observation unarmed records itself; the first one
+since `ContextCreated` stands, with the GL error that site read, a count, and
+the milliseconds since creation. Flags say which arming steps happened:
+created, practice ROM, armed, dispatch installed for this context, nominal,
+owner thread, context lost, and which state-witness parts are known. A BINDINGS
+refusal copies the record into the refused surface's unused bytes 52..75;
+identity, origin, swaps and source format stay zero. These are writes of
+values each site already holds: no query, wait or allocation.
+
+`ContextCreated` also reads `GL_VENDOR`, `GL_RENDERER` and `GL_VERSION` once,
+for a practice ROM with its handles current. A context that call never saw is
+read once, at its first bindings refusal. The wrapper copies them through the
+`SM64ReplayContextEvidenceV1` export without GL; an older renderer lacks it,
+which reads as unknown. Strings are printable ASCII, bounded, NUL-padded.
+
 ## Verification
 
 Set `SM64_LINK_WITNESS_SOURCE` to the staged directory and run

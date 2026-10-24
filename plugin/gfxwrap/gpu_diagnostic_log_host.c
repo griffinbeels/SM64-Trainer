@@ -30,8 +30,23 @@ static int notes(void) {
     d.kind=GD_KIND_ANCHOR;runtime_diagnostic(&d); /* retired kind: no line */
     return lines==2?0:3;
 }
+/* A no-surface BINDINGS failure with every counter at its widest: the line
+ * must still fit the logger's buffer (plugin_logf exits 2 when it would not). */
+static int bindings_failure(void) {
+    gd_diagnostic d={0};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;
+    d.epoch=0xFFFFFFFFu;d.reason=10034;d.detail=0x53520001u;d.current_phase=0xFFFFFFFFu;
+    d.qpc_frequency=d.observed_qpc=d.phase_started_qpc=d.accounted_occurrence=~0ull;
+    d.published_token=d.oldest_admitted_qpc=~0ull;
+    d.source_records=d.offer_retirements=d.bridge_credits=d.unpublished_bridges=0xFFFFFFFFu;
+    d.returning_records=d.awaiting_decisions=d.awaiting_copy=d.unsampled=0xFFFFFFFFu;
+    d.bindings_site=14;d.bindings_gl_error=0x502;d.bindings_flags=0xFFFFFFFFu;
+    d.bindings_invalidations=d.bindings_after_ms=d.bindings_contexts=0xFFFFFFFFu;
+    runtime_diagnostic(&d);
+    return 0;
+}
 int main(int argc,char**argv) {
     if(argc==2 && !strcmp(argv[1],"--notes"))return notes();
+    if(argc==2 && !strcmp(argv[1],"--bindings-failure"))return bindings_failure();
     gd_diagnostic d={0};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;
     d.healthy=1;d.epoch=17;d.qpc_frequency=1000;d.window_started_qpc=1000;d.observed_qpc=6000;
     d.accounted_occurrence=300;d.published_token=150;d.previous_emit_ticks=1;

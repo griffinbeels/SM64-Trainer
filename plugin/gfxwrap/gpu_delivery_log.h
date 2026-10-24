@@ -58,11 +58,15 @@ static void __cdecl runtime_diagnostic(const gd_diagnostic *s) {
         s->refused_pictures,s->peak_pending,s->offer_count,s->peak_bridges);
     else plugin_logf("gpu_failure", "epoch=%u reason=%u detail=%u observed_qpc=%llu frequency=%llu "
         "phase=%u phase_started=%llu source=%u retirements=%u bridges=%u unpublished=%u "
-        "returning=%u decisions=%u copies=%u unsampled=%u accounted=%llu token=%llu oldest=%llu",
+        "returning=%u decisions=%u copies=%u unsampled=%u accounted=%llu token=%llu oldest=%llu "
+        "bindings_site=%u bindings_gl_error=%u bindings_flags=%u bindings_invalidations=%u "
+        "bindings_after_ms=%u bindings_contexts=%u",
         s->epoch, s->reason, s->detail, s->observed_qpc, s->qpc_frequency,
         s->current_phase, s->phase_started_qpc, s->source_records, s->offer_retirements,
         s->bridge_credits, s->unpublished_bridges, s->returning_records, s->awaiting_decisions,
-        s->awaiting_copy, s->unsampled, s->accounted_occurrence, s->published_token, s->oldest_admitted_qpc);
+        s->awaiting_copy, s->unsampled, s->accounted_occurrence, s->published_token, s->oldest_admitted_qpc,
+        s->bindings_site, s->bindings_gl_error, s->bindings_flags, s->bindings_invalidations,
+        s->bindings_after_ms, s->bindings_contexts);
     if (!s->healthy && sa_read_refusal(&source) && source.epoch == s->epoch) {
         plugin_logf("gpu_source_refusal", "epoch=%u first_qpc=%lld cause=%u committed=%llu "
             "full=%u busy=%u baseline_full=%u baseline_busy=%u offered=%u observed=%u",

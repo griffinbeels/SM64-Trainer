@@ -5,7 +5,7 @@
  * The pointed-to snapshot is borrowed only for the callback's duration. */
 #pragma once
 #include <stdint.h>
-#define GD_DIAGNOSTIC_VERSION 7u
+#define GD_DIAGNOSTIC_VERSION 8u
 enum gd_diagnostic_kind {
     GD_KIND_WINDOW=0, /* healthy summary or failure, as before */
     GD_KIND_REQUEST,  /* a capture request was taken: prepare.request_qpc */
@@ -52,6 +52,10 @@ typedef struct {
     /* Version 5. Peaks are per healthy window; offer_count is the pool's size. */
     uint32_t kind,peak_pending,peak_bridges,offer_count;
     gd_prepare_diagnostic prepare; /* version 7: the anchor stamps are gone */
+    /* Version 8. A no-surface deadline whose latest refusal was BINDINGS:
+     * rs_bindings_cause (source_refusal.h), zero otherwise. */
+    uint32_t bindings_site,bindings_gl_error,bindings_flags,bindings_invalidations;
+    uint32_t bindings_after_ms,bindings_contexts;
 } gd_diagnostic;
 typedef void (__cdecl *gd_diagnostic_callback)(const gd_diagnostic*);
 #ifdef __cplusplus

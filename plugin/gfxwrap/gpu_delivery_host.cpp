@@ -29,6 +29,7 @@ extern "C" uint32_t gd_test_deadline_visits();
 extern "C" int gd_test_terminal_diagnostics(gd_status*,uint32_t*);
 extern "C" int gd_test_failure_status_coherence(gd_status*,uint32_t*);
 extern "C" int gd_test_request_fault_reset(uint32_t*);
+extern "C" int gd_test_bindings_cause(bool,gd_diagnostic*,gpu_startup_context_v1*);
 extern "C" int gd_test_bootstrap_deadline(int,uint32_t*,uint32_t=0,uint32_t=RB_SURFACE_FAILED,bool=false);
 extern "C" int gd_test_take_omissions(const rs_api*,uint64_t*);
 extern "C" int gd_test_pressure_omissions(const rs_api*,uint64_t*,uint64_t*);
@@ -437,6 +438,22 @@ int main(int argc,char**argv){
     if(argc==5 && !strcmp(argv[1],"--source-refusal-cpu")){
         uint32_t out[4]{};CHECK(gd_test_bootstrap_deadline(2,out,strtoul(argv[2],nullptr,0),atoi(argv[3]),atoi(argv[4])!=0));
         printf("source refusal %u %u %u\n",out[0],out[1],out[3]);return 0;
+    }
+    if(argc==3 && !strcmp(argv[1],"--bindings-cause-cpu")){
+        gd_diagnostic d{};gpu_startup_context_v1 receipts[2]{};
+        CHECK(gd_test_bindings_cause(atoi(argv[2])!=0,&d,receipts));
+        for(const auto&r:receipts){
+            CHECK(!memcmp(r.magic,GPU_STARTUP_CONTEXT_MAGIC,8) && r.version==GPU_STARTUP_CONTEXT_VERSION);
+            CHECK(r.bytes==sizeof r && r.epoch==17 && !r.renderer[sizeof r.renderer-1]);
+        }
+        const auto&a=receipts[0];const auto&b=receipts[1];
+        CHECK(!a.bindings_site && !a.bindings_flags); // admission names the GPU, no cause yet
+        printf("bindings cause %u %u diagnostic %u %u %u %u %u %u receipt %u %u %u %u %u %u "
+               "identity %u %u %s %u %s\n",d.reason,d.detail,d.bindings_site,d.bindings_gl_error,d.bindings_flags,
+               d.bindings_invalidations,d.bindings_after_ms,d.bindings_contexts,b.bindings_site,b.bindings_gl_error,
+               b.bindings_flags,b.bindings_invalidations,b.bindings_after_ms,b.bindings_contexts,
+               a.identity_source,b.identity_source,b.vendor,unsigned(strlen(b.renderer)),b.gl_version);
+        return 0;
     }
     if(argc==2 && !strcmp(argv[1],"--request-fault-reset-cpu")){
         uint32_t out[5]{};CHECK(gd_test_request_fault_reset(out));

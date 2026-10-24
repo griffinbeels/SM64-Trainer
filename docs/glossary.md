@@ -1209,6 +1209,23 @@ delivery worker only keeps time and books, without the GPU.
 - **Not** -- the driver warm-up it replaced (2026-09-26 to 09-27), which kept
   the worker's context and paid the same freeze once in the boot intro
 
+### Bindings cause
+
+Why the [[renderer]] could not name a capture surface: the first place its GL
+state observation was given up since the context was created (a site, plus
+the OpenGL error read there), and how far arming that context got (created,
+practice ROM, function table installed, right thread). Added 2026-10-24 for a
+tester whose every recording ended "no qualified source surface" (10034) with
+no way to tell which of those steps failed. It rides the refused picture
+record, the `gpu_failure` log line and the startup receipt, beside the GPU's
+name read when the context was created.
+
+- **Lives** -- `plugin/gfxwrap/source_refusal.h` (the numbers),
+  `plugin/gfxwrap/link_dispatch.cpp` (where each is recorded),
+  `src/sm64_events/replay/gpudiagnostics.py` (the plain-words names)
+- **Not** -- a refusal reason: the 10034 reason and its `0x53520001` detail
+  say which gate refused; the bindings cause says why that gate was closed
+
 ### Activation log
 
 `sm64_trainer_gfx.activation.log`, beside the wrapper: this Project64

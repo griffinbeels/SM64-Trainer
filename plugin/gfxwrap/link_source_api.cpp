@@ -16,7 +16,10 @@ uint64_t update_occurrence=0;
 uint32_t before_swaps=0;
 int surface(rb_surface *out) {
     renderer::Identity identity{}; snapshot::RestoreBindings bindings{};
-    if (!replay_gl::CandidateBindings(&identity,&bindings)) {out->witness=RS_SURFACE_BINDINGS;return 0;}
+    if (!replay_gl::CandidateBindings(&identity,&bindings)) {
+        out->witness=RS_SURFACE_BINDINGS;
+        rs_bindings_cause cause{};replay_gl::BindingsCause(&cause);rs_write_bindings_cause(out,cause);return 0;
+    }
     const auto format=replay_gl::SourceFormat();
     if (format==RB_SOURCE_UNKNOWN) {out->witness=RS_SURFACE_FORMAT;return 0;}
     unsigned drawable_width=0, drawable_height=0;

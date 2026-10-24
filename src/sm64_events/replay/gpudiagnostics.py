@@ -47,6 +47,84 @@ def unsupported_capture_reason(reason):
     return _GL_UNSUPPORTED.get(reason)
 
 
+# The bindings cause (plugin/gfxwrap/source_refusal.h): why the renderer's
+# bindings were false at a BINDINGS refusal. Native values are appended, never
+# renumbered; an unknown value stays unknown.
+_BINDINGS_SITES = {
+    1: ("framebuffer_target", "the renderer bound a framebuffer to a target capture does not track"),
+    2: ("framebuffer_delete", "the renderer deleted more framebuffers at once than capture can follow"),
+    3: ("texture_unit", "the renderer selected a texture unit outside its context's range"),
+    4: ("vertex_array_delete", "the renderer deleted vertex arrays with an invalid count"),
+    5: ("drawable_changed", "the window was resized from another thread"),
+    6: ("drawable_committed", "the window's drawing area was missing or empty after a resize"),
+    7: ("dispatch_reinstalled", "the renderer installed its GL function table twice"),
+    8: ("dispatch_incomplete", "the driver lacks a framebuffer or texture-unit function"),
+    9: ("dispatch_unarmed", "the renderer installed its GL function table before its context was ready"),
+    10: ("dispatch_not_current", "the renderer installed its GL function table with another context current"),
+    11: ("read_buffer", "the renderer selected a read buffer capture cannot certify"),
+    12: ("texture_delete", "the renderer deleted more textures at once than capture can follow"),
+    13: ("renderer_error", "the renderer's own OpenGL error check found an error"),
+    14: ("gateway_open_error", "an OpenGL error was already pending when a capture step began"),
+    15: ("gateway_close_error", "an OpenGL error followed a capture step's own work"),
+    16: ("layer_fatal_error", "the ghost layer ran out of video memory or lost its context"),
+    17: ("layer_undrained", "the ghost layer left OpenGL errors it could not clear"),
+    18: ("created_not_current", "the renderer created its context without making it current"),
+    19: ("created_exhausted", "the renderer created more contexts than capture can count"),
+    20: ("created_no_units", "the driver reported no texture units"),
+}
+_BINDINGS_FLAGS = (
+    "reported", "context_created", "practice_rom", "armed", "install_called", "dispatch_installed",
+    "nominal", "owner_thread", "context_lost", "state_identity", "read_known", "default_read_known",
+    "unit_known", "texture_known",
+)
+_GL_ERRORS = {0x500: "GL_INVALID_ENUM", 0x501: "GL_INVALID_VALUE", 0x502: "GL_INVALID_OPERATION",
+              0x503: "GL_STACK_OVERFLOW", 0x504: "GL_STACK_UNDERFLOW", 0x505: "GL_OUT_OF_MEMORY",
+              0x506: "GL_INVALID_FRAMEBUFFER_OPERATION", 0x507: "GL_CONTEXT_LOST"}
+_IDENTITY_SOURCES = {1: "context_created", 2: "first_refusal"}
+
+
+def bindings_flag_names(flags):
+    """The set flags, in native bit order; unknown bits are not named."""
+    return [name for bit, name in enumerate(_BINDINGS_FLAGS) if flags >> bit & 1]
+
+
+def bindings_site_name(site):
+    return _BINDINGS_SITES.get(site, ("unknown", None))[0] if site else None
+
+
+def bindings_cause(site, gl_error, flags):
+    """One plain sentence naming why the bindings were false, or None when the
+    renderer reported nothing (an older renderer, or no BINDINGS refusal)."""
+    if not flags & 1:
+        return None
+    named = set(bindings_flag_names(flags))
+    if site:
+        text = _BINDINGS_SITES.get(site, (None, f"an invalidation site this build does not know ({site})"))[1]
+        if gl_error:
+            text += f" ({_GL_ERRORS.get(gl_error, hex(gl_error))})"
+        return text
+    for flag, text in (
+        ("context_created", "the renderer never reported creating its context for this ROM"),
+        ("practice_rom", "the renderer did not recognize the ROM as a practice ROM"),
+        ("armed", "the renderer's new context was never armed for capture"),
+        ("install_called", "the renderer never installed its GL function table for this context"),
+        ("dispatch_installed", "the renderer's GL function table belongs to an older context"),
+        ("owner_thread", "capture ran on a thread other than the renderer's"),
+        ("state_identity", "the renderer's state witness belongs to another context or window size"),
+    ):
+        if flag not in named:
+            if flag == "context_created" and "context_lost" in named:
+                return "the renderer lost its context and created no new one"
+            return text
+    if not {"read_known", "default_read_known", "unit_known", "texture_known"} <= named:
+        return "the renderer's state witness lost track of a framebuffer or texture binding"
+    return "the renderer reported no cause"
+
+
+def context_identity_source(source):
+    return _IDENTITY_SOURCES.get(source)
+
+
 def native_reason(reason, *, channel=False):
     """Decode only known namespaces; channel Result 6 is not control reason 6."""
     if channel:

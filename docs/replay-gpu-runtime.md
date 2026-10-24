@@ -982,7 +982,13 @@ refusal in `gpu_failure.detail`, using the existing diagnostic-only failed
 `rb_surface.witness`: `0x53520001` bindings, `02` source format, `03` drawable
 extent, `04` geometry, `05` missing VI register, `06` crop bounds, and `07` a
 ticket the renderer did not observe. Zero is unknown, including older producers.
-The bindings gate still does not identify its underlying state-invalidation cause.
+A bindings refusal also carries the [bindings cause](replay-link-state.md#bindings-cause):
+the first invalidation site since context creation, the GL error read there,
+and which arming steps happened. The deadline puts it in the `gpu_failure`
+line (`bindings_*`) and in the appended startup receipt (control page offset
+784), beside the GL vendor, renderer and version the renderer read at context
+creation. Those name the GPU even when no surface qualified, while the V1
+receipt's strings stay empty until a gateway opens.
 Later refusals replace transient startup evidence; accepted requests reset it.
 Successful pictures retain their witness semantics and no Source layout changes.
 These observations retain the original deadline, safety gates and scoped desktop

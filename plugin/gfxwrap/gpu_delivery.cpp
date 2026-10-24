@@ -25,6 +25,7 @@ using ChannelResult=gpu_channel::Result;
 constexpr uint32_t bootstrap_omission=SA_BOOTSTRAP_OMISSION;
 constexpr uint32_t setup_deadline_ms=5000u; // separate from admitted-picture max_age_ms
 std::atomic<gd_diagnostic_callback> diagnostic_callback{nullptr};
+std::atomic<rs_read_context_evidence> context_evidence{nullptr}; // the renderer's, when it exports one
 #ifdef GD_TEST_HOST
 std::atomic<bool> test_hold_poll{false};
 void (__cdecl *test_preparation_probe)()=nullptr;
@@ -79,10 +80,13 @@ struct Runtime {
     std::atomic<uint32_t> request_state{0},surface_state{0}; // 0 free,1 writing,2 ready,3 owned
     std::atomic<uint32_t> status_seq{0},status_words[sizeof(gd_status)/4]{};
     std::atomic<uint32_t> startup_seq{0},startup_words[sizeof(gpu_startup_v1)/4]{};
+    std::atomic<uint32_t> startup_context_words[sizeof(gpu_startup_context_v1)/4]{}; // same sequence
     // Request admission initializes CPU identity while request_state=1 owns
     // the empty runtime. Subsequent writes belong to the renderer thread.
     gpu_startup_v1 startup{};
+    gpu_startup_context_v1 startup_context{};
     uint32_t latest_source_refusal=0;
+    rs_bindings_cause latest_bindings_cause{}; // what the latest refusal carried, when it was BINDINGS
     std::atomic<bool> exhausted{false};
     gc_header request{};uint64_t budget=0;uint32_t epoch=0;
     rb_surface mailbox{},surface{};uint32_t mailbox_epoch=0;
@@ -205,6 +209,11 @@ struct Runtime {
         gd_diagnostic d{};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;d.kind=kind;
         d.prepare=prepare_steps;d.offer_count=request.offer_count;
         d.epoch=epoch;d.reason=why;d.detail=detail;d.current_phase=phase;
+        if(!healthy && kind==GD_KIND_WINDOW && why==GD_SETUP_NO_SURFACE && detail==RS_SURFACE_BINDINGS){
+            d.bindings_site=latest_bindings_cause.site;d.bindings_gl_error=latest_bindings_cause.gl_error;
+            d.bindings_flags=latest_bindings_cause.flags;d.bindings_invalidations=latest_bindings_cause.invalidations;
+            d.bindings_after_ms=latest_bindings_cause.after_ms;d.bindings_contexts=latest_bindings_cause.contexts;
+        }
         d.qpc_frequency=frequency;d.observed_qpc=observed?observed:qpc();d.phase_started_qpc=phase_started;
         d.healthy=healthy;d.window_started_qpc=healthy?summary_started:started;
         d.previous_emit_ticks=previous_emit_ticks;
@@ -248,7 +257,32 @@ struct Runtime {
         const auto seq=startup_seq.load();startup_seq.store(seq+1);
         const auto*words=reinterpret_cast<const uint32_t*>(&startup);
         for(unsigned i=0;i<sizeof(startup)/4;++i)startup_words[i].store(words[i]);
+        words=reinterpret_cast<const uint32_t*>(&startup_context);
+        for(unsigned i=0;i<sizeof(startup_context)/4;++i)startup_context_words[i].store(words[i]);
         startup_seq.store(seq+2);
+    }
+    // The renderer's own GL identity, copied without GL (source_refusal.h).
+    // Admission and the bootstrap deadline both try: the first success stays.
+    void adopt_context_identity(){
+        const auto read=context_evidence.load();rs_context_evidence named{};
+        if(startup_context.identity_source || !read || !read(&named,sizeof named) || named.bytes!=sizeof named
+            || named.version!=RS_CONTEXT_EVIDENCE_V1 || !named.source)return;
+        const auto copy=[](char*target,unsigned capacity,const char*source){
+            rs_bounded_text(target,capacity,reinterpret_cast<const unsigned char*>(source));};
+        copy(startup_context.vendor,sizeof startup_context.vendor,named.vendor);
+        copy(startup_context.renderer,sizeof startup_context.renderer,named.renderer);
+        copy(startup_context.gl_version,sizeof startup_context.gl_version,named.gl_version);
+        startup_context.identity_source=named.source;
+    }
+    // A bootstrap deadline names the GPU and, when its latest refusal was
+    // BINDINGS, why the renderer's bindings were false. CPU writes only.
+    void publish_bootstrap_evidence(uint32_t refusal){
+        adopt_context_identity();
+        const auto cause=refusal==RS_SURFACE_BINDINGS?latest_bindings_cause:rs_bindings_cause{};
+        startup_context.bindings_site=cause.site;startup_context.bindings_gl_error=cause.gl_error;
+        startup_context.bindings_flags=cause.flags;startup_context.bindings_invalidations=cause.invalidations;
+        startup_context.bindings_after_ms=cause.after_ms;startup_context.bindings_contexts=cause.contexts;
+        publish_startup();
     }
     void publish_status(){
         const auto failure=first_failure.load();
@@ -336,6 +370,8 @@ struct Runtime {
                     if(r->outcome==RB_SURFACE_FAILED)
                         latest_source_refusal=rs_surface_refusal_valid(r->surface.witness)?r->surface.witness:0;
                     else if(r->outcome==RB_NOT_OBSERVED)latest_source_refusal=RS_SURFACE_NOT_OBSERVED;
+                    if(r->outcome==RB_SURFACE_FAILED || r->outcome==RB_NOT_OBSERVED)
+                        latest_bindings_cause=r->outcome==RB_SURFACE_FAILED?rs_read_bindings_cause(r->surface):rs_bindings_cause{};
                 }
                 // Bootstrap, same-VI-origin and no-swap observations are explicit
                 // omissions. A full snapshot pool is a MISSING picture, counted:
@@ -754,7 +790,9 @@ struct Runtime {
             // bootstrap waits. Keep the deadline and every safety gate intact.
             const auto why=state.load()==GD_BOOTSTRAP
                 ? (startup.width?GD_SETUP_GATEWAY_REFUSED:GD_SETUP_NO_SURFACE):GD_DEADLINE;
-            fail(why,why==GD_SETUP_NO_SURFACE?latest_source_refusal:0);
+            const auto refusal=why==GD_SETUP_NO_SURFACE?latest_source_refusal:0;
+            publish_bootstrap_evidence(refusal);
+            fail(why,refusal);
         }
         return false;
     }
@@ -1040,6 +1078,7 @@ extern "C" int __cdecl gd_configure4(const rs_api_v4*s,const rcl_api*c,const gd_
     return rs_valid_v4(s)?configure_delivery(&s->v3.boundary,&s->v3,s,c,l):GD_INVALID;
 }
 extern "C" void __cdecl gd_set_diagnostic(gd_diagnostic_callback callback){diagnostic_callback.store(callback);}
+extern "C" void __cdecl gd_set_context_evidence(rs_read_context_evidence read){context_evidence.store(read);}
 extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     auto*r=runtime.load();if(!r || !h || !r->request_valid(*h,budget))return GD_INVALID;
     if(r->exhausted.load())return GD_EXHAUSTED;
@@ -1062,7 +1101,7 @@ extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     // Prior source callbacks are quiescent before fresh admission. Their last
     // deferred sample fault must not quarantine the new epoch on its first VI.
     r->sample_fault.store(0);r->twin_capture_fault.store(0);
-    r->latest_source_refusal=0;
+    r->latest_source_refusal=0;r->latest_bindings_cause={};
     // request_state=1 exclusively owns the now-empty worker state. Publish the
     // fresh identity and BOOTSTRAP synchronously, before the supervisor can read
     // an old OFF/FAULT status after ACCEPTED. This is bounded CPU metadata only;
@@ -1074,6 +1113,9 @@ extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     r->startup={};memcpy(r->startup.magic,GPU_STARTUP_MAGIC,8);
     r->startup.version=GPU_STARTUP_VERSION;r->startup.bytes=sizeof r->startup;r->startup.epoch=e;
     r->startup.control_generation=h->generation;r->startup.nonce_lo=h->nonce_lo;r->startup.nonce_hi=h->nonce_hi;
+    r->startup_context={};memcpy(r->startup_context.magic,GPU_STARTUP_CONTEXT_MAGIC,8);
+    r->startup_context.version=GPU_STARTUP_CONTEXT_VERSION;r->startup_context.bytes=sizeof r->startup_context;
+    r->startup_context.epoch=e;r->adopt_context_identity(); // CPU copy of the renderer's own receipt
     r->publish_startup();
     r->set_state(GD_BOOTSTRAP);r->publish_status();
     if(r->exhausted.load()){r->request_state.store(2);SetEvent(r->wake);return GD_EXHAUSTED;}
@@ -1131,6 +1173,14 @@ extern "C" int __cdecl gd_read_startup(gpu_startup_v1*out){
         if(before==r->startup_seq.load()){memcpy(out,words,sizeof(*out));return 1;}
     }return 0;
 }
+extern "C" int __cdecl gd_read_startup_context(gpu_startup_context_v1*out){
+    const auto*r=runtime.load();if(!r||!out)return 0;
+    for(unsigned n=0;n<3;++n){const auto before=r->startup_seq.load();if(!before||before&1)continue;
+        uint32_t words[sizeof(*out)/4]{};
+        for(unsigned i=0;i<sizeof(*out)/4;++i)words[i]=r->startup_context_words[i].load();
+        if(before==r->startup_seq.load()){memcpy(out,words,sizeof(*out));return 1;}
+    }return 0;
+}
 #ifdef GD_TEST_HOST
 #include "gpu_delivery_retry_test.h"
 extern "C" int __cdecl rc_test_delivery_status(uint32_t*,uint32_t*);
@@ -1166,6 +1216,47 @@ extern "C" int gd_test_bootstrap_deadline(int surface_seen,uint32_t*out,
     uint32_t state=0;valid=valid && rc_test_delivery_status(&state,&out[2]);
     out[3]=detail;
     gd_set_diagnostic(nullptr);gd_disarm(GD_CANCELLED);runtime.store(nullptr);CloseHandle(r.wake);CloseHandle(r.changed);return valid;
+}
+// A no-surface deadline carries the latest BINDINGS refusal's cause into the
+// failure diagnostic and the startup receipt, beside the renderer's GL
+// identity, bounded and printable. CPU only: no worker, renderer or GPU.
+extern "C" int gd_test_bindings_cause(bool latest_format,gd_diagnostic*failure,gpu_startup_context_v1*receipts){
+    if(!failure || !receipts || runtime.load())return 0;
+    Runtime r;r.source.disarm=[](){};r.source.activate=[]()->uint32_t{return 17;};
+    r.source.take=[]()->const rb_record*{return nullptr;};
+    r.limits.max_slots=1;r.limits.snapshot_bytes=4u<<20;r.limits.channel_bytes=1u<<20;
+    LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);r.frequency=uint64_t(frequency.QuadPart);
+    r.wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r.changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    if(!r.wake || !r.changed){if(r.wake)CloseHandle(r.wake);if(r.changed)CloseHandle(r.changed);return 0;}
+    runtime.store(&r);
+    gd_set_context_evidence([](rs_context_evidence*out,uint32_t bytes)->int{
+        if(!out || bytes!=sizeof *out)return 0;
+        *out={};out->bytes=sizeof *out;out->version=RS_CONTEXT_EVIDENCE_V1;out->source=RS_IDENTITY_CONTEXT_CREATED;
+        memcpy(out->vendor,"ATI Technologies Inc.\x01",23); // a control byte becomes '?'
+        memset(out->renderer,'R',sizeof out->renderer);     // unterminated: bounded to 127
+        memcpy(out->gl_version,"4.6.0 Compatibility Profile Context",36);
+        return 1;});
+    gc_header h{};h.owner_pid=GetCurrentProcessId();h.owner_birth=gpu_channel::process_birth(GetCurrentProcess());
+    h.nonce_lo=23;h.generation=7;h.offer_count=h.table_count=h.packet_count=1;h.table[0]={0,4};
+    h.packet_bytes=h.pending_bytes=1024;h.ram_budget=1u<<20;
+    int valid=gd_request(&h,4u<<20)==GD_ACCEPTED && gd_read_startup_context(&receipts[0]);
+    static rb_record failed[2];static unsigned next=0;static gd_diagnostic seen{};
+    failed[0]={};failed[0].occurrence=1;failed[0].epoch=r.epoch;failed[0].outcome=RB_SURFACE_FAILED;
+    failed[0].surface.witness=RS_SURFACE_BINDINGS;
+    rs_write_bindings_cause(&failed[0].surface,{RS_BINDINGS_DISPATCH_UNARMED,0,RS_BINDINGS_REPORTED,1,2,3});
+    failed[1]={};failed[1].occurrence=2;failed[1].epoch=r.epoch;failed[1].outcome=RB_SURFACE_FAILED;
+    failed[1].surface.witness=latest_format?RS_SURFACE_FORMAT:RS_SURFACE_BINDINGS;
+    rs_write_bindings_cause(&failed[1].surface,{RS_BINDINGS_GATEWAY_OPEN_ERROR,0x502,
+        RS_BINDINGS_REPORTED|RS_BINDINGS_CONTEXT_CREATED|RS_BINDINGS_PRACTICE_ROM|RS_BINDINGS_ARMED,4,5,6});
+    next=0;seen={};
+    r.source.take=[]()->const rb_record*{return next<2?&failed[next++]:nullptr;};
+    r.source.release=[](rb_ticket)->int{return 1;};
+    gd_set_diagnostic([](const gd_diagnostic*s){if(s->kind==GD_KIND_WINDOW && s->reason==GD_SETUP_NO_SURFACE)seen=*s;});
+    r.started=qpc()-r.frequency*6; // Test-owned elapsed phase; no sleeps or GPU.
+    r.iterate(false);
+    valid=valid && gd_read_startup_context(&receipts[1]);*failure=seen;
+    gd_set_diagnostic(nullptr);gd_set_context_evidence(nullptr);gd_disarm(GD_CANCELLED);runtime.store(nullptr);
+    CloseHandle(r.wake);CloseHandle(r.changed);return valid;
 }
 extern "C" int gd_test_request_fault_reset(uint32_t*out){
     if(!out || runtime.load())return 0;

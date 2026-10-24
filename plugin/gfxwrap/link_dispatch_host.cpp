@@ -28,6 +28,16 @@ void check_bindings(GLuint read, GLuint texture, GLenum selector) {
     bind(GL_READ_FRAMEBUFFER,read);
     CHECK(glGetError()==GL_NO_ERROR);
 }
+extern "C" int __cdecl SM64ReplayContextEvidenceV1(rs_context_evidence *, uint32_t);
+// The cause a BINDINGS refusal would carry right now.
+rs_bindings_cause cause_now() { rs_bindings_cause cause{}; replay_gl::BindingsCause(&cause); return cause; }
+constexpr uint32_t armed_flags = RS_BINDINGS_REPORTED | RS_BINDINGS_CONTEXT_CREATED | RS_BINDINGS_PRACTICE_ROM
+    | RS_BINDINGS_ARMED | RS_BINDINGS_INSTALL_CALLED | RS_BINDINGS_DISPATCH_INSTALLED | RS_BINDINGS_OWNER_THREAD;
+void check_cause(uint32_t site, GLenum error, uint32_t contexts = 1) {
+    const auto cause = cause_now();
+    CHECK(cause.site == site && cause.gl_error == error && cause.invalidations >= 1 && cause.contexts == contexts);
+    CHECK((cause.flags & armed_flags) == armed_flags && !(cause.flags & RS_BINDINGS_NOMINAL));
+}
 int main(int argc, char **argv) {
     const bool unsupported=argc==2 && std::strcmp(argv[1],"format_unsupported")==0;
     const bool baseline=argc==2 && std::strcmp(argv[1],"baseline_rom")==0;
@@ -73,6 +83,9 @@ int main(int argc, char **argv) {
         CHECK(g_glActiveTexture==reinterpret_cast<PFNGLACTIVETEXTUREPROC>(wglGetProcAddress("glActiveTexture")));
         renderer::Identity none{}; snapshot::RestoreBindings unused{};
         CHECK(!replay_gl::CandidateBindings(&none,&unused));
+        rs_context_evidence named{}; CHECK(!SM64ReplayContextEvidenceV1(&named,sizeof named)); // no query
+        const auto cause = cause_now();
+        CHECK(cause.flags == (RS_BINDINGS_REPORTED | RS_BINDINGS_CONTEXT_CREATED) && !cause.site && cause.contexts == 1);
         CHECK(replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN && !replay_gl::BeginCapture());
         glBindTexture(GL_TEXTURE_2D,0); CHECK(glGetError()==GL_NO_ERROR);
         replay_gl::ContextLost(); CHECK(wglMakeCurrent(nullptr,nullptr)); CHECK(wglDeleteContext(context));
@@ -86,6 +99,19 @@ int main(int argc, char **argv) {
     renderer::Identity identity{}; snapshot::RestoreBindings witness{};
     CHECK(!replay_gl::CandidateBindings(&identity,&witness)); // before dispatch qualification
     initGLFunctions(); check_bindings(0,0,GL_BACK);
+    {
+        // An armed context names its GPU and reports no cause.
+        const auto cause = cause_now();
+        CHECK(!cause.site && !cause.invalidations && cause.contexts == 1);
+        CHECK(cause.flags == (armed_flags | RS_BINDINGS_NOMINAL | RS_BINDINGS_STATE_IDENTITY | RS_BINDINGS_READ_KNOWN
+            | RS_BINDINGS_DEFAULT_READ_KNOWN | RS_BINDINGS_UNIT_KNOWN | RS_BINDINGS_TEXTURE_KNOWN));
+        rs_context_evidence named{}; CHECK(!SM64ReplayContextEvidenceV1(&named,sizeof named - 1));
+        CHECK(SM64ReplayContextEvidenceV1(&named,sizeof named) && named.bytes == sizeof named);
+        CHECK(named.version == RS_CONTEXT_EVIDENCE_V1 && named.source == RS_IDENTITY_CONTEXT_CREATED);
+        const auto version = reinterpret_cast<const char *>(glGetString(GL_VERSION));
+        CHECK(version && named.gl_version[0] && std::strncmp(named.gl_version, version, sizeof named.gl_version - 1) == 0);
+        CHECK(named.vendor[0] && named.renderer[0] && !named.gl_version[sizeof named.gl_version - 1]);
+    }
 #ifdef SM64_REPLAY_CONTEXT_LIFETIME
     if (!unsupported) {
         // No shared anchor, ever (renderer-thread capture): ContextV1 stays
@@ -156,6 +182,7 @@ int main(int argc, char **argv) {
             glEnable(0xFFFFFFFF); // original renderer error, no observer sees this call
             CHECK(!replay_gl::BeginCapture() && !replay_gl::EndCapture());
             CHECK(raw_error()==GL_NO_ERROR); // gateway consumed exactly one flag
+            check_cause(RS_BINDINGS_GATEWAY_OPEN_ERROR, GL_INVALID_ENUM);
             glScissor(0,0,-1,1); // a later distinct error remains in driver state
             CHECK(glGetError()==GL_INVALID_ENUM && glGetError()==GL_INVALID_VALUE && glGetError()==GL_NO_ERROR);
         } else if (std::strcmp(argv[1],"post")==0) {
@@ -164,9 +191,13 @@ int main(int argc, char **argv) {
             CHECK(!replay_gl::EndCapture() && !replay_gl::EndCapture());
             CHECK(raw_error()==GL_NO_ERROR);
             CHECK(glGetError()==GL_INVALID_ENUM && glGetError()==GL_NO_ERROR);
+            // The renderer's later read of the saved error never replaces the first site.
+            check_cause(RS_BINDINGS_GATEWAY_CLOSE_ERROR, GL_INVALID_ENUM);
+            CHECK(cause_now().invalidations >= 2);
         } else if (std::strcmp(argv[1],"renderer")==0) {
             glEnable(0xFFFFFFFF);
             CHECK(glGetError()==GL_INVALID_ENUM && !replay_gl::BeginCapture());
+            check_cause(RS_BINDINGS_RENDERER_ERROR, GL_INVALID_ENUM);
         } else if (std::strcmp(argv[1],"checked")==0) {
             bool caught=false;
             try { checked([]{glEnable(0xFFFFFFFF);},"seeded invalid capability"); }
@@ -176,6 +207,8 @@ int main(int argc, char **argv) {
             replay_gl::ContextLost(); glEnable(0xFFFFFFFF);
             CHECK(!replay_gl::BeginCapture() && !replay_gl::EndCapture());
             CHECK(raw_error()==GL_INVALID_ENUM); // no inactive driver error read
+            const auto cause = cause_now(); // a lost context, nothing armed since
+            CHECK(cause.flags == (RS_BINDINGS_REPORTED | RS_BINDINGS_CONTEXT_LOST) && !cause.site && cause.contexts == 1);
         } else if (std::strcmp(argv[1],"layer")==0) {
             // Two errors inside the translucent layer drop the layer only: the
             // flags are drained, and the replay source and ghost stay nominal.
@@ -190,6 +223,7 @@ int main(int argc, char **argv) {
             glEnable(0xFFFFFFFF);
             CHECK(!replay_gl::BeginLayer() && !replay_gl::CandidateBindings(&identity,&witness));
             CHECK(glGetError()==GL_INVALID_ENUM);
+            check_cause(RS_BINDINGS_GATEWAY_OPEN_ERROR, GL_INVALID_ENUM); // drained layer errors left none
         } else if (std::strcmp(argv[1],"clean")==0) {
             CHECK(replay_gl::BeginCapture() && replay_gl::EndCapture());
             CHECK(replay_gl::CandidateBindings(&identity,&witness));
@@ -309,6 +343,7 @@ int main(int argc, char **argv) {
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     CHECK(glGetError()==GL_INVALID_OPERATION);
     CHECK(!replay_gl::CandidateBindings(&identity,&witness));
+    check_cause(RS_BINDINGS_READ_BUFFER, GL_NO_ERROR); // the selector, not the renderer's later error read
     replay_gl::ContextLost(); CHECK(!replay_gl::CandidateBindings(&identity,&witness));
     glDeleteTextures(1,names+1); glDeleteFramebuffers(1,fbos+1);
     CHECK(wglMakeCurrent(nullptr,nullptr)); CHECK(wglDeleteContext(context));
@@ -318,6 +353,7 @@ int main(int argc, char **argv) {
     CHECK(!replay_gl::CandidateBindings(&identity,&witness)); // old dispatch cannot authorize recreated context
     initGLFunctions(); check_bindings(0,0,GL_BACK);
     replay_gl::InstallDispatch(); CHECK(!replay_gl::CandidateBindings(&identity,&witness)); // no recursive install
+    check_cause(RS_BINDINGS_DISPATCH_REINSTALLED, GL_NO_ERROR, 2);
     replay_gl::ContextLost(); CHECK(wglMakeCurrent(nullptr,nullptr)); CHECK(wglDeleteContext(context));
     CHECK(ReleaseDC(window,dc)); CHECK(DestroyWindow(window));
     printf("LINK source witness passed: actual-loader cached-bind core-alias delete reset invalid-selector context-recreate\n");

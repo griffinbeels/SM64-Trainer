@@ -45,6 +45,9 @@ NUMBER_FIELDS = frozenset({
     "snapshot_busy", "durations", "duration_max_ticks", "duration_max_started_qpc", "gaps", "gap_max_ticks",
     "gap_max_started_qpc", "cpu_samples", "cpu_invalid", "cpu_thread_changes", "cpu_commit_busy",
     "queued_samples", "unsent_samples", "in_flight", "window_started_qpc", "previous_emit_ticks",
+    # gpu_failure: the bindings cause of a no-surface deadline (source_refusal.h).
+    "bindings_site", "bindings_gl_error", "bindings_flags", "bindings_invalidations",
+    "bindings_after_ms", "bindings_contexts",
 })
 ENUM_FIELDS = {
     "callback": frozenset({"ProcessDList", "UpdateScreen", "ProcessRDPList"}),
