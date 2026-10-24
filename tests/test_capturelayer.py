@@ -15,17 +15,19 @@ import pytest
 from sm64_events.core.capturelayer import (
     ACTIVE,
     GRAPHICS_DLL_VALUE,
+    LEGACY_RENDERER_DLL,
     NEEDS_RESTART,
     NOT_INSTALLED,
     REGISTRY_DLL_SUBKEY,
     REGRESSED,
-    RENDERER_DLL,
+    RENDERER_FILE,
     UNAVAILABLE,
     WRAPPER_DLL,
     WRAPPER_INI,
     CaptureLayer,
     LayerRefused,
 )
+from sm64_events.core.paths import RENDERER_DLL_NAME
 
 #: the installed app; a source checkout is {"kind": "checkout", "path": ...}
 FROZEN_APP = {"kind": "frozen", "version": "test"}
@@ -109,7 +111,7 @@ def dll_source(tmp_path):
 
 
 def renderer_for(dll_source):
-    return dll_source.with_name("shipped_" + RENDERER_DLL)
+    return dll_source.with_name("shipped_" + RENDERER_DLL_NAME)
 
 
 @pytest.fixture
@@ -158,15 +160,15 @@ def test_install_writes_dll_ini_registry_and_overlay(pj64_dir, dll_source, setti
 
     plugin_dir = pj64_dir / "Plugin"
     assert (plugin_dir / WRAPPER_DLL).read_bytes() == dll_source.read_bytes()
-    assert (plugin_dir / RENDERER_DLL).read_bytes() == renderer_for(dll_source).read_bytes()
+    assert (plugin_dir / RENDERER_FILE).read_bytes() == renderer_for(dll_source).read_bytes()
     # The wrapper wraps OUR renderer, never the plugin the user had: a stock
     # renderer has no capture export (every frame read "input unavailable",
     # 2026-09-15). The user's plugin is remembered for undo instead.
-    assert (plugin_dir / WRAPPER_INI).read_text().strip() == f"wrapped={RENDERER_DLL}"
+    assert (plugin_dir / WRAPPER_INI).read_text().strip() == f"wrapped={RENDERER_FILE}"
     assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == WRAPPER_DLL
     overlay = json.loads(settings_path.read_text())
     assert overlay["consented_at"] is not None
-    assert overlay["wrapped"] == RENDERER_DLL
+    assert overlay["wrapped"] == RENDERER_FILE
     assert overlay["previous_graphics_dll"] == ORIGINAL_GRAPHICS_DLL
     assert status.state == NEEDS_RESTART
     assert status.renderer_present and status.renderer_current
@@ -234,7 +236,7 @@ def test_install_receipts_identify_each_successful_copy(pj64_dir, dll_source, se
     assert renderer_receipt["after"]["sha256"] == overlay["installed_renderer_sha256"]
     plugin_dir = pj64_dir / "Plugin"
     assert (plugin_dir / WRAPPER_DLL).read_bytes() == dll_source.read_bytes()
-    assert (plugin_dir / RENDERER_DLL).read_bytes() == renderer_for(dll_source).read_bytes()
+    assert (plugin_dir / RENDERER_FILE).read_bytes() == renderer_for(dll_source).read_bytes()
 
 
 def test_unknown_installation_history_requires_explicit_install(pj64_dir, dll_source, settings_path):
@@ -267,7 +269,7 @@ def test_second_install_leaves_the_ini_wrapped_name_alone(pj64_dir, dll_source, 
     layer.install(consent=True)   # a re-install; the registry now names OUR wrapper
 
     ini_text = (pj64_dir / "Plugin" / WRAPPER_INI).read_text().strip()
-    assert ini_text == f"wrapped={RENDERER_DLL}"
+    assert ini_text == f"wrapped={RENDERER_FILE}"
     # ...and undo still knows the user's plugin, though the registry named ours.
     assert json.loads(settings_path.read_text())["previous_graphics_dll"] == ORIGINAL_GRAPHICS_DLL
     assert layer.status().previous_graphics_dll == ORIGINAL_GRAPHICS_DLL
@@ -283,7 +285,7 @@ def test_failed_install_restores_files_and_does_not_select_a_half_install(pj64_d
         layer.install(True)
     assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == ORIGINAL_GRAPHICS_DLL
     assert not (pj64_dir / "Plugin" / WRAPPER_DLL).exists()
-    assert not (pj64_dir / "Plugin" / RENDERER_DLL).exists()
+    assert not (pj64_dir / "Plugin" / RENDERER_FILE).exists()
     assert not (pj64_dir / "Plugin" / WRAPPER_INI).exists()
     assert settings_path.read_bytes() == before
 
@@ -589,8 +591,8 @@ def test_bundle_discovery_recovers_without_recreating_layer(pj64_dir, dll_source
     layer, registry, processes = make_layer(pj64_dir, source, settings_path)
     plugin = pj64_dir / "Plugin"
     (plugin / WRAPPER_DLL).write_bytes(dll_source.read_bytes())
-    (plugin / RENDERER_DLL).write_bytes(renderer_for(dll_source).read_bytes())
-    (plugin / WRAPPER_INI).write_text("wrapped=" + RENDERER_DLL)
+    (plugin / RENDERER_FILE).write_bytes(renderer_for(dll_source).read_bytes())
+    (plugin / WRAPPER_INI).write_text("wrapped=" + RENDERER_FILE)
     registry.set(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE, WRAPPER_DLL)
     processes.image_path = str(pj64_dir / "Project64.exe")
     assert layer.status().state == UNAVAILABLE
@@ -652,8 +654,8 @@ def test_an_older_install_that_wrapped_the_users_plugin_is_not_set_up(pj64_dir, 
                for problem in status.problems)
     assert status.previous_graphics_dll == ORIGINAL_GRAPHICS_DLL
     layer.install(True)
-    assert (plugin / WRAPPER_INI).read_text().strip() == f"wrapped={RENDERER_DLL}"
-    assert (plugin / RENDERER_DLL).exists()
+    assert (plugin / WRAPPER_INI).read_text().strip() == f"wrapped={RENDERER_FILE}"
+    assert (plugin / RENDERER_FILE).exists()
     layer.uninstall()
     assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == ORIGINAL_GRAPHICS_DLL
 
@@ -663,15 +665,15 @@ def test_a_packaged_refresh_adds_the_renderer_to_an_older_install(pj64_dir, dll_
     layer.install(True)
     plugin = pj64_dir / "Plugin"
     # Rewind to the older scheme: no renderer, the ini wrapping the user's plugin.
-    (plugin / RENDERER_DLL).unlink()
+    (plugin / RENDERER_FILE).unlink()
     (plugin / WRAPPER_INI).write_text("wrapped=" + ORIGINAL_GRAPHICS_DLL)
     overlay = json.loads(settings_path.read_text())
     overlay["previous_graphics_dll"] = None
     overlay["wrapped"] = ORIGINAL_GRAPHICS_DLL
     settings_path.write_text(json.dumps(overlay))
     assert layer.refresh_if_stale() is True
-    assert (plugin / RENDERER_DLL).read_bytes() == renderer_for(dll_source).read_bytes()
-    assert (plugin / WRAPPER_INI).read_text().strip() == f"wrapped={RENDERER_DLL}"
+    assert (plugin / RENDERER_FILE).read_bytes() == renderer_for(dll_source).read_bytes()
+    assert (plugin / WRAPPER_INI).read_text().strip() == f"wrapped={RENDERER_FILE}"
     assert json.loads(settings_path.read_text())["previous_graphics_dll"] == ORIGINAL_GRAPHICS_DLL
     assert layer.refresh_if_stale() is False
     layer.uninstall()
@@ -686,14 +688,15 @@ def test_a_stale_renderer_alone_makes_the_layer_stale(pj64_dir, dll_source, sett
     assert status.wrapper_current and not status.renderer_current
     assert any("differs from this build" in problem for problem in status.problems)
     assert layer.refresh_if_stale() is True
-    assert (pj64_dir / "Plugin" / RENDERER_DLL).read_bytes() == newer
+    assert (pj64_dir / "Plugin" / RENDERER_FILE).read_bytes() == newer
     assert layer.status().installation_verified
 
 
-def test_undo_never_selects_one_of_our_own_files(pj64_dir, dll_source, settings_path):
+@pytest.mark.parametrize("renderer_name", [LEGACY_RENDERER_DLL, RENDERER_FILE])
+def test_undo_never_selects_one_of_our_own_files(pj64_dir, dll_source, settings_path, renderer_name):
     """A registry that names the renderer directly (he did that once by hand,
     2026-09-15) is not "the plugin the user had"."""
-    registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): RENDERER_DLL})
+    registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): renderer_name})
     layer, registry, _ = make_layer(pj64_dir, dll_source, settings_path, registry=registry)
     layer.install(True)
     assert json.loads(settings_path.read_text())["previous_graphics_dll"] is None
@@ -772,16 +775,16 @@ def test_a_refresh_never_replaces_a_newer_build(pj64_dir, dll_source, settings_p
     layer, _, _ = make_layer(pj64_dir, dll_source, settings_path, installer=installer)
     layer.install(True)
     plugin = pj64_dir / "Plugin"
-    before = (plugin / WRAPPER_DLL).read_bytes(), (plugin / RENDERER_DLL).read_bytes()
+    before = (plugin / WRAPPER_DLL).read_bytes(), (plugin / RENDERER_FILE).read_bytes()
     stale = dll_source if older == "wrapper" else renderer_for(dll_source)
     stale.write_bytes(build(b"an older " + older.encode(), linked=1_000))
     status = layer.status()
     assert status.automatic_update is False
     assert any(step["action"] == "install" for step in status.steps)
     assert layer.refresh_if_stale() is False
-    assert ((plugin / WRAPPER_DLL).read_bytes(), (plugin / RENDERER_DLL).read_bytes()) == before
+    assert ((plugin / WRAPPER_DLL).read_bytes(), (plugin / RENDERER_FILE).read_bytes()) == before
     layer.install(True)                      # he may still choose it explicitly
-    assert (plugin / (WRAPPER_DLL if older == "wrapper" else RENDERER_DLL)).read_bytes() == stale.read_bytes()
+    assert (plugin / (WRAPPER_DLL if older == "wrapper" else RENDERER_FILE)).read_bytes() == stale.read_bytes()
 
 
 def test_a_build_without_a_link_time_is_never_replaced_or_installed_by_itself(
@@ -844,7 +847,7 @@ def _stale_install(pj64_dir, dll_source, settings_path):
     dll_source.write_bytes(build(b"a newer capture layer"))
     renderer_for(dll_source).write_bytes(build(b"a newer renderer"))
     plugin = pj64_dir / "Plugin"
-    files = [plugin / RENDERER_DLL, plugin / WRAPPER_DLL, plugin / WRAPPER_INI, settings_path]
+    files = [plugin / RENDERER_FILE, plugin / WRAPPER_DLL, plugin / WRAPPER_INI, settings_path]
     return layer, processes, files, {path: path.read_bytes() for path in files}
 
 
@@ -863,7 +866,7 @@ def test_a_refresh_waits_quietly_while_project64_holds_the_dlls(
     monkeypatch.setattr(capturelayer, "verified_copy",
                         lambda *args, **kwargs: copies.append(args[1]) or real_copy(*args, **kwargs))
     assert processes.pj64_image_path() is None     # the process list saw nothing
-    with caplog.at_level(logging.INFO), held_like_a_loaded_plugin(plugin / RENDERER_DLL, plugin / WRAPPER_DLL):
+    with caplog.at_level(logging.INFO), held_like_a_loaded_plugin(plugin / RENDERER_FILE, plugin / WRAPPER_DLL):
         assert layer.refresh_if_stale() is False
         assert layer.refresh_if_stale() is False   # the loop's next turn
     assert copies == []                            # a held file is "running": no copy is tried
@@ -872,7 +875,7 @@ def test_a_refresh_waits_quietly_while_project64_holds_the_dlls(
     assert len([r for r in caplog.records if "refresh waits" in r.getMessage()]) == 1
     assert layer.refresh_if_stale() is True        # Project64 closed
     assert (plugin / WRAPPER_DLL).read_bytes() == dll_source.read_bytes()
-    assert (plugin / RENDERER_DLL).read_bytes() == renderer_for(dll_source).read_bytes()
+    assert (plugin / RENDERER_FILE).read_bytes() == renderer_for(dll_source).read_bytes()
 
 
 def test_a_project64_that_loads_the_plugins_mid_copy_changes_nothing(
@@ -883,11 +886,11 @@ def test_a_project64_that_loads_the_plugins_mid_copy_changes_nothing(
     layer, _, files, before = _stale_install(pj64_dir, dll_source, settings_path)
     plugin = pj64_dir / "Plugin"
     monkeypatch.setattr(capturelayer, "in_use", lambda path: False)
-    with caplog.at_level(logging.INFO), held_like_a_loaded_plugin(plugin / RENDERER_DLL, plugin / WRAPPER_DLL):
+    with caplog.at_level(logging.INFO), held_like_a_loaded_plugin(plugin / RENDERER_FILE, plugin / WRAPPER_DLL):
         assert layer.refresh_if_stale() is False
     assert {path: path.read_bytes() for path in files} == before
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING or r.exc_info]
-    assert any("refresh waits" in r.getMessage() and RENDERER_DLL in r.getMessage()
+    assert any("refresh waits" in r.getMessage() and RENDERER_FILE in r.getMessage()
                for r in caplog.records)
 
 

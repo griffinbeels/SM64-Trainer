@@ -119,7 +119,7 @@ comparison (+0.92% AV1/-0.31% H.264) remains preserved as historical evidence.
 
 | File | Role | Built by | Build id suffix |
 |---|---|---|---|
-| `GLideN64_SM64Trainer.dll` (label `LINK v4.2 [SM64 Trainer]`) | the renderer: LINK's GLideN64 v4.2 at the pinned commit plus the SourceV2/ContextV1 overlay from `plugin/gfxwrap/` | `tools/build_renderer.py` (pin, credits and the prebuilt-library recipe in `renderer/`) | `-renderer` |
+| `GLideN64_SM64Trainer.dll` (label `LINK v4.2 [SM64 Trainer]`) | the renderer: LINK's GLideN64 v4.2 at the pinned commit plus the SourceV2/ContextV1 overlay from `plugin/gfxwrap/`; installed in Project64 as `sm64_trainer_gfx.renderer` so its picker lists one plugin | `tools/build_renderer.py` (pin, credits and the prebuilt-library recipe in `renderer/`) | `-renderer` |
 | `sm64_trainer_gfx.dll` (label `SM64 Trainer v1.0`) | the capture wrapper Project64 selects; loads the renderer named by `sm64_trainer_gfx.ini` | `tools/build_plugin.py` | `-gpu-runtime` |
 | `SM64GpuEncoderV1.dll` | the 64-bit hardware helper: unchanged NVENC plus shared Windows D3D11/MF encoding | `tools/build_plugin.py` | `-gpu-encoder` |
 
