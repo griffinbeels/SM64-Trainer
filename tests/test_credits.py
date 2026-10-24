@@ -93,6 +93,32 @@ def test_no_credit_covers_something_that_no_longer_ships():
         f"ships. Remove the row, or the stale covers entry.")
 
 
+def test_everything_vendored_by_hand_names_its_license_text():
+    """A Python package's license is collected from its install at build time
+    (tools/third_party_notices.py); a file we vendored ourselves has no
+    install, so its row must point at a tracked text the build copies."""
+    for item in items():
+        vendored = [c for c in item.get("covers", []) if not c.startswith("python:")]
+        if vendored:
+            assert item.get("notices"), (
+                f"{item['name']} ships {vendored} but names no license text. Put the "
+                f"text in licenses/<name>/, add its row to licenses/README.md and set "
+                f"notices: \"licenses/<name>\".")
+
+
+def test_every_license_text_exists_and_every_tracked_one_is_named():
+    named = {item["notices"] for item in items() if item.get("notices")}
+    for path in named:
+        target = ROOT / path
+        assert target.is_file() or (target.is_dir() and any(target.rglob("*"))), path
+    licenses = ROOT / "licenses"
+    index = (licenses / "README.md").read_text(encoding="utf-8")
+    for folder in sorted(p for p in licenses.iterdir() if p.is_dir() and p.name != "python"):
+        assert f"licenses/{folder.name}" in named, (
+            f"licenses/{folder.name} ships but no credits row names it in `notices`")
+        assert f"`{folder.name}/" in index, f"licenses/README.md has no row for {folder.name}/"
+
+
 def test_testers_link_real_twitch_handles():
     handles = [tester["twitch"] for tester in registry()["testers"]]
     assert len(handles) == len(set(handles)), handles

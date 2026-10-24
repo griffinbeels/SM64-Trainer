@@ -326,9 +326,11 @@ fixed `PYTHONHASHSEED` and `SOURCE_DATE_EPOCH` so unchanged files hash
 identically between releases, which is what keeps update downloads small.
 `build.bat` is the double-click version.
 
-> The released exe bundles **ffmpeg** (https://ffmpeg.org) for replay encoding.
-> FFmpeg is licensed under the GPL/LGPL; it ships as a separate binary within
-> the app and is used unmodified.
+> The released exe bundles **ffmpeg** (https://ffmpeg.org) for replay encoding:
+> gyan.dev's full build, which is GPL-3.0, shipped unmodified as a separate
+> program. Every bundled component's license, and where the GPL parts' source
+> is, ships in the app's `_internal\licenses` folder; the index is
+> [licenses/README.md](licenses/README.md).
 
 ### Release (maintainer)
 
