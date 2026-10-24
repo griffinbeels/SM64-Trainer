@@ -238,6 +238,21 @@ def stage_reporting(work: Path) -> Path:
     return output
 
 
+def stage_notices(distpath: Path | None, ffmpeg: Path) -> Path | None:
+    """Stage `_internal/licenses/` into the app PyInstaller just built and
+    return its folder, or print why the build is refused and return None."""
+    import third_party_notices
+    # PyInstaller's default distpath is ./dist under the working directory.
+    app_dir = (distpath or Path.cwd() / "dist") / "SM64Trainer"
+    try:
+        third_party_notices.stage(app_dir / "_internal",
+                                  third_party_notices.bundled_import_names(app_dir), ffmpeg)
+    except RuntimeError as failure:
+        print(f"Build refused: {failure}", file=sys.stderr)
+        return None
+    return app_dir
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["app", "bootstrap", "all"],
@@ -296,14 +311,7 @@ def main() -> int:
         pyi.run(app_args(ffmpeg, metadata_path=metadata, reporting_path=stage_reporting(work), version_hook=hook,
                          version_metadata=version_metadata, distpath=args.distpath,
                          workpath=work / "app", specpath=work / "spec"))
-        # PyInstaller's default distpath is ./dist under the working directory.
-        app_dir = (args.distpath or Path.cwd() / "dist") / "SM64Trainer"
-        import third_party_notices
-        try:
-            third_party_notices.stage(app_dir / "_internal",
-                                      third_party_notices.bundled_import_names(app_dir), Path(ffmpeg))
-        except RuntimeError as failure:
-            print(f"Build refused: {failure}", file=sys.stderr)
+        if (app_dir := stage_notices(args.distpath, Path(ffmpeg))) is None:
             return 2
         print("\nBuilt:", app_dir)
     if args.mode in ("bootstrap", "all"):
