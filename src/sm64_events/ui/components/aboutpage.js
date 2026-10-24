@@ -1,8 +1,9 @@
 // src/sm64_events/ui/components/aboutpage.js — the About tab.
 //
-// Two views behind one switch: How it works (components/howitworks.js) and
-// Credits (drawn here from ui/credits.js). The choice is a per-viewer
-// convenience, remembered in localStorage.
+// Two views behind one switch: Credits (drawn here from ui/credits.js) and
+// How it works (components/howitworks.js). The tab always opens on Credits
+// and How it works is the optional view (his call, 2026-10-24), so the
+// choice is deliberately not remembered.
 import { h } from "preact";
 import { useState } from "preact/hooks";
 import htm from "htm";
@@ -12,15 +13,7 @@ import { CREDIT_GROUPS, TESTERS, twitchUrl } from "../credits.js";
 
 const html = htm.bind(h);
 
-const VIEW_KEY = "about_view";
-const VIEWS = [["how", "How it works"], ["credits", "Credits"]];
-
-function storedView() {
-  try {
-    const v = localStorage.getItem(VIEW_KEY);
-    return VIEWS.some(([id]) => id === v) ? v : "how";
-  } catch { return "how"; }
-}
+const VIEWS = [["credits", "Credits"], ["how", "How it works"]];
 
 function CreditRow({ item }) {
   return html`<li class="credit-row">
@@ -69,11 +62,7 @@ function Credits() {
 }
 
 export function AboutPage({ t }) {
-  const [view, setViewState] = useState(storedView);
-  const setView = (id) => {
-    setViewState(id);
-    try { localStorage.setItem(VIEW_KEY, id); } catch { /* storage unavailable */ }
-  };
+  const [view, setView] = useState("credits");
   return html`<div class="workshop-page about-page">
     <header class="practice-card workshop-hero">
       <div class="workshop-title">

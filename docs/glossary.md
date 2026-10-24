@@ -2393,9 +2393,9 @@ so reordering or adding a link is a data edit.
 
 ### About tab
 
-The "?" screen pointing inward: How it works, a step-through lesson from
-playing to the time appearing on screen, and Credits, naming the people,
-projects and testers the trainer stands on.
+The "?" screen pointing inward. It opens on Credits, naming the people,
+projects and testers the trainer stands on; How it works, a step-through
+lesson from playing to the time appearing on screen, is the other view.
 
 - **Lives** — `src/sm64_events/ui/components/aboutpage.js`; the lesson's
   words in `src/sm64_events/ui/howitworks.js`; the credits and testers in

@@ -8,7 +8,6 @@
 
 // Action codes are the game's own (src/sm64_events/memory/addresses.py).
 export const ACTION_NAMES = {
-  0x0C400201: "Standing still",
   0x03000880: "Jump",
   0x03000881: "Double jump",
   0x01000882: "Triple jump",
