@@ -24,6 +24,8 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 LAB = ROOT / "tools/scene_lab"
+sys.path.insert(0, str(LAB))
+from gpu_gate import require_gpu  # noqa: E402
 
 
 def run(*command: str) -> None:
@@ -33,6 +35,7 @@ def run(*command: str) -> None:
 
 
 def main() -> int:
+    require_gpu()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("session", type=Path)
     parser.add_argument("work", type=Path)

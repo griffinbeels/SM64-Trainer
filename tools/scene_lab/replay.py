@@ -38,6 +38,8 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
+sys.path.insert(0, str(ROOT / "tools/scene_lab"))
+from gpu_gate import require_gpu  # noqa: E402
 
 SOURCES = (ROOT / "tools/scene_lab/replay_host.c", ROOT / "plugin/gfxwrap/zilmar.h")
 TRAINER_RENDERER = ROOT / "src/sm64_events/data/plugin/GLideN64_SM64Trainer.dll"
@@ -92,6 +94,7 @@ def load_picture(raw: Path) -> tuple[np.ndarray, dict]:
 
 
 def render(args) -> int:
+    require_gpu()
     pj64_plugin = Path(args.pj64_plugin or os.environ.get("SM64_PJ64_PLUGIN", ""))
     if not (pj64_plugin / CONFIG_FILES[0]).is_file():
         raise SystemExit("--pj64-plugin (or SM64_PJ64_PLUGIN) must name Project64's Plugin folder")
