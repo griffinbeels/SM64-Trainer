@@ -18,8 +18,12 @@ from __future__ import annotations
 import argparse
 import json
 import struct
+import sys
 import zipfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from sm64_events.memory.layout import layout_for  # noqa: E402
 
 SAVE_ID = 0x23D8A6C8
 # Project64 1.6 Machine_SaveState order: id, rdram size, rom header, timer, pc,
@@ -106,7 +110,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("savestate", type=Path)
     parser.add_argument("out", type=Path, help="private scratch folder for frame inputs")
-    parser.add_argument("--timer", type=lambda value: int(value, 0), default=0x8032D5D4,
+    parser.add_argument("--timer", type=lambda value: int(value, 0), default=layout_for("us").global_timer,
                         help="gGlobalTimer address for provenance (US default)")
     args = parser.parse_args()
     for frame in write_frames(args.savestate, args.out, args.timer):

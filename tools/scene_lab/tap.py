@@ -4,32 +4,56 @@
     tap.py disarm
     tap.py summary <session>
     tap.py frames <session> <out> [--pattern 0xA5] [--limit N] [--pair origin|next]
+    tap.py offline <lab_root> <frame_dir>... [--seconds N] [--no-scene-state]
 
 `arm` writes the one-shot arming file the wrapper consumes when a practice ROM
 next opens; its identity reads (gGlobalTimer, level, area) come from
 memory/layout.py so the plugin still knows no game address. `frames` turns
 each recorded task into a frame input (savestate_frames.py format) whose
 RDRAM holds ONLY the captured closure, every other byte set to --pattern,
-paired with the presented picture that followed it (ref.bgr). Sessions and
+paired with the presented picture that followed it (ref.bgr). `arm` also
+names the scene state spans (layout.py's scene_* and main_pool_* rows) the tap
+copies with each task, so SM64's own renderer can re-run offline (E2-live:
+tools/scene_lab/e2_georender.py from-tap; `scene_states` rebuilds each task's
+RDRAM from a session). `offline` runs the REAL producer (scene_tap.cpp, through
+tap_offline_host.cpp) over frame inputs and writes a session exactly as the
+live tap would, under <lab_root> instead of %LOCALAPPDATA%. Sessions and
 frames are private RAM images: keep them out of the repository.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import mmap
 import os
 import struct
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
+from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 from sm64_events.memory.layout import layout_for  # noqa: E402
 
 MAGIC = 0x31544C53
-REC_PAD, REC_TASK, REC_PRESENT, REC_FULL = 0, 1, 2, 3
+REC_PAD, REC_TASK, REC_PRESENT, REC_FULL, REC_REGIONS = 0, 1, 2, 3, 4
+REGION_KINDS = ("task", "level_key", "level_delta")
+REGION_FIELDS = ("task_index", "kind", "count", "data_bytes", "copy_ns", "scan_ns", "block_bytes", "reserved")
+# The spans the scene renderer reads (layout.py rows, [start, end)): copied
+# whole with every task, and the main pool as a level region (key + deltas).
+SCENE_SPANS = (("scene_data_start", "scene_data_end"), ("scene_bss_start", "scene_bss_end"),
+               ("scene_engine_bss_start", "scene_engine_bss_end"))
+SCENE_LEVEL_SPANS = (("main_pool_start", "main_pool_end"),)
+HOST_SOURCES = (ROOT / "tools/scene_lab/tap_offline_host.cpp", ROOT / "plugin/gfxwrap/scene_tap.cpp",
+                ROOT / "plugin/gfxwrap/scene_tap.h", ROOT / "plugin/gfxwrap/scene_closure.h",
+                ROOT / "plugin/gfxwrap/zilmar.h")
 TASK_FIELDS = ("refusals", "commands", "walk_ns", "copy_ns", "vi_origin", "runs", "extras",
                "closure_bytes", "last_cimg", "color_images", "task_index", "reserved")
 VI_NAMES = ("status", "origin", "width", "intr", "v_current", "burst", "v_sync", "h_sync",
@@ -50,6 +74,17 @@ class Task:
     runs: list
     run_bytes: bytes
     extras: list = field(default_factory=list)   # (address, bytes)
+
+
+@dataclass
+class Regions:
+    sequence: int
+    qpc: int
+    fields: dict
+    kind: str           # REGION_KINDS
+    segments: tuple     # the task's 16 RSP segment bases
+    spans: list         # (physical begin, bytes)
+    data: bytes         # the spans' bytes, in order, as Project64 stores them
 
 
 @dataclass
@@ -106,6 +141,13 @@ def _parse_record(kind: int, sequence: int, qpc: int, body: memoryview):
     if kind == REC_FULL:
         (rdram_size,) = struct.unpack_from("<I", body, 0)
         return ("full", sequence, bytes(body[16:16 + rdram_size]))
+    if kind == REC_REGIONS:
+        fields = dict(zip(REGION_FIELDS, struct.unpack_from("<8I", body, 0), strict=True))
+        segments = struct.unpack_from("<16I", body, 32)
+        spans = [struct.unpack_from("<II", body, 96 + 8 * i) for i in range(fields["count"])]
+        at = 96 + 8 * fields["count"]
+        return Regions(sequence, qpc, fields, REGION_KINDS[fields["kind"]], segments, spans,
+                       bytes(body[at:at + fields["data_bytes"]]))
     return None
 
 
@@ -169,7 +211,20 @@ def word_value(extras: list, address: int, size: int) -> int | None:
     return None
 
 
-def arm(args) -> int:
+def scene_state_lines(layout) -> list[str]:
+    """Arming lines for the scene renderer's state (E2-live), or none when this
+    version's layout lacks the spans."""
+    lines = []
+    for kind, spans in (("region", SCENE_SPANS), ("level_region", SCENE_LEVEL_SPANS)):
+        for start_field, end_field in spans:
+            start, end = layout.value(start_field), layout.value(end_field)
+            if start is None or end is None:
+                return []
+            lines.append(f"{kind}={start & 0x1FFFFFFF:x}:{end - start}")
+    return lines
+
+
+def arming_text(args) -> str:
     layout = layout_for(args.version)
     lines = [f"seconds={args.seconds}", f"reference={0 if args.no_reference else 1}",
              f"reference_every={args.reference_every}", f"full_every={args.full_every}"]
@@ -180,8 +235,14 @@ def arm(args) -> int:
             lines.append(f"extra={address & 0x1FFFFFFF:x}:{size}")
             names.append(f"{name}:{address & 0x1FFFFFFF:x}:{size}")
     lines.append("# identity=" + ",".join(names))   # the tap ignores comment lines
+    if not args.no_scene_state:
+        lines += scene_state_lines(layout)
+    return "\n".join(lines) + "\n"
+
+
+def arm(args) -> int:
     lab_root().mkdir(parents=True, exist_ok=True)
-    (lab_root() / "armed.txt").write_text("\n".join(lines) + "\n", encoding="ascii")
+    (lab_root() / "armed.txt").write_text(arming_text(args), encoding="ascii")
     print("armed:", lab_root() / "armed.txt")
     return 0
 
@@ -191,12 +252,71 @@ def disarm(_args) -> int:
     return 0
 
 
+class SceneState:
+    """The RDRAM one task's scene renderer read, rebuilt from a session.
+
+    The level regions accumulate across tasks (a key replaces them, a delta
+    patches them); a task's own regions and its closure lie on top. Bytes stay
+    in Project64's word-swapped order; `known` marks every byte the session
+    captured, and everything else reads `pattern`."""
+
+    def __init__(self, rdram_size: int):
+        self.level = np.zeros(rdram_size, np.uint8)
+        self.level_known = np.zeros(rdram_size, bool)
+
+    def apply_level(self, regions: Regions) -> None:
+        if regions.kind == "level_key":
+            self.level_known[:] = False
+        at = 0
+        for begin, size in regions.spans:
+            self.level[begin:begin + size] = np.frombuffer(regions.data, np.uint8, size, at)
+            self.level_known[begin:begin + size] = True
+            at += size
+
+    def task_ram(self, task: Task, regions: Regions | None, pattern: int = 0x5A):
+        ram = np.where(self.level_known, self.level, np.uint8(pattern))
+        known = self.level_known.copy()
+        layers = [] if regions is None else [(regions.spans, regions.data)]
+        layers.append(([(begin, end - begin) for begin, end in task.runs], task.run_bytes))
+        for spans, data in layers:
+            at = 0
+            for begin, size in spans:
+                ram[begin:begin + size] = np.frombuffer(data, np.uint8, size, at)
+                known[begin:begin + size] = True
+                at += size
+        return ram, known
+
+
+def scene_states(records, rdram_size: int):
+    """(task, its task regions or None, RDRAM, known mask) for every task, in
+    order, with the level regions as they stood at that task."""
+    state = SceneState(rdram_size)
+    pending: list = []
+    for record in records:
+        if isinstance(record, Task):
+            if pending:
+                yield (pending[0], pending[1], *state.task_ram(pending[0], pending[1]))
+            pending = [record, None]
+        elif isinstance(record, Regions):
+            if record.kind != "task":
+                state.apply_level(record)
+            elif pending and record.fields["task_index"] == pending[0].fields["task_index"]:
+                pending[1] = record
+    if pending:
+        yield (pending[0], pending[1], *state.task_ram(pending[0], pending[1]))
+
+
 def summary(args) -> int:
     session = Path(args.session)
     tasks = presents = refused = 0
     walk, copy, closure, reads = [], [], [], []
+    region = {kind: {"bytes": [], "us": [], "scan_us": []} for kind in REGION_KINDS}
     for record in read_records(session / "tap.bin"):
-        if isinstance(record, Task):
+        if isinstance(record, Regions):
+            region[record.kind]["bytes"].append(record.fields["data_bytes"])
+            region[record.kind]["us"].append(record.fields["copy_ns"] / 1000)
+            region[record.kind]["scan_us"].append(record.fields["scan_ns"] / 1000)
+        elif isinstance(record, Task):
             tasks += 1
             refused += bool(record.fields["refusals"])
             walk.append(record.fields["walk_ns"] / 1000)
@@ -216,6 +336,10 @@ def summary(args) -> int:
         "copy_us": {"p50": pct(copy, .5), "p99": pct(copy, .99), "max": max(copy, default=0)},
         "closure_kib": {"p50": pct(closure, .5) / 1024, "max": max(closure, default=0) / 1024},
         "reference_read_us": {"p50": pct(reads, .5), "p99": pct(reads, .99)},
+        "regions": {kind: {"records": len(v["bytes"]), "kib_p50": pct(v["bytes"], .5) / 1024,
+                           "kib_max": max(v["bytes"], default=0) / 1024, "us_p50": pct(v["us"], .5),
+                           "us_p99": pct(v["us"], .99), "scan_us_p50": pct(v["scan_us"], .5)}
+                    for kind, v in region.items() if v["bytes"]},
         "summary": (session / "summary.txt").read_text(encoding="ascii") if (session / "summary.txt").is_file() else None,
     }, indent=2))
     return 0
@@ -265,6 +389,45 @@ def frames(args) -> int:
     return 0
 
 
+def build_offline_host() -> Path:
+    """tap_offline_host.exe (x86, the wrapper's compiler flags), cached by source hash."""
+    spec = importlib.util.spec_from_file_location("scene_lab_build", ROOT / "tools/build_plugin.py")
+    compiler = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compiler)
+    digest = hashlib.sha256(b"".join(path.read_bytes() for path in HOST_SOURCES)).hexdigest()[:16]
+    work = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "SM64Trainer/build-cache/scene-lab" / digest
+    target = work / "tap_offline_host.exe"
+    if target.is_file():
+        return target
+    work.mkdir(parents=True, exist_ok=True)
+    vcvars = compiler.find_vcvars32()
+    if vcvars is None:
+        raise RuntimeError("x86 MSVC toolchain is required")
+    flags = [flag for flag in compiler.COMMON_FLAGS if not flag.startswith("/std:")]
+    compiler._cl(vcvars, [*flags, "/std:c++17", "/EHsc", f"/I{ROOT / 'plugin/gfxwrap'}",
+                          str(HOST_SOURCES[0]), str(HOST_SOURCES[1]), f"/Fe:{target}", f"/Fo{work}\\",
+                          "/link", "kernel32.lib", "user32.lib"], work)
+    return target
+
+
+def offline(args) -> int:
+    """Arm under <lab_root>, feed the frames through the real producer, print the session."""
+    root = Path(args.lab_root).resolve()
+    lab = root / "SM64Trainer" / "scene-lab"
+    lab.mkdir(parents=True, exist_ok=True)
+    before = set(lab.glob("tap-*"))
+    (lab / "armed.txt").write_text(arming_text(args), encoding="ascii")
+    result = subprocess.run([str(build_offline_host()), str(root), *(str(Path(f).resolve()) for f in args.frames)],
+                            capture_output=True, text=True, check=False, timeout=600, **quiet_spawn_kwargs())
+    if result.returncode != 0:
+        raise SystemExit(f"tap_offline_host failed ({result.returncode}): {result.stdout}{result.stderr}")
+    sessions = sorted(set(lab.glob("tap-*")) - before)
+    if len(sessions) != 1 or not (sessions[0] / "tap.bin").is_file():
+        raise SystemExit(f"expected one new session under {lab}, found {sessions}")
+    print(sessions[0])
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -274,6 +437,8 @@ def main() -> int:
     p.add_argument("--reference-every", type=int, default=1)
     p.add_argument("--full-every", type=int, default=0)
     p.add_argument("--version", choices=("us", "jp"), default="us")
+    p.add_argument("--no-scene-state", action="store_true",
+                   help="do not copy the scene renderer's state spans (E2-live)")
     p.set_defaults(run=arm)
     sub.add_parser("disarm").set_defaults(run=disarm)
     p = sub.add_parser("summary")
@@ -286,6 +451,13 @@ def main() -> int:
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--pair", choices=("origin", "next"), default="origin")
     p.set_defaults(run=frames)
+    p = sub.add_parser("offline")
+    p.add_argument("lab_root", help="stands in for %%LOCALAPPDATA%%; use a fresh folder per run")
+    p.add_argument("frames", nargs="+")
+    p.add_argument("--seconds", type=int, default=600)
+    p.add_argument("--version", choices=("us", "jp"), default="us")
+    p.add_argument("--no-scene-state", action="store_true")
+    p.set_defaults(run=offline, no_reference=True, reference_every=1, full_every=0)
     args = parser.parse_args()
     return args.run(args)
 

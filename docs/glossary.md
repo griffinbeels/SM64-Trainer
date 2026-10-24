@@ -1172,6 +1172,25 @@ input the [[renderer]] can redraw offline.
 - **Not** -- the [[recorder]], which encodes video of play; the scene tap is
   an M4 probe that writes nothing unless armed
 
+### Scene state
+
+The game memory SM64's own scene-graph code reads to build one task's display
+list: the game globals and the object pool, and the main pool where a level's
+scene graph, surfaces and models live. The [[scene tap]] copies it with each
+task: the globals and the pool whole every time, the main pool whole at each
+new level and then only its blocks that changed. Running the game's own code
+offline over the ROM, a task's [[task closure]] and its scene state, with
+every other byte overwritten, rebuilds that task's display list byte for byte,
+and a moved camera reads nothing else (M4 experiment E2, 2026-10-24, on two
+savestates). That is what lets a recording be re-viewed from a free camera.
+
+- **Lives** -- the spans (the scene and main-pool rows in
+  `src/sm64_events/memory/layout.py`); the copy (`plugin/gfxwrap/scene_tap.cpp`);
+  the rebuild and the proof (`tools/scene_lab/tap.py`,
+  `tools/scene_lab/e2_georender.py`, its from-tap mode)
+- **Not** -- the [[task closure]], which is what the [[renderer]] reads to
+  draw a list; the scene state is what the game reads to make one
+
 ### Scene package
 
 An M4 experiment's portable file of the graphics tasks a [[scene tap]]

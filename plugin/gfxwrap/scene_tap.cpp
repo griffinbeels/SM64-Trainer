@@ -14,6 +14,15 @@
  *   extra=<addr>:<n>  copy n bytes at this RDRAM address with every task
  *                     (identity fields such as gGlobalTimer; the arming tool
  *                     takes them from memory/layout.py, the plugin knows none)
+ *   region=<addr>:<n> copy this RDRAM span with every task (the game state the
+ *                     scene renderer reads: E2-live; up to 16, 4 MiB in all)
+ *   level_region=<addr>:<n> copy this span whole on the first task and whenever
+ *                     the task's RSP segment bases change (a level load), and
+ *                     on every other task only its 256-byte blocks that differ
+ *                     from the last copy (up to 8, 8 MiB in all)
+ *   level_segments=<hex> segments whose bases key a level (default fffc: SM64
+ *                     points segment 1 at the alternating gfx pool)
+ *   level_delta=0|1   0: level regions only at a key change (default 1)
  * Without that file every call returns after one relaxed atomic load.
  *
  * The emulation thread never waits: it walks the task (scene_closure.h),
@@ -22,7 +31,11 @@
  * Records are 32-byte aligned: a 32-byte header {magic 'SLT1', type, bytes,
  * sequence, qpc, reserved[2]} then the payload; tools/scene_lab/tap.py reads
  * them. Producer cost (walk + copy) is timed separately from the reference
- * readback. */
+ * readback. A REGIONS record follows its task's record: {task_index, kind
+ * (0 task, 1 level key, 2 level delta), count, data bytes, copy_ns, scan_ns,
+ * block bytes, 0}, the task's 16 segment bases, count x {begin, bytes}, data.
+ * A delta's spans apply over the last key and deltas; a lost delta leaves the
+ * shadow copy unchanged, so the next one still carries those blocks. */
 #define NOMINMAX
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -41,15 +54,25 @@
 namespace {
 
 constexpr uint32_t kMagic = 0x31544C53;   // "SLT1" little-endian
-enum : uint32_t { REC_PAD = 0, REC_TASK = 1, REC_PRESENT = 2, REC_FULL = 3 };
+enum : uint32_t { REC_PAD = 0, REC_TASK = 1, REC_PRESENT = 2, REC_FULL = 3, REC_REGIONS = 4 };
+enum : uint32_t { REGIONS_TASK = 0, REGIONS_LEVEL_KEY = 1, REGIONS_LEVEL_DELTA = 2 };
 struct RecordHeader { uint32_t magic, type, bytes, sequence; int64_t qpc; uint32_t reserved[2]; };
 static_assert(sizeof(RecordHeader) == 32, "tap record header");
 constexpr uint32_t kMaxExtras = 16, kMaxExtraBytes = 4096;
+constexpr uint32_t kMaxRegions = 16, kMaxRegionBytes = 4u << 20;
+constexpr uint32_t kMaxLevelRegions = 8, kMaxLevelBytes = 8u << 20;
+constexpr uint32_t kBlockBytes = 256, kPageBytes = 4096;
+constexpr uint32_t kMaxBlocks = kMaxLevelBytes / kBlockBytes + kMaxLevelRegions;
+constexpr uint32_t kRegionsHead = 32 + 64;   // fields, then the 16 segment bases
 constexpr uint64_t kRingBytes = 128ull << 20, kSmallRingBytes = 48ull << 20;
+
+struct Span { uint32_t begin, bytes; };
 
 struct Config {
     uint32_t seconds = 20, reference = 1, reference_every = 1, full_every = 0, extras = 0;
     uint32_t extra_begin[kMaxExtras], extra_bytes[kMaxExtras];
+    uint32_t regions = 0, level_regions = 0, level_segments = 0xFFFC, level_delta = 1;
+    Span region[kMaxRegions], level[kMaxLevelRegions];
 };
 
 struct Tap {
@@ -71,6 +94,16 @@ struct Tap {
     uint64_t walk_ns_total, copy_ns_total;
     uint32_t walk_ns_max, copy_ns_max;
     scene_closure::Walker walker;
+    // Regions (E2-live). The shadow holds the level regions as last emitted,
+    // concatenated; `changed` is the delta scan's scratch. Both are allocated
+    // at arming, so the producer never allocates.
+    uint8_t *shadow;
+    struct Change { Span span; uint32_t shadow; } *changed;
+    uint32_t level_total, level_key[16];
+    bool level_valid;
+    uint32_t level_keys, level_deltas, region_records;
+    uint64_t region_bytes_total, delta_bytes_total, region_ns_total, level_ns_total;
+    uint32_t region_ns_max, level_ns_max;
 };
 Tap g_tap;
 
@@ -137,17 +170,27 @@ DWORD WINAPI writer_main(void *) {
         Sleep(4);
     }
     if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
-    char summary[1024];
+    char summary[2048];
     const uint32_t tasks = t.tasks.load();
-    snprintf(summary, sizeof summary,
+    const int at = snprintf(summary, sizeof summary,
              "tasks=%u\npresents=%u\nlost_records=%u\nrefused_tasks=%u\nbytes_written=%llu\nwrite_failed=%d\n"
              "walk_ns_mean=%u\nwalk_ns_max=%u\ncopy_ns_mean=%u\ncopy_ns_max=%u\n",
              tasks, t.presents.load(), t.lost.load(), t.refused.load(), (unsigned long long)written, failed,
              tasks ? (uint32_t)(t.walk_ns_total / tasks) : 0, t.walk_ns_max,
              tasks ? (uint32_t)(t.copy_ns_total / tasks) : 0, t.copy_ns_max);
+    const uint32_t records = t.region_records, levels = t.level_keys + t.level_deltas;
+    snprintf(summary + at, sizeof summary - at,
+             "region_records=%u\nregion_bytes_mean=%llu\nregion_ns_mean=%u\nregion_ns_max=%u\n"
+             "level_keys=%u\nlevel_deltas=%u\nlevel_delta_bytes_mean=%llu\nlevel_ns_mean=%u\nlevel_ns_max=%u\n",
+             records, records ? (unsigned long long)(t.region_bytes_total / records) : 0ull,
+             records ? (uint32_t)(t.region_ns_total / records) : 0, t.region_ns_max,
+             t.level_keys, t.level_deltas,
+             t.level_deltas ? (unsigned long long)(t.delta_bytes_total / t.level_deltas) : 0ull,
+             levels ? (uint32_t)(t.level_ns_total / levels) : 0, t.level_ns_max);
     write_text(L"summary.txt", summary);
     VirtualFree(t.ring, 0, MEM_RELEASE);
     t.ring = nullptr;
+    if (t.shadow) { VirtualFree(t.shadow, 0, MEM_RELEASE); t.shadow = nullptr; t.changed = nullptr; }
     return 0;
 }
 
@@ -166,8 +209,129 @@ void parse_config(const wchar_t *path, Config &config) {
             config.extra_begin[config.extras] = a & 0x1FFFFFFF;
             config.extra_bytes[config.extras++] = b;
         }
+        else if (sscanf(line, "level_segments=%x", &a) == 1) config.level_segments = a & 0xFFFF;
+        else if (sscanf(line, "level_delta=%u", &a) == 1) config.level_delta = a != 0;
+        else if (sscanf(line, "level_region=%x:%u", &a, &b) == 2 && config.level_regions < kMaxLevelRegions)
+            config.level[config.level_regions++] = {a & 0x1FFFFFFF, b};
+        else if (sscanf(line, "region=%x:%u", &a, &b) == 2 && config.regions < kMaxRegions)
+            config.region[config.regions++] = {a & 0x1FFFFFFF, b};
     }
     fclose(file);
+}
+
+// Whole words inside RDRAM, within the byte budget; anything else is dropped
+// at arming (and missing from session.txt), never clipped mid-session.
+uint32_t settle_spans(Span *spans, uint32_t count, uint32_t budget, uint32_t rdram_size) {
+    uint32_t kept = 0, total = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t begin = spans[i].begin & ~3u;
+        const uint64_t end = ((uint64_t)spans[i].begin + spans[i].bytes + 3) & ~3ull;
+        if (!spans[i].bytes || end > rdram_size || end - begin > budget - total) continue;
+        spans[kept++] = {begin, (uint32_t)(end - begin)};
+        total += (uint32_t)(end - begin);
+    }
+    return kept;
+}
+
+void put_regions_head(uint8_t *record, uint32_t task_index, uint32_t kind, uint32_t count,
+                      uint32_t data, uint32_t copy_ns, uint32_t scan_ns) {
+    const uint32_t fields[8] = {task_index, kind, count, data, copy_ns, scan_ns, kBlockBytes, 0};
+    memcpy(record + 32, fields, sizeof fields);
+    memcpy(record + 64, g_tap.walker.segment, 64);
+}
+
+// Every task: the configured spans, whole.
+void copy_task_regions(uint32_t task_index, int64_t when) {
+    Tap &t = g_tap;
+    const Config &c = t.config;
+    if (!c.regions) return;
+    const int64_t begin = qpc();
+    uint64_t data = 0;
+    for (uint32_t i = 0; i < c.regions; ++i) data += c.region[i].bytes;
+    const uint32_t bytes = align32(sizeof(RecordHeader) + kRegionsHead + 8ull * c.regions + data);
+    uint8_t *record = reserve(bytes);
+    if (!record) return;
+    uint8_t *entries = record + 32 + kRegionsHead, *at = entries + 8 * c.regions;
+    for (uint32_t i = 0; i < c.regions; ++i) {
+        memcpy(entries + 8 * i, &c.region[i], 8);
+        memcpy(at, t.gfx.RDRAM + c.region[i].begin, c.region[i].bytes);
+        at += c.region[i].bytes;
+    }
+    const uint32_t copy_ns = ns(qpc() - begin);
+    put_regions_head(record, task_index, REGIONS_TASK, c.regions, (uint32_t)data, copy_ns, 0);
+    commit(record, REC_REGIONS, bytes, when);
+    ++t.region_records;
+    t.region_bytes_total += data;
+    t.region_ns_total += copy_ns;
+    if (copy_ns > t.region_ns_max) t.region_ns_max = copy_ns;
+}
+
+uint32_t smaller(uint32_t a, uint32_t b) { return a < b ? a : b; }
+
+// Level regions: whole at a new level key (or when the shadow is not current),
+// else only the blocks that differ from the shadow, which then follows what
+// was emitted. A lost record leaves the shadow as it was.
+void copy_level_regions(uint32_t task_index, int64_t when) {
+    Tap &t = g_tap;
+    const Config &c = t.config;
+    if (!c.level_regions || !t.shadow) return;
+    const int64_t begin = qpc();
+    uint32_t key[16];
+    for (uint32_t s = 0; s < 16; ++s)
+        key[s] = (c.level_segments >> s & 1) && (t.walker.stats.segments_set >> s & 1) ? t.walker.segment[s] : 0;
+    const bool new_key = !t.level_valid || memcmp(key, t.level_key, sizeof key) != 0;
+    uint32_t count = 0, scan_ns = 0, offset = 0;
+    uint64_t data = 0;
+    if (!new_key) {
+        if (!c.level_delta) return;
+        for (uint32_t r = 0; r < c.level_regions; offset += c.level[r++].bytes) {
+            const uint8_t *live = t.gfx.RDRAM + c.level[r].begin, *old = t.shadow + offset;
+            for (uint32_t page = 0; page < c.level[r].bytes; page += kPageBytes) {
+                const uint32_t page_end = page + smaller(kPageBytes, c.level[r].bytes - page);
+                if (!memcmp(live + page, old + page, page_end - page)) continue;
+                for (uint32_t block = page; block < page_end; block += kBlockBytes) {
+                    const uint32_t n = smaller(kBlockBytes, page_end - block);
+                    if (!memcmp(live + block, old + block, n)) continue;
+                    t.changed[count++] = {{c.level[r].begin + block, n}, offset + block};
+                    data += n;
+                }
+            }
+        }
+        scan_ns = ns(qpc() - begin);
+    }
+    const bool key_frame = new_key || data > t.level_total / 2;
+    if (key_frame) {
+        count = 0;
+        offset = 0;
+        for (uint32_t r = 0; r < c.level_regions; offset += c.level[r++].bytes)
+            t.changed[count++] = {c.level[r], offset};
+        data = t.level_total;
+    }
+    const uint32_t bytes = align32(sizeof(RecordHeader) + kRegionsHead + 8ull * count + data);
+    uint8_t *record = reserve(bytes);
+    if (!record) { if (key_frame) t.level_valid = false; return; }
+    uint8_t *entries = record + 32 + kRegionsHead, *at = entries + 8ull * count;
+    for (uint32_t i = 0; i < count; ++i) {
+        const Tap::Change change = t.changed[i];
+        memcpy(entries + 8ull * i, &change.span, 8);
+        memcpy(at, t.gfx.RDRAM + change.span.begin, change.span.bytes);
+        memcpy(t.shadow + change.shadow, at, change.span.bytes);
+        at += change.span.bytes;
+    }
+    const uint32_t level_ns = ns(qpc() - begin);
+    put_regions_head(record, task_index, key_frame ? REGIONS_LEVEL_KEY : REGIONS_LEVEL_DELTA,
+                     count, (uint32_t)data, level_ns, scan_ns);
+    commit(record, REC_REGIONS, bytes, when);
+    if (key_frame) {
+        memcpy(t.level_key, key, sizeof key);
+        t.level_valid = true;
+        ++t.level_keys;
+    } else {
+        ++t.level_deltas;
+        t.delta_bytes_total += data;
+    }
+    t.level_ns_total += level_ns;
+    if (level_ns > t.level_ns_max) t.level_ns_max = level_ns;
 }
 
 uint32_t committed_rdram() {
@@ -220,13 +384,35 @@ extern "C" void __cdecl st_rom_open(void) {
     if (!MoveFileW(armed, moved)) return;
     t.config = Config();
     parse_config(moved, t.config);
+    Config &c = t.config;
+    c.regions = settle_spans(c.region, c.regions, kMaxRegionBytes, t.rdram_size);
+    c.level_regions = settle_spans(c.level, c.level_regions, kMaxLevelBytes, t.rdram_size);
+    t.level_total = 0;
+    for (uint32_t r = 0; r < c.level_regions; ++r) t.level_total += c.level[r].bytes;
+    t.shadow = nullptr;
+    t.changed = nullptr;
+    if (t.level_total) {
+        const uint32_t blocks = t.level_total / kBlockBytes + c.level_regions;
+        t.shadow = (uint8_t *)VirtualAlloc(nullptr, t.level_total + blocks * sizeof(Tap::Change),
+                                           MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!t.shadow) { write_text(L"summary.txt", "shadow_allocation_failed=1\n"); return; }
+        t.changed = (Tap::Change *)(t.shadow + t.level_total);
+    }
+    t.level_valid = false;
+    t.level_keys = t.level_deltas = t.region_records = 0;
+    t.region_bytes_total = t.delta_bytes_total = t.region_ns_total = t.level_ns_total = 0;
+    t.region_ns_max = t.level_ns_max = 0;
     t.capacity = kRingBytes;
     t.ring = (uint8_t *)VirtualAlloc(nullptr, (SIZE_T)t.capacity, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!t.ring) {
         t.capacity = kSmallRingBytes;
         t.ring = (uint8_t *)VirtualAlloc(nullptr, (SIZE_T)t.capacity, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     }
-    if (!t.ring) { write_text(L"summary.txt", "ring_allocation_failed=1\n"); return; }
+    if (!t.ring) {
+        write_text(L"summary.txt", "ring_allocation_failed=1\n");
+        if (t.shadow) { VirtualFree(t.shadow, 0, MEM_RELEASE); t.shadow = nullptr; t.changed = nullptr; }
+        return;
+    }
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
     t.frequency = frequency.QuadPart;
@@ -234,19 +420,31 @@ extern "C" void __cdecl st_rom_open(void) {
     t.first_qpc = 0; t.deadline = 0;
     t.tasks = 0; t.presents = 0; t.lost = 0; t.refused = 0;
     t.walk_ns_total = t.copy_ns_total = 0; t.walk_ns_max = t.copy_ns_max = 0;
-    char session[1024];
+    char session[2048];
     int at = snprintf(session, sizeof session,
                       "schema=scene-lab-tap/1\nwrapper_build=%s\nqpc_frequency=%lld\nrdram_size=%u\n"
-                      "ring_bytes=%llu\nseconds=%u\nreference=%u\nfull_every=%u\nrom_header=",
+                      "ring_bytes=%llu\nseconds=%u\nreference=%u\nfull_every=%u\n"
+                      "level_segments=%x\nlevel_delta=%u\nlevel_block_bytes=%u\nrom_header=",
                       GFXWRAP_BUILD_ID, (long long)t.frequency, t.rdram_size,
-                      (unsigned long long)t.capacity, t.config.seconds, t.config.reference, t.config.full_every);
+                      (unsigned long long)t.capacity, c.seconds, c.reference, c.full_every,
+                      c.level_segments, c.level_delta, kBlockBytes);
     for (int i = 0; i < 0x40 && t.gfx.HEADER && at < (int)sizeof session - 4; ++i)
         at += snprintf(session + at, sizeof session - at, "%02x", t.gfx.HEADER[i]);
     if (at < (int)sizeof session - 2) { session[at++] = '\n'; session[at] = 0; }
+    // The spans as kept (whole words inside RDRAM, within budget).
+    for (uint32_t i = 0; i < c.regions && at < (int)sizeof session - 40; ++i)
+        at += snprintf(session + at, sizeof session - at, "region=%x:%u\n", c.region[i].begin, c.region[i].bytes);
+    for (uint32_t i = 0; i < c.level_regions && at < (int)sizeof session - 40; ++i)
+        at += snprintf(session + at, sizeof session - at, "level_region=%x:%u\n", c.level[i].begin, c.level[i].bytes);
     write_text(L"session.txt", session);
     t.finish = false;
     t.writer = CreateThread(nullptr, 0, writer_main, nullptr, 0, nullptr);
-    if (!t.writer) { VirtualFree(t.ring, 0, MEM_RELEASE); t.ring = nullptr; return; }
+    if (!t.writer) {
+        VirtualFree(t.ring, 0, MEM_RELEASE);
+        t.ring = nullptr;
+        if (t.shadow) { VirtualFree(t.shadow, 0, MEM_RELEASE); t.shadow = nullptr; t.changed = nullptr; }
+        return;
+    }
     t.active.store(true, std::memory_order_release);
 }
 
@@ -298,6 +496,10 @@ extern "C" void __cdecl st_process_dlist(void) {
         if (walk_ns > t.walk_ns_max) t.walk_ns_max = walk_ns;
         if (copy_ns > t.copy_ns_max) t.copy_ns_max = copy_ns;
     }
+    // The game state the scene renderer read for this task (E2-live), copied at
+    // the same instant: the emulation thread is inside ProcessDList.
+    copy_task_regions(task_index, begin);
+    copy_level_regions(task_index, begin);
     if (refusals) ++t.refused;
     t.tasks.fetch_add(1, std::memory_order_relaxed);
 }

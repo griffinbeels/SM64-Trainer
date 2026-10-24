@@ -1,7 +1,9 @@
 """E2a probe: re-run SM64's OWN scene-graph renderer offline, under a moved camera.
 
     uv run --with unicorn python tools/scene_lab/e2_georender.py regen <frame_dir> <out_dir>
-        --rom <z64> [--map <MappingUS.map>] [--orbit YAW,PITCH,DIST ...] [--focus-height H]
+        --rom <z64> --map <MappingUS.map> [--orbit YAW,PITCH,DIST ...] [--focus-height H]
+    uv run --with unicorn python tools/scene_lab/e2_georender.py from-tap <session>
+        --rom <z64> --map <MappingUS.map> [--every N] [--limit N] [--out report.json]
 
 <frame_dir> is the savestate frame input (savestate_frames.py) of the gfx pool
 the RAM image last rendered (gGfxPool). The game's geo_process_root, its
@@ -29,22 +31,35 @@ moved around Mario (yaw relative to the source camera, degrees), splices the
 new geo output between the captured prologue and HUD, and writes a frame input
 replay.py can render. report.json carries the comparisons, the read and write
 sets by region, the persistent writes (side effects), what a recording would
-carry (provenance.py's ROM attribution) and per-object culling decisions. RAM
-images are private: outputs belong in scratch only.
+carry (provenance.py's ROM attribution) and per-object culling decisions.
+
+from-tap is the E2-live proof: for each task of a scene-tap session it rebuilds
+RDRAM from the ROM's own images plus what the session captured (closure, the
+scene state spans, the main pool's key and deltas), poisons everything else,
+regenerates the task's geo output in place and compares every byte the game
+wrote with the captured list. It also lists every byte the renderer read that
+the session did not capture, and checks the rebuild against the tap's full
+RDRAM copy of task 0. RAM images are private: outputs belong in scratch only.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import os
 import re
 import struct
+import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
 from unicorn import (UC_ARCH_MIPS, UC_HOOK_BLOCK, UC_HOOK_CODE, UC_HOOK_INTR, UC_MODE_BIG_ENDIAN,
                      UC_MODE_MIPS64, Uc, UcError)
 from unicorn import mips_const as mips
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from sm64_events.memory.layout import layout_for  # noqa: E402
 
 RDRAM_BYTES = 8 << 20
 SCRATCH_PHYS = 0x01000000          # private page outside RDRAM: stack and return sentinel
@@ -54,21 +69,20 @@ STACK_TOP = 0x810FFF00
 GFX_POOL_BYTES = 6400 * 8
 STATUS_CU1 = 0x20000000            # kernel, EXL/ERL/IE clear, FR=0 (libultra threads never set FR)
 
-# SM64 US addresses: n64decomp/sm64 US build map (STROOP MappingUS.map).
-US = {
-    "geo_process_root": 0x8027E130, "geo_process_object": 0x8027D6FC, "geo_process_held_object": 0x8027DA84,
-    "obj_is_in_view": 0x8027D518, "gGlobalTimer": 0x8032D5D4, "gCurrentArea": 0x8032DDCC,
-    "D_8032CE74": 0x8032DDD4, "D_8032CE78": 0x8032DDD8, "gFBSetColor": 0x8032DDE0,
-    "gAreaUpdateCounter": 0x8032DF08, "gDisplayListHead": 0x8033B06C, "gGfxPoolEnd": 0x8033B070,
-    "gGfxPool": 0x8033B074, "gMarioStates": 0x8033B170, "sSegmentTable": 0x8033B400,
-    "gDisplayListHeap": 0x8033C388, "gLakituState": 0x8033C698, "gObjectPool": 0x8033D488,
-}
-# ROM-loaded code images (US layout): (virtual start, size, ROM offset).
-CODE_SEGMENTS = (("main", 0x80246000, 0xF4580, 0x1000), ("engine", 0x80378800, 0x13490, 0xF5580))
-REGIONS = (  # read/write-set classification, US layout
-    ("main image", 0x80246000, 0x8033A580), ("main bss", 0x8033A580, 0x80367460),
-    ("engine image", 0x80378800, 0x8038BC90), ("engine bss", 0x8038BC90, 0x8038EEF0),
-)
+# Every game address comes from the decomp's linker map for the ROM's version
+# (STROOP MappingUS.map, --map), filled in by load_map and cross-checked
+# against memory/layout.py wherever a layout row names the same global.
+SYMBOLS = ("geo_process_root", "geo_process_object", "geo_process_held_object", "obj_is_in_view",
+           "gGlobalTimer", "gCurrentArea", "D_8032CE74", "D_8032CE78", "gFBSetColor",
+           "gAreaUpdateCounter", "gCurrLevelNum", "gDisplayListHead", "gGfxPoolEnd", "gGfxPool",
+           "gMarioStates", "sSegmentTable", "gDisplayListHeap", "gLakituState", "gObjectPool",
+           "gGfxPools")
+LAYOUT_ROWS_FOR = {"gGlobalTimer": "global_timer", "gCurrentArea": "current_area_pointer",
+                   "gAreaUpdateCounter": "area_update_counter", "gCurrLevelNum": "curr_level",
+                   "gMarioStates": "mario_struct", "gObjectPool": "object_pool"}
+US: dict[str, int] = {}
+CODE_SEGMENTS: list[tuple[str, int, int, int]] = []   # ROM-loaded images: (name, start, size, ROM offset)
+REGIONS: list[tuple[str, int, int]] = []              # read/write-set classification: (name, start, end)
 OBJECT_BYTES, OBJECT_COUNT = 0x260, 240
 LAKITU_FOCUS, LAKITU_POS = 0x80, 0x8C
 MARIO_POS = 0x3C
@@ -330,16 +344,33 @@ def find_geo_start(ram: bytes, main: int, size: int, top: int) -> tuple[int, int
 
 
 # --- symbolization ---
-def load_map(path: Path | None) -> list[tuple[int, str]]:
-    if not path:
-        return []
+def load_map(path: Path, version: str = "us") -> list[tuple[int, str]]:
+    """Fill US, CODE_SEGMENTS and REGIONS from the decomp's linker map (read as
+    data); returns every (address, symbol) for labels."""
     pattern = re.compile(r"^\s+0x00000000([0-9a-f]{8})\s+([A-Za-z_]\w*)\s*$")
-    symbols = {}
+    section = re.compile(r"^\.(main|engine)(\.noload)?\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+load address 0x([0-9a-f]+)")
+    by_address, by_name, sections = {}, {}, {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        match = pattern.match(line)
-        if match:
-            symbols[int(match[1], 16)] = match[2]
-    return sorted(symbols.items())
+        if match := pattern.match(line):
+            by_address[int(match[1], 16)] = match[2]
+            by_name.setdefault(match[2], int(match[1], 16))
+        elif match := section.match(line):
+            sections[match[1] + (match[2] or "")] = (int(match[3], 16) & 0xFFFFFFFF, int(match[4], 16),
+                                                     int(match[5], 16))
+    missing = [name for name in SYMBOLS if name not in by_name] + \
+              [name for name in ("main", "main.noload", "engine", "engine.noload") if name not in sections]
+    if missing:
+        raise SystemExit(f"{path}: the map names none of {missing}")
+    US.update({name: by_name[name] for name in SYMBOLS})
+    layout = layout_for(version)
+    for symbol, field in LAYOUT_ROWS_FOR.items():
+        if layout.value(field) not in (None, US[symbol]):
+            raise SystemExit(f"{path}: {symbol} {US[symbol]:#x} disagrees with layout.{field}")
+    CODE_SEGMENTS[:] = [(name, *sections[name]) for name in ("main", "engine")]
+    REGIONS[:] = [(f"{name} image" if not name.endswith("noload") else f"{name.split('.')[0]} bss",
+                   sections[name][0], sections[name][0] + sections[name][1])
+                  for name in ("main", "main.noload", "engine", "engine.noload")]
+    return sorted(by_address.items())
 
 
 def label(address: int, symbols: list[tuple[int, str]], heap: tuple[int, int] | None) -> str:
@@ -368,7 +399,7 @@ def region_of(virtual: int) -> str:
     pool = US["gObjectPool"]
     if pool <= virtual < pool + OBJECT_BYTES * OBJECT_COUNT:
         return "object pool"
-    if 0x80207D00 <= virtual < 0x80207D00 + 2 * (GFX_POOL_BYTES + 0x50):
+    if US["gGfxPools"] <= virtual < US["gGfxPools"] + 2 * (GFX_POOL_BYTES + 0x50):
         return "gfx pools"
     return "other RDRAM (heap / segments)"
 
@@ -408,7 +439,7 @@ def run_geo(frame: Frame, rom: bytes, fcr31: int, head: int, end: int, poison: l
     for origin in sandbox.verified.values():
         origins[str(origin)] = origins.get(str(origin), 0) + 1
     result = {"args": [f"{value:08x}" for value in args], "violations": sandbox.violations,
-              "level": frame.word(0x8032DDF8) >> 16, "code_blocks_by_rom_origin": origins,
+              "level": frame.word(US["gCurrLevelNum"]) >> 16, "code_blocks_by_rom_origin": origins,
               "instructions": sandbox.instructions, "head": sandbox.u32(US["gDisplayListHead"]),
               "end": sandbox.u32(US["gGfxPoolEnd"])}
     return sandbox, result
@@ -705,6 +736,225 @@ def regen(args) -> int:
     return 0 if not any(report["source_camera"]["differing_written_bytes"].values()) else 2
 
 
+class TapFrame(Frame):
+    """One tap-session task as a frame: RDRAM rebuilt from what the session holds."""
+
+    def __init__(self, session: Path, task, ram_be: bytes):
+        self.dir = session
+        self.ram = ram_be
+        self.dmem = b""
+        self.meta = {"task": {"data_ptr": task.task[12] | 0x80000000, "data_size": task.task[13]}}
+        self.task_words = task.task
+
+
+def graphics_not_captured(frame: TapFrame, ram: bytearray, known: np.ndarray, spliced: bytes, at: int) -> list:
+    """Bytes the moved-camera task makes the RENDERER read that the session lacks: the real
+    closure walker (closure_probe.cpp, scene_closure.h) over the spliced list, read by read
+    (its trace), not by its 32-byte granules, which round into unwritten pool memory."""
+    import closure
+    with tempfile.TemporaryDirectory(prefix="e2-orbit-") as folder:
+        folder = Path(folder)
+        (folder / "rdram.bin").write_bytes(pj64_from_be(bytes(ram)))
+        dmem = bytearray(0x1000)
+        struct.pack_into("<16I", dmem, 0xFC0, *frame.task_words)
+        struct.pack_into("<2I", dmem, 0xFF0, phys(at), len(spliced))
+        (folder / "dmem.bin").write_bytes(bytes(dmem))
+        os.environ["SCENE_LAB_TRACE"] = str(folder / "reads.txt")
+        try:
+            closure.probe(closure.build(), folder, 1)
+        finally:
+            del os.environ["SCENE_LAB_TRACE"]
+        reads = (folder / "reads.txt").read_text(encoding="ascii").split()
+    missing = np.zeros(RDRAM_BYTES, bool)
+    for begin, size in zip(reads[1::3], reads[2::3], strict=True):
+        begin, size = int(begin, 16), int(size)
+        missing[begin:begin + size] = ~known[begin:begin + size]
+    return ranges(missing)
+
+
+def check_orbits(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, orbits: list[str],
+                 scratch_head: int, low_water: int, geo: tuple[int, int], sink=None) -> list[dict]:
+    """A moved camera from the same captured bytes: no output to compare against, so the
+    question is coverage: does the game's renderer read anything the tap did not capture, and
+    does the list it makes send the RSP anywhere the session holds no bytes?"""
+    source_pos = list(struct.unpack_from(">3f", frame.ram, phys(US["gLakituState"] + LAKITU_POS)))
+    mario = list(struct.unpack_from(">3f", frame.ram, phys(US["gMarioStates"] + MARIO_POS)))
+    checked = []
+    for spec in orbits:
+        yaw, pitch, dist = (float(part) for part in spec.split(","))
+        camera = orbit_camera([mario[0], mario[1] + 120.0, mario[2]], source_pos, yaw, pitch, dist)
+        moved, run = run_geo(frame, rom, fcr31, scratch_head, low_water, [], camera)
+        outside = (np.frombuffer(bytes(moved.first), np.uint8) == 1) & ~known
+        entry = {"orbit": spec, "violations": run["violations"], "commands": (run["head"] - scratch_head) // 8,
+                 "objects_visible": sum(1 for _, visible in moved.culling if visible),
+                 "read_bytes_not_captured": int(outside.sum())}
+        if not run["violations"]:
+            main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
+            ram = bytearray(moved.ram())
+            spliced = (frame.ram[phys(main):phys(geo[0])] + ram[phys(scratch_head):phys(run["head"])]
+                       + frame.ram[phys(geo[1]):phys(main) + size])
+            at = (run["head"] + 15) & ~7
+            if phys(at) + len(spliced) <= phys(run["end"]):
+                ram[phys(at):phys(at) + len(spliced)] = spliced
+                # The run's own output, slack included: a buffer a callback allocated and did not
+                # fill holds stale pool memory in the live game too, and the walker's peek past an
+                # ENDDL reads it (never used). Plus the peek past the spliced list's end.
+                made = known.copy()
+                made[phys(scratch_head):phys(run["head"])] = True
+                made[phys(run["end"]):phys(low_water)] = True
+                made[phys(at):phys(at) + len(spliced) + 8] = True
+                missing = graphics_not_captured(frame, ram, made, spliced, at)
+                entry["graphics_bytes_not_captured"] = sum(hi - lo for lo, hi in missing)
+                entry["graphics_not_captured"] = [f"{0x80000000 | lo:08x}-{0x80000000 | hi:08x}"
+                                                  for lo, hi in missing[:8]]
+                if sink:
+                    entry["frame"] = sink(f"orbit_{int(yaw)}_{int(pitch)}_{int(dist)}", bytes(ram), at, len(spliced))
+            else:
+                entry["violations"] = ["no pool room for the spliced list"]
+        checked.append(entry)
+    return checked
+
+
+def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbols,
+               orbits: list[str] = (), sink=None) -> dict:
+    """Regenerate one captured task's geo output in place and compare every byte the game wrote
+    with what the tap captured; list every byte the renderer read that the tap did not capture."""
+    main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
+    pool = frame.word(US["gGfxPool"])
+    entry = {"global_timer": frame.word(US["gGlobalTimer"]), "pool": f"{pool:08x}", "data_ptr": f"{main:08x}"}
+    if pool != main or frame.word(US["gDisplayListHead"]) != main + size:
+        return {**entry, "status": "not parked after this pool's render"}
+    top, low_water = pool + GFX_POOL_BYTES, frame.word(US["gGfxPoolEnd"])
+    try:
+        geo_start, pre = find_geo_start(frame.ram, phys(main), size, phys(top))
+    except RuntimeError as error:
+        return {**entry, "status": str(error)}
+    geo_start |= 0x80000000
+    poison = [(geo_start, main + size), (low_water, top - pre)]
+    sandbox, run = run_geo(frame, rom, fcr31, geo_start, top - pre, poison, None)
+    outside = (np.frombuffer(bytes(sandbox.first), np.uint8) == 1) & ~known
+    reads_outside = [{"range": f"{0x80000000 | lo:08x}-{0x80000000 | hi:08x}", "label": label(lo, symbols, None)}
+                     for lo, hi in ranges(outside)]
+    entry.update({"level": run["level"], "instructions": run["instructions"], "violations": run["violations"],
+                  "read_bytes_not_captured": int(outside.sum()), "reads_not_captured": reads_outside[:20]})
+    if run["violations"]:
+        return {**entry, "status": "sandbox violation"}
+    wrote = np.frombuffer(bytes(sandbox.wrote), np.uint8).astype(bool)
+    out, captured = np.frombuffer(sandbox.ram(), np.uint8), np.frombuffer(frame.ram, np.uint8)
+    outputs = {"main list": (phys(geo_start), phys(run["head"])), "allocations": (phys(run["end"]), phys(top - pre))}
+    differing = {name: int((wrote[lo:hi] & known[lo:hi] & (out[lo:hi] != captured[lo:hi])).sum())
+                 for name, (lo, hi) in outputs.items()}
+    # Output the RSP never reads (a culled part's matrix) is not in the closure, and closure
+    # bytes the game never writes (Vp padding) are stale pool memory: counted, not compared.
+    uncaptured_output = {name: int((wrote[lo:hi] & ~known[lo:hi]).sum()) for name, (lo, hi) in outputs.items()}
+    unwritten_capture = {name: int((~wrote[lo:hi] & known[lo:hi]).sum()) for name, (lo, hi) in outputs.items()}
+    entry.update({"commands": (run["head"] - geo_start) // 8, "differing_written_bytes": differing,
+                  "written_but_not_captured": uncaptured_output, "captured_but_not_written": unwritten_capture})
+    if any(differing.values()):
+        commands = (run["head"] - geo_start) // 8
+        segments = segment_table(frame.ram)
+        regenerated = np.where(wrote, out, captured).tobytes()
+        entry["first_divergence"] = first_divergence(
+            walk(regenerated, phys(geo_start), commands, (phys(pool), phys(top)), segments, wrote),
+            walk(frame.ram, phys(geo_start), commands, (phys(pool), phys(top)), segments, wrote))
+    identical = not any(differing.values()) and not outside.any()
+    if orbits:
+        entry["orbits"] = check_orbits(frame, rom, fcr31, known, orbits, (main + size + 15) & ~7, low_water,
+                                       (geo_start, run["head"]), sink)
+    if sink:
+        entry["frame"] = sink("captured", frame.ram, main, size)
+        identical = identical and all(not o["violations"] and not o["read_bytes_not_captured"]
+                                      and not o.get("graphics_bytes_not_captured") for o in entry["orbits"])
+    return {**entry, "status": "identical" if identical else "divergent"}
+
+
+def rom_images(rom: bytes) -> tuple[np.ndarray, np.ndarray]:
+    """The ROM's own code images (code, constants, .data's initial values) at their load addresses."""
+    image, known = np.zeros(RDRAM_BYTES, np.uint8), np.zeros(RDRAM_BYTES, bool)
+    for _, start, length, rom_offset in CODE_SEGMENTS:
+        image[phys(start):phys(start) + length] = np.frombuffer(rom[rom_offset:rom_offset + length], np.uint8)
+        known[phys(start):phys(start) + length] = True
+    return image, known
+
+
+def frame_sink(args, header: dict, vi: dict, task):
+    """Writes one task's frame inputs replay.py renders: what the session holds, the rest poison."""
+    def sink(name: str, ram: bytes, data_ptr: int, data_size: int) -> str:
+        folder = args.frames / f"task{task.fields['task_index']:05d}-{name}"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "rdram.bin").write_bytes(pj64_from_be(ram))
+        dmem = bytearray(0x1000)
+        struct.pack_into("<16I", dmem, 0xFC0, *task.task)
+        struct.pack_into("<2I", dmem, 0xFF0, phys(data_ptr), data_size)
+        (folder / "dmem.bin").write_bytes(bytes(dmem))
+        (folder / "frame.json").write_text(json.dumps({
+            "schema": "scene-lab-frame/1", "vi": vi, "rom_header": header["rom_header"],
+            "source": {"kind": "e2-from-tap", "session": args.session.name, "task_sequence": task.sequence,
+                       "camera": name}}, indent=2) + "\n", encoding="utf-8")
+        return folder.name
+    return sink
+
+
+def session_vi(tap, args) -> dict | None:
+    """VI registers for written frames: the session's first picture, else --vi-frame's."""
+    if not args.frames:
+        return None
+    vi = next((r.vi for r in tap.read_records(args.session / "tap.bin") if isinstance(r, tap.Present)), None)
+    if vi is None and args.vi_frame:
+        vi = json.loads((args.vi_frame / "frame.json").read_text(encoding="utf-8"))["vi"]
+    if vi is None:
+        raise SystemExit("--frames needs VI registers: the session has no picture; pass --vi-frame")
+    return vi
+
+
+def from_tap(args) -> int:
+    """E2-live: every captured task regenerated from the session's bytes and the ROM alone."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import tap
+    symbols = load_map(args.map)
+    rom = args.rom.read_bytes()
+    header = tap.session_header(args.session)
+    if be_from_pj64(bytes.fromhex(header["rom_header"])) != rom[:0x40]:
+        raise SystemExit("the session's ROM header does not match --rom")
+    image, image_known = rom_images(rom)
+    vi = session_vi(tap, args)
+    fulls: dict[int, bytes] = {}
+
+    def keep_fulls(records):
+        for record in records:
+            if isinstance(record, tuple) and record[0] == "full":
+                fulls[record[1]] = record[2]
+            yield record
+
+    results = []
+    states = tap.scene_states(keep_fulls(tap.read_records(args.session / "tap.bin")), int(header["rdram_size"]))
+    for index, (task, regions, ram, known) in enumerate(states):
+        if index % args.every:
+            continue
+        if args.limit and len(results) >= args.limit:
+            break
+        entry = {"task_index": task.fields["task_index"], "has_regions": regions is not None}
+        full = fulls.pop(task.sequence - 1, None)
+        if full is not None:   # the tap's full RDRAM copy, taken at the same instant
+            entry["captured_bytes_differing_from_full_copy"] = int(
+                (known & (ram != np.frombuffer(full, np.uint8, known.size))).sum())
+        ram_be = np.frombuffer(be_from_pj64(ram.tobytes()), np.uint8)   # captured spans are whole words
+        ram_be = np.where(image_known & ~known, image, ram_be)
+        sink = frame_sink(args, header, vi, task) if args.frames else None
+        entry.update(check_task(TapFrame(args.session, task, ram_be.tobytes()), rom, args.fcr31,
+                                known | image_known, symbols, args.orbit, sink))
+        results.append(entry)
+        print(json.dumps({k: v for k, v in entry.items() if k != "reads_not_captured"}))
+    statuses: dict[str, int] = {}
+    for entry in results:
+        statuses[entry["status"]] = statuses.get(entry["status"], 0) + 1
+    summary = {"session": str(args.session), "tasks_checked": len(results), "statuses": statuses}
+    print(json.dumps(summary))
+    if args.out:
+        args.out.write_text(json.dumps({"summary": summary, "tasks": results}, indent=2) + "\n", encoding="utf-8")
+    return 0 if results and statuses.get("identical") == len(results) else 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -712,12 +962,29 @@ def main() -> int:
     run.add_argument("frame", type=Path)
     run.add_argument("out", type=Path)
     run.add_argument("--rom", type=Path, required=True)
-    run.add_argument("--map", type=Path, help="US linker map (STROOP MappingUS.map) to label addresses")
+    run.add_argument("--map", type=Path, required=True,
+                     help="the decomp's linker map for this version (STROOP MappingUS.map): every address")
     run.add_argument("--orbit", action="append", default=[], help="YAW,PITCH,DIST around Mario")
     run.add_argument("--focus-height", type=float, default=120.0)
     run.add_argument("--fcr31", type=lambda value: int(value, 0), default=0x01000800,
                      help="FPU control (libultra's FS|EV, as the savestates hold)")
     run.set_defaults(handler=regen)
+    live = commands.add_parser("from-tap")
+    live.add_argument("session", type=Path, help="a scene-tap session folder (tap.py arm, or tap.py offline)")
+    live.add_argument("--rom", type=Path, required=True)
+    live.add_argument("--map", type=Path, required=True)
+    live.add_argument("--every", type=int, default=1, help="check every n-th task")
+    live.add_argument("--limit", type=int, default=0)
+    live.add_argument("--out", type=Path, help="write the per-task report here (private scratch)")
+    live.add_argument("--frames", type=Path, help="write each checked task (captured and orbits) as frame "
+                      "inputs replay.py renders: private scratch only")
+    live.add_argument("--vi-frame", type=Path, help="VI registers from this frame input when the session "
+                      "holds no picture (an offline session)")
+    live.add_argument("--orbit", action="append", default=[],
+                      help="YAW,PITCH,DIST: also re-run each task from a moved camera and require it "
+                           "to read only captured bytes")
+    live.add_argument("--fcr31", type=lambda value: int(value, 0), default=0x01000800)
+    live.set_defaults(handler=from_tap)
     args = parser.parse_args()
     return args.handler(args)
 
