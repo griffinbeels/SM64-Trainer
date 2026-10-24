@@ -139,7 +139,16 @@ function ReplayVisual() {
   </div>`;
 }
 
-const VISUALS = { game: GameVisual, memory: MemoryVisual, live: LiveVisual,
+function JournalVisual() {
+  const steps = ["The journal: every event, in order", "Attempts, rebuilt from it",
+    "Your personal best and rank", "This page asks again and redraws"];
+  return html`<div class="hiw-road" aria-label="From the journal to the page">
+    ${steps.map((step, i) => html`${i ? html`<span class="hiw-arrow" aria-hidden="true">↓</span>` : ""}
+      <span class=${`hiw-node ${i === steps.length - 1 ? "is-gold" : ""}`}>${step}</span>`)}
+  </div>`;
+}
+
+const VISUALS = { journal: JournalVisual, game: GameVisual, memory: MemoryVisual, live: LiveVisual,
   grab: GrabVisual, frames: FramesVisual, message: MessageVisual, replay: ReplayVisual };
 
 export function HowItWorks({ t, showCredits }) {
