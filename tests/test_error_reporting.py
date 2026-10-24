@@ -129,7 +129,7 @@ def test_gpu_owner_logging_carries_structured_native_failure_through_actual_sdk(
     assert event["exception"]["values"][-1]["type"] == "RuntimeError"
 
 
-@pytest.mark.parametrize("name", ["sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64.replay"])
+@pytest.mark.parametrize("name", ["sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64.replay", "sm64.poller"])
 def test_actual_application_logger_names_supply_breadcrumbs(tmp_path, name):
     configure(tmp_path)
     logger = logging.getLogger(name)
@@ -339,8 +339,8 @@ def test_spool_bounds_cooldown_expiry_and_monthly_budget(tmp_path, monkeypatch):
 
 def test_oversized_corrupt_stale_spool_files_are_removed(tmp_path):
     import os
-    from sm64_events.core.error_reporting_transport import MAX_ENVELOPE_BYTES
-    (tmp_path / "oversized.envelope").write_bytes(b"x" * (MAX_ENVELOPE_BYTES + 1))
+    from sm64_events.core.error_reporting_transport import MAX_STORED_BYTES
+    (tmp_path / "oversized.envelope").write_bytes(b"x" * (MAX_STORED_BYTES + 1))
     (tmp_path / "corrupt.envelope").write_bytes(b"not an envelope")
     stale = tmp_path / "stale.envelope"
     stale.write_bytes(envelope().serialize())

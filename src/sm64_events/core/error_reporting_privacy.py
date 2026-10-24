@@ -1,10 +1,12 @@
 """Allowlisted automatic diagnostics, scrubbed before persistence or delivery.
 
 This intentionally does not accept arbitrary SDK context: request bodies, locals,
-user identities, source lines and attachments never become automatic reports.
+user identities, source lines and SDK scope attachments never become automatic
+reports. The only attachment is the transport's own redacted Debug report.
 """
 from __future__ import annotations
 
+import json
 import re
 import ipaddress
 from collections.abc import Mapping
@@ -34,6 +36,19 @@ _CONTEXT_KEYS = frozenset({
     "gl_vendor", "gl_renderer", "gl_version", "missing_entry_point",
     "stalled_for_s",
 })
+# Operational loggers only: gameplay event wires, profiles, community/account
+# and process inventories stay local. Breadcrumbs, Sentry Logs and the Debug
+# report's server-log section all filter through `operational_log`.
+OPERATIONAL_LOGGERS = frozenset({"sm64.replay", "sm64.setup", "sm64.capturelayer", "sm64.desktop",
+                                 "sm64.ghost.capture", "sm64.updater", "sm64.poller",
+                                 "uvicorn.error", "uvicorn.access"})
+_ACCESS_STATUS = re.compile(r'"\s+([1-5][0-9]{2})\s*$')
+LOG_LINE_LIMIT = 600
+BREADCRUMB_LIMIT = 100
+BREADCRUMB_BYTES = 24 * 1024
+_LOG_TEXT_ATTRIBUTES = frozenset({"sentry.severity_text", "sentry.sdk.name", "sentry.sdk.version",
+                                  "process.runtime.name", "process.runtime.version", "code.function.name",
+                                  "thread.name", "sentry.message.template", "sentry.origin"})
 
 
 def _safe_url(match: re.Match) -> str:
@@ -56,6 +71,18 @@ def scrub_text(value: object, limit: int = 600) -> str:
     ):
         text = pattern.sub(replacement, text)
     return text[:limit]
+
+
+def routine_access(name: object, message: object) -> bool:
+    """A request that succeeded (1xx-3xx). The page polls, so these bury the
+    evidence; a failing endpoint (4xx/5xx) or an unparsed line is kept."""
+    status = _ACCESS_STATUS.search(str(message)) if name == "uvicorn.access" else None
+    return status is not None and int(status[1]) < 400
+
+
+def operational_log(name: object, message: object) -> bool:
+    """The one keep rule for breadcrumbs, Sentry Logs and the report's server log."""
+    return name in OPERATIONAL_LOGGERS and not routine_access(name, message)
 
 
 def _safe_ip(match: re.Match) -> str:
@@ -96,6 +123,12 @@ def safe_context(context: object) -> dict:
     return result
 
 
+def _source_file(value: object) -> str:
+    filename = str(value).replace("\\", "/")
+    marker = filename.find("sm64_events/")
+    return scrub_text(filename[marker:] if marker >= 0 else PurePosixPath(filename).name, 180)
+
+
 def _frames(stacktrace: object) -> dict:
     if not isinstance(stacktrace, dict):
         return {}
@@ -103,10 +136,7 @@ def _frames(stacktrace: object) -> dict:
     for frame in stacktrace.get("frames", [])[-30:]:
         if not isinstance(frame, dict):
             continue
-        filename = str(frame.get("filename", "")).replace("\\", "/")
-        marker = filename.find("sm64_events/")
-        filename = filename[marker:] if marker >= 0 else PurePosixPath(filename).name
-        safe = {"filename": scrub_text(filename, 180)}
+        safe = {"filename": _source_file(frame.get("filename", ""))}
         for key in ("module", "function"):
             if isinstance(frame.get(key), str):
                 safe[key] = scrub_text(frame[key], 180)
@@ -120,11 +150,11 @@ def _frames(stacktrace: object) -> dict:
 def safe_breadcrumb(crumb: dict, _hint: object = None) -> dict | None:
     """Only operational logs: event wires, profiles and process inventories stay local."""
     category = str(crumb.get("category", ""))
-    if category not in {"sm64.replay", "sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64.ghost.capture", "sm64.updater"}:
+    if not operational_log(category, crumb.get("message", "")):
         return None
     result = {
         "category": scrub_text(category, 120),
-        "message": scrub_text(crumb.get("message", ""), 220),
+        "message": scrub_text(crumb.get("message", ""), LOG_LINE_LIMIT),
         "level": scrub_text(crumb.get("level", "info"), 20),
         "type": "default",
     }
@@ -187,7 +217,70 @@ def safe_event(event: dict) -> dict:
         if safe:
             result["contexts"] = safe
     crumbs = event.get("breadcrumbs", {})
-    if isinstance(crumbs, dict):
-        safe = [safe_breadcrumb(crumb) for crumb in crumbs.get("values", [])[-20:]]
-        result["breadcrumbs"] = {"values": [crumb for crumb in safe if crumb]}
+    if isinstance(crumbs, dict) and isinstance(crumbs.get("values"), list):
+        result["breadcrumbs"] = {"values": _bounded_breadcrumbs(crumbs["values"])}
     return result
+
+
+def _bounded_breadcrumbs(values: list) -> list:
+    """Newest first within a byte budget: the lead-up never pushes an event past its cap."""
+    kept, used = [], 0
+    for crumb in reversed(values[-BREADCRUMB_LIMIT:]):
+        safe = safe_breadcrumb(crumb) if isinstance(crumb, dict) else None
+        if safe is None:
+            continue
+        used += len(json.dumps(safe, default=str))
+        if used > BREADCRUMB_BYTES:
+            break
+        kept.append(safe)
+    return kept[::-1]
+
+
+def _log_attributes(attributes: Mapping) -> dict:
+    """Allowlisted log attributes: hostname, PIDs, raw arguments and extras never leave."""
+    result = {}
+    for key, value in attributes.items():
+        if key == "code.file.path" and isinstance(value, str):
+            result[key] = _source_file(value)
+        elif key in ("code.line.number", "sentry.severity_number") and type(value) is int:
+            result[key] = value
+        elif key in ("sentry.release", "sentry.environment") and _build_identity({"release": value}):
+            result[key] = value
+        elif key in _LOG_TEXT_ATTRIBUTES and isinstance(value, str):
+            result[key] = scrub_text(value, 180)
+    return result
+
+
+def _operational_log(name: object, severity: object, body: object, attributes: Mapping):
+    """The Debug report's server-log filter, for WARNING and above (OTel severity 13+)."""
+    if not operational_log(name, body) or type(severity) is not int or severity < 13:
+        return None
+    return scrub_text(body, LOG_LINE_LIMIT), {"logger.name": name, **_log_attributes(attributes)}
+
+
+def safe_log(log: Mapping) -> dict | None:
+    """Project one SDK log record (before batching) or drop it."""
+    attributes = log.get("attributes") if isinstance(log.get("attributes"), Mapping) else {}
+    projected = _operational_log(attributes.get("logger.name"), log.get("severity_number"), log.get("body"), attributes)
+    if projected is None or not isinstance(log.get("time_unix_nano"), int):
+        return None
+    body, attributes = projected
+    return {"severity_text": scrub_text(log.get("severity_text", ""), 20), "severity_number": log["severity_number"],
+            "body": body, "attributes": attributes, "time_unix_nano": log["time_unix_nano"],
+            "trace_id": None, "span_id": None}
+
+
+def safe_log_item(item: object) -> dict | None:
+    """Rebuild one serialized log item at transport admission."""
+    from sentry_sdk.utils import serialize_attribute
+    if not isinstance(item, Mapping) or not isinstance(item.get("attributes"), Mapping):
+        return None
+    attributes = {key: value.get("value") for key, value in item["attributes"].items() if isinstance(value, Mapping)}
+    projected = _operational_log(attributes.get("logger.name"), attributes.get("sentry.severity_number"),
+                                 item.get("body"), attributes)
+    stamp = item.get("timestamp")
+    if projected is None or type(stamp) not in (int, float):
+        return None
+    body, attributes = projected
+    return {"timestamp": stamp, "level": scrub_text(item.get("level", ""), 20), "body": body,
+            "attributes": {key: serialize_attribute(value) for key, value in attributes.items()}}

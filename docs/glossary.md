@@ -2894,9 +2894,12 @@ log records and [[ghost]] playback state. The builder omits private paths and
 custom display labels. The Debug report
 button in the settings drawer writes one and opens Explorer with it selected,
 so a user can attach evidence to a bug report instead of a description of it.
+The first automatic error of each issue in a session carries the same report
+as an attachment, built by the upload worker after the error is captured.
 
 - **Lives** — the report builder (`src/sm64_events/core/diagnostics.py`) → the
-  settings drawer (`src/sm64_events/ui/components/header.js`)
+  settings drawer (`src/sm64_events/ui/components/header.js`) and the error
+  upload worker (`src/sm64_events/core/error_reporting_transport.py`)
 
 ### Memory layout
 

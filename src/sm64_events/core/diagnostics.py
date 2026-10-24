@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from sm64_events.core.diagnostic_export import native_export, report_line, report_value
+from sm64_events.core.diagnostic_export import native_export, report_line, report_value, routine_line
 from sm64_events.core.diagnostic_privacy import safe_snapshot
-from sm64_events.core.diagnostic_retention import REPORT_KEEP as KEEP_REPORTS, REPORT_MAX_BYTES, report_directory
+from sm64_events.core.diagnostic_retention import REPORT_KEEP as KEEP_REPORTS, bounded_report, report_directory
 from sm64_events.core.error_reporting_privacy import scrub_text
 from sm64_events.core.native_diagnostics import bounded_tail
 
@@ -33,9 +33,15 @@ UILOG_EMPTY = ("empty — the page posts these itself, so silence means the "
                "open tab is running old JS, or no page was open")
 
 
-def _tail(path: Path, count: int) -> list[str]:
+def _tail(path: Path, count: int, *, skip: Callable[[str], bool] | None = None) -> list[str]:
     text, _ = bounded_tail(path, limit=256 * 1024)
-    return [report_line(line)[:LINE_CLIP] for line in text.splitlines()[-count:]]
+    lines = [line for line in text.splitlines() if skip is None or not skip(line)]
+    return [report_line(line)[:LINE_CLIP] for line in lines[-count:]]
+
+
+def _server_log(path: Path) -> list[str]:
+    # Successful requests are skipped before counting, so the tail is operational.
+    return _tail(path, LOG_TAIL_LINES, skip=routine_line)
 
 
 def _fence(lines: list[str]) -> str:
@@ -71,12 +77,15 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
                  health: Callable[[], dict],
                  events: Callable[[], list], replay: Callable[[], dict] | None = None,
                  setup: Callable[[], dict] | None = None, build: dict | None = None,
-                 snapshot: Callable[[], dict] | None = None) -> str:
+                 snapshot: Callable[[], dict] | None = None, attached: bool = False) -> str:
+    """`attached` changes only the header: automatic error reports carry this same text."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    sharing = ("Attached to an automatic error report." if attached
+               else "This export leaves your machine only when you share it.")
     head = (
         "# SM64 Trainer debug report\n\n"
         f"Generated {now} (UTC). Private paths and display labels are omitted. "
-        "This export leaves your machine only when you share it.\n\n"
+        f"{sharing}\n\n"
         f"- version: {version}\n"
         f"- install: {'packaged exe' if frozen else 'from source (dev)'}\n"
         f"- port: {port}\n"
@@ -89,13 +98,13 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
         captured = {"available": False, "error_type": type(error).__name__}
 
     try:
-        log_lines: list[str] | None = _tail(log_file, LOG_TAIL_LINES)
-    except Exception:
+        log_lines: list[str] | None = _server_log(log_file)
+    except Exception:  # noqa: BLE001 - the Server log section re-raises and names the reason.
         log_lines = None
 
     def _log_body() -> str:
         if log_lines is None:
-            _tail(log_file, LOG_TAIL_LINES)  # re-raise the real reason
+            _server_log(log_file)  # re-raise the real reason
         return _fence(log_lines)
 
     def _journal_body() -> str:
@@ -145,11 +154,7 @@ def write_report(report_dir: Path, markdown: str, *,
     report_dir = report_directory(report_dir, keep=keep)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%fZ")
     out = report_dir / f"debug-report-{stamp}.md"
-    raw = markdown.encode("utf-8")
-    suffix = b"\n\n[Report truncated at the 1 MiB size limit.]\n"
-    if len(raw) > REPORT_MAX_BYTES:
-        raw = raw[:REPORT_MAX_BYTES - len(suffix)].decode("utf-8", "ignore").encode("utf-8") + suffix
-    out.write_bytes(raw)
+    out.write_bytes(bounded_report(markdown))
     # Resolved: the path is shown to the user and handed to the reveal
     # endpoint, and from source data_root() is cwd-relative.
     return out.resolve()

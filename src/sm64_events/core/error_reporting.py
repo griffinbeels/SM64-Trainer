@@ -1,8 +1,11 @@
 """Automatic, private, bounded error reports; inert until configured with a DSN.
 
 The user preference survives restarts. Captures are safe from any application
-thread, and transport failures never become application failures. No gameplay,
-ROM, recording, raw log or screenshot attachments are collected.
+thread, and transport failures never become application failures. The only
+attachment is the same redacted Debug report the user can export, built on the
+transport's worker; no ROM, recording, database, input or screenshot is sent.
+Warning-and-above operational log lines go out as Sentry Logs through the
+Debug report's server-log filter; INFO lines stay breadcrumbs.
 """
 from __future__ import annotations
 
@@ -16,10 +19,10 @@ from pathlib import Path
 
 import sentry_sdk
 from sentry_sdk.integrations.excepthook import ExcepthookIntegration
-from sentry_sdk.integrations.logging import LoggingIntegration, ignore_logger
+from sentry_sdk.integrations.logging import LoggingIntegration, ignore_logger, ignore_logger_for_sentry_logs
 from sentry_sdk.integrations.threading import ThreadingIntegration
 
-from .error_reporting_privacy import safe_breadcrumb, safe_context, safe_event
+from .error_reporting_privacy import BREADCRUMB_LIMIT, safe_breadcrumb, safe_context, safe_event, safe_log
 from .error_reporting_transport import PersistentTransport
 
 _lock = threading.RLock()
@@ -30,6 +33,7 @@ _enabled = False
 _configuration_error = False
 _preference_error = False
 _diagnostic_source = None
+_report_source = None
 _collecting = threading.local()
 _consent_generation = 0
 _consent_since = 0.0
@@ -100,6 +104,27 @@ def set_diagnostic_source(source):
     return unbind
 
 
+def set_report_source(source):
+    """Bind the app's Debug report builder; an older app cannot unregister its replacement."""
+    global _report_source
+    _report_source = source
+    def unbind():
+        global _report_source
+        if _report_source is source:
+            _report_source = None
+    return unbind
+
+
+def _debug_report():
+    """Called on the transport worker only, and only while reporting is enabled."""
+    source = _report_source
+    return source() if source is not None and _enabled else None
+
+
+def _before_send_log(log, _hint):
+    return safe_log(log) if _enabled else None
+
+
 def _before_breadcrumb(crumb, hint):
     generation = _consent_generation
     result = safe_breadcrumb(crumb, hint) if _enabled else None
@@ -143,18 +168,21 @@ def configure(*, dsn, release, environment, directory, enabled=True):
             # Never capture error collector/HTTP diagnostics recursively.
             for logger in ("sentry_sdk.*", "urllib3.*", "sm64_events.core.error_reporting*"):
                 ignore_logger(logger)
-            transport = PersistentTransport({"dsn": dsn}, _directory, enabled=_enabled)
+                ignore_logger_for_sentry_logs(logger)
+            transport = PersistentTransport({"dsn": dsn}, _directory, enabled=_enabled, report=_debug_report)
             _transport = transport
             sentry_sdk.init(
                 dsn=dsn, release=release, environment=environment,
                 transport=transport, default_integrations=False, auto_enabling_integrations=False,
                 integrations=[ExcepthookIntegration(), ThreadingIntegration(),
-                              LoggingIntegration(level=logging.INFO, event_level=logging.ERROR, sentry_logs_level=None)],
+                              LoggingIntegration(level=logging.INFO, event_level=logging.ERROR,
+                                                 sentry_logs_level=logging.WARNING)],
                 send_default_pii=False, include_local_variables=False,
-                include_source_context=False, attach_stacktrace=False, max_breadcrumbs=20,
+                include_source_context=False, attach_stacktrace=False, max_breadcrumbs=BREADCRUMB_LIMIT,
                 before_send=_before_send, before_breadcrumb=_before_breadcrumb,
+                enable_logs=True, before_send_log=_before_send_log,
                 traces_sample_rate=0, profiles_sample_rate=0, auto_session_tracking=False,
-                send_client_reports=False, enable_logs=False, shutdown_timeout=0,
+                send_client_reports=False, shutdown_timeout=0,
             )
             _client = sentry_sdk.get_client()
         except Exception:  # noqa: BLE001 -- offline diagnostics must not prevent app startup

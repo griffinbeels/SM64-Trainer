@@ -4,9 +4,10 @@ Packaged builds can send unexpected Python errors, browser errors, startup failu
 and terminal Practice Replay installation errors to a private Sentry project.
 Players do not need accounts or to submit reports. Settings -> Error reports turns
 collection off and deletes pending uploads and breadcrumbs. Reporting is enabled by
-default in configured builds; an unreadable preference fails closed. The existing
-Debug report export remains available independently. A build without a configured
-DSN sends nothing and says so.
+default in configured builds; an unreadable preference fails closed. The first
+error of each issue in a session also carries the same filtered Debug report a
+player can export. The export remains available independently. A build without a
+configured DSN sends nothing and says so.
 
 ## What a failure needs
 
@@ -26,8 +27,10 @@ questions.
 | Ghost enabled/target-present, native playback/display state, counts | Yes | Yes |
 | Cached setup checks, ROM region, polling/input health counters | Yes | Yes |
 | Own memory/handle/thread counts | Yes | Yes |
-| Recognized native log events and numeric/enum fields | Latest 32, within 16 KiB snapshot | Bounded recognized records from known log tails |
-| Local journal/UI observations | No | Counts, clocks and states; display labels omitted |
+| Recognized native log events and numeric/enum fields | Latest 32 within a 24 KiB snapshot; absent log files only counted | Bounded recognized records from known log tails |
+| The Debug report itself | Attached to the first error of each issue, at most 5 per session | Exported on request |
+| Operational log lines (the report's server-log filter) | INFO as up to 100 breadcrumbs; WARNING and above as Sentry Logs | Last 400 lines, successful requests skipped |
+| Local journal/UI observations | Only inside the attached report | Counts, clocks and states; display labels omitted |
 | Raw native messages, account/profile/roster labels or arbitrary log fields | No | No |
 | ROMs, video, inputs, databases, screenshots, environment, request bodies, locals | No | No file contents or attachments |
 
@@ -52,6 +55,17 @@ Errors automatically receive this snapshot before being queued. Unexpected nativ
 ghost model/pose/playback faults also report when no Python exception occurs;
 ordinary preparation, another scene and waiting for an attempt do not. There is
 no background native/log sampler or automatic report-file generation.
+
+The attached report comes from the same builder and redaction as the export.
+The upload worker builds it after capture, never the failing thread: about 18 ms
+and 82 KB on a 17,669-event journal with native logs (2026-10-24). An attachment
+is cut at 256 KiB. Delivery holds that error until the report is attached or
+refused. The report reads only the latest 100 journal rows. Identity is the
+exception type and its last frame, or the message, so differing error text
+shares one report. Sentry Logs pass the same logger allowlist and scrubber.
+Their attributes keep logger, level, release, function, line and module path.
+Hostname, PIDs, raw arguments and extras are dropped. Logs stay in memory, at
+most 500 lines a day, and an identical line repeats at most once a minute.
 
 Updater failures carry the running release plus the installed and target versions,
 failed phase, attempt/count, planned download bytes and available OS/HTTP error
@@ -120,10 +134,16 @@ request tokens, player/account identities, machine names and persistent device
 identifiers are excluded. Ephemeral producer PID/generation identifies a runtime,
 not a player. No administrative Sentry credential is bundled.
 
-Only named operational loggers supply breadcrumbs. Gameplay event wires, unrelated
+Only named operational loggers, uvicorn's own included (`OPERATIONAL_LOGGERS`),
+supply breadcrumbs, Sentry Logs and the report's server-log lines. One rule
+(`operational_log`) drops successful request lines (1xx-3xx) from all three and
+keeps failing ones (4xx/5xx), so the page's polling cannot fill the 400-line tail.
+Gameplay event wires, unrelated
 process rankings and community/account logs are excluded. Turning reporting off
 also prevents breadcrumb collection and clears prior breadcrumbs, so re-enabling
-cannot upload prior log history from the disabled period. Automatic native/GPU
+cannot upload prior log history from the disabled period. It also drops queued
+log lines and any report still being built; a log line written before the latest
+re-enable is never sent. Automatic native/GPU
 history is also bounded to the current reporting period. Normal performance records keep
 aggregate machine load and Trainer/emulator resources; unrelated program names
 are not retained in logs or `/health`.
@@ -149,7 +169,8 @@ app's 24-hour local cleanup. Opt-out cannot retract an already accepted upload.
 | Disposable artifact | Bound and cleanup |
 | --- | --- |
 | Exported reports | 24 hours, at most 3 files, at most 1 MiB each; cleanup at normal startup and export |
-| Unsent automatic envelopes and abandoned upload temporaries | 24 hours, at most 20 / 1 MiB total; expiry during active sessions, shutdown and restart |
+| Unsent automatic envelopes and abandoned upload temporaries | 24 hours, at most 20 / 2 MiB total; attached reports never fill the last 512 KiB; expiry during active sessions, shutdown and restart |
+| Unsent Sentry Logs | Memory only, at most 10 batches; lost at exit |
 | Python server log | 1 MiB plus one backup; stale/oversized legacy debug logs removed at startup |
 | Performance log | 1 MiB plus one previous file; stale/oversized files removed at startup |
 | UI observation log | Existing 2 MB bound; stale file removed at normal startup |
@@ -223,6 +244,10 @@ the wrapper in that ambiguous case; retrying installation is safe.
 ## Verification limits
 
 Synthetic transport tests establish capture, scrubbing, queue/retry and opt-out.
+`tests/test_error_report_evidence.py` covers the attachment, Sentry Logs and
+breadcrumbs the same way. Neither has been observed in the real project yet.
+Confirm on the first real event that the project keeps the attachment (plan
+quota and attachment settings) and that its Logs view shows the warning lines.
 Offline browser tests establish Settings and the continuous Installing state.
 Installer tests use scratch files and controlled native boundaries. The opt-in
 `tests/test_sentry_live_reporting.py` exercises normal startup and the real failed
