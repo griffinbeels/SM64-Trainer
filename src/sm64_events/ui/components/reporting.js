@@ -33,8 +33,8 @@ export function ReportingSettings() {
       <input id="automatic-error-reports" type="checkbox" checked=${!!status?.enabled}
           disabled=${!status || busy} onchange=${event => change(event.target.checked)} />
     </label>
-    <p class="settings-note">Helps fix crashes and failed operations. Reports include technical
-      error details with personal paths and credentials filtered. No screenshots or gameplay recordings.</p>
+    <p class="settings-note">Helps fix crashes and failed operations. Reports include the same
+      filtered debug report you can export, with personal paths and credentials removed. No screenshots or recordings.</p>
     ${status && !status.configured && html`<p class="settings-note">Automatic reporting is not configured in this build.</p>`}
     ${status?.configured && status?.enabled && html`<p class="settings-note">Reports send automatically in the background.</p>`}
     ${status?.preference_error && html`<p class="settings-note" role="status">

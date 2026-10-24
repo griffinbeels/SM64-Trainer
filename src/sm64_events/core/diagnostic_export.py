@@ -9,7 +9,7 @@ from collections.abc import Mapping
 import json
 import re
 
-from sm64_events.core.error_reporting_privacy import scrub_text
+from sm64_events.core.error_reporting_privacy import LOG_LINE_LIMIT, OPERATIONAL_LOGGERS, scrub_text
 from sm64_events.core.native_diagnostics import technical_events
 
 _TEXT_FIELDS = frozenset({"state", "status", "type", "surface", "source", "phase", "kind", "reason", "error",
@@ -30,8 +30,7 @@ _FIELDS = _TEXT_FIELDS | frozenset({"id", "seq", "frame", "last_frame", "session
     "commit_limit_bytes", "count", "worst_late_ms", "window_s", "collect_ms", "mode", "surface", "marks", "rows",
     "cards", "cells", "logs", "total", "open", "active", "name", "title", "note", "strat", "course_id", "star_id",
     "level", "area", "igt_frames", "igt_source", "igt", "payload", "checks", "plugin", "pictures", "game"})
-_LOGGERS = frozenset({"sm64.replay", "sm64.setup", "sm64.capturelayer", "sm64.desktop", "sm64.ghost.capture",
-                       "sm64.poller", "uvicorn.error", "uvicorn.access"})
+_LOGGERS = OPERATIONAL_LOGGERS | {"uvicorn.error", "uvicorn.access"}
 
 
 def report_value(value, *, key="", depth=0):
@@ -54,7 +53,7 @@ def report_line(line: str) -> str:
     except (ValueError, TypeError):
         parts = line.split(maxsplit=3)
         if len(parts) == 4 and parts[2] in _LOGGERS:
-            return scrub_text(line, 600)
+            return scrub_text(line, LOG_LINE_LIMIT)
         frame = re.search(r'File "([^"\r\n]+)", line (\d+), in ([\w<>]+)', line)
         if frame:
             filename = frame[1].replace("\\", "/")

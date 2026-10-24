@@ -15,7 +15,7 @@ from typing import Callable
 
 from sm64_events.core.diagnostic_export import native_export, report_line, report_value
 from sm64_events.core.diagnostic_privacy import safe_snapshot
-from sm64_events.core.diagnostic_retention import REPORT_KEEP as KEEP_REPORTS, REPORT_MAX_BYTES, report_directory
+from sm64_events.core.diagnostic_retention import REPORT_KEEP as KEEP_REPORTS, bounded_report, report_directory
 from sm64_events.core.error_reporting_privacy import scrub_text
 from sm64_events.core.native_diagnostics import bounded_tail
 
@@ -71,12 +71,15 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
                  health: Callable[[], dict],
                  events: Callable[[], list], replay: Callable[[], dict] | None = None,
                  setup: Callable[[], dict] | None = None, build: dict | None = None,
-                 snapshot: Callable[[], dict] | None = None) -> str:
+                 snapshot: Callable[[], dict] | None = None, attached: bool = False) -> str:
+    """`attached` changes only the header: automatic error reports carry this same text."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    sharing = ("Attached to an automatic error report." if attached
+               else "This export leaves your machine only when you share it.")
     head = (
         "# SM64 Trainer debug report\n\n"
         f"Generated {now} (UTC). Private paths and display labels are omitted. "
-        "This export leaves your machine only when you share it.\n\n"
+        f"{sharing}\n\n"
         f"- version: {version}\n"
         f"- install: {'packaged exe' if frozen else 'from source (dev)'}\n"
         f"- port: {port}\n"
@@ -145,11 +148,7 @@ def write_report(report_dir: Path, markdown: str, *,
     report_dir = report_directory(report_dir, keep=keep)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%fZ")
     out = report_dir / f"debug-report-{stamp}.md"
-    raw = markdown.encode("utf-8")
-    suffix = b"\n\n[Report truncated at the 1 MiB size limit.]\n"
-    if len(raw) > REPORT_MAX_BYTES:
-        raw = raw[:REPORT_MAX_BYTES - len(suffix)].decode("utf-8", "ignore").encode("utf-8") + suffix
-    out.write_bytes(raw)
+    out.write_bytes(bounded_report(markdown))
     # Resolved: the path is shown to the user and handed to the reveal
     # endpoint, and from source data_root() is cwd-relative.
     return out.resolve()

@@ -240,7 +240,8 @@ only where the wiki actually has a page, so it never leads to a 404.
 **Automatic error reports.** Builds configured for Sentry send technical failures
 in the background. **Settings → Error reports** turns collection off and clears
 pending uploads and breadcrumbs. Errors include bounded capture, setup and ghost
-playback evidence. Reports filter private paths and credentials; gameplay logs,
+playback evidence, and the first error of each kind carries the same filtered
+Debug report you can export. Reports filter private paths and credentials;
 account identities, unrelated applications, screenshots and recordings are excluded.
 See the [data inventory and retention limits](error-reporting.md).
 

@@ -65,6 +65,15 @@ def prune_reports(directory: Path, *, now: float | None = None, keep: int = REPO
         pass
 
 
+def bounded_report(markdown: str, limit: int = REPORT_MAX_BYTES) -> bytes:
+    """One cut for exported files and error attachments; it names its own limit."""
+    raw = markdown.encode("utf-8")
+    if len(raw) <= limit:
+        return raw
+    suffix = f"\n\n[Report truncated at the {limit // 1024} KiB size limit.]\n".encode()
+    return raw[:limit - len(suffix)].decode("utf-8", "ignore").encode("utf-8") + suffix
+
+
 def report_directory(directory: Path, *, keep: int = REPORT_KEEP) -> Path:
     """Reserve a slot through the same guarded cleanup path before writing."""
     path = Path(directory).absolute()

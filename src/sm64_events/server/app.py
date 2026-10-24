@@ -822,7 +822,29 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, 
         capture_layer=capture_layer, ghost=ghost, setup_observer=setup_observer,
         polling_state=lambda: _polling_state(app))
     app.state.diagnostic_snapshot = snapshot
-    app.router.lifespan_context = with_diagnostics(app.router.lifespan_context, snapshot)
+
+    def debug_report(*, attached=False):
+        """The one Debug report: the Settings export and the error-report attachment."""
+        def _events():
+            if service is None or service.db is None:
+                raise RuntimeError("journal unavailable (no db attached)")
+            return service.db.recent_events(diagnostics.JOURNAL_TAIL)
+        return diagnostics.build_report(
+            version=__version__, frozen=is_frozen(), port=server_port(),
+            data_dir=str(data_root().resolve()),
+            log_file=logs_dir() / "sm64_events.log",
+            ui_log_file=uilog.log_path(),
+            perf_log_file=monitor.log_path
+            or data_root() / "data" / "perf_log.jsonl",
+            health=health, events=_events,
+            replay=getattr(getattr(replay, "recorder", None), "diagnostic_status", None),
+            setup=getattr(capture_layer, "diagnostic_status", None),
+            snapshot=lambda: snapshot.collect(local=True),
+            build={"channel": current_build().channel, "build_id": current_build().build_id},
+            attached=attached)
+
+    app.router.lifespan_context = with_diagnostics(app.router.lifespan_context, snapshot,
+                                                   report=lambda: debug_report(attached=True))
     @app.get("/health")
     def health():
         latest = poller.latest
@@ -881,23 +903,7 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, 
         so the existing /api/replay/reveal can open it. Lives HERE like
         /api/pause: it reads poller + broadcaster + service + monitor,
         which only this composition surface holds together."""
-        def _events():
-            if service is None or service.db is None:
-                raise RuntimeError("journal unavailable (no db attached)")
-            return service.db.events()
-        report = diagnostics.build_report(
-            version=__version__, frozen=is_frozen(), port=server_port(),
-            data_dir=str(data_root().resolve()),
-            log_file=logs_dir() / "sm64_events.log",
-            ui_log_file=uilog.log_path(),
-            perf_log_file=monitor.log_path
-            or data_root() / "data" / "perf_log.jsonl",
-            health=health, events=_events,
-            replay=getattr(getattr(replay, "recorder", None), "diagnostic_status", None),
-            setup=getattr(capture_layer, "diagnostic_status", None),
-            snapshot=lambda: snapshot.collect(local=True),
-            build={"channel": current_build().channel, "build_id": current_build().build_id})
-        out = diagnostics.write_report(diagnostics_dir(), report)
+        out = diagnostics.write_report(diagnostics_dir(), debug_report())
         return {"path": str(out), "size_bytes": out.stat().st_size}
 
 

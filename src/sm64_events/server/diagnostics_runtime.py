@@ -54,10 +54,14 @@ def make_snapshot(*, poller, service, monitor, replay, capture_layer, ghost, set
         progress=progress if recorder is not None else None)
 
 
-def with_diagnostics(lifespan, snapshot):
+def with_diagnostics(lifespan, snapshot, *, report=None):
     @asynccontextmanager
     async def combined(app):
-        unbind = error_reporting.set_diagnostic_source(snapshot.collect)
+        unbind_report = error_reporting.set_report_source(report) if report is not None else (lambda: None)
+        unbind_snapshot = error_reporting.set_diagnostic_source(snapshot.collect)
+        def unbind():
+            unbind_snapshot()
+            unbind_report()
         watcher = SilentFailureMonitor(snapshot.progress) if snapshot.has_progress else None
         stopped = True
         try:
