@@ -246,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
         metadata.write_text(json.dumps(build.metadata(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
         import PyInstaller.__main__ as pyi
         pyi.run(beta_args(ffmpeg, metadata))
+        import third_party_notices    # the same license notices a public build carries
+        third_party_notices.stage(DIST / BETA_APP_DIR / "_internal",
+                                  third_party_notices.bundled_import_names(DIST / BETA_APP_DIR, BETA_APP_DIR),
+                                  Path(ffmpeg))
         archive = package_beta(DIST / BETA_APP_DIR, build, DIST, ghosts=ghosts, ghost_author=author)
         pyi.run(installer_args())
         executable = package_installer(WORK / "installer" / "SM64TrainerBetaSetup.exe", archive, build, DIST)
