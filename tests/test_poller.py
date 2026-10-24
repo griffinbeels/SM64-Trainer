@@ -184,6 +184,33 @@ def test_implausible_snapshot_means_layout_mismatch_and_refusal():
     assert p.latest is None
 
 
+def _impossible() -> GameSnapshot:
+    return GameSnapshot(
+        wall_time_utc=datetime(2026, 6, 10, tzinfo=timezone.utc),
+        global_timer=1, mario_action=0, mario_action_timer=0,
+        num_stars=29999, last_completed_course=0, last_completed_star=0,
+    )
+
+
+def test_a_console_reset_mid_play_is_not_reported_as_a_problem(caplog):
+    """beta.30: every F1 reset logged an ERROR telling the tester to "check
+    the address registry", and it showed in their report's Problems. The
+    reattach that follows is the designed path, so it logs below WARNING."""
+    p = Poller(StubMemory(), [EchoDetector()], RecordingBroadcaster(),
+               reader=ScriptedReader([_impossible()]))
+    with caplog.at_level("INFO", logger="sm64.poller"):
+        asyncio.run(p.tick())
+    assert caplog.records and all(r.levelname == "INFO" for r in caplog.records)
+
+
+def test_a_refused_rom_warns_once_per_refusal_streak(caplog):
+    p = Poller(StubMemory(), [], RecordingBroadcaster(),
+               reader=ScriptedReader([_impossible(), _impossible(), snap(1), _impossible()]))
+    with caplog.at_level("INFO", logger="sm64.poller"):
+        assert [p._probe() for _ in range(4)] == [False, False, True, False]
+    assert [r.levelname for r in caplog.records] == ["WARNING", "WARNING"]
+
+
 def test_probe_accepts_plausible_layout():
     mem = StubMemory()
     p = Poller(mem, [], RecordingBroadcaster(), reader=ScriptedReader([snap(1)]))
