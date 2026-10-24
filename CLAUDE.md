@@ -133,7 +133,8 @@ failure, then reverting it. Tests alone do not establish visual correctness.
   the change. New memory reads have human live verification.
 - Update the glossary for changed domain nouns, chain rules for moved value
   hops, the rule index for changed routes, architecture for cross-cutting facts,
-  API docs for endpoints, README for consumer-facing changes, and
+  API docs for endpoints, `docs/user-guide.md` for consumer-facing changes
+  (the README only when the pitch or a pictured surface changes), and
   `ui/credits.js` for a new dependency, data source or tester (with its
   license text in `licenses/` when it is vendored by hand).
 - When a shipped feature changes public capabilities or UI pictured on the

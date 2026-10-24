@@ -471,8 +471,8 @@ Run lifecycle events `run_started`/`run_ended`/`run_paused`/`run_resumed`/
 broadcast-only.
 
 **Rank standards** (`/api/ranks/*` — per-strategy rank ladders, the rank mode,
-and full deletion of custom strategies) are documented in the
-[README](../README.md#rank-badges) rather than here.
+and full deletion of custom strategies) are in the ranks table further down
+this page.
 
 **Error taxonomy:** `404` = no such attempt; `409` = attempt exists but is not valid for the
 operation (bad timer mode, already cleared, non-success outcome, missing clock, or — for

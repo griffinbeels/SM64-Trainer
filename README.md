@@ -1,404 +1,175 @@
+<!-- Keep this page about outcomes, not controls: say what a player gets
+     ("every attempt is timed"), never which button to press, so a redesign
+     changes a picture rather than a paragraph. The screenshots in
+     docs/readme/ regenerate with `uv run python tools/readme_media.py`
+     (CONTRIBUTING.md). Feature detail belongs in docs/user-guide.md. -->
+
+<div align="center">
+
+<img src="website/assets/logo.png" alt="SM64 Trainer" width="112">
+
 # SM64 Trainer
 
-A practice tracker for **Super Mario 64 — Usamune v1.93u (US)** running in
-**Project64 1.6** on Windows.
+**Make every attempt count: the free Super Mario 64 practice companion for Usamune and Project64.**
 
-Play normally. It watches the emulator's memory and does the rest: every star
-grab timed to Usamune's own clock, every reset and death, your PBs, your
-ranks, and an instant video replay of the attempt you just finished.
+Play the way you already do. The trainer times every attempt, keeps your
+bests and their replays, and shows you exactly how your practice is paying off.
 
-Follow the guided setup once, then open it and practise.
+[![Download for Windows](https://img.shields.io/badge/Download_for_Windows-f2c94c?style=for-the-badge&logo=windows&logoColor=0b1b33)](https://sm64trainer.app)
 
----
+[Website](https://sm64trainer.app) · [All releases](https://github.com/griffinbeels/SM64-Trainer/releases) · [User guide](docs/user-guide.md) · [Contributing](CONTRIBUTING.md) · [Support (optional)](https://ko-fi.com/sm64trainer)
 
-## Install
+[![Latest release](https://img.shields.io/github/v/release/griffinbeels/SM64-Trainer?include_prereleases&label=latest&color=0b1b33)](https://github.com/griffinbeels/SM64-Trainer/releases)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-0b1b33)](LICENSE)
+![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0b1b33)
 
-1. **Download `SM64Trainer.exe`** from the [Releases page](../../releases) —
-   a small installer, about 11 MB.
-2. **Run it.** Windows SmartScreen warns because the app is unsigned: click
-   **More info → Run anyway**. It installs to
-   `%LOCALAPPDATA%\Programs\SM64Trainer`, puts an **SM64 Trainer** shortcut on
-   your Desktop, and launches. **That shortcut is your launcher from now on** —
-   it keeps working no matter how many updates land.
-3. **Follow the setup wizard.** Select Emulator, open Project64 1.6 so the
-   trainer can find it, close it to install Practice Replay, then reopen it
-   and load Usamune v1.93u (US), **windowed**. Setup checks the game, replay
-   pictures and inputs before **Ready to practice!** takes you to Practice.
+<img src="docs/readme/hero.png" alt="SM64 Trainer next to a practice session: pick a star, and every attempt lands in the practice log with its time and rank. The new best is marked GOLD." width="900">
 
-That's it — no Python, nothing else to install.
+</div>
 
-> Prefer a portable copy? Grab `SM64Trainer-full.zip` instead, extract it
-> anywhere, and run the exe inside. It self-updates in place wherever it lives.
+## What you get
 
-**Updates are automatic and small.** On launch the app checks GitHub; if
-there's a newer release you get a popup with the patch notes and the exact
-download size. Only the files that actually changed come down — usually ~25 MB,
-sometimes a few kilobytes, never the whole app — each one SHA-256 verified,
-with automatic rollback if anything is interrupted. Then it restarts. Your
-history and PBs are untouched. **Skip this version** silences one release;
-**Later** dismisses until next launch. (In-app updates don't trip SmartScreen —
-only the first manual download does.)
+**You do the practicing. The trainer keeps score.** No spreadsheet to fill
+in, no splits to set up, no new ROM to learn. Open the trainer, open
+Project64, and play Usamune the way you always have.
 
-### What you need
+### Every attempt, timed and kept
 
-- **Windows 11** 64-bit. Windows 10 works if the
-  [Edge WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
-  is installed; it's preinstalled on 11.
-- **Project64 1.6** — other versions are not supported, the memory addresses
-  are 1.6-specific.
-- **Usamune v1.93u (US) or v1.93j (JP)**. The trainer detects the loaded ROM
-  and follows US↔JP swaps automatically, including tracking, inputs and ghosts.
-  Ghosts and practice PBs are shared where a strategy plays the same on both
-  versions; strategies with regional differences keep separate ghosts and PBs.
-  **Settings → Game → Game version** (Auto-detect / JP / US) controls grading;
-  Auto-detect follows the loaded ROM. MARELO remains your overall rating, with
-  each PB graded against its own region's standards. Scorecard **You** follows
-  the Scorecard's US/JP filter. Unverified ROM builds cannot record attempts,
-  PBs or publishable ghosts. Address verification for future builds is covered
-  in [`docs/version-sync.md`](docs/version-sync.md).
-- **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
-- Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
+Star grabs, resets and deaths are recorded the moment they happen, timed by
+Usamune's own clock. Eligible new bests become **GOLDs**: they save their
+replay and show exactly how much time you just found.
 
-**Setup and Practice Replay.** Each page shows the current action, with
-optional help for getting Project64, setting up your own Usamune ROM, and
-configuring the game/controller. Pages advance after a visible acknowledgment;
-Back lets you review earlier steps. **Not now** postpones unfinished setup
-for the current app session. Open it again from **Settings → Setup**.
+<img src="docs/readme/practice.png" alt="One star's practice log: four attempts with their times and ranks, the newest best marked GOLD." width="900">
 
-Already set up? The trainer compares the installed wrapper's SHA-256 hash with
-this build and checks its selected graphics configuration. A matching installation
-skips automatic onboarding, including in a fresh worktree. A stale or incomplete
-installation opens its repair step directly. Only Project64 installation metadata
-is shared across checkouts; your practice data stays in its existing location.
+### See what your hands did
 
-Installing Practice Replay adds a **capture layer** to Project64's plugin
-folder and selects it as the `Graphics Dll`: the trainer's own renderer
-(`GLideN64_SM64Trainer.dll`, LINK's GLideN64 v4.2 with the capture hooks,
-GPL-2.0, credits in its About box) and the capture wrapper (`SM64 Trainer
-v1.0`) that loads it and supplies replay pictures stamped with the game's
-frame counter and inputs. Your existing graphics plugin stays in the folder
-untouched. Install while Project64 is closed; open Usamune once afterward to
-check it. **Manage Practice Replay → Remove Practice Replay** selects your
-previous graphics plugin again, also with Project64 closed.
-Practice tooling runs only on the Usamune practice ROM. Load vanilla SM64,
-another hack or another game for a real run and the same plugin draws as
-plain GLideN64, while the trainer neither tracks nor records.
-The trainer can still use desktop capture when you postpone installation.
-N64 setup currently explains that console tracking is in development.
+Watch any attempt back the moment it ends, alongside its controller inputs.
+Compare it with a saved run and spot the difference.
 
-In an attempt's replay drawer, **Save as template** keeps a named example for
-future attempts. **Import inputs** accepts a text file or pasted document;
-**Templates** lets you filter, select, copy, export or remove saved examples.
-**Copy inputs** copies a compact document you can paste into a message; its name
-autofills when imported. Files use the same text format. The
-amber template overlays your blue inputs on the same rows and direction dials,
-aligned at frame zero. **Template overlay rows** remembers which rows you want
-to compare. Input files and player credit stay local; community browsing and
-hosted video sharing are future features.
+### Race the community, inside the game
 
-> **No sound on a saved replay?** Windows has routed the app's audio — and the
-> embedded browser's (`msedgewebview2.exe`) — to a different output device.
-> Open **Settings → System → Sound → Volume mixer** and point both at your
-> speakers. (A WebView2 quirk in the current build.)
+Challenge a shared ghost directly in Project64. See someone else's line, try
+to keep up, and turn a time on a spreadsheet into something you can learn
+from. Your best attempt could be someone else's next breakthrough.
 
----
+### A clear ladder, from Capless to Mario
 
-## What it does
+Community time standards turn improvement into a rank you can see. Ranks are
+graded per strategy, so a fast time on one never flatters another. Nine tiers
+of five divisions give every star a next goal, and one rating rolls them all up.
 
-**Practice.** Every star grab, reset, death, level change, Bowser key and
-dustless trick is detected live. Each star and segment gets its own card:
-attempt history, PB, a timeline of what happened, and a completion-time graph
-you can click to jump straight to an attempt — or open its replay. The first
-success after moving to a different star or segment returns Practice to the
-top of the page; repeat successes leave your scroll position alone.
-Choosing a strategy also classifies pending attempts and automatically saves
-the fastest eligible success as GOLD. Correcting the latest attempt's strategy
-saves it when it beats that strategy's PB, with the usual rank celebration.
+<img src="docs/readme/ranks.png" alt="The rank ladder for one strategy: nine tiers from Capless to Mario, each with its time range." width="900">
 
-**Segments.** Not just stars: define any repeatable piece of the run (LBLJ,
-a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
-practice target with the same history, PBs, ranks and replays a star gets.
+### Learn from everyone's best runs
 
-**Ghost Overlay.** Race recorded Mario poses in the game window, following the
-live camera and terrain through the trainer's GLideN64 renderer. Adjust colour,
-visibility, sound and the route drawn ahead. Your current PB supplies the default
-ghost; saved local recordings and imported ghosts can race alongside it.
+The community's Ultimate Star Sheet lives inside the app: every star's
+strategies and recorded runs, filed by the rank they would earn you, with
+their videos playing in place. Bring your Sheet times in, and copy your new
+bests back out.
 
-**Share ghosts.** Open **Ghost Library · Import / Export** from a star or segment.
-Export that target's overall best, each strategy's best, all your personal bests,
-or a custom selection. The app remembers your player name and can save a search
-for next time. Import previews a collection before you confirm: choose all new
-ghosts, comparable ghosts faster than yours, or a smaller selection. Browsing
-the library leaves your practice target unchanged.
+### See the whole game at a glance
 
-**Bring your times with you.** Practised for years before finding this? Two
-ways in: type a time straight onto any star's card, or pick your name in
-Settings if you have a column on the Ultimate Sheet — every star time lands,
-the Bowser course and fight rows land on their movements, and a subsection
-lands the moment you link its Library row to a segment you built. A time only
-lands when it beats the best you already hold for that star and strategy, so
-importing twice costs nothing. Each one becomes a real row in that star's
-practice log — clear it, undo it, move it to another strategy like any run —
-and every import can be undone in one click. Anything it could not use is
-listed back at you by name, under the reason, rather than quietly skipped.
-Recording links come with those times. Open a replay to watch the embedded
-video, then choose Download to enable full replay features. The Library and
-Compare reuse that local copy. Add or change a recording link directly in the
-replay panel, with Undo after saving.
+Pick a goal and the scorecard lines every star up against it, course by
+course, so you know where your next minute is hiding.
 
-**Score yourself against a goal.** The Rank tab's scorecard lines every star
-and castle movement up as a tile against a goal, showing your gap tile by tile
-and a summed gap per course. By default the goal follows your scope's MARELO
-rank plus one subdivision (up to Mario 1), using each entry's Library standards.
-Rank Goal chooses one division or Automatic. Player Goal adds any number of
-runners, and Custom Goals saves named sets of the stars and segments you edit.
-Enable or remove a whole set together. Manual choices stay across routes;
-Automatic follows the route even with players or custom sets selected.
-Copy your own times as a sheet column ready to paste
-beside everyone else's, including each time's public recording hyperlink,
-or as a full CSV.
+<img src="docs/readme/scorecard.png" alt="The scorecard: each course's stars with your time, the goal time and the gap." width="900">
 
-**Ranks.** Every attempt, banner and route step wears a rank badge, graded
-against community standards — **per strategy**, so a fast time on one strat
-never flatters another. A header picker switches what the badges grade: your
-PB, or the mean of your last 10/50, or your best 10/50, or your lifetime
-average.
+**And more:** practice any trick as its own segment, build routes and run
+them as a forgiving full-game RTA with live splits, and look back over every
+session. The app keeps itself up to date, downloading only what changed.
 
-**MARELO.** One 0–100 rating that rolls up everything you practise, per scope:
-Overall, a single course, or any route. It has its own tab with a ladder, a
-history chart, and a per-entity breakdown of where your next rank is coming
-from.
+## Get started
 
-**Living Overall ranks.** Each star or segment blends progression through
-compatible strategies with the community's submitted best times. Valid Sheet
-refreshes update Strategy standards, Overall ranks, and MARELO automatically;
-saved times stay unchanged. Strategy and Overall cutoffs have separate edits.
-See [ranking calibration and tuning](docs/ranking-calibration.md).
+1. **Download** `SM64Trainer.exe` from [sm64trainer.app](https://sm64trainer.app)
+   and run it. The installer is unsigned, so Windows SmartScreen warns: choose
+   **More info → Run anyway**. It installs to `%LOCALAPPDATA%\Programs\SM64Trainer`
+   and adds a Desktop shortcut.
+2. **Sign in**, so the ghosts you share carry your name.
+3. **Set up Project64.** The wizard finds Project64 1.6, installs the replay
+   capture plugin, and checks the game, pictures and inputs with you.
+4. **Go practice.** Open Usamune, pick a star, and chase your next GOLD.
 
-**Routes.** Build an ordered route of stars and segments — including
-"complete K of N" group steps — and see per-step and cumulative success rates.
-Pick one as active and the Practice tab focuses on just that route. Export any
-route as JSON to share.
+<details>
+<summary><b>What you need</b></summary>
 
-**Run mode.** Run the whole game as a forgiving RTA. A per-route start
-condition arms the clock (default F1 reset), retries roll up into each step's
-split, and you get live ± against your PB, gold splits, pause/reset, a calming
-Focus mode, and a saved run history with a PB-progression graph.
+- Windows 11, or Windows 10 with the
+  [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
+- **Project64 1.6**, running windowed.
+- Your own **Usamune v1.93u (US)** or v1.93j (JP) practice ROM. ROMs are not
+  included.
+- Frame-matched replays need an NVIDIA graphics card. Other cards record
+  replays without the frame-by-frame input match.
 
-**Instant replay.** The PJ64 window and game audio are always being recorded
-into a rolling buffer, so you can watch the video of any attempt right after
-it happens — and save the ones worth keeping, forever. Audio is captured from
-Project64 alone, so a Discord call, music or a video playing in the background
-never ends up in a clip you upload.
+Prefer a portable copy? Download `SM64Trainer-full.zip` from the releases
+page, extract it anywhere and run the exe inside. Your history lives in
+`%LOCALAPPDATA%\SM64Trainer` and survives every update.
 
-Frame-exact replay, where every picture carries the input that drew it, needs
-an NVIDIA GPU: the trainer's graphics plugin captures inside Project64 and an
-NVENC encoder records the pictures ([how it works](docs/replay-gpu-runtime.md)).
-Until the plugin is set up, replays record the Project64 window without that
-input match, using NVIDIA, AMD or Intel hardware encoding when a startup check
-passes and the CPU otherwise.
+</details>
 
-Mark an attempt as a PB to save its replay automatically. PB selection stays
-manual. Unsaved footage shares a modest storage budget and is discarded when
-the session ends; storage pressure removes the oldest unsaved footage first.
-Explicitly saved replays remain on disk. See [replay storage](docs/replay-storage.md).
+## How it works
 
-On an RTX 40-series or newer card, the trainer records in AV1 and a saved
-replay is already about a third the size the moment you save it, with nothing
-left to do afterwards. It asks your card at the start of each recording and
-records H.264 when the card has no AV1 encoder.
+```mermaid
+flowchart LR
+    game["Project64 1.6<br/>running Usamune"] -- "reads memory,<br/>never writes" --> trainer["SM64 Trainer"]
+    trainer --> log["Attempts, bests<br/>and replays"]
+    trainer --> ranks["Ranks and<br/>your rating"]
+    community["Community:<br/>Ultimate Star Sheet,<br/>shared ghosts"] <--> trainer
+```
 
-Saving is instant, and for an H.264 recording the trainer makes the saved
-replay smaller in the background afterwards — around a third of its original
-size, in the same file, with the picture, the sound and the frame-by-frame
-input match all unchanged.
-It checks the smaller version against the original before replacing it, and
-keeps the original if anything differs. Nothing waits on this: you can watch
-a replay, keep playing, or close the app, and an unfinished one is finished
-the next time you open the trainer. Closing while it is still working says
-what is left and offers to wait. The recording panel lists the same progress
-at any time.
+The trainer reads Super Mario 64's memory from Project64 many times a second,
+the way tools like STROOP do, and never writes to it, so your game plays
+exactly as before. It recognizes star grabs, resets and deaths as they happen,
+times them with Usamune's own clock, and keeps everything on your PC. A
+graphics plugin records the game window for replays and draws the ghosts. In
+the app, **About → How it works** walks through each step.
 
-**Library.** Browse the whole community spreadsheet without leaving the app —
-every star and segment's proven ways to do it, laid out beginner to expert
-with real recorded times filed by the rank and subdivision they'd earn
-against your own standards, down to "Wario 3", with a JP/US switch at the top
-that re-files everything under the other version's standards (the same switch
-sits on every Rank standards panel — a way to look, not a change to how you
-are graded). Opens straight on whatever you last practiced, and
-a search box finds any star or movement as you type — by its own name or by
-the name of a way of doing it, so "LBLJ" lands on the one that documents it.
-Runs with video play in place — YouTube, Twitch, X, Bluesky, Streamable,
-Drive, or a raw clip file — and runs without one still count as times. Dock
-clips to the tray to watch several side by side, or send the tray to Compare
-— pulled from YouTube, a local file, or a browser upload — for one
-frame-accurate transport driving them all in lockstep. Every Sheet strategy
-and subsection receives all 45 rank subdivisions, even with one submitted
-time. Narrow ranges extend slower one frame per subdivision; rows without
-submissions show estimates with their source explained. See
-[how Sheet standards are derived](docs/sheet-rank-standards.md). Library and Practice
-share the same standards and update together when you edit or refresh them.
-Missing movements and subsections become manual practice entries under their
-parent. You can import times immediately and configure detection in Segments.
-Every star, Bowser course
-and named movement (LBLJ, Lakitu Skip, MIPS…) wears a small Ukiki face beside
-its name — Ukikipedia's own icon — that opens its RTA Guide page; it appears
-only where the wiki actually has a page, so it never leads to a 404.
+<details>
+<summary><b>Questions</b></summary>
 
-**Automatic error reports.** Builds configured for Sentry send technical failures
-in the background. **Settings → Error reports** turns collection off and clears
-pending uploads and breadcrumbs. Errors include bounded capture, setup and ghost
-playback evidence. Reports filter private paths and credentials; gameplay logs,
-account identities, unrelated applications, screenshots and recordings are excluded.
-See the [data inventory and retention limits](docs/error-reporting.md).
+**Is it safe to install?** It is open source, every release comes with SHA-256
+checksums, and the app verifies each update before applying it. The installer
+is unsigned, which is why SmartScreen warns.
 
-**Debug report.** Something behaving oddly? **Settings → Debug report** writes
-a single file capturing what the trainer was doing (logs, recent events,
-health, recognized native log records and ghost playback state) and shows it in
-Explorer. Custom labels and private paths are omitted. Exports expire after a
-day, with at most three bounded files retained; attach the file to your bug report.
+**Will it change my game or my setup?** It only reads the game's memory. The
+replay plugin leaves your previous graphics plugin installed, and the setup
+screen switches back to it. Outside the Usamune practice ROM, nothing is
+tracked or recorded.
 
----
+**What gets shared?** A ghost shares Mario's poses, timing and optionally
+your inputs, with your display name. Never your ROM, videos or practice
+history. You can stop future uploads in Settings, and withdraw the ghosts you
+already shared.
 
-## Develop
+**Is it really free?** Yes, always. There are no paid ranks or features.
 
-### Run from source
+</details>
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. To run it from source on
+Windows with [uv](https://docs.astral.sh/uv/):
 
 ```
+git clone https://github.com/griffinbeels/SM64-Trainer.git
+cd SM64-Trainer
 uv sync
-uv run python -m sm64_events.desktop    # the desktop app (window + tray)
-uv run python -m sm64_events.main       # headless — then open http://127.0.0.1:8065/
+uv run python -m sm64_events.desktop
 ```
 
-Run from the repo root: from source, `data/` is created relative to cwd.
-`uv` only — never pip. The dev server binds **8065**; the packaged exe binds
-**8064**, so the two never collide. Set `SM64_PORT` to override.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers tests, builds and releases, and how
+the codebase is organized for AI coding agents. The [user guide](docs/user-guide.md)
+documents every feature in detail, and [docs/architecture.md](docs/architecture.md)
+explains how the game is read.
 
-For maintainer segment testing, `run-test-server.bat` makes **Save for everyone**
-the primary editor/recorder action. It saves default fixes into release source;
-released apps keep edits personal. See [saving default segment fixes](docs/default-segment-authoring.md).
+## Credits and license
 
-The **↻ restart server** button in the app header relaunches the backend to
-pick up code changes. UI files are served per request — edit and refresh, no
-restart needed.
+SM64 Trainer stands on the work of the Super Mario 64 community: Usamune, the
+SM64 decompilation, STROOP, libsm64, the Ultimate Star Sheet, Ukikipedia and
+many more. **About → Credits** in the app names everyone.
 
-### Test
+Free software under [GPL-3.0-or-later](LICENSE). Fork it, build on it, learn
+from it; if you distribute it or anything made from it, keep it open source
+under the same license. Third-party licenses are listed in
+[licenses/](licenses/README.md).
 
-Use Node 24.13+ on the 24.x line (or Node 26+) for browser-free component tests.
-Install their locked dev dependencies once per checkout:
-
-```
-npm ci --prefix tests/frontend --ignore-scripts
-```
-
-```
-uv run python tools/run_tests.py tests/test_ui_components.py  # focused, never queues
-uv run python tools/run_tests.py                             # the merge check: this change's blast radius
-uv run python tools/full_run.py status                       # the full run on GitHub
-```
-
-Locally only the tests a change can affect run; they must pass before
-integration, and an identical tested tree reuses its evidence. The whole
-suite runs on GitHub Actions on every push to main and must be green before a
-release. [The testing guide](docs/testing.md) explains how the radius is
-chosen and the machine budget. Two live-only gates need PJ64 running:
-
-```
-uv run python tools/verify_addresses.py     # every memory address, against the real game
-uv run python tools/dedupe_journal.py data/tracker.db   # scan for double-journaled events
-```
-
-`run-test-server.bat` starts a server from the latest committed `main` on port
-8066 — safe to run alongside your real trainer — and prints every dev page it
-hosts with the port already filled in.
-
-### Build
-
-```
-uv run python tools/build_exe.py            # --mode app|bootstrap|all
-```
-
-Produces `dist\SM64Trainer\` (the onedir app) and `dist\SM64TrainerSetup.exe`
-(the tiny bootstrap installer, published as the `SM64Trainer.exe` release
-asset). ffmpeg is picked up from PATH and bundled automatically — pass
-`--ffmpeg PATH` to point at a specific binary. The build re-execs itself with a
-fixed `PYTHONHASHSEED` and `SOURCE_DATE_EPOCH` so unchanged files hash
-identically between releases, which is what keeps update downloads small.
-`build.bat` is the double-click version.
-
-> The released exe bundles **ffmpeg** (https://ffmpeg.org) for replay encoding:
-> gyan.dev's full build, which is GPL-3.0, shipped unmodified as a separate
-> program. Every bundled component's license, and where the GPL parts' source
-> is, ships in the app's `_internal\licenses` folder; the index is
-> [licenses/README.md](licenses/README.md).
-
-### Release (maintainer)
-
-```
-uv run python tools/release.py 1.1.0        # or --notes-file NOTES.md
-```
-
-One command. It refuses unless you're on `main` with a clean tree and `gh` is
-authenticated, runs the full suite, bumps the version, **builds before
-tagging** (so a broken build aborts with nothing pushed), then publishes six
-assets: the app zip, the per-file update manifest, the bootstrap installer, and
-a `.sha256` for each. **Prereqs:** ffmpeg on PATH and `gh auth login`.
-`--dry-run` builds and checksums without publishing.
-
-The in-app updater needs all four of the zip/manifest assets and their
-checksums — a release published without them is simply never offered to users,
-which is the intended failure mode: no unverified bytes ever get applied.
-
----
-
-## Working on this with Claude
-
-This codebase is written almost entirely by Claude, and it is *organised* for
-that. If you're pointing an agent at it, the important thing to know is that
-the guidance is **path-scoped**, not one giant file:
-
-| Where | What it is |
-|---|---|
-| `CLAUDE.md` | The index. Commands, the zone map, the domain rules, definition of done. Read first. |
-| `.claude/rules/*.md` | "Where to change what" per zone. Claude Code loads one **automatically** when you open a file it owns, so a rank change never pays for the replay subsystem's history. |
-| `AGENTS.md` | The same routing for Codex, which can't auto-load a scoped rule and has to open them by hand. |
-| `docs/architecture.md` | Cross-cutting domain knowledge — the facts that were hard to win, kept with their evidence. |
-| `docs/api.md` | The full REST/WebSocket surface. |
-| `.claude/skills/` | Procedures: cutting a release, UI/UX work, building a tuning inspector. |
-
-Four conventions do most of the work, and they're worth knowing before you
-change anything:
-
-1. **Tests are the spec.** `tests/test_<module>.py` mirrors every module. Read
-   the test before the source; it says what the contract actually is.
-2. **A rule that matters is a test, not a sentence.** "Don't repeat yourself"
-   can't fail a build. So the things that must not drift have guards that can:
-   `test_single_source.py` (one derivation, one door),
-   `test_cross_language_parity.py` (the four values defined in both Python and
-   JS), `test_docs_cover_api.py` (every route documented),
-   `test_docs_links_resolve.py` (no pointer into a private directory),
-   `test_rule_files.py` (every rule file still reaches someone).
-   New guards are **proved by mutation** — break the thing, watch it fail,
-   restore — because a scan that matches nothing is green forever.
-3. **UI changes are verified by rendering**, never by unit tests plus
-   `node --check`. That combination once shipped an invisible feature, and
-   `node --check` returns 0 on JS that cannot even be imported.
-4. **Anything judged by feel gets an inspector, not a guess.** Timings, easing,
-   transitions: build the tuning page first, tune it live, and let SAVE write
-   the numbers back into the repo as the new defaults. `/ui/tune.html` is the
-   worked example.
-
-Everything a session learns that the next one would otherwise re-derive goes
-back into one of the files above, next to the code it's about. Stale
-documentation here is treated as a broken build.
-
-Building your own client instead? Speak only to the API: `ws://…/ws/events`,
-`GET /state` for initial state, `GET /health` for liveness. Schemas in
-[`docs/api.md`](docs/api.md).
-
-## License
-
-SM64 Trainer is free software: [GPL-3.0-or-later](LICENSE). Fork it, build on
-it, learn from it — but if you distribute it or anything derived from it, you
-must keep it open source under the same license. The SM64 community's tools
-and knowledge stay free.
+<sub>An independent community project, not affiliated with Nintendo.</sub>
