@@ -9,8 +9,9 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { getJSON } from "../api.js";
+import { entityIconSrc } from "./entityicons.js";
 import { fmtIgtShort } from "../format.js";
-import { STOPS, GRAB_FRAMES, MEMORY_CELLS, ACTION_NAMES } from "../howitworks.js";
+import { STOPS, GRAB_FRAMES, MEMORY_CELLS, ACTION_NAMES, MESSAGE_EXAMPLE } from "../howitworks.js";
 
 const html = htm.bind(h);
 
@@ -97,10 +98,10 @@ function GrabVisual() {
   </div>`;
 }
 
-function GameVisual() {
+function GameVisual({ t }) {
   return html`<figure class="hiw-window">
     <figcaption><span></span><span></span><span></span>Project64 1.6 · Usamune</figcaption>
-    <img src="/ui/assets/course_icons/bob.webp" alt="Bob-omb Battlefield" />
+    <img src=${entityIconSrc(t, "course:1")} alt="Bob-omb Battlefield" />
   </figure>`;
 }
 
@@ -119,10 +120,29 @@ function FramesVisual() {
   </div>`;
 }
 
-const VISUALS = { game: GameVisual, memory: MemoryVisual, live: LiveVisual,
-  grab: GrabVisual, frames: FramesVisual };
+function MessageVisual() {
+  return html`<div class="hiw-message">
+    <span class="hiw-caption">What this page receives for a star (trimmed)</span>
+    <pre>${JSON.stringify(MESSAGE_EXAMPLE, null, 2)}</pre>
+  </div>`;
+}
 
-export function HowItWorks({ showCredits }) {
+function ReplayVisual() {
+  return html`<div class="hiw-road" aria-label="The picture's two roads">
+    <span class="hiw-node">Project64 draws a frame</span>
+    <span class="hiw-arrow" aria-hidden="true">↓</span>
+    <span class="hiw-node is-gold">The trainer's graphics plugin</span>
+    <div class="hiw-split">
+      <div><span class="hiw-arrow" aria-hidden="true">↙</span><span class="hiw-node">Your screen, as always</span></div>
+      <div><span class="hiw-arrow" aria-hidden="true">↘</span><span class="hiw-node">A stamped copy → your graphics card encodes it → a replay</span></div>
+    </div>
+  </div>`;
+}
+
+const VISUALS = { game: GameVisual, memory: MemoryVisual, live: LiveVisual,
+  grab: GrabVisual, frames: FramesVisual, message: MessageVisual, replay: ReplayVisual };
+
+export function HowItWorks({ t, showCredits }) {
   const [at, setAt] = useState(0);
   const stop = STOPS[at];
   const Visual = VISUALS[stop.visual];
@@ -144,7 +164,7 @@ export function HowItWorks({ showCredits }) {
           ${stop.builtOn.map((name, i) => html`${i ? ", " : ""}<button type="button"
               class="link-button" onclick=${showCredits}>${name}</button>`)}</p>`}
       </div>
-      ${Visual && html`<div class="hiw-visual"><${Visual} /></div>`}
+      ${Visual && html`<div class="hiw-visual"><${Visual} t=${t} /></div>`}
     </div>
     <div class="hiw-nav">
       <button type="button" disabled=${at === 0} onclick=${() => setAt(at - 1)}>Back</button>

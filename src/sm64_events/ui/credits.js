@@ -1,6 +1,12 @@
 // src/sm64_events/ui/credits.js — who and what SM64 Trainer stands on.
 //
-// Data only, import-free; About > Credits draws it in this order.
+// Data only, import-free; About > Credits draws it in this order. A name in
+// `by` is one its own primary source states (the project's README, About
+// page or repository); never fill one in from memory.
+//
+// `covers` ties a row to the shipped thing it credits ("python:<dist>",
+// "vendor:<file in ui/vendor>", "font:<file in ui/assets/fonts>",
+// "native:<dll>"), so a new dependency without a credit can be caught.
 
 export const twitchUrl = (handle) => `https://www.twitch.tv/${handle}`;
 
@@ -12,4 +18,123 @@ export const TESTERS = [
   { name: "DentoriousRed", twitch: "dentoriousred" },
 ];
 
-export const CREDIT_GROUPS = [];
+export const CREDIT_GROUPS = [
+  {
+    id: "game",
+    eyebrow: "Game knowledge",
+    title: "The game and its research",
+    items: [
+      { name: "Super Mario 64", by: "Nintendo",
+        what: "The game itself. Course portraits and character renders in the trainer are Nintendo's, used in a free, non-commercial practice tool." },
+      { name: "Super Mario 64 decompilation", by: "the n64decomp team",
+        url: "https://github.com/n64decomp/sm64",
+        what: "The game's source code, rebuilt from the cartridge. It names what lives at each memory address, including every one of Mario's actions." },
+      { name: "STROOP", by: "SM64-TAS-ABC",
+        url: "https://github.com/SM64-TAS-ABC/STROOP",
+        what: "The SM64 memory viewer. Its US and JP address maps are where the trainer's addresses come from." },
+      { name: "Usamune ROM", by: "Usamune Projects · site by circumark994, atmpas, Lyfey",
+        url: "https://sites.google.com/view/supermario64/home",
+        what: "The practice ROM the trainer reads. Its own timer is where every star time comes from." },
+      { name: "Project64", by: "the Project64 team",
+        url: "https://github.com/project64/project64",
+        what: "The emulator the trainer reads the game from." },
+      { name: "Ukikipedia", url: "https://ukikipedia.net/wiki/RTA_Guide",
+        what: "The SM64 wiki. Each star in the trainer links to its Ukikipedia page for routes and examples." },
+    ],
+  },
+  {
+    id: "community",
+    eyebrow: "Data and ideas",
+    title: "Community work we build on",
+    items: [
+      { name: "The Daily Star and Xcam Viewer",
+        by: "Twig64 (dcco) · the Daily Star started by MontyVR",
+        url: "https://sm64-xcams.netlify.app/about",
+        what: "The rank standards and the starting point for rank scoring came from here, and so did the idea behind the trainer's own Daily Star." },
+      { name: "Ultimate Star Spreadsheet",
+        by: "circumark994 · mods circumark, atmpas, Badroenis",
+        url: "https://docs.google.com/spreadsheets/d/1J20aivGnvLlAuyRIMMclIFUmrkHXUzgcDmYa31gdtCI/edit?gid=1663140350#gid=1663140350",
+        what: "Every star's strategies and the community's times. The Library is built from it." },
+      { name: "SM64 emulator guide", by: "wermipls",
+        url: "https://wermi.neocities.org/emuguide/",
+        what: "The Project64 setup steps the trainer's own setup links to." },
+    ],
+  },
+  {
+    id: "replay",
+    eyebrow: "Graphics and video",
+    title: "Replays",
+    items: [
+      { name: "LINK's GLideN64 v4.2",
+        by: "Luna-Project64, from GLideN64 by Sergey Lipskiy with Olivieryuyu, Ryan Rosser and contributors",
+        url: "https://github.com/Luna-Project64/GLideN64",
+        what: "The graphics plugin the replay capture is built on. GLideN64 credits Orkin (glN64), yongzh (gles2n64), Hiroshi Morii (GlideHQ) and ziggy (z64). GPL-2.0.",
+        covers: ["native:GLideN64_SM64Trainer.dll", "native:sm64_trainer_gfx.dll"] },
+      { name: "NVIDIA Video Codec SDK headers", by: "NVIDIA, via FFmpeg's nv-codec-headers",
+        url: "https://github.com/FFmpeg/nv-codec-headers",
+        what: "Hardware video encoding on NVIDIA cards. MIT.",
+        covers: ["native:SM64GpuEncoderV1.dll"] },
+      { name: "FFmpeg", url: "https://ffmpeg.org",
+        what: "Encodes, decodes and compresses replay video, through PyAV." },
+    ],
+  },
+  {
+    id: "libraries",
+    eyebrow: "Open source",
+    title: "Libraries",
+    compact: true,
+    items: [
+      { name: "FastAPI", by: "Sebastián Ramírez", url: "https://github.com/fastapi/fastapi",
+        what: "The trainer's local server. MIT.", covers: ["python:fastapi"] },
+      { name: "Uvicorn", by: "Tom Christie / Encode", url: "https://uvicorn.dev/",
+        what: "Runs that server. BSD-3-Clause.", covers: ["python:uvicorn"] },
+      { name: "Pymem", by: "Fabien Reboia", url: "https://github.com/srounet/Pymem",
+        what: "Reads Project64's memory. MIT.", covers: ["python:pymem"] },
+      { name: "PyAV", by: "the PyAV team", url: "https://github.com/PyAV-Org/PyAV",
+        what: "FFmpeg for Python: replay video. BSD-3-Clause.", covers: ["python:av"] },
+      { name: "NumPy", by: "the NumPy developers", url: "https://numpy.org",
+        what: "Video and audio data. BSD-3-Clause.", covers: ["python:numpy"] },
+      { name: "ProcTap", by: "m96-chan", url: "https://github.com/m96-chan/ProcTap",
+        what: "Records Project64's own audio. MIT.", covers: ["python:proc-tap"] },
+      { name: "PyAudioWPatch", by: "s0d3s, from PyAudio by Hubert Pham", url: "https://github.com/s0d3s/PyAudioWPatch",
+        what: "Windows audio capture. Apache-2.0.", covers: ["python:pyaudiowpatch"] },
+      { name: "pycaw", by: "Andre Miras", url: "https://github.com/AndreMiras/pycaw",
+        what: "Finds Windows audio devices and sessions.", covers: ["python:pycaw"] },
+      { name: "Pillow", by: "Jeffrey A. Clark and contributors", url: "https://python-pillow.github.io",
+        what: "The tray icon's image. MIT-CMU.", covers: ["python:pillow"] },
+      { name: "pywebview", by: "Roman Sirokov", url: "https://pywebview.flowrl.com/",
+        what: "The desktop window. BSD-3-Clause.", covers: ["python:pywebview"] },
+      { name: "pystray", by: "Moses Palmér", url: "https://github.com/moses-palmer/pystray",
+        what: "The tray icon. LGPL-3.0.", covers: ["python:pystray"] },
+      { name: "yt-dlp", by: "the yt-dlp contributors", url: "https://github.com/yt-dlp/yt-dlp",
+        what: "Imports comparison videos. Unlicense.", covers: ["python:yt-dlp"] },
+      { name: "HTTPX", by: "Tom Christie / Encode", url: "https://github.com/encode/httpx",
+        what: "Web requests for community accounts. BSD-3-Clause.", covers: ["python:httpx"] },
+      { name: "Authlib", by: "Hsiaoming Yang", url: "https://github.com/authlib/authlib",
+        what: "Sign-in for community accounts. BSD-3-Clause.", covers: ["python:Authlib"] },
+      { name: "Sentry SDK", by: "Sentry", url: "https://github.com/getsentry/sentry-python",
+        what: "Crash reports. MIT.", covers: ["python:sentry-sdk"] },
+      { name: "Preact", by: "Jason Miller and contributors", url: "https://github.com/preactjs/preact",
+        what: "Draws this page. MIT.", covers: ["vendor:preact.module.js", "vendor:hooks.module.js"] },
+      { name: "htm", by: "Jason Miller", url: "https://github.com/developit/htm",
+        what: "Writes the page's markup. Apache-2.0.", covers: ["vendor:htm.module.js"] },
+    ],
+  },
+  {
+    id: "art",
+    eyebrow: "Pictures and type",
+    title: "Art",
+    items: [
+      { name: "Star split icons", by: "the community split-icon pack",
+        url: "https://www.reddit.com/r/speedrun/comments/27fvua/for_sm64_runners_in_search_of_split_icons/",
+        what: "Every star's icon. Original at furaffinity.net/view/7557800." },
+      { name: "Super Mario 256", by: "fsuarez913", url: "https://www.dafont.com/super-mario-256.font",
+        what: "The fan-made font on the rank caps' division digits.",
+        covers: ["font:SuperMario256.ttf"] },
+      { name: "Rank caps", by: "Griffman1212",
+        what: "The Mario-cap rank badges, drawn for the trainer." },
+      { name: "Ukikipedia, Discord and Twitch marks", by: "their owners",
+        what: "Each service's own official mark, used to link to it." },
+    ],
+  },
+];

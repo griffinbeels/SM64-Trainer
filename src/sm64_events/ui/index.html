@@ -4353,6 +4353,23 @@
   .hiw-slider { display: grid; gap: .3rem; font-size: .82rem; color: var(--muted); }
   .hiw-slider input { width: 100%; accent-color: var(--gold); }
   .hiw-frames-demo p { margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.45; }
+  .hiw-caption { display: block; margin-bottom: .45rem; color: var(--muted); font-size: .8rem; }
+  .hiw-message pre {
+    margin: 0; padding: .7rem .8rem; overflow-x: auto; border-radius: 8px;
+    background: #081322; color: #cfe3f7; font-size: .8rem; line-height: 1.45;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  .hiw-road { display: grid; justify-items: center; gap: .35rem; text-align: center; }
+  .hiw-node {
+    display: inline-block; padding: .45rem .75rem; border-radius: 8px;
+    border: 1px solid var(--border); background: #102238; font-size: .84rem;
+  }
+  .hiw-node.is-gold { border-color: var(--gold-soft); color: var(--gold-soft); font-weight: 650; }
+  .hiw-arrow { display: block; color: var(--muted); font-size: 1.1rem; line-height: 1; }
+  .hiw-split {
+    width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: .6rem;
+  }
+  .hiw-split > div { display: grid; justify-items: center; gap: .35rem; }
 
   .workshop-empty {
     min-height: 460px; display: flex; flex-direction: column;

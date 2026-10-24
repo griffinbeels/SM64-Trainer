@@ -48,13 +48,27 @@ export const GRAB_FRAMES = [
     says: "Mario landed and the star dance began: the x-cam moment, where the time counts." },
 ];
 
+// The shape of what the page receives for a star (core/events.py to_wire,
+// detectors/star_grab.py _emit), trimmed to the fields a reader recognizes.
+export const MESSAGE_EXAMPLE = {
+  type: "star_collected",
+  frame: 4415,
+  payload: {
+    course_name: "Bob-omb Battlefield",
+    star_name: "Shoot to the Island in the Sky",
+    igt_frames: 343,
+    igt: "0'11\"43",
+    igt_source: "result",
+  },
+};
+
 export const STOPS = [
   {
     short: "You play",
     title: "It starts with you playing",
     body: [
       "Super Mario 64 runs inside Project64 1.6, using Usamune, a practice version of the game.",
-      "The trainer never sees your screen. Everything it knows, it reads out of the game's memory.",
+      "The trainer doesn't watch your screen to know what happened. Everything it knows, it reads out of the game's memory.",
     ],
     visual: "game",
     builtOn: ["Project64", "Usamune ROM"],
@@ -63,7 +77,7 @@ export const STOPS = [
     short: "Memory",
     title: "The whole game is numbers in memory",
     body: [
-      "The game keeps everything in 8 MB of memory: what Mario is doing, where he is, which level he's in, how many stars you have.",
+      "The game keeps everything in the console's memory: what Mario is doing, where he is, which level he's in, how many stars you have.",
       "Each value lives at a fixed address. Fans rebuilt the game's source code from the cartridge, and that work tells us which address holds what.",
     ],
     term: ["Decompilation:", "turning a finished game back into source code people can read."],
@@ -115,6 +129,18 @@ export const STOPS = [
       "The page redraws, and your time shows up.",
     ],
     term: ["WebSocket:", "a connection that stays open, so the server can push updates without being asked."],
+    visual: "message",
     builtOn: ["FastAPI", "Preact"],
+  },
+  {
+    short: "Replays",
+    title: "Replays take a separate road",
+    body: [
+      "Detection never needs the picture, but a replay does. Project64 draws the game through a graphics plugin, and the trainer installs its own version of one.",
+      "That plugin hands over each finished frame, stamped with the moment it belongs to, and your graphics card encodes it. That stamp is how a replay lines up with the attempt it shows.",
+    ],
+    term: ["Graphics plugin:", "the part of Project64 that turns the game's drawing commands into the picture you see."],
+    visual: "replay",
+    builtOn: ["LINK's GLideN64 v4.2", "FFmpeg"],
   },
 ];

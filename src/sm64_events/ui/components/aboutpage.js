@@ -68,7 +68,7 @@ function Credits() {
   </div>`;
 }
 
-export function AboutPage() {
+export function AboutPage({ t }) {
   const [view, setViewState] = useState(storedView);
   const setView = (id) => {
     setViewState(id);
@@ -89,7 +89,7 @@ export function AboutPage() {
             onclick=${() => setView(id)}>${label}</button>`)}
       </div>
     </header>
-    ${view === "how" ? html`<${HowItWorks} showCredits=${() => setView("credits")} />`
+    ${view === "how" ? html`<${HowItWorks} t=${t} showCredits=${() => setView("credits")} />`
       : html`<${Credits} />`}
   </div>`;
 }
