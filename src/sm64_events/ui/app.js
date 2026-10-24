@@ -80,6 +80,13 @@ const MOBILE_BAR = ["Practice", "Run", "Library"];
 
 const inBar = ([name]) => MOBILE_BAR.includes(name);
 
+// Tabs whose page needs nothing but the store: mounted on visit, one row
+// each. Tabs with intents or kept-mounted state stay explicit in App.
+const PLAIN_TABS = {
+  "Segments": Segments, "Routes": Routes, "Run": Run, "Live feed": Feed,
+  "Resources": ResourcesPage, "About": AboutPage,
+};
+
 function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {
   // FINAL REVIEW FIX (minor: Compare is an orphan destination). Compare's own
   // nav entry is gone since Task 6 folded it into the Library (see NAV_GROUPS
@@ -304,10 +311,6 @@ function App() {
         </div>
         ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
             openCompare=${openCompare} openLibrary=${openLibrary} /></div>`
-          : tab === "Segments" ? html`<div class="view-pane">
-              <${Segments} t=${t} /></div>`
-          : tab === "Routes" ? html`<div class="view-pane"><${Routes} t=${t} /></div>`
-          : tab === "Run" ? html`<div class="view-pane"><${Run} t=${t} /></div>`
           : tab === "Rank" ? html`<div class="view-pane">${openPlayerUid
               ? html`<${PlayerPage} t=${t} uid=${openPlayerUid}
                   initialScope=${comparisonScope} onScopeChange=${setComparisonScope}
@@ -318,9 +321,7 @@ function App() {
               : html`<${RankPage} t=${t} onOpenRunner=${openRunner} onOpenPlayer=${openPlayer}
                   onScopeChange=${setComparisonScope}
                   openLibrary=${openLibrary} />`}</div>`
-          : tab === "Live feed" ? html`<div class="view-pane"><${Feed} t=${t} /></div>`
-          : tab === "Resources" ? html`<div class="view-pane"><${ResourcesPage} /></div>`
-          : tab === "About" ? html`<div class="view-pane"><${AboutPage} t=${t} /></div>`
+          : PLAIN_TABS[tab] ? html`<div class="view-pane"><${PLAIN_TABS[tab]} t=${t} /></div>`
           : null}
       </div>
     </main>
