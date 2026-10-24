@@ -16,6 +16,9 @@
  *                    owned GPU snapshot plus that stamp to the delivery worker,
  *                    which never waits on Python.
  *
+ * Both also feed the scene tap (scene_tap.cpp), an M4 capture experiment that
+ * stays one atomic load unless a one-shot arming file exists at RomOpen.
+ *
  * The plugin knows NO game address: the tracker publishes {rdram_offset,
  * length} entries through the control page (memory/layout.py stays the one
  * source of addresses) and this copies bytes. It reads the emulator's memory
@@ -42,6 +45,7 @@
 #include "gpu_delivery_diagnostics.h"
 #include "control_worker.h"
 #include "practice_rom.h"
+#include "scene_tap.h"
 
 #define EXPORT __declspec(dllexport)
 #define CALL __cdecl
@@ -259,6 +263,7 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
     log_module_path("wrapper_loaded", g_self);
     ensure_wrapped();
     g_gfx = info;
+    st_configure(&g_gfx);
     g_have_gfx = FALSE;
     callback_diagnostic_reset(&g_diagnostic_list);
     callback_diagnostic_reset(&g_diagnostic_update);
@@ -306,6 +311,7 @@ EXPORT void CALL ProcessDList(void) {
      * recording retention or polling. The adapter wraps the original call,
      * so the duration includes stamp copying; formatting runs off-thread. */
     int64_t begin = callback_diagnostic_begin(&g_diagnostic_list);
+    st_process_dlist();                       /* idle unless a scene-lab session is armed */
     if (g_runtime_ready) sa_process_dlist();
     else if (g_wrapped.ProcessDList) g_wrapped.ProcessDList();
     callback_diagnostic_end(&g_diagnostic_list, begin, qpc_now());
@@ -316,6 +322,7 @@ EXPORT void CALL UpdateScreen(void) {
     int64_t begin = callback_diagnostic_begin(&g_diagnostic_update);
     if (g_runtime_ready) sa_update_screen();
     else if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen();
+    st_update_screen(g_wrapped.ReadScreen);
     int64_t end = qpc_now();
     callback_diagnostic_end(&g_diagnostic_update, begin, end);
 }
@@ -333,6 +340,7 @@ EXPORT void CALL RomOpen(void) {
     plugin_logf("rom_open_begin", "initiated=%d practice_rom=%d", g_have_gfx, g_practice_rom);
     if (g_wrapped.RomOpen) g_wrapped.RomOpen();
     measure_rdram();                          /* the expansion pak is committed by now */
+    if (g_practice_rom) st_rom_open();
     control_rom(g_practice_rom, !g_practice_rom);
     plugin_logf("rom_open_end", "rdram_span=%u", (unsigned)g_rdram_span);
 }
@@ -344,6 +352,7 @@ EXPORT void CALL RomClosed(void) {
     control_rom(FALSE, FALSE);
     g_practice_rom = FALSE;
     sa_reset();
+    st_stop();
     plugin_logf("rom_closed_begin", "");
     if (g_wrapped.RomClosed) g_wrapped.RomClosed();
     plugin_logf("rom_closed_end", "");
@@ -351,6 +360,7 @@ EXPORT void CALL RomClosed(void) {
 
 EXPORT void CALL CloseDLL(void) {
     wr_suspend(); g_runtime_ready = FALSE; g_practice_rom = FALSE; sa_reset();
+    st_close(15000);
     control_stop();
     plugin_logf("close_begin", "initiated=%d", g_have_gfx);
     if (g_wrapped.CloseDLL) g_wrapped.CloseDLL();
