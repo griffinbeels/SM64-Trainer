@@ -901,6 +901,10 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '1280x720 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        '1400x700 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x701 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
         '1400x760 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1400x761 [page] overlap :: span.starholder x span.starrank':
@@ -1127,6 +1131,14 @@ BOWSER_PROJECT = dataclasses.replace(
             'overlap 7x2px inside button.starcell',
         '1280x720 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        '1400x700 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x700 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x701 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x701 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
         '1400x760 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1400x760 [bowser-row] overlap :: span.starholder x span.starrank':
@@ -1359,6 +1371,14 @@ SUBSECTION_PROJECT = dataclasses.replace(
         '1280x720 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1280x720 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x700 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x700 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x701 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x701 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1400x760 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',

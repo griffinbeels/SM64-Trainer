@@ -4197,6 +4197,9 @@
   }
   .rule-banned summary { cursor: pointer; font-weight: 600; font-size: .86rem; }
   .rule-banned[open] summary { margin-bottom: .5rem; }
+  /* A closed <details> still lays its list out, unpainted, past its own
+     border and across the card below; the layout sweep measures that. */
+  .rule-banned:not([open]) ul { display: none; }
 
   /* ---- About tab: Credits (components/aboutpage.js) ------------------ */
   .credit-grid {
