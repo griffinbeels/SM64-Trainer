@@ -27,6 +27,12 @@ US_2026_08_15 = {
     "sound_consumer": 0x80332F40, "sound_ring": 0x80361498,
     # Found by a menu-open RAM watch (2026-10-17); its live gate remains VERIFY.
     "usamune_savestate_button": 0x80417B66,
+    # The scene renderer's state spans (M4 E2-live, 2026-10-24): linker-map
+    # section bounds and the main pool's bounds; their live gates remain VERIFY.
+    "scene_data_start": 0x8032D560, "scene_data_end": 0x803312F0,
+    "scene_bss_start": 0x8033AF90, "scene_bss_end": 0x80361270,
+    "scene_engine_bss_start": 0x8038BCA0, "scene_engine_bss_end": 0x8038EEE0,
+    "main_pool_start": 0x8005C010, "main_pool_end": 0x801C0FF0,
 }
 
 

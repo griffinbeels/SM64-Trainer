@@ -113,6 +113,34 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("behaviour_base", None, "mario_object_behaviour",
               "RAM address of segment 0x13; = mario_object->behaviour "
               "minus bhvMario's segmented offset for this version"),
+    # The game state SM64's own scene renderer (geo_process_root) reads, as
+    # spans the scene tap copies with each graphics task (M4 E2-live, lab
+    # only: tools/scene_lab/tap.py arm). Bounds are [start, end) and come from
+    # the linker map's section layout, not a symbol; optional, so a version
+    # without them only loses the free-camera capture.
+    LayoutRow("scene_data_start", None, "linker_map_sections",
+              "VERIFY: first byte of the game .data the renderer reads (main.o) "
+              "through moving_texture.o: area, camera, render-mode, skybox globals",
+              optional=True),
+    LayoutRow("scene_data_end", None, "linker_map_sections",
+              "VERIFY: end (exclusive) of that .data span", optional=True),
+    LayoutRow("scene_bss_start", None, "linker_map_sections",
+              "VERIFY: game .bss from game_init.o (display-list head, gfx pool) "
+              "through object_list_processor.o: MarioState, Lakitu, FOV, the object pool",
+              optional=True),
+    LayoutRow("scene_bss_end", None, "linker_map_sections",
+              "VERIFY: end (exclusive) of that .bss span", optional=True),
+    LayoutRow("scene_engine_bss_start", None, "linker_map_sections",
+              "VERIFY: engine .bss from geo_layout.o through surface_load.o: the "
+              "surface partitions and pool pointers shadows read", optional=True),
+    LayoutRow("scene_engine_bss_end", None, "linker_map_sections",
+              "VERIFY: end (exclusive) of that engine .bss span", optional=True),
+    LayoutRow("main_pool_start", None, "main_pool_bounds",
+              "VERIFY: the value sPoolStart holds: the main pool, where a level's "
+              "segments, scene graph, surfaces and Mario's animation buffer live",
+              optional=True),
+    LayoutRow("main_pool_end", None, "main_pool_bounds",
+              "VERIFY: the value sPoolEnd holds (exclusive)", optional=True),
 )
 
 
@@ -148,6 +176,14 @@ class Layout:
 
     usamune_stop: int | None = None
     behaviour_base: int | None = None
+    scene_data_start: int | None = None
+    scene_data_end: int | None = None
+    scene_bss_start: int | None = None
+    scene_bss_end: int | None = None
+    scene_engine_bss_start: int | None = None
+    scene_engine_bss_end: int | None = None
+    main_pool_start: int | None = None
+    main_pool_end: int | None = None
 
     def value(self, field: str) -> int | None:
         return getattr(self, field)
@@ -223,6 +259,22 @@ US = Layout(
     usamune_stop=0x80417B4D,        # ROM-derived; live-confirmed 2026-10-17: Grab then
                                     # GrabX (journal 20368/20377; final raw byte 3)
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
+    # VERIFY until the live E2 proof: STROOP MappingUS.map section layout
+    # (.data main.o 0x...D560 .. moving_texture.o end; .bss game_init.o ..
+    # object_list_processor.o end; engine .bss geo_layout.o .. surface_load.o
+    # end). On savestates u_a (WF) and u_b (castle grounds), 2026-10-24, these
+    # spans plus the main pool and the ROM held every byte geo_process_root
+    # read under the source camera and five orbits: regenerated display lists
+    # matched byte for byte with everything else poisoned. Pool bounds: what
+    # sPoolStart/sPoolEnd held in all three savestates, Usamune and vanilla.
+    scene_data_start=0x8032D560,
+    scene_data_end=0x803312F0,
+    scene_bss_start=0x8033AF90,
+    scene_bss_end=0x80361270,
+    scene_engine_bss_start=0x8038BCA0,
+    scene_engine_bss_end=0x8038EEE0,
+    main_pool_start=0x8005C010,
+    main_pool_end=0x801C0FF0,
 )
 
 # JP / Usamune v1.93j. Every value passed its address gate on his JP game

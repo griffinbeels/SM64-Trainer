@@ -1325,3 +1325,130 @@ register(Gate(
            "zone, on every read.",
     check=_check_player1_controller,
 ))
+
+
+# --- the scene renderer's state spans (M4 E2-live, lab only)
+#
+# The scene tap copies these spans with each graphics task so SM64's own
+# geo_process_root can re-run offline. Their bounds come from the linker map's
+# section layout, not a symbol, so no single read proves them; each gate checks
+# the span against independent facts the running game shows. The definitive
+# check is the offline regeneration itself (tools/scene_lab/e2_georender.py
+# from-tap), which needs a live tap session.
+
+SCENE_SPAN_LIMIT = 512 * 1024          # bytes; the largest span (game .bss) is ~153 KiB
+
+
+def _span(ctx, start_field: str, end_field: str):
+    start, end = ctx.candidate(start_field), ctx.candidate(end_field)
+    if start is None or end is None:
+        return None
+    if start % 4 or end % 4 or not start < end <= start + SCENE_SPAN_LIMIT \
+            or not _ghost_ram_pointer(start, end - start):
+        return False
+    return start, end
+
+
+def _scene_span_gate(field: str, start_field: str, end_field: str, inside: tuple[str, ...], what: str):
+    def check(ctx) -> Verdict:
+        span = _span(ctx, start_field, end_field)
+        if span is None:
+            return Verdict("missing", evidence=f"{start_field}/{end_field} candidates missing")
+        if span is False:
+            return Verdict("failed", evidence="span is unaligned, empty, oversized or outside RDRAM")
+        start, end = span
+        missing = [name for name in inside
+                   if ctx.candidate(name) is None or not start <= ctx.candidate(name) < end]
+        if missing:
+            return Verdict("failed", evidence=f"verified globals outside the span: {', '.join(missing)}")
+        return Verdict("verified", value=ctx.candidate(field), measured={"bytes": end - start},
+                       evidence=f"{what} lie inside [{start:#x}, {end:#x}); only the offline "
+                                "regeneration proves the span holds everything the renderer reads")
+    return check
+
+
+_DATA_INSIDE = ("global_timer", "curr_level", "current_area_pointer", "area_update_counter",
+                "last_completed_course")
+_BSS_INSIDE = ("mario_struct", "curr_area", "warp_dest", "pending_warp_op", "hud_display",
+               "player1_controller", "object_pool", "mario_object")
+for _field in ("scene_data_start", "scene_data_end"):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+        needs=tuple(f"address.{name}" for name in _DATA_INSIDE),
+        instruction="Nothing to do: checks the scene .data span against verified globals.",
+        proves="The scene .data span is a sane RDRAM span holding every verified .data global.",
+        check=_scene_span_gate(_field, "scene_data_start", "scene_data_end", _DATA_INSIDE,
+                               "every verified .data global"),
+    ))
+for _field in ("scene_bss_start", "scene_bss_end"):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+        needs=tuple(f"address.{name}" for name in _BSS_INSIDE),
+        instruction="Nothing to do: checks the scene .bss span against verified globals.",
+        proves="The scene .bss span is a sane RDRAM span holding every verified .bss global "
+               "and the object pool's first slot.",
+        check=_scene_span_gate(_field, "scene_bss_start", "scene_bss_end", _BSS_INSIDE,
+                               "every verified .bss global and the object pool"),
+    ))
+
+
+def _check_scene_engine_bss(field: str):
+    def check(ctx) -> Verdict:
+        span = _span(ctx, "scene_engine_bss_start", "scene_engine_bss_end")
+        pool = (ctx.candidate("main_pool_start"), ctx.candidate("main_pool_end"))
+        if span is None or None in pool:
+            return Verdict("missing", evidence="engine .bss or main pool candidates missing")
+        if span is False:
+            return Verdict("failed", evidence="span is unaligned, empty, oversized or outside RDRAM")
+        start, end = span
+        block = ctx.raw().read_words(start, end - start)
+        pointers = sum(1 for at in range(0, len(block), 4)
+                       if pool[0] <= int.from_bytes(block[at:at + 4], "little") < pool[1])
+        if pointers < 2:
+            return Verdict("failed", measured={"pool_pointers": pointers},
+                           evidence="the span holds no surface-pool pointers into the main pool")
+        return Verdict("verified", value=ctx.candidate(field), measured={"pool_pointers": pointers},
+                       evidence="the span holds pointers into the main pool (the surface pools); only "
+                                "the offline regeneration proves it holds what shadows read")
+    return check
+
+
+for _field in ("scene_engine_bss_start", "scene_engine_bss_end"):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+        needs=("address.main_pool_start", "address.main_pool_end"),
+        instruction="Load a normal playable area; reads the engine .bss span once.",
+        proves="The scene engine .bss span holds the surface pool pointers into the main pool.",
+        check=_check_scene_engine_bss(_field),
+    ))
+
+
+def _check_main_pool(field: str):
+    def check(ctx) -> Verdict:
+        start, end = ctx.candidate("main_pool_start"), ctx.candidate("main_pool_end")
+        bss = _span(ctx, "scene_bss_start", "scene_bss_end")
+        area = ctx.candidate("current_area_pointer")
+        if start is None or end is None or not bss or area is None:
+            return Verdict("missing", evidence="pool bounds, scene .bss span or gCurrentArea missing")
+        mem = ctx.raw()
+        block = mem.read_words(bss[0], bss[1] - bss[0])
+        words = [int.from_bytes(block[at:at + 4], "little") for at in range(0, len(block), 4)]
+        held = any(words[i] == start and words[i + 1] == end for i in range(len(words) - 1))
+        root = mem.read_u32(mem.read_u32(area) + A.AREA_GRAPH_ROOT_OFF)
+        if not held or not start <= root < end:
+            return Verdict("failed", measured={"bounds_held": held, "graph_root": root},
+                           evidence="the game's pool bounds or the active scene graph disagree with the candidates")
+        return Verdict("verified", value=ctx.candidate(field), measured={"graph_root": root},
+                       evidence="two adjacent .bss words hold exactly these bounds (sPoolStart, sPoolEnd) "
+                                "and the active area's scene graph lies inside them")
+    return check
+
+
+for _field in ("main_pool_start", "main_pool_end"):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+        needs=("address.scene_bss_start", "address.scene_bss_end", "address.current_area_pointer"),
+        instruction="Load a normal playable area; reads the pool bounds the game holds.",
+        proves="The main pool bounds are the values the game's own pool globals hold.",
+        check=_check_main_pool(_field),
+    ))
