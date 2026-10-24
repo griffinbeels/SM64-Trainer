@@ -1139,6 +1139,39 @@ user's existing GLideN64 settings carry over.
 - **Not** -- the graphics plugin the user had before; that one stays in the
   folder untouched, and "Remove Practice Replay" selects it again
 
+### Task closure
+
+Every byte of game memory the [[renderer]] reads while it draws one SM64
+graphics task: the display lists, vertices, matrices, lights, viewport,
+texture and palette loads, and the microcode it identifies. The closure walker
+follows the task the way the [[renderer]] does and marks those ranges; it
+refuses a task it cannot follow rather than guessing. The [[renderer]] redraws
+a task from its closure alone, with every other byte overwritten, and
+reproduces the original picture pixel for pixel (M4 experiment E0,
+2026-10-24): a faithful recording can carry the closure instead of the whole
+memory.
+
+- **Lives** -- the walker (`plugin/gfxwrap/scene_closure.h`); the proof tools
+  (`tools/scene_lab/closure.py`, `tools/scene_lab/replay.py`)
+- **Not** -- the stamp the [[capture layer]] copies for each picture: a few
+  fields that identify the picture, not what it draws
+
+### Scene tap
+
+An M4 experiment inside the [[capture layer]]'s wrapper that writes
+each graphics task's [[task closure]] and the picture Project64 then shows,
+for a few armed seconds. A one-shot arming file present when a [[practice
+ROM]] opens starts it; without that file it costs one memory read per
+callback. It copies at the instant the game submits the task into a fixed
+ring and never makes the game wait; a full ring drops and counts the record.
+`tools/scene_lab/tap.py` arms it, reads what it wrote and turns each task into
+input the [[renderer]] can redraw offline.
+
+- **Lives** -- the tap (`plugin/gfxwrap/scene_tap.cpp`), called from the
+  wrapper (`plugin/gfxwrap/gfxwrap.c`); its tool (`tools/scene_lab/tap.py`)
+- **Not** -- the [[recorder]], which encodes video of play; the scene tap is
+  an M4 probe that writes nothing unless armed
+
 ### Practice ROM
 
 The cartridge the practice tooling works on: Usamune v1.93u (US) or a JP
