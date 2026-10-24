@@ -45,7 +45,7 @@ The public destination, privacy boundary and durable retry behavior belong to
 
 ```
 Project64 1.6 process (Windows)
-      │  ReadProcessMemory, ~60 Hz poll (game logic runs at 30 fps)
+      │  ReadProcessMemory, 250 Hz poll with a pad, else 60 Hz (game logic runs at 30 fps)
 ┌─────▼──────────┐   GameSnapshot     ┌──────────────┐   Event
 │ memory/pj64.py  │ ─────────────────▶ │ detectors/*  │ ──────────▶ ─────────────────────────────────────────┐
 │ attach, RDRAM   │  core/snapshot.py  │ (prev,curr)→ │                                                      │
@@ -71,7 +71,9 @@ Project64 1.6 process (Windows)
                                                                                                             consumers
 ```
 
-Polling at 60 Hz against 30 fps logic observes every game frame. Detectors
+The poller samples the pad at 250 Hz and snapshots once per game frame; with
+no pad it polls at 60 Hz, every tick a read (rates and evidence:
+`server/poller.py`'s docstring). Either way every game frame is observed. Detectors
 hold no I/O; the poller holds no game logic; `main.py` wires everything.
 `TrackerService` is the event sink: it broadcasts first (liveness never gated
 on the db), then journals, then feeds the projector; derived `attempt_completed`
