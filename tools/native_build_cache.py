@@ -178,8 +178,16 @@ def _compiler_args(args: list[str]) -> list[str]:
 
 
 def _prune(root: Path) -> None:
-    entries = sorted((path for path in root.glob("*/*") if (path / "manifest.json").is_file()),
-                     key=lambda path: (path / "manifest.json").stat().st_mtime)
+    # Parallel test workers share this cache and prune it concurrently: an
+    # entry listed here can vanish before its stat, so read each mtime once
+    # and skip the ones already gone.
+    entries = []
+    for path in root.glob("*/*"):
+        try:
+            entries.append(((path / "manifest.json").stat().st_mtime, path))
+        except OSError:
+            continue
+    entries = [path for _, path in sorted(entries)]
     for stale in entries[:max(0, len(entries) - MAX_ENTRIES)]:
         shutil.rmtree(stale, ignore_errors=True)
 

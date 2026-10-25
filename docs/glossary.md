@@ -1213,34 +1213,34 @@ delivery worker only keeps time and books, without the GPU.
 
 ### Bindings cause
 
-Why the [[renderer]] could not name a capture surface: the first place its GL
-state observation was given up since the context was created (a site, plus
-the OpenGL error read there), and how far arming that context got (created,
-practice ROM, function table installed, right thread). Added 2026-10-24 for a
-tester whose every recording ended "no qualified source surface" (10034) with
-no way to tell which of those steps failed. It rides the refused picture
-record, the `gpu_failure` log line and the startup receipt, beside the GPU's
-name read when the context was created.
+Why the [[renderer]] could not name a capture surface: the first place it
+stopped trusting its GL state observation in this context (a site, plus the
+OpenGL error it read there), and how far arming that context got (created,
+[[practice ROM]], function table installed, right thread). Added 2026-10-24
+for a tester whose every recording ended "no qualified source surface"
+(10034) with no way to tell which of those steps failed. It rides the
+[[refused picture]] record, the `gpu_failure` log line and the startup
+receipt, beside the GPU's name it read at context creation.
 
 - **Lives** -- `plugin/gfxwrap/source_refusal.h` (the numbers),
   `plugin/gfxwrap/link_dispatch.cpp` (where each is recorded),
   `src/sm64_events/replay/gpudiagnostics.py` (the plain-words names)
 - **Not** -- a refusal reason: the 10034 reason and its `0x53520001` detail
-  say which gate refused; the bindings cause says why that gate was closed
+  say which check refused; the bindings cause says why that check failed
 
 ### Witness rebuild
 
 The [[renderer]] asking the driver for every binding its state witness
 holds, after a recoverable [[bindings cause]], so one GL error no longer costs
-GPU recording for a whole session (2026-10-24, his "Why can't we fix the GPU
-stuff as best we can?"). It runs when a picture is about to be refused or a
-ghost list would start no poses, at most once a second, and never after a
-structural cause.
+GPU recording until the next context (2026-10-24, his "Why can't we fix the
+GPU stuff as best we can?"). It happens when the source is about to refuse a
+picture or a [[ghost]] list would start no poses, at most once a second, and
+never after a structural cause.
 
-- **Lives** -- `plugin/gfxwrap/link_dispatch.cpp` (`Reconstruct`),
+- **Lives** -- `plugin/gfxwrap/link_dispatch.cpp` (Reconstruct),
   `plugin/gfxwrap/source_refusal.h` (which sites are recoverable); contract
   in [the link-state doc](replay-link-state.md#witness-rebuild)
-- **Not** -- a retry of the whole recording: that is the GPU retry gate
+- **Not** -- a new recording: the GPU retry starts one of those
 
 ### Activation log
 
@@ -2910,8 +2910,9 @@ log records and [[ghost]] playback state. The builder omits private paths and
 custom display labels. The Debug report
 button in the settings drawer writes one and opens Explorer with it selected,
 so a user can attach evidence to a bug report instead of a description of it.
-The first automatic error of each issue in a session carries the same report
-as an attachment, built by the upload worker after the error is captured.
+The first automatic error of each issue per launch carries the same report
+as an attachment, which the upload worker builds after the SDK captures the
+error.
 
 - **Lives** — the report builder (`src/sm64_events/core/diagnostics.py`) → the
   settings drawer (`src/sm64_events/ui/components/header.js`) and the error
