@@ -61,13 +61,34 @@ int main(int argc,char **argv) {
             rs_request request{sizeof(request),RS_ABI_V2,{0,0},token};api->update(&request);api->finish(token);
             const auto* record=api->take();CHECK(record && record->outcome==RB_SURFACE_FAILED);
             CHECK(record->surface.witness==(0x53520000u|gate) && record->image.ownership==RB_IMAGE_NONE);
+            // Only a BINDINGS refusal carries a cause; identity fields stay zero for every gate.
+            const auto&s=record->surface;const auto cause=rs_read_bindings_cause(s);
+            CHECK(!s.width && !s.height && !s.context && !s.boundary_qpc && !s.context_generation
+                && !s.post_vi_origin && !s.swap_count && !s.source_format);
+            if(gate==1)CHECK(cause.site==RS_BINDINGS_GATEWAY_OPEN_ERROR && cause.gl_error==0x502
+                && cause.flags==(RS_BINDINGS_REPORTED|RS_BINDINGS_CONTEXT_CREATED) && cause.invalidations==3
+                && cause.after_ms==41 && cause.contexts==2);
+            else CHECK(!s.read_drawable && !s.drawable_width && !s.drawable_height && !s.restore_read_framebuffer
+                && !s.restore_texture_2d && !s.restore_read_buffer);
             CHECK(captured()==gate-1 && api->release(token));
             refuse(0);token=api->stage(&stamp);request.ticket=token;api->update(&request);api->finish(token);
             record=api->take();CHECK(record && record->outcome==RB_OBSERVED && !record->surface.witness);
             CHECK(captured()==gate && api->release(token));
         }
+        // Only the bindings gate asks for a rebuild, once per refusal; a healed
+        // witness lets that same update's surface through.
+        auto rebuilds=reinterpret_cast<unsigned (__cdecl *)()>(GetProcAddress(source,"SourceTestRebuilds"));
+        CHECK(rebuilds && rebuilds()==1);
+        refuse(8);
+        {
+            rb_stamp stamp{};stamp.bytes[0]=77;
+            auto token=api->stage(&stamp);CHECK(token.occurrence);
+            rs_request request{sizeof(request),RS_ABI_V2,{0,0},token};api->update(&request);api->finish(token);
+            const auto* record=api->take();CHECK(record && record->outcome==RB_OBSERVED && !record->surface.witness);
+            CHECK(rebuilds()==2 && captured()==7 && api->release(token));
+        }
         api->disarm();lifecycle(0);
-        std::puts("source ABI passed: six refusal gates and successful recovery");return 0;
+        std::puts("source ABI passed: six refusal gates, successful recovery and a rebuilt witness");return 0;
     }
     for(unsigned cycle=0;cycle<3;cycle++) {
         if(cycle==0 || cycle==2)lifecycle(1); CHECK(api->activate());

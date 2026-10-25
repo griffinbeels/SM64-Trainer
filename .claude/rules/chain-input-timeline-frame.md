@@ -116,6 +116,16 @@ paused picture":
 
 ## Failure catalogue
 
+- **2026-10-24: one GL error cost a tester every recording.** An AMD tester's
+  every session ended 10034 (no qualified source surface): any invalidation of
+  the renderer's bindings witness was one-way for the context, and the first
+  capture gateway can meet an error GLideN64's Release build left pending.
+  The witness now rebuilds from the driver, once a second, for recoverable
+  sites only, asked by the refused picture or the ghost's next list (its
+  ghosts never started either); the ghost steps aside after its own error. His
+  words: *"Why can't we fix the GPU stuff as best we can?"* Contract and
+  limits: [witness rebuild](../../docs/replay-link-state.md#witness-rebuild).
+
 - **2026-09-15 (round 48): two sources on one screen, and three ways a
   stamp could lie.** The lanes drew the polled track while the inspector drew
   the stamp, so a stale poll (his 100 Coins frame 3017: no successful poll in

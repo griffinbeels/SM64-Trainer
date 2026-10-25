@@ -13,7 +13,7 @@ import re
 from sm64_events.core.error_reporting_privacy import scrub_text
 from sm64_events.core.native_diagnostics import EVENT_NAMES, technical_fields
 
-MAX_SNAPSHOT_BYTES = 16 * 1024
+MAX_SNAPSHOT_BYTES = 24 * 1024
 _CAPTURE_STAGES = ("channel", "encoder", "sink_prepare", "first_offer", "media_setup", "tick", "between_ticks",
                    "audio_drain", "adapter_pump", "heartbeat", "media_drain", "media_age", "report",
                    "mux_video", "mux_audio", "ledger_feed", "copy_lane")
@@ -56,14 +56,25 @@ def _numbers(value, keys) -> dict:
 
 
 def _startup(value):
-    """Keep pre-channel progress, never raw GL identity or request nonces."""
+    """Keep pre-channel progress and the GPU it ran on, never request nonces.
+    The vendor/renderer strings name the adapter (as `gpu_name` already
+    does): a no-surface startup (10034) is otherwise unattributable."""
     value = mapping(value)
     result = {key: item for key, item in value.items()
-              if key in {"epoch", "load_error", "width", "height", "control_generation"}
+              if key in {"epoch", "load_error", "width", "height", "control_generation",
+                         "bindings_site", "bindings_gl_error", "bindings_flags", "bindings_invalidations",
+                         "bindings_after_ms", "bindings_contexts"}
               and type(item) is int and 0 <= item <= 0xffffffff}
-    version = value.get("gl_version")
-    if isinstance(version, str) and (match := re.match(r"^([0-9]{1,2})\.([0-9]{1,2})(?=[.\s]|$)", version)):
-        result["gl_version"] = f"{int(match[1])}.{int(match[2])}"
+    for key in ("gl_version", "context_gl_version"):
+        version = value.get(key)
+        if isinstance(version, str) and (match := re.match(r"^([0-9]{1,2})\.([0-9]{1,2})(?=[.\s]|$)", version)):
+            result[key] = f"{int(match[1])}.{int(match[2])}"
+    result.update(pick(value, ("context_gl_vendor", "context_gl_renderer", "bindings_cause")))
+    if value.get("context_identity") in ("context_created", "first_refusal"):
+        result["context_identity"] = value["context_identity"]
+    site = value.get("bindings_site_name")
+    if isinstance(site, str) and re.fullmatch(r"[a-z_]{1,40}", site):
+        result["bindings_site_name"] = site
     entry = value.get("missing_entry_point")
     if isinstance(entry, str) and entry in _ENTRY_POINTS:
         result["missing_entry_point"] = entry
@@ -100,9 +111,18 @@ def _native(value):
                                                    "reason", "ack_heartbeat", "capabilities", "rom_open", "baseline_rom", "build_id"))
     if isinstance(control.get("gpu_startup"), Mapping):
         result["control"]["gpu_startup"] = _startup(control["gpu_startup"])
-    logs = value.get("logs", [])
+    logs = [row for row in value.get("logs", [])[:24] if isinstance(row, Mapping)] \
+        if isinstance(value.get("logs"), list) else []
+    # Most candidate log names are absent on any one install. A count keeps the
+    # search explicit without spending the byte budget the native events need.
+    def absent(row):
+        return row.get("available") is False and row.get("error_type") == "FileNotFoundError"
     result["logs"] = [pick(row, ("source", "file", "available", "error_type", "offset"))
-                      for row in logs[:24] if isinstance(row, Mapping)] if isinstance(logs, list) else []
+                      for row in logs if not absent(row)]
+    previous = value.get("missing_log_files")
+    counted = sum(map(absent, logs)) + (previous if type(previous) is int and 0 <= previous <= 24 else 0)
+    if counted:
+        result["missing_log_files"] = min(counted, 24)
     events = value.get("events", [])
     result["events"] = []
     for row in events[-32:] if isinstance(events, list) else []:
@@ -163,12 +183,19 @@ def safe_snapshot(value) -> dict:
     resources = mapping(value.get("resources"))
     result["resources"] = pick(resources, ("t_utc", "uptime_s", "rss_mib", "private_mib", "handles", "gdi", "user", "threads", "os_threads"))
     result["native"] = _native(value.get("native"))
-    if len(json.dumps(result).encode()) > MAX_SNAPSHOT_BYTES:
-        result["native"]["events"] = result["native"].get("events", [])[-8:]
+    # Shed the least useful evidence first: found-log rows, then the oldest
+    # native events one at a time (the latest 32 survive whenever they fit).
+    def oversize():
+        return len(json.dumps(result).encode()) > MAX_SNAPSHOT_BYTES
+    if oversize() and result["native"].get("logs"):
+        result["native"]["logs"] = []
+        result["truncated"] = True
+    events = result["native"].get("events", [])
+    while events and oversize():
+        events.pop(0)
         result["truncated"] = True
     # The fallback is bounded even when several known fields carry long numbers/text.
-    if len(json.dumps(result).encode()) > MAX_SNAPSHOT_BYTES:
-        result["native"]["events"] = []
+    if oversize():
         result["capture"]["gpu"]["first_failure"] = {}
     if len(json.dumps(result).encode()) > MAX_SNAPSHOT_BYTES:
         # Several malformed but allowed scalar fields can still exceed the

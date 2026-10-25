@@ -214,6 +214,7 @@ class Poller:
         # PJ64 closed and reopened under a live tracker, and nothing came
         # back). Past UNREADABLE_TICKS_BEFORE_READ the tick reads anyway.
         self._unreadable_ticks = 0
+        self._probe_refusing = False   # the attach probe already said so
         # Wait until the game has FINISHED writing a frame before reading it.
         # The pad's own rewrite lands ~62% in (addresses.CONTROLLER_SETTLE_PHASE,
         # measured); the phases of the other fields are UNMEASURED, so this is
@@ -396,8 +397,13 @@ class Poller:
             await self.broadcaster.publish(_lifecycle_event("emulator_disconnected"))
             return
         if not _plausible(curr):
-            log.error("memory layout mismatch (impossible values read) — "
-                      "refusing to emit events; check the address registry")
+            # A console reset or a ROM change mid-play: RDRAM is briefly
+            # implausible, and reattaching identifies the game again (the
+            # reset-across-reattach path below). Expected, so not an error:
+            # at ERROR it read as a broken address registry in every beta
+            # tester's report (2026-10-24).
+            log.info("memory implausible mid-play (console reset or ROM change); "
+                     "detaching to identify the game again")
             self._break_input_capture()
             self.memory.detach()
             self._prev = None
@@ -602,10 +608,15 @@ class Poller:
             self.memory.detach()
             return False
         if not _plausible(curr):
-            log.error("memory layout mismatch (impossible values read) — "
-                      "refusing to serve; check ROM / address registry")
+            # Retried every LAYOUT_RETRY_S while another game runs: say it
+            # once per refusal streak, not every five seconds.
+            if not self._probe_refusing:
+                log.warning("memory layout mismatch (impossible values read) — "
+                            "refusing to serve; check ROM / address registry")
+            self._probe_refusing = True
             self.memory.detach()
             return False
+        self._probe_refusing = False
         return True
 
     async def run(self) -> None:

@@ -66,10 +66,12 @@ is shared across checkouts; your practice data stays in its existing location.
 
 Installing Practice Replay adds a **capture layer** to Project64's plugin
 folder and selects it as the `Graphics Dll`: the trainer's own renderer
-(`GLideN64_SM64Trainer.dll`, LINK's GLideN64 v4.2 with the capture hooks,
+(`sm64_trainer_gfx.renderer`, LINK's GLideN64 v4.2 with the capture hooks,
 GPL-2.0, credits in its About box) and the capture wrapper (`SM64 Trainer
 v1.0`) that loads it and supplies replay pictures stamped with the game's
-frame counter and inputs. Your existing graphics plugin stays in the folder
+frame counter and inputs. Project64's plugin list shows only `SM64 Trainer
+v1.0`; an older install's second entry goes away when the trainer updates
+it. Your existing graphics plugin stays in the folder
 untouched. Install while Project64 is closed; open Usamune once afterward to
 check it. **Manage Practice Replay → Remove Practice Replay** selects your
 previous graphics plugin again, also with Project64 closed.
@@ -240,7 +242,8 @@ only where the wiki actually has a page, so it never leads to a 404.
 **Automatic error reports.** Builds configured for Sentry send technical failures
 in the background. **Settings → Error reports** turns collection off and clears
 pending uploads and breadcrumbs. Errors include bounded capture, setup and ghost
-playback evidence. Reports filter private paths and credentials; gameplay logs,
+playback evidence, and the first error of each kind carries the same filtered
+Debug report you can export. Reports filter private paths and credentials;
 account identities, unrelated applications, screenshots and recordings are excluded.
 See the [data inventory and retention limits](error-reporting.md).
 

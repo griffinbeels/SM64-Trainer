@@ -280,8 +280,12 @@ const char *owner(Owner who) {
     return who == Owner::renderer ? "renderer" : who == Owner::ghost ? "ghost" : who == Owner::layer ? "layer" : "none";
 }
 // A fault, one list of 3 surfaces and 5 HUD draws, and where its error went.
+void fresh_context() {
+    ++active_identity.context_generation; run_list(0, 0); run_list(0, 0);
+}
 void scenario(const char *name, bool comma, Faults fault) {
-    reset(); run_list(3, 5); // a clean list first: the scenario's own starts clean
+    reset(); fresh_context();
+    run_list(3, 5); // a clean list first: the scenario's own starts clean
     faults = fault; const Seen before = seen;
     const auto list = run_list(3, 5);
     std::printf("%s\"%s\":{\"drawn\":%u,\"kept\":\"%s\",\"pending\":\"%s\",\"nominal\":%s,"
@@ -295,6 +299,28 @@ void scenario(const char *name, bool comma, Faults fault) {
     check(!gl.drained_renderer, "a renderer error is never drained");
 }
 #ifndef GHOST_DRAW_BASELINE
+// The ghost's own error at its display scope's close costs the source one
+// invalidation, which the source rebuilds (modelled here by the witness going
+// nominal again). The ghost then asks nothing more of that context, and draws
+// again in the next one.
+void ghost_steps_aside() {
+    reset(); fresh_context();
+    const auto clean = run_list(3, 5);
+    faults.batch = true; const auto faulted = run_list(3, 5); faults = {};
+    const bool kept = gl.saved_owner == Owner::ghost && !gl.nominal;
+    gl.nominal = true; gl.saved = GL_NO_ERROR; gl.saved_owner = Owner::none; // the source rebuilt
+    const auto after = run_list(3, 5);
+    const auto again = run_list(3, 5);
+    const bool nominal = gl.nominal;
+    fresh_context();
+    const auto next = run_list(3, 5);
+    std::printf(",\"ghost_steps_aside\":{\"clean_drawn\":%u,\"faulted_drawn\":%u,\"kept\":%s,"
+                "\"after_drawn\":%u,\"after_reads\":%u,\"after_layers\":%u,\"again_reads\":%u,"
+                "\"nominal\":%s,\"next_context_drawn\":%u}",
+                clean.drawn, faulted.drawn, kept ? "true" : "false", after.drawn, after.reads, after.layer_passes,
+                again.reads, nominal ? "true" : "false", next.drawn);
+    check(!gl.open, "no gateway scope outlives the ghost stepping aside");
+}
 void transitions() {
     ghost_presentation::ViSource source{screen, color.name, width, height, 1,
         identity().context_generation, identity().drawable_generation};
@@ -425,6 +451,9 @@ int main() {
         fault.hud_gl = true; scenario("hud_gl", true, fault); fault = {};
         fault.renderer_after_huds = true; scenario("renderer_after_huds", true, fault); fault = {};
         fault.throw_in_layer = true; scenario("throw_in_layer", true, fault); fault = {};
+#ifndef GHOST_DRAW_BASELINE
+        ghost_steps_aside();
+#endif
         std::printf("},\"checks\":%u,\"driver_queries\":%u}\n", checks, clean_queries);
         return 0;
     } catch (const std::exception &error) {

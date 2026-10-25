@@ -20,7 +20,7 @@ def installed(**kwargs):
     return _status("active", consented_at="yesterday", wrapper_present=True,
                    wrapper_current=True, wrapper_selected=True, pj64_dir="C:/PJ64",
                    pj64_running=True, layer_alive=True, plugin_pid=123,
-                   wrapped_name="GLideN64_SM64Trainer.dll", renderer_present=True,
+                   wrapped_name="sm64_trainer_gfx.renderer", renderer_present=True,
                    renderer_current=True, **kwargs)
 
 

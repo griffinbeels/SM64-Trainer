@@ -117,6 +117,28 @@ def test_real_startup_receipt_keeps_progress_and_capability_without_driver_or_re
     assert safe_snapshot(result) == result
 
 
+def test_a_no_surface_startup_names_its_gpu_and_first_bindings_invalidation():
+    """beta.30's AMD tester: 10034 every session, and neither Sentry nor the
+    report could say which GPU or which check refused. The automatic snapshot
+    now keeps both, scrubbed like every other string."""
+    startup = {"epoch": 14, "load_error": 0, "width": 0, "height": 0, "control_generation": 1,
+               "context_identity": "context_created", "context_gl_vendor": "ATI Technologies Inc.",
+               "context_gl_renderer": "AMD Radeon RX 6700 XT C:\\Users\\PrivateName",
+               "context_gl_version": "4.6.14830 Compatibility Profile Context 24.9.1",
+               "bindings_site": 14, "bindings_site_name": "gateway_open_error",
+               "bindings_cause": "the first capture gateway found a GL error pending (GL_INVALID_ENUM)",
+               "bindings_gl_error": 0x500, "bindings_flags": 0xFF, "bindings_invalidations": 1,
+               "bindings_after_ms": 0, "bindings_contexts": 1, "nonce": "PrivateNonce"}
+    kept = safe_snapshot({"capture": {"gpu": {"latest": {"startup": startup}}}})["capture"]["gpu"]["latest"]["startup"]
+    assert kept["context_gl_vendor"] == "ATI Technologies Inc."
+    assert kept["context_gl_renderer"].startswith("AMD Radeon RX 6700 XT")
+    assert kept["context_gl_version"] == "4.6"
+    assert (kept["bindings_site_name"], kept["bindings_gl_error"], kept["bindings_flags"]) == ("gateway_open_error", 0x500, 0xFF)
+    assert kept["bindings_cause"].endswith("(GL_INVALID_ENUM)")
+    assert "Private" not in json.dumps(kept)
+    assert safe_snapshot({"capture": {"gpu": {"latest": {"startup": kept}}}})["capture"]["gpu"]["latest"]["startup"] == kept
+
+
 @pytest.mark.parametrize(("width", "height"), [(0, 0), (640, 480)])
 def test_accepted_request_without_a_surface_is_distinct_from_surface_arrival(width, height):
     receipt = {"epoch": 4, "load_error": 0, "width": width, "height": height, "control_generation": 3}
@@ -152,17 +174,57 @@ def test_expanded_native_metrics_stay_inside_the_snapshot_byte_budget():
     result = safe_snapshot({"native": {"events": [row] * 100}})
     assert len(json.dumps(result).encode()) <= MAX_SNAPSHOT_BYTES
     assert result["truncated"] is True
-    assert len(result["native"]["events"]) <= 8
+    assert 0 < len(result["native"]["events"]) < 32
+    assert safe_snapshot(result) == result
+
+
+def _tester_shaped_snapshot(events):
+    """Sizes from a beta.30 tester's export: 16 candidate native logs, 13 absent."""
+    timings = {stage: {"count": 1200, "total_ms": 123456.789, "max_ms": 987.654} for stage in (
+        "channel", "encoder", "sink_prepare", "first_offer", "media_setup", "tick", "between_ticks", "audio_drain",
+        "adapter_pump", "heartbeat", "media_drain", "media_age", "report", "mux_video", "mux_audio")}
+    failure = {"stage": "native_capture_ended", "reason": "native_capture_ended:3:10034", "capture_build": BUILD,
+               "native_reason": 10034, "native_result": 3, "observed_unix_s": 1761345460.5, "stage_timings": timings}
+    counters = {key: 123456 for key in ("failures", "restarts", "recoveries", "samples", "frames", "invalid_samples",
+                                        "sink_failures", "history_failures", "edge_checks", "skipped_frames")}
+    logs = [{"source": source, "file": name, "available": False, "error_type": "FileNotFoundError"}
+            for source in ("plugin_dir", "pj64_dir", "virtual_plugin_dir", "virtual_pj64_dir")
+            for name in ("sm64_trainer_gfx.activation.log", "sm64_trainer_gfx.log",
+                         "sm64_trainer_gfx.activation.log.1", "sm64_trainer_gfx.log.1")]
+    for index in (8, 9, 10):
+        logs[index] = {**logs[index], "available": True, "error_type": None, "offset": 155762}
+    return {"captured_utc": "2026-10-24T22:39:01Z",
+            "capture": {"gpu": {"failures": 3, "latest": failure, "first_failure": failure}},
+            "pipeline": {key: counters for key in ("polling", "tracking", "inputs", "input_storage")},
+            "native": {"available": True, "logs": logs, "events": events}}
+
+
+def test_missing_log_files_cannot_crowd_out_the_latest_32_native_events():
+    line = producer_line("plugin/gfxwrap/diagnostics.h", "callback_progress", (BUILD, "UpdateScreen", "in_flight"))
+    row, = technical_events(line, producer_pid=42, producer_birth=BIRTH, build_id=BUILD)
+    events = [{**row, "timestamp": f"2026-10-24T22:{minute:02d}:00.000Z"} for minute in range(40)]
+    result = safe_snapshot(_tester_shaped_snapshot(events))
+    assert len(json.dumps(result).encode()) <= MAX_SNAPSHOT_BYTES
+    assert [event["timestamp"] for event in result["native"]["events"]] == [event["timestamp"] for event in events[-32:]]
+    assert result["native"]["missing_log_files"] == 13
+    assert [row["available"] for row in result["native"]["logs"]] == [True] * 3
+    assert result["capture"]["gpu"]["first_failure"]["native_reason"] == 10034
     assert safe_snapshot(result) == result
 
 
 def test_oversized_allowed_scalars_leave_an_explicit_bounded_evidence_failure():
     row = {key: "\u2605" * 1000 for key in ("source", "file", "error_type")}
+    wide = {key: "\u2605" * 1000 for key in (
+        "stage", "reason", "codec", "requested_codec", "encoder_backend", "capture_build", "native_reason",
+        "native_result", "native_stage", "native_operation", "native_hresult", "encoder_error", "encoder_result",
+        "driver_error", "gpu_vendor_id", "gpu_name", "gpu_driver", "observed_unix_s")}
+    # Native log rows are shed before the fallback, so the oversize lives in fields that are never shed.
     result = safe_snapshot({"captured_utc": "2026-10-21T18:01:00Z", "native": {"logs": [row] * 24},
-        "capture": {"gpu": {"latest": {key: "x" * 1000 for key in (
-            "stage", "reason", "codec", "requested_codec", "encoder_backend", "capture_build", "native_reason",
-            "native_result", "native_stage", "native_operation", "native_hresult", "encoder_error", "encoder_result",
-            "driver_error", "gpu_vendor_id", "gpu_name", "gpu_driver", "observed_unix_s")}}}})
+        "capture": {"gpu": {"latest": wide}},
+        "pipeline": {"polling": {key: "\u2605" * 1000 for key in ("state", "error")}},
+        "setup": {key: "\u2605" * 1000 for key in ("state", "pj64_running", "wrapper_present", "wrapper_current",
+            "wrapper_selected", "renderer_present", "renderer_current", "installation_verified", "layer_alive",
+            "pictures_flowing", "observed_unix_s")}})
     assert len(json.dumps(result).encode()) <= MAX_SNAPSHOT_BYTES
     assert result["truncated"] is True and result["error_type"] == "Oversize"
     assert result["captured_utc"] == "2026-10-21T18:01:00Z"

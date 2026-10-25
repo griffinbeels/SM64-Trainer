@@ -14,6 +14,19 @@ from sm64_events.core.setup_files import restore_on_failure
 
 log = logging.getLogger("sm64.capturelayer")
 
+# The capture layer's files inside Project64's Plugin folder; the setup
+# screen (core/capturelayer.py) and the UAC helper write the same names.
+WRAPPER_DLL = "sm64_trainer_gfx.dll"
+WRAPPER_INI = "sm64_trainer_gfx.ini"
+#: THE RENDERER as installed. Never a .dll: Project64 lists every *.dll in
+#: Plugin\ as a graphics plugin, and picking the renderer itself skips
+#: capture. The wrapper loads it by full path, so Windows appends nothing.
+#: Its extension must not start with "dll" ("*.dll" also matches 8.3 names).
+RENDERER_FILE = "sm64_trainer_gfx.renderer"
+#: Where installs before 2026-10-24 put the renderer (its bundled name,
+#: core/paths.py::RENDERER_DLL_NAME). Install and refresh move it.
+LEGACY_RENDERER_DLL = "GLideN64_SM64Trainer.dll"
+
 
 class PluginInstallError(OSError):
     """A terminal install failure with the original operation and Windows code."""

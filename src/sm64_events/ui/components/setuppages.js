@@ -104,9 +104,10 @@ function InstallDetails({ emu }) {
   return html`<${SetupDisclosure} label="What does this install change?">
     <p>Adds three files to:</p>
     <code class="setup-path">${emu.plugin_dir || `${emu.pj64_dir}\\Plugin`}</code>
-    <p><code>GLideN64_SM64Trainer.dll</code> is the trainer's build of LINK's GLideN64 v4.2 with the
+    <p><code>sm64_trainer_gfx.renderer</code> is the trainer's build of LINK's GLideN64 v4.2 with the
       capture hooks; <code>sm64_trainer_gfx.dll</code> and its <code>.ini</code> are the capture layer
-      Project64 loads. Nothing else is changed or tuned.</p>
+      Project64 loads, the only one of these Project64 lists as a graphics plugin. Nothing else is
+      changed or tuned.</p>
     <p>Selects <code>SM64 Trainer v1.0</code> in Project64's <code>Graphics Dll</code> setting.${" "}
       ${previous
         ? html`Your current plugin, <code>${previous}</code>, stays in the folder and is selected again when you remove Practice Replay.`

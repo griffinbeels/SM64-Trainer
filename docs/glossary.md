@@ -1121,9 +1121,11 @@ never reopens for it (his rule, 2026-09-16).
 
 ### Renderer
 
-The trainer's build of LINK's GLideN64 v4.2 (`GLideN64_SM64Trainer.dll`,
-picker label `LINK v4.2 [SM64 Trainer]`): the pinned upstream tree plus the
-capture overlay that adds the SourceV2 export the [[capture layer]] reads. A
+The trainer's build of LINK's GLideN64 v4.2 (bundled as `GLideN64_SM64Trainer.dll`,
+own label `LINK v4.2 [SM64 Trainer]`): the pinned upstream tree plus the
+capture overlay that adds the SourceV2 export the [[capture layer]] reads.
+Project64 receives it as `sm64_trainer_gfx.renderer`, no `.dll`, so its plugin
+picker lists only the wrapper (a tester saw two plugins, 2026-10-24). A
 stock GLideN64 has no such export, so a wrapper pointed at one captures
 nothing. (His 2026-09-15 "input unavailable" report had a different cause:
 Project64 selected the renderer directly, so the wrapper never loaded.)
@@ -1208,6 +1210,37 @@ delivery worker only keeps time and books, without the GPU.
   [the runtime doc](replay-gpu-runtime.md#first-capture-freeze)
 - **Not** -- the driver warm-up it replaced (2026-09-26 to 09-27), which kept
   the worker's context and paid the same freeze once in the boot intro
+
+### Bindings cause
+
+Why the [[renderer]] could not name a capture surface: the first place it
+stopped trusting its GL state observation in this context (a site, plus the
+OpenGL error it read there), and how far arming that context got (created,
+[[practice ROM]], function table installed, right thread). Added 2026-10-24
+for a tester whose every recording ended "no qualified source surface"
+(10034) with no way to tell which of those steps failed. It rides the
+[[refused picture]] record, the `gpu_failure` log line and the startup
+receipt, beside the GPU's name it read at context creation.
+
+- **Lives** -- `plugin/gfxwrap/source_refusal.h` (the numbers),
+  `plugin/gfxwrap/link_dispatch.cpp` (where each is recorded),
+  `src/sm64_events/replay/gpudiagnostics.py` (the plain-words names)
+- **Not** -- a refusal reason: the 10034 reason and its `0x53520001` detail
+  say which check refused; the bindings cause says why that check failed
+
+### Witness rebuild
+
+The [[renderer]] asking the driver for every binding its state witness
+holds, after a recoverable [[bindings cause]], so one GL error no longer costs
+GPU recording until the next context (2026-10-24, his "Why can't we fix the
+GPU stuff as best we can?"). It happens when the source is about to refuse a
+picture or a [[ghost]] list would start no poses, at most once a second, and
+never after a structural cause.
+
+- **Lives** -- `plugin/gfxwrap/link_dispatch.cpp` (Reconstruct),
+  `plugin/gfxwrap/source_refusal.h` (which sites are recoverable); contract
+  in [the link-state doc](replay-link-state.md#witness-rebuild)
+- **Not** -- a new recording: the GPU retry starts one of those
 
 ### Activation log
 
@@ -2877,9 +2910,13 @@ log records and [[ghost]] playback state. The builder omits private paths and
 custom display labels. The Debug report
 button in the settings drawer writes one and opens Explorer with it selected,
 so a user can attach evidence to a bug report instead of a description of it.
+The first automatic error of each issue per launch carries the same report
+as an attachment, which the upload worker builds after the SDK captures the
+error.
 
 - **Lives** — the report builder (`src/sm64_events/core/diagnostics.py`) → the
-  settings drawer (`src/sm64_events/ui/components/header.js`)
+  settings drawer (`src/sm64_events/ui/components/header.js`) and the error
+  upload worker (`src/sm64_events/core/error_reporting_transport.py`)
 
 ### Memory layout
 
