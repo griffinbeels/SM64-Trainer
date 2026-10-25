@@ -2,8 +2,9 @@
  * Observes real dispatch calls, including cached function pointers. No per-call
  * GL queries, allocations, locks, events, I/O or capture work. Raw void GL calls
  * do not prove success: this is a nominal-state candidate, not source admission.
- * After ContextCreated the only driver queries are Reconstruct's, on a BINDINGS
- * refusal, at most once a second (source_refusal.h, "THE WITNESS HEALS").
+ * After ContextCreated the only driver queries are Reconstruct's, asked by a
+ * BINDINGS refusal or a ghost list start, at most once a second
+ * (source_refusal.h, "THE WITNESS HEALS").
  *
  * ONLY ON A PRACTICE ROM (practice_rom.h, read from the header GLideN64 itself
  * parses in RSP_Init). For any other cartridge ContextCreated observes nothing,
@@ -512,7 +513,7 @@ bool reconstructable() {
 // framebuffer's selector is asked only while it is the one bound for
 // reading (GLideN64 binds it before every swap); otherwise it stays unknown
 // and the next attempt asks again.
-bool rebuild() {
+bool rebuild(uint32_t &asked) {
     if (!drain_for_renderer()) return false;
     GLint read = 0, draw = 0, active = 0, texture = 0, selector = GL_NONE, view[4]{}, box[4]{};
     GLint program = 0, array = 0, function = GL_LESS, factors[4]{GL_ONE, GL_ZERO, GL_ONE, GL_ZERO};
@@ -539,6 +540,8 @@ bool rebuild() {
         for (unsigned i = 0; i < sizeof(capabilities) / sizeof(capabilities[0]); ++i)
             if (glIsEnabled(capabilities[i])) on |= 1u << i;
     }
+    // State queries asked, for a caller that publishes its driver cost.
+    asked = 6 + (read ? 0 : 1) + (render_hooks ? 9 + sizeof(capabilities) / sizeof(capabilities[0]) : 0);
     const GLenum queried = ::glGetError();
     if (queried != GL_NO_ERROR) { drain_ours(queried); return false; }
     const auto unit = GLenum(active) - GL_TEXTURE0;
@@ -564,13 +567,16 @@ bool rebuild() {
     return true;
 }
 }
-bool Reconstruct() {
+bool Reconstruct(uint32_t *queries) {
+    if (queries) *queries = 0;
     if (!reconstructable()) return false;
     const uint64_t now = GetTickCount64();
     if (attempted && now - last_attempt_ms < 1000) return false;
     attempted = true; last_attempt_ms = now;
     if (reconstruct_attempts != saturated) ++reconstruct_attempts;
-    const bool rebuilt = rebuild();
+    uint32_t asked = 0;
+    const bool rebuilt = rebuild(asked);
+    if (queries) *queries = asked;
     if (rebuilt) {
         if (reconstruct_successes != saturated) ++reconstruct_successes;
         evidence.reconstructed_site = cause_site; evidence.reconstructed_gl_error = cause_error;

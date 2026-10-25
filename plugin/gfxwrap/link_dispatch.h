@@ -49,9 +49,11 @@ bool CandidateBindings(renderer::Identity *, snapshot::RestoreBindings *);
 void BindingsCause(rs_bindings_cause *);
 // Rebuilds the witness from the driver's answers after a RECOVERABLE
 // invalidation (source_refusal.h), at most once a second per context; true
-// when the observation is nominal again. Only a BINDINGS refusal calls it:
-// it is this file's one driver-query path after ContextCreated.
-bool Reconstruct();
+// when the observation is nominal again. Called where a refused witness would
+// cost the recording (surface()) or the ghost's poses (ghost_link's list
+// start): this file's one driver-query path after ContextCreated. `queries`
+// receives the state queries it asked (0 when it did not try).
+bool Reconstruct(uint32_t *queries = nullptr);
 uint32_t SourceFormat(); // observed once on fresh default framebuffer; no driver query
 // Called only for an admitted snapshot, before mutation and after restoration/
 // fence/flush, BEFORE image publication. One raw error read each; no drain.

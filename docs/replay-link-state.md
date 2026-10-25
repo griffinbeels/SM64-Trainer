@@ -95,7 +95,8 @@ wraparound reuse.
 
 Observers add no driver queries, waits, allocations, I/O, events or capture work
 per mutation. GL capability/current-handle queries occur during preparation
-and in the witness rebuild, which runs only on a refusal, at most once a second.
+and in the witness rebuild, which runs only when a refused witness would cost
+the recording or the ghost, at most once a second.
 This is a source-code property, not measured zero gameplay overhead.
 
 `CandidateBindings` is deliberately unqualified. Void GL calls do not report
@@ -139,8 +140,12 @@ session. His ruling that day: *"Why can't we fix the GPU stuff as best we
 can? Try to do it as best we can without needing to run on my GPU."* So
 `replay_gl::Reconstruct` now rebuilds the witness from the driver's answers.
 
-- **When.** Only when `surface()` is about to refuse with BINDINGS, at most once
-  a second per context, then `CandidateBindings` is asked again. The context
+- **When.** Two callers ask, then ask `CandidateBindings` again: `surface()`
+  when it is about to refuse a picture with BINDINGS, and the ghost's list
+  start (`ghost_link::begin_list`), which otherwise starts no pose capture.
+  They share one limit of one attempt a second per context, so with recording
+  off or given up after its startup deadline the ghost still heals the
+  context; the list counts the rebuild's queries as its own. The context
   must be the armed practice-ROM context, current on its owner thread with the
   dispatch installed for its generation, GL 3.3 or newer, not lost.
 - **Recoverable sites only** (`rs_bindings_site_recoverable`): 1-4, 11-15
@@ -175,9 +180,10 @@ every picture between rebuilds, and while recording is active one refused
 picture still ends that recording (`GD_SOURCE_IMAGE_MISSING`) until the
 retry gate starts a new one. A structural site, a fatal driver error, or a
 presentation whose own setup fails deterministically stays unavailable for
-the context. Only a recording request rebuilds: with recording off, a ghost
-waits for the next context. `tests/test_link_dispatch_cpu.py` runs the real
-overlay over a fake driver; the `heal` mode of
+the context, for the recording and the ghost alike. Pose capture resumes after
+a rebuild even when the ghost's drawing stepped aside: the fault flags stop
+only drawing. `tests/test_link_dispatch_cpu.py` runs the real overlay over a
+fake driver, with the ghost's real list start; the `heal` mode of
 `tests/test_link_source_witness.py` checks it against a real one.
 
 ## Verification

@@ -1231,8 +1231,9 @@ name read when the context was created.
 The [[renderer]] asking the driver for every binding its state witness
 holds, after a recoverable [[bindings cause]], so one GL error no longer costs
 GPU recording for a whole session (2026-10-24, his "Why can't we fix the GPU
-stuff as best we can?"). It runs only when a picture is about to be refused,
-at most once a second, and never after a structural cause.
+stuff as best we can?"). It runs when a picture is about to be refused or a
+ghost list would start no poses, at most once a second, and never after a
+structural cause.
 
 - **Lives** -- `plugin/gfxwrap/link_dispatch.cpp` (`Reconstruct`),
   `plugin/gfxwrap/source_refusal.h` (which sites are recoverable); contract

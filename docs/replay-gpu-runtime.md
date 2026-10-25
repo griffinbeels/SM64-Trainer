@@ -990,7 +990,7 @@ line (`bindings_*`) and in the appended startup receipt (control page offset
 creation. Those name the GPU even when no surface qualified, while the V1
 receipt's strings stay empty until a gateway opens. Since 2026-10-24 a
 recoverable bindings cause no longer lasts the session: the renderer rebuilds
-its witness from the driver at the refusal ([witness rebuild](replay-link-state.md#witness-rebuild)),
+its witness from the driver at the refusal or at the ghost's next list ([witness rebuild](replay-link-state.md#witness-rebuild)),
 logs `bindings_reconstructed` on success, and a failure line counts the
 attempts. A 10034 after rebuilds names a structural site, a fatal driver
 error, or an error repeated faster than the once-a-second rebuild.

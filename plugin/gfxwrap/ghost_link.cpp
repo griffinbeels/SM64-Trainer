@@ -113,8 +113,17 @@ bool begin_list() {
         ghost_stream::cancel(); observing = false; return false;
     }
     renderer::Identity identity{}; snapshot::RestoreBindings ignored{};
+    // The ghost asks for the witness rebuild as the recording does, under the
+    // same once-a-second limit (link_dispatch's Reconstruct): with recording
+    // off or given up, poses would otherwise never start in a context whose
+    // witness one recoverable error broke. Its queries are this list's.
     if (!replay_gl::CandidateBindings(&identity, &ignored)) {
-        ghost_draw::cancel(); ghost_stream::cancel(); observing = false; return false;
+        uint32_t asked = 0;
+        const bool rebuilt = replay_gl::Reconstruct(&asked);
+        hook_queries += asked;
+        if (!rebuilt || !replay_gl::CandidateBindings(&identity, &ignored)) {
+            ghost_draw::cancel(); ghost_stream::cancel(); observing = false; return false;
+        }
     }
     context_generation = identity.context_generation;
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now);

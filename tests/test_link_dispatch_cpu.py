@@ -122,3 +122,52 @@ def test_the_default_selector_is_asked_only_while_it_is_bound_for_reading(report
 def test_a_resize_while_invalid_advances_the_rebuilt_drawable_and_vanilla_asks_nothing(report):
     assert report["resize_while_invalid"] == {"healed": "1", "drawable_generation": "+1", "context_generation": "+0"}
     assert report["vanilla"] == {"rebuilt": "0", "queries": "0"}
+
+
+def _function(source, signature):
+    """One actual function body, copied verbatim; refuse an ambiguous anchor."""
+    assert source.count(signature) == 1, signature
+    start = source.index(signature)
+    cursor = source.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += (source[cursor] == "{") - (source[cursor] == "}")
+        cursor += 1
+    return source[start:cursor]
+
+
+@pytest.fixture(scope="module")
+def ghost_report(tmp_path_factory):
+    """ghost_link's real list start over the real witness and the fake driver."""
+    if sys.platform != "win32":
+        pytest.skip("Win32 renderer component")
+    work = tmp_path_factory.mktemp("ghost_list_cpu")
+    link = (NATIVE / "ghost_link.cpp").read_text(encoding="utf-8")
+    (work / "actual_begin_list.inc").write_text(_function(link, "bool begin_list()"), encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("ghost_list_cpu_build", ROOT / "tools/build_plugin.py")
+    tools = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tools)
+    flags = [flag for flag in tools.COMMON_FLAGS if not flag.startswith("/std:")]
+    target = work / "ghost_begin_list_cpu.exe"
+    tools._cl(tools.find_vcvars32(), flags + ["/std:c++17", "/EHsc", f"/I{work}", f"/I{FAKE}", f"/I{NATIVE}",
+        str(NATIVE / "link_dispatch.cpp"), str(FAKE / "fake_gl.cpp"),
+        str(ROOT / "tests/native/ghost_begin_list_cpu_host.cpp"), f"/Fe:{target}", f"/Fo{work}\\", "/link",
+        "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", "kernel32.lib", "user32.lib", "gdi32.lib"], work)
+    return scenarios(run(target))
+
+
+def test_a_ghost_list_rebuilds_the_witness_and_starts_poses_without_a_recording(ghost_report):
+    """The tester's ghost never started: pose capture waits for a witness only
+    a recording request used to rebuild. Now the ghost's own list start asks,
+    and its queries are counted as that list's driver queries."""
+    assert ghost_report["clean"] == {"observing": "1", "begins": "+1", "queries": "0", "attempts": "0"}
+    assert ghost_report["healed"] == {
+        "broken": "1", "observing": "1", "healed": "1", "begins": "+1", "generation_match": "1",
+        "configuration": "77", "queries": "27", "attempts": "1", "successes": "1", "renderer_error": "0x502"}
+
+
+def test_a_ghost_list_never_rebuilds_a_structural_witness_and_shares_the_limit(ghost_report):
+    assert ghost_report["ghost_structural"] == {"observing": "0", "later": "0", "begins": "+0", "cancels": "+2",
+                                          "queries": "0", "attempts": "0"}
+    # The recording rebuilt a moment ago: the ghost waits for the next second.
+    assert ghost_report["shared_limit"] == {"soon": "0", "later": "1", "attempts": "2", "successes": "2"}

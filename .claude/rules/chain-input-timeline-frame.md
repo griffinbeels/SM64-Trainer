@@ -120,8 +120,9 @@ paused picture":
   every session ended 10034 (no qualified source surface): any invalidation of
   the renderer's bindings witness was one-way for the context, and the first
   capture gateway can meet an error GLideN64's Release build left pending.
-  The witness now rebuilds from the driver at the refusal, once a second, for
-  recoverable sites only; the ghost steps aside after its own error. His
+  The witness now rebuilds from the driver, once a second, for recoverable
+  sites only, asked by the refused picture or the ghost's next list (its
+  ghosts never started either); the ghost steps aside after its own error. His
   words: *"Why can't we fix the GPU stuff as best we can?"* Contract and
   limits: [witness rebuild](../../docs/replay-link-state.md#witness-rebuild).
 
