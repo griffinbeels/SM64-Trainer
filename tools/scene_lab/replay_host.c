@@ -4,7 +4,10 @@
  * (savestate_frames.py) reproduces a picture here, its bytes suffice.
  *
  *   replay_host --renderer <dll> --plugin-dir <dir> --out <dir> [--fresh]
- *               [--warmup <frame_dir>] frame_dir...
+ *               [--warmup <frame_dir>] [--list <file>] frame_dir...
+ *
+ * --list names a file of frame dirs, one per line, taken in place among the
+ * frame_dir arguments.
  *
  * GLideN64 reads GLideN64.ini and GLideN64.custom.ini from its OWN folder,
  * so the host copies --renderer into --plugin-dir and loads that copy.
@@ -309,10 +312,27 @@ static int copy_renderer(const char *renderer, const char *plugin_dir, char *loa
 int main(int argc, char **argv) {
     const char *renderer = NULL, *plugin_dir = NULL;
     const char *warmup = NULL;
-    int fresh = 0, count = 0;
-    g_frames = calloc((size_t)argc, sizeof *g_frames);
+    int fresh = 0, count = 0, capacity = argc;
+    g_frames = calloc((size_t)capacity, sizeof *g_frames);
     for (int index = 1; index < argc; index++) {
-        if (strcmp(argv[index], "--renderer") == 0 && index + 1 < argc) renderer = argv[++index];
+        if (strcmp(argv[index], "--list") == 0 && index + 1 < argc) {
+            /* One frame dir per line: a long session overflows the command line. */
+            FILE *list = fopen(argv[++index], "r");
+            if (!list) { fprintf(stderr, "cannot read %s\n", argv[index]); return 1; }
+            char line[1024];
+            while (fgets(line, sizeof line, list)) {
+                line[strcspn(line, "\r\n")] = 0;
+                if (!line[0]) continue;
+                if (count + 1 >= capacity) {   /* keep the --warmup slot after the last frame */
+                    g_frames = realloc(g_frames, (size_t)capacity * 2 * sizeof *g_frames);
+                    memset(g_frames + capacity, 0, (size_t)capacity * sizeof *g_frames);
+                    capacity *= 2;
+                }
+                g_frames[count++].dir = _strdup(line);
+            }
+            fclose(list);
+        }
+        else if (strcmp(argv[index], "--renderer") == 0 && index + 1 < argc) renderer = argv[++index];
         else if (strcmp(argv[index], "--plugin-dir") == 0 && index + 1 < argc) plugin_dir = argv[++index];
         else if (strcmp(argv[index], "--out") == 0 && index + 1 < argc) g_out = argv[++index];
         else if (strcmp(argv[index], "--fresh") == 0) fresh = 1;

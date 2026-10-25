@@ -105,10 +105,11 @@ def render(args) -> int:
         stale.unlink()
     plugin_dir = (args.plugin_dir or out / "plugin").resolve()
     prepare_plugin_dir(plugin_dir, pj64_plugin)
+    listing = out / "host-frames.txt"
+    listing.write_text("".join(f"{frame.resolve()}\n" for frame in args.frames), encoding="utf-8")
     command = [str(build()), "--renderer", str(renderer), "--plugin-dir", str(plugin_dir),
                "--out", str(out), *(["--fresh"] if args.fresh else []),
-               *(["--warmup", str(args.warmup.resolve())] if args.warmup else []),
-               *(str(frame.resolve()) for frame in args.frames)]
+               *(["--warmup", str(args.warmup.resolve())] if args.warmup else []), "--list", str(listing)]
     result = subprocess.run(command, capture_output=True, text=True, check=False,
                             timeout=120 + 30 * len(args.frames), **quiet_spawn_kwargs())
     if result.returncode != 0:
@@ -177,7 +178,9 @@ def poison(args) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # @file reads one argument per line: a long session's frame list overflows
+    # the Windows command line.
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], fromfile_prefix_chars="@")
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("render")
     run.add_argument("frames", type=Path, nargs="+")

@@ -1,7 +1,7 @@
 """E1: replay a scene-tap session from its closures and compare with its source pictures.
 
     uv run python tools/scene_lab/e1.py <session> <work> [--order direct|reverse|shuffle]
-        [--pattern 0xA5] [--pair origin|next] [--limit N]
+        [--pattern 0xA5] [--pair origin|next] [--limit N] [--every N]
 
 Exports every task paired with a presented picture (tap.py frames: RDRAM holds
 only the captured closure, every other byte --pattern), renders them through
@@ -41,14 +41,16 @@ def main() -> int:
     parser.add_argument("work", type=Path)
     parser.add_argument("--order", choices=("direct", "reverse", "shuffle"), default="direct")
     parser.add_argument("--pattern", default="0xA5")
-    parser.add_argument("--pair", choices=("origin", "next"), default="origin")
+    parser.add_argument("--pair", choices=("origin", "next"), default="next")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--every", type=int, default=0, help="export every N-th referenced frame")
     parser.add_argument("--seed", type=int, default=64)
     args = parser.parse_args()
     frames_dir = args.work / "frames"
     if not frames_dir.is_dir():
         run(str(LAB / "tap.py"), "frames", str(args.session), str(frames_dir), "--pattern", args.pattern,
-            "--pair", args.pair, *(["--limit", str(args.limit)] if args.limit else []))
+            "--pair", args.pair, *(["--limit", str(args.limit)] if args.limit else []),
+            *(["--every", str(args.every)] if args.every else []))
     frames = sorted(path for path in frames_dir.iterdir() if (path / "ref.bgr").is_file())
     if not frames:
         raise SystemExit("no frames with reference pictures")
@@ -58,7 +60,10 @@ def main() -> int:
     elif args.order == "shuffle":
         random.Random(args.seed).shuffle(order)
     out = args.work / f"render-{args.order}"
-    run(str(LAB / "replay.py"), "render", "--out", str(out), "--warmup", str(frames[0]), *map(str, order))
+    out.mkdir(parents=True, exist_ok=True)
+    listing = out / "frames.txt"
+    listing.write_text("".join(f"{frame}\n" for frame in order), encoding="utf-8")
+    run(str(LAB / "replay.py"), "render", "--out", str(out), "--warmup", str(frames[0]), f"@{listing}")
     results = []
     for index, frame in enumerate(order):
         meta = json.loads((frame / "frame.json").read_text(encoding="utf-8"))

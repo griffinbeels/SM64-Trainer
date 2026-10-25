@@ -30,7 +30,6 @@ import importlib.util
 import io
 import json
 import math
-import mmap
 import os
 import random
 import re
@@ -98,18 +97,6 @@ class Picture:
         return hashlib.sha256(self.pixels).hexdigest()
 
 
-class _Mapped:
-    """Hands tap.read_records a mapping instead of the file's bytes, so a
-    session full of reference pictures never has to fit in memory."""
-
-    def __init__(self, path: Path):
-        self.path = path
-
-    def read_bytes(self):
-        with open(self.path, "rb") as handle:
-            return mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
-
-
 def load_session(session: Path) -> tuple[list[Frame], str]:
     header = dict(line.partition("=")[::2] for line in
                   (session / "session.txt").read_text(encoding="ascii").splitlines())
@@ -121,7 +108,7 @@ def load_session(session: Path) -> tuple[list[Frame], str]:
                 name, address, size = item.split(":")
                 identity.append((name, int(address, 16), int(size)))
     frames, pending = [], None
-    for record in tap.read_records(_Mapped(session / "tap.bin")):
+    for record in tap.read_records(session / "tap.bin"):   # mapped, not read whole
         if isinstance(record, tap.Task):
             pending = record
         elif isinstance(record, tap.Present) and pending is not None:

@@ -3,7 +3,7 @@
     tap.py arm [--seconds N] [--no-reference] [--reference-every N] [--full-every N] [--version us|jp]
     tap.py disarm
     tap.py summary <session>
-    tap.py frames <session> <out> [--pattern 0xA5] [--limit N] [--pair origin|next]
+    tap.py frames <session> <out> [--pattern 0xA5] [--limit N] [--every N] [--pair origin|next]
     tap.py offline <lab_root> <frame_dir>... [--seconds N] [--no-scene-state]
 
 `arm` writes the one-shot arming file the wrapper consumes when a practice ROM
@@ -11,7 +11,8 @@ next opens; its identity reads (gGlobalTimer, level, area) come from
 memory/layout.py so the plugin still knows no game address. `frames` turns
 each recorded task into a frame input (savestate_frames.py format) whose
 RDRAM holds ONLY the captured closure, every other byte set to --pattern,
-paired with the presented picture that followed it (ref.bgr). `arm` also
+paired with the presented picture that followed it (ref.bgr); --every N keeps
+only every N-th frame that has a reference picture. `arm` also
 names the scene state spans (layout.py's scene_* and main_pool_* rows) the tap
 copies with each task, so SM64's own renderer can re-run offline (E2-live:
 tools/scene_lab/e2_georender.py from-tap; `scene_states` rebuilds each task's
@@ -171,12 +172,17 @@ def identity_spec(session: Path) -> list[tuple[str, int, int]]:
     return identity
 
 
-def paired(records, pair: str = "origin"):
+def paired(records, pair: str = "next"):
     """Every task once, in record order, with the present that showed it or None.
 
-    The picture shows the newest task drawn into the image VI now scans; tasks
-    a later picture overtook were never shown. --pair next (offline hosts whose
-    VI origin is synthetic) takes the newest task.
+    With frame buffer emulation off (Project64's configuration) the renderer
+    presents its newest list at the next new VI origin, whatever that origin
+    names, so "next" pairs a picture with the newest task. Measured on the
+    first live session (2026-10-24): "next" matched 217 of 219 sampled
+    pictures pixel for pixel, "origin" 25 (SM64 shows the previous task's
+    buffer, so origin pairing is one frame late). "origin" pairs with the
+    newest task drawn into the image VI scans, for a renderer that emulates
+    frame buffers. Tasks a later picture overtook were never shown.
     """
     pending: list[Task] = []
     for record in records:
@@ -351,10 +357,16 @@ def frames(args) -> int:
     rdram_size = int(header["rdram_size"])
     pattern = bytes([args.pattern]) * rdram_size
     identity = identity_spec(session)
-    written = 0
+    written = referenced = 0
     for task, record in paired(read_records(session / "tap.bin"), args.pair):
         if record is None:
             continue
+        if args.every:
+            if not record.pixels:
+                continue
+            referenced += 1
+            if (referenced - 1) % args.every:
+                continue
         rdram = bytearray(pattern)
         at = 0
         for begin, end in task.runs:
@@ -449,7 +461,8 @@ def main() -> int:
     p.add_argument("out")
     p.add_argument("--pattern", type=lambda value: int(value, 0), default=0xA5)
     p.add_argument("--limit", type=int, default=0)
-    p.add_argument("--pair", choices=("origin", "next"), default="origin")
+    p.add_argument("--every", type=int, default=0, help="keep every N-th frame with a reference picture")
+    p.add_argument("--pair", choices=("origin", "next"), default="next")
     p.set_defaults(run=frames)
     p = sub.add_parser("offline")
     p.add_argument("lab_root", help="stands in for %%LOCALAPPDATA%%; use a fresh folder per run")

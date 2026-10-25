@@ -218,7 +218,7 @@ def frames_source(folder: Path, pattern: str) -> Source:
     return source
 
 
-def load_source(path: Path, pair: str = "origin", frames_glob: str = "*") -> Source:
+def load_source(path: Path, pair: str = "next", frames_glob: str = "*") -> Source:
     return tap_source(path, pair) if (path / "tap.bin").is_file() else frames_source(path, frames_glob)
 
 
@@ -962,7 +962,7 @@ def main() -> int:
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(run=verify)
     for p in (sub.choices["write"], sub.choices["verify"]):
-        p.add_argument("--pair", choices=("origin", "next"), default="origin")
+        p.add_argument("--pair", choices=("origin", "next"), default="next")
         p.add_argument("--frames-glob", default="*", help="frame-input folders to take from a frames source")
     args = parser.parse_args()
     try:
