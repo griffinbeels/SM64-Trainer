@@ -25,6 +25,21 @@ _POSIX_PATH = re.compile(r"(?<![\w:/])/(?!ui/)[^\s\"'<>;,]+")
 _IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 _IPV6 = re.compile(r"(?<![\w])\[?(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\]?(?![\w])")
 _OPAQUE = re.compile(r"\b(?=[A-Za-z0-9_+/=-]*[0-9])[A-Za-z0-9_+/=-]{40,}\b")
+# The SDK's random per-run trace: Sentry refuses a log item without one
+# ("invalid", no_data: beta.31 delivered none), and it links an error to the
+# same run's warning logs. Random per process, like a PID: not a device id.
+_TRACE_ID = re.compile(r"[0-9a-f]{32}")
+_SPAN_ID = re.compile(r"[0-9a-f]{16}")
+
+
+def trace_ids(trace_id: object, span_id: object = None) -> dict:
+    """Validated trace/span ids, or nothing; never free text."""
+    if not (isinstance(trace_id, str) and _TRACE_ID.fullmatch(trace_id)):
+        return {}
+    result = {"trace_id": trace_id}
+    if isinstance(span_id, str) and _SPAN_ID.fullmatch(span_id):
+        result["span_id"] = span_id
+    return result
 _CONTEXT_KEYS = frozenset({
     "operation", "component", "stage", "phase", "action", "code", "errno",
     "winerror", "error_type", "setup_state", "plugin_status", "platform",
@@ -184,6 +199,21 @@ def _build_identity(event: dict) -> dict:
     return result
 
 
+def _safe_contexts(contexts: object) -> dict:
+    """OS and runtime names/versions, and the run's validated trace ids."""
+    if not isinstance(contexts, dict):
+        return {}
+    safe = {}
+    for name in ("os", "runtime"):
+        if isinstance(contexts.get(name), dict):
+            safe[name] = {key: scrub_text(value, 120) for key, value in contexts[name].items()
+                          if key in ("name", "version", "build") and isinstance(value, str)}
+    trace = contexts.get("trace")
+    if isinstance(trace, dict) and (ids := trace_ids(trace.get("trace_id"), trace.get("span_id"))):
+        safe["trace"] = ids
+    return safe
+
+
 def safe_event(event: dict) -> dict:
     """Rebuild an SDK event from safe fields instead of blacklisting payloads."""
     result = _build_identity(event)
@@ -212,15 +242,8 @@ def safe_event(event: dict) -> dict:
         context["diagnostics"] = safe_snapshot(extra["diagnostics"])
     if context:
         result["extra"] = context
-    contexts = event.get("contexts", {})
-    if isinstance(contexts, dict):
-        safe = {}
-        for name in ("os", "runtime"):
-            if isinstance(contexts.get(name), dict):
-                safe[name] = {key: scrub_text(value, 120) for key, value in contexts[name].items()
-                              if key in ("name", "version", "build") and isinstance(value, str)}
-        if safe:
-            result["contexts"] = safe
+    if contexts := _safe_contexts(event.get("contexts", {})):
+        result["contexts"] = contexts
     crumbs = event.get("breadcrumbs", {})
     if isinstance(crumbs, dict) and isinstance(crumbs.get("values"), list):
         result["breadcrumbs"] = {"values": _bounded_breadcrumbs(crumbs["values"])}
@@ -270,13 +293,15 @@ def safe_log(log: Mapping) -> dict | None:
     if projected is None or not isinstance(log.get("time_unix_nano"), int):
         return None
     body, attributes = projected
+    ids = trace_ids(log.get("trace_id"), log.get("span_id"))
     return {"severity_text": scrub_text(log.get("severity_text", ""), 20), "severity_number": log["severity_number"],
             "body": body, "attributes": attributes, "time_unix_nano": log["time_unix_nano"],
-            "trace_id": None, "span_id": None}
+            "trace_id": ids.get("trace_id"), "span_id": ids.get("span_id")}
 
 
-def safe_log_item(item: object) -> dict | None:
-    """Rebuild one serialized log item at transport admission."""
+def safe_log_item(item: object, run_trace: str = "") -> dict | None:
+    """Rebuild one serialized log item at transport admission. A row without a
+    valid trace takes the transport's `run_trace`: Sentry requires one."""
     from sentry_sdk.utils import serialize_attribute
     if not isinstance(item, Mapping) or not isinstance(item.get("attributes"), Mapping):
         return None
@@ -287,5 +312,6 @@ def safe_log_item(item: object) -> dict | None:
     if projected is None or type(stamp) not in (int, float):
         return None
     body, attributes = projected
-    return {"timestamp": stamp, "level": scrub_text(item.get("level", ""), 20), "body": body,
+    ids = trace_ids(item.get("trace_id"), item.get("span_id")) or trace_ids(run_trace)
+    return {"timestamp": stamp, "level": scrub_text(item.get("level", ""), 20), "body": body, **ids,
             "attributes": {key: serialize_attribute(value) for key, value in attributes.items()}}

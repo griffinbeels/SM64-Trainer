@@ -52,10 +52,13 @@ def _before_send(event, _hint):
         crumbs["values"] = [crumb for crumb in crumbs.get("values", [])
                             if isinstance(crumb, dict) and isinstance(crumb.get("data"), dict)
                             and crumb["data"].get("reporting_generation") == generation]
+    trace = (event.get("contexts") or {}).get("trace")  # the run's trace, which its logs carry too
     event["contexts"] = {"runtime": {
         "name": sys.implementation.name,
         "version": ".".join(str(part) for part in sys.version_info[:3]),
     }, "os": {"name": sys.platform}}
+    if isinstance(trace, dict):
+        event["contexts"]["trace"] = trace
     if sys.platform == "win32":
         version = sys.getwindowsversion()
         event["contexts"]["os"]["version"] = f"{version.major}.{version.minor}.{version.build}"

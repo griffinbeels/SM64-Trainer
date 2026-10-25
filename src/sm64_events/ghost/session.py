@@ -578,6 +578,12 @@ class GhostSession:
                     # The run itself, now; its star dance is completed afterwards
                     # (his rule, round 47: ready on the very next reset).
                     kept = await asyncio.to_thread(lambda: preserve(attempt.id, wait_tail=False))
+                    reason = kept.get("native_ghost_reason") if isinstance(kept, dict) else None
+                    if isinstance(reason, str) and not kept.get("native_ghost"):
+                        # An error, so Sentry gets the ghost snapshot with it. Until
+                        # 2026-10-25 this was silent: an AMD tester's PBs became no
+                        # ghost and nothing said why ("i still dont see any ghost").
+                        log.error("A saved PB kept no Mario poses: %s", reason)
                     if self._rivals is not None and isinstance(kept, dict) and kept.get("native_ghost"):
                         async with self._lock:
                             def committed():

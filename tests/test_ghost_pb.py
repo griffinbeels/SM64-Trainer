@@ -86,6 +86,28 @@ def test_saving_a_pb_makes_it_the_playing_ghost_immediately(tmp_path):
         archive.close()
 
 
+def test_a_pb_that_kept_no_poses_reports_why(tmp_path, caplog):
+    """A PB without Mario poses is no ghost; it must say so to error reports
+    (an AMD tester's beta.31 PBs reported nothing)."""
+    session, replay, row, archive, db, store, capture = pb_world(tmp_path)
+    replay.recorder.pose_archive = None  # this recording captured no poses
+
+    async def check():
+        await session.update({"enabled": True})
+        save_pb(db, row)
+        with caplog.at_level("ERROR", logger="sm64.ghost"):
+            await session.pb_changed(row, True)
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        archive.close()
+    errors = [record for record in caplog.records if record.name == "sm64.ghost" and record.levelname == "ERROR"]
+    assert [record.getMessage() for record in errors] == [
+        "A saved PB kept no Mario poses: This recording has no native Mario poses."]
+
+
 def test_undoing_the_pb_removes_it_as_the_ghost(tmp_path):
     session, _replay, row, archive, db, store, capture = pb_world(tmp_path)
 
