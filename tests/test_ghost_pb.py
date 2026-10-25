@@ -131,11 +131,11 @@ def test_the_ghost_logs_each_decision_once(tmp_path, caplog):
     lines = [record.getMessage() for record in caplog.records if record.name == "sm64.ghost.state"]
     key = f"star:{row.course_id}-{row.star_id}"
     assert lines[0].startswith(f"ghost: target={key} strategy={bool(row.strat_tag)} on=True source=")
-    assert " pb=False playing=0 " in lines[0]
+    assert " pb=False playing=0 pb_seat=none " in lines[0]
     assert len(set(lines)) == len(lines)  # a repeated refresh adds nothing
     assert any(line.startswith(f"PB attempt {row.id} kept ") and line.endswith(" Mario poses")
                and "None" not in line for line in lines)
-    assert " source=ready " in lines[-1] and " pb=True playing=1 " in lines[-1]
+    assert " source=ready " in lines[-1] and " pb=True playing=1 pb_seat=pb " in lines[-1]
 
 
 def test_undoing_the_pb_removes_it_as_the_ghost(tmp_path):

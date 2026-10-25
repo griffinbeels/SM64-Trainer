@@ -94,6 +94,8 @@ def ghost_label(ghost, number=1) -> str:
     """Display labels never replace the source credit or stable identity."""
     if getattr(ghost, "pb", False):
         return "YOUR PB"
+    if getattr(ghost, "best_run", False):
+        return "BEST RUN"  # racing in the PB's seat while the PB has no poses (ghost/rivals.py)
     if not getattr(ghost, "import_id", None):
         return "YOUR RUN"
     slot = getattr(ghost, "rival_slot", None)
@@ -207,7 +209,7 @@ class NativeGhost:
         answers, assets, clip_ids = [], [], set()
         rival_number = 0
         for template in ghosts:
-            if not getattr(template, "pb", False):
+            if not (getattr(template, "pb", False) or getattr(template, "best_run", False)):
                 rival_number += 1
             result, asset = self._resolve_template(target, template)
             result = {**result, "import_id": getattr(template, "import_id", None),

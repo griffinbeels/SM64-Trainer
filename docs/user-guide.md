@@ -116,7 +116,10 @@ practice target with the same history, PBs, ranks and replays a star gets.
 **Ghost Overlay.** Race recorded Mario poses in the game window, following the
 live camera and terrain through the trainer's GLideN64 renderer. Adjust colour,
 visibility, sound and the route drawn ahead. Your current PB supplies the default
-ghost; saved local recordings and imported ghosts can race alongside it.
+ghost; saved local recordings and imported ghosts can race alongside it. When
+that PB has no recorded Mario poses (an older or imported PB), your fastest
+recorded run races in its place, shown as **Best recorded run**; your PB stays
+the rank you chase.
 
 **Share ghosts.** Open **Ghost Library · Import / Export** from a star or segment.
 Export that target's overall best, each strategy's best, all your personal bests,
