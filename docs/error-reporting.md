@@ -146,7 +146,13 @@ Only named operational loggers, uvicorn's own included (`OPERATIONAL_LOGGERS`),
 supply breadcrumbs, Sentry Logs and the report's server-log lines. One rule
 (`operational_log`) drops successful request lines (1xx-3xx) from all three and
 keeps failing ones (4xx/5xx), so the page's polling cannot fill the 400-line tail.
-Gameplay event wires, unrelated
+`sm64.ghost.state` is the ghost's decision log: one line whenever the target,
+strategy, switch, source reason, lineup, PB, playing count or renderer
+state/reason changes, plus each PB's pose outcome, written with ids, counts and
+reason codes only. The report's Ghost timeline reads its last 120 lines from the
+whole log and its rotated copy, because the 400-line tail spans minutes of play
+and a tester's report can come hours after the ghost failed to show. The rest of
+`sm64.ghost` stays excluded. Gameplay event wires, unrelated
 process rankings and community/account logs are excluded. Turning reporting off
 also prevents breadcrumb collection and clears prior breadcrumbs, so re-enabling
 cannot upload prior log history from the disabled period. It also drops queued

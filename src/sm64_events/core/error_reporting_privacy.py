@@ -59,8 +59,11 @@ _CONTEXT_KEYS = frozenset({
 # Operational loggers only: gameplay event wires, profiles, community/account
 # and process inventories stay local. Breadcrumbs, Sentry Logs and the Debug
 # report's server-log section all filter through `operational_log`.
+# The ghost's decisions (ghost/session.py): ids, counts and reason codes only,
+# so it is operational while the rest of sm64.ghost is not.
+GHOST_STATE_LOGGER = "sm64.ghost.state"
 OPERATIONAL_LOGGERS = frozenset({"sm64.replay", "sm64.setup", "sm64.capturelayer", "sm64.desktop",
-                                 "sm64.ghost.capture", "sm64.updater", "sm64.poller",
+                                 "sm64.ghost.capture", GHOST_STATE_LOGGER, "sm64.updater", "sm64.poller",
                                  "uvicorn.error", "uvicorn.access"})
 _ACCESS_STATUS = re.compile(r'"\s+([1-5][0-9]{2})\s*$')
 LOG_LINE_LIMIT = 600

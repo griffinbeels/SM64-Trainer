@@ -67,6 +67,26 @@ def test_successful_requests_cannot_push_operational_lines_out_of_the_tail(tmp_p
     assert '" 200' not in server_log and '" 304' not in server_log
 
 
+def test_the_ghost_timeline_survives_hours_of_capture_lines(tmp_path):
+    # An AMD tester's report (2026-10-25) was made hours after the ghost failed;
+    # its 400-line tail held nine minutes of capture lines and no ghost decision.
+    kwargs = _healthy_kwargs(tmp_path)
+    log = kwargs["log_file"]
+    log.with_name(log.name + ".1").write_text(
+        "2026-10-25T12:58:31Z INFO sm64.ghost.state ghost: target=star:14-3 strategy=False on=True\n", encoding="utf-8")
+    log.write_text("\n".join(
+        ["2026-10-25T13:06:47Z ERROR sm64.ghost.state A saved PB kept no Mario poses: This recording has no native Mario poses.",
+         "2026-10-25T13:06:47Z INFO sm64.ghost rival C:\\Users\\Someone\\ghosts kept"]
+        + [f"2026-10-25T13:07:{i % 60:02d}Z INFO sm64.replay dwm capture: {i} grabs/s" for i in range(900)]), encoding="utf-8")
+    report = diagnostics.build_report(**kwargs)
+    timeline = report.split("## Ghost timeline", 1)[1].split("## Server log", 1)[0]
+    assert timeline.splitlines()[3:5] == [
+        "2026-10-25T12:58:31Z INFO sm64.ghost.state ghost: target=star:14-3 strategy=False on=True",
+        "2026-10-25T13:06:47Z ERROR sm64.ghost.state A saved PB kept no Mario poses: This recording has no native Mario poses."]
+    assert "sm64.ghost rival" not in report and "Someone" not in report
+    assert "kept no Mario poses" not in report.split("## Server log", 1)[1]  # beyond the tail
+
+
 def test_every_broken_source_names_itself_instead_of_raising(tmp_path):
     kwargs = _healthy_kwargs(tmp_path)
     kwargs["log_file"] = tmp_path / "missing.log"

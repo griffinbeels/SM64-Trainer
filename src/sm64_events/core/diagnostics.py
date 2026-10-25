@@ -15,11 +15,14 @@ from typing import Callable
 
 from sm64_events.core.diagnostic_export import native_export, report_line, report_value, routine_line
 from sm64_events.core.diagnostic_privacy import safe_snapshot
-from sm64_events.core.diagnostic_retention import REPORT_KEEP as KEEP_REPORTS, bounded_report, report_directory
-from sm64_events.core.error_reporting_privacy import scrub_text
+from sm64_events.core.diagnostic_retention import (
+    REPORT_KEEP as KEEP_REPORTS, SERVER_LOG_MAX_BYTES, bounded_report, report_directory,
+)
+from sm64_events.core.error_reporting_privacy import GHOST_STATE_LOGGER, scrub_text
 from sm64_events.core.native_diagnostics import bounded_tail
 
 LOG_TAIL_LINES = 400
+GHOST_TIMELINE = 120
 JOURNAL_TAIL = 100
 UILOG_TAIL = 50
 PERF_TAIL = 30
@@ -42,6 +45,20 @@ def _tail(path: Path, count: int, *, skip: Callable[[str], bool] | None = None) 
 def _server_log(path: Path) -> list[str]:
     # Successful requests are skipped before counting, so the tail is operational.
     return _tail(path, LOG_TAIL_LINES, skip=routine_line)
+
+
+def _ghost_timeline(path: Path) -> list[str]:
+    """Every ghost decision in the server log and its rotated copy, newest last.
+
+    The Server log tail spans minutes of play, filled by the capture's 30 s
+    lines; a tester often makes the report hours after the ghost failed to show
+    (2026-10-25), so the ghost's own lines are read from the whole log."""
+    lines = []
+    for source in (path.with_name(path.name + ".1"), path):
+        if source.exists():
+            text, _ = bounded_tail(source, limit=SERVER_LOG_MAX_BYTES)
+            lines += [line for line in text.splitlines() if line.split(maxsplit=3)[2:3] == [GHOST_STATE_LOGGER]]
+    return [report_line(line)[:LINE_CLIP] for line in lines[-GHOST_TIMELINE:]]
 
 
 def _fence(lines: list[str]) -> str:
@@ -140,6 +157,8 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
         _section("Build", lambda: "```json\n" + json.dumps(build or {}, indent=2) + "\n```"),
         _section("Problems", lambda: _problems(log_lines)
                  if log_lines is not None else _log_body()),
+        _section("Ghost timeline", lambda: _fence(lines) if (lines := _ghost_timeline(log_file))
+                 else "no ghost decisions in the server log"),
         _section("Server log", _log_body),
         _section("Recent game events", _journal_body),
         _section("What the screen drew", _uilog_body),

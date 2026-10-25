@@ -243,9 +243,9 @@ def test_an_error_and_the_runs_warning_logs_share_one_trace(tmp_path, sent):
 
 
 def test_a_pb_without_poses_reaches_sentry_as_an_error(tmp_path, sent):
-    """The ghost session's own logger is not operational, but its errors are events."""
+    """The ghost's decision logger carries the PB outcome; its errors are events."""
     configure(tmp_path)
-    logging.getLogger("sm64.ghost").error("A saved PB kept no Mario poses: %s", "Synthetic archive reason")
+    logging.getLogger("sm64.ghost.state").error("A saved PB kept no Mario poses: %s", "Synthetic archive reason")
     wait_for(lambda: items(sent, "event"))
     event = json.loads(items(sent, "event")[0].payload.get_bytes())
     assert event["logentry"]["formatted"] == "A saved PB kept no Mario poses: Synthetic archive reason"
