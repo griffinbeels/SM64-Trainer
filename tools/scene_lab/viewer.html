@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scene Lab Viewer</title>
+<!-- Scene lab E3: pictures come from the REAL renderer in viewer_host.c,
+     one request at a time over /ws (viewer.py). The page never redraws on
+     its own: it asks only for a step, a seek, a camera move or playback. -->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #121418; --panel: #1b1e24; --line: #2b3038; --text: #e7e9ed; --muted: #9ba2ae;
+    --accent: #f2c14e; --ok: #6fcf8f; --bad: #ef6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+  header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  .badge { background: var(--accent); color: #1a1400; font-weight: 700; font-size: 12px; padding: 2px 8px; border-radius: 99px; }
+  .notice { margin: 0; color: var(--muted); }
+  .stage { position: relative; background: #000; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  canvas { display: block; width: 100%; height: auto; max-height: 68vh; object-fit: contain; cursor: grab; touch-action: none; }
+  canvas:active { cursor: grabbing; }
+  .tag { position: absolute; left: 10px; top: 10px; background: #000a; padding: 3px 8px; border-radius: 6px; font-size: 12px; }
+  .tag.free { color: var(--accent); }
+  .busy { position: absolute; right: 10px; top: 10px; font-size: 12px; color: var(--muted); }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  button, select { background: #262a32; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; }
+  button:hover { border-color: #4a515d; }
+  button[aria-pressed="true"] { background: #3a3220; border-color: var(--accent); color: var(--accent); }
+  input[type=range] { flex: 1 1 240px; min-width: 160px; accent-color: var(--accent); }
+  .readout { min-width: 13ch; font-variant-numeric: tabular-nums; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-variant-numeric: tabular-nums; }
+  .stats div { display: flex; justify-content: space-between; gap: 8px; }
+  .stats span:first-child { color: var(--muted); }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  code { font-size: 12px; color: var(--muted); word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Recorded-scene viewer</h1><span class="badge">Experiment</span>
+    <span class="hint" id="source">loading...</span>
+  </header>
+  <p class="notice">Recorded graphics only: each picture is the game's own recorded draw list, re-rendered by the real
+    renderer in a hidden helper. A free camera can only re-view what the game drew. Characters and objects the original
+    camera left out are absent, and flat sprites (trees, coins) and the sky still face the original camera.</p>
+
+  <section class="stage">
+    <canvas id="picture" width="640" height="480" tabindex="0" aria-label="Rendered picture"></canvas>
+    <div class="tag" id="modeTag">Recorded camera</div>
+    <div class="busy" id="busy"></div>
+  </section>
+
+  <section class="bar" aria-label="Playback">
+    <button id="back" title="Previous frame (Left arrow)">Step back</button>
+    <button id="play" title="Play or pause at 30 fps (Space)">Play</button>
+    <button id="forward" title="Next frame (Right arrow)">Step forward</button>
+    <input id="slider" type="range" min="0" max="0" value="0" aria-label="Frame">
+    <span class="readout" id="frameLabel">frame -</span>
+    <span class="hint" id="identity"></span>
+  </section>
+
+  <section class="bar" aria-label="Camera and delivery">
+    <button id="recorded" aria-pressed="true">Recorded camera</button>
+    <button id="free" aria-pressed="false">Free camera</button>
+    <span class="hint">Drag to orbit, Shift-drag to pan, wheel to move closer or back, R returns to the recorded camera.</span>
+    <span class="spacer"></span>
+    <label class="hint">Delivery
+      <select id="encoding">
+        <option value="raw">Lossless: the renderer's exact bytes</option>
+        <option value="jpeg">JPEG, quality 90</option>
+      </select>
+    </label>
+    <label class="hint"><input id="verify" type="checkbox"> Check bytes in the page</label>
+  </section>
+
+  <section class="stats" aria-label="Measurements">
+    <div><span>Renderer draw</span><span id="sRender">-</span></div>
+    <div><span>Picture readback</span><span id="sRead">-</span></div>
+    <div><span>Helper round trip</span><span id="sHost">-</span></div>
+    <div><span>Server encode</span><span id="sEncode">-</span></div>
+    <div><span>Request to response</span><span id="sTrip">-</span></div>
+    <div><span>Page decode and draw</span><span id="sDecode">-</span></div>
+    <div><span>Input to picture p50</span><span id="sP50">-</span></div>
+    <div><span>Input to picture p95</span><span id="sP95">-</span></div>
+    <div><span>Sent to page</span><span id="sBytes">-</span></div>
+    <div><span>Closure sent to helper</span><span id="sClosure">-</span></div>
+    <div><span>Playback rate</span><span id="sFps">-</span></div>
+    <div><span>Bytes match server</span><span id="sVerify">off</span></div>
+    <div style="grid-column: 1 / -1"><span>Picture SHA-256</span><code id="sSha">-</code></div>
+    <div style="grid-column: 1 / -1"><span id="sHelper">Helper process: not sampled</span>
+      <button id="sample">Sample helper CPU and memory</button></div>
+    <div style="grid-column: 1 / -1"><span id="sMeasure">Measurement run: scripted camera drags and 4 s of playback, lossless then JPEG</span>
+      <button id="measure">Run measurement</button></div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const canvas = $("picture"), ctx = canvas.getContext("2d");
+const PIVOT = 1500;   // recamera.py's default: the orbit point ahead of the recorded camera
+const state = { frames: [], fps: 30, frame: 0, playing: false, free: false, encoding: "raw", verify: false, cam: null };
+const history = [], latencies = [];
+let ws = null, inFlight = null, wanted = null, sequence = 0, image = null;
+let playStart = 0, playFrom = 0, playPaints = 0, playFrame = null, playFps = null, idleWaiters = [];
+
+// Row-major 4x4, row vectors (view' = view * M), as recamera.py and viewer_host.c.
+const identity = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+function multiply(a, b) {
+  const out = new Array(16).fill(0);
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+    let sum = 0;
+    for (let k = 0; k < 4; k++) sum += a[r * 4 + k] * b[k * 4 + c];
+    out[r * 4 + c] = sum;
+  }
+  return out;
+}
+function translate(x, y, z) { const m = identity(); m[12] = x; m[13] = y; m[14] = z; return m; }
+function rotY(t) { const c = Math.cos(t), s = Math.sin(t); return [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]; }
+function rotX(t) { const c = Math.cos(t), s = Math.sin(t); return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]; }
+function resetCamera() { state.cam = { yaw: 0, pitch: 0, pivot: [0, 0, -PIVOT], dist: PIVOT }; }
+// The free camera orbits `pivot` (in the recorded camera's view space) at `dist`.
+function cameraMatrix() {
+  const { yaw, pitch, pivot, dist } = state.cam;
+  return multiply(multiply(multiply(translate(-pivot[0], -pivot[1], -pivot[2]), rotY(yaw)), rotX(pitch)),
+                  translate(0, 0, -dist));
+}
+function orbitBy(dx, dy) {
+  state.cam.yaw += dx * 0.006;
+  state.cam.pitch = Math.max(-1.45, Math.min(1.45, state.cam.pitch + dy * 0.006));
+}
+function panBy(dx, dy) {   // grab-and-drag: the scene follows the pointer
+  const rotation = multiply(rotY(state.cam.yaw), rotX(state.cam.pitch));
+  const scale = state.cam.dist * 0.0015, local = [-dx * scale, dy * scale, 0];
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++) state.cam.pivot[i] += local[j] * rotation[i * 4 + j];
+}
+function dollyBy(delta) { state.cam.dist = Math.max(100, Math.min(30000, state.cam.dist * Math.exp(delta * 0.001))); }
+
+function setFree(free) {
+  if (free && !state.free) resetCamera();
+  state.free = free;
+  if (!free) resetCamera();
+  $("recorded").setAttribute("aria-pressed", String(!free));
+  $("free").setAttribute("aria-pressed", String(free));
+  $("modeTag").textContent = free ? "Free camera (relative to the recorded camera)" : "Recorded camera";
+  $("modeTag").classList.toggle("free", free);
+}
+
+// Latest wins: at most one request in flight; a newer input replaces the
+// pending one but keeps the EARLIEST input time, so latency stays honest.
+function want(kind, inputTime = performance.now()) {
+  if (!wanted) wanted = { kind, inputTime };
+  else if (kind === "input") wanted.kind = "input";
+  pump();
+}
+function pump() {
+  if (inFlight || !wanted || !ws || ws.readyState !== WebSocket.OPEN) return settleIdle();
+  const request = wanted;
+  wanted = null;
+  Object.assign(request, { id: ++sequence, frame: state.frame, camera: state.free ? cameraMatrix() : null,
+                           encoding: state.encoding, sentTime: performance.now() });
+  inFlight = request;
+  $("busy").textContent = "rendering...";
+  ws.send(JSON.stringify({ id: request.id, frame: request.frame, camera: request.camera, encoding: request.encoding }));
+}
+function settleIdle() {
+  if (inFlight || wanted) return;
+  $("busy").textContent = "";
+  idleWaiters.splice(0).forEach((resolve) => resolve());
+}
+
+function drawRaw(width, height, source) {   // ReadScreen's BGR rows, bottom-up
+  if (!image || image.width !== width || image.height !== height) image = ctx.createImageData(width, height);
+  const target = new Uint32Array(image.data.buffer), row = width * 3;
+  for (let y = 0; y < height; y++) {
+    let s = (height - 1 - y) * row, d = y * width;
+    for (let x = 0; x < width; x++, s += 3) target[d++] = 0xff000000 | (source[s] << 16) | (source[s + 1] << 8) | source[s + 2];
+  }
+  ctx.putImageData(image, 0, 0);
+}
+async function draw(header, payload) {
+  if (canvas.width !== header.width || canvas.height !== header.height) {
+    canvas.width = header.width;
+    canvas.height = header.height;
+  }
+  if (header.encoding === "raw") return drawRaw(header.width, header.height, payload);
+  const bitmap = await createImageBitmap(new Blob([payload], { type: "image/jpeg" }));
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+}
+async function sha256(bytes) {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function percentile(values, p) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.round(p * (sorted.length - 1)))];
+}
+const ms = (value) => value == null ? "-" : `${value.toFixed(1)} ms`;
+const size = (bytes) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MiB` : `${(bytes / 1024).toFixed(1)} KiB`;
+
+async function onPicture(event) {
+  const request = inFlight, received = performance.now();
+  if (typeof event.data === "string") {
+    console.error("viewer:", event.data);
+    inFlight = null;
+    return pump();
+  }
+  const buffer = event.data, headerLength = new DataView(buffer).getUint32(0, true);
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, headerLength)));
+  const payload = new Uint8Array(buffer, 4 + headerLength);
+  await draw(header, payload);
+  const drawn = performance.now();
+  const entry = { id: header.id, frame: header.frame, free: header.camera, kind: request.kind, sha256: header.sha256,
+                  encoding: header.encoding, render_ms: header.render_ms, read_ms: header.read_ms, host_ms: header.host_ms,
+                  encode_ms: header.encode_ms, hash_ms: header.hash_ms, server_ms: header.server_ms,
+                  payload_bytes: header.payload_bytes, trip_ms: received - request.sentTime,
+                  decode_ms: drawn - received, input_to_drawn_ms: drawn - request.inputTime, page_sha256: null };
+  history.push(entry);
+  if (request.kind === "input") latencies.push(entry.input_to_drawn_ms);
+  if (latencies.length > 200) latencies.shift();
+  if (state.playing) playPaints++;
+  requestAnimationFrame(() => { entry.input_to_presented_ms = performance.now() - request.inputTime; });
+  // Checked before the next request, so a check never trails its picture.
+  if (state.verify && header.encoding === "raw") entry.page_sha256 = await sha256(payload);
+  inFlight = null;
+  pump();
+  showStats(entry, header);
+}
+function showStats(entry, header) {
+  $("sRender").textContent = ms(header.render_ms + header.camera_ms);
+  $("sRead").textContent = ms(header.read_ms);
+  $("sHost").textContent = ms(header.host_ms);
+  $("sEncode").textContent = ms(header.encode_ms);
+  $("sTrip").textContent = ms(entry.trip_ms);
+  $("sDecode").textContent = ms(entry.decode_ms);
+  $("sP50").textContent = ms(percentile(latencies, 0.5));
+  $("sP95").textContent = ms(percentile(latencies, 0.95));
+  $("sBytes").textContent = `${size(header.payload_bytes)} ${header.encoding === "raw" ? "lossless" : "JPEG"}`;
+  $("sClosure").textContent = size(header.request_bytes);
+  $("sSha").textContent = `${header.sha256} (${header.width}x${header.height}${header.camera_failed ? ", camera walk failed" : ""})`;
+  const verified = entry.page_sha256 === header.sha256;
+  $("sVerify").textContent = entry.page_sha256 ? (verified ? "yes" : "NO") :
+    header.encoding === "raw" ? "off" : "lossy: not comparable";
+  $("sVerify").className = entry.page_sha256 ? (verified ? "ok" : "bad") : "";
+  if (state.playing) {
+    const seconds = (performance.now() - playStart) / 1000;
+    $("sFps").textContent = `${(playPaints / seconds).toFixed(1)} of ${state.fps} fps`;
+  }
+}
+
+function showFrame() {
+  const frame = state.frames[state.frame] || {};
+  $("slider").value = state.frame;
+  $("frameLabel").textContent = `frame ${state.frame + 1} / ${state.frames.length}`;
+  const id = frame.identity || {};
+  $("identity").textContent = [frame.label, id.curr_level != null && `level ${id.curr_level}`,
+    id.curr_area != null && `area ${id.curr_area}`, id.global_timer != null && `game frame ${id.global_timer}`]
+    .filter(Boolean).join(" · ");
+}
+function seek(index, kind = "input", time = performance.now()) {
+  const count = state.frames.length;
+  state.frame = ((index % count) + count) % count;
+  showFrame();
+  want(kind, time);
+}
+function step(delta, time) { pause(); seek(state.frame + delta, "input", time); }
+
+function playTick() {
+  if (!state.playing) return;
+  const frame = (playFrom + Math.floor((performance.now() - playStart) * state.fps / 1000)) % state.frames.length;
+  if (frame !== playFrame) {
+    playFrame = frame;
+    state.frame = frame;
+    showFrame();
+    want("play");
+  }
+  requestAnimationFrame(playTick);
+}
+function play() {
+  state.playing = true;
+  playStart = performance.now();
+  playFrom = state.frame;
+  playFrame = null;
+  playPaints = 0;
+  $("play").textContent = "Pause";
+  playTick();
+}
+function pause() {
+  if (state.playing) playFps = playPaints / ((performance.now() - playStart) / 1000);
+  state.playing = false;
+  $("play").textContent = "Play";
+}
+
+$("back").onclick = (event) => step(-1, event.timeStamp);
+$("forward").onclick = (event) => step(1, event.timeStamp);
+$("play").onclick = () => (state.playing ? pause() : play());
+$("slider").oninput = (event) => { pause(); seek(Number(event.target.value), "input", event.timeStamp); };
+$("recorded").onclick = (event) => { setFree(false); want("input", event.timeStamp); };
+$("free").onclick = (event) => { setFree(true); want("input", event.timeStamp); };
+$("encoding").onchange = (event) => { state.encoding = event.target.value; want("input", event.timeStamp); };
+$("verify").onchange = (event) => { state.verify = event.target.checked; };
+$("sample").onclick = async () => {
+  const stats = await (await fetch("/api/stats")).json();
+  $("sHelper").textContent = `Helper process ${stats.host_pid}: ${stats.host_cpu_s} s CPU, ` +
+    `${stats.host_private_mib} MiB private, ${stats.host_threads} threads, ${stats.served} pictures served`;
+};
+
+let drag = null;
+canvas.addEventListener("pointerdown", (event) => {
+  canvas.setPointerCapture(event.pointerId);
+  drag = { x: event.clientX, y: event.clientY };
+});
+canvas.addEventListener("pointermove", (event) => {
+  if (!drag) return;
+  const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+  drag = { x: event.clientX, y: event.clientY };
+  if (!dx && !dy) return;
+  if (!state.free) setFree(true);
+  (event.shiftKey ? panBy : orbitBy)(dx, dy);
+  want("input", event.timeStamp);
+});
+canvas.addEventListener("pointerup", () => { drag = null; });
+canvas.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  if (!state.free) setFree(true);
+  dollyBy(event.deltaY);
+  want("input", event.timeStamp);
+}, { passive: false });
+document.addEventListener("keydown", (event) => {
+  if (event.target.tagName === "SELECT") return;
+  if (event.key === "r" || event.key === "R") { setFree(false); want("input", event.timeStamp); }
+  else if (event.key === " ") { event.preventDefault(); state.playing ? pause() : play(); }
+  else if (event.key === "ArrowLeft") step(-1, event.timeStamp);
+  else if (event.key === "ArrowRight") step(1, event.timeStamp);
+});
+
+const idle = () => new Promise((resolve) => { idleWaiters.push(resolve); settleIdle(); });
+const sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
+
+// A scripted run that needs no automation attached: a browser driven over
+// DevTools copies every WebSocket frame into the DevTools channel, which
+// slows exactly the path being measured. Drags call the same camera and
+// request code as the pointer handlers, at 60 moves per second.
+async function measure() {
+  $("measure").disabled = true;
+  pause();
+  const saved = { encoding: state.encoding, verify: state.verify };
+  const report = { browser: navigator.userAgent, size: `${canvas.width}x${canvas.height}` };
+  state.verify = false;
+  for (const encoding of ["raw", "jpeg"]) {
+    $("sMeasure").textContent = `Measuring ${encoding}...`;
+    state.encoding = encoding;
+    setFree(false);
+    seek(0);
+    await idle();
+    history.length = 0;
+    setFree(true);
+    for (let move = 0; move < 120; move++) {
+      orbitBy(move < 60 ? 5 : -5, move % 20 < 10 ? 1 : -1);
+      want("input");
+      await sleep(16);
+    }
+    await idle();
+    await new Promise(requestAnimationFrame);
+    const drags = history.filter((entry) => entry.kind === "input");
+    const spread = (key) => {
+      const values = drags.map((entry) => entry[key]).filter((value) => value != null);
+      const at = (p) => (values.length ? +percentile(values, p).toFixed(2) : null);
+      return { p50: at(0.5), p95: at(0.95) };
+    };
+    report[encoding] = { pictures: drags.length, input_to_drawn_ms: spread("input_to_drawn_ms"),
+      input_to_presented_ms: spread("input_to_presented_ms"), request_to_response_ms: spread("trip_ms"),
+      page_decode_draw_ms: spread("decode_ms"), server_ms: spread("server_ms"), server_hash_ms: spread("hash_ms"),
+      server_encode_ms: spread("encode_ms"),
+      helper_round_trip_ms: spread("host_ms"), renderer_ms: spread("render_ms"), readback_ms: spread("read_ms"),
+      payload_bytes: spread("payload_bytes") };
+    setFree(false);
+    play();
+    await sleep(4000);
+    pause();
+    await idle();
+    report[encoding].playback_fps = +playFps.toFixed(1);
+  }
+  Object.assign(state, saved);
+  $("encoding").value = state.encoding;
+  $("sMeasure").textContent = `Lossless: drag p50 ${report.raw.input_to_presented_ms.p50} ms, p95 ` +
+    `${report.raw.input_to_presented_ms.p95} ms, playback ${report.raw.playback_fps} fps. JPEG: drag p50 ` +
+    `${report.jpeg.input_to_presented_ms.p50} ms, p95 ${report.jpeg.input_to_presented_ms.p95} ms, ` +
+    `playback ${report.jpeg.playback_fps} fps (input to picture on screen)`;
+  $("measure").disabled = false;
+  await fetch("/api/report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(report) });
+  return report;
+}
+$("measure").onclick = measure;
+
+// For automated checks: drive the page and read back what it drew.
+window.__viewer = {
+  state, history, latencies, seek, setFree, orbitBy, panBy, dollyBy, play, pause, want, idle, measure,
+};
+
+(async () => {
+  const session = await (await fetch("/api/session")).json();
+  state.frames = session.frames;
+  state.fps = session.fps;
+  $("slider").max = session.frames.length - 1;
+  $("source").textContent = `${session.source} · ${session.frames.length} frames · ${session.renderer} · ` +
+    `resolution: ${session.resolution}`;
+  resetCamera();
+  showFrame();
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onmessage = onPicture;
+  ws.onopen = () => {
+    want("input");
+    if (new URLSearchParams(location.search).has("measure")) idle().then(measure);
+  };
+  ws.onclose = () => { $("busy").textContent = "disconnected: the viewer server stopped"; };
+})();
+</script>
+</body>
+</html>

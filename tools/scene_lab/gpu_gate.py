@@ -5,7 +5,9 @@ browser, relaunched after every kill) froze his PC while he played. His words:
 "pause anything heavy on the GPU for now ... I want to be able to play a game
 AND use this system". The hold lives in ~/.swarm-engine/gpu-hold.txt and only
 he lifts it. Every scene-lab entry point that starts a renderer calls
-`require_gpu()` first, so no agent can start one by accident while it exists.
+`require_gpu()` first, so no agent can start one by accident while it holds.
+A lifted hold stays on disk as a record beginning "Lifted by"; any other
+content (including an unreadable file) still holds.
 """
 from __future__ import annotations
 
@@ -17,5 +19,7 @@ HOLD = Path.home() / ".swarm-engine" / "gpu-hold.txt"
 def require_gpu() -> None:
     if HOLD.is_file():
         reason = HOLD.read_text(encoding="utf-8", errors="replace").strip()
+        if reason.startswith("Lifted by"):
+            return
         raise SystemExit(f"GPU held ({HOLD}): {reason}\nNo renderer runs until Griffin lifts the hold in his "
                          "own words; never delete the file on anyone else's say-so.")
