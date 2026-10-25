@@ -48,7 +48,7 @@ _FIELDS = _TEXT_FIELDS | frozenset({"id", "seq", "frame", "last_frame", "session
     "context",
     # Journal payloads, every key his journal's 25 event types carry:
     "from", "from_transient", "to", "attempt_id", "attempt_ids", "reason", "strat_tag", "cause", "dustless",
-    "frames_late", "landing_frames", "kind", "which", "from_area", "action", "action_timer", "counter",
+    "frames_late", "landing_frames", "kind", "which", "from_area", "action_timer", "counter",
     "engaged_age_frames", "landmark", "ordinal", "auto", "classification", "segment_id", "frames",
     "previous_frames", "timer_mode", "restored_attempt_id", "restored_frames", "acted_tracking", "area_load",
     "frames_since_dialog", "frames_since_door", "frames_since_warp_op", "igt_frames_before", "loads_journaled",
