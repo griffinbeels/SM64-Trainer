@@ -75,8 +75,11 @@ _BINDINGS_SITES = {
 _BINDINGS_FLAGS = (
     "reported", "context_created", "practice_rom", "armed", "install_called", "dispatch_installed",
     "nominal", "owner_thread", "context_lost", "state_identity", "read_known", "default_read_known",
-    "unit_known", "texture_known",
+    "unit_known", "texture_known", "structural",
 )
+# Sites the renderer rebuilds its witness from (rs_bindings_site_recoverable):
+# an error flag or one call capture could not follow, with every hook intact.
+_RECOVERABLE_SITES = frozenset({1, 2, 3, 4, 11, 12, 13, 14, 15, 17})
 _GL_ERRORS = {0x500: "GL_INVALID_ENUM", 0x501: "GL_INVALID_VALUE", 0x502: "GL_INVALID_OPERATION",
               0x503: "GL_STACK_OVERFLOW", 0x504: "GL_STACK_UNDERFLOW", 0x505: "GL_OUT_OF_MEMORY",
               0x506: "GL_INVALID_FRAMEBUFFER_OPERATION", 0x507: "GL_CONTEXT_LOST"}
@@ -102,6 +105,8 @@ def bindings_cause(site, gl_error, flags):
         text = _BINDINGS_SITES.get(site, (None, f"an invalidation site this build does not know ({site})"))[1]
         if gl_error:
             text += f" ({_GL_ERRORS.get(gl_error, hex(gl_error))})"
+        if "structural" in named:
+            text += "; the renderer cannot rebuild its capture state in this context"
         return text
     for flag, text in (
         ("context_created", "the renderer never reported creating its context for this ROM"),
@@ -116,9 +121,37 @@ def bindings_cause(site, gl_error, flags):
             if flag == "context_created" and "context_lost" in named:
                 return "the renderer lost its context and created no new one"
             return text
+    if "nominal" in named and "default_read_known" not in named:
+        return "the window's read buffer was unknown: an offscreen framebuffer was bound for reading when it was rebuilt"
     if not {"read_known", "default_read_known", "unit_known", "texture_known"} <= named:
         return "the renderer's state witness lost track of a framebuffer or texture binding"
     return "the renderer reported no cause"
+
+
+def bindings_site_recoverable(site):
+    return site in _RECOVERABLE_SITES
+
+
+def bindings_reconstruction(fields):
+    """Plain words for a `bindings_reconstructed` event, or for the rebuild
+    counts on a `gpu_failure` line; None when there is nothing to say."""
+    if not isinstance(fields, dict):
+        return None
+    if {"site", "attempts", "successes"} <= fields.keys():
+        site, error = fields["site"], fields.get("gl_error")
+        what = (_BINDINGS_SITES.get(site, (None, f"an invalidation site this build does not know ({site})"))[1]
+                if site else "an earlier rebuild could not ask the window's read buffer")
+        if error:
+            what += f" ({_GL_ERRORS.get(error, hex(error))})"
+        seconds = fields.get("ms_since_created", 0) / 1000
+        return (f"recording recovered: the renderer rebuilt its capture state from the driver {seconds:.1f} s "
+                f"after its context started, because {what} (rebuild {fields['successes']} of "
+                f"{fields['attempts']} tries)")
+    attempts = fields.get("reconstruct_attempts")
+    if attempts:
+        return (f"the renderer rebuilt its capture state {fields.get('reconstruct_successes', 0)} of {attempts} "
+                "times in its current context, and recording still failed")
+    return None
 
 
 def context_identity_source(source):

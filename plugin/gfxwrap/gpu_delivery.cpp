@@ -87,6 +87,10 @@ struct Runtime {
     gpu_startup_context_v1 startup_context{};
     uint32_t latest_source_refusal=0;
     rs_bindings_cause latest_bindings_cause{}; // what the latest refusal carried, when it was BINDINGS
+    // The renderer's reconstruction counts (SM64ReplayContextEvidenceV1), the
+    // successes this epoch has already noted, and how many notes it wrote.
+    rs_context_evidence renderer_evidence{};
+    uint32_t noted_generation=0,noted_successes=0,reconstruct_notes=0;
     std::atomic<bool> exhausted{false};
     gc_header request{};uint64_t budget=0;uint32_t epoch=0;
     rb_surface mailbox{},surface{};uint32_t mailbox_epoch=0;
@@ -214,6 +218,14 @@ struct Runtime {
             d.bindings_flags=latest_bindings_cause.flags;d.bindings_invalidations=latest_bindings_cause.invalidations;
             d.bindings_after_ms=latest_bindings_cause.after_ms;d.bindings_contexts=latest_bindings_cause.contexts;
         }
+        if(!healthy && kind==GD_KIND_WINDOW)read_renderer_evidence();
+        if((!healthy && kind==GD_KIND_WINDOW) || kind==GD_KIND_RECONSTRUCT){
+            d.reconstruct_attempts=renderer_evidence.reconstruct_attempts;
+            d.reconstruct_successes=renderer_evidence.reconstruct_successes;
+            d.reconstructed_site=renderer_evidence.reconstructed_site;
+            d.reconstructed_gl_error=renderer_evidence.reconstructed_gl_error;
+            d.reconstructed_ms=renderer_evidence.reconstructed_ms;
+        }
         d.qpc_frequency=frequency;d.observed_qpc=observed?observed:qpc();d.phase_started_qpc=phase_started;
         d.healthy=healthy;d.window_started_qpc=healthy?summary_started:started;
         d.previous_emit_ticks=previous_emit_ticks;
@@ -273,6 +285,22 @@ struct Runtime {
         copy(startup_context.renderer,sizeof startup_context.renderer,named.renderer);
         copy(startup_context.gl_version,sizeof startup_context.gl_version,named.gl_version);
         startup_context.identity_source=named.source;
+    }
+    // The renderer's evidence export, copied without GL; false leaves the last copy.
+    bool read_renderer_evidence(){
+        const auto read=context_evidence.load();rs_context_evidence named{};
+        if(!read || !read(&named,sizeof named) || named.bytes!=sizeof named || named.version!=RS_CONTEXT_EVIDENCE_V1)return false;
+        renderer_evidence=named;return true;
+    }
+    // One bounded note per witness reconstruction this epoch (delivery thread).
+    // Successes are at most one a second; sixteen notes cover any startup.
+    void note_reconstructions(){
+        if(!read_renderer_evidence())return;
+        const auto&e=renderer_evidence;
+        if(e.context_generation!=noted_generation){noted_generation=e.context_generation;noted_successes=0;}
+        if(e.reconstruct_successes<=noted_successes)return;
+        noted_successes=e.reconstruct_successes;
+        if(reconstruct_notes<16){++reconstruct_notes;emit_diagnostic(GD_NONE,0,false,0,GD_KIND_RECONSTRUCT);}
     }
     // A bootstrap deadline names the GPU and, when its latest refusal was
     // BINDINGS, why the renderer's bindings were false. CPU writes only.
@@ -778,6 +806,7 @@ struct Runtime {
             emit_diagnostic(GD_NONE,0,false,0,GD_KIND_REQUEST);
         }
         if(!live())return drain_tick();
+        if(!renderer)note_reconstructions();
         const auto now_state=state.load();
         if(now_state==GD_BOOTSTRAP){take_records(false);if(renderer)bootstrap_ready();}
         else if(now_state==GD_PREPARING){take_records(false);if(renderer)preparing_tick();else activate_when_imported();}
@@ -1116,6 +1145,10 @@ extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     r->startup_context={};memcpy(r->startup_context.magic,GPU_STARTUP_CONTEXT_MAGIC,8);
     r->startup_context.version=GPU_STARTUP_CONTEXT_VERSION;r->startup_context.bytes=sizeof r->startup_context;
     r->startup_context.epoch=e;r->adopt_context_identity(); // CPU copy of the renderer's own receipt
+    // Successes before this request belong to earlier epochs: note only new ones.
+    r->renderer_evidence={};r->reconstruct_notes=0;
+    r->noted_generation=r->read_renderer_evidence()?r->renderer_evidence.context_generation:0;
+    r->noted_successes=r->renderer_evidence.reconstruct_successes;
     r->publish_startup();
     r->set_state(GD_BOOTSTRAP);r->publish_status();
     if(r->exhausted.load()){r->request_state.store(2);SetEvent(r->wake);return GD_EXHAUSTED;}
@@ -1255,6 +1288,45 @@ extern "C" int gd_test_bindings_cause(bool latest_format,gd_diagnostic*failure,g
     r.started=qpc()-r.frequency*6; // Test-owned elapsed phase; no sleeps or GPU.
     r.iterate(false);
     valid=valid && gd_read_startup_context(&receipts[1]);*failure=seen;
+    gd_set_diagnostic(nullptr);gd_set_context_evidence(nullptr);gd_disarm(GD_CANCELLED);runtime.store(nullptr);
+    CloseHandle(r.wake);CloseHandle(r.changed);return valid;
+}
+// Each witness reconstruction after this request reaches one bounded note;
+// earlier epochs' successes do not, and a failure carries the context's counts.
+extern "C" int gd_test_reconstruct_notes(uint32_t*out){
+    if(!out || runtime.load())return 0;
+    Runtime r;r.source.disarm=[](){};r.source.activate=[]()->uint32_t{return 17;};
+    r.source.take=[]()->const rb_record*{return nullptr;};
+    r.limits.max_slots=1;r.limits.snapshot_bytes=4u<<20;r.limits.channel_bytes=1u<<20;
+    LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);r.frequency=uint64_t(frequency.QuadPart);
+    r.wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r.changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    if(!r.wake || !r.changed){if(r.wake)CloseHandle(r.wake);if(r.changed)CloseHandle(r.changed);return 0;}
+    runtime.store(&r);
+    static uint32_t generation=0,attempts=0,successes=0;generation=3;attempts=successes=2; // earlier epochs'
+    gd_set_context_evidence([](rs_context_evidence*e,uint32_t bytes)->int{
+        if(!e || bytes!=sizeof *e)return 0;
+        *e={};e->bytes=sizeof *e;e->version=RS_CONTEXT_EVIDENCE_V1;e->context_generation=generation;
+        e->reconstruct_attempts=attempts;e->reconstruct_successes=successes;
+        e->reconstructed_site=RS_BINDINGS_GATEWAY_OPEN_ERROR;e->reconstructed_gl_error=0x502;e->reconstructed_ms=40+successes;
+        return 1;});
+    static unsigned notes=0;static gd_diagnostic first{},failure{};notes=0;first=failure={};
+    gd_set_diagnostic([](const gd_diagnostic*s){
+        if(s->kind==GD_KIND_RECONSTRUCT){if(!notes++)first=*s;}
+        else if(s->kind==GD_KIND_WINDOW && !s->healthy)failure=*s;});
+    gc_header h{};h.owner_pid=GetCurrentProcessId();h.owner_birth=gpu_channel::process_birth(GetCurrentProcess());
+    h.nonce_lo=23;h.generation=7;h.offer_count=h.table_count=h.packet_count=1;h.table[0]={0,4};
+    h.packet_bytes=h.pending_bytes=1024;h.ram_budget=1u<<20;
+    const int valid=gd_request(&h,4u<<20)==GD_ACCEPTED;
+    r.iterate(false);out[0]=notes;                        // nothing new since the request
+    ++attempts;++successes;r.iterate(false);out[1]=notes; // one success, one note
+    r.iterate(false);out[2]=notes;                        // never repeated
+    for(unsigned n=0;n<40;++n){++attempts;++successes;r.iterate(false);}
+    out[3]=notes;                                          // bounded
+    out[4]=first.reconstructed_site;out[5]=first.reconstructed_gl_error;
+    out[6]=first.reconstruct_successes;out[7]=first.reconstructed_ms;out[8]=first.epoch;
+    generation=4;attempts=successes=1;                     // a new context's counts
+    r.started=qpc()-r.frequency*6;r.iterate(false);       // the no-surface deadline
+    out[9]=failure.reason;out[10]=failure.reconstruct_attempts;out[11]=failure.reconstruct_successes;
     gd_set_diagnostic(nullptr);gd_set_context_evidence(nullptr);gd_disarm(GD_CANCELLED);runtime.store(nullptr);
     CloseHandle(r.wake);CloseHandle(r.changed);return valid;
 }

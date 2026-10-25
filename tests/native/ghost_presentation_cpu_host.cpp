@@ -7,7 +7,7 @@ namespace gp=ghost_presentation;
 namespace gc=ghost_compositor;
 namespace gl=ghost_compositor::gl;
 static unsigned calls=0,copies=0,opened=0,ended=0,next_name=1,draws=0;
-static bool gpu_open=false,refuse_second_open=false,refuse_next_open=false;
+static bool gpu_open=false,refuse_second_open=false,refuse_next_open=false,dirty_next_end=false;
 static void require(bool okay,const char* message) {
     if(!okay){std::fprintf(stderr,"FAILED: %s\n",message);std::exit(1);}
 }
@@ -34,7 +34,8 @@ static gp::Dispatch dispatch() {
     out.gl.CheckFramebufferStatus=complete;out.CopyTexSubImage2D=copy;out.DrawBuffers=buffers;return out;
 }
 static bool begin(){if(refuse_next_open || (refuse_second_open && opened==1))return false;require(!gpu_open,"gateway not nested");gpu_open=true;++opened;return true;}
-static bool end(){require(gpu_open,"gateway balanced");gpu_open=false;++ended;return true;}
+static bool end(){require(gpu_open,"gateway balanced");gpu_open=false;++ended;
+    if(dirty_next_end){dirty_next_end=false;return false;}return true;}
 static void draw(void*,const gp::Draw&){++draws;}
 static bool known(gp::Known* out) {
     *out={};out->fields=gp::Known::read_framebuffer|gp::Known::draw_framebuffer|gp::Known::texture_unit|
@@ -93,6 +94,17 @@ int main() {
     refuse_next_open=true;gp::record_display(p);refuse_next_open=false;gp::swap_completed(p,true);
     require(gp::surface(p).framebuffer && gp::surface(p).update_occurrence==11 && copies==1 &&
             !gp::display(p).presentation_serial,"refused display copy preserves qualified private clean picture only");
+    // A ghost-only scope that closes dirty costs the source one witness
+    // invalidation; this instance then draws no more ghosts, while plain
+    // frames keep publishing their clean front without any GL.
+    gp::begin_update(p,12);reset_counts();dirty_next_end=true;
+    require(!gp::replace_vi(p,image,0x3000,false,raster) && !draws && opened==ended,"dirty ghost scope is refused and closed");
+    require(gp::before_swap(p,0x3000,raster),"plain frame after a dirty ghost scope");swapped(p);
+    gp::begin_update(p,13);reset_counts();
+    require(!gp::replace_vi(p,image,0x3000,false,raster) && !calls && !opened,"stepped-aside ghost asks nothing");
+    require(gp::before_swap(p,0x3000,raster) && !gp::begin_osd(p),"plain frame still qualifies");swapped(p);
+    require(gp::surface(p).presentation_serial && gp::surface(p).update_occurrence==13 && !gp::surface(p).framebuffer &&
+            !calls,"clean front still publishes without GL");
     gp::display_consumer(false);gp::destroy(p);require(!gpu_open && opened==ended,"balanced final gateway");
-    std::puts("CPU presentation passed: plain_gl_calls=0 plain_copies=0 plain_osd_mirrors=0 ghost_copies=2 identity=qualified failed_display=clean_preserved");
+    std::puts("CPU presentation passed: plain_gl_calls=0 plain_copies=0 plain_osd_mirrors=0 ghost_copies=2 identity=qualified failed_display=clean_preserved ghost_fault=stepped_aside");
 }

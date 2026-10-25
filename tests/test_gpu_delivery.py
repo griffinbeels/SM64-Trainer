@@ -171,6 +171,23 @@ def test_bindings_failure_line_fits_the_logger_and_reaches_the_automatic_schema_
         "bindings_site": 14, "bindings_gl_error": 0x502, "bindings_flags": 0xFFFFFFFF,
         "bindings_invalidations": 0xFFFFFFFF, "bindings_after_ms": 0xFFFFFFFF, "bindings_contexts": 0xFFFFFFFF}
     assert row["fields"]["reason"] == 10034 and row["fields"]["detail"] == 0x53520001
+    assert (row["fields"]["reconstruct_attempts"], row["fields"]["reconstruct_successes"]) == (0xFFFFFFFF, 0xFFFFFFFF)
+    note = subprocess.run([str(exe), "--reconstruct-note"], capture_output=True, text=True,
+                          timeout=5, check=True, **quiet_spawn_kwargs()).stdout.strip()
+    row, = technical_events(note)
+    assert row["event"] == "bindings_reconstructed"
+    assert row["fields"] == {"epoch": 0xFFFFFFFF, "site": 14, "gl_error": 0x502, "attempts": 0xFFFFFFFF,
+                             "successes": 0xFFFFFFFE, "ms_since_created": 0xFFFFFFFF}
+
+
+def test_each_witness_rebuild_after_the_request_writes_one_bounded_note_cpu(host):
+    result = subprocess.run([str(host), "--reconstruct-notes-cpu"], capture_output=True, text=True,
+                            timeout=5, check=True, **quiet_spawn_kwargs())
+    # Earlier epochs' successes write nothing; one new success writes one note,
+    # never repeated, at most sixteen an epoch; the failure carries the
+    # renderer's counts for its current context.
+    assert result.stdout.strip() == (
+        "reconstruct notes 0 1 1 16 site 14 error 1282 successes 3 ms 43 epoch 17 failure 10034 1 1")
 
 
 def test_omission_frontier_uses_identity_before_source_record_release_cpu(host):

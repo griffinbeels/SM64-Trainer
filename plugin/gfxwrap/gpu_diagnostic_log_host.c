@@ -41,12 +41,22 @@ static int bindings_failure(void) {
     d.returning_records=d.awaiting_decisions=d.awaiting_copy=d.unsampled=0xFFFFFFFFu;
     d.bindings_site=14;d.bindings_gl_error=0x502;d.bindings_flags=0xFFFFFFFFu;
     d.bindings_invalidations=d.bindings_after_ms=d.bindings_contexts=0xFFFFFFFFu;
+    d.reconstruct_attempts=d.reconstruct_successes=0xFFFFFFFFu;
     runtime_diagnostic(&d);
     return 0;
+}
+/* The note a witness reconstruction writes, at its widest. */
+static int reconstruct_note(void) {
+    gd_diagnostic d={0};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;d.kind=GD_KIND_RECONSTRUCT;
+    d.epoch=0xFFFFFFFFu;d.reconstructed_site=14;d.reconstructed_gl_error=0x502;
+    d.reconstruct_attempts=0xFFFFFFFFu;d.reconstruct_successes=0xFFFFFFFEu;d.reconstructed_ms=0xFFFFFFFFu;
+    runtime_diagnostic(&d);
+    return lines==1?0:3;
 }
 int main(int argc,char**argv) {
     if(argc==2 && !strcmp(argv[1],"--notes"))return notes();
     if(argc==2 && !strcmp(argv[1],"--bindings-failure"))return bindings_failure();
+    if(argc==2 && !strcmp(argv[1],"--reconstruct-note"))return reconstruct_note();
     gd_diagnostic d={0};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;
     d.healthy=1;d.epoch=17;d.qpc_frequency=1000;d.window_started_qpc=1000;d.observed_qpc=6000;
     d.accounted_occurrence=300;d.published_token=150;d.previous_emit_ticks=1;

@@ -19,6 +19,11 @@ struct Instance {
     CleanSurface published{};
     bool display_copied=false;uint32_t display_generation=0;CleanSurface display_published{};
     bool ready=false,saved=false,replaced=false,osd_window=false,osd=false,qualified=false;
+    // A ghost-only scope (the clean save before a ghost, the ghost's VI draw,
+    // its OSD mirror or display copy) closed dirty: that cost the recording
+    // one witness invalidation, so this instance draws no more ghosts. The
+    // clean presentation of plain frames needs no gateway and carries on.
+    bool ghost_faulted=false;
     int32_t osd_fbo=0;
     explicit Instance(const Dispatch& d,uint32_t generation):dispatch(d),context_generation(generation) {}
 };
@@ -100,7 +105,9 @@ bool copy_back(Instance* p,uint32_t index) {
         p->dispatch.CopyTexSubImage2D(gl::TEXTURE_2D,0,0,0,0,0,p->width,p->height);
         g.ReadBuffer(selector); // restore DEFAULT selector even if another FBO was originally read
     }
-    return p->raster.end_gpu();
+    const bool clean=p->raster.end_gpu();
+    if(!clean)p->ghost_faulted=true;
+    return clean;
 }
 bool save_back(Instance* p) {
     p->published=p->display_published={};p->qualified=false;
@@ -181,7 +188,7 @@ void begin_update(Instance* p,uint64_t occurrence) {
     reset(p);p->update=occurrence;
 }
 bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma,const Raster& raster) {
-    if(!p || !p->ready || p->saved || !raster_valid(raster) || !image.texture || !image.occurrence ||
+    if(!p || !p->ready || p->saved || p->ghost_faulted || !raster_valid(raster) || !image.texture || !image.occurrence ||
        !image.configuration || !p->update || image.context_generation!=p->context_generation ||
        !image.width || !image.height || image.width!=p->source_width || image.height!=p->source_height ||
        image.texture==p->textures[0] || image.texture==p->textures[1] || image.texture==p->textures[2])return false;
@@ -198,6 +205,7 @@ bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma
         drawn=true;
     }catch(...) {} // duplicate-only renderer diagnostics must still close our gateway
     const bool clean=raster.end_gpu();
+    if(!clean)p->ghost_faulted=true;
     if(!drawn || !clean){restore_back(p);p->saved=false;return false;}
     p->image=image;p->replaced=true;return true;
 }
@@ -225,7 +233,7 @@ bool begin_osd(Instance* p) {
 void end_osd(Instance* p) {
     if(!p || !p->osd)return;
     p->dispatch.gl.BindFramebuffer(gl::DRAW_FRAMEBUFFER,p->osd_fbo);p->osd=false;
-    if(!p->raster.end_gpu()){p->qualified=false;p->published={};}
+    if(!p->raster.end_gpu()){p->qualified=false;p->published={};p->ghost_faulted=true;}
 }
 void after_osd(Instance* p) {
     if(!p)return;
@@ -240,12 +248,13 @@ void after_osd(Instance* p) {
 // ghost and only while the ghost copy's lane consumes it. A failed copy
 // publishes no display picture; the clean picture is unaffected.
 void record_display(Instance* p) {
-    if(!p || !p->replaced || !p->qualified || !p->image.record_display || p->osd || p->osd_window ||
+    if(!p || !p->replaced || !p->qualified || p->ghost_faulted || !p->image.record_display || p->osd || p->osd_window ||
        !display_consumer())return;
     if(!p->textures[Instance::DISPLAY]) {
         if(!p->raster.begin_gpu())return;
         const bool made=allocate_display(p);
-        if(!p->raster.end_gpu() || !made)return;
+        if(!p->raster.end_gpu()){p->ghost_faulted=true;return;}
+        if(!made)return;
     }
     p->display_copied=copy_back(p,Instance::DISPLAY);
 }

@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
             CHECK(glGetError()==GL_INVALID_ENUM && glGetError()==GL_NO_ERROR);
             // The renderer's later read of the saved error never replaces the first site.
             check_cause(RS_BINDINGS_GATEWAY_CLOSE_ERROR, GL_INVALID_ENUM);
-            CHECK(cause_now().invalidations >= 2);
+            CHECK(cause_now().invalidations == 1); // the kept answer never invalidates again
         } else if (std::strcmp(argv[1],"renderer")==0) {
             glEnable(0xFFFFFFFF);
             CHECK(glGetError()==GL_INVALID_ENUM && !replay_gl::BeginCapture());
@@ -224,6 +224,20 @@ int main(int argc, char **argv) {
             CHECK(!replay_gl::BeginLayer() && !replay_gl::CandidateBindings(&identity,&witness));
             CHECK(glGetError()==GL_INVALID_ENUM);
             check_cause(RS_BINDINGS_GATEWAY_OPEN_ERROR, GL_INVALID_ENUM); // drained layer errors left none
+        } else if (std::strcmp(argv[1],"heal")==0) {
+            // A real driver's pending error at the first gateway: the witness
+            // rebuilds from the driver's answers, which match it independently;
+            // the renderer still gets its error once, and capture opens again.
+            glEnable(0xFFFFFFFF);
+            CHECK(!replay_gl::BeginCapture() && !replay_gl::CandidateBindings(&identity,&witness));
+            CHECK(replay_gl::Reconstruct() && raw_error()==GL_NO_ERROR); // raw flags drained, none left
+            CHECK(replay_gl::GetError()==GL_INVALID_ENUM && replay_gl::GetError()==GL_NO_ERROR);
+            check_bindings(0,0,GL_BACK); // after the kept answer: its own error read must be clean
+            CHECK(replay_gl::BeginCapture() && replay_gl::EndCapture() && replay_gl::CandidateBindings(&identity,&witness));
+            CHECK(!replay_gl::Reconstruct()); // nothing to rebuild inside the second
+            replay_gl::InstallDispatch(); // structural: the table installed twice
+            CHECK(!replay_gl::CandidateBindings(&identity,&witness) && !replay_gl::Reconstruct());
+            replay_gl::ContextLost();
         } else if (std::strcmp(argv[1],"clean")==0) {
             CHECK(replay_gl::BeginCapture() && replay_gl::EndCapture());
             CHECK(replay_gl::CandidateBindings(&identity,&witness));

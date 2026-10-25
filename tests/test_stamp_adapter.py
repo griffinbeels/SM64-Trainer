@@ -36,6 +36,7 @@ inline bool CandidateBindings(renderer::Identity *i,snapshot::RestoreBindings *b
 inline bool DrawableExtent(unsigned*w,unsigned*h){*w=640;*h=480;return true;}
 inline uint32_t SourceFormat(){return 1;}
 inline void BindingsCause(rs_bindings_cause *c){*c={};}
+inline bool Reconstruct(){return false;}
 inline bool __cdecl BeginCapture(){return true;}inline bool __cdecl EndCapture(){return true;}
 }
 """)

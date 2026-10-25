@@ -59,22 +59,44 @@ enum rs_bindings_flag : uint32_t {
     RS_BINDINGS_READ_KNOWN=1024u,         // read framebuffer binding known
     RS_BINDINGS_DEFAULT_READ_KNOWN=2048u, // default framebuffer read selector known
     RS_BINDINGS_UNIT_KNOWN=4096u,         // active texture unit known
-    RS_BINDINGS_TEXTURE_KNOWN=8192u       // active unit's 2D texture known
+    RS_BINDINGS_TEXTURE_KNOWN=8192u,      // active unit's 2D texture known
+    RS_BINDINGS_STRUCTURAL=16384u         // this context can no longer be rebuilt
 };
 typedef struct {
-    uint32_t site;          // rs_bindings_site: the FIRST invalidation since ContextCreated
+    uint32_t site;          // rs_bindings_site: the FIRST invalidation since ContextCreated or the last reconstruction
     uint32_t gl_error;      // the GL error read at that site; 0 when the site read none
     uint32_t flags;         // rs_bindings_flag at the refusal
     uint32_t invalidations; // invalidations since ContextCreated, saturating
-    uint32_t after_ms;      // ms from ContextCreated to the first invalidation, saturating
+    uint32_t after_ms;      // ms from ContextCreated to that invalidation, saturating
     uint32_t contexts;      // ContextCreated calls in this process, saturating
 } rs_bindings_cause;
 static_assert(sizeof(rs_bindings_cause)==24, "bindings cause layout");
+/* THE WITNESS HEALS (his words, 2026-10-24: "Why can't we fix the GPU stuff
+ * as best we can?"). After a RECOVERABLE invalidation the renderer rebuilds
+ * the witness from the driver's own answers (replay_gl::Reconstruct). Each of
+ * these left a GL error flag or one call capture could not follow while every
+ * hook stayed installed, so the driver's answer is the truth and every later
+ * mutation is observed again. A
+ * STRUCTURAL site (every other one) means hooks are missing or another
+ * thread, drawable or context is involved: future mutations would go
+ * unobserved, so no query can make the witness trustworthy again. */
+inline bool rs_bindings_site_recoverable(uint32_t site) {
+    switch (site) {
+    case RS_BINDINGS_FRAMEBUFFER_TARGET: case RS_BINDINGS_FRAMEBUFFER_DELETE: case RS_BINDINGS_TEXTURE_UNIT:
+    case RS_BINDINGS_VERTEX_ARRAY_DELETE: case RS_BINDINGS_READ_BUFFER: case RS_BINDINGS_TEXTURE_DELETE:
+    case RS_BINDINGS_RENDERER_ERROR: case RS_BINDINGS_GATEWAY_OPEN_ERROR: case RS_BINDINGS_GATEWAY_CLOSE_ERROR:
+    case RS_BINDINGS_LAYER_UNDRAINED:
+        return true;
+    default:
+        return false;
+    }
+}
 
 /* The GL identity of the renderer's practice-ROM context, read by the renderer
  * on its own thread: at ContextCreated, or once at the first bindings refusal
  * of a context ContextCreated never saw. SM64ReplayContextEvidenceV1 copies it
- * for the wrapper without GL. Bounded printable ASCII, NUL-padded. */
+ * for the wrapper without GL. Bounded printable ASCII, NUL-padded. The tail
+ * counts this context's witness reconstructions and names the latest success. */
 #define RS_CONTEXT_EVIDENCE_V1 1u
 enum rs_context_identity_source : uint32_t {
     RS_IDENTITY_NONE=0, RS_IDENTITY_CONTEXT_CREATED=1, RS_IDENTITY_FIRST_REFUSAL=2
@@ -82,8 +104,12 @@ enum rs_context_identity_source : uint32_t {
 typedef struct rs_context_evidence {
     uint32_t bytes, version, source, reserved;
     char vendor[80], renderer[128], gl_version[96];
+    uint32_t context_generation;           // whose counts follow (0: none armed yet)
+    uint32_t reconstruct_attempts, reconstruct_successes; // this context, saturating
+    uint32_t reconstructed_site, reconstructed_gl_error;  // what the latest success repaired
+    uint32_t reconstructed_ms;             // ms from ContextCreated to that success, saturating
 } rs_context_evidence;
-static_assert(sizeof(rs_context_evidence)==320, "context evidence layout");
+static_assert(sizeof(rs_context_evidence)==344, "context evidence layout");
 typedef int (__cdecl *rs_read_context_evidence)(rs_context_evidence *, uint32_t bytes);
 /* Printable ASCII only (anything else becomes '?'), at most capacity-1 bytes,
  * the rest zero. A null source leaves an empty string. */

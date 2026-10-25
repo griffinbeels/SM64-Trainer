@@ -217,7 +217,9 @@ known operation/HRESULT. OpenGL vendor/renderer/version and a missing function
 are sampled once on the existing renderer startup thread. The renderer also
 reports the same three strings from its context creation, and a no-surface
 startup failure carries the bindings cause: numeric site, GL error, flags,
-counts and one plain sentence naming it. These strings pass
+counts and one plain sentence naming it. A renderer witness rebuild logs a
+numeric `bindings_reconstructed` event, and a failure line counts the rebuilds.
+These strings pass
 the same privacy scrubber. Raw helper stderr and native log text are never uploaded.
 Expected AV1 codec refusal followed by H.264 negotiation is not a failure report.
 The local Debug report separately includes the current recording route and its

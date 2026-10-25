@@ -23,6 +23,22 @@ public:
     }
     void lost() { identity_ = {}; read_known_ = unit_known_ = default_known_ = false;
                   known_textures_ = 0; }
+    // The driver's answers after a recoverable invalidation (link_dispatch's
+    // Reconstruct asks them; this class stays GL-free). Only the active unit's
+    // texture is known: the others are learned again as the renderer binds.
+    // The default framebuffer's selector is known only when it was asked.
+    void reconstructed(Identity identity, GLuint read, bool default_known, GLenum default_read,
+                       unsigned unit, GLuint texture) {
+        identity_ = identity;
+        const bool valid = identity.context && identity.read_drawable && identity.context_generation
+            && identity.drawable_generation && identity.owner_thread;
+        read_ = read; read_known_ = valid;
+        default_read_ = default_known ? default_read : GL_NONE; default_known_ = valid && default_known;
+        for (auto &name : textures_) name = 0;
+        unit_ = unit; unit_known_ = valid && unit < texture_units;
+        known_textures_ = unit_known_ ? 1u << unit : 0;
+        if (unit_known_) textures_[unit] = texture;
+    }
     // Same context/drawable, storage resized: GL binding state survives. The
     // source generation changes without claiming a freshly initialized context.
     void drawable_changed(uint32_t generation) {

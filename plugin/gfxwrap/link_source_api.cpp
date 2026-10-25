@@ -16,7 +16,9 @@ uint64_t update_occurrence=0;
 uint32_t before_swaps=0;
 int surface(rb_surface *out) {
     renderer::Identity identity{}; snapshot::RestoreBindings bindings{};
-    if (!replay_gl::CandidateBindings(&identity,&bindings)) {
+    // A recoverable invalidation is rebuilt from the driver once, then asked again.
+    if (!replay_gl::CandidateBindings(&identity,&bindings)
+            && !(replay_gl::Reconstruct() && replay_gl::CandidateBindings(&identity,&bindings))) {
         out->witness=RS_SURFACE_BINDINGS;
         rs_bindings_cause cause{};replay_gl::BindingsCause(&cause);rs_write_bindings_cause(out,cause);return 0;
     }

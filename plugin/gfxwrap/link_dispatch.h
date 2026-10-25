@@ -47,6 +47,11 @@ bool CandidateBindings(renderer::Identity *, snapshot::RestoreBindings *);
 // Copies already-known values. Once per process, a context ContextCreated never
 // saw has its GL identity read here instead: three glGetString calls, no other GL.
 void BindingsCause(rs_bindings_cause *);
+// Rebuilds the witness from the driver's answers after a RECOVERABLE
+// invalidation (source_refusal.h), at most once a second per context; true
+// when the observation is nominal again. Only a BINDINGS refusal calls it:
+// it is this file's one driver-query path after ContextCreated.
+bool Reconstruct();
 uint32_t SourceFormat(); // observed once on fresh default framebuffer; no driver query
 // Called only for an admitted snapshot, before mutation and after restoration/
 // fence/flush, BEFORE image publication. One raw error read each; no drain.

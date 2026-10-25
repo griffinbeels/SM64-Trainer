@@ -988,7 +988,12 @@ and which arming steps happened. The deadline puts it in the `gpu_failure`
 line (`bindings_*`) and in the appended startup receipt (control page offset
 784), beside the GL vendor, renderer and version the renderer read at context
 creation. Those name the GPU even when no surface qualified, while the V1
-receipt's strings stay empty until a gateway opens.
+receipt's strings stay empty until a gateway opens. Since 2026-10-24 a
+recoverable bindings cause no longer lasts the session: the renderer rebuilds
+its witness from the driver at the refusal ([witness rebuild](replay-link-state.md#witness-rebuild)),
+logs `bindings_reconstructed` on success, and a failure line counts the
+attempts. A 10034 after rebuilds names a structural site, a fatal driver
+error, or an error repeated faster than the once-a-second rebuild.
 Later refusals replace transient startup evidence; accepted requests reset it.
 Successful pictures retain their witness semantics and no Source layout changes.
 These observations retain the original deadline, safety gates and scoped desktop

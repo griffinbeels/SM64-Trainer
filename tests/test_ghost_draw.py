@@ -103,6 +103,12 @@ def test_ghost_glue_gateway_reads_and_error_owners(tmp_path):
                            "drained_renderer": 0, "broken": 0, "scope_open": False}, name
     # A surface whose upstream draw throws still closes its one scope.
     assert s["throw_in_layer"]["scope_open"] is False and s["throw_in_layer"]["drawn"] == 1
+    # The ghost's own error costs the source one invalidation; once the source
+    # rebuilt its witness the ghost asks that context for nothing more (no
+    # draw, no layer pass, no gateway read) and draws again in the next one.
+    assert s["ghost_steps_aside"] == {
+        "clean_drawn": 1, "faulted_drawn": 0, "kept": True, "after_drawn": 0, "after_reads": 0,
+        "after_layers": 0, "again_reads": 0, "nominal": True, "next_context_drawn": 1}
 
 
 def test_old_scope_teardown_before_identity_negative_control(tmp_path):

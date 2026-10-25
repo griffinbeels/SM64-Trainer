@@ -2,6 +2,8 @@
  * Observes real dispatch calls, including cached function pointers. No per-call
  * GL queries, allocations, locks, events, I/O or capture work. Raw void GL calls
  * do not prove success: this is a nominal-state candidate, not source admission.
+ * After ContextCreated the only driver queries are Reconstruct's, on a BINDINGS
+ * refusal, at most once a second (source_refusal.h, "THE WITNESS HEALS").
  *
  * ONLY ON A PRACTICE ROM (practice_rom.h, read from the header GLideN64 itself
  * parses in RSP_Init). For any other cartridge ContextCreated observes nothing,
@@ -17,6 +19,35 @@
 #include <limits>
 #include <cstdio>
 #include <cstring>
+// Driver queries Reconstruct makes, all GL 3.3 core. The pinned headers
+// define them; these only guard a header that lacks one.
+#ifndef GL_READ_FRAMEBUFFER_BINDING
+#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER_BINDING
+#define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6
+#endif
+#ifndef GL_ACTIVE_TEXTURE
+#define GL_ACTIVE_TEXTURE 0x84E0
+#endif
+#ifndef GL_CURRENT_PROGRAM
+#define GL_CURRENT_PROGRAM 0x8B8D
+#endif
+#ifndef GL_VERTEX_ARRAY_BINDING
+#define GL_VERTEX_ARRAY_BINDING 0x85B5
+#endif
+#ifndef GL_BLEND_SRC_RGB
+#define GL_BLEND_SRC_RGB 0x80C9
+#endif
+#ifndef GL_BLEND_DST_RGB
+#define GL_BLEND_DST_RGB 0x80C8
+#endif
+#ifndef GL_BLEND_SRC_ALPHA
+#define GL_BLEND_SRC_ALPHA 0x80CB
+#endif
+#ifndef GL_BLEND_DST_ALPHA
+#define GL_BLEND_DST_ALPHA 0x80CA
+#endif
 
 namespace replay_gl {
 namespace {
@@ -64,6 +95,8 @@ bool nominal = false, double_buffer = false;
 bool practice = false; // the context belongs to a practice ROM
 bool capture_open = false;
 GLenum saved_error = GL_NO_ERROR;
+// One pending answer for the renderer: a later consumed error never replaces it.
+void keep_for_renderer(GLenum error) { if (saved_error == GL_NO_ERROR) saved_error = error; }
 uint32_t source_format = RB_SOURCE_UNKNOWN;
 // THE BINDINGS CAUSE (source_refusal.h): why CandidateBindings is false. Plain
 // renderer-thread writes of values each site already holds; no query or wait.
@@ -72,25 +105,35 @@ uint32_t cause_site = RS_BINDINGS_SITE_NONE, cause_error = 0, cause_invalidation
 uint32_t contexts_created = 0;
 uint64_t created_ms = 0;
 bool created = false, armed = false, install_called = false, lost = false;
-// Every site that leaves the observation unarmed. Only the first one since
-// ContextCreated is the cause: invalidation is one-way until the next context.
+// A structural site since ContextCreated (rs_bindings_site_recoverable), or a
+// driver error that leaves state undefined: no reconstruction this context.
+bool structural = false;
+uint32_t ms_since_created() {
+    const uint64_t elapsed = created ? GetTickCount64() - created_ms : 0;
+    return elapsed > saturated ? saturated : uint32_t(elapsed);
+}
+// Every site that leaves the observation unarmed. The first one since
+// ContextCreated, or since the last reconstruction, is the cause.
 void note(uint32_t site, GLenum error = GL_NO_ERROR) {
     if (cause_invalidations != saturated) ++cause_invalidations;
+    if (!rs_bindings_site_recoverable(site)) structural = true;
     if (cause_site) return;
-    cause_site = site; cause_error = error;
-    const uint64_t elapsed = created ? GetTickCount64() - created_ms : 0;
-    cause_after_ms = elapsed > saturated ? saturated : uint32_t(elapsed);
+    cause_site = site; cause_error = error; cause_after_ms = ms_since_created();
 }
-// The context's GL identity for the wrapper (SM64ReplayContextEvidenceV1):
-// published by this thread, copied by any thread without GL.
+// Reconstruct's bookkeeping for this context: at most one attempt a second.
+uint32_t reconstruct_attempts = 0, reconstruct_successes = 0;
+uint64_t last_attempt_ms = 0;
+bool attempted = false;
+int gl_major = 0, gl_minor = 0; // GL_VERSION at ContextCreated
+bool render_hooks = false;      // InstallDispatch observes every render-state entry
+// The context's GL identity and reconstruction counts for the wrapper
+// (SM64ReplayContextEvidenceV1): this thread's copy, published whole, copied
+// by any thread without GL.
 std::atomic<uint32_t> evidence_seq{0}, evidence_words[sizeof(rs_context_evidence) / 4]{};
+rs_context_evidence evidence{};
 bool identity_tried = false;
-void publish_identity(uint32_t source) {
-    rs_context_evidence evidence{};
-    evidence.bytes = sizeof evidence; evidence.version = RS_CONTEXT_EVIDENCE_V1; evidence.source = source;
-    rs_bounded_text(evidence.vendor, sizeof evidence.vendor, glGetString(GL_VENDOR));
-    rs_bounded_text(evidence.renderer, sizeof evidence.renderer, glGetString(GL_RENDERER));
-    rs_bounded_text(evidence.gl_version, sizeof evidence.gl_version, glGetString(GL_VERSION));
+void publish_evidence() {
+    evidence.bytes = sizeof evidence; evidence.version = RS_CONTEXT_EVIDENCE_V1;
     uint32_t words[sizeof evidence / 4];
     memcpy(words, &evidence, sizeof evidence);
     const auto seq = evidence_seq.load();
@@ -98,12 +141,20 @@ void publish_identity(uint32_t source) {
     for (unsigned i = 0; i < sizeof evidence / 4; ++i) evidence_words[i].store(words[i]);
     evidence_seq.store(seq + 2);
 }
+void publish_identity(uint32_t source) {
+    evidence.source = source;
+    rs_bounded_text(evidence.vendor, sizeof evidence.vendor, glGetString(GL_VENDOR));
+    rs_bounded_text(evidence.renderer, sizeof evidence.renderer, glGetString(GL_RENDERER));
+    rs_bounded_text(evidence.gl_version, sizeof evidence.gl_version, glGetString(GL_VERSION));
+    publish_evidence();
+}
 void observe_source_format() {
     // ContextCreated is called only for a fresh context, before renderer state
     // mutation: default READ/DRAW framebuffers are both zero. No temporary binds.
     const auto version=reinterpret_cast<const char*>(glGetString(GL_VERSION));
-    int major=0;
-    if (!version || std::sscanf(version,"%d",&major)!=1 || major<3) return;
+    int major=0, minor=0;
+    if (!version || std::sscanf(version,"%d.%d",&major,&minor)<1 || major<3) return;
+    gl_major=major; gl_minor=minor;
     auto query=reinterpret_cast<PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC>(
         wglGetProcAddress("glGetFramebufferAttachmentParameteriv"));
     const auto address=reinterpret_cast<uintptr_t>(query);
@@ -197,19 +248,26 @@ void ContextLost() {
     source_format = RB_SOURCE_UNKNOWN;
     cause_site = RS_BINDINGS_SITE_NONE; cause_error = cause_invalidations = cause_after_ms = 0;
     created = armed = install_called = false; lost = true;
+    structural = attempted = render_hooks = false; reconstruct_attempts = reconstruct_successes = 0;
+    last_attempt_ms = 0; gl_major = gl_minor = 0;
+    evidence.context_generation = evidence.reconstruct_attempts = evidence.reconstruct_successes = 0;
+    evidence.reconstructed_site = evidence.reconstructed_gl_error = evidence.reconstructed_ms = 0;
 }
 void DrawableChanged() {
     drawable_width = drawable_height = 0;
-    if (!nominal) return;
+    // Followed while armed, nominal or not: a resize during an invalidation
+    // still advances the drawable a reconstructed witness names.
+    if (!armed) return;
     if (GetCurrentThreadId() != identity.owner_thread
             || identity.drawable_generation == (std::numeric_limits<uint32_t>::max)()) {
         invalidate(RS_BINDINGS_DRAWABLE_CHANGED); return;
     }
-    state.drawable_changed(++identity.drawable_generation);
+    ++identity.drawable_generation;
+    if (nominal) state.drawable_changed(identity.drawable_generation);
 }
 bool DrawableCommitted(HWND window, bool resized) {
     drawable_width = drawable_height = 0;
-    if (!resized || !nominal || GetCurrentThreadId() != identity.owner_thread) return resized;
+    if (!resized || !armed || GetCurrentThreadId() != identity.owner_thread) return resized;
     RECT bounds{};
     if (!window || !GetClientRect(window, &bounds) || bounds.right <= bounds.left || bounds.bottom <= bounds.top) {
         invalidate(RS_BINDINGS_DRAWABLE_COMMITTED); return resized;
@@ -230,6 +288,7 @@ void ContextCreated(HGLRC context, HDC drawable, bool buffered) {
     if (contexts_created != saturated) ++contexts_created;
     practice = HEADER && practice_rom(HEADER);
     if (!practice) return; // no queries, no observed state, never a capture source
+    evidence.context_generation = 0;
     if (!context || !drawable || context != wglGetCurrentContext() || drawable != wglGetCurrentDC()) {
         note(RS_BINDINGS_CREATED_NOT_CURRENT); return;
     }
@@ -251,6 +310,7 @@ void ContextCreated(HGLRC context, HDC drawable, bool buffered) {
     fresh_render_state(); // known once InstallDispatch observes the pointer-called entries too
     state.created(identity, buffered); nominal = true; armed = true;
     observe_source_format();
+    evidence.context_generation = generation; publish_evidence();
     // No shared context, ever: capture runs on this thread in this context
     // (renderer-thread capture), so the driver only sees the original
     // single-context renderer, with or without a recording.
@@ -294,8 +354,9 @@ void InstallDispatch() {
     // Every entry that changes the render state is now observed: the
     // pointer-called ones above, the GL 1.1 exports aliased at the call.
     // Without glEnablei the renderer switches BLEND through glEnable.
-    render_known = raw_use_program && raw_bind_vertex_array && raw_delete_vertex_arrays
+    render_hooks = raw_use_program && raw_bind_vertex_array && raw_delete_vertex_arrays
         && !raw_enablei == !raw_disablei;
+    render_known = render_hooks;
 }
 void APIENTRY Viewport(GLint x, GLint y, GLsizei width, GLsizei height) {
     ::glViewport(x, y, width, height);
@@ -414,7 +475,111 @@ void BindingsCause(rs_bindings_cause *out) {
     if (known.default_read) flags |= RS_BINDINGS_DEFAULT_READ_KNOWN;
     if (known.unit) flags |= RS_BINDINGS_UNIT_KNOWN;
     if (known.texture) flags |= RS_BINDINGS_TEXTURE_KNOWN;
+    if (structural) flags |= RS_BINDINGS_STRUCTURAL;
     *out = {cause_site, cause_error, flags, cause_invalidations, cause_after_ms, contexts_created};
+}
+namespace {
+bool fatal(GLenum error) { return error == GL_OUT_OF_MEMORY || error == 0x0507 /* GL_CONTEXT_LOST */; }
+// One flag per error kind at most, so a bounded drain empties it. The first
+// becomes the renderer's pending answer; a lost context or exhausted memory
+// leaves state undefined, so the witness is never rebuilt in this context.
+bool drain_for_renderer() {
+    for (unsigned i = 0; i < 8; ++i) {
+        const GLenum error = ::glGetError();
+        if (error == GL_NO_ERROR) return true;
+        keep_for_renderer(error);
+        if (fatal(error)) { structural = true; return false; }
+    }
+    return false; // a flag that will not clear: try again next second
+}
+// The reconstruction's own query errors are ours: drained, never the renderer's.
+void drain_ours(GLenum error) {
+    for (unsigned i = 0; error != GL_NO_ERROR && i < 8; ++i) {
+        if (fatal(error)) structural = true;
+        error = ::glGetError();
+    }
+}
+bool reconstructable() {
+    return practice && created && armed && !lost && !structural && !capture_open
+        && dispatch_generation && dispatch_generation == identity.context_generation
+        && GetCurrentThreadId() == identity.owner_thread
+        && reinterpret_cast<HGLRC>(identity.context) == wglGetCurrentContext()
+        && reinterpret_cast<HDC>(identity.read_drawable) == wglGetCurrentDC()
+        && (gl_major > 3 || (gl_major == 3 && gl_minor >= 3)) // every query below is GL 3.3 core
+        && (cause_site == RS_BINDINGS_SITE_NONE || rs_bindings_site_recoverable(cause_site));
+}
+// The driver's answers for everything the witness holds. The default
+// framebuffer's selector is asked only while it is the one bound for
+// reading (GLideN64 binds it before every swap); otherwise it stays unknown
+// and the next attempt asks again.
+bool rebuild() {
+    if (!drain_for_renderer()) return false;
+    GLint read = 0, draw = 0, active = 0, texture = 0, selector = GL_NONE, view[4]{}, box[4]{};
+    GLint program = 0, array = 0, function = GL_LESS, factors[4]{GL_ONE, GL_ZERO, GL_ONE, GL_ZERO};
+    GLfloat range[2]{0, 1};
+    GLboolean mask = GL_TRUE;
+    uint32_t on = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+    if (!read) glGetIntegerv(GL_READ_BUFFER, &selector);
+    glGetIntegerv(GL_VIEWPORT, view);
+    glGetFloatv(GL_DEPTH_RANGE, range);
+    if (render_hooks) {
+        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &array);
+        glGetIntegerv(GL_DEPTH_FUNC, &function);
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &mask);
+        glGetIntegerv(GL_BLEND_SRC_RGB, &factors[0]);
+        glGetIntegerv(GL_BLEND_DST_RGB, &factors[1]);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &factors[2]);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &factors[3]);
+        glGetIntegerv(GL_SCISSOR_BOX, box);
+        for (unsigned i = 0; i < sizeof(capabilities) / sizeof(capabilities[0]); ++i)
+            if (glIsEnabled(capabilities[i])) on |= 1u << i;
+    }
+    const GLenum queried = ::glGetError();
+    if (queried != GL_NO_ERROR) { drain_ours(queried); return false; }
+    const auto unit = GLenum(active) - GL_TEXTURE0;
+    if (GLenum(active) < GL_TEXTURE0 || unit >= unit_limit || read < 0 || draw < 0 || texture < 0) return false;
+    const auto mode = GLenum(selector);
+    const bool default_known = !read && (mode == GL_NONE || mode == GL_FRONT || mode == GL_FRONT_LEFT
+        || (double_buffer && (mode == GL_BACK || mode == GL_BACK_LEFT)));
+    state.reconstructed(identity, GLuint(read), default_known, mode, unsigned(unit), GLuint(texture));
+    read_framebuffer = GLuint(read);
+    draw_framebuffer = GLuint(draw); draw_known = true;
+    for (unsigned i = 0; i < 4; ++i) viewport[i] = view[i];
+    viewport_known = view[2] >= 0 && view[3] >= 0;
+    depth_range[0] = range[0]; depth_range[1] = range[1]; depth_known = true;
+    if (render_hooks) {
+        render.program = GLuint(program); render.vertex_array = GLuint(array);
+        render.depth_func = GLenum(function); render.depth_mask = mask != GL_FALSE;
+        for (unsigned i = 0; i < 4; ++i) { render.blend[i] = GLenum(factors[i]); render.scissor[i] = box[i]; }
+        render.scissor_known = box[2] >= 0 && box[3] >= 0;
+        enabled = on;
+    }
+    render_known = render_hooks;
+    nominal = true;
+    return true;
+}
+}
+bool Reconstruct() {
+    if (!reconstructable()) return false;
+    const uint64_t now = GetTickCount64();
+    if (attempted && now - last_attempt_ms < 1000) return false;
+    attempted = true; last_attempt_ms = now;
+    if (reconstruct_attempts != saturated) ++reconstruct_attempts;
+    const bool rebuilt = rebuild();
+    if (rebuilt) {
+        if (reconstruct_successes != saturated) ++reconstruct_successes;
+        evidence.reconstructed_site = cause_site; evidence.reconstructed_gl_error = cause_error;
+        evidence.reconstructed_ms = ms_since_created();
+        cause_site = RS_BINDINGS_SITE_NONE; cause_error = 0; cause_after_ms = 0; // the next one is its own cause
+    }
+    evidence.reconstruct_attempts = reconstruct_attempts; evidence.reconstruct_successes = reconstruct_successes;
+    publish_evidence();
+    return rebuilt;
 }
 uint32_t SourceFormat() {
     if (!nominal || !dispatch_generation || dispatch_generation!=identity.context_generation
@@ -424,24 +589,33 @@ uint32_t SourceFormat() {
 GLenum APIENTRY GetError() {
     // All source consumers run on the serialized renderer thread. Worker GL
     // operations must use raw dispatch, not this source-only alias.
-    const GLenum error = saved_error ? saved_error : ::glGetError();
-    saved_error = GL_NO_ERROR;
+    // A saved error is the renderer's pending answer, returned exactly once.
+    // The site that saved it already invalidated, and a reconstruction may
+    // have repaired that since, so returning it never invalidates again.
+    if (saved_error != GL_NO_ERROR) {
+        const GLenum error = saved_error;
+        saved_error = GL_NO_ERROR;
+        return error;
+    }
+    const GLenum error = ::glGetError();
     if (error != GL_NO_ERROR) invalidate(RS_BINDINGS_RENDERER_ERROR, error);
     return error;
 }
 bool __cdecl BeginCapture() {
-    if (!nominal || source_format==RB_SOURCE_UNKNOWN || capture_open || saved_error || !dispatch_generation
+    // A pending answer no longer refuses the gateway: the GL Release build
+    // never asks for it, and a reconstruction drained the driver's flags.
+    if (!nominal || source_format==RB_SOURCE_UNKNOWN || capture_open || !dispatch_generation
             || dispatch_generation != identity.context_generation
             || GetCurrentThreadId() != identity.owner_thread) return false;
     const GLenum error = ::glGetError();
-    if (error != GL_NO_ERROR) { saved_error = error; invalidate(RS_BINDINGS_GATEWAY_OPEN_ERROR, error); return false; }
+    if (error != GL_NO_ERROR) { keep_for_renderer(error); invalidate(RS_BINDINGS_GATEWAY_OPEN_ERROR, error); return false; }
     capture_open = true; return true;
 }
 bool __cdecl EndCapture() {
     if (!capture_open || GetCurrentThreadId() != identity.owner_thread) return false;
     capture_open = false;
     const GLenum error = ::glGetError();
-    if (error != GL_NO_ERROR) { saved_error = error; invalidate(RS_BINDINGS_GATEWAY_CLOSE_ERROR, error); return false; }
+    if (error != GL_NO_ERROR) { keep_for_renderer(error); invalidate(RS_BINDINGS_GATEWAY_CLOSE_ERROR, error); return false; }
     return nominal;
 }
 bool __cdecl BeginLayer() { return BeginCapture(); }
@@ -456,7 +630,7 @@ bool __cdecl EndLayer() {
         const GLenum error = ::glGetError();
         if (error == GL_NO_ERROR) return clean && nominal;
         if (error == GL_OUT_OF_MEMORY || error == 0x0507 /* GL_CONTEXT_LOST */) {
-            saved_error = error; invalidate(RS_BINDINGS_LAYER_FATAL_ERROR, error); return false;
+            keep_for_renderer(error); invalidate(RS_BINDINGS_LAYER_FATAL_ERROR, error); return false;
         }
         clean = false; last = error;
     }

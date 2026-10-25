@@ -75,8 +75,20 @@ int main(int argc,char **argv) {
             record=api->take();CHECK(record && record->outcome==RB_OBSERVED && !record->surface.witness);
             CHECK(captured()==gate && api->release(token));
         }
+        // Only the bindings gate asks for a rebuild, once per refusal; a healed
+        // witness lets that same update's surface through.
+        auto rebuilds=reinterpret_cast<unsigned (__cdecl *)()>(GetProcAddress(source,"SourceTestRebuilds"));
+        CHECK(rebuilds && rebuilds()==1);
+        refuse(8);
+        {
+            rb_stamp stamp{};stamp.bytes[0]=77;
+            auto token=api->stage(&stamp);CHECK(token.occurrence);
+            rs_request request{sizeof(request),RS_ABI_V2,{0,0},token};api->update(&request);api->finish(token);
+            const auto* record=api->take();CHECK(record && record->outcome==RB_OBSERVED && !record->surface.witness);
+            CHECK(rebuilds()==2 && captured()==7 && api->release(token));
+        }
         api->disarm();lifecycle(0);
-        std::puts("source ABI passed: six refusal gates and successful recovery");return 0;
+        std::puts("source ABI passed: six refusal gates, successful recovery and a rebuilt witness");return 0;
     }
     for(unsigned cycle=0;cycle<3;cycle++) {
         if(cycle==0 || cycle==2)lifecycle(1); CHECK(api->activate());

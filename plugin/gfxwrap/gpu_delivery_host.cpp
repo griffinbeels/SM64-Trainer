@@ -30,6 +30,7 @@ extern "C" int gd_test_terminal_diagnostics(gd_status*,uint32_t*);
 extern "C" int gd_test_failure_status_coherence(gd_status*,uint32_t*);
 extern "C" int gd_test_request_fault_reset(uint32_t*);
 extern "C" int gd_test_bindings_cause(bool,gd_diagnostic*,gpu_startup_context_v1*);
+extern "C" int gd_test_reconstruct_notes(uint32_t*);
 extern "C" int gd_test_bootstrap_deadline(int,uint32_t*,uint32_t=0,uint32_t=RB_SURFACE_FAILED,bool=false);
 extern "C" int gd_test_take_omissions(const rs_api*,uint64_t*);
 extern "C" int gd_test_pressure_omissions(const rs_api*,uint64_t*,uint64_t*);
@@ -453,6 +454,12 @@ int main(int argc,char**argv){
                d.bindings_invalidations,d.bindings_after_ms,d.bindings_contexts,b.bindings_site,b.bindings_gl_error,
                b.bindings_flags,b.bindings_invalidations,b.bindings_after_ms,b.bindings_contexts,
                a.identity_source,b.identity_source,b.vendor,unsigned(strlen(b.renderer)),b.gl_version);
+        return 0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--reconstruct-notes-cpu")){
+        uint32_t out[12]{};CHECK(gd_test_reconstruct_notes(out));
+        printf("reconstruct notes %u %u %u %u site %u error %u successes %u ms %u epoch %u failure %u %u %u\n",
+               out[0],out[1],out[2],out[3],out[4],out[5],out[6],out[7],out[8],out[9],out[10],out[11]);
         return 0;
     }
     if(argc==2 && !strcmp(argv[1],"--request-fault-reset-cpu")){

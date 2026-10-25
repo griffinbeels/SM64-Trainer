@@ -10,7 +10,8 @@ enum gd_diagnostic_kind {
     GD_KIND_WINDOW=0, /* healthy summary or failure, as before */
     GD_KIND_REQUEST,  /* a capture request was taken: prepare.request_qpc */
     GD_KIND_PREPARE,  /* the epoch reached ACTIVE: prepare.* */
-    GD_KIND_ANCHOR    /* retired: the renderer publishes no shared anchor since 2026-09-28 */
+    GD_KIND_ANCHOR,   /* retired: the renderer publishes no shared anchor since 2026-09-28 */
+    GD_KIND_RECONSTRUCT /* the renderer rebuilt its bindings witness: reconstruct_* */
 };
 /* QPC stamps; zero means the step did not run. Every step from prepare_begin
  * on runs on the RENDERER thread (renderer-thread capture), so a step's
@@ -56,6 +57,11 @@ typedef struct {
      * rs_bindings_cause (source_refusal.h), zero otherwise. */
     uint32_t bindings_site,bindings_gl_error,bindings_flags,bindings_invalidations;
     uint32_t bindings_after_ms,bindings_contexts;
+    /* The renderer's witness reconstructions in its current context
+     * (source_refusal.h): the counts on a failure, plus what the latest
+     * success repaired on a GD_KIND_RECONSTRUCT note. */
+    uint32_t reconstruct_attempts,reconstruct_successes,reconstructed_site,reconstructed_gl_error;
+    uint32_t reconstructed_ms,reconstruct_reserved;
 } gd_diagnostic;
 typedef void (__cdecl *gd_diagnostic_callback)(const gd_diagnostic*);
 #ifdef __cplusplus

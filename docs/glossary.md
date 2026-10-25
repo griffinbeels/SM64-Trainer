@@ -1226,6 +1226,19 @@ name read when the context was created.
 - **Not** -- a refusal reason: the 10034 reason and its `0x53520001` detail
   say which gate refused; the bindings cause says why that gate was closed
 
+### Witness rebuild
+
+The [[renderer]] asking the driver for every binding its state witness
+holds, after a recoverable [[bindings cause]], so one GL error no longer costs
+GPU recording for a whole session (2026-10-24, his "Why can't we fix the GPU
+stuff as best we can?"). It runs only when a picture is about to be refused,
+at most once a second, and never after a structural cause.
+
+- **Lives** -- `plugin/gfxwrap/link_dispatch.cpp` (`Reconstruct`),
+  `plugin/gfxwrap/source_refusal.h` (which sites are recoverable); contract
+  in [the link-state doc](replay-link-state.md#witness-rebuild)
+- **Not** -- a retry of the whole recording: that is the GPU retry gate
+
 ### Activation log
 
 `sm64_trainer_gfx.activation.log`, beside the wrapper: this Project64
