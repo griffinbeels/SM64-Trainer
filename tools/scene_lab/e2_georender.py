@@ -59,14 +59,15 @@ from unicorn import (UC_ARCH_MIPS, UC_HOOK_BLOCK, UC_HOOK_CODE, UC_HOOK_INTR, UC
 from unicorn import mips_const as mips
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sm64_events.memory.layout import layout_for  # noqa: E402
+from tap import GFX_POOL_BYTES  # noqa: E402
 
 RDRAM_BYTES = 8 << 20
 SCRATCH_PHYS = 0x01000000          # private page outside RDRAM: stack and return sentinel
 SCRATCH_BYTES = 1 << 20
 SENTINEL = 0x81000000
 STACK_TOP = 0x810FFF00
-GFX_POOL_BYTES = 6400 * 8
 STATUS_CU1 = 0x20000000            # kernel, EXL/ERL/IE clear, FR=0 (libultra threads never set FR)
 
 # Every game address comes from the decomp's linker map for the ROM's version
@@ -76,7 +77,7 @@ SYMBOLS = ("geo_process_root", "geo_process_object", "geo_process_held_object", 
            "gGlobalTimer", "gCurrentArea", "D_8032CE74", "D_8032CE78", "gFBSetColor",
            "gAreaUpdateCounter", "gCurrLevelNum", "gDisplayListHead", "gGfxPoolEnd", "gGfxPool",
            "gMarioStates", "sSegmentTable", "gDisplayListHeap", "gLakituState", "gObjectPool",
-           "gGfxPools")
+           "gGfxPools", "sFloorAlignMatrix")
 LAYOUT_ROWS_FOR = {"gGlobalTimer": "global_timer", "gCurrentArea": "current_area_pointer",
                    "gAreaUpdateCounter": "area_update_counter", "gCurrLevelNum": "curr_level",
                    "gMarioStates": "mario_struct", "gObjectPool": "object_pool"}
@@ -815,6 +816,81 @@ def check_orbits(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, orb
     return checked
 
 
+THROW_MATCH_UNITS = 64.0   # a floor-aligned matrix sits where its object was before this frame's move
+
+
+def world_matrix(ram: bytes, address: int) -> np.ndarray | None:
+    """A float Mat4 that can place an object: affine, rows of plausible length."""
+    m = np.array(struct.unpack_from(">16f", ram, phys(address))).reshape(4, 4)
+    if not np.isfinite(m).all() or m[3, 3] != 1.0 or m[:3, 3].any():
+        return None
+    lengths = np.linalg.norm(m[:3, :3], axis=1)
+    return m if ((lengths > 0.5) & (lengths < 2.0)).all() else None
+
+
+def restore_throw_matrices(frame: TapFrame, known: np.ndarray, update_span: tuple[int, int]) -> list[tuple]:
+    """Put back the throwMatrix pointers the original render consumed.
+
+    The update can draw an object through a world matrix: obj_orient_graph's floor-aligned Mat4,
+    allocated in the gfx pool before geo_process_root (bob-ombs and other walkers on object_step),
+    or sFloorAlignMatrix (Mario on a slide). geo_process_object reads it, then sets throwMatrix to
+    NULL, so the capture holds the matrix but not the pointer. Each captured candidate goes to the
+    active object it places (nearest within THROW_MATCH_UNITS); the byte comparison then judges.
+    """
+    candidates = [(at, "update allocation") for at in range(update_span[0], update_span[1] - 63, 8)
+                  if known[phys(at):phys(at) + 64].all()]
+    candidates += [(US["sFloorAlignMatrix"] + 64 * k, f"sFloorAlignMatrix[{k}]") for k in (0, 1)]
+    objects = []
+    for slot in range(OBJECT_COUNT):
+        obj = US["gObjectPool"] + slot * OBJECT_BYTES
+        if struct.unpack_from(">h", frame.ram, phys(obj + 0x74))[0] & 1:
+            objects.append((obj, np.array(struct.unpack_from(">3f", frame.ram, phys(obj + 0x20)))))
+    restored, taken = [], set()
+    for address, source in candidates:
+        matrix = world_matrix(frame.ram, address) if known[phys(address):phys(address) + 64].all() else None
+        if matrix is None:
+            continue
+        near = [(float(np.linalg.norm(pos - matrix[3, :3])), obj) for obj, pos in objects if obj not in taken]
+        distance, obj = min(near, default=(None, None))
+        if obj is not None and distance <= THROW_MATCH_UNITS:
+            taken.add(obj)
+            restored.append((obj, address, source))
+    return restored
+
+
+def with_throw_matrices(frame: TapFrame, pointers: list[tuple]) -> TapFrame:
+    ram = bytearray(frame.ram)
+    for obj, address, _ in pointers:
+        struct.pack_into(">I", ram, phys(obj + 0x50), address)
+    return TapFrame(frame.dir, type("Task", (), {"task": frame.task_words})(), bytes(ram))
+
+
+def regenerate(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, layout: dict) -> dict:
+    """One in-place regeneration of the task's geo output, compared with the capture."""
+    geo_start, top, pre, low_water = layout["geo_start"], layout["top"], layout["pre"], layout["low_water"]
+    main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
+    sandbox, run = run_geo(frame, rom, fcr31, geo_start, top - pre, [(geo_start, main + size), (low_water, top - pre)],
+                           None)
+    outside = (np.frombuffer(bytes(sandbox.first), np.uint8) == 1) & ~known
+    result = {"sandbox": sandbox, "run": run, "outside": outside, "differing": {}}
+    if run["violations"]:
+        return result
+    wrote = np.frombuffer(bytes(sandbox.wrote), np.uint8).astype(bool)
+    out, captured = np.frombuffer(sandbox.ram(), np.uint8), np.frombuffer(frame.ram, np.uint8)
+    outputs = {"main list": (phys(geo_start), phys(run["head"])), "allocations": (phys(run["end"]), phys(top - pre))}
+    result.update({
+        "wrote": wrote, "out": out, "captured": captured,
+        "differing": {name: int((wrote[lo:hi] & known[lo:hi] & (out[lo:hi] != captured[lo:hi])).sum())
+                      for name, (lo, hi) in outputs.items()},
+        # Output the RSP never reads (a culled part's matrix) is not in the closure, and closure
+        # bytes the game never writes (Vp padding) are stale pool memory: counted, not compared.
+        "written_but_not_captured": {name: int((wrote[lo:hi] & ~known[lo:hi]).sum())
+                                     for name, (lo, hi) in outputs.items()},
+        "captured_but_not_written": {name: int((~wrote[lo:hi] & known[lo:hi]).sum())
+                                     for name, (lo, hi) in outputs.items()}})
+    return result
+
+
 def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbols,
                orbits: list[str] = (), sink=None) -> dict:
     """Regenerate one captured task's geo output in place and compare every byte the game wrote
@@ -829,42 +905,49 @@ def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbo
         geo_start, pre = find_geo_start(frame.ram, phys(main), size, phys(top))
     except RuntimeError as error:
         return {**entry, "status": str(error)}
-    geo_start |= 0x80000000
-    poison = [(geo_start, main + size), (low_water, top - pre)]
-    sandbox, run = run_geo(frame, rom, fcr31, geo_start, top - pre, poison, None)
-    outside = (np.frombuffer(bytes(sandbox.first), np.uint8) == 1) & ~known
-    reads_outside = [{"range": f"{0x80000000 | lo:08x}-{0x80000000 | hi:08x}", "label": label(lo, symbols, None)}
-                     for lo, hi in ranges(outside)]
+    layout = {"geo_start": geo_start | 0x80000000, "top": top, "pre": pre, "low_water": low_water}
+    entry["update_allocations"] = {"bytes": pre, "captured": int(known[phys(top - pre):phys(top)].sum())}
+    result = regenerate(frame, rom, fcr31, known, layout)
+    # The source capture decides each throwMatrix the render consumed: keep a proposed pointer
+    # only when it brings the regenerated list closer to the captured one.
+    chosen = []
+    for proposal in restore_throw_matrices(frame, known, (top - pre, top)):
+        if not result["run"]["violations"] and not any(result["differing"].values()):
+            break
+        trial_frame = with_throw_matrices(frame, chosen + [proposal])
+        trial = regenerate(trial_frame, rom, fcr31, known, layout)
+        if not trial["run"]["violations"] and sum(trial["differing"].values()) < sum(result["differing"].values()):
+            chosen.append(proposal)
+            result = trial
+    frame = with_throw_matrices(frame, chosen) if chosen else frame
+    entry["throw_matrices_restored"] = [
+        {"slot": (obj - US["gObjectPool"]) // OBJECT_BYTES, "from": f"{address:08x} {source}"}
+        for obj, address, source in chosen]
+    run, outside = result["run"], result["outside"]
     entry.update({"level": run["level"], "instructions": run["instructions"], "violations": run["violations"],
-                  "read_bytes_not_captured": int(outside.sum()), "reads_not_captured": reads_outside[:20]})
+                  "read_bytes_not_captured": int(outside.sum()),
+                  "reads_not_captured": [{"range": f"{0x80000000 | lo:08x}-{0x80000000 | hi:08x}",
+                                          "label": label(lo, symbols, None)} for lo, hi in ranges(outside)][:20]})
     if run["violations"]:
         return {**entry, "status": "sandbox violation"}
-    wrote = np.frombuffer(bytes(sandbox.wrote), np.uint8).astype(bool)
-    out, captured = np.frombuffer(sandbox.ram(), np.uint8), np.frombuffer(frame.ram, np.uint8)
-    outputs = {"main list": (phys(geo_start), phys(run["head"])), "allocations": (phys(run["end"]), phys(top - pre))}
-    differing = {name: int((wrote[lo:hi] & known[lo:hi] & (out[lo:hi] != captured[lo:hi])).sum())
-                 for name, (lo, hi) in outputs.items()}
-    # Output the RSP never reads (a culled part's matrix) is not in the closure, and closure
-    # bytes the game never writes (Vp padding) are stale pool memory: counted, not compared.
-    uncaptured_output = {name: int((wrote[lo:hi] & ~known[lo:hi]).sum()) for name, (lo, hi) in outputs.items()}
-    unwritten_capture = {name: int((~wrote[lo:hi] & known[lo:hi]).sum()) for name, (lo, hi) in outputs.items()}
-    entry.update({"commands": (run["head"] - geo_start) // 8, "differing_written_bytes": differing,
-                  "written_but_not_captured": uncaptured_output, "captured_but_not_written": unwritten_capture})
-    if any(differing.values()):
-        commands = (run["head"] - geo_start) // 8
+    geo_start, commands = layout["geo_start"], (run["head"] - layout["geo_start"]) // 8
+    entry.update({"commands": commands, "differing_written_bytes": result["differing"],
+                  "written_but_not_captured": result["written_but_not_captured"],
+                  "captured_but_not_written": result["captured_but_not_written"]})
+    if any(result["differing"].values()):
         segments = segment_table(frame.ram)
-        regenerated = np.where(wrote, out, captured).tobytes()
+        regenerated = np.where(result["wrote"], result["out"], result["captured"]).tobytes()
         entry["first_divergence"] = first_divergence(
-            walk(regenerated, phys(geo_start), commands, (phys(pool), phys(top)), segments, wrote),
-            walk(frame.ram, phys(geo_start), commands, (phys(pool), phys(top)), segments, wrote))
-    identical = not any(differing.values()) and not outside.any()
+            walk(regenerated, phys(geo_start), commands, (phys(pool), phys(top)), segments, result["wrote"]),
+            walk(frame.ram, phys(geo_start), commands, (phys(pool), phys(top)), segments, result["wrote"]))
+    identical = not any(result["differing"].values()) and not outside.any()
     if orbits:
         entry["orbits"] = check_orbits(frame, rom, fcr31, known, orbits, (main + size + 15) & ~7, low_water,
                                        (geo_start, run["head"]), sink)
-    if sink:
-        entry["frame"] = sink("captured", frame.ram, main, size)
         identical = identical and all(not o["violations"] and not o["read_bytes_not_captured"]
                                       and not o.get("graphics_bytes_not_captured") for o in entry["orbits"])
+    if sink:
+        entry["frame"] = sink("captured", frame.ram, main, size)
     return {**entry, "status": "identical" if identical else "divergent"}
 
 

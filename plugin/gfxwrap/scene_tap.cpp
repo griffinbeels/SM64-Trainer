@@ -16,6 +16,10 @@
  *                     takes them from memory/layout.py, the plugin knows none)
  *   region=<addr>:<n> copy this RDRAM span with every task (the game state the
  *                     scene renderer reads: E2-live; up to 16, 4 MiB in all)
+ *   task_region=<offset>:<n> copy n bytes at the task's own data pointer plus
+ *                     offset with every task (up to 4, in the same budget): the
+ *                     game's gfx pool around this task's list, such as the
+ *                     matrices its update allocated before drawing
  *   level_region=<addr>:<n> copy this span whole on the first task and whenever
  *                     the task's RSP segment bases change (a level load), and
  *                     on every other task only its 256-byte blocks that differ
@@ -59,7 +63,7 @@ enum : uint32_t { REGIONS_TASK = 0, REGIONS_LEVEL_KEY = 1, REGIONS_LEVEL_DELTA =
 struct RecordHeader { uint32_t magic, type, bytes, sequence; int64_t qpc; uint32_t reserved[2]; };
 static_assert(sizeof(RecordHeader) == 32, "tap record header");
 constexpr uint32_t kMaxExtras = 16, kMaxExtraBytes = 4096;
-constexpr uint32_t kMaxRegions = 16, kMaxRegionBytes = 4u << 20;
+constexpr uint32_t kMaxRegions = 16, kMaxRegionBytes = 4u << 20, kMaxTaskRegions = 4;
 constexpr uint32_t kMaxLevelRegions = 8, kMaxLevelBytes = 8u << 20;
 constexpr uint32_t kBlockBytes = 256, kPageBytes = 4096;
 constexpr uint32_t kMaxBlocks = kMaxLevelBytes / kBlockBytes + kMaxLevelRegions;
@@ -71,8 +75,8 @@ struct Span { uint32_t begin, bytes; };
 struct Config {
     uint32_t seconds = 20, reference = 1, reference_every = 1, full_every = 0, extras = 0;
     uint32_t extra_begin[kMaxExtras], extra_bytes[kMaxExtras];
-    uint32_t regions = 0, level_regions = 0, level_segments = 0xFFFC, level_delta = 1;
-    Span region[kMaxRegions], level[kMaxLevelRegions];
+    uint32_t regions = 0, level_regions = 0, level_segments = 0xFFFC, level_delta = 1, task_regions = 0;
+    Span region[kMaxRegions], level[kMaxLevelRegions], task_region[kMaxTaskRegions];   // task: {offset, bytes}
 };
 
 struct Tap {
@@ -213,6 +217,8 @@ void parse_config(const wchar_t *path, Config &config) {
         else if (sscanf(line, "level_delta=%u", &a) == 1) config.level_delta = a != 0;
         else if (sscanf(line, "level_region=%x:%u", &a, &b) == 2 && config.level_regions < kMaxLevelRegions)
             config.level[config.level_regions++] = {a & 0x1FFFFFFF, b};
+        else if (sscanf(line, "task_region=%x:%u", &a, &b) == 2 && config.task_regions < kMaxTaskRegions)
+            config.task_region[config.task_regions++] = {a & ~3u, (b + 3) & ~3u};
         else if (sscanf(line, "region=%x:%u", &a, &b) == 2 && config.regions < kMaxRegions)
             config.region[config.regions++] = {a & 0x1FFFFFFF, b};
     }
@@ -240,25 +246,33 @@ void put_regions_head(uint8_t *record, uint32_t task_index, uint32_t kind, uint3
     memcpy(record + 64, g_tap.walker.segment, 64);
 }
 
-// Every task: the configured spans, whole.
-void copy_task_regions(uint32_t task_index, int64_t when) {
+// Every task: the configured spans, whole, then the task-relative ones placed
+// at this task's data pointer (a span that would leave RDRAM is skipped).
+void copy_task_regions(uint32_t task_index, int64_t when, uint32_t data_ptr) {
     Tap &t = g_tap;
     const Config &c = t.config;
-    if (!c.regions) return;
+    if (!c.regions && !c.task_regions) return;
     const int64_t begin = qpc();
+    Span spans[kMaxRegions + kMaxTaskRegions];
+    uint32_t count = 0;
     uint64_t data = 0;
-    for (uint32_t i = 0; i < c.regions; ++i) data += c.region[i].bytes;
-    const uint32_t bytes = align32(sizeof(RecordHeader) + kRegionsHead + 8ull * c.regions + data);
+    for (uint32_t i = 0; i < c.regions; ++i) spans[count++] = c.region[i];
+    for (uint32_t i = 0; i < c.task_regions; ++i) {
+        const uint64_t at = (uint64_t)(data_ptr & 0x1FFFFFFC) + c.task_region[i].begin;
+        if (at + c.task_region[i].bytes <= t.rdram_size) spans[count++] = {(uint32_t)at, c.task_region[i].bytes};
+    }
+    for (uint32_t i = 0; i < count; ++i) data += spans[i].bytes;
+    const uint32_t bytes = align32(sizeof(RecordHeader) + kRegionsHead + 8ull * count + data);
     uint8_t *record = reserve(bytes);
     if (!record) return;
-    uint8_t *entries = record + 32 + kRegionsHead, *at = entries + 8 * c.regions;
-    for (uint32_t i = 0; i < c.regions; ++i) {
-        memcpy(entries + 8 * i, &c.region[i], 8);
-        memcpy(at, t.gfx.RDRAM + c.region[i].begin, c.region[i].bytes);
-        at += c.region[i].bytes;
+    uint8_t *entries = record + 32 + kRegionsHead, *at = entries + 8 * count;
+    for (uint32_t i = 0; i < count; ++i) {
+        memcpy(entries + 8 * i, &spans[i], 8);
+        memcpy(at, t.gfx.RDRAM + spans[i].begin, spans[i].bytes);
+        at += spans[i].bytes;
     }
     const uint32_t copy_ns = ns(qpc() - begin);
-    put_regions_head(record, task_index, REGIONS_TASK, c.regions, (uint32_t)data, copy_ns, 0);
+    put_regions_head(record, task_index, REGIONS_TASK, count, (uint32_t)data, copy_ns, 0);
     commit(record, REC_REGIONS, bytes, when);
     ++t.region_records;
     t.region_bytes_total += data;
@@ -386,6 +400,14 @@ extern "C" void __cdecl st_rom_open(void) {
     parse_config(moved, t.config);
     Config &c = t.config;
     c.regions = settle_spans(c.region, c.regions, kMaxRegionBytes, t.rdram_size);
+    uint32_t budget = kMaxRegionBytes, kept = 0;
+    for (uint32_t i = 0; i < c.regions; ++i) budget -= c.region[i].bytes;
+    for (uint32_t i = 0; i < c.task_regions; ++i) {
+        if (!c.task_region[i].bytes || c.task_region[i].bytes > budget) continue;
+        budget -= c.task_region[i].bytes;
+        c.task_region[kept++] = c.task_region[i];
+    }
+    c.task_regions = kept;
     c.level_regions = settle_spans(c.level, c.level_regions, kMaxLevelBytes, t.rdram_size);
     t.level_total = 0;
     for (uint32_t r = 0; r < c.level_regions; ++r) t.level_total += c.level[r].bytes;
@@ -434,6 +456,9 @@ extern "C" void __cdecl st_rom_open(void) {
     // The spans as kept (whole words inside RDRAM, within budget).
     for (uint32_t i = 0; i < c.regions && at < (int)sizeof session - 40; ++i)
         at += snprintf(session + at, sizeof session - at, "region=%x:%u\n", c.region[i].begin, c.region[i].bytes);
+    for (uint32_t i = 0; i < c.task_regions && at < (int)sizeof session - 40; ++i)
+        at += snprintf(session + at, sizeof session - at, "task_region=%x:%u\n", c.task_region[i].begin,
+                       c.task_region[i].bytes);
     for (uint32_t i = 0; i < c.level_regions && at < (int)sizeof session - 40; ++i)
         at += snprintf(session + at, sizeof session - at, "level_region=%x:%u\n", c.level[i].begin, c.level[i].bytes);
     write_text(L"session.txt", session);
@@ -498,7 +523,7 @@ extern "C" void __cdecl st_process_dlist(void) {
     }
     // The game state the scene renderer read for this task (E2-live), copied at
     // the same instant: the emulation thread is inside ProcessDList.
-    copy_task_regions(task_index, begin);
+    copy_task_regions(task_index, begin, task[12]);
     copy_level_regions(task_index, begin);
     if (refusals) ++t.refused;
     t.tasks.fetch_add(1, std::memory_order_relaxed);

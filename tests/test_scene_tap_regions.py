@@ -5,9 +5,10 @@ plugin/gfxwrap/scene_tap.cpp exactly as ProcessDList would; tap.py reads the
 session back. Synthetic RDRAM only (no game data): a two-command task whose
 segment base keys the level. The contract: a task region is copied whole with
 every task; a level region is copied whole at the first task and at each new
-segment key, else only its changed 256-byte blocks; spans that leave RDRAM are
-dropped at arming; and scene_states rebuilds, for every task, exactly the
-bytes RDRAM held at that task over every captured span.
+segment key, else only its changed 256-byte blocks; a task region sits at the
+task's own data pointer; spans that leave RDRAM are dropped at arming; and
+scene_states rebuilds, for every task, exactly the bytes RDRAM held at that
+task over every captured span.
 
 Skipped (not failed) on a machine without the x86 MSVC toolchain."""
 from __future__ import annotations
@@ -36,6 +37,7 @@ pytestmark = pytest.mark.skipif(not build_plugin.toolchain_available(),
 RDRAM = 8 << 20
 LIST, UCODE, UCODE_DATA = 0x100000, 0x200000, 0x201000
 TASK_REGION = (0x300000, 4096)
+POOL_TAIL = (0x200, 256)          # task_region: offset from the task's data pointer, bytes
 LEVEL_REGION = (0x400000, 65536)
 
 
@@ -78,6 +80,7 @@ def test_regions_copy_whole_tasks_and_level_keys_then_only_changed_blocks(tmp_pa
         "seconds=600\nreference=0\n"
         f"region={TASK_REGION[0]:x}:{TASK_REGION[1]}\n"
         f"region={RDRAM - 16:x}:64\n"         # leaves RDRAM: dropped at arming
+        f"task_region={POOL_TAIL[0]:x}:{POOL_TAIL[1]}\n"
         f"level_region={LEVEL_REGION[0]:x}:{LEVEL_REGION[1]}\n", encoding="ascii")
     result = subprocess.run([str(tap.build_offline_host()), str(root), *map(str, frames)], capture_output=True,
                             text=True, timeout=120, check=False, **quiet_spawn_kwargs())
@@ -85,7 +88,8 @@ def test_regions_copy_whole_tasks_and_level_keys_then_only_changed_blocks(tmp_pa
     (session,) = lab.glob("tap-*")
     header = tap.session_header(session)
     assert [line for line in (session / "session.txt").read_text().splitlines() if "region=" in line] == [
-        f"region={TASK_REGION[0]:x}:{TASK_REGION[1]}", f"level_region={LEVEL_REGION[0]:x}:{LEVEL_REGION[1]}"]
+        f"region={TASK_REGION[0]:x}:{TASK_REGION[1]}", f"task_region={POOL_TAIL[0]:x}:{POOL_TAIL[1]}",
+        f"level_region={LEVEL_REGION[0]:x}:{LEVEL_REGION[1]}"]
     assert header["level_block_bytes"] == "256"
 
     records = list(tap.read_records(session / "tap.bin"))
@@ -97,13 +101,14 @@ def test_regions_copy_whole_tasks_and_level_keys_then_only_changed_blocks(tmp_pa
     assert level[1].segments[2] == 0x10000 and level[2].segments[2] == 0x20000
     task_regions = [r for r in records if isinstance(r, tap.Regions) and r.kind == "task"]
     assert [r.fields["task_index"] for r in task_regions] == [0, 1, 2, 3]
-    assert all(r.spans == [TASK_REGION] for r in task_regions)
+    pool_tail = (LIST + POOL_TAIL[0], POOL_TAIL[1])
+    assert all(r.spans == [TASK_REGION, pool_tail] for r in task_regions)
 
     states = list(tap.scene_states(iter(records), RDRAM))
     assert len(states) == len(snapshots)
     for (task, regions, rebuilt, known), expected in zip(states, snapshots, strict=True):
         assert regions is not None
-        for begin, size in (TASK_REGION, LEVEL_REGION):
+        for begin, size in (TASK_REGION, pool_tail, LEVEL_REGION):
             assert known[begin:begin + size].all()
             assert np.array_equal(rebuilt[begin:begin + size], expected[begin:begin + size])
         assert np.array_equal(rebuilt[known], expected[known]), f"task {task.fields['task_index']}"

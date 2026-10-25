@@ -52,6 +52,12 @@ REGION_FIELDS = ("task_index", "kind", "count", "data_bytes", "copy_ns", "scan_n
 SCENE_SPANS = (("scene_data_start", "scene_data_end"), ("scene_bss_start", "scene_bss_end"),
                ("scene_engine_bss_start", "scene_engine_bss_end"))
 SCENE_LEVEL_SPANS = (("main_pool_start", "main_pool_end"),)
+# SM64's gfx pool (GFX_POOL_SIZE: 6400 commands, every version) starts at a task's data pointer.
+# The update allocates from its top before geo_process_root draws: obj_orient_graph's floor-aligned
+# matrices, which the render reads through throwMatrix and then lets go of (E2-live). The tap copies
+# this tail of the task's own pool; the evaluator reports a task whose update allocated more.
+GFX_POOL_BYTES = 6400 * 8
+POOL_TAIL_BYTES = 4096
 HOST_SOURCES = (ROOT / "tools/scene_lab/tap_offline_host.cpp", ROOT / "plugin/gfxwrap/scene_tap.cpp",
                 ROOT / "plugin/gfxwrap/scene_tap.h", ROOT / "plugin/gfxwrap/scene_closure.h",
                 ROOT / "plugin/gfxwrap/zilmar.h")
@@ -227,6 +233,7 @@ def scene_state_lines(layout) -> list[str]:
             if start is None or end is None:
                 return []
             lines.append(f"{kind}={start & 0x1FFFFFFF:x}:{end - start}")
+    lines.append(f"task_region={GFX_POOL_BYTES - POOL_TAIL_BYTES:x}:{POOL_TAIL_BYTES}")
     return lines
 
 
