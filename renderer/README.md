@@ -2,7 +2,8 @@
 
 The graphics plugin the trainer installs into Project64 is two files. The
 capture wrapper (`sm64_trainer_gfx.dll`, built from `plugin/gfxwrap/`) is
-what Project64 selects; it loads this renderer (`GLideN64_SM64Trainer.dll`)
+what Project64 selects; it loads this renderer (`GLideN64_SM64Trainer.dll`,
+installed beside it as `sm64_trainer_gfx.renderer` so Project64 never lists it)
 and takes finished frames from it through the SourceV2 export the overlay
 adds. A stock GLideN64 has no such export, so the wrapper alone captures
 nothing.
@@ -40,9 +41,9 @@ so this modified build is too. The complete corresponding source is:
   `tools/stage_link_witness.py` makes to the upstream files;
 - the project adaptations and build steps in `tools/build_renderer.py`.
 
-Project64 shows the wrapper's About box (credits and the build id); the
-renderer's own About dialog stays reachable by selecting the renderer DLL
-directly in Project64.
+Project64 shows the wrapper's About box (credits and the build id). Since
+2026-10-24 the renderer is not a selectable plugin, so its own About dialog
+is no longer reachable from Project64.
 
 ## Building
 

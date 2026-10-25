@@ -2,7 +2,8 @@
 
 The helper accepts one authenticated parent connection, installs only the active
 bundle's two named DLLs and fixed INI into a verified Project64/Plugin directory,
-then commits or rolls back. It cannot copy arbitrary files or run commands.
+removes an older install's renderer DLL of its own after the commit, and rolls
+everything back on failure. It cannot copy arbitrary files or run commands.
 """
 from __future__ import annotations
 
@@ -16,13 +17,10 @@ if __name__ == "__main__" and not getattr(sys, "frozen", False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sm64_events.core.plugin_installation import (  # noqa: E402
-    _BUILD, file_operation, in_use, sha256, verified_copy,
+    _BUILD, LEGACY_RENDERER_DLL as LEGACY_RENDERER, RENDERER_FILE as RENDERER, WRAPPER_DLL as WRAPPER,
+    WRAPPER_INI as INI, file_operation, in_use, sha256, verified_copy,
 )
 from sm64_events.core.plugin_elevation import receive_packet, send_packet  # noqa: E402
-
-WRAPPER = "sm64_trainer_gfx.dll"
-RENDERER = "GLideN64_SM64Trainer.dll"
-INI = "sm64_trainer_gfx.ini"
 
 
 def _safe_path(value) -> Path:
@@ -82,7 +80,7 @@ def privileged_files(request):
         with file_operation("create plugin folder", plugin):
             plugin.mkdir(exist_ok=True)
         destinations = [plugin / name for name in (WRAPPER, RENDERER, INI)]
-        for destination in destinations:
+        for destination in [*destinations, plugin / LEGACY_RENDERER]:
             if in_use(destination):
                 raise OSError(f"Plugin is in use by another process: {destination}")
         with locked_paths([plugin], [], destinations):
@@ -97,10 +95,26 @@ def privileged_files(request):
                     try:
                         yield {"renderer_receipt": renderer_receipt,
                                "installation_receipt": wrapper_receipt}
+                        # The commit means the original user selected the wrapper.
+                        _remove_legacy_renderer(plugin / LEGACY_RENDERER)
                     except (ValueError, TypeError) as exc:
                         # restore_on_failure handles OSError. Invalid/tampered
                         # protocol input must roll the same files back too.
                         raise OSError("Administrator transaction was not committed") from exc
+
+
+def _remove_legacy_renderer(legacy: Path) -> None:
+    """Delete an older install's renderer DLL, which Project64 listed as a
+    second plugin: only one this trainer built, never a link."""
+    try:
+        stat = legacy.lstat()
+    except FileNotFoundError:
+        return
+    if getattr(stat, "st_file_attributes", 0) & 0x400 or stat.st_nlink != 1 or not legacy.is_file():
+        return
+    if any(label.endswith(b"-renderer\0") for label in _BUILD.findall(legacy.read_bytes())):
+        with file_operation("remove the older renderer", legacy):
+            legacy.unlink()
 
 
 class _Rollback(OSError):

@@ -1121,9 +1121,11 @@ never reopens for it (his rule, 2026-09-16).
 
 ### Renderer
 
-The trainer's build of LINK's GLideN64 v4.2 (`GLideN64_SM64Trainer.dll`,
-picker label `LINK v4.2 [SM64 Trainer]`): the pinned upstream tree plus the
-capture overlay that adds the SourceV2 export the [[capture layer]] reads. A
+The trainer's build of LINK's GLideN64 v4.2 (bundled as `GLideN64_SM64Trainer.dll`,
+own label `LINK v4.2 [SM64 Trainer]`): the pinned upstream tree plus the
+capture overlay that adds the SourceV2 export the [[capture layer]] reads.
+Project64 receives it as `sm64_trainer_gfx.renderer`, no `.dll`, so its plugin
+picker lists only the wrapper (a tester saw two plugins, 2026-10-24). A
 stock GLideN64 has no such export, so a wrapper pointed at one captures
 nothing. (His 2026-09-15 "input unavailable" report had a different cause:
 Project64 selected the renderer directly, so the wrapper never loaded.)
