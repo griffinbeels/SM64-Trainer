@@ -356,6 +356,7 @@ class GhostSession:
             ("seats", len(rivals.get("rows") or ())),
             ("pb", bool(rivals.get("pb") or selection.get("pb"))),
             ("playing", len(selection.get("playing") or ())),
+            ("pb_seat", _pb_seat(rivals, selection)),
             ("native", f"{native[0]}/{native[1]}"), ("playback", f"{native[2]}/{native[3]}"),
             ("clips", native[6]), ("displayed", native[7])))
         if line != self._noted_state:
@@ -923,6 +924,18 @@ class GhostSession:
         await self._broadcaster.publish(
             Event(type=EVENT_TYPE, frame=0,
                   timestamp_utc=datetime.now(timezone.utc), payload=body))
+
+
+def _pb_seat(rivals: dict, selection: dict) -> str:
+    """Who races in your colour: your saved PB, your best recorded run while
+    the PB has no poses (`ghost/rivals.py::Rivals._pb_seat`), or nobody."""
+    if rivals:
+        if rivals.get("best_run"):
+            return "best_run"
+        pb = rivals.get("pb") or {}
+        racing = pb and pb.get("available") is not False and (rivals.get("options") or {}).get("include_pb", True)
+        return "pb" if racing else "none"
+    return "pb" if any(row.get("key") == "pb" for row in selection.get("playing") or ()) else "none"
 
 
 def _remember(database, key: str, value) -> None:

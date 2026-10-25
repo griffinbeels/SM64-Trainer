@@ -1588,6 +1588,20 @@ the saved PBs on every read, never stored, and never changes the input compariso
 
 - **Lives** — `src/sm64_events/ghost/pb.py`
 
+### Best recorded run
+
+Your fastest recording of the practised [[target]] and [[strategy]] that has
+Mario poses, racing in the [[PB ghost]]'s place and colour while your saved
+[[personal best]] has none (an older build's PB, an [[imported time]]). Only a
+[[run]] the trainer admitted itself qualifies, so the [[ghost ceiling]] applies to it.
+The [[lineup]] gives it its own seat under this name, and its label in the
+game says the same; your PB stays the [[rank]] you chase (his decision,
+2026-10-25). A PB with poses takes the seat back.
+
+- **Lives** — `src/sm64_events/ghost/rivals.py` (Rivals._pb_seat)
+- **Not** — a [[ghost slot]]: it never holds a rival, and unticking the PB
+  unseats it.
+
 ### Ghost set
 
 Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any [[saved ghost]],

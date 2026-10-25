@@ -95,17 +95,27 @@ def lineup_row(slot: int, name: str, tier: str, division: str, frames: int, *,
 
 def lineup_rivals(*, state: str = "ready", reason: str | None = None, pb_frames: int | None = 343,
                   rows: list | None = None, include_pb: bool = True, count: int = 4,
-                  scope: str = "strategy") -> dict:
+                  scope: str = "strategy", best_run_frames: int | None = None) -> dict:
     """`session.rivals` in the Lineup contract (engineering-plan.md): state,
-    reason, your PB and the rival seats, with the shipped options and limits."""
+    reason, your PB and the rival seats, with the shipped options and limits.
+    `best_run_frames`: your PB has no poses and your best recorded run races
+    in its seat (`ghost/rivals.py::Rivals._pb_seat`)."""
     from sm64_events.ghost.adaptive import PB_HUE_DEGREES
+    from sm64_events.ghost.rivals import BEST_RUN_FIELDS
 
     if rows is None:
         rows = [lineup_row(slot, *player) for slot, player in enumerate(LINEUP_PLAYERS)]
     pb = None if pb_frames is None else {"frames": pb_frames, "tier": "Platinum", "division": "II", "step": 23,
                                           "hue_degrees": PB_HUE_DEGREES, "available": True}
+    best = None
+    if best_run_frames is not None and include_pb:
+        pb = {**pb, "available": False, "reason_text": "Mario poses were not recorded for this attempt."}
+        values = {"id": "b357".ljust(64, "0"), "frames": best_run_frames, "tier": "Platinum", "division": "IV",
+                  "step": 21, "strategy": FIXTURE_TARGET["strat"], "game_version": "us"}
+        best = {**{key: values[key] for key in BEST_RUN_FIELDS}, "hue_degrees": PB_HUE_DEGREES,
+                "available": True, "reason_text": None}
     return {"state": state, "reason": reason, "scope": scope, "rows": rows if state == "ready" else [],
-            "pb": pb, "status": None, "simulation": None, "strategy_name": FIXTURE_TARGET["strat"],
+            "pb": pb, "best_run": best, "status": None, "simulation": None, "strategy_name": FIXTURE_TARGET["strat"],
             "options": {"mode": "adaptive", "count": count, "include_pb": include_pb,
                         "min_ahead": 1, "max_ahead": 5, "min_step": 0, "max_step": 44},
             "limits": {"last_step": 44, "max_ahead": 10, "counts": [1, 2, 3, 4]},

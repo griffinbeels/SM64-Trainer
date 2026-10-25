@@ -55,6 +55,8 @@ WIDTHS = (1500, 850)
 #: differently from frame arithmetic: 344 shows 11"46 and 339 shows 11"30, so
 #: the track must say −0.16, while (344 − 339) / 30 rounds to 0.17.
 GAP_PB = 344
+#: A best recorded run slower than the fixture's 343-frame PB, as it nearly always is.
+BEST_RUN = 352
 NO_STRAT_TARGET = {**FIXTURE_TARGET, "strat": None}
 
 
@@ -96,6 +98,8 @@ STATES = {
     "unknown_rom": unknown_rom(),
     "unreachable": lineup_session(),       # served behind a failing GET
     "off": lineup_session(enabled=False),
+    # Your PB has no poses: your best recorded run races in its seat and colour.
+    "best_run": lineup_session(best_run_frames=BEST_RUN),
 }
 
 #: (seats, placeholders, note words) each state paints.
@@ -104,13 +108,14 @@ EXPECT = {
     "no_strategy": (0, 0, "noStrategy"), "no_strategy_off": (0, 0, "noStrategyOff"),
     "nobody": (1, 0, "nobody"), "offline": (1, 0, "offline"),
     "signed_out": (1, 0, "signedOut"), "unknown_rom": (0, 0, "unknownRom"),
-    "unreachable": (0, 0, "unreachable"), "off": (5, 0, None),
+    "unreachable": (0, 0, "unreachable"), "off": (5, 0, None), "best_run": (6, 0, None),
 }
 
 READY = {
     "loading": f"{SEAT}.is-placeholder", "no_strategy": f"{ROW} .lineup-note.has-choices",
     "no_strategy_off": f"{ROW} .lineup-note.has-choices",
     "off": f"{ROW} .lineup.is-off", "ready": f"{SEAT}:not(.is-you)", "marks": f"{SEAT}:not(.is-you)",
+    "best_run": f"{SEAT}:not(.is-you)",
 }
 
 SETTLED = """() => {
@@ -151,6 +156,8 @@ MEASURE = """() => {
         && r.top >= clipBox.top - 0.5 && r.bottom <= clipBox.bottom + 0.5),
       nameOverflow: name ? name.scrollWidth - name.clientWidth : 0,
       bones: s.querySelectorAll('.lineup-bone').length, lock: Boolean(s.querySelector(':scope > .lineup-lock')),
+      swap: Boolean(s.querySelector(':scope > .lineup-swap')), noGhost: s.classList.contains('no-ghost'),
+      hue: s.style.getPropertyValue('--hue'),
       opacity: parseFloat(getComputedStyle(s).opacity), left: box.left, right: box.right,
     };
   });
@@ -302,7 +309,8 @@ def test_each_state_paints_its_people_and_words_inside_the_card(rendered, name, 
     assert len(shown["seats"]) == seats, shown["seats"]
     assert sum(seat["placeholder"] for seat in shown["seats"]) == holes
     if seats:
-        assert shown["seats"][0]["you"] or name == "marks", "your seat is not first"
+        # A seat you have beaten (a pin, your best recorded run) sits to your left.
+        assert shown["seats"][0]["you"] or name in ("marks", "best_run"), "your seat is not first"
     assert [note["text"] for note in shown["notes"]] == ([WORDS[words]] if words else [])
     assert all(note["inside"] for note in shown["notes"]), shown["notes"]
     for key in ("rowOverflow", "clipOverflow", "ghostRowOverflow", "cardOverflow", "pageOverflow"):
@@ -335,6 +343,22 @@ def test_the_marks_say_pinned_downloading_and_beaten(rendered, width):
     assert pinned["pinned"] and pinned["lock"] and not pinned["beaten"] and pinned["opacity"] == 1
     assert pending["pending"] and not pending["lock"]
     assert beaten["beaten"] and beaten["opacity"] < 1
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_your_best_recorded_run_races_in_your_colour_beside_your_pb(rendered, width):
+    """His decision, 2026-10-25: the card labels it "Best recorded run" and
+    keeps the real PB as the rank you're chasing."""
+    seats = rendered[("best_run", width)]["seats"]
+    best, you = seats[0], seats[1]
+    assert (you["you"], you["time"], you["noGhost"]) == (True, format_igt_short(343), True)
+    assert (best["name"], best["time"]) == (WORDS["bestRun"], format_igt_short(BEST_RUN))
+    assert best["hue"] == you["hue"] and not best["noGhost"]
+    # Yours, not a rival: no swap, never dimmed as beaten by your PB.
+    assert not best["swap"] and not best["beaten"] and best["opacity"] == 1
+    assert all(seat["swap"] for seat in seats[2:])
+    lit, mine = next_after_you(seats)
+    assert lit == [mine[0] + 1] and seats[lit[0]]["name"] == "Alexander_Speedruns"
 
 
 @pytest.mark.parametrize("state", ["no_strategy", "no_strategy_off"])

@@ -18,6 +18,11 @@ MAX_REMOTE_CHOICES = 1024
 LIMITS = {"last_step":MAX_STEP, "max_ahead":MAX_AHEAD, "counts":list(range(1,MAX_RIVALS+1))}
 NO_STRATEGY = "Choose a strategy to race ghosts."
 OWN_RECORDING_REASON = "Your PB ghost is included automatically."
+#: The PB's own pose answers that mean its recording cannot race; another
+#: reason (an unsupported ROM, a transient read) keeps the PB in its seat.
+NO_POSES = frozenset({"no_native_poses", "native_preservation_failed", "older_pose_format", "incomplete_inputs"})
+#: What the card shows of the best recorded run; never its player, digest or lineage.
+BEST_RUN_FIELDS = ("id", "frames", "tier", "division", "step", "strategy", "game_version")
 
 
 def wire(row):
@@ -43,6 +48,20 @@ class ColoredGhost:
 class PersonalBestGhost:
     """The isolated tester can race its unchanged portable baseline clip."""
     pb = True
+
+    def __init__(self, ghost):
+        self.ghost = ghost
+
+    def __getattr__(self, name):
+        return getattr(self.ghost, name)
+
+
+class BestRunGhost:
+    """Your fastest recorded run, racing in the PB's seat and colour while the
+    saved PB has no poses (his decision, 2026-10-25: "the PB seat races your
+    fastest run on that star that does have them"). It is not the PB: the
+    renderer labels it BEST RUN and the PB stays the rank you chase."""
+    best_run = True
 
     def __init__(self, ghost):
         self.ghost = ghost
@@ -81,6 +100,7 @@ class Rivals:
         self.identity = None
         self.rows = ()
         self.pb = None
+        self.best_run = None
         self.generation = 0
         self.fingerprint = None
         self.status = None
@@ -140,7 +160,7 @@ class Rivals:
         identity = self.identity_for(target)
         changed_identity = self.identity != identity
         if changed_identity:
-            self.rows, self.pb = (),None
+            self.rows, self.pb, self.best_run = (),None,None
             self.fingerprint = self.prepared_key = None
             self.manual = False
             self.community.downloading = False
@@ -292,7 +312,7 @@ class Rivals:
             self.pins = {}
         self.loaded_db = database
         self.fingerprint = self.prepared_key = self._saved_pb = None
-        self.rows, self.pb = (),None
+        self.rows, self.pb, self.best_run = (),None,None
         self.manual = False
 
     def pb_changed(self, target=None):
@@ -340,13 +360,27 @@ class Rivals:
         ranked = rank_recordings((*records,*chosen),self.tracker.ranks,identity)
         owners = self._owned_players()
         refused = self.community.refused()
+        best = self._best_recorded(ranked, owners, identity)
         # Explicit choices survive; automatic slots exclude our own runs. A
         # recording that can never download leaves its seat (a pin shows unavailable).
         ranked = tuple(self._seat_row(row, owners) for row in ranked if row["id"] not in refused
                        and (row["id"] in pins.values() or row["player_id"] not in owners))
         # Test profiles use production selection too: retiring beaten donors
         # here would prevent the closest-below fallback from filling its seats.
-        return ranked
+        return ranked, best
+
+    @staticmethod
+    def _best_recorded(rows, owners, identity):
+        """Your fastest recording of the PB's own strategy, from the same snapshot.
+
+        Only this install's own admissions qualify (`certified`: the population
+        preserved it from a full, valid run with complete inputs, under the
+        ghost ceiling). A bundled, community or private recording never stands
+        in for the PB (his rule: "If it's not a perfectly recorded ghost, it
+        doesn't belong in the system")."""
+        own = [row for row in rows if row.get("player_id") in owners and row.get("certified") is True
+               and row.get("simulated") is not True and row.get("strategy") == identity.strategy]
+        return min(own, key=lambda row: (row["frames"], row["id"]), default=None)
 
     def refresh(self, target, controls, *, enabled, sharing=None, force=False):
         """Recompute the lineup when anything it reads moved.
@@ -361,7 +395,7 @@ class Rivals:
         if changed_target:
             self.target = target
             self.fingerprint = None
-            self.rows, self.pb = (),None
+            self.rows, self.pb, self.best_run = (),None,None
             self.manual = False
         self._update_identity(target,controls,changed_target)
         identity = self.identity
@@ -382,15 +416,16 @@ class Rivals:
                  getattr(sharing,"generation",None),self.community.refused(),
                  json.dumps(self.options,sort_keys=True),json.dumps(self.pins.get(self._key(target),{}),sort_keys=True))
         if force or stamp != self.fingerprint:
-            pb, desired = self._desired(identity, target)
+            pb, best, desired = self._desired(identity, target)
             self.rows = self.community.stage(desired, fetch=enabled)
             self.redeal = False
-            self.pb = pb
+            self.pb, self.best_run = pb, None
             ghosts = [ColoredGhost(row["ghost"],row["hue_degrees"],row["slot"]) for row in self.rows
                       if row.get("ghost") is not None and not row.get("pending")]
-            if pb and self.options["include_pb"] and pb.get("ghost") is not None:
-                ghosts.insert(0,ColoredGhost(pb["ghost"],controls["hue_degrees"]))
-                self.pb = {**pb,"hue_degrees":controls["hue_degrees"]}
+            seat = self._pb_seat(pb,best,target,controls["hue_degrees"])
+            if seat is not None:
+                ghosts.insert(0,ColoredGhost(seat,controls["hue_degrees"]))
+                self.pb = {**self.pb,"hue_degrees":controls["hue_degrees"]}
             # What the renderer holds, whatever the overlay switch says: a flip
             # never re-prepares the same roster (his ask, 2026-10-17: switched
             # back on, the ghosts resume at once).
@@ -429,7 +464,7 @@ class Rivals:
     def _parked(self, target):
         """The answer while nothing can race: no ROM, no target or no strategy."""
         if self.identity is None:
-            self.rows, self.pb = (),None
+            self.rows, self.pb, self.best_run = (),None,None
             self.fingerprint = self.prepared_key = None
             self.native.cancel_preparation()
             self.status = "Load a compatible practice ROM to choose ghosts." if target else None
@@ -439,23 +474,52 @@ class Rivals:
             # No strategy: no PB, no pins, no cloud list, no native preparation.
             if self.rows or self.prepared_key is not None:
                 self.native.cancel_preparation()
-            self.rows, self.pb = (),None
+            self.rows, self.pb, self.best_run = (),None,None
             self.fingerprint = self.prepared_key = None
             self.status = None
             return {"available":False,"reason":"no_strategy","reason_text":NO_STRATEGY,"ghosts":[]}
         return None
 
     def _desired(self, identity, target):
-        """The saved PB and the seats it implies; seats keep their players and colours."""
+        """The saved PB, your best recorded run and the seats the PB implies;
+        seats keep their players and colours."""
         pb = self._simulation_pb(self._pb_basis(identity),target)
         pins = self.pins.get(self._key(target),{})
-        ranked = self._ranked_population(identity,pins)
+        ranked, best = self._ranked_population(identity,pins)
         private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
         owners = self._owned_players()
         # Only new rival settings deal afresh.
         previous = () if self.redeal else tuple(self._seat_row(row, owners) for row in self.rows)
-        return pb, select_rivals((*ranked,*private),pb,self.options,pins,previous,scope=identity.scope,
-                                 allow_fastest=self.community.complete(identity))
+        return pb, best, select_rivals((*ranked,*private),pb,self.options,pins,previous,scope=identity.scope,
+                                       allow_fastest=self.community.complete(identity))
+
+    def _pb_seat(self, pb, best, target, hue):
+        """The ghost that races in your colour, or None.
+
+        Your saved PB when its poses can play; while they cannot, your best
+        recorded run (his decision, 2026-10-25: "When your saved PB has no
+        poses, the PB seat races your fastest run on that star that does have
+        them"). Either way `self.pb` stays the rank you chase: only playback
+        moves. A PB that has poses is never probed for a fallback it cannot need.
+        """
+        if not pb or not self.options["include_pb"]:
+            return None
+        ghost = pb.get("ghost")
+        if ghost is not None and best is not None:
+            self.native.set_portable(RivalProvider(self.population,self.sharing))
+            answer = self.native.probe(self.native_target(target),ghost)
+            if answer.get("available") or answer.get("retryable") or answer.get("reason") not in NO_POSES:
+                return ghost
+            self.pb = {**self.pb,"available":False,"reason_text":answer.get("reason_text")}
+        elif ghost is not None:
+            return ghost
+        else:
+            # An imported or unplayable saved time never races itself.
+            self.pb = {**self.pb,"available":False}
+        if best is None:
+            return None
+        self.best_run = {**{key: best.get(key) for key in BEST_RUN_FIELDS},"hue_degrees":hue}
+        return BestRunGhost(best["ghost"])
 
     def _pb_basis(self, identity):
         """The saved PB, read again only after pb_changed, a forced resolve,
@@ -466,9 +530,20 @@ class Rivals:
         return self._saved_pb[1]
 
     def _pb_playback(self, answer):
-        """Retain the rank anchor when its separate pose resolution fails."""
-        if self.pb and answer:
-            playback = next((row for row in answer.get("ghosts",()) if row.get("pb")),None)
+        """Retain the rank anchor when its separate pose resolution fails.
+
+        While the best recorded run holds the seat, its answer is the seat's;
+        the PB keeps the probe's refusal."""
+        if not answer:
+            return
+        rows = answer.get("ghosts",())
+        if self.best_run:
+            playback = next((row for row in rows if row.get("import_id")==self.best_run["id"]),None)
+            if playback:
+                self.best_run = {**self.best_run,"available":playback["available"],
+                                 "reason_text":playback.get("reason_text")}
+        elif self.pb:
+            playback = next((row for row in rows if row.get("pb")),None)
             if playback:
                 self.pb = {**self.pb,"available":playback["available"],
                            "reason_text":playback.get("reason_text")}
@@ -563,6 +638,7 @@ class Rivals:
                 "simulation":simulation.get("label") if simulation else None,
                 "rows":[{"pending":False,**wire(row),"own":row.get("_owned") is True} for row in self.rows],
                 "pb":wire(self.pb) if self.pb else None,
+                "best_run":dict(self.best_run) if self.best_run else None,
                 "strategy_name":self.target.get("strat") or None if self.target else None,
                 "coverage": self.community.coverage(self.identity),
                 "status": self.community.status(self.identity) or (
