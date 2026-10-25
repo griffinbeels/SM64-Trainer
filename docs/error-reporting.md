@@ -239,6 +239,12 @@ latest attempt, and last observed setup status. Export reads cached facts; it
 does not enable capture or retry installation. Restarting Trainer clears this
 in-memory history; automatic reports already queued remain governed by retention.
 
+The report shows a value's key name only when the name is a listed schema
+field (`diagnostic_export._FIELDS`); any other key becomes `field_N`, so a key
+that is data (a process, runner or strategy name) never appears. Strings show
+only under `_TEXT_FIELDS`, scrubbed. Until 2026-10-25 the setup, perf and
+journal payload names were unlisted and a tester's report read field_0 to field_23.
+
 ## Practice Replay permission handling
 
 Install first tries the normal user's permissions. A qualifying denied plugin

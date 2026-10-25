@@ -87,6 +87,24 @@ def test_the_ghost_timeline_survives_hours_of_capture_lines(tmp_path):
     assert "kept no Mario poses" not in report.split("## Server log", 1)[1]  # beyond the tail
 
 
+def test_schema_names_show_while_their_values_and_data_keys_stay_hidden(tmp_path):
+    # A tester's report (2026-10-25) named almost nothing: field_0..field_23.
+    kwargs = _healthy_kwargs(tmp_path)
+    kwargs["events"] = lambda: [Row(1, 1, 0, "practice_reset", 578, "2026-10-25T13:09:18Z",
+                                    {"mario_acted": True, "area_load": False, "strat_tag": "My Secret Strat",
+                                     "classification": {"SomeRunnerName": 3}})]
+    kwargs["setup"] = lambda: {"state": "needs_restart", "layer_alive": False,
+                               "plugin_dir": "C:\\Users\\Someone\\Project64\\Plugin"}
+    report = diagnostics.build_report(**kwargs)
+    journal = report.split("## Recent game events", 1)[1]
+    assert '"mario_acted": true' in journal and '"area_load": false' in journal
+    assert '"strat_tag": "[text omitted]"' in journal and "My Secret Strat" not in report
+    assert '"classification": {"field_0": 3}' in journal and "SomeRunnerName" not in report
+    setup = report.split("## Last observed setup", 1)[1].split("## Trainer diagnostic snapshot", 1)[0]
+    assert '"layer_alive": false' in setup and '"plugin_dir": "[text omitted]"' in setup
+    assert "Someone" not in report
+
+
 def test_every_broken_source_names_itself_instead_of_raising(tmp_path):
     kwargs = _healthy_kwargs(tmp_path)
     kwargs["log_file"] = tmp_path / "missing.log"
