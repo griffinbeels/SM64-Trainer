@@ -25,6 +25,14 @@ state). `offline` runs the REAL producer (scene_tap.cpp, through
 tap_offline_host.cpp) over frame inputs and writes a session exactly as the
 live tap would, under <lab_root> instead of %LOCALAPPDATA%. Sessions and
 frames are private RAM images: keep them out of the repository.
+
+The live spool (live_spool.py) writes the same records into rolling segments:
+`read_segment` reads one from its first byte, stops at a torn tail (the open
+segment grows while it is read), and rebuilds the writer's packed records
+(REC_PACKED: RDRAM pieces equal to the segment's reference image left out,
+then XPRESS) through an Unpacker. REC_BOOT (Boot) is the live capture's one
+copy of the expansion RAM, in its session's boot.bin. A header's flags carry
+WRITER_KEY on the keys the writer starts each segment with.
 """
 from __future__ import annotations
 
@@ -49,7 +57,12 @@ from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 from sm64_events.memory.layout import layout_for  # noqa: E402
 
 MAGIC = 0x31544C53
-REC_PAD, REC_TASK, REC_PRESENT, REC_FULL, REC_REGIONS, REC_VI = 0, 1, 2, 3, 4, 5
+REC_PAD, REC_TASK, REC_PRESENT, REC_FULL, REC_REGIONS, REC_VI, REC_BOOT, REC_PACKED = 0, 1, 2, 3, 4, 5, 6, 7
+HEADER = struct.Struct("<IIIIqII")      # magic, type, bytes, sequence, qpc, records lost so far, flags
+WRITER_KEY = 1                          # header flag: a live-spool key the writer wrote from its own shadow
+PACKED = struct.Struct("<8I")           # inner type, inner body bytes, codec, stream bytes, payload bytes, pieces, dedupe, 0
+CODEC_STORED, CODEC_XPRESS = 0, 1
+SPOOL_BLOCK = 256                       # a packed record's pieces end at every multiple of this RDRAM address
 REGION_KINDS = ("task", "level_key", "level_delta")
 REGION_FIELDS = ("task_index", "kind", "count", "data_bytes", "copy_ns", "scan_ns", "block_bytes", "reserved")
 VI_KINDS = ("vi_key", "vi_delta")
@@ -76,7 +89,8 @@ AUDIO_SPANS = (("audio_heap_start", "audio_heap_end"), ("audio_globals_start", "
 GFX_POOL_BYTES = 6400 * 8
 POOL_TAIL_BYTES = 4096
 HOST_SOURCES = (ROOT / "tools/scene_lab/tap_offline_host.cpp", ROOT / "plugin/gfxwrap/scene_tap.cpp",
-                ROOT / "plugin/gfxwrap/scene_tap.h", ROOT / "plugin/gfxwrap/scene_closure.h",
+                ROOT / "plugin/gfxwrap/scene_spool.cpp", ROOT / "plugin/gfxwrap/scene_tap.h",
+                ROOT / "plugin/gfxwrap/scene_spool.h", ROOT / "plugin/gfxwrap/scene_closure.h",
                 ROOT / "plugin/gfxwrap/zilmar.h")
 TASK_FIELDS = ("refusals", "commands", "walk_ns", "copy_ns", "vi_origin", "runs", "extras",
                "closure_bytes", "last_cimg", "color_images", "task_index", "reserved")
@@ -132,22 +146,132 @@ class Present:
     pixels: bytes
 
 
+@dataclass
+class Boot:
+    """A live capture's one copy when it starts (the lease's boot_region): the
+    expansion RAM a practice ROM copied its own code into."""
+    sequence: int
+    begin: int
+    data: bytes
+
+
+def _walk(data, torn_ok: bool):
+    """(offset, kind, size, sequence, qpc, flags) of each whole record. A live segment may
+    end mid-write: torn_ok stops at the first record that is not whole instead of refusing."""
+    at = 0
+    while at + 32 <= len(data):
+        magic, kind, size, sequence, qpc, _lost, flags = HEADER.unpack_from(data, at)
+        if magic != MAGIC or size < 32 or size % 32 or at + size > len(data):
+            if torn_ok:
+                return
+            raise ValueError(f"corrupt tap record at byte {at}")
+        yield at, kind, size, sequence, qpc, flags
+        at += size
+
+
 def read_records(path: Path):
     """Stream tap.bin's records. The file is mapped, not read whole: a session
     with reference pictures runs to gigabytes, and only the caller's records stay."""
     if not path.stat().st_size:
         return
     with path.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
-        at = 0
-        while at + 32 <= len(data):
-            magic, kind, size, sequence, qpc = struct.unpack_from("<IIIIq", data, at)
-            if magic != MAGIC or size < 32 or at + size > len(data):
-                raise ValueError(f"corrupt tap record at byte {at}")
+        for at, kind, size, sequence, qpc, _flags in _walk(data, torn_ok=False):
             with memoryview(data)[at + 32:at + size] as body:
                 record = _parse_record(kind, sequence, qpc, body)
             if record is not None:
                 yield record
-            at += size
+
+
+def read_segment(data: bytes, rdram_size: int):
+    """(offset, header flags, record) for a live-spool segment's whole records, from its
+    first byte (plugin/gfxwrap/scene_spool.cpp): packed records come back as the
+    producer's own, rebuilt against the segment's reference image."""
+    unpacker = Unpacker(rdram_size)
+    for at, kind, size, sequence, qpc, flags in _walk(data, torn_ok=True):
+        body = memoryview(data)[at + 32:at + size]
+        if kind == REC_PACKED:
+            kind, body = unpacker.unpack(body)
+        record = _parse_record(kind, sequence, qpc, body)
+        if record is not None:
+            yield at, flags, record
+
+
+_ntdll = None
+
+
+def _xpress(payload: bytes, size: int) -> bytes:
+    """XPRESS (ntdll's RtlDecompressBuffer, the writer's RtlCompressBuffer format)."""
+    global _ntdll
+    import ctypes
+    if _ntdll is None:
+        _ntdll = ctypes.WinDLL("ntdll")
+    out, final = ctypes.create_string_buffer(size), ctypes.c_ulong()
+    status = _ntdll.RtlDecompressBuffer(ctypes.c_ushort(3), out, size, payload, len(payload), ctypes.byref(final))
+    if status != 0 or final.value != size:
+        raise ValueError(f"packed record does not decompress (status {status & 0xFFFFFFFF:#x})")
+    return out.raw
+
+
+class Unpacker:
+    """A live-spool segment's packed records back into the producer's records.
+
+    The reference image follows the writer's: zero at the segment's start, then every
+    closure's runs and task record's regions as they decode, in record order. A packed
+    record's RDRAM bytes come in pieces cut at every 256-byte RDRAM boundary; a cleared
+    bit means the piece equals the reference image before this record."""
+
+    def __init__(self, rdram_size: int):
+        self.ref = np.zeros(rdram_size, np.uint8)
+
+    def unpack(self, body) -> tuple[int, bytes]:
+        inner, inner_bytes, codec, stream_bytes, payload_bytes, pieces, dedupe, _ = PACKED.unpack_from(body, 0)
+        payload = bytes(body[32:32 + payload_bytes])
+        if codec == CODEC_XPRESS:
+            stream = _xpress(payload, stream_bytes)
+        elif codec == CODEC_STORED and len(payload) == stream_bytes:
+            stream = payload
+        else:
+            raise ValueError(f"packed record: unknown codec {codec} or short payload")
+        if not dedupe:
+            return inner, stream
+        bitmap = ((pieces + 7) // 8 + 3) & ~3
+        rest = stream[bitmap:]
+        if inner == REC_TASK:
+            runs, extras, content = struct.unpack_from("<3I", rest, 20)
+            prefix = 112 + 8 * runs + 8 * extras
+            table = np.frombuffer(rest, "<u4", 2 * runs, 112).reshape(-1, 2).astype(np.int64)
+            begins, sizes = table[:, 0], table[:, 1] - table[:, 0]
+        elif inner == REC_REGIONS:
+            count, content = struct.unpack_from("<2I", rest, 8)
+            prefix = 96 + 8 * count
+            table = np.frombuffer(rest, "<u4", 2 * count, 96).reshape(-1, 2).astype(np.int64)
+            begins, sizes = table[:, 0], table[:, 1]
+        else:
+            raise ValueError(f"packed record: type {inner} carries no RDRAM pieces")
+        if int(sizes.sum()) != content or (len(begins) and int((begins + sizes).max()) > len(self.ref)):
+            raise ValueError("packed record: its spans and its bytes disagree")
+        first, last = begins // SPOOL_BLOCK, (begins + sizes - 1) // SPOOL_BLOCK
+        counts = np.where(sizes > 0, last - first + 1, 0)
+        if int(counts.sum()) != pieces:
+            raise ValueError("packed record: its piece count does not match its spans")
+        span = np.repeat(np.arange(len(begins)), counts)
+        block = np.repeat(first, counts) + np.arange(pieces) - np.repeat(np.cumsum(counts) - counts, counts)
+        lows = np.maximum(begins[span], block * SPOOL_BLOCK)
+        highs = np.minimum((begins + sizes)[span], (block + 1) * SPOOL_BLOCK)
+        bits = np.unpackbits(np.frombuffer(stream, np.uint8, (pieces + 7) // 8), bitorder="little")[:pieces]
+        stored = np.repeat(bits.astype(bool), highs - lows)
+        spans = list(zip(begins.tolist(), sizes.tolist(), strict=True))
+        rebuilt = np.concatenate([self.ref[begin:begin + size] for begin, size in spans] or [np.zeros(0, np.uint8)])
+        kept = int(stored.sum())
+        rebuilt[stored] = np.frombuffer(rest, np.uint8, kept, prefix)
+        offset = 0
+        for begin, size in spans:
+            self.ref[begin:begin + size] = rebuilt[offset:offset + size]
+            offset += size
+        body = rest[:prefix] + rebuilt.tobytes() + rest[prefix + kept:]
+        if len(body) != inner_bytes:
+            raise ValueError("packed record: rebuilt body has the wrong length")
+        return inner, body
 
 
 def _parse_record(kind: int, sequence: int, qpc: int, body: memoryview):
@@ -192,6 +316,9 @@ def _parse_record(kind: int, sequence: int, qpc: int, body: memoryview):
         at = 32 + 8 * fields["count"]
         return ViRegions(sequence, qpc, fields, VI_KINDS[fields["kind"]], spans,
                          bytes(body[at:at + fields["data_bytes"]]))
+    if kind == REC_BOOT:
+        begin, size = struct.unpack_from("<II", body, 0)
+        return Boot(sequence, begin, bytes(body[32:32 + size]))
     return None
 
 
@@ -548,7 +675,7 @@ def build_offline_host() -> Path:
         raise RuntimeError("x86 MSVC toolchain is required")
     flags = [flag for flag in compiler.COMMON_FLAGS if not flag.startswith("/std:")]
     compiler._cl(vcvars, [*flags, "/std:c++17", "/EHsc", f"/I{ROOT / 'plugin/gfxwrap'}",
-                          str(HOST_SOURCES[0]), str(HOST_SOURCES[1]), f"/Fe:{target}", f"/Fo{work}\\",
+                          *map(str, HOST_SOURCES[:3]), f"/Fe:{target}", f"/Fo{work}\\",
                           "/link", "kernel32.lib", "user32.lib"], work)
     return target
 

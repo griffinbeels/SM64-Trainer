@@ -39,7 +39,8 @@ def binaries(tmp_path_factory):
     # Graphics internals have independent real-GPU witnesses. This host exercises
     # the actual production composition modules through the fixture gd facade.
     build.RUNTIME_SOURCES = ("wrapper_runtime", "stamp_adapter", "runtime_control",
-                             "runtime_delivery", "gpu_request", "gpu_delivery", "scene_tap")
+                             "runtime_delivery", "gpu_request", "gpu_delivery", "scene_tap",
+                             "scene_spool")
     vcvars = build.find_vcvars32()
     assert vcvars
     wrapper = build.build_wrapper(work, vcvars)
