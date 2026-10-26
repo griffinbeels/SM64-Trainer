@@ -161,17 +161,24 @@ def _wait_closed(client, seconds=10.0) -> dict:
 
 
 def test_without_the_switch_nothing_is_imported_or_routed(monkeypatch, lab):
+    """Off, the shell's one probe answers {"lab": null} and nothing else exists: a 404 there put
+    an HTTP error on every page load of every install (the Friends shell test caught it,
+    2026-10-25)."""
     import sm64_events.main as main
     monkeypatch.delenv("SM64_SCENE_LAB", raising=False)
     monkeypatch.delitem(sys.modules, "sm64_events.server.scene_lab_api")
     app = FastAPI()
     routes = {route.path for route in app.routes}
     assert main._mount_scene_lab(app) is app
-    assert {route.path for route in app.routes} == routes
+    assert {route.path for route in app.routes} - routes == {"/api/scene-lab"}
     assert "sm64_events.server.scene_lab_api" not in sys.modules
+    with TestClient(app) as client:
+        probe = client.get("/api/scene-lab")
+        assert probe.status_code == 200 and probe.json() == {"lab": None}
+        assert client.get("/api/scene-lab/status").status_code == 404
     monkeypatch.setenv("SM64_SCENE_LAB", str(lab["config"]))
-    main._mount_scene_lab(app)
-    assert {"/api/scene-lab", "/api/scene-lab/open", "/api/scene-lab/ws"} <= {route.path for route in app.routes}
+    lab_app = main._mount_scene_lab(FastAPI())
+    assert {"/api/scene-lab", "/api/scene-lab/open", "/api/scene-lab/ws"} <= {route.path for route in lab_app.routes}
 
 
 def test_status_lists_only_packages_and_names_what_is_missing(lab):
@@ -247,6 +254,68 @@ def test_the_free_camera_redraws_from_the_evaluator_and_says_when_it_cannot(lab,
                 reply = _reply(socket)
                 assert reply["id"] == 4 and "error" in reply and not reply.get("closed")
         assert len(evaluators.made) == 1                                # one evaluator, built on first use
+
+
+def test_a_free_camera_carries_its_own_roll_and_field_of_view_to_the_game_code(lab):
+    evaluators = Evaluators()
+    app, _server = _app(lab, evaluators=evaluators)
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
+        base = {"focus": [1.0, 2.0, 3.0], "position": [100.0, 200.0, 300.0]}
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            for ident, extra in enumerate(({}, {"roll": -224, "fov": 52.5}, {"roll": 0}, {"fov": 80})):
+                socket.send_json({"id": ident, "session": opened["session"], "frame": 2, "camera": {**base, **extra},
+                                  "encoding": "raw"})
+                assert _reply(socket)["camera"] == "free"
+            for bad in ({"roll": 40000}, {"roll": 1.5}, {"roll": True}, {"fov": 0}, {"fov": 200},
+                        {"fov": float("nan")}):
+                socket.send_json({"id": 9, "session": opened["session"], "frame": 2, "camera": {**base, **bad},
+                                  "encoding": "raw"})
+                reply = _reply(socket)
+                assert "error" in reply and not reply.get("closed"), bad
+        cameras = [camera for _index, camera in evaluators.made[0].calls]
+        focus, position = base["focus"], base["position"]
+        assert cameras == [(focus, position), (focus, position, -224, 52.5), (focus, position, 0, None),
+                           (focus, position, None, 80.0)]
+
+
+def test_set_focus_answers_where_the_list_drew_the_clicked_point(lab):
+    evaluators = Evaluators(wall=1000.0, no_scene=(SHOWN[1],))
+    app, _server = _app(lab, evaluators=evaluators)
+    camera = {"focus": [0.0, 0.0, 0.0], "position": [0.0, 0.0, 1000.0], "roll": 0, "fov": 45.0}
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
+        session = opened["session"]
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            socket.send_json({"id": 1, "session": session, "kind": "pick", "frame": 2, "camera": camera,
+                              "u": 0.5, "v": 0.5})
+            reply = _reply(socket)
+            assert reply["kind"] == "pick" and reply["reason"] is None
+            assert reply["point"] == pytest.approx([0, 0, -1000], abs=0.01)
+            assert reply["distance"] == pytest.approx(1000, abs=0.01)
+            assert reply["mario"] == fake_viewer_host.FakeEvaluator.POSE["mario"]      # a fly-to's one round trip
+            socket.send_json({"id": 2, "session": session, "kind": "pick", "frame": 2, "camera": camera,
+                              "u": 0.75, "v": 0.25})
+            right, up, _ = _reply(socket)["point"]
+            assert right > 0 and up > 0                                    # up and to the right of the middle
+            socket.send_json({"id": 20, "session": session, "frame": 3, "camera": camera, "encoding": "jpeg"})
+            assert _reply(socket)["camera"] == "free"
+            runs = len(evaluators.made[0].calls)
+            socket.send_json({"id": 21, "session": session, "kind": "pick", "frame": 3, "camera": camera,
+                              "u": 0.5, "v": 0.5})
+            assert _reply(socket)["point"] == pytest.approx([0, 0, -1000], abs=0.01)
+            assert len(evaluators.made[0].calls) == runs                   # the picture's own view, not a re-run
+            socket.send_json({"id": 3, "session": session, "kind": "pick", "frame": 1, "camera": camera,
+                              "u": 0.5, "v": 0.5})
+            assert _reply(socket) == {"id": 3, "kind": "pick", "point": None, "distance": None, "mario": None,
+                                      "reason": scene_session.NO_SCENE}
+            socket.send_json({"id": 4, "session": session, "kind": "pick", "frame": 0, "camera": None,
+                              "u": 0.5, "v": 0.5})
+            recorded = _reply(socket)                                    # the synthetic capture draws no world
+            assert recorded["kind"] == "pick" and recorded["point"] is None and recorded["reason"]
+            for bad in ({"u": 1.5, "v": 0.5}, {"u": "0.5", "v": 0.5}, {"v": 0.5}):
+                socket.send_json({"id": 5, "session": session, "kind": "pick", "frame": 2, "camera": camera, **bad})
+                assert "error" in _reply(socket)
 
 
 def _free_session_pictures(lab, keeps_rdram: bool, requests: list) -> list[dict]:

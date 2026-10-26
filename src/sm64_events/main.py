@@ -680,12 +680,18 @@ def build(*, recorder_lock=None):
 
 def _mount_scene_lab(app):
     """M4's scene viewer is a lab-only surface (server/scene_lab_api.py). This is the one
-    reader of its switch: unless SM64_SCENE_LAB names a lab config, nothing is imported or
-    routed and the shell never shows its entry."""
+    reader of its switch: unless SM64_SCENE_LAB names a lab config, nothing is imported and
+    the shell never shows its entry. The shell's one probe (GET /api/scene-lab) then answers
+    {"lab": null}: a 404 there put an HTTP error on every page load of every install.
+    Mounting twice (a lab script that wraps an app the UI fixture already mounted) is a no-op."""
+    if any(getattr(route, "path", None) == "/api/scene-lab" for route in app.routes):
+        return app
     config = os.environ.get("SM64_SCENE_LAB")
     if config:
         from sm64_events.server.scene_lab_api import mount_scene_lab
         mount_scene_lab(app, config)
+    else:
+        app.add_api_route("/api/scene-lab", lambda: {"lab": None}, methods=["GET"], include_in_schema=False)
     return app
 
 
