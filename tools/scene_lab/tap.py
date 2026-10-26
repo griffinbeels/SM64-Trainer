@@ -27,8 +27,9 @@ live tap would, under <lab_root> instead of %LOCALAPPDATA%. Sessions and
 frames are private RAM images: keep them out of the repository.
 
 The live spool (live_spool.py) writes the same records into rolling segments:
-`read_segment` reads one from its first byte, stops at a torn tail (the open
-segment grows while it is read), and rebuilds the writer's packed records
+`read_segment` reads one from its first byte (a SegmentReader takes it in runs
+as it grows), stops at a torn tail (the open segment is still being written),
+and rebuilds the writer's packed records
 (REC_PACKED: RDRAM pieces equal to the segment's reference image left out,
 then XPRESS) through an Unpacker. REC_BOOT (Boot) is the live capture's one
 copy of the expansion RAM, in its session's boot.bin. A header's flags carry
@@ -186,14 +187,36 @@ def read_segment(data: bytes, rdram_size: int):
     """(offset, header flags, record) for a live-spool segment's whole records, from its
     first byte (plugin/gfxwrap/scene_spool.cpp): packed records come back as the
     producer's own, rebuilt against the segment's reference image."""
-    unpacker = Unpacker(rdram_size)
-    for at, kind, size, sequence, qpc, flags in _walk(data, torn_ok=True):
-        body = memoryview(data)[at + 32:at + size]
-        if kind == REC_PACKED:
-            kind, body = unpacker.unpack(body)
-        record = _parse_record(kind, sequence, qpc, body)
-        if record is not None:
-            yield at, flags, record
+    yield from SegmentReader(rdram_size).feed(data)
+
+
+class SegmentReader:
+    """A live-spool segment read as it grows: feed() each run of bytes appended since the
+    last call; a record not yet whole waits for the next feed. Consume each feed fully."""
+
+    def __init__(self, rdram_size: int):
+        self.unpacker = Unpacker(rdram_size)
+        self.offset = 0                  # file bytes taken as whole records
+        self.pending = b""               # bytes after them: a record still being written
+
+    @property
+    def read(self) -> int:
+        """File bytes fed so far: where the next feed starts."""
+        return self.offset + len(self.pending)
+
+    def feed(self, data: bytes):
+        buffer = self.pending + data if self.pending else data
+        consumed = 0
+        for at, kind, size, sequence, qpc, flags in _walk(buffer, torn_ok=True):
+            body = memoryview(buffer)[at + 32:at + size]
+            if kind == REC_PACKED:
+                kind, body = self.unpacker.unpack(body)
+            record = _parse_record(kind, sequence, qpc, body)
+            consumed = at + size
+            if record is not None:
+                yield self.offset + at, flags, record
+        self.pending = bytes(buffer[consumed:])
+        self.offset += consumed
 
 
 _ntdll = None
