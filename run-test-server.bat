@@ -81,13 +81,19 @@ echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunemarelo.html   (overall rank-u
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunelog.html   (practice log card layout)
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tuneselector.html   (selector card exchange)
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunefeed.html   (feed arrival + every dropdown)
+if defined SM64_SCENE_LAB echo   Lab:    Scene viewer in the sidebar, under Lab   (%SM64_SCENE_LAB%)
 echo   The real trainer exe keeps its own port (8064) untouched.
 echo   Press CTRL+C in this window to stop the test server.
 echo ============================================================
 echo.
 
+REM --- the lab Scene viewer (run-scene-lab.bat) runs the game's code in Unicorn;
+REM     tools/scene_lab/cpu_hooks.c reads Unicorn 2.1.4's internals, so pin it ---
+set "SM64_UV_WITH="
+if defined SM64_SCENE_LAB set "SM64_UV_WITH=--with unicorn==2.1.4"
+
 REM canonical launch (binds the CTRL+C graceful-shutdown deadline)
-uv run python -m sm64_events.main
+uv run %SM64_UV_WITH% python -m sm64_events.main
 
 echo.
 echo Test server stopped.

@@ -1038,7 +1038,9 @@ is the one reader); otherwise none of these routes exists and the shell shows no
 Lab entry. The config is a private JSON file of absolute paths:
 `{"rom", "packages", "pj64_plugin", "map"}` plus optional `"renderer"`
 (`trainer`, `link` or a DLL path), `"resolution"` (`"WxH"`) and `"idle_seconds"`.
-Run the server with `uv run --with unicorn` for the free camera. One scene is open
+Run the server with `uv run --with unicorn==2.1.4` for the free camera;
+`run-scene-lab.bat` does both, reading `%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json`
+and starting the test server. One scene is open
 at a time; its renderer helper and evaluator run on one worker thread and stop on
 Close, another Open, `idle_seconds` without a request, about 20 s with no page
 connected, a helper that dies, or server shutdown. Owner: `server/scene_lab_api.py`.
