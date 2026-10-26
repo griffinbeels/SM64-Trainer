@@ -39,9 +39,9 @@ export const SCENE_CAMERA_TUNABLES = {
 
   // --- sliding and moving closer (Shift-drag, wheel) -----------------------
   panPerPixel: {
-    group: "Pan & dolly", label: "Slide per pixel", value: 0.0015,
-    min: 0.0002, max: 0.01, step: 0.0001, unit: "of distance",
-    why: "Shift-drag slides the scene by this fraction of the distance to the focus point per pixel, so a close look at Mario moves in small steps and a stage-wide view in large ones.",
+    group: "Pan & dolly", label: "Slide per pixel", value: 0.00375,
+    min: 0.0002, max: 0.02, step: 0.00005, unit: "of distance",
+    why: "Shift-drag (or a middle-button drag) slides the scene by this fraction of the distance to the focus point per pixel, so a close look at Mario moves in small steps and a stage-wide view in large ones. Raised from 0.0015 to 0.00375 (2.5x) on Griffin's first try: 'I fly further per drag'.",
   },
   dollyPerWheel: {
     group: "Pan & dolly", label: "Move closer per wheel unit", value: 0.001,
@@ -89,6 +89,18 @@ export const SCENE_CAMERA_TUNABLES = {
     group: "Flight", label: "Level a tilted view per second", value: 20,
     min: 0, max: 180, step: 1, unit: "deg",
     why: "While flying, a recorded tilt levels by this much each second.",
+  },
+
+  // --- double-click: fly to the clicked surface, then look at Mario ----------
+  flyToStandoff: {
+    group: "Fly to (double-click)", label: "Stop short of the surface by", value: 250,
+    min: 20, max: 3000, step: 10, unit: "units",
+    why: "Double-click flies to the clicked surface and stops this far in front of it, back along the click's line toward where the camera was, so it sits in front of a wall, never inside it. Mario is about 160 units tall.",
+  },
+  flyToMs: {
+    group: "Fly to (double-click)", label: "Flight takes", value: 320,
+    min: 0, max: 1500, step: 10, unit: "ms",
+    why: "How long the double-click flight lasts. It eases out of the old view and into the new one; any input stops it where it is. Zero jumps straight there.",
   },
 
   // --- Look at Mario (F) ------------------------------------------------------

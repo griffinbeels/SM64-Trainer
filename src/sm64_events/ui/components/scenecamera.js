@@ -136,3 +136,30 @@ export function lookingAt(orbit, mario, tuning = SCENE_CAMERA_DEFAULTS) {
 export function focusedOn(orbit, point) {
   return orbitFromPose(point, cameraOf(orbit).position, { roll: 0, fov: orbit.fov }) || orbit;
 }
+
+// Double-click fly-to's destination: just in front of the clicked surface,
+// backed off along the click's ray toward where the camera was (never past
+// it), looking at Mario where Look at Mario looks, level. null when that
+// spot is Mario's own focus point.
+export function flyToTarget(orbit, hit, mario, tuning = SCENE_CAMERA_DEFAULTS) {
+  const from = cameraOf(orbit).position, back = sub(from, hit), length = Math.hypot(...back);
+  const position = add(hit, scale(unit(back), Math.min(tuning.flyToStandoff, length)));
+  return orbitFromPose(add(mario, [0, tuning.marioHeight, 0]), position, { roll: 0, fov: orbit.fov });
+}
+
+// Starts and ends at rest: no jolt leaving, no bump arriving.
+export const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+
+// The camera `t` (0..1, already eased) of the way from one orbit to another:
+// its place and its focus point travel in straight lines, the tilt levels.
+export function glided(from, to, t) {
+  const a = cameraOf(from), b = cameraOf(to), mix = (p, q) => p.map((value, i) => value + (q[i] - value) * t);
+  return orbitFromPose(mix(a.focus, b.focus), mix(a.position, b.position),
+    { roll: (from.roll || 0) + ((to.roll || 0) - (from.roll || 0)) * t, fov: to.fov }) || (t < 1 ? from : to);
+}
+
+// Where a double-click's flight is `elapsed` ms in: {orbit, done}.
+export function glideAt(from, to, elapsed, tuning = SCENE_CAMERA_DEFAULTS) {
+  const t = tuning.flyToMs > 0 ? clamp(elapsed / tuning.flyToMs, 0, 1) : 1;
+  return { orbit: t < 1 ? glided(from, to, easeInOut(t)) : to, done: t >= 1 };
+}

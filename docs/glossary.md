@@ -1262,12 +1262,13 @@ camera**, stepping forward and back, seeking and 30 fps playback, and a **Free
 camera** the [[scene evaluator]] redraws. Free camera starts from the picture
 on screen (the recorded camera's place, screen tilt and field of view) and owns
 all four after that, so steps and seeks never move or zoom it. Controls: drag to
-turn around the focus point, Shift-drag to slide, the wheel to move closer;
-hold the right button to fly (W A S D, Q and E down and up, Shift faster, Alt
-slower, the wheel or the flight speed control sets the speed); F looks at
-Mario; **Set focus** then a click puts the focus point where the picture drew
-that pixel; one button puts the view back where Free camera began; R returns
-to the recorded camera. A tilted view levels as you turn or fly, never on entry.
+turn around the focus point, Shift-drag or a middle-button drag to slide, the
+wheel to move closer; hold the right button to fly (W A S D, Q and E down and
+up, Shift faster, Alt slower, the wheel or the flight speed control sets the
+speed); **double-click** a surface to fly to just in front of it and look at
+Mario (an eased flight any input stops); F looks at Mario; **Set focus** then a
+click puts the focus point where the picture drew that pixel; one button puts
+the view back where Free camera began; R returns to the recorded camera. A tilted view levels as you turn or fly, never on entry.
 **Tune controls** opens the camera's tuning panel, whose SAVE writes the numbers
 as the shipped defaults. It is
 lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab

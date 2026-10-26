@@ -8,16 +8,16 @@
 import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SceneViewer, hintFor, pictureFraction, speedWords } from
+import { DRAG_DEAD_ZONE, SceneViewer, hintFor, pictureFraction, speedWords } from
   "../../src/sm64_events/ui/components/sceneviewer.js";
-import { cameraOf, dollied, flightSpeed, flown, lookingAt, looked, orbitFromPose, slid, speedStepped, turned,
-  worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
+import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt, lookingAt, looked, orbitFromPose, slid,
+  speedStepped, turned, worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
 import { SCENE_CAMERA_DEFAULTS, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
 
 const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1, panPerPixel: 0.002,
   dollyPerWheel: 0.002, closestDistance: 40, farthestDistance: 20000, flightSpeed: 1000, lookPerPixel: 0.004,
-  fastMultiplier: 5, slowMultiplier: 0.2, speedPerNotch: 1.5, levelPerSecond: 30, focusDistance: 600,
-  marioHeight: 100 };
+  fastMultiplier: 5, slowMultiplier: 0.2, speedPerNotch: 1.5, levelPerSecond: 30, flyToStandoff: 300, flyToMs: 200,
+  focusDistance: 600, marioHeight: 100 };
 const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
 const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
 const PER_DEGREE = 65536 / 360;
@@ -410,6 +410,137 @@ test("Set focus asks where the clicked point is and turns the camera to orbit it
   expect(page.getByRole("button", { name: "Set focus" }).getAttribute("aria-pressed")).toBe("false");
 });
 
+// ------------------------------------------------------------------ middle drag, clicks, double-click fly-to
+
+test("a middle-button drag slides exactly as Shift-drag does, never autoscrolls, and lets go like any drag", async () => {
+  const { page, socket, root, canvas } = await openScene();
+  const first = await enterFree(page, socket);
+  expect(fireEvent.pointerDown(canvas, { button: 1, buttons: 4, pointerId: 6, clientX: 100, clientY: 100 })).toBe(false);
+  expect(fireEvent.mouseDown(canvas, { button: 1, buttons: 4 })).toBe(false);          // no autoscroll
+  move(canvas, { pointerId: 6, buttons: 4, clientX: 130, clientY: 90 });
+  await waitFor(() => expect(socket.last().camera.focus).not.toEqual(first.focus));
+  const expected = cameraOf(slid(orbitFromPose(first.focus, first.position), 30, -10, REFERENCE));
+  close(socket.last().camera.focus, expected.focus, 9);
+  close(socket.last().camera.position, expected.position, 9);
+  await socket.picture(socket.last());
+  fireEvent.keyDown(root, { key: "Escape" });                                              // Esc lets go
+  const sent = socket.sent.length;
+  move(canvas, { pointerId: 6, buttons: 4, clientX: 200, clientY: 90 });
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  expect(socket.sent.length).toBe(sent);
+  fireEvent.pointerDown(canvas, { button: 1, buttons: 4, pointerId: 6, clientX: 100, clientY: 100 });
+  fireEvent.pointerUp(canvas, { button: 1, buttons: 0, pointerId: 6 });                    // so does letting go
+  move(canvas, { pointerId: 6, buttons: 0, clientX: 160, clientY: 100 });
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  expect(socket.sent.length).toBe(sent);
+});
+
+test("a press that moves under the dead zone is a click, not a drag; past it the whole movement counts", async () => {
+  const { page, socket, canvas } = await openScene();
+  const first = await enterFree(page, socket);
+  const sent = socket.sent.length, tiny = DRAG_DEAD_ZONE - 1;
+  for (let i = 0; i < 2; i++) {                                                              // the two halves of a double-click
+    fireEvent.pointerDown(canvas, { button: 0, buttons: 1, pointerId: 1, clientX: 300, clientY: 200 });
+    move(canvas, { pointerId: 1, buttons: 1, clientX: 300 + tiny, clientY: 200 });
+    fireEvent.pointerUp(canvas, { button: 0, buttons: 0, pointerId: 1 });
+  }
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  expect(socket.sent.length).toBe(sent);
+  fireEvent.pointerDown(canvas, { button: 0, buttons: 1, pointerId: 1, clientX: 300, clientY: 200 });
+  move(canvas, { pointerId: 1, buttons: 1, clientX: 300 + DRAG_DEAD_ZONE + 6, clientY: 200 });
+  await waitFor(() => expect(socket.sent.length).toBe(sent + 1));
+  const expected = cameraOf(turned(orbitFromPose(first.focus, first.position), DRAG_DEAD_ZONE + 6, 0, REFERENCE));
+  close(socket.last().camera.position, expected.position, 9);
+});
+
+// The flight's next animation frame, once the page has asked for one.
+async function glideTick(at) {
+  await waitFor(() => expect(frames.length).toBeGreaterThan(0));
+  await tick(at);
+}
+
+async function doubleClick(canvas, x, y) {
+  for (let i = 0; i < 2; i++) {
+    fireEvent.pointerDown(canvas, { button: 0, buttons: 1, pointerId: 1, clientX: x, clientY: y });
+    fireEvent.pointerUp(canvas, { button: 0, buttons: 0, pointerId: 1, clientX: x, clientY: y });
+  }
+  fireEvent.dblClick(canvas, { button: 0, clientX: x, clientY: y });
+}
+
+test("double-click flies to the clicked surface, stops short of it, and ends looking at Mario, eased all the way", async () => {
+  const { socket, canvas } = await openScene();
+  await socket.picture(socket.sent[0]);
+  await doubleClick(canvas, 480, 120);                                                       // from the recorded camera
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose" }));                // entry first
+  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pick", u: 0.75, v: 0.25 }));
+  const used = orbitFromPose(POSE.focus, POSE.position, { roll: 0, fov: 45 });
+  expect(socket.last().camera).toEqual(cameraOf(used));
+  const pick = socket.last();
+  await socket.picture(socket.pictures().at(-1));                                           // the entry's own picture
+  const point = [200, 150, -1100], hit = worldPoint(used, point);
+  socket.text({ id: pick.id, kind: "pick", point, distance: Math.hypot(...point), reason: null });
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose" }));                // where Mario is
+  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  const end = cameraOf(flyToTarget(used, hit, POSE.mario, REFERENCE));
+  const t0 = performance.now();
+  const seen = [];
+  for (const at of [0, 0.1, 0.5, 1.2]) {                                                     // start, early, middle, past the end
+    await glideTick(t0 + at * REFERENCE.flyToMs);
+    await waitFor(() => expect(socket.last().kind).toBeUndefined());
+    seen.push(socket.last().camera);
+    await socket.picture(socket.last());
+  }
+  close(seen[0].position, cameraOf(used).position, 0);                                     // it starts where it was
+  const along = (camera) => Math.hypot(...[0, 1, 2].map((i) => camera.position[i] - seen[0].position[i]))
+    / Math.hypot(...[0, 1, 2].map((i) => end.position[i] - cameraOf(used).position[i]));
+  expect(along(seen[1])).toBeLessThan(0.03);                                               // eases out of the old view
+  expect(along(seen[2])).toBeGreaterThan(0.3);
+  expect(along(seen[2])).toBeLessThan(0.7);
+  close(seen[3].position, end.position, 9);                                                // and lands on the target
+  close(seen[3].focus, [POSE.mario[0], POSE.mario[1] + REFERENCE.marioHeight, POSE.mario[2]], 9);
+  expect(Math.hypot(...[0, 1, 2].map((i) => end.position[i] - hit[i]))).toBeCloseTo(REFERENCE.flyToStandoff, 6);
+  expect(frames.length).toBe(0);                                                             // and stops asking
+  expect(easeInOut(0)).toBe(0);
+  expect(easeInOut(1)).toBe(1);
+  expect(easeInOut(0.01)).toBeLessThan(0.001);                                               // leaves at rest
+  expect(1 - easeInOut(0.99)).toBeLessThan(0.001);                                           // arrives at rest
+});
+
+test("double-clicking the sky says there is nothing there and does not move", async () => {
+  const { page, socket, canvas } = await openScene();
+  const first = await enterFree(page, socket);
+  await doubleClick(canvas, 320, 10);
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pick" }));
+  socket.text({ id: socket.last().id, kind: "pick", point: null, distance: null, reason: "Nothing is drawn there." });
+  await waitFor(() => expect(page.container.textContent).toContain("Nothing there to fly to."));
+  await tick(performance.now() + 1000);
+  expect(socket.pictures().at(-1).camera).toEqual(first);
+});
+
+test("any input stops a double-click's flight where it is", async () => {
+  const { page, socket, canvas } = await openScene();
+  const first = await enterFree(page, socket);
+  await doubleClick(canvas, 320, 240);
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pick" }));
+  socket.text({ id: socket.last().id, kind: "pick", point: [0, 0, -1000], distance: 1000, reason: null });
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  const t0 = performance.now();
+  await glideTick(t0 + REFERENCE.flyToMs * 0.4);
+  await waitFor(() => expect(socket.last().camera?.position).not.toEqual(first.position));
+  const midway = socket.last().camera;
+  await socket.picture(socket.last());
+  fireEvent.wheel(canvas, { deltaY: 100 });                                                   // the wheel interrupts
+  await waitFor(() => expect(socket.last().camera.position).not.toEqual(midway.position));
+  const dollyFromMidway = cameraOf(dollied(orbitFromPose(midway.focus, midway.position), 100, REFERENCE));
+  close(socket.last().camera.position, dollyFromMidway.position, 6);                       // from where it stopped
+  await socket.picture(socket.last());
+  const sent = socket.sent.length;
+  await tick(t0 + REFERENCE.flyToMs * 2);
+  expect(socket.sent.length).toBe(sent);                                                     // the flight never resumed
+});
+
 test("a click maps onto the picture inside its letterbox", () => {
   const canvas = document.createElement("canvas");
   Object.assign(canvas, { width: 640, height: 480 });
@@ -486,6 +617,8 @@ test("every movement reads its tuning: the shipped values when none is given, a 
     ["slowMultiplier", (t) => flightSpeed(1, { slow: true }, t)], ["speedPerNotch", (t) => speedStepped(1, 1, t)],
     ["levelPerSecond", (t) => flown(tilted, { forward: 1 }, 0.01, 10, t)],
     ["focusDistance", (t) => lookingAt(orbit, [0, 0, 0], t)], ["marioHeight", (t) => lookingAt(orbit, [0, 0, 0], t)],
+    ["flyToStandoff", (t) => flyToTarget(orbit, [100, 0, -200], [0, 0, 0], t)],
+    ["flyToMs", (t) => glideAt(orbit, lookingAt(orbit, [0, 0, 0]), 150, t)],
   ];
   expect(new Set(cases.map(([key]) => key))).toEqual(new Set(Object.keys(SCENE_CAMERA_DEFAULTS)));
   for (const [key, run] of cases) {

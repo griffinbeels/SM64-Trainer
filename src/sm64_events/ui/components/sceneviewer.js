@@ -15,11 +15,14 @@
 // The free camera (components/scenecamera.js owns its math) starts from the
 // picture on screen -- the recorded camera's place, screen tilt and field of
 // view -- and stays in the game's world coordinates while you step or seek.
-// Left drag turns around the focus point, Shift-drag slides, the wheel moves
-// closer; holding the right button flies (W A S D, Q E, Shift faster, Alt
-// slower, the wheel sets the speed). F looks at Mario, Set focus turns to a
-// point on the stage, Reset view goes back to where Free camera began, R
-// returns to the recorded camera. One keyboard owner: the page's keys work
+// Left drag turns around the focus point, Shift-drag or a middle-button drag
+// slides, the wheel moves closer; holding the right button flies (W A S D,
+// Q E, Shift faster, Alt slower, the wheel sets the speed). A double-click
+// flies to the surface under the pointer and looks at Mario. F looks at
+// Mario, Set focus turns to a point on the stage, Reset view goes back to
+// where Free camera began, R returns to the recorded camera. A press that
+// moves under DRAG_DEAD_ZONE pixels is a click, never a drag; any input stops
+// a double-click's flight where it is. One keyboard owner: the page's keys work
 // only while it has focus, and the flight keys only while the right button is
 // held. Nothing is captured by opening a scene; Esc, letting go, leaving the
 // window and Close each stop every movement and give the pointer back.
@@ -31,8 +34,8 @@ import { getJSON, send } from "../api.js";
 import { ControlGroups } from "../tunecontrols.js";
 import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, sceneCameraTuning,
   setSceneCameraTuning } from "../scenecameratuning.js";
-import { cameraOf, dollied, flightSpeed, flown, focusedOn, lookingAt, looked, orbitFromPose, slid, speedStepped,
-  turned, worldPoint } from "./scenecamera.js";
+import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lookingAt, looked,
+  orbitFromPose, slid, speedStepped, turned, worldPoint } from "./scenecamera.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -118,7 +121,7 @@ export class SceneLink {
     Object.assign(this, { scene: null, frame: 0, free: false, orbit: null, entry: null, encoding: "jpeg",
       playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: null, wanted: null,
       sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null, entering: null,
-      arrived: 0, fly: null, speed: 1, picking: false, finding: false });
+      arrived: 0, fly: null, speed: 1, picking: false, finding: false, glide: null, serial: 0, noticeTimer: null });
   }
 
   get freeAvailable() { return !!this.scene?.free_camera?.available; }
@@ -139,6 +142,7 @@ export class SceneLink {
   }
 
   disconnect() {
+    this.interrupt();
     this.playing = false;
     Object.assign(this, { fly: null, picking: false, drag: null });
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
@@ -217,6 +221,19 @@ export class SceneLink {
 
   say(notice) { this.notice = notice; this.changed(); }
 
+  // A notice that clears itself unless something replaced it.
+  sayBriefly(notice, ms = 2500) {
+    this.say(notice);
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => { if (this.notice === notice) this.say(null); }, ms);
+  }
+
+  // Any new input: a fly-to in progress (or still asking where to go) stops where it is.
+  interrupt() {
+    this.serial += 1;
+    this.glide = null;
+  }
+
   fail(error) { this.error = error; this.changed(); }
 
   // Enter the free camera from the camera on screen -- its place, tilt and
@@ -242,18 +259,21 @@ export class SceneLink {
   }
 
   recorded(time) {
+    this.interrupt();
     this.stopFlight();
     Object.assign(this, { free: false, notice: null, picking: false });
     this.want("input", time);
   }
 
   resetView(time) {
+    this.interrupt();
     if (!this.free || !this.entry) return;
     this.orbit = this.entry;
     this.want("input", time);
   }
 
   async lookAtMario(time) {
+    this.interrupt();
     if (!this.freeAvailable) return;
     await this.enterFree();
     const answer = this.free ? await this.pose(this.frame) : null;
@@ -263,6 +283,7 @@ export class SceneLink {
   }
 
   move(dx, dy, sliding, time) {
+    this.interrupt();
     this.pause();
     if (!this.free) {
       this.pending = [this.pending[0] + dx, this.pending[1] + dy, sliding];
@@ -273,6 +294,7 @@ export class SceneLink {
   }
 
   async dolly(wheel, time) {
+    this.interrupt();
     await this.enterFree();
     if (!this.free) return;
     this.orbit = dollied(this.orbit, wheel, sceneCameraTuning());
@@ -284,16 +306,15 @@ export class SceneLink {
 
   async pickAt(u, v, time) {
     if (this.finding) return;
+    this.interrupt();
     this.finding = true;
     this.changed();
     try {
-      await this.enterFree();
-      if (!this.free) return;
-      const used = this.orbit;
-      const answer = await this.ask("pick", { frame: this.frame, camera: cameraOf(used), u, v });
-      if (!answer.point) return this.say(answer.reason || "Nothing is drawn there to focus on.");
+      const hit = await this.pickWorld(u, v);
+      if (!hit) return;
+      if (!hit.world) return this.say(hit.reason || "Nothing is drawn there to focus on.");
       this.picking = false;
-      this.orbit = focusedOn(this.orbit, worldPoint(used, answer.point));
+      this.orbit = focusedOn(this.orbit, hit.world);
       this.notice = null;
       this.want("input", time);
     } finally {
@@ -302,9 +323,57 @@ export class SceneLink {
     }
   }
 
+  // The one way the page turns a place in the picture into a point in the
+  // world (Set focus and fly-to both): the server finds where this frame's
+  // list drew it from the camera on screen, in that camera's axes, and the
+  // camera that asked places it. null when the free camera cannot start.
+  async pickWorld(u, v) {
+    await this.enterFree();
+    if (!this.free) return null;
+    const used = this.orbit;
+    const answer = await this.ask("pick", { frame: this.frame, camera: cameraOf(used), u, v });
+    return { world: answer.point ? worldPoint(used, answer.point) : null, reason: answer.reason };
+  }
+
+  // ---- double-click: fly to the surface under the pointer, then look at Mario
+  async flyTo(u, v, time) {
+    this.interrupt();
+    const serial = this.serial;
+    const hit = await this.pickWorld(u, v);
+    if (!hit || serial !== this.serial) return;
+    if (!hit.world) return this.sayBriefly("Nothing there to fly to.");
+    const answer = await this.pose(this.frame);
+    if (serial !== this.serial) return;
+    const tuning = sceneCameraTuning();
+    const end = answer.pose && flyToTarget(this.orbit, hit.world, answer.pose.mario, tuning);
+    if (!end) return this.sayBriefly("Nothing there to fly to.");
+    this.notice = null;
+    this.glideTo(end, tuning, time);
+  }
+
+  // An eased flight from the camera now to `end` (scenecamera.glideAt), one
+  // picture asked for per animation frame; any input (interrupt) leaves it
+  // where it is.
+  glideTo(end, tuning, time = performance.now()) {
+    const from = this.orbit, glide = { started: performance.now() };
+    this.glide = glide;
+    let input = time;
+    const step = (now) => {
+      if (this.glide !== glide) return;
+      const at = glideAt(from, end, now - glide.started, tuning);
+      this.orbit = at.orbit;
+      this.want("input", Math.min(input, now));
+      input = Infinity;
+      if (at.done) this.glide = null; else this.animate(step);
+      this.changed();
+    };
+    this.animate(step);
+  }
+
   // ---- flight: only while the right button is held on the picture
   async startFlight(time) {
     if (!this.freeAvailable || this.fly) return;
+    this.interrupt();
     Object.assign(this, { fly: { keys: new Set(), fast: false, slow: false, ticking: false, last: time, input: null },
       picking: false });
     this.changed();
@@ -369,12 +438,14 @@ export class SceneLink {
 
   // Esc, letting go of the window, Close: every movement stops.
   release() {
+    this.interrupt();
     Object.assign(this, { drag: null, picking: false });
     this.stopFlight();
     this.changed();
   }
 
   seek(next, kind = "input", time) {
+    if (kind === "input") this.interrupt();
     this.frame = clamp(next, 0, (this.scene?.frames.length || 1) - 1);
     this.changed();
     this.want(kind, time);
@@ -384,7 +455,7 @@ export class SceneLink {
 
   pause() { if (this.playing) { this.playing = false; this.changed(); } }
 
-  toggle() { if (this.playing) this.pause(); else this.play(); }
+  toggle() { this.interrupt(); if (this.playing) this.pause(); else this.play(); }
 
   // 30 fps against the clock: the frame due now is asked for whenever nothing
   // is in flight, and frames that passed while one was drawn are skipped.
@@ -452,29 +523,38 @@ function endFlight(link, canvas, everything = false) {
 const MOVE_EVENT = typeof window !== "undefined" && "onpointerrawupdate" in window
   ? "onpointerrawupdate" : "onpointermove";
 
+// A press that moves less than this is a click (a double-click's two halves
+// among them), never a drag: the camera does not move until the pointer has.
+export const DRAG_DEAD_ZONE = 4;
+
+// Hold the right button: the viewer takes the pointer (lock, else capture) and flies.
+function takeOff(link, surface, event) {
+  const canvas = event.currentTarget;
+  event.preventDefault();
+  surface.current?.focus({ preventScroll: true });
+  canvas.setPointerCapture(event.pointerId);
+  link.capture = event.pointerId;
+  link.startFlight(event.timeStamp);
+  try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* the browser refused: capture still holds */ }
+}
+
 function pointerHandlers(link, surface) {
   const movable = () => link.scene && link.freeAvailable;
   return {
     onpointerdown: (event) => {
       if (!movable()) return;
       const canvas = event.currentTarget;
-      if (event.button === 2 && !link.drag) {          // hold the right button: fly
-        event.preventDefault();
-        surface.current?.focus({ preventScroll: true });
-        canvas.setPointerCapture(event.pointerId);
-        link.capture = event.pointerId;
-        link.startFlight(event.timeStamp);
-        try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* the browser refused: capture still holds */ }
-        return;
-      }
-      if (event.button !== 0 || link.fly) return;
-      if (link.picking) {
+      if (event.button === 2 && !link.drag) return takeOff(link, surface, event);
+      if ((event.button !== 0 && event.button !== 1) || link.fly) return;
+      if (event.button === 1) event.preventDefault();  // the middle button slides, never autoscrolls
+      if (event.button === 0 && link.picking) {
         const at = pictureFraction(canvas, event.clientX, event.clientY);
         if (at) link.pickAt(at.u, at.v, event.timeStamp);
         return;
       }
       canvas.setPointerCapture(event.pointerId);
-      link.drag = { x: event.clientX, y: event.clientY, id: event.pointerId };
+      link.drag = { x: event.clientX, y: event.clientY, id: event.pointerId, sliding: event.button === 1,
+        moving: false };
     },
     [MOVE_EVENT]: (event) => {
       if (link.fly) {
@@ -484,8 +564,16 @@ function pointerHandlers(link, surface) {
       const drag = link.drag;
       if (!drag || drag.id !== event.pointerId) return;
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
-      link.drag = { ...drag, x: event.clientX, y: event.clientY };
-      if (dx || dy) link.move(dx, dy, event.shiftKey, event.timeStamp);
+      if (!drag.moving && Math.hypot(dx, dy) < DRAG_DEAD_ZONE) return;
+      link.drag = { ...drag, x: event.clientX, y: event.clientY, moving: true };
+      if (dx || dy) link.move(dx, dy, drag.sliding || event.shiftKey, event.timeStamp);
+    },
+    onmousedown: (event) => { if (event.button === 1 && movable()) event.preventDefault(); },
+    onauxclick: (event) => { if (event.button === 1 && movable()) event.preventDefault(); },
+    ondblclick: (event) => {
+      if (!movable() || link.fly || event.button !== 0) return;
+      const at = pictureFraction(event.currentTarget, event.clientX, event.clientY);
+      if (at) link.flyTo(at.u, at.v, event.timeStamp);
     },
     onpointerup: (event) => {
       if (link.fly && !(event.buttons & 2)) endFlight(link, event.currentTarget);
@@ -557,8 +645,8 @@ export function hintFor(link) {
   if (!link.freeAvailable) return `Only the recorded camera is available: ${link.scene.free_camera.reason}`;
   if (link.picking) return "Click a surface in the picture to turn around it. Esc cancels.";
   if (link.fly) return "W A S D move, Q and E go down and up. Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop.";
-  if (link.free) return "Drag to turn around the focus point, Shift-drag to slide, the wheel moves closer. Hold the right button to fly. F looks at Mario, R returns to the recorded camera.";
-  return "Drag, scroll or hold the right button to move the camera yourself. Left and Right step one frame, Space plays.";
+  if (link.free) return "Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer. Double-click a surface to fly there, or hold the right button to fly. F looks at Mario, R returns to the recorded camera.";
+  return "Drag, scroll, double-click or hold the right button to move the camera yourself. Left and Right step one frame, Space plays.";
 }
 
 // The same lesson on the picture itself while it is what you are acting on:
