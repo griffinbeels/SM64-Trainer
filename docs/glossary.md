@@ -1222,9 +1222,28 @@ exactly as it does from the tap's own files (2026-10-25). The reader refuses
 a version or layer it does not know.
 
 - **Lives** -- `tools/scene_lab/package.py` (write, read, verify); the
-  evaluator's from-package mode (`tools/scene_lab/e2_georender.py`)
+  [[scene evaluator]] reads it (`tools/scene_lab/evaluator.py`)
 - **Not** -- what the [[scene tap]] itself writes, which holds raw memory
   images and pictures and stays private on the machine that recorded it
+
+### Scene evaluator
+
+An M4 experiment that redraws a recorded task from a free camera by executing
+SM64's own scene-graph code over a [[scene package]] and the viewer's ROM.
+For each task it rebuilds the [[scene state]] and works out what the original
+drawing used: values the drawing stepped and matrices it let go of go back
+until its regenerated list matches the recorded one byte for byte. Then it
+redraws the task from any camera position. It executes code only from the
+viewer's ROM and checks every block against that ROM first. On this desktop a
+new camera on the same task costs about 4 ms, the next task during playback
+about 22 ms (52 ms while walkers need their matrices put back), and a jump to
+any task about 60 ms (2026-10-25).
+
+- **Lives** -- `tools/scene_lab/evaluator.py` (what a viewer calls); the
+  game-code sandbox and its proofs (`tools/scene_lab/e2_georender.py`, with
+  native hooks in `tools/scene_lab/cpu_hooks.c`)
+- **Not** -- the [[renderer]], which draws a list; the evaluator makes the
+  list the [[renderer]] then draws
 
 ### Practice ROM
 

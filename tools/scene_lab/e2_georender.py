@@ -20,6 +20,10 @@ the exception vectors are refused outright. Every RDRAM read and write is
 recorded per byte (first touch: read or write) by decoding each load and store
 before it executes: Unicorn 2.1.4's MIPS memory hooks raise a spurious
 reserved-instruction exception on a delay-slot access, so they are not used.
+Those per-block and per-instruction hooks are native (cpu_hooks.c, built with
+the x64 MSVC toolchain; the same semantics in Python without it), and a Cpu
+reuses one traced and one untraced sandbox run after run, keeping translated
+code while the bytes it came from are unchanged.
 
 regen first proves the vehicle: it poisons the captured pool's geo output and
 regenerates it in place with the source camera, compares every byte the game
@@ -50,15 +54,17 @@ copy. A task with no area loaded, or a paused scene, has no geo output: "no
 scene". RAM images are private: outputs belong in scratch only.
 
 from-package runs the same check reading only a scene package (package.py,
-version 1 with the scene-state layer) and the local ROM: each checked task's
-state, and the previous task's, rebuilt by a seek (--order random visits them
-shuffled), and the practice ROM's code from the package's code load, rebuilt
-from this ROM and refused on mismatch. The package carries no full RDRAM copy,
-so the full-copy comparison of task 0 is from-tap's alone.
+version 1 with the scene-state layer) and the local ROM, through the viewer's
+evaluator (evaluator.py): each checked task's state, and the previous task's,
+rebuilt by a seek (--order random visits them shuffled), and the practice
+ROM's code from the package's code load, rebuilt from this ROM and refused on
+mismatch. The package carries no full RDRAM copy, so the full-copy comparison
+of task 0 is from-tap's alone.
 """
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import math
 import os
@@ -67,18 +73,26 @@ import re
 import struct
 import sys
 import tempfile
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 
 import numpy as np
 from unicorn import (UC_ARCH_MIPS, UC_HOOK_BLOCK, UC_HOOK_CODE, UC_HOOK_INTR, UC_MODE_BIG_ENDIAN,
-                     UC_MODE_MIPS64, Uc, UcError)
+                     UC_MODE_MIPS64, UC_PROT_ALL, Uc, UcError)
 from unicorn import mips_const as mips
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cpu_hooks  # noqa: E402
+from cpu_hooks import decode_access, mark_access  # noqa: E402,F401  (decode_access: the reference decoder)
 from provenance import boot_copied_code  # noqa: E402
 from sm64_events.memory.layout import layout_for  # noqa: E402
 from tap import GFX_POOL_BYTES  # noqa: E402
+
+# Run as a script this module is __main__: evaluator.py's import must find this one (its US,
+# CODE_SEGMENTS and BOOT_CODE), not load a second, empty copy.
+sys.modules.setdefault("e2_georender", sys.modules[__name__])
 
 RDRAM_BYTES = 8 << 20
 SCRATCH_PHYS = 0x01000000          # private page outside RDRAM: stack and return sentinel
@@ -128,71 +142,166 @@ def sext(address: int) -> int:
 
 
 GPR = [getattr(mips, f"UC_MIPS_REG_{n}") for n in range(32)]
-# MIPS III loads and stores: opcode -> (write, bytes, kind); "left"/"right" are the unaligned halves.
-ACCESS = {0x20: (0, 1, ""), 0x21: (0, 2, ""), 0x22: (0, 4, "left"), 0x23: (0, 4, ""), 0x24: (0, 1, ""),
-          0x25: (0, 2, ""), 0x26: (0, 4, "right"), 0x27: (0, 4, ""), 0x30: (0, 4, ""), 0x31: (0, 4, ""),
-          0x34: (0, 8, ""), 0x35: (0, 8, ""), 0x37: (0, 8, ""), 0x1A: (0, 8, "left"), 0x1B: (0, 8, "right"),
-          0x28: (1, 1, ""), 0x29: (1, 2, ""), 0x2A: (1, 4, "left"), 0x2B: (1, 4, ""), 0x2C: (1, 8, "left"),
-          0x2D: (1, 8, "right"), 0x2E: (1, 4, "right"), 0x38: (1, 4, ""), 0x39: (1, 4, ""), 0x3C: (1, 8, ""),
-          0x3D: (1, 8, ""), 0x3F: (1, 8, "")}
 
 
-def decode_access(word: int) -> tuple | None:
-    entry = ACCESS.get(word >> 26)
-    if entry is None:
-        return None
-    offset = word & 0xFFFF
-    return entry[0], (word >> 21) & 31, offset - 0x10000 if offset & 0x8000 else offset, entry[1], entry[2]
+def host_memory(size: int) -> np.ndarray:
+    """A page-aligned host buffer the emulated CPU maps directly (uc.mem_map_ptr)."""
+    backing = np.zeros(size + cpu_hooks.PAGE_BYTES, np.uint8)
+    skip = -backing.ctypes.data % cpu_hooks.PAGE_BYTES
+    return backing[skip:skip + size]
 
 
 class Sandbox:
-    """One N64 CPU context over a private RDRAM copy, instrumented per byte."""
+    """One N64 CPU context over a private RDRAM copy, instrumented per byte.
 
-    def __init__(self, ram_be: bytes, rom: bytes, fcr31: int, trace_access: bool = True):
+    A sandbox runs many times: load() starts the next run from another RDRAM image with the
+    registers back in their first state, the stack page zeroed and the masks cleared, as a fresh
+    sandbox would. Translated code and passed ROM checks carry over only while every byte they came
+    from is unchanged (Unicorn 2.1.4 keeps a translated block after its bytes are rewritten from the
+    host, so call() compares and flushes). A block that matched a fixed image (the code segments,
+    the practice ROM's code) stays verified; one found elsewhere in the ROM is checked again every
+    run. With an x64 MSVC toolchain the per-block and per-instruction hooks are native
+    (cpu_hooks.c); the Python hooks below are the same semantics without it."""
+
+    def __init__(self, ram_be: bytes, rom: bytes, fcr31: int, trace_access: bool = True, native: bool = True):
         self.rom = rom
+        self.trace_access = trace_access
         self.uc = uc = Uc(UC_ARCH_MIPS, UC_MODE_MIPS64 | UC_MODE_BIG_ENDIAN)
         uc.ctl_set_cpu_model(mips.UC_CPU_MIPS64_R4000)
-        uc.mem_map(0, RDRAM_BYTES)
-        uc.mem_write(0, ram_be)
-        uc.mem_map(SCRATCH_PHYS, SCRATCH_BYTES)
+        self.memory = host_memory(RDRAM_BYTES)        # RDRAM, big-endian, as the CPU sees it
+        self.stack = host_memory(SCRATCH_BYTES)
+        uc.mem_map_ptr(0, RDRAM_BYTES, UC_PROT_ALL, self.memory.ctypes.data)
+        uc.mem_map_ptr(SCRATCH_PHYS, SCRATCH_BYTES, UC_PROT_ALL, self.stack.ctypes.data)
         uc.reg_write(mips.UC_MIPS_REG_CP0_STATUS, STATUS_CU1)
         uc.reg_write(mips.UC_MIPS_REG_FCSR, fcr31)
+        self._fresh = uc.context_save()
         self.first = bytearray(RDRAM_BYTES)     # 0 untouched, 1 first read, 2 first written
         self.read = bytearray(RDRAM_BYTES)
         self.wrote = bytearray(RDRAM_BYTES)
         self.code = bytearray(RDRAM_BYTES)
-        self.verified: dict[int, str] = {}
+        self.verified: dict[int, str | None] = {}
+        self._kept: set[int] = set()            # verified against a fixed image: kept across runs
+        # Every block checked so far (start: size), and its bytes' offsets and values then.
+        self._executed: dict[int, int] = {}
+        self._executed_new: list[tuple[int, np.ndarray]] = []
+        self._executed_at, self._executed_values = np.zeros(0, np.intp), np.zeros(0, np.uint8)
         self.loaded: list[tuple[str, int, int, int]] = []
         self.violations: list[str] = []
-        self.instructions = 0
-        self.stack_accesses = 0
         self.culling: list[tuple[int, int]] = []
         self.decoded: dict[int, tuple | None] = {}
-        uc.hook_add(UC_HOOK_BLOCK, self._on_block)
-        if trace_access:
-            uc.hook_add(UC_HOOK_CODE, self._on_instruction)
+        self._instructions = self._stack_accesses = 0
+        self.native = self._attach_native(trace_access) if native else None
+        if self.native is None:
+            uc.hook_add(UC_HOOK_BLOCK, self._on_block)
+            if trace_access:
+                uc.hook_add(UC_HOOK_CODE, self._on_instruction)
         uc.hook_add(UC_HOOK_INTR, self._on_exception)
         self._pending_view = 0
-        uc.hook_add(UC_HOOK_CODE, self._on_view_entry, begin=sext(US["obj_is_in_view"]),
-                    end=sext(US["obj_is_in_view"]))
+        self.memory[:] = np.frombuffer(ram_be, np.uint8)
         returned = self._call_return(US["geo_process_object"], US["geo_process_held_object"], US["obj_is_in_view"])
-        uc.hook_add(UC_HOOK_CODE, self._on_view_return, begin=sext(returned), end=sext(returned))
+        for at, hook, native_hook in ((US["obj_is_in_view"], self._on_view_entry, "scene_on_view_entry"),
+                                      (returned, self._on_view_return, "scene_on_view_return")):
+            if self.native:
+                cpu_hooks.attach(uc, self._uclib, UC_HOOK_CODE, native_hook, self.native, sext(at), sext(at))
+            else:
+                uc.hook_add(UC_HOOK_CODE, hook, begin=sext(at), end=sext(at))
+
+    def _attach_native(self, trace_access: bool):
+        library = cpu_hooks.library()
+        if library is None:
+            return None
+        from unicorn.unicorn_py3.unicorn import uclib   # the binding's ctypes library (Unicorn 2.1)
+        self._verified_words = bytearray(RDRAM_BYTES // 4)
+        self._dirty = bytearray(RDRAM_BYTES // cpu_hooks.PAGE_BYTES)
+        self._miss = cpu_hooks.MISS(self._on_miss)
+        native = cpu_hooks.NativeCpu()
+        native.ram = self.memory.ctypes.data
+        for name in ("first", "read", "wrote", "code"):
+            setattr(native, name, cpu_hooks.address(getattr(self, name)))
+        native.verified = cpu_hooks.address(self._verified_words)
+        native.dirty = cpu_hooks.address(self._dirty)
+        native.reg_read = ctypes.cast(uclib.uc_reg_read, ctypes.c_void_p).value
+        native.miss = ctypes.cast(self._miss, ctypes.c_void_p).value
+        native.gpr[:] = GPR
+        native.sentinel = SENTINEL
+        self._culling = (ctypes.c_uint32 * (2 * cpu_hooks.CULLING_CAPACITY))()
+        native.culling = ctypes.addressof(self._culling)
+        native.culling_capacity = cpu_hooks.CULLING_CAPACITY
+        native.reg_a0, native.reg_v0 = mips.UC_MIPS_REG_A0, mips.UC_MIPS_REG_V0
+        cpu_hooks.attach(self.uc, uclib, UC_HOOK_BLOCK, "scene_on_block", native)
+        if trace_access:
+            cpu_hooks.attach(self.uc, uclib, UC_HOOK_CODE, "scene_on_access", native)
+        self._library, self._uclib = library, uclib
+        return native
+
+    @property
+    def instructions(self) -> int:
+        return self.native.instructions if self.native else self._instructions
+
+    @property
+    def stack_accesses(self) -> int:
+        return self.native.stack_accesses if self.native else self._stack_accesses
+
+    def load(self, ram_be) -> None:
+        """Start the next run from this RDRAM image (big-endian bytes or a uint8 array)."""
+        self.memory[:] = np.frombuffer(ram_be, np.uint8) if not isinstance(ram_be, np.ndarray) else ram_be
+        self.stack[:] = 0
+        self.uc.context_restore(self._fresh)
+        if self.native:
+            self._library.scene_clear(ctypes.byref(self.native))
+        else:
+            for mask in (self.first, self.read, self.wrote, self.code):
+                np.frombuffer(mask, np.uint8).fill(0)
+            self._instructions = self._stack_accesses = 0
+        for address in [address for address in self.verified if address not in self._kept]:
+            del self.verified[address]
+        self.loaded = []
+        self.violations, self.culling, self._pending_view = [], [], 0
+
+    def _check_code(self) -> None:
+        """Forget translated code and ROM checks if any byte they came from changed."""
+        if self._executed_new:
+            self._executed_at = np.concatenate([self._executed_at] + [np.arange(start, start + len(values))
+                                                                      for start, values in self._executed_new])
+            self._executed_values = np.concatenate([self._executed_values] + [v for _, v in self._executed_new])
+            self._executed_new = []
+        if self._executed_at.size and not np.array_equal(self.memory[self._executed_at], self._executed_values):
+            self.uc.ctl_flush_tb()
+            self.verified.clear()
+            self._kept.clear()
+            self.decoded.clear()
+            if self.native:
+                np.frombuffer(self._verified_words, np.uint8).fill(0)
+            self._executed.clear()
+            self._executed_at, self._executed_values = np.zeros(0, np.intp), np.zeros(0, np.uint8)
+
+    def first_reads(self) -> np.ndarray:
+        """This run's bytes read before written, as an RDRAM-sized mask: with native hooks only
+        the pages a hook marked are scanned (every mark dirties its page)."""
+        first = np.frombuffer(self.first, np.uint8)
+        if not self.native:
+            return first == 1
+        mask = np.zeros(RDRAM_BYTES, bool)
+        for lo, hi in index_ranges(np.flatnonzero(np.frombuffer(self._dirty, np.uint8))):
+            lo, hi = lo * cpu_hooks.PAGE_BYTES, hi * cpu_hooks.PAGE_BYTES
+            mask[lo:hi] = first[lo:hi] == 1
+        return mask
 
     # --- memory helpers (virtual KSEG0 addresses) ---
     def u32(self, address: int) -> int:
-        return struct.unpack(">I", self.uc.mem_read(phys(address), 4))[0]
+        return struct.unpack_from(">I", self.memory, phys(address))[0]
 
     def put_u32(self, address: int, value: int) -> None:
-        self.uc.mem_write(phys(address), struct.pack(">I", value & 0xFFFFFFFF))
+        struct.pack_into(">I", self.memory, phys(address), value & 0xFFFFFFFF)
 
     def f32s(self, address: int, count: int) -> list[float]:
-        return list(struct.unpack(f">{count}f", self.uc.mem_read(phys(address), 4 * count)))
+        return list(struct.unpack_from(f">{count}f", self.memory, phys(address)))
 
     def put_f32s(self, address: int, values) -> None:
-        self.uc.mem_write(phys(address), struct.pack(f">{len(values)}f", *values))
+        struct.pack_into(f">{len(values)}f", self.memory, phys(address), *values)
 
     def ram(self) -> bytes:
-        return bytes(self.uc.mem_read(0, RDRAM_BYTES))
+        return self.memory.tobytes()
 
     def _call_return(self, start: int, end: int, callee: int) -> int:
         jal = 0x0C000000 | ((callee & 0x0FFFFFFF) >> 2)
@@ -206,20 +315,39 @@ class Sandbox:
         address &= 0xFFFFFFFF
         if address == SENTINEL:
             return
-        self.instructions += size // 4
-        if address not in self.verified:
-            self.verified[address] = self._origin(address, size)
-            if self.verified[address] is None:
-                self.violations.append(f"block {address:08x}+{size} is not ROM code")
-                uc.emu_stop()
-                return
+        self._instructions += size // 4
+        if not self._check_block(address, size):
+            return
         start = phys(address)
         self.code[start:start + size] = b"\x01" * size
+
+    def _on_miss(self, _uc, address, size, _user):
+        """The native block hook's call for a block start without a passed check."""
+        if not self._check_block(address & 0xFFFFFFFF, size):
+            self.native.stop = 1
+
+    def _check_block(self, address: int, size: int) -> bool:
+        if address not in self.verified:
+            origin = self.verified[address] = self._origin(address, size)
+            start = phys(address)
+            if start + size <= RDRAM_BYTES and self._executed.get(start) != size:   # its translation came from these
+                self._executed[start] = size
+                self._executed_new.append((start, self.memory[start:start + size].copy()))
+            if origin is None:
+                self.violations.append(f"block {address:08x}+{size} is not ROM code")
+                self.uc.emu_stop()
+                return False
+            fixed = {name for name, *_ in (*CODE_SEGMENTS, *BOOT_CODE)}
+            if origin in fixed and address >> 29 == 4:   # KSEG0: one start per physical word
+                self._kept.add(address)
+                if self.native:
+                    self._verified_words[start >> 2] = 1
+        return True
 
     def _origin(self, address: int, size: int) -> str | None:
         if address < 0x80000400 or phys(address) + size > RDRAM_BYTES:
             return None  # exception vectors (or beyond RDRAM) never run here
-        code = bytes(self.uc.mem_read(phys(address), size))
+        code = self.memory[phys(address):phys(address) + size].tobytes()
         for name, start, length, rom_offset in (*CODE_SEGMENTS, *BOOT_CODE, *self.loaded):
             if start <= address and address + size <= start + length:
                 at = rom_offset + address - start
@@ -227,11 +355,11 @@ class Sandbox:
         # Code outside the fixed images (a segment the level loaded raw): find a unique 64-byte
         # window in the ROM, then take the whole identical run around it as one loaded image.
         start = phys(address) & ~3
-        window = bytes(self.uc.mem_read(start, 64))
+        window = self.memory[start:start + 64].tobytes()
         found = self.rom.find(window)
         if found < 0 or self.rom.find(window, found + 1) >= 0:
             return None
-        ram = self.uc.mem_read(0, RDRAM_BYTES)
+        ram = self.memory.tobytes()
         lo, hi, delta = start, start + 64, found - start
         while lo >= 4 and lo + delta >= 4 and ram[lo - 4:lo] == self.rom[lo - 4 + delta:lo + delta]:
             lo -= 4
@@ -247,24 +375,9 @@ class Sandbox:
         a spurious reserved-instruction exception on a delay-slot access, so they are not used)."""
         access = self.decoded.get(address, False)
         if access is False:
-            access = self.decoded[address] = decode_access(struct.unpack(">I", uc.mem_read(phys(address), 4))[0])
-        if access is None:
-            return
-        write, base, offset, size, kind = access
-        target = phys((uc.reg_read(GPR[base]) + offset) & 0xFFFFFFFF)
-        if kind == "left":
-            size -= target & (size - 1)
-        elif kind == "right":
-            size, target = (target & (size - 1)) + 1, target & ~(size - 1)
-        if target >= RDRAM_BYTES:
-            self.stack_accesses += 1
-            return
-        mark = 2 if write else 1
-        first = self.first
-        for at in range(target, target + size):
-            if not first[at]:
-                first[at] = mark
-        (self.wrote if write else self.read)[target:target + size] = b"\x01" * size
+            access = self.decoded[address] = decode_access(struct.unpack_from(">I", self.memory, phys(address))[0])
+        if access is not None and mark_access(access, uc.reg_read(GPR[access[1]]), self.first, self.read, self.wrote):
+            self._stack_accesses += 1
 
     def _on_exception(self, uc, number, _):
         pc = uc.reg_read(mips.UC_MIPS_REG_PC) & 0xFFFFFFFF
@@ -286,10 +399,18 @@ class Sandbox:
             uc.reg_write(register, sext(value))
         uc.reg_write(mips.UC_MIPS_REG_SP, sext(STACK_TOP))
         uc.reg_write(mips.UC_MIPS_REG_RA, sext(SENTINEL))
+        self._check_code()
         try:
             uc.emu_start(sext(function), sext(SENTINEL), count=budget)
         except UcError as error:
             self.violations.append(f"unicorn: {error}")
+        self._check_code()   # the run itself may have rewritten code it translated
+        if self.native:
+            count = self.native.culling_count
+            if count > cpu_hooks.CULLING_CAPACITY:
+                self.violations.append(f"{count} obj_is_in_view decisions overflow the culling log")
+            pairs = self._culling[:2 * min(count, cpu_hooks.CULLING_CAPACITY)]
+            self.culling = list(zip(pairs[0::2], pairs[1::2], strict=True))
         pc = uc.reg_read(mips.UC_MIPS_REG_PC) & 0xFFFFFFFF
         if pc != SENTINEL and not self.violations:
             self.violations.append(f"stopped at {pc:08x} before returning")
@@ -425,8 +546,17 @@ def region_of(virtual: int) -> str:
 
 
 def ranges(mask: np.ndarray) -> list[tuple[int, int]]:
-    edges = np.flatnonzero(np.diff(np.concatenate(([0], mask.astype(np.int8), [0]))))
-    return [(int(edges[i]), int(edges[i + 1])) for i in range(0, len(edges), 2)]
+    return index_ranges(np.flatnonzero(mask))
+
+
+def index_ranges(at: np.ndarray) -> list[tuple[int, int]]:
+    """Ascending indices as [begin, end) runs."""
+    if not at.size:
+        return []
+    breaks = np.flatnonzero(np.diff(at) != 1)
+    begins = at[np.concatenate(([0], breaks + 1))]
+    ends = at[np.concatenate((breaks, [at.size - 1]))] + 1
+    return [(int(begin), int(end)) for begin, end in zip(begins, ends, strict=True)]
 
 
 # --- the experiment ---
@@ -441,11 +571,34 @@ class Frame:
         return struct.unpack_from(">I", self.ram, phys(address))[0]
 
 
-def run_geo(frame: Frame, rom: bytes, fcr31: int, head: int, end: int, poison: list[tuple[int, int]],
-            camera: tuple[list[float], list[float]] | None, ram: bytes | None = None) -> tuple[Sandbox, dict]:
-    sandbox = Sandbox(ram or frame.ram, rom, fcr31)
+class Cpu:
+    """Where geo_process_root runs: the local ROM, the FPU control word and the sandboxes. By
+    default one traced sandbox (every byte read and written: the proofs) and one untraced one
+    (pictures) are reused run after run, keeping their translated code; fresh=True makes a new
+    sandbox for every run, as regen's per-run code-origin counts need. A sandbox's masks and RAM
+    belong to its latest run only."""
+
+    def __init__(self, rom: bytes, fcr31: int, fresh: bool = False):
+        self.rom, self.fcr31, self.fresh = rom, fcr31, fresh
+        self._sandboxes: dict[bool, Sandbox] = {}
+
+    def sandbox(self, ram_be, trace: bool = True) -> Sandbox:
+        if self.fresh:
+            return Sandbox(ram_be, self.rom, self.fcr31, trace)
+        sandbox = self._sandboxes.get(trace)
+        if sandbox is None:
+            sandbox = self._sandboxes[trace] = Sandbox(ram_be, self.rom, self.fcr31, trace)
+        else:
+            sandbox.load(ram_be)
+        return sandbox
+
+
+def run_geo(frame: Frame, cpu: Cpu, head: int, end: int, poison: list[tuple[int, int]],
+            camera: tuple[list[float], list[float]] | None, ram: bytes | None = None,
+            trace: bool = True) -> tuple[Sandbox, dict]:
+    sandbox = cpu.sandbox(frame.ram if ram is None else ram, trace)
     for lo, hi in poison:
-        sandbox.uc.mem_write(phys(lo), b"\xA5" * (hi - lo))
+        sandbox.memory[phys(lo):phys(hi)] = 0xA5
     if camera:
         lakitu = US["gLakituState"]
         sandbox.put_f32s(lakitu + LAKITU_FOCUS, camera[0])
@@ -595,6 +748,7 @@ class Capture:
             raise SystemExit("the frame's ROM header does not match --rom")
         self.symbols = load_map(args.map)
         self.fcr31 = args.fcr31
+        self.cpu = Cpu(self.rom, self.fcr31, fresh=True)
         self.pool = frame.word(US["gGfxPool"])
         self.top = self.pool + GFX_POOL_BYTES
         task = int(frame.meta["source"]["task_address"], 16)
@@ -611,7 +765,7 @@ class Capture:
         self.scratch_head = (self.pool + self.main_size + 15) & ~7
 
     def run(self, head: int, end: int, poison=(), camera=None, ram=None) -> tuple[Sandbox, dict]:
-        return run_geo(self.frame, self.rom, self.fcr31, head, end, list(poison), camera, ram)
+        return run_geo(self.frame, self.cpu, head, end, list(poison), camera, ram)
 
     def canonical(self, ram: bytes, start: int, commands: int, written: np.ndarray) -> list[tuple]:
         return walk(ram, phys(start), commands, (phys(self.pool), phys(self.top)), segment_table(self.frame.ram),
@@ -792,30 +946,50 @@ def graphics_not_captured(frame: TapFrame, ram: bytearray, known: np.ndarray, sp
     return ranges(missing)
 
 
-def check_orbits(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, orbits: list[str],
+def orbit_of(frame: Frame, spec: str) -> tuple[list[float], list[float]]:
+    """--orbit YAW,PITCH,DIST as a camera: around Mario's head, yaw relative to the source camera."""
+    source_pos = list(struct.unpack_from(">3f", frame.ram, phys(US["gLakituState"] + LAKITU_POS)))
+    mario = list(struct.unpack_from(">3f", frame.ram, phys(US["gMarioStates"] + MARIO_POS)))
+    yaw, pitch, dist = (float(part) for part in spec.split(","))
+    return orbit_camera([mario[0], mario[1] + 120.0, mario[2]], source_pos, yaw, pitch, dist)
+
+
+def moved_view(frame: TapFrame, cpu: Cpu, camera, scratch_head: int, low_water: int, geo: tuple[int, int],
+               trace: bool = True) -> tuple[Sandbox, dict, bytearray | None, int, bytes]:
+    """The task from a moved camera: geo_process_root re-run with gLakituState's focus and
+    position replaced, its output in the pool's free middle, then the captured prologue, that
+    output and the captured HUD spliced at the first aligned address past it. Returns the
+    sandbox, the run and (RDRAM holding the spliced list, its address, the list); RDRAM is None
+    after a violation or when the pool has no room for the splice."""
+    moved, run = run_geo(frame, cpu, scratch_head, low_water, [], camera, trace=trace)
+    if run["violations"]:
+        return moved, run, None, 0, b""
+    main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
+    ram = bytearray(moved.memory)
+    spliced = (frame.ram[phys(main):phys(geo[0])] + ram[phys(scratch_head):phys(run["head"])]
+               + frame.ram[phys(geo[1]):phys(main) + size])
+    at = (run["head"] + 15) & ~7
+    if phys(at) + len(spliced) > phys(run["end"]):
+        return moved, run, None, at, spliced
+    ram[phys(at):phys(at) + len(spliced)] = spliced
+    return moved, run, ram, at, spliced
+
+
+def check_orbits(frame: TapFrame, cpu: Cpu, known: np.ndarray, orbits: list[str],
                  scratch_head: int, low_water: int, geo: tuple[int, int], sink=None) -> list[dict]:
     """A moved camera from the same captured bytes: no output to compare against, so the
     question is coverage: does the game's renderer read anything the tap did not capture, and
     does the list it makes send the RSP anywhere the session holds no bytes?"""
-    source_pos = list(struct.unpack_from(">3f", frame.ram, phys(US["gLakituState"] + LAKITU_POS)))
-    mario = list(struct.unpack_from(">3f", frame.ram, phys(US["gMarioStates"] + MARIO_POS)))
     checked = []
     for spec in orbits:
         yaw, pitch, dist = (float(part) for part in spec.split(","))
-        camera = orbit_camera([mario[0], mario[1] + 120.0, mario[2]], source_pos, yaw, pitch, dist)
-        moved, run = run_geo(frame, rom, fcr31, scratch_head, low_water, [], camera)
-        outside = (np.frombuffer(bytes(moved.first), np.uint8) == 1) & ~known
+        moved, run, ram, at, spliced = moved_view(frame, cpu, orbit_of(frame, spec), scratch_head, low_water, geo)
+        outside = moved.first_reads() & ~known
         entry = {"orbit": spec, "violations": run["violations"], "commands": (run["head"] - scratch_head) // 8,
                  "objects_visible": sum(1 for _, visible in moved.culling if visible),
                  "read_bytes_not_captured": int(outside.sum())}
         if not run["violations"]:
-            main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
-            ram = bytearray(moved.ram())
-            spliced = (frame.ram[phys(main):phys(geo[0])] + ram[phys(scratch_head):phys(run["head"])]
-                       + frame.ram[phys(geo[1]):phys(main) + size])
-            at = (run["head"] + 15) & ~7
-            if phys(at) + len(spliced) <= phys(run["end"]):
-                ram[phys(at):phys(at) + len(spliced)] = spliced
+            if ram is not None:
                 # The run's own output, slack included: a buffer a callback allocated and did not
                 # fill holds stale pool memory in the live game too, and the walker's peek past an
                 # ENDDL reads it (never used). Plus the peek past the spliced list's end.
@@ -878,18 +1052,22 @@ def restore_throw_matrices(frame: TapFrame, known: np.ndarray, update_span: tupl
 
 
 def with_throw_matrices(frame: TapFrame, pointers: list[tuple]) -> TapFrame:
-    ram = bytearray(frame.ram)
-    for obj, address, _ in pointers:
-        struct.pack_into(">I", ram, phys(obj + 0x50), address)
-    return TapFrame(frame.dir, type("Task", (), {"task": frame.task_words})(), bytes(ram))
+    """The frame with these objects' throwMatrix pointers set (one copy of its RDRAM)."""
+    view, pieces, at = memoryview(frame.ram), [], 0
+    for obj, address, _ in sorted(pointers, key=lambda pointer: pointer[0]):   # one per object
+        pieces += [view[at:phys(obj + 0x50)], struct.pack(">I", address)]
+        at = phys(obj + 0x50) + 4
+    pieces.append(view[at:])
+    return TapFrame(frame.dir, type("Task", (), {"task": frame.task_words})(), b"".join(pieces))
 
 
 RESTORE_ROUNDS = 6
 
 
-def restore_render_state(frame: TapFrame, previous: tuple[bytes, np.ndarray], rom: bytes, fcr31: int,
+def restore_render_state(frame: TapFrame, previous: tuple[bytes, np.ndarray], cpu: Cpu,
                          known: np.ndarray, layout: dict, baseline: dict) -> tuple[TapFrame, dict, np.ndarray]:
-    """Put back the state the original render read and then stepped.
+    """Put back the state the original render read and then stepped; returns the frame, its
+    regeneration and the RDRAM offsets restored.
 
     Some render callbacks draw from a value and then advance it: geo_painting_draw draws, then
     painting_update_ripple_state moves rippleTimer and currRippleMag on; geo_camera_fov steps
@@ -900,67 +1078,76 @@ def restore_render_state(frame: TapFrame, previous: tuple[bytes, np.ndarray], ro
     the object pool (the update's own state; the per-object animation step is idempotent per
     frame) and the gfx pools (per-frame output). A candidate keeps the previous value only while
     re-rendering from it reproduces the captured post-render byte; the rest are dropped until
-    the set settles. The captured list is not consulted.
+    the set settles. The captured list is not consulted. Trials run untraced (only the bytes at
+    the candidates are compared); the settled one runs again traced to become the result.
     """
     prev_ram, prev_known = previous
     ram, old = np.frombuffer(frame.ram, np.uint8), np.frombuffer(prev_ram, np.uint8)
-    keep = (np.frombuffer(bytes(baseline["sandbox"].first), np.uint8) == 1) & known & prev_known & (ram != old)
+    keep = np.flatnonzero(ram != old)
+    keep = keep[baseline["read_first"][keep] & known[keep] & prev_known[keep]]
     pool = phys(US["gObjectPool"])
-    keep[pool:pool + OBJECT_BYTES * OBJECT_COUNT] = False
-    keep[phys(US["gGfxPools"]):phys(US["gGfxPools"]) + 2 * (GFX_POOL_BYTES + 0x50)] = False
-    for name in ("gDisplayListHead", "gGfxPoolEnd"):   # the evaluator sets these itself
-        keep[phys(US[name]):phys(US[name]) + 4] = False
-    nothing = np.zeros(RDRAM_BYTES, bool)
+    excluded = [(pool, pool + OBJECT_BYTES * OBJECT_COUNT),
+                (phys(US["gGfxPools"]), phys(US["gGfxPools"]) + 2 * (GFX_POOL_BYTES + 0x50))]
+    excluded += [(phys(US[name]), phys(US[name]) + 4) for name in ("gDisplayListHead", "gGfxPoolEnd")]
+    for lo, hi in excluded:   # the evaluator sets the display-list head and pool end itself
+        keep = keep[(keep < lo) | (keep >= hi)]
+    nothing = np.zeros(0, np.intp)
     for _ in range(RESTORE_ROUNDS):
-        if not keep.any():
+        if not keep.size:
             return frame, baseline, nothing
-        trial_frame = TapFrame(frame.dir, type("Task", (), {"task": frame.task_words})(),
-                               np.where(keep, old, ram).tobytes())
-        trial = regenerate(trial_frame, rom, fcr31, known, layout)
+        trial_ram = ram.copy()
+        trial_ram[keep] = old[keep]
+        trial_frame = TapFrame(frame.dir, type("Task", (), {"task": frame.task_words})(), trial_ram.tobytes())
+        trial = regenerate(trial_frame, cpu, known, layout, trace=False, watch=keep)
         if trial["run"]["violations"]:
             return frame, baseline, nothing
-        stale = keep & (trial["out"] != ram)
+        stale = trial["watched"] != ram[keep]
         if not stale.any():
-            return trial_frame, trial, keep
-        keep &= ~stale
+            return trial_frame, regenerate(trial_frame, cpu, known, layout), keep
+        keep = keep[~stale]
     return frame, baseline, nothing
 
 
-def regenerate(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, layout: dict) -> dict:
-    """One in-place regeneration of the task's geo output, compared with the capture."""
+def regenerate(frame: TapFrame, cpu: Cpu, known: np.ndarray, layout: dict, trace: bool = True,
+               watch: np.ndarray | None = None) -> dict:
+    """One in-place regeneration of the task's geo output, compared with the capture. The
+    result owns what the comparisons use: the RDRAM the run left at `watch` (offsets), and when
+    traced the bytes it read before writing, and over the gfx pool (which holds its output; zero
+    elsewhere) the bytes it wrote and left: the sandbox goes on to other runs."""
     geo_start, top, pre, low_water = layout["geo_start"], layout["top"], layout["pre"], layout["low_water"]
     main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
-    sandbox, run = run_geo(frame, rom, fcr31, geo_start, top - pre, [(geo_start, main + size), (low_water, top - pre)],
-                           None)
-    outside = (np.frombuffer(bytes(sandbox.first), np.uint8) == 1) & ~known
-    result = {"sandbox": sandbox, "run": run, "outside": outside, "differing": {}}
+    sandbox, run = run_geo(frame, cpu, geo_start, top - pre, [(geo_start, main + size), (low_water, top - pre)],
+                           None, trace=trace)
+    result = {"run": run, "differing": {}}
+    if watch is not None:
+        result["watched"] = sandbox.memory[watch]
+    if not trace:
+        return result
+    result["read_first"] = sandbox.first_reads()
     if run["violations"]:
         return result
-    wrote = np.frombuffer(bytes(sandbox.wrote), np.uint8).astype(bool)
-    out, captured = np.frombuffer(sandbox.ram(), np.uint8), np.frombuffer(frame.ram, np.uint8)
     outputs = {"main list": (phys(geo_start), phys(run["head"])), "allocations": (phys(run["end"]), phys(top - pre))}
+    pool_lo = min(phys(top - GFX_POOL_BYTES), *(begin for begin, _ in outputs.values()))
+    pool_hi = max(phys(top), *(end for _, end in outputs.values()))
+    wrote, out, captured = np.zeros(RDRAM_BYTES, bool), np.zeros(RDRAM_BYTES, np.uint8), np.frombuffer(frame.ram, np.uint8)
+    wrote[pool_lo:pool_hi] = np.frombuffer(sandbox.wrote, np.uint8)[pool_lo:pool_hi]
+    out[pool_lo:pool_hi] = sandbox.memory[pool_lo:pool_hi]
     result.update({
-        "wrote": wrote, "out": out, "captured": captured,
+        "wrote": wrote, "out": out, "captured": captured, "outputs": outputs,
         "differing": {name: int((wrote[lo:hi] & known[lo:hi] & (out[lo:hi] != captured[lo:hi])).sum())
-                      for name, (lo, hi) in outputs.items()},
-        # Output the RSP never reads (a culled part's matrix) is not in the closure, and closure
-        # bytes the game never writes (Vp padding) are stale pool memory: counted, not compared.
-        "written_but_not_captured": {name: int((wrote[lo:hi] & ~known[lo:hi]).sum())
-                                     for name, (lo, hi) in outputs.items()},
-        "captured_but_not_written": {name: int((~wrote[lo:hi] & known[lo:hi]).sum())
-                                     for name, (lo, hi) in outputs.items()}})
+                      for name, (lo, hi) in outputs.items()}})
     return result
 
 
-def consumed_state(frame: TapFrame, previous: tuple | None, rom: bytes, fcr31: int, known: np.ndarray,
+def consumed_state(frame: TapFrame, previous: tuple | None, cpu: Cpu, known: np.ndarray,
                    layout: dict, symbols) -> tuple[TapFrame, dict, dict]:
     """Regenerate from the state the original render consumed: render-stepped state from the
     previous game frame (tried when the post-render state does not reproduce the list), then each
     throwMatrix pointer the render let go of."""
-    result = regenerate(frame, rom, fcr31, known, layout)
-    restored = np.zeros(RDRAM_BYTES, bool)
+    result = regenerate(frame, cpu, known, layout)
+    restored = np.zeros(0, np.intp)
     if previous is not None and not result["run"]["violations"] and any(result["differing"].values()):
-        frame, result, restored = restore_render_state(frame, previous, rom, fcr31, known, layout, result)
+        frame, result, restored = restore_render_state(frame, previous, cpu, known, layout, result)
     # The source capture decides each throwMatrix the render consumed: keep a proposed pointer
     # only when it brings the regenerated list closer to the captured one.
     chosen = []
@@ -969,29 +1156,40 @@ def consumed_state(frame: TapFrame, previous: tuple | None, rom: bytes, fcr31: i
         if not result["run"]["violations"] and not any(result["differing"].values()):
             break
         trial_frame = with_throw_matrices(frame, chosen + [proposal])
-        trial = regenerate(trial_frame, rom, fcr31, known, layout)
+        trial = regenerate(trial_frame, cpu, known, layout)
         if not trial["run"]["violations"] and sum(trial["differing"].values()) < sum(result["differing"].values()):
             chosen.append(proposal)
             result = trial
     frame = with_throw_matrices(frame, chosen) if chosen else frame
     notes = {"render_state_restored": [{"range": f"{0x80000000 | lo:08x}-{0x80000000 | hi:08x}",
-                                        "label": label(lo, symbols, None)} for lo, hi in ranges(restored)],
+                                        "label": label(lo, symbols, None)} for lo, hi in index_ranges(restored)],
              "throw_matrices_restored": [
                  {"slot": (obj - US["gObjectPool"]) // OBJECT_BYTES, "from": f"{address:08x} {source}"}
                  for obj, address, source in chosen]}
     return frame, result, notes
 
 
-def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbols,
-               orbits: list[str] = (), sink=None, previous: tuple | None = None) -> dict:
-    """Regenerate one captured task's geo output in place and compare every byte the game wrote
-    with what the tap captured; list every byte the renderer read that the tap did not capture.
-    previous is the previous game frame's (RDRAM, known mask), when the session holds it."""
+@dataclass
+class Resolved:
+    """One task's scene state as its render consumed it (resolve_task), and the regeneration
+    from that state; status says why there is none."""
+    entry: dict                        # global_timer, pool, data_ptr
+    known: np.ndarray
+    status: str | None = None
+    frame: TapFrame | None = None      # render-stepped state and throwMatrix pointers restored
+    layout: dict | None = None
+    result: dict | None = None         # regenerate's, from that state
+    notes: dict = dataclass_field(default_factory=dict)
+
+
+def resolve_task(frame: TapFrame, cpu: Cpu, known: np.ndarray, symbols, previous: tuple | None = None) -> Resolved:
+    """Find the task's geo output in its pool and regenerate it from the state its render
+    consumed (consumed_state). previous is the previous game frame's (RDRAM, known mask)."""
     main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
     pool = frame.word(US["gGfxPool"])
     entry = {"global_timer": frame.word(US["gGlobalTimer"]), "pool": f"{pool:08x}", "data_ptr": f"{main:08x}"}
     if pool != main or frame.word(US["gDisplayListHead"]) != main + size:
-        return {**entry, "status": "not parked after this pool's render"}
+        return Resolved(entry, known, "not parked after this pool's render")
     top, low_water = pool + GFX_POOL_BYTES, frame.word(US["gGfxPoolEnd"])
     try:
         geo_start, pre = find_geo_start(frame.ram, phys(main), size, phys(top))
@@ -999,13 +1197,32 @@ def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbo
         # render_game calls geo_process_root only with an area loaded (not at boot or during a
         # level load) and no finished warp transition pausing the scene: a clear screen only.
         if not frame.word(US["gCurrentArea"]) or frame.ram[phys(US["gWarpTransition"]) + WARP_PAUSE_RENDERING]:
-            return {**entry, "status": "no scene"}
-        return {**entry, "status": str(error)}
+            return Resolved(entry, known, "no scene")
+        return Resolved(entry, known, str(error))
     layout = {"geo_start": geo_start | 0x80000000, "top": top, "pre": pre, "low_water": low_water}
+    frame, result, notes = consumed_state(frame, previous, cpu, known, layout, symbols)
+    return Resolved(entry, known, None, frame, layout, result, notes)
+
+
+def check_task(frame: TapFrame, cpu: Cpu, known: np.ndarray, symbols,
+               orbits: list[str] = (), sink=None, previous: tuple | None = None) -> dict:
+    """Regenerate one captured task's geo output in place and compare every byte the game wrote
+    with what the tap captured; list every byte the renderer read that the tap did not capture.
+    previous is the previous game frame's (RDRAM, known mask), when the session holds it."""
+    return report_task(resolve_task(frame, cpu, known, symbols, previous), cpu, symbols, orbits, sink)
+
+
+def report_task(resolved: Resolved, cpu: Cpu, symbols, orbits: list[str] = (), sink=None) -> dict:
+    """check_task's report on a resolved task: the comparison, the coverage, any moved cameras."""
+    entry, known = dict(resolved.entry), resolved.known
+    if resolved.status:
+        return {**entry, "status": resolved.status}
+    frame, layout, result = resolved.frame, resolved.layout, resolved.result
+    main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
+    pool, top, pre, low_water = int(entry["pool"], 16), layout["top"], layout["pre"], layout["low_water"]
     entry["update_allocations"] = {"bytes": pre, "captured": int(known[phys(top - pre):phys(top)].sum())}
-    frame, result, notes = consumed_state(frame, previous, rom, fcr31, known, layout, symbols)
-    entry.update(notes)
-    run, outside = result["run"], result["outside"]
+    entry.update(resolved.notes)
+    run, outside = result["run"], result["read_first"] & ~known
     entry.update({"level": run["level"], "instructions": run["instructions"], "violations": run["violations"],
                   "read_bytes_not_captured": int(outside.sum()),
                   "reads_not_captured": [{"range": f"{0x80000000 | lo:08x}-{0x80000000 | hi:08x}",
@@ -1013,9 +1230,14 @@ def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbo
     if run["violations"]:
         return {**entry, "status": "sandbox violation"}
     geo_start, commands = layout["geo_start"], (run["head"] - layout["geo_start"]) // 8
+    wrote = result["wrote"]
     entry.update({"commands": commands, "differing_written_bytes": result["differing"],
-                  "written_but_not_captured": result["written_but_not_captured"],
-                  "captured_but_not_written": result["captured_but_not_written"]})
+                  # Output the RSP never reads (a culled part's matrix) is not in the closure, and closure
+                  # bytes the game never writes (Vp padding) are stale pool memory: counted, not compared.
+                  "written_but_not_captured": {name: int((wrote[lo:hi] & ~known[lo:hi]).sum())
+                                               for name, (lo, hi) in result["outputs"].items()},
+                  "captured_but_not_written": {name: int((~wrote[lo:hi] & known[lo:hi]).sum())
+                                               for name, (lo, hi) in result["outputs"].items()}})
     if any(result["differing"].values()):
         segments = segment_table(frame.ram)
         regenerated = np.where(result["wrote"], result["out"], result["captured"]).tobytes()
@@ -1024,7 +1246,7 @@ def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbo
             walk(frame.ram, phys(geo_start), commands, (phys(pool), phys(top)), segments, result["wrote"]))
     identical = not any(result["differing"].values()) and not outside.any()
     if orbits:
-        entry["orbits"] = check_orbits(frame, rom, fcr31, known, orbits, (main + size + 15) & ~7, low_water,
+        entry["orbits"] = check_orbits(frame, cpu, known, orbits, (main + size + 15) & ~7, low_water,
                                        (geo_start, run["head"]), sink)
         identical = identical and all(not o["violations"] and not o["read_bytes_not_captured"]
                                       and not o.get("graphics_bytes_not_captured") for o in entry["orbits"])
@@ -1119,12 +1341,14 @@ def from_tap(args) -> int:
     """E2-live: every captured task regenerated from the session's bytes and the ROM alone."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import tap
+    from evaluator import SceneImages
     symbols = load_map(args.map)
     rom = args.rom.read_bytes()
     header = tap.session_header(args.session)
     if be_from_pj64(bytes.fromhex(header["rom_header"])) != rom[:0x40]:
         raise SystemExit("the session's ROM header does not match --rom")
     *images, code = session_images(tap, args.session, rom)
+    images, cpu = SceneImages(*images), Cpu(rom, args.fcr31)
     vi = session_vi(tap, args)
     fulls: dict[int, bytes] = {}
 
@@ -1148,40 +1372,36 @@ def from_tap(args) -> int:
             entry["captured_bytes_differing_from_full_copy"] = int(
                 (known & (ram != np.frombuffer(full, np.uint8, known.size))).sum())
         sink = frame_sink(args, header, vi, task) if args.frames else None
-        entry.update(check_state(args, args.session, rom, symbols, images, task, (ram, known), before, sink))
+        entry.update(check_state(args, args.session, cpu, symbols, images, task, (ram, known), before, sink))
         results.append(entry)
         print(json.dumps({k: v for k, v in entry.items() if k != "reads_not_captured"}))
     return tap_summary(args, results, code, str(args.session))
 
 
-def check_state(args, source: Path, rom: bytes, symbols, images: list, task, state: tuple,
+def check_state(args, source: Path, cpu: Cpu, symbols, images, task, state: tuple,
                 before: tuple | None, sink=None) -> dict:
     """check_task on one recorded state, (RDRAM, known mask) as tap.SceneState builds it, with
-    the uncaptured bytes filled from the ROM's images; before is the previous task's state."""
-    image, image_known, fill = images
+    the uncaptured bytes filled from the ROM's images (evaluator.SceneImages); before is the
+    previous task's state."""
 
-    def rebuilt(ram: np.ndarray, known: np.ndarray) -> np.ndarray:
-        ram_be = np.frombuffer(be_from_pj64(ram.tobytes()), np.uint8)   # captured spans are whole words
-        return np.where(fill & ~known, image, ram_be)
-
-    def timer(ram_be: np.ndarray) -> int:
+    def timer(ram_be: bytes) -> int:
         return struct.unpack_from(">I", ram_be, phys(US["gGlobalTimer"]))[0]
 
-    ram, known = state
-    ram_be = rebuilt(ram, known)
+    ram_be, known = images.assemble(*state)
     previous = None
     if before is not None:   # the previous task's state, when it is the previous game frame
-        before_be = rebuilt(*before)
+        before_be, before_known = images.assemble(*before)
         if timer(before_be) + 1 == timer(ram_be):
-            previous = (before_be.tobytes(), before[1] | image_known)
-    return check_task(TapFrame(source, task, ram_be.tobytes()), rom, args.fcr31, known | image_known, symbols,
-                      args.orbit, sink, previous)
+            previous = (before_be, before_known)
+    return check_task(TapFrame(source, task, ram_be), cpu, known, symbols, args.orbit, sink, previous)
 
 
 def from_package(args) -> int:
-    """E2-live from a scene package and the local ROM alone: each checked task's state, and the
-    previous task's, rebuilt by a seek (package.py's scene-state layer), in order or shuffled."""
+    """E2-live from a scene package and the local ROM alone, through the viewer's evaluator:
+    each checked task's state, and the previous task's, rebuilt by a seek (package.py's
+    scene-state layer), in order or shuffled, then compared like from-tap."""
     import package as scene_package
+    from evaluator import Evaluator
     symbols = load_map(args.map)
     rom = args.rom.read_bytes()
     results = []
@@ -1189,8 +1409,8 @@ def from_package(args) -> int:
         package = scene_package.Package(args.package.read_bytes(), rom)
         if package.states is None:
             raise SystemExit(f"{args.package} carries no scene state (version 0, or written with --no-state)")
-        windows = package.states.code_windows()
-        images = list(code_images(rom, windows))
+        evaluator = Evaluator(package, rom, symbols, fcr31=args.fcr31, source=args.package)
+        windows = evaluator.windows
         if args.tasks:
             selected = [index for index in range(len(package)) if package.fields(index)["task_index"] in args.tasks]
         else:
@@ -1199,10 +1419,11 @@ def from_package(args) -> int:
         if args.order == "random":
             random.Random(args.seed).shuffle(selected)
         for index in selected:
-            before = package.scene_state(index - 1)[2:] if index else None
-            task, regions, ram, known = package.scene_state(index)
-            entry = {"task_index": task.fields["task_index"], "has_regions": regions is not None, "frame": index}
-            entry.update(check_state(args, args.package, rom, symbols, images, task, (ram, known), before))
+            resolved = evaluator.state(index)
+            scene = evaluator.scene(index)
+            entry = {"task_index": scene.task.fields["task_index"], "has_regions": scene.regions is not None,
+                     "frame": index}
+            entry.update(report_task(resolved, evaluator.cpu, symbols, args.orbit))
             results.append(entry)
             print(json.dumps({k: v for k, v in entry.items() if k != "reads_not_captured"}))
     except scene_package.PackageError as error:
