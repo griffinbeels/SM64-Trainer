@@ -1,9 +1,10 @@
 """Work the page does while nothing he can see changes (perf audit 2026-09-25).
 
-Four witnesses, each driven through the real app on the UI fixture:
+Witnesses, each driven through the real app on the UI fixture:
 
   * an unchanged pause poll (every 5 s) renders nothing -- it used to hand
     the store a fresh object and re-render the whole app, hidden panes too;
+    the Friends status poll (every 2 s) had the same fault;
   * an event that cannot move the Daily Star or a goal refetches only the
     view and MARELO, and the hidden Library refetches nothing until it is
     shown -- one refresh event used to cost session + marelo + daily-star +
@@ -115,6 +116,27 @@ def _publish(service, kind, payload=None):
 
 def _event_fetches(page):
     return [path for path in page.evaluate("window.__fetched") if path in EVENT_FETCHES]
+
+
+def test_an_unchanged_friends_poll_renders_nothing(live):
+    """The Friends status poll (every 2 s, mounted in the app shell) handed the
+    store a fresh snapshot each time and re-rendered the whole app, hidden panes
+    too, with nothing changed (found 2026-10-25: it also failed the pause-poll
+    witness below whenever a Friends poll landed in its window)."""
+    base, _service = live
+    page_cm, page = _open(base)
+    try:
+        page.wait_ms(1500)
+        page.evaluate(LOG_FETCHES)
+        page.evaluate(COUNT_APP_RENDERS)
+        _wait_until(page, "window.__fetched.filter((p) => p === '/api/multiplayer').length >= 2", 8000)
+        page.wait_ms(300)
+        answered = page.evaluate("fetch('/api/multiplayer').then((r) => r.ok)")
+        assert answered, "the fixture's Friends status did not answer, so the poll never reached the store"
+        assert page.evaluate("window.__appRenders") == 0, (
+            "a Friends poll that answered the same snapshot re-rendered the app")
+    finally:
+        page_cm.__exit__(None, None, None)
 
 
 def test_an_unchanged_pause_poll_renders_nothing(live):

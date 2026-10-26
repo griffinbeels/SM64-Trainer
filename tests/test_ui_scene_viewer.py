@@ -27,7 +27,7 @@ def test_the_shell_reaches_the_viewer_only_after_the_server_says_it_exists():
     assert not any("sceneviewer" in name for name in _static_imports(app))
     probe = app.index('fetch("/api/scene-lab"')
     lazy = app.index('import("./components/sceneviewer.js")')
-    assert probe < lazy and "response.ok ?" in app[probe:lazy + 40]
+    assert probe < lazy and "probe?.lab ?" in app[probe:lazy + 40]
     index = (UI / "index.html").read_text(encoding="utf-8")
     assert "scenelab.css" not in index and "sceneviewer" not in index
 

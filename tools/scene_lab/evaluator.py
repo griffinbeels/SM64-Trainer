@@ -49,6 +49,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import package as scene_package  # noqa: E402
+import pick  # noqa: E402
 
 FCR31 = 0x01000800      # libultra's FS|EV, as the savestates hold
 
@@ -209,20 +210,51 @@ class Evaluator:
             self.state(index)
 
     def pose(self, index: int) -> dict:
-        """Frame `index`'s recorded camera (gLakituState's focus and position, the camera the
-        drawing used) and Mario's position, in the game's world coordinates: where a free camera
-        starts, and what Focus Mario looks at."""
+        """Frame `index`'s recorded camera (gLakituState's focus, position and screen roll, the
+        camera the drawing used, and the field of view the picture shows) and Mario's position,
+        in the game's world coordinates: where a free camera starts, and what Focus Mario looks
+        at. A free camera of all four draws the picture's own camera (run_geo).
+
+        The FOV is the captured list's own (pick.fov_of its world projection), shake included,
+        so a free camera starts at the FOV on screen even where this evaluator's state for the
+        frame draws another (the first frame of a FOV ramp or a shake, measured 2026-10-25:
+        48.5 against 52 degrees). Where a run from this camera drew the same FOV to 0.001
+        degrees it is the float the game drew with (sFOVState's fov, plus the shake offset when
+        a shake added one: shake_camera_fov leaves a stale offset when none runs), so the free
+        picture is the recorded one byte for byte. None when the picture has no perspective
+        camera."""
         e2, ram = self.e2, self.scene(index).ram
 
         def vector(address: int) -> list[float]:
             return [float(value) for value in struct.unpack_from(">3f", ram, e2.phys(address))]
         lakitu = e2.US["gLakituState"]
-        return {"focus": vector(lakitu + e2.LAKITU_FOCUS), "position": vector(lakitu + e2.LAKITU_POS),
+        focus, position = vector(lakitu + e2.LAKITU_FOCUS), vector(lakitu + e2.LAKITU_POS)
+        capture = self.package.frame(index)
+        try:
+            drawn = pick.walk(pick.ram_from_runs(capture.runs, capture.run_bytes), capture.task[12]).projection
+        except ValueError:
+            drawn = None
+        fov = None if drawn is None else pick.fov_of(drawn)
+        view = self.display_list(index, (focus, position)) if fov is not None and focus != position else None
+        if view is not None and view.ram is not None:
+            base, shake = np.frombuffer(view.ram, ">f4", 2, e2.phys(e2.US["sFOVState"] + e2.FOV_VALUE))
+            for game in (float(base), float(np.float32(base) + np.float32(shake))):
+                if abs(game - fov) < 1e-3:
+                    fov = game
+                    break
+        return {"focus": focus, "position": position,
+                "roll": struct.unpack_from(">h", ram, e2.phys(lakitu + e2.LAKITU_ROLL))[0], "fov": fov,
                 "mario": vector(e2.US["gMarioStates"] + e2.MARIO_POS)}
 
+    def mario(self, index: int) -> list[float]:
+        """Mario's position at frame `index` (pose's "mario", without pose's camera work)."""
+        return [float(value) for value in struct.unpack_from(
+            ">3f", self.scene(index).ram, self.e2.phys(self.e2.US["gMarioStates"] + self.e2.MARIO_POS))]
+
     def display_list(self, index: int, camera: tuple) -> View | None:
-        """Frame `index` from camera (focus xyz, position xyz), or None when it has no scene. One
-        caller thread at a time: views share one sandbox (resolution may run beside them)."""
+        """Frame `index` from camera (focus xyz, position xyz[, roll, fov]: e2_georender.run_geo),
+        or None when it has no scene. One caller thread at a time: views share one sandbox
+        (resolution may run beside them)."""
         resolved = self.state(index)
         if resolved.status:
             return None

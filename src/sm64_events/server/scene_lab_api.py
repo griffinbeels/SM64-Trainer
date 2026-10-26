@@ -34,12 +34,15 @@ sound late. 404 for no sound or no such block, 409 for a scene no longer open, 4
 that fails its hash.
 
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
-xyz, "position": xyz}, "encoding": "jpeg"|"raw"} for a picture, {"id", "session", "kind":
-"pose", "frame"} for the recorded camera and Mario. A picture comes back as one binary message,
-[u32 little-endian header length][header JSON][picture]; everything else is JSON text: a pose,
-{"id", "error"[, "closed"]}, or {"id", "superseded": true}. Each socket keeps at most one
-picture request waiting: a newer one replaces it and the replaced one is answered superseded,
-so quick steps never queue stale renders behind the one being drawn. The server sends its
+xyz, "position": xyz[, "roll", "fov"]}, "encoding": "jpeg"|"raw"} for a picture, {"id",
+"session", "kind": "pose", "frame"} for the recorded camera and Mario, {"id", "session", "kind":
+"pick", "frame", "camera", "u", "v"} for where the picture drew a point (u, v from 0 to 1 across
+and down; Set focus). A picture comes back as one binary message, [u32 little-endian header
+length][header JSON][picture]; everything else is JSON text: a pose, a pick, {"id", "error"[,
+"closed"]}, or {"id", "superseded": true}. Each socket keeps at most one picture request
+waiting: a newer one replaces it and the replaced one is answered superseded, so quick steps
+never queue stale renders behind the one being drawn. Poses and picks wait in order and are
+answered before pictures. The server sends its
 messages uncompressed even where the page negotiated permessage-deflate (_SendUncompressed):
 compressing a picture cost the event loop ~5 ms per JPEG and ~75 ms per exact-pixel picture.
 """
@@ -67,7 +70,7 @@ PACKAGE_SUFFIX = ".sm64scene"
 PAGE_GONE_SECONDS = 20.0       # a reload or a tab switch comes back within this; a closed page does not
 DEFAULT_IDLE_SECONDS = 300.0
 WATCH_SECONDS = 1.0
-MAX_POSES_WAITING = 8
+MAX_QUESTIONS_WAITING = 8     # poses and picks a socket holds; the oldest is answered superseded
 ENDS = {"closed": "Closed.",
         "replaced": "Closed to open another scene.",
         "page": "Closed because no page was showing it.",
@@ -364,6 +367,16 @@ class SceneLab:
             return {"id": message.get("id"), "error": str(error)}
         return {"id": message.get("id"), "kind": "pose", **pose}
 
+    async def pick_reply(self, message: dict) -> dict:
+        try:
+            picked = await self._run(message.get("session"), "pick", message.get("frame"), message.get("camera"),
+                                     message.get("u"), message.get("v"))
+        except SceneClosed as closed:
+            return {"id": message.get("id"), "error": str(closed), "closed": True}
+        except ValueError as error:
+            return {"id": message.get("id"), "error": str(error)}
+        return {"id": message.get("id"), "kind": "pick", **picked}
+
     async def audio_block(self, generation: int, block: int) -> tuple[bytes, str]:
         """One block of the open scene's sound, decoded and checked off the session's worker."""
         session = self.session
@@ -452,13 +465,14 @@ def _send_uncompressed(websocket: WebSocket) -> bool:
 
 class _PageSocket:
     """One page's socket: at most one picture request waiting (a newer one supersedes it),
-    a short queue of pose requests, answered one at a time in that order, poses first."""
+    a short queue of questions (poses and picks), answered one at a time in that order,
+    questions first."""
 
     def __init__(self, lab: SceneLab, websocket: WebSocket):
         self.lab, self.websocket = lab, websocket
         self.sending = asyncio.Lock()
         self.picture: dict | None = None
-        self.poses: deque = deque()
+        self.questions: deque = deque()
         self.wake = asyncio.Event()
         self.uncompressed: bool | None = None       # set at the first send, after a message arrived
 
@@ -483,10 +497,10 @@ class _PageSocket:
             if not isinstance(message, dict):
                 await self.send({"id": None, "error": "a request is one JSON object"})
                 continue
-            if message.get("kind") == "pose":
-                if len(self.poses) >= MAX_POSES_WAITING:
-                    await self.send({"id": self.poses.popleft().get("id"), "superseded": True})
-                self.poses.append(message)
+            if message.get("kind") in ("pose", "pick"):
+                if len(self.questions) >= MAX_QUESTIONS_WAITING:
+                    await self.send({"id": self.questions.popleft().get("id"), "superseded": True})
+                self.questions.append(message)
             else:
                 replaced, self.picture = self.picture, message
                 if replaced is not None:
@@ -497,9 +511,11 @@ class _PageSocket:
         while True:
             await self.wake.wait()
             self.wake.clear()
-            while self.poses or self.picture is not None:
-                if self.poses:
-                    await self.send(await self.lab.pose_reply(self.poses.popleft()))
+            while self.questions or self.picture is not None:
+                if self.questions:
+                    question = self.questions.popleft()
+                    reply = self.lab.pick_reply if question.get("kind") == "pick" else self.lab.pose_reply
+                    await self.send(await reply(question))
                 else:
                     message, self.picture = self.picture, None
                     await self.send(await self.lab.picture_reply(message))
