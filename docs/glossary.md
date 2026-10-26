@@ -1223,12 +1223,17 @@ never as a memory image. On a 90-second recording the state adds about
 5.4 MiB a minute to the closures' 2.4, and every checked task regenerates
 exactly as it does from the tap's own files (2026-10-25). A scene-resolution
 layer, added after writing, records what the [[scene evaluator]] found each
-task's drawing used, as addresses only (3.5 KB for that recording). The
-reader refuses a version or layer it does not know.
+task's drawing used, as addresses only (3.5 KB for that recording). A
+source-audio layer, also added after writing, carries the game sound the
+recorder's process tap heard, lossless, with the sample sounding as each
+picture appeared; attaching refuses sound recorded beside another session.
+The reader refuses a version or layer it does not know.
 
 - **Lives** -- `tools/scene_lab/package.py` (write, read, verify); the
   [[scene evaluator]] reads it and writes the scene-resolution layer
-  (`tools/scene_lab/evaluator.py`, its resolve command)
+  (`tools/scene_lab/evaluator.py`, its resolve command); the sound's format
+  (`tools/scene_lab/audio_layer.py`) and its attach command
+  (`tools/scene_lab/audio_session.py`)
 - **Not** -- what the [[scene tap]] itself writes, which holds raw memory
   images and pictures and stays private on the machine that recorded it
 
@@ -1258,7 +1263,9 @@ while it draws this one.
 
 An M4 experiment's page inside the Trainer that plays one [[scene package]]
 in its reconstructed stage: the game's own pictures from the **Recorded
-camera**, stepping forward and back, seeking and 30 fps playback, and a **Free
+camera**, stepping forward and back, seeking, and playback at the recording's
+own pace (each picture stays up as long as the recording showed it, so a level
+load's held picture holds and its sound plays through), and a **Free
 camera** the [[scene evaluator]] redraws. Free camera starts from the picture
 on screen (the recorded camera's place, screen tilt and field of view) and owns
 all four after that, so steps and seeks never move or zoom it. Controls: drag to
@@ -1277,12 +1284,20 @@ map). Nothing starts until someone opens a package; the hidden [[renderer]]
 helper and the evaluator start then and stop on Close, after a while unused,
 when no page shows the scene, and when the server stops. The page asks for one
 picture at a time, asks for the next as soon as one arrives, and a newer step or
-camera move replaces the waiting one.
+camera move replaces the waiting one. A package with a source-audio layer
+plays the sound the runner heard during Play, following the pictures: the
+sample heard as a picture appears is that picture's own. Stepping, seeking and
+Pause are silent; Mute (or M) and the volume persist per viewer; a stretch the
+capture lost plays silent and says so. A package without one says it has no
+sound.
 
 - **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
   mounted by `src/sm64_events/main.py`); one open scene
-  (`tools/scene_lab/scene_session.py`); the page
-  (`src/sm64_events/ui/components/sceneviewer.js`); the free camera's math
+  (`tools/scene_lab/scene_session.py`) and its sound (`tools/scene_lab/scene_audio.py`);
+  the page (`src/sm64_events/ui/components/sceneviewer.js`), the recording's
+  own clock its Play keeps (`src/sm64_events/ui/components/sceneclock.js`) and its sound
+  (`src/sm64_events/ui/components/sceneaudio.js`, rendered by `sceneaudioworklet.js`);
+  the free camera's math
   (`src/sm64_events/ui/components/scenecamera.js`) and feel numbers
   (`src/sm64_events/ui/scenecameratuning.js`); where it goes in the game's RAM
   (`tools/scene_lab/camera_state.py`); Set focus's point

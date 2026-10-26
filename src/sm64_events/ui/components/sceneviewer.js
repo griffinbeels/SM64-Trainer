@@ -26,6 +26,9 @@
 // only while it has focus, and the flight keys only while the right button is
 // held. Nothing is captured by opening a scene; Esc, letting go, leaving the
 // window and Close each stop every movement and give the pointer back.
+//
+// The recording's sound (sceneaudio.js) follows the picture clock: SceneLink
+// tells it when Play starts, each picture it draws, and every stop.
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
@@ -36,6 +39,8 @@ import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, scen
   setSceneCameraTuning } from "../scenecameratuning.js";
 import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lookingAt, looked,
   orbitFromPose, slid, speedStepped, turned, worldPoint } from "./scenecamera.js";
+import { SceneSound, SoundBar } from "./sceneaudio.js";
+import { pictureAt, playLength, recordedTimes } from "./sceneclock.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -122,7 +127,8 @@ export class SceneLink {
     Object.assign(this, { scene: null, frame: 0, free: false, orbit: null, entry: null, encoding: "jpeg",
       playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: null, wanted: null,
       sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null, entering: null,
-      arrived: 0, fly: null, speed: 1, picking: false, finding: false, glide: null, serial: 0, noticeTimer: null });
+      arrived: 0, fly: null, speed: 1, picking: false, finding: false, glide: null, serial: 0, noticeTimer: null,
+      sound: new SceneSound({ changed: () => this.changed() }) });
   }
 
   get freeAvailable() { return !!this.scene?.free_camera?.available; }
@@ -139,18 +145,21 @@ export class SceneLink {
     ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: null, wanted: null,
       notice: null, error: null, speed: 1 });
+    this.sound.load(scene);
     this.changed();
   }
 
   disconnect() {
     this.interrupt();
     this.playing = false;
+    this.sound.stop();
     Object.assign(this, { fly: null, picking: false, drag: null });
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
   }
 
   end(message) {
     this.disconnect();
+    this.sound.load(null);
     Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: null, wanted: null });
     this.changed();
     this.ended();
@@ -185,6 +194,7 @@ export class SceneLink {
     const current = () => arrived === this.arrived;
     await this.draw(header, new Uint8Array(buffer, 4 + length), current);
     if (!current()) return;           // a newer picture arrived while this one decoded
+    if (request) this.sound.shown(header.frame, request.sent);
     if (request) {
       header.trip_ms = received - request.sent;
       header.input_ms = performance.now() - request.inputTime;
@@ -460,25 +470,32 @@ export class SceneLink {
 
   step(delta, time) { this.pause(); this.seek(this.frame + delta, "input", time); }
 
-  pause() { if (this.playing) { this.playing = false; this.changed(); } }
+  pause() { if (this.playing) { this.playing = false; this.sound.stop(); this.changed(); } }
 
   toggle() { this.interrupt(); if (this.playing) this.pause(); else this.play(); }
 
-  // 30 fps against the clock: the frame due now is asked for whenever nothing
-  // is in flight, and frames that passed while one was drawn are skipped.
+  // The recording's own clock (sceneclock.js): each picture stays up as long
+  // as the recording showed it. The frame due now is asked for whenever
+  // nothing is in flight, and frames that passed while one was drawn are
+  // skipped. The clock starts once the sound can start with it (sound.lead()),
+  // so the first picture of a play holds that much longer.
   play() {
     const scene = this.scene;
     if (!scene) return;
-    const from = this.frame >= scene.frames.length - 1 ? 0 : this.frame, start = performance.now();
+    this.sound.arm();
+    const from = this.frame >= scene.frames.length - 1 ? 0 : this.frame, times = recordedTimes(scene);
+    const start = performance.now() + this.sound.lead(), length = playLength(times, from, scene.fps);
     this.playing = true;
     const tick = () => {
       if (!this.playing || this.scene !== scene) return;
-      const at = from + Math.floor((performance.now() - start) * scene.fps / 1000);
-      if (at >= scene.frames.length) { this.seek(scene.frames.length - 1, "play"); this.pause(); return; }
+      const elapsed = performance.now() - start;
+      if (elapsed >= length) { this.seek(scene.frames.length - 1, "play"); this.pause(); return; }
+      const at = pictureAt(times, from, elapsed);
       if (at !== this.frame) this.seek(at, "play");
       requestAnimationFrame(tick);
     };
     this.seek(from, "play");
+    this.sound.play(from, start);
     requestAnimationFrame(tick);
   }
 }
@@ -491,6 +508,7 @@ const KEYS = {
   " ": (link) => link.toggle(),
   f: (link, event) => link.lookAtMario(event.timeStamp),
   r: (link, event) => link.recorded(event.timeStamp),
+  m: (link) => link.sound.toggleMute(),
 };
 
 // The page's one keyboard owner (keydown and keyup on the viewer): flight keys
@@ -768,6 +786,7 @@ function Player({ link, canvas, surface }) {
     </div>
     ${link.notice && html`<p class="scene-lab-reason" role="status">${link.notice}</p>`}
     <${Transport} link=${link} />
+    <${SoundBar} sound=${link.sound} frame=${link.frame} />
     <${CameraBar} link=${link} tuning=${tuning} setTuning=${setTuning} />
     <${Readout} link=${link} />
   </section>
@@ -799,6 +818,7 @@ function useSceneLink(canvas, refresh) {
       // The server frees the renderer once no page has shown the scene for a
       // little while, so a tab switch and back keeps it open.
       scene.disconnect();
+      scene.sound.close();
     };
   }, []);
   return link.current;

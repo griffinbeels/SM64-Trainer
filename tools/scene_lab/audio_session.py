@@ -3,6 +3,7 @@
     audio_session.py build <tap session> <audio.cap> <out.audio> [--codec flac|stored] [--offset-ms X]
         [--report report.json]
     audio_session.py report <tap session> <audio.cap> [--offset-ms X]
+    audio_session.py attach <package.sm64scene> <layer.audio> <out.sm64scene> --rom <rom.z64>
 
 The capture file is what a bounded fanout from the recorder's process tap
 writes (e4-audio-design.md): a header naming the sample rate and the QPC
@@ -12,8 +13,10 @@ the fanout and, unless the fanout had to drop it (LOST), its s16 stereo PCM.
 `build` reads the session's present stamps (tap.py), fits the audio clock
 (audio_clock.py), maps every present and writes the package-ready layer
 (audio_layer.py) with a JSON report: drift, jitter, holes, losses and picture
-statuses. Capture files hold private game audio: keep them out of the
-repository.
+statuses. `attach` writes a scene package again with that layer as its
+source-audio layer (package.with_audio; `out` may be the package's own path),
+refusing audio from another session. Capture files hold private game audio:
+keep them out of the repository.
 """
 from __future__ import annotations
 
@@ -108,6 +111,27 @@ def build(session: Path, capture: Path, *, offset_ms: float = 0.0, presents: lis
     return clock, ac.stream_pcm(chunks, payloads)
 
 
+def attach(package_path: Path, layer_path: Path, out: Path, rom_path: Path) -> dict:
+    """Write the package again with the layer file as its source-audio layer (atomically, so
+    `out` may be the package itself). Returns what the viewer will play, counted per frame a
+    present showed: with sound, with lost sound (silence, marked), without any."""
+    import package as scene_package
+    import scene_audio
+
+    rom = rom_path.read_bytes()
+    data = scene_package.with_audio(package_path.read_bytes(), rom, layer_path.read_bytes())
+    partial = out.with_name(out.name + ".partial")
+    partial.write_bytes(data)
+    partial.replace(out)
+    package = scene_package.Package(data, rom)
+    outlines = [package.outline(index) for index in range(len(package))]
+    sound = scene_audio.SceneSound.of(package, [outline["present"] for outline in outlines if outline["vi"]])
+    silent = sum(sample < 0 for sample in sound.samples)
+    return {"package_bytes": len(data), "seconds": round(sound.layer.total_samples / sound.layer.rate, 3),
+            "frames": {"sound": len(sound.samples) - silent - len(sound.lost), "lost": len(sound.lost),
+                       "none": silent}}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -120,7 +144,19 @@ def main() -> int:
             p.add_argument("--codec", choices=sorted(al.CODECS), default="flac")
             p.add_argument("--report")
         p.add_argument("--offset-ms", type=float, default=0.0)
+    p = sub.add_parser("attach", help="write a scene package again with its source-audio layer")
+    p.add_argument("package", type=Path)
+    p.add_argument("layer", type=Path, help="what build wrote")
+    p.add_argument("out", type=Path, help="the package written again with the layer (may be the same path)")
+    p.add_argument("--rom", type=Path, required=True)
     args = parser.parse_args()
+    if args.command == "attach":
+        try:
+            print(json.dumps(attach(args.package, args.layer, args.out, args.rom), indent=2))
+        except ValueError as error:          # package.PackageError, audio_layer.LayerError
+            print(f"refused: {error}", file=sys.stderr)
+            return 2
+        return 0
     clock, pcm = build(Path(args.session), Path(args.capture), offset_ms=args.offset_ms)
     report = dict(clock.stats, total_samples=clock.total_samples, offset_ms=args.offset_ms)
     if args.command == "build":
