@@ -16,6 +16,7 @@ import os
 import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -383,6 +384,143 @@ def test_a_forced_ring_overflow_shows_as_lost_records_and_a_hole(recorded, tmp_p
         assert {120, 121, 122} <= indexes                # capture continues after the overflow
         after = spool.source(120, 122)
         assert [capture.fields[10] for capture in after.captures] == [120, 121, 122]
+    finally:
+        lease.stop()
+        host.close()
+
+
+class Follower:
+    """Spool.follow's captures drained on a thread, as the lab's cutter would."""
+
+    def __init__(self, source, rom: bytes | None = None, out: Path | None = None):
+        self.source, self.indexes, self.stats = source, [], None
+        self.thread = threading.Thread(target=self._run, args=(rom, out), daemon=True)
+        self.thread.start()
+
+    def _run(self, rom, out):
+        captures = self.source.captures
+        if rom is None:
+            for capture in captures:
+                self.indexes.append(capture.fields[10])
+            return
+        def counted():
+            for capture in captures:
+                self.indexes.append(capture.fields[10])
+                yield capture
+        self.source.captures = counted()
+        self.stats = pk.write_package(self.source, rom, out, pk.ZLIB, group=3, checkpoint_every=4)
+
+    def wait_for(self, count: int, timeout: float = 10) -> None:
+        until = time.monotonic() + timeout
+        while len(self.indexes) < count and time.monotonic() < until:
+            time.sleep(0.01)
+        assert len(self.indexes) >= count, (self.indexes, self.source.ended)
+
+    def join(self, timeout: float = 10) -> None:
+        self.thread.join(timeout)
+        assert not self.thread.is_alive(), "the follower did not end"
+
+
+@needs_toolchain
+def test_follow_yields_tasks_as_they_flush_across_segments_and_matches_source(recorded, tmp_path):
+    frames, rom = recorded["frames"], recorded["rom"]
+    lease = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=50"])
+    lease.start()
+    host = Host(tmp_path, frames[0])
+    try:
+        assert host.send("poke") == "ok 1"
+        for task in range(3):
+            host.send(f"frame {frames[task]}")
+            host.send(f"vi {frames[task]}")
+        host.send("poke")
+        spool = live_spool.open_spool(_lab(tmp_path))
+        live = Follower(spool.follow(1), rom, tmp_path / "followed.sm64scene")
+        abandoned = Follower(spool.follow(40))                # waits for a task still to come
+        live.wait_for(2)                                     # tasks 1, 2 before any more play
+        for task in range(3, 14):
+            if task % 4 == 0:
+                host.send("sleep 70")                        # a new segment
+            host.send(f"frame {frames[task % FRAMES]}")
+            host.send(f"vi {frames[(task + task // 6) % FRAMES]}")
+            if task == 6:
+                live.wait_for(5)                             # flushed tasks arrive while play goes on
+        live.source.stop_at(11)
+        live.join()
+        abandoned.source.stop_at(-1)
+        abandoned.join(timeout=1)
+        assert abandoned.indexes == [] and abandoned.source.ended is None
+        assert live.indexes == list(range(1, 12)) and live.source.ended is None and live.source.last == 11
+        assert len(list(spool.session.glob("seg-*.tap"))) >= 3
+        expected = tmp_path / "source.sm64scene"
+        pk.write_package(spool.source(1, 11), rom, expected, pk.ZLIB, group=3, checkpoint_every=4)
+        followed, cut = (pk.Package(path.read_bytes(), rom) for path in (tmp_path / "followed.sm64scene", expected))
+        assert len(followed) == len(cut) == 11
+        for index in range(11):
+            assert followed.frame(index) == cut.frame(index)
+            assert pk.state_fingerprint(*followed.scene_state(index)[1:]) == pk.state_fingerprint(
+                *cut.scene_state(index)[1:])
+        # The lease ends: a follower at the live edge ends too, saying why.
+        tail = Follower(spool.follow(12))
+        tail.wait_for(2)
+        lease.stop()
+        assert host.send("poke") == "ok 0"
+        tail.join()
+        assert tail.indexes == [12, 13] and tail.source.ended == "The Trainer ended the lease."
+    finally:
+        lease.stop()
+        host.close()
+
+
+@needs_toolchain
+def test_follow_ends_with_a_reason_when_it_falls_behind_or_reaches_a_hole(recorded, tmp_path):
+    frames = recorded["frames"]
+    lease = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=30", "window_ms=150", "ring_mib=16"])
+    lease.start()
+    host = Host(tmp_path, frames[0])
+    try:
+        assert host.send("poke") == "ok 1"
+        for task in range(3):
+            host.send(f"frame {frames[task]}")
+            host.send(f"vi {frames[task + 1]}")
+        host.send("poke")
+        spool = live_spool.open_spool(_lab(tmp_path))
+        slow = spool.follow(0)
+        first = next(slow.captures)                          # it has read segment 1 so far, then stalls
+        for group in range(6):
+            host.send("sleep 60")
+            host.send(f"frame {frames[group % FRAMES]}")
+        host.send("poke")                                    # segment 1 left the 150 ms window
+        assert not (spool.session / "seg-000001.idx").exists()
+        rest = [capture.fields[10] for capture in slow.captures]
+        assert [first.fields[10], *rest] == list(range(len(rest) + 1))   # never a silent skip
+        assert "fell behind" in slow.ended
+        late = spool.follow(0)
+        assert list(late.captures) == [] and late.ended == "Task 0 already left the spool's window."
+        # A full ring: the follower stops at the first incomplete task (a new session, a wide window).
+        lease.stop()
+        host.send("poke")
+        lease = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=60000", "ring_mib=16"])
+        lease.start()
+        assert host.send("poke") == "ok 1"
+        host.send(f"frame {frames[0]}")
+        host.send("poke")
+        spool = live_spool.open_spool(_lab(tmp_path))
+        newest = spool.tasks()[-1].index
+        through = Follower(spool.follow(newest))
+        host.send("hold")
+        for task in range(80):                               # each shown, as the game shows them
+            host.send(f"frame {frames[task % FRAMES]}")
+            host.send(f"vi {frames[task % FRAMES]}")
+        host.send("release")
+        host.send("poke")
+        for task in range(3):
+            host.send(f"frame {frames[task]}")
+            host.send(f"vi {frames[task]}")
+        host.send("poke")
+        through.join()
+        holes = spool.health()["holes"]
+        assert holes and through.indexes == list(range(newest, holes[0][0]))
+        assert through.source.ended == f"Task {holes[0][0]} lost records when the capture ring was full."
     finally:
         lease.stop()
         host.close()
