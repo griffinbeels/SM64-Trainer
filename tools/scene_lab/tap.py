@@ -13,7 +13,8 @@ each recorded task into a frame input (savestate_frames.py format) whose
 RDRAM holds ONLY the captured closure, every other byte set to --pattern,
 paired with the presented picture that followed it (ref.bgr); --every N keeps
 only every N-th frame that has a reference picture. `arm` also
-names the scene state spans (layout.py's scene_* and main_pool_* rows) the tap
+names the scene state spans (layout.py's scene_* and main_pool_* rows, plus the
+act selector's save_buffer_* and usamune_state_* where the layout has them) the tap
 copies with each task, so SM64's own renderer can re-run offline (E2-live:
 tools/scene_lab/e2_georender.py from-tap; `scene_states` rebuilds each task's
 RDRAM from a session). `offline` runs the REAL producer (scene_tap.cpp, through
@@ -52,6 +53,10 @@ REGION_FIELDS = ("task_index", "kind", "count", "data_bytes", "copy_ns", "scan_n
 SCENE_SPANS = (("scene_data_start", "scene_data_end"), ("scene_bss_start", "scene_bss_end"),
                ("scene_engine_bss_start", "scene_engine_bss_end"))
 SCENE_LEVEL_SPANS = (("main_pool_start", "main_pool_end"),)
+# Copied whole with every task too, each only where this version's layout names
+# it: the act selector's coin score (gSaveBuffer) and Usamune's settings and
+# counters its act-select hook prints. A version without them loses those menus.
+SCENE_OPTIONAL_SPANS = (("save_buffer_start", "save_buffer_end"), ("usamune_state_start", "usamune_state_end"))
 # SM64's gfx pool (GFX_POOL_SIZE: 6400 commands, every version) starts at a task's data pointer.
 # The update allocates from its top before geo_process_root draws: obj_orient_graph's floor-aligned
 # matrices, which the render reads through throwMatrix and then lets go of (E2-live). The tap copies
@@ -233,6 +238,10 @@ def scene_state_lines(layout) -> list[str]:
             if start is None or end is None:
                 return []
             lines.append(f"{kind}={start & 0x1FFFFFFF:x}:{end - start}")
+    for start_field, end_field in SCENE_OPTIONAL_SPANS:
+        start, end = layout.value(start_field), layout.value(end_field)
+        if start is not None and end is not None:
+            lines.append(f"region={start & 0x1FFFFFFF:x}:{end - start}")
     lines.append(f"task_region={GFX_POOL_BYTES - POOL_TAIL_BYTES:x}:{POOL_TAIL_BYTES}")
     return lines
 

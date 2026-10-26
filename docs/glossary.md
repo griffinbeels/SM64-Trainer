@@ -1176,11 +1176,14 @@ input the [[renderer]] can redraw offline.
 
 The game memory SM64's own scene-graph code reads to build one task's display
 list: the game globals and the object pool, and the main pool where a level's
-scene graph, surfaces and models live. The [[scene tap]] copies it with each
-task: the globals and the pool whole every time, the tail of the task's own
-graphics pool (where the update leaves the floor-aligned matrices the drawing
-places walkers with), the main pool whole at each new level and then only its
-blocks that changed. A few callbacks draw from a value and then step it
+scene graph, surfaces and models live. The menu that picks a course's act also
+reads the save buffer (the course's coin score) and Usamune's settings and
+counters (its hook prints a counter there). The [[scene tap]] copies it with
+each task: the globals, the object pool and those two spans whole every time,
+the tail of the task's own graphics pool (where the update leaves the
+floor-aligned matrices the drawing places walkers with), the main pool whole
+at each new level and then only its blocks that changed. A few callbacks draw
+from a value and then step it
 (painting ripples, the camera's field of view and its shake, title and menu
 counters); the copy holds the stepped value, so the value the drawing used is
 the previous [[frame]]'s copy. Running the game's own code
@@ -1189,8 +1192,8 @@ every other byte overwritten, rebuilds that task's display list byte for byte,
 and a moved camera reads nothing else (M4 experiment E2, 2026-10-24, on two
 savestates). That is what lets a recording be re-viewed from a free camera.
 
-- **Lives** -- the spans (the scene and main-pool rows in
-  `src/sm64_events/memory/layout.py`); the copy (`plugin/gfxwrap/scene_tap.cpp`);
+- **Lives** -- the spans (the scene, main-pool, save-buffer and Usamune-state
+  rows in `src/sm64_events/memory/layout.py`); the copy (`plugin/gfxwrap/scene_tap.cpp`);
   the rebuild and the proof (`tools/scene_lab/tap.py`,
   `tools/scene_lab/e2_georender.py`, its from-tap and from-package modes);
   its portable form (`tools/scene_lab/package.py`, the scene-state layer)

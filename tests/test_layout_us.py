@@ -33,6 +33,10 @@ US_2026_08_15 = {
     "scene_bss_start": 0x8033AF90, "scene_bss_end": 0x80361270,
     "scene_engine_bss_start": 0x8038BCA0, "scene_engine_bss_end": 0x8038EEE0,
     "main_pool_start": 0x8005C010, "main_pool_end": 0x801C0FF0,
+    # The act selector's spans (2026-10-25): gSaveBuffer off the linker map and
+    # Usamune's settings and counters; their live gates remain VERIFY.
+    "save_buffer_start": 0x80207700, "save_buffer_end": 0x80207900,
+    "usamune_state_start": 0x80417B4C, "usamune_state_end": 0x80417C80,
 }
 
 

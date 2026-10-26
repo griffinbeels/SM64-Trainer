@@ -1452,3 +1452,63 @@ for _field in ("main_pool_start", "main_pool_end"):
         proves="The main pool bounds are the values the game's own pool globals hold.",
         check=_check_main_pool(_field),
     ))
+
+
+# --- the act selector's spans (M4 E2-live, lab only)
+#
+# The act selector (star select) prints the course's coin score out of the
+# save buffer, and Usamune's hook prints its own counter there under two of
+# its settings, so the scene tap copies both spans with each task. As above,
+# only the offline regeneration of an act-select task proves them whole.
+
+SAVE_BUFFER_BYTES = 0x200           # struct SaveBuffer: 4 files x 2 copies x 0x38, then 2 menu copies
+MENU_DATA_OFF, MENU_DATA_BYTES = 0x1C0, 0x20
+MENU_DATA_MAGIC = 0x4849            # "HI": the decomp's save block signature on the menu data
+
+
+def _signed(block: bytes, magic: int) -> bool:
+    """The decomp's save block signature: {u16 magic, u16 checksum} ends the
+    block, the checksum summing every byte before it but its own two."""
+    return (int.from_bytes(block[-4:-2], "big") == magic
+            and int.from_bytes(block[-2:], "big") == sum(block[:-2]) & 0xFFFF)
+
+
+def _check_save_buffer(field: str):
+    def check(ctx) -> Verdict:
+        span = _span(ctx, "save_buffer_start", "save_buffer_end")
+        if span is None:
+            return Verdict("missing", evidence="save_buffer_start/save_buffer_end candidates missing")
+        if span is False or span[1] - span[0] != SAVE_BUFFER_BYTES:
+            return Verdict("failed", evidence="span is not one word-aligned struct SaveBuffer in RDRAM")
+        block = ctx.raw().read_block(span[0], SAVE_BUFFER_BYTES)
+        menus = [_signed(block[at:at + MENU_DATA_BYTES], MENU_DATA_MAGIC)
+                 for at in (MENU_DATA_OFF, MENU_DATA_OFF + MENU_DATA_BYTES)]
+        if not all(menus):
+            return Verdict("failed", measured={"menu_copies_signed": sum(menus)},
+                           evidence="the menu data copies at the buffer's end lack the save block signature")
+        return Verdict("verified", value=ctx.candidate(field), measured={"bytes": SAVE_BUFFER_BYTES},
+                       evidence="both menu data copies end the span with their signature and checksum, "
+                                "which the game writes at boot; only the offline regeneration of an "
+                                "act-select task proves the coin scores it reads")
+    return check
+
+
+for _field in ("save_buffer_start", "save_buffer_end"):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+        needs=("version.rom",),
+        instruction="Nothing to do once a file is loaded: reads the save buffer once.",
+        proves="The span is gSaveBuffer: it ends with the two signed copies of the menu data.",
+        check=_check_save_buffer(_field),
+    ))
+
+_USAMUNE_INSIDE = ("usamune_stop", "usamune_input_display", "usamune_overall", "usamune_star_result")
+for _field in ("usamune_state_start", "usamune_state_end"):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+        needs=tuple(f"address.{name}" for name in _USAMUNE_INSIDE),
+        instruction="Nothing to do: checks Usamune's state span against its verified globals.",
+        proves="Usamune's settings and counters span holds every verified Usamune setting and counter.",
+        check=_scene_span_gate(_field, "usamune_state_start", "usamune_state_end", _USAMUNE_INSIDE,
+                               "every verified Usamune setting and counter"),
+    ))

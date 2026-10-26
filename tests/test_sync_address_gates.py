@@ -697,3 +697,64 @@ def test_usamune_stop_that_never_moves_or_leaves_the_four_settings_fails():
                          AG._check_usamune_stop).status == "failed"
     assert _usamune_flip("usamune_stop", lambda t: 1 if t < 1.0 else 7,
                          AG._check_usamune_stop).status == "failed"
+
+
+# --- the act selector's spans (M4 E2-live) ------------------------------------
+
+_ACT_SPANS = ("save_buffer_start", "save_buffer_end", "usamune_state_start", "usamune_state_end")
+
+
+def _save_buffer(memory, *, signed=(True, True)) -> None:
+    """gSaveBuffer as the game leaves it after boot: two menu data copies, each
+    ending with the decomp's {u16 magic "HI", u16 checksum} signature."""
+    for copy, sign in enumerate(signed):
+        block = bytearray(range(copy, copy + AG.MENU_DATA_BYTES))
+        if sign:
+            block[-4:-2] = AG.MENU_DATA_MAGIC.to_bytes(2, "big")
+            block[-2:] = (sum(block[:-2]) & 0xFFFF).to_bytes(2, "big")
+        at = US.save_buffer_start + AG.MENU_DATA_OFF + copy * AG.MENU_DATA_BYTES
+        for offset, value in enumerate(block):
+            memory.write_u8(at + offset, value)
+
+
+def test_every_act_select_span_has_an_optional_address_gate_and_a_verify_row():
+    from sm64_events.memory.layout import LAYOUT_ROWS
+    for field in _ACT_SPANS:
+        gate = next(g for g in GATES if g.id == f"address.{field}")
+        assert gate.optional and gate.auto and gate.kind == "address"
+        row = next(r for r in LAYOUT_ROWS if r.field == field)
+        assert row.optional and row.note.startswith("VERIFY") and row.symbol is None
+
+
+def test_save_buffer_is_verified_by_the_signed_menu_data_that_ends_it():
+    memory = BufferMemory()
+    _save_buffer(memory)
+    candidates = {field: getattr(US, field) for field in ("save_buffer_start", "save_buffer_end")}
+    verdict = AG._check_save_buffer("save_buffer_end")(FakeContext(memory, candidates))
+    assert verdict.status == "verified" and verdict.value == US.save_buffer_end
+
+
+def test_save_buffer_without_its_signatures_or_of_the_wrong_size_fails():
+    candidates = {field: getattr(US, field) for field in ("save_buffer_start", "save_buffer_end")}
+    for signed in ((True, False), (False, True)):
+        memory = BufferMemory()
+        _save_buffer(memory, signed=signed)
+        verdict = AG._check_save_buffer("save_buffer_start")(FakeContext(memory, candidates))
+        assert verdict.status == "failed" and verdict.measured["menu_copies_signed"] == 1
+    memory = BufferMemory()
+    _save_buffer(memory)
+    shifted = dict(candidates, save_buffer_end=US.save_buffer_end + 4)
+    assert AG._check_save_buffer("save_buffer_start")(FakeContext(memory, shifted)).status == "failed"
+    assert AG._check_save_buffer("save_buffer_start")(FakeContext(memory, {})).status == "missing"
+
+
+def test_usamune_state_span_holds_every_verified_usamune_global():
+    names = ("usamune_state_start", "usamune_state_end", *AG._USAMUNE_INSIDE)
+    candidates = {field: getattr(US, field) for field in names}
+    check = AG._scene_span_gate("usamune_state_start", "usamune_state_start", "usamune_state_end",
+                                AG._USAMUNE_INSIDE, "every verified Usamune setting and counter")
+    verdict = check(FakeContext(BufferMemory(), candidates))
+    assert verdict.status == "verified" and verdict.value == US.usamune_state_start
+    short = dict(candidates, usamune_state_end=US.usamune_star_result)    # cuts the result off
+    verdict = check(FakeContext(BufferMemory(), short))
+    assert verdict.status == "failed" and "usamune_star_result" in verdict.evidence

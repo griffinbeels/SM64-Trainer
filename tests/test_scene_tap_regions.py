@@ -8,12 +8,16 @@ every task; a level region is copied whole at the first task and at each new
 segment key, else only its changed 256-byte blocks; a task region sits at the
 task's own data pointer; spans that leave RDRAM are dropped at arming; and
 scene_states rebuilds, for every task, exactly the bytes RDRAM held at that
-task over every captured span.
+task over every captured span. `tap.py arm` names the layout's spans within
+the wrapper's region limits.
 
-Skipped (not failed) on a machine without the x86 MSVC toolchain."""
+The producer test is skipped (not failed) on a machine without the x86 MSVC
+toolchain."""
 from __future__ import annotations
 
+import dataclasses
 import json
+import re
 import struct
 import subprocess
 import sys
@@ -30,9 +34,10 @@ import build_plugin  # noqa: E402
 import tap  # noqa: E402
 
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
+from sm64_events.memory.layout import US  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not build_plugin.toolchain_available(),
-                                reason="no x86 MSVC toolchain (vcvars32.bat)")
+needs_toolchain = pytest.mark.skipif(not build_plugin.toolchain_available(),
+                                     reason="no x86 MSVC toolchain (vcvars32.bat)")
 
 RDRAM = 8 << 20
 LIST, UCODE, UCODE_DATA = 0x100000, 0x200000, 0x201000
@@ -56,6 +61,7 @@ def write_frame(folder: Path, ram: np.ndarray, segment_base: int) -> Path:
     return folder
 
 
+@needs_toolchain
 def test_regions_copy_whole_tasks_and_level_keys_then_only_changed_blocks(tmp_path):
     rng = np.random.default_rng(64)
     ram = rng.integers(0, 256, RDRAM, dtype=np.uint8)
@@ -113,3 +119,44 @@ def test_regions_copy_whole_tasks_and_level_keys_then_only_changed_blocks(tmp_pa
             assert np.array_equal(rebuilt[begin:begin + size], expected[begin:begin + size])
         assert np.array_equal(rebuilt[known], expected[known]), f"task {task.fields['task_index']}"
         assert not known[TASK_REGION[0] + TASK_REGION[1]:LEVEL_REGION[0]].any()
+
+
+def _wrapper_limits() -> tuple[int, int]:
+    """(regions, bytes) scene_tap.cpp accepts for region= lines, read off its source."""
+    source = (REPO / "plugin/gfxwrap/scene_tap.cpp").read_text(encoding="utf-8")
+    count, value, shift = map(int, re.search(
+        r"kMaxRegions = (\d+), kMaxRegionBytes = (\d+)u << (\d+)", source).groups())
+    return count, value << shift
+
+
+def _region_lines(lines: list[str]) -> list[tuple[int, int]]:
+    return [tuple(int(part, 16) if i == 0 else int(part) for i, part in
+                  enumerate(line.removeprefix("region=").split(":"))) for line in lines if line.startswith("region=")]
+
+
+def test_arming_names_the_act_selectors_spans_beside_the_renderers_within_the_wrapper_limits():
+    """The act selector re-renders only with gSaveBuffer (the course's coin score) and
+    Usamune's settings and counters (its hook prints settings +7/+8 and the u16 at
+    +0x122): five whole spans per task, inside what the wrapper keeps, never overlapping."""
+    lines = tap.scene_state_lines(US)
+    regions = _region_lines(lines)
+    count, budget = _wrapper_limits()
+    assert len(regions) == len(tap.SCENE_SPANS) + len(tap.SCENE_OPTIONAL_SPANS) <= count
+    assert sum(size for _, size in regions) + tap.POOL_TAIL_BYTES <= budget
+    ordered = sorted(regions)
+    assert all(a + n <= b for (a, n), (b, _) in zip(ordered, ordered[1:], strict=False))
+    assert all(begin % 4 == 0 and size % 4 == 0 and begin + size <= RDRAM for begin, size in regions)
+    # What the 9 act-select tasks of tap-20261025-184022 read and the tap missed.
+    hook_reads = ((US.save_buffer_start + 0x25, 1), (US.usamune_state_start + 7, 2),
+                  (US.usamune_state_start + 0x122, 2))
+    for at, size in hook_reads:
+        at &= 0x1FFFFFFF
+        assert any(begin <= at and at + size <= begin + n for begin, n in regions), hex(at)
+    assert sum(line.startswith("level_region=") for line in lines) == 1
+
+
+def test_a_layout_without_the_act_selectors_spans_still_arms_the_renderers():
+    bare = dataclasses.replace(US, save_buffer_start=None, save_buffer_end=None,
+                               usamune_state_start=None, usamune_state_end=None)
+    assert len(_region_lines(tap.scene_state_lines(bare))) == len(tap.SCENE_SPANS)
+    assert tap.scene_state_lines(dataclasses.replace(US, scene_bss_end=None)) == []

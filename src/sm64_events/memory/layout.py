@@ -141,6 +141,22 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               optional=True),
     LayoutRow("main_pool_end", None, "main_pool_bounds",
               "VERIFY: the value sPoolEnd holds (exclusive)", optional=True),
+    # Two more spans the scene tap copies with each task, for the act selector
+    # (star select): it prints the course's coin score out of the save buffer,
+    # and Usamune's hook prints its own counter there under two settings.
+    LayoutRow("save_buffer_start", None, "linker_map_symbols",
+              "VERIFY: gSaveBuffer: four save files in two copies, then two copies of the "
+              "menu data; the act selector reads the course's coin score", optional=True),
+    LayoutRow("save_buffer_end", None, "linker_map_symbols",
+              "VERIFY: end (exclusive) of gSaveBuffer: the next symbol, gGfxSPTaskStack",
+              optional=True),
+    LayoutRow("usamune_state_start", None, "usamune_code_refs",
+              "VERIFY: Usamune's settings array (usamune_stop is base + 1), where its "
+              "boot-copied code ends; its act-select hook reads settings +7 and +8",
+              optional=True),
+    LayoutRow("usamune_state_end", None, "usamune_code_refs",
+              "VERIFY: end (exclusive) past the counters after the settings: the u16 at +0x122 "
+              "the act-select hook prints, usamune_overall, usamune_star_result", optional=True),
 )
 
 
@@ -184,6 +200,10 @@ class Layout:
     scene_engine_bss_end: int | None = None
     main_pool_start: int | None = None
     main_pool_end: int | None = None
+    save_buffer_start: int | None = None
+    save_buffer_end: int | None = None
+    usamune_state_start: int | None = None
+    usamune_state_end: int | None = None
 
     def value(self, field: str) -> int | None:
         return getattr(self, field)
@@ -275,6 +295,21 @@ US = Layout(
     scene_engine_bss_end=0x8038EEE0,
     main_pool_start=0x8005C010,
     main_pool_end=0x801C0FF0,
+    # VERIFY until the next live E2 proof. On session tap-20261025-184022 the 9
+    # act-select tasks regenerate identically once these bytes come from the
+    # session's own full RDRAM copy (2026-10-25); the hook read gSaveBuffer +0x25
+    # (file A's BoB coin score) and Usamune settings +7, +8 and the u16 at +0x122.
+    # gSaveBuffer: STROOP MappingUS.map, up to the next symbol (gGfxSPTaskStack);
+    # 0x200 = sizeof(struct SaveBuffer), and every file and menu copy in that
+    # copy carried its save block signature and checksum. Usamune: base =
+    # usamune_stop - 1, which its code addresses 251 times and where its
+    # boot-copied ROM image ends (97,100 bytes from 0x80400000); the end is the
+    # first 16-byte address boundary past usamune_star_result (ends 0x80417C76),
+    # below 0x80417C86, the next global its code addresses on its own.
+    save_buffer_start=0x80207700,
+    save_buffer_end=0x80207900,
+    usamune_state_start=0x80417B4C,
+    usamune_state_end=0x80417C80,
 )
 
 # JP / Usamune v1.93j. Every value passed its address gate on his JP game
