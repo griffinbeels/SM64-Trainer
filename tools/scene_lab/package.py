@@ -129,6 +129,7 @@ CHECKPOINT_EVERY = 64
 RDRAM_SIZES = (4 << 20, 8 << 20)
 BOOT_ROM = (0x1000, 0x101000)          # IPL3 copies 1 MiB from ROM 0x1000 to the header's entry point
 WINDOW = 0x10000                       # ROM window a discovered static mapping references
+RECHOOSE_TASKS = 32                    # a segment base no load fits is searched again this many tasks on
 
 MAX_PACKAGE_BYTES = 4 << 30
 MAX_INDEX_BYTES = 256 << 20
@@ -411,12 +412,20 @@ class Candidate:
     rom_end: int
     data: bytes
     _image: bytes | None = None
+    _array: np.ndarray | None = None
 
     @property
     def image(self) -> bytes:
         if self._image is None:
             self._image = swap_words(self.data)
         return self._image
+
+    @property
+    def array(self) -> np.ndarray:
+        """The image as bytes numpy compares a whole run against at once."""
+        if self._array is None:
+            self._array = np.frombuffer(self.image, np.uint8)
+        return self._array
 
 
 class Attributor:
@@ -430,10 +439,19 @@ class Attributor:
     checked byte for byte, so a wrong guess only costs size, never fidelity.
     """
 
-    def __init__(self, rom: bytes, rdram_size: int, rom_loads: list[dict] | None = None):
+    def __init__(self, rom: bytes, rdram_size: int, rom_loads: list[dict] | None = None,
+                 shared: Attributor | None = None):
         """`rom_loads`: provenance.segment_loads(rom) when the caller keeps it (decoding the ROM's
-        MIO0 blocks costs ~1 s of every package otherwise; attempt_cutter.py writes many)."""
+        MIO0 blocks costs ~1 s of every package otherwise; attempt_cutter.py writes many).
+        `shared`: an attributor over the same ROM and RDRAM size whose candidates, discovered
+        windows and known misses this one uses and adds to (attempt_cutter.py's takes: a take's
+        first frame then skips the ROM searches an earlier take already made)."""
         self.rom, self.rdram_size = rom, rdram_size
+        self._per_package()
+        if shared is not None:
+            self.by_segment, self.anywhere, self.static = shared.by_segment, shared.anywhere, shared.static
+            self.windows, self.misses = shared.windows, shared.misses
+            return
         self.by_segment: dict[int, list[Candidate]] = {}
         anywhere: dict[int, Candidate] = {}
         slices: dict[tuple[int, int], Candidate] = {}
@@ -449,10 +467,18 @@ class Attributor:
         start, end = BOOT_ROM[0], min(BOOT_ROM[1], len(rom), BOOT_ROM[0] + rdram_size - entry)
         self.static: list[tuple[int, Candidate]] = [(entry, Candidate(LOAD_ROM, start, end, rom[start:end]))]
         self.windows: set[tuple[int, int, int]] = set()
-        self.choices: dict[tuple[int, int], Candidate] = {}
         self.misses: set[bytes] = set()
+
+    def _per_package(self) -> None:
+        self.choices: dict[tuple[int, int], Candidate] = {}
+        # A segment base no candidate fits well (dynamic data in a ROM-loaded segment, a buffer
+        # the game fills) is searched again only RECHOOSE_TASKS tasks later, not on every task:
+        # the search tried every MIO0 block in the ROM, ~4 ms a frame on his BoB minute.
+        self.rechoose: dict[tuple[int, int], int] = {}
+        self.tasks_seen = 0
         self.loads: dict[Candidate, int] = {}
-        self.sparse = bytearray(b"\xa5") * rdram_size
+        self.sparse = bytearray(b"\xa5") * self.rdram_size
+        self.sparse_array = np.frombuffer(self.sparse, np.uint8)   # a view: _place writes through it
         self.runs: list = []
         self.ends: list = []
 
@@ -462,6 +488,7 @@ class Attributor:
         State spans hold no display list: they pass the RSP segment bases the tap recorded, and
         look for new ROM windows only where new content arrives (a level key)."""
         self._place(capture)
+        self.tasks_seen += 1
         segments = self._segments(capture.task) if segments is None else segments
         for _ in range(8):
             mappings = self._segment_mappings(segments) + self.static
@@ -490,15 +517,24 @@ class Attributor:
         for segment, base in sorted(segments.items()):
             if base % 4 or base >= self.rdram_size:
                 continue
-            chosen = self.choices.get((segment, base))
+            key = (segment, base)
+            chosen = self.choices.get(key)
+            if self.rechoose.get(key, -1) < self.tasks_seen:
+                if chosen is not None and not self._fits(chosen, base):
+                    chosen = None
+                if chosen is None:
+                    chosen = self._choose(segment, base)
+                    self.choices.pop(key, None)
+                    if chosen is None or not self._fits(chosen, base):
+                        self.rechoose[key] = self.tasks_seen + RECHOOSE_TASKS
             if chosen is not None:
-                matched, total = self._matched(chosen, base)
-                chosen = chosen if total and matched * 2 >= total else None
-            chosen = chosen or self._choose(segment, base)
-            if chosen is not None:
-                self.choices[(segment, base)] = chosen
+                self.choices[key] = chosen
                 mappings.append((base, chosen))
         return mappings
+
+    def _fits(self, candidate: Candidate, base: int) -> bool:
+        matched, total = self._matched(candidate, base)
+        return bool(total) and matched * 2 >= total
 
     def _choose(self, segment: int, base: int) -> Candidate | None:
         best, best_matched = None, 0
@@ -517,35 +553,57 @@ class Attributor:
             yield max(begin, lo), min(end, hi)
 
     def _matched(self, candidate: Candidate, base: int, limit: int = 0) -> tuple[int, int]:
-        """Closure bytes in the candidate's span that equal it, of those compared."""
+        """Closure bytes in the candidate's span that equal it, of those compared: 32-byte
+        granules from each overlap's start, whole or not at all; with `limit`, only granules
+        until that many bytes were compared."""
         image, matched, total = candidate.image, 0, 0
         for lo, hi in self._overlap(base, base + len(image)):
             if not limit and self.sparse[lo:hi] == image[lo - base:hi - base]:
                 matched, total = matched + hi - lo, total + hi - lo
                 continue
-            for at in range(lo, hi, 32):
-                size = min(32, hi - at)
-                total += size
-                matched += size if self.sparse[at:at + size] == image[at - base:at - base + size] else 0
-                if limit and total >= limit:
-                    return matched, total
+            starts = np.arange(0, hi - lo, 32)
+            sizes = np.diff(np.append(starts, hi - lo))
+            good = np.logical_and.reduceat(self.sparse_array[lo:hi] == candidate.array[lo - base:hi - base], starts)
+            if limit:
+                reach = int(np.searchsorted(np.cumsum(sizes), limit - total))
+                if reach < len(sizes):
+                    return matched + int(sizes[:reach + 1][good[:reach + 1]].sum()), \
+                        total + int(sizes[:reach + 1].sum())
+            matched, total = matched + int(sizes[good].sum()), total + hi - lo
         return matched, total
 
-    def _equal(self, at: int, size: int, mapping: tuple[int, Candidate]) -> bool:
-        base, candidate = mapping
-        offset = at - base
-        return (0 <= offset and offset + size <= len(candidate.image)
-                and self.sparse[at:at + size] == candidate.image[offset:offset + size])
-
     def _pieces(self, mappings: list) -> list[list]:
+        """Each 32-byte granule of each run (from the run's start) names the mapping that held
+        the previous granule if it still holds this one whole, else the first mapping in order
+        that does, else none (raw). Granules are matched a run at a time; the walk then visits
+        each stretch of one choice, not each granule (measured 2026-10-26: 14.4 -> see
+        attempt_cutter.py ms a frame)."""
         pieces: list[list] = []
         for begin, end in self.runs:
-            last = None
-            for at in range(begin, end, 32):
-                size = min(32, end - at)
-                if last is None or not self._equal(at, size, last):
-                    last = next((mapping for mapping in mappings if self._equal(at, size, mapping)), None)
-                _append(pieces, at, size, last)
+            near = [mapping for mapping in mappings
+                    if mapping[0] < end and mapping[0] + len(mapping[1].image) > begin]
+            if not near:
+                _append(pieces, begin, end - begin, None)
+                continue
+            starts = np.arange(0, end - begin, 32)
+            holds = np.zeros((len(near), len(starts)), bool)
+            for row, (base, candidate) in enumerate(near):
+                lo, hi = max(begin, base), min(end, base + len(candidate.image))
+                equal = np.zeros(end - begin, bool)
+                equal[lo - begin:hi - begin] = self.sparse_array[lo:hi] == candidate.array[lo - base:hi - base]
+                holds[row] = np.logical_and.reduceat(equal, starts)
+            anywhere = holds.any(axis=0)
+            granule, count, last = 0, len(starts), None
+            while granule < count:
+                if last is None or not holds[last, granule]:
+                    hits = np.flatnonzero(holds[:, granule])
+                    last = int(hits[0]) if hits.size else None
+                stretch = anywhere[granule:] if last is None else ~holds[last, granule:]
+                stop = granule + (int(np.argmax(stretch)) if stretch.any() else count - granule)
+                stop = max(stop, granule + 1)
+                at = begin + 32 * granule
+                _append(pieces, at, min(begin + 32 * stop, end) - at, None if last is None else near[last])
+                granule = stop
         return pieces
 
     def _discover(self, pieces: list[list]) -> bool:
@@ -605,9 +663,12 @@ def _append(pieces: list[list], at: int, size: int, mapping: tuple[int, Candidat
         pieces.append(["raw", at, at + size])
 
 
-def compress(codec: int, raw: bytes) -> bytes:
+def compress(codec: int, raw: bytes, level: int = 9) -> bytes:
+    """`level`: zlib's. 9 for a package written once; a take written while he plays uses 6
+    (measured 2026-10-26 on 600 frames of his BoB minute: 3.69 MB at 5.3 ms a frame against
+    3.91 MB at 0.8)."""
     if codec == ZLIB:
-        return zlib.compress(raw, 9)
+        return zlib.compress(raw, level)
     if codec == LZMA:
         return lzma.compress(raw, format=lzma.FORMAT_XZ, check=lzma.CHECK_NONE, filters=[
             {"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "dict_size": 1 << 20}])
@@ -615,13 +676,13 @@ def compress(codec: int, raw: bytes) -> bytes:
 
 
 class ChunkWriter:
-    def __init__(self, handle, codec: int, offset: int):
-        self.handle, self.codec, self.offset = handle, codec, offset
+    def __init__(self, handle, codec: int, offset: int, level: int = 9):
+        self.handle, self.codec, self.offset, self.level = handle, codec, offset, level
         self.entries: list[tuple] = []
         self.stored = Counter()
 
     def add(self, raw: bytes, kind: str) -> int:
-        stored = compress(self.codec, raw)
+        stored = compress(self.codec, raw, self.level)
         self.handle.write(stored)
         self.entries.append((self.offset, len(stored), len(raw), self.codec, hashlib.sha256(raw).digest()))
         self.offset += len(stored)
@@ -849,7 +910,11 @@ class PackageWriter:
     the end it learns later, and their bytes stay in the body unreferenced."""
 
     def __init__(self, source: Source, rom: bytes, out: Path, codec: int = LZMA, block_bytes: int = 256,
-                 group: int = 16, checkpoint_every: int = CHECKPOINT_EVERY, rom_loads: list[dict] | None = None):
+                 group: int = 16, checkpoint_every: int = CHECKPOINT_EVERY, rom_loads: list[dict] | None = None,
+                 level: int = 9, shared: Attributor | None = None, in_place: bool = False):
+        """in_place: write `out` itself from the start (its header stays zero until finish) rather
+        than `out`.partial renamed at the end; a reader of a growing package needs the file to
+        keep its name, and Windows refuses to rename a file another process has open."""
         if source.rom_header != rom_header_hex(rom):
             raise SystemExit("the source was recorded from a different ROM (header mismatch)")
         if source.rdram_size not in RDRAM_SIZES or block_bytes % 32 or not 0 < group <= 4096 or checkpoint_every < 1:
@@ -857,12 +922,13 @@ class PackageWriter:
         self.started = time.perf_counter()
         self.source, self.rom, self.out = source, rom, out
         self.block_bytes, self.group, self.checkpoint_every = block_bytes, group, checkpoint_every
-        self.attributor = Attributor(rom, source.rdram_size, rom_loads)
+        self.attributor = Attributor(rom, source.rdram_size, rom_loads, shared)
         self.stats = Counter()
-        self.partial = out.with_name(out.name + ".partial")
+        self.partial = out if in_place else out.with_name(out.name + ".partial")
+        self.codes: list[tuple[int, int]] | None = None
         self.handle = self.partial.open("wb")
         self.handle.write(bytes(HEADER.size))
-        self.chunks = ChunkWriter(self.handle, codec, HEADER.size)
+        self.chunks = ChunkWriter(self.handle, codec, HEADER.size, level)
         self.blocks = Slices(self.chunks, "blocks", CHUNK_TARGET, dedupe=True)
         self.records = Slices(self.chunks, "records", 1 << 62, dedupe=False)
         self.states = source.states and StateWriter(source.states, self.attributor, self.chunks, self.blocks,
@@ -896,39 +962,81 @@ class PackageWriter:
             stats["shown"] = sum(shown for shown, _ in self.added[:kept])
             stats["closure_bytes"] = sum(size for _, size in self.added[:kept])
         with self.handle as handle:
-            layers, layer_meta = [], []
             if states:
                 states.finish()
-                code = code_load(self.rom, source.states.full)
-                source.states.full = None
-                codes = [(attributor.load_index(code[0]), code[1])] if code else []
-                layers = [(STATE, [tuple(entry) for entry in states.records.entries[:kept]]), (CODE, codes)]
-                layer_meta = [{"name": STATE_LAYER[0], "version": STATE_LAYER[1],
-                               "checkpoint_every": self.checkpoint_every, "group": self.group}]
+                self._codes()
                 stats.update({f"state_{name}": value for name, value in states.stats.items()})
-                stats.update(chunk_state=chunks.stored["state"], code_loads=len(codes))
+                stats.update(chunk_state=chunks.stored["state"], code_loads=len(self.codes))
             self.blocks.flush()
             self.records.flush()
-            loads = attributor.load_table()
             stats.update(refused=source.refused, chunk_blocks=chunks.stored["blocks"],
-                         chunk_records=chunks.stored["records"], loads=len(loads),
+                         chunk_records=chunks.stored["records"], loads=len(attributor.loads),
                          discovered_windows=len(attributor.static) - 1)
-            version = VERSION if states else 0
-            meta = {"schema": SCHEMAS[version], "source": source.kind, "wrapper_build": source.build,
-                    "identity": [list(item) for item in source.identity], "block_bytes": self.block_bytes,
-                    "group": self.group, "stats": dict(stats)} | ({"layers": layer_meta} if version else {})
-            index_raw = encode_index(meta, loads, chunks.entries, [tuple(e) for e in self.blocks.entries],
-                                     [tuple(e) for e in self.records.entries[:kept]], *layers)
+            index_raw, version = self._index(kept)
             stored = zlib.compress(index_raw, 9)
             handle.write(stored)
             handle.seek(0)
-            handle.write(pack_header(hashlib.sha256(self.rom).digest(), source.rdram_size, stats["frames"],
+            handle.write(pack_header(hashlib.sha256(self.rom).digest(), source.rdram_size, kept,
                                      chunks.offset, stored, index_raw, version))
-        os.replace(self.partial, self.out)
+        if self.partial != self.out:
+            os.replace(self.partial, self.out)
         stats.update(package_bytes=self.out.stat().st_size, index_raw_bytes=len(index_raw))
         now = time.perf_counter()
         return dict(stats) | {"write_seconds": round(now - self.started, 3),
                               "finish_seconds": round(now - finishing, 3)}
+
+    def _index(self, kept: int) -> tuple[bytes, int]:
+        """(raw index, version) for the first `kept` frames over everything flushed so far."""
+        source, states, attributor = self.source, self.states, self.attributor
+        layers, layer_meta = [], []
+        self.blocks.flush()
+        self.records.flush()
+        if states:
+            states.records.flush()
+            layers = [(STATE, [tuple(entry) for entry in states.records.entries[:kept]]), (CODE, self._codes())]
+            layer_meta = [{"name": STATE_LAYER[0], "version": STATE_LAYER[1],
+                           "checkpoint_every": self.checkpoint_every, "group": self.group}]
+        version = VERSION if states else 0
+        meta = {"schema": SCHEMAS[version], "source": source.kind, "wrapper_build": source.build,
+                "identity": [list(item) for item in source.identity], "block_bytes": self.block_bytes,
+                "group": self.group, "stats": dict(self.stats)} | ({"layers": layer_meta} if version else {})
+        return encode_index(meta, attributor.load_table(), self.chunks.entries, [tuple(e) for e in self.blocks.entries],
+                            [tuple(e) for e in self.records.entries[:kept]], *layers), version
+
+    def _codes(self) -> list[tuple[int, int]]:
+        """The practice ROM's code rows, located once from the source's full RDRAM copy (which
+        never travels and is dropped once read)."""
+        if self.codes is None:
+            code = code_load(self.rom, self.source.states.full)
+            self.source.states.full = None
+            self.codes = [(self.attributor.load_index(code[0]), code[1])] if code else []
+        return self.codes
+
+    def publish(self, sidecar: Path, limit: int | None = None) -> int:
+        """While the package grows: flushes what its frames so far need and writes `sidecar`, a
+        package header and index for them (zlib level 1), atomically. The header, this writer's
+        body so far and that index are a package a reader opens before it is finished
+        (grown_package): chunks are only appended, so every index published stays valid against
+        the body that was on disk when it was. Covers the frames whose scene state is written
+        (the state runs one frame behind), at most `limit`. Returns how many frames it covers."""
+        self.blocks.flush()
+        self.records.flush()
+        kept = len(self.records.entries)
+        if self.states:
+            self.states.records.flush()
+            kept = min(kept, len(self.states.records.entries))
+        kept = kept if limit is None else min(kept, limit)
+        if kept <= 0:
+            return 0
+        index_raw, version = self._index(kept)
+        self.handle.flush()
+        stored = zlib.compress(index_raw, 1)
+        header = pack_header(hashlib.sha256(self.rom).digest(), self.source.rdram_size, kept, self.chunks.offset,
+                             stored, index_raw, version)
+        partial = sidecar.with_name(sidecar.name + ".partial")
+        partial.write_bytes(header + stored)
+        os.replace(partial, sidecar)
+        return kept
 
     def abandon(self) -> None:
         self.handle.close()
@@ -1082,7 +1190,7 @@ def decompress(codec: int, stored: bytes, raw: int) -> bytes:
 
 def read_header(data: bytes) -> Header:
     _require(len(data) >= HEADER.size, "shorter than a package header")
-    header = Header(*HEADER.unpack_from(data))
+    header = Header(*HEADER.unpack_from(data[:HEADER.size]))
     _require(header.magic == MAGIC, "not a scene package")
     _require(header.version in SCHEMAS,
              f"unsupported package version {header.version} (this reader knows {sorted(SCHEMAS)})")
@@ -1297,6 +1405,25 @@ class Package:
     def __len__(self) -> int:
         return len(self.index.frames)
 
+    def carry(self, previous: Package) -> None:
+        """This package grew from `previous` (an earlier publication of the same file, or the
+        finished file): its chunk and load tables only gained rows, so the ROM loads and chunks
+        decoded there, and the scene-state cursor, hold here too. The two share one lock, so a
+        reader still holding the previous one never moves the cursor beside this one."""
+        with previous.lock:
+            _require(len(previous.index.chunks) <= len(self.index.chunks)
+                     and self.index.chunks[:len(previous.index.chunks)] == previous.index.chunks
+                     and self.index.loads[:len(previous.index.loads)] == previous.index.loads,
+                     "a grown package does not extend the one before it")
+            self.lock = previous.lock
+            self._loads = previous._loads
+            self._chunks, self._cached = OrderedDict(previous._chunks), previous._cached
+            if self.states is not None and previous.states is not None and previous.states.at >= 0 \
+                    and self.states.rows[:previous.states.at + 1] == previous.states.rows[:previous.states.at + 1]:
+                old = previous.states
+                self.states.scene, self.states.level_runs, self.states.task = old.scene, old.level_runs, old.task
+                self.states.at = old.at
+
     def _chunk(self, index: int) -> bytes:
         if index in self._chunks:
             self._chunks.move_to_end(index)
@@ -1487,6 +1614,50 @@ class SceneStates:
         else:
             self.task = None
         _require(cursor.done(), "trailing bytes in a scene-state record")
+
+
+class Joined:
+    """Byte strings read as one without joining them: a growing package is its sidecar's header,
+    the body read so far (in the pieces it was read in) and the sidecar's index. A slice inside
+    one piece costs a copy of the slice alone; a chunk never spans two pieces, since each piece
+    ends where a publication's chunks ended."""
+
+    def __init__(self, parts: list):
+        self.parts, self.starts, at = parts, [], 0
+        for part in parts:
+            self.starts.append(at)
+            at += len(part)
+        self.length = at
+
+    def __len__(self) -> int:
+        return self.length
+
+    def __getitem__(self, key):
+        if not isinstance(key, slice):
+            return self[key:key + 1][0]
+        start, stop, step = key.indices(self.length)
+        _require(step == 1, "a joined package reads contiguous bytes only")
+        if start >= stop:
+            return b""
+        at = bisect.bisect_right(self.starts, start) - 1
+        out = []
+        while start < stop:
+            part, base = self.parts[at], self.starts[at]
+            end = min(stop, base + len(part))
+            out.append(bytes(part[start - base:end - base]))
+            start, at = end, at + 1
+        return out[0] if len(out) == 1 else b"".join(out)
+
+
+def grown_package(sidecar: bytes, body: list, rom: bytes, previous: Package | None = None) -> Package:
+    """A package still being written (PackageWriter.publish): `sidecar` is its header and index,
+    `body` the pieces of the package file read so far, from byte HEADER.size to the header's
+    index offset. The reader checks it like any package. With `previous` (the publication
+    before, over the same file) it keeps what that one decoded and shares its lock."""
+    package = Package(Joined([sidecar[:HEADER.size], *body, sidecar[HEADER.size:]]), rom)
+    if previous is not None:
+        package.carry(previous)
+    return package
 
 
 def open_package(path: Path, rom_path: Path) -> Package:
