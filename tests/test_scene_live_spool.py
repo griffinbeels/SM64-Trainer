@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -165,7 +166,7 @@ def recorded(tmp_path_factory):
     finally:
         lease.stop()
     return {"rom": rom, "frames": frames, "one_shot": one_shot_session, "spool": live_spool.open_spool(_lab(live)),
-            "health_while_recording": health, "host_output": output, "folder": folder}
+            "health_while_recording": health, "host_output": output, "folder": folder, "arming": arming}
 
 
 @needs_toolchain
@@ -452,7 +453,11 @@ def test_follow_yields_tasks_as_they_flush_across_segments_and_matches_source(re
         assert live.indexes == list(range(1, 12)) and live.source.ended is None and live.source.last == 11
         assert len(list(spool.session.glob("seg-*.tap"))) >= 3
         expected = tmp_path / "source.sm64scene"
-        pk.write_package(spool.source(1, 11), rom, expected, pk.ZLIB, group=3, checkpoint_every=4)
+        cut = spool.source(1, 11)
+        pk.write_package(cut, rom, expected, pk.ZLIB, group=3, checkpoint_every=4)
+        spool.refresh()
+        first_qpc = next(segment.tasks[1][2] for segment in spool._segments.values() if 1 in segment.tasks)
+        assert live.source.origin_qpc == cut.origin_qpc == first_qpc   # a capture's times count from it
         followed, cut = (pk.Package(path.read_bytes(), rom) for path in (tmp_path / "followed.sm64scene", expected))
         assert len(followed) == len(cut) == 11
         for index in range(11):
@@ -524,6 +529,37 @@ def test_follow_ends_with_a_reason_when_it_falls_behind_or_reaches_a_hole(record
     finally:
         lease.stop()
         host.close()
+
+
+@needs_toolchain
+def test_the_shared_capture_loop_gives_what_tap_source_gives(recorded, tmp_path):
+    """live_spool.captures is the loop package.tap_source repeats: the same captures, refusals
+    and times over a one-shot session with a refused task and an overtaken one, in both pairings."""
+    frames = recorded["frames"]
+    refused = tmp_path / "refused"
+    shutil.copytree(frames[1], refused)
+    ram = bytearray((refused / "rdram.bin").read_bytes())
+    struct.pack_into("<II", ram, LIST + 0x40, 0x0A000000, 0)   # a command the walker does not know: refused
+    (refused / "rdram.bin").write_bytes(bytes(ram))
+    root = tmp_path / "one-shot"
+    _lab(root).mkdir(parents=True)
+    (_lab(root) / "armed.txt").write_text(recorded["arming"], encoding="ascii")
+    script = [f"frame {frames[0]}", f"vi {frames[0]}", f"frame {refused}", f"vi {frames[1]}",
+              f"frame {frames[2]}", f"frame {frames[3]}", f"vi {frames[3]}", f"frame {frames[4]}", f"vi {frames[4]}"]
+    result = subprocess.run([str(tap.build_offline_host()), str(root), *script], capture_output=True, text=True,
+                            timeout=300, check=False, **quiet_spawn_kwargs())
+    assert result.returncode == 0, result.stdout + result.stderr
+    (session,) = _lab(root).glob("tap-*")
+    frequency = int(tap.session_header(session)["qpc_frequency"])
+    for pair in ("next", "origin"):
+        expected = pk.tap_source(session, pair, states=True)
+        wanted = list(expected.captures)
+        mine = pk.Source("scene-tap", expected.rdram_size, expected.rom_header, expected.identity, expected.build)
+        mine.states = pk.TapStates()
+        got = list(live_spool.captures(mine, tap.read_records(session / "tap.bin"), frequency, pair=pair))
+        assert got == wanted and len(got) == 4 and mine.refused == expected.refused == 1
+        assert mine.origin_qpc == next(r.qpc for r in tap.read_records(session / "tap.bin") if isinstance(r, tap.Task))
+    assert [capture.shown for capture in got] != [capture.shown for capture in pk.tap_source(session, "next").captures]
 
 
 @needs_toolchain
