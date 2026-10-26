@@ -33,9 +33,7 @@ import http.server
 import json
 import os
 import re
-import shutil
 import socketserver
-import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -43,9 +41,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from sm64_events.core.paths import bundled_ffmpeg  # noqa: E402
-from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
-from sm64_events.replay.extract import ffprobe_beside, frame_times_of, video_start_of  # noqa: E402
+from sm64_events.replay.mediaprobe import frame_times_of, probe, video_start_of  # noqa: E402
 
 FRAME_JS = ROOT / "src" / "sm64_events" / "ui" / "frame.js"
 
@@ -154,23 +150,12 @@ class ClipHandler(http.server.BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
 
-def clip_fps(ffmpeg: str | None, clip: Path) -> float:
-    """The clip's frame rate off ffprobe; 60 (the extractor's CFR grid)
-    when it cannot be read."""
-    ffprobe = ffprobe_beside(ffmpeg)
-    if not ffprobe:
-        return 60.0
-    try:
-        out = subprocess.run(
-            [ffprobe, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", str(clip)],
-            capture_output=True, text=True, timeout=30, check=False,
-            **quiet_spawn_kwargs())
-        numerator, denominator = out.stdout.strip().splitlines()[0].split("/")
-        return float(numerator) / float(denominator)
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError,
-            ZeroDivisionError):
-        return 60.0
+def clip_fps(clip: Path) -> float:
+    """The clip's r_frame_rate; 60 (the extractor's CFR grid) when it cannot
+    be read."""
+    media = probe(clip)
+    rate = media.video.rate if media and media.video else None
+    return float(rate) if rate else 60.0
 
 
 def parse_slots(text: str | None, slot_count: int) -> list[int]:
@@ -202,16 +187,15 @@ def main() -> int:
         return 2
     meta = json.loads(sidecar.read_text(encoding="utf-8"))
     frame_map = meta.get("frame_map") or []
-    ffmpeg = bundled_ffmpeg() or shutil.which("ffmpeg")   # what main.py resolves
-    start = video_start_of(ffmpeg, clip)
-    fps = clip_fps(ffmpeg, clip)
+    start = video_start_of(clip)
+    fps = clip_fps(clip)
     stored = meta.get("video_start_s")
     # A picture-feed clip (item 38) is VFR: the view carries every frame's
     # own time and the browser seeks into each frame's span. The sidecar
     # says so; a CFR clip's view carries none and the grid stands.
     times = meta.get("frame_times")
     if times is None and meta.get("encode") == "picture_feed":
-        times = frame_times_of(ffmpeg, clip)
+        times = frame_times_of(clip)
     print(f"clip {clip.name}: {len(frame_map)} mapped slots, {fps:g} fps, "
           f"first video pts {start:.6f} s"
           + (f" (sidecar holds {stored:.6f})" if stored is not None

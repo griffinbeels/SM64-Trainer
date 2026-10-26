@@ -474,9 +474,8 @@ def test_the_reader_decodes_exactly_one_cell_per_stored_frame(tmp_path):
     icons = padread.decode_icons(ff, result.path)
     assert len(icons) == stored, f"decoded {len(icons)} icon strips of {stored}"
     # And the count ffprobe -count_frames sees, the third witness.
-    from sm64_events.replay.extract import ffprobe_beside
     counted = subprocess.run(
-        [ffprobe_beside(ff) or "ffprobe", "-v", "error", "-select_streams",
+        [shutil.which("ffprobe") or "ffprobe", "-v", "error", "-select_streams",
          "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames",
          "-of", "csv=p=0", str(result.path)], capture_output=True, text=True)
     assert int(counted.stdout.strip()) == stored

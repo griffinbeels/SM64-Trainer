@@ -6,6 +6,7 @@ paths:
   - "src/sm64_events/replay/virtualmp4.py"
   - "src/sm64_events/server/replay_range.py"
   - "src/sm64_events/replay/extract.py"
+  - "src/sm64_events/replay/mediaprobe.py"
   - "src/sm64_events/replay/service.py"
   - "src/sm64_events/server/replay_api.py"
   - "src/sm64_events/ui/components/replay.js"

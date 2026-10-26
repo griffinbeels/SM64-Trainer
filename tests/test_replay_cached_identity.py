@@ -125,7 +125,7 @@ def test_invalid_cached_picture_clock_can_recover_from_the_actual_video(tmp_path
     sidecar.write_bytes(before)
     measured_paths = []
 
-    def measure(_ffmpeg, path):
+    def measure(path):
         measured_paths.append(path)
         return actual_times
 

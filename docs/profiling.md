@@ -192,9 +192,8 @@ frame probing, tail wait, picture association, input audit and total replay view
 `replay.storage_maintenance` measures the complete periodic inventory and eviction
 pass, including waiting for its lock. It helps distinguish session-length-related
 filesystem work from capture and encoder work.
-`replay.probe_native_packets` isolates the packet-index subprocess and validation
-inside native extraction. It retains the existing malformed-media checks; adding
-this span does not enable an in-process packet-reader shortcut.
+`replay.probe_native_packets` isolates the in-process packet-index read and
+validation inside native extraction (`replay/mediaprobe.py`).
 `replay.fragment_publish` and `replay.fragment_select` measure indexing/writing
 each complete fragment and selecting published ranges in the opt-in archive.
 The default fragment recorder uses them. `replay.native_index` measures native
