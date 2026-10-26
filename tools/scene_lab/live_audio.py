@@ -3,6 +3,7 @@
     live = LiveAudio()                                  # once, before the recorder is built
     recorder = ReplayRecorder(..., audio_factory=live.wrap(primary), fallback_audio_factory=live.wrap(fallback))
     live.write_span(qpc_from, qpc_to, capture)          # an attempt's sound, in audio_session.py's capture format
+    live.records(qpc_from, qpc_to); live.after(...)     # the same chunks in memory, for a growing scene's sound
     attach_span(package, capture, presents, frequency, rom)   # None, or why the scene stays silent
 
 Intent: a scene cut from an attempt Griffin just played opens with the sound the game made
@@ -52,6 +53,8 @@ import threading
 from collections import deque
 from collections.abc import Sequence
 from pathlib import Path
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audio_capture as cap  # noqa: E402
@@ -215,21 +218,47 @@ class LiveAudio:
                 "covers_start": kept[0].arrival - self._ticks(kept[0].samples) <= qpc_from,
                 "covers_end": kept[-1].arrival >= qpc_to, "bytes": out.stat().st_size}
 
-    def span(self, qpc_from: int, qpc_to: int, *, margin_s: float = MARGIN_S) -> list[tuple]:
-        """write_span's chunks in memory, (audio_clock.Chunk, PCM bytes or None where lost),
-        oldest first: a scene still growing builds its sound from them (span_layer)."""
-        return self._select(self._fanout.snapshot(), qpc_from, qpc_to, margin_s)
+    def records(self, qpc_from: int, qpc_to: int, *, margin_s: float = MARGIN_S) -> list[tuple]:
+        """write_span's chunks as the ring holds them, (epoch, first, samples, arrival, lost,
+        PCM bytes or None), oldest first: a growing scene's sound starts from them (scene_audio
+        LiveSound), with no Chunk built for each."""
+        return self._records(self._fanout.snapshot(), qpc_from, qpc_to, margin_s)
+
+    def after(self, epoch: int, first: int, qpc_to: int, *, margin_s: float = MARGIN_S) -> tuple[list[tuple], str]:
+        """The ring's records that continue a stream whose next sample is `first` of `epoch`, up
+        to write_span's end for a span ending at `qpc_to`, and how the stream stands: "open"
+        (more may arrive), "end" (it reached that end) or "broken" (a new epoch began, or the
+        ring no longer holds the chunk it continues from). Searches back from the newest
+        record, so a call costs what arrived since the stream's last chunk."""
+        records = self._fanout.snapshot()
+        at = len(records)
+        while at and (records[at - 1][0], records[at - 1][1]) > (epoch, first - 1):
+            at -= 1
+        if not at or records[at - 1][0] != epoch or records[at - 1][1] + records[at - 1][2] != first:
+            return [], "broken"
+        stop = qpc_to + round(margin_s * self.frequency) + round(LATE_S * self.frequency)
+        kept = []
+        for record in records[at:]:
+            if record[3] > stop:
+                return kept, "end"
+            if record[0] != epoch or record[1] != first:
+                return kept, "broken"
+            kept.append(record)
+            first += record[2]
+        return kept, "open"
 
     def silence(self, qpc_from: int, qpc_to: int) -> str:
         """The plain sentence why the ring holds no sound for this span (write_span's own)."""
         return self._why_silent(qpc_from, qpc_to, self._fanout.snapshot())
 
     def _select(self, records: list, qpc_from: int, qpc_to: int, margin_s: float) -> list[tuple]:
+        return [(cap.chunk_of(record), record[5]) for record in self._records(records, qpc_from, qpc_to, margin_s)]
+
+    def _records(self, records: list, qpc_from: int, qpc_to: int, margin_s: float) -> list[tuple]:
         margin = round(margin_s * self.frequency)
-        arrivals = [record[3] for record in records]
-        start = bisect.bisect_left(arrivals, qpc_from - margin)
-        stop = bisect.bisect_right(arrivals, qpc_to + margin + round(LATE_S * self.frequency))
-        return [(cap.chunk_of(record), record[5]) for record in records[start:stop]]
+        start = bisect.bisect_left(records, qpc_from - margin, key=_arrival)
+        stop = bisect.bisect_right(records, qpc_to + margin + round(LATE_S * self.frequency), key=_arrival)
+        return records[start:stop]
 
     def _ticks(self, samples: int) -> int:
         return samples * self.frequency // RATE
@@ -250,12 +279,41 @@ class LiveAudio:
         return "The Trainer was not recording Project64's sound during this attempt."
 
 
-def span_layer(chosen: list, presents: Sequence[tuple[int, int]], frequency: int, *, rate: int = RATE,
-               codec: str = "flac") -> tuple[bytes | None, str | None]:
+def _arrival(record: tuple) -> int:
+    return record[3]
+
+
+def stamps_of(records: list[tuple]) -> np.ndarray:
+    """The ring records' chunk stamps, one int64 row each (epoch, first, samples, arrival,
+    lost): all a clock fit reads (fit_stamps), without the PCM."""
+    stamps = np.array([record[:5] for record in records], np.int64)
+    return stamps.reshape(-1, 5)
+
+
+def pcm_of(records: list[tuple]) -> bytes:
+    """The ring records' stored stream, as audio_clock.stream_pcm makes it: each chunk's s16
+    stereo PCM in order, a lost chunk as silence."""
+    return b"".join(record[5] if record[5] is not None else bytes(record[2] * 4) for record in records)
+
+
+def fit_stamps(stamps: np.ndarray, origin_qpc: int, frequency: int, *, rate: int = RATE) -> dict:
+    """The audio clock fit to the chunks' stamps (stamps_of), its times counted from
+    `origin_qpc` (the first picture's present, as attach_span's fit counts them): {"segments":
+    [audio_clock.Segment's fields], "losses", "total"}. The cutter child runs it for a growing
+    scene (scene_audio.LiveSound); audio_clock.ClockError when the stamps cannot be fit."""
+    chunks = [ac.Chunk(int(epoch), int(first), int(samples), int(arrival), bool(lost))
+              for epoch, first, samples, arrival, lost in np.asarray(stamps, np.int64).reshape(-1, 5).tolist()]
+    clock = ac.build_clock(chunks, [ac.Present(0, int(origin_qpc))], rate=rate, frequency=frequency)
+    return {"segments": [[segment.epoch, segment.first, segment.samples, segment.stream_first, segment.anchor,
+                          segment.period_q32, segment.flags] for segment in clock.segments],
+            "losses": [list(loss) for loss in clock.losses], "total": clock.total_samples}
+
+
+def span_layer(chosen: list, presents: Sequence[tuple[int, int]], frequency: int, *,
+               rate: int = RATE) -> tuple[bytes | None, str | None]:
     """(an audio_layer.py payload, None) for the chunks (audio_clock.Chunk, PCM or None) and the
     pictures' (present sequence, QPC), the clock fit to them; or (None, the plain sentence why
-    the scene stays silent). attach_span writes it into a finished package; a scene still
-    growing builds one in memory (codec "stored": no FLAC to encode while it grows)."""
+    the scene stays silent). attach_span writes it into a finished package."""
     pictures = [ac.Present(sequence, qpc)
                 for sequence, qpc in sorted({(int(sequence), int(qpc)) for sequence, qpc in presents})]
     chunks, payloads = [chunk for chunk, _data in chosen], [data for _chunk, data in chosen]
@@ -268,7 +326,7 @@ def span_layer(chosen: list, presents: Sequence[tuple[int, int]], frequency: int
     if not statuses["covered"] + statuses["loss"]:
         return None, "No game sound was recorded while this attempt's pictures were on screen."
     try:
-        return al.encode_layer(clock, pcm, codec=codec), None
+        return al.encode_layer(clock, pcm), None
     except ValueError as error:            # audio_layer.LayerError
         return None, f"This attempt's sound could not be added to its scene ({error})."
 

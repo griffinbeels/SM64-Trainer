@@ -34,6 +34,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 
 import attempt_span
@@ -94,6 +95,8 @@ class AttemptScenes:
         self.problem: str | None = None
         self.recording: dict | None = None
         self.restarts = 0
+        self.fits: dict[int, tuple[Future, Path]] = {}   # token -> a growing scene's sound fit in the child
+        self.fit_serial = 0
 
     # ------------------------------------------------------------ lifetime
 
@@ -104,7 +107,7 @@ class AttemptScenes:
             folder = Path(self.folder_of())
             self.held = _lock(folder)
             for path in folder.iterdir():
-                if path.name != LOCK_NAME and (path.suffix in (".sm64scene", ".grow", ".cap")
+                if path.name != LOCK_NAME and (path.suffix in (".sm64scene", ".grow", ".cap", ".npy")
                                                or path.name.endswith(".partial")):
                     path.unlink(missing_ok=True)
             self.folder = folder
@@ -124,6 +127,7 @@ class AttemptScenes:
         cutter, self.cutter = self.cutter, None
         if cutter is not None:
             cutter.close()
+        self._fits_end(STOPPED)
         if self.held is not None:
             self.held.close()
             self.held = None
@@ -196,6 +200,12 @@ class AttemptScenes:
                 self.takes.pop(event["take_ended"], None)
         elif "id" in event and "sound" in event:
             self._sound_added(event["id"], event["sound"])
+        elif "fit" in event:
+            with self.lock:
+                future, path = self.fits.pop(event["fit"], (None, None))
+            if future is not None:
+                path.unlink(missing_ok=True)
+                future.set_result({key: value for key, value in event.items() if key != "fit"})
         elif "id" in event:
             with self.lock:
                 entry = self.entries.get(event["id"])
@@ -255,6 +265,36 @@ class AttemptScenes:
             if entry is not None:
                 entry.update(sound="attached" if reason is None else "silent", sound_reason=reason)
 
+    def fit(self, stamps, origin_qpc: int, frequency: int) -> Future:
+        """A growing scene's one sound fit, which the cutter child makes (scene_audio.LiveSound):
+        `stamps` live_audio.stamps_of the ring's chunks, `origin_qpc` the scene's first present.
+        The future gives the child's answer, live_audio.fit_stamps's dict with "fit_ms", or
+        {"reason"} with the plain sentence. Writes one small file beside the scenes."""
+        import numpy as np
+
+        future: Future = Future()
+        cutter, folder = self.cutter, self.folder
+        if cutter is None or folder is None:
+            future.set_result({"reason": self.problem or STOPPED})
+            return future
+        with self.lock:
+            self.fit_serial += 1
+            token = self.fit_serial
+            path = Path(folder) / f"fit-{token}.npy"
+            self.fits[token] = (future, path)
+        with path.open("wb") as out:
+            np.save(out, stamps)
+        cutter.send({"op": "fit", "token": token, "stamps": str(path), "origin": int(origin_qpc),
+                     "frequency": int(frequency)})
+        return future
+
+    def _fits_end(self, reason: str) -> None:
+        with self.lock:
+            pending, self.fits = self.fits, {}
+        for future, path in pending.values():
+            path.unlink(missing_ok=True)
+            future.set_result({"reason": reason})
+
     def sound_reason(self, attempt_id: int) -> str | None:
         """Why this attempt's scene has no sound (yet), as the viewer says it; None once it has."""
         with self.lock:
@@ -269,6 +309,7 @@ class AttemptScenes:
                 if entry["state"] == "cutting" or entry.get("growing"):     # its take died with the child
                     entry.update(state="unavailable", reason=STOPPED, growing=False)
             self.takes.clear()
+        self._fits_end(STOPPED)
         if self.stopping:
             return
         self.cutter = None

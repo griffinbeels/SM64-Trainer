@@ -11,8 +11,9 @@ live_spool.Lease keeps the wrapper's tap writing) and writes one JSON line per c
 true} once it can cut, {"live": {"recording", "reason"}} when the recording's state changes, and per
 attempt {"id", "state": "cutting" | "ready" | "unavailable", ...}. Notes the server sends: "start"
 (an anchor, practice_reset or state_loaded, or a segment_armed notice: where an attempt may begin),
-"stop" (a segment_disarmed notice), "complete" (an attempt finished: its AttemptMark) and "forget"
-(the server no longer keeps that attempt).
+"stop" (a segment_disarmed notice), "complete" (an attempt finished: its AttemptMark), "forget"
+(the server no longer keeps that attempt), "sound" (add a finished scene's sound) and "fit" (fit
+a growing scene's sound to its pictures once, for scene_audio.LiveSound).
 
 Why while he plays. A package written after the attempt ends is ready seconds to minutes late:
 measured 2026-10-26 on a 20 s span (600 tasks) of his BoB minute (tap-20261025-184022), one
@@ -380,6 +381,8 @@ class Brain:
         elif op == "sound":
             threading.Thread(target=self._sound, args=(int(note["id"]), Path(note["capture"])),
                              name="cutter-sound", daemon=True).start()
+        elif op == "fit":
+            threading.Thread(target=self._fit, args=(note,), name="cutter-fit", daemon=True).start()
         elif op == "forget":
             attempt_id = int(note["id"])
             self.forgotten.add(attempt_id)
@@ -537,6 +540,20 @@ class Brain:
             except Exception as error:  # noqa: BLE001 - a silent scene, never a stopped cutter
                 reason = f"This attempt's sound could not be added: {error}"
         self.emit({"id": attempt_id, "sound": reason})
+
+    def _fit(self, note: dict) -> None:
+        """A growing scene's one sound fit (scene_audio.LiveSound), off the main thread: the
+        audio clock fit to the ring's chunk stamps the server wrote, here rather than in the
+        server, whose poll loop shares its process's lock. {"fit": token, "segments", "losses",
+        "total", "fit_ms"}, or {"fit": token, "reason"} with the plain sentence."""
+        started = time.perf_counter()
+        try:
+            import numpy as np
+            fit = __import__("live_audio").fit_stamps(np.load(note["stamps"]), int(note["origin"]),
+                                                      int(note["frequency"]))
+        except Exception as error:  # noqa: BLE001 - a silent scene, never a stopped cutter
+            fit = {"reason": f"This scene's sound could not be lined up with its pictures ({error})."}
+        self.emit({"fit": note["token"], **fit, "fit_ms": round((time.perf_counter() - started) * 1000, 1)})
 
     def _say(self, attempt_id: int, entry: dict, state: str, **fields) -> None:
         said = (state, fields.get("reason"))

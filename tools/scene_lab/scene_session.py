@@ -32,7 +32,9 @@ After a free-camera picture of a new frame, a second thread resolves the frames 
 (evaluator.prepare; backward when stepping back), so playing or stepping finds states ready.
 
 The package's source-audio layer, when it has one, is the recording's sound mapped to these
-frames (scene_audio.py); describe() carries its table and audio_block serves its blocks.
+frames (scene_audio.py); describe() carries its table and audio_block serves its blocks. An
+attempt scene without one yet plays the recorder's own sound (scene_audio.LiveSound) until the
+cutter adds the layer to the whole package and grow() hands over to it.
 
 Every method but finish and audio_block runs on the caller's one thread (the server's worker),
 so the evaluator's view sandbox, the package and the host's image are never shared. finish runs
@@ -84,7 +86,8 @@ RUN_GAP_WORDS = 16            # changed words this close together travel to the 
 MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
 LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
 LOOK_AHEAD_FRAMES = 3         # how many frames the look-ahead resolves (the evaluator caches 4 states)
-SOUND_REFIT_SECONDS = 1.0     # how often a growing scene's sound is fit to its newest frames
+FIT_WAIT_SECONDS = 1.5        # how long an opening scene waits for its sound's fit (the renderer starts meanwhile)
+SOUND_SETTLE_SECONDS = 60.0   # how long a whole scene watches for the sound the cutter adds to it
 
 
 class Refused(Exception):
@@ -321,6 +324,20 @@ class Growth:
         return scene_package.grown_package(published, list(self.body), rom, previous)
 
 
+def _live_sound(package, outlines: list[dict], frames: list[int], live, fitter) -> scene_audio.LiveSound | None:
+    """A package without a sound layer yet plays the recorder's own (scene_audio.LiveSound), its
+    fit asked for now so the cutter child makes it while the host starts."""
+    clock = package.index.meta.get("clock")
+    if live is None or fitter is None or not isinstance(clock, dict) or package.audio is not None:
+        return None
+    sound = scene_audio.LiveSound(live, clock, fitter)
+    try:
+        sound.request(outlines, frames)
+    except Exception as error:  # noqa: BLE001 - the scene opens silent and says why
+        sound.reason = f"This scene's sound could not be built: {error}"
+    return sound
+
+
 @dataclass(eq=False)
 class PendingPicture:
     """A picture begin() sent to the host and finish() has yet to collect (compared by identity)."""
@@ -355,12 +372,14 @@ class SceneSession:
         self._begun: deque[PendingPicture] = deque()     # sent to the host, not yet finished, oldest first
         self.served = 0
         self.growth: Growth | None = None                # set while the package is still being written
-        self.live_sound: scene_audio.LiveSound | None = None   # a growing scene's sound, from the recorder's ring
+        self.live_sound: scene_audio.LiveSound | None = None   # sound from the recorder's ring, until the layer
         self.silence: str | None = None                  # why there is no sound, when the page should know
-        self.sound_built = 0.0
+        self.path: Path | None = None
+        self.read_stat: tuple[int, int] | None = None    # the whole file as last read: (size, mtime)
+        self.whole_at: float | None = None               # when the package was whole
 
     @classmethod
-    def open(cls, config, path: Path, *, sidecar: Path | None = None, live=None, host_factory=None,
+    def open(cls, config, path: Path, *, sidecar: Path | None = None, live=None, fitter=None, host_factory=None,
              evaluator_factory=None,
              encoder_factory=None) -> SceneSession:
         """Reads and checks the package against the configured ROM, then starts and warms the host.
@@ -368,7 +387,8 @@ class SceneSession:
         reader refuses (another ROM, truncated, corrupt), a package with nothing shown, a renderer
         that cannot start. With `sidecar`, the package is still being written (an attempt scene
         while its recording grows, Growth): the session opens what is published and grow()
-        takes the rest."""
+        takes the rest. With `live` (live_audio.LiveAudio) and `fitter` (AttemptScenes.fit), a
+        scene whose package has no sound yet plays the recorder's own (scene_audio.LiveSound)."""
         held = gpu_gate.hold_reason()
         if held:
             raise Refused(f"The renderer is on hold until Griffin lifts it: {held}")
@@ -379,8 +399,10 @@ class SceneSession:
             if path.stat().st_size > scene_package.MAX_PACKAGE_BYTES:
                 raise Refused("This scene package is larger than the viewer accepts.")
             rom = config.rom.read_bytes()
+            stat = path.stat()
             package = scene_package.Package(path.read_bytes(), rom) if growth is None else growth.read(rom)
             if package is None:                         # finished between the lookup and now
+                stat = path.stat()
                 growth, package = None, scene_package.Package(path.read_bytes(), rom)
             outlines = [package.outline(index) for index in range(len(package))]
         except OSError as error:
@@ -392,6 +414,7 @@ class SceneSession:
             raise Refused("This scene package holds no picture the game showed.")
         factory = evaluator_factory or GameCodeEvaluator(config.map, path)
         unavailable = getattr(factory, "unavailable", None)
+        live_sound = _live_sound(package, outlines, frames, live, fitter)
         encoder = (encoder_factory or start_encoder)()      # starts beside the host's warm-up
         try:
             host = (host_factory or renderer_host(config))(scene_package.rom_header_hex(rom))
@@ -401,16 +424,17 @@ class SceneSession:
             raise
         session = cls(path.name, package, rom, host, frames, outlines, factory,
                       unavailable(package) if unavailable else None, encoder)
-        session.growth = growth
-        clock = package.index.meta.get("clock")
-        if growth is not None and live is not None and isinstance(clock, dict) and package.audio is None:
-            session.live_sound = scene_audio.LiveSound(live, clock)
-            session._sound(force=True)
+        session.growth, session.path, session.live_sound = growth, path, live_sound
+        if growth is None:
+            session.read_stat, session.whole_at = (stat.st_size, stat.st_mtime_ns), time.monotonic()
         try:
             session.host.render(session._recorded_frame(frames[0], {}), discard=True)  # a first list renders wrong
         except (RuntimeError, OSError, ValueError) as error:
             session.close()
             raise Refused(f"The renderer could not draw this recording: {error}") from None
+        if live_sound is not None:
+            live_sound.adopt(wait=max(0.0, live_sound.requested + FIT_WAIT_SECONDS - time.monotonic()))
+            session._sound(0)
         return session
 
     def describe(self) -> dict:
@@ -420,9 +444,11 @@ class SceneSession:
         state, and the recording's sound (scene_audio.py's table, or why there is none)."""
         return {"name": self.name, "fps": FPS, "frames": self._rows(0), "renderer_pid": self.host.pid,
                 "free_camera": {"available": self.free_reason is None, "reason": self.free_reason},
-                "audio": self.sound.describe() if self.sound else {**scene_audio.absent(), **(
-                    {"reason": self.silence} if self.silence else {})},
-                "growing": self.growth is not None}
+                "audio": self._audio(), "growing": self.growth is not None}
+
+    def _audio(self) -> dict:
+        return self.sound.describe() if self.sound else {**scene_audio.absent(), **(
+            {"reason": self.silence} if self.silence else {})}
 
     def _rows(self, start: int) -> list[dict]:
         """The page's rows for frames start.. (recorded_ms from the first frame's present)."""
@@ -436,22 +462,41 @@ class SceneSession:
                          "recorded_ms": (times[position] - times[0]) / 1000 if ordered else None})
         return rows
 
+    @property
+    def settled(self) -> bool:
+        """Nothing about the scene changes any more: its package is whole, and its sound is the
+        package's own (or the cutter did not add it within SOUND_SETTLE_SECONDS)."""
+        return self.growth is None and (self.live_sound is None or self.whole_at is not None
+                                        and time.monotonic() - self.whole_at > SOUND_SETTLE_SECONDS)
+
     def grow(self) -> dict | None:
-        """While the package is still being written: takes its newest publication, or the finished
-        file once the writer is done, and returns what the page gains ({"from": the first frame
-        that changed, "frames": its rows on, "growing"}), or None when nothing changed. Runs on
-        the worker, like every other read of the package."""
-        growth = self.growth
-        if growth is None:
+        """Until the scene is settled: takes the package's newest publication, or the finished
+        file once the writer is done, and the sound's progress (_sound), and returns what the
+        page gains ({"from": the first frame that changed, "frames": its rows on, "growing",
+        and "audio" when the sound's table changed}), or None when nothing changed. Runs on the
+        worker, like every other read of the package."""
+        start = self._grow_package() if self.growth is not None else None
+        sound = self._sound(start)
+        if start is None and not sound:
             return None
+        start = len(self.frames) if start is None else start
+        grown = {"from": start, "frames": self._rows(start), "growing": self.growth is not None}
+        if sound:
+            grown["audio"] = self._audio()
+        return grown
+
+    def _grow_package(self) -> int | None:
+        """The first frame that changed, None when nothing did."""
+        growth = self.growth
         package = growth.read(self.rom, self.package)
         if package is None:                             # the writer finished: the file is whole
             try:
+                stat = growth.path.stat()
                 package = scene_package.Package(growth.path.read_bytes(), self.rom)
             except OSError as error:
                 raise scene_package.PackageError(f"the finished scene could not be read: {error}") from None
             package.carry(self.package)
-            self.growth = None
+            self.growth, self.read_stat, self.whole_at = None, (stat.st_size, stat.st_mtime_ns), time.monotonic()
         elif package is self.package:
             return None
         outlines = self.outlines[:len(package)]
@@ -459,27 +504,70 @@ class SceneSession:
         frames = [index for index, outline in enumerate(outlines) if outline["vi"] is not None]
         start = next((at for at, (a, b) in enumerate(zip(frames, self.frames, strict=False)) if a != b),
                      min(len(frames), len(self.frames)))
-        self.package, self.outlines, self.frames = package, outlines, frames
+        self._use(package)
+        self.outlines, self.frames = outlines, frames
+        return start
+
+    def _use(self, package: scene_package.Package) -> None:
+        self.package = package
         if self._evaluator is not None and hasattr(self._evaluator, "package"):
             self._evaluator.package = package
-        grown = {"from": start, "frames": self._rows(start), "growing": self.growth is not None}
-        if self._sound(force=self.growth is None):
-            grown["audio"] = self.describe()["audio"]
-        return grown
 
-    def _sound(self, force: bool = False) -> bool:
-        """A growing scene's sound refit to its frames so far (LiveSound), at most every
-        SOUND_REFIT_SECONDS and once more when the scene is whole; True when it changed."""
-        if self.live_sound is None or not force and time.monotonic() - self.sound_built < SOUND_REFIT_SECONDS:
+    def _sound(self, start: int | None) -> bool:
+        """The scene's sound while it comes from the recorder's ring (LiveSound): the cutter
+        child's fit once it arrives, the ring's newer chunks and frames `start` on, then the
+        layer the cutter adds to the whole package. True when the page's table changed."""
+        live = self.live_sound
+        if live is None:
             return False
-        self.sound_built = time.monotonic()
         try:
-            sound, reason = self.live_sound.build(self.outlines, self.frames)
+            changed = live.adopt()
+            if live.available:
+                changed |= live.extend(self.outlines, self.frames, len(self.frames) if start is None else start,
+                                       self.growth is None)
         except Exception as error:  # noqa: BLE001 - the scene goes on silent and says why
-            sound, reason = None, f"This scene's sound could not be built: {error}"
-        if sound is None and self.sound is not None:
-            return False                                 # keep the sound it has rather than fall silent
-        self.sound, self.silence = sound, reason
+            live.segments, live.reason, changed = None, f"This scene's sound could not be built: {error}", True
+        if self.growth is None and self._attached():
+            return True
+        state = (live, None) if live.available else (None, live.reason)
+        if (self.sound, self.silence) != state:
+            self.sound, self.silence = state
+            changed = True
+        return changed
+
+    def _attached(self) -> bool:
+        """Once the cutter has added the sound to the whole package (live_audio.attach_span, which
+        writes the file again), its layer takes over from the ring's: the same stream in the same
+        blocks, so the page's blocks stay valid while the frames' samples move by the fit's own
+        error. A layer whose stream differs (the ring had dropped the scene's start meanwhile)
+        waits for the next open. True when it took over."""
+        try:
+            stat = self.path.stat()
+        except OSError:
+            return False
+        if (stat.st_size, stat.st_mtime_ns) == self.read_stat:
+            return False
+        self.read_stat = (stat.st_size, stat.st_mtime_ns)
+        try:
+            package = scene_package.Package(self.path.read_bytes(), self.rom)
+        except (OSError, ValueError, struct.error):     # mid-replace, or refused: the next look
+            self.read_stat = None
+            return False
+        sound = scene_audio.SceneSound.of(package, [self.outlines[index]["present"] for index in self.frames])
+        live = self.live_sound
+        if sound is None or len(package) != len(self.package):
+            return False
+        try:
+            if live.available:
+                ours = bytes(live.pcm[:scene_audio.LIVE_BLOCK_SAMPLES * 4])
+                theirs = np.asarray(sound.layer.block(0), np.int16).tobytes()
+                if sound.layer.block_samples != scene_audio.LIVE_BLOCK_SAMPLES or theirs[:len(ours)] != ours[:len(theirs)]:
+                    return False
+            package.carry(self.package)
+        except ValueError:                              # a block that fails its hash, a package that differs
+            return False
+        self._use(package)
+        self.sound, self.silence, self.live_sound = sound, None, None
         return True
 
     def audio_block(self, index: int) -> tuple[bytes, str]:

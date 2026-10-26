@@ -393,6 +393,7 @@ class SceneLab:
         module = _lab_module("scene_session")
         try:
             session = module.SceneSession.open(config, path, sidecar=sidecar, live=self.live_audio,
+                                               fitter=self.scenes.fit if self.scenes is not None else None,
                                                **self.session_options)
         except module.Refused as refused:
             raise SceneRefused(str(refused)) from None
@@ -469,16 +470,21 @@ class SceneLab:
         loop = asyncio.get_running_loop()
         if self.watch_task is None or self.watch_task.done():
             self.watch_task = loop.create_task(self._watch(), name="scene-lab-watch")
-        if self.described and self.described.get("growing"):
+        if self.described and not self._settled():
             loop.create_task(self._grow(self.generation), name="scene-lab-grow")
         if self.loop_probe is not None and self.loop_probe.task is None:
             self.loop_probe.task = loop.create_task(self.loop_probe.run(), name="scene-lab-loop-probe")
 
+    def _settled(self) -> bool:
+        session = self.session
+        return session is None or getattr(session, "settled", not (self.described or {}).get("growing"))
+
     async def _grow(self, generation: int) -> None:
         """While the open scene is still being written (an attempt scene whose fade-out has not
-        reached the recording yet): every GROW_SECONDS its worker takes the newest publication,
-        and each page showing it is told what it gained, {"kind": "grown", "session", "from",
-        "frames", "growing"}, until the scene is whole or closed."""
+        reached the recording yet) or its sound still comes from the recorder's ring: every
+        GROW_SECONDS its worker takes the newest publication and sound, and each page showing it
+        is told what it gained, {"kind": "grown", "session", "from", "frames", "growing", and
+        "audio" when the sound's table changed}, until the scene is settled or closed."""
         failures = 0
         while self.session is not None and generation == self.generation:
             await asyncio.sleep(self.grow_seconds)
@@ -493,18 +499,18 @@ class SceneLab:
                 if failures < GROW_FAILURES:
                     continue
                 grown = {"from": len((self.described or {}).get("frames", ())), "frames": [], "growing": False}
-            if not grown:
-                continue
-            if self.described is not None and generation == self.generation:
-                frames = self.described["frames"][:grown["from"]] + grown["frames"]
-                self.described = {**self.described, "frames": frames, "growing": grown["growing"]}
-            message = {"kind": "grown", "session": generation, **grown}
-            for page in list(self.pages):
-                try:
-                    await page.send(message)
-                except Exception as error:  # noqa: BLE001 - a page that left misses nothing it needs
-                    log.debug("a scene page did not hear the scene grow: %r", error)
-            if not grown["growing"]:
+            if grown:
+                if self.described is not None and generation == self.generation:
+                    frames = self.described["frames"][:grown["from"]] + grown["frames"]
+                    self.described = {**self.described, "frames": frames, "growing": grown["growing"],
+                                      **({"audio": grown["audio"]} if "audio" in grown else {})}
+                message = {"kind": "grown", "session": generation, **grown}
+                for page in list(self.pages):
+                    try:
+                        await page.send(message)
+                    except Exception as error:  # noqa: BLE001 - a page that left misses nothing it needs
+                        log.debug("a scene page did not hear the scene grow: %r", error)
+            if self._settled() or failures >= GROW_FAILURES:
                 return
 
     async def _watch(self) -> None:
