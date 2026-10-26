@@ -22,6 +22,10 @@ const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_fr
 const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
 const PER_DEGREE = 65536 / 360;
 let sockets, opened, fetches, frames, locked;
+// The page's clock is the test's: performance.now() reads `clock.now`, which only tick() (an
+// animation frame) and the test itself move, as one clock serves both in a browser. A step's
+// time is then the test's and never the machine's, so a loaded machine cannot change a result.
+const clock = { now: 1000 };
 
 class FakeSocket {
   static OPEN = 1;
@@ -48,6 +52,8 @@ function respond(body, status = 200) {
 }
 
 beforeEach(() => {
+  clock.now = 1000;
+  vi.spyOn(performance, "now").mockImplementation(() => clock.now);
   sockets = [];
   fetches = [];
   frames = [];
@@ -82,20 +88,38 @@ beforeEach(() => {
   Object.defineProperty(document, "pointerLockElement", { configurable: true, get: () => locked });
   document.exitPointerLock = vi.fn(() => { locked = null; document.dispatchEvent(new Event("pointerlockchange")); });
 });
-afterEach(() => { cleanup(); setSceneCameraTuning(null); });
+afterEach(() => { cleanup(); setSceneCameraTuning(null); vi.restoreAllMocks(); });
+
+// Turns of the event loop until `check` passes, then its value: like waitFor, with no deadline
+// on the wall clock, so a busy machine only makes it slower, never wrong.
+async function until(check, turns = 200) {
+  for (let turn = 0; ; turn++) {
+    try {
+      return check();
+    } catch (error) {
+      if (turn >= turns) throw error;
+    }
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+  }
+}
+
+// A few turns of the event loop: whatever the page would do by itself has happened.
+const settled = async (turns = 5) => {
+  for (let turn = 0; turn < turns; turn++) await new Promise((resolve) => { setTimeout(resolve, 0); });
+};
 
 async function openScene() {
   const page = render(h(SceneViewer, {}));
-  const button = await waitFor(() => {
+  const button = await until(() => {
     const found = page.getByRole("button", { name: "Open" });
     expect(found.disabled).toBe(false);
     return found;
   });
   fireEvent.click(button);
-  await waitFor(() => expect(sockets.length).toBe(1));
+  await until(() => expect(sockets.length).toBe(1));
   const socket = sockets[0];
   socket.open();
-  await waitFor(() => expect(socket.sent.length).toBe(1));
+  await until(() => expect(socket.sent.length).toBe(1));
   const root = page.container.querySelector(".scene-lab");
   return { page, socket, root, canvas: root.querySelector("canvas") };
 }
@@ -104,9 +128,9 @@ async function openScene() {
 async function enterFree(page, socket, pose = POSE) {
   await socket.picture(socket.sent[0]);
   fireEvent.click(page.getByRole("button", { name: "Free camera" }));
-  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
   socket.text({ id: socket.last().id, kind: "pose", pose, reason: null });
-  await waitFor(() => expect(socket.last().camera).toBeTruthy());
+  await until(() => expect(socket.last().camera).toBeTruthy());
   await socket.picture(socket.last());
   return socket.last().camera;
 }
@@ -114,6 +138,7 @@ async function enterFree(page, socket, pose = POSE) {
 // The page follows the pointer on pointerrawupdate where the browser has it (jsdom does).
 const move = (canvas, init) => fireEvent(canvas, new PointerEvent("pointerrawupdate", { bubbles: true, ...init }));
 const tick = async (at) => {
+  clock.now = at;
   const due = frames.splice(0);
   due.forEach((step) => step(at));
   await new Promise((resolve) => { setTimeout(resolve, 0); });
@@ -207,6 +232,76 @@ test("pictures whose decodes finish in order are all drawn, oldest first", async
   expect(drawn).toEqual(createImageBitmap.mock.calls.map(([blob]) => blob));   // 0, then 1 over it
 });
 
+// ------------------------------------------------------------------ Play on time
+
+// Opens a scene whose first picture took 40 ms from asked to drawn, so a play asks 40 ms plus a
+// display frame ahead; `drawn` gets the page's clock at each draw.
+async function openTimed() {
+  const drawn = [];
+  HTMLCanvasElement.prototype.getContext = () => ({ putImageData: () => drawn.push(clock.now),
+    createImageData: (w, hgt) => ({ data: new Uint8ClampedArray(w * hgt * 4), width: w, height: hgt }) });
+  const opened = await openScene();
+  clock.now += 40;
+  await opened.socket.picture(opened.socket.sent[0]);
+  await until(() => expect(drawn.length).toBe(1));
+  return { ...opened, drawn };
+}
+
+test("Play asks for each picture ahead of its time and draws it on the display frame it is due", async () => {
+  const { page, socket, drawn } = await openTimed();
+  clock.now = 10000;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await settled();
+  expect(socket.last()).toMatchObject({ frame: 0 });                 // the play's first picture, due at once
+  await tick(10000);
+  await until(() => expect(socket.last().frame).toBe(1));          // due at 10033 ms, asked for at 10000
+  await socket.picture(socket.pictures().at(-2));                  // frame 0 draws now: its time has come
+  expect(drawn.at(-1)).toBe(10000);
+  clock.now = 10005;
+  const held = socket.picture(socket.last());                      // frame 1, ready 28 ms early: it waits
+  await settled();
+  expect(drawn.length).toBe(2);
+  await tick(10016.7);                                             // the display frame before it is due
+  await held;
+  expect(drawn).toEqual([1040, 10000, 10016.7]);
+  expect(page.container.textContent).toContain("Frame 2 of 5");
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+});
+
+test("a picture a play asked for ahead is never shown once the play has stopped", async () => {
+  const { page, socket, drawn } = await openTimed();
+  clock.now = 10000;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await settled();
+  await tick(10000);
+  await until(() => expect(socket.last().frame).toBe(1));
+  await socket.picture(socket.pictures().at(-2));                  // frame 0, due at once
+  clock.now = 10005;
+  const waiting = socket.picture(socket.last());                   // frame 1, due at 10033: it waits
+  await settled();
+  expect(drawn.length).toBe(2);
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));    // stopped while it waits
+  await waiting;
+  await tick(10050);
+  await settled();
+  expect(drawn.length).toBe(2);                                    // frame 1 was never shown
+  expect(page.container.textContent).toContain("Frame 1 of 5");
+  await tick(10100);
+  expect(socket.pictures().length).toBe(3);                        // and a stopped play asks for nothing more
+  clock.now = 20000;                                               // again, stopped before its pictures come
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await settled();
+  await tick(20000);
+  await tick(20020);                                               // pictures now come 5 ms after asked
+  await until(() => expect(socket.last().frame).toBe(1));
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+  await socket.picture(socket.pictures().at(-2));
+  await socket.picture(socket.last());
+  await settled();
+  expect(drawn.length).toBe(2);
+  expect(page.container.textContent).toContain("Frame 1 of 5");
+});
+
 // ------------------------------------------------------------------ the desktop window's shared memory
 
 // The desktop window's WebView2 as a page sees it: sharedbufferreceived events and releaseBuffer.
@@ -294,6 +389,7 @@ test("while the camera moves the page sums up its numbers once a window, and pos
     fireEvent.pointerDown(canvas, { button: 0, buttons: 1, pointerId: 1, clientX: 100, clientY: 100 });
     for (let step = 1; step <= 4; step++) {
       const sent = socket.sent.length;
+      clock.now += 10;                                             // a picture every 10 ms
       move(canvas, { pointerId: 1, buttons: 1, clientX: 100 + 10 * step, clientY: 100 });
       await waitFor(() => expect(socket.sent.length).toBe(sent + 1));
       await socket.picture(socket.last(), { server_ms: 12, timings: { evaluate_ms: 5, host_ms: 3, encode_ms: 4 } });
@@ -409,7 +505,7 @@ test("a tilted view levels as you turn or fly, never on entry, a step, a slide o
 async function startFlying(page, socket, canvas) {
   await enterFree(page, socket);
   fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
-  await waitFor(() => expect(page.container.querySelector(".scene-lab-hint").textContent).toContain("W A S D"));
+  await until(() => expect(page.container.querySelector(".scene-lab-hint").textContent).toContain("W A S D"));
 }
 
 test("holding the right button flies: W moves at a constant speed where the camera looks, and letting go stops it", async () => {
@@ -417,24 +513,25 @@ test("holding the right button flies: W moves at a constant speed where the came
   const keyBefore = socket.sent.length;
   fireEvent.keyDown(root, { key: "w", code: "KeyW" });                         // not flying: W is nobody's
   fireEvent.keyUp(root, { key: "w", code: "KeyW" });
-  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  await settled();
   expect(socket.sent.length).toBe(keyBefore);
   await startFlying(page, socket, canvas);
   expect(HTMLCanvasElement.prototype.requestPointerLock).toHaveBeenCalledTimes(1);
   const start = socket.last().camera;
+  clock.now = 5000;                                                             // the key goes down at 5 s
   fireEvent.keyDown(root, { key: "w", code: "KeyW" });
-  await tick(5000);                                                             // the first step, from the key
-  await waitFor(() => expect(socket.last().camera.position).not.toEqual(start.position));
+  await tick(5050);                                                             // the first step, 50 ms on
+  await until(() => expect(socket.last().camera.position).not.toEqual(start.position));
   const first = socket.last().camera;
   await socket.picture(socket.last());
-  await tick(5050);                                                             // 50 ms later
-  await waitFor(() => expect(socket.last().camera.position).not.toEqual(first.position));
+  await tick(5100);                                                             // 50 ms later
+  await until(() => expect(socket.last().camera.position).not.toEqual(first.position));
   const moved = socket.last().camera, view = [0, 1, 2].map((i) => start.focus[i] - start.position[i]);
   const length = Math.hypot(...view), travelled = [0, 1, 2].map((i) => moved.position[i] - first.position[i]);
   close(travelled, view.map((value) => value / length * REFERENCE.flightSpeed * 0.05), 6);
   await socket.picture(socket.last());
   fireEvent.keyUp(root, { key: "w", code: "KeyW" });
-  await tick(5100);
+  await tick(5150);
   const after = socket.sent.length;
   await tick(6000);
   expect(frames.length).toBe(0);                                                // no coasting: the loop ended
@@ -471,24 +568,25 @@ test("Shift flies faster, Alt slower, and the wheel sets the speed while flying 
   await startFlying(page, socket, canvas);
   const sentBefore = socket.sent.length;
   fireEvent.wheel(canvas, { deltaY: -100 });                                    // one notch up: faster
-  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  await settled();
   expect(socket.sent.length).toBe(sentBefore);                                  // no dolly picture
   expect(page.getByRole("group", { name: "Flight speed" }).textContent).toContain(speedWords(REFERENCE.speedPerNotch));
   const start = socket.last().camera;
+  clock.now = 5000;
   fireEvent.keyDown(root, { key: "e", code: "KeyE", shiftKey: true });
-  await tick(5000);
-  await waitFor(() => expect(socket.last().camera.focus[1]).not.toBe(start.focus[1]));
+  await tick(5050);
+  await until(() => expect(socket.last().camera.focus[1]).not.toBe(start.focus[1]));
   const first = socket.last().camera;
   await socket.picture(socket.last());
-  await tick(5100);
-  await waitFor(() => expect(socket.last().camera.focus[1]).not.toBe(first.focus[1]));
+  await tick(5150);                                                             // 100 ms later
+  await until(() => expect(socket.last().camera.focus[1]).not.toBe(first.focus[1]));
   const fast = socket.last().camera;
   expect(fast.focus[1] - first.focus[1])
     .toBeCloseTo(REFERENCE.flightSpeed * REFERENCE.speedPerNotch * REFERENCE.fastMultiplier * 0.1, 6);
   await socket.picture(socket.last());
   fireEvent.keyDown(root, { key: "Alt", code: "AltLeft", shiftKey: false, altKey: true });
-  await tick(5200);
-  await waitFor(() => expect(socket.last().camera.focus[1]).not.toBe(fast.focus[1]));
+  await tick(5250);
+  await until(() => expect(socket.last().camera.focus[1]).not.toBe(fast.focus[1]));
   expect(socket.last().camera.focus[1] - fast.focus[1])
     .toBeCloseTo(REFERENCE.flightSpeed * REFERENCE.speedPerNotch * REFERENCE.slowMultiplier * 0.1, 6);
   fireEvent.click(page.getByRole("button", { name: "Reset" }));
@@ -503,14 +601,15 @@ test.each([
 ])("%s stops every movement and gives the pointer back", async (_label, end) => {
   const { page, socket, root, canvas } = await openScene();
   await startFlying(page, socket, canvas);
+  clock.now = 5000;
   fireEvent.keyDown(root, { key: "d", code: "KeyD" });
-  await tick(0);
-  await tick(50);
-  await waitFor(() => expect(frames.length).toBe(1));
+  await tick(5000);
+  await tick(5050);
+  await until(() => expect(frames.length).toBe(1));
   end(root, canvas);
-  await tick(100);
+  await tick(5100);
   const after = socket.sent.length;
-  await tick(400);
+  await tick(5400);
   expect(socket.sent.length).toBe(after);
   expect(frames.length).toBe(0);
   expect(locked).toBeNull();

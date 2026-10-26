@@ -302,14 +302,14 @@ test("the first picture of a play holds until the sound can start with it", asyn
   sound.arm();
   expect(sound.lead()).toBe(SCENE_SOUND.coldLeadMs);                 // a starting device has no clock to read
   for (let i = 0; i < 3; i++) sound.measureOutput();
-  // Heard 40 ms of steering lead + 60 ms of output delay + a 5 ms margin from now; the
-  // first new picture shows pictureDelayMs (35) after it is due.
-  expect(sound.lead()).toBeCloseTo(105 - SCENE_SOUND.pictureDelayMs, 0);
-  sound.shown(0, performance.now() - 5);                             // a paused picture: the scene's own delay
-  await new Promise((resolve) => { setTimeout(resolve, 40); });
-  expect(sound.delays.length).toBe(1);
-  // A play's picture also waits up to a display frame for its request: half of one on average.
-  expect(sound.lead()).toBeCloseTo(105 - sound.delays[0] - SCENE_SOUND.tickMs / 2, 0);
+  // Heard 40 ms of steering lead + 60 ms of output delay + a 5 ms margin from now. SceneLink asks
+  // for a play's pictures ahead and draws each on the display frame it is due: half a frame late on
+  // average, until a play has measured its own.
+  expect(sound.lead()).toBeCloseTo(105 - SCENE_SOUND.tickMs / 2, 0);
+  sound.shown(0);                                                    // paused: not a play's picture
+  expect(sound.lead()).toBeCloseTo(105 - SCENE_SOUND.tickMs / 2, 0);
+  sound.lastLate = 12;                                               // the last play's own lateness
+  expect(sound.lead()).toBeCloseTo(105 - 12, 0);
   sound.close();
 });
 

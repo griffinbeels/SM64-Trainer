@@ -80,6 +80,9 @@ const wheelPixels = (event) => event.deltaY * (event.deltaMode === 1 ? WHEEL_LIN
 // PICTURES_IN_FLIGHT holds the same number).
 export const PICTURES_IN_FLIGHT = 2;
 const WANTS = { play: 0, input: 1, move: 2 };
+// How long a picture takes from asked to ready to draw, until the page has measured its own (the
+// median of its last READY_WINDOW): a play asks this much plus a display frame ahead.
+const READY_GUESS_MS = 40, READY_WINDOW = 15;
 // How long the page sums up its numbers while the camera moves before showing and recording them.
 export const MOVING_WINDOW = { ms: 2000 };
 
@@ -87,6 +90,11 @@ function percentile(values, p) {
   if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.min(sorted.length - 1, Math.round(p * (sorted.length - 1)))];
+}
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 const tenths = (value) => (value == null || !Number.isFinite(value) ? null : Math.round(value * 10) / 10);
 const spread = (values) => {
@@ -158,16 +166,19 @@ function drawRaw(context, header, bytes) {  // ReadScreen's BGR rows, bottom-up
   context.putImageData(picture, 0, 0);
 }
 
-// Draws the picture unless `claim()` refuses (a newer one is already drawn:
-// decodes can finish out of order). Returns how long decoding and drawing
-// took, or null when it did not draw.
-async function paint(canvas, header, bytes, claim = () => true) {
+// Draws the picture once `ready()` lets it (a play's picture waits for the
+// display frame it is due; false: never) and unless `claim()` refuses (a newer
+// one is already drawn: decodes can finish out of order). Returns how long
+// decoding and drawing took, without the wait, or null when it did not draw.
+async function paint(canvas, header, bytes, claim = () => true, ready = null) {
   const context = canvas?.getContext("2d");
   if (!context) return null;
   const started = performance.now();
   const bitmap = header.encoding === "jpeg"
     ? await createImageBitmap(new Blob([bytes], { type: "image/jpeg" })) : null;
-  if (!claim()) { bitmap?.close(); return null; }
+  const decoded = performance.now();
+  if ((ready && !(await ready())) || !claim()) { bitmap?.close(); return null; }
+  const drawing = performance.now();
   if (canvas.width !== header.width || canvas.height !== header.height) {
     canvas.width = header.width;
     canvas.height = header.height;
@@ -177,7 +188,7 @@ async function paint(canvas, header, bytes, claim = () => true) {
     context.drawImage(bitmap, 0, 0);
     bitmap.close();
   }
-  return performance.now() - started;
+  return decoded - started + performance.now() - drawing;
 }
 
 // Where a pointer sits on the picture, 0 to 1 across and down, or null off it:
@@ -210,7 +221,7 @@ export class SceneLink {
       playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: new Map(),
       wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
       entering: null, arrived: 0, drawnSeq: 0, fly: null, speed: 1, picking: false, finding: false, glide: null,
-      serial: 0, noticeTimer: null, moving: null, shared: new Map(),
+      serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null, readies: [],
       sound: new SceneSound({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
@@ -242,6 +253,7 @@ export class SceneLink {
 
   disconnect() {
     this.interrupt();
+    this.stopPlay();
     this.playing = false;
     this.sound.stop();
     this.timings.stop();
@@ -297,21 +309,61 @@ export class SceneLink {
 
   // kind: "play" (the playback clock), "input" (the person: a step, a seek, a camera switch) or
   // "move" (the person moved the free camera); a waiting request takes the strongest that asked.
-  want(kind = "input", inputTime = performance.now()) {
-    if (!this.wanted) this.wanted = { kind, inputTime };
-    else if (WANTS[kind] > WANTS[this.wanted.kind]) this.wanted.kind = kind;
+  // `frame` is the play's: the picture it asks for ahead of the one on screen.
+  want(kind = "input", inputTime = performance.now(), frame = null) {
+    if (!this.wanted) this.wanted = { kind, inputTime, frame };
+    else {
+      if (WANTS[kind] > WANTS[this.wanted.kind]) this.wanted.kind = kind;
+      if (frame != null) this.wanted.frame = frame;
+    }
     queueMicrotask(() => this.pump());
   }
 
+  // During a play every request is for the play's frame and is due when the
+  // recording showed it; otherwise for the frame on screen.
   pump() {
     const ready = this.ws && this.ws.readyState === WebSocket.OPEN && this.scene;
     if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
+    const play = this.playback, frame = this.wanted.frame ?? (play ? play.asked : this.frame);
     const id = ++this.sequence, camera = this.free && this.orbit ? cameraOf(this.orbit) : null;
-    this.inFlight.set(id, { ...this.wanted, id, free: !!camera, sent: performance.now() });
+    this.inFlight.set(id, { ...this.wanted, id, frame, free: !!camera, sent: performance.now(), play,
+      due: play ? play.dueOf(frame) : null });
     this.wanted = null;
-    this.ws.send(JSON.stringify({ id, session: this.scene.session, frame: this.frame, camera, encoding: this.encoding }));
+    this.ws.send(JSON.stringify({ id, session: this.scene.session, frame, camera, encoding: this.encoding }));
     this.drawing = true;
     this.changed();
+  }
+
+  // When a picture asked for now is ready to draw: the median of recent ones, ask to decoded.
+  readyMs() { return median(this.readies) ?? READY_GUESS_MS; }
+
+  // A play's picture waits until the display frame it is due has begun, so it shows on that frame:
+  // true then (at once when that frame has already begun), false when its play stopped first.
+  holdUntil(due, play) {
+    if (this.playback !== play) return false;
+    if (play.frameAt != null && due <= play.frameAt + play.frameMs) return true;
+    return new Promise((resolve) => { play.holds.push({ due, resolve }); });
+  }
+
+  // What paint awaits once a picture has decoded: how long that took feeds how far ahead a play
+  // asks; a play's picture then waits for its display frame, and one from a stopped play is not shown.
+  readyFor(request) {
+    return () => {
+      if (request) this.readies = [...this.readies.slice(-(READY_WINDOW - 1)), performance.now() - request.sent];
+      return request?.play ? this.holdUntil(request.due, request.play) : true;
+    };
+  }
+
+  stopPlay() {
+    const play = this.playback;
+    if (!play) return;
+    Object.assign(this, { playback: null, playing: false });
+    for (const hold of play.holds.splice(0)) hold.resolve(false);
+    if (this.wanted?.frame != null) {
+      if (this.wanted.kind === "play") this.wanted = null;
+      else this.wanted.frame = null;
+    }
+    this.sound.stop();
   }
 
   async onPicture(buffer) {
@@ -330,7 +382,7 @@ export class SceneLink {
       return true;
     };
     const got = await this.pixelsOf(header, buffer, 4 + length);
-    const decodeMs = got ? await this.draw(header, got.pixels, claim) : null;
+    const decodeMs = got ? await this.draw(header, got.pixels, claim, this.readyFor(request)) : null;
     if (got?.shared) webview()?.releaseBuffer(got.shared);
     this.drawing = this.inFlight.size > 0;
     if (decodeMs == null || arrived !== this.drawnSeq) {
@@ -338,8 +390,16 @@ export class SceneLink {
       this.changed();
       return;
     }
+    this.pictureDrawn(header, request, received, decodeMs);
+  }
+
+  // A picture is on the canvas: the frame on screen during a play, the sound, the page's numbers.
+  pictureDrawn(header, request, received, decodeMs) {
     const drawnAt = performance.now();
-    if (request) this.sound.shown(header.frame, request.sent);
+    if (request?.play) {
+      this.frame = header.frame;
+      this.sound.shown(header.frame);
+    }
     if (request) {
       header.trip_ms = received - request.sent;
       header.input_ms = drawnAt - request.inputTime;
@@ -619,33 +679,59 @@ export class SceneLink {
 
   step(delta, time) { this.pause(); this.seek(this.frame + delta, "input", time); }
 
-  pause() { if (this.playing) { this.playing = false; this.sound.stop(); this.changed(); } }
+  pause() { if (this.playing) { this.stopPlay(); this.changed(); } }
 
   toggle() { this.interrupt(); if (this.playing) this.pause(); else this.play(); }
 
   // The recording's own clock (sceneclock.js): each picture stays up as long
-  // as the recording showed it. The frame due now is asked for whenever
-  // nothing is in flight, and frames that passed while one was drawn are
-  // skipped. The clock starts once the sound can start with it (sound.lead()),
-  // so the first picture of a play holds that much longer.
+  // as the recording showed it. A play asks for each picture ahead, as long
+  // before it is due as a picture takes to be ready plus a display frame, and
+  // draws it on the display frame it is due, so it shows on time instead of
+  // being asked for once due (which showed every picture one to three display
+  // frames late, measured 2026-10-26). A newer request still replaces a
+  // waiting one, so frames a slow server cannot keep up with are skipped. The
+  // clock starts once the sound can start with it (sound.lead()), so the
+  // first picture of a play holds that much longer. The frame on screen
+  // (this.frame) is the last one drawn.
   play() {
     const scene = this.scene;
     if (!scene) return;
     this.sound.arm();
     const from = this.frame >= scene.frames.length - 1 ? 0 : this.frame, times = recordedTimes(scene);
     const start = performance.now() + this.sound.lead(), length = playLength(times, from, scene.fps);
-    this.playing = true;
-    const tick = () => {
-      if (!this.playing || this.scene !== scene) return;
-      const elapsed = performance.now() - start;
-      if (elapsed >= length) { this.seek(scene.frames.length - 1, "play"); this.pause(); return; }
-      const at = pictureAt(times, from, elapsed);
-      if (at !== this.frame) this.seek(at, "play");
+    const play = { from, start, asked: from, frameAt: null, frameMs: 1000 / 60, gaps: [], holds: [],
+      dueOf: (frame) => start + times[frame] - times[from] };
+    Object.assign(this, { playback: play, playing: true, frame: from });
+    const tick = (frameTime) => {
+      if (this.playback !== play) return;
+      if (play.frameAt != null) {
+        play.gaps = [...play.gaps.slice(-7), frameTime - play.frameAt];
+        play.frameMs = clamp(median(play.gaps), 4, 50);
+      }
+      play.frameAt = frameTime;
+      if (frameTime - start >= length) return this.finishPlay(scene);
+      for (const hold of play.holds.splice(0)) {
+        if (hold.due <= frameTime + play.frameMs) hold.resolve(true);
+        else play.holds.push(hold);
+      }
+      const ahead = pictureAt(times, from, Math.max(0, frameTime - start + this.readyMs() + play.frameMs));
+      if (ahead !== play.asked) {
+        play.asked = ahead;
+        this.want("play", performance.now(), ahead);
+      }
       requestAnimationFrame(tick);
     };
-    this.seek(from, "play");
+    this.want("play", performance.now(), from);
+    this.changed();
     this.sound.play(from, start);
     requestAnimationFrame(tick);
+  }
+
+  // A play ran to its end: it stops on the last picture.
+  finishPlay(scene) {
+    const last = scene.frames.length - 1;
+    this.pause();
+    if (this.frame !== last) this.seek(last, "play");
   }
 }
 
@@ -967,7 +1053,8 @@ function useSceneLink(canvas, refresh) {
   const [, setRevision] = useState(0);
   const link = useRef(null);
   if (!link.current) {
-    link.current = new SceneLink({ draw: (header, bytes, current) => paint(canvas.current, header, bytes, current),
+    link.current = new SceneLink({
+      draw: (header, bytes, claim, ready) => paint(canvas.current, header, bytes, claim, ready),
       changed: () => setRevision((revision) => revision + 1), ended: () => refresh.current() });
   }
   useEffect(() => {

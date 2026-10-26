@@ -1310,7 +1310,8 @@ when no page shows the scene, and when the server stops. The page keeps two
 pictures in flight, asks for the next as soon as one arrives, and a newer step or
 camera move replaces the one waiting behind them; the game's code works out the
 next camera's picture while the [[renderer]] draws and the [[picture encoder]]
-compresses the one before. In the desktop app's window the pictures skip the
+compresses the one before. Play asks for each picture ahead of its recorded
+time and shows it at the screen refresh it is due. In the desktop app's window the pictures skip the
 JPEG: the server hands the page the [[renderer]]'s exact pixels through WebView2
 shared memory. While the camera moves, the page sums up its own
 numbers every 2 s (pictures a second, input to picture, decode, the server's
