@@ -430,12 +430,14 @@ class Attributor:
     checked byte for byte, so a wrong guess only costs size, never fidelity.
     """
 
-    def __init__(self, rom: bytes, rdram_size: int):
+    def __init__(self, rom: bytes, rdram_size: int, rom_loads: list[dict] | None = None):
+        """`rom_loads`: provenance.segment_loads(rom) when the caller keeps it (decoding the ROM's
+        MIO0 blocks costs ~1 s of every package otherwise; attempt_cutter.py writes many)."""
         self.rom, self.rdram_size = rom, rdram_size
         self.by_segment: dict[int, list[Candidate]] = {}
         anywhere: dict[int, Candidate] = {}
         slices: dict[tuple[int, int], Candidate] = {}
-        for load in provenance.segment_loads(rom):
+        for load in provenance.segment_loads(rom) if rom_loads is None else rom_loads:
             if load["kind"] in (0x18, 0x1A):
                 anywhere.setdefault(load["start"], Candidate(LOAD_MIO0, load["start"], 0, load["data"]))
             elif load["segment"] is not None:
@@ -826,64 +828,111 @@ def assemble(rom_sha: bytes, rdram_size: int, frame_count: int, body: bytes, ind
 def write_package(source: Source, rom: bytes, out: Path, codec: int = LZMA, block_bytes: int = 256,
                   group: int = 16, checkpoint_every: int = CHECKPOINT_EVERY) -> dict:
     """Version 1 with the scene-state layer when the source carries its records, else version 0."""
-    if source.rom_header != rom_header_hex(rom):
-        raise SystemExit("the source was recorded from a different ROM (header mismatch)")
-    if source.rdram_size not in RDRAM_SIZES or block_bytes % 32 or not 0 < group <= 4096 or checkpoint_every < 1:
-        raise SystemExit("unsupported RDRAM size, block size, group or checkpoint spacing")
-    started = time.perf_counter()
-    attributor = Attributor(rom, source.rdram_size)
-    stats = Counter()
-    partial = out.with_name(out.name + ".partial")
-    with partial.open("wb") as handle:
-        handle.write(bytes(HEADER.size))
-        chunks = ChunkWriter(handle, codec, HEADER.size)
-        blocks = Slices(chunks, "blocks", CHUNK_TARGET, dedupe=True)
-        records = Slices(chunks, "records", 1 << 62, dedupe=False)
-        states = source.states and StateWriter(source.states, attributor, chunks, blocks, block_bytes,
-                                               source.rdram_size, checkpoint_every, group)
+    writer = PackageWriter(source, rom, out, codec, block_bytes, group, checkpoint_every)
+    try:
         for capture in source.captures:
-            check_capture(capture, source.rdram_size)
-            segments = encode_segments(attributor, attributor.attribute(capture), blocks, block_bytes, stats)
-            records.add(encode_record(capture, segments), len(capture.run_bytes),
-                        closure_digest(capture.runs, capture.run_bytes))
+            writer.add(capture)
+    except BaseException:
+        writer.abandon()
+        raise
+    return writer.finish()
+
+
+class PackageWriter:
+    """write_package one frame at a time: each frame's record, blocks and state go to disk as it
+    arrives, and finish() writes only what is still pending, the index and the header. So a
+    package can be written while its recording is still being made and be complete moments
+    after its last frame arrives (attempt_cutter.py's takes: a 20 s span cost 12.2 s with zlib
+    written in one go, 2026-10-26, which keeps pace while he plays and is far too slow after). The
+    file is `out`.partial until finish() renames it; abandon() deletes it. finish(frames=n) keeps
+    only the first n frames: a writer that follows a live recording may have taken frames past
+    the end it learns later, and their bytes stay in the body unreferenced."""
+
+    def __init__(self, source: Source, rom: bytes, out: Path, codec: int = LZMA, block_bytes: int = 256,
+                 group: int = 16, checkpoint_every: int = CHECKPOINT_EVERY, rom_loads: list[dict] | None = None):
+        if source.rom_header != rom_header_hex(rom):
+            raise SystemExit("the source was recorded from a different ROM (header mismatch)")
+        if source.rdram_size not in RDRAM_SIZES or block_bytes % 32 or not 0 < group <= 4096 or checkpoint_every < 1:
+            raise SystemExit("unsupported RDRAM size, block size, group or checkpoint spacing")
+        self.started = time.perf_counter()
+        self.source, self.rom, self.out = source, rom, out
+        self.block_bytes, self.group, self.checkpoint_every = block_bytes, group, checkpoint_every
+        self.attributor = Attributor(rom, source.rdram_size, rom_loads)
+        self.stats = Counter()
+        self.partial = out.with_name(out.name + ".partial")
+        self.handle = self.partial.open("wb")
+        self.handle.write(bytes(HEADER.size))
+        self.chunks = ChunkWriter(self.handle, codec, HEADER.size)
+        self.blocks = Slices(self.chunks, "blocks", CHUNK_TARGET, dedupe=True)
+        self.records = Slices(self.chunks, "records", 1 << 62, dedupe=False)
+        self.states = source.states and StateWriter(source.states, self.attributor, self.chunks, self.blocks,
+                                                    block_bytes, source.rdram_size, checkpoint_every, group)
+        self.added: list[tuple[bool, int]] = []         # (shown, closure bytes) per frame, for finish(frames=)
+
+    def add(self, capture: Capture) -> None:
+        stats, attributor = self.stats, self.attributor
+        check_capture(capture, self.source.rdram_size)
+        segments = encode_segments(attributor, attributor.attribute(capture), self.blocks, self.block_bytes, stats)
+        self.records.add(encode_record(capture, segments), len(capture.run_bytes),
+                         closure_digest(capture.runs, capture.run_bytes))
+        if self.states:
+            self.states.add(capture)
+        self.added.append((capture.shown, len(capture.run_bytes)))
+        stats["frames"] += 1
+        stats["shown"] += capture.shown
+        stats["closure_bytes"] += len(capture.run_bytes)
+        if stats["frames"] % self.group == 0:
+            self.records.flush()
+
+    def finish(self, frames: int | None = None) -> dict:
+        finishing = time.perf_counter()
+        source, stats, states, attributor, chunks = self.source, self.stats, self.states, self.attributor, self.chunks
+        kept = len(self.added) if frames is None else frames
+        if not 0 < kept <= len(self.added):
+            self.abandon()
+            raise ValueError(f"a package of {kept} frames from a writer that took {len(self.added)}")
+        if kept < len(self.added):                       # (Counter.update would add, not set)
+            stats["frames"], stats["dropped_frames"] = kept, len(self.added) - kept
+            stats["shown"] = sum(shown for shown, _ in self.added[:kept])
+            stats["closure_bytes"] = sum(size for _, size in self.added[:kept])
+        with self.handle as handle:
+            layers, layer_meta = [], []
             if states:
-                states.add(capture)
-            stats["frames"] += 1
-            stats["shown"] += capture.shown
-            stats["closure_bytes"] += len(capture.run_bytes)
-            if stats["frames"] % group == 0:
-                records.flush()
-        layers, layer_meta = [], []
-        if states:
-            states.finish()
-            code = code_load(rom, source.states.full)
-            source.states.full = None
-            codes = [(attributor.load_index(code[0]), code[1])] if code else []
-            layers = [(STATE, [tuple(entry) for entry in states.records.entries]), (CODE, codes)]
-            layer_meta = [{"name": STATE_LAYER[0], "version": STATE_LAYER[1], "checkpoint_every": checkpoint_every,
-                           "group": group}]
-            stats.update({f"state_{name}": value for name, value in states.stats.items()})
-            stats.update(chunk_state=chunks.stored["state"], code_loads=len(codes))
-        blocks.flush()
-        records.flush()
-        loads = attributor.load_table()
-        stats.update(refused=source.refused, chunk_blocks=chunks.stored["blocks"],
-                     chunk_records=chunks.stored["records"], loads=len(loads),
-                     discovered_windows=len(attributor.static) - 1)
-        version = VERSION if states else 0
-        meta = {"schema": SCHEMAS[version], "source": source.kind, "wrapper_build": source.build,
-                "identity": [list(item) for item in source.identity], "block_bytes": block_bytes,
-                "group": group, "stats": dict(stats)} | ({"layers": layer_meta} if version else {})
-        index_raw = encode_index(meta, loads, chunks.entries, [tuple(e) for e in blocks.entries],
-                                 [tuple(e) for e in records.entries], *layers)
-        stored = zlib.compress(index_raw, 9)
-        handle.write(stored)
-        handle.seek(0)
-        handle.write(pack_header(hashlib.sha256(rom).digest(), source.rdram_size, stats["frames"], chunks.offset,
-                                 stored, index_raw, version))
-    os.replace(partial, out)
-    stats.update(package_bytes=out.stat().st_size, index_raw_bytes=len(index_raw))
-    return dict(stats) | {"write_seconds": round(time.perf_counter() - started, 3)}
+                states.finish()
+                code = code_load(self.rom, source.states.full)
+                source.states.full = None
+                codes = [(attributor.load_index(code[0]), code[1])] if code else []
+                layers = [(STATE, [tuple(entry) for entry in states.records.entries[:kept]]), (CODE, codes)]
+                layer_meta = [{"name": STATE_LAYER[0], "version": STATE_LAYER[1],
+                               "checkpoint_every": self.checkpoint_every, "group": self.group}]
+                stats.update({f"state_{name}": value for name, value in states.stats.items()})
+                stats.update(chunk_state=chunks.stored["state"], code_loads=len(codes))
+            self.blocks.flush()
+            self.records.flush()
+            loads = attributor.load_table()
+            stats.update(refused=source.refused, chunk_blocks=chunks.stored["blocks"],
+                         chunk_records=chunks.stored["records"], loads=len(loads),
+                         discovered_windows=len(attributor.static) - 1)
+            version = VERSION if states else 0
+            meta = {"schema": SCHEMAS[version], "source": source.kind, "wrapper_build": source.build,
+                    "identity": [list(item) for item in source.identity], "block_bytes": self.block_bytes,
+                    "group": self.group, "stats": dict(stats)} | ({"layers": layer_meta} if version else {})
+            index_raw = encode_index(meta, loads, chunks.entries, [tuple(e) for e in self.blocks.entries],
+                                     [tuple(e) for e in self.records.entries[:kept]], *layers)
+            stored = zlib.compress(index_raw, 9)
+            handle.write(stored)
+            handle.seek(0)
+            handle.write(pack_header(hashlib.sha256(self.rom).digest(), source.rdram_size, stats["frames"],
+                                     chunks.offset, stored, index_raw, version))
+        os.replace(self.partial, self.out)
+        stats.update(package_bytes=self.out.stat().st_size, index_raw_bytes=len(index_raw))
+        now = time.perf_counter()
+        return dict(stats) | {"write_seconds": round(now - self.started, 3),
+                              "finish_seconds": round(now - finishing, 3)}
+
+    def abandon(self) -> None:
+        self.handle.close()
+        self.partial.unlink(missing_ok=True)
 
 
 def with_resolution(data: bytes, rom: bytes, resolutions: list) -> bytes:
