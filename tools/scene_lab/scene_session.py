@@ -3,6 +3,7 @@
     session = SceneSession.open(config, package_path)            # Refused names why it cannot
     header, payload = session.picture(frame, camera, "jpeg")       # camera None: the recorded camera
     session.pose(frame)                                            # the recorded camera and Mario
+    session.audio_block(index)                                     # a block of the recording's sound
     session.close()                                                # the host exits; returns its code
 
 A frame is a picture the game showed: a package task a present displayed, in recording order
@@ -19,9 +20,14 @@ already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame
 After a free-camera picture of a new frame, a second thread resolves the frames that follow it
 (evaluator.prepare; backward when stepping back), so playing or stepping finds states ready.
 
+The package's source-audio layer, when it has one, is the recording's sound mapped to these
+frames (scene_audio.py); describe() carries its table and audio_block serves its blocks.
+
 Every method runs on the caller's one thread: the server gives each session a single worker
 thread, so the host's pipe and the evaluator's view sandbox are never shared. The look-ahead
 thread touches only the evaluator's resolution side and the package, both behind their locks.
+audio_block is the exception: it reads only the immutable sound layer, so the server runs it
+off the worker, where a sound block never waits behind a render.
 src/sm64_events/server/scene_lab_api.py owns the session's lifetime. The host starts only after
 the GPU hold check; tests and e3_measure.py --fake inject fake_viewer_host.py's doubles.
 """
@@ -47,6 +53,7 @@ sys.path.insert(0, str(HERE))
 import gpu_gate  # noqa: E402
 import package as scene_package  # noqa: E402
 import replay  # noqa: E402
+import scene_audio  # noqa: E402
 import viewer  # noqa: E402
 
 FPS = 30                      # game frames per second; the viewer steps presented pictures
@@ -232,6 +239,7 @@ class SceneSession:
                  outlines: list[dict], evaluator_factory, free_reason: str | None):
         self.name, self.package, self.rom, self.host = name, package, rom, host
         self.frames, self.outlines = frames, outlines
+        self.sound = scene_audio.SceneSound.of(package, [outlines[index]["present"] for index in frames])
         self.evaluator_factory, self.free_reason = evaluator_factory, free_reason
         self._evaluator = None
         self.image = HostImage() if getattr(host, "keeps_rdram", False) else None
@@ -277,14 +285,23 @@ class SceneSession:
         return session
 
     def describe(self) -> dict:
-        """What the page lists: every frame's level, area and game frame, and the free camera's state."""
+        """What the page lists: every frame's level, area and game frame, the free camera's state,
+        and the recording's sound (scene_audio.py's table, or why there is none)."""
         frames = []
         for index in self.frames:
             identity = self.outlines[index]["identity"]
             frames.append({"level": identity.get("curr_level"), "area": identity.get("curr_area"),
                            "game_frame": identity.get("global_timer")})
         return {"name": self.name, "fps": FPS, "frames": frames, "renderer_pid": self.host.pid,
-                "free_camera": {"available": self.free_reason is None, "reason": self.free_reason}}
+                "free_camera": {"available": self.free_reason is None, "reason": self.free_reason},
+                "audio": self.sound.describe() if self.sound else scene_audio.absent()}
+
+    def audio_block(self, index: int) -> tuple[bytes, str]:
+        """(file bytes, media type) of one block of the recording's sound: LookupError when there
+        is no sound or no such block, ValueError when the block fails its hash."""
+        if self.sound is None:
+            raise LookupError(scene_audio.NO_SOUND)
+        return self.sound.block(index)
 
     def _index(self, frame) -> int:
         if not isinstance(frame, int) or isinstance(frame, bool) or not 0 <= frame < len(self.frames):

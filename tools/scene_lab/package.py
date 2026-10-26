@@ -53,6 +53,15 @@ render-stepped values come from the previous game frame's state, and the throwMa
 the render consumed (object, matrix address). It carries addresses only, never bytes, and the
 evaluator takes a frame's entry only when one traced regeneration from it reproduces the
 captured list byte for byte; otherwise it searches as without the layer.
+
+The source-audio layer (version 1, added to a package by `audio_session.py attach`) carries
+the recording's own game sound: one row naming where in the body an audio_layer.py payload
+lies (its own header, index, blocks and picture-to-sample table). Attaching appends the
+payload after the chunks and keeps every other body byte; the reader requires the span to lie
+inside the body clear of every chunk and parses the payload when the package opens (each
+audio block's hash is checked when it decodes). The payload's pictures are the tap's
+presents, so a frame finds its sound through its present sequence; attaching refuses audio
+whose pictures miss any frame a present showed, which is audio from another session.
 """
 from __future__ import annotations
 
@@ -76,6 +85,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import audio_layer  # noqa: E402
 import provenance  # noqa: E402
 import tap  # noqa: E402
 from savestate_frames import TASK_NAMES  # noqa: E402
@@ -99,6 +109,7 @@ STATE_HEAD = struct.Struct("<IIIII")   # kind, level runs | level ops, level seg
 RESOLVE = struct.Struct("<IIIII")      # flags, first range, ranges, first pointer, pointers
 RANGE = RUN                            # begin, end: RDRAM bytes taken from the previous game frame's state
 POINTER = struct.Struct("<II")         # object, matrix: a throwMatrix pointer (virtual addresses)
+AUDIO = struct.Struct("<QQ")           # offset, length: the source-audio payload in the body
 
 LOAD_ROM, LOAD_MIO0 = 1, 2
 SEG_REF, SEG_RAW = 1, 2
@@ -108,6 +119,7 @@ SHOWN, HAS_VI = 1, 2
 NO_PRESENT = 0xFFFFFFFF
 STATE_LAYER = ("scene-state", 1)
 RESOLUTION_LAYER = ("scene-resolution", 1)
+AUDIO_LAYER = audio_layer.LAYER                 # ("source-audio", 1)
 CHECKPOINT, HAS_TASK = 1, 2            # state row flags
 RESOLVED = 1                           # resolution row flag: the search reproduced the captured list
 KEY_RECORD, DELTA_RECORD = 1, 2        # state record kinds: a checkpoint, or XOR the previous frame
@@ -890,22 +902,56 @@ def with_resolution(data: bytes, rom: bytes, resolutions: list) -> bytes:
         rows.append((RESOLVED, len(ranges), len(restored), len(pointers), len(consumed)))
         ranges += [tuple(item) for item in restored]
         pointers += [tuple(item) for item in consumed]
+    return _with_layer(package, {"name": RESOLUTION_LAYER[0], "version": RESOLUTION_LAYER[1],
+                                 "resolved": sum(entry is not None for entry in resolutions)},
+                       (rows, ranges, pointers))
+
+
+def with_audio(data: bytes, rom: bytes, payload: bytes) -> bytes:
+    """The package with its source-audio layer set to `payload` (an audio_layer.py payload),
+    replacing any it had: the payload goes after the chunks (a previous one attached there is
+    dropped) and every other body byte is kept. Refuses a payload audio_layer refuses, and
+    audio whose pictures miss a frame a present showed: it was recorded beside another session."""
+    package = Package(data, rom)
+    payload = bytes(payload)
+    try:
+        layer = audio_layer.read_layer(payload)
+    except audio_layer.LayerError as error:
+        raise PackageError(f"this source audio cannot be attached: {error}") from None
+    heard = {picture.sequence for picture in layer.pictures}
+    shown = [present for present in (package.outline(index)["present"] for index in range(len(package)))
+             if present is not None]
+    missing = sum(present not in heard for present in shown)
+    _require(shown and not missing, f"this source audio belongs to another recording: {missing} of the "
+             f"{len(shown)} frames a present showed have no picture in it")
+    header = package.header
+    body = data[HEADER.size:header.index_offset]
+    previous = package.index.layers.get(AUDIO_LAYER[0])
+    if previous and sum(previous[0][0]) == header.index_offset:
+        body = body[:previous[0][0][0] - HEADER.size]
+    return _with_layer(package, {"name": AUDIO_LAYER[0], "version": AUDIO_LAYER[1],
+                                 "seconds": round(layer.total_samples / layer.rate, 3)},
+                       ([(HEADER.size + len(body), len(payload))],), body + payload)
+
+
+def _with_layer(package: "Package", layer_meta: dict, tables: tuple, body: bytes | None = None) -> bytes:
+    """The package with one layer set, replacing any of its name: `tables` in its formats' order.
+    Only the index and header change unless `body` replaces the body; a closures-only package
+    becomes version 1, the version that carries layers. The reader checks what this writes."""
     index, header = package.index, package.header
     meta = json.loads(json.dumps(index.meta))
-    layers = [layer for layer in meta["layers"] if layer["name"] != RESOLUTION_LAYER[0]]
-    meta["layers"] = layers + [{"name": RESOLUTION_LAYER[0], "version": RESOLUTION_LAYER[1],
-                                "resolved": sum(entry is not None for entry in resolutions)}]
-    tables = {name: index.layers[name] for name, _version in LAYER_TABLES if name in index.layers}
-    tables[RESOLUTION_LAYER[0]] = (rows, ranges, pointers)
+    kept = [layer for layer in meta.get("layers", []) if layer["name"] != layer_meta["name"]]
+    meta.update(schema=SCHEMAS[VERSION], layers=kept + [layer_meta])
+    current = {layer["name"]: index.layers[layer["name"]] for layer in kept} | {layer_meta["name"]: tables}
     encoded = []
     for layer in meta["layers"]:
         formats = LAYER_TABLES[layer["name"], layer["version"]]
-        encoded += [(fmt, list(table)) for (fmt, _limit, _what), table in zip(formats, tables[layer["name"]],
+        encoded += [(fmt, list(table)) for (fmt, _limit, _what), table in zip(formats, current[layer["name"]],
                                                                                strict=True)]
     index_raw = encode_index(meta, index.loads, index.chunks, index.blocks, index.frames, *encoded)
     rebuilt = assemble(header.rom_sha, header.rdram_size, header.frame_count,
-                       data[HEADER.size:header.index_offset], index_raw, header.version)
-    Package(rebuilt, rom)                      # the reader takes what this writes
+                       package.data[HEADER.size:header.index_offset] if body is None else body, index_raw, VERSION)
+    Package(rebuilt, package.rom)              # the reader takes what this writes
     return rebuilt
 
 
@@ -1006,6 +1052,7 @@ LAYER_TABLES = {
     STATE_LAYER: ((STATE, MAX_ENTRIES, "scene states"), (CODE, MAX_CODE_LOADS, "code loads")),
     RESOLUTION_LAYER: ((RESOLVE, MAX_ENTRIES, "resolution rows"), (RANGE, MAX_ENTRIES, "restored ranges"),
                        (POINTER, MAX_ENTRIES, "throwMatrix pointers")),
+    AUDIO_LAYER: ((AUDIO, 1, "source-audio payloads"),),
 }
 
 
@@ -1063,6 +1110,8 @@ def check_index(index: Index, header: Header, rom_size: int) -> None:
     if RESOLUTION_LAYER[0] in index.layers:
         _require(STATE_LAYER[0] in index.layers, "a scene-resolution layer needs the scene-state layer")
         _check_resolution_layer(index, header)
+    if AUDIO_LAYER[0] in index.layers:
+        _check_audio_layer(index, header)
     _check_slices(index)
 
 
@@ -1093,6 +1142,16 @@ def _check_resolution_layer(index: Index, header: Header) -> None:
         for obj, matrix in pointers[first_pointer:first_pointer + pointer_count]:
             _require(0x80000000 <= obj <= top - 0x54 and 0x80000000 <= matrix <= top - 64 and not (obj | matrix) & 3,
                      "a throwMatrix pointer leaves RDRAM")
+
+
+def _check_audio_layer(index: Index, header: Header) -> None:
+    (rows,) = index.layers[AUDIO_LAYER[0]]
+    _require(len(rows) == 1, "a source-audio layer names one payload")
+    offset, length = rows[0]
+    _require(HEADER.size <= offset and audio_layer.HEADER.size <= length <= header.index_offset - offset,
+             "the source-audio payload lies outside the package body")
+    _require(all(offset + length <= start or start + stored <= offset for start, stored, *_ in index.chunks),
+             "the source-audio payload overlaps a chunk")
 
 
 def _check_slices(index: Index) -> None:
@@ -1177,6 +1236,13 @@ class Package:
         layer = self.index.layers.get(STATE_LAYER[0])
         self.states = SceneStates(self, *layer) if layer else None
         self.resolutions = self.index.layers.get(RESOLUTION_LAYER[0])
+        self.audio = None                              # audio_layer.Layer: the source-audio layer
+        if AUDIO_LAYER[0] in self.index.layers:
+            offset, length = self.index.layers[AUDIO_LAYER[0]][0][0]
+            try:
+                self.audio = audio_layer.read_layer(data[offset:offset + length])
+            except audio_layer.LayerError as error:
+                raise PackageError(f"the source-audio layer is damaged: {error}") from None
         self.lock = threading.RLock()
 
     def __len__(self) -> int:
@@ -1237,10 +1303,12 @@ class Package:
 
     def outline(self, index: int) -> dict:
         """What a viewer lists for a frame without rebuilding its closure: the VI registers of the
-        present that showed it (None when none did), and its identity values (global_timer, ...)."""
+        present that showed it and that present's tap sequence (None when none did), and its
+        identity values (global_timer, ...)."""
         with self.lock:
             record = self._record(index)
         return {"vi": tuple(record.head[22:36]) if record.head[2] & HAS_VI else None,
+                "present": None if record.head[1] == NO_PRESENT else record.head[1],
                 "identity": {name: tap.word_value(record.extras, address, size)
                              for name, address, size in self.identity}}
 
