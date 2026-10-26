@@ -46,6 +46,7 @@ LIBS = ["opengl32.lib", "user32.lib", "gdi32.lib", "kernel32.lib"]
 RUNTIME_SOURCES = (
     "wrapper_runtime", "stamp_adapter", "runtime_control", "runtime_delivery", "gpu_request",
     "gpu_delivery", "gpu_render", "source_snapshot", "gl_snapshot", "gpu_channel", "scene_tap",
+    "scene_spool",
 )
 # The encoder helper: a 64-bit DLL loaded by the isolated helper process,
 # never by Project64. Its NVENC header is the vendored nvEncodeAPI.h.

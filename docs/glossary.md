@@ -1159,9 +1159,10 @@ memory.
 ### Scene tap
 
 An M4 experiment inside the [[capture layer]]'s wrapper that writes
-each graphics task's [[task closure]] and the picture Project64 then shows,
-for a few armed seconds. A one-shot arming file present when a [[practice
-ROM]] opens starts it; without that file it costs one memory read per
+each graphics task's [[task closure]] and the picture Project64 then shows.
+A one-shot arming file present when a [[practice ROM]] opens records a few
+seconds; while the Trainer's scene lab holds a lease it records continuously
+into the [[live spool]]. Without either it costs one memory read per
 callback. It copies at the instant the game submits the task into a fixed
 ring and never makes the game wait; a full ring drops and counts the record.
 `tools/scene_lab/tap.py` arms it, reads what it wrote and turns each task into
@@ -1170,7 +1171,28 @@ input the [[renderer]] can redraw offline.
 - **Lives** -- the tap (`plugin/gfxwrap/scene_tap.cpp`), called from the
   wrapper (`plugin/gfxwrap/gfxwrap.c`); its tool (`tools/scene_lab/tap.py`)
 - **Not** -- the [[recorder]], which encodes video of play; the scene tap is
-  an M4 probe that writes nothing unless armed
+  an M4 probe that writes nothing unless armed or leased
+
+### Live spool
+
+The [[scene tap]]'s continuous recording while the Trainer's scene lab is on:
+every graphics task with its [[scene state]], in rolling files on disk, so you
+can open the scene of an [[attempt]] right after it ends. The lab holds a lease
+by renewing a file every 2 seconds; the wrapper checks it once a second,
+starts recording without reopening the game, and stops 8 seconds after the
+last renewal. The writer thread starts a new file about every 15 seconds with
+the level state whole, so a reader decodes any recent stretch without the
+files before it, and keeps 15 minutes (at most 2 GiB). It leaves out 256-byte
+blocks a file already holds and compresses the rest: about 42 MB a minute of
+play (2026-10-26). An index names each task's [[frame]], level, area and time
+a few dozen milliseconds after the game drew it, and names the tasks a full
+ring left incomplete.
+
+- **Lives** -- the lease and the reader (`tools/scene_lab/live_spool.py`); the
+  capture and the lease check (`plugin/gfxwrap/scene_tap.cpp`); the segments
+  (`plugin/gfxwrap/scene_spool.cpp`)
+- **Not** -- the [[recorder]]'s video, which keeps pictures only; the live
+  spool keeps what the [[scene viewer]] needs to redraw from a free camera
 
 ### Scene state
 
@@ -1304,7 +1326,8 @@ the view back where Free camera began; R returns to the recorded camera. A tilte
 as the shipped defaults. It is
 lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab
 config (the ROM, the package folder, Project64's Plugin folder, the symbol
-map). Nothing starts until someone opens a package; the hidden [[renderer]]
+map). Nothing starts until someone opens a package or, with the
+[[ghost button]], an [[attempt]]'s scene; the hidden [[renderer]]
 helper and the evaluator start then and stop on Close, after a while unused,
 when no page shows the scene, and when the server stops. The page keeps two
 pictures in flight, asks for the next as soon as one arrives, and a newer step or
@@ -1338,6 +1361,24 @@ so. A package without one says it has no sound.
   (`tools/scene_lab/e3_measure.py`)
 - **Not** -- the replay player, which plays recorded video; the scene viewer
   redraws the game's graphics from a [[scene package]]
+
+### Ghost button
+
+The button left of ▷ on a [[practice log]] row, shown only while the scene lab
+is on: one click switches to the [[scene viewer]], opens that [[attempt]]'s
+scene and plays it from its first [[frame]] as soon as the viewer draws that
+picture. A row the lab knows nothing about has none; a scene the lab is still
+cutting shows it disabled ("Scene finishing…") until it is ready, and a scene
+that cannot exist shows the lab's reason. [[star]] and [[segment]] rows both
+have it.
+
+- **Lives** -- `src/sm64_events/ui/components/attemptscene.js` (the button and
+  each table's ask of the lab), drawn by
+  `src/sm64_events/ui/components/attemptlog.js`; `src/sm64_events/ui/app.js`
+  hands the [[attempt]] to the viewer
+- **Not** -- the [[ghost toggle]], which races a recorded [[ghost]] in the game;
+  this button only opens the [[attempt]]'s scene, and wears the same mark as
+  the [[scene viewer]]'s sidebar entry
 
 ### Picture encoder
 

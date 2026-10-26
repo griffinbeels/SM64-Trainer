@@ -221,7 +221,8 @@ export class SceneLink {
       playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: new Map(),
       wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
       entering: null, arrived: 0, drawnSeq: 0, fly: null, speed: 1, picking: false, finding: false, glide: null,
-      serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null, readies: [],
+      serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null, readies: [], coldId: 0,
+      autoplay: false,
       sound: new SceneSound({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
@@ -233,16 +234,21 @@ export class SceneLink {
 
   get moved() { return this.free && !sameOrbit(this.orbit, this.entry); }
 
-  connect(scene) {
+  // `play`: Play starts from the first frame once its picture is drawn (the
+  // Practice log's Ghost button), unless the person steps or plays first.
+  connect(scene, { play = false } = {}) {
     this.disconnect();
+    this.autoplay = play;
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${ROOT}/ws`);
     ws.binaryType = "arraybuffer";
     ws.onmessage = (event) => (typeof event.data === "string"
       ? this.onText(JSON.parse(event.data)) : this.onPicture(event.data));
     ws.onopen = () => this.want("input");
     ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
+    // A scene's first picture carries the session's cold start (a seek from nothing), so it never
+    // counts towards how far ahead a play asks: a Play started on it would skip the opening frames.
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
-      wanted: null, notice: null, error: null, speed: 1, moving: null });
+      wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1 });
     if (this.sharedAvailable) {
       webview().addEventListener("sharedbufferreceived", this.onShared);
       this.encoding = "shared";
@@ -253,6 +259,7 @@ export class SceneLink {
 
   disconnect() {
     this.interrupt();
+    this.autoplay = false;
     this.stopPlay();
     this.playing = false;
     this.sound.stop();
@@ -349,7 +356,9 @@ export class SceneLink {
   // asks; a play's picture then waits for its display frame, and one from a stopped play is not shown.
   readyFor(request) {
     return () => {
-      if (request) this.readies = [...this.readies.slice(-(READY_WINDOW - 1)), performance.now() - request.sent];
+      if (request && request.id !== this.coldId) {
+        this.readies = [...this.readies.slice(-(READY_WINDOW - 1)), performance.now() - request.sent];
+      }
       return request?.play ? this.holdUntil(request.due, request.play) : true;
     };
   }
@@ -412,6 +421,7 @@ export class SceneLink {
     Object.assign(this, { shown: header, notice: header.reason || null });
     this.changed();
     this.pump();
+    if (this.autoplay) this.play();
   }
 
   onText(message) {
@@ -679,7 +689,10 @@ export class SceneLink {
 
   step(delta, time) { this.pause(); this.seek(this.frame + delta, "input", time); }
 
-  pause() { if (this.playing) { this.stopPlay(); this.changed(); } }
+  pause() {
+    this.autoplay = false;
+    if (this.playing) { this.stopPlay(); this.changed(); }
+  }
 
   toggle() { this.interrupt(); if (this.playing) this.pause(); else this.play(); }
 
@@ -695,6 +708,7 @@ export class SceneLink {
   // (this.frame) is the last one drawn.
   play() {
     const scene = this.scene;
+    this.autoplay = false;
     if (!scene) return;
     this.sound.arm();
     const from = this.frame >= scene.frames.length - 1 ? 0 : this.frame, times = recordedTimes(scene);
@@ -872,7 +886,7 @@ function Opener({ status, opening, open }) {
       </select>
     </label>
     <button type="button" class="primary" disabled=${!!why || opening || !picked}
-        title=${why || "Start the renderer and show this recording"} onclick=${() => open(picked)}>
+        title=${why || "Start the renderer and show this recording"} onclick=${() => open({ package: picked })}>
       ${opening ? "Opening..." : "Open"}</button>
     ${why && html`<p class="scene-lab-reason">${why}</p>`}
   </div>`;
@@ -1081,7 +1095,10 @@ function useSceneLink(canvas, refresh) {
   return link.current;
 }
 
-export function SceneViewer() {
+// `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an
+// attempt; the viewer opens that attempt's scene and plays it, once per click.
+export function SceneViewer({ t }) {
+  const lab = t?.sceneLab, intent = lab?.intent;
   const [status, setStatus] = useState(null);
   const [opening, setOpening] = useState(false);
   const canvas = useRef(null), surface = useRef(null), refresh = useRef(null);
@@ -1093,7 +1110,15 @@ export function SceneViewer() {
       return next;
     } catch (problem) { link.fail(problem.message); return null; }
   };
-  useEffect(() => { refresh.current().then((next) => { if (next?.session) link.connect(next.session); }); }, []);
+  useEffect(() => {
+    if (intent) return;              // the attempt below replaces whatever scene was open
+    refresh.current().then((next) => { if (next?.session) link.connect(next.session); });
+  }, []);
+  useEffect(() => {
+    if (!intent) return;
+    lab.clearIntent();
+    open({ attempt: intent.attempt }, { play: true });
+  }, [intent]);
   // One observation per summary, read off the page once it shows it. Not useUiLog: that runs on
   // every render, and this page renders every picture, which would claim the practice page's
   // latency marks (ui/latency.js) dozens of times a second.
@@ -1101,11 +1126,13 @@ export function SceneViewer() {
     const observation = link.moving && readSceneViewer(surface.current);
     if (observation) postObservation(observation);
   }, [link.moving]);
-  async function open(name) {
+  // `body`: {package} from the picker, or {attempt} from the Ghost button. A refusal shows the
+  // server's own sentence either way.
+  async function open(body, { play = false } = {}) {
     setOpening(true);
     link.fail(null);
     try {
-      link.connect(await send("POST", `${ROOT}/open`, { package: name }));
+      link.connect(await send("POST", `${ROOT}/open`, body), { play });
       surface.current?.focus();
     } catch (problem) { link.fail(problem.message); }
     setOpening(false);

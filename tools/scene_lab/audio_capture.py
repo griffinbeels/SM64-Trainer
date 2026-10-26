@@ -85,51 +85,83 @@ class Fanout:
     atomic, and each byte counter has one writer. Losses are counted in
     samples on the producer side and merged until the next kept chunk, so the
     queue holds at most one LOST record between two kept ones and stays
-    bounded by `budget_bytes` of PCM."""
+    bounded by `budget_bytes` of PCM.
 
-    def __init__(self, stamp, budget_bytes: int):
+    With `keep_ticks` it is a ring instead (live_audio.py): nobody pops, and
+    each arrival first drops the oldest records past the byte budget or older
+    than `keep_ticks` before it (counted in `evicted_*`), so only a chunk
+    larger than the whole budget is ever LOST. A reader takes `snapshot()`.
+    `begin_epoch` starts a new tap stream, its samples counting from 0.
+
+    A record is one flat tuple, (epoch, first, samples, arrival, lost, bytes
+    or None): ints and bytes only, which the garbage collector stops tracking,
+    so a full ring barely touches the server's collections. As (Chunk, bytes)
+    pairs a full 900 s ring kept 180,000 more tracked objects, and a full
+    collection took 21 ms against 12 ms flat in the same benchmark
+    (2026-10-26). `chunk_of` turns a record back into its Chunk."""
+
+    def __init__(self, stamp, budget_bytes: int, *, keep_ticks: int | None = None):
         self._stamp = stamp
         self._budget = budget_bytes
+        self._keep = keep_ticks
         self._queue: deque = deque()
         self._ready = threading.Event()
         self._lost_run: ac.Chunk | None = None
         self._next = 0
+        self.epoch = 0
         self.bytes_in = self.bytes_out = self.peak_bytes = 0
         self.kept_chunks = self.lost_records = self.lost_samples = 0
+        self.evicted_chunks = self.evicted_bytes = 0
         self.costs_ns: deque = deque(maxlen=COSTS_KEPT)
 
-    def on_pcm(self, data) -> None:
+    def on_pcm(self, data, arrival: int | None = None) -> None:
+        """`arrival`: the QPC tick the caller already stamped the chunk with, else stamped here."""
         began = time.perf_counter_ns()
-        arrival = self._stamp()
+        if arrival is None:
+            arrival = self._stamp()
         pcm = np.asarray(data, np.int16).reshape(-1, 2)
         samples = len(pcm)
         if not samples:
             return
         first, self._next = self._next, self._next + samples
+        if self._keep is not None:
+            self._evict(samples * 4, arrival)
         queued = self.bytes_in - self.bytes_out
         if queued + samples * 4 <= self._budget:
             self._flush_lost()
-            self._queue.append((ac.Chunk(0, first, samples, arrival), pcm.tobytes()))
+            self._queue.append((self.epoch, first, samples, arrival, False, pcm.tobytes()))
             self.bytes_in += samples * 4
             self.kept_chunks += 1
             self.peak_bytes = max(self.peak_bytes, queued + samples * 4)
         else:
             self._lose(first, samples, arrival)
-        self._ready.set()
+        if self._keep is None:
+            self._ready.set()                           # a ring has no writer to wake
         self.costs_ns.append(time.perf_counter_ns() - began)
+
+    def _evict(self, incoming: int, arrival: int) -> None:
+        """Ring only: drop the oldest records until `incoming` bytes fit and none is too old."""
+        queue, oldest = self._queue, arrival - self._keep
+        while queue and (self.bytes_in - self.bytes_out + incoming > self._budget or queue[0][3] < oldest):
+            data = queue.popleft()[5]
+            if data is not None:
+                self.bytes_out += len(data)
+                self.evicted_bytes += len(data)
+            self.evicted_chunks += 1
 
     def _lose(self, first: int, samples: int, arrival: int) -> None:
         run = self._lost_run
         if run is not None and run.samples + samples > ac.MAX_CHUNK_SAMPLES:
             self._flush_lost()
             run = None
-        self._lost_run = (ac.Chunk(0, first, samples, arrival, True) if run is None
-                          else ac.Chunk(0, run.first, run.samples + samples, arrival, True))
+        self._lost_run = (ac.Chunk(self.epoch, first, samples, arrival, True) if run is None
+                          else ac.Chunk(self.epoch, run.first, run.samples + samples, arrival, True))
         self.lost_samples += samples
 
     def _flush_lost(self) -> None:
-        if self._lost_run is not None:
-            self._queue.append((self._lost_run, None))
+        run = self._lost_run
+        if run is not None:
+            self._queue.append((run.epoch, run.first, run.samples, run.arrival, True, None))
             self.lost_records += 1
             self._lost_run = None
 
@@ -138,20 +170,32 @@ class Fanout:
         self._flush_lost()
         self._ready.set()
 
+    def begin_epoch(self) -> None:
+        """A new tap stream follows (call before it delivers): its samples count from 0 again."""
+        self._flush_lost()
+        self.epoch += 1
+        self._next = 0
+
+    def snapshot(self) -> list:
+        """Every queued record, oldest first: a copy taken in one step, so a reader on
+        another thread never sees the producer half way through a change."""
+        return list(self._queue.copy())
+
     def records(self, done: threading.Event):
         """The writer's side: (Chunk, bytes | None) in order until `done` and drained."""
         while True:
             try:
-                chunk, data = self._queue.popleft()
+                record = self._queue.popleft()
             except IndexError:
                 if done.is_set() and not self._queue:
                     return
                 self._ready.wait(0.05)
                 self._ready.clear()
                 continue
+            data = record[5]
             if data is not None:
                 self.bytes_out += len(data)
-            yield chunk, data
+            yield chunk_of(record), data
 
     def cost_us(self) -> dict:
         costs = sorted(self.costs_ns)
@@ -159,6 +203,11 @@ class Fanout:
             return {}
         pick = lambda p: round(costs[min(len(costs) - 1, int(p * (len(costs) - 1) + 0.5))] / 1000, 1)  # noqa: E731
         return {"p50": pick(.5), "p99": pick(.99), "max": round(costs[-1] / 1000, 1)}
+
+
+def chunk_of(record: tuple) -> ac.Chunk:
+    """A Fanout record's Chunk (its bytes are record[5])."""
+    return ac.Chunk(*record[:5])
 
 
 class ProcessWatch:

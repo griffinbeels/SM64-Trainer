@@ -17,7 +17,8 @@
  *                    which never waits on Python.
  *
  * Both also feed the scene tap (scene_tap.cpp), an M4 capture experiment that
- * stays one atomic load unless a one-shot arming file exists at RomOpen.
+ * stays one atomic load unless a one-shot arming file exists at RomOpen or the
+ * Trainer's scene lab holds the live spool's lease (its own thread checks).
  *
  * The plugin knows NO game address: the tracker publishes {rdram_offset,
  * length} entries through the control page (memory/layout.py stays the one
