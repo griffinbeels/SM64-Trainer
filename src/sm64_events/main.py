@@ -384,6 +384,11 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
             return reservation.pop() if reservation else acquire_recorder_lock()
 
         recorder_options["recorder_lock_factory"] = reserve_capture
+    # With the scene lab on, the recorder's game sound is also copied into a bounded ring the
+    # lab's attempt scenes take their sound from (tools/scene_lab/live_audio.py); off, the
+    # factories are the recorder's own.
+    live_sound = _scene_lab_live_audio()
+    wrap = live_sound.wrap if live_sound is not None else (lambda factory: factory)
     recorder = ReplayRecorder(
         cfg=replay_cfg,
         window_finder=find_window,
@@ -392,11 +397,11 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
         # The ghost sound player is tapped only while Ghosts in recording is
         # on, for the ghost copy; the clean audio is the game alone
         # (replay/audio.py GhostTimeline). `recorder` binds late.
-        audio_factory=lambda pid: ProcessAudioSource(
+        audio_factory=wrap(lambda pid: ProcessAudioSource(
             pid=pid, rate=replay_cfg.audio_rate,
-            extra_pid=lambda: recorder.ghost_sound_pid()),
-        fallback_audio_factory=lambda pid: SystemAudioSource(
-            rate=replay_cfg.audio_rate, pid=pid),
+            extra_pid=lambda: recorder.ghost_sound_pid())),
+        fallback_audio_factory=wrap(lambda pid: SystemAudioSource(
+            rate=replay_cfg.audio_rate, pid=pid)),
         codec_factory=codec,
         video_sink_factory=video_sink_factory,
         ghost_capture_factory=ghost_capture_factory,
@@ -675,21 +680,44 @@ def build(*, recorder_lock=None):
         refresh_library_on_start=True, community_account=community_account,
         community_sync=community_sync,
         multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
-        protect_local_api=True, local_port=server_port()))
+        protect_local_api=True, local_port=server_port()), tracker=service, live_audio=_scene_lab_live_audio())
 
 
-def _mount_scene_lab(app):
+_LIVE_SOUND: list = []          # the one LiveAudio of this process, once asked for
+
+
+def _scene_lab_live_audio():
+    """The scene lab's copy of the recorder's game sound (live_audio.LiveAudio, the last 300 s),
+    or None: the lab is off, or this app is frozen (the scene lab runs from a source checkout).
+    One per process: the recorder's factories and the lab share it."""
+    if not os.environ.get("SM64_SCENE_LAB"):
+        return None
+    if not _LIVE_SOUND:
+        from sm64_events.server.scene_lab_api import ConfigError, _lab_module
+        try:
+            _LIVE_SOUND.append(_lab_module("live_audio").LiveAudio(seconds=300.0))
+        except ConfigError:
+            _LIVE_SOUND.append(None)
+    return _LIVE_SOUND[0]
+
+
+def _mount_scene_lab(app, tracker=None, live_audio=None):
     """M4's scene viewer is a lab-only surface (server/scene_lab_api.py). This is the one
     reader of its switch: unless SM64_SCENE_LAB names a lab config, nothing is imported and
     the shell never shows its entry. The shell's one probe (GET /api/scene-lab) then answers
     {"lab": null}: a 404 there put an HTTP error on every page load of every install.
-    Mounting twice (a lab script that wraps an app the UI fixture already mounted) is a no-op."""
+    Mounting twice (a lab script that wraps an app the UI fixture already mounted) is a no-op.
+    With the switch on, the server's own `tracker` also feeds the lab's attempt scenes (the
+    live recording's lease, a cut per completed attempt); a caller without one (the UI fixture)
+    gets the viewer alone and never arms the wrapper's tap."""
     if any(getattr(route, "path", None) == "/api/scene-lab" for route in app.routes):
         return app
     config = os.environ.get("SM64_SCENE_LAB")
     if config:
         from sm64_events.server.scene_lab_api import mount_scene_lab
-        mount_scene_lab(app, config)
+        lab = mount_scene_lab(app, config, live=tracker is not None, live_audio=live_audio)
+        if tracker is not None:
+            lab.follow_attempts(tracker)
     else:
         app.add_api_route("/api/scene-lab", lambda: {"lab": None}, methods=["GET"], include_in_schema=False)
     return app

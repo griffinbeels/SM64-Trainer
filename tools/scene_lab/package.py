@@ -129,6 +129,7 @@ CHECKPOINT_EVERY = 64
 RDRAM_SIZES = (4 << 20, 8 << 20)
 BOOT_ROM = (0x1000, 0x101000)          # IPL3 copies 1 MiB from ROM 0x1000 to the header's entry point
 WINDOW = 0x10000                       # ROM window a discovered static mapping references
+RECHOOSE_TASKS = 32                    # a segment base no load fits is searched again this many tasks on
 
 MAX_PACKAGE_BYTES = 4 << 30
 MAX_INDEX_BYTES = 256 << 20
@@ -411,12 +412,20 @@ class Candidate:
     rom_end: int
     data: bytes
     _image: bytes | None = None
+    _array: np.ndarray | None = None
 
     @property
     def image(self) -> bytes:
         if self._image is None:
             self._image = swap_words(self.data)
         return self._image
+
+    @property
+    def array(self) -> np.ndarray:
+        """The image as bytes numpy compares a whole run against at once."""
+        if self._array is None:
+            self._array = np.frombuffer(self.image, np.uint8)
+        return self._array
 
 
 class Attributor:
@@ -430,12 +439,23 @@ class Attributor:
     checked byte for byte, so a wrong guess only costs size, never fidelity.
     """
 
-    def __init__(self, rom: bytes, rdram_size: int):
+    def __init__(self, rom: bytes, rdram_size: int, rom_loads: list[dict] | None = None,
+                 shared: Attributor | None = None):
+        """`rom_loads`: provenance.segment_loads(rom) when the caller keeps it (decoding the ROM's
+        MIO0 blocks costs ~1 s of every package otherwise; attempt_cutter.py writes many).
+        `shared`: an attributor over the same ROM and RDRAM size whose candidates, discovered
+        windows and known misses this one uses and adds to (attempt_cutter.py's takes: a take's
+        first frame then skips the ROM searches an earlier take already made)."""
         self.rom, self.rdram_size = rom, rdram_size
+        self._per_package()
+        if shared is not None:
+            self.by_segment, self.anywhere, self.static = shared.by_segment, shared.anywhere, shared.static
+            self.windows, self.misses = shared.windows, shared.misses
+            return
         self.by_segment: dict[int, list[Candidate]] = {}
         anywhere: dict[int, Candidate] = {}
         slices: dict[tuple[int, int], Candidate] = {}
-        for load in provenance.segment_loads(rom):
+        for load in provenance.segment_loads(rom) if rom_loads is None else rom_loads:
             if load["kind"] in (0x18, 0x1A):
                 anywhere.setdefault(load["start"], Candidate(LOAD_MIO0, load["start"], 0, load["data"]))
             elif load["segment"] is not None:
@@ -447,10 +467,18 @@ class Attributor:
         start, end = BOOT_ROM[0], min(BOOT_ROM[1], len(rom), BOOT_ROM[0] + rdram_size - entry)
         self.static: list[tuple[int, Candidate]] = [(entry, Candidate(LOAD_ROM, start, end, rom[start:end]))]
         self.windows: set[tuple[int, int, int]] = set()
-        self.choices: dict[tuple[int, int], Candidate] = {}
         self.misses: set[bytes] = set()
+
+    def _per_package(self) -> None:
+        self.choices: dict[tuple[int, int], Candidate] = {}
+        # A segment base no candidate fits well (dynamic data in a ROM-loaded segment, a buffer
+        # the game fills) is searched again only RECHOOSE_TASKS tasks later, not on every task:
+        # the search tried every MIO0 block in the ROM, ~4 ms a frame on his BoB minute.
+        self.rechoose: dict[tuple[int, int], int] = {}
+        self.tasks_seen = 0
         self.loads: dict[Candidate, int] = {}
-        self.sparse = bytearray(b"\xa5") * rdram_size
+        self.sparse = bytearray(b"\xa5") * self.rdram_size
+        self.sparse_array = np.frombuffer(self.sparse, np.uint8)   # a view: _place writes through it
         self.runs: list = []
         self.ends: list = []
 
@@ -460,6 +488,7 @@ class Attributor:
         State spans hold no display list: they pass the RSP segment bases the tap recorded, and
         look for new ROM windows only where new content arrives (a level key)."""
         self._place(capture)
+        self.tasks_seen += 1
         segments = self._segments(capture.task) if segments is None else segments
         for _ in range(8):
             mappings = self._segment_mappings(segments) + self.static
@@ -488,15 +517,24 @@ class Attributor:
         for segment, base in sorted(segments.items()):
             if base % 4 or base >= self.rdram_size:
                 continue
-            chosen = self.choices.get((segment, base))
+            key = (segment, base)
+            chosen = self.choices.get(key)
+            if self.rechoose.get(key, -1) < self.tasks_seen:
+                if chosen is not None and not self._fits(chosen, base):
+                    chosen = None
+                if chosen is None:
+                    chosen = self._choose(segment, base)
+                    self.choices.pop(key, None)
+                    if chosen is None or not self._fits(chosen, base):
+                        self.rechoose[key] = self.tasks_seen + RECHOOSE_TASKS
             if chosen is not None:
-                matched, total = self._matched(chosen, base)
-                chosen = chosen if total and matched * 2 >= total else None
-            chosen = chosen or self._choose(segment, base)
-            if chosen is not None:
-                self.choices[(segment, base)] = chosen
+                self.choices[key] = chosen
                 mappings.append((base, chosen))
         return mappings
+
+    def _fits(self, candidate: Candidate, base: int) -> bool:
+        matched, total = self._matched(candidate, base)
+        return bool(total) and matched * 2 >= total
 
     def _choose(self, segment: int, base: int) -> Candidate | None:
         best, best_matched = None, 0
@@ -515,35 +553,57 @@ class Attributor:
             yield max(begin, lo), min(end, hi)
 
     def _matched(self, candidate: Candidate, base: int, limit: int = 0) -> tuple[int, int]:
-        """Closure bytes in the candidate's span that equal it, of those compared."""
+        """Closure bytes in the candidate's span that equal it, of those compared: 32-byte
+        granules from each overlap's start, whole or not at all; with `limit`, only granules
+        until that many bytes were compared."""
         image, matched, total = candidate.image, 0, 0
         for lo, hi in self._overlap(base, base + len(image)):
             if not limit and self.sparse[lo:hi] == image[lo - base:hi - base]:
                 matched, total = matched + hi - lo, total + hi - lo
                 continue
-            for at in range(lo, hi, 32):
-                size = min(32, hi - at)
-                total += size
-                matched += size if self.sparse[at:at + size] == image[at - base:at - base + size] else 0
-                if limit and total >= limit:
-                    return matched, total
+            starts = np.arange(0, hi - lo, 32)
+            sizes = np.diff(np.append(starts, hi - lo))
+            good = np.logical_and.reduceat(self.sparse_array[lo:hi] == candidate.array[lo - base:hi - base], starts)
+            if limit:
+                reach = int(np.searchsorted(np.cumsum(sizes), limit - total))
+                if reach < len(sizes):
+                    return matched + int(sizes[:reach + 1][good[:reach + 1]].sum()), \
+                        total + int(sizes[:reach + 1].sum())
+            matched, total = matched + int(sizes[good].sum()), total + hi - lo
         return matched, total
 
-    def _equal(self, at: int, size: int, mapping: tuple[int, Candidate]) -> bool:
-        base, candidate = mapping
-        offset = at - base
-        return (0 <= offset and offset + size <= len(candidate.image)
-                and self.sparse[at:at + size] == candidate.image[offset:offset + size])
-
     def _pieces(self, mappings: list) -> list[list]:
+        """Each 32-byte granule of each run (from the run's start) names the mapping that held
+        the previous granule if it still holds this one whole, else the first mapping in order
+        that does, else none (raw). Granules are matched a run at a time; the walk then visits
+        each stretch of one choice, not each granule: the same pieces as the per-granule loop
+        (300 of 300 frames of his BoB minute) for a ninth of its time on checkpoint tiles."""
         pieces: list[list] = []
         for begin, end in self.runs:
-            last = None
-            for at in range(begin, end, 32):
-                size = min(32, end - at)
-                if last is None or not self._equal(at, size, last):
-                    last = next((mapping for mapping in mappings if self._equal(at, size, mapping)), None)
-                _append(pieces, at, size, last)
+            near = [mapping for mapping in mappings
+                    if mapping[0] < end and mapping[0] + len(mapping[1].image) > begin]
+            if not near:
+                _append(pieces, begin, end - begin, None)
+                continue
+            starts = np.arange(0, end - begin, 32)
+            holds = np.zeros((len(near), len(starts)), bool)
+            for row, (base, candidate) in enumerate(near):
+                lo, hi = max(begin, base), min(end, base + len(candidate.image))
+                equal = np.zeros(end - begin, bool)
+                equal[lo - begin:hi - begin] = self.sparse_array[lo:hi] == candidate.array[lo - base:hi - base]
+                holds[row] = np.logical_and.reduceat(equal, starts)
+            anywhere = holds.any(axis=0)
+            granule, count, last = 0, len(starts), None
+            while granule < count:
+                if last is None or not holds[last, granule]:
+                    hits = np.flatnonzero(holds[:, granule])
+                    last = int(hits[0]) if hits.size else None
+                stretch = anywhere[granule:] if last is None else ~holds[last, granule:]
+                stop = granule + (int(np.argmax(stretch)) if stretch.any() else count - granule)
+                stop = max(stop, granule + 1)
+                at = begin + 32 * granule
+                _append(pieces, at, min(begin + 32 * stop, end) - at, None if last is None else near[last])
+                granule = stop
         return pieces
 
     def _discover(self, pieces: list[list]) -> bool:
@@ -603,9 +663,12 @@ def _append(pieces: list[list], at: int, size: int, mapping: tuple[int, Candidat
         pieces.append(["raw", at, at + size])
 
 
-def compress(codec: int, raw: bytes) -> bytes:
+def compress(codec: int, raw: bytes, level: int = 9) -> bytes:
+    """`level`: zlib's. 9 for a package written once; a take written while he plays uses 6
+    (measured 2026-10-26 on 600 frames of his BoB minute: 3.69 MB at 5.3 ms a frame against
+    3.91 MB at 0.8)."""
     if codec == ZLIB:
-        return zlib.compress(raw, 9)
+        return zlib.compress(raw, level)
     if codec == LZMA:
         return lzma.compress(raw, format=lzma.FORMAT_XZ, check=lzma.CHECK_NONE, filters=[
             {"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "dict_size": 1 << 20}])
@@ -613,13 +676,13 @@ def compress(codec: int, raw: bytes) -> bytes:
 
 
 class ChunkWriter:
-    def __init__(self, handle, codec: int, offset: int):
-        self.handle, self.codec, self.offset = handle, codec, offset
+    def __init__(self, handle, codec: int, offset: int, level: int = 9):
+        self.handle, self.codec, self.offset, self.level = handle, codec, offset, level
         self.entries: list[tuple] = []
         self.stored = Counter()
 
     def add(self, raw: bytes, kind: str) -> int:
-        stored = compress(self.codec, raw)
+        stored = compress(self.codec, raw, self.level)
         self.handle.write(stored)
         self.entries.append((self.offset, len(stored), len(raw), self.codec, hashlib.sha256(raw).digest()))
         self.offset += len(stored)
@@ -826,64 +889,166 @@ def assemble(rom_sha: bytes, rdram_size: int, frame_count: int, body: bytes, ind
 def write_package(source: Source, rom: bytes, out: Path, codec: int = LZMA, block_bytes: int = 256,
                   group: int = 16, checkpoint_every: int = CHECKPOINT_EVERY) -> dict:
     """Version 1 with the scene-state layer when the source carries its records, else version 0."""
-    if source.rom_header != rom_header_hex(rom):
-        raise SystemExit("the source was recorded from a different ROM (header mismatch)")
-    if source.rdram_size not in RDRAM_SIZES or block_bytes % 32 or not 0 < group <= 4096 or checkpoint_every < 1:
-        raise SystemExit("unsupported RDRAM size, block size, group or checkpoint spacing")
-    started = time.perf_counter()
-    attributor = Attributor(rom, source.rdram_size)
-    stats = Counter()
-    partial = out.with_name(out.name + ".partial")
-    with partial.open("wb") as handle:
-        handle.write(bytes(HEADER.size))
-        chunks = ChunkWriter(handle, codec, HEADER.size)
-        blocks = Slices(chunks, "blocks", CHUNK_TARGET, dedupe=True)
-        records = Slices(chunks, "records", 1 << 62, dedupe=False)
-        states = source.states and StateWriter(source.states, attributor, chunks, blocks, block_bytes,
-                                               source.rdram_size, checkpoint_every, group)
+    writer = PackageWriter(source, rom, out, codec, block_bytes, group, checkpoint_every)
+    try:
         for capture in source.captures:
-            check_capture(capture, source.rdram_size)
-            segments = encode_segments(attributor, attributor.attribute(capture), blocks, block_bytes, stats)
-            records.add(encode_record(capture, segments), len(capture.run_bytes),
-                        closure_digest(capture.runs, capture.run_bytes))
+            writer.add(capture)
+    except BaseException:
+        writer.abandon()
+        raise
+    return writer.finish()
+
+
+class PackageWriter:
+    """write_package one frame at a time: each frame's record, blocks and state go to disk as it
+    arrives, and finish() writes only what is still pending, the index and the header. So a
+    package can be written while its recording is still being made and be complete moments
+    after its last frame arrives (attempt_cutter.py's takes: a 20 s span cost 12.2 s with zlib
+    written in one go, 2026-10-26, which keeps pace while he plays and is far too slow after). The
+    file is `out`.partial until finish() renames it; abandon() deletes it. finish(frames=n) keeps
+    only the first n frames: a writer that follows a live recording may have taken frames past
+    the end it learns later, and their bytes stay in the body unreferenced."""
+
+    def __init__(self, source: Source, rom: bytes, out: Path, codec: int = LZMA, block_bytes: int = 256,
+                 group: int = 16, checkpoint_every: int = CHECKPOINT_EVERY, rom_loads: list[dict] | None = None,
+                 level: int = 9, shared: Attributor | None = None, in_place: bool = False,
+                 frequency: int | None = None):
+        """in_place: write `out` itself from the start (its header stays zero until finish) rather
+        than `out`.partial renamed at the end; a reader of a growing package needs the file to
+        keep its name, and Windows refuses to rename a file another process has open."""
+        if source.rom_header != rom_header_hex(rom):
+            raise SystemExit("the source was recorded from a different ROM (header mismatch)")
+        if source.rdram_size not in RDRAM_SIZES or block_bytes % 32 or not 0 < group <= 4096 or checkpoint_every < 1:
+            raise SystemExit("unsupported RDRAM size, block size, group or checkpoint spacing")
+        self.started = time.perf_counter()
+        self.source, self.rom, self.out = source, rom, out
+        self.block_bytes, self.group, self.checkpoint_every = block_bytes, group, checkpoint_every
+        self.attributor = Attributor(rom, source.rdram_size, rom_loads, shared)
+        self.stats = Counter()
+        self.partial = out if in_place else out.with_name(out.name + ".partial")
+        # frequency: the source's QPC ticks a second. With the source's origin_qpc (live_spool's) the
+        # index then carries "clock", so a reader turns each present's time back into QPC: a
+        # growing attempt scene finds its sound in the recorder's ring by it.
+        self.frequency = frequency
+        self.codes: list[tuple[int, int]] | None = None
+        self.handle = self.partial.open("wb")
+        self.handle.write(bytes(HEADER.size))
+        self.chunks = ChunkWriter(self.handle, codec, HEADER.size, level)
+        self.blocks = Slices(self.chunks, "blocks", CHUNK_TARGET, dedupe=True)
+        self.records = Slices(self.chunks, "records", 1 << 62, dedupe=False)
+        self.states = source.states and StateWriter(source.states, self.attributor, self.chunks, self.blocks,
+                                                    block_bytes, source.rdram_size, checkpoint_every, group)
+        self.added: list[tuple[bool, int]] = []         # (shown, closure bytes) per frame, for finish(frames=)
+
+    def add(self, capture: Capture) -> None:
+        stats, attributor = self.stats, self.attributor
+        check_capture(capture, self.source.rdram_size)
+        segments = encode_segments(attributor, attributor.attribute(capture), self.blocks, self.block_bytes, stats)
+        self.records.add(encode_record(capture, segments), len(capture.run_bytes),
+                         closure_digest(capture.runs, capture.run_bytes))
+        if self.states:
+            self.states.add(capture)
+        self.added.append((capture.shown, len(capture.run_bytes)))
+        stats["frames"] += 1
+        stats["shown"] += capture.shown
+        stats["closure_bytes"] += len(capture.run_bytes)
+        if stats["frames"] % self.group == 0:
+            self.records.flush()
+
+    def finish(self, frames: int | None = None) -> dict:
+        finishing = time.perf_counter()
+        source, stats, states, attributor, chunks = self.source, self.stats, self.states, self.attributor, self.chunks
+        kept = len(self.added) if frames is None else frames
+        if not 0 < kept <= len(self.added):
+            self.abandon()
+            raise ValueError(f"a package of {kept} frames from a writer that took {len(self.added)}")
+        if kept < len(self.added):                       # (Counter.update would add, not set)
+            stats["frames"], stats["dropped_frames"] = kept, len(self.added) - kept
+            stats["shown"] = sum(shown for shown, _ in self.added[:kept])
+            stats["closure_bytes"] = sum(size for _, size in self.added[:kept])
+        with self.handle as handle:
             if states:
-                states.add(capture)
-            stats["frames"] += 1
-            stats["shown"] += capture.shown
-            stats["closure_bytes"] += len(capture.run_bytes)
-            if stats["frames"] % group == 0:
-                records.flush()
+                states.finish()
+                self._codes()
+                stats.update({f"state_{name}": value for name, value in states.stats.items()})
+                stats.update(chunk_state=chunks.stored["state"], code_loads=len(self.codes))
+            self.blocks.flush()
+            self.records.flush()
+            stats.update(refused=source.refused, chunk_blocks=chunks.stored["blocks"],
+                         chunk_records=chunks.stored["records"], loads=len(attributor.loads),
+                         discovered_windows=len(attributor.static) - 1)
+            index_raw, version = self._index(kept)
+            stored = zlib.compress(index_raw, 9)
+            handle.write(stored)
+            handle.seek(0)
+            handle.write(pack_header(hashlib.sha256(self.rom).digest(), source.rdram_size, kept,
+                                     chunks.offset, stored, index_raw, version))
+        if self.partial != self.out:
+            os.replace(self.partial, self.out)
+        stats.update(package_bytes=self.out.stat().st_size, index_raw_bytes=len(index_raw))
+        now = time.perf_counter()
+        return dict(stats) | {"write_seconds": round(now - self.started, 3),
+                              "finish_seconds": round(now - finishing, 3)}
+
+    def _index(self, kept: int) -> tuple[bytes, int]:
+        """(raw index, version) for the first `kept` frames over everything flushed so far."""
+        source, states, attributor = self.source, self.states, self.attributor
         layers, layer_meta = [], []
+        self.blocks.flush()
+        self.records.flush()
         if states:
-            states.finish()
-            code = code_load(rom, source.states.full)
-            source.states.full = None
-            codes = [(attributor.load_index(code[0]), code[1])] if code else []
-            layers = [(STATE, [tuple(entry) for entry in states.records.entries]), (CODE, codes)]
-            layer_meta = [{"name": STATE_LAYER[0], "version": STATE_LAYER[1], "checkpoint_every": checkpoint_every,
-                           "group": group}]
-            stats.update({f"state_{name}": value for name, value in states.stats.items()})
-            stats.update(chunk_state=chunks.stored["state"], code_loads=len(codes))
-        blocks.flush()
-        records.flush()
-        loads = attributor.load_table()
-        stats.update(refused=source.refused, chunk_blocks=chunks.stored["blocks"],
-                     chunk_records=chunks.stored["records"], loads=len(loads),
-                     discovered_windows=len(attributor.static) - 1)
+            states.records.flush()
+            layers = [(STATE, [tuple(entry) for entry in states.records.entries[:kept]]), (CODE, self._codes())]
+            layer_meta = [{"name": STATE_LAYER[0], "version": STATE_LAYER[1],
+                           "checkpoint_every": self.checkpoint_every, "group": self.group}]
         version = VERSION if states else 0
         meta = {"schema": SCHEMAS[version], "source": source.kind, "wrapper_build": source.build,
-                "identity": [list(item) for item in source.identity], "block_bytes": block_bytes,
-                "group": group, "stats": dict(stats)} | ({"layers": layer_meta} if version else {})
-        index_raw = encode_index(meta, loads, chunks.entries, [tuple(e) for e in blocks.entries],
-                                 [tuple(e) for e in records.entries], *layers)
-        stored = zlib.compress(index_raw, 9)
-        handle.write(stored)
-        handle.seek(0)
-        handle.write(pack_header(hashlib.sha256(rom).digest(), source.rdram_size, stats["frames"], chunks.offset,
-                                 stored, index_raw, version))
-    os.replace(partial, out)
-    stats.update(package_bytes=out.stat().st_size, index_raw_bytes=len(index_raw))
-    return dict(stats) | {"write_seconds": round(time.perf_counter() - started, 3)}
+                "identity": [list(item) for item in source.identity], "block_bytes": self.block_bytes,
+                "group": self.group, "stats": dict(self.stats)} | ({"layers": layer_meta} if version else {})
+        origin = getattr(source, "origin_qpc", None)
+        if origin is not None and self.frequency:
+            meta["clock"] = {"origin_qpc": origin, "frequency": self.frequency}
+        return encode_index(meta, attributor.load_table(), self.chunks.entries, [tuple(e) for e in self.blocks.entries],
+                            [tuple(e) for e in self.records.entries[:kept]], *layers), version
+
+    def _codes(self) -> list[tuple[int, int]]:
+        """The practice ROM's code rows, located once from the source's full RDRAM copy (which
+        never travels and is dropped once read)."""
+        if self.codes is None:
+            code = code_load(self.rom, self.source.states.full)
+            self.source.states.full = None
+            self.codes = [(self.attributor.load_index(code[0]), code[1])] if code else []
+        return self.codes
+
+    def publish(self, sidecar: Path, limit: int | None = None) -> int:
+        """While the package grows: flushes what its frames so far need and writes `sidecar`, a
+        package header and index for them (zlib level 1), atomically. The header, this writer's
+        body so far and that index are a package a reader opens before it is finished
+        (grown_package): chunks are only appended, so every index published stays valid against
+        the body that was on disk when it was. Covers the frames whose scene state is written
+        (the state runs one frame behind), at most `limit`. Returns how many frames it covers."""
+        self.blocks.flush()
+        self.records.flush()
+        kept = len(self.records.entries)
+        if self.states:
+            self.states.records.flush()
+            kept = min(kept, len(self.states.records.entries))
+        kept = kept if limit is None else min(kept, limit)
+        if kept <= 0:
+            return 0
+        index_raw, version = self._index(kept)
+        self.handle.flush()
+        stored = zlib.compress(index_raw, 1)
+        header = pack_header(hashlib.sha256(self.rom).digest(), self.source.rdram_size, kept, self.chunks.offset,
+                             stored, index_raw, version)
+        partial = sidecar.with_name(sidecar.name + ".partial")
+        partial.write_bytes(header + stored)
+        os.replace(partial, sidecar)
+        return kept
+
+    def abandon(self) -> None:
+        self.handle.close()
+        self.partial.unlink(missing_ok=True)
 
 
 def with_resolution(data: bytes, rom: bytes, resolutions: list) -> bytes:
@@ -998,7 +1163,8 @@ class _Cursor:
 
     def rows(self, fmt: struct.Struct, count: int) -> list[tuple]:
         _require(count * fmt.size <= len(self.data) - self.at, f"truncated {self.what}")
-        rows = [fmt.unpack_from(self.data, self.at + i * fmt.size) for i in range(count)]
+        with memoryview(self.data)[self.at:self.at + count * fmt.size] as view:
+            rows = list(fmt.iter_unpack(view))
         self.at += count * fmt.size
         return rows
 
@@ -1033,7 +1199,7 @@ def decompress(codec: int, stored: bytes, raw: int) -> bytes:
 
 def read_header(data: bytes) -> Header:
     _require(len(data) >= HEADER.size, "shorter than a package header")
-    header = Header(*HEADER.unpack_from(data))
+    header = Header(*HEADER.unpack_from(data[:HEADER.size]))
     _require(header.magic == MAGIC, "not a scene package")
     _require(header.version in SCHEMAS,
              f"unsupported package version {header.version} (this reader knows {sorted(SCHEMAS)})")
@@ -1086,14 +1252,18 @@ def _identity_ok(item, rdram_size: int) -> bool:
             and 0 <= item[1] <= rdram_size - item[2])
 
 
-def check_index(index: Index, header: Header, rom_size: int) -> None:
+def check_index(index: Index, header: Header, rom_size: int, checked: Index | None = None) -> None:
+    """`checked`: an index this one only extends (a growing package's earlier publication,
+    already checked): its rows are taken as they are and only the new ones are checked, which
+    is what keeps re-opening a growing scene a few milliseconds instead of the whole index's."""
+    old = _checked_counts(index, checked)
     meta = index.meta
     _require(isinstance(meta, dict) and meta.get("schema") == SCHEMAS[header.version], "unknown package metadata")
     identity = meta.get("identity", [])
     _require(isinstance(identity, list) and len(identity) <= 16
              and all(_identity_ok(item, header.rdram_size) for item in identity), "malformed identity fields")
     _require(len(index.frames) == header.frame_count, "frame count does not match the header")
-    for kind, start, end, length, _sha in index.loads:
+    for kind, start, end, length, _sha in index.loads[old["loads"]:]:
         _require(kind in (LOAD_ROM, LOAD_MIO0) and 0 <= start < end <= rom_size and 0 < length <= MAX_LOAD_BYTES
                  and (kind != LOAD_ROM or length == end - start), "malformed load entry")
     previous_end = HEADER.size
@@ -1102,23 +1272,41 @@ def check_index(index: Index, header: Header, rom_size: int) -> None:
         _require(offset >= previous_end and offset + stored <= header.index_offset,
                  "chunk outside the package or overlapping another")
         previous_end = offset + stored
-    _require(all(length % 4 == 0 for _, _, length in index.blocks), "block length is not whole words")
-    _require(all(0 < closure <= header.rdram_size for _, _, _, closure, _ in index.frames),
+    _require(all(length % 4 == 0 for _, _, length in index.blocks[old["blocks"]:]), "block length is not whole words")
+    _require(all(0 < closure <= header.rdram_size for _, _, _, closure, _ in index.frames[old["frames"]:]),
              "frame closure larger than RDRAM")
     if STATE_LAYER[0] in index.layers:
-        _check_state_layer(index, header)
+        _check_state_layer(index, header, old["states"])
     if RESOLUTION_LAYER[0] in index.layers:
         _require(STATE_LAYER[0] in index.layers, "a scene-resolution layer needs the scene-state layer")
         _check_resolution_layer(index, header)
     if AUDIO_LAYER[0] in index.layers:
         _check_audio_layer(index, header)
-    _check_slices(index)
+    _check_slices(index, old)
 
 
-def _check_state_layer(index: Index, header: Header) -> None:
+def _checked_counts(index: Index, checked: Index | None) -> dict:
+    """How many leading rows of each table `checked` (an earlier publication of the same growing
+    package) already vouches for: all of its rows when every table of `index` starts with them
+    and the layers are the same; otherwise none, and everything is checked."""
+    none = {"loads": 0, "chunks": 0, "blocks": 0, "frames": 0, "states": 0}
+    if checked is None:
+        return none
+    states = index.layers.get(STATE_LAYER[0], ([], []))[0]
+    old_states = checked.layers.get(STATE_LAYER[0], ([], []))[0]
+    counts = {"loads": len(checked.loads), "chunks": len(checked.chunks), "blocks": len(checked.blocks),
+              "frames": len(checked.frames), "states": len(old_states)}
+    extends = (set(index.layers) == set(checked.layers) <= {STATE_LAYER[0]}
+               and index.loads[:counts["loads"]] == checked.loads and index.chunks[:counts["chunks"]] == checked.chunks
+               and index.blocks[:counts["blocks"]] == checked.blocks
+               and index.frames[:counts["frames"]] == checked.frames and states[:counts["states"]] == old_states)
+    return counts if extends else none
+
+
+def _check_state_layer(index: Index, header: Header, checked_rows: int = 0) -> None:
     states, codes = index.layers[STATE_LAYER[0]]
     _require(len(states) == len(index.frames), "scene-state rows do not match the frames")
-    _require(all(flags & ~(CHECKPOINT | HAS_TASK) == 0 for _, _, _, flags, _ in states)
+    _require(all(flags & ~(CHECKPOINT | HAS_TASK) == 0 for _, _, _, flags, _ in states[checked_rows:])
              and (not states or states[0][3] & CHECKPOINT), "malformed scene-state rows")
     for load, address in codes:
         _require(load < len(index.loads) and index.loads[load][0] == LOAD_ROM and address % 4 == 0
@@ -1154,10 +1342,22 @@ def _check_audio_layer(index: Index, header: Header) -> None:
              "the source-audio payload overlaps a chunk")
 
 
-def _check_slices(index: Index) -> None:
+def _check_slices(index: Index, checked: dict | None = None) -> None:
+    """Every block, frame and state record lies inside its chunk and no two overlap. With
+    `checked` (_checked_counts) only the rows after the vouched-for ones, and the vouched-for
+    rows sharing a chunk with them (a records chunk can hold a frame the earlier publication
+    did not list yet)."""
+    old = checked or {"blocks": 0, "frames": 0, "states": 0}
     spans: dict[int, list[tuple[int, int]]] = {}
     states = index.layers.get(STATE_LAYER[0], ([], []))[0]
-    for chunk, offset, length in [row[:3] for table in (index.blocks, index.frames, states) for row in table]:
+    full = (index.blocks, index.frames, states)
+    rows = [row[:3] for table, start in zip(full, (old["blocks"], old["frames"], old["states"]), strict=True)
+            for row in table[start:]]
+    shared = {row[0] for row in rows}
+    if any(old.values()):
+        rows += [row[:3] for table, start in zip(full, (old["blocks"], old["frames"], old["states"]), strict=True)
+                 for row in table[:start] if row[0] in shared]
+    for chunk, offset, length in rows:
         _require(chunk < len(index.chunks) and 0 < length and offset + length <= index.chunks[chunk][2],
                  "block, frame or state record outside its chunk")
         spans.setdefault(chunk, []).append((offset, offset + length))
@@ -1218,7 +1418,7 @@ class Package:
     (outline, fields, frame, scene_state, resolution) hold one lock: the chunk cache and the
     state cursor are shared, and a viewer reads ahead on a second thread."""
 
-    def __init__(self, data: bytes, rom: bytes, cache_bytes: int = CACHE_BYTES):
+    def __init__(self, data: bytes, rom: bytes, cache_bytes: int = CACHE_BYTES, checked: Index | None = None):
         _require(len(data) <= MAX_PACKAGE_BYTES, "package too large")
         self.data, self.rom = data, rom
         self.header = read_header(data)
@@ -1228,7 +1428,7 @@ class Package:
         raw = decompress(ZLIB, data[start:start + self.header.index_stored], self.header.index_raw)
         _require(hashlib.sha256(raw).digest() == self.header.index_sha, "package index is corrupt")
         self.index = parse_index(raw, self.header.version)
-        check_index(self.index, self.header, len(rom))
+        check_index(self.index, self.header, len(rom), checked)
         self.identity = [tuple(item) for item in self.index.meta.get("identity", [])]
         self.cache_bytes, self._cached = cache_bytes, 0
         self._chunks: OrderedDict[int, bytes] = OrderedDict()
@@ -1247,6 +1447,25 @@ class Package:
 
     def __len__(self) -> int:
         return len(self.index.frames)
+
+    def carry(self, previous: Package) -> None:
+        """This package grew from `previous` (an earlier publication of the same file, or the
+        finished file): its chunk and load tables only gained rows, so the ROM loads and chunks
+        decoded there, and the scene-state cursor, hold here too. The two share one lock, so a
+        reader still holding the previous one never moves the cursor beside this one."""
+        with previous.lock:
+            _require(len(previous.index.chunks) <= len(self.index.chunks)
+                     and self.index.chunks[:len(previous.index.chunks)] == previous.index.chunks
+                     and self.index.loads[:len(previous.index.loads)] == previous.index.loads,
+                     "a grown package does not extend the one before it")
+            self.lock = previous.lock
+            self._loads = previous._loads
+            self._chunks, self._cached = OrderedDict(previous._chunks), previous._cached
+            if self.states is not None and previous.states is not None and previous.states.at >= 0 \
+                    and self.states.rows[:previous.states.at + 1] == previous.states.rows[:previous.states.at + 1]:
+                old = previous.states
+                self.states.scene, self.states.level_runs, self.states.task = old.scene, old.level_runs, old.task
+                self.states.at = old.at
 
     def _chunk(self, index: int) -> bytes:
         if index in self._chunks:
@@ -1438,6 +1657,51 @@ class SceneStates:
         else:
             self.task = None
         _require(cursor.done(), "trailing bytes in a scene-state record")
+
+
+class Joined:
+    """Byte strings read as one without joining them: a growing package is its sidecar's header,
+    the body read so far (in the pieces it was read in) and the sidecar's index. A slice inside
+    one piece costs a copy of the slice alone; a chunk never spans two pieces, since each piece
+    ends where a publication's chunks ended."""
+
+    def __init__(self, parts: list):
+        self.parts, self.starts, at = parts, [], 0
+        for part in parts:
+            self.starts.append(at)
+            at += len(part)
+        self.length = at
+
+    def __len__(self) -> int:
+        return self.length
+
+    def __getitem__(self, key):
+        if not isinstance(key, slice):
+            return self[key:key + 1][0]
+        start, stop, step = key.indices(self.length)
+        _require(step == 1, "a joined package reads contiguous bytes only")
+        if start >= stop:
+            return b""
+        at = bisect.bisect_right(self.starts, start) - 1
+        out = []
+        while start < stop:
+            part, base = self.parts[at], self.starts[at]
+            end = min(stop, base + len(part))
+            out.append(bytes(part[start - base:end - base]))
+            start, at = end, at + 1
+        return out[0] if len(out) == 1 else b"".join(out)
+
+
+def grown_package(sidecar: bytes, body: list, rom: bytes, previous: Package | None = None) -> Package:
+    """A package still being written (PackageWriter.publish): `sidecar` is its header and index,
+    `body` the pieces of the package file read so far, from byte HEADER.size to the header's
+    index offset. The reader checks it like any package. With `previous` (the publication
+    before, over the same file) it keeps what that one decoded and shares its lock."""
+    package = Package(Joined([sidecar[:HEADER.size], *body, sidecar[HEADER.size:]]), rom,
+                      checked=None if previous is None else previous.index)
+    if previous is not None:
+        package.carry(previous)
+    return package
 
 
 def open_package(path: Path, rom_path: Path) -> Package:

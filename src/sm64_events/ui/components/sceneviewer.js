@@ -425,6 +425,7 @@ export class SceneLink {
   }
 
   onText(message) {
+    if (message.kind === "grown") return this.grown(message);
     const resolve = this.questions.get(message.id);
     this.questions.delete(message.id);
     if (resolve) resolve(message.kind ? message : { pose: null, point: null, reason: message.error });
@@ -435,6 +436,21 @@ export class SceneLink {
     this.drawing = this.inFlight.size > 0;
     this.changed();
     this.pump();
+  }
+
+  // The open scene is still being written (an attempt scene whose fade-out has not reached the
+  // recording yet): the server's frames replace this scene's from `from` on, the slider grows
+  // with them, and a Play waiting at the newest picture goes on. `growing` false: it is whole.
+  grown(message) {
+    const scene = this.scene;
+    if (!scene || message.session !== scene.session) return;
+    scene.frames.splice(message.from, Infinity, ...message.frames);
+    scene.growing = !!message.growing;
+    if (message.audio) scene.audio = message.audio;
+    this.frame = clamp(this.frame, 0, Math.max(0, scene.frames.length - 1));
+    this.sound.grew(scene);
+    if (this.playback) this.playback.grew(scene);
+    this.changed();
   }
 
   // A pose or a pick: answered in order, before any picture.
@@ -706,15 +722,27 @@ export class SceneLink {
   // clock starts once the sound can start with it (sound.lead()), so the
   // first picture of a play holds that much longer. The frame on screen
   // (this.frame) is the last one drawn.
+  //
+  // A scene still being written plays on as it grows: at its newest picture the clock waits
+  // (heldAt) and goes on from there when more arrives (grew), never skipping ahead to catch up.
   play() {
     const scene = this.scene;
     this.autoplay = false;
     if (!scene) return;
     this.sound.arm();
-    const from = this.frame >= scene.frames.length - 1 ? 0 : this.frame, times = recordedTimes(scene);
-    const start = performance.now() + this.sound.lead(), length = playLength(times, from, scene.fps);
-    const play = { from, start, asked: from, frameAt: null, frameMs: 1000 / 60, gaps: [], holds: [],
-      dueOf: (frame) => start + times[frame] - times[from] };
+    const from = this.frame >= scene.frames.length - 1 && !scene.growing ? 0 : this.frame, times = recordedTimes(scene);
+    const play = { from, start: performance.now() + this.sound.lead(), times, length: playLength(times, from, scene.fps),
+      asked: from, frameAt: null, frameMs: 1000 / 60, gaps: [], holds: [], heldAt: null,
+      dueOf: (frame) => play.start + play.times[frame] - play.times[from],
+      grew: (grown) => {
+        play.times = recordedTimes(grown);
+        play.length = playLength(play.times, from, grown.fps);
+        if (play.heldAt != null && play.times.length > play.asked + 1) {
+          play.start += performance.now() - play.heldAt;
+          play.heldAt = null;
+          if (this.playback === play) this.sound.play(from, play.start);   // the sound follows the wait
+        }
+      } };
     Object.assign(this, { playback: play, playing: true, frame: from });
     const tick = (frameTime) => {
       if (this.playback !== play) return;
@@ -723,12 +751,15 @@ export class SceneLink {
         play.frameMs = clamp(median(play.gaps), 4, 50);
       }
       play.frameAt = frameTime;
-      if (frameTime - start >= length) return this.finishPlay(scene);
+      if (frameTime - play.start >= play.length) {
+        if (!scene.growing) return this.finishPlay(scene);
+        play.heldAt ??= frameTime;
+      }
       for (const hold of play.holds.splice(0)) {
         if (hold.due <= frameTime + play.frameMs) hold.resolve(true);
         else play.holds.push(hold);
       }
-      const ahead = pictureAt(times, from, Math.max(0, frameTime - start + this.readyMs() + play.frameMs));
+      const ahead = pictureAt(play.times, from, Math.max(0, frameTime - play.start + this.readyMs() + play.frameMs));
       if (ahead !== play.asked) {
         play.asked = ahead;
         this.want("play", performance.now(), ahead);
@@ -737,7 +768,7 @@ export class SceneLink {
     };
     this.want("play", performance.now(), from);
     this.changed();
-    this.sound.play(from, start);
+    this.sound.play(from, play.start);
     requestAnimationFrame(tick);
   }
 
@@ -909,7 +940,7 @@ function Transport({ link }) {
       <${Icon} name="stepForward" size=${15} /> Forward 1</button>
     <input type="range" min="0" max=${Math.max(0, frames.length - 1)} value=${link.frame} aria-label="Frame"
       oninput=${(event) => { link.pause(); link.seek(Number(event.currentTarget.value), "input", event.timeStamp); }} />
-    <span class="scene-lab-frame">Frame ${link.frame + 1} of ${frames.length}
+    <span class="scene-lab-frame">Frame ${link.frame + 1} of ${frames.length}${link.scene.growing ? " so far" : ""}
       <small>${frameWords(frames[link.frame])}</small></span>
   </div>`;
 }

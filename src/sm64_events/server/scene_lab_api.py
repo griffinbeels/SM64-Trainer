@@ -3,19 +3,30 @@
 None of this exists unless SM64_SCENE_LAB names a lab config: main.py::_mount_scene_lab is the
 one reader, and without it this module is never imported and no route is added. With it:
 
-    GET  /api/scene-lab           the probe the shell waits for before it shows the Lab entry
+    GET  /api/scene-lab           the probe the shell waits for before it shows the Lab entry, and
+                                  "live": whether the scene recording runs ({recording, reason})
     GET  /api/scene-lab/status    the config's readiness, the packages, the open scene, the last end
-    POST /api/scene-lab/open      {package: <a listed name>} -> the scene; 409 with the reason
+    GET  /api/scene-lab/attempt-scenes?ids=12,13   each known attempt's scene: ready, cutting, unavailable
+    POST /api/scene-lab/open      {package: <a listed name>} or {attempt: <id>} -> the scene; 409 with the reason
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
     GET  /api/scene-lab/audio/{block}?session=N   one block of the open scene's sound
 
 The lab config is a private JSON file of absolute paths: {"rom", "packages" (a folder of
 .sm64scene files), "pj64_plugin", "map" (the free camera's MappingUS.map), and optionally
-"renderer", "resolution" ("WxH"), "idle_seconds"}. The page names a package only by a name the
-server listed from that folder; no path or URL ever comes from the page. Packages stay
-untrusted: package.py's reader checks every record, and the evaluator executes code only from
-the configured ROM. The scene lab's code (tools/scene_lab) runs from a source checkout.
+"renderer", "resolution" ("WxH"), "idle_seconds", "lab_root" (where the live scene recording
+and the attempt scenes live; %LOCALAPPDATA%\\SM64Trainer\\scene-lab when absent)}. The page names a
+package only by a name the server listed from that folder, or an attempt by its id; no path or
+URL ever comes from the page. Packages stay untrusted: package.py's reader checks every record,
+and the evaluator executes code only from the configured ROM. The scene lab's code
+(tools/scene_lab) runs from a source checkout.
+
+Attempt scenes (round 2, "IMMEDIATELY AFTER FINISHING AN ATTEMPT"): while the server runs, the
+lab holds live_spool.Lease (the wrapper's scene tap records into a rolling spool) and
+attempt_scenes.AttemptScenes, whose cutter child writes each completed attempt's scene from that
+spool (tools/scene_lab/attempt_cutter.py; the span: attempt_span.py). main.py chains the
+tracker's completion hook and the broadcaster's observer to it (follow_attempts); the replay's
+hook is called first and unchanged.
 
 Nothing runs until a page opens a package. The session (tools/scene_lab/scene_session.py)
 starts the renderer host after the GPU hold check and, on the first free-camera request, the
@@ -70,7 +81,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Response, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 log = logging.getLogger("sm64.scene_lab")
 
@@ -81,6 +92,8 @@ DEFAULT_IDLE_SECONDS = 300.0
 WATCH_SECONDS = 1.0
 MAX_QUESTIONS_WAITING = 8     # poses and picks a socket holds; the oldest is answered superseded
 PICTURES_IN_FLIGHT = 2        # pictures a socket has begun and not yet sent (the page keeps as many)
+GROW_SECONDS = 0.25           # how often an open scene still being written takes its newest frames
+GROW_FAILURES = 3             # publications in a row it cannot read before it stops growing
 ENDS = {"closed": "Closed.",
         "replaced": "Closed to open another scene.",
         "page": "Closed because no page was showing it.",
@@ -118,6 +131,7 @@ class LabConfig:
     renderer: str = "trainer"
     resolution: tuple[int, int] | None = None
     idle_seconds: float = DEFAULT_IDLE_SECONDS
+    lab_root: Path | None = None
 
     @classmethod
     def load(cls, path: Path) -> "LabConfig":
@@ -144,7 +158,7 @@ class LabConfig:
             raise ConfigError('The lab config\'s "renderer" must be trainer, link or a DLL path.')
         return cls(_absolute(raw, "rom", True), _absolute(raw, "packages", True),
                    _absolute(raw, "pj64_plugin", False), _absolute(raw, "map", False),
-                   renderer, resolution, float(idle))
+                   renderer, resolution, float(idle), _absolute(raw, "lab_root", False))
 
     def problems(self) -> list[str]:
         """What stops any scene from opening, in words the page shows."""
@@ -217,9 +231,29 @@ class SceneLab:
 
     def __init__(self, config_path: Path, *, session_options: dict | None = None,
                  page_gone_seconds: float = PAGE_GONE_SECONDS, watch_seconds: float = WATCH_SECONDS,
-                 idle_seconds: float | None = None, measure_loop: bool = False):
+                 idle_seconds: float | None = None, measure_loop: bool = False, live: bool = False,
+                 lease_factory=None, cutter_factory=None, cutter_options: dict | None = None,
+                 grow_seconds: float = GROW_SECONDS, live_audio=None):
+        """live: hold the recording's lease and cut attempt scenes (main.py's server only; a test,
+        the UI fixture or e3_measure.py never arms the wrapper's tap). Tests replace the lease
+        (lease_factory(lab_root)), the cutter (cutter_factory(folder, on_event)) or the cutter
+        child's spool (cutter_options: attempt_cutter.CutterProcess's spool_factory, extra_path)."""
         self.config_path = Path(config_path)
         self.session_options = session_options or {}
+        self.live_on, self.lease_factory, self.cutter_options = live, lease_factory, cutter_options or {}
+        self.cutter_factory = cutter_factory
+        self.grow_seconds = grow_seconds
+        self.live_audio = live_audio                       # live_audio.LiveAudio: the recorder's sound ring
+        self.pages: set[_PageSocket] = set()               # the sockets a grown scene tells
+        self.lease = None
+        self.live_problem: str | None = None
+        self.open_path: Path | None = None             # the package the open scene reads (retention spares it)
+        self.open_attempt: int | None = None
+        try:
+            self.scenes = _lab_module("attempt_scenes").AttemptScenes(
+                self._scene_folder, self._start_cutter, in_use=lambda: self.open_path, live_audio=live_audio)
+        except ConfigError as error:
+            self.scenes, self.live_problem = None, str(error)
         self.page_gone_seconds, self.watch_seconds = page_gone_seconds, watch_seconds
         self.idle_override = idle_seconds
         self.session = None
@@ -247,7 +281,90 @@ class SceneLab:
             self.shared = None
 
     def _scene(self, described: dict) -> dict:
-        return {"session": self.generation, **described, "shared_pictures": self.shared is not None}
+        scene = {"session": self.generation, **described, "shared_pictures": self.shared is not None}
+        return scene | ({"attempt": self.open_attempt} if self.open_attempt is not None else {})
+
+    # ------------------------------------------------------------ attempt scenes (live recording)
+
+    def _lab_root(self) -> Path:
+        config = LabConfig.load(self.config_path)
+        return config.lab_root or _lab_module("attempt_scenes").default_lab_root()
+
+    def _scene_folder(self) -> Path:
+        return self._lab_root() / "attempts"
+
+    def _start_cutter(self, folder: Path, on_event):
+        if self.cutter_factory is not None:
+            return self.cutter_factory(folder, on_event)
+        config = LabConfig.load(self.config_path)
+        return _lab_module("attempt_cutter").CutterProcess(config.rom, folder, on_event, lab_root=config.lab_root,
+                                                           **self.cutter_options)
+
+    def _start_live_blocking(self) -> None:
+        if self.scenes is None or not self.live_on:
+            return
+        try:
+            lab_root = LabConfig.load(self.config_path).lab_root
+            if self.lease_factory is not None:
+                self.lease = self.lease_factory(lab_root)
+            elif (TOOLS / "live_spool.py").is_file():
+                self.lease = _lab_module("live_spool").Lease(lab_root)
+            else:
+                self.live_problem = "This checkout has no live scene recording (tools/scene_lab/live_spool.py)."
+                return
+            self.lease.start()
+        except Exception as error:  # noqa: BLE001 - the lab still opens packages without the live recording
+            log.warning("The live scene recording could not start.", exc_info=True)
+            self.lease, self.live_problem = None, f"The live scene recording could not start: {error}"
+            return
+        self.scenes.start()
+
+    def _stop_live_blocking(self) -> None:
+        if self.scenes is not None:
+            self.scenes.stop()
+        lease, self.lease = self.lease, None
+        if lease is not None:
+            lease.stop()
+
+    async def start_live(self) -> None:
+        """At server start: the lease that keeps the scene tap recording, and the attempt scenes."""
+        await asyncio.to_thread(self._start_live_blocking)
+
+    def live(self) -> dict:
+        """{recording, reason} for the probe; no I/O (the cutter reports the recording's state)."""
+        if not self.live_on:
+            return {"recording": False, "reason": "This server does not run the live scene recording."}
+        if self.live_problem:
+            return {"recording": False, "reason": self.live_problem}
+        live = self.scenes.live()
+        if self.live_audio is not None:
+            health = self.live_audio.health()
+            live["sound"] = {"recording": health["recording"], "reason": health["reason"],
+                             "kept_seconds": health["kept_seconds"]}
+        return live
+
+    def follow_attempts(self, tracker) -> None:
+        """Every attempt the tracker completes, and every start the event stream announces, reach
+        the attempt scenes. The tracker's completion hook (the replay's AttemptHistory.observe) is
+        called first with the same arguments, so what the replay receives is unchanged; both
+        callbacks run on the poll loop and the scenes' half only queues a note."""
+        scenes = self.scenes
+        if scenes is None:
+            return
+        previous = tracker.on_replay_history
+
+        def observe(completed, active_start, **options):
+            if previous is not None:
+                previous(completed, active_start, **options)
+            try:
+                scenes.observe_completed(completed, active_start, **options)
+            except Exception:  # noqa: BLE001 - a scene never costs tracking or the replay
+                log.warning("An attempt did not reach the attempt scenes.", exc_info=True)
+
+        tracker.on_replay_history = observe
+        broadcaster = getattr(tracker, "broadcaster", None)
+        if broadcaster is not None and hasattr(broadcaster, "observe"):
+            broadcaster.observe(scenes.observe_event)
 
     # ------------------------------------------------------------ status, open, close
 
@@ -272,27 +389,45 @@ class SceneLab:
             report["loop"] = self.loop_probe.summary()
         return report
 
-    def _open_blocking(self, config: LabConfig, path: Path):
+    def _open_blocking(self, config: LabConfig, path: Path, sidecar: Path | None = None):
         module = _lab_module("scene_session")
         try:
-            session = module.SceneSession.open(config, path, **self.session_options)
+            session = module.SceneSession.open(config, path, sidecar=sidecar, live=self.live_audio,
+                                               fitter=self.scenes.fit if self.scenes is not None else None,
+                                               **self.session_options)
         except module.Refused as refused:
             raise SceneRefused(str(refused)) from None
         return session, session.describe()
 
-    async def open(self, name: str) -> dict:
+    async def open(self, name: str | None = None, *, attempt: int | None = None) -> dict:
+        """A listed package by name, or an attempt's scene by its id (LookupError: none known;
+        SceneRefused: still being cut, or never, with the reason)."""
         config = await asyncio.to_thread(LabConfig.load, self.config_path)
-        path = await asyncio.to_thread(config.package_path, name)
+        sidecar = None
+        if attempt is None:
+            path = await asyncio.to_thread(config.package_path, name)
+        elif self.scenes is None:
+            raise SceneRefused(self.live_problem or "This lab has no attempt scenes.")
+        else:
+            try:
+                path, sidecar = self.scenes.path(attempt)
+            except _lab_module("attempt_scenes").SceneUnavailable as unavailable:
+                raise SceneRefused(str(unavailable)) from None
         async with self.lock:
             await self._end("replaced")
             worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab")
             try:
                 session, described = await asyncio.get_running_loop().run_in_executor(
-                    worker, self._open_blocking, config, path)
+                    worker, self._open_blocking, config, path, sidecar)
             except BaseException:
                 worker.shutdown(wait=False)
                 raise
+            if attempt is not None and not described["audio"].get("available") and self.scenes is not None:
+                quiet = self.scenes.sound_reason(attempt)          # the catalog knows why it is silent
+                if quiet and described["audio"].get("reason") == _lab_module("scene_audio").NO_SOUND:
+                    described = {**described, "audio": {**described["audio"], "reason": quiet}}
             self.session, self.worker, self.described = session, worker, described
+            self.open_path, self.open_attempt = path, attempt
             self.delivery = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab-delivery")
             self.generation += 1
             self.idle_seconds = self.idle_override or config.idle_seconds
@@ -312,6 +447,7 @@ class SceneLab:
         if session is None:
             return
         self.session = self.worker = self.delivery = self.described = None
+        self.open_path = self.open_attempt = None
         self.ended = {"code": code, "message": message or ENDS[code], "name": session.name}
         try:
             self.host_exit = await asyncio.get_running_loop().run_in_executor(worker, session.close)
@@ -328,13 +464,54 @@ class SceneLab:
         if self.watch_task is not None:
             self.watch_task.cancel()
         await self.close("shutdown")
+        await asyncio.to_thread(self._stop_live_blocking)
 
     def _start_watch(self) -> None:
         loop = asyncio.get_running_loop()
         if self.watch_task is None or self.watch_task.done():
             self.watch_task = loop.create_task(self._watch(), name="scene-lab-watch")
+        if self.described and not self._settled():
+            loop.create_task(self._grow(self.generation), name="scene-lab-grow")
         if self.loop_probe is not None and self.loop_probe.task is None:
             self.loop_probe.task = loop.create_task(self.loop_probe.run(), name="scene-lab-loop-probe")
+
+    def _settled(self) -> bool:
+        session = self.session
+        return session is None or getattr(session, "settled", not (self.described or {}).get("growing"))
+
+    async def _grow(self, generation: int) -> None:
+        """While the open scene is still being written (an attempt scene whose fade-out has not
+        reached the recording yet) or its sound still comes from the recorder's ring: every
+        GROW_SECONDS its worker takes the newest publication and sound, and each page showing it
+        is told what it gained, {"kind": "grown", "session", "from", "frames", "growing", and
+        "audio" when the sound's table changed}, until the scene is settled or closed."""
+        failures = 0
+        while self.session is not None and generation == self.generation:
+            await asyncio.sleep(self.grow_seconds)
+            try:
+                grown = await self._run(generation, "grow")
+                failures = 0
+            except SceneClosed:
+                return
+            except (ValueError, struct.error) as error:          # a publication the reader refused
+                failures += 1
+                log.warning("A growing scene could not be read further: %s", error)
+                if failures < GROW_FAILURES:
+                    continue
+                grown = {"from": len((self.described or {}).get("frames", ())), "frames": [], "growing": False}
+            if grown:
+                if self.described is not None and generation == self.generation:
+                    frames = self.described["frames"][:grown["from"]] + grown["frames"]
+                    self.described = {**self.described, "frames": frames, "growing": grown["growing"],
+                                      **({"audio": grown["audio"]} if "audio" in grown else {})}
+                message = {"kind": "grown", "session": generation, **grown}
+                for page in list(self.pages):
+                    try:
+                        await page.send(message)
+                    except Exception as error:  # noqa: BLE001 - a page that left misses nothing it needs
+                        log.debug("a scene page did not hear the scene grow: %r", error)
+            if self._settled() or failures >= GROW_FAILURES:
+                return
 
     async def _watch(self) -> None:
         """Releases a scene nobody is looking at or using; stops once no scene is open."""
@@ -442,6 +619,7 @@ class SceneLab:
         self.sockets += 1
         self.page_seen = time.monotonic()
         page = _PageSocket(self, websocket)
+        self.pages.add(page)
         tasks = [asyncio.create_task(page.receive()), asyncio.create_task(page.answer()),
                  asyncio.create_task(page.deliver())]
         try:
@@ -453,6 +631,7 @@ class SceneLab:
         finally:
             for task in tasks:
                 task.cancel()
+            self.pages.discard(page)
             self.sockets -= 1
             self.page_seen = time.monotonic()
             # asyncio.wait, not gather: if the server is cancelling this handler, the
@@ -609,27 +788,53 @@ class _PageSocket:
 
 
 class OpenBody(BaseModel):
-    package: str = Field(min_length=1, max_length=255)
+    package: str | None = Field(default=None, min_length=1, max_length=255)
+    attempt: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def one_of_them(self):
+        if (self.package is None) == (self.attempt is None):
+            raise ValueError("Name a package or an attempt.")
+        return self
+
+
+MAX_IDS = 500                  # attempt ids one attempt-scenes request may name
+
+
+def _attempt_ids(text: str) -> list[int]:
+    try:
+        wanted = [int(part) for part in text.split(",") if part.strip()]
+    except ValueError:
+        raise HTTPException(400, "ids is a comma-separated list of attempt ids.") from None
+    if len(wanted) > MAX_IDS:
+        raise HTTPException(400, f"Ask for at most {MAX_IDS} attempts at once.")
+    return wanted
 
 
 def mount_scene_lab(app, config_path, **options) -> SceneLab:
-    """Adds the scene viewer's routes to `app` and closes its scene when the app stops.
-    `options` are SceneLab's (tests and e3_measure.py inject doubles and short timers)."""
+    """Adds the scene viewer's routes to `app`, starts the live recording's lease and the attempt
+    scenes when the app starts, and ends both and the open scene when it stops. `options` are
+    SceneLab's (tests and e3_measure.py inject doubles and short timers)."""
     lab = SceneLab(Path(config_path), **options)
     router = APIRouter(prefix="/api/scene-lab")
 
     @router.get("")
     def probe():
-        return {"lab": "scene-viewer"}
+        return {"lab": "scene-viewer", "live": lab.live()}
 
     @router.get("/status")
     async def status():
         return await lab.status()
 
+    @router.get("/attempt-scenes")
+    def attempt_scenes(ids: str = ""):
+        wanted = _attempt_ids(ids)
+        return {"scenes": lab.scenes.states(wanted) if lab.scenes is not None else {}}
+
     @router.post("/open")
     async def open_scene(body: OpenBody):
         try:
-            return await lab.open(body.package)
+            return await lab.open(body.package, attempt=body.attempt)
         except LookupError as missing:
             raise HTTPException(404, str(missing)) from None
         except (ConfigError, SceneRefused) as refused:
@@ -662,6 +867,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     @asynccontextmanager
     async def lifespan(application):
         async with serving(application) as state:
+            await lab.start_live()
             try:
                 yield state
             finally:

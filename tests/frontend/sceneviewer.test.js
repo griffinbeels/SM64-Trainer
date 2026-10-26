@@ -325,6 +325,40 @@ test("Play asks for each picture ahead of its time and draws it on the display f
   fireEvent.click(page.getByRole("button", { name: "Pause" }));
 });
 
+test("a scene still being written grows under the slider, and Play waits at its newest picture, then goes on", async () => {
+  opened = { ...opened, frames: FRAMES.slice(0, 3), growing: true };
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  await until(() => expect(page.container.textContent).toContain("Frame 1 of 3 so far"));
+  socket.text({ kind: "grown", session: 2, from: 3, frames: FRAMES.slice(3), growing: false });   // another scene's
+  socket.text({ kind: "grown", session: 1, from: 3, frames: FRAMES.slice(3, 4), growing: true });
+  await until(() => expect(page.container.textContent).toContain("Frame 1 of 4 so far"));
+  clock.now = 10000;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  const answer = async () => {             // each asked picture arrives (a held one draws on its due frame)
+    for (const request of socket.pictures().filter((r) => !r.answered)) {
+      request.answered = true;
+      socket.picture(request);
+    }
+    await settled();
+  };
+  for (let at = 10000; at <= 10400; at += 16.7) {         // well past the four frames' 133 ms
+    await tick(at);
+    await answer();
+  }
+  expect(page.getByRole("button", { name: "Pause" })).toBeTruthy();   // waiting, not finished
+  expect(Math.max(...socket.pictures().map((request) => request.frame))).toBe(3);
+  socket.text({ kind: "grown", session: 1, from: 4, frames: FRAMES.slice(4), growing: false });
+  for (let at = 10417; at <= 10600; at += 16.7) {
+    await tick(at);
+    await answer();
+  }
+  expect(socket.pictures().some((request) => request.frame === 4)).toBe(true);   // went on, frame by frame
+  await until(() => expect(page.getByRole("button", { name: "Play" })).toBeTruthy());   // whole: it ends
+  expect(page.container.textContent).toContain("Frame 5 of 5");
+  expect(page.container.textContent).not.toContain("so far");
+});
+
 test("a picture a play asked for ahead is never shown once the play has stopped", async () => {
   const { page, socket, drawn } = await openTimed();
   clock.now = 10000;

@@ -1397,6 +1397,36 @@ the server encodes the picture itself.
   around it (`tools/scene_lab/webview_pictures.py`)
 - **Not** -- the [[recorder]]'s video encoder, which compresses recorded play
 
+### Attempt scene
+
+The [[scene package]] of one [[attempt]] he just played, which the [[scene viewer]]
+opens by the [[attempt]]'s id. It starts on the [[frame]] the [[attempt]]'s clock
+started and ends on the last picture of the fade-out after its end: the [[frame]]
+before the next level or area appears, the [[frame]] before his [[reset]], or 10 s
+after the end when nothing comes. While the lab is on, the [[scene tap]] records
+all the time, and a hidden child process writes each [[attempt]]'s package as he
+plays it, publishing what it has every quarter second. So the scene opens as
+soon as the [[attempt]] completes, before the tap has even recorded its fade-out:
+it grows on screen as the recording reaches it (about 0.3 s behind the game), and a
+Play that catches up waits on the newest picture. Its sound is the game sound the
+[[recorder]] heard, from the first picture on. Only an [[attempt]] no package was
+following when it began (one started before the lab) is "cutting" for a few
+seconds; one the recording does not fully hold has no scene, and says why in one
+sentence. The server keeps the scenes of his last 20 [[attempt]]s while it is up.
+
+- **Lives** -- the span (`tools/scene_lab/attempt_span.py`); the child that
+  writes them (`tools/scene_lab/attempt_cutter.py`); which attempts have one,
+  retention, the folder and the finished scene's sound
+  (`tools/scene_lab/attempt_scenes.py`); a scene read while it grows
+  (`tools/scene_lab/scene_session.py` Growth, `tools/scene_lab/package.py`
+  grown_package) and its sound while it grows (`tools/scene_lab/scene_audio.py`
+  LiveSound, from `tools/scene_lab/live_audio.py`); the routes and the wiring
+  (`src/sm64_events/server/scene_lab_api.py`, `src/sm64_events/main.py`); the
+  page's growth (`src/sm64_events/ui/components/sceneviewer.js`,
+  `src/sm64_events/ui/components/sceneaudio.js`)
+- **Not** -- the replay's video of an [[attempt]], which the [[recorder]] keeps;
+  this scene redraws the game's graphics, and its camera can move
+
 ### Practice ROM
 
 The cartridge the practice tooling works on: Usamune v1.93u (US) or a JP

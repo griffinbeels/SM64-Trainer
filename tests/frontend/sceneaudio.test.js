@@ -313,6 +313,36 @@ test("the first picture of a play holds until the sound can start with it", asyn
   sound.close();
 });
 
+test("a growing scene's sound extends in place: its map grows and only a block that was short is fetched again", () => {
+  const sound = new SceneSound();
+  const posted = [];
+  sound.post = (message) => posted.push(message);
+  const { times, samples } = recording(40);
+  const frames = (count) => times.slice(0, count).map((t) => ({ recorded_ms: t }));
+  const table = (count, total) => ({ available: true, rate: RATE, block_samples: 9216, total_samples: total,
+    blocks: Math.ceil(total / 9216), codec: "stored", shift_ms: 0, samples: samples.slice(0, count), lost: [] });
+  const scene = { session: 1, fps: FPS, frames: frames(20), audio: table(20, 2 * 9216 + 100) };
+  sound.load(scene);
+  sound.decoded.set(0, []).set(1, []).set(2, []);                  // block 2 held only 100 samples
+  const before = sound.table;
+  Object.assign(scene, { frames: frames(40), audio: table(40, 4 * 9216) });
+  sound.grew(scene);
+  expect(sound.table).toBe(before);                                // fetches in flight still count
+  expect(sound.table.samples.length).toBe(40);
+  expect(sound.table.blocks).toBe(4);
+  expect([...sound.decoded.keys()]).toEqual([0, 1]);               // the short block goes, the whole ones stay
+  expect(posted.at(-1)).toMatchObject({ type: "map" });
+  expect(sound.runs.at(-1).p1).toBeGreaterThan(times[38]);
+  const quiet = new SceneSound();
+  quiet.load({ session: 2, fps: FPS, frames: frames(20), audio: { available: false, reason: "No sound." } });
+  quiet.playing = { from: 0 };                                     // sound never switches on in a play
+  quiet.grew({ session: 2, fps: FPS, frames: frames(40), audio: table(40, 4 * 9216) });
+  expect(quiet.available).toBe(false);
+  quiet.playing = null;
+  quiet.grew({ session: 2, fps: FPS, frames: frames(40), audio: table(40, 4 * 9216) });
+  expect(quiet.available).toBe(true);                              // at the next one it does
+});
+
 test("a step or a seek is silent, and a lost or sound-less picture says so", async () => {
   const { page, socket, root } = await openScene();
   await socket.picture(socket.sent[0]);
