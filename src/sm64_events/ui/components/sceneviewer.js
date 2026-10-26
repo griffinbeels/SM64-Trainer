@@ -65,8 +65,11 @@ function percentile(values, p) {
 }
 const ms = (value) => (value == null ? "-" : `${Math.round(value)} ms`);
 const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
-export const speedWords = (multiplier) => `${multiplier >= 9.95 ? multiplier.toFixed(0)
-  : multiplier >= 0.995 ? multiplier.toFixed(1) : String(Number(multiplier.toPrecision(2)))}x`;
+// Three figures, whole numbers with one place: 0.64x, 1.0x, 1.25x, 15.3x.
+export function speedWords(multiplier) {
+  const shown = Number(multiplier.toPrecision(3));
+  return `${Number.isInteger(shown) ? shown.toFixed(1) : shown}x`;
+}
 
 function drawRaw(context, header, bytes) {  // ReadScreen's BGR rows, bottom-up
   const { width, height } = header, picture = context.createImageData(width, height);
@@ -558,12 +561,20 @@ export function hintFor(link) {
   return "Drag, scroll or hold the right button to move the camera yourself. Left and Right step one frame, Space plays.";
 }
 
+// The same lesson on the picture itself while it is what you are acting on:
+// flying, or choosing a point.
+export function cueFor(link) {
+  if (link.picking) return "Click a surface to turn around it · Esc cancels";
+  if (link.fly) return `W A S D move · Q E down, up · Shift faster · Alt slower · wheel: speed ${speedWords(link.speed)}`;
+  return null;
+}
+
 function SpeedControl({ link }) {
   const tuning = sceneCameraTuning(), unitsPerSecond = Math.round(flightSpeed(link.speed, {}, tuning));
   return html`<div class="scene-lab-speed" role="group" aria-label="Flight speed"
       title=${`Flying moves ${unitsPerSecond} units a second; the wheel changes it while you fly`}>
     <span>Flight speed</span>
-    <button type="button" aria-label="Slower" onclick=${() => link.stepSpeed(-1)}>-</button>
+    <button type="button" aria-label="Slower" onclick=${() => link.stepSpeed(-1)}>−</button>
     <output aria-live="polite">${speedWords(link.speed)}</output>
     <button type="button" aria-label="Faster" onclick=${() => link.stepSpeed(1)}>+</button>
     <button type="button" disabled=${link.speed === 1} onclick=${() => link.resetSpeed()}
@@ -658,6 +669,7 @@ function Player({ link, canvas, surface }) {
         aria-label="The recording's picture" ...${pointerHandlers(link, surface)}></canvas>
       <span class=${`scene-lab-tag ${link.free ? "is-free" : ""}`}>${link.free ? "Free camera" : "Recorded camera"}</span>
       ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
+      ${cueFor(link) && html`<p class="scene-lab-cue" aria-hidden="true">${cueFor(link)}</p>`}
     </div>
     ${link.notice && html`<p class="scene-lab-reason" role="status">${link.notice}</p>`}
     <${Transport} link=${link} />

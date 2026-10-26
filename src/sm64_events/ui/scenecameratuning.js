@@ -39,13 +39,13 @@ export const SCENE_CAMERA_TUNABLES = {
 
   // --- sliding and moving closer (Shift-drag, wheel) -----------------------
   panPerPixel: {
-    group: "Pan & dolly", label: "Slide per pixel (x distance)", value: 0.0015,
-    min: 0.0002, max: 0.01, step: 0.0001, unit: "x",
+    group: "Pan & dolly", label: "Slide per pixel", value: 0.0015,
+    min: 0.0002, max: 0.01, step: 0.0001, unit: "of distance",
     why: "Shift-drag slides the scene by this fraction of the distance to the focus point per pixel, so a close look at Mario moves in small steps and a stage-wide view in large ones.",
   },
   dollyPerWheel: {
     group: "Pan & dolly", label: "Move closer per wheel unit", value: 0.001,
-    min: 0.0001, max: 0.005, step: 0.0001, unit: "x",
+    min: 0.0001, max: 0.005, step: 0.0001, unit: "of distance",
     why: "The wheel scales the distance to the focus point by e^(this x wheel delta): one notch (100) at 0.001 moves about 10%, so it is as precise near a wall as it is quick across the stage.",
   },
   closestDistance: {

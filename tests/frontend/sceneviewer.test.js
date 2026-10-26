@@ -286,6 +286,28 @@ test("holding the right button flies: W moves at a constant speed where the came
   expect(page.container.querySelector(".scene-lab-hint").textContent).not.toContain("W A S D");
 });
 
+test("moving the mouse while flying turns the view where the camera stands, and the picture says how to fly", async () => {
+  const { page, socket, canvas } = await openScene();
+  await startFlying(page, socket, canvas);
+  expect(page.container.querySelector(".scene-lab-cue").textContent).toContain("W A S D move");
+  const start = socket.last().camera;
+  move(canvas, { pointerId: 3, buttons: 2, movementX: 25, movementY: -10 });
+  await waitFor(() => expect(socket.last().camera.focus).not.toEqual(start.focus));
+  const turnedView = socket.last().camera;
+  close(turnedView.position, start.position, 6);                                   // it turned where it stands
+  const before = orbitFromPose(start.focus, start.position), after = orbitFromPose(turnedView.focus, turnedView.position);
+  expect(after.yaw - before.yaw).toBeCloseTo(-25 * REFERENCE.lookPerPixel, 9);
+  expect(after.pitch - before.pitch).toBeCloseTo(-10 * REFERENCE.lookPerPixel, 9);
+  await socket.picture(socket.last());
+  move(canvas, { pointerId: 3, buttons: 0, movementX: 5, movementY: 0 });            // the button came up elsewhere
+  await waitFor(() => expect(page.container.querySelector(".scene-lab-cue")).toBeNull());
+  expect(locked).toBeNull();
+});
+
+test("the speed reads in three figures", () => {
+  expect([0.64, 1, 1.25, 1.5625, 15.26, 20].map(speedWords)).toEqual(["0.64x", "1.0x", "1.25x", "1.56x", "15.3x", "20.0x"]);
+});
+
 test("Shift flies faster, Alt slower, and the wheel sets the speed while flying instead of moving closer", async () => {
   const { page, socket, root, canvas } = await openScene();
   await startFlying(page, socket, canvas);

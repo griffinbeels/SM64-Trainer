@@ -20,6 +20,9 @@
 .scene-lab-tag { left: 10px; }
 .scene-lab-tag.is-free { color: var(--gold-soft); }
 .scene-lab-busy { right: 10px; color: var(--muted); }
+.scene-lab-cue { position: absolute; left: 50%; bottom: 12px; max-width: calc(100% - 24px); margin: 0; padding: 4px 10px;
+  transform: translateX(-50%); border-radius: 6px; background: rgba(0,0,0,.66); color: var(--text); font-size: .78rem;
+  text-align: center; pointer-events: none; }
 .scene-lab-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .scene-lab-bar input[type=range] { flex: 1 1 220px; min-width: 0; accent-color: var(--gold); }
 .scene-lab-bar button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-soft); }
