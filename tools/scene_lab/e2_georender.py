@@ -4,6 +4,8 @@
         --rom <z64> --map <MappingUS.map> [--orbit YAW,PITCH,DIST ...] [--focus-height H]
     uv run --with unicorn python tools/scene_lab/e2_georender.py from-tap <session>
         --rom <z64> --map <MappingUS.map> [--every N | --tasks I,J,...] [--limit N] [--out report.json]
+    uv run --with unicorn python tools/scene_lab/e2_georender.py from-package <package.sm64scene>
+        --rom <z64> --map <MappingUS.map> [--every N | --tasks I,J,...] [--order direct|random] [--out ...]
 
 <frame_dir> is the savestate frame input (savestate_frames.py) of the gfx pool
 the RAM image last rendered (gGfxPool). The game's geo_process_root, its
@@ -46,6 +48,13 @@ throwMatrix pointers from the pool tail. The practice ROM's own code (Usamune's
 act-select hook) runs from the ROM file, located and proven equal by that full
 copy. A task with no area loaded, or a paused scene, has no geo output: "no
 scene". RAM images are private: outputs belong in scratch only.
+
+from-package runs the same check reading only a scene package (package.py,
+version 1 with the scene-state layer) and the local ROM: each checked task's
+state, and the previous task's, rebuilt by a seek (--order random visits them
+shuffled), and the practice ROM's code from the package's code load, rebuilt
+from this ROM and refused on mismatch. The package carries no full RDRAM copy,
+so the full-copy comparison of task 0 is from-tap's alone.
 """
 from __future__ import annotations
 
@@ -53,6 +62,7 @@ import argparse
 import json
 import math
 import os
+import random
 import re
 import struct
 import sys
@@ -1072,26 +1082,30 @@ def session_vi(tap, args) -> dict | None:
     return vi
 
 
-def session_images(tap, session: Path, rom: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple | None]:
-    """What fills the bytes a session did not capture: the ROM's code images (known: the run may
-    read them), and the practice ROM's own code from the ROM's bytes as code only (fill, not
-    known: a read of it as data still counts as uncaptured)."""
+def code_images(rom: bytes, windows: list[tuple[int, int, int]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """What fills the bytes a recording did not capture: the ROM's code images (known: the run may
+    read them), and the practice ROM's own code windows (virtual start, bytes, ROM offset) from the
+    ROM's bytes as code only (fill, not known: a read of it as data still counts as uncaptured)."""
     image, image_known = rom_images(rom)
-    code = boot_copied_code(rom, first_full_copy(tap, session))
     fill = image_known.copy()
-    BOOT_CODE[:] = [("boot-copied code", *code)] if code else []
-    if code:
-        start, length, rom_offset = code
+    BOOT_CODE[:] = [("boot-copied code", *window) for window in windows]
+    for start, length, rom_offset in windows:
         image[phys(start):phys(start) + length] = np.frombuffer(rom[rom_offset:rom_offset + length], np.uint8)
         fill[phys(start):phys(start) + length] = True
-    return image, image_known, fill, code
+    return image, image_known, fill
 
 
-def tap_summary(args, results: list[dict], code: tuple | None) -> int:
+def session_images(tap, session: Path, rom: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple | None]:
+    """code_images with the window the session's full RDRAM copy locates (boot_copied_code)."""
+    code = boot_copied_code(rom, first_full_copy(tap, session))
+    return (*code_images(rom, [code] if code else []), code)
+
+
+def tap_summary(args, results: list[dict], code: tuple | None, source: str, order: str = "direct") -> int:
     statuses: dict[str, int] = {}
     for entry in results:
         statuses[entry["status"]] = statuses.get(entry["status"], 0) + 1
-    summary = {"session": str(args.session), "tasks_checked": len(results), "statuses": statuses,
+    summary = {"session": source, "order": order, "tasks_checked": len(results), "statuses": statuses,
                "boot_copied_code": {"start": f"{code[0]:08x}", "bytes": code[1], "rom_offset": f"{code[2]:06x}"}
                if code else None}
     print(json.dumps(summary))
@@ -1110,7 +1124,7 @@ def from_tap(args) -> int:
     header = tap.session_header(args.session)
     if be_from_pj64(bytes.fromhex(header["rom_header"])) != rom[:0x40]:
         raise SystemExit("the session's ROM header does not match --rom")
-    image, image_known, fill, code = session_images(tap, args.session, rom)
+    *images, code = session_images(tap, args.session, rom)
     vi = session_vi(tap, args)
     fulls: dict[int, bytes] = {}
 
@@ -1119,13 +1133,6 @@ def from_tap(args) -> int:
             if isinstance(record, tuple) and record[0] == "full":
                 fulls[record[1]] = record[2]
             yield record
-
-    def rebuilt(ram: np.ndarray, known: np.ndarray) -> np.ndarray:
-        ram_be = np.frombuffer(be_from_pj64(ram.tobytes()), np.uint8)   # captured spans are whole words
-        return np.where(fill & ~known, image, ram_be)
-
-    def timer(ram_be: np.ndarray) -> int:
-        return struct.unpack_from(">I", ram_be, phys(US["gGlobalTimer"]))[0]
 
     results, last = [], None
     states = tap.scene_states(keep_fulls(tap.read_records(args.session / "tap.bin")), int(header["rdram_size"]))
@@ -1140,18 +1147,68 @@ def from_tap(args) -> int:
         if full is not None:   # the tap's full RDRAM copy, taken at the same instant
             entry["captured_bytes_differing_from_full_copy"] = int(
                 (known & (ram != np.frombuffer(full, np.uint8, known.size))).sum())
-        ram_be = rebuilt(ram, known)
-        previous = None
-        if before is not None:   # the previous task's state, when it is the previous game frame
-            before_be = rebuilt(*before)
-            if timer(before_be) + 1 == timer(ram_be):
-                previous = (before_be.tobytes(), before[1] | image_known)
         sink = frame_sink(args, header, vi, task) if args.frames else None
-        entry.update(check_task(TapFrame(args.session, task, ram_be.tobytes()), rom, args.fcr31,
-                                known | image_known, symbols, args.orbit, sink, previous))
+        entry.update(check_state(args, args.session, rom, symbols, images, task, (ram, known), before, sink))
         results.append(entry)
         print(json.dumps({k: v for k, v in entry.items() if k != "reads_not_captured"}))
-    return tap_summary(args, results, code)
+    return tap_summary(args, results, code, str(args.session))
+
+
+def check_state(args, source: Path, rom: bytes, symbols, images: list, task, state: tuple,
+                before: tuple | None, sink=None) -> dict:
+    """check_task on one recorded state, (RDRAM, known mask) as tap.SceneState builds it, with
+    the uncaptured bytes filled from the ROM's images; before is the previous task's state."""
+    image, image_known, fill = images
+
+    def rebuilt(ram: np.ndarray, known: np.ndarray) -> np.ndarray:
+        ram_be = np.frombuffer(be_from_pj64(ram.tobytes()), np.uint8)   # captured spans are whole words
+        return np.where(fill & ~known, image, ram_be)
+
+    def timer(ram_be: np.ndarray) -> int:
+        return struct.unpack_from(">I", ram_be, phys(US["gGlobalTimer"]))[0]
+
+    ram, known = state
+    ram_be = rebuilt(ram, known)
+    previous = None
+    if before is not None:   # the previous task's state, when it is the previous game frame
+        before_be = rebuilt(*before)
+        if timer(before_be) + 1 == timer(ram_be):
+            previous = (before_be.tobytes(), before[1] | image_known)
+    return check_task(TapFrame(source, task, ram_be.tobytes()), rom, args.fcr31, known | image_known, symbols,
+                      args.orbit, sink, previous)
+
+
+def from_package(args) -> int:
+    """E2-live from a scene package and the local ROM alone: each checked task's state, and the
+    previous task's, rebuilt by a seek (package.py's scene-state layer), in order or shuffled."""
+    import package as scene_package
+    symbols = load_map(args.map)
+    rom = args.rom.read_bytes()
+    results = []
+    try:
+        package = scene_package.Package(args.package.read_bytes(), rom)
+        if package.states is None:
+            raise SystemExit(f"{args.package} carries no scene state (version 0, or written with --no-state)")
+        windows = package.states.code_windows()
+        images = list(code_images(rom, windows))
+        if args.tasks:
+            selected = [index for index in range(len(package)) if package.fields(index)["task_index"] in args.tasks]
+        else:
+            selected = list(range(0, len(package), args.every))
+        selected = selected[:args.limit] if args.limit else selected
+        if args.order == "random":
+            random.Random(args.seed).shuffle(selected)
+        for index in selected:
+            before = package.scene_state(index - 1)[2:] if index else None
+            task, regions, ram, known = package.scene_state(index)
+            entry = {"task_index": task.fields["task_index"], "has_regions": regions is not None, "frame": index}
+            entry.update(check_state(args, args.package, rom, symbols, images, task, (ram, known), before))
+            results.append(entry)
+            print(json.dumps({k: v for k, v in entry.items() if k != "reads_not_captured"}))
+    except scene_package.PackageError as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return 2
+    return tap_summary(args, results, windows[0] if windows else None, str(args.package), args.order)
 
 
 def main() -> int:
@@ -1186,6 +1243,22 @@ def main() -> int:
                            "to read only captured bytes")
     live.add_argument("--fcr31", type=lambda value: int(value, 0), default=0x01000800)
     live.set_defaults(handler=from_tap)
+    pack = commands.add_parser("from-package")
+    pack.add_argument("package", type=Path, help="a scene package with the scene-state layer (package.py write)")
+    pack.add_argument("--rom", type=Path, required=True)
+    pack.add_argument("--map", type=Path, required=True)
+    pack.add_argument("--every", type=int, default=1, help="check every n-th task")
+    pack.add_argument("--tasks", type=lambda value: {int(part) for part in value.split(",")}, default=set(),
+                      help="check only these task indices (comma-separated), instead of --every")
+    pack.add_argument("--limit", type=int, default=0)
+    pack.add_argument("--order", choices=("direct", "random"), default="direct",
+                      help="visit the checked tasks in package order or shuffled (each one a seek)")
+    pack.add_argument("--seed", type=int, default=0)
+    pack.add_argument("--out", type=Path, help="write the per-task report here (private scratch)")
+    pack.add_argument("--orbit", action="append", default=[],
+                      help="YAW,PITCH,DIST: also re-run each task from a moved camera")
+    pack.add_argument("--fcr31", type=lambda value: int(value, 0), default=0x01000800)
+    pack.set_defaults(handler=from_package)
     args = parser.parse_args()
     return args.handler(args)
 

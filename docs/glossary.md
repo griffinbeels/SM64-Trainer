@@ -1192,7 +1192,8 @@ savestates). That is what lets a recording be re-viewed from a free camera.
 - **Lives** -- the spans (the scene and main-pool rows in
   `src/sm64_events/memory/layout.py`); the copy (`plugin/gfxwrap/scene_tap.cpp`);
   the rebuild and the proof (`tools/scene_lab/tap.py`,
-  `tools/scene_lab/e2_georender.py`, its from-tap mode)
+  `tools/scene_lab/e2_georender.py`, its from-tap and from-package modes);
+  its portable form (`tools/scene_lab/package.py`, the scene-state layer)
 - **Not** -- the [[task closure]], which is what the [[renderer]] reads to
   draw a list; the scene state is what the game reads to make one
 
@@ -1208,9 +1209,20 @@ the display lists the game builds for each task, and tasks that repeat them
 share one copy. Any task decodes without visiting the others; the reader
 refuses a package made from a different ROM, a truncated one or a corrupt
 one. On savestate tasks about 95% of a closure is a reference, and a 175 KB
-closure packs to about 2 KB (2026-10-24).
+closure packs to about 2 KB (2026-10-24). Version 1 adds each task's [[scene
+state]], so the game's own scene-graph code can redraw a task from a moved
+camera with only the package and the viewer's ROM. A checkpoint every 64 tasks,
+and at each level load, holds the whole state; the tasks between hold what
+changed since the task before, so any task's state rebuilds from one
+checkpoint and at most 63 tasks after it. The [[practice ROM]]'s own code
+that the drawing executes travels as a reference to the ROM bytes it came from,
+never as a memory image. On a 90-second recording the state adds about
+5.4 MiB a minute to the closures' 2.4, and every checked task regenerates
+exactly as it does from the tap's own files (2026-10-25). The reader refuses
+a version or layer it does not know.
 
-- **Lives** -- `tools/scene_lab/package.py` (write, read, verify)
+- **Lives** -- `tools/scene_lab/package.py` (write, read, verify); the
+  evaluator's from-package mode (`tools/scene_lab/e2_georender.py`)
 - **Not** -- what the [[scene tap]] itself writes, which holds raw memory
   images and pictures and stays private on the machine that recorded it
 
