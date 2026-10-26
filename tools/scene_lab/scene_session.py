@@ -281,6 +281,45 @@ def start_encoder():
         return None
 
 
+class Growth:
+    """A package its writer is still writing in place (attempt_cutter.py's takes): `sidecar` is
+    the writer's newest publication (package.PackageWriter.publish), a header and index over the
+    file's body as it stood. read() takes only the body bytes the file gained since the last
+    read, opening and closing the file each time (the writer's process keeps writing it), and
+    returns the grown package, the same one when nothing was published since, or None once the
+    sidecar is gone: the writer finished and the file is a whole package."""
+
+    def __init__(self, path: Path, sidecar: Path):
+        self.path, self.sidecar = path, sidecar
+        self.body: list[bytes] = []
+        self.read_to = scene_package.HEADER.size
+
+    def read(self, rom: bytes, previous: scene_package.Package | None = None):
+        try:
+            published = self.sidecar.read_bytes()
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            raise scene_package.PackageError(f"the growing scene's publication could not be read: {error}") from None
+        if len(published) < scene_package.HEADER.size:
+            raise scene_package.PackageError("the growing scene's publication is shorter than a header")
+        header = scene_package.Header(*scene_package.HEADER.unpack_from(published[:scene_package.HEADER.size]))
+        if previous is not None and header.frame_count == len(previous):
+            return previous
+        if header.index_offset > self.read_to:
+            try:
+                with self.path.open("rb") as handle:
+                    handle.seek(self.read_to)
+                    piece = handle.read(header.index_offset - self.read_to)
+            except OSError as error:
+                raise scene_package.PackageError(f"the growing scene's file could not be read: {error}") from None
+            if len(piece) != header.index_offset - self.read_to:
+                raise scene_package.PackageError("the growing scene's file is shorter than its publication")
+            self.body.append(piece)
+            self.read_to = header.index_offset
+        return scene_package.grown_package(published, list(self.body), rom, previous)
+
+
 @dataclass(eq=False)
 class PendingPicture:
     """A picture begin() sent to the host and finish() has yet to collect (compared by identity)."""
@@ -314,24 +353,30 @@ class SceneSession:
         self._last_view = self._last_walk = None         # the newest view, and its list walked (_view)
         self._begun: deque[PendingPicture] = deque()     # sent to the host, not yet finished, oldest first
         self.served = 0
+        self.growth: Growth | None = None                # set while the package is still being written
 
     @classmethod
-    def open(cls, config, path: Path, *, host_factory=None, evaluator_factory=None,
+    def open(cls, config, path: Path, *, sidecar: Path | None = None, host_factory=None, evaluator_factory=None,
              encoder_factory=None) -> SceneSession:
         """Reads and checks the package against the configured ROM, then starts and warms the host.
         Refused carries the reason for every refusal: the GPU hold, a missing ROM, a package the
         reader refuses (another ROM, truncated, corrupt), a package with nothing shown, a renderer
-        that cannot start."""
+        that cannot start. With `sidecar`, the package is still being written (an attempt scene
+        while its recording grows, Growth): the session opens what is published and grow()
+        takes the rest."""
         held = gpu_gate.hold_reason()
         if held:
             raise Refused(f"The renderer is on hold until Griffin lifts it: {held}")
         if not config.rom.is_file():
             raise Refused("The ROM named in the lab config is missing.")
+        growth = None if sidecar is None else Growth(path, sidecar)
         try:
             if path.stat().st_size > scene_package.MAX_PACKAGE_BYTES:
                 raise Refused("This scene package is larger than the viewer accepts.")
             rom = config.rom.read_bytes()
-            package = scene_package.Package(path.read_bytes(), rom)
+            package = scene_package.Package(path.read_bytes(), rom) if growth is None else growth.read(rom)
+            if package is None:                         # finished between the lookup and now
+                growth, package = None, scene_package.Package(path.read_bytes(), rom)
             outlines = [package.outline(index) for index in range(len(package))]
         except OSError as error:
             raise Refused(f"This scene package could not be read: {error.strerror or error}.") from None
@@ -351,6 +396,7 @@ class SceneSession:
             raise
         session = cls(path.name, package, rom, host, frames, outlines, factory,
                       unavailable(package) if unavailable else None, encoder)
+        session.growth = growth
         try:
             session.host.render(session._recorded_frame(frames[0], {}), discard=True)  # a first list renders wrong
         except (RuntimeError, OSError, ValueError) as error:
@@ -363,17 +409,50 @@ class SceneSession:
         recording showed it, ms after its first picture: Play holds each picture that long; None
         throughout when the package lacks the times, and Play then runs at FPS), the free camera's
         state, and the recording's sound (scene_audio.py's table, or why there is none)."""
+        return {"name": self.name, "fps": FPS, "frames": self._rows(0), "renderer_pid": self.host.pid,
+                "free_camera": {"available": self.free_reason is None, "reason": self.free_reason},
+                "audio": self.sound.describe() if self.sound else scene_audio.absent(),
+                "growing": self.growth is not None}
+
+    def _rows(self, start: int) -> list[dict]:
+        """The page's rows for frames start.. (recorded_ms from the first frame's present)."""
         times = [self.outlines[index]["present_us"] for index in self.frames]
         ordered = None not in times and all(a <= b for a, b in zip(times, times[1:], strict=False))
-        frames = []
-        for position, index in enumerate(self.frames):
-            identity = self.outlines[index]["identity"]
-            frames.append({"level": identity.get("curr_level"), "area": identity.get("curr_area"),
-                           "game_frame": identity.get("global_timer"),
-                           "recorded_ms": (times[position] - times[0]) / 1000 if ordered else None})
-        return {"name": self.name, "fps": FPS, "frames": frames, "renderer_pid": self.host.pid,
-                "free_camera": {"available": self.free_reason is None, "reason": self.free_reason},
-                "audio": self.sound.describe() if self.sound else scene_audio.absent()}
+        rows = []
+        for position in range(start, len(self.frames)):
+            identity = self.outlines[self.frames[position]]["identity"]
+            rows.append({"level": identity.get("curr_level"), "area": identity.get("curr_area"),
+                         "game_frame": identity.get("global_timer"),
+                         "recorded_ms": (times[position] - times[0]) / 1000 if ordered else None})
+        return rows
+
+    def grow(self) -> dict | None:
+        """While the package is still being written: takes its newest publication, or the finished
+        file once the writer is done, and returns what the page gains ({"from": the first frame
+        that changed, "frames": its rows on, "growing"}), or None when nothing changed. Runs on
+        the worker, like every other read of the package."""
+        growth = self.growth
+        if growth is None:
+            return None
+        package = growth.read(self.rom, self.package)
+        if package is None:                             # the writer finished: the file is whole
+            try:
+                package = scene_package.Package(growth.path.read_bytes(), self.rom)
+            except OSError as error:
+                raise scene_package.PackageError(f"the finished scene could not be read: {error}") from None
+            package.carry(self.package)
+            self.growth = None
+        elif package is self.package:
+            return None
+        outlines = self.outlines[:len(package)]
+        outlines += [package.outline(index) for index in range(len(outlines), len(package))]
+        frames = [index for index, outline in enumerate(outlines) if outline["vi"] is not None]
+        start = next((at for at, (a, b) in enumerate(zip(frames, self.frames, strict=False)) if a != b),
+                     min(len(frames), len(self.frames)))
+        self.package, self.outlines, self.frames = package, outlines, frames
+        if self._evaluator is not None and hasattr(self._evaluator, "package"):
+            self._evaluator.package = package
+        return {"from": start, "frames": self._rows(start), "growing": self.growth is not None}
 
     def audio_block(self, index: int) -> tuple[bytes, str]:
         """(file bytes, media type) of one block of the recording's sound: LookupError when there

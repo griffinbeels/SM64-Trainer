@@ -9,7 +9,6 @@ emulator or live recording is involved.
 """
 import asyncio
 import json
-import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -160,7 +159,7 @@ def test_each_completed_attempt_is_cutting_at_once_and_the_replay_still_gets_its
         cutters[0].on_event({"id": 13, "state": "unavailable",
                              "reason": "The scene recording lost 2 pictures during this attempt."})
         assert _scenes(client, 12, 13) == {
-            "12": {"state": "ready", "seconds": 9.7},
+            "12": {"state": "ready", "seconds": 9.7, "growing": False},
             "13": {"state": "unavailable", "reason": "The scene recording lost 2 pictures during this attempt."}}
         tracker.on_replay_history([first], None)                 # a repeat is not a new attempt
         assert len(cutters[0].notes) == 2
@@ -293,11 +292,81 @@ def test_end_to_end_the_real_cutter_child_cuts_a_completed_attempt_that_then_ope
         deadline = time.monotonic() + 90
         while _scenes(client, 31).get("31", {}).get("state") == "cutting" and time.monotonic() < deadline:
             time.sleep(0.1)
-        assert _scenes(client, 31) == {"31": {"state": "ready", "seconds": 9.3}}
+        assert _scenes(client, 31) == {"31": {"state": "ready", "seconds": 9.3, "growing": False}}
         child = server.scenes.cutter.process
         scene = client.post("/api/scene-lab/open", json={"attempt": 31}).json()
         assert scene["attempt"] == 31 and len(scene["frames"]) == 280
         assert (scene["frames"][0]["game_frame"], scene["frames"][-1]["game_frame"]) == (5020, 5299)
         assert {frame["level"] for frame in scene["frames"]} == {9}
     assert child.poll() is not None                                      # shutdown ended the child
-    assert not os.path.exists(lab["folder"] / "take-20-1.sm64scene.partial")
+    assert not list(lab["folder"].glob("*.grow"))
+
+
+def _take_event(folder: Path, refs, first: int, name: str = "take-20-1") -> dict:
+    return {"take": {"path": str(folder / f"{name}.sm64scene"), "grow": str(folder / f"{name}.grow"),
+                     "frame": refs[first].global_timer, "utc": refs[first].utc.isoformat(), "first": first,
+                     "kind": "anchor"}}
+
+
+def test_a_completed_attempt_with_a_take_answers_ready_in_the_same_call(lab, recording):
+    """The Practice log asks for a row's scene once, when the row appears (the attempt_completed
+    broadcast that follows the hook): the answer must already be ready, growing, never omitted."""
+    refs = RecordedSpool(recording["session"]).refs
+    app, server, cutters = _app(lab)
+    tracker = _tracker()
+    server.follow_attempts(tracker)
+    with TestClient(app) as client:
+        cutters[0].on_event(_take_event(lab["folder"], refs, 20))
+        attempt = SimpleNamespace(id=40, anchor_frame=5020, closed_frame=5150, outcome="success",
+                                  started_utc=refs[20].utc.isoformat(), ended_utc=refs[150].utc.isoformat())
+        tracker.on_replay_history([attempt], None)
+        assert _scenes(client, 40) == {"40": {"state": "ready", "seconds": 4.3, "growing": True}}
+        late = SimpleNamespace(id=41, anchor_frame=5200, closed_frame=5250, outcome="reset",
+                               started_utc=refs[200].utc.isoformat(), ended_utc=refs[250].utc.isoformat())
+        tracker.on_replay_history([late], None)                       # no take began there: the slow way
+        assert _scenes(client, 41) == {"41": {"state": "cutting"}}
+        cutters[0].on_event({"id": 40, "state": "ready", "growing": False, "seconds": 9.3,
+                             "path": str(lab["folder"] / "take-20-1.sm64scene")})
+        assert _scenes(client, 40) == {"40": {"state": "ready", "seconds": 9.3, "growing": False}}
+
+
+def test_a_growing_scene_opens_at_once_and_its_page_gets_each_new_stretch(lab, recording):
+    """A take's package published while written: the viewer opens it by the attempt's id, its
+    pages hear {"kind": "grown"} as it gains frames, and the last word is the finished file."""
+    refs = RecordedSpool(recording["session"]).refs
+    lab["folder"].mkdir(parents=True, exist_ok=True)
+    app, server, cutters = _app(lab, grow_seconds=0.05)
+    tracker = _tracker()
+    server.follow_attempts(tracker)
+    with TestClient(app) as client:
+        path, grow = lab["folder"] / "take-20-1.sm64scene", lab["folder"] / "take-20-1.grow"
+        source = RecordedSpool(recording["session"]).follow(20)
+        source.stop_at(299)
+        captures = iter(source.captures)
+        writer = package.PackageWriter(source, recording["rom"], path, package.ZLIB, level=6, in_place=True)
+        for _ in range(61):
+            writer.add(next(captures))
+        assert writer.publish(grow) == 60
+        cutters[0].on_event(_take_event(lab["folder"], refs, 20))
+        tracker.on_replay_history([SimpleNamespace(
+            id=50, anchor_frame=5020, closed_frame=5150, outcome="success",
+            started_utc=refs[20].utc.isoformat(), ended_utc=refs[150].utc.isoformat())], None)
+        scene = client.post("/api/scene-lab/open", json={"attempt": 50}).json()
+        assert scene["attempt"] == 50 and scene["growing"] is True and len(scene["frames"]) == 60
+        with client.websocket_connect("/api/scene-lab/ws") as page:
+            for _ in range(100):
+                writer.add(next(captures))
+            covered = writer.publish(grow)
+            grown = page.receive_json()
+            assert grown["kind"] == "grown" and grown["session"] == scene["session"] and grown["growing"] is True
+            assert grown["from"] == 60 and len(grown["frames"]) == covered - 60
+            assert grown["frames"][0]["game_frame"] == 5080
+            for capture in captures:
+                writer.add(capture)
+            writer.finish()
+            grow.unlink()
+            last = page.receive_json()
+            assert last["kind"] == "grown" and last["growing"] is False and last["from"] + len(last["frames"]) == 280
+            assert last["frames"][-1]["game_frame"] == 5299
+        status = client.get("/api/scene-lab/status").json()["session"]
+        assert status["growing"] is False and len(status["frames"]) == 280

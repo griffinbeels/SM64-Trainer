@@ -92,6 +92,8 @@ DEFAULT_IDLE_SECONDS = 300.0
 WATCH_SECONDS = 1.0
 MAX_QUESTIONS_WAITING = 8     # poses and picks a socket holds; the oldest is answered superseded
 PICTURES_IN_FLIGHT = 2        # pictures a socket has begun and not yet sent (the page keeps as many)
+GROW_SECONDS = 0.25           # how often an open scene still being written takes its newest frames
+GROW_FAILURES = 3             # publications in a row it cannot read before it stops growing
 ENDS = {"closed": "Closed.",
         "replaced": "Closed to open another scene.",
         "page": "Closed because no page was showing it.",
@@ -230,7 +232,8 @@ class SceneLab:
     def __init__(self, config_path: Path, *, session_options: dict | None = None,
                  page_gone_seconds: float = PAGE_GONE_SECONDS, watch_seconds: float = WATCH_SECONDS,
                  idle_seconds: float | None = None, measure_loop: bool = False, live: bool = False,
-                 lease_factory=None, cutter_factory=None, cutter_options: dict | None = None):
+                 lease_factory=None, cutter_factory=None, cutter_options: dict | None = None,
+                 grow_seconds: float = GROW_SECONDS):
         """live: hold the recording's lease and cut attempt scenes (main.py's server only; a test,
         the UI fixture or e3_measure.py never arms the wrapper's tap). Tests replace the lease
         (lease_factory(lab_root)), the cutter (cutter_factory(folder, on_event)) or the cutter
@@ -239,6 +242,8 @@ class SceneLab:
         self.session_options = session_options or {}
         self.live_on, self.lease_factory, self.cutter_options = live, lease_factory, cutter_options or {}
         self.cutter_factory = cutter_factory
+        self.grow_seconds = grow_seconds
+        self.pages: set[_PageSocket] = set()               # the sockets a grown scene tells
         self.lease = None
         self.live_problem: str | None = None
         self.open_path: Path | None = None             # the package the open scene reads (retention spares it)
@@ -378,10 +383,10 @@ class SceneLab:
             report["loop"] = self.loop_probe.summary()
         return report
 
-    def _open_blocking(self, config: LabConfig, path: Path):
+    def _open_blocking(self, config: LabConfig, path: Path, sidecar: Path | None = None):
         module = _lab_module("scene_session")
         try:
-            session = module.SceneSession.open(config, path, **self.session_options)
+            session = module.SceneSession.open(config, path, sidecar=sidecar, **self.session_options)
         except module.Refused as refused:
             raise SceneRefused(str(refused)) from None
         return session, session.describe()
@@ -390,13 +395,14 @@ class SceneLab:
         """A listed package by name, or an attempt's scene by its id (LookupError: none known;
         SceneRefused: still being cut, or never, with the reason)."""
         config = await asyncio.to_thread(LabConfig.load, self.config_path)
+        sidecar = None
         if attempt is None:
             path = await asyncio.to_thread(config.package_path, name)
         elif self.scenes is None:
             raise SceneRefused(self.live_problem or "This lab has no attempt scenes.")
         else:
             try:
-                path = self.scenes.path(attempt)
+                path, sidecar = self.scenes.path(attempt)
             except _lab_module("attempt_scenes").SceneUnavailable as unavailable:
                 raise SceneRefused(str(unavailable)) from None
         async with self.lock:
@@ -404,7 +410,7 @@ class SceneLab:
             worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab")
             try:
                 session, described = await asyncio.get_running_loop().run_in_executor(
-                    worker, self._open_blocking, config, path)
+                    worker, self._open_blocking, config, path, sidecar)
             except BaseException:
                 worker.shutdown(wait=False)
                 raise
@@ -452,8 +458,43 @@ class SceneLab:
         loop = asyncio.get_running_loop()
         if self.watch_task is None or self.watch_task.done():
             self.watch_task = loop.create_task(self._watch(), name="scene-lab-watch")
+        if self.described and self.described.get("growing"):
+            loop.create_task(self._grow(self.generation), name="scene-lab-grow")
         if self.loop_probe is not None and self.loop_probe.task is None:
             self.loop_probe.task = loop.create_task(self.loop_probe.run(), name="scene-lab-loop-probe")
+
+    async def _grow(self, generation: int) -> None:
+        """While the open scene is still being written (an attempt scene whose fade-out has not
+        reached the recording yet): every GROW_SECONDS its worker takes the newest publication,
+        and each page showing it is told what it gained, {"kind": "grown", "session", "from",
+        "frames", "growing"}, until the scene is whole or closed."""
+        failures = 0
+        while self.session is not None and generation == self.generation:
+            await asyncio.sleep(self.grow_seconds)
+            try:
+                grown = await self._run(generation, "grow")
+                failures = 0
+            except SceneClosed:
+                return
+            except (ValueError, struct.error) as error:          # a publication the reader refused
+                failures += 1
+                log.warning("A growing scene could not be read further: %s", error)
+                if failures < GROW_FAILURES:
+                    continue
+                grown = {"from": len((self.described or {}).get("frames", ())), "frames": [], "growing": False}
+            if not grown:
+                continue
+            if self.described is not None and generation == self.generation:
+                frames = self.described["frames"][:grown["from"]] + grown["frames"]
+                self.described = {**self.described, "frames": frames, "growing": grown["growing"]}
+            message = {"kind": "grown", "session": generation, **grown}
+            for page in list(self.pages):
+                try:
+                    await page.send(message)
+                except Exception as error:  # noqa: BLE001 - a page that left misses nothing it needs
+                    log.debug("a scene page did not hear the scene grow: %r", error)
+            if not grown["growing"]:
+                return
 
     async def _watch(self) -> None:
         """Releases a scene nobody is looking at or using; stops once no scene is open."""
@@ -561,6 +602,7 @@ class SceneLab:
         self.sockets += 1
         self.page_seen = time.monotonic()
         page = _PageSocket(self, websocket)
+        self.pages.add(page)
         tasks = [asyncio.create_task(page.receive()), asyncio.create_task(page.answer()),
                  asyncio.create_task(page.deliver())]
         try:
@@ -572,6 +614,7 @@ class SceneLab:
         finally:
             for task in tasks:
                 task.cancel()
+            self.pages.discard(page)
             self.sockets -= 1
             self.page_seen = time.monotonic()
             # asyncio.wait, not gather: if the server is cancelling this handler, the

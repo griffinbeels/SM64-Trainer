@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import logging
 import os
 import queue
 import subprocess
@@ -61,16 +62,15 @@ PACKAGE_SUFFIX = ".sm64scene"
 TICK_SECONDS = 0.1             # how often the child re-reads the recording while anything waits
 IDLE_TICK_SECONDS = 0.5        # and when nothing does (the recording's state for the probe)
 GRACE_SECONDS = 1.0            # an anchor's take outlives a newer anchor's this long for its completion
-MAX_TAKES = 4                  # unclaimed takes writing at once; zlib needs ~half a core each to keep pace
+MAX_TAKES = 2                  # unclaimed takes writing at once (~30 MB each: two RDRAM-sized images)
 MAX_BEHIND = 2                 # takes cutting from behind the live edge at once; the rest queue
 LAG_FRAMES = 3                 # a live take this far behind the recording pauses the behind takes
 HOLD_SECONDS = 0.5             # a take holds a later start's first frame this long for a completion
+MAX_LAG_FRAMES = 150           # an unclaimed take this far (5 s) behind the recording gives up
+PUBLISH_SECONDS = 0.25         # how often a growing package is published (what an open scene can show)
+TAKE_ZLIB_LEVEL = 6            # package.compress: about 6x faster than level 9 for 6 % more bytes
 _BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
 _SERIAL = itertools.count(1)   # takes from one start (a behind take, an abandoned one) never share a file
-
-
-def scene_path(folder: Path, attempt_id: int) -> Path:
-    return Path(folder) / f"{int(attempt_id)}{PACKAGE_SUFFIX}"
 
 
 # ---------------------------------------------------------------- the server's handle
@@ -125,7 +125,11 @@ class CutterProcess:
             except ValueError:
                 continue
             if isinstance(event, dict):
-                self.on_event(event)
+                try:
+                    self.on_event(event)
+                except Exception:  # noqa: BLE001 - one bad event must not stop the events after it
+                    logging.getLogger("sm64.scene_lab").warning("A scene cutter event failed: %r", event,
+                                                                exc_info=True)
         self.on_event({"exited": self.process.wait()})
 
     def close(self, timeout: float = 10.0) -> int | None:
@@ -157,6 +161,18 @@ class Take(threading.Thread):
         self.ended = False
         self.stop_index = last
         self.limit: int | None = None          # write no further than this until claimed (Waiting.through)
+        # The package is written in place under its final name, and published beside it as it
+        # grows (package.PackageWriter.publish): a growing scene opens from the two.
+        self.path = Path(brain.folder) / f"take-{first.index}-{next(_SERIAL)}{PACKAGE_SUFFIX}"
+        self.grow = self.path.with_suffix(".grow")
+        self.published = 0                     # frames the newest publication covers
+        self.published_at = 0.0
+        self.writer = None
+
+    def announce(self) -> dict:
+        """The child's "take" event: where this take began and where its package grows."""
+        return {"take": {"path": str(self.path), "grow": str(self.grow), "frame": self.first.global_timer,
+                         "utc": self.first.utc.isoformat(), "first": self.first.index, "kind": self.kind}}
 
     @property
     def open(self) -> bool:
@@ -190,6 +206,7 @@ class Take(threading.Thread):
         index = self.position + 1
         started = time.monotonic()
         while not self.dropped.is_set() and self.cut is None:
+            self._publish()                      # what it holds back from is shown meanwhile
             if self.limit is not None and index > self.limit:
                 time.sleep(0.005)
                 continue
@@ -212,9 +229,10 @@ class Take(threading.Thread):
             else:                               # a reader without follow(): only cuts with a known end
                 self.source = brain.spool.source(self.first.index, self.stop_index, states=True)
                 self.source.stop_at = lambda last: None
-            out = Path(brain.folder) / f"take-{self.first.index}-{next(_SERIAL)}{PACKAGE_SUFFIX}"
-            writer = brain.package.PackageWriter(self.source, brain.rom, out, brain.package.ZLIB,
-                                                 rom_loads=brain.rom_loads)
+            writer = brain.package.PackageWriter(self.source, brain.rom, self.path, brain.package.ZLIB,
+                                                 level=TAKE_ZLIB_LEVEL, shared=brain.seed(self.source.rdram_size),
+                                                 in_place=True)
+            self.writer = writer
             timer = dict((name, (address, size)) for name, address, size in self.source.identity).get("global_timer")
             for capture in self.source.captures:
                 self._hold(capture, timer)
@@ -224,6 +242,7 @@ class Take(threading.Thread):
                     break
                 writer.add(capture)
                 self.written += 1
+                self._publish()
             # A take that follows the live edge may have written a frame or two past the end it
             # learned later (the reset's own picture can reach the recording before its event
             # reaches the server); finish keeps the span and leaves those unreferenced.
@@ -235,9 +254,9 @@ class Take(threading.Thread):
                     brain.finished(self, None, getattr(self.source, "ended", None)     # live_spool says why
                                    or "The scene recording ended before this attempt's scene was complete.")
                 return
-            writer.out = scene_path(brain.folder, self.attempt_id)
             stats = writer.finish(frames)
             writer = None
+            self.grow.unlink(missing_ok=True)   # the file is whole: a growing session reads it now
             brain.finished(self, stats, None)
         except Exception as error:  # noqa: BLE001 - a take's failure is that attempt's reason, never the child's end
             if writer is not None:
@@ -245,7 +264,24 @@ class Take(threading.Thread):
             if self.cut is not None:
                 brain.finished(self, None, f"The scene could not be cut: {error}")
         finally:
+            if not self.path.is_file():         # abandoned: its publication goes with it
+                self.grow.unlink(missing_ok=True)
             self.ended = True
+            brain.emit({"take_ended": str(self.path)})
+
+    def _publish(self) -> None:
+        """Publishes the frames written so far (never past a claimed span's last) once
+        PUBLISH_SECONDS passed since the last publication and it would cover more; a take cut
+        from behind the edge publishes nothing (nobody opens it before it is whole)."""
+        writer = self.writer
+        if writer is None or self.kind == "behind" or time.monotonic() - self.published_at < PUBLISH_SECONDS:
+            return
+        written = self.written - (1 if writer.states else 0)        # the state runs one frame behind
+        limit = None if self.cut is None else self.cut.last.index - self.first.index + 1
+        if min(written, limit or written) <= self.published:
+            return
+        self.published = writer.publish(self.grow, limit) or self.published
+        self.published_at = time.monotonic()
 
 
 class Brain:
@@ -267,6 +303,13 @@ class Brain:
         self.forgotten: set[int] = set()
         self.live: dict | None = None
         self.edge = None                             # the newest TaskRef the recording held at the last tick
+        self.seeds: dict[int, object] = {}           # RDRAM size -> the attributor every take shares
+
+    def seed(self, rdram_size: int):
+        """The attributor whose ROM candidates, discovered windows and misses every take uses."""
+        if rdram_size not in self.seeds:
+            self.seeds[rdram_size] = self.package.Attributor(self.rom, rdram_size, self.rom_loads)
+        return self.seeds[rdram_size]
 
     def should_wait(self, take: Take) -> bool:
         """The child's one core goes first to a live take finishing its claimed span (what he is
@@ -341,8 +384,9 @@ class Brain:
         for take in self.takes:
             if take.open and take.reserved is None and (
                     (take.abandon_at is not None and now >= take.abandon_at)
-                    or take.written > attempt_span.MAX_SCENE_FRAMES):
-                take.abandon()
+                    or take.written > attempt_span.MAX_SCENE_FRAMES
+                    or (self.edge is not None and take.written and self.edge.index - take.position > MAX_LAG_FRAMES)):
+                take.abandon()              # nobody waits for it, or it fell too far behind to catch up
         if not health.get("recording"):
             self.spool = self.edge = None      # a newer session, when one starts, is opened next tick
         return bool(self.starts or self.pending or self.takes)
@@ -385,7 +429,9 @@ class Brain:
                     take.reserved = attempt_id
                     if found.through is not None:
                         take.limit = found.through.index
-                self._say(attempt_id, entry, "cutting", reason=found.reason)
+                    self._say(attempt_id, entry, "ready", growing=True, path=str(take.path), grow=str(take.grow))
+                else:
+                    self._say(attempt_id, entry, "cutting", reason=found.reason)
             else:
                 self.pending.pop(attempt_id)
                 take = self._open_take(found.first.index)
@@ -393,13 +439,19 @@ class Brain:
                     take = Take(self, found.first, "behind", last=found.last.index)
                     self._begin(take)
                 take.claim(attempt_id, found, now)
-                self._say(attempt_id, entry, "cutting", seconds=found.seconds, reason="Writing the scene.")
+                if take.kind == "behind":
+                    self._say(attempt_id, entry, "cutting", seconds=found.seconds, reason="Writing the scene.")
+                else:
+                    self._say(attempt_id, entry, "ready", growing=True, seconds=found.seconds,
+                              path=str(take.path), grow=str(take.grow))
 
     def _begin(self, take: Take) -> None:
         if take.kind == "behind" and sum(other.kind == "behind" for other in self.takes) >= MAX_BEHIND:
             self.queued.append(take)                         # tick starts it when one ends
             return
         self.takes.append(take)
+        if take.kind != "behind":
+            self.emit(take.announce())
         take.start()
 
     def _release(self, attempt_id: int) -> None:
@@ -412,17 +464,17 @@ class Brain:
         """On the take's thread, once its package is complete or cannot be."""
         if take.attempt_id in self.forgotten:
             if stats is not None:
-                scene_path(self.folder, take.attempt_id).unlink(missing_ok=True)
+                take.path.unlink(missing_ok=True)
             return
         if stats is None:
             self.emit({"id": take.attempt_id, "state": "unavailable", "reason": reason})
             return
         cut = take.cut
-        self.emit({"id": take.attempt_id, "state": "ready", "seconds": cut.seconds,
-                   "path": str(scene_path(self.folder, take.attempt_id)), "why": cut.why,
+        self.emit({"id": take.attempt_id, "state": "ready", "growing": False, "seconds": cut.seconds,
+                   "path": str(take.path), "why": cut.why,
                    "first": cut.first.index, "last": cut.last.index, "frames": stats["frames"],
                    "bytes": stats["package_bytes"], "write_seconds": stats["write_seconds"],
-                   "finish_seconds": stats["finish_seconds"], "take": take.kind,
+                   "finish_seconds": stats["finish_seconds"], "take_kind": take.kind,
                    "ready_after_decided_ms": round((self.clock() - take.decided_at) * 1000, 1),
                    "ready_after_last_ms": round((datetime.now(timezone.utc) - cut.last.utc).total_seconds() * 1000, 1)})
 

@@ -576,8 +576,8 @@ class Attributor:
         """Each 32-byte granule of each run (from the run's start) names the mapping that held
         the previous granule if it still holds this one whole, else the first mapping in order
         that does, else none (raw). Granules are matched a run at a time; the walk then visits
-        each stretch of one choice, not each granule (measured 2026-10-26: 14.4 -> see
-        attempt_cutter.py ms a frame)."""
+        each stretch of one choice, not each granule: the same pieces as the per-granule loop
+        (300 of 300 frames of his BoB minute) for a ninth of its time on checkpoint tiles."""
         pieces: list[list] = []
         for begin, end in self.runs:
             near = [mapping for mapping in mappings

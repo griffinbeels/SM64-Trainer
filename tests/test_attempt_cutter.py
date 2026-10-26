@@ -19,6 +19,7 @@ import attempt_cutter  # noqa: E402
 import attempt_span  # noqa: E402
 import package  # noqa: E402
 import scene_attempt_fixture as fixture  # noqa: E402
+import scene_session  # noqa: E402
 from scene_spool_double import RecordedSpool  # noqa: E402
 
 TASKS, LOAD = 400, 300
@@ -69,8 +70,9 @@ class Run:
         raise AssertionError(f"timed out; events {self.events}")
 
     def ended(self, attempt_id: int) -> dict:
-        return self.until(lambda: next((event for event in self.events if event.get("id") == attempt_id
-                                        and event["state"] in ("ready", "unavailable")), None))
+        """The attempt's last word: its scene whole, or why it has none."""
+        return self.until(lambda: next((event for event in self.events if event.get("id") == attempt_id and (
+            event["state"] == "unavailable" or event["state"] == "ready" and not event.get("growing"))), None))
 
     def close(self) -> None:
         self.brain.close()
@@ -98,24 +100,28 @@ def test_a_take_written_while_he_plays_stops_at_the_fade_and_matches_the_whole_r
         run.until(lambda: run.brain.takes and run.brain.takes[0].position >= 39)
         run.spool.through = 160
         run.complete(8, 20, 150, "success")
-        run.until(lambda: any(event.get("id") == 8 and event["state"] == "cutting" for event in run.events))
+        growing = run.until(lambda: next((event for event in run.events if event.get("id") == 8), None))
         take = run.brain.takes[0]
+        assert growing == {"id": 8, "state": "ready", "growing": True, "path": str(take.path), "grow": str(take.grow)}
         assert take.reserved == 8 and take.limit == 160
         run.spool.through = 299                                  # the fade's last picture, castle not yet
         run.until(lambda: take.position == 299)
         run.spool.through = 310                                  # recorded, but the span rule has not looked yet
         time.sleep(0.3)
         assert take.position == 299 and take.cut is None         # held at the newest task known inside the span
+        published = scene_session.Growth(take.path, take.grow).read(recording["rom"])
+        assert 0 < len(published) <= 280                        # what an open scene shows while it grows
+        _same_frames(published, recording["whole"], 20)
         ready = run.ended(8)
     finally:
         run.close()
     assert ready["state"] == "ready" and (ready["first"], ready["last"], ready["why"]) == (20, 299, "fade")
-    assert ready["take"] == "anchor" and ready["frames"] == 280
+    assert ready["take_kind"] == "anchor" and ready["frames"] == 280 and ready["path"] == str(take.path)
     cut = package.Package(Path(ready["path"]).read_bytes(), recording["rom"])
     assert "dropped_frames" not in cut.index.meta["stats"]
     assert (_identity(cut, 0), _identity(cut, len(cut) - 1)) == (5020, 5299)
     _same_frames(cut, recording["whole"], 20)
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["8.sm64scene"]
+    assert [path.name for path in tmp_path.iterdir()] == [take.path.name]      # its publication is gone
 
 
 def test_the_next_attempts_reset_ends_the_scene_on_the_picture_before_it(recording, tmp_path, monkeypatch):
@@ -151,7 +157,7 @@ def test_an_attempt_with_no_take_is_cut_from_behind_the_edge(recording, tmp_path
         ready = run.ended(3)
     finally:
         run.close()
-    assert (ready["state"], ready["take"], ready["first"], ready["last"]) == ("ready", "behind", 200, 299)
+    assert (ready["state"], ready["take_kind"], ready["first"], ready["last"]) == ("ready", "behind", 200, 299)
     _same_frames(package.Package(Path(ready["path"]).read_bytes(), recording["rom"]), recording["whole"], 200)
 
 
@@ -167,7 +173,7 @@ def test_an_unclaimed_take_is_abandoned_and_its_file_removed(recording, tmp_path
         assert [take.first.index for take in run.brain.takes if not take.ended] == [60]
     finally:
         run.close()
-    assert not list(tmp_path.glob("*.partial")) and not list(tmp_path.glob("*.sm64scene"))
+    assert not list(tmp_path.iterdir())                                     # no package, no publication
 
 
 def test_the_child_writes_what_he_waits_for_first(recording, tmp_path):

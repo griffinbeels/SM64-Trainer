@@ -82,6 +82,7 @@ class AttemptScenes:
         self.in_use, self.retain, self.restart_seconds = in_use, retain, restart_seconds
         self.lock = threading.Lock()
         self.entries: dict[int, dict] = {}       # attempt id -> {"state", "ended", ...}
+        self.takes: dict[str, dict] = {}         # package path -> a take the child is writing (its "take" event)
         self.folder: Path | None = None
         self.cutter = None
         self.held = None
@@ -136,10 +137,15 @@ class AttemptScenes:
         with self.lock:
             for attempt in fresh:
                 mark = attempt_span.AttemptMark.of(attempt)
+                take = self._take_for(mark) if cutter is not None else None
                 if cutter is None:
                     entry = {"state": "unavailable", "reason": self.problem or STARTING}
+                elif take is not None:              # ready now, growing to its fade-out: no wait
+                    entry = {"state": "ready", "growing": True, "path": take["path"], "grow": take["grow"],
+                             "seconds": round((mark.ended_utc - mark.started_utc).total_seconds(), 1)}
                 else:
                     entry = {"state": "cutting"}
+                if cutter is not None:
                     notes.append({"op": "complete", "attempt": mark.as_json()})
                 self.entries[attempt.id] = entry | {"ended": mark.ended_utc}
             dropped = self._retain()
@@ -163,30 +169,48 @@ class AttemptScenes:
 
     # ------------------------------------------------------------ the cutter's side
 
+    def _take_for(self, mark) -> dict | None:
+        """The take the child began at this attempt's start (its anchor frame, at about its
+        start time), if one is writing; under the lock."""
+        if mark.anchor_frame is None:
+            return None
+        return next((take for take in self.takes.values() if take["frame"] == mark.anchor_frame and abs(
+            (take["utc"] - mark.started_utc).total_seconds()) <= attempt_span.MATCH_SECONDS), None)
+
     def _event(self, event: dict) -> None:
         if "live" in event:
             self.recording = event["live"]
         elif "exited" in event:
             self._exited(event["exited"])
+        elif "take" in event:
+            take = event["take"]
+            with self.lock:
+                self.takes[take["path"]] = take | {"utc": attempt_span.utc(take["utc"])}
+        elif "take_ended" in event:
+            with self.lock:
+                self.takes.pop(event["take_ended"], None)
         elif "id" in event:
             with self.lock:
                 entry = self.entries.get(event["id"])
-                if entry is not None and entry["state"] != "ready":
+                if entry is not None and not (entry["state"] == "ready" and not entry.get("growing")):
                     entry.update(state=event["state"], reason=event.get("reason"),
-                                 seconds=event.get("seconds"), path=event.get("path"))
-                    if event["state"] == "ready":
+                                 seconds=event.get("seconds") or entry.get("seconds"),
+                                 path=event.get("path") or entry.get("path"),
+                                 grow=event.get("grow"), growing=bool(event.get("growing")))
+                    if event["state"] == "ready" and not event.get("growing"):
                         log.info("attempt scene %s ready: %s", event["id"], {
                             key: event.get(key) for key in ("seconds", "frames", "bytes", "write_seconds",
                                                             "finish_seconds", "ready_after_decided_ms",
-                                                            "ready_after_last_ms", "take", "why")})
+                                                            "ready_after_last_ms", "take_kind", "why")})
             if entry is None and event.get("state") == "ready" and event.get("path"):
                 Path(event["path"]).unlink(missing_ok=True)          # retention dropped it meanwhile
 
     def _exited(self, code) -> None:
         with self.lock:
             for entry in self.entries.values():
-                if entry["state"] == "cutting":
-                    entry.update(state="unavailable", reason=STOPPED)
+                if entry["state"] == "cutting" or entry.get("growing"):     # its take died with the child
+                    entry.update(state="unavailable", reason=STOPPED, growing=False)
+            self.takes.clear()
         if self.stopping:
             return
         self.cutter = None
@@ -231,6 +255,7 @@ class AttemptScenes:
             return
         with self.lock:
             kept = {Path(entry["path"]).name for entry in self.entries.values() if entry.get("path")}
+            kept |= {Path(path).name for path in self.takes}                # takes the child is writing
             kept |= {f"{attempt_id}.sm64scene" for attempt_id, entry in self.entries.items()
                      if entry["state"] == "cutting"}
         reading = self.in_use()
@@ -252,17 +277,19 @@ class AttemptScenes:
                 if entry is None:
                     continue
                 if entry["state"] == "ready":
-                    found[str(attempt_id)] = {"state": "ready", "seconds": entry["seconds"]}
+                    found[str(attempt_id)] = {"state": "ready", "seconds": entry["seconds"],
+                                              "growing": bool(entry.get("growing"))}
                 elif entry["state"] == "cutting":
                     found[str(attempt_id)] = {"state": "cutting"}
                 else:
                     found[str(attempt_id)] = {"state": "unavailable", "reason": entry.get("reason")}
         return found
 
-    def path(self, attempt_id: int) -> Path:
+    def path(self, attempt_id: int) -> tuple[Path, Path | None]:
+        """(the scene's package, its growth sidecar while it is still being written, else None)."""
         with self.lock:
-            entry = self.entries.get(attempt_id)
-        if entry is None:
+            entry = dict(self.entries.get(attempt_id) or {})
+        if not entry:
             raise LookupError("The lab has no scene for that attempt.")
         if entry["state"] == "cutting":
             raise SceneUnavailable("This attempt's scene is still being cut.")
@@ -271,7 +298,14 @@ class AttemptScenes:
         path = Path(entry["path"])
         if not path.is_file():
             raise SceneUnavailable("This attempt's scene file is gone.")
-        return path
+        sidecar = Path(entry["grow"]) if entry.get("growing") and entry.get("grow") else None
+        if sidecar is not None and not sidecar.is_file() and entry.get("growing"):
+            with self.lock:                                 # finished meanwhile, or not yet published
+                current = self.entries.get(attempt_id) or {}
+            if current.get("growing"):
+                raise SceneUnavailable("This attempt's scene is starting; open it again in a moment.")
+            sidecar = None
+        return path, sidecar
 
     def live(self) -> dict:
         if self.problem:
