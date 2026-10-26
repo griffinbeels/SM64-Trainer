@@ -30,7 +30,9 @@ xyz, "position": xyz}, "encoding": "jpeg"|"raw"} for a picture, {"id", "session"
 [u32 little-endian header length][header JSON][picture]; everything else is JSON text: a pose,
 {"id", "error"[, "closed"]}, or {"id", "superseded": true}. Each socket keeps at most one
 picture request waiting: a newer one replaces it and the replaced one is answered superseded,
-so quick steps never queue stale renders behind the one being drawn.
+so quick steps never queue stale renders behind the one being drawn. The server sends its
+messages uncompressed even where the page negotiated permessage-deflate (_SendUncompressed):
+compressing a picture cost the event loop ~5 ms per JPEG and ~75 ms per exact-pixel picture.
 """
 import asyncio
 import json
@@ -375,6 +377,62 @@ class SceneLab:
             await asyncio.wait(tasks)
 
 
+class _SendUncompressed:
+    """A negotiated permessage-deflate that still reads what the page sends and no longer
+    compresses what the server sends. uvicorn offers the extension on every socket (the app's
+    default) and websockets then deflates each outgoing message on the event loop: measured
+    2026-10-25, ~4.7 ms for a 236 KB JPEG picture and ~75 ms for an exact-pixel one, for pictures
+    that do not shrink. RFC 7692 section 6 lets a sender leave any message uncompressed (RSV1
+    clear); the page's browser inflates only messages marked compressed."""
+
+    def __init__(self, extension):
+        self.extension, self.name = extension, extension.name
+
+    def decode(self, frame, *, max_size=None):
+        return self.extension.decode(frame, max_size=max_size)
+
+    def encode(self, frame):
+        return frame
+
+
+def _server_connection(send, limit: int = 16):
+    """The uvicorn websockets connection behind an ASGI send: the send is its asgi_send bound
+    method, or closures Starlette and middleware wrapped around it (wrap_app_handling_exceptions'
+    sender); walked breadth-first through closure cells, at most `limit` callables."""
+    pending, seen = [send], 0
+    while pending and seen < limit:
+        current = pending.pop(0)
+        seen += 1
+        owner = getattr(current, "__self__", None)
+        if type(owner).__module__.startswith("uvicorn.protocols.websockets") \
+                and isinstance(getattr(owner, "extensions", None), list):
+            return owner
+        for cell in getattr(current, "__closure__", None) or ():
+            try:
+                value = cell.cell_contents
+            except ValueError:                       # an empty cell
+                continue
+            if callable(value):
+                pending.append(value)
+    return None
+
+
+def _send_uncompressed(websocket: WebSocket) -> bool:
+    """Swaps this socket's negotiated permessage-deflate for _SendUncompressed when the server is
+    uvicorn's websockets protocol (the app's default; its connection keeps the negotiated
+    extensions in a list). Call it once the page has sent a message: the handshake is done
+    then. Any other server stack is left as it is; False says nothing changed."""
+    connection = _server_connection(getattr(websocket, "_send", None))
+    extensions = getattr(connection, "extensions", None)
+    if not isinstance(extensions, list):
+        return False
+    for position, extension in enumerate(extensions):
+        if getattr(extension, "name", None) == "permessage-deflate" and hasattr(extension, "decode"):
+            extensions[position] = _SendUncompressed(extension)
+            return True
+    return False
+
+
 class _PageSocket:
     """One page's socket: at most one picture request waiting (a newer one supersedes it),
     a short queue of pose requests, answered one at a time in that order, poses first."""
@@ -385,8 +443,11 @@ class _PageSocket:
         self.picture: dict | None = None
         self.poses: deque = deque()
         self.wake = asyncio.Event()
+        self.uncompressed: bool | None = None       # set at the first send, after a message arrived
 
     async def send(self, reply) -> None:
+        if self.uncompressed is None:
+            self.uncompressed = _send_uncompressed(self.websocket)
         async with self.sending:
             if isinstance(reply, bytes):
                 await self.websocket.send_bytes(reply)

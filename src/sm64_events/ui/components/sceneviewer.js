@@ -9,6 +9,8 @@
 // The page never redraws on its own: SceneLink asks for one picture at a time
 // over the socket, and a newer step, seek or camera move replaces the request
 // waiting behind the one being drawn (latest wins; the server does the same).
+// A picture stops being in flight when it arrives: the next request goes out
+// while it decodes and draws, so decoding never holds up the server.
 // The free camera lives in the game's world coordinates, so it stays where
 // you put it while you step or seek. Controls (plan section 7 prototype):
 // drag turns around the focus point, Shift-drag slides, the wheel moves
@@ -82,28 +84,34 @@ function drawRaw(context, header, bytes) {  // ReadScreen's BGR rows, bottom-up
   context.putImageData(picture, 0, 0);
 }
 
-async function paint(canvas, header, bytes) {
+// Draws the picture, unless `current()` says a newer one arrived while this
+// one decoded.
+async function paint(canvas, header, bytes, current = () => true) {
   const context = canvas?.getContext("2d");
   if (!context) return;
+  const bitmap = header.encoding === "raw" ? null
+    : await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+  if (!current()) { bitmap?.close(); return; }
   if (canvas.width !== header.width || canvas.height !== header.height) {
     canvas.width = header.width;
     canvas.height = header.height;
   }
-  if (header.encoding === "raw") return drawRaw(context, header, bytes);
-  const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+  if (!bitmap) return drawRaw(context, header, bytes);
   context.drawImage(bitmap, 0, 0);
   bitmap.close();
 }
 
 // The open scene's requests and camera: one picture in flight, the newest
 // input waiting behind it, input time kept from the EARLIEST input so
-// input-to-picture stays honest. `changed` re-renders the page.
+// input-to-picture stays honest (until that picture is drawn). `changed`
+// re-renders the page.
 export class SceneLink {
   constructor({ draw, changed, ended }) {
     Object.assign(this, { draw, changed, ended });
     Object.assign(this, { scene: null, frame: 0, free: false, orbit: null, encoding: "jpeg", playing: false,
       shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: null, wanted: null,
-      sequence: 0, poses: new Map(), latencies: [], pending: [0, 0, false], drag: null, entering: false });
+      sequence: 0, poses: new Map(), latencies: [], pending: [0, 0, false], drag: null, entering: false,
+      arrived: 0 });
   }
 
   get freeAvailable() { return !!this.scene?.free_camera?.available; }
@@ -151,17 +159,23 @@ export class SceneLink {
   }
 
   async onPicture(buffer) {
-    const request = this.inFlight, received = performance.now();
+    const received = performance.now(), arrived = ++this.arrived;
     const length = new DataView(buffer).getUint32(0, true);
     const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, length)));
-    await this.draw(header, new Uint8Array(buffer, 4 + length));
-    if (request && request.id === header.id) {
+    const request = this.inFlight && this.inFlight.id === header.id ? this.inFlight : null;
+    if (request) {
+      this.inFlight = null;
+      this.pump();                    // the server draws the next while this one decodes
+    }
+    const current = () => arrived === this.arrived;
+    await this.draw(header, new Uint8Array(buffer, 4 + length), current);
+    if (!current()) return;           // a newer picture arrived while this one decoded
+    if (request) {
       header.trip_ms = received - request.sent;
       header.input_ms = performance.now() - request.inputTime;
       if (request.kind === "input") this.latencies = [...this.latencies.slice(-99), header.input_ms];
-      this.inFlight = null;
     }
-    Object.assign(this, { shown: header, notice: header.reason || null, drawing: false });
+    Object.assign(this, { shown: header, notice: header.reason || null, drawing: !!this.inFlight });
     this.changed();
     this.pump();
   }
@@ -296,6 +310,13 @@ function releaseDrag(link, canvas) {
   try { if (drag) canvas?.releasePointerCapture(drag.id); } catch { /* already released */ }
 }
 
+// pointerrawupdate reaches the page when the pointer moves; Chromium holds
+// pointermove for the next animation frame, up to a frame later. It exists in
+// secure contexts (the Trainer's localhost page is one); elsewhere pointermove
+// carries the drag.
+const MOVE_EVENT = typeof window !== "undefined" && "onpointerrawupdate" in window
+  ? "onpointerrawupdate" : "onpointermove";
+
 function pointerHandlers(link) {
   const movable = () => link.scene && link.freeAvailable;
   return {
@@ -304,7 +325,7 @@ function pointerHandlers(link) {
       event.currentTarget.setPointerCapture(event.pointerId);
       link.drag = { x: event.clientX, y: event.clientY, id: event.pointerId };
     },
-    onpointermove: (event) => {
+    [MOVE_EVENT]: (event) => {
       const drag = link.drag;
       if (!drag || drag.id !== event.pointerId) return;
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
@@ -421,7 +442,7 @@ function useSceneLink(canvas, refresh) {
   const [, setRevision] = useState(0);
   const link = useRef(null);
   if (!link.current) {
-    link.current = new SceneLink({ draw: (header, bytes) => paint(canvas.current, header, bytes),
+    link.current = new SceneLink({ draw: (header, bytes, current) => paint(canvas.current, header, bytes, current),
       changed: () => setRevision((revision) => revision + 1), ended: () => refresh.current() });
   }
   useEffect(() => {

@@ -14,8 +14,14 @@ host draws the whole rebuilt RDRAM with the new list. When the evaluator cannot 
 (no 3D scene during a level load, a stopped run, no scene state in the package) the picture is
 the recorded one and `reason` says why. The evaluator starts on the first free-camera request.
 
+A free-camera picture sends the host only the RDRAM words that differ from what the host
+already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame tens of KiB.
+After a free-camera picture of a new frame, a second thread resolves the frames that follow it
+(evaluator.prepare; backward when stepping back), so playing or stepping finds states ready.
+
 Every method runs on the caller's one thread: the server gives each session a single worker
-thread, so the package's caches, the evaluator's sandboxes and the host's pipe are never shared.
+thread, so the host's pipe and the evaluator's view sandbox are never shared. The look-ahead
+thread touches only the evaluator's resolution side and the package, both behind their locks.
 src/sm64_events/server/scene_lab_api.py owns the session's lifetime. The host starts only after
 the GPU hold check; tests and e3_measure.py --fake inject fake_viewer_host.py's doubles.
 """
@@ -24,13 +30,17 @@ from __future__ import annotations
 import importlib.util
 import io
 import math
+import re
 import shutil
 import struct
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+
+import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -45,6 +55,10 @@ JPEG_QUALITY = 90
 WORLD_LIMIT = 1e6             # SM64's world fits in +-32768; a camera far outside it is a bug, not a view
 NO_SCENE = ("This frame has no 3D scene to move around in (a level load, a fade or a menu), "
             "so it shows the recorded camera.")
+RUN_GAP_WORDS = 16            # changed words this close together travel to the host as one run
+MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
+LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
+LOOK_AHEAD_FRAMES = 3         # how many frames the look-ahead resolves (the evaluator caches 4 states)
 
 
 class Refused(Exception):
@@ -70,9 +84,11 @@ def world_camera(camera) -> tuple[list[float], list[float]]:
 
 @dataclass
 class OwnedHost:
-    """A renderer host and the private plugin folder it reads its config from (removed on close)."""
+    """A renderer host and the private plugin folder it reads its config from (removed on close).
+    keeps_rdram: nothing but the session's requests writes the host's RDRAM (HostImage)."""
     host: viewer.Host
     plugin_dir: Path | None = None
+    keeps_rdram: bool = False
 
     @property
     def pid(self) -> int:
@@ -87,6 +103,67 @@ class OwnedHost:
         finally:
             if self.plugin_dir is not None:
                 shutil.rmtree(self.plugin_dir, ignore_errors=True)
+
+
+FRAME_BUFFER_SWITCH = re.compile(r"^frameBufferEmulation\\enable\s*=\s*(\d+)\s*$", re.MULTILINE)
+
+
+def renderer_keeps_rdram(plugin_dir: Path) -> bool:
+    """True when the renderer config turns GLideN64's frame-buffer emulation off everywhere
+    (frameBufferEmulation\\enable=0, and no section turning it on): the only way the renderer
+    itself writes RDRAM. Absent, GLideN64's default is on."""
+    switches = []
+    for name in replay.CONFIG_FILES:
+        path = plugin_dir / name
+        if path.is_file():
+            switches += FRAME_BUFFER_SWITCH.findall(path.read_text(encoding="utf-8", errors="replace"))
+    return bool(switches) and all(value == "0" for value in switches)
+
+
+class HostImage:
+    """The host's RDRAM as the session last left it, in the game's big-endian order, so a
+    free-camera picture sends only the words that changed and the host ends each request
+    holding exactly the image a full send would have left. That holds because viewer_host.c
+    writes nothing into RDRAM but a request's runs (the session never asks for its camera
+    rewrite) and the session uses a HostImage only for a renderer that keeps RDRAM
+    (renderer_keeps_rdram). Unknown (None) until the first free-camera picture sends
+    everything; a recorded frame's closure runs are applied as they go."""
+
+    def __init__(self):
+        self.words: np.ndarray | None = None
+
+    def recorded(self, runs: list, run_bytes: bytes) -> None:
+        """A recorded frame's closure went to the host (Project64's word order)."""
+        if self.words is None:
+            return
+        image, at = self.words.view(np.uint8), 0
+        for begin, end in runs:
+            if end > image.size:                          # not the image this mirror holds
+                self.words = None
+                return
+            image[begin:end] = np.frombuffer(run_bytes, np.uint32, (end - begin) // 4, at).byteswap().view(np.uint8)
+            at += end - begin
+
+    def free(self, ram: bytes) -> tuple[bytes, bytes]:
+        """(packed <II runs, their bytes in Project64's word order) that bring the host to `ram`."""
+        new = np.frombuffer(ram, np.uint32)
+        if self.words is None or self.words.size != new.size:
+            self.words = new.copy()
+            return struct.pack("<II", 0, len(ram)), scene_package.swap_words(ram)
+        changed = np.flatnonzero(new != self.words)
+        if not changed.size:
+            return b"", b""
+        breaks = np.flatnonzero(np.diff(changed) > RUN_GAP_WORDS)
+        starts = changed[np.concatenate(([0], breaks + 1))]
+        ends = changed[np.concatenate((breaks, [changed.size - 1]))] + 1
+        if starts.size > MAX_HOST_RUNS:
+            self.words = None
+            return self.free(ram)
+        pieces = [new[start:end] for start, end in zip(starts.tolist(), ends.tolist(), strict=True)]
+        self.words[changed] = new[changed]
+        runs = np.empty(2 * starts.size, np.uint32)
+        runs[0::2], runs[1::2] = starts * 4, ends * 4
+        return runs.tobytes(), np.concatenate(pieces).byteswap().tobytes()
 
 
 def renderer_host(config):
@@ -104,18 +181,19 @@ def renderer_host(config):
         plugin_dir = Path(tempfile.mkdtemp(prefix="scene-viewer-plugin-"))
         try:
             viewer.prepare_plugin_dir(plugin_dir, plugin, config.resolution)
-            return OwnedHost(viewer.Host(renderer, plugin_dir, header), plugin_dir)
+            return OwnedHost(viewer.Host(renderer, plugin_dir, header), plugin_dir, renderer_keeps_rdram(plugin_dir))
         except (OSError, RuntimeError) as error:
             shutil.rmtree(plugin_dir, ignore_errors=True)
             raise Refused(f"The renderer could not start: {error}") from None
     return start
 
 
-def command_host(command: list[str]):
+def command_host(command: list[str], keeps_rdram: bool = True):
     """A host factory over another program that speaks the host protocol
     (fake_viewer_host.command(): tests and dry runs)."""
     def start(header: str) -> OwnedHost:
-        return OwnedHost(viewer.Host(Path("renderer.dll"), Path(tempfile.gettempdir()), header, command=command))
+        return OwnedHost(viewer.Host(Path("renderer.dll"), Path(tempfile.gettempdir()), header, command=command),
+                         keeps_rdram=keeps_rdram)
     return start
 
 
@@ -156,6 +234,10 @@ class SceneSession:
         self.frames, self.outlines = frames, outlines
         self.evaluator_factory, self.free_reason = evaluator_factory, free_reason
         self._evaluator = None
+        self.image = HostImage() if getattr(host, "keeps_rdram", False) else None
+        self._ahead: ThreadPoolExecutor | None = None    # the look-ahead thread, with the evaluator
+        self._ahead_generation = 0                       # bumped by every free-camera request
+        self._last_free: int | None = None               # the frame of the last free-camera picture
         self.served = 0
 
     @classmethod
@@ -214,6 +296,8 @@ class SceneSession:
         capture = self.package.frame(index)
         timings["decode_ms"] = _ms(started)
         runs = struct.pack(f"<{2 * len(capture.runs)}I", *(edge for run in capture.runs for edge in run))
+        if self.image is not None:
+            self.image.recorded(capture.runs, capture.run_bytes)
         return viewer.Frame(f"frame {index}", capture.task, capture.vi, runs, capture.run_bytes)
 
     def _evaluator_or_reason(self):
@@ -224,7 +308,34 @@ class SceneSession:
                 self.free_reason = str(refused)
             except Exception as error:  # noqa: BLE001 - the page shows it as the reason
                 self.free_reason = f"The free camera could not start: {error}"
+            if self._evaluator is not None and hasattr(self._evaluator, "prepare"):
+                self._ahead = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab-ahead")
         return self._evaluator, self.free_reason
+
+    def _look_ahead(self, frame: int) -> None:
+        """After a free-camera picture of `frame`, resolve the LOOK_AHEAD_FRAMES frames that follow
+        it on the look-ahead thread (cached ones cost nothing): backward when the previous picture
+        was a few frames after it (stepping back), else forward (playing, stepping, or a seek or
+        the first picture, after which play goes forward). The frames next to it, not the last
+        step repeated: playback that fell behind once asks for the frame due next. A drag (the
+        same frame again) predicts nothing new. A job stops before its next frame once another
+        free-camera request arrives (_ahead_generation), so a request never waits for more than
+        the one frame being resolved, and the newest request's job runs next."""
+        step = None if self._last_free is None else frame - self._last_free
+        self._last_free = frame
+        if self._ahead is None or step == 0:
+            return
+        direction = -1 if step is not None and -LOOK_AHEAD_STEP <= step < 0 else 1
+        targets = [self.frames[at] for at in range(frame + direction, frame + direction * (LOOK_AHEAD_FRAMES + 1),
+                                                   direction) if 0 <= at < len(self.frames)]
+        if targets:
+            self._ahead.submit(self._prepare, targets, self._ahead_generation)
+
+    def _prepare(self, indices: list[int], generation: int) -> None:
+        for index in indices:
+            if generation != self._ahead_generation:
+                return
+            self._evaluator.prepare(index)
 
     def _free_frame(self, index: int, camera: tuple, timings: dict) -> tuple[viewer.Frame | None, str | None]:
         evaluator, reason = self._evaluator_or_reason()
@@ -243,9 +354,14 @@ class SceneSession:
                           "does not hold), so it shows the recorded camera.")
         task = list(view.task)
         task[12], task[13] = view.data_ptr & 0x1FFFFFFF, view.data_size
-        data = scene_package.swap_words(bytes(view.ram))      # the host takes Project64's word order
-        return viewer.Frame(f"frame {index} free", tuple(task), self.outlines[index]["vi"],
-                            struct.pack("<II", 0, len(data)), data), None
+        started = time.perf_counter()
+        if self.image is not None:
+            runs, data = self.image.free(view.ram)               # the words the host lacks
+        else:                                                    # the whole image; Project64's word order
+            data = scene_package.swap_words(bytes(view.ram))
+            runs = struct.pack("<II", 0, len(data))
+        timings.update(send_bytes=len(data), pack_ms=_ms(started))
+        return viewer.Frame(f"frame {index} free", tuple(task), self.outlines[index]["vi"], runs, data), None
 
     def picture(self, frame: int, camera=None, encoding: str = "jpeg") -> tuple[dict, bytes]:
         """Frame `frame` (a position in the frame list) as the renderer draws it: from the recorded
@@ -255,10 +371,14 @@ class SceneSession:
         if encoding not in ENCODINGS:
             raise ValueError("unknown encoding")
         free = None if camera is None else world_camera(camera)
+        if free is not None:
+            self._ahead_generation += 1          # the look-ahead stops before its next frame
         started = time.perf_counter()
         timings: dict = {}
         host_frame, reason = (None, None) if free is None else self._free_frame(index, free, timings)
         drawn_free = host_frame is not None
+        if drawn_free:
+            self._look_ahead(frame)          # resolves beside this picture's render and encode
         if host_frame is None:
             host_frame = self._recorded_frame(index, timings)
         picture = self.host.render(host_frame)
@@ -295,6 +415,10 @@ class SceneSession:
 
     def close(self) -> int:
         """Ends the host (its pipe closes; viewer.Host.close waits for the exit) and drops the
-        evaluator's sandboxes and the package's caches."""
+        evaluator's sandboxes and the package's caches, after any look-ahead finishes."""
+        ahead, self._ahead = self._ahead, None
+        if ahead is not None:
+            self._ahead_generation += 1                  # a running job stops after its frame
+            ahead.shutdown(wait=True, cancel_futures=True)
         self._evaluator = None
         return self.host.close()

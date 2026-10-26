@@ -96,6 +96,32 @@ test("one picture is in flight at a time and the newest step wins", async () => 
   expect(socket.sent[2].frame).toBe(4);                // stepping stops at the last frame
 });
 
+test("the next picture is asked for while one decodes, and a late decode never covers a newer picture", async () => {
+  const decodes = [], drawn = [];
+  globalThis.createImageBitmap = vi.fn((blob) => new Promise((resolve) => {
+    decodes.push(() => resolve({ blob, close: () => {} }));
+  }));
+  HTMLCanvasElement.prototype.getContext = () => ({ drawImage: (bitmap) => drawn.push(bitmap.blob) });
+  const { page, socket, root } = await openScene();
+  fireEvent.keyDown(root, { key: "ArrowRight" });                  // waits behind picture 0
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  expect(socket.sent.length).toBe(1);
+  socket.picture(socket.sent[0], { encoding: "jpeg" });             // arrives; its decode waits
+  await waitFor(() => expect(socket.sent.length).toBe(2));         // asked for before picture 0 drew
+  expect(decodes.length).toBe(1);
+  expect(drawn).toEqual([]);
+  socket.picture(socket.sent[1], { encoding: "jpeg" });            // decode 1 waits too
+  await waitFor(() => expect(decodes.length).toBe(2));
+  decodes[1]();                                                    // the newer one finishes first
+  await waitFor(() => expect(drawn.length).toBe(1));
+  decodes[0]();
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  expect(drawn.length).toBe(1);                                    // picture 0 never covered picture 1
+  expect(createImageBitmap.mock.calls[1][0]).toBe(drawn[0]);
+  await waitFor(() => expect(page.container.textContent).toContain("Frame 2 of 5"));
+  expect(page.container.querySelector(".scene-lab-readout").textContent).toContain("input to picture");
+});
+
 test("the free camera starts from the recorded camera, keeps its place across steps, and R returns", async () => {
   const { page, socket, root } = await openScene();
   await socket.picture(socket.sent[0]);

@@ -12,6 +12,7 @@ import importlib.util
 import json
 import struct
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -248,6 +249,76 @@ def test_the_free_camera_redraws_from_the_evaluator_and_says_when_it_cannot(lab,
         assert len(evaluators.made) == 1                                # one evaluator, built on first use
 
 
+def _free_session_pictures(lab, keeps_rdram: bool, requests: list) -> list[dict]:
+    """Every reply to `requests` ((frame, camera or None, encoding)) from a session whose fake host
+    keeps an RDRAM and names it in the picture, its evaluator's views whole 4 MiB images."""
+    app = FastAPI()
+    host = scene_session.command_host(fake_viewer_host.command(ram=True), keeps_rdram=keeps_rdram)
+    scene_lab_api.mount_scene_lab(app, lab["config"], session_options={
+        "host_factory": host, "evaluator_factory": Evaluators(ram_bytes=synthetic.RDRAM)}, watch_seconds=0.05)
+    replies = []
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            for ident, (frame, camera, encoding) in enumerate(requests):
+                socket.send_json({"id": ident, "session": opened["session"], "frame": frame, "camera": camera,
+                                  "encoding": encoding})
+                replies.append(_reply(socket))
+    return replies
+
+
+def test_a_free_picture_sends_only_what_changed_and_leaves_the_host_as_a_full_send_would(lab):
+    one = {"focus": [1.0, 2.0, 3.0], "position": [100.0, 200.0, 300.0]}
+    two = {"focus": [1.0, 2.0, 3.0], "position": [120.0, 200.0, 300.0]}
+    requests = [(2, one, "raw"), (2, two, "raw"), (3, two, "raw"), (0, None, "raw"), (3, one, "raw"),
+                (0, one, "raw"), (4, None, "raw"), (4, two, "raw"), (4, two, "raw")]
+    whole = _free_session_pictures(lab, False, requests)
+    changed = _free_session_pictures(lab, True, requests)
+    assert [reply["camera"] for reply in changed] == ["free"] * 3 + ["recorded"] + ["free"] * 2 + [
+        "recorded"] + ["free"] * 2
+    assert [reply["payload"] for reply in changed] == [reply["payload"] for reply in whole]
+    assert len({reply["payload"] for reply in changed}) == 8                  # the last repeats the one before
+    sent = [reply["timings"].get("send_bytes") for reply in changed]
+    assert all(reply["timings"].get("send_bytes") in (None, synthetic.RDRAM) for reply in whole)
+    assert sent[0] == synthetic.RDRAM                                            # the first sends everything
+    assert all(0 < sent[at] < 4096 for at in (1, 2, 5)), sent                   # a new camera, the next frame
+    assert all(0 < sent[at] < synthetic.RDRAM for at in (4, 7)), sent            # also undoes a recorded closure
+    assert sent[3] is None and sent[6] is None and sent[8] == 0, sent           # the same view again: nothing
+
+
+def test_free_pictures_moving_frame_by_frame_resolve_the_next_one_ahead(lab):
+    evaluators = Evaluators()
+    app, server = _app(lab, evaluators=evaluators)
+    camera = {"focus": [1.0, 2.0, 3.0], "position": [100.0, 200.0, 300.0]}
+
+    def free(socket, session, frame, expected):
+        socket.send_json({"id": frame, "session": session, "frame": frame, "camera": camera, "encoding": "raw"})
+        assert _reply(socket)["camera"] == "free"
+        deadline = time.monotonic() + 10
+        while len(evaluators.made[0].prepared) < expected and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return [index for index, _thread in evaluators.made[0].prepared]
+
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            session = opened["session"]
+            first = [SHOWN[2], SHOWN[3], SHOWN[4]]
+            assert free(socket, session, 1, 3) == first                         # the first: the next three
+            assert free(socket, session, 2, 5) == first + [SHOWN[3], SHOWN[4]]  # stepping on (cached: no cost)
+            assert free(socket, session, 2, 5) == first + [SHOWN[3], SHOWN[4]]  # a drag predicts nothing new
+            assert free(socket, session, 4, 5) == first + [SHOWN[3], SHOWN[4]]  # the last frame: nothing after
+            back = first + [SHOWN[3], SHOWN[4], SHOWN[2], SHOWN[1], SHOWN[0]]
+            assert free(socket, session, 3, 8) == back                          # stepping back: the ones before
+            assert free(socket, session, 1, 9) == back + [SHOWN[0]]             # back two: still backward
+            assert free(socket, session, 4, 9) == back + [SHOWN[0]]             # a seek forward to the end
+        threads = {thread for _index, thread in evaluators.made[0].prepared}
+        assert len(threads) == 1 and threads.pop().startswith("scene-lab-ahead")
+        client.post("/api/scene-lab/close")
+        assert server.session is None
+    assert not [thread for thread in threading.enumerate() if thread.name.startswith("scene-lab-ahead")]
+
+
 def test_quick_steps_replace_the_request_waiting_behind_a_slow_render(lab):
     app, server = _app(lab, delay_ms=300)
     with TestClient(app) as client:
@@ -261,6 +332,74 @@ def test_quick_steps_replace_the_request_waiting_behind_a_slow_render(lab):
         superseded = sorted(reply["id"] for reply in replies if reply.get("superseded"))
         assert drawn == [0, 4] and superseded == [1, 2, 3]
         assert server.session.served == 2                               # the host drew nothing stale
+
+
+class _FrameFlags:
+    """A client's negotiated permessage-deflate, wrapped to note each data message's RSV1 bit
+    (set: the server compressed it)."""
+
+    def __init__(self, extension):
+        self.extension, self.name, self.compressed = extension, extension.name, []
+
+    def decode(self, frame, *, max_size=None):
+        if frame.opcode.name in ("TEXT", "BINARY"):
+            self.compressed.append(frame.rsv1)
+        return self.extension.decode(frame, max_size=max_size)
+
+    def encode(self, frame):
+        return self.extension.encode(frame)
+
+
+def _compressed_replies(lab) -> list[bool]:
+    """Over a real uvicorn server (permessage-deflate on, as the app runs it, behind the Trainer's
+    local access middleware) and a client that offers it, as browsers do: whether each reply to
+    a pose, a picture and a bad request came compressed."""
+    import socket as sockets
+
+    import httpx
+    import uvicorn
+    from websockets.sync.client import connect
+
+    from sm64_events.server.local_access import mount_local_access
+    app, _server = _app(lab)
+    listener = sockets.socket(sockets.AF_INET, sockets.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    origin = f"http://127.0.0.1:{port}"
+    mount_local_access(app, port=port, protected=True)
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="on", ws="websockets"))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 30
+        while not server.started and time.monotonic() < deadline:
+            time.sleep(0.02)
+        http = httpx.Client(base_url=origin, timeout=60)
+        token = {"X-SM64-Request-Token": http.get("/api/local-access").json()["request_token"]}
+        opened = http.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}, headers=token).json()
+        with connect(f"ws://127.0.0.1:{port}/api/scene-lab/ws", origin=origin, compression="deflate") as socket:
+            extensions = socket.protocol.extensions
+            assert [extension.name for extension in extensions] == ["permessage-deflate"]
+            extensions[0] = flags = _FrameFlags(extensions[0])
+            socket.send(json.dumps({"id": 1, "session": opened["session"], "kind": "pose", "frame": 0}))
+            assert json.loads(socket.recv(timeout=30))["kind"] == "pose"
+            socket.send(json.dumps({"id": 2, "session": opened["session"], "frame": 0, "camera": None,
+                                    "encoding": "jpeg"}))
+            assert socket.recv(timeout=30)[4:8] != b""                         # a picture, decoded whole
+            socket.send("not json")
+            assert "error" in json.loads(socket.recv(timeout=30))
+        assert http.post("/api/scene-lab/close", headers=token).json()["host_exit"] == 0
+        http.close()
+        return flags.compressed
+    finally:
+        server.should_exit = True
+        thread.join(timeout=30)
+
+
+def test_the_server_sends_uncompressed_where_the_page_offered_deflate(lab, monkeypatch):
+    assert _compressed_replies(lab) == [False, False, False]
+    monkeypatch.setattr(scene_lab_api, "_send_uncompressed", lambda websocket: False)
+    assert _compressed_replies(lab) == [True, True, True]                     # what websockets does by itself
 
 
 def test_the_event_loop_answers_while_the_host_draws(lab):

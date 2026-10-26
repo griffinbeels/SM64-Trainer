@@ -18,7 +18,9 @@ Reported (milliseconds unless named): open (POST open) and open to first picture
 camera step forward/back and random seek; free camera start (the evaluator's first build and
 pose), first free picture, free step and free random seek (cold state seeks); camera input to
 picture during a 60 Hz drag (received, and received plus JPEG decode); playback pictures per
-second at 30 fps, recorded and free; exact-pixel ("raw") pictures; server event-loop lateness
+second at 30 fps, recorded and free, each started from the frame on screen as the page plays (the
+first picture apart, and how many after it took longer than a frame); exact-pixel ("raw")
+pictures; server event-loop lateness
 while a scene is open; the host's memory and CPU; and the host's exit after Close. The page's
 own decode and draw are not in these numbers: read them from the viewer's readout. Results
 are this desktop under its current load, not a universal minimum; the machine record is in
@@ -229,18 +231,22 @@ def drag(page: Page, frame: int, pose: dict, moves: int) -> dict:
 
 def playback(page: Page, start: int, count: int, seconds: float, camera=None) -> dict:
     """30 fps playback as the page runs it: the frame due now is asked for whenever nothing is in
-    flight; frames whose time passed while one was drawn are skipped."""
+    flight; frames whose time passed while one was drawn are skipped. The first picture is a seek
+    when `start` is not the frame last shown, so it is reported apart, with how many of the rest
+    took longer than one frame."""
     shown, started = 0, time.perf_counter()
-    last = None
+    last, times = None, []
     while time.perf_counter() - started < seconds:
         due = (start + int((time.perf_counter() - started) * 30)) % count     # wraps at the end
         if due == last:
             time.sleep(0.001)
             continue
-        page.picture(due, camera)
+        times.append(page.picture(due, camera)[1])
         shown, last = shown + 1, due
     elapsed = time.perf_counter() - started
-    return {"seconds": round(elapsed, 2), "pictures": shown, "pictures_per_second": round(shown / elapsed, 1)}
+    return {"seconds": round(elapsed, 2), "pictures": shown, "pictures_per_second": round(shown / elapsed, 1),
+            "first_picture_ms": round(times[0], 1) if times else None, "picture_ms": spread(times[1:]),
+            "late_pictures": sum(ms > FRAME_BUDGET_MS for ms in times[1:])}
 
 
 def host_resources(pid: int) -> dict:
@@ -301,8 +307,9 @@ def free_camera(page: Page, count: int, steps: int, args, rng: random.Random) ->
     report.update(step_ms=spread([ms for _header, ms in stepped]), seek_ms=spread([ms for _header, ms in sought]),
                   recorded_fallbacks=sum(header["camera"] != "free" for header, _ms in stepped + sought),
                   evaluate_ms=spread([t["evaluate_ms"] for t in timings if "evaluate_ms" in t]),
-                  host_ms=spread([t["host_ms"] for t in timings]),
-                  playback=playback(page, anchor, count, args.play_seconds, camera))
+                  host_ms=spread([t["host_ms"] for t in timings]))
+    page.picture(anchor, camera)          # the page plays from the frame on screen; the seeks measured the rest
+    report["playback"] = playback(page, anchor, count, args.play_seconds, camera)
     return report
 
 

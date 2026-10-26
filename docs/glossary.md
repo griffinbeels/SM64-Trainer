@@ -1221,11 +1221,14 @@ checkpoint and at most 63 tasks after it. The [[practice ROM]]'s own code
 that the drawing executes travels as a reference to the ROM bytes it came from,
 never as a memory image. On a 90-second recording the state adds about
 5.4 MiB a minute to the closures' 2.4, and every checked task regenerates
-exactly as it does from the tap's own files (2026-10-25). The reader refuses
-a version or layer it does not know.
+exactly as it does from the tap's own files (2026-10-25). A scene-resolution
+layer, added after writing, records what the [[scene evaluator]] found each
+task's drawing used, as addresses only (3.5 KB for that recording). The
+reader refuses a version or layer it does not know.
 
 - **Lives** -- `tools/scene_lab/package.py` (write, read, verify); the
-  [[scene evaluator]] reads it (`tools/scene_lab/evaluator.py`)
+  [[scene evaluator]] reads it and writes the scene-resolution layer
+  (`tools/scene_lab/evaluator.py`, its resolve command)
 - **Not** -- what the [[scene tap]] itself writes, which holds raw memory
   images and pictures and stays private on the machine that recorded it
 
@@ -1235,12 +1238,15 @@ An M4 experiment that redraws a recorded task from a free camera by executing
 SM64's own scene-graph code over a [[scene package]] and the viewer's ROM.
 For each task it rebuilds the [[scene state]] and works out what the original
 drawing used: values the drawing stepped and matrices it let go of go back
-until its regenerated list matches the recorded one byte for byte. Then it
-redraws the task from any camera position. It executes code only from the
-viewer's ROM and checks every block against that ROM first. On this desktop a
-new camera on the same task costs about 4 ms, the next task during playback
-about 22 ms (52 ms while walkers need their matrices put back), and a jump to
-any task about 60 ms (2026-10-25).
+until its regenerated list matches the recorded one byte for byte. When the
+package records that answer, it takes it after one regeneration confirms the
+match instead of searching again. Then it redraws the task from any camera
+position. It executes code only from the viewer's ROM and checks every block
+against that ROM first. On this desktop a new camera on the same task costs
+about 4 ms, the next task about 22 ms with the recorded answers (52 ms
+searching, while walkers need their matrices put back), and a jump to any task
+about 60 ms (2026-10-25). A viewer works out the next tasks on a second thread
+while it draws this one.
 
 - **Lives** -- `tools/scene_lab/evaluator.py` (what a viewer calls); the
   game-code sandbox and its proofs (`tools/scene_lab/e2_georender.py`, with
@@ -1260,7 +1266,8 @@ config (the ROM, the package folder, Project64's Plugin folder, the symbol
 map). Nothing starts until someone opens a package; the hidden [[renderer]]
 helper and the evaluator start then and stop on Close, after a while unused,
 when no page shows the scene, and when the server stops. The page asks for one
-picture at a time, and a newer step or camera move replaces the waiting one.
+picture at a time, asks for the next as soon as one arrives, and a newer step or
+camera move replaces the waiting one.
 
 - **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
   mounted by `src/sm64_events/main.py`); one open scene
