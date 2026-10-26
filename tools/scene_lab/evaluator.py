@@ -246,6 +246,11 @@ class Evaluator:
                 "roll": struct.unpack_from(">h", ram, e2.phys(lakitu + e2.LAKITU_ROLL))[0], "fov": fov,
                 "mario": vector(e2.US["gMarioStates"] + e2.MARIO_POS)}
 
+    def mario(self, index: int) -> list[float]:
+        """Mario's position at frame `index` (pose's "mario", without pose's camera work)."""
+        return [float(value) for value in struct.unpack_from(
+            ">3f", self.scene(index).ram, self.e2.phys(self.e2.US["gMarioStates"] + self.e2.MARIO_POS))]
+
     def display_list(self, index: int, camera: tuple) -> View | None:
         """Frame `index` from camera (focus xyz, position xyz[, roll, fov]: e2_georender.run_geo),
         or None when it has no scene. One caller thread at a time: views share one sandbox

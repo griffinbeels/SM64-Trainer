@@ -261,6 +261,7 @@ class SceneSession:
         self._ahead: ThreadPoolExecutor | None = None    # the look-ahead thread, with the evaluator
         self._ahead_generation = 0                       # bumped by every free-camera request
         self._last_free: int | None = None               # the frame of the last free-camera picture
+        self._last_view = self._last_walk = None         # the newest view, and its list walked (_view)
         self.served = 0
 
     @classmethod
@@ -360,13 +361,29 @@ class SceneSession:
                 return
             self._evaluator.prepare(index)
 
+    def _view(self, evaluator, index: int, camera: tuple):
+        """The evaluator's view of `index` from `camera`, kept for the one most recent pair: a pick
+        of the picture on screen (Set focus, a double-click) asks for the view its picture was
+        just drawn from, so it neither re-runs the game's code nor walks the list twice."""
+        last = self._last_view
+        if last is not None and last[0] == index and last[1] == camera:
+            return last[2]
+        view = evaluator.display_list(index, camera)
+        self._last_view, self._last_walk = (index, camera, view), None
+        return view
+
+    def _walk(self, view):
+        if self._last_walk is None or self._last_walk[0] is not view:
+            self._last_walk = (view, list_pick.walk(view.ram, view.data_ptr))
+        return self._last_walk[1]
+
     def _free_frame(self, index: int, camera: tuple, timings: dict) -> tuple[viewer.Frame | None, str | None]:
         evaluator, reason = self._evaluator_or_reason()
         if evaluator is None:
             return None, reason
         started = time.perf_counter()
         try:
-            view = evaluator.display_list(index, camera)
+            view = self._view(evaluator, index, camera)
         except Exception as error:  # noqa: BLE001 - the page shows it as the reason
             return None, f"The game's drawing code could not redraw this frame ({error}), so it shows the recorded camera."
         timings["evaluate_ms"] = _ms(started)
@@ -428,31 +445,35 @@ class SceneSession:
     def pick(self, frame: int, camera, u, v) -> dict:
         """Where the picture of `frame` from `camera` (None: the recorded camera) drew the pixel at
         (u, v), its place in the picture from 0 to 1 across and down: {"point": [x, y, z] in that
-        camera's space (pick.py), "distance", "reason"}, or point None and the reason. The
-        recorded camera walks the captured list; a free camera walks the list its view makes."""
+        camera's space (pick.py), "distance", "mario", "reason"}, or point None and the reason.
+        "mario" is the frame's Mario (a double-click's flight ends looking at him), so one round
+        trip carries all a fly-to needs. The recorded camera walks the captured list; a free
+        camera walks the list its view makes, the one its picture was just drawn from."""
         index = self._index(frame)
         if not all(_number(value) and 0 <= value <= 1 for value in (u, v)):
             raise ValueError("a pick names a place in the picture: u and v from 0 to 1")
-        if camera is None:
-            capture = self.package.frame(index)
-            ram, list_at = list_pick.ram_from_runs(capture.runs, capture.run_bytes), capture.task[12]
-        else:
-            free = world_camera(camera)
-            evaluator, reason = self._evaluator_or_reason()
-            if evaluator is None:
-                return {"point": None, "distance": None, "reason": reason}
-            self._ahead_generation += 1
-            view = evaluator.display_list(index, free)
-            if view is None or view.ram is None:          # the page showed the recorded picture
-                return {"point": None, "distance": None, "reason": NO_SCENE}
-            ram, list_at = view.ram, view.data_ptr
+        evaluator, reason = (None, None) if camera is None and self._evaluator is None else self._evaluator_or_reason()
+        missed = {"point": None, "distance": None, "mario": None}
         try:
-            point = list_pick.nearest(list_pick.walk(ram, list_at), u, v)
+            if camera is None:
+                capture = self.package.frame(index)
+                walked = list_pick.walk(list_pick.ram_from_runs(capture.runs, capture.run_bytes), capture.task[12])
+            else:
+                free = world_camera(camera)
+                if evaluator is None:
+                    return {**missed, "reason": reason}
+                self._ahead_generation += 1
+                view = self._view(evaluator, index, free)
+                if view is None or view.ram is None:          # the page showed the recorded picture
+                    return {**missed, "reason": NO_SCENE}
+                walked = self._walk(view)
         except ValueError as error:
-            return {"point": None, "distance": None, "reason": f"This picture's list could not be read: {error}."}
+            return {**missed, "reason": f"This picture's list could not be read: {error}."}
+        point = list_pick.nearest(walked, u, v)
         if point is None:
-            return {"point": None, "distance": None, "reason": NOTHING_DRAWN}
-        return {"point": point, "distance": math.hypot(*point), "reason": None}
+            return {**missed, "reason": NOTHING_DRAWN}
+        mario = evaluator.mario(index) if evaluator is not None and hasattr(evaluator, "mario") else None
+        return {"point": point, "distance": math.hypot(*point), "mario": mario, "reason": None}
 
     def pose(self, frame: int) -> dict:
         """The frame's recorded camera and Mario's position, or None and the reason."""
@@ -472,5 +493,5 @@ class SceneSession:
         if ahead is not None:
             self._ahead_generation += 1                  # a running job stops after its frame
             ahead.shutdown(wait=True, cancel_futures=True)
-        self._evaluator = None
+        self._evaluator = self._last_view = self._last_walk = None
         return self.host.close()

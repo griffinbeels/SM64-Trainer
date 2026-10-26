@@ -479,17 +479,18 @@ test("double-click flies to the clicked surface, stops short of it, and ends loo
   const pick = socket.last();
   await socket.picture(socket.pictures().at(-1));                                           // the entry's own picture
   const point = [200, 150, -1100], hit = worldPoint(used, point);
-  socket.text({ id: pick.id, kind: "pick", point, distance: Math.hypot(...point), reason: null });
-  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose" }));                // where Mario is
-  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
-  const end = cameraOf(flyToTarget(used, hit, POSE.mario, REFERENCE));
+  const asked = socket.sent.length;
+  socket.text({ id: pick.id, kind: "pick", point, distance: Math.hypot(...point), mario: POSE.mario, reason: null });
   const t0 = performance.now();
-  const seen = [];
-  for (const at of [0, 0.1, 0.5, 1.2]) {                                                     // start, early, middle, past the end
-    await glideTick(t0 + at * REFERENCE.flyToMs);
-    await waitFor(() => expect(socket.last().kind).toBeUndefined());
-    seen.push(socket.last().camera);
+  await waitFor(() => expect(socket.sent.length).toBe(asked + 1));                         // the first picture goes out at once,
+  expect(socket.sent.slice(asked).every((message) => !message.kind)).toBe(true);            // with no second question
+  const end = cameraOf(flyToTarget(used, hit, POSE.mario, REFERENCE));
+  const seen = [socket.last().camera];
+  for (const at of [0.1, 0.5, 1.2]) {                                                        // early, middle, past the end
     await socket.picture(socket.last());
+    await glideTick(t0 + at * REFERENCE.flyToMs);
+    await waitFor(() => expect(socket.last().camera).not.toEqual(seen.at(-1)));
+    seen.push(socket.last().camera);
   }
   close(seen[0].position, cameraOf(used).position, 0);                                     // it starts where it was
   const along = (camera) => Math.hypot(...[0, 1, 2].map((i) => camera.position[i] - seen[0].position[i]))
@@ -505,6 +506,17 @@ test("double-click flies to the clicked surface, stops short of it, and ends loo
   expect(easeInOut(1)).toBe(1);
   expect(easeInOut(0.01)).toBeLessThan(0.001);                                               // leaves at rest
   expect(1 - easeInOut(0.99)).toBeLessThan(0.001);                                           // arrives at rest
+});
+
+test("without Mario in the pick's answer the flight asks where he is first", async () => {
+  const { page, socket, canvas } = await openScene();
+  await enterFree(page, socket);
+  await doubleClick(canvas, 320, 240);
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pick" }));
+  socket.text({ id: socket.last().id, kind: "pick", point: [0, 0, -1000], distance: 1000, mario: null, reason: null });
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  await waitFor(() => expect(socket.last().kind).toBeUndefined());
 });
 
 test("double-clicking the sky says there is nothing there and does not move", async () => {
@@ -523,10 +535,11 @@ test("any input stops a double-click's flight where it is", async () => {
   const first = await enterFree(page, socket);
   await doubleClick(canvas, 320, 240);
   await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pick" }));
-  socket.text({ id: socket.last().id, kind: "pick", point: [0, 0, -1000], distance: 1000, reason: null });
-  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
-  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  socket.text({ id: socket.last().id, kind: "pick", point: [0, 0, -1000], distance: 1000, mario: POSE.mario,
+    reason: null });
   const t0 = performance.now();
+  await waitFor(() => expect(socket.last().kind).toBeUndefined());
+  await socket.picture(socket.last());
   await glideTick(t0 + REFERENCE.flyToMs * 0.4);
   await waitFor(() => expect(socket.last().camera?.position).not.toEqual(first.position));
   const midway = socket.last().camera;

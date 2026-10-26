@@ -179,6 +179,9 @@ class FakeEvaluator:
     def pose(self, index: int) -> dict:
         return {key: list(value) if isinstance(value, list) else value for key, value in self.POSE.items()}
 
+    def mario(self, index: int) -> list[float]:
+        return list(self.POSE["mario"])
+
     def prepare(self, index: int) -> None:
         self.prepared.append((index, threading.current_thread().name))
 

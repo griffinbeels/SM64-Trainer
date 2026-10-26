@@ -147,8 +147,10 @@ export function flyToTarget(orbit, hit, mario, tuning = SCENE_CAMERA_DEFAULTS) {
   return orbitFromPose(add(mario, [0, tuning.marioHeight, 0]), position, { roll: 0, fov: orbit.fov });
 }
 
-// Starts and ends at rest: no jolt leaving, no bump arriving.
-export const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+// Starts and ends at rest (no jolt leaving, no bump arriving): a sine ease,
+// under way sooner than a cubic one, so the flight visibly answers the
+// double-click within its first frames.
+export const easeInOut = (t) => (1 - Math.cos(Math.PI * t)) / 2;
 
 // The camera `t` (0..1, already eased) of the way from one orbit to another:
 // its place and its focus point travel in straight lines, the tilt levels.

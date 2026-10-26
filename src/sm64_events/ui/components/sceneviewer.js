@@ -59,6 +59,7 @@ function movementOf(keys) {
   return move;
 }
 const WHEEL_LINE = 40, WHEEL_PAGE = 800, WHEEL_NOTCH = 100;   // deltaMode 1 and 2 in pixels; Chromium's notch
+const GLIDE_LEAD_MS = 40;     // a double-click's flight is at most this far along when its first picture goes out
 const wheelPixels = (event) => event.deltaY * (event.deltaMode === 1 ? WHEEL_LINE : event.deltaMode === 2 ? WHEEL_PAGE : 1);
 
 function percentile(values, p) {
@@ -332,20 +333,22 @@ export class SceneLink {
     if (!this.free) return null;
     const used = this.orbit;
     const answer = await this.ask("pick", { frame: this.frame, camera: cameraOf(used), u, v });
-    return { world: answer.point ? worldPoint(used, answer.point) : null, reason: answer.reason };
+    return { world: answer.point ? worldPoint(used, answer.point) : null, mario: answer.mario || null,
+      reason: answer.reason };
   }
 
-  // ---- double-click: fly to the surface under the pointer, then look at Mario
+  // ---- double-click: fly to the surface under the pointer, then look at Mario.
+  // One round trip: the pick's answer carries Mario's place in the frame too.
   async flyTo(u, v, time) {
     this.interrupt();
     const serial = this.serial;
     const hit = await this.pickWorld(u, v);
     if (!hit || serial !== this.serial) return;
     if (!hit.world) return this.sayBriefly("Nothing there to fly to.");
-    const answer = await this.pose(this.frame);
+    const mario = hit.mario || (await this.pose(this.frame)).pose?.mario;
     if (serial !== this.serial) return;
     const tuning = sceneCameraTuning();
-    const end = answer.pose && flyToTarget(this.orbit, hit.world, answer.pose.mario, tuning);
+    const end = mario && flyToTarget(this.orbit, hit.world, mario, tuning);
     if (!end) return this.sayBriefly("Nothing there to fly to.");
     this.notice = null;
     this.glideTo(end, tuning, time);
@@ -353,21 +356,25 @@ export class SceneLink {
 
   // An eased flight from the camera now to `end` (scenecamera.glideAt), one
   // picture asked for per animation frame; any input (interrupt) leaves it
-  // where it is.
+  // where it is. Its clock starts at the click, but never more than
+  // GLIDE_LEAD_MS back, so a slow answer cannot skip the gentle start, and its
+  // first step runs at once: the first picture that moves goes out the moment
+  // the destination is known.
   glideTo(end, tuning, time = performance.now()) {
-    const from = this.orbit, glide = { started: performance.now() };
+    const now = performance.now(), from = this.orbit;
+    const glide = { started: clamp(time, now - GLIDE_LEAD_MS, now) };
     this.glide = glide;
     let input = time;
-    const step = (now) => {
+    const step = (at) => {
       if (this.glide !== glide) return;
-      const at = glideAt(from, end, now - glide.started, tuning);
-      this.orbit = at.orbit;
-      this.want("input", Math.min(input, now));
+      const place = glideAt(from, end, at - glide.started, tuning);
+      this.orbit = place.orbit;
+      this.want("input", Math.min(input, at));
       input = Infinity;
-      if (at.done) this.glide = null; else this.animate(step);
+      if (place.done) this.glide = null; else this.animate(step);
       this.changed();
     };
-    this.animate(step);
+    step(now);
   }
 
   // ---- flight: only while the right button is held on the picture

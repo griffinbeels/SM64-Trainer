@@ -286,13 +286,21 @@ def test_set_focus_answers_where_the_list_drew_the_clicked_point(lab):
             assert reply["kind"] == "pick" and reply["reason"] is None
             assert reply["point"] == pytest.approx([0, 0, -1000], abs=0.01)
             assert reply["distance"] == pytest.approx(1000, abs=0.01)
+            assert reply["mario"] == fake_viewer_host.FakeEvaluator.POSE["mario"]      # a fly-to's one round trip
             socket.send_json({"id": 2, "session": session, "kind": "pick", "frame": 2, "camera": camera,
                               "u": 0.75, "v": 0.25})
             right, up, _ = _reply(socket)["point"]
             assert right > 0 and up > 0                                    # up and to the right of the middle
+            socket.send_json({"id": 20, "session": session, "frame": 3, "camera": camera, "encoding": "jpeg"})
+            assert _reply(socket)["camera"] == "free"
+            runs = len(evaluators.made[0].calls)
+            socket.send_json({"id": 21, "session": session, "kind": "pick", "frame": 3, "camera": camera,
+                              "u": 0.5, "v": 0.5})
+            assert _reply(socket)["point"] == pytest.approx([0, 0, -1000], abs=0.01)
+            assert len(evaluators.made[0].calls) == runs                   # the picture's own view, not a re-run
             socket.send_json({"id": 3, "session": session, "kind": "pick", "frame": 1, "camera": camera,
                               "u": 0.5, "v": 0.5})
-            assert _reply(socket) == {"id": 3, "kind": "pick", "point": None, "distance": None,
+            assert _reply(socket) == {"id": 3, "kind": "pick", "point": None, "distance": None, "mario": None,
                                       "reason": scene_session.NO_SCENE}
             socket.send_json({"id": 4, "session": session, "kind": "pick", "frame": 0, "camera": None,
                               "u": 0.5, "v": 0.5})
