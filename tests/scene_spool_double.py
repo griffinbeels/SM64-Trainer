@@ -135,8 +135,11 @@ def _records_from(path: Path, starts: list[int], limit: int | None = None):
 
 
 class FollowSource(package.Source):
-    """package.Source whose captures stop once the index stop_at named was yielded."""
+    """package.Source whose captures stop once the index stop_at named was yielded; as
+    live_spool's, a capture's times count from origin_qpc (the first yielded task's QPC)."""
     stop: int | None = None
+    origin_qpc: int | None = None
+    ended: str | None = None
 
     def stop_at(self, last: int) -> None:
         self.stop = last
@@ -152,6 +155,7 @@ class RecordedSpool:
         self.started_at = time.time() if started_at is None else started_at
         self.recording, self.reason = recording, reason
         self.holes = [tuple(hole) for hole in holes or ()]
+        self.frequency = int(tap.session_header(self.session).get("qpc_frequency") or 1)
         self.lock = threading.Lock()
 
     def edge(self) -> int:
@@ -218,7 +222,8 @@ class RecordedSpool:
                     time.sleep(0.005)                          # the live edge: wait for the flush
                 if (source.stop is not None and index > source.stop) or self._lost(index):
                     return
-                origin = task.qpc if origin is None else origin
+                if origin is None:
+                    origin = source.origin_qpc = task.qpc
                 if task.fields["refusals"]:
                     source.refused += 1
                     continue

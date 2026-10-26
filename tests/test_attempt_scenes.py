@@ -370,3 +370,56 @@ def test_a_growing_scene_opens_at_once_and_its_page_gets_each_new_stretch(lab, r
             assert last["frames"][-1]["game_frame"] == 5299
         status = client.get("/api/scene-lab/status").json()["session"]
         assert status["growing"] is False and len(status["frames"]) == 280
+
+
+class StubLive:
+    """live_audio.LiveAudio as the lab uses it: a ring that writes a span, or says why not."""
+    frequency = 10_000_000
+
+    def __init__(self, written: dict):
+        self.written, self.spans = written, []
+
+    def write_span(self, first, last, out):
+        self.spans.append((first, last))
+        if self.written["written"]:
+            Path(out).write_bytes(b"capture")
+        return self.written
+
+    def health(self):
+        return {"recording": True, "reason": None, "kept_seconds": 12.0}
+
+
+def test_a_finished_scene_takes_the_recorders_sound_after_ready_and_says_why_when_it_cannot(lab, recording):
+    silent = "The Trainer was not recording Project64's sound during this attempt."
+    for written, expect in (({"written": False, "reason": silent}, silent), ({"written": True, "reason": None}, None)):
+        live = StubLive(written)
+        app, server, cutters = _app(lab, live_audio=live)
+        tracker = _tracker()
+        server.follow_attempts(tracker)
+        with TestClient(app) as client:
+            assert client.get("/api/scene-lab").json()["live"]["sound"] == {
+                "recording": True, "reason": None, "kept_seconds": 12.0}
+            tracker.on_replay_history([_attempt(60, 10)], None)
+            path = cutters[0].folder / "take-20-1.sm64scene"
+            path.write_bytes(recording["scene"])
+            cutters[0].on_event({"id": 60, "state": "ready", "growing": False, "seconds": 9.3, "path": str(path),
+                                 "presents_qpc": [100, 900], "qpc_frequency": live.frequency})
+            assert _scenes(client, 60) == {"60": {"state": "ready", "seconds": 9.3, "growing": False}}
+            assert server.scenes.sound_reason(60).startswith("This attempt's sound is still being added")
+            deadline = time.monotonic() + 5
+            while not live.spans and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert live.spans == [(100, 900)]
+            if written["written"]:
+                deadline = time.monotonic() + 5
+                while not any(note.get("op") == "sound" for note in cutters[0].notes) and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                note = next(note for note in cutters[0].notes if note.get("op") == "sound")
+                assert note["id"] == 60 and Path(note["capture"]).is_file()
+                cutters[0].on_event({"id": 60, "sound": None})
+                assert not Path(note["capture"]).exists()
+            assert server.scenes.sound_reason(60) == expect
+            if expect:
+                opened = client.post("/api/scene-lab/open", json={"attempt": 60}).json()
+                assert opened["audio"] == {"available": False, "reason": silent}
+                client.post("/api/scene-lab/close")

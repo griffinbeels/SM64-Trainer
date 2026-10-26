@@ -1405,19 +1405,25 @@ started and ends on the last picture of the fade-out after its end: the [[frame]
 before the next level or area appears, the [[frame]] before his [[reset]], or 10 s
 after the end when nothing comes. While the lab is on, the [[scene tap]] records
 all the time, and a hidden child process writes each [[attempt]]'s package as he
-plays it. When the [[attempt]] completes, the child writes only its last [[frame]]s
-and the index, so the scene is ready a fraction of a second after the fade-out's
-last picture reaches the recording (0.11 s after a [[star]] grab's fade, 0.26 s
-after a [[reset]], on his recorded BoB minute, 2026-10-26). Until then the scene
-is "cutting"; an [[attempt]] the recording does not fully hold has none, and says
-why in one sentence. The server keeps the scenes of his last 20 [[attempt]]s while
-it is up.
+plays it, publishing what it has every quarter second. So the scene opens as
+soon as the [[attempt]] completes, before the tap has even recorded its fade-out:
+it grows on screen as the recording reaches it (about 0.3 s behind the game), and a
+Play that catches up waits on the newest picture. Its sound is the game sound the
+[[recorder]] heard, from the first picture on. Only an [[attempt]] no package was
+following when it began (one started before the lab) is "cutting" for a few
+seconds; one the recording does not fully hold has no scene, and says why in one
+sentence. The server keeps the scenes of his last 20 [[attempt]]s while it is up.
 
 - **Lives** -- the span (`tools/scene_lab/attempt_span.py`); the child that
   writes them (`tools/scene_lab/attempt_cutter.py`); which attempts have one,
-  retention and the folder (`tools/scene_lab/attempt_scenes.py`); the routes
-  and the wiring (`src/sm64_events/server/scene_lab_api.py`,
-  `src/sm64_events/main.py`)
+  retention, the folder and the finished scene's sound
+  (`tools/scene_lab/attempt_scenes.py`); a scene read while it grows
+  (`tools/scene_lab/scene_session.py` Growth, `tools/scene_lab/package.py`
+  grown_package) and its sound while it grows (`tools/scene_lab/scene_audio.py`
+  LiveSound, from `tools/scene_lab/live_audio.py`); the routes and the wiring
+  (`src/sm64_events/server/scene_lab_api.py`, `src/sm64_events/main.py`); the
+  page's growth (`src/sm64_events/ui/components/sceneviewer.js`,
+  `src/sm64_events/ui/components/sceneaudio.js`)
 - **Not** -- the replay's video of an [[attempt]], which the [[recorder]] keeps;
   this scene redraws the game's graphics, and its camera can move
 

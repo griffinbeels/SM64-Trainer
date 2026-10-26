@@ -446,7 +446,9 @@ export class SceneLink {
     if (!scene || message.session !== scene.session) return;
     scene.frames.splice(message.from, Infinity, ...message.frames);
     scene.growing = !!message.growing;
+    if (message.audio) scene.audio = message.audio;
     this.frame = clamp(this.frame, 0, Math.max(0, scene.frames.length - 1));
+    this.sound.grew(scene);
     if (this.playback) this.playback.grew(scene);
     this.changed();
   }
@@ -738,6 +740,7 @@ export class SceneLink {
         if (play.heldAt != null && play.times.length > play.asked + 1) {
           play.start += performance.now() - play.heldAt;
           play.heldAt = null;
+          if (this.playback === play) this.sound.play(from, play.start);   // the sound follows the wait
         }
       } };
     Object.assign(this, { playback: play, playing: true, frame: from });

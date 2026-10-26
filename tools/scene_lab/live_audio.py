@@ -199,12 +199,8 @@ class LiveAudio:
         held sound from before the span's start and past its end ("covers_start", "covers_end")."""
         if type(qpc_from) is not int or type(qpc_to) is not int or qpc_to < qpc_from:
             return {"written": False, "reason": "This attempt has no span of pictures to find sound for."}
-        margin = round(margin_s * self.frequency)
         records = self._fanout.snapshot()
-        arrivals = [record[3] for record in records]
-        start = bisect.bisect_left(arrivals, qpc_from - margin)
-        stop = bisect.bisect_right(arrivals, qpc_to + margin + round(LATE_S * self.frequency))
-        chosen = [(cap.chunk_of(record), record[5]) for record in records[start:stop]]
+        chosen = self._select(records, qpc_from, qpc_to, margin_s)
         if not any(data is not None for _chunk, data in chosen):
             return {"written": False, "reason": self._why_silent(qpc_from, qpc_to, records)}
         out = Path(out)
@@ -218,6 +214,22 @@ class LiveAudio:
                 "epochs": len({chunk.epoch for chunk, _data in chosen}),
                 "covers_start": kept[0].arrival - self._ticks(kept[0].samples) <= qpc_from,
                 "covers_end": kept[-1].arrival >= qpc_to, "bytes": out.stat().st_size}
+
+    def span(self, qpc_from: int, qpc_to: int, *, margin_s: float = MARGIN_S) -> list[tuple]:
+        """write_span's chunks in memory, (audio_clock.Chunk, PCM bytes or None where lost),
+        oldest first: a scene still growing builds its sound from them (span_layer)."""
+        return self._select(self._fanout.snapshot(), qpc_from, qpc_to, margin_s)
+
+    def silence(self, qpc_from: int, qpc_to: int) -> str:
+        """The plain sentence why the ring holds no sound for this span (write_span's own)."""
+        return self._why_silent(qpc_from, qpc_to, self._fanout.snapshot())
+
+    def _select(self, records: list, qpc_from: int, qpc_to: int, margin_s: float) -> list[tuple]:
+        margin = round(margin_s * self.frequency)
+        arrivals = [record[3] for record in records]
+        start = bisect.bisect_left(arrivals, qpc_from - margin)
+        stop = bisect.bisect_right(arrivals, qpc_to + margin + round(LATE_S * self.frequency))
+        return [(cap.chunk_of(record), record[5]) for record in records[start:stop]]
 
     def _ticks(self, samples: int) -> int:
         return samples * self.frequency // RATE
@@ -238,6 +250,29 @@ class LiveAudio:
         return "The Trainer was not recording Project64's sound during this attempt."
 
 
+def span_layer(chosen: list, presents: Sequence[tuple[int, int]], frequency: int, *, rate: int = RATE,
+               codec: str = "flac") -> tuple[bytes | None, str | None]:
+    """(an audio_layer.py payload, None) for the chunks (audio_clock.Chunk, PCM or None) and the
+    pictures' (present sequence, QPC), the clock fit to them; or (None, the plain sentence why
+    the scene stays silent). attach_span writes it into a finished package; a scene still
+    growing builds one in memory (codec "stored": no FLAC to encode while it grows)."""
+    pictures = [ac.Present(sequence, qpc)
+                for sequence, qpc in sorted({(int(sequence), int(qpc)) for sequence, qpc in presents})]
+    chunks, payloads = [chunk for chunk, _data in chosen], [data for _chunk, data in chosen]
+    try:
+        clock = ac.build_clock(chunks, pictures, rate=rate, frequency=frequency)
+        pcm = ac.stream_pcm(chunks, payloads)
+    except ac.ClockError as error:
+        return None, f"This attempt's sound could not be lined up with its pictures ({error})."
+    statuses = clock.stats["pictures"]
+    if not statuses["covered"] + statuses["loss"]:
+        return None, "No game sound was recorded while this attempt's pictures were on screen."
+    try:
+        return al.encode_layer(clock, pcm, codec=codec), None
+    except ValueError as error:            # audio_layer.LayerError
+        return None, f"This attempt's sound could not be added to its scene ({error})."
+
+
 def attach_span(package: Path, capture: Path, presents: Sequence[tuple[int, int]], qpc_frequency: int,
                 rom: bytes) -> str | None:
     """Adds the capture as the cut package's source-audio layer, in place (atomic replace).
@@ -251,18 +286,10 @@ def attach_span(package: Path, capture: Path, presents: Sequence[tuple[int, int]
         return f"This attempt's sound could not be read ({error})."
     if frequency != qpc_frequency:
         return "This attempt's sound was timed on a different clock than its pictures."
-    pictures = [ac.Present(sequence, qpc)
-                for sequence, qpc in sorted({(int(sequence), int(qpc)) for sequence, qpc in presents})]
+    payload, reason = span_layer(list(zip(chunks, payloads, strict=True)), presents, frequency, rate=rate)
+    if payload is None:
+        return reason
     try:
-        clock = ac.build_clock(chunks, pictures, rate=rate, frequency=frequency)
-        pcm = ac.stream_pcm(chunks, payloads)
-    except ac.ClockError as error:
-        return f"This attempt's sound could not be lined up with its pictures ({error})."
-    statuses = clock.stats["pictures"]
-    if not statuses["covered"] + statuses["loss"]:
-        return "No game sound was recorded while this attempt's pictures were on screen."
-    try:
-        payload = al.encode_layer(clock, pcm, codec="flac")
         data = scene_package.with_audio(Path(package).read_bytes(), rom, payload)
     except OSError as error:
         return f"The scene package could not be read ({error.strerror or error})."

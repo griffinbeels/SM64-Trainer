@@ -84,6 +84,7 @@ RUN_GAP_WORDS = 16            # changed words this close together travel to the 
 MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
 LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
 LOOK_AHEAD_FRAMES = 3         # how many frames the look-ahead resolves (the evaluator caches 4 states)
+SOUND_REFIT_SECONDS = 1.0     # how often a growing scene's sound is fit to its newest frames
 
 
 class Refused(Exception):
@@ -354,9 +355,13 @@ class SceneSession:
         self._begun: deque[PendingPicture] = deque()     # sent to the host, not yet finished, oldest first
         self.served = 0
         self.growth: Growth | None = None                # set while the package is still being written
+        self.live_sound: scene_audio.LiveSound | None = None   # a growing scene's sound, from the recorder's ring
+        self.silence: str | None = None                  # why there is no sound, when the page should know
+        self.sound_built = 0.0
 
     @classmethod
-    def open(cls, config, path: Path, *, sidecar: Path | None = None, host_factory=None, evaluator_factory=None,
+    def open(cls, config, path: Path, *, sidecar: Path | None = None, live=None, host_factory=None,
+             evaluator_factory=None,
              encoder_factory=None) -> SceneSession:
         """Reads and checks the package against the configured ROM, then starts and warms the host.
         Refused carries the reason for every refusal: the GPU hold, a missing ROM, a package the
@@ -397,6 +402,10 @@ class SceneSession:
         session = cls(path.name, package, rom, host, frames, outlines, factory,
                       unavailable(package) if unavailable else None, encoder)
         session.growth = growth
+        clock = package.index.meta.get("clock")
+        if growth is not None and live is not None and isinstance(clock, dict) and package.audio is None:
+            session.live_sound = scene_audio.LiveSound(live, clock)
+            session._sound(force=True)
         try:
             session.host.render(session._recorded_frame(frames[0], {}), discard=True)  # a first list renders wrong
         except (RuntimeError, OSError, ValueError) as error:
@@ -411,7 +420,8 @@ class SceneSession:
         state, and the recording's sound (scene_audio.py's table, or why there is none)."""
         return {"name": self.name, "fps": FPS, "frames": self._rows(0), "renderer_pid": self.host.pid,
                 "free_camera": {"available": self.free_reason is None, "reason": self.free_reason},
-                "audio": self.sound.describe() if self.sound else scene_audio.absent(),
+                "audio": self.sound.describe() if self.sound else {**scene_audio.absent(), **(
+                    {"reason": self.silence} if self.silence else {})},
                 "growing": self.growth is not None}
 
     def _rows(self, start: int) -> list[dict]:
@@ -452,7 +462,25 @@ class SceneSession:
         self.package, self.outlines, self.frames = package, outlines, frames
         if self._evaluator is not None and hasattr(self._evaluator, "package"):
             self._evaluator.package = package
-        return {"from": start, "frames": self._rows(start), "growing": self.growth is not None}
+        grown = {"from": start, "frames": self._rows(start), "growing": self.growth is not None}
+        if self._sound(force=self.growth is None):
+            grown["audio"] = self.describe()["audio"]
+        return grown
+
+    def _sound(self, force: bool = False) -> bool:
+        """A growing scene's sound refit to its frames so far (LiveSound), at most every
+        SOUND_REFIT_SECONDS and once more when the scene is whole; True when it changed."""
+        if self.live_sound is None or not force and time.monotonic() - self.sound_built < SOUND_REFIT_SECONDS:
+            return False
+        self.sound_built = time.monotonic()
+        try:
+            sound, reason = self.live_sound.build(self.outlines, self.frames)
+        except Exception as error:  # noqa: BLE001 - the scene goes on silent and says why
+            sound, reason = None, f"This scene's sound could not be built: {error}"
+        if sound is None and self.sound is not None:
+            return False                                 # keep the sound it has rather than fall silent
+        self.sound, self.silence = sound, reason
+        return True
 
     def audio_block(self, index: int) -> tuple[bytes, str]:
         """(file bytes, media type) of one block of the recording's sound: LookupError when there

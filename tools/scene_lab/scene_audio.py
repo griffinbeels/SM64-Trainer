@@ -96,6 +96,39 @@ class SceneSound:
         return out.getvalue(), "audio/wav"
 
 
+class LiveSound:
+    """A growing attempt scene's sound, from the recorder's own ring (live_audio.LiveAudio) rather
+    than a layer in its package, which gains one only after the scene is whole: so the scene
+    plays with sound from its first picture while it grows, and keeps this sound until it
+    closes rather than switching mid-play. `clock` is the package index's "clock" (the QPC its
+    present times count from, and the QPC's frequency). build() fits the ring's chunks to the
+    frames' presents so far (live_audio.span_layer, uncompressed: measured 2026-10-26 on a
+    synthetic 30 s recording, 18 ms a refit; 120 s, 75 ms); the chunks start at a fixed margin
+    before the first picture, so the stream only grows and a block the page holds stays valid,
+    while a refit may move earlier frames' samples by the fit's own error (about 1 ms)."""
+
+    def __init__(self, live, clock: dict):
+        self.live, self.origin, self.frequency = live, int(clock["origin_qpc"]), int(clock["frequency"])
+
+    def build(self, outlines: list[dict], frames: list[int]) -> tuple[SceneSound | None, str | None]:
+        if self.frequency != self.live.frequency:
+            return None, "This scene's pictures and the recorder's sound count time on different clocks."
+        presents = [(outlines[index]["present"], self.origin + outlines[index]["present_us"] * self.frequency
+                     // 1_000_000) for index in frames
+                    if outlines[index]["present"] is not None and outlines[index]["present_us"] is not None]
+        if not presents:
+            return None, NO_SOUND
+        import live_audio
+        chosen = self.live.span(presents[0][1], presents[-1][1])
+        if not any(data is not None for _chunk, data in chosen):
+            return None, self.live.silence(presents[0][1], presents[-1][1])
+        payload, reason = live_audio.span_layer(chosen, presents, self.frequency, codec="stored")
+        if payload is None:
+            return None, reason
+        layer = al.read_layer(payload)
+        return SceneSound.of(type("Holder", (), {"audio": layer})(), [outlines[index]["present"] for index in frames]), None
+
+
 def lost_frames(samples: list[int], losses: list[tuple[int, int]]) -> list[int]:
     """Frames whose sound, from their sample to the next frame's, overlaps a marked loss."""
     starts = [first for first, _count in losses]

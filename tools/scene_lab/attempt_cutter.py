@@ -67,6 +67,7 @@ MAX_BEHIND = 2                 # takes cutting from behind the live edge at once
 LAG_FRAMES = 3                 # a live take this far behind the recording pauses the behind takes
 HOLD_SECONDS = 0.5             # a take holds a later start's first frame this long for a completion
 MAX_LAG_FRAMES = 150           # an unclaimed take this far (5 s) behind the recording gives up
+SOUNDS_KEPT = 32               # finished scenes whose presents wait for the server's sound
 PUBLISH_SECONDS = 0.25         # how often a growing package is published (what an open scene can show)
 TAKE_ZLIB_LEVEL = 6            # package.compress: about 6x faster than level 9 for 6 % more bytes
 _BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
@@ -150,6 +151,7 @@ class Take(threading.Thread):
     def __init__(self, brain: Brain, first, kind: str, segment_id=None, last: int | None = None):
         super().__init__(name=f"take-{first.index}", daemon=True)
         self.brain, self.first, self.kind, self.segment_id = brain, first, kind, segment_id
+        self.spool = brain.spool               # the recording its indexes belong to, even after the brain moves on
         self.attempt_id = None                 # who claimed it; None while unclaimed
         self.reserved = None                   # an attempt waiting for its end that will claim it
         self.cut: attempt_span.Cut | None = None
@@ -166,7 +168,10 @@ class Take(threading.Thread):
         self.path = Path(brain.folder) / f"take-{first.index}-{next(_SERIAL)}{PACKAGE_SUFFIX}"
         self.grow = self.path.with_suffix(".grow")
         self.published = 0                     # frames the newest publication covers
+        self.presents: list = []               # per frame written: (present sequence, us after the origin) or None
         self.published_at = 0.0
+        self.add_ms: list[float] = []          # each frame's write, for the cost the ready event reports
+        self.cpu_started = 0.0
         self.writer = None
 
     def announce(self) -> dict:
@@ -196,6 +201,26 @@ class Take(threading.Thread):
         if self.source is not None:
             self.source.stop_at(-1)
 
+    def cost(self) -> dict:
+        """What this take cost the child's core: its thread's CPU a frame (writing, publishing,
+        reading the recording), and each frame's write, mean and p95, in ms."""
+        writes = sorted(self.add_ms)
+        if not writes:
+            return {}
+        return {"cpu_ms_per_frame": round((time.thread_time() - self.cpu_started) * 1000 / len(writes), 2),
+                "write_ms_mean": round(sum(writes) / len(writes), 2),
+                "write_ms_p95": round(writes[min(len(writes) - 1, int(len(writes) * 0.95))], 2)}
+
+    def absolute_presents(self, frames: int) -> list[tuple[int, int]]:
+        """(present sequence, QPC) of each shown frame of the first `frames`, as live_audio's
+        attach_span takes them; empty when the reader gives no origin (live_spool.LiveSource's
+        origin_qpc: a capture's times count from it)."""
+        origin, frequency = getattr(self.source, "origin_qpc", None), self.brain.spool_frequency
+        if origin is None or not frequency:
+            return []
+        return [(sequence, origin + time_us * frequency // 1_000_000)
+                for sequence, time_us in filter(None, self.presents[:frames])]
+
     def _hold(self, capture, timer) -> None:
         """Waits before writing a frame that may lie past this take's span: past `limit` (the
         newest task the span rule placed inside it while the end of the fade-out is still to
@@ -222,17 +247,18 @@ class Take(threading.Thread):
         brain = self.brain
         writer = None
         try:
-            if hasattr(brain.spool, "follow"):
-                self.source = brain.spool.follow(self.first.index, states=True)
+            if hasattr(self.spool, "follow"):
+                self.source = self.spool.follow(self.first.index, states=True)
                 if self.stop_index is not None or self.dropped.is_set():
                     self.source.stop_at(-1 if self.dropped.is_set() else self.stop_index)
             else:                               # a reader without follow(): only cuts with a known end
-                self.source = brain.spool.source(self.first.index, self.stop_index, states=True)
+                self.source = self.spool.source(self.first.index, self.stop_index, states=True)
                 self.source.stop_at = lambda last: None
             writer = brain.package.PackageWriter(self.source, brain.rom, self.path, brain.package.ZLIB,
                                                  level=TAKE_ZLIB_LEVEL, shared=brain.seed(self.source.rdram_size),
-                                                 in_place=True)
+                                                 in_place=True, frequency=brain.spool_frequency)
             self.writer = writer
+            self.cpu_started = time.thread_time()
             timer = dict((name, (address, size)) for name, address, size in self.source.identity).get("global_timer")
             for capture in self.source.captures:
                 self._hold(capture, timer)
@@ -240,8 +266,12 @@ class Take(threading.Thread):
                     time.sleep(0.005)
                 if self.dropped.is_set() or (self.cut is not None and self.position >= self.cut.last.index):
                     break
+                began = time.perf_counter()
                 writer.add(capture)
+                self.add_ms.append((time.perf_counter() - began) * 1000)
                 self.written += 1
+                self.presents.append((capture.present_sequence, capture.present_time_us)
+                                     if capture.shown and capture.present_time_us >= 0 else None)
                 self._publish()
             # A take that follows the live edge may have written a frame or two past the end it
             # learned later (the reset's own picture can reach the recording before its event
@@ -294,6 +324,7 @@ class Brain:
         self.package = package
         self.rom, self.rom_loads, self.folder, self.opener, self.emit, self.clock = (
             rom, rom_loads, Path(folder), opener, emit, clock)
+        self.folder.mkdir(parents=True, exist_ok=True)
         self.spool = None
         self.starts: deque[dict] = deque(maxlen=64)
         self.boundaries: deque[attempt_span.Boundary] = deque(maxlen=256)
@@ -304,6 +335,8 @@ class Brain:
         self.live: dict | None = None
         self.edge = None                             # the newest TaskRef the recording held at the last tick
         self.seeds: dict[int, object] = {}           # RDRAM size -> the attributor every take shares
+        self.sounds: dict[int, tuple] = {}           # attempt id -> (package, absolute presents) awaiting sound
+        self.spool_frequency: int | None = None      # the recording's QPC ticks a second
 
     def seed(self, rdram_size: int):
         """The attributor whose ROM candidates, discovered windows and misses every take uses."""
@@ -344,6 +377,9 @@ class Brain:
             self.pending[mark.id] = {"mark": mark, "said": None}
             if mark.anchor_frame is not None:
                 self.boundaries.append(attempt_span.Boundary(mark.anchor_frame, mark.started_utc))
+        elif op == "sound":
+            threading.Thread(target=self._sound, args=(int(note["id"]), Path(note["capture"])),
+                             name="cutter-sound", daemon=True).start()
         elif op == "forget":
             attempt_id = int(note["id"])
             self.forgotten.add(attempt_id)
@@ -360,6 +396,7 @@ class Brain:
             self._begin(self.queued.popleft())
         if self.spool is None:
             self.spool = self.opener()
+            self.spool_frequency = getattr(self.spool, "frequency", None) or self.spool_frequency
             if self.spool is None:
                 self._live({"recording": False, "reason": "No scene recording is running."})
                 for attempt_id, entry in list(self.pending.items()):
@@ -437,8 +474,10 @@ class Brain:
                 take = self._open_take(found.first.index)
                 if take is None or take.reserved not in (None, attempt_id):
                     take = Take(self, found.first, "behind", last=found.last.index)
+                    take.claim(attempt_id, found, now)          # before it starts: a failure has its attempt
                     self._begin(take)
-                take.claim(attempt_id, found, now)
+                else:
+                    take.claim(attempt_id, found, now)
                 if take.kind == "behind":
                     self._say(attempt_id, entry, "cutting", seconds=found.seconds, reason="Writing the scene.")
                 else:
@@ -470,13 +509,34 @@ class Brain:
             self.emit({"id": take.attempt_id, "state": "unavailable", "reason": reason})
             return
         cut = take.cut
-        self.emit({"id": take.attempt_id, "state": "ready", "growing": False, "seconds": cut.seconds,
+        presents = take.absolute_presents(stats["frames"])
+        if presents:
+            self.sounds[take.attempt_id] = (take.path, presents)
+            while len(self.sounds) > SOUNDS_KEPT:
+                self.sounds.pop(next(iter(self.sounds)))
+        sound = {"presents_qpc": [presents[0][1], presents[-1][1]], "qpc_frequency": self.spool_frequency} \
+            if presents else {"silent": "The scene recording gives no time for this attempt's pictures."}
+        self.emit({"id": take.attempt_id, "state": "ready", "growing": False, "seconds": cut.seconds, **sound,
                    "path": str(take.path), "why": cut.why,
                    "first": cut.first.index, "last": cut.last.index, "frames": stats["frames"],
                    "bytes": stats["package_bytes"], "write_seconds": stats["write_seconds"],
-                   "finish_seconds": stats["finish_seconds"], "take_kind": take.kind,
+                   "finish_seconds": stats["finish_seconds"], "take_kind": take.kind, **take.cost(),
                    "ready_after_decided_ms": round((self.clock() - take.decided_at) * 1000, 1),
                    "ready_after_last_ms": round((datetime.now(timezone.utc) - cut.last.utc).total_seconds() * 1000, 1)})
+
+    def _sound(self, attempt_id: int, capture: Path) -> None:
+        """Adds the sound the recorder heard (the server wrote it from live_audio's ring) to a
+        finished attempt scene, off the main thread: {"id", "sound": None} once the package
+        carries it, else the plain sentence why the scene stays silent."""
+        path, presents = self.sounds.get(attempt_id, (None, None))
+        if path is None:
+            reason = "This attempt's scene is no longer kept."
+        else:
+            try:
+                reason = __import__("live_audio").attach_span(path, capture, presents, self.spool_frequency, self.rom)
+            except Exception as error:  # noqa: BLE001 - a silent scene, never a stopped cutter
+                reason = f"This attempt's sound could not be added: {error}"
+        self.emit({"id": attempt_id, "sound": reason})
 
     def _say(self, attempt_id: int, entry: dict, state: str, **fields) -> None:
         said = (state, fields.get("reason"))

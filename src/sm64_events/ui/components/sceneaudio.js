@@ -163,6 +163,27 @@ export class SceneSound {
     this.changed();
   }
 
+  // A growing scene gained frames, and maybe a refit of its sound (the server builds it from the
+  // recorder's ring as the scene grows): the table and the map extend in place. Its stream only
+  // grows, so the blocks already decoded stay, except a last block that was short then.
+  grew(scene) {
+    this.times = recordedTimes(scene);
+    const audio = scene?.audio, table = this.table;
+    if (!audio?.available) return;
+    if (!table) {                            // never switched on in the middle of a play: at the next one
+      if (!this.playing) this.load(scene);
+      return;
+    }
+    const short = table.totalSamples % table.blockSamples ? Math.floor(table.totalSamples / table.blockSamples) : -1;
+    Object.assign(table, { totalSamples: audio.total_samples, blocks: audio.blocks,
+      samples: Int32Array.from(audio.samples), lost: new Set(audio.lost) });
+    if (this.decoded.delete(short)) this.post({ type: "keep", indices: [...this.decoded.keys()] });
+    this.failed.delete(short);
+    this.runs = soundMap(table.samples, this.times, audio.rate, this.fps);
+    this.post({ type: "map", runs: this.runs, blockSamples: audio.block_samples });
+    this.changed();
+  }
+
   // What frame `frame`'s sound is: "sound", "lost" (silence, marked) or "none".
   at(frame) {
     const table = this.table;

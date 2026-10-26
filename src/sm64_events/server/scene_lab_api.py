@@ -233,7 +233,7 @@ class SceneLab:
                  page_gone_seconds: float = PAGE_GONE_SECONDS, watch_seconds: float = WATCH_SECONDS,
                  idle_seconds: float | None = None, measure_loop: bool = False, live: bool = False,
                  lease_factory=None, cutter_factory=None, cutter_options: dict | None = None,
-                 grow_seconds: float = GROW_SECONDS):
+                 grow_seconds: float = GROW_SECONDS, live_audio=None):
         """live: hold the recording's lease and cut attempt scenes (main.py's server only; a test,
         the UI fixture or e3_measure.py never arms the wrapper's tap). Tests replace the lease
         (lease_factory(lab_root)), the cutter (cutter_factory(folder, on_event)) or the cutter
@@ -243,6 +243,7 @@ class SceneLab:
         self.live_on, self.lease_factory, self.cutter_options = live, lease_factory, cutter_options or {}
         self.cutter_factory = cutter_factory
         self.grow_seconds = grow_seconds
+        self.live_audio = live_audio                       # live_audio.LiveAudio: the recorder's sound ring
         self.pages: set[_PageSocket] = set()               # the sockets a grown scene tells
         self.lease = None
         self.live_problem: str | None = None
@@ -250,7 +251,7 @@ class SceneLab:
         self.open_attempt: int | None = None
         try:
             self.scenes = _lab_module("attempt_scenes").AttemptScenes(
-                self._scene_folder, self._start_cutter, in_use=lambda: self.open_path)
+                self._scene_folder, self._start_cutter, in_use=lambda: self.open_path, live_audio=live_audio)
         except ConfigError as error:
             self.scenes, self.live_problem = None, str(error)
         self.page_gone_seconds, self.watch_seconds = page_gone_seconds, watch_seconds
@@ -335,7 +336,12 @@ class SceneLab:
             return {"recording": False, "reason": "This server does not run the live scene recording."}
         if self.live_problem:
             return {"recording": False, "reason": self.live_problem}
-        return self.scenes.live()
+        live = self.scenes.live()
+        if self.live_audio is not None:
+            health = self.live_audio.health()
+            live["sound"] = {"recording": health["recording"], "reason": health["reason"],
+                             "kept_seconds": health["kept_seconds"]}
+        return live
 
     def follow_attempts(self, tracker) -> None:
         """Every attempt the tracker completes, and every start the event stream announces, reach
@@ -386,7 +392,8 @@ class SceneLab:
     def _open_blocking(self, config: LabConfig, path: Path, sidecar: Path | None = None):
         module = _lab_module("scene_session")
         try:
-            session = module.SceneSession.open(config, path, sidecar=sidecar, **self.session_options)
+            session = module.SceneSession.open(config, path, sidecar=sidecar, live=self.live_audio,
+                                               **self.session_options)
         except module.Refused as refused:
             raise SceneRefused(str(refused)) from None
         return session, session.describe()
@@ -414,6 +421,10 @@ class SceneLab:
             except BaseException:
                 worker.shutdown(wait=False)
                 raise
+            if attempt is not None and not described["audio"].get("available") and self.scenes is not None:
+                quiet = self.scenes.sound_reason(attempt)          # the catalog knows why it is silent
+                if quiet and described["audio"].get("reason") == _lab_module("scene_audio").NO_SOUND:
+                    described = {**described, "audio": {**described["audio"], "reason": quiet}}
             self.session, self.worker, self.described = session, worker, described
             self.open_path, self.open_attempt = path, attempt
             self.delivery = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab-delivery")

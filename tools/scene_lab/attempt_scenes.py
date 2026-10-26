@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 import attempt_span
@@ -41,12 +42,14 @@ log = logging.getLogger("sm64.scene_lab")
 
 RETAIN_ATTEMPTS = 20           # completed attempts whose scenes are kept
 RESTART_SECONDS = 30.0         # a cutter that exited is started again after this long
+SOUND_WAIT_SECONDS = 0.6       # after a scene is whole, before its sound is taken from the ring
 MAX_RESTARTS = 3               # and no more than this often in one server's life
 LOCK_NAME = ".owner.lock"
 ANCHORS = ("practice_reset", "state_loaded")
 STARTING = "The scene cutter is starting."
 STOPPED = "The scene cutter stopped; attempts finished meanwhile have no scene."
 GAVE_UP = "The scene cutter keeps stopping; restart the Trainer to try again."
+NO_LIVE_SOUND = "This server does not keep the game's sound for scenes."
 
 
 class SceneUnavailable(Exception):
@@ -77,8 +80,9 @@ class AttemptScenes:
     attempt_cutter.CutterProcess (or a double with send and close)."""
 
     def __init__(self, folder, start_cutter, *, in_use=lambda: None, retain: int = RETAIN_ATTEMPTS,
-                 restart_seconds: float = RESTART_SECONDS):
+                 restart_seconds: float = RESTART_SECONDS, live_audio=None, sound_wait: float = SOUND_WAIT_SECONDS):
         self.folder_of, self.start_cutter = folder, start_cutter
+        self.live_audio, self.sound_wait = live_audio, sound_wait     # live_audio.LiveAudio: the recorder's ring
         self.in_use, self.retain, self.restart_seconds = in_use, retain, restart_seconds
         self.lock = threading.Lock()
         self.entries: dict[int, dict] = {}       # attempt id -> {"state", "ended", ...}
@@ -100,7 +104,8 @@ class AttemptScenes:
             folder = Path(self.folder_of())
             self.held = _lock(folder)
             for path in folder.iterdir():
-                if path.name != LOCK_NAME and (path.suffix == ".sm64scene" or path.name.endswith(".partial")):
+                if path.name != LOCK_NAME and (path.suffix in (".sm64scene", ".grow", ".cap")
+                                               or path.name.endswith(".partial")):
                     path.unlink(missing_ok=True)
             self.folder = folder
             self._start_cutter()
@@ -189,6 +194,8 @@ class AttemptScenes:
         elif "take_ended" in event:
             with self.lock:
                 self.takes.pop(event["take_ended"], None)
+        elif "id" in event and "sound" in event:
+            self._sound_added(event["id"], event["sound"])
         elif "id" in event:
             with self.lock:
                 entry = self.entries.get(event["id"])
@@ -198,12 +205,63 @@ class AttemptScenes:
                                  path=event.get("path") or entry.get("path"),
                                  grow=event.get("grow"), growing=bool(event.get("growing")))
                     if event["state"] == "ready" and not event.get("growing"):
+                        self._sound_for(event["id"], entry, event)
                         log.info("attempt scene %s ready: %s", event["id"], {
                             key: event.get(key) for key in ("seconds", "frames", "bytes", "write_seconds",
                                                             "finish_seconds", "ready_after_decided_ms",
-                                                            "ready_after_last_ms", "take_kind", "why")})
+                                                            "ready_after_last_ms", "take_kind", "why",
+                                                            "cpu_ms_per_frame", "write_ms_mean", "write_ms_p95")})
             if entry is None and event.get("state") == "ready" and event.get("path"):
                 Path(event["path"]).unlink(missing_ok=True)          # retention dropped it meanwhile
+
+    # ------------------------------------------------------------ the recorder's sound
+
+    def _sound_for(self, attempt_id: int, entry: dict, event: dict) -> None:
+        """Under the lock, once a scene is whole: its sound comes from the recorder's ring on a
+        thread of its own, never before "ready" and never delaying it."""
+        presents = event.get("presents_qpc")
+        if self.live_audio is None:
+            entry.update(sound="silent", sound_reason=NO_LIVE_SOUND)
+        elif not presents:
+            entry.update(sound="silent", sound_reason=event.get("silent") or NO_LIVE_SOUND)
+        else:
+            entry.update(sound="pending", sound_reason=None)
+            threading.Thread(target=self._write_sound, args=(attempt_id, *presents, event.get("qpc_frequency")),
+                             name="scene-sound", daemon=True).start()
+
+    def _write_sound(self, attempt_id: int, first: int, last: int, frequency: int) -> None:
+        """The ring's chunks around the scene's pictures, written once the last picture's sound
+        has had time to arrive (SOUND_WAIT_SECONDS: the ring can receive a chunk up to
+        live_audio.LATE_S after it sounded); the cutter child then attaches them."""
+        time.sleep(self.sound_wait)
+        if frequency != self.live_audio.frequency:
+            self._sound_added(attempt_id, "This scene's pictures and the recorder's sound count time "
+                                          "on different clocks.")
+            return
+        capture = Path(self.folder) / f"sound-{attempt_id}.cap"
+        written = self.live_audio.write_span(first, last, capture)
+        cutter = self.cutter
+        if not written["written"] or cutter is None:
+            capture.unlink(missing_ok=True)
+            self._sound_added(attempt_id, written["reason"] or STOPPED)
+            return
+        cutter.send({"op": "sound", "id": attempt_id, "capture": str(capture)})
+
+    def _sound_added(self, attempt_id: int, reason: str | None) -> None:
+        if self.folder is not None:
+            (Path(self.folder) / f"sound-{attempt_id}.cap").unlink(missing_ok=True)
+        with self.lock:
+            entry = self.entries.get(attempt_id)
+            if entry is not None:
+                entry.update(sound="attached" if reason is None else "silent", sound_reason=reason)
+
+    def sound_reason(self, attempt_id: int) -> str | None:
+        """Why this attempt's scene has no sound (yet), as the viewer says it; None once it has."""
+        with self.lock:
+            entry = dict(self.entries.get(attempt_id) or {})
+        if entry.get("sound") == "pending":
+            return "This attempt's sound is still being added; open it again in a moment to hear it."
+        return entry.get("sound_reason")
 
     def _exited(self, code) -> None:
         with self.lock:
