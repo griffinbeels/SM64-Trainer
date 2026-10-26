@@ -27,6 +27,15 @@
  *   level_segments=<hex> segments whose bases key a level (default fffc: SM64
  *                     points segment 1 at the alternating gfx pool)
  *   level_delta=0|1   0: level regions only at a key change (default 1)
+ *   vi_region=<addr>:<n> copy this span at every UpdateScreen (every VI): whole
+ *                     on the first VI, else only its 256-byte blocks that changed
+ *                     since the last VI (up to 8, 1 MiB in all). M4 stems: at a VI
+ *                     the audio task the game just dispatched has not run yet, so
+ *                     the audio spans hold its whole input, and at the next VI
+ *                     its output
+ *   vi_dmem=1         add SP DMEM (4 KiB, recorded at its physical address
+ *                     0x04000000) to the VI spans: a list may read bytes the
+ *                     last one left there
  * Without that file every call returns after one relaxed atomic load.
  *
  * The emulation thread never waits: it walks the task (scene_closure.h),
@@ -39,7 +48,11 @@
  * (0 task, 1 level key, 2 level delta), count, data bytes, copy_ns, scan_ns,
  * block bytes, 0}, the task's 16 segment bases, count x {begin, bytes}, data.
  * A delta's spans apply over the last key and deltas; a lost delta leaves the
- * shadow copy unchanged, so the next one still carries those blocks. */
+ * shadow copy unchanged, so the next one still carries those blocks. A VI
+ * record (every UpdateScreen, before the present's) is {vi_index, kind (0 key,
+ * 1 delta), count, data bytes, total_ns, scan_ns, block bytes, tasks so far},
+ * count x {begin, bytes}, data; the same shadow rule holds, and a lost record
+ * shows as a gap in vi_index. */
 #define NOMINMAX
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -58,8 +71,9 @@
 namespace {
 
 constexpr uint32_t kMagic = 0x31544C53;   // "SLT1" little-endian
-enum : uint32_t { REC_PAD = 0, REC_TASK = 1, REC_PRESENT = 2, REC_FULL = 3, REC_REGIONS = 4 };
+enum : uint32_t { REC_PAD = 0, REC_TASK = 1, REC_PRESENT = 2, REC_FULL = 3, REC_REGIONS = 4, REC_VI = 5 };
 enum : uint32_t { REGIONS_TASK = 0, REGIONS_LEVEL_KEY = 1, REGIONS_LEVEL_DELTA = 2 };
+enum : uint32_t { VI_KEY = 0, VI_DELTA = 1 };
 struct RecordHeader { uint32_t magic, type, bytes, sequence; int64_t qpc; uint32_t reserved[2]; };
 static_assert(sizeof(RecordHeader) == 32, "tap record header");
 constexpr uint32_t kMaxExtras = 16, kMaxExtraBytes = 4096;
@@ -68,6 +82,8 @@ constexpr uint32_t kMaxLevelRegions = 8, kMaxLevelBytes = 8u << 20;
 constexpr uint32_t kBlockBytes = 256, kPageBytes = 4096;
 constexpr uint32_t kMaxBlocks = kMaxLevelBytes / kBlockBytes + kMaxLevelRegions;
 constexpr uint32_t kRegionsHead = 32 + 64;   // fields, then the 16 segment bases
+constexpr uint32_t kMaxViRegions = 8, kMaxViBytes = 1u << 20, kViHead = 32;
+constexpr uint32_t kDmemBegin = 0x04000000, kDmemBytes = 0x1000;   // SP DMEM's physical address
 constexpr uint64_t kRingBytes = 128ull << 20, kSmallRingBytes = 48ull << 20;
 
 struct Span { uint32_t begin, bytes; };
@@ -77,6 +93,8 @@ struct Config {
     uint32_t extra_begin[kMaxExtras], extra_bytes[kMaxExtras];
     uint32_t regions = 0, level_regions = 0, level_segments = 0xFFFC, level_delta = 1, task_regions = 0;
     Span region[kMaxRegions], level[kMaxLevelRegions], task_region[kMaxTaskRegions];   // task: {offset, bytes}
+    uint32_t vi_regions = 0, vi_dmem = 0;
+    Span vi[kMaxViRegions + 1];   // the RDRAM spans, then DMEM when vi_dmem
 };
 
 struct Tap {
@@ -108,6 +126,12 @@ struct Tap {
     uint32_t level_keys, level_deltas, region_records;
     uint64_t region_bytes_total, delta_bytes_total, region_ns_total, level_ns_total;
     uint32_t region_ns_max, level_ns_max;
+    // VI regions (M4 stems): the same shadow scheme, kept per VI.
+    uint8_t *vi_shadow;
+    Change *vi_changed;
+    uint32_t vi_total, vi_index, vi_keys, vi_deltas, vi_ns_max;
+    bool vi_valid;
+    uint64_t vi_delta_bytes_total, vi_ns_total;
 };
 Tap g_tap;
 
@@ -183,18 +207,24 @@ DWORD WINAPI writer_main(void *) {
              tasks ? (uint32_t)(t.walk_ns_total / tasks) : 0, t.walk_ns_max,
              tasks ? (uint32_t)(t.copy_ns_total / tasks) : 0, t.copy_ns_max);
     const uint32_t records = t.region_records, levels = t.level_keys + t.level_deltas;
+    const uint32_t vis = t.vi_keys + t.vi_deltas;
     snprintf(summary + at, sizeof summary - at,
              "region_records=%u\nregion_bytes_mean=%llu\nregion_ns_mean=%u\nregion_ns_max=%u\n"
-             "level_keys=%u\nlevel_deltas=%u\nlevel_delta_bytes_mean=%llu\nlevel_ns_mean=%u\nlevel_ns_max=%u\n",
+             "level_keys=%u\nlevel_deltas=%u\nlevel_delta_bytes_mean=%llu\nlevel_ns_mean=%u\nlevel_ns_max=%u\n"
+             "vi_calls=%u\nvi_keys=%u\nvi_deltas=%u\nvi_delta_bytes_mean=%llu\nvi_ns_mean=%u\nvi_ns_max=%u\n",
              records, records ? (unsigned long long)(t.region_bytes_total / records) : 0ull,
              records ? (uint32_t)(t.region_ns_total / records) : 0, t.region_ns_max,
              t.level_keys, t.level_deltas,
              t.level_deltas ? (unsigned long long)(t.delta_bytes_total / t.level_deltas) : 0ull,
-             levels ? (uint32_t)(t.level_ns_total / levels) : 0, t.level_ns_max);
+             levels ? (uint32_t)(t.level_ns_total / levels) : 0, t.level_ns_max,
+             t.vi_index, t.vi_keys, t.vi_deltas,
+             t.vi_deltas ? (unsigned long long)(t.vi_delta_bytes_total / t.vi_deltas) : 0ull,
+             vis ? (uint32_t)(t.vi_ns_total / vis) : 0, t.vi_ns_max);
     write_text(L"summary.txt", summary);
     VirtualFree(t.ring, 0, MEM_RELEASE);
     t.ring = nullptr;
     if (t.shadow) { VirtualFree(t.shadow, 0, MEM_RELEASE); t.shadow = nullptr; t.changed = nullptr; }
+    if (t.vi_shadow) { VirtualFree(t.vi_shadow, 0, MEM_RELEASE); t.vi_shadow = nullptr; t.vi_changed = nullptr; }
     return 0;
 }
 
@@ -221,6 +251,9 @@ void parse_config(const wchar_t *path, Config &config) {
             config.task_region[config.task_regions++] = {a & ~3u, (b + 3) & ~3u};
         else if (sscanf(line, "region=%x:%u", &a, &b) == 2 && config.regions < kMaxRegions)
             config.region[config.regions++] = {a & 0x1FFFFFFF, b};
+        else if (sscanf(line, "vi_region=%x:%u", &a, &b) == 2 && config.vi_regions < kMaxViRegions)
+            config.vi[config.vi_regions++] = {a & 0x1FFFFFFF, b};
+        else if (sscanf(line, "vi_dmem=%u", &a) == 1) config.vi_dmem = a != 0;
     }
     fclose(file);
 }
@@ -282,6 +315,51 @@ void copy_task_regions(uint32_t task_index, int64_t when, uint32_t data_ptr) {
 
 uint32_t smaller(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
+// The live bytes behind a span: RDRAM, or SP DMEM at its physical address.
+const uint8_t *live(uint32_t begin) {
+    return begin >= kDmemBegin ? g_tap.gfx.DMEM + (begin - kDmemBegin) : g_tap.gfx.RDRAM + begin;
+}
+
+// The 256-byte blocks of these spans that differ from their shadow (whole
+// pages compared first), into `changed`: how many, and their bytes into `data`.
+uint32_t changed_blocks(const Span *spans, uint32_t count, const uint8_t *shadow, Tap::Change *changed,
+                        uint64_t &data) {
+    uint32_t found = 0, offset = 0;
+    for (uint32_t r = 0; r < count; offset += spans[r++].bytes) {
+        const uint8_t *now = live(spans[r].begin), *old = shadow + offset;
+        for (uint32_t page = 0; page < spans[r].bytes; page += kPageBytes) {
+            const uint32_t page_end = page + smaller(kPageBytes, spans[r].bytes - page);
+            if (!memcmp(now + page, old + page, page_end - page)) continue;
+            for (uint32_t block = page; block < page_end; block += kBlockBytes) {
+                const uint32_t n = smaller(kBlockBytes, page_end - block);
+                if (!memcmp(now + block, old + block, n)) continue;
+                changed[found++] = {{spans[r].begin + block, n}, offset + block};
+                data += n;
+            }
+        }
+    }
+    return found;
+}
+
+// Every span whole, as changes: a key.
+uint32_t whole_spans(const Span *spans, uint32_t count, Tap::Change *changed) {
+    uint32_t offset = 0;
+    for (uint32_t r = 0; r < count; offset += spans[r++].bytes) changed[r] = {spans[r], offset};
+    return count;
+}
+
+// The changes into a record (their spans, then their bytes) and into the shadow.
+void emit_blocks(uint8_t *entries, const Tap::Change *changes, uint32_t count, uint8_t *shadow) {
+    uint8_t *at = entries + 8ull * count;
+    for (uint32_t i = 0; i < count; ++i) {
+        const Tap::Change change = changes[i];
+        memcpy(entries + 8ull * i, &change.span, 8);
+        memcpy(at, live(change.span.begin), change.span.bytes);
+        memcpy(shadow + change.shadow, at, change.span.bytes);
+        at += change.span.bytes;
+    }
+}
+
 // Level regions: whole at a new level key (or when the shadow is not current),
 // else only the blocks that differ from the shadow, which then follows what
 // was emitted. A lost record leaves the shadow as it was.
@@ -294,44 +372,22 @@ void copy_level_regions(uint32_t task_index, int64_t when) {
     for (uint32_t s = 0; s < 16; ++s)
         key[s] = (c.level_segments >> s & 1) && (t.walker.stats.segments_set >> s & 1) ? t.walker.segment[s] : 0;
     const bool new_key = !t.level_valid || memcmp(key, t.level_key, sizeof key) != 0;
-    uint32_t count = 0, scan_ns = 0, offset = 0;
+    uint32_t count = 0, scan_ns = 0;
     uint64_t data = 0;
     if (!new_key) {
         if (!c.level_delta) return;
-        for (uint32_t r = 0; r < c.level_regions; offset += c.level[r++].bytes) {
-            const uint8_t *live = t.gfx.RDRAM + c.level[r].begin, *old = t.shadow + offset;
-            for (uint32_t page = 0; page < c.level[r].bytes; page += kPageBytes) {
-                const uint32_t page_end = page + smaller(kPageBytes, c.level[r].bytes - page);
-                if (!memcmp(live + page, old + page, page_end - page)) continue;
-                for (uint32_t block = page; block < page_end; block += kBlockBytes) {
-                    const uint32_t n = smaller(kBlockBytes, page_end - block);
-                    if (!memcmp(live + block, old + block, n)) continue;
-                    t.changed[count++] = {{c.level[r].begin + block, n}, offset + block};
-                    data += n;
-                }
-            }
-        }
+        count = changed_blocks(c.level, c.level_regions, t.shadow, t.changed, data);
         scan_ns = ns(qpc() - begin);
     }
     const bool key_frame = new_key || data > t.level_total / 2;
     if (key_frame) {
-        count = 0;
-        offset = 0;
-        for (uint32_t r = 0; r < c.level_regions; offset += c.level[r++].bytes)
-            t.changed[count++] = {c.level[r], offset};
+        count = whole_spans(c.level, c.level_regions, t.changed);
         data = t.level_total;
     }
     const uint32_t bytes = align32(sizeof(RecordHeader) + kRegionsHead + 8ull * count + data);
     uint8_t *record = reserve(bytes);
     if (!record) { if (key_frame) t.level_valid = false; return; }
-    uint8_t *entries = record + 32 + kRegionsHead, *at = entries + 8ull * count;
-    for (uint32_t i = 0; i < count; ++i) {
-        const Tap::Change change = t.changed[i];
-        memcpy(entries + 8ull * i, &change.span, 8);
-        memcpy(at, t.gfx.RDRAM + change.span.begin, change.span.bytes);
-        memcpy(t.shadow + change.shadow, at, change.span.bytes);
-        at += change.span.bytes;
-    }
+    emit_blocks(record + 32 + kRegionsHead, t.changed, count, t.shadow);
     const uint32_t level_ns = ns(qpc() - begin);
     put_regions_head(record, task_index, key_frame ? REGIONS_LEVEL_KEY : REGIONS_LEVEL_DELTA,
                      count, (uint32_t)data, level_ns, scan_ns);
@@ -346,6 +402,46 @@ void copy_level_regions(uint32_t task_index, int64_t when) {
     }
     t.level_ns_total += level_ns;
     if (level_ns > t.level_ns_max) t.level_ns_max = level_ns;
+}
+
+// VI regions (M4 stems), at every UpdateScreen: whole at the first VI (or
+// after a lost key), else only the blocks that changed since the last VI. A
+// lost record leaves the shadow as it was and a gap in vi_index.
+void copy_vi_regions(int64_t when) {
+    Tap &t = g_tap;
+    const Config &c = t.config;
+    if (!t.vi_shadow) return;
+    const int64_t begin = qpc();
+    const uint32_t vi_index = t.vi_index++;
+    uint32_t count = 0, scan_ns = 0;
+    uint64_t data = 0;
+    if (t.vi_valid) {
+        count = changed_blocks(c.vi, c.vi_regions, t.vi_shadow, t.vi_changed, data);
+        scan_ns = ns(qpc() - begin);
+    }
+    const bool key = !t.vi_valid || data > t.vi_total / 2;
+    if (key) {
+        count = whole_spans(c.vi, c.vi_regions, t.vi_changed);
+        data = t.vi_total;
+    }
+    const uint32_t bytes = align32(sizeof(RecordHeader) + kViHead + 8ull * count + data);
+    uint8_t *record = reserve(bytes);
+    if (!record) { if (key) t.vi_valid = false; return; }
+    emit_blocks(record + 32 + kViHead, t.vi_changed, count, t.vi_shadow);
+    const uint32_t vi_ns = ns(qpc() - begin);
+    const uint32_t fields[8] = {vi_index, key ? VI_KEY : VI_DELTA, count, (uint32_t)data, vi_ns, scan_ns,
+                                kBlockBytes, t.tasks.load(std::memory_order_relaxed)};
+    memcpy(record + 32, fields, sizeof fields);
+    commit(record, REC_VI, bytes, when);
+    if (key) {
+        t.vi_valid = true;
+        ++t.vi_keys;
+    } else {
+        ++t.vi_deltas;
+        t.vi_delta_bytes_total += data;
+    }
+    t.vi_ns_total += vi_ns;
+    if (vi_ns > t.vi_ns_max) t.vi_ns_max = vi_ns;
 }
 
 uint32_t committed_rdram() {
@@ -424,6 +520,26 @@ extern "C" void __cdecl st_rom_open(void) {
     t.level_keys = t.level_deltas = t.region_records = 0;
     t.region_bytes_total = t.delta_bytes_total = t.region_ns_total = t.level_ns_total = 0;
     t.region_ns_max = t.level_ns_max = 0;
+    c.vi_regions = settle_spans(c.vi, c.vi_regions, kMaxViBytes, t.rdram_size);
+    if (c.vi_dmem) c.vi[c.vi_regions++] = {kDmemBegin, kDmemBytes};
+    t.vi_total = 0;
+    for (uint32_t r = 0; r < c.vi_regions; ++r) t.vi_total += c.vi[r].bytes;
+    t.vi_shadow = nullptr;
+    t.vi_changed = nullptr;
+    if (t.vi_total) {
+        const uint32_t blocks = t.vi_total / kBlockBytes + c.vi_regions;
+        t.vi_shadow = (uint8_t *)VirtualAlloc(nullptr, t.vi_total + blocks * sizeof(Tap::Change),
+                                              MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!t.vi_shadow) {
+            write_text(L"summary.txt", "vi_shadow_allocation_failed=1\n");
+            if (t.shadow) { VirtualFree(t.shadow, 0, MEM_RELEASE); t.shadow = nullptr; t.changed = nullptr; }
+            return;
+        }
+        t.vi_changed = (Tap::Change *)(t.vi_shadow + t.vi_total);
+    }
+    t.vi_valid = false;
+    t.vi_index = t.vi_keys = t.vi_deltas = t.vi_ns_max = 0;
+    t.vi_delta_bytes_total = t.vi_ns_total = 0;
     t.capacity = kRingBytes;
     t.ring = (uint8_t *)VirtualAlloc(nullptr, (SIZE_T)t.capacity, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!t.ring) {
@@ -433,6 +549,7 @@ extern "C" void __cdecl st_rom_open(void) {
     if (!t.ring) {
         write_text(L"summary.txt", "ring_allocation_failed=1\n");
         if (t.shadow) { VirtualFree(t.shadow, 0, MEM_RELEASE); t.shadow = nullptr; t.changed = nullptr; }
+        if (t.vi_shadow) { VirtualFree(t.vi_shadow, 0, MEM_RELEASE); t.vi_shadow = nullptr; t.vi_changed = nullptr; }
         return;
     }
     LARGE_INTEGER frequency;
@@ -461,6 +578,9 @@ extern "C" void __cdecl st_rom_open(void) {
                        c.task_region[i].bytes);
     for (uint32_t i = 0; i < c.level_regions && at < (int)sizeof session - 40; ++i)
         at += snprintf(session + at, sizeof session - at, "level_region=%x:%u\n", c.level[i].begin, c.level[i].bytes);
+    for (uint32_t i = 0; i < c.vi_regions && at < (int)sizeof session - 40; ++i)
+        at += snprintf(session + at, sizeof session - at, c.vi[i].begin == kDmemBegin ? "vi_dmem=%x:%u\n"
+                       : "vi_region=%x:%u\n", c.vi[i].begin, c.vi[i].bytes);
     write_text(L"session.txt", session);
     t.finish = false;
     t.writer = CreateThread(nullptr, 0, writer_main, nullptr, 0, nullptr);
@@ -468,6 +588,7 @@ extern "C" void __cdecl st_rom_open(void) {
         VirtualFree(t.ring, 0, MEM_RELEASE);
         t.ring = nullptr;
         if (t.shadow) { VirtualFree(t.shadow, 0, MEM_RELEASE); t.shadow = nullptr; t.changed = nullptr; }
+        if (t.vi_shadow) { VirtualFree(t.vi_shadow, 0, MEM_RELEASE); t.vi_shadow = nullptr; t.vi_changed = nullptr; }
         return;
     }
     t.active.store(true, std::memory_order_release);
@@ -532,6 +653,9 @@ extern "C" void __cdecl st_process_dlist(void) {
 extern "C" void __cdecl st_update_screen(fn_readscreen read_screen) {
     Tap &t = g_tap;
     if (!t.active.load(std::memory_order_relaxed) || !t.first_qpc) return;
+    const int64_t vi_when = qpc();
+    if (vi_when >= t.deadline) { st_stop(); return; }
+    copy_vi_regions(vi_when);   // every VI: the audio task the game just dispatched, before the RSP runs it
     const uint32_t origin = *t.gfx.VI_ORIGIN_REG;
     if (origin == t.last_origin) return;
     t.last_origin = origin;
