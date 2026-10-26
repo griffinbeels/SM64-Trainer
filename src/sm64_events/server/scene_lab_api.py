@@ -8,6 +8,7 @@ one reader, and without it this module is never imported and no route is added. 
     POST /api/scene-lab/open      {package: <a listed name>} -> the scene; 409 with the reason
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
+    GET  /api/scene-lab/audio/{block}?session=N   one block of the open scene's sound
 
 The lab config is a private JSON file of absolute paths: {"rom", "packages" (a folder of
 .sm64scene files), "pj64_plugin", "map" (the free camera's MappingUS.map), and optionally
@@ -28,6 +29,14 @@ to drawn p95 fell from 48 to 31 ms). A session ends on Close, on
 another Open, when no page has been connected for `page_gone_seconds` (unload, leaving the
 tab), after the config's idle_seconds without a request, when its host dies, and at server
 shutdown; each end closes the host's pipe and waits for it to exit.
+
+The recording's sound, when the package carries a source-audio layer, is described in the open
+scene (its "audio" table, tools/scene_lab/scene_audio.py) and served block by block over HTTP:
+a block is a complete .flac (or .wav) the page decodes, served once its PCM matched its hash.
+Sound blocks decode on the default thread pool rather than the session's worker: they read only
+the package's immutable sound layer, and a block waiting behind a render would start Play's
+sound late. 404 for no sound or no such block, 409 for a scene no longer open, 422 for a block
+that fails its hash.
 
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
 xyz, "position": xyz[, "roll", "fov"]}, "encoding": "jpeg"|"raw"|"shared"} for a picture ("shared":
@@ -60,7 +69,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 log = logging.getLogger("sm64.scene_lab")
@@ -420,6 +429,14 @@ class SceneLab:
             return {"id": message.get("id"), "error": str(error)}
         return {"id": message.get("id"), "kind": "pick", **picked}
 
+    async def audio_block(self, generation: int, block: int) -> tuple[bytes, str]:
+        """One block of the open scene's sound, decoded and checked off the session's worker."""
+        session = self.session
+        if session is None or generation != self.generation:
+            raise SceneClosed((self.ended or {}).get("message") or "This scene is not open.")
+        self.last_used = time.monotonic()
+        return await asyncio.to_thread(session.audio_block, block)
+
     async def serve_socket(self, websocket: WebSocket) -> None:
         await websocket.accept()
         self.sockets += 1
@@ -626,6 +643,18 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     @router.websocket("/ws")
     async def scene_socket(websocket: WebSocket):
         await lab.serve_socket(websocket)
+
+    @router.get("/audio/{block}")
+    async def audio(block: int, session: int):
+        try:
+            data, media_type = await lab.audio_block(session, block)
+        except SceneClosed as closed:
+            raise HTTPException(409, str(closed)) from None
+        except LookupError as missing:
+            raise HTTPException(404, str(missing)) from None
+        except ValueError as damaged:
+            raise HTTPException(422, f"This part of the recording's sound is damaged: {damaged}") from None
+        return Response(data, media_type=media_type, headers={"Cache-Control": "no-store"})
 
     app.include_router(router)
     serving = app.router.lifespan_context

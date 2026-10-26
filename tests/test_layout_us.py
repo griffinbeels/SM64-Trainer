@@ -37,6 +37,13 @@ US_2026_08_15 = {
     # Usamune's settings and counters; their live gates remain VERIFY.
     "save_buffer_start": 0x80207700, "save_buffer_end": 0x80207900,
     "usamune_state_start": 0x80417B4C, "usamune_state_end": 0x80417C80,
+    # The stems capture's audio spans (2026-10-26): linker-map symbols checked
+    # on three savestates; their live gates remain VERIFY.
+    "audio_heap_start": 0x801CE000, "audio_heap_end": 0x801FF150,
+    "audio_globals_start": 0x80220DA0, "audio_globals_end": 0x80226CC0,
+    "sp_task_queue_start": 0x8033AE20, "sp_task_queue_end": 0x8033AE38,
+    "sp_task_messages_start": 0x8033AF08, "sp_task_messages_end": 0x8033AF48,
+    "sp_task_pointers_start": 0x8032D568, "sp_task_pointers_end": 0x8032D57C,
 }
 
 

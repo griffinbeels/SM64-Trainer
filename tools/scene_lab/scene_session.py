@@ -6,6 +6,7 @@
     header, payload = session.finish(pending)                      #   draws while the next one begins
     session.pose(frame)                                            # the recorded camera and Mario
     session.pick(frame, camera, u, v)                              # where that picture drew a pixel
+    session.audio_block(index)                                     # a block of the recording's sound
     session.close()                                                # the host exits; returns its code
 
 A frame is a picture the game showed: a package task a present displayed, in recording order
@@ -30,13 +31,18 @@ already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame
 After a free-camera picture of a new frame, a second thread resolves the frames that follow it
 (evaluator.prepare; backward when stepping back), so playing or stepping finds states ready.
 
-Every method but finish runs on the caller's one thread (the server's worker), so the
-evaluator's view sandbox, the package and the host's image are never shared. finish runs on a
-second thread (the server's delivery thread), once per begin and in begin's order: it reads the
-host's answer and encodes it while the worker begins the next picture, which is what lets the
-game's code for one camera run while the renderer draws and the encoder compresses the last
+The package's source-audio layer, when it has one, is the recording's sound mapped to these
+frames (scene_audio.py); describe() carries its table and audio_block serves its blocks.
+
+Every method but finish and audio_block runs on the caller's one thread (the server's worker),
+so the evaluator's view sandbox, the package and the host's image are never shared. finish runs
+on a second thread (the server's delivery thread), once per begin and in begin's order: it reads
+the host's answer and encodes it while the worker begins the next picture, which is what lets
+the game's code for one camera run while the renderer draws and the encoder compresses the last
 one. The host answers its requests in order (viewer.Host). The look-ahead thread touches only
-the evaluator's resolution side and the package, both behind their locks.
+the evaluator's resolution side and the package, both behind their locks. audio_block reads only
+the immutable sound layer, so the server runs it off the worker, where a sound block never
+waits behind a render.
 src/sm64_events/server/scene_lab_api.py owns the session's lifetime. The host starts only after
 the GPU hold check; tests and e3_measure.py --fake inject fake_viewer_host.py's doubles.
 """
@@ -64,6 +70,7 @@ import package as scene_package  # noqa: E402
 import pick as list_pick  # noqa: E402
 import picture_encoder  # noqa: E402
 import replay  # noqa: E402
+import scene_audio  # noqa: E402
 import viewer  # noqa: E402
 
 FPS = 30                      # game frames per second; the viewer steps presented pictures
@@ -297,6 +304,7 @@ class SceneSession:
         if self.slots is not None:
             host.use_slots(self.slots)
         self.frames, self.outlines = frames, outlines
+        self.sound = scene_audio.SceneSound.of(package, [outlines[index]["present"] for index in frames])
         self.evaluator_factory, self.free_reason = evaluator_factory, free_reason
         self._evaluator = None
         self.image = HostImage() if getattr(host, "keeps_rdram", False) else None
@@ -351,14 +359,28 @@ class SceneSession:
         return session
 
     def describe(self) -> dict:
-        """What the page lists: every frame's level, area and game frame, and the free camera's state."""
+        """What the page lists: every frame's level, area, game frame and recorded time (when the
+        recording showed it, ms after its first picture: Play holds each picture that long; None
+        throughout when the package lacks the times, and Play then runs at FPS), the free camera's
+        state, and the recording's sound (scene_audio.py's table, or why there is none)."""
+        times = [self.outlines[index]["present_us"] for index in self.frames]
+        ordered = None not in times and all(a <= b for a, b in zip(times, times[1:], strict=False))
         frames = []
-        for index in self.frames:
+        for position, index in enumerate(self.frames):
             identity = self.outlines[index]["identity"]
             frames.append({"level": identity.get("curr_level"), "area": identity.get("curr_area"),
-                           "game_frame": identity.get("global_timer")})
+                           "game_frame": identity.get("global_timer"),
+                           "recorded_ms": (times[position] - times[0]) / 1000 if ordered else None})
         return {"name": self.name, "fps": FPS, "frames": frames, "renderer_pid": self.host.pid,
-                "free_camera": {"available": self.free_reason is None, "reason": self.free_reason}}
+                "free_camera": {"available": self.free_reason is None, "reason": self.free_reason},
+                "audio": self.sound.describe() if self.sound else scene_audio.absent()}
+
+    def audio_block(self, index: int) -> tuple[bytes, str]:
+        """(file bytes, media type) of one block of the recording's sound: LookupError when there
+        is no sound or no such block, ValueError when the block fails its hash."""
+        if self.sound is None:
+            raise LookupError(scene_audio.NO_SOUND)
+        return self.sound.block(index)
 
     def _index(self, frame) -> int:
         if not isinstance(frame, int) or isinstance(frame, bool) or not 0 <= frame < len(self.frames):

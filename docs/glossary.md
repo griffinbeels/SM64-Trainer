@@ -1200,6 +1200,30 @@ savestates). That is what lets a recording be re-viewed from a free camera.
 - **Not** -- the [[task closure]], which is what the [[renderer]] reads to
   draw a list; the scene state is what the game reads to make one
 
+### Sound stems
+
+An M4 experiment's music track and effects track, split from the sound a
+recording played without guessing. Every VI the game hands the RSP one audio
+task: a list of mixing commands over its notes. The [[scene tap]] copies the
+audio state at each VI while that task still waits, so a recording holds
+every task's whole input and, at the next VI, the samples Project64's RSP
+wrote. Offline, the ROM's own audio microcode executes each task again in an
+RSP interpreter. A stem is the same task with the other side's notes still
+decoding but mixing into a scratch buffer. A note belongs to the sequence
+player that owns it: the level music and jingle players make the music,
+the sound-effect player the effects, Mario's voice included. Each stem is
+what the game played for those notes, voice stealing included, and the two
+sum to the mix within a few units of the 16-bit scale. On savestates the
+copy is complete: executing it again reproduces every task bit for bit;
+matching Project64's own output waits on a live recording (2026-10-26).
+
+- **Lives** -- the audio spans (the audio and SP-task rows in
+  `src/sm64_events/memory/layout.py`); the per-VI copy
+  (`plugin/gfxwrap/scene_tap.cpp`); the renders and the
+  four checks (`tools/scene_lab/stems_probe.py`, `tools/scene_lab/stems_check.py`)
+- **Not** -- separating a recorded mix after the fact (source separation,
+  volume ducking): those guess at sound the game never split
+
 ### Scene package
 
 An M4 experiment's portable file of the graphics tasks a [[scene tap]]
@@ -1223,12 +1247,17 @@ never as a memory image. On a 90-second recording the state adds about
 5.4 MiB a minute to the closures' 2.4, and every checked task regenerates
 exactly as it does from the tap's own files (2026-10-25). A scene-resolution
 layer, added after writing, records what the [[scene evaluator]] found each
-task's drawing used, as addresses only (3.5 KB for that recording). The
-reader refuses a version or layer it does not know.
+task's drawing used, as addresses only (3.5 KB for that recording). A
+source-audio layer, also added after writing, carries the game sound
+Project64's own audio output played, lossless, with the sample sounding as each
+picture appeared; attaching refuses sound recorded beside a different recording.
+The reader refuses a version or layer it does not know.
 
 - **Lives** -- `tools/scene_lab/package.py` (write, read, verify); the
   [[scene evaluator]] reads it and writes the scene-resolution layer
-  (`tools/scene_lab/evaluator.py`, its resolve command)
+  (`tools/scene_lab/evaluator.py`, its resolve command); the sound's format
+  (`tools/scene_lab/audio_layer.py`) and its attach command
+  (`tools/scene_lab/audio_session.py`)
 - **Not** -- what the [[scene tap]] itself writes, which holds raw memory
   images and pictures and stays private on the machine that recorded it
 
@@ -1258,7 +1287,9 @@ while it draws this one.
 
 An M4 experiment's page inside the Trainer that plays one [[scene package]]
 in its reconstructed stage: the game's own pictures from the **Recorded
-camera**, stepping forward and back, seeking and 30 fps playback, and a **Free
+camera**, stepping forward and back, seeking, and playback at the recording's
+own pace (each picture stays up as long as the recording showed it, so a level
+load's held picture holds and its sound plays through), and a **Free
 camera** the [[scene evaluator]] redraws. Free camera starts from the picture
 on screen (the recorded camera's place, screen tilt and field of view) and owns
 all four after that, so steps and seeks never move or zoom it. Controls: drag to
@@ -1284,11 +1315,20 @@ JPEG: the server hands the page the [[renderer]]'s exact pixels through WebView2
 shared memory. While the camera moves, the page sums up its own
 numbers every 2 s (pictures a second, input to picture, decode, the server's
 stages): the readout shows them and the UI observation log records them.
+A package with a source-audio layer plays Project64's own sound during Play,
+following the pictures: the sample heard as a picture appears is that
+picture's own. Stepping, seeking and Pause are silent; Mute (or M) and the
+volume persist per viewer; a stretch the capture lost plays silent and says
+so. A package without one says it has no sound.
 
 - **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
   mounted by `src/sm64_events/main.py`); one open scene
-  (`tools/scene_lab/scene_session.py`); the page
-  (`src/sm64_events/ui/components/sceneviewer.js`); the free camera's math
+  (`tools/scene_lab/scene_session.py`) and its sound (`tools/scene_lab/scene_audio.py`);
+  the page (`src/sm64_events/ui/components/sceneviewer.js`), the recording's
+  own clock its Play keeps (`src/sm64_events/ui/components/sceneclock.js`) and its sound
+  (`src/sm64_events/ui/components/sceneaudio.js`, rendered by
+  `src/sm64_events/ui/components/sceneaudioworklet.js`);
+  the free camera's math
   (`src/sm64_events/ui/components/scenecamera.js`) and feel numbers
   (`src/sm64_events/ui/scenecameratuning.js`); where it goes in the game's RAM
   (`tools/scene_lab/camera_state.py`); Set focus's point
