@@ -591,26 +591,23 @@ test("a tilted view levels as you turn or fly, never on entry, a step, a slide o
   await waitFor(() => expect(socket.last().camera).toEqual(first));
 });
 
-// ------------------------------------------------------------------ flight
+// ------------------------------------------------------------------ flight: W A S D and Q E, no button needed
 
-async function startFlying(page, socket, canvas) {
+const hint = (page) => page.container.querySelector(".scene-lab-hint").textContent;
+const LOOKING = "Move the mouse to look around";
+
+// Holding the right button adds looking around with the mouse.
+async function startLooking(page, socket, canvas) {
   await enterFree(page, socket);
   fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
-  await until(() => expect(page.container.querySelector(".scene-lab-hint").textContent).toContain("W A S D"));
+  await until(() => expect(hint(page)).toContain(LOOKING));
 }
 
-test("holding the right button flies: W moves at a constant speed where the camera looks, and letting go stops it", async () => {
-  const { page, socket, root, canvas } = await openScene();
-  const keyBefore = socket.sent.length;
-  fireEvent.keyDown(root, { key: "w", code: "KeyW" });                         // not flying: W is nobody's
-  fireEvent.keyUp(root, { key: "w", code: "KeyW" });
-  await settled();
-  expect(socket.sent.length).toBe(keyBefore);
-  await startFlying(page, socket, canvas);
-  expect(HTMLCanvasElement.prototype.requestPointerLock).toHaveBeenCalledTimes(1);
-  const start = socket.last().camera;
+test("W flies with no button held: a constant speed where the camera looks, and letting go stops it", async () => {
+  const { page, socket, root } = await openScene();
+  const start = await enterFree(page, socket);
   clock.now = 5000;                                                             // the key goes down at 5 s
-  fireEvent.keyDown(root, { key: "w", code: "KeyW" });
+  expect(fireEvent.keyDown(root, { key: "w", code: "KeyW" })).toBe(false);     // the camera's: nothing else gets it
   await tick(5050);                                                             // the first step, 50 ms on
   await until(() => expect(socket.last().camera.position).not.toEqual(start.position));
   const first = socket.last().camera;
@@ -627,14 +624,60 @@ test("holding the right button flies: W moves at a constant speed where the came
   await tick(6000);
   expect(frames.length).toBe(0);                                                // no coasting: the loop ended
   expect(socket.sent.length).toBe(after);
-  fireEvent.pointerUp(canvas, { button: 2, buttons: 0, pointerId: 3 });
-  expect(document.exitPointerLock).toHaveBeenCalled();
-  expect(page.container.querySelector(".scene-lab-hint").textContent).not.toContain("W A S D");
+  expect(HTMLCanvasElement.prototype.requestPointerLock).not.toHaveBeenCalled(); // the pointer stays his
+  expect(page.container.querySelector(".scene-lab-cue")).toBeNull();
 });
 
-test("moving the mouse while flying turns the view where the camera stands, and the picture says how to fly", async () => {
+test("keys held together combine through the one flight step: W and D go diagonally, no faster than straight", async () => {
+  const { page, socket, root } = await openScene();
+  await enterFree(page, socket);
+  clock.now = 5000;
+  fireEvent.keyDown(root, { key: "w", code: "KeyW" });
+  fireEvent.keyDown(root, { key: "d", code: "KeyD" });
+  await tick(5050);
+  await until(() => expect(socket.last().camera.position).not.toEqual(POSE.position));
+  const first = socket.last().camera;
+  await socket.picture(socket.last());
+  await tick(5100);
+  await until(() => expect(socket.last().camera.position).not.toEqual(first.position));
+  const expected = cameraOf(flown(orbitFromPose(first.focus, first.position, { roll: 0, fov: first.fov }),
+    { forward: 1, right: 1 }, 0.05, REFERENCE.flightSpeed, REFERENCE));
+  close(socket.last().camera.position, expected.position, 6);
+  expect(Math.hypot(...[0, 1, 2].map((i) => socket.last().camera.position[i] - first.position[i])))
+    .toBeCloseTo(REFERENCE.flightSpeed * 0.05, 6);
+  fireEvent.keyUp(root, { key: "w", code: "KeyW" });
+  fireEvent.keyUp(root, { key: "d", code: "KeyD" });
+});
+
+test("in the recorded camera the first movement key enters the free camera from exactly the picture on screen and moves on that press", async () => {
+  const shown = { ...POSE, roll: -2000, fov: 80 };
+  const { page, socket, root } = await openScene();
+  await socket.picture(socket.sent[0]);
+  clock.now = 5000;
+  fireEvent.keyDown(root, { key: "w", code: "KeyW" });                         // no click on Free camera first
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose", frame: 0 }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: shown, reason: null });
+  await until(() => expect(socket.last().camera).toBeTruthy());
+  const entry = socket.last().camera;                                          // the picture does not jump
+  close(entry.focus, shown.focus, 9);
+  close(entry.position, shown.position, 9);
+  expect(entry.roll).toBe(shown.roll);
+  expect(entry.fov).toBe(shown.fov);
+  expect(page.container.querySelector(".scene-lab-tag").textContent).toBe("Free camera");
+  await socket.picture(socket.last());
+  await tick(5050);                                                             // the same press, still held
+  await until(() => expect(socket.last().camera.position).not.toEqual(entry.position));
+  const expected = cameraOf(flown(orbitFromPose(shown.focus, shown.position, { roll: shown.roll, fov: shown.fov }),
+    { forward: 1 }, 0.05, REFERENCE.flightSpeed, REFERENCE));
+  close(socket.last().camera.position, expected.position, 6);
+  expect(socket.last().camera.roll).toBe(expected.roll);
+  fireEvent.keyUp(root, { key: "w", code: "KeyW" });
+});
+
+test("holding the right button looks around with the mouse where the camera stands, and the picture says how to fly", async () => {
   const { page, socket, canvas } = await openScene();
-  await startFlying(page, socket, canvas);
+  await startLooking(page, socket, canvas);
+  expect(HTMLCanvasElement.prototype.requestPointerLock).toHaveBeenCalledTimes(1);
   expect(page.container.querySelector(".scene-lab-cue").textContent).toContain("W A S D move");
   const start = socket.last().camera;
   move(canvas, { pointerId: 3, buttons: 2, movementX: 25, movementY: -10 });
@@ -654,9 +697,9 @@ test("the speed reads in three figures", () => {
   expect([0.64, 1, 1.25, 1.5625, 15.26, 20].map(speedWords)).toEqual(["0.64x", "1.0x", "1.25x", "1.56x", "15.3x", "20.0x"]);
 });
 
-test("Shift flies faster, Alt slower, and the wheel sets the speed while flying instead of moving closer", async () => {
+test("Shift flies faster, Alt slower, and the wheel sets the speed while the right button is held instead of moving closer", async () => {
   const { page, socket, root, canvas } = await openScene();
-  await startFlying(page, socket, canvas);
+  await startLooking(page, socket, canvas);
   const sentBefore = socket.sent.length;
   fireEvent.wheel(canvas, { deltaY: -100 });                                    // one notch up: faster
   await settled();
@@ -684,38 +727,160 @@ test("Shift flies faster, Alt slower, and the wheel sets the speed while flying 
   expect(page.getByRole("group", { name: "Flight speed" }).textContent).toContain("1.0x");
 });
 
-test.each([
-  ["Esc", (root) => fireEvent.keyDown(root, { key: "Escape" })],
-  ["leaving the window", () => window.dispatchEvent(new Event("blur"))],
-  ["letting go of the right button", (root, canvas) => fireEvent.pointerUp(canvas, { button: 2, buttons: 0, pointerId: 3 })],
-  ["the browser ending the pointer lock", () => { locked = null; document.dispatchEvent(new Event("pointerlockchange")); }],
-])("%s stops every movement and gives the pointer back", async (_label, end) => {
+test("letting go of the right button gives the pointer back, and a key still held flies on until it is let go", async () => {
   const { page, socket, root, canvas } = await openScene();
-  await startFlying(page, socket, canvas);
+  await startLooking(page, socket, canvas);
+  clock.now = 5000;
+  fireEvent.keyDown(root, { key: "d", code: "KeyD" });
+  await tick(5050);
+  await until(() => expect(frames.length).toBe(1));
+  fireEvent.pointerUp(canvas, { button: 2, buttons: 0, pointerId: 3 });
+  expect(locked).toBeNull();
+  expect(hint(page)).not.toContain(LOOKING);
+  await socket.picture(socket.last());
+  const before = socket.last().camera;
+  await tick(5100);
+  await until(() => expect(socket.last().camera.position).not.toEqual(before.position));   // D still moves
+  fireEvent.keyUp(root, { key: "d", code: "KeyD" });
+  await tick(5150);
+  expect(frames.length).toBe(0);
+});
+
+test.each([
+  ["Esc", ({ root }) => fireEvent.keyDown(root, { key: "Escape" })],
+  ["leaving the window", () => window.dispatchEvent(new Event("blur"))],
+  ["the window hiding", () => {
+    vi.spyOn(Document.prototype, "hidden", "get").mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+  }],
+  ["the browser ending the pointer lock", () => { locked = null; document.dispatchEvent(new Event("pointerlockchange")); }],
+  ["leaving the page", ({ page }) => page.unmount()],
+])("%s stops every movement, lets go of every key and gives the pointer back", async (_label, end) => {
+  const { page, socket, root, canvas } = await openScene();
+  await startLooking(page, socket, canvas);
   clock.now = 5000;
   fireEvent.keyDown(root, { key: "d", code: "KeyD" });
   await tick(5000);
   await tick(5050);
   await until(() => expect(frames.length).toBe(1));
-  end(root, canvas);
+  end({ page, root });
   await tick(5100);
   const after = socket.sent.length;
+  fireEvent.keyDown(root, { key: "d", code: "KeyD", repeat: true });            // D still down: its repeats stay still
   await tick(5400);
+  await tick(5450);
   expect(socket.sent.length).toBe(after);
   expect(frames.length).toBe(0);
   expect(locked).toBeNull();
-  expect(page.container.querySelector(".scene-lab-hint").textContent).not.toContain("W A S D");
+  if (root.isConnected) expect(hint(page)).not.toContain(LOOKING);
 });
 
-test("arrows still step and Space still plays while flying: one keyboard owner", async () => {
+test("arrows still step and Space still plays while looking around: one keyboard owner", async () => {
   const { page, socket, root, canvas } = await openScene();
-  await startFlying(page, socket, canvas);
+  await startLooking(page, socket, canvas);
   fireEvent.keyDown(root, { key: "ArrowRight", code: "ArrowRight" });
   await waitFor(() => expect(socket.last().frame).toBe(1));
   expect(socket.last().camera).toBeTruthy();
   await socket.picture(socket.last());
   fireEvent.keyDown(root, { key: " ", code: "Space" });
   await waitFor(() => expect(page.getByRole("button", { name: "Pause" })).toBeTruthy());
+});
+
+// ------------------------------------------------------------------ who has the keyboard
+
+test("arriving gives the viewer the keyboard, from the sidebar and from the Ghost button", async () => {
+  const sidebar = document.body.appendChild(document.createElement("button"));
+  sidebar.focus();                                                              // the entry he clicked to get here
+  const page = render(h(SceneViewer, {}));
+  expect(document.activeElement).toBe(page.container.querySelector(".scene-lab"));
+  cleanup();
+  sidebar.focus();
+  const ghost = await openAttempt(12);
+  expect(document.activeElement).toBe(ghost.page.container.querySelector(".scene-lab"));
+  sidebar.remove();
+});
+
+test("a mouse click on a control hands the keyboard back; a button pressed from the keyboard keeps Space and Enter", async () => {
+  const { page, socket, root } = await openScene();
+  await socket.picture(socket.sent[0]);
+  const play = page.getByRole("button", { name: "Play" });
+  play.focus();                                                                 // a mouse press focuses the button,
+  fireEvent.click(play, { detail: 1 });                                         // its click plays,
+  expect(document.activeElement).toBe(root);                                    // and the viewer has the keyboard again
+  await until(() => expect(page.getByRole("button", { name: "Pause" })).toBeTruthy());
+  fireEvent.keyDown(document.activeElement, { key: " ", code: "Space" });       // so Space pauses, once
+  await until(() => expect(page.getByRole("button", { name: "Play" })).toBeTruthy());
+  const slider = page.getByRole("slider", { name: "Frame" });
+  slider.focus();
+  fireEvent.click(slider, { detail: 1 });
+  expect(document.activeElement).toBe(root);
+  const free = page.getByRole("button", { name: "Free camera" });
+  free.focus();                                                                 // reached with Tab
+  expect(fireEvent.keyDown(free, { key: " ", code: "Space" })).toBe(true);      // Space is the button's own press,
+  expect(fireEvent.keyDown(free, { key: "Enter", code: "Enter" })).toBe(true);
+  await settled();
+  expect(page.getByRole("button", { name: "Play" })).toBeTruthy();             // never Play as well
+  fireEvent.click(free);                                                        // the browser's press: detail 0
+  expect(document.activeElement).toBe(free);                                    // Tab walks on from here
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  await until(() => expect(socket.last().camera).toBeTruthy());
+  const entry = socket.last().camera;
+  await socket.picture(socket.last());
+  clock.now = 5000;
+  expect(fireEvent.keyDown(free, { key: "w", code: "KeyW" })).toBe(false);     // W still flies from the button
+  await tick(5050);
+  await until(() => expect(socket.last().camera.position).not.toEqual(entry.position));
+  fireEvent.keyUp(free, { key: "w", code: "KeyW" });
+});
+
+test("a field that types keeps its keys, Ctrl and Meta combinations stay the browser's, and focus moving to a field lets go", async () => {
+  const { page, socket, root } = await openScene();
+  const entry = await enterFree(page, socket);
+  fireEvent.click(page.getByRole("button", { name: "Tune controls" }));
+  const field = page.getByRole("region", { name: "Tune controls" }).querySelector("#flightSpeed");
+  const picker = root.querySelector(".scene-lab-quality select");
+  const sent = socket.sent.length;
+  for (const target of [field, picker]) {
+    target.focus();
+    for (const [key, code] of [["w", "KeyW"], ["e", "KeyE"], [" ", "Space"], ["r", "KeyR"], ["f", "KeyF"], ["ArrowRight", "ArrowRight"]]) {
+      expect(fireEvent.keyDown(target, { key, code }), `${target.tagName} ${key}`).toBe(true);   // not taken
+    }
+  }
+  root.focus();
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+    for (const [key, code] of [["r", "KeyR"], ["w", "KeyW"], [" ", "Space"]]) {
+      expect(fireEvent.keyDown(root, { key, code, ...modifier }), `${key} ${JSON.stringify(modifier)}`).toBe(true);
+    }
+  }
+  await tick(1100);
+  expect(socket.sent.length).toBe(sent);                                        // nothing moved, stepped or played
+  expect(page.container.querySelector(".scene-lab-tag").textContent).toBe("Free camera");
+  clock.now = 5000;
+  fireEvent.keyDown(root, { key: "w", code: "KeyW" });
+  await tick(5050);
+  await until(() => expect(socket.last().camera.position).not.toEqual(entry.position));
+  field.focus();                                                                // W still down, now typing into a field
+  await socket.picture(socket.last());
+  await tick(5100);
+  const after = socket.sent.length;
+  await tick(5200);
+  expect(socket.sent.length).toBe(after);
+  expect(frames.length).toBe(0);
+});
+
+test("a key pressed while nothing on the page has focus is the viewer's, and its release is heard wherever it lands", async () => {
+  const { page, socket, root } = await openScene();
+  const entry = await enterFree(page, socket);
+  root.blur();
+  expect(document.activeElement).toBe(document.body);
+  clock.now = 5000;
+  expect(fireEvent.keyDown(document.body, { key: "w", code: "KeyW" })).toBe(false);
+  await tick(5050);
+  await until(() => expect(socket.last().camera.position).not.toEqual(entry.position));
+  fireEvent.keyUp(document.body, { key: "w", code: "KeyW" });
+  await tick(5100);
+  expect(frames.length).toBe(0);
 });
 
 // ------------------------------------------------------------------ focus
@@ -915,18 +1080,18 @@ test("a click maps onto the picture inside its letterbox", () => {
 
 test("the hint teaches only what applies now", async () => {
   const { page, socket, canvas } = await openScene();
-  const hint = () => page.container.querySelector(".scene-lab-hint").textContent;
-  expect(hint()).toContain("hold the right button");
+  expect(hint(page)).toContain("W A S D move the camera from this picture");
   await enterFree(page, socket);
-  expect(hint()).toContain("Drag to turn around the focus point");
+  expect(hint(page)).toContain("hold the right button to look around.");
+  expect(hint(page)).toContain("Drag to turn around the focus point");
   fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
-  await waitFor(() => expect(hint()).toContain("W A S D"));
+  await waitFor(() => expect(hint(page)).toContain(LOOKING));
   expect(hintFor({ freeAvailable: false, scene: { free_camera: { reason: "No state." } } })).toContain("No state.");
 });
 
 test("without a free camera the controls say why instead of doing nothing", async () => {
   opened.free_camera = { available: false, reason: "This recording carries no scene state." };
-  const { page, canvas } = await openScene();
+  const { page, socket, root, canvas } = await openScene();
   expect(page.getByRole("button", { name: "Free camera" }).disabled).toBe(true);
   expect(page.getByRole("button", { name: "Look at Mario" }).disabled).toBe(true);
   expect(page.getByRole("button", { name: "Set focus" }).disabled).toBe(true);
@@ -934,6 +1099,10 @@ test("without a free camera the controls say why instead of doing nothing", asyn
     .toContain("Only the recorded camera is available: This recording carries no scene state.");
   fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
   expect(HTMLCanvasElement.prototype.requestPointerLock).not.toHaveBeenCalled();
+  const sent = socket.sent.length;
+  expect(fireEvent.keyDown(root, { key: "w", code: "KeyW" })).toBe(true);     // W is nobody's: not taken
+  await settled();
+  expect(socket.sent.length).toBe(sent);
 });
 
 test("a closed scene shows the server's reason and offers Open again", async () => {

@@ -93,7 +93,7 @@ export function dollied(orbit, wheel, tuning = SCENE_CAMERA_DEFAULTS) {
     Math.min(tuning.closestDistance, orbit.dist), Math.max(tuning.farthestDistance, orbit.dist)) };
 }
 
-// Mouse movement while flying: the view turns where the camera stands.
+// Mouse movement with the right button held: the view turns where the camera stands.
 export function looked(orbit, dx, dy, tuning = SCENE_CAMERA_DEFAULTS) {
   const k = tuning.lookPerPixel, position = cameraOf(orbit).position;
   const yaw = orbit.yaw - dx * k, pitch = pitchWithin(orbit.pitch + dy * k, orbit.pitch, tuning);
