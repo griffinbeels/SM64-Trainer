@@ -1304,7 +1304,8 @@ the view back where Free camera began; R returns to the recorded camera. A tilte
 as the shipped defaults. It is
 lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab
 config (the ROM, the package folder, Project64's Plugin folder, the symbol
-map). Nothing starts until someone opens a package; the hidden [[renderer]]
+map). Nothing starts until someone opens a package or, with the
+[[ghost button]], an [[attempt]]'s scene; the hidden [[renderer]]
 helper and the evaluator start then and stop on Close, after a while unused,
 when no page shows the scene, and when the server stops. The page keeps two
 pictures in flight, asks for the next as soon as one arrives, and a newer step or
@@ -1338,6 +1339,24 @@ so. A package without one says it has no sound.
   (`tools/scene_lab/e3_measure.py`)
 - **Not** -- the replay player, which plays recorded video; the scene viewer
   redraws the game's graphics from a [[scene package]]
+
+### Ghost button
+
+The button left of ▷ on a [[practice log]] row, shown only while the scene lab
+is on: one click switches to the [[scene viewer]], opens that [[attempt]]'s
+scene and plays it from its first [[frame]] as soon as the viewer draws that
+picture. A row the lab knows nothing about has none; a scene the lab is still
+cutting shows it disabled ("Scene finishing…") until it is ready, and a scene
+that cannot exist shows the lab's reason. [[star]] and [[segment]] rows both
+have it.
+
+- **Lives** -- `src/sm64_events/ui/components/attemptscene.js` (the button and
+  each table's ask of the lab), drawn by
+  `src/sm64_events/ui/components/attemptlog.js`; `src/sm64_events/ui/app.js`
+  hands the [[attempt]] to the viewer
+- **Not** -- the [[ghost toggle]], which races a recorded [[ghost]] in the game;
+  this button only opens the [[attempt]]'s scene, and wears the same mark as
+  the [[scene viewer]]'s sidebar entry
 
 ### Picture encoder
 
