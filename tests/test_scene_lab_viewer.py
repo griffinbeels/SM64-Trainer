@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -446,6 +447,38 @@ def test_an_answer_is_never_taken_for_another_requests_picture(lab, recording):
     session.begin(4, None, "raw")                                     # two answers nobody collects
     started = time.monotonic()
     assert session.close() == 0 and time.monotonic() - started < 5
+
+
+class _Shared:
+    """The desktop window's shared-memory pictures (webview_pictures.WebView2Pictures), recorded."""
+
+    def __init__(self):
+        self.ok, self.posts = True, []
+
+    def post(self, pixels, info):
+        self.posts.append((bytes(pixels), info))
+        return self.ok
+
+
+def test_the_desktop_window_gets_the_exact_pixels_through_shared_memory_or_a_jpeg(lab, recording):
+    app, server = _app(lab)
+    with TestClient(app) as client:
+        assert client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()["shared_pictures"] is False
+        server.attach_window(SimpleNamespace(native=None))           # a window with no WebView2 yet
+        assert server.shared.post(b"pixels", {"id": 1}) is False
+        server.shared = shared = _Shared()
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-b.sm64scene"}).json()
+        assert opened["shared_pictures"] is True
+        assert client.get("/api/scene-lab/status").json()["session"]["shared_pictures"] is True
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            socket.send_json({"id": 5, "session": opened["session"], "frame": 2, "camera": None, "encoding": "shared"})
+            reply = _reply(socket)
+            assert (reply["encoding"], reply["payload"], reply["payload_bytes"]) == ("shared", b"", 0)
+            assert shared.posts == [(_recorded(recording, SHOWN[2]), {"id": 5, "session": opened["session"]})]
+            shared.ok = False                                           # the window went: a JPEG instead
+            socket.send_json({"id": 6, "session": opened["session"], "frame": 2, "camera": None, "encoding": "shared"})
+            reply = _reply(socket)
+            assert reply["encoding"] == "jpeg" and reply["payload"][:2] == b"\xff\xd8"
 
 
 def test_the_encoder_child_makes_the_same_jpeg_and_the_session_carries_on_without_it(lab):

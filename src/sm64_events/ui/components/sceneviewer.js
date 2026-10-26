@@ -12,7 +12,9 @@
 // move replaces the one request waiting behind them (latest wins; the server
 // does the same). A picture stops being in flight when it arrives: the next
 // request goes out while it decodes and draws. Pictures draw as they finish
-// decoding, never over a newer one already on the canvas.
+// decoding, never over a newer one already on the canvas. In the desktop app's
+// window the pictures skip JPEG: the server hands over the exact pixels through
+// WebView2 shared memory (SHARED_WAIT has the details).
 //
 // While the free camera moves, the page sums up its own numbers every
 // MOVING_WINDOW.ms (input to picture, pictures a second, decode, the server's
@@ -158,8 +160,8 @@ async function paint(canvas, header, bytes, claim = () => true) {
   const context = canvas?.getContext("2d");
   if (!context) return null;
   const started = performance.now();
-  const bitmap = header.encoding === "raw" ? null
-    : await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+  const bitmap = header.encoding === "jpeg"
+    ? await createImageBitmap(new Blob([bytes], { type: "image/jpeg" })) : null;
   if (!claim()) { bitmap?.close(); return null; }
   if (canvas.width !== header.width || canvas.height !== header.height) {
     canvas.width = header.width;
@@ -183,6 +185,15 @@ export function pictureFraction(canvas, clientX, clientY) {
   return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? { u, v } : null;
 }
 
+// The desktop window's WebView2 (null in a browser). There the server can hand
+// over the renderer's exact pixels through shared memory instead of a JPEG
+// (tools/scene_lab/webview_pictures.py): a "shared" picture's header comes over
+// the socket with no pixels, and the pixels as a sharedbufferreceived event
+// tagged with the request's id. Either can arrive first; a header whose pixels
+// never come is dropped after SHARED_WAIT.ms.
+const webview = () => globalThis.chrome?.webview ?? null;
+export const SHARED_WAIT = { ms: 2000 };
+
 // The open scene's requests and camera: up to PICTURES_IN_FLIGHT pictures in
 // flight, the newest input waiting behind them, input time kept from the
 // EARLIEST input so input-to-picture stays honest (until that picture is
@@ -194,11 +205,14 @@ export class SceneLink {
       playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: new Map(),
       wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
       entering: null, arrived: 0, drawnSeq: 0, fly: null, speed: 1, picking: false, finding: false, glide: null,
-      serial: 0, noticeTimer: null, moving: null });
+      serial: 0, noticeTimer: null, moving: null, shared: new Map() });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
+    this.onShared = (event) => this.sharedArrived(event);
   }
 
   get freeAvailable() { return !!this.scene?.free_camera?.available; }
+
+  get sharedAvailable() { return !!this.scene?.shared_pictures && !!webview(); }
 
   get moved() { return this.free && !sameOrbit(this.orbit, this.entry); }
 
@@ -212,6 +226,10 @@ export class SceneLink {
     ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
       wanted: null, notice: null, error: null, speed: 1, moving: null });
+    if (this.sharedAvailable) {
+      webview().addEventListener("sharedbufferreceived", this.onShared);
+      this.encoding = "shared";
+    } else if (this.encoding === "shared") this.encoding = "jpeg";
     this.changed();
   }
 
@@ -219,8 +237,46 @@ export class SceneLink {
     this.interrupt();
     this.playing = false;
     this.timings.stop();
+    webview()?.removeEventListener("sharedbufferreceived", this.onShared);
+    for (const [id, waiting] of this.shared) {
+      this.shared.delete(id);
+      if (waiting.buffer) webview()?.releaseBuffer(waiting.buffer);
+      else { clearTimeout(waiting.timer); waiting.resolve(null); }
+    }
     Object.assign(this, { fly: null, picking: false, drag: null });
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
+  }
+
+  // A shared picture's pixels: handed to its waiting header, else kept until the header comes.
+  sharedArrived(event) {
+    const { id, session } = event.additionalData || {}, buffer = event.getBuffer();
+    const waiting = this.shared.get(id);
+    if (session !== this.scene?.session || waiting?.buffer) return webview()?.releaseBuffer(buffer);
+    if (!waiting) return this.shared.set(id, { buffer });
+    this.shared.delete(id);
+    clearTimeout(waiting.timer);
+    waiting.resolve(buffer);
+  }
+
+  // A picture's pixels: after its header in the socket message, or (encoding "shared") the shared
+  // buffer posted for it; null when that never came.
+  async pixelsOf(header, buffer, offset) {
+    if (header.encoding !== "shared") return { pixels: new Uint8Array(buffer, offset) };
+    const shared = await this.sharedPixels(header.id);
+    return shared && { pixels: new Uint8Array(shared), shared };
+  }
+
+  // The pixels for header `id`: at once if they came first, else when they come (null: they did not).
+  sharedPixels(id) {
+    const stored = this.shared.get(id);
+    if (stored?.buffer) {
+      this.shared.delete(id);
+      return Promise.resolve(stored.buffer);
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.shared.delete(id); resolve(null); }, SHARED_WAIT.ms);
+      this.shared.set(id, { resolve, timer });
+    });
   }
 
   end(message) {
@@ -264,7 +320,9 @@ export class SceneLink {
       this.drawnSeq = arrived;
       return true;
     };
-    const decodeMs = await this.draw(header, new Uint8Array(buffer, 4 + length), claim);
+    const got = await this.pixelsOf(header, buffer, 4 + length);
+    const decodeMs = got ? await this.draw(header, got.pixels, claim) : null;
+    if (got?.shared) webview()?.releaseBuffer(got.shared);
     this.drawing = this.inFlight.size > 0;
     if (decodeMs == null || arrived !== this.drawnSeq) {
       this.timings.skip();
@@ -790,6 +848,7 @@ function CameraBar({ link, tuning, setTuning }) {
     ${available && html`<${SpeedControl} link=${link} />`}
     <label class="scene-lab-quality">Pictures
       <select value=${link.encoding} onchange=${(event) => { link.encoding = event.currentTarget.value; link.want("input"); }}>
+        ${link.sharedAvailable && html`<option value="shared">Exact pixels, fastest (shared memory)</option>`}
         <option value="jpeg">Faster (JPEG)</option>
         <option value="raw">Exact pixels (slower)</option>
       </select></label>
@@ -799,13 +858,15 @@ function CameraBar({ link, tuning, setTuning }) {
   <p class="scene-lab-hint">${hintFor(link)}</p>`;
 }
 
+const ENCODING_WORDS = { jpeg: "JPEG", raw: "exact pixels", shared: "exact pixels through shared memory" };
+
 function Readout({ link }) {
   const shown = link.shown, timings = shown?.timings || {}, moving = link.moving;
   if (!shown) return null;
   const rate = moving && (moving.pictures_per_second == null ? `${moving.pictures} picture`
     : `${Math.round(moving.pictures_per_second)} pictures a second`);
   return html`<p class="scene-lab-readout">
-    ${shown.width}x${shown.height} ${shown.encoding === "raw" ? "exact pixels" : "JPEG"},
+    ${shown.width}x${shown.height} ${ENCODING_WORDS[shown.encoding] || shown.encoding},
     ${" "}input to picture ${ms(percentile(link.latencies, 0.5))} (p95 ${ms(percentile(link.latencies, 0.95))}),
     ${" "}server ${ms(shown.server_ms)}: game code ${ms(timings.evaluate_ms)}, renderer ${ms(timings.host_ms)},
     ${" "}encode ${ms(timings.encode_ms)}

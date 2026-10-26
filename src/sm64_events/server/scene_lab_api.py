@@ -30,7 +30,10 @@ tab), after the config's idle_seconds without a request, when its host dies, and
 shutdown; each end closes the host's pipe and waits for it to exit.
 
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
-xyz, "position": xyz[, "roll", "fov"]}, "encoding": "jpeg"|"raw"} for a picture, {"id",
+xyz, "position": xyz[, "roll", "fov"]}, "encoding": "jpeg"|"raw"|"shared"} for a picture ("shared":
+the desktop window's page only, once attach_window gave the scene its window; the exact pixels
+go through WebView2 shared memory and the binary reply is the header alone, or a JPEG when the
+post failed, as its header's encoding says), {"id",
 "session", "kind": "pose", "frame"} for the recorded camera and Mario, {"id", "session", "kind":
 "pick", "frame", "camera", "u", "v"} for where the picture drew a point (u, v from 0 to 1 across
 and down; Set focus). A picture comes back as one binary message, [u32 little-endian header
@@ -223,6 +226,19 @@ class SceneLab:
         self.host_exit: int | None = None
         self.watch_task: asyncio.Task | None = None
         self.loop_probe = LoopProbe() if measure_loop else None
+        self.shared = None             # the desktop window's shared-memory pictures (attach_window)
+
+    def attach_window(self, window) -> None:
+        """The desktop app's pywebview window: its page may then ask for encoding "shared" and get
+        the renderer's exact pixels through WebView2 shared memory instead of a JPEG
+        (tools/scene_lab/webview_pictures.py). A browser's page goes on getting JPEGs."""
+        try:
+            self.shared = _lab_module("webview_pictures").WebView2Pictures(window)
+        except ConfigError:
+            self.shared = None
+
+    def _scene(self, described: dict) -> dict:
+        return {"session": self.generation, **described, "shared_pictures": self.shared is not None}
 
     # ------------------------------------------------------------ status, open, close
 
@@ -241,8 +257,7 @@ class SceneLab:
 
     async def status(self) -> dict:
         report = await asyncio.to_thread(self._status_blocking)
-        report["session"] = ({"session": self.generation, **self.described}
-                             if self.session is not None and self.described else None)
+        report["session"] = self._scene(self.described) if self.session is not None and self.described else None
         report["ended"] = self.ended
         if self.loop_probe is not None:
             report["loop"] = self.loop_probe.summary()
@@ -275,7 +290,7 @@ class SceneLab:
             self.last_used = self.page_seen = time.monotonic()
             self.ended = self.host_exit = None
             self._start_watch()
-            return {"session": self.generation, **described}
+            return self._scene(described)
 
     async def close(self, code: str = "closed") -> None:
         async with self.lock:
@@ -366,7 +381,7 @@ class SceneLab:
             delivery = None
         self.busy += 1
         work = None if delivery is None else loop.run_in_executor(
-            delivery, _delivered, session, pending, ident, generation, received)
+            delivery, _delivered, session, pending, ident, generation, received, self.shared)
         return loop.create_task(self._delivery_reply(session, work, ident))
 
     async def _delivery_reply(self, session, work, ident):
@@ -434,10 +449,12 @@ def _answered(reply) -> asyncio.Future:
     return future
 
 
-def _delivered(session, pending, ident, generation, received: float) -> bytes:
+def _delivered(session, pending, ident, generation, received: float, shared=None) -> bytes:
     """On the delivery thread: the host's picture for `pending`, encoded and packed as the page's
-    binary message, so the event loop only sends it."""
-    header, payload = session.finish(pending)
+    binary message, so the event loop only sends it. A "shared" picture's pixels go to the desktop
+    window's page through `shared` (attach_window), tagged with the request it answers."""
+    share = None if shared is None else (lambda pixels: shared.post(pixels, {"id": ident, "session": generation}))
+    header, payload = session.finish(pending, share)
     header.update(id=ident, session=generation, server_ms=round((time.perf_counter() - received) * 1000, 3))
     encoded = json.dumps(header).encode("utf-8")
     return b"".join((struct.pack("<I", len(encoded)), encoded, payload))

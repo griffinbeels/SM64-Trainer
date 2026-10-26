@@ -1279,7 +1279,9 @@ when no page shows the scene, and when the server stops. The page keeps two
 pictures in flight, asks for the next as soon as one arrives, and a newer step or
 camera move replaces the one waiting behind them; the game's code works out the
 next camera's picture while the [[renderer]] draws and the [[picture encoder]]
-compresses the one before. While the camera moves, the page sums up its own
+compresses the one before. In the desktop app's window the pictures skip the
+JPEG: the server hands the page the [[renderer]]'s exact pixels through WebView2
+shared memory. While the camera moves, the page sums up its own
 numbers every 2 s (pictures a second, input to picture, decode, the server's
 stages): the readout shows them and the UI observation log records them.
 
@@ -1309,7 +1311,8 @@ before, so every JPEG is the same bytes; when it is not ready or has died,
 the server encodes the picture itself.
 
 - **Lives** -- `tools/scene_lab/picture_encoder.py`; started and closed with
-  the scene (`tools/scene_lab/scene_session.py`)
+  the scene (`tools/scene_lab/scene_session.py`); the desktop window's way
+  around it (`tools/scene_lab/webview_pictures.py`)
 - **Not** -- the [[recorder]]'s video encoder, which compresses recorded play
 
 ### Practice ROM

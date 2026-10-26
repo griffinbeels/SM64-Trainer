@@ -67,7 +67,7 @@ import replay  # noqa: E402
 import viewer  # noqa: E402
 
 FPS = 30                      # game frames per second; the viewer steps presented pictures
-ENCODINGS = ("jpeg", "raw")
+ENCODINGS = ("jpeg", "raw", "shared")   # shared: the desktop window's shared memory (webview_pictures.py)
 JPEG_QUALITY = 90
 WORLD_LIMIT = 1e6             # SM64's world fits in +-32768; a camera far outside it is a bug, not a view
 NO_SCENE = ("This frame has no 3D scene to move around in (a level load, a fade or a menu), "
@@ -483,12 +483,15 @@ class SceneSession:
         self._begun.append(pending)
         return pending
 
-    def finish(self, pending: PendingPicture) -> tuple[dict, bytes]:
+    def finish(self, pending: PendingPicture, share=None) -> tuple[dict, bytes]:
         """picture()'s second half: the host's picture for `pending`, encoded. One thread calls it,
         in begin()'s order (the host answers in order); it never touches the evaluator, the package
         or the host's image, so it runs beside the next begin(). A picture begun before `pending`
         that nobody finished (its caller gave up) has its answer read and dropped first, so an
-        answer is never taken for another request's."""
+        answer is never taken for another request's. For encoding "shared", `share(pixels)` hands
+        the exact pixels to the page another way (the desktop window's shared memory) and the
+        payload is empty; without `share`, or when it returns False, the picture goes as JPEG and
+        the header says so."""
         if pending not in tuple(self._begun):          # a snapshot: begin() appends from its own thread
             raise RuntimeError("this picture is not being drawn")
         while True:
@@ -500,12 +503,13 @@ class SceneSession:
         timings = pending.timings
         timings.update(render_ms=round(picture.render_ms, 3), read_ms=round(picture.read_ms, 3),
                        host_ms=round(picture.host_ms, 3))
-        encoding_started = time.perf_counter()
+        encoding_started, encoding, digest, payload = time.perf_counter(), pending.encoding, None, b""
         try:
-            if pending.encoding == "jpeg":
+            if encoding == "shared" and not (share is not None and share(picture.pixels)):
+                encoding = "jpeg"
+            if encoding == "jpeg":
                 payload, timings["encoder"] = self._jpeg(picture)
-                digest = None
-            else:
+            elif encoding == "raw":
                 payload, digest = bytes(picture.pixels), picture.sha256
         except (ValueError, BufferError):                  # close() released the slot under it
             raise RuntimeError("the scene closed while this picture was drawn") from None
@@ -514,9 +518,8 @@ class SceneSession:
         timings["encode_ms"] = _ms(encoding_started)
         timings["session_ms"] = _ms(pending.started)
         self.served += 1
-        return {"frame": pending.frame, "width": picture.width, "height": picture.height,
-                "encoding": pending.encoding,
-                "format": "image/jpeg" if pending.encoding == "jpeg" else "bgr24-bottom-up",
+        return {"frame": pending.frame, "width": picture.width, "height": picture.height, "encoding": encoding,
+                "format": "image/jpeg" if encoding == "jpeg" else "bgr24-bottom-up",
                 "camera": pending.camera, "reason": pending.reason, "sha256": digest,
                 "payload_bytes": len(payload), "timings": timings}, payload
 
@@ -528,8 +531,8 @@ class SceneSession:
             try:
                 made = encoder.jpeg(self.slots, picture.slot, picture.width, picture.height)
             except RuntimeError:
-                self.encoder = None
-                made = None
+                self.encoder, made = None, None
+                encoder.close()
             if made is not None:
                 return made, "process"
         return picture_encoder.encode(picture.pixels, picture.width, picture.height, JPEG_QUALITY), "thread"

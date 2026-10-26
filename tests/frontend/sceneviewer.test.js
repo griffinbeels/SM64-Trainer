@@ -8,8 +8,8 @@
 import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { DRAG_DEAD_ZONE, MOVING_WINDOW, PICTURES_IN_FLIGHT, STILL_MS, SceneViewer, hintFor, movingSummary,
-  pictureFraction, speedWords } from "../../src/sm64_events/ui/components/sceneviewer.js";
+import { DRAG_DEAD_ZONE, MOVING_WINDOW, PICTURES_IN_FLIGHT, SHARED_WAIT, STILL_MS, SceneViewer, hintFor,
+  movingSummary, pictureFraction, speedWords } from "../../src/sm64_events/ui/components/sceneviewer.js";
 import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt, lookingAt, looked, orbitFromPose, slid,
   speedStepped, turned, worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
 import { SCENE_CAMERA_DEFAULTS, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
@@ -205,6 +205,78 @@ test("pictures whose decodes finish in order are all drawn, oldest first", async
   decodes[1]();
   await waitFor(() => expect(drawn.length).toBe(2));
   expect(drawn).toEqual(createImageBitmap.mock.calls.map(([blob]) => blob));   // 0, then 1 over it
+});
+
+// ------------------------------------------------------------------ the desktop window's shared memory
+
+// The desktop window's WebView2 as a page sees it: sharedbufferreceived events and releaseBuffer.
+function desktopWindow() {
+  const view = Object.assign(new EventTarget(), { releaseBuffer: vi.fn() });
+  globalThis.chrome = { webview: view };
+  const post = (id, session = 1) => {
+    const buffer = new Uint8Array(36).map((_, i) => id * 10 + i).buffer;
+    const event = Object.assign(new Event("sharedbufferreceived"), { additionalData: { id, session },
+      getBuffer: () => buffer });
+    view.dispatchEvent(event);
+    return buffer;
+  };
+  return { view, post };
+}
+
+test("in the desktop window the page asks for shared pictures and draws their exact pixels, whichever comes first", async () => {
+  const drawn = [];
+  HTMLCanvasElement.prototype.getContext = () => ({ putImageData: (image) => drawn.push([...image.data.slice(0, 4)]),
+    createImageData: (w, hgt) => ({ data: new Uint8ClampedArray(w * hgt * 4), width: w, height: hgt }) });
+  opened.shared_pictures = true;
+  const { view, post } = desktopWindow();
+  try {
+    const { page, socket, root } = await openScene();
+    expect(socket.sent[0].encoding).toBe("shared");
+    expect(page.container.querySelector("select option[value=shared]")).not.toBeNull();
+    const first = post(socket.sent[0].id);                            // the pixels before their header
+    await socket.picture(socket.sent[0], { encoding: "shared" });
+    await waitFor(() => expect(drawn.length).toBe(1));
+    const topRow = new Uint8Array(first, 2 * 12, 3);                 // BGR rows bottom-up: the top row is last
+    expect(drawn[0]).toEqual([topRow[2], topRow[1], topRow[0], 255]);
+    expect(view.releaseBuffer).toHaveBeenCalledWith(first);
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    await waitFor(() => expect(socket.sent.length).toBe(2));
+    const header = socket.picture(socket.sent[1], { encoding: "shared" });   // the header before its pixels
+    await new Promise((resolve) => { setTimeout(resolve, 20); });
+    expect(drawn.length).toBe(1);
+    const second = post(socket.sent[1].id);
+    await header;
+    await waitFor(() => expect(drawn.length).toBe(2));
+    expect(view.releaseBuffer).toHaveBeenCalledWith(second);
+    post(99, 7);                                                      // another scene's: let go at once
+    expect(view.releaseBuffer).toHaveBeenCalledTimes(3);
+    expect(page.container.querySelector(".scene-lab-readout").textContent).toContain("exact pixels through shared memory");
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test("a shared picture whose pixels never come is let go, and a JPEG answer draws as a JPEG", async () => {
+  SHARED_WAIT.ms = 40;
+  opened.shared_pictures = true;
+  desktopWindow();
+  try {
+    const { page, socket } = await openScene();
+    socket.picture(socket.sent[0], { encoding: "shared" });
+    await new Promise((resolve) => { setTimeout(resolve, 80); });
+    expect(page.container.querySelector(".scene-lab-readout")).toBeNull();       // nothing drawn, nothing stuck
+    expect(page.container.querySelector(".scene-lab-busy")).toBeNull();
+  } finally {
+    SHARED_WAIT.ms = 2000;
+    delete globalThis.chrome;
+  }
+});
+
+test("a browser page never asks for shared pictures, even when the server offers them", async () => {
+  opened.shared_pictures = true;
+  const { page, socket } = await openScene();
+  expect(socket.sent[0].encoding).toBe("jpeg");
+  expect(page.container.querySelector("select option[value=shared]")).toBeNull();
 });
 
 // ------------------------------------------------------------------ the page's own numbers

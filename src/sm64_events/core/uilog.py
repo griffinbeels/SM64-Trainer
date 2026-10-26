@@ -84,7 +84,7 @@ def _scene_number(value):
 def _scene_viewer(body: dict) -> dict:
     """A scene_viewer record keeps only its own numbers: anything else, or out of range, is null."""
     entry = {"surface": "scene_viewer",
-             "encoding": body.get("encoding") if body.get("encoding") in ("jpeg", "raw") else None}
+             "encoding": body.get("encoding") if body.get("encoding") in ("jpeg", "raw", "shared") else None}
     for key in SCENE_VIEWER_COUNTS:
         entry[key] = _scene_number(body.get(key))
     for key in SCENE_VIEWER_SPREADS:
