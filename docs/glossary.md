@@ -1356,6 +1356,30 @@ the server encodes the picture itself.
   around it (`tools/scene_lab/webview_pictures.py`)
 - **Not** -- the [[recorder]]'s video encoder, which compresses recorded play
 
+### Attempt scene
+
+The [[scene package]] of one [[attempt]] he just played, which the [[scene viewer]]
+opens by the [[attempt]]'s id. It starts on the [[frame]] the [[attempt]]'s clock
+started and ends on the last picture of the fade-out after its end: the [[frame]]
+before the next level or area appears, the [[frame]] before his [[reset]], or 10 s
+after the end when nothing comes. While the lab is on, the [[scene tap]] records
+all the time, and a hidden child process writes each [[attempt]]'s package as he
+plays it. When the [[attempt]] completes, the child writes only its last [[frame]]s
+and the index, so the scene is ready a fraction of a second after the fade-out's
+last picture reaches the recording (0.11 s after a [[star]] grab's fade, 0.26 s
+after a [[reset]], on his recorded BoB minute, 2026-10-26). Until then the scene
+is "cutting"; an [[attempt]] the recording does not fully hold has none, and says
+why in one sentence. The server keeps the scenes of his last 20 [[attempt]]s while
+it is up.
+
+- **Lives** -- the span (`tools/scene_lab/attempt_span.py`); the child that
+  writes them (`tools/scene_lab/attempt_cutter.py`); which attempts have one,
+  retention and the folder (`tools/scene_lab/attempt_scenes.py`); the routes
+  and the wiring (`src/sm64_events/server/scene_lab_api.py`,
+  `src/sm64_events/main.py`)
+- **Not** -- the replay's video of an [[attempt]], which the [[recorder]] keeps;
+  this scene redraws the game's graphics, and its camera can move
+
 ### Practice ROM
 
 The cartridge the practice tooling works on: Usamune v1.93u (US) or a JP

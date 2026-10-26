@@ -675,21 +675,26 @@ def build(*, recorder_lock=None):
         refresh_library_on_start=True, community_account=community_account,
         community_sync=community_sync,
         multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
-        protect_local_api=True, local_port=server_port()))
+        protect_local_api=True, local_port=server_port()), tracker=service)
 
 
-def _mount_scene_lab(app):
+def _mount_scene_lab(app, tracker=None):
     """M4's scene viewer is a lab-only surface (server/scene_lab_api.py). This is the one
     reader of its switch: unless SM64_SCENE_LAB names a lab config, nothing is imported and
     the shell never shows its entry. The shell's one probe (GET /api/scene-lab) then answers
     {"lab": null}: a 404 there put an HTTP error on every page load of every install.
-    Mounting twice (a lab script that wraps an app the UI fixture already mounted) is a no-op."""
+    Mounting twice (a lab script that wraps an app the UI fixture already mounted) is a no-op.
+    With the switch on, the server's own `tracker` also feeds the lab's attempt scenes (the
+    live recording's lease, a cut per completed attempt); a caller without one (the UI fixture)
+    gets the viewer alone and never arms the wrapper's tap."""
     if any(getattr(route, "path", None) == "/api/scene-lab" for route in app.routes):
         return app
     config = os.environ.get("SM64_SCENE_LAB")
     if config:
         from sm64_events.server.scene_lab_api import mount_scene_lab
-        mount_scene_lab(app, config)
+        lab = mount_scene_lab(app, config, live=tracker is not None)
+        if tracker is not None:
+            lab.follow_attempts(tracker)
     else:
         app.add_api_route("/api/scene-lab", lambda: {"lab": None}, methods=["GET"], include_in_schema=False)
     return app
