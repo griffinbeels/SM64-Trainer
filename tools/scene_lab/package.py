@@ -911,7 +911,8 @@ class PackageWriter:
 
     def __init__(self, source: Source, rom: bytes, out: Path, codec: int = LZMA, block_bytes: int = 256,
                  group: int = 16, checkpoint_every: int = CHECKPOINT_EVERY, rom_loads: list[dict] | None = None,
-                 level: int = 9, shared: Attributor | None = None, in_place: bool = False):
+                 level: int = 9, shared: Attributor | None = None, in_place: bool = False,
+                 frequency: int | None = None):
         """in_place: write `out` itself from the start (its header stays zero until finish) rather
         than `out`.partial renamed at the end; a reader of a growing package needs the file to
         keep its name, and Windows refuses to rename a file another process has open."""
@@ -925,6 +926,10 @@ class PackageWriter:
         self.attributor = Attributor(rom, source.rdram_size, rom_loads, shared)
         self.stats = Counter()
         self.partial = out if in_place else out.with_name(out.name + ".partial")
+        # frequency: the source's QPC ticks a second. With the source's origin_qpc (live_spool's) the
+        # index then carries "clock", so a reader turns each present's time back into QPC: a
+        # growing attempt scene finds its sound in the recorder's ring by it.
+        self.frequency = frequency
         self.codes: list[tuple[int, int]] | None = None
         self.handle = self.partial.open("wb")
         self.handle.write(bytes(HEADER.size))
@@ -1000,6 +1005,9 @@ class PackageWriter:
         meta = {"schema": SCHEMAS[version], "source": source.kind, "wrapper_build": source.build,
                 "identity": [list(item) for item in source.identity], "block_bytes": self.block_bytes,
                 "group": self.group, "stats": dict(self.stats)} | ({"layers": layer_meta} if version else {})
+        origin = getattr(source, "origin_qpc", None)
+        if origin is not None and self.frequency:
+            meta["clock"] = {"origin_qpc": origin, "frequency": self.frequency}
         return encode_index(meta, attributor.load_table(), self.chunks.entries, [tuple(e) for e in self.blocks.entries],
                             [tuple(e) for e in self.records.entries[:kept]], *layers), version
 
@@ -1155,7 +1163,8 @@ class _Cursor:
 
     def rows(self, fmt: struct.Struct, count: int) -> list[tuple]:
         _require(count * fmt.size <= len(self.data) - self.at, f"truncated {self.what}")
-        rows = [fmt.unpack_from(self.data, self.at + i * fmt.size) for i in range(count)]
+        with memoryview(self.data)[self.at:self.at + count * fmt.size] as view:
+            rows = list(fmt.iter_unpack(view))
         self.at += count * fmt.size
         return rows
 
@@ -1243,14 +1252,18 @@ def _identity_ok(item, rdram_size: int) -> bool:
             and 0 <= item[1] <= rdram_size - item[2])
 
 
-def check_index(index: Index, header: Header, rom_size: int) -> None:
+def check_index(index: Index, header: Header, rom_size: int, checked: Index | None = None) -> None:
+    """`checked`: an index this one only extends (a growing package's earlier publication,
+    already checked): its rows are taken as they are and only the new ones are checked, which
+    is what keeps re-opening a growing scene a few milliseconds instead of the whole index's."""
+    old = _checked_counts(index, checked)
     meta = index.meta
     _require(isinstance(meta, dict) and meta.get("schema") == SCHEMAS[header.version], "unknown package metadata")
     identity = meta.get("identity", [])
     _require(isinstance(identity, list) and len(identity) <= 16
              and all(_identity_ok(item, header.rdram_size) for item in identity), "malformed identity fields")
     _require(len(index.frames) == header.frame_count, "frame count does not match the header")
-    for kind, start, end, length, _sha in index.loads:
+    for kind, start, end, length, _sha in index.loads[old["loads"]:]:
         _require(kind in (LOAD_ROM, LOAD_MIO0) and 0 <= start < end <= rom_size and 0 < length <= MAX_LOAD_BYTES
                  and (kind != LOAD_ROM or length == end - start), "malformed load entry")
     previous_end = HEADER.size
@@ -1259,23 +1272,41 @@ def check_index(index: Index, header: Header, rom_size: int) -> None:
         _require(offset >= previous_end and offset + stored <= header.index_offset,
                  "chunk outside the package or overlapping another")
         previous_end = offset + stored
-    _require(all(length % 4 == 0 for _, _, length in index.blocks), "block length is not whole words")
-    _require(all(0 < closure <= header.rdram_size for _, _, _, closure, _ in index.frames),
+    _require(all(length % 4 == 0 for _, _, length in index.blocks[old["blocks"]:]), "block length is not whole words")
+    _require(all(0 < closure <= header.rdram_size for _, _, _, closure, _ in index.frames[old["frames"]:]),
              "frame closure larger than RDRAM")
     if STATE_LAYER[0] in index.layers:
-        _check_state_layer(index, header)
+        _check_state_layer(index, header, old["states"])
     if RESOLUTION_LAYER[0] in index.layers:
         _require(STATE_LAYER[0] in index.layers, "a scene-resolution layer needs the scene-state layer")
         _check_resolution_layer(index, header)
     if AUDIO_LAYER[0] in index.layers:
         _check_audio_layer(index, header)
-    _check_slices(index)
+    _check_slices(index, old)
 
 
-def _check_state_layer(index: Index, header: Header) -> None:
+def _checked_counts(index: Index, checked: Index | None) -> dict:
+    """How many leading rows of each table `checked` (an earlier publication of the same growing
+    package) already vouches for: all of its rows when every table of `index` starts with them
+    and the layers are the same; otherwise none, and everything is checked."""
+    none = {"loads": 0, "chunks": 0, "blocks": 0, "frames": 0, "states": 0}
+    if checked is None:
+        return none
+    states = index.layers.get(STATE_LAYER[0], ([], []))[0]
+    old_states = checked.layers.get(STATE_LAYER[0], ([], []))[0]
+    counts = {"loads": len(checked.loads), "chunks": len(checked.chunks), "blocks": len(checked.blocks),
+              "frames": len(checked.frames), "states": len(old_states)}
+    extends = (set(index.layers) == set(checked.layers) <= {STATE_LAYER[0]}
+               and index.loads[:counts["loads"]] == checked.loads and index.chunks[:counts["chunks"]] == checked.chunks
+               and index.blocks[:counts["blocks"]] == checked.blocks
+               and index.frames[:counts["frames"]] == checked.frames and states[:counts["states"]] == old_states)
+    return counts if extends else none
+
+
+def _check_state_layer(index: Index, header: Header, checked_rows: int = 0) -> None:
     states, codes = index.layers[STATE_LAYER[0]]
     _require(len(states) == len(index.frames), "scene-state rows do not match the frames")
-    _require(all(flags & ~(CHECKPOINT | HAS_TASK) == 0 for _, _, _, flags, _ in states)
+    _require(all(flags & ~(CHECKPOINT | HAS_TASK) == 0 for _, _, _, flags, _ in states[checked_rows:])
              and (not states or states[0][3] & CHECKPOINT), "malformed scene-state rows")
     for load, address in codes:
         _require(load < len(index.loads) and index.loads[load][0] == LOAD_ROM and address % 4 == 0
@@ -1311,10 +1342,22 @@ def _check_audio_layer(index: Index, header: Header) -> None:
              "the source-audio payload overlaps a chunk")
 
 
-def _check_slices(index: Index) -> None:
+def _check_slices(index: Index, checked: dict | None = None) -> None:
+    """Every block, frame and state record lies inside its chunk and no two overlap. With
+    `checked` (_checked_counts) only the rows after the vouched-for ones, and the vouched-for
+    rows sharing a chunk with them (a records chunk can hold a frame the earlier publication
+    did not list yet)."""
+    old = checked or {"blocks": 0, "frames": 0, "states": 0}
     spans: dict[int, list[tuple[int, int]]] = {}
     states = index.layers.get(STATE_LAYER[0], ([], []))[0]
-    for chunk, offset, length in [row[:3] for table in (index.blocks, index.frames, states) for row in table]:
+    full = (index.blocks, index.frames, states)
+    rows = [row[:3] for table, start in zip(full, (old["blocks"], old["frames"], old["states"]), strict=True)
+            for row in table[start:]]
+    shared = {row[0] for row in rows}
+    if any(old.values()):
+        rows += [row[:3] for table, start in zip(full, (old["blocks"], old["frames"], old["states"]), strict=True)
+                 for row in table[:start] if row[0] in shared]
+    for chunk, offset, length in rows:
         _require(chunk < len(index.chunks) and 0 < length and offset + length <= index.chunks[chunk][2],
                  "block, frame or state record outside its chunk")
         spans.setdefault(chunk, []).append((offset, offset + length))
@@ -1375,7 +1418,7 @@ class Package:
     (outline, fields, frame, scene_state, resolution) hold one lock: the chunk cache and the
     state cursor are shared, and a viewer reads ahead on a second thread."""
 
-    def __init__(self, data: bytes, rom: bytes, cache_bytes: int = CACHE_BYTES):
+    def __init__(self, data: bytes, rom: bytes, cache_bytes: int = CACHE_BYTES, checked: Index | None = None):
         _require(len(data) <= MAX_PACKAGE_BYTES, "package too large")
         self.data, self.rom = data, rom
         self.header = read_header(data)
@@ -1385,7 +1428,7 @@ class Package:
         raw = decompress(ZLIB, data[start:start + self.header.index_stored], self.header.index_raw)
         _require(hashlib.sha256(raw).digest() == self.header.index_sha, "package index is corrupt")
         self.index = parse_index(raw, self.header.version)
-        check_index(self.index, self.header, len(rom))
+        check_index(self.index, self.header, len(rom), checked)
         self.identity = [tuple(item) for item in self.index.meta.get("identity", [])]
         self.cache_bytes, self._cached = cache_bytes, 0
         self._chunks: OrderedDict[int, bytes] = OrderedDict()
@@ -1654,7 +1697,8 @@ def grown_package(sidecar: bytes, body: list, rom: bytes, previous: Package | No
     `body` the pieces of the package file read so far, from byte HEADER.size to the header's
     index offset. The reader checks it like any package. With `previous` (the publication
     before, over the same file) it keeps what that one decoded and shares its lock."""
-    package = Package(Joined([sidecar[:HEADER.size], *body, sidecar[HEADER.size:]]), rom)
+    package = Package(Joined([sidecar[:HEADER.size], *body, sidecar[HEADER.size:]]), rom,
+                      checked=None if previous is None else previous.index)
     if previous is not None:
         package.carry(previous)
     return package
