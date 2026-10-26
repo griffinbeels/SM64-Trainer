@@ -57,7 +57,7 @@ RATE = 48000                  # ProcessAudioSource's pump speaks 48 kHz s16 ster
 POLL_S = 0.25
 STATUS_EVERY_S = 5.0
 COSTS_KEPT = 1 << 16
-SYNCHRONIZE, WAIT_OBJECT_0 = 0x00100000, 0
+SYNCHRONIZE, WAIT_TIMEOUT = 0x00100000, 0x102
 
 
 class CaptureRefused(RuntimeError):
@@ -169,10 +169,12 @@ class ProcessWatch:
         kernel32 = ctypes.windll.kernel32
         kernel32.OpenProcess.restype = ctypes.c_void_p
         self._handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if not self._handle:
+            raise OSError(f"cannot watch process {pid} (error {ctypes.GetLastError()})")
 
     def alive(self) -> bool:
         return bool(self._handle) and \
-            ctypes.windll.kernel32.WaitForSingleObject(ctypes.c_void_p(self._handle), 0) != WAIT_OBJECT_0
+            ctypes.windll.kernel32.WaitForSingleObject(ctypes.c_void_p(self._handle), 0) == WAIT_TIMEOUT
 
     def close(self) -> None:
         if self._handle:
@@ -232,7 +234,10 @@ def capture(out: Path, *, seconds: float, wait_seconds: float, budget_bytes: int
         source = _isolated_source(status, pid, make_source)
         frequency = frequency or qpc_frequency()
         fanout = Fanout(stamp or qpc_stamp(frequency), budget_bytes)
-        process = watch(pid)
+        try:
+            process = watch(pid)
+        except OSError as exc:
+            _refuse(status, f"Project64 could not be watched for its exit ({exc})", exc)
         try:
             try:
                 source.start(fanout.on_pcm)

@@ -8,6 +8,7 @@ and the capture ends when Project64 exits. What lands on disk is read back
 with audio_session.py, the reader the offline join uses.
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -179,6 +180,17 @@ def test_no_project64_is_a_refusal_after_the_wait(tmp_path):
     with pytest.raises(cap.CaptureRefused, match="no single Project64 within 30 s"):
         _run(tmp_path, source=FakeSource(1), find_pid=lambda: (None, "Open Project64 v1.6."))
     assert _lock_is_free()
+
+
+def test_the_exit_watch_holds_a_handle_and_refuses_a_process_it_cannot_open():
+    watch = cap.ProcessWatch(os.getpid())
+    try:
+        assert watch.alive()
+    finally:
+        watch.close()
+    assert not watch.alive()
+    with pytest.raises(OSError, match="cannot watch process"):
+        cap.ProcessWatch(0)
 
 
 def test_the_default_source_is_the_recorders_own_process_tap():
