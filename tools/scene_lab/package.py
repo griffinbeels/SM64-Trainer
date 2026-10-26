@@ -1151,6 +1151,14 @@ class Package:
         """The frame's tap fields (task_index, ...) without rebuilding its closure."""
         return dict(zip(tap.TASK_FIELDS, self._record(index).head[36:48], strict=True))
 
+    def outline(self, index: int) -> dict:
+        """What a viewer lists for a frame without rebuilding its closure: the VI registers of the
+        present that showed it (None when none did), and its identity values (global_timer, ...)."""
+        record = self._record(index)
+        return {"vi": tuple(record.head[22:36]) if record.head[2] & HAS_VI else None,
+                "identity": {name: tap.word_value(record.extras, address, size)
+                             for name, address, size in self.identity}}
+
     def frame(self, index: int) -> Capture:
         record = self._record(index)
         run_bytes = b"".join(self._piece(*segment) for segment in record.segments)

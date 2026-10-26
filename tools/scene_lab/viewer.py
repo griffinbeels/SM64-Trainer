@@ -185,11 +185,14 @@ def prepare_plugin_dir(plugin_dir: Path, pj64_plugin: Path, resolution: tuple[in
 
 class Host:
     """One viewer_host.exe and its pipe. Requests are serialized by a lock;
-    closing stdin is the shutdown, and a host whose parent dies sees EOF."""
+    closing stdin is the shutdown, and a host whose parent dies sees EOF.
+    `command` replaces the built executable (fake_viewer_host.py, a protocol
+    double, in tests and dry runs)."""
 
-    def __init__(self, renderer: Path, plugin_dir: Path, header: str):
+    def __init__(self, renderer: Path, plugin_dir: Path, header: str, command: list[str] | None = None):
         self.process = subprocess.Popen(
-            [str(build()), "--renderer", str(renderer), "--plugin-dir", str(plugin_dir), "--header", header],
+            [*(command or [str(build())]), "--renderer", str(renderer), "--plugin-dir", str(plugin_dir),
+             "--header", header],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **quiet_spawn_kwargs())
         self.lock = threading.Lock()
         self.errors: list[str] = []

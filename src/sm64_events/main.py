@@ -665,16 +665,28 @@ def build(*, recorder_lock=None):
         replay.recorder.set_capture_gate(poller.capture_allowed)
     updater = UpdateService(current_version=__version__)
     capture_layer, setup_observer = _build_capture_layer(poller, replay)
-    return create_app(poller, broadcaster, service=service, replay=replay,
-                      inputs=inputs.get_service, on_db_attached=inputs.attach,
-                      updater=updater, bootstrap_cleanup_path=_bootstrap_cleanup_arg(),
-                      compare=compare, compilation=compilation,
-                      db_retry=db_retry, capture_layer=capture_layer,
-                      setup_observer=setup_observer, ghost=ghost,
-                      refresh_library_on_start=True, community_account=community_account,
-                      community_sync=community_sync,
-                      multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
-                      protect_local_api=True, local_port=server_port())
+    return _mount_scene_lab(create_app(
+        poller, broadcaster, service=service, replay=replay,
+        inputs=inputs.get_service, on_db_attached=inputs.attach,
+        updater=updater, bootstrap_cleanup_path=_bootstrap_cleanup_arg(),
+        compare=compare, compilation=compilation,
+        db_retry=db_retry, capture_layer=capture_layer,
+        setup_observer=setup_observer, ghost=ghost,
+        refresh_library_on_start=True, community_account=community_account,
+        community_sync=community_sync,
+        multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
+        protect_local_api=True, local_port=server_port()))
+
+
+def _mount_scene_lab(app):
+    """M4's scene viewer is a lab-only surface (server/scene_lab_api.py). This is the one
+    reader of its switch: unless SM64_SCENE_LAB names a lab config, nothing is imported or
+    routed and the shell never shows its entry."""
+    config = os.environ.get("SM64_SCENE_LAB")
+    if config:
+        from sm64_events.server.scene_lab_api import mount_scene_lab
+        mount_scene_lab(app, config)
+    return app
 
 
 _app = None

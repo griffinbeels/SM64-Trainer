@@ -150,6 +150,18 @@ class Evaluator:
         resolved = self.e2.resolve_task(frame, self.cpu, scene.known, self.symbols, self.previous(index))
         return self._remember(self._states, index, resolved, self.cache)
 
+    def pose(self, index: int) -> dict:
+        """Frame `index`'s recorded camera (gLakituState's focus and position, the camera the
+        drawing used) and Mario's position, in the game's world coordinates: where a free camera
+        starts, and what Focus Mario looks at."""
+        e2, ram = self.e2, self.scene(index).ram
+
+        def vector(address: int) -> list[float]:
+            return [float(value) for value in struct.unpack_from(">3f", ram, e2.phys(address))]
+        lakitu = e2.US["gLakituState"]
+        return {"focus": vector(lakitu + e2.LAKITU_FOCUS), "position": vector(lakitu + e2.LAKITU_POS),
+                "mario": vector(e2.US["gMarioStates"] + e2.MARIO_POS)}
+
     def display_list(self, index: int, camera: tuple) -> View | None:
         """Frame `index` from camera (focus xyz, position xyz), or None when it has no scene."""
         resolved = self.state(index)

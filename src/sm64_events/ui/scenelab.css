@@ -1,0 +1,33 @@
+/* The Scene viewer (M4 E3, lab only): components/sceneviewer.js links this
+   sheet when it loads, so with the lab switched off the browser never fetches
+   it. Layout gates on the pane (.view-pane is the container), never the
+   viewport. */
+.scene-lab { display: grid; gap: 12px; outline: none; }
+.scene-lab-open { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; }
+.scene-lab-open label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); min-width: 0; }
+.scene-lab-open select { min-width: 0; max-width: 360px; background: var(--surface-2); }
+.scene-lab-name { min-width: 0; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.scene-lab-reason { margin: 0; flex-basis: 100%; color: var(--muted); line-height: 1.5; }
+.scene-lab-error { margin: 0; padding: 10px 14px; border-left: 3px solid var(--coral); background: rgba(255,123,115,.06); }
+.scene-lab-player { display: grid; gap: 10px; min-width: 0; }
+.scene-lab-stage { position: relative; background: #000; border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: hidden; }
+.scene-lab-stage canvas { display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain; touch-action: none; }
+.scene-lab-stage canvas.is-movable { cursor: grab; }
+.scene-lab-stage canvas.is-movable:active { cursor: grabbing; }
+.scene-lab-tag, .scene-lab-busy { position: absolute; top: 10px; padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,.6); font-size: .78rem; pointer-events: none; }
+.scene-lab-tag { left: 10px; }
+.scene-lab-tag.is-free { color: var(--gold-soft); }
+.scene-lab-busy { right: 10px; color: var(--muted); }
+.scene-lab-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.scene-lab-bar input[type=range] { flex: 1 1 220px; min-width: 0; accent-color: var(--gold); }
+.scene-lab-bar button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-soft); }
+.scene-lab-frame { min-width: 13ch; font-variant-numeric: tabular-nums; }
+.scene-lab-frame small { display: block; color: var(--muted); }
+.scene-lab-quality { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); }
+.scene-lab-quality select { background: var(--surface-2); }
+.scene-lab-hint, .scene-lab-readout { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.scene-lab-readout { font-variant-numeric: tabular-nums; }
+@container (max-width: 640px) {
+  .scene-lab-quality { margin-left: 0; }
+  .scene-lab-name { max-width: 100%; }
+}

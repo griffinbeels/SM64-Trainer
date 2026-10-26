@@ -1031,6 +1031,26 @@ The settings string the page exports carries EVERY tunable, not just the ones
 that differ from the defaults, so it still means the same thing after a default
 is codified.
 
+## Scene viewer (M4 lab, source checkouts only, off by default)
+
+Exists only when `SM64_SCENE_LAB` names a lab config (`main.py::_mount_scene_lab`
+is the one reader); otherwise none of these routes exists and the shell shows no
+Lab entry. The config is a private JSON file of absolute paths:
+`{"rom", "packages", "pj64_plugin", "map"}` plus optional `"renderer"`
+(`trainer`, `link` or a DLL path), `"resolution"` (`"WxH"`) and `"idle_seconds"`.
+Run the server with `uv run --with unicorn` for the free camera. One scene is open
+at a time; its renderer helper and evaluator run on one worker thread and stop on
+Close, another Open, `idle_seconds` without a request, about 20 s with no page
+connected, a helper that dies, or server shutdown. Owner: `server/scene_lab_api.py`.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/scene-lab` | The probe the shell waits for: `{lab: "scene-viewer"}`. |
+| `GET /api/scene-lab/status` | `{ready, problems, hold, packages: [{name, bytes, modified_utc}], session, ended}`: what stops a scene opening, the GPU hold, the folder's `.sm64scene` files, the open scene (as Open returns it) and how the last one ended (`{code, message, name}`). |
+| `POST /api/scene-lab/open` `{package}` | Opens a package the folder lists (by name; anything else is **404**). Returns `{session, name, fps, frames: [{level, area, game_frame}], renderer_pid, free_camera: {available, reason}}`. **409** with the reason for a refused package (truncated, corrupt, another ROM), a missing ROM, the GPU hold, or a renderer that cannot start. |
+| `POST /api/scene-lab/close` | Ends the open scene; `{closed, host_exit}`. |
+| `WS /api/scene-lab/ws` | Pictures and poses. Send `{id, session, frame, camera: null \| {focus: [x,y,z], position: [x,y,z]}, encoding: "jpeg"\|"raw"}` or `{id, session, kind: "pose", frame}`. A picture returns as one binary message, `[u32 LE header length][header JSON][JPEG, or BGR rows bottom-up]`; the header carries `frame, width, height, camera ("recorded"\|"free"), reason, sha256 (raw only), timings, server_ms`. A pose returns `{id, kind: "pose", pose: {focus, position, mario} \| null, reason}`. Errors are `{id, error}`, with `closed: true` when the scene is gone. One picture request waits per socket: a newer one replaces it and the replaced one is answered `{id, superseded: true}`. |
+
 ## Version sync — US vs JP coverage (source checkouts and installs alike)
 
 `/ui/sync.html` shows, per version-dependent thing the tracker relies on (a
