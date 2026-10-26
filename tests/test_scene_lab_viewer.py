@@ -249,6 +249,68 @@ def test_the_free_camera_redraws_from_the_evaluator_and_says_when_it_cannot(lab,
         assert len(evaluators.made) == 1                                # one evaluator, built on first use
 
 
+def test_a_free_camera_carries_its_own_roll_and_field_of_view_to_the_game_code(lab):
+    evaluators = Evaluators()
+    app, _server = _app(lab, evaluators=evaluators)
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
+        base = {"focus": [1.0, 2.0, 3.0], "position": [100.0, 200.0, 300.0]}
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            for ident, extra in enumerate(({}, {"roll": -224, "fov": 52.5}, {"roll": 0}, {"fov": 80})):
+                socket.send_json({"id": ident, "session": opened["session"], "frame": 2, "camera": {**base, **extra},
+                                  "encoding": "raw"})
+                assert _reply(socket)["camera"] == "free"
+            for bad in ({"roll": 40000}, {"roll": 1.5}, {"roll": True}, {"fov": 0}, {"fov": 200},
+                        {"fov": float("nan")}):
+                socket.send_json({"id": 9, "session": opened["session"], "frame": 2, "camera": {**base, **bad},
+                                  "encoding": "raw"})
+                reply = _reply(socket)
+                assert "error" in reply and not reply.get("closed"), bad
+        cameras = [camera for _index, camera in evaluators.made[0].calls]
+        focus, position = base["focus"], base["position"]
+        assert cameras == [(focus, position), (focus, position, -224, 52.5), (focus, position, 0, None),
+                           (focus, position, None, 80.0)]
+
+
+def test_set_focus_answers_where_the_list_drew_the_clicked_point(lab):
+    evaluators = Evaluators(wall=1000.0, no_scene=(SHOWN[1],))
+    app, _server = _app(lab, evaluators=evaluators)
+    camera = {"focus": [0.0, 0.0, 0.0], "position": [0.0, 0.0, 1000.0], "roll": 0, "fov": 45.0}
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
+        session = opened["session"]
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            socket.send_json({"id": 1, "session": session, "kind": "pick", "frame": 2, "camera": camera,
+                              "u": 0.5, "v": 0.5})
+            reply = _reply(socket)
+            assert reply["kind"] == "pick" and reply["reason"] is None
+            assert reply["point"] == pytest.approx([0, 0, -1000], abs=0.01)
+            assert reply["distance"] == pytest.approx(1000, abs=0.01)
+            assert reply["mario"] == fake_viewer_host.FakeEvaluator.POSE["mario"]      # a fly-to's one round trip
+            socket.send_json({"id": 2, "session": session, "kind": "pick", "frame": 2, "camera": camera,
+                              "u": 0.75, "v": 0.25})
+            right, up, _ = _reply(socket)["point"]
+            assert right > 0 and up > 0                                    # up and to the right of the middle
+            socket.send_json({"id": 20, "session": session, "frame": 3, "camera": camera, "encoding": "jpeg"})
+            assert _reply(socket)["camera"] == "free"
+            runs = len(evaluators.made[0].calls)
+            socket.send_json({"id": 21, "session": session, "kind": "pick", "frame": 3, "camera": camera,
+                              "u": 0.5, "v": 0.5})
+            assert _reply(socket)["point"] == pytest.approx([0, 0, -1000], abs=0.01)
+            assert len(evaluators.made[0].calls) == runs                   # the picture's own view, not a re-run
+            socket.send_json({"id": 3, "session": session, "kind": "pick", "frame": 1, "camera": camera,
+                              "u": 0.5, "v": 0.5})
+            assert _reply(socket) == {"id": 3, "kind": "pick", "point": None, "distance": None, "mario": None,
+                                      "reason": scene_session.NO_SCENE}
+            socket.send_json({"id": 4, "session": session, "kind": "pick", "frame": 0, "camera": None,
+                              "u": 0.5, "v": 0.5})
+            recorded = _reply(socket)                                    # the synthetic capture draws no world
+            assert recorded["kind"] == "pick" and recorded["point"] is None and recorded["reason"]
+            for bad in ({"u": 1.5, "v": 0.5}, {"u": "0.5", "v": 0.5}, {"v": 0.5}):
+                socket.send_json({"id": 5, "session": session, "kind": "pick", "frame": 2, "camera": camera, **bad})
+                assert "error" in _reply(socket)
+
+
 def _free_session_pictures(lab, keeps_rdram: bool, requests: list) -> list[dict]:
     """Every reply to `requests` ((frame, camera or None, encoding)) from a session whose fake host
     keeps an RDRAM and names it in the picture, its evaluator's views whole 4 MiB images."""
