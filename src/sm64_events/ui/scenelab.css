@@ -41,7 +41,7 @@
 .scene-lab-tune-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0 22px; }
 .scene-lab-tune-groups h2 { margin: 8px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border-soft);
   color: var(--muted); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
-.scene-lab-tune .tune-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px; gap: 4px 8px; align-items: center;
+.scene-lab-tune .tune-row { display: grid; grid-template-columns: minmax(0, 1fr) 104px; gap: 4px 8px; align-items: center;
   margin-bottom: 8px; }
 .scene-lab-tune .tune-row > label { font-size: .78rem; cursor: help; }
 .scene-lab-tune .tune-row > input[type=number] { width: 100%; background: var(--surface); }

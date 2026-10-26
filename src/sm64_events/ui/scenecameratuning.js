@@ -98,7 +98,7 @@ export const SCENE_CAMERA_TUNABLES = {
     why: "Double-click flies to the clicked surface and stops this far in front of it, back along the click's line toward where the camera was, so it sits in front of a wall, never inside it. Mario is about 160 units tall.",
   },
   flyToMs: {
-    group: "Fly to (double-click)", label: "Flight takes", value: 320,
+    group: "Fly to (double-click)", label: "Flight takes (ms)", value: 320,
     min: 0, max: 1500, step: 10, unit: "ms",
     why: "How long the double-click flight lasts. It eases out of the old view and into the new one; any input stops it where it is. Zero jumps straight there.",
   },
