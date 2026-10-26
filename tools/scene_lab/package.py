@@ -1303,12 +1303,14 @@ class Package:
 
     def outline(self, index: int) -> dict:
         """What a viewer lists for a frame without rebuilding its closure: the VI registers of the
-        present that showed it and that present's tap sequence (None when none did), and its
-        identity values (global_timer, ...)."""
+        present that showed it, that present's tap sequence and when it showed the frame (us after
+        the session's first task; None when no present did), and its identity values (global_timer, ...)."""
         with self.lock:
             record = self._record(index)
+        shown = record.head[1] != NO_PRESENT
         return {"vi": tuple(record.head[22:36]) if record.head[2] & HAS_VI else None,
-                "present": None if record.head[1] == NO_PRESENT else record.head[1],
+                "present": record.head[1] if shown else None,
+                "present_us": record.head[5] if shown and record.head[5] >= 0 else None,
                 "identity": {name: tap.word_value(record.extras, address, size)
                              for name, address, size in self.identity}}
 

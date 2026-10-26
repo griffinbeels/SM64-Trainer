@@ -64,6 +64,9 @@ def test_an_open_scene_describes_its_sound_and_serves_each_block_it_names(lab, r
         audio = opened["audio"]
         assert audio["available"] and audio["rate"] == fx.RATE and audio["codec"] == "flac"
         assert len(audio["samples"]) == len(opened["frames"]) == fx.FRAMES and audio["lost"] == [12]
+        presents = recording["presents"]                  # Play holds each picture for its recorded time
+        assert [frame["recorded_ms"] for frame in opened["frames"]] == pytest.approx(
+            [(present.qpc - presents[0].qpc) / 10_000 for present in presents], abs=0.002)
         step = audio["block_samples"]
         for block in range(audio["blocks"]):
             reply = client.get(f"/api/scene-lab/audio/{block}", params={"session": opened["session"]})

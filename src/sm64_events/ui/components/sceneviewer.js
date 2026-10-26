@@ -40,6 +40,7 @@ import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, scen
 import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lookingAt, looked,
   orbitFromPose, slid, speedStepped, turned, worldPoint } from "./scenecamera.js";
 import { SceneSound, SoundBar } from "./sceneaudio.js";
+import { pictureAt, playLength, recordedTimes } from "./sceneclock.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -193,7 +194,7 @@ export class SceneLink {
     const current = () => arrived === this.arrived;
     await this.draw(header, new Uint8Array(buffer, 4 + length), current);
     if (!current()) return;           // a newer picture arrived while this one decoded
-    if (request && this.playing) this.sound.shown(header.frame, request.sent);
+    if (request) this.sound.shown(header.frame, request.sent);
     if (request) {
       header.trip_ms = received - request.sent;
       header.input_ms = performance.now() - request.inputTime;
@@ -473,18 +474,23 @@ export class SceneLink {
 
   toggle() { this.interrupt(); if (this.playing) this.pause(); else this.play(); }
 
-  // 30 fps against the clock: the frame due now is asked for whenever nothing
-  // is in flight, and frames that passed while one was drawn are skipped.
+  // The recording's own clock (sceneclock.js): each picture stays up as long
+  // as the recording showed it. The frame due now is asked for whenever
+  // nothing is in flight, and frames that passed while one was drawn are
+  // skipped. The clock starts once the sound can start with it (sound.lead()),
+  // so the first picture of a play holds that much longer.
   play() {
     const scene = this.scene;
     if (!scene) return;
     this.sound.arm();
-    const from = this.frame >= scene.frames.length - 1 ? 0 : this.frame, start = performance.now();
+    const from = this.frame >= scene.frames.length - 1 ? 0 : this.frame, times = recordedTimes(scene);
+    const start = performance.now() + this.sound.lead(), length = playLength(times, from, scene.fps);
     this.playing = true;
     const tick = () => {
       if (!this.playing || this.scene !== scene) return;
-      const at = from + Math.floor((performance.now() - start) * scene.fps / 1000);
-      if (at >= scene.frames.length) { this.seek(scene.frames.length - 1, "play"); this.pause(); return; }
+      const elapsed = performance.now() - start;
+      if (elapsed >= length) { this.seek(scene.frames.length - 1, "play"); this.pause(); return; }
+      const at = pictureAt(times, from, elapsed);
       if (at !== this.frame) this.seek(at, "play");
       requestAnimationFrame(tick);
     };

@@ -1,69 +1,87 @@
 // @vitest-environment jsdom
-// The Scene viewer's sound (ui/components/sceneaudio.js and its worklet):
-// the frame table smoothed into runs, the clock steering, the worklet's
-// rendering, and the controls in the real page against a scripted server.
-// WebAudio, the socket and fetch are stand-ins; the rendered samples are the
-// worklet's own arithmetic, run here sample by sample.
+// The Scene viewer's sound (ui/components/sceneaudio.js and its worklet) and
+// the recording's own clock (sceneclock.js): the frame table as runs on the
+// recorded-time axis, the clock steering, the worklet's rendering, and the
+// controls in the real page against a scripted server. WebAudio, the socket
+// and fetch are stand-ins; the rendered samples are the worklet's own
+// arithmetic, run here sample by sample.
 import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SCENE_SOUND, soundMap, startClock, steerClock } from "../../src/sm64_events/ui/components/sceneaudio.js";
+import { SCENE_SOUND, SceneSound, soundMap, startClock, steerClock } from
+  "../../src/sm64_events/ui/components/sceneaudio.js";
 import { SceneSoundProcessor, sampleAt } from "../../src/sm64_events/ui/components/sceneaudioworklet.js";
+import { pictureAt, playLength, recordedTimes } from "../../src/sm64_events/ui/components/sceneclock.js";
 import { SceneViewer } from "../../src/sm64_events/ui/components/sceneviewer.js";
 
-const RATE = 48000, FPS = 30, NOMINAL = RATE / FPS;
+const RATE = 48000, FPS = 30, PICTURE = 1000 / FPS, PER_MS = RATE / 1000 * (1 - 100e-6);   // a device 100 ppm slow
 
-function jittered(count, seed = 3) {         // presents ~33 ms apart, +-2 ms, like a real tap's
-  let state = seed, sample = 9600;
+// A recording's table: presents ~33 ms apart (+-2 ms), each frame's sample the
+// device sample sounding at its present, as the server's stored clock gives it.
+function recording(count, seed = 3) {
+  let state = seed;
   const random = () => { state = (state * 1103515245 + 12345) % 2147483648; return state / 2147483648; };
-  return Array.from({ length: count }, () => {
-    const at = Math.round(sample + (random() - 0.5) * 192);
-    sample += NOMINAL;
-    return at;
-  });
+  const times = Array.from({ length: count }, (_, k) => k * PICTURE + (random() - 0.5) * 4);
+  return { times, samples: times.map((t) => Math.round(9600 + t * PER_MS)) };
 }
 
-test("the frame table becomes runs cut at holds and silence, each frame within 5 ms of its own sample", () => {
-  const samples = jittered(300);
-  for (let k = 120; k < 300; k++) samples[k] += 0.8 * RATE;      // a picture held 0.8 s (a level load) at 120
+test("a hold keeps its sound running; a frame without sound or a jump in the stream cuts the run", () => {
+  const { times, samples } = recording(300);
+  for (let k = 120; k < 300; k++) {                              // picture 119 held 0.8 s (a level load)
+    times[k] += 800;
+    samples[k] = Math.round(9600 + times[k] * PER_MS);
+  }
   for (let k = 200; k < 210; k++) samples[k] = -1;               // no sound for ten pictures
-  const runs = soundMap(samples, RATE, FPS);
-  expect(runs.map((run) => [run.p0, run.p1])).toEqual([[0, 120], [120, 200], [210, 300]]);
+  for (let k = 250; k < 300; k++) samples[k] += 5000;            // a reopened capture: the stream jumps
+  const runs = soundMap(samples, times, RATE, FPS);
+  expect(runs.map((run) => run.p0)).toEqual([times[0], times[210], times[250]]);
   for (const [k, sample] of samples.entries()) {
-    const at = sampleAt(runs, k);
+    const at = sampleAt(runs, times[k]);
     if (sample < 0) { expect(at).toBe(null); continue; }
-    expect(Math.abs(at.s - sample) / RATE * 1000).toBeLessThan(5);
+    expect(Math.abs(at.s - sample)).toBeLessThan(1e-6);           // each picture's own sample, exactly
   }
-  for (const { kp, ks } of runs) {                                // the sound plays near 1x: no warble
-    for (let j = 1; j < kp.length; j++) expect(Math.abs((ks[j] - ks[j - 1]) / (kp[j] - kp[j - 1]) / NOMINAL - 1)).toBeLessThan(0.01);
-  }
-  expect(Math.abs(sampleAt(runs, 119.5).s - samples[119] - NOMINAL / 2)).toBeLessThan(48);   // the last picture plays one
-  expect(sampleAt(runs, 205)).toBe(null);
+  const held = sampleAt(runs, times[119] + 400).s;                 // mid-hold the sound is still playing, at 1x
+  expect(Math.abs(held - samples[119] - 400 * PER_MS)).toBeLessThan(1.5);
+  expect(sampleAt(runs, times[205])).toBe(null);
+  expect(sampleAt(runs, times[199] + PICTURE / 2).s).toBeCloseTo(samples[199] + PICTURE / 2 * RATE / 1000, 6);
 });
 
-test("the clock starts where the pictures reach the play's frame, leans at most 1% and jumps a big miss", () => {
-  const nominal = FPS / RATE;
-  const first = startClock(9.5, 1000, nominal, 10);              // frame 10 is heard 0.5 picture from now
-  expect(first.f0).toBe(1800);
-  expect(first.p0).toBeCloseTo(10, 6);
-  expect(startClock(10.2, 1000, nominal, 10)).toMatchObject({ f0: 1000, p0: 10.2, jump: true });
+test("Play keeps the recorded time: a held picture stays up its whole recorded hold", () => {
+  const frames = [0, 33, 850, 883, 917].map((recorded_ms) => ({ recorded_ms }));
+  const times = recordedTimes({ fps: FPS, frames });
+  expect([...times]).toEqual([0, 33, 850, 883, 917]);
+  expect([0, 32, 33, 400, 849, 850, 900].map((elapsed) => pictureAt(times, 0, elapsed))).toEqual([0, 0, 1, 1, 1, 2, 3]);
+  expect(pictureAt(times, 2, 40)).toBe(3);                          // from the third picture
+  expect(pictureAt(times, 1, -100)).toBe(1);                        // before the clock starts: the play's first
+  expect(playLength(times, 0, FPS)).toBeCloseTo(917 + PICTURE, 6);
+  frames[2] = {};                                                   // a package without the times: game frames
+  expect([...recordedTimes({ fps: FPS, frames })]).toEqual([0, 1, 2, 3, 4].map((k) => k * PICTURE));
+});
+
+test("the clock starts where the recorded time reaches the play's first picture, leans at most 1% and jumps a big miss", () => {
+  const nominal = 1000 / RATE;                                        // ms of recorded time per sample frame
+  const first = startClock(990, 1000, nominal, 1000);                 // its first picture is heard 10 ms from now
+  expect(first.f0).toBe(1480);
+  expect(first.p0).toBeCloseTo(1000, 6);
+  expect(startClock(1004, 1000, nominal, 1000)).toMatchObject({ f0: 1000, p0: 1004, jump: true });
   const plan = { f0: 0, p0: 0, slope: nominal };
   const at = (seconds) => seconds * RATE;
-  expect(steerClock(plan, 30 + 0.05, at(1), nominal, FPS)).toBe(null);          // 1.7 ms: inside the dead band
-  const ahead = steerClock(plan, 30.3, at(1), nominal, FPS);                     // 10 ms behind the pictures
+  expect(steerClock(plan, 1001.7, at(1), nominal)).toBe(null);        // 1.7 ms: inside the dead band
+  const ahead = steerClock(plan, 1010, at(1), nominal);              // 10 ms behind the pictures
   expect(ahead.jump).toBe(false);
-  expect(ahead.p0).toBeCloseTo(30, 6);
+  expect(ahead.p0).toBeCloseTo(1000, 6);
   expect(ahead.slope / nominal - 1).toBeCloseTo(0.01, 6);
-  expect(steerClock(plan, 29.85, at(1), nominal, FPS).slope / nominal - 1).toBeCloseTo(-0.005, 6);
-  expect(steerClock(plan, 33, at(1), nominal, FPS)).toMatchObject({ p0: 33, slope: nominal, jump: true });
-  expect(steerClock({ ...plan, f0: at(2) }, 50, at(1), nominal, FPS)).toBe(null);   // not started yet
-  expect(steerClock({ ...plan, slope: nominal * 1.01 }, 30.3 * 1.0, at(1), nominal, FPS).slope).toBe(nominal);
+  expect(steerClock(plan, 995, at(1), nominal).slope / nominal - 1).toBeCloseTo(-0.005, 6);
+  expect(steerClock(plan, 1100, at(1), nominal)).toMatchObject({ p0: 1100, slope: nominal, jump: true });
+  expect(steerClock({ ...plan, f0: at(2) }, 50, at(1), nominal)).toBe(null);   // not started yet
+  expect(steerClock({ ...plan, slope: nominal * 1.01 }, 1010, at(1), nominal).slope).toBe(nominal);
 });
 
 function processor(blockSamples = 4800) {
   const worklet = new SceneSoundProcessor();
   const ramp = (index) => Float32Array.from({ length: blockSamples }, (_, i) => (index * blockSamples + i) / 1e6);
-  worklet.take({ type: "map", runs: soundMap([0, 1600, 3200, 4800, 6400, 8000], RATE, FPS), blockSamples });
+  const samples = [0, 1600, 3200, 4800, 6400, 8000], times = samples.map((_, k) => k * PICTURE);
+  worklet.take({ type: "map", runs: soundMap(samples, times, RATE, FPS), blockSamples });
   worklet.take({ type: "block", index: 0, channels: [ramp(0), ramp(0).map((value) => -value)] });
   worklet.take({ type: "block", index: 1, channels: [ramp(1), ramp(1).map((value) => -value)] });
   return worklet;
@@ -80,9 +98,11 @@ function quanta(worklet, from, count) {
   return { left, right };
 }
 
-test("the worklet plays the sample its picture position maps to, fading in, and Stop is silent within 64 frames", () => {
+const MS_PER_FRAME = 1000 / RATE;
+
+test("the worklet plays the sample its recorded time maps to, fading in, and Stop is silent within 64 frames", () => {
   const worklet = processor();
-  worklet.take({ type: "clock", piece: { f0: 256, p0: 1, slope: FPS / RATE, jump: true } });
+  worklet.take({ type: "clock", piece: { f0: 256, p0: PICTURE, slope: MS_PER_FRAME, jump: true } });
   const { left, right } = quanta(worklet, 0, 40);
   expect(left.slice(0, 256).every((value) => value === 0)).toBe(true);    // nothing before the clock starts
   expect(left[256]).toBeCloseTo(1600 / 1e6 / 64, 9);                      // fades in over 64 frames
@@ -98,13 +118,13 @@ test("the worklet plays the sample its picture position maps to, fading in, and 
 
 test("the worklet steers without a seam, fades across a jump, and a missing block is silence", () => {
   const worklet = processor();
-  worklet.take({ type: "clock", piece: { f0: 0, p0: 0, slope: FPS / RATE, jump: true } });
+  worklet.take({ type: "clock", piece: { f0: 0, p0: 0, slope: MS_PER_FRAME, jump: true } });
   quanta(worklet, 0, 4);
-  worklet.take({ type: "clock", piece: { f0: 512, p0: 512 * FPS / RATE, slope: FPS / RATE * 1.01, jump: false } });
+  worklet.take({ type: "clock", piece: { f0: 512, p0: 512 * MS_PER_FRAME, slope: MS_PER_FRAME * 1.01, jump: false } });
   const lean = quanta(worklet, 512, 1).left;
   expect(lean[0]).toBeCloseTo(512 / 1e6, 6);                               // same sample: no seam
   expect(lean[100]).toBeCloseTo((512 + 100 * 1.01) / 1e6, 6);
-  worklet.take({ type: "clock", piece: { f0: 640, p0: 3, slope: FPS / RATE, jump: true } });
+  worklet.take({ type: "clock", piece: { f0: 640, p0: 3 * PICTURE, slope: MS_PER_FRAME, jump: true } });
   const jump = quanta(worklet, 640, 2).left;
   expect(Math.abs(jump[63])).toBeLessThan(Math.abs(jump[0]) / 32);         // the old sound fades out
   expect(jump[130]).toBeCloseTo((4800 + 130) / 1e6, 6);                    // then the new one, on its own clock
@@ -117,6 +137,7 @@ test("the worklet steers without a seam, fades across a jump, and a missing bloc
 // ---------------------------------------------------------------- the page
 
 const FRAMES = Array.from({ length: 60 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
+FRAMES.forEach((frame, i) => { frame.recorded_ms = i * PICTURE; });
 const SAMPLES = FRAMES.map((_, i) => (i === 4 ? -1 : 9600 + 1600 * i));
 let sockets, fetches, contexts, nodes, opened;
 
@@ -136,17 +157,20 @@ class FakeSocket {
   }
 }
 
+// A running audio device: its clock runs with the page's, renders 10 ms ahead
+// and is heard 50 ms after rendering.
 class FakeContext {
   constructor(options) {
-    Object.assign(this, { options, sampleRate: options.sampleRate, state: "running", currentTime: 1, destination: {},
-      audioWorklet: { addModule: vi.fn(() => Promise.resolve()) } });
+    Object.assign(this, { options, sampleRate: options.sampleRate, state: "running", destination: {},
+      born: performance.now(), audioWorklet: { addModule: vi.fn(() => Promise.resolve()) } });
     contexts.push(this);
   }
+  get currentTime() { return (performance.now() - this.born) / 1000 + 1; }
   createGain() { return { gain: { value: 1, setTargetAtTime(value) { this.value = value; } }, connect: vi.fn() }; }
   resume() { this.state = "running"; return Promise.resolve(); }
   suspend() { this.state = "suspended"; return Promise.resolve(); }
   close() { this.state = "closed"; return Promise.resolve(); }
-  getOutputTimestamp() { return { contextTime: 0.1, performanceTime: 100 }; }
+  getOutputTimestamp() { return { contextTime: this.currentTime - 0.06, performanceTime: performance.now() - 0.01 }; }
 }
 
 class FakeNode {
@@ -247,7 +271,7 @@ test("a recording without sound says so instead of showing dead controls", async
   expect(page.queryByLabelText("Volume")).toBe(null);
 });
 
-test("Play starts the sound inside the click, a play's picture starts its clock, and Pause stops it", async () => {
+test("Play starts the sound inside the click, on schedule from the play's first picture, and Pause stops it", async () => {
   const { page, socket } = await openScene();
   await socket.picture(socket.sent[0]);
   // Paused on frame 0 (sample 9600, in block 1), its sound is fetched before Play.
@@ -261,12 +285,32 @@ test("Play starts the sound inside the click, a play's picture starts its clock,
   const node = nodes[0];
   expect(node.messages[0]).toMatchObject({ type: "map", blockSamples: 9216 });
   await waitFor(() => expect(node.messages.some((message) => message.type === "block" && message.index === 1)).toBe(true));
-  await waitFor(() => expect(socket.sent.length).toBe(2));
-  await socket.picture(socket.sent[1]);                                // the play's first picture is drawn
+  // No picture of the play has been drawn: the sound is already scheduled, from frame 0's own time.
   await waitFor(() => expect(node.messages.some((message) => message.type === "clock")).toBe(true));
-  expect(node.messages.find((message) => message.type === "clock").piece).toMatchObject({ jump: true });
+  const piece = node.messages.find((message) => message.type === "clock").piece;
+  expect(piece.jump).toBe(true);
+  expect(Math.abs(piece.p0)).toBeLessThan(MS_PER_FRAME);              // frame 0's own time, to a sample
+  expect(piece.f0).toBeGreaterThan(contexts[0].currentTime * RATE);  // in the future: nothing of it is cut
   fireEvent.click(page.getByRole("button", { name: "Pause" }));
   expect(node.messages.at(-1)).toEqual({ type: "stop" });
+});
+
+test("the first picture of a play holds until the sound can start with it", async () => {
+  const sound = new SceneSound();
+  sound.load(opened);
+  expect(sound.lead()).toBe(0);                                      // no audio device yet: nothing to wait for
+  sound.arm();
+  expect(sound.lead()).toBe(SCENE_SOUND.coldLeadMs);                 // a starting device has no clock to read
+  for (let i = 0; i < 3; i++) sound.measureOutput();
+  // Heard 40 ms of steering lead + 60 ms of output delay + a 5 ms margin from now; the
+  // first new picture shows pictureDelayMs (35) after it is due.
+  expect(sound.lead()).toBeCloseTo(105 - SCENE_SOUND.pictureDelayMs, 0);
+  sound.shown(0, performance.now() - 5);                             // a paused picture: the scene's own delay
+  await new Promise((resolve) => { setTimeout(resolve, 40); });
+  expect(sound.delays.length).toBe(1);
+  // A play's picture also waits up to a display frame for its request: half of one on average.
+  expect(sound.lead()).toBeCloseTo(105 - sound.delays[0] - SCENE_SOUND.tickMs / 2, 0);
+  sound.close();
 });
 
 test("a step or a seek is silent, and a lost or sound-less picture says so", async () => {
@@ -275,12 +319,13 @@ test("a step or a seek is silent, and a lost or sound-less picture says so", asy
   fireEvent.click(page.getByRole("button", { name: "Play" }));
   await waitFor(() => expect(nodes.length).toBe(1));
   fireEvent.keyDown(root, { key: "ArrowRight" });
+  const stopped = nodes[0].messages.length;
   expect(nodes[0].messages.at(-1)).toEqual({ type: "stop" });
   fireEvent.input(page.getByLabelText("Frame"), { target: { value: "2" } });
   await waitFor(() => expect(page.container.textContent).toContain("Sound lost here"));
   fireEvent.input(page.getByLabelText("Frame"), { target: { value: "4" } });
   await waitFor(() => expect(page.container.textContent).toContain("No sound was recorded for this picture."));
-  expect(nodes[0].messages.filter((message) => message.type === "clock")).toEqual([]);
+  expect(nodes[0].messages.slice(stopped).filter((message) => message.type === "clock")).toEqual([]);
 });
 
 test("a browser without WebAudio says it cannot play the sound", async () => {

@@ -1,38 +1,44 @@
 // src/sm64_events/ui/components/sceneaudio.js -- the Scene viewer's sound (M4 E4-audio, lab only).
 //
 // Plays the sound the runner heard -- the package's source-audio layer --
-// with the pictures during Play. Pictures are the truth: SceneLink's picture
-// clock says which frame is due, and the sound follows it. The server maps
-// every frame to the sample sounding as its picture appeared
-// (tools/scene_lab/scene_audio.py); here soundMap smooths that table into
-// runs, the sound starts when the play's first picture is drawn, and steering
-// keeps the sample heard as each picture appears at that picture's own,
-// leaning the sound's rate by at most SCENE_SOUND.bend (a big miss jumps).
-// Stepping, seeking and Pause are silent at once, and a lost stretch plays as
-// silence and says so. sceneaudioworklet.js renders it on the audio thread.
-// Mute (M) and the volume persist per viewer. The recording is one mixed
-// stream, so there is one stem; per-stem volume (music, effects) would add a
-// gain per stem between the worklet and the master gain.
+// with the pictures during Play. Both keep the recording's own time
+// (sceneclock.js): a picture stays up as long as the recording showed it and
+// the sound plays through it at its own speed. The server maps every frame to
+// the sample sounding as its picture appeared (tools/scene_lab/scene_audio.py);
+// soundMap turns that into runs of recorded time against sample. Pictures are
+// the truth: the sound starts with the play's first picture (SceneLink holds
+// that picture until the sound can start, `lead`), and steering keeps the
+// sample heard as each picture appears at that picture's own, leaning the
+// sound's rate by at most SCENE_SOUND.bend (a big miss jumps). Stepping,
+// seeking and Pause are silent at once, and a lost stretch plays as silence
+// and says so. sceneaudioworklet.js renders it on the audio thread. Mute (M)
+// and the volume persist per viewer. The recording is one mixed stream, so
+// there is one stem; per-stem volume (music, effects) would add a gain per
+// stem between the worklet and the master gain.
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { sampleAt } from "./sceneaudioworklet.js";
+import { recordedTimes } from "./sceneclock.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
 const WORKLET = new URL("./sceneaudioworklet.js", import.meta.url).href;
 export const NO_SOUND = "This recording has no sound.";
-// Steering numbers; knot spacing and the lean were checked on a synthetic
-// click track (snd page check), the rest are untuned.
+// Steering numbers; the picture delays and the lean were checked on a
+// synthetic click track (snd page check), the rest are untuned.
 export const SCENE_SOUND = {
   preference: "sm64.sceneSound", volume: 0.5,   // the localStorage entry: {volume, muted}
-  knotPictures: 30,          // the table is smoothed over a second: present jitter would warble
-  maxStepPictures: 2,        // a picture held longer than this is a cut: only its first picture of sound plays
+  joinMs: 2,                 // samples this close to the recorded time between two pictures are one run
   bend: 0.01, convergeSeconds: 1, deadMs: 3, jumpMs: 80,
   leadSeconds: 0.04,         // a steer takes effect this far ahead of the audio clock
+  pictureDelayMs: 35,        // a picture appears this long after it is asked for, until the scene measures it
+  tickMs: 1000 / 60,         // a play asks for each picture on the display frame after it is due
+  coldLeadMs: 250,           // a starting audio device can be heard this soon after Play, before it reports its clock
+  marginMs: 5, settleMs: 500, settleJumpMs: 10,
   startMs: 20, steerMs: 100, latencyWindow: 9, aheadSeconds: 6, keepBlocks: 8, cueMs: 150, syncWindow: 600,
-  idleMs: 30000,             // the audio device is let go this long after the last play
+  idleMs: 300000,            // the audio device is let go this long after the last play
 };
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
@@ -61,36 +67,34 @@ function storeSound({ volume, muted }) {
   catch { /* storage unavailable: the choice lasts this page */ }
 }
 
-// The frame table as runs the worklet plays: a run is frames whose samples
-// rise by at most maxStepPictures pictures' worth each, so a gap, a sound-less
-// frame or a picture the game held for a level load cuts it. Knots: the run's
-// first frame exactly, then one a second at the median of its neighbours
-// projected at the nominal rate, then the last frame's end one picture on.
-export function soundMap(samples, rate, fps) {
-  const nominal = rate / fps, limit = SCENE_SOUND.maxStepPictures * nominal, runs = [];
+// The frame table as runs the worklet plays, on the recorded-time axis: knot
+// k is (when the recording showed picture k, its sample). Both come from the
+// same present stamp, so within a run the sound advances at its own speed
+// through any hold. A run ends where the next picture's sample is not the
+// recorded time later (a gap, a reopened capture) or has none; its last
+// picture plays until the next picture, at most one game frame.
+export function soundMap(samples, times, rate, fps) {
+  const runs = [], join = SCENE_SOUND.joinMs * rate / 1000;
+  const follows = (k) => samples[k + 1] >= 0
+    && Math.abs(samples[k + 1] - samples[k] - (times[k + 1] - times[k]) * rate / 1000) <= join;
   for (let a = 0; a < samples.length;) {
     if (samples[a] < 0) { a++; continue; }
     let b = a;
-    while (b + 1 < samples.length && samples[b + 1] > samples[b] && samples[b + 1] - samples[b] <= limit) b++;
-    const every = SCENE_SOUND.knotPictures, half = every >> 1, end = samples[b] + nominal;
-    const kp = [a], ks = [samples[a]];
-    for (let k = a + every; k <= b + 1 - half; k += every) {
-      const near = [];
-      for (let j = Math.max(a, k - half); j <= Math.min(b, k + half); j++) near.push(samples[j] - (j - k) * nominal);
-      const s = median(near);
-      if (s > ks[ks.length - 1] && s < end) { kp.push(k); ks.push(s); }
-    }
-    kp.push(b + 1);
-    ks.push(end);
-    runs.push({ p0: a, p1: b + 1, kp: Float64Array.from(kp), ks: Float64Array.from(ks) });
+    while (b + 1 < samples.length && follows(b)) b++;
+    const tail = Math.min(1000 / fps, b + 1 < times.length ? times[b + 1] - times[b] : Infinity);
+    const kp = Float64Array.from({ length: b - a + 2 }, (_, i) => (a + i <= b ? times[a + i] : times[b] + tail));
+    const ks = Float64Array.from({ length: b - a + 2 }, (_, i) => (a + i <= b ? samples[a + i]
+      : samples[b] + tail * rate / 1000));
+    runs.push({ p0: kp[0], p1: kp[kp.length - 1], kp, ks });
     a = b + 1;
   }
   return runs;
 }
 
-// The play's first clock piece: it starts where the pictures reach `from`,
-// or now (at `f`) when that has passed. `want` is the picture position the
-// pictures say is heard at frame `f`; `nominal` pictures per sample frame.
+// The play's first clock piece: it starts where the recorded time reaches
+// `from` (the first picture's), or now (at `f`) when that has passed. `want`
+// is the recorded time the pictures say is heard at frame `f`; `nominal` is
+// ms of recorded time per sample frame.
 export function startClock(want, f, nominal, from) {
   const at = f + (from - want) / nominal;
   if (at <= f) return { f0: f, p0: want, slope: nominal, jump: true };
@@ -98,13 +102,15 @@ export function startClock(want, f, nominal, from) {
   return { f0, p0: from + (f0 - at) * nominal, slope: nominal, jump: true };
 }
 
-// The next clock piece, or null to keep `plan`: a miss past jumpMs jumps
+// The next clock piece, or null to keep `plan`: a miss past `jumpMs` jumps
 // (the worklet fades across it); a smaller one leans the rate toward the
-// pictures, at most `bend`, until it is inside deadMs.
-export function steerClock(plan, want, f, nominal, fps) {
+// pictures, at most `bend`, until it is inside deadMs. Times in ms. While a
+// play's sound settles, its first pictures' delay corrects the start with a
+// jump past settleJumpMs rather than a second of leaning.
+export function steerClock(plan, want, f, nominal, jumpMs = SCENE_SOUND.jumpMs) {
   if (f < plan.f0) return null;                       // the sound has not started yet
-  const now = plan.p0 + (f - plan.f0) * plan.slope, missMs = (want - now) * 1000 / fps;
-  const { bend, convergeSeconds, deadMs, jumpMs } = SCENE_SOUND;
+  const now = plan.p0 + (f - plan.f0) * plan.slope, missMs = want - now;
+  const { bend, convergeSeconds, deadMs } = SCENE_SOUND;
   if (Math.abs(missMs) > jumpMs) return { f0: f, p0: want, slope: nominal, jump: true };
   const lean = Math.abs(missMs) <= deadMs ? 0 : clamp(missMs / 1000 / convergeSeconds, -bend, bend);
   const slope = nominal * (1 + lean);
@@ -125,16 +131,17 @@ async function readBlock(response) {
 }
 
 // The open scene's sound. SceneLink calls load (a scene opened or ended),
-// arm then play (Play: its picture clock started with frame `from` due at
-// performance time `start`), shown (a play's picture was drawn) and stop
-// (Pause, a step, a seek, a closed scene); the page reads the rest.
+// arm, lead and play (Play: the recorded clock starts with frame `from` due at
+// performance time `start`), shown (a picture was drawn) and stop (Pause, a
+// step, a seek, a closed scene); the page reads the rest.
 export class SceneSound {
   constructor({ changed } = {}) {
     const saved = storedSound();
     Object.assign(this, { changed: changed || (() => {}), volume: saved.volume, muted: saved.muted, table: null,
-      runs: [], reason: null, session: null, fps: 30, ctx: null, master: null, node: null, playing: null,
-      lastLate: null, offsets: [], reports: [], pending: [], sync: [], decoded: new Map(), loading: new Map(),
-      failed: new Set(), notice: null, broken: null, steerTimer: null, cueTimer: null, idleTimer: null });
+      runs: [], times: new Float64Array(0), reason: null, session: null, fps: 30, ctx: null, master: null, node: null,
+      playing: null, lastLate: null, delays: [], offsets: [], reports: [], pending: [], sync: [], decoded: new Map(),
+      loading: new Map(), failed: new Set(), notice: null, broken: null, steerTimer: null, cueTimer: null,
+      idleTimer: null });
   }
 
   get available() { return !!this.table; }
@@ -142,12 +149,12 @@ export class SceneSound {
   load(scene) {
     this.stop();
     const audio = scene?.audio;
-    Object.assign(this, { session: scene?.session ?? null, fps: scene?.fps || 30, decoded: new Map(),
-      loading: new Map(), failed: new Set(), notice: null, sync: [], pending: [], reports: [] });
+    Object.assign(this, { session: scene?.session ?? null, fps: scene?.fps || 30, times: recordedTimes(scene),
+      decoded: new Map(), loading: new Map(), failed: new Set(), notice: null, sync: [], pending: [], reports: [] });
     if (audio?.available) {
       this.table = { rate: audio.rate, blockSamples: audio.block_samples, totalSamples: audio.total_samples,
         blocks: audio.blocks, samples: Int32Array.from(audio.samples), lost: new Set(audio.lost) };
-      this.runs = soundMap(this.table.samples, audio.rate, this.fps);
+      this.runs = soundMap(this.table.samples, this.times, audio.rate, this.fps);
       this.reason = null;
       if (this.ctx && this.ctx.sampleRate !== audio.rate) this.close();
       this.post({ type: "map", runs: this.runs, blockSamples: audio.block_samples });
@@ -229,13 +236,39 @@ export class SceneSound {
     this.ctx.resume?.().catch(() => {});
   }
 
+  // How late a play's picture shows against its recorded time: this play's
+  // own lateness once it has some; before that the last play's; else what a
+  // picture took from being asked for to showing (the play's first, asked for
+  // at Play, then the scene's paused ones, the open's included) plus half a
+  // display frame, which a play's picture also waits for its request; else
+  // pictureDelayMs.
+  pictureDelay() {
+    const play = this.playing, paused = median(this.delays);
+    if (play?.late.length) return median(play.late);
+    if (play?.first != null) return play.first + SCENE_SOUND.tickMs / 2;
+    return this.lastLate ?? (paused == null ? SCENE_SOUND.pictureDelayMs : paused + SCENE_SOUND.tickMs / 2);
+  }
+
+  // How long SceneLink holds the first picture of a play so the sound can
+  // start with it: the sound is heard no sooner than the audio clock's lead
+  // plus the device's own output delay (unknown while the device starts:
+  // coldLeadMs), and the play's first new picture shows pictureDelay after it
+  // is due. 0 without sound.
+  lead() {
+    if (!this.table || !this.ctx) return 0;
+    const offset = this.ctx.state === "running" ? this.outputOffset() : null;
+    if (offset == null) return SCENE_SOUND.coldLeadMs;
+    const heard = offset + (this.ctx.currentTime + SCENE_SOUND.leadSeconds) * 1000 + SCENE_SOUND.marginMs;
+    return Math.max(0, heard - performance.now() - this.pictureDelay());
+  }
+
   play(from, start) {
     if (!this.table) return;
     this.stop();
     this.arm();
     if (!this.ctx) return;
-    this.playing = { from, start, late: [], plan: null };
-    this.fetchFrom(from);
+    this.playing = { from, start, asked: performance.now(), late: [], first: null, plan: null, began: null };
+    this.fetchFrom(this.times[from]);
     this.steer();
     this.steerTimer = setInterval(() => this.steer(), SCENE_SOUND.startMs);
   }
@@ -255,14 +288,25 @@ export class SceneSound {
     this.changed();
   }
 
-  // A picture of this play was drawn; it shows from the next compositor frame.
+  // A picture asked for at `sent` was drawn; it shows from the next compositor
+  // frame. While paused that measures the picture delay; during a play, how
+  // late the picture is against its recorded time (a picture asked for before
+  // it was due, like the play's first, says nothing about that).
   shown(frame, sent) {
-    const play = this.playing;
-    if (!play || frame < play.from || !(sent >= play.start)) return;
-    const next = globalThis.requestAnimationFrame ?? ((callback) => setTimeout(() => callback(performance.now()), 0));
-    next((visible) => {
+    const play = this.playing, due = play && play.start + this.times[frame] - this.times[play.from];
+    const early = play && frame === play.from && sent < due && sent >= play.asked;   // asked for at Play
+    if (play && !early && (frame < play.from || !(sent >= due))) return;
+    const next = globalThis.requestAnimationFrame ?? ((callback) => setTimeout(callback, 0));
+    next(() => {
+      const visible = performance.now();
+      if (!play || early) {
+        if (visible - sent >= 1000) return;
+        if (!play && !this.playing) this.delays = [...this.delays.slice(-(SCENE_SOUND.latencyWindow - 1)), visible - sent];
+        else if (this.playing === play) play.first = visible - sent;
+        return;
+      }
       if (this.playing !== play) return;
-      play.late.push(visible - (play.start + (frame - play.from) * 1000 / this.fps));
+      play.late.push(visible - due);
       if (play.late.length > SCENE_SOUND.latencyWindow) play.late.shift();
       this.pending.push({ frame, visible });
       this.steer();
@@ -291,29 +335,31 @@ export class SceneSound {
     return median(this.offsets);
   }
 
-  // Bring the sound to the pictures: the position heard at a frame is where
-  // the picture clock is then, less how late its pictures appear (this play's
-  // pictures, or the last play's until one is drawn).
+  // Bring the sound to the pictures: the recorded time heard at a frame is
+  // where the recorded clock is then, less how late its pictures appear
+  // (pictureDelay: from the first drawn picture of the play on, its own).
   steer() {
     const play = this.playing, ctx = this.ctx;
     if (!play || !this.node) return;
     this.measureOutput();
     const offset = this.outputOffset();
-    const late = play.late.length ? median(play.late) : this.lastLate;
-    if (offset == null || late == null) return;
-    const rate = ctx.sampleRate, nominal = this.fps / rate;
+    if (offset == null) return;
+    const rate = ctx.sampleRate, nominal = 1000 / rate, origin = this.times[play.from];
     const f = Math.ceil((ctx.currentTime + SCENE_SOUND.leadSeconds) * rate);
-    const want = play.from + (offset + f / rate * 1000 - play.start - late) * this.fps / 1000;
-    const piece = play.plan ? steerClock(play.plan, want, f, nominal, this.fps) : startClock(want, f, nominal, play.from);
+    const want = origin + offset + f / rate * 1000 - play.start - this.pictureDelay();
+    const settling = play.began != null && f - play.began < SCENE_SOUND.settleMs * rate / 1000;
+    const piece = play.plan ? steerClock(play.plan, want, f, nominal, settling ? SCENE_SOUND.settleJumpMs : undefined)
+      : startClock(want, f, nominal, origin);
     if (piece) {
       if (!play.plan) {                      // started: steer at the slower pace from here
+        play.began = piece.f0;
         clearInterval(this.steerTimer);
         this.steerTimer = setInterval(() => this.steer(), SCENE_SOUND.steerMs);
       }
       play.plan = piece;
       this.post({ type: "clock", piece });
     }
-    this.fetchFrom(Math.max(play.from, want));
+    this.fetchFrom(Math.max(origin, want));
   }
 
   // The worklet's position reports: how far each drawn picture's own sample
@@ -338,16 +384,16 @@ export class SceneSound {
     if (this.sync.length > SCENE_SOUND.syncWindow) this.sync.splice(0, this.sync.length - SCENE_SOUND.syncWindow);
   }
 
-  // The sample `position` plays, or the next run's first when it falls in a gap.
-  sampleNear(position) {
-    const at = sampleAt(this.runs, position);
+  // The sample recorded time `time` plays, or the next run's first when it falls in a gap.
+  sampleNear(time) {
+    const at = sampleAt(this.runs, time);
     if (at) return at.s;
-    const next = this.runs.find((run) => run.p0 >= position);
+    const next = this.runs.find((run) => run.p0 >= time);
     return next ? next.ks[0] : null;
   }
 
-  fetchFrom(position) {
-    const table = this.table, first = table && this.sampleNear(position);
+  fetchFrom(time) {
+    const table = this.table, first = table && this.sampleNear(time);
     if (first == null) return;
     const lo = Math.floor(first / table.blockSamples);
     const hi = Math.min(table.blocks - 1, Math.floor((first + SCENE_SOUND.aheadSeconds * table.rate) / table.blockSamples));
@@ -387,7 +433,7 @@ export class SceneSound {
   cue(frame) {
     clearTimeout(this.cueTimer);
     if (!this.table || this.playing) return;
-    this.cueTimer = setTimeout(() => this.fetchFrom(frame), SCENE_SOUND.cueMs);
+    this.cueTimer = setTimeout(() => this.fetchFrom(this.times[frame] ?? 0), SCENE_SOUND.cueMs);
   }
 
   syncReadout() {

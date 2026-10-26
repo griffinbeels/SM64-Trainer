@@ -309,13 +309,18 @@ class SceneSession:
         return session
 
     def describe(self) -> dict:
-        """What the page lists: every frame's level, area and game frame, the free camera's state,
-        and the recording's sound (scene_audio.py's table, or why there is none)."""
+        """What the page lists: every frame's level, area, game frame and recorded time (when the
+        recording showed it, ms after its first picture: Play holds each picture that long; None
+        throughout when the package lacks the times, and Play then runs at FPS), the free camera's
+        state, and the recording's sound (scene_audio.py's table, or why there is none)."""
+        times = [self.outlines[index]["present_us"] for index in self.frames]
+        ordered = None not in times and all(a <= b for a, b in zip(times, times[1:], strict=False))
         frames = []
-        for index in self.frames:
+        for position, index in enumerate(self.frames):
             identity = self.outlines[index]["identity"]
             frames.append({"level": identity.get("curr_level"), "area": identity.get("curr_area"),
-                           "game_frame": identity.get("global_timer")})
+                           "game_frame": identity.get("global_timer"),
+                           "recorded_ms": (times[position] - times[0]) / 1000 if ordered else None})
         return {"name": self.name, "fps": FPS, "frames": frames, "renderer_pid": self.host.pid,
                 "free_camera": {"available": self.free_reason is None, "reason": self.free_reason},
                 "audio": self.sound.describe() if self.sound else scene_audio.absent()}

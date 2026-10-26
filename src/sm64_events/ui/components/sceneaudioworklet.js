@@ -2,13 +2,13 @@
 //
 // An AudioWorklet module: it runs on the audio thread, imports nothing, and
 // allocates nothing per sample. sceneaudio.js sends it the recording's map
-// from picture position to sample (runs of knots: a run is sound with no cut
-// in it), the decoded blocks around the play position, and a clock: from
-// context frame f0 on, picture position p0 + (f - f0) * slope. Each output
-// frame plays the sample its picture position maps to, so a new slope steers
-// the sound with no seam. A start, a stop, a jump and the edge of a run fade
-// over FADE frames, so nothing clicks. The page imports sampleAt from here
-// too, so the map has one reader.
+// from recorded time (ms, sceneclock.js) to sample (runs of knots: a run is
+// sound with no cut in it), the decoded blocks around the play position, and
+// a clock: from context frame f0 on, recorded time p0 + (f - f0) * slope.
+// Each output frame plays the sample its recorded time maps to, so a new
+// slope steers the sound with no seam. A start, a stop, a jump and the edge of
+// a run fade over FADE frames, so nothing clicks. The page imports sampleAt
+// from here too, so the map has one reader.
 const FADE = 64;                 // 1.3 ms at 48 kHz
 const REPORT_QUANTA = 16;        // a position report every ~43 ms of sound
 const AT = { run: 0, s: 0, edge: 0 };
@@ -21,8 +21,8 @@ function below(values, value, lo, hi) {   // the last index in [lo, hi) whose va
   return lo;
 }
 
-// The sample picture position `p` plays, or null between runs: AT, reused, with
-// the run's index (pass it back as `hint`) and the distance in pictures to the
+// The sample recorded time `p` plays, or null between runs: AT, reused, with
+// the run's index (pass it back as `hint`) and the distance in ms to the
 // nearer end of the run.
 export function sampleAt(runs, p, hint = 0) {
   let index = hint < runs.length && runs[hint].p0 <= p ? hint : 0;
