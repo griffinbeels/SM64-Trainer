@@ -26,6 +26,7 @@ import { Icon } from "./icons.js";
 import { EmptyState } from "./emptystate.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { PbAction, PbReplayNotice, usePbReplay } from "./pbreplay.js";
+import { AttemptScenes, SceneButton, useAttemptScenes } from "./attemptscene.js";
 
 const html = htm.bind(h);
 
@@ -374,6 +375,11 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
         : html`<span>${a.strat_tag || "— no strategy —"}</span>`}
     </td>
     <td class="attempt-actions"><div class="attempt-action-slots">
+      ${/* The Ghost button (lab only, attemptscene.js) sits left of ▷ and only
+           on a row the lab knows a scene for (AttemptTable's answers, empty
+           with the lab off); the slots stay right-aligned, so a row without
+           one moves no other button. */""}
+      <${SceneButton} attempt=${a.id} open=${() => t.sceneLab.open(a.id)} />
       <button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
             aria-expanded=${showReplay}
             title="View replay" aria-label="View replay">
@@ -411,7 +417,8 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
 // attempts: the full ordered list for stable numbering;
 // rows: the filtered/sorted subset to actually render.
 export function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, openCompare, sec }) {
-  return html`<table class="attempt-table">
+  const scenes = useAttemptScenes(rows.map((a) => a.id), Boolean(t.sceneLab));
+  return html`<table class="attempt-table"><${AttemptScenes.Provider} value=${scenes}>
     ${rows.map((a) => {
       const idx = attempts.indexOf(a);
       return html`<${AttemptRow} key=${a.id} a=${a} t=${t} idx=${idx}
@@ -419,7 +426,7 @@ export function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, o
         isNew=${freshIds ? freshIds.has(a.id) : false}
         openCompare=${openCompare} sec=${sec} />`;
     })}
-  </table>`;
+  <//></table>`;
 }
 
 export function HideToggle({ hidden, showHidden, setShowHidden }) {

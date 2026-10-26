@@ -91,9 +91,11 @@ const PLAIN_TABS = {
 // The Scene viewer (M4, lab only). This one probe names the lab only when
 // SM64_SCENE_LAB names a lab config; anywhere else it answers {lab: null} and
 // the shell stays exactly as it was. The viewer's code loads only after the
-// server names the lab.
+// server names the lab. Also the attempt the Practice log's Ghost button
+// handed over, until the viewer takes it.
 function useSceneLab() {
   const [viewer, setViewer] = useState(null);
+  const [intent, setIntent] = useState(null);
   useEffect(() => {
     let mounted = true;
     fetch("/api/scene-lab", { cache: "no-store" })
@@ -103,9 +105,20 @@ function useSceneLab() {
       .catch(() => {});
     return () => { mounted = false; };
   }, []);
-  return viewer;
+  return [viewer, intent, setIntent];
 }
 const LAB_GROUP = ["Lab", [["Scene viewer", "ghost"]]];
+
+// The lab's door on `t`, the way the Daily Star rides on it: every practice-log
+// row reads one copy with no prop threaded through the log. `open(attempt)` is
+// the Ghost button: the Scene viewer opens that attempt's scene and plays it
+// (`intent`, the libraryIntent shape: go to that tab and open that thing).
+// Null with the lab off, and then no row draws the button.
+function sceneDoor(viewer, intent, setIntent, setTab) {
+  if (!viewer) return null;
+  return { intent, clearIntent: () => setIntent(null),
+    open: (attempt) => { setIntent({ attempt }); setTab("Scene viewer"); } };
+}
 
 function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {
   // FINAL REVIEW FIX (minor: Compare is an orphan destination). Compare's own
@@ -237,7 +250,7 @@ function App() {
     return () => media.removeEventListener("change", changed);
   }, []);
   const tracker = useTracker();
-  const SceneViewer = useSceneLab();
+  const [SceneViewer, sceneIntent, setSceneIntent] = useSceneLab();
   const navGroups = SceneViewer ? [...NAV_GROUPS, LAB_GROUP] : NAV_GROUPS;
   const plainTabs = SceneViewer ? { ...PLAIN_TABS, "Scene viewer": SceneViewer } : PLAIN_TABS;
   // The Daily Star rides on `t` so every surface reads one copy; it lives
@@ -322,6 +335,7 @@ function App() {
   // `openCompare`, unrenamed, with the same {attemptId, entity, strat} shape
   // it always has -- change the ONE function, never the prop chain.
   const openCompare = (intent) => openLibrary({ kind: "compare", ...intent });
+  t.sceneLab = sceneDoor(SceneViewer, sceneIntent, setSceneIntent, setTab);
 
   return html`<div class="app-shell">
     <${Sidebar} t=${t} tab=${tab} setTab=${setTab} groups=${navGroups}

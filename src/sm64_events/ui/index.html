@@ -3907,6 +3907,10 @@
      a hole between ▷ and ×. */
   .attempt-actions button.pb-unavailable { opacity: 1; cursor: default; }
   .attempt-actions button.pb-unavailable > * { opacity: .35; }
+  /* The Ghost button (lab only) waiting for its scene, or without one,
+     wears the same frame the same way; its title says which. */
+  .attempt-actions button.attempt-scene:disabled { opacity: 1; cursor: default; }
+  .attempt-actions button.attempt-scene:disabled > * { opacity: .35; }
   /* `vertical-align: middle`, because the cell lays its buttons out INLINE
      and inline-blocks sit on the text baseline by default -- the replay
      button's SVG, "Save as PB"'s text and the ×'s glyph each put that
@@ -6848,6 +6852,21 @@
     .routepick > button { grid-column: 1 / -1; justify-self: end; }
     .compare-stage-card { min-height: 520px; }
     .cf-row { grid-template-columns: 85px 110px minmax(0,1fr) auto 18px; }
+  }
+
+  /* The scene lab's Ghost button (attemptscene.js) adds a fourth 30px frame to
+     the action column. On a pane this narrow a row with a long result (a
+     death's detail and a 1' time) then pushed the x past the card by 21px at
+     850 (measured on the table layout, 2026-10-26), so a table wearing one
+     takes the narrow layout's own compact Save and strategy widths below:
+     together they give back more than the button takes. At 700px and under
+     the narrow layout below already does exactly this. Lab only: without the
+     button nothing here matches. */
+  @container (min-width: 701px) and (max-width: 800px) {
+    .attempt-table:has(.attempt-scene) .save-pb-wide { display: none; }
+    .attempt-table:has(.attempt-scene) .save-pb-narrow { display: inline; }
+    .attempt-table:has(.attempt-scene) .attempt-pb-slot { min-width: 5.5rem; }
+    .attempt-table:has(.attempt-scene) .attempt-strategy select { max-width: 104px; }
   }
 
   /* Was @media (max-width: 760px). Viewport 760 gives the pane 725px and viewport 761 gives it 642px -- the mobile block was styling the WIDER pane. 700px splits them the right way round. */

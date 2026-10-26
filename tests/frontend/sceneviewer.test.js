@@ -158,6 +158,63 @@ test("opening names a listed package, then asks for the first picture from the r
   expect(HTMLCanvasElement.prototype.setPointerCapture).not.toHaveBeenCalled();
 });
 
+// The Practice log's Ghost button (app.js hands its attempt over as `t.sceneLab.intent`).
+const fromGhostButton = (attempt, clearIntent = () => {}) => ({ t: { sceneLab: { intent: { attempt }, clearIntent } } });
+
+async function openAttempt(attempt = 12) {
+  const clearIntent = vi.fn();
+  const page = render(h(SceneViewer, fromGhostButton(attempt, clearIntent)));
+  await until(() => expect(sockets.length).toBe(1));
+  const socket = sockets[0];
+  socket.open();
+  await until(() => expect(socket.sent.length).toBe(1));
+  return { page, socket, clearIntent };
+}
+
+test("an attempt from the Practice log opens and plays from its first frame once that picture is drawn", async () => {
+  const { page, socket, clearIntent } = await openAttempt(12);
+  expect(clearIntent).toHaveBeenCalledTimes(1);
+  const asked = fetches.filter(([url]) => url.startsWith("/api/scene-lab/")).map(([url, method, body]) => [url, method, body]);
+  expect(asked[0]).toEqual(["/api/scene-lab/open", "POST", JSON.stringify({ attempt: 12 })]);  // never the old scene first
+  expect(socket.sent[0]).toMatchObject({ frame: 0, camera: null });
+  expect(page.getByRole("button", { name: "Play" })).toBeTruthy();     // nothing plays before a picture is up
+  await socket.picture(socket.sent[0]);
+  await until(() => expect(page.getByRole("button", { name: "Pause" })).toBeTruthy());
+  expect(socket.pictures().map((request) => request.frame)).toEqual([0, 0]);   // the play's own first picture
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+});
+
+test("a scene's slow first picture does not make Play jump past the attempt's opening frames", async () => {
+  const { page, socket } = await openAttempt(12);
+  clock.now += 300;                                   // the session's cold start, not a picture's usual time
+  await socket.picture(socket.sent[0]);
+  await until(() => expect(page.getByRole("button", { name: "Pause" })).toBeTruthy());
+  await tick(clock.now);
+  await until(() => expect(socket.last().frame).toBe(1));   // asked READY_GUESS ahead: frame 1, not the last
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+});
+
+test("stepping before the first picture keeps an attempt's scene paused where the step put it", async () => {
+  const { page, socket } = await openAttempt(12);
+  fireEvent.keyDown(page.container.querySelector(".scene-lab"), { key: "ArrowRight" });
+  await socket.picture(socket.sent[0]);
+  await settled();
+  expect(page.getByRole("button", { name: "Play" })).toBeTruthy();
+  expect(socket.pictures().map((request) => request.frame)).toEqual([0, 1]);
+});
+
+test("an attempt the lab refuses shows the server's reason and plays nothing", async () => {
+  const refusal = "This attempt was played before capture started, so it has no scene.";
+  const answer = globalThis.fetch;
+  globalThis.fetch = vi.fn((url, options = {}) => (url === "/api/scene-lab/open"
+    ? (fetches.push([url, options.method, options.body]), respond({ detail: refusal }, 409)) : answer(url, options)));
+  const page = render(h(SceneViewer, fromGhostButton(99)));
+  await until(() => expect(page.container.querySelector(".scene-lab-error")?.textContent).toBe(refusal));
+  await settled();
+  expect(sockets.length).toBe(0);
+  expect(page.getByRole("button", { name: "Open" })).toBeTruthy();       // the packages are still there to pick
+});
+
 test("two pictures are in flight at a time and the newest step waiting behind them wins", async () => {
   expect(PICTURES_IN_FLIGHT).toBe(2);
   const { page, socket, root } = await openScene();
