@@ -1248,9 +1248,9 @@ never as a memory image. On a 90-second recording the state adds about
 exactly as it does from the tap's own files (2026-10-25). A scene-resolution
 layer, added after writing, records what the [[scene evaluator]] found each
 task's drawing used, as addresses only (3.5 KB for that recording). A
-source-audio layer, also added after writing, carries the game sound the
-recorder's process tap heard, lossless, with the sample sounding as each
-picture appeared; attaching refuses sound recorded beside another session.
+source-audio layer, also added after writing, carries the game sound
+Project64's own audio output played, lossless, with the sample sounding as each
+picture appeared; attaching refuses sound recorded beside a different recording.
 The reader refuses a version or layer it does not know.
 
 - **Lives** -- `tools/scene_lab/package.py` (write, read, verify); the
@@ -1309,7 +1309,7 @@ helper and the evaluator start then and stop on Close, after a while unused,
 when no page shows the scene, and when the server stops. The page asks for one
 picture at a time, asks for the next as soon as one arrives, and a newer step or
 camera move replaces the waiting one. A package with a source-audio layer
-plays the sound the runner heard during Play, following the pictures: the
+plays Project64's own sound during Play, following the pictures: the
 sample heard as a picture appears is that picture's own. Stepping, seeking and
 Pause are silent; Mute (or M) and the volume persist per viewer; a stretch the
 capture lost plays silent and says so. A package without one says it has no
@@ -1320,7 +1320,8 @@ sound.
   (`tools/scene_lab/scene_session.py`) and its sound (`tools/scene_lab/scene_audio.py`);
   the page (`src/sm64_events/ui/components/sceneviewer.js`), the recording's
   own clock its Play keeps (`src/sm64_events/ui/components/sceneclock.js`) and its sound
-  (`src/sm64_events/ui/components/sceneaudio.js`, rendered by `sceneaudioworklet.js`);
+  (`src/sm64_events/ui/components/sceneaudio.js`, rendered by
+  `src/sm64_events/ui/components/sceneaudioworklet.js`);
   the free camera's math
   (`src/sm64_events/ui/components/scenecamera.js`) and feel numbers
   (`src/sm64_events/ui/scenecameratuning.js`); where it goes in the game's RAM
