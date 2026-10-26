@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from time import monotonic
 from types import SimpleNamespace
 
+from sm64_events.core.error_reporting_privacy import GHOST_STATE_LOGGER
 from sm64_events.core.events import Event
 from sm64_events.ghost.dpad_toggle import hotkey_for
 from sm64_events.ghost.native_session import ghost_hue
@@ -26,6 +27,9 @@ from sm64_events.ghost.settings import (
 )
 
 log = logging.getLogger("sm64.ghost")
+#: What decided the ghost, one line per change (`_note_state`), and each PB's
+#: pose outcome. The Debug report and Sentry breadcrumbs keep this logger.
+state_log = logging.getLogger(GHOST_STATE_LOGGER)
 
 #: The broadcast-only event every client refreshes on. Published on the
 #: Broadcaster, never through `TrackerService.publish`, so there is no journal
@@ -137,6 +141,10 @@ class GhostSession:
                 source_of=lambda:id(getattr(getattr(replay,"recorder",None),"ghost_capture",None)), community=community)
             self._population_recorder = PopulationRecorder(population,replay,tracker,self._attempt_identity,community=community)
         self._native_answer = {}
+        # The last `sm64.ghost.state` line, and the renderer's last readable
+        # progress (its lock is only tried, so a busy read keeps the old one).
+        self._noted_state: str | None = None
+        self._noted_native: tuple = ()
         # When the last resolve ran, and what the world it read looked like
         # (`_world`): a change there is itself the event that re-resolves.
         self._resolved_at: float | None = None
@@ -314,12 +322,46 @@ class GhostSession:
             target = self._read_target()
             await asyncio.to_thread(self._cycle, target, resolve)
             body = self.payload()
+            self._note_state(body)
             if body == self._published:
                 return body
             self._published = body
         if publish:
             await self._publish(body)
         return body
+
+    def _note_state(self, body: dict) -> None:
+        """One `sm64.ghost.state` line whenever what decides the ghost changes.
+
+        Ids, counts and reason codes only, never a label, name or path, so the
+        Debug report keeps every line however long ago it was written. Until
+        2026-10-25 these decisions were silent: an AMD tester's report, taken
+        hours after "i still dont see any ghost", could not tell a missing PB
+        from an empty lineup or a renderer refusal.
+        """
+        progress = self.silent_failure_status()
+        if progress.get("progress") is not None:
+            self._noted_native = (*progress["progress"], progress.get("displayed"))
+        # (state, reason, playback state, playback reason, prepared and active
+        # generation, clips prepared, displayed); generations change every
+        # arm, so they stay out of the line.
+        native = (*self._noted_native, *(None,) * 8)[:8]
+        target, rivals = body.get("target") or {}, body.get("rivals") or {}
+        source, selection = body.get("source") or {}, body.get("selection") or {}
+        line = " ".join(f"{name}={value}" for name, value in (
+            ("target", f"{target['kind']}:{target['entity_key']}" if target else None),
+            ("strategy", bool(target.get("strat"))), ("on", bool(body.get("enabled"))),
+            ("source", source.get("reason") or ("ready" if source.get("available") else None)),
+            ("lineup", f"{rivals.get('state')}/{rivals.get('reason')}" if rivals else None),
+            ("seats", len(rivals.get("rows") or ())),
+            ("pb", bool(rivals.get("pb") or selection.get("pb"))),
+            ("playing", len(selection.get("playing") or ())),
+            ("pb_seat", _pb_seat(rivals, selection)),
+            ("native", f"{native[0]}/{native[1]}"), ("playback", f"{native[2]}/{native[3]}"),
+            ("clips", native[6]), ("displayed", native[7])))
+        if line != self._noted_state:
+            self._noted_state = line
+            state_log.info("ghost: %s", line)
 
     def _cycle(self, target: dict | None, resolve: bool) -> None:
         with self._lifecycle_lock:
@@ -578,6 +620,15 @@ class GhostSession:
                     # The run itself, now; its star dance is completed afterwards
                     # (his rule, round 47: ready on the very next reset).
                     kept = await asyncio.to_thread(lambda: preserve(attempt.id, wait_tail=False))
+                    reason = kept.get("native_ghost_reason") if isinstance(kept, dict) else None
+                    if isinstance(reason, str) and not kept.get("native_ghost"):
+                        # An error, so Sentry gets the ghost snapshot with it. Until
+                        # 2026-10-25 this was silent: an AMD tester's PBs became no
+                        # ghost and nothing said why ("i still dont see any ghost").
+                        state_log.error("A saved PB kept no Mario poses: %s", reason)
+                    elif isinstance(kept, dict) and kept.get("native_ghost"):
+                        state_log.info("PB attempt %s kept %s Mario poses", attempt.id,
+                                       kept["native_ghost"].get("records"))
                     if self._rivals is not None and isinstance(kept, dict) and kept.get("native_ghost"):
                         async with self._lock:
                             def committed():
@@ -873,6 +924,18 @@ class GhostSession:
         await self._broadcaster.publish(
             Event(type=EVENT_TYPE, frame=0,
                   timestamp_utc=datetime.now(timezone.utc), payload=body))
+
+
+def _pb_seat(rivals: dict, selection: dict) -> str:
+    """Who races in your colour: your saved PB, your best recorded run while
+    the PB has no poses (`ghost/rivals.py::Rivals._pb_seat`), or nobody."""
+    if rivals:
+        if rivals.get("best_run"):
+            return "best_run"
+        pb = rivals.get("pb") or {}
+        racing = pb and pb.get("available") is not False and (rivals.get("options") or {}).get("include_pb", True)
+        return "pb" if racing else "none"
+    return "pb" if any(row.get("key") == "pb" for row in selection.get("playing") or ()) else "none"
 
 
 def _remember(database, key: str, value) -> None:

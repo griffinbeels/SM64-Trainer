@@ -149,11 +149,13 @@ function seatLabel(p, fmt) {
   return `${p.name}, ${time}${p.pinned ? ", pinned" : ""}${p.pending ? ", downloading" : ""}`;
 }
 
+// Your best recorded run (racing while your PB has no poses) is yours, not a
+// rival: no swap, never dimmed as beaten, and an empty ring if it cannot race.
 function dress(ctx, seat, p, you) {
-  const beaten = !p.you && !p.placeholder && Boolean(you) && you.frames != null && p.frames > you.frames;
+  const beaten = !p.you && !p.best && !p.placeholder && Boolean(you) && you.frames != null && p.frames > you.frames;
   seat.style.setProperty("--hue", String(p.hue ?? 210));
   seat.classList.toggle("is-you", !!p.you);
-  seat.classList.toggle("no-ghost", !!p.you && !p.ghost);
+  seat.classList.toggle("no-ghost", (!!p.you || !!p.best) && !p.ghost);
   seat.classList.toggle("is-pending", !!p.pending);
   seat.classList.toggle("is-placeholder", !!p.placeholder);
   seat.classList.toggle("is-pinned", !!p.pinned);
@@ -170,7 +172,7 @@ function seatNode(ctx, p, you) {
   const li = el("li", "lineup-seat");
   li.dataset.key = p.key;
   li.append(el("span", "lineup-mark", { "aria-hidden": "true" }), face(ctx, p));
-  if (!p.you && !p.placeholder) {
+  if (!p.you && !p.best && !p.placeholder) {
     const swap = el("button", "lineup-swap", { type: "button" });
     swap.textContent = "⇄";
     swap.addEventListener("click", event => {

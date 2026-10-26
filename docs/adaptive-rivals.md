@@ -17,6 +17,14 @@ Legacy rows with no ROM stamp still grade
 on the running version; imported times can also supply the rank anchor.
 The native provider separately checks whether that PB has playable poses.
 An expired clip retains its PB time/rank and reports its playback failure.
+While that PB cannot play because its recording has no usable poses (saved
+before pose recording, imported, or refused at export), its seat races your
+best recorded run instead: your fastest own certified population recording
+of the same target, strategy, clock and region scope (his decision, 2026-10-25).
+The PB stays the rank, step and range; the lineup seats the run as "Best
+recorded run" in the PB's colour and the renderer labels it `BEST RUN`.
+Unticking the PB unseats it, and a PB with poses takes the seat back on its
+next resolve. [Tests](../tests/test_ghost_best_run.py).
 Undo resolves the surviving saved slot; historical minima cannot restore an
 undone PB. Without a saved basis, four rivals spread across the two lowest
 tiers (steps 0 to 9, Capless V to Toad I), one near each evenly spaced step.

@@ -42,6 +42,8 @@ WIDTHS = (1500, 1200, 900, 850)
 STATES = {
     # The Lineup: a session with adaptive rivals, you first and four faster.
     "lineup": {**ghost_session(enabled=True), "rivals": lineup_rivals()},
+    # Your PB has no poses: your best recorded run races in its seat and colour.
+    "best_run": {**ghost_session(enabled=True), "rivals": lineup_rivals(best_run_frames=352)},
     # The older ticks-and-tuning controls, for a session without rivals.
     "defaults": ghost_session(),
     "on": ghost_session(enabled=True, opacity=0.6, nudge_frames=3),

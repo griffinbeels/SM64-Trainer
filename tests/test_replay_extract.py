@@ -90,34 +90,21 @@ def test_extract_produces_scrubbable_av_mp4(tmp_path):
     # The clip's own first video timestamp rides the result (chain hop 6):
     # a real number the browser will count slots from, never a guess.
     assert isinstance(res.video_start_s, float) and 0.0 <= res.video_start_s < 0.05
-    from sm64_events.replay.extract import video_start_of
-    assert video_start_of(None, out) == 0.0, "no ffprobe: the old assumption, not a crash"
+    from sm64_events.replay.mediaprobe import video_start_of
+    assert video_start_of(tmp_path / "absent.mp4") == 0.0, "unreadable: the old assumption, not a crash"
     # faststart: moov atom must precede mdat for instant browser scrubbing
     head = out.read_bytes()[:8192]
     assert head.find(b"moov") != -1 and (
         head.find(b"mdat") == -1 or head.find(b"moov") < head.find(b"mdat"))
 
 
-def test_ffprobe_is_found_beside_an_ffmpeg_that_lives_in_a_folder_named_ffmpeg(tmp_path):
-    """The standard layout is <root>/ffmpeg/bin/ffmpeg.exe; a whole-path
-    replace renamed the FOLDER too and the clip's first pts silently read
-    0.0 on the one clip that had one (5782)."""
-    from sm64_events.replay.extract import ffprobe_beside
-    binaries = tmp_path / "ffmpeg" / "bin"
-    binaries.mkdir(parents=True)
-    (binaries / "ffmpeg.EXE").write_bytes(b"")
-    (binaries / "ffprobe.EXE").write_bytes(b"")
-    assert ffprobe_beside(str(binaries / "ffmpeg.EXE")) == str(binaries / "ffprobe.EXE")
-    assert ffprobe_beside(None) is None
+def test_failed_probe_cannot_supply_a_partial_frame_clock(tmp_path):
+    from sm64_events.replay.mediaprobe import frame_times_of
 
-
-def test_failed_probe_cannot_supply_a_partial_frame_clock(tmp_path, monkeypatch):
-    from sm64_events.replay import extract
-
-    monkeypatch.setattr(extract, "ffprobe_beside", lambda ff: "probe")
-    monkeypatch.setattr(extract.subprocess, "run", lambda *args, **kw:
-                        subprocess.CompletedProcess([], 1, "0.000000\n0.033333\n", "truncated"))
-    assert extract.frame_times_of("ffmpeg", tmp_path / "partial.mp4") is None
+    partial = tmp_path / "partial.mp4"
+    partial.write_bytes(b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + b"\x00" * 64)
+    assert frame_times_of(partial) is None
+    assert frame_times_of(partial, native_packets=True) is None
 
 
 def test_extract_av_stay_in_sync(tmp_path):
@@ -247,8 +234,8 @@ def test_cut_command_pins_a_quality_target(tmp_path, monkeypatch):
     captured = {}                                 # the stub below is global
 
     def fake_run(args, **kwargs):
-        # The CUT is the call that encodes; the probe that follows it
-        # (ffprobe for the clip's first timestamp) must not overwrite it.
+        # The CUT is the call that encodes; any other child must not
+        # overwrite what it captured.
         if "-c:v" in args:
             captured["args"] = args
             # A real ffmpeg writes the file it was given, and the extractor

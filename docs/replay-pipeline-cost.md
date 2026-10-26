@@ -241,14 +241,16 @@ These are lookup-only batch costs, not per-picture costs or a prediction of
 whole-browser CPU. The portable operation-count and tie/gap checks live in
 `tests/frontend/inputtimelineperformance.test.js`.
 
-An in-process PyAV packet-index trial was rejected despite a faster benchmark.
-On the saved 1'29"96 recording, it matched 2,809 packet PTS/DTS/flags and reduced
-the isolated median wall time from 123.21 to 63.28 ms across four alternating
-rounds. However, an added diagnostic-error witness failed: PyAV 17.1's default
-logging disables the errors that `Capture()` was supposed to inspect. Temporarily
-changing its process-wide callback during concurrent recording would need a
-different concurrency proof. The existing ffprobe/error-refusal path remains.
-The timing is evidence about a rejected candidate, not a shipped speedup.
+An in-process PyAV packet index first lost to ffprobe's error refusal: it
+matched 2,809 packet PTS/DTS/flags on the saved 1'29"96 recording and halved the
+isolated median (123.21 to 63.28 ms), but PyAV 17.1 discards the libav errors
+that refusal read, and a process-wide log callback during recording needed a
+concurrency proof nobody had. It shipped anyway on 2026-10-25, with every probe
+read, because the packaged app never had ffprobe: installed copies shrank no
+saved replay and read every cached clip's first pts as 0.0.
+`replay/mediaprobe.py` replaces the log with structural refusals (a read
+error; a sample the mov demuxer indexed but never delivered) and names the one
+case that no longer refuses.
 
 The default picture-feed recorder now eliminates repeated packet scans and
 per-attempt video copies through an index produced once during recording.

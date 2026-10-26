@@ -24,6 +24,7 @@ paths:
   - "src/sm64_events/replay/media.py"
   - "src/sm64_events/replay/ring.py"
   - "src/sm64_events/replay/extract.py"
+  - "src/sm64_events/replay/mediaprobe.py"
   - "src/sm64_events/replay/feedmap.py"
   - "src/sm64_events/replay/padread.py"
   - "src/sm64_events/replay/service.py"

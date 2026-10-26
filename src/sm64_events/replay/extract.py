@@ -30,7 +30,6 @@ import os
 from contextlib import nullcontext, closing
 from sm64_events.core.profiling import measured
 import math
-import json
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -41,7 +40,8 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import (CLIP_MAXRATE, ReplayConfig,
                                        video_quality_args)
-from sm64_events.replay.packetmux import NATIVE_CODECS
+from sm64_events.replay.mediaprobe import (frame_times_of, native_packet_index,
+                                           video_start_of)
 from sm64_events.replay.ring import SegmentRing
 from sm64_events.replay.media import MEDIA_HZ, MediaRun, picture_duration_filter
 
@@ -76,137 +76,6 @@ class ClipResult:
     # Source MPEG-TS timestamps, in MEDIA_HZ ticks, for these exact slots.
     # Unknown for older/CFR sources whose media origin was not retained.
     source_pts: list[int] | None = None
-
-
-@measured("replay.probe_frames")
-def frame_times_of(ffmpeg: str | None, clip: Path, *,
-                   input_format: str | None = None,
-                   native_packets: bool = False,
-                   native_preroll: bool = False) -> list[float] | None:
-    """Every video frame's PTS; None when it cannot be read.
-
-    Native encoder callers can use guarded packet timestamps. Other media
-    retains decoded-frame semantics, including presentation reordering.
-    """
-    ffprobe = ffprobe_beside(ffmpeg)
-    if not ffprobe:
-        return None
-    if native_packets:
-        times = _native_packet_times(ffprobe, clip, input_format,
-                                     allow_preroll=native_preroll)
-        if times is not None:
-            return times
-    try:
-        out = subprocess.run(
-            [ffprobe, "-v", "error", "-select_streams", "v:0",
-             *(["-f", input_format] if input_format else []),
-             "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(clip)],
-            capture_output=True, text=True, timeout=120, check=False,
-            **quiet_spawn_kwargs())
-        if out.returncode:
-            return None
-        times = [float(line.split(",")[0]) for line in out.stdout.split()
-                 if line.strip()]
-        return times or None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None
-
-
-def _native_packet_times(ffprobe: str, clip: Path,
-                         input_format: str | None, *,
-                         allow_preroll: bool = False) -> list[float] | None:
-    packets = _native_packet_index(ffprobe, clip, input_format,
-                                   allow_preroll=allow_preroll)
-    if not packets:
-        return None
-    return [round(p["pts"] / MEDIA_HZ, 6) for p in packets if "D" not in p["flags"]] or None
-
-
-@measured("replay.probe_native_packets")
-def _native_packet_index(ffprobe: str, clip: Path,
-                         input_format: str | None, *,
-                         allow_preroll: bool = False) -> list[dict] | None:
-    """Read timestamps without decoding pixels, only for our native encoder.
-
-    Our mux writes one picture per packet with no B frames, in H264 or in AV1
-    depending on what the recording GPU can encode. Arbitrary downloads do not
-    have that contract and must keep the decoded-frame path. Refuse reordered,
-    discarded, corrupt or incomplete packets rather than sorting them into an
-    apparently plausible picture map.
-    """
-    try:
-        out = subprocess.run(
-            [ffprobe, "-v", "error", "-select_streams", "v:0",
-             *(["-f", input_format] if input_format else []),
-             "-show_entries",
-             "stream=codec_name,has_b_frames,time_base:packet=pts,dts,flags",
-             "-of", "json", str(clip)],
-            capture_output=True, text=True, timeout=120, check=False,
-            **quiet_spawn_kwargs())
-        if out.returncode or out.stderr.strip():
-            return None
-        data = json.loads(out.stdout)
-        streams = data.get("streams", [])
-        if len(streams) != 1:
-            return None
-        stream = streams[0]
-        if (stream.get("codec_name") not in NATIVE_CODECS
-                or stream.get("has_b_frames") != 0
-                or stream.get("time_base") != "1/90000"):
-            return None
-        ticks = []
-        for packet in data.get("packets", []):
-            pts = packet.get("pts")
-            flags = packet.get("flags")
-            if (type(pts) is not int or packet.get("dts") != pts
-                    or not isinstance(flags, str) or "C" in flags
-                    or ("D" in flags and not (allow_preroll and pts < 0))
-                    or (allow_preroll and pts < 0 and "D" not in flags)
-                    or (ticks and pts <= ticks[-1])):
-                return None
-            ticks.append(pts)
-        return data.get("packets") or None
-    except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
-        return None
-
-
-def ffprobe_beside(ffmpeg: str | None) -> str | None:
-    """The ffprobe that ships beside `ffmpeg` -- by FILE name only. A plain
-    replace on the whole path turned D:/ffmpeg/bin/ffmpeg.EXE into
-    D:/ffprobe/bin/ffprobe.EXE (the standard install layout), so the first
-    version of this read 0.0 on the very clip it was written for and the
-    shipped fix would have done nothing; tools/probe_clip_seek.py caught it
-    on its first run (2026-09-01). PATH's ffprobe is the fallback."""
-    if not ffmpeg:
-        return None
-    binary = Path(ffmpeg)
-    sibling = binary.with_name(binary.name.replace("ffmpeg", "ffprobe"))
-    if binary.parent != Path(".") or sibling.exists():
-        if sibling.exists():
-            return str(sibling)
-    return shutil.which("ffprobe")
-
-
-def video_start_of(ffmpeg: str | None, clip: Path) -> float:
-    """The video stream's first pts, in seconds; 0.0 when it cannot be read
-    (no ffprobe, an unreadable file) -- the pre-2026-09-01 assumption."""
-    ffprobe = ffprobe_beside(ffmpeg)
-    if not ffprobe:
-        return 0.0
-    try:
-        out = subprocess.run(
-            [ffprobe, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=start_time", "-of", "csv=p=0", str(clip)],
-            capture_output=True, text=True, timeout=30, check=False,
-            **quiet_spawn_kwargs())
-        if out.returncode:
-            return 0.0
-        first = out.stdout.strip().splitlines()[0]
-        value = float(first.split(",")[0])
-        return value if value >= 0 else 0.0
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
-        # no ffprobe, a timeout, an unreadable file, an empty answer
-        return 0.0
 
 
 def _joinable(prev, seg) -> bool:
@@ -263,8 +132,8 @@ class ClipExtractor:
 
     @property
     def ffmpeg(self) -> str | None:
-        """The binary this extractor cuts with -- the service reads a cached
-        clip's first pts with the ffprobe beside it."""
+        """The binary this extractor cuts with -- the service's compressor
+        encodes saved replays with the same one."""
         return self._ffmpeg
 
     @measured("replay.extract")
@@ -337,8 +206,8 @@ class ClipExtractor:
         ss = (s.timestamp() - media_run.origin_ts if media_run
               else max(0.0, (s - rs).total_seconds()))
         # Select one representable source tick and use it for both ffmpeg's
-        # cut and the reverse map. Adding an unrounded float seek to ffprobe's
-        # rounded seconds can otherwise recover a neighboring timestamp.
+        # cut and the reverse map. Adding an unrounded float seek to the
+        # probe's rounded seconds can otherwise recover a neighboring timestamp.
         seek_pts = math.ceil(ss * MEDIA_HZ) if media_run else None
         copy_pts = None
         if seek_pts is not None:
@@ -416,11 +285,10 @@ class ClipExtractor:
         # Probe the file we just wrote, THEN publish it. Probing after the
         # rename let a racing writer change the file between the two, which is
         # how a sidecar came to describe 1921 frames of a 1380-frame clip.
-        times = (frame_times_of(self._ffmpeg, cut_path, native_packets=True,
+        times = (frame_times_of(cut_path, native_packets=True,
                                 native_preroll=copy_pts is not None)
                  if self._picture_feed else None)
-        start_s = (times[0] if times
-                   else video_start_of(self._ffmpeg, cut_path))
+        start_s = times[0] if times else video_start_of(cut_path)
         os.replace(cut_path, out_path)
         return ClipResult(path=out_path, duration_s=dur, truncated=truncated,
                           start_utc=s, video_start_s=start_s,
@@ -430,10 +298,9 @@ class ClipExtractor:
 
     def _source_seek(self, path: Path, requested_pts: int) -> tuple[int, int | None]:
         """Resolve the held source picture and its decode-only keyframe pre-roll."""
-        probe = ffprobe_beside(self._ffmpeg)
-        packets = _native_packet_index(probe, path, "mpegts") if probe else None
-        source_times = ([round(p["pts"] / MEDIA_HZ, 6) for p in packets] if packets else
-                        frame_times_of(self._ffmpeg, path, input_format="mpegts"))
+        packets = native_packet_index(path, input_format="mpegts")
+        source_times = ([round(p.pts / MEDIA_HZ, 6) for p in packets] if packets else
+                        frame_times_of(path, input_format="mpegts"))
         if not source_times:
             raise ValueError("no readable pictures at the requested start")
         source_ticks = [round(t * MEDIA_HZ) for t in source_times]
@@ -441,8 +308,8 @@ class ClipExtractor:
                        default=source_ticks[0])
         copy_pts = None
         if packets and self._picture_feed:
-            copy_pts = max((p["pts"] for p in packets
-                            if "K" in p["flags"] and p["pts"] <= seek_pts), default=None)
+            copy_pts = max((p.pts for p in packets
+                            if p.keyframe and p.pts <= seek_pts), default=None)
         return seek_pts, copy_pts
 
     def _codec_opts(self) -> list[str]:

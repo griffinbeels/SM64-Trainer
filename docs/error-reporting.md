@@ -56,7 +56,9 @@ presence is not evidence of delivered poses or visible playback.
 
 Errors automatically receive this snapshot before being queued. Unexpected native
 ghost model/pose/playback faults also report when no Python exception occurs;
-ordinary preparation, another scene and waiting for an attempt do not. There is
+ordinary preparation, another scene and waiting for an attempt do not. A saved
+PB that keeps no Mario poses reports an error with the pose archive's reason:
+it can never become a ghost, and until 2026-10-25 nothing said so. There is
 no background native/log sampler or automatic report-file generation.
 
 The attached report comes from the same builder and redaction as the export.
@@ -67,7 +69,10 @@ refused. The report reads only the latest 100 journal rows. Identity is the
 exception type and its last frame, or the message, so differing error text
 shares one report. Sentry Logs pass the same logger allowlist and scrubber.
 Their attributes keep logger, level, release, function, line and module path.
-Hostname, PIDs, raw arguments and extras are dropped. Logs stay in memory, at
+Hostname, PIDs, raw arguments and extras are dropped. Each log and error keeps
+the SDK's random per-run trace id (32 hex, like a PID it names a run, not a
+player): Sentry refuses a log without one, and it lists an error's logs by it.
+Beta.31 dropped every log for lack of it (outcome `invalid`, `no_data`). Logs stay in memory, at
 most 500 lines a day, and an identical line repeats at most once a minute.
 
 Updater failures carry the running release plus the installed and target versions,
@@ -141,7 +146,13 @@ Only named operational loggers, uvicorn's own included (`OPERATIONAL_LOGGERS`),
 supply breadcrumbs, Sentry Logs and the report's server-log lines. One rule
 (`operational_log`) drops successful request lines (1xx-3xx) from all three and
 keeps failing ones (4xx/5xx), so the page's polling cannot fill the 400-line tail.
-Gameplay event wires, unrelated
+`sm64.ghost.state` is the ghost's decision log: one line whenever the target,
+strategy, switch, source reason, lineup, PB, playing count or renderer
+state/reason changes, plus each PB's pose outcome, written with ids, counts and
+reason codes only. The report's Ghost timeline reads its last 120 lines from the
+whole log and its rotated copy, because the 400-line tail spans minutes of play
+and a tester's report can come hours after the ghost failed to show. The rest of
+`sm64.ghost` stays excluded. Gameplay event wires, unrelated
 process rankings and community/account logs are excluded. Turning reporting off
 also prevents breadcrumb collection and clears prior breadcrumbs, so re-enabling
 cannot upload prior log history from the disabled period. It also drops queued
@@ -227,6 +238,12 @@ picture/input matching method, first failure retained through cleanup/fallback,
 latest attempt, and last observed setup status. Export reads cached facts; it
 does not enable capture or retry installation. Restarting Trainer clears this
 in-memory history; automatic reports already queued remain governed by retention.
+
+The report shows a value's key name only when the name is a listed schema
+field (`diagnostic_export._FIELDS`); any other key becomes `field_N`, so a key
+that is data (a process, runner or strategy name) never appears. Strings show
+only under `_TEXT_FIELDS`, scrubbed. Until 2026-10-25 the setup, perf and
+journal payload names were unlisted and a tester's report read field_0 to field_23.
 
 ## Practice Replay permission handling
 

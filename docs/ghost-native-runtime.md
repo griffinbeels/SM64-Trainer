@@ -81,7 +81,8 @@ row `usamune_input_display`: 2 draws the stick, any other nonzero value the
 Values rows, per its branch at RAM `0x80408a14`), read from each list's RDRAM so
 the ghosts switch on the same frame his display does. The stored `input_mode`
 (initially Stick) applies only while his display is off or unread. Each ghost carries its own bounded credit: `YOUR PB` for
-the selected local PB, `YOUR RUN` for another local recording, and the exporting
+the selected local PB, `BEST RUN` for your best recorded run racing in a
+pose-less PB's seat, `YOUR RUN` for another local recording, and the exporting
 player's name for an imported ghost. Credit is presentation metadata; changing
 it never changes clip identity or restarts playback. Input and label metadata
 travel inside the pose through depth sorting and inherit its visibility.

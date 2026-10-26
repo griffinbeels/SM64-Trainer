@@ -67,6 +67,44 @@ def test_successful_requests_cannot_push_operational_lines_out_of_the_tail(tmp_p
     assert '" 200' not in server_log and '" 304' not in server_log
 
 
+def test_the_ghost_timeline_survives_hours_of_capture_lines(tmp_path):
+    # An AMD tester's report (2026-10-25) was made hours after the ghost failed;
+    # its 400-line tail held nine minutes of capture lines and no ghost decision.
+    kwargs = _healthy_kwargs(tmp_path)
+    log = kwargs["log_file"]
+    log.with_name(log.name + ".1").write_text(
+        "2026-10-25T12:58:31Z INFO sm64.ghost.state ghost: target=star:14-3 strategy=False on=True\n", encoding="utf-8")
+    log.write_text("\n".join(
+        ["2026-10-25T13:06:47Z ERROR sm64.ghost.state A saved PB kept no Mario poses: This recording has no native Mario poses.",
+         "2026-10-25T13:06:47Z INFO sm64.ghost rival C:\\Users\\Someone\\ghosts kept"]
+        + [f"2026-10-25T13:07:{i % 60:02d}Z INFO sm64.replay dwm capture: {i} grabs/s" for i in range(900)]), encoding="utf-8")
+    report = diagnostics.build_report(**kwargs)
+    timeline = report.split("## Ghost timeline", 1)[1].split("## Server log", 1)[0]
+    assert timeline.splitlines()[3:5] == [
+        "2026-10-25T12:58:31Z INFO sm64.ghost.state ghost: target=star:14-3 strategy=False on=True",
+        "2026-10-25T13:06:47Z ERROR sm64.ghost.state A saved PB kept no Mario poses: This recording has no native Mario poses."]
+    assert "sm64.ghost rival" not in report and "Someone" not in report
+    assert "kept no Mario poses" not in report.split("## Server log", 1)[1]  # beyond the tail
+
+
+def test_schema_names_show_while_their_values_and_data_keys_stay_hidden(tmp_path):
+    # A tester's report (2026-10-25) named almost nothing: field_0..field_23.
+    kwargs = _healthy_kwargs(tmp_path)
+    kwargs["events"] = lambda: [Row(1, 1, 0, "practice_reset", 578, "2026-10-25T13:09:18Z",
+                                    {"mario_acted": True, "area_load": False, "strat_tag": "My Secret Strat",
+                                     "classification": {"SomeRunnerName": 3}})]
+    kwargs["setup"] = lambda: {"state": "needs_restart", "layer_alive": False,
+                               "plugin_dir": "C:\\Users\\Someone\\Project64\\Plugin"}
+    report = diagnostics.build_report(**kwargs)
+    journal = report.split("## Recent game events", 1)[1]
+    assert '"mario_acted": true' in journal and '"area_load": false' in journal
+    assert '"strat_tag": "[text omitted]"' in journal and "My Secret Strat" not in report
+    assert '"classification": {"field_0": 3}' in journal and "SomeRunnerName" not in report
+    setup = report.split("## Last observed setup", 1)[1].split("## Trainer diagnostic snapshot", 1)[0]
+    assert '"layer_alive": false' in setup and '"plugin_dir": "[text omitted]"' in setup
+    assert "Someone" not in report
+
+
 def test_every_broken_source_names_itself_instead_of_raising(tmp_path):
     kwargs = _healthy_kwargs(tmp_path)
     kwargs["log_file"] = tmp_path / "missing.log"

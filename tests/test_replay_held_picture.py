@@ -7,7 +7,8 @@ import time
 import av
 import pytest
 from sm64_events.replay.config import ReplayConfig
-from sm64_events.replay.extract import ClipExtractor, frame_times_of
+from sm64_events.replay.extract import ClipExtractor
+from sm64_events.replay.mediaprobe import frame_times_of
 from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.media import MediaRun
@@ -43,7 +44,7 @@ def test_a_tiny_held_segment_keeps_its_picture(tmp_path, encoder):
     ffmpeg, codec = encoder
     path = Path(__file__).parent / "fixtures" / "replay_tiny_held.ts"
     assert read_pictures(path) == [(369919 / 90000, 3)]
-    ticks = frame_times_of(ffmpeg, path, input_format="mpegts")
+    ticks = frame_times_of(path, input_format="mpegts")
     assert ticks and [round(t * 90000) for t in ticks] == [369919]
     start = datetime.fromtimestamp(369919 / 90000, timezone.utc)
     end = datetime.fromtimestamp(461141 / 90000, timezone.utc)

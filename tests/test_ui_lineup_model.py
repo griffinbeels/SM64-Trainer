@@ -190,6 +190,30 @@ def test_not_racing_your_pb_keeps_your_seat_without_a_ghost():
     assert model(unavailable)["people"][0]["ghost"] is False
 
 
+@pytest.mark.parametrize("state", [{}, {"state": "loading"}, {"rows": [], "reason": "nobody"}])
+def test_a_pb_without_poses_seats_your_best_recorded_run_in_its_colour(state):
+    """His decision, 2026-10-25: your best recorded run races in the PB's seat;
+    the card labels it "Best recorded run" and keeps the PB as the rank."""
+    people = model(lineup_session(best_run_frames=352, **state))["people"]
+    you, best = people[:2]
+    assert (you["you"], you["frames"], you["tier"], you["division"], you["ghost"]) == (
+        True, 343, "Platinum", "II", False)
+    assert (best["key"], best["best"], best["name"], best["frames"], best["ghost"]) == (
+        "best", True, WORDS["bestRun"], 352, True)
+    assert best["hue"] == you["hue"] and (best["tier"], best["division"]) == ("Platinum", "IV")
+    assert sum(bool(person.get("best")) for person in people) == 1
+
+
+def test_no_best_run_seat_while_your_pb_races_or_is_unticked():
+    assert not any(person.get("best") for person in model(lineup_session())["people"])
+    unticked = lineup_session(best_run_frames=352)
+    unticked["rivals"]["options"]["include_pb"] = False
+    assert not any(person.get("best") for person in model(unticked)["people"])
+    failed = lineup_session(best_run_frames=352)
+    failed["rivals"]["best_run"]["available"] = False
+    assert model(failed)["people"][1]["ghost"] is False  # a dashed ring, never a false race
+
+
 def test_the_overlay_switch_rides_on_the_model():
     assert model(lineup_session(), on=False)["on"] is False
     assert model(lineup_session(), on=True)["on"] is True

@@ -9921,15 +9921,16 @@
 .lineup-tick path { fill: none; stroke: #07111e; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .lineup-seat.is-beaten { opacity: .42; }
 
-/* A dashed ring: no ghost to race yet. Grey for you with no time, the slot
-   colour while a rival's recording downloads. The dashes live on ::after and
+/* A dashed ring: no ghost to race yet. Grey for your seat when your PB cannot
+   race (your best recorded run's seat too), the slot colour while a rival's
+   recording downloads. The dashes live on ::after and
    cross-fade with the solid ring, so the ring closes instead of blinking. */
 .lineup-mark::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2.5px dashed hsl(var(--hue) 80% 64%);
   opacity: 0; transition: opacity 260ms ease; }
 .lineup-seat.is-pending .lineup-mark { box-shadow: inset 0 0 0 2.5px hsl(var(--hue) 80% 64% / 0); }
 .lineup-seat.is-pending .lineup-mark::after { opacity: 1; }
-.lineup-seat.is-you.no-ghost .lineup-mark { box-shadow: inset 0 0 0 2.5px hsl(var(--hue) 80% 64% / 0); }
-.lineup-seat.is-you.no-ghost .lineup-mark::after { opacity: 1; border-width: 1.5px; border-color: var(--muted-2); }
+.lineup-seat.no-ghost .lineup-mark { box-shadow: inset 0 0 0 2.5px hsl(var(--hue) 80% 64% / 0); }
+.lineup-seat.no-ghost .lineup-mark::after { opacity: 1; border-width: 1.5px; border-color: var(--muted-2); }
 
 /* PINNED: a lock on the ring says why this ghost never moves on its own; the
    lock is the button that lets the trainer choose again. A beaten pin is not

@@ -15,8 +15,9 @@ import pytest
 from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay import compress
 from sm64_events.replay.config import ARCHIVE_CODECS, CLIP_MAXRATE, video_quality_args
-from sm64_events.replay.extract import frame_times_of
+from sm64_events.replay.mediaprobe import frame_times_of
 from test_replay_picture_identity import av1_encoder as av1_encoder  # real availability
+from test_media_probe import no_ffprobe as no_ffprobe
 
 CPU_ONLY = ("libx264",)
 NAME = "attempt_0042_test-course_test-star_0m02s00.mp4"
@@ -52,7 +53,7 @@ def saved(source_clip, tmp_path):
     clip = tmp_path / "2026-09-18" / "session_1" / NAME
     clip.parent.mkdir(parents=True)
     shutil.copy2(source_clip, clip)
-    times = frame_times_of(_ffmpeg(), clip)
+    times = frame_times_of(clip)
     sidecar = {"duration_s": 2.0, "truncated": False, "encode": "picture_feed",
                "frame_times": [round(t, 6) for t in times],
                "frame_map": list(range(100, 100 + len(times)))}
@@ -82,8 +83,8 @@ def test_shrink_then_adopt_changes_the_bytes_and_nothing_a_consumer_reads(saved,
     ff = _ffmpeg()
     before = compress.fingerprint(ff, saved)
     sidecar_before = json.loads(saved.with_suffix(".json").read_text())
-    gaps = {b - a for a, b in zip(compress.picture_ticks(ff, saved),
-                                  compress.picture_ticks(ff, saved)[1:], strict=False)}
+    gaps = {b - a for a, b in zip(compress.picture_ticks(saved),
+                                  compress.picture_ticks(saved)[1:], strict=False)}
     assert len(gaps) > 1, "the fixture must be variable-rate or this proves nothing"
 
     assert compress.shrink(ff, saved, codecs=CPU_ONLY)["state"] == "ready"
@@ -104,6 +105,20 @@ def test_shrink_then_adopt_changes_the_bytes_and_nothing_a_consumer_reads(saved,
                              attempt=row, target=manifest["target"])
     assert checked.clip_id == manifest["clip_id"]
     assert _leftovers(saved) == []
+
+
+def test_a_saved_replay_shrinks_where_no_ffprobe_exists(saved, no_ffprobe):
+    """The packaged app ships ffmpeg and no ffprobe. Until 2026-10-25 every
+    stream read here spawned one, so every installed copy logged "replay kept
+    as saved: ... (no ffprobe beside ffmpeg)" and none ever shrank."""
+    ff = no_ffprobe.ffmpeg
+    before = compress.fingerprint(ff, saved)
+    proven = compress.shrink(ff, saved, codecs=CPU_ONLY)
+    assert proven["state"] == "ready", proven
+    done = compress.adopt(saved)
+    assert done["state"] == "compressed" and done["bytes"] < before.bytes
+    assert done["original"] == before.as_dict()
+    assert no_ffprobe.attempts == [], "the shipped path tried to start an ffprobe"
 
 
 def test_an_encode_that_retimes_pictures_is_refused_and_the_clip_survives(saved):
@@ -195,20 +210,17 @@ def test_the_skip_stops_applying_when_the_two_av1_targets_diverge(
     the call, and this is what proves it does."""
     from sm64_events.replay import config as replay_config
     monkeypatch.setattr(replay_config, "VIDEO_AV1_CQ", 20)
-    assert not compress._recorded_at_archive_quality(
-        _ffmpeg(), saved_in_av1, ARCHIVE_CODECS)
+    assert not compress._recorded_at_archive_quality(saved_in_av1, ARCHIVE_CODECS)
     monkeypatch.setattr(replay_config, "VIDEO_AV1_CQ",
                         replay_config.ARCHIVE_AV1_CQ)
-    assert compress._recorded_at_archive_quality(
-        _ffmpeg(), saved_in_av1, ARCHIVE_CODECS)
+    assert compress._recorded_at_archive_quality(saved_in_av1, ARCHIVE_CODECS)
 
 
 def test_an_h264_recording_is_still_worth_re_encoding(saved):
     """H.264 never qualifies for the skip: the ring records at cq20 for
     quality and the archive re-encodes at cq28 for size, so the bytes really
     are there to save."""
-    assert not compress._recorded_at_archive_quality(
-        _ffmpeg(), saved, ARCHIVE_CODECS)
+    assert not compress._recorded_at_archive_quality(saved, ARCHIVE_CODECS)
 
 
 def _worker(saved, **kwargs):

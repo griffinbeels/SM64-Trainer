@@ -3,6 +3,7 @@ an attachment, warning-and-above operational log lines as Sentry Logs, and the
 INFO lead-up as breadcrumbs. Synthetic transports only; nothing leaves the test."""
 import json
 import logging
+import re
 import socket
 import threading
 import time
@@ -217,6 +218,8 @@ def test_operational_warnings_become_scrubbed_sentry_logs_and_sdk_loggers_never_
     wait_for(lambda: items(sent, "log"))
     rows = [row for item in items(sent, "log") for row in json.loads(item.payload.get_bytes())["items"]]
     assert [row["body"] for row in rows] == ["memory layout mismatch (impossible values read) at [path]"]
+    # Sentry refuses a log item without a trace (beta.31 delivered none).
+    assert re.fullmatch(r"[0-9a-f]{32}", rows[0]["trace_id"])
     attributes = rows[0]["attributes"]
     assert attributes["logger.name"]["value"] == "sm64.poller"
     assert attributes["sentry.release"]["value"] == "synthetic@beta"
@@ -224,6 +227,28 @@ def test_operational_warnings_become_scrubbed_sentry_logs_and_sdk_loggers_never_
     payload = b"".join(sent).decode("utf-8")
     assert "SyntheticPrivate" not in payload and "synthetic-secret" not in payload
     assert socket.gethostname() not in payload
+
+
+def test_an_error_and_the_runs_warning_logs_share_one_trace(tmp_path, sent):
+    """Sentry shows an issue's logs by trace: the error must keep the run's."""
+    configure(tmp_path)
+    logging.getLogger("sm64.replay").warning("Synthetic GPU warning before the error")
+    reporting.capture_problem("Synthetic failure after the warning")
+    reporting._client.flush(timeout=0)
+    wait_for(lambda: items(sent, "event") and items(sent, "log"))
+    event = json.loads(items(sent, "event")[0].payload.get_bytes())
+    rows = [row for item in items(sent, "log") for row in json.loads(item.payload.get_bytes())["items"]]
+    assert re.fullmatch(r"[0-9a-f]{32}", event["contexts"]["trace"]["trace_id"])
+    assert {row["trace_id"] for row in rows} == {event["contexts"]["trace"]["trace_id"]}
+
+
+def test_a_pb_without_poses_reaches_sentry_as_an_error(tmp_path, sent):
+    """The ghost's decision logger carries the PB outcome; its errors are events."""
+    configure(tmp_path)
+    logging.getLogger("sm64.ghost.state").error("A saved PB kept no Mario poses: %s", "Synthetic archive reason")
+    wait_for(lambda: items(sent, "event"))
+    event = json.loads(items(sent, "event")[0].payload.get_bytes())
+    assert event["logentry"]["formatted"] == "A saved PB kept no Mario poses: Synthetic archive reason"
 
 
 def test_the_spool_rebuilds_log_batches_it_did_not_project_itself(tmp_path):
@@ -246,6 +271,7 @@ def test_the_spool_rebuilds_log_batches_it_did_not_project_itself(tmp_path):
         transport.kill()
     rows = [row for item in items(delivered, "log") for row in json.loads(item.payload.get_bytes())["items"]]
     assert [row["body"] for row in rows] == ["[credential] retry"]
+    assert rows[0]["trace_id"] == transport.run_trace  # the batch carried none
     assert not any(value in delivered[0] for value in (b"SyntheticHost", b"SyntheticArg", b"SyntheticAccount", b"synthetic-secret"))
 
 

@@ -157,6 +157,7 @@ class PersistentTransport(Transport):
         self.reported: set[str] = set()
         self.logs: deque[bytes] = deque()
         self.log_seen: dict[tuple, float] = {}
+        self.run_trace = uuid.uuid4().hex  # for a log row that arrives without the SDK's trace
         self.signatures: dict[str, float] = {}
         self.budget = {"day": "", "month": "", "daily": 0, "monthly": 0, "logs": 0}
         self.counters = {"accepted": 0, "sent": 0, "dropped": 0, "expired": 0,
@@ -307,7 +308,7 @@ class PersistentTransport(Transport):
                 data = item.payload.json if item.payload.json is not None else json.loads(item.payload.get_bytes())
                 if isinstance(data, dict) and isinstance(data.get("items"), list):
                     rows.extend(data["items"][:100])
-        projected = [row for row in map(safe_log_item, rows[:100]) if row is not None]
+        projected = [row for row in (safe_log_item(item, self.run_trace) for item in rows[:100]) if row is not None]
         if not projected:
             return
         with self.lock:
