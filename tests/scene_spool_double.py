@@ -45,6 +45,7 @@ class TaskRef:
     area: int
     utc: datetime
     has_present: bool
+    refused: bool = False               # the walker refused its list (live_spool's TaskRef)
 
 
 def session_start(session: Path) -> datetime:

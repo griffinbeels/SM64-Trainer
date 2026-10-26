@@ -232,7 +232,8 @@ class Take(threading.Thread):
                 writer.abandon()
                 writer = None
                 if self.cut is not None and not self.dropped.is_set():
-                    brain.finished(self, None, "The scene recording ended before this attempt's scene was complete.")
+                    brain.finished(self, None, getattr(self.source, "ended", None)     # live_spool says why
+                                   or "The scene recording ended before this attempt's scene was complete.")
                 return
             writer.out = scene_path(brain.folder, self.attempt_id)
             stats = writer.finish(frames)

@@ -101,6 +101,9 @@ def test_a_hole_inside_the_span_makes_it_unavailable_with_how_many_pictures():
     gap = [task for task in tasks(400) if task.index != 60]
     assert "lost 1 picture during" in span_rule.span(mark(20, 90, "reset"), gap, [], RECORDING).reason
     assert isinstance(span_rule.span(mark(20, 40, "reset"), recorded, [], RECORDING), span_rule.Cut)
+    unread = [TaskRef(*vars(task).values()) if task.index != 70 else TaskRef(70, 1070, 9, 1, at(70), True, True)
+              for task in tasks(400)]                               # the tap could not read task 70's list
+    assert "lost 1 picture during" in span_rule.span(mark(20, 90, "reset"), unread, [], RECORDING).reason
 
 
 def test_what_cannot_have_a_scene_says_why():

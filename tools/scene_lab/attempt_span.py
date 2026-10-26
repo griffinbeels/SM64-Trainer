@@ -134,11 +134,12 @@ def find(tasks: list, frame: int, when: datetime, after: int = -1):
 
 
 def lost_pictures(tasks: list, health: dict, first: int, last: int) -> int:
-    """Pictures the recording lost between task indexes first and last (inclusive)."""
+    """Pictures the recording lost between task indexes first and last (inclusive): its holes,
+    tasks missing from the list, and tasks whose display list the tap could not read whole."""
     lost = sum(max(0, min(last, b) - max(first, a) + 1) for a, b in health.get("holes") or ())
-    indexes = [task.index for task in tasks if first <= task.index <= last]
-    gaps = sum(later - earlier - 1 for earlier, later in zip(indexes, indexes[1:], strict=False))
-    return max(lost, gaps)
+    inside = [task for task in tasks if first <= task.index <= last]
+    gaps = sum(later.index - earlier.index - 1 for earlier, later in zip(inside, inside[1:], strict=False))
+    return max(lost, gaps) + sum(bool(getattr(task, "refused", False)) for task in inside)
 
 
 def span(mark: AttemptMark, tasks: list, boundaries: list[Boundary], health: dict):
