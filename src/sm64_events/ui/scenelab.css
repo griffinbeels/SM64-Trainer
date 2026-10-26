@@ -27,6 +27,11 @@
 .scene-lab-quality select { background: var(--surface-2); }
 .scene-lab-hint, .scene-lab-readout { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .scene-lab-readout { font-variant-numeric: tabular-nums; }
+/* The Sound row (components/sceneaudio.js): a short volume slider, then what this picture's sound is. */
+.scene-lab-sound input[type=range] { flex: 0 1 140px; }
+.scene-lab-sound-note { min-width: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.scene-lab-sound-note.is-lost { color: var(--gold-soft); }
+.scene-lab-sound-sync { margin-left: auto; }
 @container (max-width: 640px) {
   .scene-lab-quality { margin-left: 0; }
   .scene-lab-name { max-width: 100%; }

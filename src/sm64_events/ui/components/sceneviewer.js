@@ -15,11 +15,14 @@
 // you put it while you step or seek. Controls (plan section 7 prototype):
 // drag turns around the focus point, Shift-drag slides, the wheel moves
 // closer or back, F looks at Mario, R returns to the recorded camera.
+// The recording's sound (sceneaudio.js) follows the picture clock: SceneLink
+// tells it when Play starts, each picture a play draws, and every stop.
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { getJSON, send } from "../api.js";
+import { SceneSound, SoundBar } from "./sceneaudio.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -111,7 +114,7 @@ export class SceneLink {
     Object.assign(this, { scene: null, frame: 0, free: false, orbit: null, encoding: "jpeg", playing: false,
       shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: null, wanted: null,
       sequence: 0, poses: new Map(), latencies: [], pending: [0, 0, false], drag: null, entering: false,
-      arrived: 0 });
+      arrived: 0, sound: new SceneSound({ changed: () => this.changed() }) });
   }
 
   get freeAvailable() { return !!this.scene?.free_camera?.available; }
@@ -126,16 +129,19 @@ export class SceneLink {
     ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, inFlight: null, wanted: null,
       notice: null, error: null });
+    this.sound.load(scene);
     this.changed();
   }
 
   disconnect() {
     this.playing = false;
+    this.sound.stop();
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
   }
 
   end(message) {
     this.disconnect();
+    this.sound.load(null);
     Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: null, wanted: null });
     this.changed();
     this.ended();
@@ -170,6 +176,7 @@ export class SceneLink {
     const current = () => arrived === this.arrived;
     await this.draw(header, new Uint8Array(buffer, 4 + length), current);
     if (!current()) return;           // a newer picture arrived while this one decoded
+    if (request && this.playing) this.sound.shown(header.frame, request.sent);
     if (request) {
       header.trip_ms = received - request.sent;
       header.input_ms = performance.now() - request.inputTime;
@@ -261,7 +268,7 @@ export class SceneLink {
 
   step(delta, time) { this.pause(); this.seek(this.frame + delta, "input", time); }
 
-  pause() { if (this.playing) { this.playing = false; this.changed(); } }
+  pause() { if (this.playing) { this.playing = false; this.sound.stop(); this.changed(); } }
 
   toggle() { if (this.playing) this.pause(); else this.play(); }
 
@@ -270,6 +277,7 @@ export class SceneLink {
   play() {
     const scene = this.scene;
     if (!scene) return;
+    this.sound.arm();
     const from = this.frame >= scene.frames.length - 1 ? 0 : this.frame, start = performance.now();
     this.playing = true;
     const tick = () => {
@@ -280,6 +288,7 @@ export class SceneLink {
       requestAnimationFrame(tick);
     };
     this.seek(from, "play");
+    this.sound.play(from, start);
     requestAnimationFrame(tick);
   }
 }
@@ -292,6 +301,7 @@ const KEYS = {
   " ": (link) => link.toggle(),
   f: (link, event) => link.lookAtMario(event.timeStamp),
   r: (link, event) => link.recorded(event.timeStamp),
+  m: (link) => link.sound.toggleMute(),
 };
 
 function onKey(link, event) {
@@ -433,6 +443,7 @@ function Player({ link, canvas }) {
     </div>
     ${link.notice && html`<p class="scene-lab-reason" role="status">${link.notice}</p>`}
     <${Transport} link=${link} />
+    <${SoundBar} sound=${link.sound} frame=${link.frame} />
     <${CameraBar} link=${link} />
     <${Readout} link=${link} />
   </section>`;
@@ -456,6 +467,7 @@ function useSceneLink(canvas, refresh) {
       // The server frees the renderer once no page has shown the scene for a
       // little while, so a tab switch and back keeps it open.
       scene.disconnect();
+      scene.sound.close();
     };
   }, []);
   return link.current;
