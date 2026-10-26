@@ -297,8 +297,8 @@ export class SceneSound {
     const early = play && frame === play.from && sent < due && sent >= play.asked;   // asked for at Play
     if (play && !early && (frame < play.from || !(sent >= due))) return;
     const next = globalThis.requestAnimationFrame ?? ((callback) => setTimeout(callback, 0));
-    next(() => {
-      const visible = performance.now();
+    next((frameTime) => {            // the display frame's start, unless the stamp is on another clock (jsdom)
+      const now = performance.now(), visible = Math.abs(now - frameTime) < 50 ? frameTime : now;
       if (!play || early) {
         if (visible - sent >= 1000) return;
         if (!play && !this.playing) this.delays = [...this.delays.slice(-(SCENE_SOUND.latencyWindow - 1)), visible - sent];
