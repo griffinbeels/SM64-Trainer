@@ -4,25 +4,44 @@
     state = evaluator.state(frame)              # the scene state that frame's render consumed
     view = evaluator.display_list(frame, (focus, position))
 
+    uv run --with unicorn python tools/scene_lab/evaluator.py resolve <in.sm64scene> <out.sm64scene>
+        --rom <z64> --map <MappingUS.map>
+
 A viewer asks for display lists; the proof drivers (e2_georender.py from-package and
 from-tap) ask for the same states and add their comparisons. state() rebuilds the frame's
 RDRAM from the package's scene-state layer and the local ROM (SceneImages), then resolves what
-the original render consumed (e2_georender.resolve_task: one traced regeneration, more when
-render-stepped state or a throwMatrix must be put back). display_list() re-runs
-geo_process_root from that state with gLakituState moved, untraced, and splices its output
-between the captured prologue and HUD (e2_georender.moved_view). Both run on one pair of
-reused sandboxes (e2_georender.Cpu), so translated code and ROM checks carry from frame to
-frame. Recent scenes and states stay cached (each holds several 8 MiB images), so a camera
-change re-runs only geo_process_root, and the next frame reuses the previous one.
+the original render consumed (e2_georender.resolve_task). Searching costs one traced
+regeneration, and several more where render-stepped state or a throwMatrix must be put back
+(~32 ms a frame on Bob-omb Battlefield's walkers). A package whose scene-resolution layer
+recorded that search's answer costs one traced regeneration, which must reproduce the captured
+list byte for byte or the search runs as before (e2_georender.recorded_state). `resolve` writes
+that layer: it searches every frame of a package and records the answers.
+
+display_list() re-runs geo_process_root from that state with gLakituState moved, untraced, and
+splices its output between the captured prologue and HUD (e2_georender.moved_view). Each kind
+of run keeps its own reused sandboxes (e2_georender.Cpu): resolution on one pair, views on
+another, so translated code and ROM checks carry from frame to frame, and a viewer can resolve
+the next frames on a second thread (prepare) while it draws a view of this one. Two locks:
+`lock` covers only the caches (held for a lookup or an insert), `resolving` serializes the
+work that fills them (package reads, assembly, the resolution sandboxes), so a view of a cached
+state never waits behind a resolution of another frame. Recent scenes and states stay cached
+(each holds several 8 MiB images), so a camera change re-runs only geo_process_root, and the
+next frame reuses the previous one.
 
 Imported packages stay untrusted: the package reader checks every record, and code runs only
-from this ROM (the package's code loads are rebuilt from it and refused on mismatch).
+from this ROM (the package's code loads are rebuilt from it and refused on mismatch). A recorded
+resolution names addresses only and is taken only when the game's own code, run from the state
+it describes, redraws exactly what was captured.
 """
 from __future__ import annotations
 
+import argparse
+import json
 import struct
 import sys
-from collections import OrderedDict
+import threading
+import time
+from collections import Counter, OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,7 +105,7 @@ class Evaluator:
     """A scene package bound to the local ROM, evaluated frame by frame."""
 
     def __init__(self, package: scene_package.Package, rom: bytes, symbols, fcr31: int = FCR31,
-                 cache: int = 4, source: Path | None = None):
+                 cache: int = 4, source: Path | None = None, use_recorded: bool = True):
         import e2_georender as e2
         self.e2, self.package, self.rom, self.symbols = e2, package, rom, symbols
         self.source = source or Path("package")
@@ -94,8 +113,15 @@ class Evaluator:
             raise scene_package.PackageError("this package carries no scene state (version 0, or --no-state)")
         self.windows = package.states.code_windows()
         self.images = SceneImages(*e2.code_images(rom, self.windows))
-        self.cpu = e2.Cpu(rom, fcr31)
+        self.cpu = e2.Cpu(rom, fcr31)              # resolution: traced runs and untraced trials
+        self.view_cpu = e2.Cpu(rom, fcr31)         # display_list's moved views
         self.cache = cache
+        self.use_recorded = use_recorded
+        self.recorded = Counter()                  # taken, refused (searched instead), absent
+        self.lock = threading.Lock()               # the caches
+        self.resolving = threading.RLock()         # filling them: package, assembly, self.cpu
+        self._pending: set[int] = set()            # states a thread is resolving now
+        self._settled = threading.Condition(self.lock)
         self._scenes: OrderedDict[int, Scene] = OrderedDict()
         self._states: OrderedDict[int, object] = OrderedDict()
 
@@ -110,21 +136,32 @@ class Evaluator:
     def __len__(self) -> int:
         return len(self.package)
 
-    @staticmethod
-    def _remember(cache: OrderedDict, index: int, value, limit: int):
-        cache[index] = value
-        cache.move_to_end(index)
-        while len(cache) > limit:
-            cache.popitem(last=False)
+    def _cached(self, cache: OrderedDict, index: int):
+        with self.lock:
+            value = cache.get(index)
+            if value is not None:
+                cache.move_to_end(index)
+            return value
+
+    def _remember(self, cache: OrderedDict, index: int, value):
+        with self.lock:
+            cache[index] = value
+            cache.move_to_end(index)
+            while len(cache) > self.cache:
+                cache.popitem(last=False)
         return value
 
     def scene(self, index: int) -> Scene:
         """The frame's recorded state, assembled (package.scene_state, then SceneImages)."""
-        if index in self._scenes:
-            self._scenes.move_to_end(index)
-            return self._scenes[index]
-        task, regions, ram, known = self.package.scene_state(index)
-        return self._remember(self._scenes, index, Scene(task, regions, *self.images.assemble(ram, known)), self.cache)
+        found = self._cached(self._scenes, index)
+        if found is not None:
+            return found
+        with self.resolving:
+            found = self._cached(self._scenes, index)          # assembled while this waited
+            if found is not None:
+                return found
+            task, regions, ram, known = self.package.scene_state(index)
+            return self._remember(self._scenes, index, Scene(task, regions, *self.images.assemble(ram, known)))
 
     def previous(self, index: int) -> tuple[bytes, np.ndarray] | None:
         """The previous frame's (RDRAM, known mask) when it is the previous game frame."""
@@ -139,16 +176,37 @@ class Evaluator:
     def state(self, index: int):
         """The scene state frame `index`'s render consumed (e2_georender.Resolved): the task's
         geo output found in its pool, regenerated from captured state with render-stepped state
-        and throwMatrix pointers put back; status names why a task has none ("no scene", ...)."""
-        if index in self._states:
-            self._states.move_to_end(index)
-            return self._states[index]
-        if index:
-            self.scene(index - 1)          # seek forward: the previous frame first
-        scene = self.scene(index)
-        frame = self.e2.TapFrame(self.source, scene.task, scene.ram)
-        resolved = self.e2.resolve_task(frame, self.cpu, scene.known, self.symbols, self.previous(index))
-        return self._remember(self._states, index, resolved, self.cache)
+        and throwMatrix pointers put back (as the package recorded them when that checks out,
+        else searched); status names why a task has none ("no scene", ...)."""
+        with self.lock:
+            while index in self._pending:              # another thread is resolving this one: wait
+                self._settled.wait()                   # for it, not for whatever that thread does next
+            found = self._states.get(index)
+            if found is not None:
+                self._states.move_to_end(index)
+                return found
+            self._pending.add(index)
+        try:
+            with self.resolving:
+                if index:
+                    self.scene(index - 1)          # seek forward: the previous frame first
+                scene = self.scene(index)
+                frame = self.e2.TapFrame(self.source, scene.task, scene.ram)
+                recorded = self.package.resolution(index) if self.use_recorded else None
+                resolved = self.e2.resolve_task(frame, self.cpu, scene.known, self.symbols, self.previous(index),
+                                                recorded)
+                self.recorded["absent" if recorded is None else "taken" if resolved.recorded else "refused"] += 1
+            return self._remember(self._states, index, resolved)
+        finally:
+            with self.lock:
+                self._pending.discard(index)
+                self._settled.notify_all()
+
+    def prepare(self, index: int) -> None:
+        """Resolve frame `index` now so a later state() or display_list() finds it cached (a viewer
+        calls this on a second thread for the frames it expects next)."""
+        if 0 <= index < len(self):
+            self.state(index)
 
     def pose(self, index: int) -> dict:
         """Frame `index`'s recorded camera (gLakituState's focus and position, the camera the
@@ -163,13 +221,61 @@ class Evaluator:
                 "mario": vector(e2.US["gMarioStates"] + e2.MARIO_POS)}
 
     def display_list(self, index: int, camera: tuple) -> View | None:
-        """Frame `index` from camera (focus xyz, position xyz), or None when it has no scene."""
+        """Frame `index` from camera (focus xyz, position xyz), or None when it has no scene. One
+        caller thread at a time: views share one sandbox (resolution may run beside them)."""
         resolved = self.state(index)
         if resolved.status:
             return None
         e2, frame, layout = self.e2, resolved.frame, resolved.layout
         main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
         geo = (layout["geo_start"], resolved.result["run"]["head"])
-        moved, run, ram, at, spliced = e2.moved_view(frame, self.cpu, camera, (main + size + 15) & ~7,
+        moved, run, ram, at, spliced = e2.moved_view(frame, self.view_cpu, camera, (main + size + 15) & ~7,
                                                      layout["low_water"], geo, trace=False)
         return View(frame.task_words, ram, at, len(spliced), run, list(moved.culling))
+
+
+def resolve_package(package_path: Path, rom_path: Path, map_path: Path, out: Path, progress=None) -> dict:
+    """Search every frame of a package (resolve_task, the package's own layer ignored) and write
+    the package again with each answer that reproduced the captured list as its scene-resolution
+    layer. Returns counts: frames, resolved, with restored ranges, with throwMatrix pointers."""
+    started = time.perf_counter()
+    evaluator = Evaluator.open(package_path, rom_path, map_path, use_recorded=False)
+    answers, counts = [], Counter()
+    for index in range(len(evaluator)):
+        resolved = evaluator.state(index)
+        result = resolved.result
+        reproduced = (resolved.status is None and not result["run"]["violations"]
+                      and not any(result["differing"].values()))
+        answers.append((resolved.restored, resolved.pointers) if reproduced else None)
+        counts.update(frames=1, resolved=reproduced, restored=reproduced and bool(resolved.restored),
+                      pointers=reproduced and bool(resolved.pointers))
+        if progress and index % 200 == 0:
+            progress(index, len(evaluator))
+    data = scene_package.with_resolution(evaluator.package.data, evaluator.rom, answers)
+    partial = out.with_name(out.name + ".partial")
+    partial.write_bytes(data)
+    partial.replace(out)
+    return dict(counts) | {"package_bytes": len(data), "seconds": round(time.perf_counter() - started, 1)}
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    commands = parser.add_subparsers(dest="command", required=True)
+    resolve = commands.add_parser("resolve", help="write a package's scene-resolution layer")
+    resolve.add_argument("package", type=Path, help="a scene package with the scene-state layer")
+    resolve.add_argument("out", type=Path, help="the package written again with the layer (may be the same path)")
+    resolve.add_argument("--rom", type=Path, required=True)
+    resolve.add_argument("--map", type=Path, required=True)
+    args = parser.parse_args(argv)
+    try:
+        counts = resolve_package(args.package, args.rom, args.map, args.out,
+                                 lambda done, total: print(f"{done}/{total}", file=sys.stderr, flush=True))
+    except scene_package.PackageError as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(counts))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

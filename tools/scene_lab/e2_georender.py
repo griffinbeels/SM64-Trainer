@@ -1139,11 +1139,21 @@ def regenerate(frame: TapFrame, cpu: Cpu, known: np.ndarray, layout: dict, trace
     return result
 
 
+def resolution_notes(restored: list[tuple[int, int]], chosen: list[tuple], symbols) -> dict:
+    """The report's words for a resolution: RDRAM ranges restored, throwMatrix pointers put back."""
+    return {"render_state_restored": [{"range": f"{0x80000000 | lo:08x}-{0x80000000 | hi:08x}",
+                                       "label": label(lo, symbols, None)} for lo, hi in restored],
+            "throw_matrices_restored": [
+                {"slot": (obj - US["gObjectPool"]) // OBJECT_BYTES, "from": f"{address:08x} {source}"}
+                for obj, address, source in chosen]}
+
+
 def consumed_state(frame: TapFrame, previous: tuple | None, cpu: Cpu, known: np.ndarray,
-                   layout: dict, symbols) -> tuple[TapFrame, dict, dict]:
+                   layout: dict, symbols) -> tuple[TapFrame, dict, dict, list, list]:
     """Regenerate from the state the original render consumed: render-stepped state from the
     previous game frame (tried when the post-render state does not reproduce the list), then each
-    throwMatrix pointer the render let go of."""
+    throwMatrix pointer the render let go of. Also returns what it put back: the RDRAM ranges
+    restored and the (object, matrix) pointers, in the order chosen."""
     result = regenerate(frame, cpu, known, layout)
     restored = np.zeros(0, np.intp)
     if previous is not None and not result["run"]["violations"] and any(result["differing"].values()):
@@ -1161,12 +1171,44 @@ def consumed_state(frame: TapFrame, previous: tuple | None, cpu: Cpu, known: np.
             chosen.append(proposal)
             result = trial
     frame = with_throw_matrices(frame, chosen) if chosen else frame
-    notes = {"render_state_restored": [{"range": f"{0x80000000 | lo:08x}-{0x80000000 | hi:08x}",
-                                        "label": label(lo, symbols, None)} for lo, hi in index_ranges(restored)],
-             "throw_matrices_restored": [
-                 {"slot": (obj - US["gObjectPool"]) // OBJECT_BYTES, "from": f"{address:08x} {source}"}
-                 for obj, address, source in chosen]}
-    return frame, result, notes
+    ranges = index_ranges(restored)
+    return frame, result, resolution_notes(ranges, chosen, symbols), ranges, [(obj, at) for obj, at, _ in chosen]
+
+
+def recorded_state(frame: TapFrame, previous: tuple | None, cpu: Cpu, known: np.ndarray, layout: dict,
+                   symbols, recorded: tuple[list, list]) -> tuple[TapFrame, dict, dict, list, list] | None:
+    """consumed_state's result from a resolution a scene package recorded (its scene-resolution
+    layer: restored ranges, (object, matrix) pointers): the state put back as written, then ONE
+    traced regeneration, taken only when it reproduces the captured list byte for byte. Each
+    pointer must be one the search itself proposes (restore_throw_matrices), so a pointer the
+    source camera never draws cannot reach a moved camera. None for anything else (the caller
+    searches): a range without the previous game frame, a pointer the search would not propose,
+    a run that stops, any byte that differs."""
+    ranges, pointers = recorded
+    restored = np.zeros(0, np.intp)
+    if ranges:
+        if previous is None:
+            return None
+        ram = np.frombuffer(frame.ram, np.uint8).copy()
+        old = np.frombuffer(previous[0], np.uint8)
+        for lo, hi in ranges:
+            ram[lo:hi] = old[lo:hi]
+        frame = TapFrame(frame.dir, type("Task", (), {"task": frame.task_words})(), ram.tobytes())
+        restored = np.concatenate([np.arange(lo, hi) for lo, hi in ranges])
+    chosen = []
+    if pointers:
+        top, pre = layout["top"], layout["pre"]
+        proposed = {(obj, address): source for obj, address, source in restore_throw_matrices(frame, known,
+                                                                                              (top - pre, top))}
+        if any(tuple(pointer) not in proposed for pointer in pointers) or len(set(pointers)) != len(pointers):
+            return None
+        chosen = [(obj, address, proposed[obj, address]) for obj, address in pointers]
+    frame = with_throw_matrices(frame, chosen) if chosen else frame
+    result = regenerate(frame, cpu, known, layout)
+    if result["run"]["violations"] or any(result["differing"].values()):
+        return None
+    ranges = index_ranges(restored)
+    return frame, result, resolution_notes(ranges, chosen, symbols), ranges, [(obj, at) for obj, at, _ in chosen]
 
 
 @dataclass
@@ -1180,11 +1222,17 @@ class Resolved:
     layout: dict | None = None
     result: dict | None = None         # regenerate's, from that state
     notes: dict = dataclass_field(default_factory=dict)
+    restored: list = dataclass_field(default_factory=list)   # RDRAM ranges from the previous game frame
+    pointers: list = dataclass_field(default_factory=list)   # (object, matrix) throwMatrix pointers
+    recorded: bool = False             # taken from the package's scene-resolution layer, not searched
 
 
-def resolve_task(frame: TapFrame, cpu: Cpu, known: np.ndarray, symbols, previous: tuple | None = None) -> Resolved:
+def resolve_task(frame: TapFrame, cpu: Cpu, known: np.ndarray, symbols, previous: tuple | None = None,
+                 recorded: tuple[list, list] | None = None) -> Resolved:
     """Find the task's geo output in its pool and regenerate it from the state its render
-    consumed (consumed_state). previous is the previous game frame's (RDRAM, known mask)."""
+    consumed (consumed_state). previous is the previous game frame's (RDRAM, known mask);
+    recorded is a scene package's resolution for this task, used when it checks out
+    (recorded_state) instead of searching."""
     main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
     pool = frame.word(US["gGfxPool"])
     entry = {"global_timer": frame.word(US["gGlobalTimer"]), "pool": f"{pool:08x}", "data_ptr": f"{main:08x}"}
@@ -1200,8 +1248,9 @@ def resolve_task(frame: TapFrame, cpu: Cpu, known: np.ndarray, symbols, previous
             return Resolved(entry, known, "no scene")
         return Resolved(entry, known, str(error))
     layout = {"geo_start": geo_start | 0x80000000, "top": top, "pre": pre, "low_water": low_water}
-    frame, result, notes = consumed_state(frame, previous, cpu, known, layout, symbols)
-    return Resolved(entry, known, None, frame, layout, result, notes)
+    taken = recorded is not None and recorded_state(frame, previous, cpu, known, layout, symbols, recorded)
+    frame, result, notes, restored, pointers = taken or consumed_state(frame, previous, cpu, known, layout, symbols)
+    return Resolved(entry, known, None, frame, layout, result, notes, restored, pointers, bool(taken))
 
 
 def check_task(frame: TapFrame, cpu: Cpu, known: np.ndarray, symbols,
@@ -1426,6 +1475,9 @@ def from_package(args) -> int:
             entry.update(report_task(resolved, evaluator.cpu, symbols, args.orbit))
             results.append(entry)
             print(json.dumps({k: v for k, v in entry.items() if k != "reads_not_captured"}))
+        # Which states came from the package's scene-resolution layer (taken), were searched
+        # because its entry did not reproduce the capture (refused), or had none (absent).
+        print(f"recorded resolutions: {dict(evaluator.recorded)}", file=sys.stderr)
     except scene_package.PackageError as error:
         print(f"refused: {error}", file=sys.stderr)
         return 2

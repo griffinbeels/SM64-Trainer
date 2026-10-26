@@ -6,6 +6,10 @@ without), a level region keyed twice and patched block by block (one patch
 ahead of the first task, one on a refused task), and the tap's full RDRAM copy
 that locates a practice ROM's boot-copied code. tap.scene_states, the owner of
 the rebuild, is the expected value. No private RAM image or real ROM is involved.
+
+The scene-resolution layer (what the evaluator's search found per frame) is written over that
+package by package.with_resolution; here its format and refusals. Whether a recorded resolution
+reproduces the capture needs Unicorn and a real recording (e2_georender.py from-package).
 """
 import importlib.util
 import json
@@ -320,3 +324,102 @@ def test_truncated_or_flipped_v1_packages_are_refused(scene):
         flipped[position] ^= 0x41
         outcomes.add(_open_all(bytes(flipped), rom).split(":")[0])
     assert outcomes == {"refused"}
+
+
+# ---------------------------------------------------------------- the scene-resolution layer
+
+OBJECT, MATRIX = 0x8033D488, 0x80214480
+
+
+def _answers(count: int) -> list:
+    """Frame 1 restores two ranges, frame 2 puts back one throwMatrix pointer, frame 3 needed
+    neither, and the search reproduced none of the others."""
+    answers = [None] * count
+    answers[1] = ([(0x1000, 0x1010), (0x2000, 0x2004)], [])
+    answers[2] = ([], [(OBJECT, MATRIX)])
+    answers[3] = ([], [])
+    return answers
+
+
+def _layers(data: bytes, layers: list, version: int | None = None) -> bytes:
+    """The package re-assembled with exactly these (metadata, tables) layers, hashes recomputed."""
+    formats = {"scene-state": (pk.STATE, pk.CODE), "scene-resolution": (pk.RESOLVE, pk.RANGE, pk.POINTER)}
+    header = pk.read_header(data)
+    index = pk.parse_index(pk.decompress(pk.ZLIB, data[header.index_offset:], header.index_raw), header.version)
+    meta = json.loads(json.dumps(index.meta))
+    meta["layers"] = [layer_meta for layer_meta, _tables in layers]
+    encoded = [(fmt, list(rows)) for layer_meta, tables in layers
+               for fmt, rows in zip(formats[layer_meta["name"]], tables, strict=True)]
+    raw = pk.encode_index(meta, index.loads, index.chunks, index.blocks, index.frames, *encoded)
+    body = data[pk.HEADER.size:header.index_offset]
+    return pk.assemble(header.rom_sha, header.rdram_size, len(index.frames), body, raw,
+                       header.version if version is None else version)
+
+
+def test_a_resolution_layer_records_each_frames_answer_and_keeps_the_body(scene):
+    data, rom = scene["data"], scene["rom"]
+    plain = pk.Package(data, rom)
+    assert plain.resolutions is None and plain.resolution(1) is None
+    answers = _answers(len(plain))
+    resolved = pk.with_resolution(data, rom, answers)
+    package = pk.Package(resolved, rom)
+    assert [package.resolution(index) for index in range(len(package))] == [
+        None if answer is None else (list(answer[0]), list(answer[1])) for answer in answers]
+    before, after = pk.read_header(data), pk.read_header(resolved)
+    assert resolved[pk.HEADER.size:after.index_offset] == data[pk.HEADER.size:before.index_offset]
+    assert [package.frame(index) for index in range(len(package))] == scene["captures"]
+    assert _state(package, 4) == _state(plain, 4)
+    again = pk.Package(pk.with_resolution(resolved, rom, [None] * len(package)), rom)    # replaced, not added
+    assert [layer["name"] for layer in again.index.meta["layers"]] == ["scene-state", "scene-resolution"]
+    assert all(again.resolution(index) is None for index in range(len(again)))
+    with pytest.raises(pk.PackageError, match="needs the scene-state layer"):
+        pk.with_resolution(scene["v0"], rom, [None] * len(package))
+    with pytest.raises(pk.PackageError, match="one resolution per frame"):
+        pk.with_resolution(data, rom, answers[:-1])
+
+
+def _tables(scene) -> tuple:
+    """(state layer tables, resolution rows, ranges, pointers) of the resolved synthetic package."""
+    package = pk.Package(pk.with_resolution(scene["data"], scene["rom"], _answers(TASKS - 1)), scene["rom"])
+    rows, ranges, pointers = package.index.layers["scene-resolution"]
+    return package.index.layers["scene-state"], list(rows), list(ranges), list(pointers)
+
+
+STATE_META = {"name": "scene-state", "version": 1, "checkpoint_every": EVERY, "group": 3}
+RESOLUTION_META = {"name": "scene-resolution", "version": 1}
+
+
+@pytest.mark.parametrize("edit, message", [
+    (lambda rows, ranges, pointers: rows.pop(), "rows do not match the frames"),
+    (lambda rows, ranges, pointers: _replace(rows, 1, 0, 2), "malformed scene-resolution rows"),
+    (lambda rows, ranges, pointers: _replace(rows, 1, 2, 3), "malformed scene-resolution rows"),
+    (lambda rows, ranges, pointers: _replace(rows, 1, 2, pk.MAX_FRAME_RANGES + 1), "malformed scene-resolution"),
+    (lambda rows, ranges, pointers: _replace(rows, 2, 4, 2), "malformed scene-resolution rows"),
+    (lambda rows, ranges, pointers: _replace(rows, 0, 2, 1), "malformed scene-resolution rows"),   # unresolved
+    (lambda rows, ranges, pointers: ranges.reverse(), "restored ranges overlap, are unordered"),
+    (lambda rows, ranges, pointers: _replace(ranges, 1, 0, 0x1008), "restored ranges overlap"),
+    (lambda rows, ranges, pointers: _replace(ranges, 1, 1, RDRAM + 4), "leave RDRAM"),
+    (lambda rows, ranges, pointers: _replace(pointers, 0, 0, 0x80000000 + RDRAM), "pointer leaves RDRAM"),
+    (lambda rows, ranges, pointers: _replace(pointers, 0, 1, 0x80000000 + RDRAM - 32), "pointer leaves RDRAM"),
+    (lambda rows, ranges, pointers: _replace(pointers, 0, 1, MATRIX + 2), "pointer leaves RDRAM"),
+    (lambda rows, ranges, pointers: _replace(pointers, 0, 0, 0x00214480), "pointer leaves RDRAM"),
+])
+def test_hostile_resolution_rows_are_refused(scene, edit, message):
+    state, rows, ranges, pointers = _tables(scene)
+    edit(rows, ranges, pointers)
+    data = _layers(scene["data"], [(STATE_META, state), (RESOLUTION_META, (rows, ranges, pointers))])
+    with pytest.raises(pk.PackageError, match=message):
+        pk.Package(data, scene["rom"])
+
+
+def test_a_resolution_layer_needs_the_state_layer_and_a_known_version(scene):
+    state, rows, ranges, pointers = _tables(scene)
+    data, rom = scene["data"], scene["rom"]
+    resolution = (rows, ranges, pointers)
+    assert pk.Package(_layers(data, [(STATE_META, state), (RESOLUTION_META, resolution)]), rom).resolution(2)
+    with pytest.raises(pk.PackageError, match="unknown package layer 'scene-resolution' version 2"):
+        pk.Package(_layers(data, [(STATE_META, state), ({**RESOLUTION_META, "version": 2}, resolution)]), rom)
+    with pytest.raises(pk.PackageError, match="needs the scene-state layer"):
+        pk.Package(_layers(data, [(RESOLUTION_META, resolution)]), rom)
+    with pytest.raises(pk.PackageError, match="malformed package layers"):
+        pk.Package(_layers(data, [(STATE_META, state), (RESOLUTION_META, resolution)], version=0), rom)

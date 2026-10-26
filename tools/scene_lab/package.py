@@ -45,6 +45,14 @@ and wherever the task regions change shape, so a seek decodes one checkpoint
 and the frames after it. Its code rows name ROM code the evaluator may execute
 (the practice ROM's boot-copied code): a ROM load and the virtual address it
 runs at, rebuilt from the viewer's ROM and refused on mismatch, never RAM bytes.
+
+The scene-resolution layer (version 1, added to a v1 package by `evaluator.py resolve`) records
+what the evaluator's search found for each frame, so a viewer need not search again: per frame
+a flag (resolved: the search reproduced the captured list byte for byte), the RDRAM ranges whose
+render-stepped values come from the previous game frame's state, and the throwMatrix pointers
+the render consumed (object, matrix address). It carries addresses only, never bytes, and the
+evaluator takes a frame's entry only when one traced regeneration from it reproduces the
+captured list byte for byte; otherwise it searches as without the layer.
 """
 from __future__ import annotations
 
@@ -58,6 +66,7 @@ import os
 import random
 import struct
 import sys
+import threading
 import time
 import zlib
 from collections import Counter, OrderedDict, deque
@@ -87,6 +96,9 @@ U32 = struct.Struct("<I")
 STATE = struct.Struct("<IIII32s")      # chunk, offset, length, flags, sha256 of the state it rebuilds
 CODE = struct.Struct("<II")            # load, virtual address: ROM code the evaluator may execute
 STATE_HEAD = struct.Struct("<IIIII")   # kind, level runs | level ops, level segments, task runs, task segments
+RESOLVE = struct.Struct("<IIIII")      # flags, first range, ranges, first pointer, pointers
+RANGE = RUN                            # begin, end: RDRAM bytes taken from the previous game frame's state
+POINTER = struct.Struct("<II")         # object, matrix: a throwMatrix pointer (virtual addresses)
 
 LOAD_ROM, LOAD_MIO0 = 1, 2
 SEG_REF, SEG_RAW = 1, 2
@@ -95,7 +107,9 @@ CODECS = {"stored": STORED, "zlib": ZLIB, "lzma": LZMA}
 SHOWN, HAS_VI = 1, 2
 NO_PRESENT = 0xFFFFFFFF
 STATE_LAYER = ("scene-state", 1)
+RESOLUTION_LAYER = ("scene-resolution", 1)
 CHECKPOINT, HAS_TASK = 1, 2            # state row flags
+RESOLVED = 1                           # resolution row flag: the search reproduced the captured list
 KEY_RECORD, DELTA_RECORD = 1, 2        # state record kinds: a checkpoint, or XOR the previous frame
 # Measured 2026-10-25 on a 90 s BoB session: every 32/64/128 frames packs to 7.95/7.74/7.62 MiB a
 # minute with closures; a cold seek (closure + state) stays near 115 ms p95 at all three.
@@ -117,6 +131,8 @@ MAX_LAYERS = 8
 MAX_STATE_RUNS = 1 << 16
 MAX_LEVEL_OPS = 64
 MAX_CODE_LOADS = 4
+MAX_FRAME_RANGES = 4096                # restored ranges one frame's resolution may name
+MAX_FRAME_POINTERS = 256               # throwMatrix pointers (the object pool has 240 slots)
 LZMA_MEMLIMIT = 64 << 20
 CHUNK_TARGET = 256 << 10
 CACHE_BYTES = 64 << 20
@@ -858,6 +874,41 @@ def write_package(source: Source, rom: bytes, out: Path, codec: int = LZMA, bloc
     return dict(stats) | {"write_seconds": round(time.perf_counter() - started, 3)}
 
 
+def with_resolution(data: bytes, rom: bytes, resolutions: list) -> bytes:
+    """The package with its scene-resolution layer set (replacing any it had): one entry per
+    frame, None for a frame the search did not reproduce, else (restored ranges, (object,
+    matrix) pointers). The body is kept byte for byte; only the index and header change."""
+    package = Package(data, rom)
+    _require(package.states is not None, "a scene-resolution layer needs the scene-state layer")
+    _require(len(resolutions) == len(package), "one resolution per frame")
+    rows, ranges, pointers = [], [], []
+    for entry in resolutions:
+        if entry is None:
+            rows.append((0, 0, 0, 0, 0))
+            continue
+        restored, consumed = entry
+        rows.append((RESOLVED, len(ranges), len(restored), len(pointers), len(consumed)))
+        ranges += [tuple(item) for item in restored]
+        pointers += [tuple(item) for item in consumed]
+    index, header = package.index, package.header
+    meta = json.loads(json.dumps(index.meta))
+    layers = [layer for layer in meta["layers"] if layer["name"] != RESOLUTION_LAYER[0]]
+    meta["layers"] = layers + [{"name": RESOLUTION_LAYER[0], "version": RESOLUTION_LAYER[1],
+                                "resolved": sum(entry is not None for entry in resolutions)}]
+    tables = {name: index.layers[name] for name, _version in LAYER_TABLES if name in index.layers}
+    tables[RESOLUTION_LAYER[0]] = (rows, ranges, pointers)
+    encoded = []
+    for layer in meta["layers"]:
+        formats = LAYER_TABLES[layer["name"], layer["version"]]
+        encoded += [(fmt, list(table)) for (fmt, _limit, _what), table in zip(formats, tables[layer["name"]],
+                                                                               strict=True)]
+    index_raw = encode_index(meta, index.loads, index.chunks, index.blocks, index.frames, *encoded)
+    rebuilt = assemble(header.rom_sha, header.rdram_size, header.frame_count,
+                       data[HEADER.size:header.index_offset], index_raw, header.version)
+    Package(rebuilt, rom)                      # the reader takes what this writes
+    return rebuilt
+
+
 # ---------------------------------------------------------------- reader
 
 @dataclass
@@ -950,6 +1001,14 @@ def read_header(data: bytes) -> Header:
     return header
 
 
+# Each known layer's tables, in index order: (struct, row limit, name).
+LAYER_TABLES = {
+    STATE_LAYER: ((STATE, MAX_ENTRIES, "scene states"), (CODE, MAX_CODE_LOADS, "code loads")),
+    RESOLUTION_LAYER: ((RESOLVE, MAX_ENTRIES, "resolution rows"), (RANGE, MAX_ENTRIES, "restored ranges"),
+                       (POINTER, MAX_ENTRIES, "throwMatrix pointers")),
+}
+
+
 def parse_index(raw: bytes, version: int = 0) -> Index:
     cursor = _Cursor(raw, "index")
     (length,) = cursor.unpack(U32)
@@ -966,11 +1025,10 @@ def parse_index(raw: bytes, version: int = 0) -> Index:
              "malformed package layers")
     for layer in layers:
         name, number = (layer.get("name"), layer.get("version")) if isinstance(layer, dict) else (None, None)
-        _require((name, number) == STATE_LAYER and name not in index.layers,
-                 f"unknown package layer {str(name)[:40]!r} version {str(number)[:12]} "
-                 f"(this reader knows {STATE_LAYER[0]} {STATE_LAYER[1]})")
-        index.layers[name] = (cursor.table(STATE, MAX_ENTRIES, "scene states"),
-                              cursor.table(CODE, MAX_CODE_LOADS, "code loads"))
+        known = ", ".join(f"{known_name} {known_version}" for known_name, known_version in LAYER_TABLES)
+        _require((name, number) in LAYER_TABLES and name not in index.layers,
+                 f"unknown package layer {str(name)[:40]!r} version {str(number)[:12]} (this reader knows {known})")
+        index.layers[name] = tuple(cursor.table(fmt, limit, what) for fmt, limit, what in LAYER_TABLES[name, number])
     _require(cursor.done(), "trailing bytes in the index")
     return index
 
@@ -1002,6 +1060,9 @@ def check_index(index: Index, header: Header, rom_size: int) -> None:
              "frame closure larger than RDRAM")
     if STATE_LAYER[0] in index.layers:
         _check_state_layer(index, header)
+    if RESOLUTION_LAYER[0] in index.layers:
+        _require(STATE_LAYER[0] in index.layers, "a scene-resolution layer needs the scene-state layer")
+        _check_resolution_layer(index, header)
     _check_slices(index)
 
 
@@ -1014,6 +1075,24 @@ def _check_state_layer(index: Index, header: Header) -> None:
         _require(load < len(index.loads) and index.loads[load][0] == LOAD_ROM and address % 4 == 0
                  and 0x80000000 <= address < 0xA0000000
                  and (address & 0x1FFFFFFF) + index.loads[load][3] <= header.rdram_size, "malformed code load")
+
+
+def _check_resolution_layer(index: Index, header: Header) -> None:
+    rows, ranges, pointers = index.layers[RESOLUTION_LAYER[0]]
+    _require(len(rows) == len(index.frames), "scene-resolution rows do not match the frames")
+    top = 0x80000000 + header.rdram_size
+    for flags, first, count, first_pointer, pointer_count in rows:
+        _require(flags & ~RESOLVED == 0 and count <= MAX_FRAME_RANGES and pointer_count <= MAX_FRAME_POINTERS
+                 and first + count <= len(ranges) and first_pointer + pointer_count <= len(pointers)
+                 and (flags & RESOLVED or count == pointer_count == 0), "malformed scene-resolution rows")
+        previous = 0
+        for begin, end in ranges[first:first + count]:
+            _require(previous <= begin < end <= header.rdram_size,
+                     "restored ranges overlap, are unordered or leave RDRAM")
+            previous = end
+        for obj, matrix in pointers[first_pointer:first_pointer + pointer_count]:
+            _require(0x80000000 <= obj <= top - 0x54 and 0x80000000 <= matrix <= top - 64 and not (obj | matrix) & 3,
+                     "a throwMatrix pointer leaves RDRAM")
 
 
 def _check_slices(index: Index) -> None:
@@ -1076,7 +1155,9 @@ def _check_segments(segments: list) -> None:
 
 class Package:
     """A scene package bound to the viewer's ROM; any frame decodes directly, and with the
-    scene-state layer any frame's state by a seek from its checkpoint."""
+    scene-state layer any frame's state by a seek from its checkpoint. The reading methods
+    (outline, fields, frame, scene_state, resolution) hold one lock: the chunk cache and the
+    state cursor are shared, and a viewer reads ahead on a second thread."""
 
     def __init__(self, data: bytes, rom: bytes, cache_bytes: int = CACHE_BYTES):
         _require(len(data) <= MAX_PACKAGE_BYTES, "package too large")
@@ -1095,6 +1176,8 @@ class Package:
         self._loads: dict[int, bytes] = {}
         layer = self.index.layers.get(STATE_LAYER[0])
         self.states = SceneStates(self, *layer) if layer else None
+        self.resolutions = self.index.layers.get(RESOLUTION_LAYER[0])
+        self.lock = threading.RLock()
 
     def __len__(self) -> int:
         return len(self.index.frames)
@@ -1149,17 +1232,36 @@ class Package:
 
     def fields(self, index: int) -> dict:
         """The frame's tap fields (task_index, ...) without rebuilding its closure."""
-        return dict(zip(tap.TASK_FIELDS, self._record(index).head[36:48], strict=True))
+        with self.lock:
+            return dict(zip(tap.TASK_FIELDS, self._record(index).head[36:48], strict=True))
 
     def outline(self, index: int) -> dict:
         """What a viewer lists for a frame without rebuilding its closure: the VI registers of the
         present that showed it (None when none did), and its identity values (global_timer, ...)."""
-        record = self._record(index)
+        with self.lock:
+            record = self._record(index)
         return {"vi": tuple(record.head[22:36]) if record.head[2] & HAS_VI else None,
                 "identity": {name: tap.word_value(record.extras, address, size)
                              for name, address, size in self.identity}}
 
+    def resolution(self, index: int) -> tuple[list, list] | None:
+        """The frame's recorded resolution (scene-resolution layer): (RDRAM ranges restored from
+        the previous game frame's state, (object, matrix) throwMatrix pointers), or None when
+        the package has no such layer or its search did not reproduce this frame."""
+        _require(0 <= index < len(self), "no such frame")
+        if self.resolutions is None:
+            return None
+        rows, ranges, pointers = self.resolutions
+        flags, first, count, first_pointer, pointer_count = rows[index]
+        if not flags & RESOLVED:
+            return None
+        return list(ranges[first:first + count]), list(pointers[first_pointer:first_pointer + pointer_count])
+
     def frame(self, index: int) -> Capture:
+        with self.lock:
+            return self._frame(index)
+
+    def _frame(self, index: int) -> Capture:
         record = self._record(index)
         run_bytes = b"".join(self._piece(*segment) for segment in record.segments)
         _require(closure_digest(record.runs, run_bytes) == self.index.frames[index][4],
@@ -1173,11 +1275,12 @@ class Package:
         """(task, its task regions or None, RDRAM, known mask), as tap.scene_states yields them
         for the same task: the closure over the scene state, the rest the 0x5A pattern."""
         _require(self.states is not None, "this package carries no scene state")
-        capture = self.frame(index)
-        regions, scene = self.states.state(index)
-        task = tap.Task(capture.task_sequence, 0, dict(zip(tap.TASK_FIELDS, capture.fields, strict=True)),
-                        capture.task, capture.runs, capture.run_bytes, capture.extras)
-        return (task, regions, *scene.task_ram(task, regions))
+        with self.lock:
+            capture = self._frame(index)
+            regions, scene = self.states.state(index)
+            task = tap.Task(capture.task_sequence, 0, dict(zip(tap.TASK_FIELDS, capture.fields, strict=True)),
+                            capture.task, capture.runs, capture.run_bytes, capture.extras)
+            return (task, regions, *scene.task_ram(task, regions))
 
 
 class SceneStates:
