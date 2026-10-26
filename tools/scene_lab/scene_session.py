@@ -3,16 +3,25 @@
     session = SceneSession.open(config, package_path)            # Refused names why it cannot
     header, payload = session.picture(frame, camera, "jpeg")       # camera None: the recorded camera
     session.pose(frame)                                            # the recorded camera and Mario
+    session.pick(frame, camera, u, v)                              # where that picture drew a pixel
     session.close()                                                # the host exits; returns its code
 
 A frame is a picture the game showed: a package task a present displayed, in recording order
 (package.outline). The recorded camera sends that task's closure as the package rebuilds it, so
 the host draws the recorded picture (viewer.py check proves the host reproduces replay.py's
 render byte for byte). A free camera is {"focus": xyz, "position": xyz} in the game's world
-coordinates: the scene evaluator re-runs SM64's own scene-graph code for that camera and the
-host draws the whole rebuilt RDRAM with the new list. When the evaluator cannot serve a frame
-(no 3D scene during a level load, a stopped run, no scene state in the package) the picture is
-the recorded one and `reason` says why. The evaluator starts on the first free-camera request.
+coordinates, optionally with its own "roll" (the game's s16 angle the screen turns by) and
+"fov" (degrees); without them the frame's own apply. The scene evaluator re-runs SM64's own
+scene-graph code for that camera and the host draws the whole rebuilt RDRAM with the new list.
+The pose's camera (focus, position, roll, fov) redraws the recorded picture exactly, which is
+what lets a free camera start from the picture on screen.
+
+A pick (Set focus) finds where a picture's display list drew one pixel by walking that list on
+the CPU (pick.py: the renderer's own thread holds its depth), in the camera's own space. The page
+owns the camera's world axes and turns that into a world point; the session never does.
+
+When the evaluator cannot serve a frame (no 3D scene during a level load, a stopped run, no
+scene state in the package) the picture is the recorded one and `reason` says why. The evaluator starts on the first free-camera request.
 
 A free-camera picture sends the host only the RDRAM words that differ from what the host
 already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame tens of KiB.
@@ -46,6 +55,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import gpu_gate  # noqa: E402
 import package as scene_package  # noqa: E402
+import pick as list_pick  # noqa: E402
 import replay  # noqa: E402
 import viewer  # noqa: E402
 
@@ -55,6 +65,7 @@ JPEG_QUALITY = 90
 WORLD_LIMIT = 1e6             # SM64's world fits in +-32768; a camera far outside it is a bug, not a view
 NO_SCENE = ("This frame has no 3D scene to move around in (a level load, a fade or a menu), "
             "so it shows the recorded camera.")
+NOTHING_DRAWN = "Nothing is drawn there to focus on (sky, or too far away). Pick a surface."
 RUN_GAP_WORDS = 16            # changed words this close together travel to the host as one run
 MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
 LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
@@ -65,21 +76,33 @@ class Refused(Exception):
     """Why a scene cannot open, in words the viewer shows as they are."""
 
 
-def world_camera(camera) -> tuple[list[float], list[float]]:
-    """{"focus": [x, y, z], "position": [x, y, z]} as the evaluator takes it, or ValueError."""
+def _number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def world_camera(camera) -> tuple:
+    """{"focus": [x, y, z], "position": [x, y, z][, "roll": s16][, "fov": degrees]} as the
+    evaluator takes it ((focus, position), or with (roll, fov) when either is named; a missing
+    one is None, the frame's own), or ValueError."""
     if not isinstance(camera, dict):
         raise ValueError("a free camera is {focus, position}")
     vectors = []
     for key in ("focus", "position"):
         value = camera.get(key)
         if not (isinstance(value, list) and len(value) == 3 and all(
-                isinstance(part, (int, float)) and not isinstance(part, bool) and math.isfinite(part)
-                and abs(part) <= WORLD_LIMIT for part in value)):
+                _number(part) and abs(part) <= WORLD_LIMIT for part in value)):
             raise ValueError(f"camera {key} must be three finite world coordinates")
         vectors.append([float(part) for part in value])
     if math.dist(*vectors) < 1.0:
         raise ValueError("the camera sits on its own focus point")
-    return vectors[0], vectors[1]
+    roll, fov = camera.get("roll"), camera.get("fov")
+    if roll is not None and not (isinstance(roll, int) and not isinstance(roll, bool) and -32768 <= roll <= 32767):
+        raise ValueError("camera roll must be the game's angle, a whole number from -32768 to 32767")
+    if fov is not None and not (_number(fov) and 1.0 <= fov <= 170.0):
+        raise ValueError("camera fov must be 1 to 170 degrees")
+    if roll is None and fov is None:
+        return vectors[0], vectors[1]
+    return vectors[0], vectors[1], roll, None if fov is None else float(fov)
 
 
 @dataclass
@@ -401,6 +424,35 @@ class SceneSession:
                 "camera": "free" if drawn_free else "recorded", "reason": reason,
                 "sha256": picture.sha256 if encoding == "raw" else None,
                 "payload_bytes": len(payload), "timings": timings}, payload
+
+    def pick(self, frame: int, camera, u, v) -> dict:
+        """Where the picture of `frame` from `camera` (None: the recorded camera) drew the pixel at
+        (u, v), its place in the picture from 0 to 1 across and down: {"point": [x, y, z] in that
+        camera's space (pick.py), "distance", "reason"}, or point None and the reason. The
+        recorded camera walks the captured list; a free camera walks the list its view makes."""
+        index = self._index(frame)
+        if not all(_number(value) and 0 <= value <= 1 for value in (u, v)):
+            raise ValueError("a pick names a place in the picture: u and v from 0 to 1")
+        if camera is None:
+            capture = self.package.frame(index)
+            ram, list_at = list_pick.ram_from_runs(capture.runs, capture.run_bytes), capture.task[12]
+        else:
+            free = world_camera(camera)
+            evaluator, reason = self._evaluator_or_reason()
+            if evaluator is None:
+                return {"point": None, "distance": None, "reason": reason}
+            self._ahead_generation += 1
+            view = evaluator.display_list(index, free)
+            if view is None or view.ram is None:          # the page showed the recorded picture
+                return {"point": None, "distance": None, "reason": NO_SCENE}
+            ram, list_at = view.ram, view.data_ptr
+        try:
+            point = list_pick.nearest(list_pick.walk(ram, list_at), u, v)
+        except ValueError as error:
+            return {"point": None, "distance": None, "reason": f"This picture's list could not be read: {error}."}
+        if point is None:
+            return {"point": None, "distance": None, "reason": NOTHING_DRAWN}
+        return {"point": point, "distance": math.hypot(*point), "reason": None}
 
     def pose(self, frame: int) -> dict:
         """The frame's recorded camera and Mario's position, or None and the reason."""

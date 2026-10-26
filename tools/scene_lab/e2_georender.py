@@ -84,6 +84,8 @@ from unicorn import mips_const as mips
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import camera_state  # noqa: E402
+from camera_state import FOV_VALUE, LAKITU_FOCUS, LAKITU_POS, LAKITU_ROLL  # noqa: E402,F401  (callers read them here)
 import cpu_hooks  # noqa: E402
 from cpu_hooks import decode_access, mark_access  # noqa: E402,F401  (decode_access: the reference decoder)
 from provenance import boot_copied_code  # noqa: E402
@@ -108,7 +110,7 @@ SYMBOLS = ("geo_process_root", "geo_process_object", "geo_process_held_object", 
            "gGlobalTimer", "gCurrentArea", "D_8032CE74", "D_8032CE78", "gFBSetColor",
            "gAreaUpdateCounter", "gCurrLevelNum", "gDisplayListHead", "gGfxPoolEnd", "gGfxPool",
            "gMarioStates", "sSegmentTable", "gDisplayListHeap", "gLakituState", "gObjectPool",
-           "gGfxPools", "sFloorAlignMatrix", "gWarpTransition")
+           "gGfxPools", "sFloorAlignMatrix", "gWarpTransition", "sFOVState")
 LAYOUT_ROWS_FOR = {"gGlobalTimer": "global_timer", "gCurrentArea": "current_area_pointer",
                    "gAreaUpdateCounter": "area_update_counter", "gCurrLevelNum": "curr_level",
                    "gMarioStates": "mario_struct", "gObjectPool": "object_pool"}
@@ -117,7 +119,6 @@ CODE_SEGMENTS: list[tuple[str, int, int, int]] = []   # ROM-loaded images: (name
 BOOT_CODE: list[tuple[str, int, int, int]] = []       # the practice ROM's own code (boot_copied_code)
 REGIONS: list[tuple[str, int, int]] = []              # read/write-set classification: (name, start, end)
 OBJECT_BYTES, OBJECT_COUNT = 0x260, 240
-LAKITU_FOCUS, LAKITU_POS = 0x80, 0x8C
 MARIO_POS = 0x3C
 OBJ_BEHAVIOR = 0x20C
 WARP_PAUSE_RENDERING = 3           # struct WarpTransition {u8 isActive, type, time, pauseRendering; ...}
@@ -594,15 +595,14 @@ class Cpu:
 
 
 def run_geo(frame: Frame, cpu: Cpu, head: int, end: int, poison: list[tuple[int, int]],
-            camera: tuple[list[float], list[float]] | None, ram: bytes | None = None,
-            trace: bool = True) -> tuple[Sandbox, dict]:
+            camera: tuple | None, ram: bytes | None = None, trace: bool = True) -> tuple[Sandbox, dict]:
+    """geo_process_root over `frame`'s RAM (or `ram`), from `camera` when given: (focus,
+    position), or (focus, position, roll, fov) with None for the frame's own (camera_state.place)."""
     sandbox = cpu.sandbox(frame.ram if ram is None else ram, trace)
     for lo, hi in poison:
         sandbox.memory[phys(lo):phys(hi)] = 0xA5
     if camera:
-        lakitu = US["gLakituState"]
-        sandbox.put_f32s(lakitu + LAKITU_FOCUS, camera[0])
-        sandbox.put_f32s(lakitu + LAKITU_POS, camera[1])
+        camera_state.place(sandbox.memory, camera, US["gLakituState"], US["sFOVState"])
     sandbox.put_u32(US["gDisplayListHead"], head)
     sandbox.put_u32(US["gGfxPoolEnd"], end)
     root = frame.word(frame.word(US["gCurrentArea"]) + 4)
@@ -957,8 +957,9 @@ def orbit_of(frame: Frame, spec: str) -> tuple[list[float], list[float]]:
 def moved_view(frame: TapFrame, cpu: Cpu, camera, scratch_head: int, low_water: int, geo: tuple[int, int],
                trace: bool = True) -> tuple[Sandbox, dict, bytearray | None, int, bytes]:
     """The task from a moved camera: geo_process_root re-run with gLakituState's focus and
-    position replaced, its output in the pool's free middle, then the captured prologue, that
-    output and the captured HUD spliced at the first aligned address past it. Returns the
+    position replaced (and the roll and FOV when the camera names them: run_geo), its output in
+    the pool's free middle, then the captured prologue, that output and the captured HUD
+    spliced at the first aligned address past it. Returns the
     sandbox, the run and (RDRAM holding the spliced list, its address, the list); RDRAM is None
     after a violation or when the pool has no room for the splice."""
     moved, run = run_geo(frame, cpu, scratch_head, low_water, [], camera, trace=trace)

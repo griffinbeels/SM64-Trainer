@@ -59,6 +59,7 @@ TUNING_REGISTRIES = {
     "log": _UI / "logtuning.js",
     "selector": _UI / "selectortuning.js",
     "feed": _UI / "feedtuning.js",
+    "scenecamera": _UI / "scenecameratuning.js",
 }
 
 # The original single-surface name, kept as the climb's own path so nothing

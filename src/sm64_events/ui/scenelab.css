@@ -14,6 +14,8 @@
 .scene-lab-stage canvas { display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain; touch-action: none; }
 .scene-lab-stage canvas.is-movable { cursor: grab; }
 .scene-lab-stage canvas.is-movable:active { cursor: grabbing; }
+.scene-lab-stage canvas.is-picking, .scene-lab-stage canvas.is-picking:active { cursor: crosshair; }
+.scene-lab-stage canvas.is-flying, .scene-lab-stage canvas.is-flying:active { cursor: none; }
 .scene-lab-tag, .scene-lab-busy { position: absolute; top: 10px; padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,.6); font-size: .78rem; pointer-events: none; }
 .scene-lab-tag { left: 10px; }
 .scene-lab-tag.is-free { color: var(--gold-soft); }
@@ -26,6 +28,22 @@
 .scene-lab-quality { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); }
 .scene-lab-quality select { background: var(--surface-2); }
 .scene-lab-hint, .scene-lab-readout { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.scene-lab-hint.is-bad { color: var(--coral); }
+.scene-lab-speed { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.scene-lab-speed output { min-width: 5ch; text-align: center; color: var(--text); font-variant-numeric: tabular-nums; }
+.scene-lab-speed button { min-width: 34px; justify-content: center; }
+.scene-lab-tune { display: grid; gap: 8px; min-width: 0; }
+.scene-lab-tune-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.scene-lab-tune-head h3 { margin: 0 auto 0 0; font-size: 1rem; }
+.scene-lab-tune-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0 22px; }
+.scene-lab-tune-groups h2 { margin: 8px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border-soft);
+  color: var(--muted); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
+.scene-lab-tune .tune-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px; gap: 4px 8px; align-items: center;
+  margin-bottom: 8px; }
+.scene-lab-tune .tune-row > label { font-size: .78rem; cursor: help; }
+.scene-lab-tune .tune-row > input[type=number] { width: 100%; background: var(--surface); }
+.scene-lab-tune .tune-row > input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--gold); }
+.scene-lab-tune .tune-row.is-changed > label { color: var(--gold-soft); font-weight: 600; }
 .scene-lab-readout { font-variant-numeric: tabular-nums; }
 @container (max-width: 640px) {
   .scene-lab-quality { margin-left: 0; }

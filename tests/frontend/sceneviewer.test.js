@@ -1,16 +1,27 @@
 // @vitest-environment jsdom
 // The Scene viewer page (ui/components/sceneviewer.js) against a scripted
 // server: what it asks for, when, and what it shows. No renderer, GPU or
-// browser: the socket, fetch and canvas are stand-ins.
+// browser: the socket, fetch, canvas, pointer lock and animation frames are
+// stand-ins. The camera's math is components/scenecamera.js; the numbers it
+// feels with are pinned to REFERENCE below, never to the shipped defaults
+// (the Tune controls panel rewrites those).
 import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SceneViewer, SCENE_CAMERA, cameraOf, dollied, orbitFromPose, turned } from
+import { SceneViewer, hintFor, pictureFraction, speedWords } from
   "../../src/sm64_events/ui/components/sceneviewer.js";
+import { cameraOf, dollied, flightSpeed, flown, lookingAt, looked, orbitFromPose, slid, speedStepped, turned,
+  worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
+import { SCENE_CAMERA_DEFAULTS, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
 
+const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1, panPerPixel: 0.002,
+  dollyPerWheel: 0.002, closestDistance: 40, farthestDistance: 20000, flightSpeed: 1000, lookPerPixel: 0.004,
+  fastMultiplier: 5, slowMultiplier: 0.2, speedPerNotch: 1.5, levelPerSecond: 30, focusDistance: 600,
+  marioHeight: 100 };
 const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
-const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], mario: [40, 80, -60] };
-let sockets, opened, fetches;
+const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
+const PER_DEGREE = 65536 / 360;
+let sockets, opened, fetches, frames, locked;
 
 class FakeSocket {
   static OPEN = 1;
@@ -20,14 +31,16 @@ class FakeSocket {
   open() { this.readyState = 1; this.onopen?.(); }
   picture(request, extra = {}) {
     const header = new TextEncoder().encode(JSON.stringify({ id: request.id, session: request.session, frame: request.frame,
-      width: 2, height: 1, encoding: "raw", camera: request.camera ? "free" : "recorded", reason: null,
+      width: 4, height: 3, encoding: "raw", camera: request.camera ? "free" : "recorded", reason: null,
       timings: {}, server_ms: 3, ...extra }));
-    const buffer = new ArrayBuffer(4 + header.length + 6);
+    const buffer = new ArrayBuffer(4 + header.length + 36);
     new DataView(buffer).setUint32(0, header.length, true);
     new Uint8Array(buffer, 4).set(header);
     return this.onmessage({ data: buffer });
   }
   text(message) { this.onmessage({ data: JSON.stringify(message) }); }
+  last() { return this.sent[this.sent.length - 1]; }
+  pictures() { return this.sent.filter((message) => !message.kind); }
 }
 
 function respond(body, status = 200) {
@@ -37,9 +50,13 @@ function respond(body, status = 200) {
 beforeEach(() => {
   sockets = [];
   fetches = [];
+  frames = [];
+  locked = null;
+  setSceneCameraTuning(REFERENCE);
   opened = { session: 1, name: "bob-minute.sm64scene", fps: 30, frames: FRAMES, renderer_pid: 7,
     free_camera: { available: true, reason: null } };
   globalThis.WebSocket = FakeSocket;
+  globalThis.requestAnimationFrame = (step) => { frames.push(step); return frames.length; };
   globalThis.fetch = vi.fn((url, options = {}) => {
     fetches.push([url, options.method || "GET", options.body]);
     if (url === "/api/local-access") return respond({}, 404);
@@ -47,14 +64,25 @@ beforeEach(() => {
       ended: null, packages: [{ name: "bob-minute.sm64scene", bytes: 11 << 20 }] });
     if (url === "/api/scene-lab/open") return respond(opened);
     if (url === "/api/scene-lab/close") return respond({ closed: true });
+    if (url === "/api/tuning/scenecamera") return respond({ written: Object.keys(JSON.parse(options.body).values).length });
     return respond({}, 404);
   });
   HTMLCanvasElement.prototype.getContext = () => ({
     createImageData: (w, hgt) => ({ data: new Uint8ClampedArray(w * hgt * 4), width: w, height: hgt }),
     putImageData: () => {}, drawImage: () => {},
   });
+  HTMLCanvasElement.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 480 });
+  HTMLCanvasElement.prototype.setPointerCapture = vi.fn();
+  HTMLCanvasElement.prototype.releasePointerCapture = vi.fn();
+  HTMLCanvasElement.prototype.requestPointerLock = vi.fn(function lock() {
+    locked = this;
+    document.dispatchEvent(new Event("pointerlockchange"));
+    return Promise.resolve();
+  });
+  Object.defineProperty(document, "pointerLockElement", { configurable: true, get: () => locked });
+  document.exitPointerLock = vi.fn(() => { locked = null; document.dispatchEvent(new Event("pointerlockchange")); });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); setSceneCameraTuning(null); });
 
 async function openScene() {
   const page = render(h(SceneViewer, {}));
@@ -68,8 +96,31 @@ async function openScene() {
   const socket = sockets[0];
   socket.open();
   await waitFor(() => expect(socket.sent.length).toBe(1));
-  return { page, socket, root: page.container.querySelector(".scene-lab") };
+  const root = page.container.querySelector(".scene-lab");
+  return { page, socket, root, canvas: root.querySelector("canvas") };
 }
+
+// Free camera from `pose`: answers the pose question and the first picture.
+async function enterFree(page, socket, pose = POSE) {
+  await socket.picture(socket.sent[0]);
+  fireEvent.click(page.getByRole("button", { name: "Free camera" }));
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
+  socket.text({ id: socket.last().id, kind: "pose", pose, reason: null });
+  await waitFor(() => expect(socket.last().camera).toBeTruthy());
+  await socket.picture(socket.last());
+  return socket.last().camera;
+}
+
+// The page follows the pointer on pointerrawupdate where the browser has it (jsdom does).
+const move = (canvas, init) => fireEvent(canvas, new PointerEvent("pointerrawupdate", { bubbles: true, ...init }));
+const tick = async (at) => {
+  const due = frames.splice(0);
+  due.forEach((step) => step(at));
+  await new Promise((resolve) => { setTimeout(resolve, 0); });
+};
+const close = (a, b, digits = 6) => a.forEach((value, i) => expect(value).toBeCloseTo(b[i], digits));
+
+// ------------------------------------------------------------------ requests
 
 test("opening names a listed package, then asks for the first picture from the recorded camera", async () => {
   const { socket } = await openScene();
@@ -78,6 +129,8 @@ test("opening names a listed package, then asks for the first picture from the r
   expect(JSON.parse(open[2])).toEqual({ package: "bob-minute.sm64scene" });
   expect(socket.url).toMatch(/\/api\/scene-lab\/ws$/);
   expect(socket.sent[0]).toMatchObject({ session: 1, frame: 0, camera: null, encoding: "jpeg" });
+  expect(HTMLCanvasElement.prototype.requestPointerLock).not.toHaveBeenCalled();     // opening captures nothing
+  expect(HTMLCanvasElement.prototype.setPointerCapture).not.toHaveBeenCalled();
 });
 
 test("one picture is in flight at a time and the newest step wins", async () => {
@@ -122,54 +175,251 @@ test("the next picture is asked for while one decodes, and a late decode never c
   expect(page.container.querySelector(".scene-lab-readout").textContent).toContain("input to picture");
 });
 
+// ------------------------------------------------------------------ entering Free camera
+
 test("the free camera starts from the recorded camera, keeps its place across steps, and R returns", async () => {
   const { page, socket, root } = await openScene();
-  await socket.picture(socket.sent[0]);
-  fireEvent.click(page.getByRole("button", { name: "Free camera" }));
-  await waitFor(() => expect(socket.sent.length).toBe(2));
-  expect(socket.sent[1]).toMatchObject({ kind: "pose", frame: 0, session: 1 });
-  socket.text({ id: socket.sent[1].id, kind: "pose", pose: POSE, reason: null });
-  await waitFor(() => expect(socket.sent.length).toBe(3));
-  const first = socket.sent[2].camera;
-  POSE.focus.forEach((value, i) => expect(first.focus[i]).toBeCloseTo(value, 6));
-  POSE.position.forEach((value, i) => expect(first.position[i]).toBeCloseTo(value, 6));
-  await socket.picture(socket.sent[2]);
-  await waitFor(() => expect(page.container.querySelector(".scene-lab-tag").textContent).toBe("Free camera"));
+  const first = await enterFree(page, socket);
+  close(first.focus, POSE.focus);
+  close(first.position, POSE.position);
+  expect(page.container.querySelector(".scene-lab-tag").textContent).toBe("Free camera");
   fireEvent.keyDown(root, { key: "ArrowRight" });
-  await waitFor(() => expect(socket.sent.length).toBe(4));
-  expect(socket.sent[3]).toMatchObject({ frame: 1, camera: first });   // same world camera, next frame
-  await socket.picture(socket.sent[3]);
+  await waitFor(() => expect(socket.last().frame).toBe(1));
+  expect(socket.last().camera).toEqual(first);                    // same world camera, next frame
+  await socket.picture(socket.last());
   fireEvent.keyDown(root, { key: "r" });
-  await waitFor(() => expect(socket.sent.length).toBe(5));
-  expect(socket.sent[4]).toMatchObject({ frame: 1, camera: null });
+  await waitFor(() => expect(socket.last()).toMatchObject({ frame: 1, camera: null }));
 });
 
-test("Look at Mario points the camera at him and a fallback picture shows its reason", async () => {
+test.each([
+  ["tilted by a shake", { ...POSE, roll: -224 }],
+  ["nearly straight down", { ...POSE, focus: [0, 0, 0], position: [3, 1000, 2] }],
+  ["closer than the wheel allows", { ...POSE, focus: [0, 100, 0], position: [0, 110, 12] }],
+  ["zoomed out to 80 degrees", { ...POSE, fov: 80, roll: 37 }],
+])("entering from a camera %s draws exactly that camera: no jump", async (_label, pose) => {
   const { page, socket } = await openScene();
-  await socket.picture(socket.sent[0]);
-  fireEvent.click(page.getByRole("button", { name: "Free camera" }));
-  await waitFor(() => expect(socket.sent.length).toBe(2));
-  socket.text({ id: socket.sent[1].id, kind: "pose", pose: POSE, reason: null });
-  await waitFor(() => expect(socket.sent.length).toBe(3));
-  await socket.picture(socket.sent[2]);
+  const first = await enterFree(page, socket, pose);
+  close(first.focus, pose.focus, 9);
+  close(first.position, pose.position, 9);
+  expect(first.roll).toBe(pose.roll);
+  expect(first.fov).toBe(pose.fov);
+});
+
+test("orbit math keeps the camera it was given and clamps only what a movement asks for", () => {
+  const steep = orbitFromPose([0, 0, 0], [3, 1000, 2], { roll: 0, fov: 45 });
+  const limit = REFERENCE.steepestDegrees * Math.PI / 180;
+  expect(steep.pitch).toBeGreaterThan(limit);
+  expect(turned(steep, 0, 50, REFERENCE).pitch).toBe(steep.pitch);           // never steeper than it began
+  expect(turned(steep, 0, -1, REFERENCE).pitch).toBeLessThan(steep.pitch);   // and comes back without a snap
+  expect(turned(steep, 0, -1, REFERENCE).pitch).toBeGreaterThan(limit);
+  const level = orbitFromPose(POSE.focus, POSE.position);
+  expect(turned(level, 0, 1e6, REFERENCE).pitch).toBeCloseTo(limit, 12);
+  expect(dollied(level, 1e6, REFERENCE).dist).toBe(REFERENCE.farthestDistance);
+  expect(dollied(level, -1e6, REFERENCE).dist).toBe(REFERENCE.closestDistance);
+  const near = orbitFromPose([0, 100, 0], [0, 110, 12]);
+  expect(dollied(near, -1, REFERENCE).dist).toBeLessThan(REFERENCE.closestDistance);   // kept, still closer
+  expect(orbitFromPose([1, 2, 3], [1, 2, 3])).toBeNull();
+});
+
+test("a tilted view levels as you turn or fly, never on entry, a step, a slide or the wheel; Reset view brings it back", async () => {
+  const { page, socket, root, canvas } = await openScene();
+  const first = await enterFree(page, socket, { ...POSE, roll: 1000 });
+  expect(first.roll).toBe(1000);
+  fireEvent.keyDown(root, { key: "ArrowRight" });
+  await waitFor(() => expect(socket.last().frame).toBe(1));
+  expect(socket.last().camera.roll).toBe(1000);
+  await socket.picture(socket.last());
+  fireEvent.wheel(canvas, { deltaY: 100 });
+  await waitFor(() => expect(socket.last().camera.position).not.toEqual(first.position));
+  expect(socket.last().camera.roll).toBe(1000);
+  await socket.picture(socket.last());
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  move(canvas, { pointerId: 1, clientX: 110, clientY: 100, shiftKey: true });
+  await waitFor(() => expect(socket.last().camera.focus).not.toEqual(first.focus));
+  expect(socket.last().camera.roll).toBe(1000);                                 // a slide keeps the tilt
+  await socket.picture(socket.last());
+  move(canvas, { pointerId: 1, clientX: 120, clientY: 100 });
+  await waitFor(() => expect(socket.last().camera.roll).toBe(Math.round(1000 - 10 * REFERENCE.levelPerPixel * PER_DEGREE)));
+  await socket.picture(socket.last());
+  fireEvent.pointerUp(canvas, { pointerId: 1 });
+  fireEvent.click(page.getByRole("button", { name: "Reset view" }));
+  await waitFor(() => expect(socket.last().camera).toEqual(first));
+});
+
+// ------------------------------------------------------------------ flight
+
+async function startFlying(page, socket, canvas) {
+  await enterFree(page, socket);
+  fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
+  await waitFor(() => expect(page.container.querySelector(".scene-lab-hint").textContent).toContain("W A S D"));
+}
+
+test("holding the right button flies: W moves at a constant speed where the camera looks, and letting go stops it", async () => {
+  const { page, socket, root, canvas } = await openScene();
+  const keyBefore = socket.sent.length;
+  fireEvent.keyDown(root, { key: "w", code: "KeyW" });                         // not flying: W is nobody's
+  fireEvent.keyUp(root, { key: "w", code: "KeyW" });
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  expect(socket.sent.length).toBe(keyBefore);
+  await startFlying(page, socket, canvas);
+  expect(HTMLCanvasElement.prototype.requestPointerLock).toHaveBeenCalledTimes(1);
+  const start = socket.last().camera;
+  fireEvent.keyDown(root, { key: "w", code: "KeyW" });
+  await tick(5000);                                                             // the first step, from the key
+  await waitFor(() => expect(socket.last().camera.position).not.toEqual(start.position));
+  const first = socket.last().camera;
+  await socket.picture(socket.last());
+  await tick(5050);                                                             // 50 ms later
+  await waitFor(() => expect(socket.last().camera.position).not.toEqual(first.position));
+  const moved = socket.last().camera, view = [0, 1, 2].map((i) => start.focus[i] - start.position[i]);
+  const length = Math.hypot(...view), travelled = [0, 1, 2].map((i) => moved.position[i] - first.position[i]);
+  close(travelled, view.map((value) => value / length * REFERENCE.flightSpeed * 0.05), 6);
+  await socket.picture(socket.last());
+  fireEvent.keyUp(root, { key: "w", code: "KeyW" });
+  await tick(5100);
+  const after = socket.sent.length;
+  await tick(6000);
+  expect(frames.length).toBe(0);                                                // no coasting: the loop ended
+  expect(socket.sent.length).toBe(after);
+  fireEvent.pointerUp(canvas, { button: 2, buttons: 0, pointerId: 3 });
+  expect(document.exitPointerLock).toHaveBeenCalled();
+  expect(page.container.querySelector(".scene-lab-hint").textContent).not.toContain("W A S D");
+});
+
+test("Shift flies faster, Alt slower, and the wheel sets the speed while flying instead of moving closer", async () => {
+  const { page, socket, root, canvas } = await openScene();
+  await startFlying(page, socket, canvas);
+  const sentBefore = socket.sent.length;
+  fireEvent.wheel(canvas, { deltaY: -100 });                                    // one notch up: faster
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  expect(socket.sent.length).toBe(sentBefore);                                  // no dolly picture
+  expect(page.getByRole("group", { name: "Flight speed" }).textContent).toContain(speedWords(REFERENCE.speedPerNotch));
+  const start = socket.last().camera;
+  fireEvent.keyDown(root, { key: "e", code: "KeyE", shiftKey: true });
+  await tick(5000);
+  await waitFor(() => expect(socket.last().camera.focus[1]).not.toBe(start.focus[1]));
+  const first = socket.last().camera;
+  await socket.picture(socket.last());
+  await tick(5100);
+  await waitFor(() => expect(socket.last().camera.focus[1]).not.toBe(first.focus[1]));
+  const fast = socket.last().camera;
+  expect(fast.focus[1] - first.focus[1])
+    .toBeCloseTo(REFERENCE.flightSpeed * REFERENCE.speedPerNotch * REFERENCE.fastMultiplier * 0.1, 6);
+  await socket.picture(socket.last());
+  fireEvent.keyDown(root, { key: "Alt", code: "AltLeft", shiftKey: false, altKey: true });
+  await tick(5200);
+  await waitFor(() => expect(socket.last().camera.focus[1]).not.toBe(fast.focus[1]));
+  expect(socket.last().camera.focus[1] - fast.focus[1])
+    .toBeCloseTo(REFERENCE.flightSpeed * REFERENCE.speedPerNotch * REFERENCE.slowMultiplier * 0.1, 6);
+  fireEvent.click(page.getByRole("button", { name: "Reset" }));
+  expect(page.getByRole("group", { name: "Flight speed" }).textContent).toContain("1.0x");
+});
+
+test.each([
+  ["Esc", (root) => fireEvent.keyDown(root, { key: "Escape" })],
+  ["leaving the window", () => window.dispatchEvent(new Event("blur"))],
+  ["letting go of the right button", (root, canvas) => fireEvent.pointerUp(canvas, { button: 2, buttons: 0, pointerId: 3 })],
+  ["the browser ending the pointer lock", () => { locked = null; document.dispatchEvent(new Event("pointerlockchange")); }],
+])("%s stops every movement and gives the pointer back", async (_label, end) => {
+  const { page, socket, root, canvas } = await openScene();
+  await startFlying(page, socket, canvas);
+  fireEvent.keyDown(root, { key: "d", code: "KeyD" });
+  await tick(0);
+  await tick(50);
+  await waitFor(() => expect(frames.length).toBe(1));
+  end(root, canvas);
+  await tick(100);
+  const after = socket.sent.length;
+  await tick(400);
+  expect(socket.sent.length).toBe(after);
+  expect(frames.length).toBe(0);
+  expect(locked).toBeNull();
+  expect(page.container.querySelector(".scene-lab-hint").textContent).not.toContain("W A S D");
+});
+
+test("arrows still step and Space still plays while flying: one keyboard owner", async () => {
+  const { page, socket, root, canvas } = await openScene();
+  await startFlying(page, socket, canvas);
+  fireEvent.keyDown(root, { key: "ArrowRight", code: "ArrowRight" });
+  await waitFor(() => expect(socket.last().frame).toBe(1));
+  expect(socket.last().camera).toBeTruthy();
+  await socket.picture(socket.last());
+  fireEvent.keyDown(root, { key: " ", code: "Space" });
+  await waitFor(() => expect(page.getByRole("button", { name: "Pause" })).toBeTruthy());
+});
+
+// ------------------------------------------------------------------ focus
+
+test("Look at Mario puts the focus point on him at a useful distance and a fallback picture shows its reason", async () => {
+  const { page, socket } = await openScene();
+  const first = await enterFree(page, socket);
   fireEvent.click(page.getByRole("button", { name: "Look at Mario" }));
-  await waitFor(() => expect(socket.sent.length).toBe(4));
-  expect(socket.sent[3]).toMatchObject({ kind: "pose", frame: 0 });
-  socket.text({ id: socket.sent[3].id, kind: "pose", pose: POSE, reason: null });
-  await waitFor(() => expect(socket.sent.length).toBe(5));
-  const camera = socket.sent[4].camera;
-  expect(camera.focus).toEqual([40, 80 + SCENE_CAMERA.marioHeight, -60]);
-  await socket.picture(socket.sent[4], { camera: "recorded", reason: "This frame has no 3D scene to move around in." });
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose", frame: 0 }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  await waitFor(() => expect(socket.last().camera?.focus).toEqual([40, 80 + REFERENCE.marioHeight, -60]));
+  const camera = socket.last().camera;
+  expect(Math.hypot(...[0, 1, 2].map((i) => camera.position[i] - camera.focus[i])))
+    .toBeCloseTo(Math.min(REFERENCE.focusDistance, Math.hypot(300, 1200)), 6);
+  expect(first.roll).toBe(0);
+  await socket.picture(socket.last(), { camera: "recorded", reason: "This frame has no 3D scene to move around in." });
   await waitFor(() => expect(page.container.textContent).toContain("This frame has no 3D scene to move around in."));
+});
+
+test("Set focus asks where the clicked point is and turns the camera to orbit it, staying where it is", async () => {
+  const { page, socket, canvas } = await openScene();
+  const first = await enterFree(page, socket);
+  fireEvent.click(page.getByRole("button", { name: "Set focus" }));
+  expect(page.getByRole("button", { name: "Set focus" }).getAttribute("aria-pressed")).toBe("true");
+  expect(page.container.querySelector(".scene-lab-hint").textContent).toContain("Click a surface");
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 4, clientX: 160, clientY: 360 });
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pick", frame: 0, u: 0.25, v: 0.75 }));
+  expect(socket.last().camera).toEqual(first);
+  socket.text({ id: socket.last().id, kind: "pick", point: null, distance: null, reason: "Nothing is drawn there." });
+  await waitFor(() => expect(page.container.textContent).toContain("Nothing is drawn there."));
+  expect(page.getByRole("button", { name: "Set focus" }).getAttribute("aria-pressed")).toBe("true");   // still armed
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 4, clientX: 320, clientY: 240 });
+  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pick", u: 0.5, v: 0.5 }));
+  const point = [30, -40, -900];
+  socket.text({ id: socket.last().id, kind: "pick", point, distance: Math.hypot(...point), reason: null });
+  await waitFor(() => expect(socket.last().kind).toBeUndefined());
+  const moved = socket.last().camera, orbit = orbitFromPose(first.focus, first.position);
+  close(moved.focus, worldPoint(orbit, point), 6);
+  close(moved.position, first.position, 6);
+  expect(page.getByRole("button", { name: "Set focus" }).getAttribute("aria-pressed")).toBe("false");
+});
+
+test("a click maps onto the picture inside its letterbox", () => {
+  const canvas = document.createElement("canvas");
+  Object.assign(canvas, { width: 640, height: 480 });
+  canvas.getBoundingClientRect = () => ({ left: 100, top: 50, width: 800, height: 480 });   // pillarboxed
+  expect(pictureFraction(canvas, 150, 100)).toBeNull();                                   // in the bar
+  expect(pictureFraction(canvas, 180, 50 + 480)).toEqual({ u: 0, v: 1 });
+  expect(pictureFraction(canvas, 500, 290)).toEqual({ u: 0.5, v: 0.5 });
+});
+
+// ------------------------------------------------------------------ the rest of the page
+
+test("the hint teaches only what applies now", async () => {
+  const { page, socket, canvas } = await openScene();
+  const hint = () => page.container.querySelector(".scene-lab-hint").textContent;
+  expect(hint()).toContain("hold the right button");
+  await enterFree(page, socket);
+  expect(hint()).toContain("Drag to turn around the focus point");
+  fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
+  await waitFor(() => expect(hint()).toContain("W A S D"));
+  expect(hintFor({ freeAvailable: false, scene: { free_camera: { reason: "No state." } } })).toContain("No state.");
 });
 
 test("without a free camera the controls say why instead of doing nothing", async () => {
   opened.free_camera = { available: false, reason: "This recording carries no scene state." };
-  const { page } = await openScene();
+  const { page, canvas } = await openScene();
   expect(page.getByRole("button", { name: "Free camera" }).disabled).toBe(true);
   expect(page.getByRole("button", { name: "Look at Mario" }).disabled).toBe(true);
+  expect(page.getByRole("button", { name: "Set focus" }).disabled).toBe(true);
   expect(page.container.querySelector(".scene-lab-hint").textContent)
     .toContain("Only the recorded camera is available: This recording carries no scene state.");
+  fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
+  expect(HTMLCanvasElement.prototype.requestPointerLock).not.toHaveBeenCalled();
 });
 
 test("a closed scene shows the server's reason and offers Open again", async () => {
@@ -179,11 +429,46 @@ test("a closed scene shows the server's reason and offers Open again", async () 
   expect(page.getByRole("button", { name: "Open" })).toBeTruthy();
 });
 
-test("the orbit keeps the recorded camera's place and clamps what it must", () => {
-  const orbit = orbitFromPose(POSE.focus, POSE.position);
-  const camera = cameraOf(orbit);
-  POSE.position.forEach((value, i) => expect(camera.position[i]).toBeCloseTo(value, 6));
-  expect(turned(orbit, 0, 1e6).pitch).toBe(SCENE_CAMERA.pitchLimit);
-  expect(dollied(orbit, 1e6).dist).toBe(SCENE_CAMERA.maxDistance);
-  expect(dollied(orbit, -1e6).dist).toBe(SCENE_CAMERA.minDistance);
+test("Tune controls changes how the camera moves on the next movement and SAVE sends only what changed", async () => {
+  const { page, socket, canvas } = await openScene();
+  await enterFree(page, socket);
+  fireEvent.click(page.getByRole("button", { name: "Tune controls" }));
+  const panel = page.getByRole("region", { name: "Tune controls" });
+  const input = panel.querySelector("#orbitPerPixel");
+  expect(Number(input.value)).toBe(REFERENCE.orbitPerPixel);
+  fireEvent.change(input, { target: { value: "0.02" } });
+  const before = orbitFromPose(socket.last().camera.focus, socket.last().camera.position);
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  move(canvas, { pointerId: 1, clientX: 110, clientY: 100 });
+  await waitFor(() => expect(socket.last().camera.position).not.toEqual(cameraOf(before).position));
+  const after = orbitFromPose(socket.last().camera.focus, socket.last().camera.position);
+  expect(after.yaw - before.yaw).toBeCloseTo(-10 * 0.02, 9);
+  fireEvent.click(page.getByRole("button", { name: "SAVE" }));
+  await waitFor(() => expect(fetches.some(([url]) => url === "/api/tuning/scenecamera")).toBe(true));
+  const [, method, body] = fetches.find(([url]) => url === "/api/tuning/scenecamera");
+  expect(method).toBe("POST");
+  expect(Object.keys(JSON.parse(body).values)).toContain("orbitPerPixel");
+});
+
+// ------------------------------------------------------------------ the tuning reaches every movement
+
+test("every movement reads its tuning: the shipped values when none is given, a change moves the result", () => {
+  const orbit = orbitFromPose(POSE.focus, POSE.position, { roll: 500, fov: 45 });
+  const tilted = orbitFromPose(POSE.focus, POSE.position, { roll: 500, fov: 45 });
+  const cases = [
+    ["orbitPerPixel", (t) => turned(orbit, 7, 3, t)], ["steepestDegrees", (t) => turned(orbit, 0, 1e4, t)],
+    ["levelPerPixel", (t) => turned(tilted, 1, 0, t)], ["panPerPixel", (t) => slid(orbit, 7, 3, t)],
+    ["dollyPerWheel", (t) => dollied(orbit, 50, t)], ["closestDistance", (t) => dollied(orbit, -1e6, t)],
+    ["farthestDistance", (t) => dollied(orbit, 1e6, t)], ["lookPerPixel", (t) => looked(orbit, 7, 3, t)],
+    ["flightSpeed", (t) => flightSpeed(1, {}, t)], ["fastMultiplier", (t) => flightSpeed(1, { fast: true }, t)],
+    ["slowMultiplier", (t) => flightSpeed(1, { slow: true }, t)], ["speedPerNotch", (t) => speedStepped(1, 1, t)],
+    ["levelPerSecond", (t) => flown(tilted, { forward: 1 }, 0.01, 10, t)],
+    ["focusDistance", (t) => lookingAt(orbit, [0, 0, 0], t)], ["marioHeight", (t) => lookingAt(orbit, [0, 0, 0], t)],
+  ];
+  expect(new Set(cases.map(([key]) => key))).toEqual(new Set(Object.keys(SCENE_CAMERA_DEFAULTS)));
+  for (const [key, run] of cases) {
+    expect(run(undefined)).toEqual(run(SCENE_CAMERA_DEFAULTS));
+    const nudged = { ...SCENE_CAMERA_DEFAULTS, [key]: SCENE_CAMERA_DEFAULTS[key] * 0.9 + (key === "steepestDegrees" ? 0 : 0.001) };
+    expect(run(nudged), key).not.toEqual(run(SCENE_CAMERA_DEFAULTS));
+  }
 });
