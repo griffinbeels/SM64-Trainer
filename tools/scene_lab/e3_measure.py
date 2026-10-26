@@ -2,7 +2,7 @@
 
     uv run --with unicorn python tools/scene_lab/e3_measure.py --lab-config <lab.json> --package <name.sm64scene>
         [--out <report.json>] [--steps 60] [--seeks 40] [--drag-moves 180] [--play-seconds 4] [--seed 1]
-        [--ignore-gpu-user <image.exe> ...]
+        [--ignore-gpu-user <image.exe> ...] [--while-playing]
     ... e3_measure.py ... --fake      # a dry run of this instrument on protocol doubles: no renderer, no GPU
 
 It refuses first, before building or starting anything, while the GPU hold stands or a game
@@ -308,9 +308,11 @@ def free_camera(page: Page, count: int, steps: int, args, rng: random.Random) ->
 
 def measure(args) -> dict:
     if not args.fake:                    # first, before anything is built or started
-        gpu_gate.require_gpu(games=True, ignore=tuple(args.ignore_gpu_user))
+        gpu_gate.require_gpu(games=not args.while_playing, ignore=tuple(args.ignore_gpu_user))
     report: dict = {"package": args.package, "fake": args.fake, "machine": machine(),
                     "note": "page decode and draw excluded; see the viewer's readout"}
+    if args.while_playing:
+        report["while_playing"] = gpu_gate.game_reasons(tuple(args.ignore_gpu_user))
     if not args.fake:
         import viewer
         started = time.perf_counter()
@@ -354,6 +356,9 @@ def main(argv=None) -> int:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--ignore-gpu-user", action="append", default=[],
                         help="an image name whose GPU use is not a game (repeatable)")
+    parser.add_argument("--while-playing", action="store_true",
+                        help="Griffin said to run beside his game: skip the game check (the hold still "
+                             "applies) and record what was running, since it loads the numbers")
     parser.add_argument("--fake", action="store_true", help="protocol doubles instead of the renderer and "
                         "evaluator: checks this instrument, measures nothing real")
     args = parser.parse_args(argv)
