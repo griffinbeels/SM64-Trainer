@@ -3,7 +3,7 @@
     uv run --with unicorn python tools/scene_lab/e2_georender.py regen <frame_dir> <out_dir>
         --rom <z64> --map <MappingUS.map> [--orbit YAW,PITCH,DIST ...] [--focus-height H]
     uv run --with unicorn python tools/scene_lab/e2_georender.py from-tap <session>
-        --rom <z64> --map <MappingUS.map> [--every N] [--limit N] [--out report.json]
+        --rom <z64> --map <MappingUS.map> [--every N | --tasks I,J,...] [--limit N] [--out report.json]
 
 <frame_dir> is the savestate frame input (savestate_frames.py) of the gfx pool
 the RAM image last rendered (gGfxPool). The game's geo_process_root, its
@@ -39,7 +39,13 @@ scene state spans, the main pool's key and deltas), poisons everything else,
 regenerates the task's geo output in place and compares every byte the game
 wrote with the captured list. It also lists every byte the renderer read that
 the session did not capture, and checks the rebuild against the tap's full
-RDRAM copy of task 0. RAM images are private: outputs belong in scratch only.
+RDRAM copy of task 0. The tap copies after the render, so state the render
+consumed comes back from elsewhere: render-stepped state (painting ripples, the
+FOV and its shake, menu counters) from the previous game frame, and dropped
+throwMatrix pointers from the pool tail. The practice ROM's own code (Usamune's
+act-select hook) runs from the ROM file, located and proven equal by that full
+copy. A task with no area loaded, or a paused scene, has no geo output: "no
+scene". RAM images are private: outputs belong in scratch only.
 """
 from __future__ import annotations
 
@@ -60,6 +66,7 @@ from unicorn import mips_const as mips
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from provenance import boot_copied_code  # noqa: E402
 from sm64_events.memory.layout import layout_for  # noqa: E402
 from tap import GFX_POOL_BYTES  # noqa: E402
 
@@ -77,17 +84,19 @@ SYMBOLS = ("geo_process_root", "geo_process_object", "geo_process_held_object", 
            "gGlobalTimer", "gCurrentArea", "D_8032CE74", "D_8032CE78", "gFBSetColor",
            "gAreaUpdateCounter", "gCurrLevelNum", "gDisplayListHead", "gGfxPoolEnd", "gGfxPool",
            "gMarioStates", "sSegmentTable", "gDisplayListHeap", "gLakituState", "gObjectPool",
-           "gGfxPools", "sFloorAlignMatrix")
+           "gGfxPools", "sFloorAlignMatrix", "gWarpTransition")
 LAYOUT_ROWS_FOR = {"gGlobalTimer": "global_timer", "gCurrentArea": "current_area_pointer",
                    "gAreaUpdateCounter": "area_update_counter", "gCurrLevelNum": "curr_level",
                    "gMarioStates": "mario_struct", "gObjectPool": "object_pool"}
 US: dict[str, int] = {}
 CODE_SEGMENTS: list[tuple[str, int, int, int]] = []   # ROM-loaded images: (name, start, size, ROM offset)
+BOOT_CODE: list[tuple[str, int, int, int]] = []       # the practice ROM's own code (boot_copied_code)
 REGIONS: list[tuple[str, int, int]] = []              # read/write-set classification: (name, start, end)
 OBJECT_BYTES, OBJECT_COUNT = 0x260, 240
 LAKITU_FOCUS, LAKITU_POS = 0x80, 0x8C
 MARIO_POS = 0x3C
 OBJ_BEHAVIOR = 0x20C
+WARP_PAUSE_RENDERING = 3           # struct WarpTransition {u8 isActive, type, time, pauseRendering; ...}
 
 
 def be_from_pj64(data: bytes) -> bytes:
@@ -201,7 +210,7 @@ class Sandbox:
         if address < 0x80000400 or phys(address) + size > RDRAM_BYTES:
             return None  # exception vectors (or beyond RDRAM) never run here
         code = bytes(self.uc.mem_read(phys(address), size))
-        for name, start, length, rom_offset in (*CODE_SEGMENTS, *self.loaded):
+        for name, start, length, rom_offset in (*CODE_SEGMENTS, *BOOT_CODE, *self.loaded):
             if start <= address and address + size <= start + length:
                 at = rom_offset + address - start
                 return name if self.rom[at:at + size] == code else None
@@ -865,6 +874,48 @@ def with_throw_matrices(frame: TapFrame, pointers: list[tuple]) -> TapFrame:
     return TapFrame(frame.dir, type("Task", (), {"task": frame.task_words})(), bytes(ram))
 
 
+RESTORE_ROUNDS = 6
+
+
+def restore_render_state(frame: TapFrame, previous: tuple[bytes, np.ndarray], rom: bytes, fcr31: int,
+                         known: np.ndarray, layout: dict, baseline: dict) -> tuple[TapFrame, dict, np.ndarray]:
+    """Put back the state the original render read and then stepped.
+
+    Some render callbacks draw from a value and then advance it: geo_painting_draw draws, then
+    painting_update_ripple_state moves rippleTimer and currRippleMag on; geo_camera_fov steps
+    sFOVState's FOV and its shake phase; the title logo, fade and file-select callbacks count
+    frames. The tap copies after the render, so a re-run draws one step ahead. For state only
+    the render writes, the pre-render value is the previous game frame's post-render copy.
+    Candidates are bytes this render read before writing that changed since that copy, outside
+    the object pool (the update's own state; the per-object animation step is idempotent per
+    frame) and the gfx pools (per-frame output). A candidate keeps the previous value only while
+    re-rendering from it reproduces the captured post-render byte; the rest are dropped until
+    the set settles. The captured list is not consulted.
+    """
+    prev_ram, prev_known = previous
+    ram, old = np.frombuffer(frame.ram, np.uint8), np.frombuffer(prev_ram, np.uint8)
+    keep = (np.frombuffer(bytes(baseline["sandbox"].first), np.uint8) == 1) & known & prev_known & (ram != old)
+    pool = phys(US["gObjectPool"])
+    keep[pool:pool + OBJECT_BYTES * OBJECT_COUNT] = False
+    keep[phys(US["gGfxPools"]):phys(US["gGfxPools"]) + 2 * (GFX_POOL_BYTES + 0x50)] = False
+    for name in ("gDisplayListHead", "gGfxPoolEnd"):   # the evaluator sets these itself
+        keep[phys(US[name]):phys(US[name]) + 4] = False
+    nothing = np.zeros(RDRAM_BYTES, bool)
+    for _ in range(RESTORE_ROUNDS):
+        if not keep.any():
+            return frame, baseline, nothing
+        trial_frame = TapFrame(frame.dir, type("Task", (), {"task": frame.task_words})(),
+                               np.where(keep, old, ram).tobytes())
+        trial = regenerate(trial_frame, rom, fcr31, known, layout)
+        if trial["run"]["violations"]:
+            return frame, baseline, nothing
+        stale = keep & (trial["out"] != ram)
+        if not stale.any():
+            return trial_frame, trial, keep
+        keep &= ~stale
+    return frame, baseline, nothing
+
+
 def regenerate(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, layout: dict) -> dict:
     """One in-place regeneration of the task's geo output, compared with the capture."""
     geo_start, top, pre, low_water = layout["geo_start"], layout["top"], layout["pre"], layout["low_water"]
@@ -891,26 +942,19 @@ def regenerate(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, layou
     return result
 
 
-def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbols,
-               orbits: list[str] = (), sink=None) -> dict:
-    """Regenerate one captured task's geo output in place and compare every byte the game wrote
-    with what the tap captured; list every byte the renderer read that the tap did not capture."""
-    main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
-    pool = frame.word(US["gGfxPool"])
-    entry = {"global_timer": frame.word(US["gGlobalTimer"]), "pool": f"{pool:08x}", "data_ptr": f"{main:08x}"}
-    if pool != main or frame.word(US["gDisplayListHead"]) != main + size:
-        return {**entry, "status": "not parked after this pool's render"}
-    top, low_water = pool + GFX_POOL_BYTES, frame.word(US["gGfxPoolEnd"])
-    try:
-        geo_start, pre = find_geo_start(frame.ram, phys(main), size, phys(top))
-    except RuntimeError as error:
-        return {**entry, "status": str(error)}
-    layout = {"geo_start": geo_start | 0x80000000, "top": top, "pre": pre, "low_water": low_water}
-    entry["update_allocations"] = {"bytes": pre, "captured": int(known[phys(top - pre):phys(top)].sum())}
+def consumed_state(frame: TapFrame, previous: tuple | None, rom: bytes, fcr31: int, known: np.ndarray,
+                   layout: dict, symbols) -> tuple[TapFrame, dict, dict]:
+    """Regenerate from the state the original render consumed: render-stepped state from the
+    previous game frame (tried when the post-render state does not reproduce the list), then each
+    throwMatrix pointer the render let go of."""
     result = regenerate(frame, rom, fcr31, known, layout)
+    restored = np.zeros(RDRAM_BYTES, bool)
+    if previous is not None and not result["run"]["violations"] and any(result["differing"].values()):
+        frame, result, restored = restore_render_state(frame, previous, rom, fcr31, known, layout, result)
     # The source capture decides each throwMatrix the render consumed: keep a proposed pointer
     # only when it brings the regenerated list closer to the captured one.
     chosen = []
+    top, pre = layout["top"], layout["pre"]
     for proposal in restore_throw_matrices(frame, known, (top - pre, top)):
         if not result["run"]["violations"] and not any(result["differing"].values()):
             break
@@ -920,9 +964,37 @@ def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbo
             chosen.append(proposal)
             result = trial
     frame = with_throw_matrices(frame, chosen) if chosen else frame
-    entry["throw_matrices_restored"] = [
-        {"slot": (obj - US["gObjectPool"]) // OBJECT_BYTES, "from": f"{address:08x} {source}"}
-        for obj, address, source in chosen]
+    notes = {"render_state_restored": [{"range": f"{0x80000000 | lo:08x}-{0x80000000 | hi:08x}",
+                                        "label": label(lo, symbols, None)} for lo, hi in ranges(restored)],
+             "throw_matrices_restored": [
+                 {"slot": (obj - US["gObjectPool"]) // OBJECT_BYTES, "from": f"{address:08x} {source}"}
+                 for obj, address, source in chosen]}
+    return frame, result, notes
+
+
+def check_task(frame: TapFrame, rom: bytes, fcr31: int, known: np.ndarray, symbols,
+               orbits: list[str] = (), sink=None, previous: tuple | None = None) -> dict:
+    """Regenerate one captured task's geo output in place and compare every byte the game wrote
+    with what the tap captured; list every byte the renderer read that the tap did not capture.
+    previous is the previous game frame's (RDRAM, known mask), when the session holds it."""
+    main, size = frame.meta["task"]["data_ptr"], frame.meta["task"]["data_size"]
+    pool = frame.word(US["gGfxPool"])
+    entry = {"global_timer": frame.word(US["gGlobalTimer"]), "pool": f"{pool:08x}", "data_ptr": f"{main:08x}"}
+    if pool != main or frame.word(US["gDisplayListHead"]) != main + size:
+        return {**entry, "status": "not parked after this pool's render"}
+    top, low_water = pool + GFX_POOL_BYTES, frame.word(US["gGfxPoolEnd"])
+    try:
+        geo_start, pre = find_geo_start(frame.ram, phys(main), size, phys(top))
+    except RuntimeError as error:
+        # render_game calls geo_process_root only with an area loaded (not at boot or during a
+        # level load) and no finished warp transition pausing the scene: a clear screen only.
+        if not frame.word(US["gCurrentArea"]) or frame.ram[phys(US["gWarpTransition"]) + WARP_PAUSE_RENDERING]:
+            return {**entry, "status": "no scene"}
+        return {**entry, "status": str(error)}
+    layout = {"geo_start": geo_start | 0x80000000, "top": top, "pre": pre, "low_water": low_water}
+    entry["update_allocations"] = {"bytes": pre, "captured": int(known[phys(top - pre):phys(top)].sum())}
+    frame, result, notes = consumed_state(frame, previous, rom, fcr31, known, layout, symbols)
+    entry.update(notes)
     run, outside = result["run"], result["outside"]
     entry.update({"level": run["level"], "instructions": run["instructions"], "violations": run["violations"],
                   "read_bytes_not_captured": int(outside.sum()),
@@ -960,6 +1032,16 @@ def rom_images(rom: bytes) -> tuple[np.ndarray, np.ndarray]:
     return image, known
 
 
+def first_full_copy(tap, session: Path) -> bytes | None:
+    """The tap's full RDRAM copy written ahead of the session's first task, big-endian."""
+    for record in tap.read_records(session / "tap.bin"):
+        if isinstance(record, tuple) and record[0] == "full":
+            return be_from_pj64(record[2])
+        if isinstance(record, tap.Task):
+            return None
+    return None
+
+
 def frame_sink(args, header: dict, vi: dict, task):
     """Writes one task's frame inputs replay.py renders: what the session holds, the rest poison."""
     def sink(name: str, ram: bytes, data_ptr: int, data_size: int) -> str:
@@ -990,6 +1072,35 @@ def session_vi(tap, args) -> dict | None:
     return vi
 
 
+def session_images(tap, session: Path, rom: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple | None]:
+    """What fills the bytes a session did not capture: the ROM's code images (known: the run may
+    read them), and the practice ROM's own code from the ROM's bytes as code only (fill, not
+    known: a read of it as data still counts as uncaptured)."""
+    image, image_known = rom_images(rom)
+    code = boot_copied_code(rom, first_full_copy(tap, session))
+    fill = image_known.copy()
+    BOOT_CODE[:] = [("boot-copied code", *code)] if code else []
+    if code:
+        start, length, rom_offset = code
+        image[phys(start):phys(start) + length] = np.frombuffer(rom[rom_offset:rom_offset + length], np.uint8)
+        fill[phys(start):phys(start) + length] = True
+    return image, image_known, fill, code
+
+
+def tap_summary(args, results: list[dict], code: tuple | None) -> int:
+    statuses: dict[str, int] = {}
+    for entry in results:
+        statuses[entry["status"]] = statuses.get(entry["status"], 0) + 1
+    summary = {"session": str(args.session), "tasks_checked": len(results), "statuses": statuses,
+               "boot_copied_code": {"start": f"{code[0]:08x}", "bytes": code[1], "rom_offset": f"{code[2]:06x}"}
+               if code else None}
+    print(json.dumps(summary))
+    if args.out:
+        args.out.write_text(json.dumps({"summary": summary, "tasks": results}, indent=2) + "\n", encoding="utf-8")
+    passing = statuses.get("identical", 0) + statuses.get("no scene", 0)
+    return 0 if results and passing == len(results) else 2
+
+
 def from_tap(args) -> int:
     """E2-live: every captured task regenerated from the session's bytes and the ROM alone."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -999,7 +1110,7 @@ def from_tap(args) -> int:
     header = tap.session_header(args.session)
     if be_from_pj64(bytes.fromhex(header["rom_header"])) != rom[:0x40]:
         raise SystemExit("the session's ROM header does not match --rom")
-    image, image_known = rom_images(rom)
+    image, image_known, fill, code = session_images(tap, args.session, rom)
     vi = session_vi(tap, args)
     fulls: dict[int, bytes] = {}
 
@@ -1009,10 +1120,18 @@ def from_tap(args) -> int:
                 fulls[record[1]] = record[2]
             yield record
 
-    results = []
+    def rebuilt(ram: np.ndarray, known: np.ndarray) -> np.ndarray:
+        ram_be = np.frombuffer(be_from_pj64(ram.tobytes()), np.uint8)   # captured spans are whole words
+        return np.where(fill & ~known, image, ram_be)
+
+    def timer(ram_be: np.ndarray) -> int:
+        return struct.unpack_from(">I", ram_be, phys(US["gGlobalTimer"]))[0]
+
+    results, last = [], None
     states = tap.scene_states(keep_fulls(tap.read_records(args.session / "tap.bin")), int(header["rdram_size"]))
     for index, (task, regions, ram, known) in enumerate(states):
-        if index % args.every:
+        last, before = (ram, known), last
+        if (task.fields["task_index"] not in args.tasks) if args.tasks else index % args.every:
             continue
         if args.limit and len(results) >= args.limit:
             break
@@ -1021,21 +1140,18 @@ def from_tap(args) -> int:
         if full is not None:   # the tap's full RDRAM copy, taken at the same instant
             entry["captured_bytes_differing_from_full_copy"] = int(
                 (known & (ram != np.frombuffer(full, np.uint8, known.size))).sum())
-        ram_be = np.frombuffer(be_from_pj64(ram.tobytes()), np.uint8)   # captured spans are whole words
-        ram_be = np.where(image_known & ~known, image, ram_be)
+        ram_be = rebuilt(ram, known)
+        previous = None
+        if before is not None:   # the previous task's state, when it is the previous game frame
+            before_be = rebuilt(*before)
+            if timer(before_be) + 1 == timer(ram_be):
+                previous = (before_be.tobytes(), before[1] | image_known)
         sink = frame_sink(args, header, vi, task) if args.frames else None
         entry.update(check_task(TapFrame(args.session, task, ram_be.tobytes()), rom, args.fcr31,
-                                known | image_known, symbols, args.orbit, sink))
+                                known | image_known, symbols, args.orbit, sink, previous))
         results.append(entry)
         print(json.dumps({k: v for k, v in entry.items() if k != "reads_not_captured"}))
-    statuses: dict[str, int] = {}
-    for entry in results:
-        statuses[entry["status"]] = statuses.get(entry["status"], 0) + 1
-    summary = {"session": str(args.session), "tasks_checked": len(results), "statuses": statuses}
-    print(json.dumps(summary))
-    if args.out:
-        args.out.write_text(json.dumps({"summary": summary, "tasks": results}, indent=2) + "\n", encoding="utf-8")
-    return 0 if results and statuses.get("identical") == len(results) else 2
+    return tap_summary(args, results, code)
 
 
 def main() -> int:
@@ -1057,6 +1173,8 @@ def main() -> int:
     live.add_argument("--rom", type=Path, required=True)
     live.add_argument("--map", type=Path, required=True)
     live.add_argument("--every", type=int, default=1, help="check every n-th task")
+    live.add_argument("--tasks", type=lambda value: {int(part) for part in value.split(",")}, default=set(),
+                      help="check only these task indices (comma-separated), instead of --every")
     live.add_argument("--limit", type=int, default=0)
     live.add_argument("--out", type=Path, help="write the per-task report here (private scratch)")
     live.add_argument("--frames", type=Path, help="write each checked task (captured and orbits) as frame "

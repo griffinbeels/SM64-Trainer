@@ -19,8 +19,11 @@ import json
 import struct
 from pathlib import Path
 
+import numpy as np
+
 MASK = 0x7FFFFF
 GFX_POOLS = ((0x207D00, 0x214550), (0x214550, 0x220DA0))   # US/Usamune gGfxPools, measured
+EXPANSION_RAM = 0x400000   # RDRAM's upper 4 MiB: a practice ROM copies its own code here at boot
 
 
 def mio0(rom: bytes, at: int) -> bytes:
@@ -82,6 +85,29 @@ def segment_loads(rom: bytes) -> list[dict]:
 def big_endian(rdram: bytes, begin: int, end: int) -> bytes:
     words = struct.unpack_from("<%dI" % ((end - begin) // 4), rdram, begin)
     return struct.pack(">%dI" % len(words), *words)
+
+
+def boot_copied_code(rom: bytes, full_be: bytes | None) -> tuple[int, int, int] | None:
+    """The practice ROM's own code image: what it copied from the cartridge into expansion RAM.
+
+    Usamune's act selector calls it during geo processing (its print_course_number hook). A
+    full big-endian RDRAM copy locates it: the 64 bytes at the expansion base occur once in the
+    ROM, and the image runs while every word still equals the ROM (on Usamune v1.93u up to its
+    settings at 0x80417B4C). Returns (virtual start, bytes, ROM offset), or None when there is no
+    copy or it matches no single ROM window. A consumer loads these bytes from its own ROM file:
+    the copy only proves they were the game's, it never supplies code.
+    """
+    if full_be is None or len(full_be) < EXPANSION_RAM + 64:
+        return None
+    anchor = full_be[EXPANSION_RAM:EXPANSION_RAM + 64]
+    at = rom.find(anchor)
+    if not any(anchor) or at < 0 or at % 4 or rom.find(anchor, at + 1) >= 0:
+        return None
+    ram = np.frombuffer(full_be, ">u4")[EXPANSION_RAM // 4:]
+    image = np.frombuffer(rom, ">u4", (len(rom) - at) // 4, at)
+    count = min(len(ram), len(image))
+    differ = np.flatnonzero(ram[:count] != image[:count])
+    return 0x80000000 | EXPANSION_RAM, 4 * (int(differ[0]) if len(differ) else count), at
 
 
 def rsp_segments(rdram: bytes, dl: int) -> dict[int, int]:

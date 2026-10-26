@@ -1180,7 +1180,10 @@ scene graph, surfaces and models live. The [[scene tap]] copies it with each
 task: the globals and the pool whole every time, the tail of the task's own
 graphics pool (where the update leaves the floor-aligned matrices the drawing
 places walkers with), the main pool whole at each new level and then only its
-blocks that changed. Running the game's own code
+blocks that changed. A few callbacks draw from a value and then step it
+(painting ripples, the camera's field of view and its shake, title and menu
+counters); the copy holds the stepped value, so the value the drawing used is
+the previous [[frame]]'s copy. Running the game's own code
 offline over the ROM, a task's [[task closure]] and its scene state, with
 every other byte overwritten, rebuilds that task's display list byte for byte,
 and a moved camera reads nothing else (M4 experiment E2, 2026-10-24, on two
