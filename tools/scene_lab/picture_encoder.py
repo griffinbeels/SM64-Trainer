@@ -175,7 +175,10 @@ def serve() -> int:
             name = raw_name.rstrip(b"\0").decode("ascii")
             memory = attached.get(name)
             if memory is None:
-                memory = attached[name] = shared_memory.SharedMemory(name=name, track=False)
+                # track= exists from Python 3.13; 3.12 (the project's floor) has no resource
+                # tracker for shared memory on Windows, so attaching there tracks nothing anyway.
+                untracked = {"track": False} if sys.version_info >= (3, 13) else {}
+                memory = attached[name] = shared_memory.SharedMemory(name=name, **untracked)
             size = width * height * 3
             if not (0 < size and offset + size <= memory.size and 1 <= quality <= 100):
                 raise ValueError("the request lies outside the shared picture memory")
