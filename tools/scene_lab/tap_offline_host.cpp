@@ -4,12 +4,14 @@
  * the live tap would have written for that RDRAM: same walker, same regions,
  * same record format, same timings measured on this machine.
  *
- *   tap_offline_host <lab_root> <frame_dir>...
+ *   tap_offline_host <lab_root> [vi:]<frame_dir>...
  *
  * <lab_root> stands in for %LOCALAPPDATA%: the arming file must already be at
  * <lab_root>\SM64Trainer\scene-lab\armed.txt (tools/scene_lab/tap.py offline
  * writes it), and the session lands beside it. Frames are fed in the order
- * given, one ProcessDList each; repeat a folder to repeat a task. Exit 0 when
+ * given, one ProcessDList each; repeat a folder to repeat a task. A folder
+ * prefixed vi: is one UpdateScreen instead (a VI with no new task), which is
+ * where the tap's VI regions are copied. Exit 0 when
  * every frame was offered to an armed tap; the session's summary.txt says
  * what it recorded. */
 #include <windows.h>
@@ -91,7 +93,9 @@ int main(int argc, char **argv) {
     st_rom_open();
     int fed = 0;
     for (int i = 2; i < argc; ++i) {
-        const std::string dir = argv[i];
+        std::string dir = argv[i];
+        const bool vi_only = dir.rfind("vi:", 0) == 0;
+        if (vi_only) dir = dir.substr(3);
         std::vector<uint8_t> ram = read_file(dir + "\\rdram.bin"), sp = read_file(dir + "\\dmem.bin");
         std::vector<uint8_t> json = read_file(dir + "\\frame.json");
         if (ram.size() != (8u << 20) || sp.size() != sizeof dmem || json.empty()) {
@@ -101,7 +105,8 @@ int main(int argc, char **argv) {
         memcpy(rdram, ram.data(), ram.size());
         memcpy(dmem, sp.data(), sp.size());
         *info.VI_ORIGIN_REG = json_number(std::string(json.begin(), json.end()), "origin");
-        st_process_dlist();
+        if (vi_only) st_update_screen(nullptr);
+        else st_process_dlist();
         ++fed;
     }
     st_close(120000);

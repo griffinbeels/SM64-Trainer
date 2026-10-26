@@ -1,6 +1,7 @@
 """Arm, read and replay scene-tap sessions (plugin/gfxwrap/scene_tap.cpp).
 
     tap.py arm [--seconds N] [--no-reference] [--reference-every N] [--full-every N] [--version us|jp]
+        [--no-scene-state] [--no-audio-state]
     tap.py disarm
     tap.py summary <session>
     tap.py frames <session> <out> [--pattern 0xA5] [--limit N] [--every N] [--pair origin|next]
@@ -17,7 +18,10 @@ names the scene state spans (layout.py's scene_* and main_pool_* rows, plus the
 act selector's save_buffer_* and usamune_state_* where the layout has them) the tap
 copies with each task, so SM64's own renderer can re-run offline (E2-live:
 tools/scene_lab/e2_georender.py from-tap; `scene_states` rebuilds each task's
-RDRAM from a session). `offline` runs the REAL producer (scene_tap.cpp, through
+RDRAM from a session), and the audio spans (layout.py's audio_* and sp_task_*
+rows) plus SP DMEM it copies at every VI, so the RSP's audio task can re-run
+offline (M4 stems: stems_probe.py from-tap; `vi_states` rebuilds each VI's
+state). `offline` runs the REAL producer (scene_tap.cpp, through
 tap_offline_host.cpp) over frame inputs and writes a session exactly as the
 live tap would, under <lab_root> instead of %LOCALAPPDATA%. Sessions and
 frames are private RAM images: keep them out of the repository.
@@ -45,9 +49,12 @@ from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 from sm64_events.memory.layout import layout_for  # noqa: E402
 
 MAGIC = 0x31544C53
-REC_PAD, REC_TASK, REC_PRESENT, REC_FULL, REC_REGIONS = 0, 1, 2, 3, 4
+REC_PAD, REC_TASK, REC_PRESENT, REC_FULL, REC_REGIONS, REC_VI = 0, 1, 2, 3, 4, 5
 REGION_KINDS = ("task", "level_key", "level_delta")
 REGION_FIELDS = ("task_index", "kind", "count", "data_bytes", "copy_ns", "scan_ns", "block_bytes", "reserved")
+VI_KINDS = ("vi_key", "vi_delta")
+VI_FIELDS = ("vi_index", "kind", "count", "data_bytes", "total_ns", "scan_ns", "block_bytes", "tasks")
+DMEM_BEGIN, DMEM_BYTES = 0x04000000, 0x1000      # vi_dmem: SP DMEM recorded at its physical address
 # The spans the scene renderer reads (layout.py rows, [start, end)): copied
 # whole with every task, and the main pool as a level region (key + deltas).
 SCENE_SPANS = (("scene_data_start", "scene_data_end"), ("scene_bss_start", "scene_bss_end"),
@@ -57,6 +64,11 @@ SCENE_LEVEL_SPANS = (("main_pool_start", "main_pool_end"),)
 # it: the act selector's coin score (gSaveBuffer) and Usamune's settings and
 # counters its act-select hook prints. A version without them loses those menus.
 SCENE_OPTIONAL_SPANS = (("save_buffer_start", "save_buffer_end"), ("usamune_state_start", "usamune_state_end"))
+# Copied at every VI with SP DMEM (M4 stems): the audio task the game just dispatched,
+# whole, before the RSP runs it, and at the next VI what the RSP wrote.
+AUDIO_SPANS = (("audio_heap_start", "audio_heap_end"), ("audio_globals_start", "audio_globals_end"),
+               ("sp_task_queue_start", "sp_task_queue_end"), ("sp_task_messages_start", "sp_task_messages_end"),
+               ("sp_task_pointers_start", "sp_task_pointers_end"))
 # SM64's gfx pool (GFX_POOL_SIZE: 6400 commands, every version) starts at a task's data pointer.
 # The update allocates from its top before geo_process_root draws: obj_orient_graph's floor-aligned
 # matrices, which the render reads through throwMatrix and then lets go of (E2-live). The tap copies
@@ -96,6 +108,16 @@ class Regions:
     kind: str           # REGION_KINDS
     segments: tuple     # the task's 16 RSP segment bases
     spans: list         # (physical begin, bytes)
+    data: bytes         # the spans' bytes, in order, as Project64 stores them
+
+
+@dataclass
+class ViRegions:
+    sequence: int
+    qpc: int
+    fields: dict
+    kind: str           # VI_KINDS
+    spans: list         # (physical begin, bytes); DMEM_BEGIN and up is SP DMEM
     data: bytes         # the spans' bytes, in order, as Project64 stores them
 
 
@@ -160,6 +182,16 @@ def _parse_record(kind: int, sequence: int, qpc: int, body: memoryview):
         at = 96 + 8 * fields["count"]
         return Regions(sequence, qpc, fields, REGION_KINDS[fields["kind"]], segments, spans,
                        bytes(body[at:at + fields["data_bytes"]]))
+    if kind == REC_VI:
+        fields = dict(zip(VI_FIELDS, struct.unpack_from("<8I", body, 0), strict=True))
+        if fields["kind"] >= len(VI_KINDS) or 32 + 8 * fields["count"] + fields["data_bytes"] > len(body):
+            raise ValueError(f"corrupt VI record {sequence}")
+        spans = [struct.unpack_from("<II", body, 32 + 8 * i) for i in range(fields["count"])]
+        if sum(size for _, size in spans) != fields["data_bytes"]:
+            raise ValueError(f"VI record {sequence}: its spans and its data disagree")
+        at = 32 + 8 * fields["count"]
+        return ViRegions(sequence, qpc, fields, VI_KINDS[fields["kind"]], spans,
+                         bytes(body[at:at + fields["data_bytes"]]))
     return None
 
 
@@ -246,6 +278,18 @@ def scene_state_lines(layout) -> list[str]:
     return lines
 
 
+def audio_state_lines(layout) -> list[str]:
+    """Arming lines for the audio task's state at every VI (M4 stems), or none when
+    this version's layout lacks any of the spans."""
+    lines = []
+    for start_field, end_field in AUDIO_SPANS:
+        start, end = layout.value(start_field), layout.value(end_field)
+        if start is None or end is None:
+            return []
+        lines.append(f"vi_region={start & 0x1FFFFFFF:x}:{end - start}")
+    return [*lines, "vi_dmem=1"]
+
+
 def arming_text(args) -> str:
     layout = layout_for(args.version)
     lines = [f"seconds={args.seconds}", f"reference={0 if args.no_reference else 1}",
@@ -259,6 +303,8 @@ def arming_text(args) -> str:
     lines.append("# identity=" + ",".join(names))   # the tap ignores comment lines
     if not args.no_scene_state:
         lines += scene_state_lines(layout)
+    if not getattr(args, "no_audio_state", False):
+        lines += audio_state_lines(layout)
     return "\n".join(lines) + "\n"
 
 
@@ -328,13 +374,70 @@ def scene_states(records, rdram_size: int):
         yield (pending[0], pending[1], *state.task_ram(pending[0], pending[1]))
 
 
+class ViState:
+    """RDRAM and SP DMEM as the VI regions last recorded them, in Project64's
+    word order: a key rewrites every span, a delta patches its blocks."""
+
+    def __init__(self, rdram_size: int):
+        self.ram = np.zeros(rdram_size, np.uint8)
+        self.known = np.zeros(rdram_size, bool)
+        self.dmem = np.zeros(DMEM_BYTES, np.uint8)
+        self.dmem_known = False
+
+    def apply(self, record: ViRegions) -> None:
+        at = 0
+        for begin, size in record.spans:
+            chunk = np.frombuffer(record.data, np.uint8, size, at)
+            if begin >= DMEM_BEGIN:
+                if begin - DMEM_BEGIN + size > DMEM_BYTES:
+                    raise ValueError(f"VI record {record.sequence}: a span leaves SP DMEM")
+                self.dmem[begin - DMEM_BEGIN:begin - DMEM_BEGIN + size] = chunk
+                self.dmem_known = True
+            else:
+                if begin + size > len(self.ram):
+                    raise ValueError(f"VI record {record.sequence}: a span leaves RDRAM")
+                self.ram[begin:begin + size] = chunk
+                self.known[begin:begin + size] = True
+            at += size
+
+
+def vi_states(records, rdram_size: int):
+    """(VI record, the state after it) for every VI record, in order. The state is
+    one object updated in place: copy what must outlive the next record."""
+    state = ViState(rdram_size)
+    for record in records:
+        if isinstance(record, ViRegions):
+            state.apply(record)
+            yield record, state
+
+
+def vi_summary(vis: list[dict], calls: int | None) -> dict:
+    """VI records by kind, the indexes no record carries (lost), bytes and cost."""
+    if not vis:
+        return {"records": 0}
+    indexes = [v["vi_index"] for v in vis]
+    deltas = [v["data_bytes"] for v in vis if v["kind"] == 1]
+    costs = sorted(v["total_ns"] / 1000 for v in vis)
+
+    def pct(p):
+        return costs[min(len(costs) - 1, int(p * (len(costs) - 1) + 0.5))]
+    span = (calls if calls is not None else max(indexes) + 1)
+    return {"records": len(vis), "keys": sum(v["kind"] == 0 for v in vis), "deltas": len(deltas),
+            "lost": span - len(set(indexes)), "bytes": sum(v["data_bytes"] for v in vis),
+            "delta_kib_p50": sorted(deltas)[len(deltas) // 2] / 1024 if deltas else 0,
+            "us_p50": pct(.5), "us_p99": pct(.99), "us_max": costs[-1]}
+
+
 def summary(args) -> int:
     session = Path(args.session)
     tasks = presents = refused = 0
     walk, copy, closure, reads = [], [], [], []
     region = {kind: {"bytes": [], "us": [], "scan_us": []} for kind in REGION_KINDS}
+    vis = []
     for record in read_records(session / "tap.bin"):
-        if isinstance(record, Regions):
+        if isinstance(record, ViRegions):
+            vis.append(record.fields)
+        elif isinstance(record, Regions):
             region[record.kind]["bytes"].append(record.fields["data_bytes"])
             region[record.kind]["us"].append(record.fields["copy_ns"] / 1000)
             region[record.kind]["scan_us"].append(record.fields["scan_ns"] / 1000)
@@ -362,9 +465,21 @@ def summary(args) -> int:
                            "kib_max": max(v["bytes"], default=0) / 1024, "us_p50": pct(v["us"], .5),
                            "us_p99": pct(v["us"], .99), "scan_us_p50": pct(v["scan_us"], .5)}
                     for kind, v in region.items() if v["bytes"]},
+        "vi": vi_summary(vis, summary_calls(session)),
         "summary": (session / "summary.txt").read_text(encoding="ascii") if (session / "summary.txt").is_file() else None,
     }, indent=2))
     return 0
+
+
+def summary_calls(session: Path) -> int | None:
+    """The wrapper's count of VIs it tried to copy (summary.txt vi_calls), when it wrote one."""
+    path = session / "summary.txt"
+    if not path.is_file():
+        return None
+    for line in path.read_text(encoding="ascii").splitlines():
+        if line.startswith("vi_calls="):
+            return int(line.partition("=")[2])
+    return None
 
 
 def frames(args) -> int:
@@ -438,6 +553,12 @@ def build_offline_host() -> Path:
     return target
 
 
+def _frame_argument(frame: str) -> str:
+    """A frame folder for tap_offline_host, keeping a vi: prefix (one UpdateScreen) intact."""
+    prefix = "vi:" if frame.startswith("vi:") else ""
+    return prefix + str(Path(frame.removeprefix(prefix)).resolve())
+
+
 def offline(args) -> int:
     """Arm under <lab_root>, feed the frames through the real producer, print the session."""
     root = Path(args.lab_root).resolve()
@@ -445,7 +566,7 @@ def offline(args) -> int:
     lab.mkdir(parents=True, exist_ok=True)
     before = set(lab.glob("tap-*"))
     (lab / "armed.txt").write_text(arming_text(args), encoding="ascii")
-    result = subprocess.run([str(build_offline_host()), str(root), *(str(Path(f).resolve()) for f in args.frames)],
+    result = subprocess.run([str(build_offline_host()), str(root), *map(_frame_argument, args.frames)],
                             capture_output=True, text=True, check=False, timeout=600, **quiet_spawn_kwargs())
     if result.returncode != 0:
         raise SystemExit(f"tap_offline_host failed ({result.returncode}): {result.stdout}{result.stderr}")
@@ -467,6 +588,8 @@ def main() -> int:
     p.add_argument("--version", choices=("us", "jp"), default="us")
     p.add_argument("--no-scene-state", action="store_true",
                    help="do not copy the scene renderer's state spans (E2-live)")
+    p.add_argument("--no-audio-state", action="store_true",
+                   help="do not copy the audio task's spans and SP DMEM at every VI (M4 stems)")
     p.set_defaults(run=arm)
     sub.add_parser("disarm").set_defaults(run=disarm)
     p = sub.add_parser("summary")
@@ -486,6 +609,7 @@ def main() -> int:
     p.add_argument("--seconds", type=int, default=600)
     p.add_argument("--version", choices=("us", "jp"), default="us")
     p.add_argument("--no-scene-state", action="store_true")
+    p.add_argument("--no-audio-state", action="store_true")
     p.set_defaults(run=offline, no_reference=True, reference_every=1, full_every=0)
     args = parser.parse_args()
     return args.run(args)

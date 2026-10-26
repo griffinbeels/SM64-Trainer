@@ -55,7 +55,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from savestate_frames import TASK_NAMES, dmem_for, read_savestate  # noqa: E402
+from savestate_frames import TASK_NAMES, dmem_for, read_savestate, write_frames  # noqa: E402
 
 HLE_REVISION = "8a7a472a7172eb2c8725b305eae26818ed7b51a2"   # mupen64plus-rsp-hle, GPL-2.0-or-later
 HLE_FILES = ("alist.c", "audio.c", "memory.c")
@@ -75,12 +75,15 @@ SYMBOLS = ("create_next_audio_frame_task", "play_sound", "osAiGetLength", "osAiS
            "gMaxSimultaneousNotes", "gSequencePlayers", "gAudioCmdBuffers", "gAudioTasks",
            "gAudioTaskIndex", "gCurrAiBufferIndex", "gAiBuffers", "gAiBufferLengths", "gCurrAiBuffer",
            "gSynthesisReverb", "sGameLoopTicked", "gAudioFrameCount", "gSPTaskMesgQueue",
-           "gAudioGlobalsStartMarker", "gAudioGlobalsEndMarker", "synthesis_execute", "sSampleDmas")
+           "gAudioGlobalsStartMarker", "gAudioGlobalsEndMarker", "synthesis_execute", "sSampleDmas",
+           "prepare_reverb_ring_buffer", "osCreateMesgQueue", "__osAiDeviceBusy", "gCurrLevelNum",
+           "dispatch_audio_sptask", "gActiveSPTask", "sCurrentAudioSPTask")
 # The STROOP map keeps an older name for gGlobalSoundSource (external.c: f32[3] at the camera).
 SYMBOL_ALIASES = {"gGlobalSoundSource": "gDefaultSoundArgs"}
-# SM64's audio code and the libultra calls it makes: run only where RAM equals the ROM.
-CODE_CHECK = (("synthesis..external", 0x80314A30, 0x80322370), ("libultra os", 0x803225A0, 0x80329780))
-MAIN_RAM, MAIN_ROM = 0x80246000, 0x1000
+# SM64's audio code and the libultra calls it makes, as map symbol bounds: run only where RAM equals the ROM.
+CODE_CHECK = (("audio code", "prepare_reverb_ring_buffer", "osCreateMesgQueue"),
+              ("libultra os", "osCreateMesgQueue", "__osAiDeviceBusy"))
+MAIN_SECTION = re.compile(r"^\.main\s+0x0*([0-9a-f]{8})\s+0x([0-9a-f]+)\s+load address 0x([0-9a-f]+)")
 
 NOTE_BYTES, LAYER_SEQ_CHANNEL, CHANNEL_SEQ_PLAYER, PLAYER_BYTES, PLAYER_CHANNELS = 0xC0, 0x50, 0x40, 0x140, 0x2C
 NOTE = {"flags": 0x00, "bankId": 0x07, "prevParentLayer": 0x28, "parentLayer": 0x2C,
@@ -124,6 +127,14 @@ def load_symbols(path: Path) -> dict[str, int]:
     if missing:
         raise SystemExit(f"{path}: the map names none of {missing}")
     return {name: found[mapped] for name, mapped in wanted.items()}
+
+
+def main_section(path: Path) -> tuple[int, int, int]:
+    """The main segment as the map lays it out: (RAM address, bytes, ROM offset)."""
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if match := MAIN_SECTION.match(line):
+            return int(match[1], 16), int(match[2], 16), int(match[3], 16)
+    raise SystemExit(f"{path}: the map has no .main section")
 
 
 # --- the two RSPs: the ROM's microcode in cxd4 (stems_lle.c), the HLE (stems_hle.c) ---
@@ -299,16 +310,24 @@ class AudioCpu:
     def _send_mesg(self) -> int:
         return self._send(self.arg(0), self.arg(1))
 
-    def _recv_mesg(self) -> int:
-        queue, out, flags = self.arg(0), self.arg(1), self.arg(2)
+    def take(self, queue: int) -> int | None:
+        """Receive the queue's next message, if any (what a thread's osRecvMesg gets)."""
         valid, first, count, messages = self._queue(queue)
         if valid == 0:
+            return None
+        message = self.u32(messages + 4 * first)
+        struct.pack_into(">ii", self.ram, phys(queue) + 8, valid - 1, (first + 1) % count)
+        return message
+
+    def _recv_mesg(self) -> int:
+        queue, out, flags = self.arg(0), self.arg(1), self.arg(2)
+        message = self.take(queue)
+        if message is None:
             if flags:                              # OS_MESG_BLOCK: nothing will ever arrive here
                 self.violations.append(f"blocking receive on empty queue {queue:08x}")
             return 0xFFFFFFFF
         if out:
-            self.put_u32(out, self.u32(messages + 4 * first))
-        struct.pack_into(">ii", self.ram, phys(queue) + 8, valid - 1, (first + 1) % count)
+            self.put_u32(out, message)
         return 0
 
     def _pi_start_dma(self) -> int:
@@ -346,11 +365,12 @@ class AudioCpu:
         return uc.reg_read(self.mips.UC_MIPS_REG_V0) & 0xFFFFFFFF
 
 
-def check_code(ram_be: np.ndarray, rom: bytes) -> list[str]:
+def check_code(ram_be: np.ndarray, rom: bytes, symbols: dict[str, int], main: tuple[int, int, int]) -> list[str]:
     """SM64's audio code and the libultra it calls must be the ROM's own bytes."""
     bad = []
-    for name, lo, hi in CODE_CHECK:
-        image = rom[lo - MAIN_RAM + MAIN_ROM:hi - MAIN_RAM + MAIN_ROM]
+    for name, first, last in CODE_CHECK:
+        lo, hi = symbols[first], symbols[last]
+        image = rom[lo - main[0] + main[2]:hi - main[0] + main[2]]
         if ram_be[phys(lo):phys(hi)].tobytes() != image:
             bad.append(name)
     return bad
@@ -582,7 +602,8 @@ class Probe:
         self.sym = load_symbols(args.map)
         state = read_savestate(args.savestate)
         self.ram_be = swap32(np.frombuffer(state["rdram"], np.uint8).copy())
-        bad = check_code(self.ram_be, self.rom)
+        self.rom_header, self.dumped = state["rom_header"], []
+        bad = check_code(self.ram_be, self.rom, self.sym, main_section(args.map))
         if bad:
             raise SystemExit(f"RAM code differs from the ROM in {bad}: refusing to run it")
         self.cpu = cpu = AudioCpu(self.ram_be.tobytes(), self.rom, self.sym, args.fcr31)
@@ -610,7 +631,7 @@ class Probe:
             + [Chain("hle", self.regions, self.dram, hle_dmem, self.ring, self.stems)]
         self.report = {"savestate": args.savestate.name, "rom_sha1": hashlib.sha1(self.rom).hexdigest(),
                        "hle_revision": HLE_REVISION, "lle_revision": LLE_REVISION if self.lle else None,
-                       "level": cpu.s16(0x8032DDF8), "heap": [hex(0x80000000 | self.heap[0]), self.heap[1] - self.heap[0]],
+                       "level": cpu.s16(self.sym["gCurrLevelNum"]), "heap": [hex(0x80000000 | self.heap[0]), self.heap[1] - self.heap[0]],
                        "reverb": {"ring_samples_per_channel": ring_samples, "gain": hex(cpu.u32(reverb + 4) >> 16),
                                   "useReverb": cpu.u8(reverb + 1)},
                        "rsp_regions": [[hex(0x80000000 | lo), hi - lo] for lo, hi in self.regions],
@@ -659,7 +680,22 @@ class Probe:
         begin = time.perf_counter()
         task = cpu.call(sym["create_next_audio_frame_task"])
         self.cpu_ms.append((time.perf_counter() - begin) * 1000)
+        if task:                # thread4_sound posts it for the scheduler
+            cpu.call(sym["dispatch_audio_sptask"], task)
         return bool(task)
+
+    def dump_frame(self, frame: int) -> None:
+        """RDRAM and SP DMEM as Project64 would hand the wrapper at this VI's UpdateScreen: the
+        task dispatched and not yet run (a tap_offline_host vi: frame)."""
+        folder = self.args.frames_out / f"vi-{frame:05d}"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "rdram.bin").write_bytes(swap32(self.cpu.ram.copy()).tobytes())
+        (folder / "dmem.bin").write_bytes(self.chains[0].sp[:0x1000].tobytes())
+        (folder / "frame.json").write_text(json.dumps({
+            "schema": "scene-lab-frame/1", "vi": {"origin": 0}, "rom_header": self.rom_header.hex(),
+            "source": {"kind": "stems-probe", "savestate": self.args.savestate.name, "audio_frame": frame}},
+            indent=2) + "\n", encoding="utf-8")
+        self.dumped.append(folder)
 
     def step(self, frame: int) -> None:
         cpu, sym, heap = self.cpu, self.sym, self.heap
@@ -684,6 +720,8 @@ class Probe:
                "sounding": {str(i): n["owner"] for i, n in notes.items() if n["enabled"]},
                "unowned_mix_commands": mix_owner.count("unknown") + stats["unattributed_mix"],
                "note_starts": stats["starts"], "handovers": stats["handovers"]}
+        if self.args.frames_out:
+            self.dump_frame(frame)
         heap_le = swap32(cpu.ram[heap[0]:heap[1]].copy())
         for chain in self.chains:
             self.render(chain, task, heap_le, masks, frame)
@@ -693,6 +731,7 @@ class Probe:
         self.dram[heap[0]:heap[1]] = heap_le
         self.chains[0].overlay(self.dram)          # the first chain carries the game on
         cpu.ram[heap[0]:heap[1]] = swap32(self.dram[heap[0]:heap[1]].copy())
+        cpu.take(sym["gSPTaskMesgQueue"])          # the scheduler takes the task at the next VI
 
     def execute(self, chain: Chain, task: "Task", sp: np.ndarray, rollback: np.ndarray | None = None) -> int:
         """One task on this chain's RSP from this DMEM (the microcode, or the HLE)."""
@@ -812,7 +851,18 @@ def run(args) -> int:
     for frame in range(int(args.seconds * VI_RATE) + 1):
         probe.step(frame)
     print(json.dumps(probe.finish(), indent=1))
+    if args.frames_out:
+        # tap.py offline's input: the savestate's own graphics task first (the tap's clock starts
+        # at a task), then one UpdateScreen per audio frame.
+        first = write_frames(args.savestate, args.frames_out / "task", None)[0]
+        (args.frames_out / "frames.txt").write_text(
+            "\n".join([str(first), *(f"vi:{folder}" for folder in probe.dumped)]) + "\n", encoding="utf-8", newline="\n")
     return 0
+
+
+def from_tap(args) -> int:
+    import stems_check
+    return stems_check.run(args)
 
 
 def main() -> int:
@@ -836,7 +886,21 @@ def main() -> int:
     probe.add_argument("--dmem-probe", action="store_true",
                        help="also run each list on patterned DMEM: does it read bytes it never wrote?")
     probe.add_argument("--fcr31", type=lambda value: int(value, 0), default=0x01000800)
+    probe.add_argument("--frames-out", type=Path, default=None,
+                       help="also write each VI's RDRAM and DMEM as tap_offline_host frames (a dry run)")
     probe.set_defaults(handler=run)
+    check = commands_.add_parser("from-tap", help="G0-G3 on a recorded session (stems_check.py)")
+    check.add_argument("session", type=Path)
+    check.add_argument("--rom", type=Path, required=True)
+    check.add_argument("--map", type=Path, required=True)
+    check.add_argument("--lle-src", type=Path, default=None,
+                       help=f"mupen64plus-rsp-cxd4 checkout at {LLE_REVISION}; without it G1 and G3 do not run")
+    check.add_argument("--capture", type=Path, default=None, help="audio_capture.py's file, for G2")
+    check.add_argument("--report", type=Path, default=None)
+    check.add_argument("--wavs", type=Path, default=None, help="write mix, music and effects WAVs here")
+    check.add_argument("--build", type=Path, default=Path(tempfile.gettempdir()) / "stm-build",
+                       help="where the cxd4 harness DLL is built")
+    check.set_defaults(handler=from_tap)
     args = parser.parse_args()
     return args.handler(args)
 

@@ -1512,3 +1512,101 @@ for _field in ("usamune_state_start", "usamune_state_end"):
         check=_scene_span_gate(_field, "usamune_state_start", "usamune_state_end", _USAMUNE_INSIDE,
                                "every verified Usamune setting and counter"),
     ))
+
+
+# --- the stems capture's audio spans (M4 stems, lab only)
+#
+# The scene tap copies these at every VI: at UpdateScreen the audio task the
+# game just dispatched has not run, so they hold its whole input, and at the
+# next VI its output. Each gate checks structure the running game shows; only
+# the live session's G0 and G1 (tools/scene_lab/stems_probe.py from-tap) prove
+# the spans hold everything the RSP reads.
+
+AUDIO_HEAP_POINTERS = 16   # the globals' pointers into the heap: notes, lists, AI buffers, ring, DMA buffers
+OSMESGQUEUE_BYTES = 0x18   # libultra's OSMesgQueue {mtqueue, fullqueue, validCount, first, msgCount, msg}
+SP_TASK_POINTERS = 5       # gActiveSPTask .. sNextDisplaySPTask
+SP_TASK_WATCH_S = 2.0
+
+
+def _check_audio_spans(field: str):
+    def check(ctx) -> Verdict:
+        heap = _span(ctx, "audio_heap_start", "audio_heap_end")
+        globals_ = _span(ctx, "audio_globals_start", "audio_globals_end")
+        if heap is None or globals_ is None:
+            return Verdict("missing", evidence="audio heap or audio globals candidates missing")
+        if heap is False or globals_ is False or (heap[0] < globals_[1] and globals_[0] < heap[1]):
+            return Verdict("failed", evidence="a span is unaligned, empty, oversized, outside RDRAM or overlapping")
+        block = ctx.raw().read_words(globals_[0], globals_[1] - globals_[0])
+        pointers = sum(1 for at in range(0, len(block), 4)
+                       if heap[0] <= int.from_bytes(block[at:at + 4], "little") < heap[1])
+        if pointers < AUDIO_HEAP_POINTERS:
+            return Verdict("failed", measured={"heap_pointers": pointers},
+                           evidence="the audio globals hold too few pointers into the audio heap")
+        return Verdict("verified", value=ctx.candidate(field), measured={"heap_pointers": pointers},
+                       evidence="the audio globals point into the heap (notes, command lists, AI buffers, "
+                                "reverb ring, sample DMA buffers); only the stems session's G1 proves the "
+                                "spans hold everything the RSP reads")
+    return check
+
+
+def _check_sp_task_queue(field: str):
+    def check(ctx) -> Verdict:
+        queue = (ctx.candidate("sp_task_queue_start"), ctx.candidate("sp_task_queue_end"))
+        messages = _span(ctx, "sp_task_messages_start", "sp_task_messages_end")
+        if None in queue or messages is None:
+            return Verdict("missing", evidence="task queue or message buffer candidates missing")
+        if queue[1] - queue[0] != OSMESGQUEUE_BYTES or not _ghost_ram_pointer(queue[0], OSMESGQUEUE_BYTES) \
+                or messages is False:
+            return Verdict("failed", evidence="the queue is not one OSMesgQueue, or the buffer span is unsound")
+        mem = ctx.raw()
+        valid, first, slots, buffer = (mem.read_u32(queue[0] + offset) for offset in (8, 12, 16, 20))
+        measured = {"slots": slots, "pending": valid, "buffer": buffer}
+        if buffer != messages[0] or slots * 4 != messages[1] - messages[0] or not (valid <= slots and first < slots):
+            return Verdict("failed", measured=measured,
+                           evidence="the queue's own buffer pointer and slot count disagree with the spans")
+        return Verdict("verified", value=ctx.candidate(field), measured=measured,
+                       evidence="the queue points at exactly this buffer and its slots fill it; only the stems "
+                                "session's G0 proves it is where the audio task waits for the RSP")
+    return check
+
+
+def _check_sp_task_pointers(field: str):
+    def check(ctx) -> Verdict:
+        span = _span(ctx, "sp_task_pointers_start", "sp_task_pointers_end")
+        if span is None:
+            return Verdict("missing", evidence="sp_task_pointers_start/sp_task_pointers_end candidates missing")
+        if span is False or span[1] - span[0] != 4 * SP_TASK_POINTERS:
+            return Verdict("failed", evidence="the span is not the five task pointers")
+        mem, held = ctx.raw(), 0
+        for _ in range(int(SP_TASK_WATCH_S / POLL_INTERVAL_S)):
+            words = [mem.read_u32(span[0] + 4 * i) for i in range(SP_TASK_POINTERS)]
+            if any(word and not _ghost_ram_pointer(word, 0x40) for word in words):
+                return Verdict("failed", measured={"words": [hex(word) for word in words]},
+                               evidence="a word is neither null nor a task in RDRAM")
+            held += any(words)
+            ctx.sleep(POLL_INTERVAL_S)
+        if not held:
+            return Verdict("failed", evidence="no task pointer was ever set while the game ran")
+        return Verdict("verified", value=ctx.candidate(field), measured={"reads_with_a_task": held},
+                       evidence="every read held null or a task in RDRAM, and tasks came and went")
+    return check
+
+
+for _field, _check, _proves in (
+        ("audio_heap_start", _check_audio_spans, "The audio globals point into this heap span."),
+        ("audio_heap_end", _check_audio_spans, "The audio globals point into this heap span."),
+        ("audio_globals_start", _check_audio_spans, "This span holds the audio globals' heap pointers."),
+        ("audio_globals_end", _check_audio_spans, "This span holds the audio globals' heap pointers."),
+        ("sp_task_queue_start", _check_sp_task_queue, "The span is one OSMesgQueue over the message buffer."),
+        ("sp_task_queue_end", _check_sp_task_queue, "The span is one OSMesgQueue over the message buffer."),
+        ("sp_task_messages_start", _check_sp_task_queue, "The task queue's own buffer is this span."),
+        ("sp_task_messages_end", _check_sp_task_queue, "The task queue's own buffer is this span."),
+        ("sp_task_pointers_start", _check_sp_task_pointers, "The span holds the five RSP task pointers."),
+        ("sp_task_pointers_end", _check_sp_task_pointers, "The span holds the five RSP task pointers.")):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+        needs=("version.rom",), timeout_s=SP_TASK_WATCH_S + 10,
+        instruction="Nothing to do once the game runs: reads the audio and RSP task state.",
+        proves=_proves,
+        check=_check(_field),
+    ))

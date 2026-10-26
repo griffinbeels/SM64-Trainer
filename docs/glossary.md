@@ -1200,6 +1200,30 @@ savestates). That is what lets a recording be re-viewed from a free camera.
 - **Not** -- the [[task closure]], which is what the [[renderer]] reads to
   draw a list; the scene state is what the game reads to make one
 
+### Sound stems
+
+An M4 experiment's music track and effects track, split from the sound a
+recording played without guessing. Every VI the game hands the RSP one audio
+task: a list of mixing commands over its notes. The [[scene tap]] copies the
+audio state at each VI while that task still waits, so a recording holds
+every task's whole input and, at the next VI, the samples Project64's RSP
+wrote. Offline, the ROM's own audio microcode executes each task again in an
+RSP interpreter. A stem is the same task with the other side's notes still
+decoding but mixing into a scratch buffer. A note belongs to the sequence
+player that owns it: the level music and jingle players make the music,
+the sound-effect player the effects, Mario's voice included. Each stem is
+what the game played for those notes, voice stealing included, and the two
+sum to the mix within a few units of the 16-bit scale. On savestates the
+copy is complete: executing it again reproduces every task bit for bit;
+matching Project64's own output waits on a live recording (2026-10-26).
+
+- **Lives** -- the audio spans (the audio and SP-task rows in
+  `src/sm64_events/memory/layout.py`); the per-VI copy
+  (`plugin/gfxwrap/scene_tap.cpp`); the renders and the
+  four checks (`tools/scene_lab/stems_probe.py`, `tools/scene_lab/stems_check.py`)
+- **Not** -- separating a recorded mix after the fact (source separation,
+  volume ducking): those guess at sound the game never split
+
 ### Scene package
 
 An M4 experiment's portable file of the graphics tasks a [[scene tap]]
