@@ -1034,8 +1034,8 @@ is codified.
 ## Scene viewer (M4 lab, source checkouts only, off by default)
 
 Exists only when `SM64_SCENE_LAB` names a lab config (`main.py::_mount_scene_lab`
-is the one reader); otherwise none of these routes exists and the shell shows no
-Lab entry. The config is a private JSON file of absolute paths:
+is the one reader); otherwise only the probe exists, answering `{lab: null}`, and
+the shell shows no Lab entry. The config is a private JSON file of absolute paths:
 `{"rom", "packages", "pj64_plugin", "map"}` plus optional `"renderer"`
 (`trainer`, `link` or a DLL path), `"resolution"` (`"WxH"`) and `"idle_seconds"`.
 Run the server with `uv run --with unicorn==2.1.4` for the free camera;
@@ -1047,7 +1047,7 @@ connected, a helper that dies, or server shutdown. Owner: `server/scene_lab_api.
 
 | Route | Purpose |
 |---|---|
-| `GET /api/scene-lab` | The probe the shell waits for: `{lab: "scene-viewer"}`. |
+| `GET /api/scene-lab` | The probe the shell waits for: `{lab: "scene-viewer"}`, or `{lab: null}` when the switch is off. |
 | `GET /api/scene-lab/status` | `{ready, problems, hold, packages: [{name, bytes, modified_utc}], session, ended}`: what stops a scene opening, the GPU hold, the folder's `.sm64scene` files, the open scene (as Open returns it) and how the last one ended (`{code, message, name}`). |
 | `POST /api/scene-lab/open` `{package}` | Opens a package the folder lists (by name; anything else is **404**). Returns `{session, name, fps, frames: [{level, area, game_frame}], renderer_pid, free_camera: {available, reason}}`. **409** with the reason for a refused package (truncated, corrupt, another ROM), a missing ROM, the GPU hold, or a renderer that cannot start. |
 | `POST /api/scene-lab/close` | Ends the open scene; `{closed, host_exit}`. |

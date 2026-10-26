@@ -21,7 +21,13 @@ export function useFriends() {
     request.current = controller;
     try {
       const next = await friendsRequest("status", undefined, { signal: controller.signal });
-      if (alive.current && ticket === generation.current) { setSnapshot(next); setReadError(null); }
+      // Each poll answers a NEW object; handing it straight over re-rendered
+      // the whole app every 2 s with nothing changed. Keeping the previous
+      // object while the content is the same lets Preact skip the render.
+      if (alive.current && ticket === generation.current) {
+        setSnapshot((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+        setReadError(null);
+      }
     } catch (problem) {
       if (alive.current && ticket === generation.current && problem.name !== "AbortError") setReadError(problem.message);
     } finally {

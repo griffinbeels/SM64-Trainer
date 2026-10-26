@@ -88,16 +88,17 @@ const PLAIN_TABS = {
   "Resources": ResourcesPage, "About": AboutPage,
 };
 
-// The Scene viewer (M4, lab only). The server adds /api/scene-lab only when
-// SM64_SCENE_LAB names a lab config, so anywhere else this one probe 404s and
-// the shell stays exactly as it was; the viewer's code loads only after the
-// server answers.
+// The Scene viewer (M4, lab only). This one probe names the lab only when
+// SM64_SCENE_LAB names a lab config; anywhere else it answers {lab: null} and
+// the shell stays exactly as it was. The viewer's code loads only after the
+// server names the lab.
 function useSceneLab() {
   const [viewer, setViewer] = useState(null);
   useEffect(() => {
     let mounted = true;
     fetch("/api/scene-lab", { cache: "no-store" })
-      .then((response) => (response.ok ? import("./components/sceneviewer.js") : null))
+      .then((response) => (response.ok ? response.json() : null))
+      .then((probe) => (probe?.lab ? import("./components/sceneviewer.js") : null))
       .then((module) => { if (mounted && module) setViewer(() => module.SceneViewer); })
       .catch(() => {});
     return () => { mounted = false; };
