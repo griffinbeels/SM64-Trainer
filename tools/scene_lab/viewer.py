@@ -31,6 +31,7 @@ import io
 import json
 import math
 import os
+import queue
 import random
 import re
 import shutil
@@ -84,17 +85,29 @@ class Frame:
 class Picture:
     width: int
     height: int
-    pixels: bytes        # ReadScreen's BGR rows, bottom-up
+    pixels: bytes | memoryview   # ReadScreen's BGR rows, bottom-up (a view of `slot` when it has one)
     render_ms: float     # ProcessDList + UpdateScreen inside the host
     read_ms: float       # ReadScreen
     camera_ms: float
     matrices: int
     camera_failed: bool
     host_ms: float       # request written to picture read, as Python sees it
+    slot: int | None = None   # the Host's slots slot the pixels were read into; its owner releases it
 
     @property
     def sha256(self) -> str:
         return hashlib.sha256(self.pixels).hexdigest()
+
+
+def _fill(stream, view: memoryview) -> int:
+    """Reads into `view` until it is full or the stream ends; the bytes it filled."""
+    done = 0
+    while done < len(view):
+        got = stream.readinto(view[done:])
+        if not got:
+            break
+        done += got
+    return done
 
 
 def load_session(session: Path) -> tuple[list[Frame], str]:
@@ -184,56 +197,114 @@ def prepare_plugin_dir(plugin_dir: Path, pj64_plugin: Path, resolution: tuple[in
 
 
 class Host:
-    """One viewer_host.exe and its pipe. Requests are serialized by a lock;
-    closing stdin is the shutdown, and a host whose parent dies sees EOF.
-    `command` replaces the built executable (fake_viewer_host.py, a protocol
-    double, in tests and dry runs)."""
+    """One viewer_host.exe and its pipe. The host answers requests in the order they were
+    written. A reader thread takes each answer off the pipe the moment the host writes it, so
+    the host never waits on a full pipe: a caller may write the next request (send) while the
+    host draws the one before, and another thread collects the pictures in order (receive).
+    render() is send then receive. Closing stdin is the shutdown, and a host whose parent dies
+    sees EOF. `command` replaces the built executable (fake_viewer_host.py, a protocol double,
+    in tests and dry runs)."""
 
     def __init__(self, renderer: Path, plugin_dir: Path, header: str, command: list[str] | None = None):
         self.process = subprocess.Popen(
             [*(command or [str(build())]), "--renderer", str(renderer), "--plugin-dir", str(plugin_dir),
              "--header", header],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **quiet_spawn_kwargs())
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()                      # writing a request
+        self.counting = threading.Lock()                  # self.waiting
+        self.waiting = 0                                  # requests whose picture nobody has received yet
+        self.sent: deque[float] = deque()                 # write times of requests the reader has yet to read
+        self.answers: queue.SimpleQueue = queue.SimpleQueue()   # Pictures in order, then what ended the pipe
+        # Where the reader puts pixels: None, a new bytes per picture; else slots with claim(size) ->
+        # (slot, writable view) or None when none is free (picture_encoder.PictureSlots).
+        self.slots = None
         self.errors: list[str] = []
         threading.Thread(target=self._drain_stderr, daemon=True).start()
+        self.reader = threading.Thread(target=self._read_answers, name="viewer-host-reader", daemon=True)
+        self.reader.start()
 
     def _drain_stderr(self) -> None:
         for line in self.process.stderr:
             self.errors.append(line.decode("utf-8", "replace").rstrip())
 
-    def _read(self, size: int) -> bytes:
-        data = self.process.stdout.read(size)
-        if len(data) != size:
-            self.process.wait(timeout=5)
-            raise RuntimeError(f"viewer_host exited ({self.process.returncode}): {' | '.join(self.errors)}")
-        return data
+    def _read_answers(self) -> None:
+        """The reader thread: each answer in order, its host_ms from its request's write to its
+        last byte, until the pipe ends; then the error every later receive raises."""
+        stdout = self.process.stdout
+        try:
+            while True:
+                head = stdout.read(RESPONSE.size)
+                if len(head) != RESPONSE.size:
+                    break
+                magic, status, width, height, render_us, read_us, camera_us, matrices, size = RESPONSE.unpack(head)
+                if magic != RESPONSE_MAGIC or size != width * height * 3 or not self.sent:
+                    self.answers.put(RuntimeError("viewer_host answered out of protocol"))
+                    return
+                claimed = self.slots.claim(size) if self.slots is not None else None
+                if claimed is None:
+                    slot, pixels = None, stdout.read(size) if size else b""
+                    if len(pixels) != size:
+                        break
+                else:
+                    slot, pixels = claimed
+                    if _fill(stdout, pixels) != size:
+                        break
+                host_ms = (time.perf_counter() - self.sent.popleft()) * 1000
+                self.answers.put(Picture(width, height, pixels, render_us / 1000, read_us / 1000,
+                                         camera_us / 1000, matrices, bool(status & 1), host_ms, slot))
+        except (OSError, ValueError) as error:
+            self.answers.put(RuntimeError(f"viewer_host's pipe failed: {error}"))
+            return
+        try:
+            code = self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            code = None
+        self.answers.put(RuntimeError(f"viewer_host exited ({code}): {' | '.join(self.errors)}"))
 
-    def render(self, frame: Frame, camera=None, discard: bool = False) -> Picture:
+    def send(self, frame: Frame, camera=None, discard: bool = False) -> None:
+        """Writes one request; the next receive() answers the oldest request not yet received."""
         flags = (1 if camera is not None else 0) | (2 if discard else 0)
         request = REQUEST.pack(REQUEST_MAGIC, 1, flags, len(frame.runs) // 8, len(frame.data),
                                *frame.task, *frame.vi, *(camera if camera is not None else IDENTITY))
         with self.lock:
-            started = time.perf_counter()
+            with self.counting:
+                self.waiting += 1
+            self.sent.append(time.perf_counter())
             self.process.stdin.write(request + frame.runs)
             self.process.stdin.write(frame.data)
             self.process.stdin.flush()
-            magic, status, width, height, render_us, read_us, camera_us, matrices, size = \
-                RESPONSE.unpack(self._read(RESPONSE.size))
-            if magic != RESPONSE_MAGIC or size != width * height * 3:
-                raise RuntimeError("viewer_host answered out of protocol")
-            pixels = self._read(size) if size else b""
-            host_ms = (time.perf_counter() - started) * 1000
-        return Picture(width, height, pixels, render_us / 1000, read_us / 1000, camera_us / 1000,
-                       matrices, bool(status & 1), host_ms)
+
+    def receive(self) -> Picture:
+        """The picture for the oldest request not yet received, waiting for the host if need be.
+        RuntimeError when nothing was sent, and once the host has ended or broken protocol."""
+        with self.counting:
+            if not self.waiting:
+                raise RuntimeError("viewer_host has no request to answer")
+            self.waiting -= 1
+        answer = self.answers.get()
+        if isinstance(answer, Exception):
+            self.answers.put(answer)                      # every later receive raises it too
+            raise answer
+        return answer
+
+    def render(self, frame: Frame, camera=None, discard: bool = False) -> Picture:
+        self.send(frame, camera, discard)
+        return self.receive()
 
     def close(self) -> int:
+        """Ends the host: it finishes the requests it was sent, then sees EOF. The reader keeps
+        taking its answers, so it never waits on a full pipe to exit."""
         try:
             self.process.stdin.close()
-            return self.process.wait(timeout=15)
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError:
+            pass                                          # it already ended: its exit code says how
+        try:
+            code = self.process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
             self.process.kill()
-            return self.process.wait(timeout=5)
+            code = self.process.wait(timeout=5)
+        self.reader.join(timeout=5)
+        return code
 
 
 def orbit(yaw_degrees: float, pitch_degrees: float = 0.0, pivot: float = 1500.0) -> tuple:

@@ -1275,9 +1275,13 @@ lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab
 config (the ROM, the package folder, Project64's Plugin folder, the symbol
 map). Nothing starts until someone opens a package; the hidden [[renderer]]
 helper and the evaluator start then and stop on Close, after a while unused,
-when no page shows the scene, and when the server stops. The page asks for one
-picture at a time, asks for the next as soon as one arrives, and a newer step or
-camera move replaces the waiting one.
+when no page shows the scene, and when the server stops. The page keeps two
+pictures in flight, asks for the next as soon as one arrives, and a newer step or
+camera move replaces the one waiting behind them; the game's code works out the
+next camera's picture while the [[renderer]] draws and the [[picture encoder]]
+compresses the one before. While the camera moves, the page sums up its own
+numbers every 2 s (pictures a second, input to picture, decode, the server's
+stages): the readout shows them and the UI observation log records them.
 
 - **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
   mounted by `src/sm64_events/main.py`); one open scene
@@ -1291,6 +1295,22 @@ camera move replaces the waiting one.
   (`tools/scene_lab/e3_measure.py`)
 - **Not** -- the replay player, which plays recorded video; the scene viewer
   redraws the game's graphics from a [[scene package]]
+
+### Picture encoder
+
+The [[scene viewer]]'s child process that turns each picture the hidden
+[[renderer]] helper drew into the JPEG the page shows. The helper's pictures
+come back through shared memory, and the encoder reads them there, so the
+server never copies the pixels and the game's code for the next camera never
+waits on the encode for Python's lock (measured 2026-10-26: the game's code
+took 4.0 ms alone, 7 to 9 ms beside an encode in the same process, 4.9 ms
+beside one in another process). It uses the same encoder and settings as
+before, so every JPEG is the same bytes; when it is not ready or has died,
+the server encodes the picture itself.
+
+- **Lives** -- `tools/scene_lab/picture_encoder.py`; started and closed with
+  the scene (`tools/scene_lab/scene_session.py`)
+- **Not** -- the [[recorder]]'s video encoder, which compresses recorded play
 
 ### Practice ROM
 

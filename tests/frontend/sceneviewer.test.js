@@ -8,8 +8,8 @@
 import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { DRAG_DEAD_ZONE, SceneViewer, hintFor, pictureFraction, speedWords } from
-  "../../src/sm64_events/ui/components/sceneviewer.js";
+import { DRAG_DEAD_ZONE, MOVING_WINDOW, PICTURES_IN_FLIGHT, STILL_MS, SceneViewer, hintFor, movingSummary,
+  pictureFraction, speedWords } from "../../src/sm64_events/ui/components/sceneviewer.js";
 import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt, lookingAt, looked, orbitFromPose, slid,
   speedStepped, turned, worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
 import { SCENE_CAMERA_DEFAULTS, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
@@ -133,34 +133,51 @@ test("opening names a listed package, then asks for the first picture from the r
   expect(HTMLCanvasElement.prototype.setPointerCapture).not.toHaveBeenCalled();
 });
 
-test("one picture is in flight at a time and the newest step wins", async () => {
+test("two pictures are in flight at a time and the newest step waiting behind them wins", async () => {
+  expect(PICTURES_IN_FLIGHT).toBe(2);
   const { page, socket, root } = await openScene();
-  for (let i = 0; i < 3; i++) fireEvent.keyDown(root, { key: "ArrowRight" });
-  await new Promise((resolve) => { setTimeout(resolve, 20); });
-  expect(socket.sent.length).toBe(1);                  // still waiting on frame 0
-  await socket.picture(socket.sent[0]);
+  fireEvent.keyDown(root, { key: "ArrowRight" });
   await waitFor(() => expect(socket.sent.length).toBe(2));
-  expect(socket.sent[1].frame).toBe(3);                // frames 1 and 2 were never asked for
+  for (let i = 0; i < 2; i++) fireEvent.keyDown(root, { key: "ArrowRight" });
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  expect(socket.sent.map((message) => message.frame)).toEqual([0, 1]);   // frame 1 went out beside frame 0
+  await socket.picture(socket.sent[0]);
+  await waitFor(() => expect(socket.sent.length).toBe(3));
+  expect(socket.sent[2].frame).toBe(3);                // frame 2 waited, and frame 3 replaced it
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+  expect(socket.sent.length).toBe(3);                  // nothing else is waiting
   await socket.picture(socket.sent[1]);
+  await socket.picture(socket.sent[2]);
   await waitFor(() => expect(page.container.textContent).toContain("Frame 4 of 5"));
   expect(page.container.textContent).toContain("level 9, area 1, game frame 1003");
   fireEvent.keyDown(root, { key: "End" });
-  await waitFor(() => expect(socket.sent.length).toBe(3));
-  expect(socket.sent[2].frame).toBe(4);                // stepping stops at the last frame
+  await waitFor(() => expect(socket.sent.length).toBe(4));
+  expect(socket.sent[3].frame).toBe(4);                // stepping stops at the last frame
+  expect(page.container.querySelector(".scene-lab-busy")).not.toBeNull();
+  await socket.picture(socket.sent[3]);
+  await waitFor(() => expect(page.container.querySelector(".scene-lab-busy")).toBeNull());
 });
 
-test("the next picture is asked for while one decodes, and a late decode never covers a newer picture", async () => {
+// JPEG pictures whose decodes finish when the test says, drawn onto a canvas that remembers them.
+function heldDecodes() {
   const decodes = [], drawn = [];
   globalThis.createImageBitmap = vi.fn((blob) => new Promise((resolve) => {
     decodes.push(() => resolve({ blob, close: () => {} }));
   }));
   HTMLCanvasElement.prototype.getContext = () => ({ drawImage: (bitmap) => drawn.push(bitmap.blob) });
+  return { decodes, drawn };
+}
+
+test("the next picture is asked for while one decodes, and a late decode never covers a newer picture", async () => {
+  const { decodes, drawn } = heldDecodes();
   const { page, socket, root } = await openScene();
-  fireEvent.keyDown(root, { key: "ArrowRight" });                  // waits behind picture 0
+  fireEvent.keyDown(root, { key: "ArrowRight" });                  // out beside picture 0
+  await waitFor(() => expect(socket.sent.length).toBe(2));
+  fireEvent.keyDown(root, { key: "ArrowRight" });                  // waits behind both
   await new Promise((resolve) => { setTimeout(resolve, 20); });
-  expect(socket.sent.length).toBe(1);
+  expect(socket.sent.length).toBe(2);
   socket.picture(socket.sent[0], { encoding: "jpeg" });             // arrives; its decode waits
-  await waitFor(() => expect(socket.sent.length).toBe(2));         // asked for before picture 0 drew
+  await waitFor(() => expect(socket.sent.length).toBe(3));         // asked for before picture 0 drew
   expect(decodes.length).toBe(1);
   expect(drawn).toEqual([]);
   socket.picture(socket.sent[1], { encoding: "jpeg" });            // decode 1 waits too
@@ -171,8 +188,77 @@ test("the next picture is asked for while one decodes, and a late decode never c
   await new Promise((resolve) => { setTimeout(resolve, 20); });
   expect(drawn.length).toBe(1);                                    // picture 0 never covered picture 1
   expect(createImageBitmap.mock.calls[1][0]).toBe(drawn[0]);
-  await waitFor(() => expect(page.container.textContent).toContain("Frame 2 of 5"));
+  await waitFor(() => expect(page.container.textContent).toContain("Frame 3 of 5"));
   expect(page.container.querySelector(".scene-lab-readout").textContent).toContain("input to picture");
+});
+
+test("pictures whose decodes finish in order are all drawn, oldest first", async () => {
+  const { decodes, drawn } = heldDecodes();
+  const { socket, root } = await openScene();
+  fireEvent.keyDown(root, { key: "ArrowRight" });
+  await waitFor(() => expect(socket.sent.length).toBe(2));
+  socket.picture(socket.sent[0], { encoding: "jpeg" });
+  socket.picture(socket.sent[1], { encoding: "jpeg" });            // arrives while picture 0 decodes
+  await waitFor(() => expect(decodes.length).toBe(2));
+  decodes[0]();
+  await waitFor(() => expect(drawn.length).toBe(1));
+  decodes[1]();
+  await waitFor(() => expect(drawn.length).toBe(2));
+  expect(drawn).toEqual(createImageBitmap.mock.calls.map(([blob]) => blob));   // 0, then 1 over it
+});
+
+// ------------------------------------------------------------------ the page's own numbers
+
+const observations = () => fetches.filter(([url, method]) => url === "/api/uilog" && method === "POST")
+  .map(([, , body]) => JSON.parse(body)).filter((body) => body.surface === "scene_viewer");
+
+test("while the camera moves the page sums up its numbers once a window, and posts nothing while still", async () => {
+  MOVING_WINDOW.ms = 80;
+  try {
+    const { page, socket, root, canvas } = await openScene();
+    await enterFree(page, socket);
+    await new Promise((resolve) => { setTimeout(resolve, 160); });
+    expect(observations()).toEqual([]);                            // entering is not moving
+    fireEvent.pointerDown(canvas, { button: 0, buttons: 1, pointerId: 1, clientX: 100, clientY: 100 });
+    for (let step = 1; step <= 4; step++) {
+      const sent = socket.sent.length;
+      move(canvas, { pointerId: 1, buttons: 1, clientX: 100 + 10 * step, clientY: 100 });
+      await waitFor(() => expect(socket.sent.length).toBe(sent + 1));
+      await socket.picture(socket.last(), { server_ms: 12, timings: { evaluate_ms: 5, host_ms: 3, encode_ms: 4 } });
+    }
+    fireEvent.pointerUp(canvas, { pointerId: 1 });
+    await waitFor(() => expect(observations().length).toBe(1));
+    const [summary] = observations();
+    expect(summary).toMatchObject({ pictures: 4, in_flight: 2, skipped: 0, width: 4, height: 3, encoding: "raw",
+      server_ms: { p50: 12, p95: 12 }, evaluate_ms: { p50: 5, p95: 5 }, host_ms: { p50: 3, p95: 3 },
+      encode_ms: { p50: 4, p95: 4 } });
+    expect(Object.keys(summary.input_to_drawn_ms)).toEqual(["p50", "p95"]);   // jsdom's event clock is not the page's
+    expect(summary.pictures_per_second).toBeGreaterThan(0);
+    expect(page.container.querySelector(".scene-lab-moving").textContent).toContain("Last time the camera moved");
+    await new Promise((resolve) => { setTimeout(resolve, 240); });
+    expect(observations().length).toBe(1);                        // still: nothing more
+    fireEvent.keyDown(root, { key: "r" });                        // the recorded camera stepping is not moving
+    await waitFor(() => expect(socket.last()).toMatchObject({ camera: null }));
+    await socket.picture(socket.last());
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    await waitFor(() => expect(socket.last()).toMatchObject({ frame: 1, camera: null }));
+    await socket.picture(socket.last());
+    await new Promise((resolve) => { setTimeout(resolve, 240); });
+    expect(observations().length).toBe(1);
+  } finally {
+    MOVING_WINDOW.ms = 2000;
+  }
+});
+
+test("a moving summary reports the pictures it drew, what it skipped, and nothing without movement", () => {
+  const sample = (at, input) => ({ at, input_ms: input, decode_ms: 3, trip_ms: 15, server_ms: 12,
+    timings: { evaluate_ms: 5 }, encoding: "jpeg", width: 1600, height: 1200 });
+  expect(movingSummary([sample(0, null), sample(10, null)])).toBeNull();
+  const summary = movingSummary([sample(0, 20), sample(10, 30), sample(20, null), sample(1000, 25)], 2);
+  expect(summary).toMatchObject({ pictures: 4, seconds: 0.02, pictures_per_second: 100, skipped: 2,
+    input_to_drawn_ms: { p50: 25, p95: 30 }, evaluate_ms: { p50: 5, p95: 5 }, width: 1600, encoding: "jpeg" });
+  expect(STILL_MS).toBeLessThan(980);                              // the still second is not moving time
+  expect(movingSummary([sample(0, 20)]).pictures_per_second).toBeNull();
 });
 
 // ------------------------------------------------------------------ entering Free camera

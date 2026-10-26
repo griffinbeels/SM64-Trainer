@@ -6,11 +6,18 @@
 // app.js imports this module only after GET /api/scene-lab answers, so with
 // the lab switched off none of it loads. Browser and desktop share it whole.
 //
-// The page never redraws on its own: SceneLink asks for one picture at a time
-// over the socket, and a newer step, seek or camera move replaces the request
-// waiting behind the one being drawn (latest wins; the server does the same).
-// A picture stops being in flight when it arrives: the next request goes out
-// while it decodes and draws, so decoding never holds up the server.
+// The page never redraws on its own: SceneLink keeps up to PICTURES_IN_FLIGHT
+// requests out over the socket (the server runs the game's code for the next
+// while it draws and encodes the one before), and a newer step, seek or camera
+// move replaces the one request waiting behind them (latest wins; the server
+// does the same). A picture stops being in flight when it arrives: the next
+// request goes out while it decodes and draws. Pictures draw as they finish
+// decoding, never over a newer one already on the canvas.
+//
+// While the free camera moves, the page sums up its own numbers every
+// MOVING_WINDOW.ms (input to picture, pictures a second, decode, the server's
+// stages): the readout shows them, and the UI observation log records them
+// (readSceneViewer), so a report carries the person's real numbers.
 //
 // The free camera (components/scenecamera.js owns its math) starts from the
 // picture on screen -- the recorded camera's place, screen tilt and field of
@@ -32,6 +39,7 @@ import htm from "htm";
 import { Icon } from "./icons.js";
 import { getJSON, send } from "../api.js";
 import { ControlGroups } from "../tunecontrols.js";
+import { postObservation } from "../uilog.js";
 import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, sceneCameraTuning,
   setSceneCameraTuning } from "../scenecameratuning.js";
 import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lookingAt, looked,
@@ -61,11 +69,69 @@ function movementOf(keys) {
 const WHEEL_LINE = 40, WHEEL_PAGE = 800, WHEEL_NOTCH = 100;   // deltaMode 1 and 2 in pixels; Chromium's notch
 const GLIDE_LEAD_MS = 40;     // a double-click's flight is at most this far along when its first picture goes out
 const wheelPixels = (event) => event.deltaY * (event.deltaMode === 1 ? WHEEL_LINE : event.deltaMode === 2 ? WHEEL_PAGE : 1);
+// Requests out at once: the server draws one while it begins the next (server/scene_lab_api.py
+// PICTURES_IN_FLIGHT holds the same number).
+export const PICTURES_IN_FLIGHT = 2;
+const WANTS = { play: 0, input: 1, move: 2 };
+// How long the page sums up its numbers while the camera moves before showing and recording them.
+export const MOVING_WINDOW = { ms: 2000 };
 
 function percentile(values, p) {
   if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.min(sorted.length - 1, Math.round(p * (sorted.length - 1)))];
+}
+const tenths = (value) => (value == null || !Number.isFinite(value) ? null : Math.round(value * 10) / 10);
+const spread = (values) => {
+  const present = values.filter((value) => value != null && Number.isFinite(value));
+  return present.length ? { p50: tenths(percentile(present, 0.5)), p95: tenths(percentile(present, 0.95)) } : null;
+};
+
+// One window of drawn pictures as the readout and the observation log show it: null without a
+// picture an input to the free camera asked for. A picture's `at` is when it was drawn. Pictures a
+// second count only while the camera moved: a gap longer than STILL_MS between two pictures is
+// the camera standing still, and neither its time nor its picture counts.
+export const STILL_MS = 150;
+export function movingSummary(samples, skipped = 0) {
+  const moved = samples.filter((sample) => sample.input_ms != null);
+  if (!moved.length) return null;
+  const gaps = samples.slice(1).map((sample, i) => sample.at - samples[i].at).filter((gap) => gap <= STILL_MS);
+  const seconds = gaps.reduce((sum, gap) => sum + gap, 0) / 1000, last = samples[samples.length - 1];
+  const stage = (name) => spread(samples.map((sample) => sample.timings?.[name]));
+  return { pictures: samples.length, seconds: Math.round(seconds * 100) / 100,
+    pictures_per_second: seconds > 0 ? tenths(gaps.length / seconds) : null,
+    input_to_drawn_ms: spread(moved.map((sample) => sample.input_ms)),
+    decode_ms: spread(samples.map((sample) => sample.decode_ms)),
+    trip_ms: spread(samples.map((sample) => sample.trip_ms)),
+    server_ms: spread(samples.map((sample) => sample.server_ms)),
+    evaluate_ms: stage("evaluate_ms"), host_ms: stage("host_ms"), encode_ms: stage("encode_ms"),
+    encoding: last.encoding, width: last.width, height: last.height, in_flight: PICTURES_IN_FLIGHT, skipped };
+}
+
+// Collects drawn pictures from the first one an input to the free camera asked for, and after
+// MOVING_WINDOW.ms hands their summary to `publish`. Pictures drawn while nothing moves are not
+// kept, so a still page publishes nothing.
+export class MovingTimings {
+  constructor(publish) { Object.assign(this, { publish, samples: [], skipped: 0, timer: null }); }
+
+  drawn(sample, moving) {
+    if (!this.timer && !moving) return;
+    this.samples.push(sample);
+    if (!this.timer) this.timer = setTimeout(() => this.close(), MOVING_WINDOW.ms);
+  }
+
+  skip() { if (this.timer) this.skipped += 1; }
+
+  close() {
+    const summary = movingSummary(this.samples, this.skipped);
+    this.stop();
+    if (summary) this.publish(summary);
+  }
+
+  stop() {
+    clearTimeout(this.timer);
+    Object.assign(this, { samples: [], skipped: 0, timer: null });
+  }
 }
 const ms = (value) => (value == null ? "-" : `${Math.round(value)} ms`);
 const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
@@ -85,21 +151,26 @@ function drawRaw(context, header, bytes) {  // ReadScreen's BGR rows, bottom-up
   context.putImageData(picture, 0, 0);
 }
 
-// Draws the picture, unless `current()` says a newer one arrived while this
-// one decoded.
-async function paint(canvas, header, bytes, current = () => true) {
+// Draws the picture unless `claim()` refuses (a newer one is already drawn:
+// decodes can finish out of order). Returns how long decoding and drawing
+// took, or null when it did not draw.
+async function paint(canvas, header, bytes, claim = () => true) {
   const context = canvas?.getContext("2d");
-  if (!context) return;
+  if (!context) return null;
+  const started = performance.now();
   const bitmap = header.encoding === "raw" ? null
     : await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
-  if (!current()) { bitmap?.close(); return; }
+  if (!claim()) { bitmap?.close(); return null; }
   if (canvas.width !== header.width || canvas.height !== header.height) {
     canvas.width = header.width;
     canvas.height = header.height;
   }
-  if (!bitmap) return drawRaw(context, header, bytes);
-  context.drawImage(bitmap, 0, 0);
-  bitmap.close();
+  if (!bitmap) drawRaw(context, header, bytes);
+  else {
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+  }
+  return performance.now() - started;
 }
 
 // Where a pointer sits on the picture, 0 to 1 across and down, or null off it:
@@ -112,17 +183,19 @@ export function pictureFraction(canvas, clientX, clientY) {
   return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? { u, v } : null;
 }
 
-// The open scene's requests and camera: one picture in flight, the newest
-// input waiting behind it, input time kept from the EARLIEST input so
-// input-to-picture stays honest (until that picture is drawn). `changed`
-// re-renders the page.
+// The open scene's requests and camera: up to PICTURES_IN_FLIGHT pictures in
+// flight, the newest input waiting behind them, input time kept from the
+// EARLIEST input so input-to-picture stays honest (until that picture is
+// drawn). `changed` re-renders the page.
 export class SceneLink {
   constructor({ draw, changed, ended, animate = (step) => requestAnimationFrame(step) }) {
     Object.assign(this, { draw, changed, ended, animate });
     Object.assign(this, { scene: null, frame: 0, free: false, orbit: null, entry: null, encoding: "jpeg",
-      playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: null, wanted: null,
-      sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null, entering: null,
-      arrived: 0, fly: null, speed: 1, picking: false, finding: false, glide: null, serial: 0, noticeTimer: null });
+      playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: new Map(),
+      wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
+      entering: null, arrived: 0, drawnSeq: 0, fly: null, speed: 1, picking: false, finding: false, glide: null,
+      serial: 0, noticeTimer: null, moving: null });
+    this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
   }
 
   get freeAvailable() { return !!this.scene?.free_camera?.available; }
@@ -137,36 +210,39 @@ export class SceneLink {
       ? this.onText(JSON.parse(event.data)) : this.onPicture(event.data));
     ws.onopen = () => this.want("input");
     ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
-    Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: null, wanted: null,
-      notice: null, error: null, speed: 1 });
+    Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
+      wanted: null, notice: null, error: null, speed: 1, moving: null });
     this.changed();
   }
 
   disconnect() {
     this.interrupt();
     this.playing = false;
+    this.timings.stop();
     Object.assign(this, { fly: null, picking: false, drag: null });
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
   }
 
   end(message) {
     this.disconnect();
-    Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: null, wanted: null });
+    Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: new Map(), wanted: null });
     this.changed();
     this.ended();
   }
 
+  // kind: "play" (the playback clock), "input" (the person: a step, a seek, a camera switch) or
+  // "move" (the person moved the free camera); a waiting request takes the strongest that asked.
   want(kind = "input", inputTime = performance.now()) {
     if (!this.wanted) this.wanted = { kind, inputTime };
-    else if (kind === "input") this.wanted.kind = "input";
+    else if (WANTS[kind] > WANTS[this.wanted.kind]) this.wanted.kind = kind;
     queueMicrotask(() => this.pump());
   }
 
   pump() {
     const ready = this.ws && this.ws.readyState === WebSocket.OPEN && this.scene;
-    if (this.inFlight || !this.wanted || !ready) return;
+    if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
     const id = ++this.sequence, camera = this.free && this.orbit ? cameraOf(this.orbit) : null;
-    this.inFlight = { ...this.wanted, id, sent: performance.now() };
+    this.inFlight.set(id, { ...this.wanted, id, free: !!camera, sent: performance.now() });
     this.wanted = null;
     this.ws.send(JSON.stringify({ id, session: this.scene.session, frame: this.frame, camera, encoding: this.encoding }));
     this.drawing = true;
@@ -177,20 +253,35 @@ export class SceneLink {
     const received = performance.now(), arrived = ++this.arrived;
     const length = new DataView(buffer).getUint32(0, true);
     const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, length)));
-    const request = this.inFlight && this.inFlight.id === header.id ? this.inFlight : null;
+    const request = this.inFlight.get(header.id) || null;
     if (request) {
-      this.inFlight = null;
-      this.pump();                    // the server draws the next while this one decodes
+      this.inFlight.delete(header.id);
+      this.pump();                    // the next goes out while this one decodes
     }
-    const current = () => arrived === this.arrived;
-    await this.draw(header, new Uint8Array(buffer, 4 + length), current);
-    if (!current()) return;           // a newer picture arrived while this one decoded
+    // Drawn unless a newer picture is on the canvas already: decodes can finish out of order.
+    const claim = () => {
+      if (arrived <= this.drawnSeq) return false;
+      this.drawnSeq = arrived;
+      return true;
+    };
+    const decodeMs = await this.draw(header, new Uint8Array(buffer, 4 + length), claim);
+    this.drawing = this.inFlight.size > 0;
+    if (decodeMs == null || arrived !== this.drawnSeq) {
+      this.timings.skip();
+      this.changed();
+      return;
+    }
+    const drawnAt = performance.now();
     if (request) {
       header.trip_ms = received - request.sent;
-      header.input_ms = performance.now() - request.inputTime;
-      if (request.kind === "input") this.latencies = [...this.latencies.slice(-99), header.input_ms];
+      header.input_ms = drawnAt - request.inputTime;
+      if (request.kind !== "play") this.latencies = [...this.latencies.slice(-99), header.input_ms];
     }
-    Object.assign(this, { shown: header, notice: header.reason || null, drawing: !!this.inFlight });
+    const moving = request?.kind === "move";
+    this.timings.drawn({ at: drawnAt, input_ms: moving ? header.input_ms : null, decode_ms: decodeMs,
+      trip_ms: header.trip_ms, server_ms: header.server_ms, timings: header.timings, encoding: header.encoding,
+      width: header.width, height: header.height }, moving);
+    Object.assign(this, { shown: header, notice: header.reason || null });
     this.changed();
     this.pump();
   }
@@ -201,9 +292,9 @@ export class SceneLink {
     if (resolve) resolve(message.kind ? message : { pose: null, point: null, reason: message.error });
     if (message.closed) return this.end(message.error);
     if (resolve) return;
-    if (this.inFlight && message.id === this.inFlight.id) this.inFlight = null;
+    this.inFlight.delete(message.id);
     if (message.error) this.error = message.error;
-    this.drawing = false;
+    this.drawing = this.inFlight.size > 0;
     this.changed();
     this.pump();
   }
@@ -255,7 +346,7 @@ export class SceneLink {
     const [dx, dy, sliding] = this.pending, tuning = sceneCameraTuning();
     Object.assign(this, { pending: [0, 0, false], free: true, entry: orbit,
       orbit: dx || dy ? (sliding ? slid : turned)(orbit, dx, dy, tuning) : orbit });
-    this.want("input");
+    this.want(dx || dy ? "move" : "input");
     if (this.fly?.keys.size) this.flyOn(performance.now());
   }
 
@@ -270,7 +361,7 @@ export class SceneLink {
     this.interrupt();
     if (!this.free || !this.entry) return;
     this.orbit = this.entry;
-    this.want("input", time);
+    this.want("move", time);
   }
 
   async lookAtMario(time) {
@@ -280,7 +371,7 @@ export class SceneLink {
     const answer = this.free ? await this.pose(this.frame) : null;
     if (!answer?.pose) return answer && this.say(answer.reason);
     this.orbit = lookingAt(this.orbit, answer.pose.mario, sceneCameraTuning());
-    this.want("input", time);
+    this.want("move", time);
   }
 
   move(dx, dy, sliding, time) {
@@ -291,7 +382,7 @@ export class SceneLink {
       return this.enterFree();
     }
     this.orbit = (sliding ? slid : turned)(this.orbit, dx, dy, sceneCameraTuning());
-    this.want("input", time);
+    this.want("move", time);
   }
 
   async dolly(wheel, time) {
@@ -299,7 +390,7 @@ export class SceneLink {
     await this.enterFree();
     if (!this.free) return;
     this.orbit = dollied(this.orbit, wheel, sceneCameraTuning());
-    this.want("input", time);
+    this.want("move", time);
   }
 
   // ---- Set focus: the next click on the picture puts the focus point on what it shows
@@ -317,7 +408,7 @@ export class SceneLink {
       this.picking = false;
       this.orbit = focusedOn(this.orbit, hit.world);
       this.notice = null;
-      this.want("input", time);
+      this.want("move", time);
     } finally {
       this.finding = false;
       this.changed();
@@ -369,7 +460,7 @@ export class SceneLink {
       if (this.glide !== glide) return;
       const place = glideAt(from, end, at - glide.started, tuning);
       this.orbit = place.orbit;
-      this.want("input", Math.min(input, at));
+      this.want("move", Math.min(input, at));
       input = Infinity;
       if (place.done) this.glide = null; else this.animate(step);
       this.changed();
@@ -428,7 +519,7 @@ export class SceneLink {
     fly.last = now;
     this.orbit = flown(this.orbit, movementOf(fly.keys), seconds,
       flightSpeed(this.speed, fly, tuning), tuning);
-    this.want("input", Math.min(fly.input ?? now, performance.now()));
+    this.want("move", Math.min(fly.input ?? now, performance.now()));
     fly.input = null;
     this.animate(this.flyTick);
   };
@@ -436,7 +527,7 @@ export class SceneLink {
   look(dx, dy, time) {
     if (!this.fly || !this.free || (!dx && !dy)) return;
     this.orbit = looked(this.orbit, dx, dy, sceneCameraTuning());
-    this.want("input", time);
+    this.want("move", time);
   }
 
   stepSpeed(notches) { this.speed = speedStepped(this.speed, notches, sceneCameraTuning()); this.changed(); }
@@ -709,14 +800,32 @@ function CameraBar({ link, tuning, setTuning }) {
 }
 
 function Readout({ link }) {
-  const shown = link.shown, timings = shown?.timings || {};
+  const shown = link.shown, timings = shown?.timings || {}, moving = link.moving;
   if (!shown) return null;
+  const rate = moving && (moving.pictures_per_second == null ? `${moving.pictures} picture`
+    : `${Math.round(moving.pictures_per_second)} pictures a second`);
   return html`<p class="scene-lab-readout">
     ${shown.width}x${shown.height} ${shown.encoding === "raw" ? "exact pixels" : "JPEG"},
     ${" "}input to picture ${ms(percentile(link.latencies, 0.5))} (p95 ${ms(percentile(link.latencies, 0.95))}),
     ${" "}server ${ms(shown.server_ms)}: game code ${ms(timings.evaluate_ms)}, renderer ${ms(timings.host_ms)},
     ${" "}encode ${ms(timings.encode_ms)}
-  </p>`;
+  </p>
+  ${moving && html`<p class="scene-lab-readout scene-lab-moving" data-summary=${JSON.stringify(moving)}>
+    Last time the camera moved: ${rate}, input to picture ${ms(moving.input_to_drawn_ms?.p50)}
+    ${" "}(p95 ${ms(moving.input_to_drawn_ms?.p95)}), decode ${ms(moving.decode_ms?.p50)},
+    ${" "}server ${ms(moving.server_ms?.p50)}</p>`}`;
+}
+
+// The UI observation log's reader for this page (ui/uilog.js posts it; core/uilog.py keeps the
+// "scene_viewer" surface): the summary the readout shows for the last time the camera moved.
+export function readSceneViewer(root) {
+  const line = root?.querySelector(".scene-lab-moving");
+  if (!line) return null;
+  try {
+    return { surface: "scene_viewer", ...JSON.parse(line.dataset.summary) };
+  } catch {
+    return null;
+  }
 }
 
 // The camera's tuning inspector: one control per registry row, live on the
@@ -817,6 +926,13 @@ export function SceneViewer() {
     } catch (problem) { link.fail(problem.message); return null; }
   };
   useEffect(() => { refresh.current().then((next) => { if (next?.session) link.connect(next.session); }); }, []);
+  // One observation per summary, read off the page once it shows it. Not useUiLog: that runs on
+  // every render, and this page renders every picture, which would claim the practice page's
+  // latency marks (ui/latency.js) dozens of times a second.
+  useEffect(() => {
+    const observation = link.moving && readSceneViewer(surface.current);
+    if (observation) postObservation(observation);
+  }, [link.moving]);
   async function open(name) {
     setOpening(true);
     link.fail(null);

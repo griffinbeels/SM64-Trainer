@@ -388,7 +388,7 @@ def test_free_pictures_moving_frame_by_frame_resolve_the_next_one_ahead(lab):
     assert not [thread for thread in threading.enumerate() if thread.name.startswith("scene-lab-ahead")]
 
 
-def test_quick_steps_replace_the_request_waiting_behind_a_slow_render(lab):
+def test_quick_steps_replace_the_request_waiting_behind_two_slow_renders(lab, recording):
     app, server = _app(lab, delay_ms=300)
     with TestClient(app) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
@@ -396,11 +396,83 @@ def test_quick_steps_replace_the_request_waiting_behind_a_slow_render(lab):
             for position in range(5):
                 socket.send_json({"id": position, "session": opened["session"], "frame": position,
                                   "camera": None, "encoding": "raw"})
+                if position < 2:
+                    time.sleep(0.08)                    # each begins before the next arrives
             replies = [_reply(socket) for _ in range(5)]
-        drawn = [reply["frame"] for reply in replies if "payload" in reply]
+        pictures = [reply for reply in replies if "payload" in reply]
         superseded = sorted(reply["id"] for reply in replies if reply.get("superseded"))
-        assert drawn == [0, 4] and superseded == [1, 2, 3]
-        assert server.session.served == 2                               # the host drew nothing stale
+        assert [reply["frame"] for reply in pictures] == [0, 1, 4]     # two drawing at once, then the newest
+        assert superseded == [2, 3]
+        assert [reply["payload"] for reply in pictures] == [_recorded(recording, SHOWN[frame]) for frame in (0, 1, 4)]
+        assert server.session.served == 3                               # the host drew nothing stale
+
+
+def test_the_next_camera_runs_the_game_code_while_the_host_draws_the_one_before(lab):
+    called: dict[tuple, float] = {}
+
+    class Timed(fake_viewer_host.FakeEvaluator):
+        def display_list(self, index, camera):
+            called[camera[1][0]] = time.perf_counter()
+            return super().display_list(index, camera)
+
+    app, _server = _app(lab, delay_ms=400, evaluators=lambda package, rom: Timed())
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            for ident, x in enumerate((100.0, 200.0)):
+                socket.send_json({"id": ident, "session": opened["session"], "frame": 1, "encoding": "raw",
+                                  "camera": {"focus": [1.0, 2.0, 3.0], "position": [x, 200.0, 300.0]}})
+            first = _reply(socket)
+            first_arrived = time.perf_counter()
+            second = _reply(socket)
+        assert (first["id"], second["id"]) == (0, 1) and first["camera"] == second["camera"] == "free"
+        assert first_arrived - called[200.0] > 0.2, "the second camera's game code waited for the first picture"
+
+
+def test_an_answer_is_never_taken_for_another_requests_picture(lab, recording):
+    """A picture begun and never finished (its page gave up) has its answer dropped by the next
+    finish, and a close collects the rest, so the host exits by itself."""
+    config = scene_lab_api.LabConfig.load(lab["config"])
+    session = scene_session.SceneSession.open(
+        config, lab["dir"] / "packages" / "scene-a.sm64scene",
+        host_factory=scene_session.command_host(fake_viewer_host.command()), evaluator_factory=Evaluators())
+    abandoned = session.begin(0, None, "raw")
+    wanted = session.begin(2, None, "raw")
+    header, payload = session.finish(wanted)
+    assert header["frame"] == 2 and payload == _recorded(recording, SHOWN[2])
+    with pytest.raises(RuntimeError):
+        session.finish(abandoned)                                     # its answer is gone, never reused
+    session.begin(3, None, "raw")
+    session.begin(4, None, "raw")                                     # two answers nobody collects
+    started = time.monotonic()
+    assert session.close() == 0 and time.monotonic() - started < 5
+
+
+def test_the_encoder_child_makes_the_same_jpeg_and_the_session_carries_on_without_it(lab):
+    """JPEGs come from a child process reading shared memory (the GIL stays with the game code),
+    byte for byte the in-process encode; when the child dies the session encodes in process."""
+    import picture_encoder
+    config = scene_lab_api.LabConfig.load(lab["config"])
+    session = scene_session.SceneSession.open(
+        config, lab["dir"] / "packages" / "scene-a.sm64scene",
+        host_factory=scene_session.command_host(fake_viewer_host.command()), evaluator_factory=Evaluators())
+    try:
+        assert session.encoder.ready.wait(30)
+        for frame in (2, 3):
+            header, raw = session.picture(frame, None, "raw")
+            expected = picture_encoder.encode(raw, header["width"], header["height"], scene_session.JPEG_QUALITY)
+            header, jpeg = session.picture(frame, None, "jpeg")
+            assert header["timings"]["encoder"] == "process" and jpeg == expected
+        assert len(session.slots.free) == session.slots.count                 # every slot came back
+        child = session.encoder.process
+        child.kill()
+        child.wait(timeout=10)
+        header, jpeg = session.picture(2, None, "jpeg")
+        assert header["timings"]["encoder"] == "thread" and session.encoder is None
+        assert jpeg == picture_encoder.encode(session.picture(2, None, "raw")[1], 64, 48, scene_session.JPEG_QUALITY)
+    finally:
+        assert session.close() == 0
+    assert session.slots.memory is None
 
 
 class _FrameFlags:

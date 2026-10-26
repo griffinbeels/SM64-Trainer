@@ -2,6 +2,8 @@
 
     session = SceneSession.open(config, package_path)            # Refused names why it cannot
     header, payload = session.picture(frame, camera, "jpeg")       # camera None: the recorded camera
+    pending = session.begin(frame, camera, "jpeg")                 # picture() in two halves: the host
+    header, payload = session.finish(pending)                      #   draws while the next one begins
     session.pose(frame)                                            # the recorded camera and Mario
     session.pick(frame, camera, u, v)                              # where that picture drew a pixel
     session.close()                                                # the host exits; returns its code
@@ -28,16 +30,19 @@ already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame
 After a free-camera picture of a new frame, a second thread resolves the frames that follow it
 (evaluator.prepare; backward when stepping back), so playing or stepping finds states ready.
 
-Every method runs on the caller's one thread: the server gives each session a single worker
-thread, so the host's pipe and the evaluator's view sandbox are never shared. The look-ahead
-thread touches only the evaluator's resolution side and the package, both behind their locks.
+Every method but finish runs on the caller's one thread (the server's worker), so the
+evaluator's view sandbox, the package and the host's image are never shared. finish runs on a
+second thread (the server's delivery thread), once per begin and in begin's order: it reads the
+host's answer and encodes it while the worker begins the next picture, which is what lets the
+game's code for one camera run while the renderer draws and the encoder compresses the last
+one. The host answers its requests in order (viewer.Host). The look-ahead thread touches only
+the evaluator's resolution side and the package, both behind their locks.
 src/sm64_events/server/scene_lab_api.py owns the session's lifetime. The host starts only after
 the GPU hold check; tests and e3_measure.py --fake inject fake_viewer_host.py's doubles.
 """
 from __future__ import annotations
 
 import importlib.util
-import io
 import math
 import re
 import shutil
@@ -45,6 +50,7 @@ import struct
 import sys
 import tempfile
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +62,7 @@ sys.path.insert(0, str(HERE))
 import gpu_gate  # noqa: E402
 import package as scene_package  # noqa: E402
 import pick as list_pick  # noqa: E402
+import picture_encoder  # noqa: E402
 import replay  # noqa: E402
 import viewer  # noqa: E402
 
@@ -119,6 +126,16 @@ class OwnedHost:
 
     def render(self, frame: viewer.Frame, discard: bool = False) -> viewer.Picture:
         return self.host.render(frame, None, discard)
+
+    def use_slots(self, slots) -> None:
+        """The host's reader puts each picture's pixels in one of `slots` (picture_encoder)."""
+        self.host.slots = slots
+
+    def send(self, frame: viewer.Frame) -> None:
+        self.host.send(frame)
+
+    def receive(self) -> viewer.Picture:
+        return self.host.receive()
 
     def close(self) -> int:
         try:
@@ -248,12 +265,37 @@ def _ms(since: float) -> float:
     return round((time.perf_counter() - since) * 1000, 3)
 
 
+def start_encoder():
+    """The picture encoder child (picture_encoder.PictureEncoder), or None where it cannot start:
+    the session then encodes in process."""
+    try:
+        return picture_encoder.PictureEncoder(JPEG_QUALITY)
+    except OSError:
+        return None
+
+
+@dataclass(eq=False)
+class PendingPicture:
+    """A picture begin() sent to the host and finish() has yet to collect (compared by identity)."""
+    frame: int
+    encoding: str
+    camera: str                  # what the host was sent: "free" or "recorded"
+    reason: str | None           # why a free camera's request shows the recorded camera
+    timings: dict
+    started: float
+
+
 class SceneSession:
     """One open scene package bound to the configured ROM, drawn by one host."""
 
     def __init__(self, name: str, package: scene_package.Package, rom: bytes, host, frames: list[int],
-                 outlines: list[dict], evaluator_factory, free_reason: str | None):
+                 outlines: list[dict], evaluator_factory, free_reason: str | None, encoder=None):
         self.name, self.package, self.rom, self.host = name, package, rom, host
+        # Pictures come back through shared memory and the encoder child makes their JPEGs
+        # (picture_encoder.py: the game's code then never waits on the encoder for the GIL).
+        self.encoder, self.slots = encoder, picture_encoder.PictureSlots() if encoder is not None else None
+        if self.slots is not None:
+            host.use_slots(self.slots)
         self.frames, self.outlines = frames, outlines
         self.evaluator_factory, self.free_reason = evaluator_factory, free_reason
         self._evaluator = None
@@ -262,10 +304,12 @@ class SceneSession:
         self._ahead_generation = 0                       # bumped by every free-camera request
         self._last_free: int | None = None               # the frame of the last free-camera picture
         self._last_view = self._last_walk = None         # the newest view, and its list walked (_view)
+        self._begun: deque[PendingPicture] = deque()     # sent to the host, not yet finished, oldest first
         self.served = 0
 
     @classmethod
-    def open(cls, config, path: Path, *, host_factory=None, evaluator_factory=None) -> SceneSession:
+    def open(cls, config, path: Path, *, host_factory=None, evaluator_factory=None,
+             encoder_factory=None) -> SceneSession:
         """Reads and checks the package against the configured ROM, then starts and warms the host.
         Refused carries the reason for every refusal: the GPU hold, a missing ROM, a package the
         reader refuses (another ROM, truncated, corrupt), a package with nothing shown, a renderer
@@ -290,9 +334,15 @@ class SceneSession:
             raise Refused("This scene package holds no picture the game showed.")
         factory = evaluator_factory or GameCodeEvaluator(config.map, path)
         unavailable = getattr(factory, "unavailable", None)
-        host = (host_factory or renderer_host(config))(scene_package.rom_header_hex(rom))
+        encoder = (encoder_factory or start_encoder)()      # starts beside the host's warm-up
+        try:
+            host = (host_factory or renderer_host(config))(scene_package.rom_header_hex(rom))
+        except BaseException:
+            if encoder is not None:
+                encoder.close()
+            raise
         session = cls(path.name, package, rom, host, frames, outlines, factory,
-                      unavailable(package) if unavailable else None)
+                      unavailable(package) if unavailable else None, encoder)
         try:
             session.host.render(session._recorded_frame(frames[0], {}), discard=True)  # a first list renders wrong
         except (RuntimeError, OSError, ValueError) as error:
@@ -407,6 +457,12 @@ class SceneSession:
         """Frame `frame` (a position in the frame list) as the renderer draws it: from the recorded
         camera when `camera` is None, else from that world camera. Returns the header the page
         reads and the picture: JPEG, or ReadScreen's own BGR rows bottom-up ("raw")."""
+        return self.finish(self.begin(frame, camera, encoding))
+
+    def begin(self, frame: int, camera=None, encoding: str = "jpeg") -> PendingPicture:
+        """picture()'s first half, on the session's thread: everything up to the host (the package
+        decode or the evaluator's view, the words the host lacks) and the request written. The host
+        draws it while this thread begins the next picture; finish() collects it."""
         index = self._index(frame)
         if encoding not in ENCODINGS:
             raise ValueError("unknown encoding")
@@ -421,26 +477,66 @@ class SceneSession:
             self._look_ahead(frame)          # resolves beside this picture's render and encode
         if host_frame is None:
             host_frame = self._recorded_frame(index, timings)
-        picture = self.host.render(host_frame)
+        self.host.send(host_frame)
+        timings["begin_ms"] = _ms(started)
+        pending = PendingPicture(frame, encoding, "free" if drawn_free else "recorded", reason, timings, started)
+        self._begun.append(pending)
+        return pending
+
+    def finish(self, pending: PendingPicture) -> tuple[dict, bytes]:
+        """picture()'s second half: the host's picture for `pending`, encoded. One thread calls it,
+        in begin()'s order (the host answers in order); it never touches the evaluator, the package
+        or the host's image, so it runs beside the next begin(). A picture begun before `pending`
+        that nobody finished (its caller gave up) has its answer read and dropped first, so an
+        answer is never taken for another request's."""
+        if pending not in tuple(self._begun):          # a snapshot: begin() appends from its own thread
+            raise RuntimeError("this picture is not being drawn")
+        while True:
+            oldest = self._begun.popleft()
+            picture = self.host.receive()
+            if oldest is pending:
+                break
+            self._release(picture)                          # an abandoned picture's answer
+        timings = pending.timings
         timings.update(render_ms=round(picture.render_ms, 3), read_ms=round(picture.read_ms, 3),
                        host_ms=round(picture.host_ms, 3))
         encoding_started = time.perf_counter()
-        if encoding == "jpeg":
-            from PIL import Image
-            buffer = io.BytesIO()
-            Image.frombuffer("RGB", (picture.width, picture.height), picture.pixels, "raw", "BGR", 0, -1) \
-                .save(buffer, "JPEG", quality=JPEG_QUALITY)
-            payload = buffer.getvalue()
-        else:
-            payload = picture.pixels
+        try:
+            if pending.encoding == "jpeg":
+                payload, timings["encoder"] = self._jpeg(picture)
+                digest = None
+            else:
+                payload, digest = bytes(picture.pixels), picture.sha256
+        except (ValueError, BufferError):                  # close() released the slot under it
+            raise RuntimeError("the scene closed while this picture was drawn") from None
+        finally:
+            self._release(picture)
         timings["encode_ms"] = _ms(encoding_started)
-        timings["session_ms"] = _ms(started)
+        timings["session_ms"] = _ms(pending.started)
         self.served += 1
-        return {"frame": frame, "width": picture.width, "height": picture.height, "encoding": encoding,
-                "format": "image/jpeg" if encoding == "jpeg" else "bgr24-bottom-up",
-                "camera": "free" if drawn_free else "recorded", "reason": reason,
-                "sha256": picture.sha256 if encoding == "raw" else None,
+        return {"frame": pending.frame, "width": picture.width, "height": picture.height,
+                "encoding": pending.encoding,
+                "format": "image/jpeg" if pending.encoding == "jpeg" else "bgr24-bottom-up",
+                "camera": pending.camera, "reason": pending.reason, "sha256": digest,
                 "payload_bytes": len(payload), "timings": timings}, payload
+
+    def _jpeg(self, picture: viewer.Picture) -> tuple[bytes, str]:
+        """The picture as JPEG and where it was made: by the encoder child from its slot, or here
+        (no slot, the child not ready yet, or gone: it is dropped after its first failure)."""
+        encoder = self.encoder
+        if encoder is not None and picture.slot is not None:
+            try:
+                made = encoder.jpeg(self.slots, picture.slot, picture.width, picture.height)
+            except RuntimeError:
+                self.encoder = None
+                made = None
+            if made is not None:
+                return made, "process"
+        return picture_encoder.encode(picture.pixels, picture.width, picture.height, JPEG_QUALITY), "thread"
+
+    def _release(self, picture: viewer.Picture) -> None:
+        if picture.slot is not None and self.slots is not None:
+            self.slots.release(picture.slot)
 
     def pick(self, frame: int, camera, u, v) -> dict:
         """Where the picture of `frame` from `camera` (None: the recorded camera) drew the pixel at
@@ -494,4 +590,11 @@ class SceneSession:
             self._ahead_generation += 1                  # a running job stops after its frame
             ahead.shutdown(wait=True, cancel_futures=True)
         self._evaluator = self._last_view = self._last_walk = None
-        return self.host.close()
+        try:
+            return self.host.close()
+        finally:
+            encoder, self.encoder = self.encoder, None
+            if encoder is not None:
+                encoder.close()
+            if self.slots is not None:
+                self.slots.close()

@@ -54,6 +54,26 @@ def test_an_unknown_surface_is_dropped_rather_than_stored_or_raised(log):
     assert uilog.read(log) == []
 
 
+def test_a_scene_viewer_record_keeps_only_its_own_numbers(log):
+    """The Scene viewer posts its timings while the camera moves (sceneviewer.js movingSummary):
+    counts and milliseconds in range, spreads as p50/p95, nothing else, and it reads back as one
+    line beside the journal."""
+    stored = uilog.record({"surface": "scene_viewer", "pictures": 121, "seconds": 1.97, "pictures_per_second": 60.9,
+                           "width": 1600, "height": 1200, "in_flight": 2, "skipped": 1, "encoding": "jpeg",
+                           "input_to_drawn_ms": {"p50": 22.4, "p95": 31.0, "p99": 50}, "decode_ms": {"p50": 3, "p95": 4},
+                           "server_ms": "fast", "evaluate_ms": {"p50": -1, "p95": True}, "note": "x" * 50,
+                           "trip_ms": {"p50": 1e9, "p95": 17}, "host_ms": None})
+    (read,) = uilog.read(log)
+    assert read == stored
+    assert stored["input_to_drawn_ms"] == {"p50": 22.4, "p95": 31.0} and stored["decode_ms"] == {"p50": 3, "p95": 4}
+    assert stored["server_ms"] is None and stored["host_ms"] is None and "note" not in stored
+    assert stored["evaluate_ms"] == {"p50": None, "p95": None} and stored["trip_ms"] == {"p50": None, "p95": 17}
+    assert (stored["pictures"], stored["in_flight"], stored["encoding"]) == (121, 2, "jpeg")
+    assert uilog.record({"surface": "scene_viewer", "encoding": "png", "pictures": True})["encoding"] is None
+    line = uilog.render(stored)
+    assert "60.9 pictures/s" in line and "input to drawn 22.4/31.0 ms" in line and "1600x1200 jpeg" in line
+
+
 def test_unknown_fields_never_reach_disk(log):
     uilog.record({**SELECTOR, "evil": "x" * 5000, "nested": {"deep": [1] * 900}})
     (stored,) = uilog.read(log)
