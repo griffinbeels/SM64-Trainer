@@ -19,8 +19,13 @@ the configured ROM. The scene lab's code (tools/scene_lab) runs from a source ch
 
 Nothing runs until a page opens a package. The session (tools/scene_lab/scene_session.py)
 starts the renderer host after the GPU hold check and, on the first free-camera request, the
-evaluator. Each session owns ONE worker thread: every package decode, evaluator run and host
-round trip happens there, and the event loop only awaits it. A session ends on Close, on
+evaluator. Each session owns two threads, and the event loop only awaits them: the worker runs
+every package decode, evaluator run, pose, pick and request written to the host (session.begin);
+the delivery thread takes each picture back and has the picture encoder child make its JPEG
+(session.finish) while the worker begins the next, so the game's code for one camera runs while
+the renderer draws and the encoder compresses the one before (measured 2026-10-26 on the
+headless page: a 60 Hz drag drew 59 pictures a second, every input, up from 52, and its input
+to drawn p95 fell from 48 to 31 ms). A session ends on Close, on
 another Open, when no page has been connected for `page_gone_seconds` (unload, leaving the
 tab), after the config's idle_seconds without a request, when its host dies, and at server
 shutdown; each end closes the host's pipe and waits for it to exit.
@@ -34,15 +39,19 @@ sound late. 404 for no sound or no such block, 409 for a scene no longer open, 4
 that fails its hash.
 
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
-xyz, "position": xyz[, "roll", "fov"]}, "encoding": "jpeg"|"raw"} for a picture, {"id",
+xyz, "position": xyz[, "roll", "fov"]}, "encoding": "jpeg"|"raw"|"shared"} for a picture ("shared":
+the desktop window's page only, once attach_window gave the scene its window; the exact pixels
+go through WebView2 shared memory and the binary reply is the header alone, or a JPEG when the
+post failed, as its header's encoding says), {"id",
 "session", "kind": "pose", "frame"} for the recorded camera and Mario, {"id", "session", "kind":
 "pick", "frame", "camera", "u", "v"} for where the picture drew a point (u, v from 0 to 1 across
 and down; Set focus). A picture comes back as one binary message, [u32 little-endian header
 length][header JSON][picture]; everything else is JSON text: a pose, a pick, {"id", "error"[,
-"closed"]}, or {"id", "superseded": true}. Each socket keeps at most one picture request
-waiting: a newer one replaces it and the replaced one is answered superseded, so quick steps
-never queue stale renders behind the one being drawn. Poses and picks wait in order and are
-answered before pictures. The server sends its
+"closed"]}, or {"id", "superseded": true}. Each socket draws up to PICTURES_IN_FLIGHT pictures at
+once (answered in the order they began) and keeps at most one more request waiting: a newer one
+replaces it and the replaced one is answered superseded, so quick steps never queue stale
+renders behind the ones being drawn. Poses and picks wait in order and are answered before a
+waiting picture. The server sends its
 messages uncompressed even where the page negotiated permessage-deflate (_SendUncompressed):
 compressing a picture cost the event loop ~5 ms per JPEG and ~75 ms per exact-pixel picture.
 """
@@ -71,6 +80,7 @@ PAGE_GONE_SECONDS = 20.0       # a reload or a tab switch comes back within this
 DEFAULT_IDLE_SECONDS = 300.0
 WATCH_SECONDS = 1.0
 MAX_QUESTIONS_WAITING = 8     # poses and picks a socket holds; the oldest is answered superseded
+PICTURES_IN_FLIGHT = 2        # pictures a socket has begun and not yet sent (the page keeps as many)
 ENDS = {"closed": "Closed.",
         "replaced": "Closed to open another scene.",
         "page": "Closed because no page was showing it.",
@@ -213,7 +223,8 @@ class SceneLab:
         self.page_gone_seconds, self.watch_seconds = page_gone_seconds, watch_seconds
         self.idle_override = idle_seconds
         self.session = None
-        self.worker: ThreadPoolExecutor | None = None
+        self.worker: ThreadPoolExecutor | None = None      # the session's thread: all but finish
+        self.delivery: ThreadPoolExecutor | None = None    # its second thread: finish, then the reply's bytes
         self.described: dict | None = None
         self.generation = 0
         self.lock = asyncio.Lock()
@@ -224,6 +235,19 @@ class SceneLab:
         self.host_exit: int | None = None
         self.watch_task: asyncio.Task | None = None
         self.loop_probe = LoopProbe() if measure_loop else None
+        self.shared = None             # the desktop window's shared-memory pictures (attach_window)
+
+    def attach_window(self, window) -> None:
+        """The desktop app's pywebview window: its page may then ask for encoding "shared" and get
+        the renderer's exact pixels through WebView2 shared memory instead of a JPEG
+        (tools/scene_lab/webview_pictures.py). A browser's page goes on getting JPEGs."""
+        try:
+            self.shared = _lab_module("webview_pictures").WebView2Pictures(window)
+        except ConfigError:
+            self.shared = None
+
+    def _scene(self, described: dict) -> dict:
+        return {"session": self.generation, **described, "shared_pictures": self.shared is not None}
 
     # ------------------------------------------------------------ status, open, close
 
@@ -242,8 +266,7 @@ class SceneLab:
 
     async def status(self) -> dict:
         report = await asyncio.to_thread(self._status_blocking)
-        report["session"] = ({"session": self.generation, **self.described}
-                             if self.session is not None and self.described else None)
+        report["session"] = self._scene(self.described) if self.session is not None and self.described else None
         report["ended"] = self.ended
         if self.loop_probe is not None:
             report["loop"] = self.loop_probe.summary()
@@ -270,23 +293,25 @@ class SceneLab:
                 worker.shutdown(wait=False)
                 raise
             self.session, self.worker, self.described = session, worker, described
+            self.delivery = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab-delivery")
             self.generation += 1
             self.idle_seconds = self.idle_override or config.idle_seconds
             self.last_used = self.page_seen = time.monotonic()
             self.ended = self.host_exit = None
             self._start_watch()
-            return {"session": self.generation, **described}
+            return self._scene(described)
 
     async def close(self, code: str = "closed") -> None:
         async with self.lock:
             await self._end(code)
 
     async def _end(self, code: str, message: str | None = None) -> None:
-        """Ends the open scene, if any: the close runs on its worker after any render in flight."""
-        session, worker = self.session, self.worker
+        """Ends the open scene, if any: the close runs on its worker after any picture it began
+        (the host's close collects answers no delivery took)."""
+        session, worker, delivery = self.session, self.worker, self.delivery
         if session is None:
             return
-        self.session = self.worker = self.described = None
+        self.session = self.worker = self.delivery = self.described = None
         self.ended = {"code": code, "message": message or ENDS[code], "name": session.name}
         try:
             self.host_exit = await asyncio.get_running_loop().run_in_executor(worker, session.close)
@@ -294,6 +319,7 @@ class SceneLab:
             log.warning("The scene viewer's renderer did not close cleanly.", exc_info=True)
         finally:
             worker.shutdown(wait=False)
+            delivery.shutdown(wait=False)
         if self.loop_probe is not None and self.loop_probe.task is not None:
             self.loop_probe.task.cancel()
             self.loop_probe.task = None
@@ -343,20 +369,46 @@ class SceneLab:
             self.busy -= 1
             self.last_used = time.monotonic()
 
-    async def picture_reply(self, message: dict):
-        ident = message.get("id")
+    async def begin_picture(self, message: dict) -> asyncio.Future:
+        """Starts one picture and returns the future of its reply (the message's bytes, or an error
+        dict). The worker runs everything up to the host (session.begin); the delivery thread then
+        reads and encodes it (session.finish) while the worker is free for the next request, so
+        the game's code for the next camera runs while the renderer draws and the encoder
+        compresses this one. Deliveries finish in the order they began."""
+        ident, generation = message.get("id"), message.get("session")
         received = time.perf_counter()
+        loop = asyncio.get_running_loop()
         try:
-            header, payload = await self._run(message.get("session"), "picture", message.get("frame"),
-                                              message.get("camera"), message.get("encoding", "jpeg"))
+            pending = await self._run(generation, "begin", message.get("frame"), message.get("camera"),
+                                      message.get("encoding", "jpeg"))
+        except SceneClosed as closed:
+            return _answered({"id": ident, "error": str(closed), "closed": True})
+        except ValueError as error:
+            return _answered({"id": ident, "error": str(error)})
+        session, delivery = self.session, self.delivery
+        if session is None or generation != self.generation:     # ended while the request was sent
+            delivery = None
+        self.busy += 1
+        work = None if delivery is None else loop.run_in_executor(
+            delivery, _delivered, session, pending, ident, generation, received, self.shared)
+        return loop.create_task(self._delivery_reply(session, work, ident))
+
+    async def _delivery_reply(self, session, work, ident):
+        try:
+            if work is None:
+                raise SceneClosed((self.ended or {}).get("message") or "This scene is not open.")
+            return await asyncio.shield(work)
         except SceneClosed as closed:
             return {"id": ident, "error": str(closed), "closed": True}
-        except ValueError as error:
-            return {"id": ident, "error": str(error)}
-        header.update(id=ident, session=message.get("session"),
-                      server_ms=round((time.perf_counter() - received) * 1000, 3))
-        encoded = json.dumps(header).encode("utf-8")
-        return struct.pack("<I", len(encoded)) + encoded + payload
+        except (RuntimeError, OSError) as error:
+            message = f"The renderer stopped: {error}"
+            async with self.lock:
+                if session is self.session:
+                    await self._end("renderer", message)
+            return {"id": ident, "error": message, "closed": True}
+        finally:
+            self.busy -= 1
+            self.last_used = time.monotonic()
 
     async def pose_reply(self, message: dict) -> dict:
         try:
@@ -390,7 +442,8 @@ class SceneLab:
         self.sockets += 1
         self.page_seen = time.monotonic()
         page = _PageSocket(self, websocket)
-        tasks = [asyncio.create_task(page.receive()), asyncio.create_task(page.answer())]
+        tasks = [asyncio.create_task(page.receive()), asyncio.create_task(page.answer()),
+                 asyncio.create_task(page.deliver())]
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
@@ -405,6 +458,23 @@ class SceneLab:
             # asyncio.wait, not gather: if the server is cancelling this handler, the
             # cancellation that propagates must stay the server's own, not a child's.
             await asyncio.wait(tasks)
+
+
+def _answered(reply) -> asyncio.Future:
+    future = asyncio.get_running_loop().create_future()
+    future.set_result(reply)
+    return future
+
+
+def _delivered(session, pending, ident, generation, received: float, shared=None) -> bytes:
+    """On the delivery thread: the host's picture for `pending`, encoded and packed as the page's
+    binary message, so the event loop only sends it. A "shared" picture's pixels go to the desktop
+    window's page through `shared` (attach_window), tagged with the request it answers."""
+    share = None if shared is None else (lambda pixels: shared.post(pixels, {"id": ident, "session": generation}))
+    header, payload = session.finish(pending, share)
+    header.update(id=ident, session=generation, server_ms=round((time.perf_counter() - received) * 1000, 3))
+    encoded = json.dumps(header).encode("utf-8")
+    return b"".join((struct.pack("<I", len(encoded)), encoded, payload))
 
 
 class _SendUncompressed:
@@ -464,16 +534,19 @@ def _send_uncompressed(websocket: WebSocket) -> bool:
 
 
 class _PageSocket:
-    """One page's socket: at most one picture request waiting (a newer one supersedes it),
-    a short queue of questions (poses and picks), answered one at a time in that order,
-    questions first."""
+    """One page's socket: at most one picture request waiting (a newer one supersedes it), up
+    to PICTURES_IN_FLIGHT pictures begun and not yet sent (answered in the order they began),
+    and a short queue of questions (poses and picks), answered one at a time in that order,
+    questions before a waiting picture."""
 
     def __init__(self, lab: SceneLab, websocket: WebSocket):
         self.lab, self.websocket = lab, websocket
         self.sending = asyncio.Lock()
         self.picture: dict | None = None
         self.questions: deque = deque()
-        self.wake = asyncio.Event()
+        self.drawing: deque[asyncio.Future] = deque()   # replies of pictures begun, oldest first
+        self.wake = asyncio.Event()                     # a request arrived, or a picture left
+        self.begun = asyncio.Event()                    # a picture began
         self.uncompressed: bool | None = None       # set at the first send, after a message arrived
 
     async def send(self, reply) -> None:
@@ -508,17 +581,31 @@ class _PageSocket:
             self.wake.set()
 
     async def answer(self) -> None:
+        """Questions, then the waiting picture once fewer than PICTURES_IN_FLIGHT are drawing."""
         while True:
             await self.wake.wait()
             self.wake.clear()
-            while self.questions or self.picture is not None:
+            while self.questions or (self.picture is not None and len(self.drawing) < PICTURES_IN_FLIGHT):
                 if self.questions:
                     question = self.questions.popleft()
                     reply = self.lab.pick_reply if question.get("kind") == "pick" else self.lab.pose_reply
                     await self.send(await reply(question))
                 else:
                     message, self.picture = self.picture, None
-                    await self.send(await self.lab.picture_reply(message))
+                    self.drawing.append(await self.lab.begin_picture(message))
+                    self.begun.set()
+
+    async def deliver(self) -> None:
+        """Sends each begun picture's reply as it is ready, in the order they began."""
+        while True:
+            await self.begun.wait()
+            self.begun.clear()
+            while self.drawing:
+                # Shielded: a page that leaves never cancels a delivery, whose host answer must be read.
+                reply = await asyncio.shield(self.drawing[0])
+                self.drawing.popleft()
+                self.wake.set()                          # room for the waiting picture
+                await self.send(reply)
 
 
 class OpenBody(BaseModel):

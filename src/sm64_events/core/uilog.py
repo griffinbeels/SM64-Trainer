@@ -62,10 +62,36 @@ CLIENT_FIELDS = ("surface", "client_utc", "title", "note", "cells", "cards",
 # error anywhere. `tests/test_ui_log_records_the_real_page.py` is what catches
 # that, because it asserts the records LAND rather than that they were sent.
 SURFACES = ("selector", "target", "log", "recorder", "ghost_library", "community_library",
-            "player_page", "progress_publication", "friends")
+            "player_page", "progress_publication", "friends", "scene_viewer")
 
 MAX_TEXT = 200
 MAX_CELLS = 40
+
+# The Scene viewer's summary of a window while its camera moved (sceneviewer.js, movingSummary):
+# counts and milliseconds only, each a number in range, every spread a {p50, p95} pair.
+SCENE_VIEWER_COUNTS = ("pictures", "seconds", "pictures_per_second", "width", "height", "in_flight", "skipped")
+SCENE_VIEWER_SPREADS = ("input_to_drawn_ms", "decode_ms", "trip_ms", "server_ms", "evaluate_ms", "host_ms",
+                        "encode_ms")
+SCENE_VIEWER_LIMIT = 1e6
+
+
+def _scene_number(value):
+    if type(value) not in (int, float) or not 0 <= value <= SCENE_VIEWER_LIMIT:
+        return None
+    return value
+
+
+def _scene_viewer(body: dict) -> dict:
+    """A scene_viewer record keeps only its own numbers: anything else, or out of range, is null."""
+    entry = {"surface": "scene_viewer",
+             "encoding": body.get("encoding") if body.get("encoding") in ("jpeg", "raw", "shared") else None}
+    for key in SCENE_VIEWER_COUNTS:
+        entry[key] = _scene_number(body.get(key))
+    for key in SCENE_VIEWER_SPREADS:
+        value = body.get(key)
+        entry[key] = ({"p50": _scene_number(value.get("p50")), "p95": _scene_number(value.get("p95"))}
+                      if isinstance(value, dict) else None)
+    return entry
 
 
 def log_path() -> Path:
@@ -108,6 +134,8 @@ def sanitize(body: dict) -> dict | None:
                for key, value in counts.items()):
             return None
         return {"surface": "friends", "phase": phase, **counts}
+    if body["surface"] == "scene_viewer":
+        return _scene_viewer(body)
     return {key: _clip(body[key]) for key in CLIENT_FIELDS if key in body}
 
 
@@ -207,6 +235,15 @@ def render(entry: dict) -> str:
             " ".join(part for part in (row.get("label"), row.get("igt")) if part)
             for row in rows)
         return f"recorder({entry.get('total')}) -> {drawn or '(NO ROWS)'}"
+    if entry.get("surface") == "scene_viewer":
+        def pair(key):
+            value = entry.get(key) or {}
+            return f"{value.get('p50')}/{value.get('p95')} ms"
+        return (f"scene viewer moving: {entry.get('pictures_per_second')} pictures/s ({entry.get('pictures')} in "
+                f"{entry.get('seconds')} s, {entry.get('skipped')} not drawn), input to drawn {pair('input_to_drawn_ms')},"
+                f" decode {pair('decode_ms')}, trip {pair('trip_ms')}, server {pair('server_ms')} (game code "
+                f"{pair('evaluate_ms')}, renderer {pair('host_ms')}, encode {pair('encode_ms')}), "
+                f"{entry.get('width')}x{entry.get('height')} {entry.get('encoding')}")
     cards = [card for card in (entry.get("cards") or []) if isinstance(card, dict)]
     if not cards:
         return "(NO CARDS)"

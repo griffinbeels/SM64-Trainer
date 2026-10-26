@@ -14,7 +14,7 @@ from source_scan import strip_comments
 UI = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui"
 
 
-def test_the_viewer_asks_for_one_picture_at_a_time_and_says_why_when_it_cannot():
+def test_the_viewer_keeps_two_pictures_in_flight_and_says_why_when_it_cannot():
     run_frontend("sceneviewer.test.js")
 
 

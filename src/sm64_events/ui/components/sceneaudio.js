@@ -26,15 +26,14 @@ const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
 const WORKLET = new URL("./sceneaudioworklet.js", import.meta.url).href;
 export const NO_SOUND = "This recording has no sound.";
-// Steering numbers; the picture delays and the lean were checked on a
+// Steering numbers; the lean was checked on a
 // synthetic click track (snd page check), the rest are untuned.
 export const SCENE_SOUND = {
   preference: "sm64.sceneSound", volume: 0.5,   // the localStorage entry: {volume, muted}
   joinMs: 2,                 // samples this close to the recorded time between two pictures are one run
   bend: 0.01, convergeSeconds: 1, deadMs: 3, jumpMs: 80,
   leadSeconds: 0.04,         // a steer takes effect this far ahead of the audio clock
-  pictureDelayMs: 35,        // a picture appears this long after it is asked for, until the scene measures it
-  tickMs: 1000 / 60,         // a play asks for each picture on the display frame after it is due
+  tickMs: 1000 / 60,         // a display frame: a play's picture shows within one after its recorded time
   coldLeadMs: 250,           // a starting audio device can be heard this soon after Play, before it reports its clock
   marginMs: 5, settleMs: 500, settleJumpMs: 10,
   startMs: 20, steerMs: 100, latencyWindow: 9, aheadSeconds: 6, keepBlocks: 8, cueMs: 150, syncWindow: 600,
@@ -132,14 +131,14 @@ async function readBlock(response) {
 
 // The open scene's sound. SceneLink calls load (a scene opened or ended),
 // arm, lead and play (Play: the recorded clock starts with frame `from` due at
-// performance time `start`), shown (a picture was drawn) and stop (Pause, a
+// performance time `start`), shown (a play's picture was drawn) and stop (Pause, a
 // step, a seek, a closed scene); the page reads the rest.
 export class SceneSound {
   constructor({ changed } = {}) {
     const saved = storedSound();
     Object.assign(this, { changed: changed || (() => {}), volume: saved.volume, muted: saved.muted, table: null,
       runs: [], times: new Float64Array(0), reason: null, session: null, fps: 30, ctx: null, master: null, node: null,
-      playing: null, lastLate: null, delays: [], offsets: [], reports: [], pending: [], sync: [], decoded: new Map(),
+      playing: null, lastLate: null, offsets: [], reports: [], pending: [], sync: [], decoded: new Map(),
       loading: new Map(), failed: new Set(), notice: null, broken: null, steerTimer: null, cueTimer: null,
       idleTimer: null });
   }
@@ -237,16 +236,14 @@ export class SceneSound {
   }
 
   // How late a play's picture shows against its recorded time: this play's
-  // own lateness once it has some; before that the last play's; else what a
-  // picture took from being asked for to showing (the play's first, asked for
-  // at Play, then the scene's paused ones, the open's included) plus half a
-  // display frame, which a play's picture also waits for its request; else
-  // pictureDelayMs.
+  // own lateness once it has some; before that the last play's; else half a
+  // display frame. SceneLink asks for a play's pictures ahead and draws each
+  // on the display frame it is due, so one that is ready in time shows within
+  // a frame after its time.
   pictureDelay() {
-    const play = this.playing, paused = median(this.delays);
+    const play = this.playing;
     if (play?.late.length) return median(play.late);
-    if (play?.first != null) return play.first + SCENE_SOUND.tickMs / 2;
-    return this.lastLate ?? (paused == null ? SCENE_SOUND.pictureDelayMs : paused + SCENE_SOUND.tickMs / 2);
+    return this.lastLate ?? SCENE_SOUND.tickMs / 2;
   }
 
   // How long SceneLink holds the first picture of a play so the sound can
@@ -267,7 +264,7 @@ export class SceneSound {
     this.stop();
     this.arm();
     if (!this.ctx) return;
-    this.playing = { from, start, asked: performance.now(), late: [], first: null, plan: null, began: null };
+    this.playing = { from, start, late: [], plan: null, began: null };
     this.fetchFrom(this.times[from]);
     this.steer();
     this.steerTimer = setInterval(() => this.steer(), SCENE_SOUND.startMs);
@@ -288,23 +285,16 @@ export class SceneSound {
     this.changed();
   }
 
-  // A picture asked for at `sent` was drawn; it shows from the next compositor
-  // frame. While paused that measures the picture delay; during a play, how
-  // late the picture is against its recorded time (a picture asked for before
-  // it was due, like the play's first, says nothing about that).
-  shown(frame, sent) {
-    const play = this.playing, due = play && play.start + this.times[frame] - this.times[play.from];
-    const early = play && frame === play.from && sent < due && sent >= play.asked;   // asked for at Play
-    if (play && !early && (frame < play.from || !(sent >= due))) return;
+  // A play's picture was drawn for its recorded time (SceneLink calls this for
+  // those only); it shows from the next compositor frame, and how late that is
+  // against its recorded time steers the sound.
+  shown(frame) {
+    const play = this.playing;
+    if (!play || frame < play.from) return;
+    const due = play.start + this.times[frame] - this.times[play.from];
     const next = globalThis.requestAnimationFrame ?? ((callback) => setTimeout(callback, 0));
     next((frameTime) => {            // the display frame's start, unless the stamp is on another clock (jsdom)
       const now = performance.now(), visible = Math.abs(now - frameTime) < 50 ? frameTime : now;
-      if (!play || early) {
-        if (visible - sent >= 1000) return;
-        if (!play && !this.playing) this.delays = [...this.delays.slice(-(SCENE_SOUND.latencyWindow - 1)), visible - sent];
-        else if (this.playing === play) play.first = visible - sent;
-        return;
-      }
       if (this.playing !== play) return;
       play.late.push(visible - due);
       if (play.late.length > SCENE_SOUND.latencyWindow) play.late.shift();

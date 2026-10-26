@@ -11,8 +11,10 @@ other process keeping a GPU 3D engine busy; --ignore-gpu-user names a non-game i
 WindowsTerminal.exe). Then it builds viewer_host.exe (timed apart, so a compile never counts
 as opening), serves the real routes (server/scene_lab_api.py behind the Trainer's local
 access check, mount_scene_lab with its loop probe on) on a free loopback port in this
-process, and drives them over HTTP and the WebSocket as the page does: one picture in
-flight, a newer input replacing the waiting one, input time kept from the earliest input.
+process, and drives them over HTTP and the WebSocket as the page did before it kept two
+pictures in flight (2026-10-26): one picture in flight, a newer input replacing the waiting
+one, input time kept from the earliest input. The page's own numbers, two in flight, are in
+the UI observation log (surface scene_viewer).
 
 Reported (milliseconds unless named): open (POST open) and open to first picture; recorded
 camera step forward/back and random seek; free camera start (the evaluator's first build and
