@@ -226,9 +226,8 @@ class LiveAudio:
         """One sentence: why the ring holds no sound for the span."""
         overlapping = [entry for entry in list(self._sources)
                        if entry[2] <= qpc_to and (entry[3] is None or entry[3] >= qpc_from)]
-        if any(entry[0] != "process" for entry in overlapping) and \
-                not any(entry[0] == "process" for entry in overlapping):
-            return NOT_ISOLATED
+        if any(entry[0] != "process" for entry in overlapping):
+            return NOT_ISOLATED            # the device loopback ran then, and the ring kept none of it
         if records and qpc_to < records[0][3]:
             keeps = f"{self.seconds / 60:g} minutes" if self.seconds >= 120 else f"{self.seconds:g} seconds"
             return f"This attempt's sound has already left the live sound buffer, which keeps the last {keeps}."

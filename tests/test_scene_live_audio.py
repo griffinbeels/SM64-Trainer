@@ -3,8 +3,9 @@
 A fake source stands in for the recorder's ProcessAudioSource and delivers what its pump
 would (read-only int16 stereo arrays) while a scripted QPC clock says when each chunk arrived.
 The device clock runs a known ppm off a 10 MHz QPC, as in scene_sound_fixture.py, so every
-expected sample is the simulation's truth. The last test cuts a scene from a synthetic tap
-session, adds the sound the ring kept and opens it through the lab's real routes.
+expected sample is the simulation's truth. The real ReplayRecorder runs with its factories
+wrapped as main.py wires them. The last tests cut a scene from a synthetic tap session, add
+the sound the ring kept and open it through the lab's real routes.
 """
 import io
 import json
@@ -110,6 +111,59 @@ def test_the_real_process_source_keeps_everything_the_recorder_reads():
     live, _clock = _live()
     wrapped = live.wrap(lambda pid: ProcessAudioSource(pid))(4242)       # constructing starts nothing
     assert wrapped.mode == "process" and isinstance(wrapped.ghost_timeline, GhostTimeline)
+
+
+def _recorder(tmp_path, live, primary, fallback=None):
+    """The real ReplayRecorder wired as main.py wires it, its factories wrapped (test_replay_recorder's fakes)."""
+    import test_replay_recorder as rr
+    from sm64_events.replay.clock import CaptureClock
+    from sm64_events.replay.config import ReplayConfig
+    from sm64_events.replay.recorder import ReplayRecorder
+
+    video, sink = rr.FakeVideoSource(), rr.FakeAvSink()
+    recorder = ReplayRecorder(
+        cfg=ReplayConfig(scratch_dir=tmp_path / "buf", attach_poll_s=0.01, fps=30),
+        window_finder=lambda title: rr.WIN, video_factory=lambda win: video,
+        audio_factory=live.wrap(lambda pid: primary),
+        fallback_audio_factory=live.wrap((lambda pid: fallback) if fallback else None),
+        clock_factory=lambda: CaptureClock(anchor_qpc_100ns=0, anchor_utc=rr.T0), codec="libx264",
+        video_sink_factory=lambda cfg, on_segment, codec: sink, recorder_lock_factory=rr._FakeLock)
+    return recorder, video, sink, rr.wait_for
+
+
+def test_the_real_recorder_records_the_same_bytes_through_the_wrapper(tmp_path):
+    live, clock = _live()
+    primary = FakeSource(42)
+    recorder, video, sink, wait_for = _recorder(tmp_path, live, primary)
+    recorder.start()
+    try:
+        assert wait_for(lambda: primary.on_pcm is not None and video.on_frame is not None)
+        assert recorder.status()["audio_mode"] == "process"
+        sent = _play(clock, primary, 6)
+        assert wait_for(lambda: len(sink.audio) == 6)
+        assert sink.audio == [chunk.tobytes() for chunk in sent]           # what it records unwrapped
+    finally:
+        recorder.stop()
+    assert [data for _chunk, data in _records(live)] == sink.audio
+    assert "stopped recording sound" in live.health()["reason"]
+
+
+def test_the_real_recorder_falls_back_through_the_wrapper_and_the_ring_refuses(tmp_path):
+    live, clock = _live()
+    failing, fallback = FakeSource(42), FakeSource(42, mode="system")
+    failing.start = lambda on_pcm: (_ for _ in ()).throw(RuntimeError("proc-tap unavailable"))
+    recorder, video, sink, wait_for = _recorder(tmp_path, live, failing, fallback)
+    recorder.start()
+    try:
+        assert wait_for(lambda: recorder.status()["audio_mode"] == "system")
+        assert failing.stopped                                              # the recorder disposed of it
+        begun = clock.now
+        _play(clock, fallback, 3)
+        assert wait_for(lambda: len(sink.audio) == 3)
+        assert live.health()["reason"] == la.NOT_ISOLATED and not _records(live)
+        assert live.write_span(begun, clock.now, tmp_path / "x.cap")["reason"] == la.NOT_ISOLATED
+    finally:
+        recorder.stop()
 
 
 def test_a_recorder_failure_is_its_own_and_a_ring_failure_never_reaches_it():
