@@ -51,8 +51,8 @@ Limits:
 - Task indexes count the tasks the tap saw: a lapse leaves no gap in them; time and
   global_timer tell when a task was drawn.
 - Without boot.bin (its copy was dropped), a package lacks the act selector's code row.
-- package.tap_source reads only a whole tap.bin, so this module rebuilds its captures from
-  a record stream (_captures); a tap_source that took records would let both share it.
+- captures() is the capture loop package.tap_source still repeats inline (package.py is
+  m4-cut's); a test holds the two equal until tap_source calls it.
 """
 from __future__ import annotations
 
@@ -176,7 +176,15 @@ class TaskRef:
 
 
 @dataclass
-class FollowSource(package.Source):
+class LiveSource(package.Source):
+    """Spool.source's Source. A capture's times count from origin_qpc, the producer QPC of the
+    first task the captures reached (set when they reach it): its present showed at
+    origin_qpc + present_time_us * Spool.frequency // 1_000_000."""
+    origin_qpc: int | None = None
+
+
+@dataclass
+class FollowSource(LiveSource):
     """Spool.follow's Source: its captures keep coming as the writer flushes tasks."""
     ended: str | None = None            # why the captures stopped short (a plain sentence), or None
     last: int | None = None             # the newest task the captures yielded
@@ -310,8 +318,8 @@ class Spool:
         if start is None:
             raise LookupError(f"task {first} is not in the spool {self.session.name}")
         chain = [n for n in numbers if n >= start]
-        source = self._new_source(package.Source, states)
-        source.captures = _captures(source, self._records(chain, last), first, last, self.frequency)
+        source = self._new_source(LiveSource, states)
+        source.captures = captures(source, self._records(chain, last), self.frequency, first=first, last=last)
         return source
 
     def follow(self, first: int, *, states: bool = True) -> FollowSource:
@@ -356,7 +364,8 @@ class Spool:
             if task.fields["refusals"]:
                 source.ended = f"Task {index}'s display list could not be read whole."
                 return
-            origin = task.qpc if origin is None else origin
+            if origin is None:
+                origin = source.origin_qpc = task.qpc
             yield _capture(task, present, origin, self.frequency)
             source.last = index
             if source.stop is not None and index >= source.stop:
@@ -512,20 +521,26 @@ def _read_from(path: Path, offset: int) -> bytes | None:
         return None
 
 
-def _captures(source: package.Source, records, first: int, last: int, frequency: int):
-    """package.tap_source's captures over a record stream, keeping tasks first..last: the
-    tasks before `first` still pass through pairing and the scene states, never out."""
+def captures(source: package.Source, records, frequency: int, *, first: int = 0, last: int | None = None,
+             pair: str = "next"):
+    """A tap record stream's captures, the one loop package.tap_source's captures repeat (a
+    tap_source that called it with tap.read_records would share it; package.py stays
+    m4-cut's): records through source.states when kept, tap.paired, and every task
+    first..last packaged except a refused one (counted in source.refused). Tasks before
+    `first` still pass through pairing and the scene states, never out. Times count from the
+    first task reached, refused or not; source.origin_qpc names it."""
     origin = None
     stream = source.states.watch(records) if source.states else records
-    for task, present in tap.paired(stream, "next"):
+    for task, present in tap.paired(stream, pair):
         index = task.fields["task_index"]
         if index < first:
             if source.states is not None:
                 source.states.task.pop(task.sequence, None)   # its level records still count
             continue
-        if index > last:
+        if last is not None and index > last:
             return
-        origin = task.qpc if origin is None else origin
+        if origin is None:
+            origin = source.origin_qpc = task.qpc
         if task.fields["refusals"]:
             source.refused += 1
             continue
