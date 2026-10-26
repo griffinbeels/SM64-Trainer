@@ -90,9 +90,16 @@ def session_presents(session: Path) -> tuple[int, list]:
     return int(header["qpc_frequency"]), presents
 
 
-def build(session: Path, capture: Path, *, offset_ms: float = 0.0):
-    """(AudioClock, stored stream) for a tap session and its audio capture."""
-    frequency, presents = session_presents(session)
+def build(session: Path, capture: Path, *, offset_ms: float = 0.0, presents: list | None = None):
+    """(AudioClock, stored stream) for a tap session and its audio capture.
+    `presents`: the session's presents when the caller already read them (a
+    long session's tap.bin is gigabytes; this skips a second pass)."""
+    if presents is None:
+        frequency, presents = session_presents(session)
+    else:
+        import tap
+
+        frequency = int(tap.session_header(session)["qpc_frequency"])
     rate, cap_frequency, chunks, payloads = read_capture(capture)
     if cap_frequency != frequency:
         raise CaptureError(f"capture clock {cap_frequency} Hz differs from the session's {frequency} Hz")
