@@ -1245,6 +1245,28 @@ any task about 60 ms (2026-10-25).
 - **Not** -- the [[renderer]], which draws a list; the evaluator makes the
   list the [[renderer]] then draws
 
+### Scene viewer
+
+An M4 experiment's page inside the Trainer that plays one [[scene package]]
+in its reconstructed stage: the game's own pictures from the recorded camera,
+stepping forward and back, seeking and 30 fps playback, and a free camera the
+[[scene evaluator]] redraws (drag to turn, Shift-drag to slide, the wheel to
+move closer, F to look at Mario, R back to the recorded camera). It is
+lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab
+config (the ROM, the package folder, Project64's Plugin folder, the symbol
+map). Nothing starts until someone opens a package; the hidden [[renderer]]
+helper and the evaluator start then and stop on Close, after a while unused,
+when no page shows the scene, and when the server stops. The page asks for one
+picture at a time, and a newer step or camera move replaces the waiting one.
+
+- **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
+  mounted by `src/sm64_events/main.py`); one open scene
+  (`tools/scene_lab/scene_session.py`); the page
+  (`src/sm64_events/ui/components/sceneviewer.js`); its delivery numbers
+  (`tools/scene_lab/e3_measure.py`)
+- **Not** -- the replay player, which plays recorded video; the scene viewer
+  redraws the game's graphics from a [[scene package]]
+
 ### Practice ROM
 
 The cartridge the practice tooling works on: Usamune v1.93u (US) or a JP

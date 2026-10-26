@@ -88,6 +88,24 @@ const PLAIN_TABS = {
   "Resources": ResourcesPage, "About": AboutPage,
 };
 
+// The Scene viewer (M4, lab only). The server adds /api/scene-lab only when
+// SM64_SCENE_LAB names a lab config, so anywhere else this one probe 404s and
+// the shell stays exactly as it was; the viewer's code loads only after the
+// server answers.
+function useSceneLab() {
+  const [viewer, setViewer] = useState(null);
+  useEffect(() => {
+    let mounted = true;
+    fetch("/api/scene-lab", { cache: "no-store" })
+      .then((response) => (response.ok ? import("./components/sceneviewer.js") : null))
+      .then((module) => { if (mounted && module) setViewer(() => module.SceneViewer); })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, []);
+  return viewer;
+}
+const LAB_GROUP = ["Lab", [["Scene viewer", "ghost"]]];
+
 function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {
   // FINAL REVIEW FIX (minor: Compare is an orphan destination). Compare's own
   // nav entry is gone since Task 6 folded it into the Library (see NAV_GROUPS
@@ -129,14 +147,14 @@ function FriendsSlot({ narrow, mobile = false, state }) {
   return narrow === mobile ? html`<${FriendsEntry} state=${state} className=${mobile ? "icon-button" : "nav-item"} />` : null;
 }
 
-function Sidebar({ t, tab, setTab, openSettings, friends }) {
+function Sidebar({ t, tab, setTab, openSettings, friends, groups = NAV_GROUPS }) {
   return html`<aside class="app-sidebar" aria-label="Primary navigation">
     <div class="app-brand">
       <img src="/ui/assets/sm64_tracker.png" alt="" />
       <span>SM64 Trainer</span>
     </div>
     <div class="sidebar-nav">
-      ${NAV_GROUPS.map(([label, items]) => html`<div class="nav-group">
+      ${groups.map(([label, items]) => html`<div class="nav-group">
         <div class="nav-group-label">${label}</div>
         ${items.map(([name, icon]) => html`<${NavItem}
           name=${name} icon=${icon} tab=${tab} setTab=${setTab}
@@ -178,7 +196,7 @@ function MobileNav({ tab, setTab, openMore }) {
   </nav>`;
 }
 
-function MobileMore({ open, close, tab, setTab, openSettings }) {
+function MobileMore({ open, close, tab, setTab, openSettings, lab = [] }) {
   if (!open) return null;
   const pick = (name) => { setTab(name); close(); };
   return html`<div class="mobile-more-backdrop" onclick=${close}>
@@ -194,7 +212,7 @@ function MobileMore({ open, close, tab, setTab, openSettings }) {
         ${/* The complement of the bottom bar, computed — never a second list.
              Sessions opens the settings drawer rather than a tab, the same
              special case the sidebar makes. */""}
-        ${NAV_ITEMS.filter((item) => !inBar(item)).map(([name, icon]) => html`
+        ${NAV_ITEMS.filter((item) => !inBar(item)).concat(lab).map(([name, icon]) => html`
           <button type="button" class=${tab === name ? "on" : ""}
               onclick=${() => (name === "Sessions"
                 ? (close(), openSettings()) : pick(name))}>
@@ -218,6 +236,9 @@ function App() {
     return () => media.removeEventListener("change", changed);
   }, []);
   const tracker = useTracker();
+  const SceneViewer = useSceneLab();
+  const navGroups = SceneViewer ? [...NAV_GROUPS, LAB_GROUP] : NAV_GROUPS;
+  const plainTabs = SceneViewer ? { ...PLAIN_TABS, "Scene viewer": SceneViewer } : PLAIN_TABS;
   // The Daily Star rides on `t` so every surface reads one copy; it lives
   // outside the store because only this layer knows the local date.
   const { daily, markSeen } = useDailyStar(tracker.standingRev);
@@ -302,7 +323,7 @@ function App() {
   const openCompare = (intent) => openLibrary({ kind: "compare", ...intent });
 
   return html`<div class="app-shell">
-    <${Sidebar} t=${t} tab=${tab} setTab=${setTab}
+    <${Sidebar} t=${t} tab=${tab} setTab=${setTab} groups=${navGroups}
       friends=${html`<${FriendsSlot} narrow=${narrowShell} state=${friends} />`}
       openSettings=${() => setSettingsOpen(true)} />
     <${MobileTop} t=${t} openSettings=${() => setSettingsOpen(true)}
@@ -338,14 +359,14 @@ function App() {
               : html`<${RankPage} t=${t} onOpenRunner=${openRunner} onOpenPlayer=${openPlayer}
                   onScopeChange=${setComparisonScope}
                   openLibrary=${openLibrary} />`}</div>`
-          : PLAIN_TABS[tab] ? html`<div class="view-pane"><${PLAIN_TABS[tab]} t=${t} /></div>`
+          : plainTabs[tab] ? html`<div class="view-pane"><${plainTabs[tab]} t=${t} /></div>`
           : null}
       </div>
     </main>
     ${t.notice && html`<div class="app-notice" role="status">${t.notice}</div>`}
     <${MobileNav} tab=${tab} setTab=${setTab}
       openMore=${() => setMoreOpen(true)} />
-    <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)}
+    <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)} lab=${SceneViewer ? LAB_GROUP[1] : []}
       tab=${tab} setTab=${setTab} openSettings=${() => setSettingsOpen(true)} />
     <${UpdatePopup} t=${t} />
     ${/* Root-mounted like the update popup: the desktop shell can ask to close
