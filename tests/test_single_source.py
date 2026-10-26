@@ -1003,3 +1003,42 @@ def test_the_interpreter_guard_can_still_fail():
     assert not _interpreter_heads('"""Never start [sys.executable, "-m", x]."""\n'
                                   "# [sys.executable, '-m', x]\n"
                                   "identity = {'executable': sys.executable}\n")
+
+
+# Shipped code reads a media file in-process through replay/mediaprobe.py. The
+# packaged app has no ffprobe to start. perfmon.py only names the image in the
+# helper allowlist its anonymous machine-load sample recognizes.
+_FFPROBE_NAMERS = frozenset({"src/sm64_events/core/perfmon.py"})
+
+
+def _reaches_for_ffprobe(code: str) -> bool:
+    return "ffprobe" in code.lower()
+
+
+def test_shipped_code_never_reaches_for_ffprobe():
+    """The release bundles ffmpeg.exe and not ffprobe.exe (209 MB; rejected
+    for download size). Every read that looked for an ffprobe beside ffmpeg or
+    on PATH therefore failed in every installed copy while dev and CI passed:
+    no saved replay ever shrank ("replay kept as saved: ... (no ffprobe beside
+    ffmpeg)", a tester's log, 2026-10-25), and a cached clip's first pts read
+    0.0. A lookup, a name and a spawn all start with naming it, so no shipped
+    file outside the allowlist may name it in code at all."""
+    offenders = sorted(path.relative_to(REPO).as_posix() for path in shipped_python()
+                       if path.relative_to(REPO).as_posix() not in _FFPROBE_NAMERS
+                       and _reaches_for_ffprobe(code_only(path)))
+    assert not offenders, (
+        f"{offenders} reach for ffprobe, which the packaged app does not ship. "
+        "Read the file through replay/mediaprobe.py instead.")
+    stale = sorted(name for name in _FFPROBE_NAMERS
+                   if not _reaches_for_ffprobe(code_only(REPO / name)))
+    assert not stale, f"{stale} no longer name ffprobe; drop the exemption"
+
+
+def test_the_ffprobe_guard_can_still_fail():
+    sample = lambda text: _reaches_for_ffprobe(code_only(Path("sample.py"), text))
+    assert sample('probe = shutil.which("ffprobe")\n')
+    assert sample('sibling = binary.name.replace("ffmpeg", "ffprobe")\n')
+    assert sample("def ffprobe_beside(ffmpeg):\n    return None\n")
+    assert sample('subprocess.run(["FFPROBE.EXE", "-v", "error"])\n')
+    assert not sample('"""Until 2026-10-25 these reads spawned ffprobe."""\n'
+                      "# ffprobe never ships\nx = 1\n")

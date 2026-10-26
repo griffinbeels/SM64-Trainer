@@ -504,15 +504,15 @@ def two_clips(tmp_path_factory):
 
 @pytest.fixture
 def saved_with_copy(two_clips, tmp_path):
-    from sm64_events.replay.extract import frame_times_of
+    from sm64_events.replay.mediaprobe import frame_times_of
     clean_src, twin_src = two_clips
     saved = tmp_path / "replays" / "2026-10-03" / "session_1" / "attempt_0042_test_0m02s00.mp4"
     saved.parent.mkdir(parents=True)
     shutil.copy2(clean_src, saved)
     copy = saved.with_suffix(".ghosts.m4v")
     shutil.copy2(twin_src, copy)
-    times = [round(t, 6) for t in frame_times_of(_ffmpeg(), saved)]
-    assert [round(t, 6) for t in frame_times_of(_ffmpeg(), copy)] == times
+    times = [round(t, 6) for t in frame_times_of(saved)]
+    assert [round(t, 6) for t in frame_times_of(copy)] == times
     saved.with_suffix(".json").write_text(json.dumps({
         "duration_s": 2.0, "truncated": False, "encode": "picture_feed", "frame_times": times,
         "ghost_copy": {"file": copy.name, "bytes": copy.stat().st_size,
