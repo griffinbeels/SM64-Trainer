@@ -161,17 +161,24 @@ def _wait_closed(client, seconds=10.0) -> dict:
 
 
 def test_without_the_switch_nothing_is_imported_or_routed(monkeypatch, lab):
+    """Off, the shell's one probe answers {"lab": null} and nothing else exists: a 404 there put
+    an HTTP error on every page load of every install (the Friends shell test caught it,
+    2026-10-25)."""
     import sm64_events.main as main
     monkeypatch.delenv("SM64_SCENE_LAB", raising=False)
     monkeypatch.delitem(sys.modules, "sm64_events.server.scene_lab_api")
     app = FastAPI()
     routes = {route.path for route in app.routes}
     assert main._mount_scene_lab(app) is app
-    assert {route.path for route in app.routes} == routes
+    assert {route.path for route in app.routes} - routes == {"/api/scene-lab"}
     assert "sm64_events.server.scene_lab_api" not in sys.modules
+    with TestClient(app) as client:
+        probe = client.get("/api/scene-lab")
+        assert probe.status_code == 200 and probe.json() == {"lab": None}
+        assert client.get("/api/scene-lab/status").status_code == 404
     monkeypatch.setenv("SM64_SCENE_LAB", str(lab["config"]))
-    main._mount_scene_lab(app)
-    assert {"/api/scene-lab", "/api/scene-lab/open", "/api/scene-lab/ws"} <= {route.path for route in app.routes}
+    lab_app = main._mount_scene_lab(FastAPI())
+    assert {"/api/scene-lab", "/api/scene-lab/open", "/api/scene-lab/ws"} <= {route.path for route in lab_app.routes}
 
 
 def test_status_lists_only_packages_and_names_what_is_missing(lab):
