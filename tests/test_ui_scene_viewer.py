@@ -217,7 +217,9 @@ def test_the_transport_fits_one_row_the_title_names_the_attempt_and_a_drag_keeps
             browser.close()
 
 
-# Each picture request's "hud" (absent: null) and each picture header's "hud" on the scene socket.
+# Each picture request's id and "hud" (absent: null), and each picture header's id, "hud" and
+# "hud_reason", on the scene socket. By id: the lab answers a superseded request with no picture, so
+# counts of requests and pictures need not agree.
 HUDS = r"""
 (() => {
   const seen = window.__huds = { asked: [], drawn: [] };
@@ -229,17 +231,20 @@ HUDS = r"""
         if (typeof event.data === "string") return;
         const length = new DataView(event.data).getUint32(0, true);
         const header = JSON.parse(new TextDecoder().decode(new Uint8Array(event.data, 4, length)));
-        seen.drawn.push([header.hud ?? null, header.hud_reason ?? null]);
+        seen.drawn.push([header.id, header.hud ?? null, header.hud_reason ?? null]);
       });
     }
     send(data) {
-      try { const message = JSON.parse(data); if (!message.kind) seen.asked.push(message.hud ?? null); }
+      try { const message = JSON.parse(data); if (!message.kind) seen.asked.push([message.id, message.hud ?? null]); }
       catch { /* not a request */ }
       return super.send(data);
     }
   };
 })()
 """
+# The picture for the request after the first `n`, once it has arrived.
+ANSWERED = """(n) => { const asked = window.__huds.asked[n];
+  return !!asked && window.__huds.drawn.some((drawn) => drawn[0] === asked[0]); }"""
 
 
 def test_hud_off_reaches_the_lab_on_every_picture_and_is_remembered(tmp_path, monkeypatch):
@@ -259,23 +264,25 @@ def test_hud_off_reaches_the_lab_on_every_picture_and_is_remembered(tmp_path, mo
             ready.click()
             page.wait_for_function(DRAWN, timeout=20000)
             page.wait_for_function(f"!({PLAYING})", timeout=20000)
-            assert set(page.evaluate("window.__huds.asked")) == {None}                  # on: the lab's default
+            assert {hud for _id, hud in page.evaluate("window.__huds.asked")} == {None}   # on: the lab's default
             hud = page.get_by_role("button", name="HUD")
             assert hud.get_attribute("aria-pressed") == "true"
             asked = page.evaluate("window.__huds.asked.length")
             hud.click()
-            page.wait_for_function(f"window.__huds.asked.length > {asked} && window.__huds.drawn.length > {asked}")
+            page.wait_for_function(ANSWERED, arg=asked, timeout=20000)
             page.keyboard.press(".")
-            page.wait_for_function(f"window.__huds.drawn.length > {asked + 1}")
+            page.wait_for_function(ANSWERED, arg=asked + 1, timeout=20000)
             huds = page.evaluate("window.__huds")
-            assert huds["asked"][asked:] == [False, False], huds
-            assert all(drawn[0] is False or drawn[1] for drawn in huds["drawn"][asked:]), huds   # cut, or why not
+            off = [request_id for request_id, hud in huds["asked"][asked:]]
+            assert [hud for _id, hud in huds["asked"][asked:]] == [False, False], huds
+            answers = [drawn for drawn in huds["drawn"] if drawn[0] in off]
+            assert len(answers) == 2 and all(hud is False or reason for _id, hud, reason in answers), huds   # cut, or why not
             _shoot(page, tmp_path, "hud-off")
             page.locator('.nav-item[title="Practice"]:visible').click()
             page.locator('.nav-item[title="Scene viewer"]:visible').click()
             page.wait_for_function(DRAWN, timeout=20000)
             assert page.get_by_role("button", name="HUD").get_attribute("aria-pressed") == "false"
-            assert page.evaluate("window.__huds.asked.at(-1)") is False
+            assert page.evaluate("window.__huds.asked.at(-1)[1]") is False
             assert errors == []
         finally:
             browser.close()
