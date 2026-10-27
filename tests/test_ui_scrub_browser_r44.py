@@ -37,7 +37,8 @@ def test_drag_flood_settles_and_continues_playing(tmp_path):
             video = page.locator(".attempt-drawer video")
             video.evaluate("video => video.pause()")
             page.wait_for_function("document.querySelector('.attempt-drawer video').readyState >= 2")
-            page.wait_for_function("document.querySelector('input[aria-label=\"Seek recording\"]').max === '4'")
+            # The bar ends on the last picture's middle once the 4 s clip's duration is known.
+            page.wait_for_function("Number(document.querySelector('input[aria-label=\"Seek recording\"]').max) > 3.9")
             burst, expected = _exercise_scrubber(page, video)
             evidence = page.evaluate("window.scrubEvidence")
             evidence.update({"viewport_width": width, "burst_writes": burst,

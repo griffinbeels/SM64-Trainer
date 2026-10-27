@@ -3,7 +3,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
-import { pictureInterval, useReviewMedia } from "../reviewmedia.js";
+import { lastPictureTime, pictureInterval, useReviewMedia } from "../reviewmedia.js";
 import { stopShuttle } from "../replayshuttle.js";
 import { LoopEditor, PlaybackOptions } from "./replayoptions.js";
 import { focusReplay } from "../replayfocus.js";
@@ -44,7 +44,7 @@ export function ReplayTransport({ video, clock = null, frameStep = null,
   }
   return html`<div class="replay-controls">
     <div class="replay-seek-row">
-      <input type="range" min="0" max=${media.duration || 1} step="any"
+      <input type="range" min="0" max=${lastPictureTime(clock, frameStep, media.duration) || 1} step="any"
         value=${media.time} disabled=${!media.duration} aria-label="Seek recording"
         onpointerup=${() => focusReplay(video)}
         oninput=${e => { if (video) { stopShuttle(video); scrubReviewSource(video, Number(e.currentTarget.value)); } }} />
