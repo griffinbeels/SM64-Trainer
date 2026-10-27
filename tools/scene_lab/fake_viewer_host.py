@@ -13,6 +13,12 @@ the process after that many renders, as a crashed host would. EOF or a quit requ
 It opens no window and touches no GPU: tests and e3_measure.py --fake use it where the real
 host would need the renderer.
 
+Ghosts (viewer_host.c --ghosts): a setup answers 0 (--no-ghosts: -100, a renderer without
+them); a load answers 0 for bytes that begin "SM64GHO" and -3 (a refused clip) otherwise, an
+empty one empties the slot; a render's ghosts block joins what its picture names, and its
+status reports every asked ghost of a loaded slot at a frame >= 0 as chosen and drawn, and
+the others as asked only.
+
 FakeEvaluator stands in for evaluator.Evaluator the same way: its "display list" is a few
 bytes naming the frame and camera (or, with ram_bytes, an image that size whose first words
 name them; or, with wall, a real Fast3D list drawing a wall that far in front of the camera,
@@ -34,16 +40,19 @@ from types import SimpleNamespace
 REQUEST = struct.Struct("<5I16I14I16d")       # viewer.py's, repeated: this file runs without its imports
 RESPONSE = struct.Struct("<9I")
 REQUEST_MAGIC, RESPONSE_MAGIC = 0x51525756, 0x53525756
+GHOST_LOOK, GHOST_ENTRY = struct.Struct("<2f2I"), struct.Struct("<Ii2I")
+LABEL_BYTES = 64
 RDRAM_BYTES = 8 << 20
 
 
 def command(delay_ms: float = 0, width: int = 64, height: int = 48, exit_after: int = 0,
-            ram: bool = False) -> list[str]:
+            ram: bool = False, ghosts: bool = True) -> list[str]:
     """The argv prefix viewer.Host(command=...) runs: the base interpreter directly, so the
     process the host owns is the one that answers (no venv launcher in between)."""
     interpreter = getattr(sys, "_base_executable", None) or sys.executable
     return [interpreter, "-I", str(Path(__file__).resolve()), "--width", str(width), "--height", str(height),
-            "--delay-ms", str(delay_ms), "--exit-after", str(exit_after), *(["--ram"] if ram else [])]
+            "--delay-ms", str(delay_ms), "--exit-after", str(exit_after), *(["--ram"] if ram else []),
+            *([] if ghosts else ["--no-ghosts"])]
 
 
 def _read(stream, size: int) -> bytes | None:
@@ -51,10 +60,39 @@ def _read(stream, size: int) -> bytes | None:
     return data if len(data) == size else None
 
 
+def _ghost_request(args, kind: int, slot: int, data: bytes, loaded: dict) -> int:
+    """A ghost setup (3) or load (4) answered as viewer_host.c answers it."""
+    if args.no_ghosts:
+        return -100
+    if kind == 3:
+        return 0 if len(data) > 200 else -1
+    clip = data[LABEL_BYTES:]
+    result = 0 if not clip or clip.startswith(b"SM64GHO") else -3
+    if clip and not result:
+        loaded[slot] = clip
+    else:
+        loaded.pop(slot, None)
+    return result
+
+
+def _ghosts_block(source, loaded: dict) -> tuple[bytes | None, int]:
+    """A render's ghosts block and the status it answers: every asked ghost of a loaded slot at a
+    frame >= 0 counts as chosen and drawn. (None, 0) when the block is cut short."""
+    count = _read(source, 4)
+    look = _read(source, GHOST_LOOK.size)
+    entries = _read(source, struct.unpack("<I", count)[0] * GHOST_ENTRY.size) if count else None
+    if entries is None or look is None:
+        return None, 0
+    ghosts = [GHOST_ENTRY.unpack_from(entries, at) for at in range(0, len(entries), GHOST_ENTRY.size)]
+    drawn = sum(1 for slot, frame, _hue, _ in ghosts if slot in loaded and frame >= 0)
+    return count + look + entries, (len(ghosts) << 24 | drawn << 16 | drawn << 8 | (4 if drawn else 0)) if ghosts else 0
+
+
 def serve(args) -> int:
     source, sink = sys.stdin.buffer, sys.stdout.buffer
     rendered = 0
     rdram = bytearray(RDRAM_BYTES) if args.ram else None
+    loaded: dict[int, bytes] = {}
     while True:
         head = _read(source, REQUEST.size)
         if head is None:
@@ -71,6 +109,15 @@ def serve(args) -> int:
         if runs is None or data is None:
             print("fake_viewer_host: stdin closed inside a request", file=sys.stderr, flush=True)
             return 3
+        if kind in (3, 4):
+            result = _ghost_request(args, kind, fields[5], data, loaded)
+            sink.write(RESPONSE.pack(RESPONSE_MAGIC, result & 0xFFFFFFFF, 0, 0, 0, 0, 0, 0, 0))
+            sink.flush()
+            continue
+        block, status = _ghosts_block(source, loaded) if flags & 4 else (b"", 0)
+        if block is None:
+            print("fake_viewer_host: the ghosts block is missing", file=sys.stderr, flush=True)
+            return 3
         started = time.perf_counter()
         if args.delay_ms:
             time.sleep(args.delay_ms / 1000)
@@ -79,15 +126,15 @@ def serve(args) -> int:
             for begin, end in struct.iter_unpack("<II", runs):
                 rdram[begin:end] = data[at:at + end - begin]
                 at += end - begin
-            digest = hashlib.sha256(head[20:20 + 30 * 4] + rdram).digest()
+            digest = hashlib.sha256(head[20:20 + 30 * 4] + rdram + block).digest()
         else:
             digest = hashlib.sha256(head[20:20 + 30 * 4] + runs + data
-                                    + (head[20 + 30 * 4:] if flags & 1 else b"")).digest()
+                                    + (head[20 + 30 * 4:] if flags & 1 else b"") + block).digest()
         size = 0 if flags & 2 else args.width * args.height * 3
         pixels = (digest * (size // len(digest) + 1))[:size]
         render_us = int((time.perf_counter() - started) * 1e6)
-        sink.write(RESPONSE.pack(RESPONSE_MAGIC, 0, 0 if flags & 2 else args.width, 0 if flags & 2 else args.height,
-                                 render_us, 0, 0, 0, size) + pixels)
+        sink.write(RESPONSE.pack(RESPONSE_MAGIC, status, 0 if flags & 2 else args.width,
+                                 0 if flags & 2 else args.height, render_us, 0, 0, 0, size) + pixels)
         sink.flush()
         rendered += 1
         if args.exit_after and rendered >= args.exit_after:
@@ -211,6 +258,7 @@ def main() -> int:
     parser.add_argument("--delay-ms", type=float, default=0)
     parser.add_argument("--exit-after", type=int, default=0)
     parser.add_argument("--ram", action="store_true", help="keep an RDRAM and name it in the picture")
+    parser.add_argument("--no-ghosts", action="store_true", help="answer ghost requests as a renderer without them")
     args, _host_arguments = parser.parse_known_args()   # --renderer, --plugin-dir, --header: unused
     return serve(args)
 

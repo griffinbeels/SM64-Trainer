@@ -1380,6 +1380,26 @@ so. A package without one says it has no sound.
 - **Not** -- the replay player, which plays recorded video; the scene viewer
   redraws the game's graphics from a [[scene package]]
 
+### Stage ghost
+
+A [[saved ghost]] the [[scene viewer]] draws into the scene it plays (its
+stage), from that [[ghost]]'s own recording. One you add appears in the next
+picture, from the recorded or the free camera, while playing, stepping or
+seeking either way. It looks as it does in the game: its own [[ghost
+colour]], shadow and [[name box]], hidden behind the stage's walls. Its first
+[[frame]] stands on the scene's first [[frame]] (an [[attempt]]'s scene starts
+where that [[attempt]] did), and it follows the game's clock from there, so
+lag [[frame]]s keep it in step. At its end one with its [[star]] dance holds
+its last pose and fades; any other one is gone. The race's own fades,
+[[corner inputs]], path and sound stay off.
+
+- **Lives** -- the set, its alignment and its look
+  (`tools/scene_lab/stage_ghosts.py`); the scene's set
+  (`tools/scene_lab/scene_session.py`); which row each one shows, in the
+  [[renderer]] (`plugin/gfxwrap/ghost_viewer.cpp`), drawn by the same code as
+  a race's (`plugin/gfxwrap/ghost_figure.h`)
+- **Not** -- the [[ghost set]], which picks who races you in the game
+
 ### Ghost button
 
 The button left of ▷ on a [[practice log]] row, shown only while the scene lab
@@ -1444,6 +1464,39 @@ sentence. The server keeps the scenes of his last 20 [[attempt]]s while it is up
   `src/sm64_events/ui/components/sceneaudio.js`)
 - **Not** -- the replay's video of an [[attempt]], which the [[recorder]] keeps;
   this scene redraws the game's graphics, and its camera can move
+
+### Viewer stage
+
+The [[attempt scene]] the [[scene viewer]] shows as the world: its level, its
+sound and its recorded camera. The viewer draws each added [[ghost]] into it from
+that [[ghost]]'s own recording, starting on the stage's first [[frame]]. It is the
+scene he opened; for a [[star]] or [[segment]] and [[strategy]] he picks, it is his
+fastest finished [[attempt]] that still has a scene (a [[reset]] only when nothing
+finished has one), else one sentence saying there is none yet. The [[strategy]] starts as the one he
+last chose for that [[target]].
+
+- **Lives** -- the stage choice (`src/sm64_events/server/scene_ghosts.py`), served
+  to the page by the lab's routes (`src/sm64_events/server/scene_lab_api.py`)
+- **Not** -- the stage banner's place (where Mario stands now); and not a merged
+  world: other [[ghost]]s never bring their own level or camera
+
+### Scene ghosts
+
+The [[ghost]]s the [[scene viewer]] can add to its [[viewer stage]], in four lists: yours
+(fastest or newest first), top (each player's best, fastest first), a search by
+player name (each match's best) and one player's (fastest first), ten to a page.
+Each shows its time, its place among every player's best (ties share a place)
+and its [[rank]] on the [[strategy]]'s [[ladder]]. The lists hold a recording only
+when the in-game race would play it, judged by the race's own checks; they leave
+anything else out and count it, never showing it with a warning.
+
+- **Lives** -- the lists, and the loader that hands the renderer a listed
+  [[ghost]]'s recording and the name its in-game name box shows
+  (`src/sm64_events/server/scene_ghosts.py`); other players' through the race's
+  community client, cache first (`src/sm64_events/server/scene_community.py`);
+  served to the page by the lab's routes (`src/sm64_events/server/scene_lab_api.py`)
+- **Not** -- the [[lineup]], which picks who you race in the game; nothing here
+  changes the race or the practice [[target]]
 
 ### Practice ROM
 

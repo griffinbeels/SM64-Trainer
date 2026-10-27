@@ -504,6 +504,10 @@ class Rivals:
         owned.update((own, self.community.owner()))
         return frozenset(value for value in owned if value)
 
+    def owned_players(self):
+        """`_owned_players` for readers outside the race (the Scene viewer's "yours")."""
+        return self._owned_players()
+
     def _own_names(self):
         """The names the player goes by: the export credit and the signed-in account's name."""
         names = [self.tracker.db.get_state(AUTHOR_KEY, None)]

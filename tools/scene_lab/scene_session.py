@@ -6,6 +6,7 @@
     header, payload = session.finish(pending)                      #   draws while the next one begins
     session.pose(frame)                                            # the recorded camera and Mario
     session.pick(frame, camera, u, v)                              # where that picture drew a pixel
+    session.set_ghosts([{"ref", "label"}], load_ghost)             # the ghosts every picture draws
     session.audio_block(index)                                     # a block of the recording's sound
     session.close()                                                # the host exits; returns its code
 
@@ -19,6 +20,11 @@ scene-graph code for that camera and the host draws the whole rebuilt RDRAM with
 The pose's camera (focus, position, roll, fov) redraws the recorded picture exactly, which is
 what lets a free camera start from the picture on screen.
 
+A picture without the HUD (begin's hud=False) sends either list with the 2D overlay the game
+draws after the world turned into no-ops (hud.py: lives, coins, stars, the timer, Usamune's
+text, the pause screen, dialogs); the world, the screen transition and the borders stay, and so
+does the cached view, which the cut copies. The header's "hud" says which picture it is.
+
 A pick (Set focus) finds where a picture's display list drew one pixel by walking that list on
 the CPU (pick.py: the renderer's own thread holds its depth), in the camera's own space. The page
 owns the camera's world axes and turns that into a world point; the session never does.
@@ -30,6 +36,14 @@ A free-camera picture sends the host only the RDRAM words that differ from what 
 already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame tens of KiB.
 After a free-camera picture of a new frame, a second thread resolves the frames that follow it
 (evaluator.prepare; backward when stepping back), so playing or stepping finds states ready.
+
+Ghosts (stage_ghosts.py): set_ghosts loads each added ghost's recording into the renderer once, and
+every picture after it, recorded or free camera, names the ghosts and each one's frame, so the
+renderer draws them into the stage with the in-game ghost's look and name boxes, hidden behind its
+walls. A recorded picture with ghosts sends the frame's scene state beside its closure: the
+in-game ghost reads the stage's camera, level and area from the game's RAM, as it does live. A
+picture without ghosts is sent exactly as before. Pick and pose read the stage alone: a ghost never
+changes what Set focus hits.
 
 The package's source-audio layer, when it has one, is the recording's sound mapped to these
 frames (scene_audio.py); describe() carries its table and audio_block serves its blocks. An
@@ -67,7 +81,9 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import stage_ghosts  # noqa: E402
 import gpu_gate  # noqa: E402
+import hud as hud_cut  # noqa: E402
 import package as scene_package  # noqa: E402
 import pick as list_pick  # noqa: E402
 import picture_encoder  # noqa: E402
@@ -88,6 +104,7 @@ LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last 
 LOOK_AHEAD_FRAMES = 3         # how many frames the look-ahead resolves (the evaluator caches 4 states)
 FIT_WAIT_SECONDS = 1.5        # how long an opening scene waits for its sound's fit (the renderer starts meanwhile)
 SOUND_SETTLE_SECONDS = 60.0   # how long a whole scene watches for the sound the cutter adds to it
+GHOST_WARM_PICTURES = 40      # pictures the renderer may take to set its ghost overlay up (it retries per list)
 
 
 class Refused(Exception):
@@ -147,6 +164,15 @@ class OwnedHost:
 
     def receive(self) -> viewer.Picture:
         return self.host.receive()
+
+    def call(self, frame: viewer.Frame) -> viewer.Picture:
+        return self.host.call(frame)
+
+    def ghost_setup(self, layout: bytes, rom: bytes) -> int:
+        return self.host.ghost_setup(layout, rom)
+
+    def ghost_load(self, slot: int, clip: bytes, label: str) -> int:
+        return self.host.ghost_load(slot, clip, label)
 
     def close(self) -> int:
         try:
@@ -232,7 +258,8 @@ def renderer_host(config):
         plugin_dir = Path(tempfile.mkdtemp(prefix="scene-viewer-plugin-"))
         try:
             viewer.prepare_plugin_dir(plugin_dir, plugin, config.resolution)
-            return OwnedHost(viewer.Host(renderer, plugin_dir, header), plugin_dir, renderer_keeps_rdram(plugin_dir))
+            return OwnedHost(viewer.Host(renderer, plugin_dir, header, ghosts=True), plugin_dir,
+                             renderer_keeps_rdram(plugin_dir))
         except (OSError, RuntimeError) as error:
             shutil.rmtree(plugin_dir, ignore_errors=True)
             raise Refused(f"The renderer could not start: {error}") from None
@@ -347,6 +374,9 @@ class PendingPicture:
     reason: str | None           # why a free camera's request shows the recorded camera
     timings: dict
     started: float
+    hud: bool = True             # the picture has the game's HUD (hud.py): False once it was cut
+    hud_reason: str | None = None   # why a picture asked for without the HUD still has it
+    ghosts: bool = False         # the picture carried the scene's ghosts
 
 
 class SceneSession:
@@ -377,6 +407,11 @@ class SceneSession:
         self.path: Path | None = None
         self.read_stat: tuple[int, int] | None = None    # the whole file as last read: (size, mtime)
         self.whole_at: float | None = None               # when the package was whole
+        self.ghosts = stage_ghosts.StageGhosts()         # the stage ghosts every picture draws (set_ghosts)
+        self.ghost_look = stage_ghosts.Look()            # their settings (the lab sets the player's)
+        self.ghost_origin = 0                            # the package frame that is every ghost's first
+        self._ghost_problem: str | None = None           # why ghosts cannot draw ("" once set up)
+        self._ghosts_warm = False                        # the renderer's ghost overlay has drawn a picture
 
     @classmethod
     def open(cls, config, path: Path, *, sidecar: Path | None = None, live=None, fitter=None, host_factory=None,
@@ -582,14 +617,27 @@ class SceneSession:
             raise ValueError("no such frame")
         return self.frames[frame]
 
-    def _recorded_frame(self, index: int, timings: dict) -> viewer.Frame:
+    def _recorded_frame(self, index: int, timings: dict, cuts: list | None = None) -> viewer.Frame:
         started = time.perf_counter()
         capture = self.package.frame(index)
         timings["decode_ms"] = _ms(started)
         runs = struct.pack(f"<{2 * len(capture.runs)}I", *(edge for run in capture.runs for edge in run))
+        run_bytes = capture.run_bytes
+        if cuts is not None:
+            blanked = self._hud_cut(hud_cut.closure_words(capture.runs, run_bytes), capture.task, timings, cuts)
+            run_bytes = hud_cut.blank_closure(capture.runs, run_bytes, blanked)
         if self.image is not None:
-            self.image.recorded(capture.runs, capture.run_bytes)
-        return viewer.Frame(f"frame {index}", capture.task, capture.vi, runs, capture.run_bytes)
+            self.image.recorded(capture.runs, run_bytes)
+        return viewer.Frame(f"frame {index}", capture.task, capture.vi, runs, run_bytes)
+
+    @staticmethod
+    def _hud_cut(words, task, timings: dict, cuts: list) -> tuple:
+        """The commands a picture without the HUD skips in the list at task (data_ptr, data_size:
+        task words 12 and 13), its hud.Cut appended to `cuts`."""
+        started = time.perf_counter()
+        cuts.append(hud_cut.cut(words, task[12], task[13]))
+        timings["hud_ms"] = _ms(started)
+        return cuts[-1].blanked
 
     def _evaluator_or_reason(self):
         if self.free_reason is None and self._evaluator is None:
@@ -644,7 +692,8 @@ class SceneSession:
             self._last_walk = (view, list_pick.walk(view.ram, view.data_ptr))
         return self._last_walk[1]
 
-    def _free_frame(self, index: int, camera: tuple, timings: dict) -> tuple[viewer.Frame | None, str | None]:
+    def _free_frame(self, index: int, camera: tuple, timings: dict,
+                    cuts: list | None = None) -> tuple[viewer.Frame | None, str | None]:
         evaluator, reason = self._evaluator_or_reason()
         if evaluator is None:
             return None, reason
@@ -661,42 +710,54 @@ class SceneSession:
                           "does not hold), so it shows the recorded camera.")
         task = list(view.task)
         task[12], task[13] = view.data_ptr & 0x1FFFFFFF, view.data_size
+        ram = view.ram                                           # a copy without the HUD: the view stays cached
+        if cuts is not None:
+            ram = hud_cut.blank_ram(ram, self._hud_cut(hud_cut.ram_words(ram), task, timings, cuts))
         started = time.perf_counter()
         if self.image is not None:
-            runs, data = self.image.free(view.ram)               # the words the host lacks
+            runs, data = self.image.free(ram)                    # the words the host lacks
         else:                                                    # the whole image; Project64's word order
-            data = scene_package.swap_words(bytes(view.ram))
+            data = scene_package.swap_words(bytes(ram))
             runs = struct.pack("<II", 0, len(data))
         timings.update(send_bytes=len(data), pack_ms=_ms(started))
         return viewer.Frame(f"frame {index} free", tuple(task), self.outlines[index]["vi"], runs, data), None
 
-    def picture(self, frame: int, camera=None, encoding: str = "jpeg") -> tuple[dict, bytes]:
+    def picture(self, frame: int, camera=None, encoding: str = "jpeg", hud: bool = True) -> tuple[dict, bytes]:
         """Frame `frame` (a position in the frame list) as the renderer draws it: from the recorded
-        camera when `camera` is None, else from that world camera. Returns the header the page
-        reads and the picture: JPEG, or ReadScreen's own BGR rows bottom-up ("raw")."""
-        return self.finish(self.begin(frame, camera, encoding))
+        camera when `camera` is None, else from that world camera, and without the game's HUD
+        when `hud` is False (hud.py). Returns the header the page reads and the picture: JPEG,
+        or ReadScreen's own BGR rows bottom-up ("raw")."""
+        return self.finish(self.begin(frame, camera, encoding, hud))
 
-    def begin(self, frame: int, camera=None, encoding: str = "jpeg") -> PendingPicture:
+    def begin(self, frame: int, camera=None, encoding: str = "jpeg", hud: bool = True) -> PendingPicture:
         """picture()'s first half, on the session's thread: everything up to the host (the package
         decode or the evaluator's view, the words the host lacks) and the request written. The host
         draws it while this thread begins the next picture; finish() collects it."""
         index = self._index(frame)
         if encoding not in ENCODINGS:
             raise ValueError("unknown encoding")
+        if not isinstance(hud, bool):
+            raise ValueError("hud is true or false")
         free = None if camera is None else world_camera(camera)
         if free is not None:
             self._ahead_generation += 1          # the look-ahead stops before its next frame
         started = time.perf_counter()
         timings: dict = {}
-        host_frame, reason = (None, None) if free is None else self._free_frame(index, free, timings)
+        cuts = None if hud else []               # the HUD cut's outcome (hud.Cut) for the frame sent
+        host_frame, reason = (None, None) if free is None else self._free_frame(index, free, timings, cuts)
         drawn_free = host_frame is not None
         if drawn_free:
             self._look_ahead(frame)          # resolves beside this picture's render and encode
         if host_frame is None:
-            host_frame = self._recorded_frame(index, timings)
+            host_frame = (self._stage_frame(index, timings, cuts) if self.ghosts
+                          else self._recorded_frame(index, timings, cuts))
+        host_frame.ghosts = self._ghost_block(index)
         self.host.send(host_frame)
         timings["begin_ms"] = _ms(started)
-        pending = PendingPicture(frame, encoding, "free" if drawn_free else "recorded", reason, timings, started)
+        cut = cuts[-1] if cuts else None
+        pending = PendingPicture(frame, encoding, "free" if drawn_free else "recorded", reason, timings, started,
+                                 cut is None or cut.reason is not None, cut and cut.reason,
+                                 ghosts=host_frame.ghosts is not None)
         self._begun.append(pending)
         return pending
 
@@ -738,7 +799,9 @@ class SceneSession:
         return {"frame": pending.frame, "width": picture.width, "height": picture.height, "encoding": encoding,
                 "format": "image/jpeg" if encoding == "jpeg" else "bgr24-bottom-up",
                 "camera": pending.camera, "reason": pending.reason, "sha256": digest,
-                "payload_bytes": len(payload), "timings": timings}, payload
+                "hud": pending.hud, "hud_reason": pending.hud_reason,
+                "payload_bytes": len(payload), "timings": timings,
+                **({"ghosts": picture.ghosts} if pending.ghosts else {})}, payload
 
     def _jpeg(self, picture: viewer.Picture) -> tuple[bytes, str]:
         """The picture as JPEG and where it was made: by the encoder child from its slot, or here
@@ -790,6 +853,92 @@ class SceneSession:
             return {**missed, "reason": NOTHING_DRAWN}
         mario = evaluator.mario(index) if evaluator is not None and hasattr(evaluator, "mario") else None
         return {"point": point, "distance": math.hypot(*point), "mario": mario, "reason": None}
+
+    def set_ghosts(self, entries, load_ghost, origin=None) -> dict:
+        """Makes the scene's ghosts the page's whole set ([{"ref", "label"}], in order; [] removes
+        them): {"shown": refs, "refused": [{"ref", "reason"}]} (stage_ghosts.StageGhosts.replace). Each
+        new ghost's recording loads into the renderer once, here; every picture begun after this
+        draws the set. `origin`, a frame position, is the scene frame every ghost's first frame
+        stands on (default the package's first frame: an attempt scene's first frame). The first
+        set also builds the renderer's ghost model and draws until its overlay is ready, so the
+        picture the page asks for next shows them. ValueError for a malformed set or origin."""
+        wanted = stage_ghosts.checked(entries)
+        if origin is not None:
+            self.ghost_origin = self._index(origin)
+        if not wanted:
+            self.ghosts.clear(self.host)
+            return {"shown": [], "refused": []}
+        problem = self._ghosts_unavailable()
+        if problem:
+            return {"shown": [], "refused": [{"ref": entry["ref"], "reason": problem} for entry in wanted]}
+        answer = self.ghosts.replace(self.host, wanted, load_ghost)
+        if self.ghosts and not self._ghosts_warm:
+            self._warm_ghosts()
+        return answer
+
+    def _ghosts_unavailable(self) -> str | None:
+        """Why this scene cannot draw ghosts, or None; sets the renderer up the first time."""
+        if self.package.states is None:
+            return stage_ghosts.NO_SCENE_STATE
+        if self._ghost_problem is None:
+            from sm64_events.memory.ghost_layout import GhostLayout
+            from sm64_events.memory.layout import layout_for
+            version = {ord("E"): "us", ord("J"): "jp"}.get(self.rom[0x3E])
+            try:
+                layout = GhostLayout.from_layout(layout_for(version)).to_bytes()
+            except (KeyError, TypeError, ValueError):
+                self._ghost_problem = "Ghosts are drawn on the US and JP practice ROMs only."
+                return self._ghost_problem
+            result = self.host.ghost_setup(layout, self.rom)
+            self._ghost_problem = "" if not result else stage_ghosts.NO_RENDERER if result == viewer.GV_ABSENT \
+                else stage_ghosts.REFUSALS.get(result, stage_ghosts.NO_RENDERER)
+        return self._ghost_problem or None
+
+    def _warm_ghosts(self) -> None:
+        """Draws the stage's first shown picture with the set (pictures nobody sees, answered to
+        this thread: host.call) until the renderer's ghost overlay reaches them: it sets itself up
+        on its own lists, retrying a refused step a bounded number of lists later. A shown one: an
+        attempt scene's first task may be one no present showed, and it has no VI registers."""
+        index = next((at for at in self.frames if at >= self.ghost_origin), self.frames[0])
+        frame = self._stage_frame(index, {})
+        frame.ghosts = self._ghost_block(index)
+        for _ in range(GHOST_WARM_PICTURES):
+            if not self.host.call(frame).ghosts["pending"]:
+                self._ghosts_warm = True
+                return
+
+    def _ghost_block(self, index: int) -> bytes | None:
+        """This picture's ghosts (stage_ghosts.StageGhosts.block) at the game frames since the stage's
+        first frame, by the tap's global_timer: lag frames and held pictures stay in step."""
+        if not self.ghosts:
+            return None
+        timer = self.outlines[index]["identity"].get("global_timer")
+        origin = self.outlines[self.ghost_origin]["identity"].get("global_timer")
+        if timer is None or origin is None:
+            return None
+        return self.ghosts.block(self.ghost_look, stage_ghosts.ghost_frame(timer, origin))
+
+    def _stage_frame(self, index: int, timings: dict, cuts: list | None = None) -> viewer.Frame:
+        """The recorded picture with the frame's scene state beside its closure (package.scene_state:
+        the regions the tap recorded, closure included, in Project64's word order): where the
+        in-game ghost reads the stage's camera, level and area. Without scene state, the closure.
+        `cuts` as _recorded_frame's: the HUD's commands skipped (hud.py)."""
+        if self.package.states is None:
+            return self._recorded_frame(index, timings, cuts)
+        started = time.perf_counter()
+        task, _regions, ram, known = self.package.scene_state(index)
+        present = np.concatenate(([False], known.view(np.uint32) != 0, [False]))
+        edges = np.flatnonzero(present[1:] != present[:-1]) * 4
+        runs = list(zip(edges[0::2].tolist(), edges[1::2].tolist(), strict=True))
+        data = b"".join(ram[begin:end].tobytes() for begin, end in runs)
+        if cuts is not None:
+            blanked = self._hud_cut(hud_cut.closure_words(runs, data), task.task, timings, cuts)
+            data = hud_cut.blank_closure(runs, data, blanked)
+        if self.image is not None:
+            self.image.recorded(runs, data)
+        timings["decode_ms"] = _ms(started)
+        return viewer.Frame(f"frame {index} stage", tuple(task.task), self.outlines[index]["vi"],
+                            struct.pack(f"<{2 * len(runs)}I", *(edge for run in runs for edge in run)), data)
 
     def pose(self, frame: int) -> dict:
         """The frame's recorded camera and Mario's position, or None and the reason."""

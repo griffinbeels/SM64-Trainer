@@ -5,6 +5,7 @@
 #include "ghost_dispatch.h"
 #include "ghost_playback.h"
 #include "ghost_live_session.h"
+#include "ghost_viewer.h"
 #include "ghost_annotation.h"
 #include "ghost_presentation.h"
 #include "ghost_stream.h"
@@ -32,7 +33,8 @@ uint32_t context_gl_major=0,context_gl_minor=0;
 uint64_t model_id = 0, particle_model = 0, annotation_model = 0, occurrence = 0;
 gp_draw_token draw_token{};
 ghost_live_session::Token live_token{};
-bool saved_contributor=false,live_contributor=false;
+// viewer: the scene viewer host's ghosts (ghost_viewer.h); never in the game.
+bool saved_contributor=false,live_contributor=false,viewer_contributor=false;
 unsigned presentation_retry=0,compositor_retry=0;
 using Reason=ghost_live_session::PresentationReason;
 Reason compositor_failure=Reason::setup_pending;
@@ -68,9 +70,10 @@ uint64_t now_ns() {
     return value<0?0:uint64_t(value);
 }
 bool contributors_current() {
-    return (saved_contributor || live_contributor)
+    return (saved_contributor || live_contributor || viewer_contributor)
         && (!saved_contributor || ghost_playback::current(draw_token))
-        && (!live_contributor || ghost_live_session::current(live_token,now_ns()));
+        && (!live_contributor || ghost_live_session::current(live_token,now_ns()))
+        && (!viewer_contributor || ghost_viewer::current());
 }
 uint32_t since(Clock::time_point start) {
     const auto us = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count();
@@ -193,7 +196,7 @@ bool close_display() {
 }
 void forget_scopes() {
     provisional = ready = hud = layer = display_scope = layer_scope = layer_color = false;
-    occurrence = 0; draw_token = {};live_token={};saved_contributor=live_contributor=false;
+    occurrence = 0; draw_token = {};live_token={};saved_contributor=live_contributor=viewer_contributor=false;
 }
 }
 void cancel() {
@@ -201,7 +204,7 @@ void cancel() {
     if (hud) end_hud();
     ghost_compositor::abort(compositor);
     close_display();
-    provisional = ready = false; occurrence = 0; draw_token = {};live_token={};saved_contributor=live_contributor=false;
+    provisional = ready = false; occurrence = 0; draw_token = {};live_token={};saved_contributor=live_contributor=viewer_contributor=false;
 }
 void context_lost() {
     renderer::Identity identity{};snapshot::RestoreBindings ignored{};
@@ -299,7 +302,8 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
     // drawable change, and prepare below reallocates only a changed extent.
     owner = identity;
     sg_atlas_view atlas{}; uint64_t wanted_model = 0;
-    if (!ghost_playback::atlas(&atlas, &wanted_model)) return;
+    // Saved playback's model, else the scene viewer host's own (only there).
+    if (!ghost_playback::atlas(&atlas, &wanted_model) && !ghost_viewer::atlas(&atlas, &wanted_model)) return;
     if (compositor && width && height && (width != prepared_width || height != prepared_height || model_id != wanted_model)) {
         if (!replay_gl::BeginCapture()) {refused(Reason::gateway_refused);return;}
         // One vertex range per displayed ghost; begin_batch shares the buffer.
@@ -312,7 +316,8 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
     }
     // The ROM particle atlas rides on the prepared model; none leaves particles undrawn.
     sg_particle_view particles{}; uint64_t particle_id = 0;
-    if (compositor && model_id && particle_model != model_id && ghost_playback::particles(&particles, &particle_id)
+    if (compositor && model_id && particle_model != model_id
+            && (ghost_playback::particles(&particles, &particle_id) || ghost_viewer::particles(&particles, &particle_id))
             && particle_id == model_id) {
         if (!replay_gl::BeginCapture()) return;
         const auto result = ghost_compositor::prepare_particles(compositor, particles.atlas_rgba,
@@ -320,14 +325,16 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         if (replay_gl::EndCapture() && result == ghost_compositor::Result::ok) particle_model = model_id;
     }
     ghost_annotation::View annotations{};uint64_t annotation_id=0;
-    if(compositor && model_id && annotation_model!=model_id && ghost_playback::annotations(&annotations,&annotation_id)
+    if(compositor && model_id && annotation_model!=model_id
+            && (ghost_playback::annotations(&annotations,&annotation_id) || ghost_viewer::annotations(&annotations,&annotation_id))
             && annotation_id==model_id) {
         if(!replay_gl::BeginCapture())return;
         const auto result=ghost_compositor::prepare_annotations(compositor,annotations.rgba,annotations.width,annotations.height);
         if(replay_gl::EndCapture() && result==ghost_compositor::Result::ok)annotation_model=model_id;
     }
     const bool saved=sample && ghost_playback::plan(*sample);
-    will_draw = compositor && model_id && model_id == wanted_model && (saved || ghost_live_session::plan());
+    const bool viewer=sample && ghost_viewer::plan(*sample);
+    will_draw = compositor && model_id && model_id == wanted_model && (saved || ghost_live_session::plan() || viewer);
 }
 void observe(const ghost::RasterTarget &target) {
     if (target.width && target.height && target.width <= 8192 && target.height <= 8192) {
@@ -349,7 +356,10 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_h
     saved_contributor=ghost_playback::evaluate(sample,world,poses,count,draw_token);
     live_contributor=ghost_live_session::evaluate(sample,world,now_ns(),poses+count,live_count,live_token);
     count+=live_count;
-    if(!saved_contributor && !live_contributor)return;
+    uint32_t viewer_count=0;
+    viewer_contributor=ghost_viewer::evaluate(sample,world,poses+count,ghost_compositor::max_poses-count,viewer_count);
+    count+=viewer_count;
+    if(!saved_contributor && !live_contributor && !viewer_contributor)return;
     if(!contributors_current()) {cancel();return;}
     // One stable ordering across saved and live contributions; neither group
     // can be concatenated after the other when their depths interleave.
@@ -400,11 +410,13 @@ void finish(const ghost::WorldPass *world) {
     if(!list_identified)return;
     if (!provisional || !world || world->list_serial != occurrence || !contributors_current()
             || !close_display()) {
+        if (viewer_contributor) ghost_viewer::finished(false);
         cancel(); return;
     }
     const auto stage = Clock::now();
     ready = ghost_compositor::finalize(compositor, occurrence) == ghost_compositor::Result::ok;
     cost.finalize_micros += since(stage);
+    if (viewer_contributor) ghost_viewer::finished(ready);
     if (!ready) {refused(Reason::compositor_refused);cancel();}
     else if(live_contributor)ghost_live_session::presentation(same(owner,presentation_owner)?Reason::ready:Reason::setup_pending);
 }

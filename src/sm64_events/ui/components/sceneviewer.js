@@ -248,12 +248,13 @@ function savedLoop() {
   try { return localStorage.getItem(LOOP_PREFERENCE) === "on"; } catch { return false; }
 }
 
-// The heading for the open scene, never its file name: the server's title, else the attempt the
-// Practice log already shows (course, star, strategy and time), else "Recording".
+// The heading for the open scene, never its file name: the server's title when it names the
+// scene's target, else the attempt the Practice log already shows (course, star, strategy and
+// time), else the server's plain title ("Lab recording"), else "Recording".
 export function sceneTitle(scene, view) {
-  if (scene?.title) return scene.title;
+  if (scene?.title && scene.target) return scene.title;
   const found = scene?.attempt != null ? attemptIn(view, scene.attempt) : null;
-  if (!found) return "Recording";
+  if (!found) return scene?.title || "Recording";
   const { section, attempt } = found, named = displayName(section, view?.catalog?.courses || []);
   const time = attempt.segment_id != null ? attempt.rta : attempt.igt ?? attempt.rta;
   return [named.context, named.name, attempt.strat_tag, time].filter(Boolean).join(" · ");
