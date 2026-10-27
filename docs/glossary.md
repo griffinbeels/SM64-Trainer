@@ -1386,7 +1386,9 @@ A [[saved ghost]] the [[scene viewer]] draws into the scene it plays (its
 stage), from that [[ghost]]'s own recording. One you add appears in the next
 picture, from the recorded or the free camera, while playing, stepping or
 seeking either way. It looks as it does in the game: its own [[ghost
-colour]], shadow and [[name box]], hidden behind the stage's walls. Its first
+colour]], shadow and [[name box]], hidden behind the stage's walls. Where two
+would show the same name (two of your own [[run]]s), each adds its time, so
+you can tell them apart. Its first
 [[frame]] stands on the scene's first [[frame]] (an [[attempt]]'s scene starts
 where that [[attempt]] did), and it follows the game's clock from there, so
 lag [[frame]]s keep it in step. At its end one with its [[star]] dance holds
