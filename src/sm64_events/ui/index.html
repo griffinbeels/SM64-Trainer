@@ -1694,6 +1694,17 @@
     border-color: #344b64; background: #0d1928; color: var(--text);
     min-height: 34px; padding: .32rem .5rem;
   }
+  /* EVERY SLIDER REACHES ITS ENDS. Chromium paints a native range's track
+     across its padding and border, but the thumb travels only the content
+     box, so the input padding above left 8.5px of track past the thumb at
+     max and fill before it at min -- it read as a bug stopping short of the
+     true end (his report, 2026-10-26: "there should be NOTHING remaining").
+     No range carries horizontal padding or border; this rule is their one
+     owner and outranks a bare class. Gold is only the default, at zero
+     specificity, so a slider's own rule states its width and, if different,
+     its colour. Guard: tests/test_ui_sliders.py. */
+  input[type=range] { padding-inline: 0; border-inline-width: 0; }
+  :where(input[type=range]) { accent-color: var(--gold); }
   /* A <select>'s own dropdown arrow is drawn INSIDE its padding box, so with
      symmetric padding a long option runs underneath it — "Bowser in the Dark
      Worl⌄", clipped mid-word with the caret on top (live audit 2026-07-25).
@@ -4358,7 +4369,7 @@
     color: var(--gold-soft); text-align: center;
   }
   .hiw-slider { display: grid; gap: .3rem; font-size: .82rem; color: var(--muted); }
-  .hiw-slider input { width: 100%; accent-color: var(--gold); }
+  .hiw-slider input { width: 100%; }
   .hiw-frames-demo p { margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.45; }
   .hiw-caption { display: block; margin-bottom: .45rem; color: var(--muted); font-size: .8rem; }
   .hiw-message pre {
@@ -5709,7 +5720,7 @@
   }
   .replay-controls { max-width: 760px; padding: .55rem 0; container-type: inline-size; }
   .replay-seek-row { display: flex; align-items: center; gap: .7rem; }
-  .replay-seek-row input { flex: 1; min-width: 40px; padding: 0; margin: 0; border: 0; accent-color: var(--gold); }
+  .replay-seek-row input { flex: 1; min-width: 40px; padding: 0; margin: 0; border: 0; }
   .replay-media-time { font-variant-numeric: tabular-nums; font-size: .72rem; color: var(--muted); white-space: nowrap; }
   .replay-control-row, .replay-playback-options, .replay-loop-row {
     display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
@@ -5727,7 +5738,7 @@
   .replay-volume-popover { display: none; position: absolute; z-index: 6; right: 0; bottom: 100%;
     padding: 14px 12px; background: #101e2f; border: 1px solid var(--border); border-radius: 6px; }
   .replay-sound:hover .replay-volume-popover, .replay-sound:focus-within .replay-volume-popover { display: flex; }
-  .replay-volume { width: 80px; min-width: 0; padding: 0; margin: 0; border: 0; accent-color: var(--gold); }
+  .replay-volume { width: 80px; min-width: 0; padding: 0; margin: 0; border: 0; }
   .replay-loop-row { padding-top: .45rem; border-top: 1px solid var(--border-soft); }
   .replay-loop-row .is-active, .replay-playback-options .is-active { color: var(--gold); border-color: var(--gold); }
   .replay-control-error { font-size: .75rem; color: var(--coral); }
@@ -9585,9 +9596,9 @@
     align-items: center; gap: .5rem 1rem;
   }
   .ghost-proximity-body .ghost-field { flex-wrap: wrap; }
-  .ghost-path-range { width: 100px; min-width: 0; accent-color: var(--gold); }
+  .ghost-path-range { width: 100px; min-width: 0; }
   .ghost-proximity-help { margin: 0; flex-basis: 100%; max-width: 45rem; line-height: 1.5; }
-  .ghost-distance { width: 120px; min-width: 0; accent-color: var(--gold); }
+  .ghost-distance { width: 120px; min-width: 0; }
   .ghost-field { display: flex; align-items: center; gap: .35rem; }
   /* The one fallback this row keeps instead of a breakpoint: if a longer
      readout ever arrives, the timing group wraps within itself rather than
@@ -9603,7 +9614,7 @@
   .ghost-path-options {
     margin-left: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1rem;
   }
-  .ghost-name-box-range { width: 70px; min-width: 0; accent-color: var(--gold); }
+  .ghost-name-box-range { width: 70px; min-width: 0; }
   .ghost-name-box select, .ghost-path-source select {
     background: #101f31; color: var(--text); border: 1px solid var(--border-soft);
     border-radius: 5px; font: inherit; font-size: .68rem; padding: 1px .3rem;
@@ -9702,7 +9713,7 @@
     .ghost-library-task { padding: 16px; }
     .ghost-library-review-meta { grid-template-columns: minmax(0,1fr); }
   }
-  .ghost-volume-range { width: 90px; min-width: 0; accent-color: var(--gold); }
+  .ghost-volume-range { width: 90px; min-width: 0; }
   .ghost-recording-row {
     display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .75rem;
     min-width: 0;
@@ -9754,32 +9765,40 @@
   /* A fixed lane, so stepping the timing does not shuffle the two buttons
      sideways under the pointer that is pressing one of them. */
   .ghost-nudge-value { min-width: 6.5rem; text-align: center; }
-  .ghost-opacity {
-    width: 120px; min-width: 0; margin: 0; padding: 0; border: 0;
-    accent-color: var(--gold);
-  }
+  .ghost-opacity { width: 120px; min-width: 0; margin: 0; padding: 0; border: 0; }
   /* THE COLOUR WHEEL IS THE TRACK. The control answers "how far round the
      wheel", which is a number nobody can picture, so the slider wears the
      wheel itself and the position IS the answer -- no swatch to keep in sync
      and nothing to decode. Drawn with `appearance: none` because a themed
      range paints its own track over any background; the thumb is then ours
-     too, and it is the row's own text colour rather than a second accent. */
+     too, and it is the row's own text colour rather than a second accent.
+     The wheel is the TRACK, 12px, not the input's own background: the input
+     keeps the shared 34px hit height, and the 14px thumb covers the wheel's
+     round end at 0 and at 359, so nothing shows past it at either end. */
   .ghost-hue {
     appearance: none; -webkit-appearance: none;
-    width: 108px; min-width: 0; height: 12px; margin: 0; padding: 0;
-    border: 1px solid var(--border-soft); border-radius: 999px;
-    cursor: pointer;
+    width: 108px; min-width: 0; margin: 0; padding: 0; border: 0;
+    background: transparent; cursor: pointer;
+  }
+  .ghost-hue::-webkit-slider-runnable-track {
+    height: 12px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--border-soft);
+    background: linear-gradient(to right,
+      hsl(0 72% 55%), hsl(60 72% 55%), hsl(120 72% 55%), hsl(180 72% 55%),
+      hsl(240 72% 55%), hsl(300 72% 55%), hsl(360 72% 55%));
+  }
+  .ghost-hue::-moz-range-track {
+    height: 12px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--border-soft);
     background: linear-gradient(to right,
       hsl(0 72% 55%), hsl(60 72% 55%), hsl(120 72% 55%), hsl(180 72% 55%),
       hsl(240 72% 55%), hsl(300 72% 55%), hsl(360 72% 55%));
   }
   .ghost-hue::-webkit-slider-thumb {
-    appearance: none; -webkit-appearance: none;
-    width: 12px; height: 12px; border-radius: 50%;
+    appearance: none; -webkit-appearance: none; box-sizing: border-box;
+    width: 14px; height: 14px; margin-top: -1px; border-radius: 50%;
     background: var(--text); border: 1px solid rgba(3,10,18,.9);
   }
   .ghost-hue::-moz-range-thumb {
-    width: 12px; height: 12px; border-radius: 50%;
+    box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%;
     background: var(--text); border: 1px solid rgba(3,10,18,.9);
   }
   .ghost-hue:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
@@ -9887,7 +9906,7 @@
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     font-size: .82rem; color: var(--text);
   }
-  .sov-field input[type="range"] { flex: 1 1 auto; min-height: 0; padding: 0; accent-color: var(--gold); }
+  .sov-field input[type="range"] { flex: 1 1 auto; min-height: 0; padding: 0; }
   .sov-field output { width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
   .sov-swatches { display: flex; align-items: center; gap: 6px; }
   .sov-swatch {
