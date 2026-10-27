@@ -18,6 +18,21 @@ export function pictureInterval(time, clock, step, duration) {
   return null;
 }
 
+// Where the seek bar ends: the middle of the last picture, where a step or a
+// pause on the final frame lands. Ending it at the duration left the thumb
+// half a picture short of the bar's end on the final frame, which reads as a
+// bar that cannot reach its end; a drag to the end now lands on that picture
+// rather than past it. Without picture timing the duration stays the end.
+export function lastPictureTime(clock, step, duration) {
+  if (!Number.isFinite(duration) || duration <= 0) return null;
+  const times = clock?.times;
+  const lastStart = times?.length ? times[times.length - 1]
+    : Number.isFinite(step) && step > 0 ? Math.max(0, Math.ceil(duration / step) - 1) * step : null;
+  const interval = lastStart != null && lastStart < duration
+    ? pictureInterval(lastStart, clock, step, duration) : null;
+  return interval ? (interval.start + interval.end) / 2 : duration;
+}
+
 export function loopSeekTime(loop) {
   // Playback begins at A itself. A midpoint is useful for paused stepping,
   // but would discard half a long hold (and its audio) on every loop.
