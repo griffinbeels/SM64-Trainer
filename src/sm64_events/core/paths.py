@@ -227,6 +227,13 @@ def compilations_dir() -> Path:
     return replays_root() / "compilations"
 
 
+def scene_clips_dir() -> Path:
+    # The Scene viewer's exported videos (server/scene_exports.py). UNDER
+    # replays_root() for compilations_dir()'s reason: /api/replay/reveal opens
+    # only files inside save_root, so "Show in folder" needs no new endpoint.
+    return replays_root() / "scene clips"
+
+
 def overlays_dir() -> Path:
     # Transparent input-overlay layers (tools/export_overlay.py). UNDER
     # replays_root() (== the ReplayService save_root) for the same reason

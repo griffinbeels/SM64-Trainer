@@ -69,6 +69,7 @@ import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, scen
 import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lookingAt, looked,
   orbitFromPose, slid, speedStepped, turned, worldPoint } from "./scenecamera.js";
 import { SceneSound, SoundBar } from "./sceneaudio.js";
+import { RecordBar } from "./scenerecord.js";
 import { pictureAt, playLength, recordedTimes } from "./sceneclock.js";
 
 const html = htm.bind(h);
@@ -419,9 +420,8 @@ export class SceneLink {
     const ready = this.ws && this.ws.readyState === WebSocket.OPEN && this.scene;
     if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
     const play = this.playback, frame = this.wanted.frame ?? (play ? play.asked : this.frame);
-    const id = ++this.sequence, camera = this.free && this.orbit ? cameraOf(this.orbit)
-      : this.view ? { ghost: this.view } : null;
-    this.inFlight.set(id, { ...this.wanted, id, frame, free: !!camera, sent: performance.now(), play,
+    const id = ++this.sequence, camera = this.cameraNow();
+    this.inFlight.set(id, { ...this.wanted, id, frame, camera, free: !!camera, sent: performance.now(), play,
       due: play ? play.dueOf(frame) : null });
     if (play && this.wanted.kind !== "play") play.moved = true;
     this.wanted = null;
@@ -429,6 +429,12 @@ export class SceneLink {
       ...(this.hud ? {} : { hud: false }) }));
     this.drawing = true;
     this.changed();
+  }
+
+  // The camera a picture asked for now is drawn from (interface D): the free camera's pose, a ghost's
+  // view, or null for the recorded camera. A recording (scenerecord.js) reads it every display frame.
+  cameraNow() {
+    return this.free && this.orbit ? cameraOf(this.orbit) : this.view ? { ghost: this.view } : null;
   }
 
   // When a picture asked for now is ready to draw: the median of recent ones, ask to decoded.
@@ -503,6 +509,7 @@ export class SceneLink {
       this.sound.shown(header.frame);
     }
     if (request) {
+      header.sentCamera = request.camera;          // what it answers: a recording's camera_used (scenerecord.js)
       header.trip_ms = received - request.sent;
       header.input_ms = drawnAt - request.inputTime;
       if (request.kind !== "play") this.latencies = [...this.latencies.slice(-99), header.input_ms];
@@ -1395,6 +1402,7 @@ function Player({ link, canvas, surface, ghosts }) {
     ${link.notice && html`<p class="scene-lab-reason" role="status">${link.notice}</p>`}
     <${Transport} link=${link} />
     <${SoundBar} sound=${link.sound} frame=${link.frame} />
+    <${RecordBar} link=${link} />
     <${CameraBar} link=${link} tuning=${tuning} setTuning=${setTuning} />
     <${Readout} link=${link} />
   </section>

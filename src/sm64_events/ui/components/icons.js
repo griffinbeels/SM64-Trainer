@@ -61,6 +61,8 @@ const PATHS = {
   resources: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm3.6 5.4-2.1 5.1-5.1 2.1 2.1-5.1 5.1-2.1z",
   about: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9.6 9.4a2.5 2.5 0 0 1 4.9.6c0 1.7-2.5 2.1-2.5 3.7M12 17h.01",
   external: "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6",
+  record: "M12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12z",
+  stop: "M7 7h10v10H7V7z",
 };
 
 export function Icon({ name, size = 18, className = "" }) {
