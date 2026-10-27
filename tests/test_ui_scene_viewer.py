@@ -138,6 +138,85 @@ def test_arriving_gives_the_viewer_the_keyboard_and_w_flies_with_no_button(tmp_p
             browser.close()
 
 
+# The transport's buttons as drawn, left to right, and whether the bar scrolls sideways.
+TRANSPORT_ROW = """(() => {
+  const bar = document.querySelector('.scene-lab-bar[aria-label=Playback]');
+  return { overflow: bar.scrollWidth - bar.clientWidth, buttons: [...bar.querySelectorAll('button')].map((b) => {
+    const r = b.getBoundingClientRect();
+    return { name: b.textContent.trim(), top: Math.round(r.top), height: Math.round(r.height) }; }) };
+})()"""
+PLAYING = "[...document.querySelectorAll('.scene-lab-bar button')].some((b) => b.textContent.trim() === 'Pause')"
+
+
+def _transport_fits_and_the_title_names_the_attempt(page, folder: Path) -> None:
+    for width in (850, 1280):
+        page.set_viewport_size({"width": width, "height": 1000})
+        page.wait_for_timeout(100)
+        row = page.evaluate(TRANSPORT_ROW)
+        assert [b["name"] for b in row["buttons"]] == ["Restart", "Back 1", "Play", "Forward 1", "Loop"], row
+        assert len({b["top"] for b in row["buttons"]}) == 1, row          # one row
+        assert len({b["height"] for b in row["buttons"]}) == 1, row       # one weight
+        assert row["overflow"] <= 0, row
+        title = page.locator(".scene-lab-title").inner_text()
+        assert title.count(" · ") == 3, title
+        assert "sm64scene" not in page.locator(".scene-lab .workshop-hero").inner_text()
+        page.locator(".scene-lab-player").screenshot(path=str(folder / f"scene-transport-{width}.png"))
+
+
+def _a_drag_keeps_playing(page) -> None:
+    before = page.evaluate("window.__cameras.length")
+    box = page.locator(".scene-lab canvas").bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    for step in range(1, 9):
+        page.mouse.move(box["x"] + box["width"] / 2 + step * 10, box["y"] + box["height"] / 2)
+        page.wait_for_timeout(30)
+    page.mouse.up()
+    page.wait_for_timeout(200)
+    assert [camera for camera in page.evaluate("window.__cameras")[before:] if camera], "the drag moved nothing"
+    assert page.evaluate(PLAYING), "a drag paused Play"
+
+
+def test_the_transport_fits_one_row_the_title_names_the_attempt_and_a_drag_keeps_playing(tmp_path, monkeypatch):
+    """Round 4 (2026-10-27), items 1 and 4-7 on the real page: the header names the attempt (course, star,
+    strategy, time), never the scene's file; Restart and Loop sit in the transport's one row at both
+    widths with Back 1 / Play / Forward 1's height; "." steps; and with Loop on, a drag on the picture
+    leaves Play playing."""
+    with attempt_scene._served(tmp_path, monkeypatch, lab_on=True) as (base, _seen), sync_playwright() as play:
+        browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 1000})
+            page.add_init_script(CAMERAS)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(base)
+            ready = page.locator(f"{attempt_scene.ROWS} .attempt-scene:not([disabled])").first
+            ready.wait_for(timeout=20000)
+            ready.click()
+            page.wait_for_function(DRAWN, timeout=20000)
+            page.wait_for_function(f"!({PLAYING})", timeout=20000)    # the five frames played through
+            _transport_fits_and_the_title_names_the_attempt(page, tmp_path)
+            assert page.evaluate(HAS_KEYBOARD)
+            page.get_by_role("button", name="Restart").click()               # paused: to the first frame, paused
+            page.wait_for_function("document.querySelector('.scene-lab-frame').textContent.includes('Frame 1 of')")
+            page.keyboard.press(".")
+            page.wait_for_function("document.querySelector('.scene-lab-frame').textContent.includes('Frame 2 of')")
+            page.keyboard.press(",")
+            page.wait_for_function("document.querySelector('.scene-lab-frame').textContent.includes('Frame 1 of')")
+            assert not page.evaluate(PLAYING)
+
+            page.get_by_role("button", name="Loop").click()
+            assert page.get_by_role("button", name="Loop").get_attribute("aria-pressed") == "true"
+            page.get_by_role("button", name="Play").click()
+            page.wait_for_timeout(600)                                       # past the end: still playing
+            assert page.evaluate(PLAYING)
+            _a_drag_keeps_playing(page)
+            page.get_by_role("button", name="Pause").click()
+            assert errors == []
+        finally:
+            browser.close()
+
+
 def _static_imports(source: str) -> list[str]:
     return re.findall(r"^\s*import\s[^;]*?from\s+[\"']([^\"']+)[\"']", source, re.MULTILINE)
 
@@ -187,7 +266,10 @@ def test_the_pointer_lock_never_outlives_the_right_button(tmp_path, monkeypatch)
             page.mouse.down(button="right")                  # a quick grant: held while the button is
             page.wait_for_function(f"({LOCKED}) === 'CANVAS'", timeout=5000)
             page.mouse.up(button="right")
-            page.wait_for_function(f"!({LOCKED})", timeout=5000)
+            # Exited, and its pointerlockchange heard (the stand-in announces it a task later): counted
+            # before it lands, it would read as a third change of the late grant below.
+            page.wait_for_function(f"!({LOCKED}) && window.__lockChanges.length >= 2 "
+                                   "&& window.__lockChanges.at(-1) === null", timeout=5000)
 
             page.evaluate("window.__pointerLockStandIn.grantMs = 300")   # a late grant: the button is up first
             changes = page.evaluate("window.__lockChanges.length")
