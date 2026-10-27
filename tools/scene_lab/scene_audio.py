@@ -24,7 +24,8 @@ refused, never served.
 
 `stems` is the scene's music and sound effects (round 4, item 11: "toggle music / game sound
 effects separately"): {available: true, tracks, lost} when the package carries a source-stems
-layer that split it (stems_layer.py), else {available: false, reason}. The two tracks lie on the
+layer that split it (stems_layer.py), else {available: false, reason} (a refused split: reason
+NOT_SPLIT, plus the layer's own "detail" and "stats", also logged when the scene opens). The two tracks lie on the
 recording's own samples and blocks, so a frame's sample and a block's index mean the same in all
 three: block(index, "music") is the same span as block(index). The viewer plays the recording
 while both are on, and one track while only that one is; `lost` names the frames whose span
@@ -34,6 +35,7 @@ from __future__ import annotations
 
 import bisect
 import io
+import logging
 import sys
 import time
 import wave
@@ -43,9 +45,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audio_clock as ac  # noqa: E402
 import audio_layer as al  # noqa: E402
 
+log = logging.getLogger("sm64.scene_lab")
 SOUND_SHIFT_MS = 0.0          # 0: as heard. Project64's audio delay here: each sound with its game event
 NO_SOUND = "This recording has no sound."
 NO_STEMS = "This scene was saved before music and sound effects could be split."
+NOT_SPLIT = "This scene's music and sound effects can't be separated."
 STEMS_PENDING = "Music and sound effects can be switched a few seconds after the attempt ends."
 TRACKS = ("mix", "music", "effects")
 LIVE_BLOCK_SAMPLES = al.FLAC_FRAME * 20     # audio_layer.encode_layer's blocks, so the attached layer's match
@@ -80,7 +84,10 @@ class SceneSound:
                 continue
             status, sample = ac.locate(picture.ticks + layer.offset_ticks + shift, layer.segments, layer.losses)
             samples.append(sample if status in (ac.COVERED, ac.LOSS) else -1)
-        return cls(layer, samples, lost_frames(samples, layer.losses), shift_ms, getattr(package, "stems", None))
+        stems = getattr(package, "stems", None)
+        if stems is not None and not stems.available:
+            log.info("scene sound: music and sound effects not split: %s %s", stems.reason, stems.stats)
+        return cls(layer, samples, lost_frames(samples, layer.losses), shift_ms, stems)
 
     def describe(self) -> dict:
         layer = self.layer
@@ -90,9 +97,13 @@ class SceneSound:
                 "samples": self.samples, "lost": self.lost, "stems": self._stems()}
 
     def _stems(self) -> dict:
+        """The split as the page shows it. A refused split says NOT_SPLIT; why, in the layer's own
+        words and numbers, goes to "detail" (the page's ui_log note) and the server log."""
         stems = self.stems
-        if stems is None or not stems.available:
-            return {"available": False, "reason": stems.reason if stems is not None else NO_STEMS}
+        if stems is None:
+            return {"available": False, "reason": NO_STEMS}
+        if not stems.available:
+            return {"available": False, "reason": NOT_SPLIT, "detail": stems.reason, "stats": stems.stats}
         return {"available": True, "tracks": list(TRACKS[1:]), "lost": lost_frames(self.samples, stems.gaps)}
 
     def block(self, index: int, track: str = "mix") -> tuple[bytes, str]:

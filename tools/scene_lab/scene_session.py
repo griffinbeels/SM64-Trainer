@@ -86,6 +86,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import stage_ghosts  # noqa: E402
+import ghost_sound  # noqa: E402
 import gpu_gate  # noqa: E402
 import hud as hud_cut  # noqa: E402
 import package as scene_package  # noqa: E402
@@ -417,6 +418,7 @@ class SceneSession:
         self.ghost_origin = 0                            # the package frame that is every ghost's first
         self._ghost_problem: str | None = None           # why ghosts cannot draw ("" once set up)
         self._ghosts_warm = False                        # the renderer's ghost overlay has drawn a picture
+        self.ghost_sounds = ghost_sound.SceneGhostSounds(map_path=getattr(evaluator_factory, "map_path", None))
 
     @classmethod
     def open(cls, config, path: Path, *, sidecar: Path | None = None, live=None, fitter=None, host_factory=None,
@@ -616,6 +618,8 @@ class SceneSession:
         such block, ValueError when the block fails its hash."""
         if self.sound is None:
             raise LookupError(scene_audio.NO_SOUND)
+        if track.startswith(ghost_sound.TRACK_PREFIX):              # a ghost's own sound (ghost_sound.py)
+            return self.ghost_sounds.block(self, track[len(ghost_sound.TRACK_PREFIX):], index)
         return self.sound.block(index, track)
 
     def _index(self, frame) -> int:
@@ -996,6 +1000,7 @@ class SceneSession:
             self._ahead_generation += 1                  # a running job stops after its frame
             ahead.shutdown(wait=True, cancel_futures=True)
         self._evaluator = self._last_view = self._last_walk = None
+        self.ghost_sounds.close()
         try:
             return self.host.close()
         finally:

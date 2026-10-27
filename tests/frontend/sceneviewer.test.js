@@ -1853,6 +1853,40 @@ test("Add and Remove send the whole list; the lab's answer selects rows, gives a
   await until(() => expect(ghostsSent(socket).at(-1).set).toEqual([]));
 });
 
+test("a ghost in the scene has its own Mute; a recording without sound says its ghosts play silent too", async () => {
+  ghostRoutes();
+  opened = { ...opened, audio: { available: true, rate: 48000, block_samples: 9600, total_samples: 4 * 9600, blocks: 4,
+    codec: "stored", shift_ms: 0, samples: FRAMES.map((_, k) => k * 1600), lost: [] } };
+  routes.set("/api/scene-lab/audio/", () => new Promise(() => {}));        // its blocks on their way
+  const page = arrive();
+  const socket = await sceneUp(1);
+  await until(() => expect(ghostRow(page, "yours-2")).not.toBeNull());
+  expect(within(ghostRow(page, "yours-2")).queryByRole("button", { name: /^Mute/ })).toBeNull();   // not in the scene
+  fireEvent.click(within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Add/ }));
+  await until(() => expect(ghostsSent(socket).length).toBe(1));
+  socket.text({ id: ghostsSent(socket)[0].id, kind: "ghosts", shown: ["yours-2"], refused: [] });
+  const mute = await until(() => within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Mute/ }));
+  expect([mute.getAttribute("aria-pressed"), mute.disabled, mute.title]).toEqual(["false", false,
+    "Mute this ghost's sound effects"]);
+  fireEvent.click(mute);
+  await until(() => expect(within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Mute/ })
+    .getAttribute("aria-pressed")).toBe("true"));
+  expect(fetches.some(([url]) => url.includes("track=ghost%3Ayours-2"))).toBe(true);
+  routes.set("/api/scene-lab/audio/", () => respond({ detail: "This ghost's sound could not be made." }, 404));
+  fireEvent.click(within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Remove/ }));
+  await until(() => expect(ghostsSent(socket).length).toBe(2));
+  socket.text({ id: ghostsSent(socket)[1].id, kind: "ghosts", shown: [], refused: [] });
+  fireEvent.click(within(ghostRow(page, "yours-3")).getByRole("button", { name: /^Add/ }));
+  await until(() => expect(ghostsSent(socket).length).toBe(3));
+  socket.text({ id: ghostsSent(socket)[2].id, kind: "ghosts", shown: ["yours-3"], refused: [] });
+  const failed = await until(() => {                                          // a ghost whose sound failed says so
+    const button = within(ghostRow(page, "yours-3")).getByRole("button", { name: /^Mute/ });
+    expect(button.disabled).toBe(true);
+    return button;
+  });
+  expect(failed.title).toBe("This ghost's sound could not be played.");
+});
+
 // His words (round 5, item 5): "we need one button per active ghost in the scene to follow their
 // recorded POV."
 const GHOST_CAMERA = { focus: [100, 200, -300], position: [600, 700, 1200], roll: -700, fov: 50 };

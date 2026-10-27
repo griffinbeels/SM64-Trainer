@@ -86,6 +86,10 @@ function splitReasonOf(audio) {
   return audio.stems?.available ? null : audio.stems?.reason || null;
 }
 
+// A ghost's own sound track (ghost_sound.py): its ref, on the recording's samples.
+const GHOST_TRACK = "ghost:";
+const ghostTrack = (ref) => `${GHOST_TRACK}${ref}`;
+
 // What plays for the switches: the recording when both are on (or the scene
 // has no split), one track when only it is on, nothing when both are off.
 export function trackFor(split, music, effects) {
@@ -161,14 +165,15 @@ async function readBlock(response) {
 // performance time `start`), shown (a play's picture was drawn) and stop (Pause, a
 // step, a seek, a closed scene); the page reads the rest.
 export class SceneSound {
-  constructor({ changed } = {}) {
+  constructor({ changed, observe } = {}) {
     const saved = storedSound();
-    Object.assign(this, { changed: changed || (() => {}), volume: saved.volume, muted: saved.muted, table: null,
+    Object.assign(this, { changed: changed || (() => {}), observe: observe || (() => {}), volume: saved.volume,
+      muted: saved.muted, table: null,
       music: saved.music, effects: saved.effects, track: "mix", switchTo: undefined, splitReason: null,
       runs: [], times: new Float64Array(0), reason: null, session: null, fps: 30, ctx: null, master: null, node: null,
       playing: null, lastLate: null, offsets: [], reports: [], pending: [], sync: [], held: new Map(),
       loading: new Map(), failed: new Set(), notice: null, broken: null, steerTimer: null, cueTimer: null,
-      idleTimer: null, cueTime: 0 });
+      idleTimer: null, cueTime: 0, ghosts: [], ghostMutes: new Set(), ghostProblems: new Map() });
   }
 
   get available() { return !!this.table; }
@@ -188,12 +193,14 @@ export class SceneSound {
     const audio = scene?.audio;
     Object.assign(this, { session: scene?.session ?? null, fps: scene?.fps || 30, times: recordedTimes(scene),
       held: new Map(), loading: new Map(), failed: new Set(), notice: null, sync: [], pending: [], reports: [],
-      switchTo: undefined });
+      switchTo: undefined, ghosts: [], ghostProblems: new Map() });
+    this.postGhosts();
     if (audio?.available) {
       this.table = { rate: audio.rate, blockSamples: audio.block_samples, totalSamples: audio.total_samples,
         blocks: audio.blocks, samples: Int32Array.from(audio.samples), lost: new Set(audio.lost),
         stems: stemsOf(audio) };
       this.splitReason = splitReasonOf(audio);
+      this.noteRefusal(scene);
       this.runs = soundMap(this.table.samples, this.times, audio.rate, this.fps);
       this.reason = null;
       if (this.ctx && this.ctx.sampleRate !== audio.rate) this.close();
@@ -205,6 +212,14 @@ export class SceneSound {
         splitReason: null });
     }
     this.changed();
+  }
+
+  // A refused split: the row says the plain sentence, the log keeps why (the stems layer's own words).
+  noteRefusal(scene) {
+    const stems = scene.audio.stems;
+    if (!stems?.detail) return;
+    this.observe({ surface: "scene_viewer", kind: "sound_not_split", scene: scene.name ?? null,
+      reason: stems.reason, detail: stems.detail, stats: stems.stats || null });
   }
 
   // A growing scene gained frames, and maybe a refit of its sound (the server builds it from the
@@ -222,6 +237,11 @@ export class SceneSound {
     Object.assign(table, { totalSamples: audio.total_samples, blocks: audio.blocks,
       samples: Int32Array.from(audio.samples), lost: new Set(audio.lost), stems: stemsOf(audio) });
     this.splitReason = splitReasonOf(audio);
+    for (const ghost of this.ghosts) {             // the server makes a grown scene's ghost tracks again
+      this.held.delete(ghostTrack(ghost));
+      for (const key of [...this.failed]) if (key.startsWith(`${ghostTrack(ghost)}:`)) this.failed.delete(key);
+      this.post({ type: "keep", track: ghostTrack(ghost), indices: [] });
+    }
     if (this.blocksOf("mix").delete(short)) this.post({ type: "keep", indices: [...this.blocksOf("mix").keys()] });
     this.failed.delete(`mix:${short}`);
     this.runs = soundMap(table.samples, this.times, audio.rate, this.fps);
@@ -328,6 +348,7 @@ export class SceneSound {
         for (const [index, channels] of blocks) this.post({ type: "block", track, index, channels });
       }
       this.post({ type: "track", track: this.track });
+      this.postGhosts();
       this.steer();
     }, (error) => {
       this.broken = `The sound could not start: ${error.message}`;
@@ -383,7 +404,7 @@ export class SceneSound {
     this.arm();
     if (!this.ctx) return;
     this.playing = { from, start, late: [], plan: null, began: null };
-    this.fetchFrom(this.times[from]);
+    this.fetchAround(this.times[from]);
     this.steer();
     this.steerTimer = setInterval(() => this.steer(), SCENE_SOUND.startMs);
   }
@@ -467,7 +488,7 @@ export class SceneSound {
       play.plan = piece;
       this.post({ type: "clock", piece });
     }
-    this.fetchFrom(Math.max(origin, want));
+    this.fetchAround(Math.max(origin, want));
   }
 
   // The worklet's position reports: how far each drawn picture's own sample
@@ -517,22 +538,31 @@ export class SceneSound {
   fetchBlock(index, track = "mix") {
     const key = `${track}:${index}`, decoded = this.blocksOf(track);
     if (decoded.has(index) || this.loading.has(key) || this.failed.has(key)) return;
-    const table = this.table, query = track === "mix" ? "" : `&track=${track}`;
+    // A ghost's first block makes its whole track on the server: ask one, then the rest.
+    const ghost = track.startsWith(GHOST_TRACK);
+    if (ghost && !decoded.size && [...this.loading.keys()].some((asked) => asked.startsWith(`${track}:`))) return;
+    const table = this.table, query = track === "mix" ? "" : `&track=${encodeURIComponent(track)}`;
     const job = fetch(`${ROOT}/audio/${index}?session=${this.session}${query}`).then(readBlock)
       .then((bytes) => decodeBlock(bytes, table.rate))
       .then((buffer) => {
-        if (this.table !== table) return;
+        if (this.table !== table || (ghost && !this.ghosts.includes(track.slice(GHOST_TRACK.length)))) return;
         if (buffer.length !== Math.min(table.blockSamples, table.totalSamples - index * table.blockSamples)) {
           throw new Error("it decoded to another length");
         }
         const channels = [buffer.getChannelData(0), buffer.getChannelData(Math.min(1, buffer.numberOfChannels - 1))];
         decoded.set(index, channels);
         this.post({ type: "block", track, index, channels });
+        if (ghost && decoded.size === 1) this.fetchFrom(this.nowTime(), track);   // its track is made: the rest
         if (this.switchTo === track) this.useTrack(track);
       })
       .catch((error) => {
         if (this.table !== table) return;
         this.failed.add(key);
+        if (ghost) {
+          this.ghostProblems.set(track.slice(GHOST_TRACK.length), error.message);
+          this.changed();
+          return;
+        }
         this.notice = `Part of this recording's sound could not be read, so it plays silent: ${error.message}`;
         if (this.switchTo === track) this.useTrack(track);
         this.changed();
@@ -541,12 +571,44 @@ export class SceneSound {
     this.loading.set(key, job);
   }
 
+  // The recording's track around `time`, and every ghost's.
+  fetchAround(time) {
+    this.fetchFrom(time);
+    for (const ghost of this.ghosts) this.fetchFrom(time, ghostTrack(ghost));
+  }
+
+  // The ghosts the scene draws (SceneLink's answer, refs in its order): each plays its own sound
+  // effects (ghost_sound.py) under the volume and Mute, unless muted here.
+  setGhosts(refs) {
+    const gone = this.ghosts.filter((ref) => !refs.includes(ref));
+    this.ghosts = [...refs];
+    for (const ref of gone) {
+      this.held.delete(ghostTrack(ref));
+      this.ghostProblems.delete(ref);
+    }
+    this.postGhosts();
+    if (this.table) this.fetchAround(this.nowTime());
+    this.changed();
+  }
+
+  ghostMuted(ref) { return this.ghostMutes.has(ref); }
+
+  toggleGhost(ref) {
+    if (!this.ghostMutes.delete(ref)) this.ghostMutes.add(ref);
+    this.postGhosts();
+    this.changed();
+  }
+
+  postGhosts() {
+    this.post({ type: "ghosts", tracks: this.ghosts.map((ref) => ({ track: ghostTrack(ref), gain: this.ghostMuted(ref) ? 0 : 1 })) });
+  }
+
   // Paused on `frame`: have its sound ready before Play.
   cue(frame) {
     clearTimeout(this.cueTimer);
     this.cueTime = this.times[frame] ?? 0;
     if (!this.table || this.playing) return;
-    this.cueTimer = setTimeout(() => this.fetchFrom(this.cueTime), SCENE_SOUND.cueMs);
+    this.cueTimer = setTimeout(() => this.fetchAround(this.cueTime), SCENE_SOUND.cueMs);
   }
 
   syncReadout() {

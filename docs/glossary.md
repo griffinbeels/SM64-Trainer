@@ -1236,8 +1236,11 @@ player that owns it: the level music and jingle players make the music,
 the sound-effect player the effects, Mario's voice included. Each stem is
 what the game played for those notes, voice stealing included, and the two
 sum to the mix within a few units of the 16-bit scale. On savestates the
-copy is complete: executing it again reproduces every task bit for bit;
-matching Project64's own output waits on a live recording (2026-10-26).
+copy is complete: executing it again reproduces every task bit for bit.
+Project64 itself executes the microcode on its RSP plugin's recompiler, which
+rounds the vector math its own way, so a stem matches what Project64 played
+to within that rounding (24 to 44 dB below the sound, 2026-10-27), not bit
+for bit; its interpreter setting matches exactly.
 While the lab is on, the [[stem renderer]] makes them for every VI of live
 play, and an [[attempt scene]] carries them on its own sound's samples (its
 source-stems layer), so the [[scene viewer]] can play either one alone.
@@ -1374,7 +1377,9 @@ so. A package without one says it has no sound. **Music** and **Sound effects**
 switch the scene's [[sound stems]] on and off apart, remembered like Mute:
 both on plays the recording itself, one on plays that stem, both off is
 silence, and a switch keeps every sound where it was. A scene without the split
-shows them disabled and says why.
+shows them disabled and says in one plain sentence that the lab cannot separate
+its music and sound effects (why, with its numbers, goes to the logs). Each
+[[stage ghost]] adds its own sound effects, under the same volume and Mute.
 
 - **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
   mounted by `src/sm64_events/main.py`); one open scene
@@ -1408,10 +1413,15 @@ you can tell them apart. Its first
 where that [[attempt]] did), and it follows the game's clock from there, so
 lag [[frame]]s keep it in step. At its end one with its [[star]] dance holds
 its last pose and fades; any other one is gone. The race's own fades,
-[[corner inputs]], path and sound stay off. Each one in the scene has a [[ghost's view]].
+[[corner inputs]] and path stay off. It plays its own [[ghost sound events]]
+(never music) beside the stage's sound, on the [[frame]]s that recorded them,
+placed and faded from the stage's recorded camera and Mario as the game does,
+at your [[ghost]] volume; each has a Mute of its own in the panel below the player.
+Each one in the scene has a [[ghost's view]].
 
 - **Lives** -- the set, its alignment and its look
-  (`tools/scene_lab/stage_ghosts.py`); the scene's set
+  (`tools/scene_lab/stage_ghosts.py`); its sound (`tools/scene_lab/ghost_sound.py`,
+  SM64's engine in `tools/scene_lab/ghost_sound_host.cpp`); the scene's set
   (`tools/scene_lab/scene_session.py`); which row each one shows, in the
   [[renderer]] (`plugin/gfxwrap/ghost_viewer.cpp`), drawn by the same code as
   a race's (`plugin/gfxwrap/ghost_figure.h`)
@@ -1493,10 +1503,10 @@ the server encodes the picture itself.
 
 The [[scene package]] of one [[attempt]] he just played, which the [[scene viewer]]
 opens by the [[attempt]]'s id. It starts on the [[frame]] the [[attempt]]'s clock
-started. An [[attempt]] that ends on a star grab ends on the star dance's last
+started. An [[attempt]] that ends on a [[star]] grab ends on the [[star]] dance's last
 [[frame]]: the last one before the game stops moving Mario (the exit fade's last
 iris picture, his pause, a save dialog) or he leaves the dance, the same [[frame]]
-his own [[dance tail]] ends on; nothing frozen after the dance is kept.
+his own [[dance tail]] ends on; the scene keeps nothing frozen after the dance.
 Any other [[attempt]] ends on the last picture of the fade-out after its end: the
 [[frame]] before the next level or area appears, the [[frame]] before his [[reset]],
 or 10 s after the end when nothing comes. While the lab is on, the [[scene tap]] records

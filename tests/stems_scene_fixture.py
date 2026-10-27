@@ -40,8 +40,11 @@ def streams(seconds: float, seed: int = 3) -> tuple[list[int], np.ndarray, np.nd
     return lengths, music.astype(np.int16), effects.astype(np.int16)
 
 
-def rows(lengths: list[int], music: np.ndarray, effects: np.ndarray, *, lost=(), differs=(), failed=()) -> list[dict]:
-    """The renderer's rows: every VI a task, its output the exact sum, settled."""
+def rows(lengths: list[int], music: np.ndarray, effects: np.ndarray, *, lost=(), differs=(), failed=(), checked=(),
+         wrong=()) -> list[dict]:
+    """The renderer's rows: every VI a task, its output the exact sum, settled. G1 checks: `checked`
+    agreed exactly, `differs` were one unit off everywhere (a recompiler's rounding), `wrong` as far
+    off as the sound itself (another program)."""
     out, at = [], 0
     for vi, samples in enumerate(lengths):
         part = slice(at, at + samples)
@@ -50,10 +53,14 @@ def rows(lengths: list[int], music: np.ndarray, effects: np.ndarray, *, lost=(),
             continue
         real = np.clip(music[part].astype(np.int32) + effects[part], -32768, 32767).astype(np.int16)
         flags = sl.TASK | sl.REAL | sl.SETTLED
-        flags |= (sl.CHECKED | sl.DIFFERS) if vi in differs else 0
+        flags |= (sl.CHECKED | sl.DIFFERS) if vi in differs or vi in wrong else sl.CHECKED if vi in checked else 0
         flags |= sl.SPLIT_FAILED if vi in failed else 0
+        g1, g1_rms = (1, 1000) if vi in differs else (0, 0)
+        if vi in wrong:
+            g1 = 2 * int(np.abs(real).max())
+            g1_rms = round(float(np.sqrt(np.mean(real.astype(np.float64) ** 2))) * 1414)
         out.append({"vi": vi, "flags": flags, "qpc": START + round(vi * FREQ / VI_HZ), "tasks": vi // 2,
-                    "g1": 1 if vi in differs else 0, "samples": samples, "real": real,
+                    "g1": g1, "g1_rms": g1_rms, "samples": samples, "real": real,
                     "music": music[part].copy(), "effects": effects[part].copy()})
     return out
 

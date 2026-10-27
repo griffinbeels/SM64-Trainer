@@ -60,7 +60,7 @@ ALLOWED = (
      "The native model witness requires locally supplied copyrighted US ROM "
      "bytes, which a fresh clone cannot include. Lifts with SM64_MODEL_ROM "
      "and the documented pinned model seed; see docs/testing.md.",
-     "tests/test_native_model.py"),
+     "tests/test_native_model.py, tests/test_scene_ghost_sound.py (SM64's audio engine for a scene's ghosts)"),
     ("SM64_GHOST_WITNESS_SOURCE",
      "The ghost adapter compile witness requires a separately staged pinned "
      "GLideN64 tree. Lifts by pointing SM64_GHOST_WITNESS_SOURCE at the source "

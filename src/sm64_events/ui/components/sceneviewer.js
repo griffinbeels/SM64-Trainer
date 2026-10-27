@@ -300,7 +300,7 @@ export class SceneLink {
       readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
       view: null,
       asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
-      sound: new SceneSound({ changed: () => this.changed() }) });
+      sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
   }
@@ -585,6 +585,7 @@ export class SceneLink {
     for (const { ref, reason } of answer.refused || []) refused.set(ref, reason);
     Object.assign(this, { ghosts: list.filter((ghost) => shown.has(ghost.ref)), refusedGhosts: refused });
     if (this.view && !shown.has(this.view)) this.view = null;
+    this.sound.setGhosts(this.ghosts.map((ghost) => ghost.ref));    // each plays its own sound effects
     keep(this.scene, { ghosts: this.ghosts });
     this.want("input");
     this.changed();

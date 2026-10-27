@@ -29,7 +29,7 @@ The look follows the player's ghost settings (ghost/settings.py, the in-game gho
 colour (each ghost's hue steps from his as in the game's set: native_session.ghost_hue), shadow,
 name boxes and their box, and the inputs over the name. The live race's own effects stay off: the
 fade where a ghost overlaps or hides live Mario (the stage's runner is not live Mario here), the
-corner input stack, the path and the ghost's sound.
+corner input stack and the path. Each ghost's own sound plays beside the stage's (ghost_sound.py).
 
 A ghost's view (round 5, item 5, his words: "one button per active ghost in the scene to follow
 their recorded POV"): the stage's world from the camera that ghost's own game drew with (its clip's
@@ -133,6 +133,7 @@ class Look:
     name_background_opacity: float = 0.6
     inputs: bool = False
     values: bool = False
+    volume: float = settings.DEFAULT_VOLUME    # its sound's level (ghost_sound.py), as in the game
 
     @classmethod
     def of(cls, values: dict | None = None) -> Look:
@@ -144,7 +145,7 @@ class Look:
                    bool(native["shadow_enabled"]), bool(native["names_enabled"]),
                    native["name_background"] == settings.NAME_BACKGROUNDS["white"],
                    float(native["name_background_opacity"]), bool(native["inputs_enabled"]),
-                   native["input_mode"] == settings.INPUT_MODES["values"])
+                   native["input_mode"] == settings.INPUT_MODES["values"], float(native["volume"]))
 
     def packed(self) -> tuple[float, float, int]:
         flags = viewer.GHOST_FLAGS

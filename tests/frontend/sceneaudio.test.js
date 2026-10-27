@@ -167,6 +167,50 @@ test("a track switch fades out, swaps and fades in on the same clock; no track i
   expect(quanta(worklet, 1536, 2).left[200]).toBeCloseTo((1536 + 200) / 1e6, 6);
 });
 
+test("each ghost's own sound mixes under the stage on the same samples, a mute fades it out, and stage silence keeps it", () => {
+  const worklet = processor();
+  const ghost = (index, level) => Float32Array.from({ length: 4800 }, () => level);
+  for (const index of [0, 1]) {
+    worklet.take({ type: "block", track: "ghost:a", index, channels: [ghost(index, 0.25), ghost(index, 0.25)] });
+    worklet.take({ type: "block", track: "ghost:b", index, channels: [ghost(index, 0.125), ghost(index, -0.125)] });
+  }
+  worklet.take({ type: "ghosts", tracks: [{ track: "ghost:a", gain: 1 }, { track: "ghost:b", gain: 1 }] });
+  worklet.take({ type: "clock", piece: { f0: 0, p0: 0, slope: MS_PER_FRAME, jump: true } });
+  const both = quanta(worklet, 0, 4);
+  expect(both.left[300]).toBeCloseTo(300 / 1e6 + 0.375, 6);                    // the stage + both ghosts
+  expect(both.right[300]).toBeCloseTo(-300 / 1e6 + 0.125, 6);
+  worklet.take({ type: "ghosts", tracks: [{ track: "ghost:a", gain: 0 }, { track: "ghost:b", gain: 1 }] });
+  const muted = quanta(worklet, 512, 2).left;
+  expect(muted[0]).toBeGreaterThan(512 / 1e6 + 0.125 + 0.2);                    // a mute moves over 64 frames, no click
+  expect(muted[100]).toBeCloseTo((512 + 100) / 1e6 + 0.125, 6);
+  worklet.take({ type: "track", track: null });                                 // Music and Sound effects both off
+  expect(quanta(worklet, 768, 2).left[200]).toBeCloseTo(0.125, 6);             // the ghost still plays
+  worklet.take({ type: "ghosts", tracks: [] });                                 // removed: its blocks go too
+  expect(worklet.tracks.has("ghost:b")).toBe(false);
+});
+
+test("a ghost in the scene fetches its own track on the recording's blocks, and Mute silences only it", () => {
+  const sound = new SceneSound();
+  const posted = [];
+  sound.post = (message) => posted.push(message);
+  const asked = [];
+  globalThis.fetch = vi.fn((url) => { asked.push(url); return new Promise(() => {}); });
+  const { times, samples } = recording(20);
+  sound.load({ session: 4, fps: FPS, frames: times.map((t) => ({ recorded_ms: t })), audio: { available: true,
+    rate: RATE, block_samples: 9216, total_samples: 4 * 9216, blocks: 4, codec: "stored", shift_ms: 0, samples, lost: [] } });
+  sound.setGhosts(["attempt:7", "community:x y"]);
+  expect(posted.at(-1)).toEqual({ type: "ghosts", tracks: [{ track: "ghost:attempt:7", gain: 1 },
+    { track: "ghost:community:x y", gain: 1 }] });
+  // one block each until the first comes back: that request makes the ghost's whole track on the server
+  expect(asked.filter((url) => url.includes("track=ghost%3Aattempt%3A7")).length).toBe(1);
+  expect(asked.some((url) => url.includes("track=ghost%3Acommunity%3Ax%20y"))).toBe(true);
+  sound.toggleGhost("attempt:7");
+  expect(sound.ghostMuted("attempt:7")).toBe(true);
+  expect(posted.at(-1).tracks).toEqual([{ track: "ghost:attempt:7", gain: 0 }, { track: "ghost:community:x y", gain: 1 }]);
+  sound.setGhosts(["attempt:7"]);                                               // removed: no track for it
+  expect(posted.at(-1).tracks).toEqual([{ track: "ghost:attempt:7", gain: 0 }]);  // a mute stays with its ghost
+});
+
 test("the switches choose the track: the recording with both on, one track with one, nothing with neither", () => {
   expect(trackFor(true, true, true)).toBe("mix");
   expect(trackFor(true, true, false)).toBe("music");
@@ -410,6 +454,21 @@ test("a scene without the split shows the switches disabled and says why, once",
   expect(music.getAttribute("aria-pressed")).toBe("true");
   expect(page.container.querySelectorAll(".scene-lab-sound-note").length).toBe(1);
   expect(page.container.textContent).toContain("saved before music and sound effects could be split");
+});
+
+test("a refused split says the plain sentence; the stems layer's reason and numbers go to the log note", () => {
+  const notes = [];
+  const sound = new SceneSound({ observe: (note) => notes.push(note) });
+  sound.post = () => {};
+  const { times, samples } = recording(20);
+  const plain = "This scene's music and sound effects can't be separated.";
+  const detail = "The stem renderer's sound differs from what Project64 played by more than rounding (G1).";
+  sound.load({ name: "take-1659-5", session: 3, fps: FPS, frames: times.map((t) => ({ recorded_ms: t })),
+    audio: { available: true, rate: RATE, block_samples: 9216, total_samples: 9216, blocks: 1, codec: "stored",
+      shift_ms: 0, samples, lost: [], stems: { available: false, reason: plain, detail, stats: { g1_snr_db: 4.25 } } } });
+  expect(sound.splitReason).toBe(plain);
+  expect(notes).toEqual([{ surface: "scene_viewer", kind: "sound_not_split", scene: "take-1659-5", reason: plain,
+    detail, stats: { g1_snr_db: 4.25 } }]);
 });
 
 test("Music off plays the effects track from where the recording was, both off is silence, and the choice persists", async () => {

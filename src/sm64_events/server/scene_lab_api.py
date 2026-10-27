@@ -13,7 +13,7 @@ one reader, and without it this module is never imported and no route is added. 
     GET  /api/scene-lab/ghosts?section=&...&page=    one page of the ghosts that could be drawn into it
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
-    GET  /api/scene-lab/audio/{block}?session=N[&track=music|effects]   one block of the open scene's sound
+    GET  /api/scene-lab/audio/{block}?session=N[&track=music|effects|ghost:<ref>]   one block of the open scene's sound
 
 The lab config is a private JSON file of absolute paths: {"rom", "packages" (a folder of
 .sm64scene files), "pj64_plugin", "map" (the free camera's MappingUS.map), and optionally
