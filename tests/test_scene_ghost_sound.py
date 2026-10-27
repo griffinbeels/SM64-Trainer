@@ -169,6 +169,122 @@ def test_the_route_serves_a_ghost_track_through_the_session(monkeypatch):
     assert calls == [("attempt:7", 3)]
 
 
+COIN = 0x38118081                       # SOUND_GENERAL_COIN: SOUND_ARG_LOAD(3, 8, 0x11, 0x80, 8)
+
+
+def split_scene_with_a_coin(coin_pcm=None, *, seconds=8.0, coin_frame=120, early_vis=1):
+    """A split scene (stems_scene_fixture: music in every VI, the recording heard 137 ms late on a
+    drifting clock) whose only sound effect is one coin, made by the VI `early_vis` before the picture
+    of frame `coin_frame` (frame k's picture is 2 ms after VI 2k): {"package", "presents", "frame"}."""
+    import stems_layer
+    import stems_scene_fixture as sfx
+    lengths, music, _effects = sfx.streams(seconds)
+    music = (music.astype(np.float32) * 0.4).astype(np.int16)
+    effects = np.zeros_like(music)
+    first = sum(lengths[:2 * coin_frame - early_vis])                    # that VI's task's first sample
+    coin = coin_pcm if coin_pcm is not None else np.full((1600, 2), 9000, np.int16)
+    effects[first:first + len(coin)] = coin[:len(effects) - first]
+    pcm, first_qpc, _positions = sfx.heard(music, effects)
+    presents = sfx.presents(seconds)
+    layer = sfx.layer(pcm, first_qpc, presents)
+    stems = stems_layer.read(stems_layer.build(layer, presents[0][1], sfx.rows(lengths, music, effects)), layer)
+    assert stems.available, stems.reason
+    return {"package": SimpleNamespace(audio=layer, stems=stems), "presents": presents, "frame": coin_frame}
+
+
+def heard_at(track, threshold):
+    loud = np.flatnonzero(np.abs(track.astype(np.int32)).max(axis=1) > threshold)
+    return int(loud[0]) if len(loud) else None
+
+
+def coin_against_ghost(split, engine_factory, shift_ms=None, like_for_like=False):
+    """(the scene's sound, the stage's coin, its own run's ghost's coin) in ms of the scene's playback:
+    the page plays recording sample S[k] at picture k and the recording's own pace between, so one
+    sample axis. The same coin on both sides (like_for_like) is placed by cross-correlation, so its
+    attack counts the same on both."""
+    import scene_audio
+    package, presents = split["package"], split["presents"]
+    sound = scene_audio.SceneSound.of(package, [sequence for sequence, _ in presents], shift_ms)
+    timers = [1000 + k for k in range(len(presents))]
+    stand_in = scene(timers, volume=1.0)
+    stand_in.sound = sound
+    data = clip_bytes(count=len(presents), sounds={split["frame"]: (COIN,)})
+    stand_in.ghosts.shown = [shown("attempt:same-run", data)]
+    ghost = ghost_sound.SceneGhostSounds(host_factory=engine_factory).track(stand_in, stand_in.ghosts.shown[0])
+    stems = package.stems
+    effects = np.concatenate([stems.block("effects", i) for i in range(len(stems.blocks["effects"]))])
+    rate = package.audio.rate
+    stage, ghosted = heard_at(effects, 2000), heard_at(ghost, 200)
+    if like_for_like:
+        import stems_check
+        window = slice(ghosted - rate // 4, ghosted + rate // 2)
+        reference = ghost[window].astype(np.float32).mean(axis=1)
+        search = effects[window.start - rate // 4:window.stop + rate // 4].astype(np.float32).mean(axis=1)
+        lag, _ncc = stems_check.xcorr_lag(reference, search)
+        stage = ghosted + lag - rate // 4
+    return sound, stage * 1000 / rate, ghosted * 1000 / rate
+
+
+def test_on_a_split_scene_a_coin_and_its_own_runs_ghost_coin_land_within_a_frame():
+    """The lead's decision (round 5, item 4): with each ghost's sound on its pictures, the stage's own
+    sound goes on its pictures too where its stems fit measured Project64's delay. The coin is made a
+    VI before its picture (the late side of how SM64 hands sound and picture to Project64); as heard,
+    the stage's coin came 137 ms after its ghost's, an echo."""
+    split = split_scene_with_a_coin()
+    sound, stage, ghost = coin_against_ghost(split, FakeEngine)
+    assert sound.measured and sound.shift_ms == pytest.approx(137, abs=4)                 # the fixture's delay
+    timing = sound.describe()["timing"]
+    assert timing["on_pictures"] and f"{sound.shift_ms:.0f} ms" in timing["why"]
+    assert abs(stage - ghost) < 1000 / 30                                   # within one game frame
+    import stems_scene_fixture as sfx
+    picture_ms = split["frame"] * 1000 / 30 + 2                              # its picture, after the coin's VI
+    coin_vi_ms = (2 * split["frame"] - 1) * 1000 / sfx.VI_HZ
+    assert stage - ghost == pytest.approx(coin_vi_ms - picture_ms, abs=5)    # the stage's coin, a VI early
+    heard, stage, ghost = coin_against_ghost(split, FakeEngine, shift_ms=0.0)
+    assert not heard.measured and stage - ghost == pytest.approx(sfx.DELAY_S * 1000 - (picture_ms - coin_vi_ms), abs=5)
+
+
+def test_a_scene_without_a_measured_delay_plays_as_heard_and_says_so():
+    import scene_audio
+    split = split_scene_with_a_coin()
+    refused = SimpleNamespace(audio=split["package"].audio,
+                              stems=SimpleNamespace(available=False, reason="G1", stats={"g1_checked": 3}))
+    for package in (refused, SimpleNamespace(audio=split["package"].audio, stems=None)):
+        sound = scene_audio.SceneSound.of(package, [sequence for sequence, _ in split["presents"]])
+        timing = sound.describe()["timing"]
+        assert (sound.shift_ms, timing["on_pictures"]) == (0.0, False)
+        assert timing["why"] == scene_audio.AS_HEARD
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 audio engine")
+def test_with_the_games_own_coin_the_stage_and_its_ghost_land_within_a_frame():
+    """As above with the real coin: SM64's engine makes the stage's coin (in the game's output) and
+    the ghost's, so the two onsets compare like for like."""
+    rom_path = os.environ.get("SM64_MODEL_ROM")
+    if not rom_path:
+        pytest.skip("set SM64_MODEL_ROM (local US ROM) to run SM64's own audio engine")
+    rom = Path(rom_path).read_bytes()
+    host = ghost_sound.EngineHost(rom)
+    try:
+        # cued on a running engine (its first ticks after opening answer a tick later), from that tick on
+        lengths, coin = host.render([((0.0, 0.0, -300.0), 1.0, [COIN] if k == 10 else []) for k in range(40)])
+    finally:
+        host.close()
+    split = split_scene_with_a_coin(coin[int(lengths[:10].sum()):].copy())
+    hosts = []
+
+    def engine(_rom):
+        hosts.append(ghost_sound.EngineHost(rom))
+        return hosts[-1]
+    try:
+        sound, stage, ghost = coin_against_ghost(split, engine, like_for_like=True)
+    finally:
+        for made in hosts:
+            made.close()
+    print(f"stage coin {stage:.1f} ms, ghost coin {ghost:.1f} ms, apart {stage - ghost:.1f} ms, shift {sound.shift_ms} ms")
+    assert sound.measured and abs(stage - ghost) < 1000 / 30
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 audio engine")
 def test_the_games_own_engine_sounds_a_cue_from_its_tick_at_its_gain():
     """SM64's audio engine through ghost_sound_host.cpp: silence before the cued tick, sound from it,

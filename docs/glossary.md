@@ -1370,8 +1370,9 @@ shared memory. While the camera moves, the page sums up its own
 numbers every 2 s (pictures a second, input to picture, decode, the server's
 stages): the readout shows them and the UI observation log records them.
 A package with a source-audio layer plays Project64's own sound during Play,
-following the pictures: the sample heard as a picture appears is that
-picture's own. Stepping, seeking and Pause are silent; Mute (or M) and the
+following the pictures. Where the [[sound stems]] measured Project64's audio
+delay, each sound plays on the picture of its [[frame]]; elsewhere it plays as
+heard, that delay after its picture. Stepping, seeking and Pause are silent; Mute (or M) and the
 volume persist per viewer; a stretch the capture lost plays silent and says
 so. A package without one says it has no sound. **Music** and **Sound effects**
 switch the scene's [[sound stems]] on and off apart, remembered like Mute:
