@@ -64,7 +64,9 @@ and down; Set focus), and {"id", "session", "kind": "ghosts", "set": [{"ref", "l
 a frame]} for the ghosts every later picture draws (the whole set, replacing the last; [] removes
 them), answered {"id", "kind": "ghosts", "shown": [refs], "refused": [{"ref", "reason"}]} once
 each new ghost's recording is in the renderer (scene_session.set_ghosts; clips come from the
-ghost catalog's load_ghost, server/scene_ghosts.py, unless `ghost_loader` replaces it). A picture of a scene
+ghost catalog's load_ghost, server/scene_ghosts.py, unless `ghost_loader` replaces it). A set never
+holds up the page's pictures: its clips load on threads of their own (a community ghost may
+download for up to a minute) and sets apply in the order they came. A picture of a scene
 with ghosts carries "ghosts" in its header ({"asked", "chosen", "drawn", "displayed",
 "pending", "refused"}). A picture comes back as one binary message, [u32 little-endian header
 length][header JSON][picture]; everything else is JSON text: a pose, a pick, a ghosts answer,
@@ -286,6 +288,7 @@ class SceneLab:
         self.loop_probe = LoopProbe() if measure_loop else None
         self.shared = None             # the desktop window's shared-memory pictures (attach_window)
         self.ghost_loader = ghost_loader
+        self._ghost_turn: asyncio.Future | None = None   # the newest ghost set's turn to apply
 
     def attach_window(self, window) -> None:
         """The desktop app's pywebview window: its page may then ask for encoding "shared" and get
@@ -636,17 +639,43 @@ class SceneLab:
 
     async def ghosts_reply(self, message: dict) -> dict:
         """The open scene's ghosts become the page's set (scene_session.set_ghosts), drawn with the
-        player's ghost settings; every picture begun after this answer draws them."""
+        player's ghost settings; every picture begun after this answer draws them. The clips of
+        ghosts the scene does not show yet load first, each on a thread of its own: the catalog's
+        load_ghost may wait up to a minute for a community download, and the session's worker,
+        which draws the pictures, never waits with it."""
+        stage_ghosts = _lab_module("stage_ghosts")
         session = self.session
-        if session is not None and message.get("session") == self.generation:
-            session.ghost_look = _lab_module("stage_ghosts").Look.of(self._ghost_values())
+        current = session is not None and message.get("session") == self.generation
+        if current:
+            session.ghost_look = stage_ghosts.Look.of(self._ghost_values())
         try:
-            answer = await self._run(message.get("session"), "set_ghosts", message.get("set"), self._load_ghost,
-                                     message.get("origin"))
+            wanted = stage_ghosts.checked(message.get("set"))
+        except ValueError as error:
+            return {"id": message.get("id"), "error": str(error)}
+        # Sets apply in the order they came, whichever one's clips load first.
+        turn, previous = asyncio.get_running_loop().create_future(), self._ghost_turn
+        self._ghost_turn = turn
+        try:
+            shown = {ghost.ref for ghost in session.ghosts.shown} if current else set()
+            new = [entry["ref"] for entry in wanted[:stage_ghosts.MAX_GHOSTS] if entry["ref"] not in shown]
+            loaded = dict(zip(new, await asyncio.gather(*(asyncio.to_thread(self._try_load, ref) for ref in new)),
+                              strict=True))
+
+            def preloaded(ref):
+                got = loaded[ref] if ref in loaded else self._try_load(ref)
+                if isinstance(got, LookupError):
+                    raise got
+                return got
+            if previous is not None:
+                await asyncio.shield(previous)
+            answer = await self._run(message.get("session"), "set_ghosts", wanted, preloaded, message.get("origin"))
         except SceneClosed as closed:
             return {"id": message.get("id"), "error": str(closed), "closed": True}
         except ValueError as error:
             return {"id": message.get("id"), "error": str(error)}
+        finally:
+            if not turn.done():
+                turn.set_result(None)
         return {"id": message.get("id"), "kind": "ghosts", **answer}
 
     def _load_ghost(self, ref) -> dict:
@@ -659,6 +688,16 @@ class SceneLab:
             from sm64_events.core.paths import replays_root
             loader = self.ghost_loader = _lab_module("stage_ghosts").LocalGhosts(replays_root() / "native")
         return loader(ref)
+
+    def _try_load(self, ref):
+        """_load_ghost's answer, or the LookupError that refuses the ghost (its sentence shown)."""
+        try:
+            return self._load_ghost(ref)
+        except LookupError as error:
+            return error
+        except Exception:  # noqa: BLE001 - one ghost's broken source refuses that ghost, not the set
+            log.exception("scene viewer: loading ghost %r failed", ref)
+            return LookupError("This ghost could not be loaded.")
 
     def _ghost_values(self) -> dict | None:
         """The player's ghost settings (the in-game ghost's), from the catalog's ghost session when
@@ -692,6 +731,7 @@ class SceneLab:
                         and not isinstance(task.exception(), WebSocketDisconnect):
                     log.warning("scene viewer socket ended: %r", task.exception())
         finally:
+            tasks += page.ghost_sets
             for task in tasks:
                 task.cancel()
             self.pages.discard(page)
@@ -790,6 +830,7 @@ class _PageSocket:
         self.wake = asyncio.Event()                     # a request arrived, or a picture left
         self.begun = asyncio.Event()                    # a picture began
         self.uncompressed: bool | None = None       # set at the first send, after a message arrived
+        self.ghost_sets: list[asyncio.Task] = []         # ghost sets being loaded and applied
 
     async def send(self, reply) -> None:
         if self.uncompressed is None:
@@ -830,13 +871,23 @@ class _PageSocket:
             while self.questions or (self.picture is not None and len(self.drawing) < PICTURES_IN_FLIGHT):
                 if self.questions:
                     question = self.questions.popleft()
-                    reply = {"pick": self.lab.pick_reply, "ghosts": self.lab.ghosts_reply}.get(
-                        question.get("kind"), self.lab.pose_reply)
+                    if question.get("kind") == "ghosts":
+                        self._ghost_set(question)
+                        continue
+                    reply = self.lab.pick_reply if question.get("kind") == "pick" else self.lab.pose_reply
                     await self.send(await reply(question))
                 else:
                     message, self.picture = self.picture, None
                     self.drawing.append(await self.lab.begin_picture(message))
                     self.begun.set()
+
+    def _ghost_set(self, question: dict) -> None:
+        """A ghost set answered on its own task: its clips may take a community download's minute
+        to load (scene_ghosts.load_ghost), and the page's pictures go on meanwhile."""
+        async def answer():
+            await self.send(await self.lab.ghosts_reply(question))
+        task = asyncio.create_task(answer())
+        self.ghost_sets = [*(other for other in self.ghost_sets if not other.done()), task]
 
     async def deliver(self) -> None:
         """Sends each begun picture's reply as it is ready, in the order they began."""
