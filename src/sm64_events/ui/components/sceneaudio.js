@@ -12,9 +12,16 @@
 // sound's rate by at most SCENE_SOUND.bend (a big miss jumps). Stepping,
 // seeking and Pause are silent at once, and a lost stretch plays as silence
 // and says so. sceneaudioworklet.js renders it on the audio thread. Mute (M)
-// and the volume persist per viewer. The recording is one mixed stream, so
-// there is one stem; per-stem volume (music, effects) would add a gain per
-// stem between the worklet and the master gain.
+// and the volume persist per viewer.
+//
+// Music and Sound effects (round 4, item 11: "toggle music / game sound
+// effects separately"): an attempt scene's sound can carry its music and its
+// sound effects apart (the source-stems layer, tools/scene_lab/stems_layer.py),
+// split from the game's own audio program, on the recording's own samples.
+// Both on plays the recording itself, exactly what he heard; one on plays that
+// track; both off is silence. A switch fades out and in on the same clock, so
+// every sound stays where it was. The switches persist with Mute; a scene
+// without the split shows them disabled and says why.
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
@@ -26,10 +33,11 @@ const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
 const WORKLET = new URL("./sceneaudioworklet.js", import.meta.url).href;
 export const NO_SOUND = "This recording has no sound.";
+export const NOT_SPLIT_HERE = "Music and sound effects are not split here, so this part plays silent.";
 // Steering numbers; the lean was checked on a
 // synthetic click track (snd page check), the rest are untuned.
 export const SCENE_SOUND = {
-  preference: "sm64.sceneSound", volume: 0.5,   // the localStorage entry: {volume, muted}
+  preference: "sm64.sceneSound", volume: 0.5,   // the localStorage entry: {volume, muted, music, effects}
   joinMs: 2,                 // samples this close to the recorded time between two pictures are one run
   bend: 0.01, convergeSeconds: 1, deadMs: 3, jumpMs: 80,
   leadSeconds: 0.04,         // a steer takes effect this far ahead of the audio clock
@@ -57,13 +65,32 @@ function storedSound() {
   try {
     const saved = JSON.parse(localStorage.getItem(SCENE_SOUND.preference));
     const volume = Number(saved?.volume);
-    return { volume: volume >= 0 && volume <= 1 ? volume : SCENE_SOUND.volume, muted: saved?.muted === true };
-  } catch { return { volume: SCENE_SOUND.volume, muted: false }; }
+    return { volume: volume >= 0 && volume <= 1 ? volume : SCENE_SOUND.volume, muted: saved?.muted === true,
+      music: saved?.music !== false, effects: saved?.effects !== false };
+  } catch { return { volume: SCENE_SOUND.volume, muted: false, music: true, effects: true }; }
 }
 
-function storeSound({ volume, muted }) {
-  try { localStorage.setItem(SCENE_SOUND.preference, JSON.stringify({ volume, muted })); }
+function storeSound({ volume, muted, music, effects }) {
+  try { localStorage.setItem(SCENE_SOUND.preference, JSON.stringify({ volume, muted, music, effects })); }
   catch { /* storage unavailable: the choice lasts this page */ }
+}
+
+// The table's split: the frames where a single track has nothing (a set), or null
+// when the scene has no split.
+function stemsOf(audio) {
+  return audio?.stems?.available ? { lost: new Set(audio.stems.lost || []) } : null;
+}
+
+// Why the scene has no split (the server's sentence), or null when it has one.
+function splitReasonOf(audio) {
+  return audio.stems?.available ? null : audio.stems?.reason || null;
+}
+
+// What plays for the switches: the recording when both are on (or the scene
+// has no split), one track when only it is on, nothing when both are off.
+export function trackFor(split, music, effects) {
+  if (!split || (music && effects)) return "mix";
+  return music ? "music" : effects ? "effects" : null;
 }
 
 // The frame table as runs the worklet plays, on the recorded-time axis: knot
@@ -137,28 +164,45 @@ export class SceneSound {
   constructor({ changed } = {}) {
     const saved = storedSound();
     Object.assign(this, { changed: changed || (() => {}), volume: saved.volume, muted: saved.muted, table: null,
+      music: saved.music, effects: saved.effects, track: "mix", switchTo: undefined, splitReason: null,
       runs: [], times: new Float64Array(0), reason: null, session: null, fps: 30, ctx: null, master: null, node: null,
-      playing: null, lastLate: null, offsets: [], reports: [], pending: [], sync: [], decoded: new Map(),
+      playing: null, lastLate: null, offsets: [], reports: [], pending: [], sync: [], held: new Map(),
       loading: new Map(), failed: new Set(), notice: null, broken: null, steerTimer: null, cueTimer: null,
-      idleTimer: null });
+      idleTimer: null, cueTime: 0 });
   }
 
   get available() { return !!this.table; }
+
+  // The decoded blocks of the track that plays (a track's blocks stay while another plays).
+  get decoded() { return this.blocksOf(this.track ?? "mix"); }
+
+  blocksOf(track) {
+    if (!this.held.has(track)) this.held.set(track, new Map());
+    return this.held.get(track);
+  }
+
+  get split() { return !!this.table?.stems; }
 
   load(scene) {
     this.stop();
     const audio = scene?.audio;
     Object.assign(this, { session: scene?.session ?? null, fps: scene?.fps || 30, times: recordedTimes(scene),
-      decoded: new Map(), loading: new Map(), failed: new Set(), notice: null, sync: [], pending: [], reports: [] });
+      held: new Map(), loading: new Map(), failed: new Set(), notice: null, sync: [], pending: [], reports: [],
+      switchTo: undefined });
     if (audio?.available) {
       this.table = { rate: audio.rate, blockSamples: audio.block_samples, totalSamples: audio.total_samples,
-        blocks: audio.blocks, samples: Int32Array.from(audio.samples), lost: new Set(audio.lost) };
+        blocks: audio.blocks, samples: Int32Array.from(audio.samples), lost: new Set(audio.lost),
+        stems: stemsOf(audio) };
+      this.splitReason = splitReasonOf(audio);
       this.runs = soundMap(this.table.samples, this.times, audio.rate, this.fps);
       this.reason = null;
       if (this.ctx && this.ctx.sampleRate !== audio.rate) this.close();
       this.post({ type: "map", runs: this.runs, blockSamples: audio.block_samples });
+      this.track = trackFor(this.split, this.music, this.effects);
+      this.post({ type: "track", track: this.track });
     } else {
-      Object.assign(this, { table: null, runs: [], reason: scene ? audio?.reason || NO_SOUND : null });
+      Object.assign(this, { table: null, runs: [], reason: scene ? audio?.reason || NO_SOUND : null, track: "mix",
+        splitReason: null });
     }
     this.changed();
   }
@@ -176,19 +220,69 @@ export class SceneSound {
     }
     const short = table.totalSamples % table.blockSamples ? Math.floor(table.totalSamples / table.blockSamples) : -1;
     Object.assign(table, { totalSamples: audio.total_samples, blocks: audio.blocks,
-      samples: Int32Array.from(audio.samples), lost: new Set(audio.lost) });
-    if (this.decoded.delete(short)) this.post({ type: "keep", indices: [...this.decoded.keys()] });
-    this.failed.delete(short);
+      samples: Int32Array.from(audio.samples), lost: new Set(audio.lost), stems: stemsOf(audio) });
+    this.splitReason = splitReasonOf(audio);
+    if (this.blocksOf("mix").delete(short)) this.post({ type: "keep", indices: [...this.blocksOf("mix").keys()] });
+    this.failed.delete(`mix:${short}`);
     this.runs = soundMap(table.samples, this.times, audio.rate, this.fps);
-    this.post({ type: "map", runs: this.runs, blockSamples: audio.block_samples });
+    // An extension: the worklet keeps its clock and blocks (a fresh map would stop a play's sound).
+    this.post({ type: "map", runs: this.runs, blockSamples: audio.block_samples, extend: true });
+    this.retrack();
     this.changed();
   }
 
-  // What frame `frame`'s sound is: "sound", "lost" (silence, marked) or "none".
+  // A switch: Music or Sound effects on or off, remembered with Mute.
+  toggle(which) {
+    this[which] = !this[which];
+    storeSound(this);
+    this.retrack();
+    this.changed();
+  }
+
+  // Plays the track the switches ask for: at once when it is silence or its
+  // block at the play position is here, else once that block arrives (the old
+  // track plays meanwhile, so a switch never leaves a hole).
+  retrack() {
+    const track = this.table ? trackFor(this.split, this.music, this.effects) : "mix";
+    if (track === this.track) {
+      this.switchTo = undefined;
+      return;
+    }
+    this.switchTo = track;
+    if (track === null) {
+      this.useTrack(null);
+      return;
+    }
+    const first = this.sampleNear(this.nowTime());
+    const index = first == null ? null : Math.floor(first / this.table.blockSamples);
+    if (index == null || this.blocksOf(track).has(index) || this.failed.has(`${track}:${index}`)) {
+      this.useTrack(track);
+    } else {
+      this.fetchFrom(this.nowTime(), track);
+    }
+  }
+
+  useTrack(track) {
+    this.track = track;
+    this.switchTo = undefined;
+    this.post({ type: "track", track });
+    if (track) this.fetchFrom(this.nowTime(), track);
+  }
+
+  // The recorded time sounding now: the play's clock, or the paused picture's.
+  nowTime() {
+    const plan = this.playing?.plan, ctx = this.ctx;
+    if (plan && ctx) return plan.p0 + (ctx.currentTime * ctx.sampleRate - plan.f0) * plan.slope;
+    return this.cueTime;
+  }
+
+  // What frame `frame`'s sound is: "sound", "lost" (silence, marked), "unsplit"
+  // (one track plays and this part has no split: silence, marked) or "none".
   at(frame) {
     const table = this.table;
     if (!table || !(table.samples[frame] >= 0)) return "none";
-    return table.lost.has(frame) ? "lost" : "sound";
+    if (table.lost.has(frame) && this.track === "mix") return "lost";
+    return this.track && this.track !== "mix" && table.stems?.lost.has(frame) ? "unsplit" : "sound";
   }
 
   level() { return this.muted ? 0 : this.volume; }
@@ -230,7 +324,10 @@ export class SceneSound {
       node.connect(this.master);
       this.node = node;
       this.post({ type: "map", runs: this.runs, blockSamples: this.table.blockSamples });
-      for (const [index, channels] of this.decoded) this.post({ type: "block", index, channels });
+      for (const [track, blocks] of this.held) {
+        for (const [index, channels] of blocks) this.post({ type: "block", track, index, channels });
+      }
+      this.post({ type: "track", track: this.track });
       this.steer();
     }, (error) => {
       this.broken = `The sound could not start: ${error.message}`;
@@ -403,23 +500,25 @@ export class SceneSound {
     return next ? next.ks[0] : null;
   }
 
-  fetchFrom(time) {
+  fetchFrom(time, track = this.switchTo ?? this.track) {
     const table = this.table, first = table && this.sampleNear(time);
-    if (first == null) return;
-    const lo = Math.floor(first / table.blockSamples);
+    if (first == null || !track) return;
+    const lo = Math.floor(first / table.blockSamples), decoded = this.blocksOf(track);
     const hi = Math.min(table.blocks - 1, Math.floor((first + SCENE_SOUND.aheadSeconds * table.rate) / table.blockSamples));
-    for (let index = lo; index <= hi; index++) this.fetchBlock(index);
-    if (this.decoded.size > SCENE_SOUND.keepBlocks) {
-      const far = [...this.decoded.keys()].sort((a, b) => Math.abs(b - lo) - Math.abs(a - lo));
-      for (const index of far.slice(0, this.decoded.size - SCENE_SOUND.keepBlocks)) this.decoded.delete(index);
-      this.post({ type: "keep", indices: [...this.decoded.keys()] });
+    for (let index = lo; index <= hi; index++) this.fetchBlock(index, track);
+    if (decoded.size > SCENE_SOUND.keepBlocks) {
+      const far = [...decoded.keys()].sort((a, b) => Math.abs(b - lo) - Math.abs(a - lo));
+      for (const index of far.slice(0, decoded.size - SCENE_SOUND.keepBlocks)) decoded.delete(index);
+      this.post({ type: "keep", track, indices: [...decoded.keys()] });
     }
   }
 
-  fetchBlock(index) {
-    if (this.decoded.has(index) || this.loading.has(index) || this.failed.has(index)) return;
-    const table = this.table;
-    const job = fetch(`${ROOT}/audio/${index}?session=${this.session}`).then(readBlock)
+  // One block of a track: the recording's ("mix") or its music or effects, which share its blocks.
+  fetchBlock(index, track = "mix") {
+    const key = `${track}:${index}`, decoded = this.blocksOf(track);
+    if (decoded.has(index) || this.loading.has(key) || this.failed.has(key)) return;
+    const table = this.table, query = track === "mix" ? "" : `&track=${track}`;
+    const job = fetch(`${ROOT}/audio/${index}?session=${this.session}${query}`).then(readBlock)
       .then((bytes) => decodeBlock(bytes, table.rate))
       .then((buffer) => {
         if (this.table !== table) return;
@@ -427,24 +526,27 @@ export class SceneSound {
           throw new Error("it decoded to another length");
         }
         const channels = [buffer.getChannelData(0), buffer.getChannelData(Math.min(1, buffer.numberOfChannels - 1))];
-        this.decoded.set(index, channels);
-        this.post({ type: "block", index, channels });
+        decoded.set(index, channels);
+        this.post({ type: "block", track, index, channels });
+        if (this.switchTo === track) this.useTrack(track);
       })
       .catch((error) => {
         if (this.table !== table) return;
-        this.failed.add(index);
+        this.failed.add(key);
         this.notice = `Part of this recording's sound could not be read, so it plays silent: ${error.message}`;
+        if (this.switchTo === track) this.useTrack(track);
         this.changed();
       })
-      .finally(() => { if (this.loading.get(index) === job) this.loading.delete(index); });
-    this.loading.set(index, job);
+      .finally(() => { if (this.loading.get(key) === job) this.loading.delete(key); });
+    this.loading.set(key, job);
   }
 
   // Paused on `frame`: have its sound ready before Play.
   cue(frame) {
     clearTimeout(this.cueTimer);
+    this.cueTime = this.times[frame] ?? 0;
     if (!this.table || this.playing) return;
-    this.cueTimer = setTimeout(() => this.fetchFrom(this.times[frame] ?? 0), SCENE_SOUND.cueMs);
+    this.cueTimer = setTimeout(() => this.fetchFrom(this.cueTime), SCENE_SOUND.cueMs);
   }
 
   syncReadout() {
@@ -457,11 +559,22 @@ export class SceneSound {
 function soundNote(sound, here) {
   if (sound.broken) return sound.broken;
   if (here === "lost") return "Sound lost here: the capture dropped it, so this part plays silent.";
+  if (here === "unsplit") return NOT_SPLIT_HERE;
   if (here === "none") return "No sound was recorded for this picture.";
-  return sound.notice;
+  return sound.notice || sound.splitReason;
 }
 
-// The Sound row under the transport: Mute (M) and the volume, or why there is no sound.
+// One of the two switches: the track plays while it is on.
+function TrackSwitch({ sound, which, label }) {
+  const on = sound[which], split = sound.split, name = label.toLowerCase();
+  const title = !split ? sound.splitReason || "This scene's music and sound effects are not split."
+    : on ? `Turn the ${name} off` : `Turn the ${name} on`;
+  return html`<button type="button" aria-pressed=${on} disabled=${!split} title=${title}
+      onclick=${() => sound.toggle(which)}>${label}</button>`;
+}
+
+// The Sound row under the transport: Mute (M), the volume, Music and Sound
+// effects, or why there is no sound.
 export function SoundBar({ sound, frame }) {
   useEffect(() => sound.cue(frame), [sound, frame]);
   if (!sound.available) return html`<p class="scene-lab-reason scene-lab-sound-none">${sound.reason || NO_SOUND}</p>`;
@@ -472,7 +585,9 @@ export function SoundBar({ sound, frame }) {
       <${Icon} name=${sound.muted ? "speakerMuted" : "speaker"} size=${16} /> Mute</button>
     <input type="range" min="0" max="1" step="0.01" value=${sound.volume} aria-label="Volume" title="Volume"
       oninput=${(event) => sound.setVolume(event.currentTarget.value)} />
-    ${note && html`<span class=${`scene-lab-sound-note ${here === "lost" ? "is-lost" : ""}`}>${note}</span>`}
+    <${TrackSwitch} sound=${sound} which="music" label="Music" />
+    <${TrackSwitch} sound=${sound} which="effects" label="Sound effects" />
+    ${note && html`<span class=${`scene-lab-sound-note ${here === "lost" || here === "unsplit" ? "is-lost" : ""}`}>${note}</span>`}
     ${sync && html`<span class="scene-lab-readout scene-lab-sound-sync">sound to picture ${Math.round(sync.p50)} ms
       (p95 ${Math.round(sync.p95)} ms)</span>`}
   </div>`;

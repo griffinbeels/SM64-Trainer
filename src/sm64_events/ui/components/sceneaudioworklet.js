@@ -8,7 +8,10 @@
 // Each output frame plays the sample its recorded time maps to, so a new
 // slope steers the sound with no seam. A start, a stop, a jump and the edge of
 // a run fade over FADE frames, so nothing clicks. The page imports sampleAt
-// from here too, so the map has one reader.
+// from here too, so the map has one reader. Blocks come per track: "mix" (the
+// recording) and, when the scene has them, "music" and "effects", which lie on
+// the recording's own samples, so one map and one clock serve all three; a
+// track change fades out, swaps and fades in, and no track is silence.
 const FADE = 64;                 // 1.3 ms at 48 kHz
 const REPORT_QUANTA = 16;        // a position report every ~43 ms of sound
 const AT = { run: 0, s: 0, edge: 0 };
@@ -45,32 +48,66 @@ export function sampleAt(runs, p, hint = 0) {
 
 const Base = globalThis.AudioWorkletProcessor ?? class {};
 
+// The page's messages, each on the processor (this).
+const TAKE = {
+  map(message) {
+    if (message.extend) {                           // a growing scene's longer map: same clock, same blocks
+      Object.assign(this, { runs: message.runs, hint: 0 });
+      return;
+    }
+    Object.assign(this, { runs: message.runs, blockSamples: message.blockSamples, clock: null, next: [], env: 0,
+      fading: false, hint: 0, cached: -1 });
+    for (const blocks of this.tracks.values()) blocks.clear();
+  },
+  block(message) {
+    const track = message.track ?? "mix";
+    this.trackBlocks(track).set(message.index, message.channels);
+    if (track === this.track) this.cached = -1;
+  },
+  keep(message) {
+    const blocks = this.trackBlocks(message.track ?? "mix");
+    for (const index of [...blocks.keys()]) if (!message.indices.includes(index)) blocks.delete(index);
+    this.cached = -1;
+  },
+  track(message) {                                  // fades out, swaps, fades in (at once when silent)
+    this.nextTrack = message.track ?? null;
+    this.switching = this.nextTrack !== this.track;
+    if (this.switching && this.env === 0) this.useTrack(this.nextTrack);
+  },
+  clock(message) {                                  // replaces what was waiting from its frame on
+    this.next = [...this.next.filter((piece) => piece.f0 < message.piece.f0), message.piece];
+  },
+  stop() {
+    this.next = [{ f0: 0, stop: true }];
+  },
+};
+
 export class SceneSoundProcessor extends Base {
   constructor() {
     super();
-    Object.assign(this, { runs: [], blockSamples: 1, blocks: new Map(), clock: null, next: [], env: 0, fading: false,
+    Object.assign(this, { runs: [], blockSamples: 1, tracks: new Map([["mix", new Map()]]), track: "mix",
+      blocks: null, switching: false, nextTrack: "mix", clock: null, next: [], env: 0, fading: false,
       hint: 0, quanta: 0, starved: 0, cached: -1, cachedData: null, firstP: 0, firstS: null, l: 0, r: 0 });
+    this.blocks = this.tracks.get("mix");
     if (this.port) this.port.onmessage = (event) => this.take(event.data);
   }
 
+  trackBlocks(track) {
+    if (!this.tracks.has(track)) this.tracks.set(track, new Map());
+    return this.tracks.get(track);
+  }
+
+  // The blocks played from now on: a track's, or none (silence).
+  useTrack(track) {
+    Object.assign(this, { track, blocks: track ? this.trackBlocks(track) : null, switching: false, cached: -1 });
+  }
+
   take(message) {
-    if (message.type === "map") {
-      Object.assign(this, { runs: message.runs, blockSamples: message.blockSamples, clock: null, next: [], env: 0,
-        fading: false, hint: 0, cached: -1 });
-      this.blocks.clear();
-    } else if (message.type === "block") {
-      this.blocks.set(message.index, message.channels);
-    } else if (message.type === "keep") {
-      for (const index of [...this.blocks.keys()]) if (!message.indices.includes(index)) this.blocks.delete(index);
-      this.cached = -1;
-    } else if (message.type === "clock") {         // replaces what was waiting from its frame on
-      this.next = [...this.next.filter((piece) => piece.f0 < message.piece.f0), message.piece];
-    } else if (message.type === "stop") {
-      this.next = [{ f0: 0, stop: true }];
-    }
+    TAKE[message.type]?.call(this, message);
   }
 
   value(index, channel) {
+    if (!this.blocks) return 0;                       // no track: silence, and nothing is missing
     const size = this.blockSamples, block = Math.floor(index / size);
     if (block !== this.cached) {
       this.cachedData = this.blocks.get(block) ?? null;
@@ -119,8 +156,10 @@ export class SceneSoundProcessor extends Base {
     const left = out[0], right = out[1] ?? out[0];
     for (let i = 0; i < left.length; i++) {
       this.advance(frame0 + i);
+      if (this.switching && this.env === 0) this.useTrack(this.nextTrack);
       this.sound(frame0 + i, i === 0);
-      this.env = this.fading ? Math.max(0, this.env - 1 / FADE) : Math.min(1, this.env + 1 / FADE);
+      const out = this.fading || this.switching;
+      this.env = out ? Math.max(0, this.env - 1 / FADE) : Math.min(1, this.env + 1 / FADE);
       left[i] = this.l * this.env;
       right[i] = this.r * this.env;
     }

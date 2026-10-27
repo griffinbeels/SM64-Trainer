@@ -1238,11 +1238,16 @@ what the game played for those notes, voice stealing included, and the two
 sum to the mix within a few units of the 16-bit scale. On savestates the
 copy is complete: executing it again reproduces every task bit for bit;
 matching Project64's own output waits on a live recording (2026-10-26).
+While the lab is on, the [[stem renderer]] makes them for every VI of live
+play, and an [[attempt scene]] carries them on its own sound's samples (its
+source-stems layer), so the [[scene viewer]] can play either one alone.
 
 - **Lives** -- the audio spans (the audio and SP-task rows in
   `src/sm64_events/memory/layout.py`); the per-VI copy
   (`plugin/gfxwrap/scene_tap.cpp`); the renders and the
-  four checks (`tools/scene_lab/stems_probe.py`, `tools/scene_lab/stems_check.py`)
+  four checks (`tools/scene_lab/stems_probe.py`, `tools/scene_lab/stems_check.py`);
+  the RSP interpreter (`tools/scene_lab/cxd4/`, vendored); a scene's layer
+  (`tools/scene_lab/stems_layer.py`)
 - **Not** -- separating a recorded mix after the fact (source separation,
   volume ducking): those guess at sound the game never split
 
@@ -1273,6 +1278,8 @@ task's drawing used, as addresses only (3.5 KB for that recording). A
 source-audio layer, also added after writing, carries the game sound
 Project64's own audio output played, lossless, with the sample sounding as each
 picture appeared; attaching refuses sound recorded beside a different recording.
+A source-stems layer, added with it, carries that sound's [[sound stems]] on the
+same samples and blocks, or the sentence why the scene has none.
 The reader refuses a version or layer it does not know.
 
 - **Lives** -- `tools/scene_lab/package.py` (write, read, verify); the
@@ -1348,7 +1355,11 @@ A package with a source-audio layer plays Project64's own sound during Play,
 following the pictures: the sample heard as a picture appears is that
 picture's own. Stepping, seeking and Pause are silent; Mute (or M) and the
 volume persist per viewer; a stretch the capture lost plays silent and says
-so. A package without one says it has no sound.
+so. A package without one says it has no sound. **Music** and **Sound effects**
+switch the scene's [[sound stems]] on and off apart, remembered like Mute:
+both on plays the recording itself, one on plays that stem, both off is
+silence, and a switch keeps every sound where it was. A scene without the split
+shows them disabled and says why.
 
 - **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
   mounted by `src/sm64_events/main.py`); one open scene
@@ -1385,6 +1396,24 @@ have it.
   this button only opens the [[attempt]]'s scene, and wears the same mark as
   the [[scene viewer]]'s sidebar entry
 
+### Stem renderer
+
+The lab's hidden child process, below normal priority, that makes the [[sound
+stems]] while he plays: it follows the live recording's VIs, splits each audio
+task with the game's own microcode (music, sound effects), and reads at the next
+VI what Project64 played for it. It keeps a row per VI for the recording's
+15-minute window. When the cutter adds an [[attempt scene]]'s sound, the child lines
+the game's output up with that recording and hands the cutter the scene's stems on
+the recording's own samples, or the reason there are none. About 3 ms of one
+core per VI on savestates (2026-10-27).
+
+- **Lives** -- `tools/scene_lab/stems_live.py` (the child, its store and the
+  cutter's handle); the alignment and the layer (`tools/scene_lab/stems_layer.py`);
+  started by the cutter (`tools/scene_lab/attempt_cutter.py`) when the lab config
+  names its symbol map
+- **Not** -- the cutter, which writes the scene's pictures; this child only
+  splits its sound
+
 ### Picture encoder
 
 The [[scene viewer]]'s child process that turns each picture the hidden
@@ -1414,7 +1443,8 @@ plays it, publishing what it has every quarter second. So the scene opens as
 soon as the [[attempt]] completes, before the tap has even recorded its fade-out:
 it grows on screen as the recording reaches it (about 0.3 s behind the game), and a
 Play that catches up waits on the newest picture. Its sound is the game sound the
-[[recorder]] heard, from the first picture on. Only an [[attempt]] no package was
+[[recorder]] heard, from the first picture on; its [[sound stems]] join it a few
+seconds after the [[attempt]] ends. Only an [[attempt]] no package was
 following when it began (one started before the lab) is "cutting" for a few
 seconds; one the recording does not fully hold has no scene, and says why in one
 sentence. The server keeps the scenes of his last 20 [[attempt]]s while it is up.

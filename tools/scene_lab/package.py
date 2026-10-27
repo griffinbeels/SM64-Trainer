@@ -62,6 +62,11 @@ inside the body clear of every chunk and parses the payload when the package ope
 audio block's hash is checked when it decodes). The payload's pictures are the tap's
 presents, so a frame finds its sound through its present sequence; attaching refuses audio
 whose pictures miss any frame a present showed, which is audio from another session.
+
+The source-stems layer (version 1, added with the sound by the attempt cutter through
+stems_live.attach) names one stems_layer.py payload the same way: the scene's music and its
+sound effects on the source audio's own samples and blocks, or the sentence why the scene has
+none. It needs the source-audio layer, and the reader refuses tracks that do not tile it.
 """
 from __future__ import annotations
 
@@ -87,6 +92,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audio_layer  # noqa: E402
 import provenance  # noqa: E402
+import stems_layer  # noqa: E402
 import tap  # noqa: E402
 from savestate_frames import TASK_NAMES  # noqa: E402
 
@@ -120,6 +126,7 @@ NO_PRESENT = 0xFFFFFFFF
 STATE_LAYER = ("scene-state", 1)
 RESOLUTION_LAYER = ("scene-resolution", 1)
 AUDIO_LAYER = audio_layer.LAYER                 # ("source-audio", 1)
+STEMS_LAYER = stems_layer.LAYER                 # ("source-stems", 1): music and effects beside it
 CHECKPOINT, HAS_TASK = 1, 2            # state row flags
 RESOLVED = 1                           # resolution row flag: the search reproduced the captured list
 KEY_RECORD, DELTA_RECORD = 1, 2        # state record kinds: a checkpoint, or XOR the previous frame
@@ -1099,6 +1106,28 @@ def with_audio(data: bytes, rom: bytes, payload: bytes) -> bytes:
                        ([(HEADER.size + len(body), len(payload))],), body + payload)
 
 
+def with_stems(data: bytes, rom: bytes, payload: bytes) -> bytes:
+    """The package with its source-stems layer set to `payload` (stems_layer.py: music and effects
+    on the source audio's samples, or why the scene has none), replacing any it had; the payload
+    goes after the rest of the body (a previous one attached last is dropped). Refuses a package
+    without source audio and a payload stems_layer refuses against it."""
+    package = Package(data, rom)
+    _require(package.audio is not None, "stems need the scene's source audio first")
+    payload = bytes(payload)
+    try:
+        stems = stems_layer.read(payload, package.audio)
+    except stems_layer.StemsError as error:
+        raise PackageError(f"these stems cannot be attached: {error}") from None
+    header = package.header
+    body = data[HEADER.size:header.index_offset]
+    previous = package.index.layers.get(STEMS_LAYER[0])
+    if previous and sum(previous[0][0]) == header.index_offset:
+        body = body[:previous[0][0][0] - HEADER.size]
+    return _with_layer(package, {"name": STEMS_LAYER[0], "version": STEMS_LAYER[1],
+                                 "split": stems.available},
+                       ([(HEADER.size + len(body), len(payload))],), body + payload)
+
+
 def _with_layer(package: "Package", layer_meta: dict, tables: tuple, body: bytes | None = None) -> bytes:
     """The package with one layer set, replacing any of its name: `tables` in its formats' order.
     Only the index and header change unless `body` replaces the body; a closures-only package
@@ -1219,6 +1248,7 @@ LAYER_TABLES = {
     RESOLUTION_LAYER: ((RESOLVE, MAX_ENTRIES, "resolution rows"), (RANGE, MAX_ENTRIES, "restored ranges"),
                        (POINTER, MAX_ENTRIES, "throwMatrix pointers")),
     AUDIO_LAYER: ((AUDIO, 1, "source-audio payloads"),),
+    STEMS_LAYER: ((AUDIO, 1, "source-stems payloads"),),
 }
 
 
@@ -1282,6 +1312,9 @@ def check_index(index: Index, header: Header, rom_size: int, checked: Index | No
         _check_resolution_layer(index, header)
     if AUDIO_LAYER[0] in index.layers:
         _check_audio_layer(index, header)
+    if STEMS_LAYER[0] in index.layers:
+        _require(AUDIO_LAYER[0] in index.layers, "a source-stems layer needs the source-audio layer")
+        _check_stems_layer(index, header)
     _check_slices(index, old)
 
 
@@ -1340,6 +1373,18 @@ def _check_audio_layer(index: Index, header: Header) -> None:
              "the source-audio payload lies outside the package body")
     _require(all(offset + length <= start or start + stored <= offset for start, stored, *_ in index.chunks),
              "the source-audio payload overlaps a chunk")
+
+
+def _check_stems_layer(index: Index, header: Header) -> None:
+    (rows,) = index.layers[STEMS_LAYER[0]]
+    _require(len(rows) == 1, "a source-stems layer names one payload")
+    offset, length = rows[0]
+    (audio,) = index.layers[AUDIO_LAYER[0]]
+    _require(HEADER.size <= offset and stems_layer.HEADER.size <= length <= header.index_offset - offset,
+             "the source-stems payload lies outside the package body")
+    _require(all(offset + length <= start or start + stored <= offset
+                 for start, stored, *_ in [*index.chunks, *audio]),
+             "the source-stems payload overlaps a chunk or the source audio")
 
 
 def _check_slices(index: Index, checked: dict | None = None) -> None:
@@ -1443,6 +1488,13 @@ class Package:
                 self.audio = audio_layer.read_layer(data[offset:offset + length])
             except audio_layer.LayerError as error:
                 raise PackageError(f"the source-audio layer is damaged: {error}") from None
+        self.stems = None                              # stems_layer.Stems: music and effects, or why not
+        if STEMS_LAYER[0] in self.index.layers:
+            offset, length = self.index.layers[STEMS_LAYER[0]][0][0]
+            try:
+                self.stems = stems_layer.read(data[offset:offset + length], self.audio)
+            except stems_layer.StemsError as error:
+                raise PackageError(f"the source-stems layer is damaged: {error}") from None
         self.lock = threading.RLock()
 
     def __len__(self) -> int:

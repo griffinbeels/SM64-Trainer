@@ -889,12 +889,16 @@ def main() -> int:
     probe.add_argument("--frames-out", type=Path, default=None,
                        help="also write each VI's RDRAM and DMEM as tap_offline_host frames (a dry run)")
     probe.set_defaults(handler=run)
-    check = commands_.add_parser("from-tap", help="G0-G3 on a recorded session (stems_check.py)")
+    check = commands_.add_parser("from-tap", help="G0-G3 on a recorded session, one-shot or live (stems_check.py)")
     check.add_argument("session", type=Path)
+    check.add_argument("--segment", type=int, default=None,
+                       help="a live spool session: start at this segment (its keys rebuild the state)")
+    check.add_argument("--vis", type=int, default=0, help="judge at most this many VIs")
     check.add_argument("--rom", type=Path, required=True)
     check.add_argument("--map", type=Path, required=True)
     check.add_argument("--lle-src", type=Path, default=None,
-                       help=f"mupen64plus-rsp-cxd4 checkout at {LLE_REVISION}; without it G1 and G3 do not run")
+                       help=f"mupen64plus-rsp-cxd4 at {LLE_REVISION} (vendored: tools/scene_lab/cxd4); "
+                            "without it G1 and G3 do not run")
     check.add_argument("--capture", type=Path, default=None, help="audio_capture.py's file, for G2")
     check.add_argument("--report", type=Path, default=None)
     check.add_argument("--wavs", type=Path, default=None, help="write mix, music and effects WAVs here")

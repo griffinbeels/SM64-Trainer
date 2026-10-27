@@ -92,6 +92,9 @@ export const CREDIT_GROUPS = [
       { name: "FFmpeg", by: "the FFmpeg developers; the bundled build is gyan.dev's", url: "https://ffmpeg.org",
         what: "Compresses and decodes replay video through PyAV, and converts comparison videos. GPL-3.0.",
         notices: "licenses/ffmpeg" },
+      { name: "cxd4", by: "Iconoclast, kept by the mupen64plus team", url: "https://github.com/mupen64plus/mupen64plus-rsp-cxd4",
+        what: "Runs the game's own sound program again, so the Scene viewer can play the music and the sound effects apart. Public domain (CC0).",
+        notices: "licenses/cxd4" },
     ],
   },
   {

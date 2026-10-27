@@ -8,7 +8,7 @@
 import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SCENE_SOUND, SceneSound, soundMap, startClock, steerClock } from
+import { NOT_SPLIT_HERE, SCENE_SOUND, SceneSound, soundMap, startClock, steerClock, trackFor } from
   "../../src/sm64_events/ui/components/sceneaudio.js";
 import { SceneSoundProcessor, sampleAt } from "../../src/sm64_events/ui/components/sceneaudioworklet.js";
 import { pictureAt, playLength, recordedTimes } from "../../src/sm64_events/ui/components/sceneclock.js";
@@ -134,6 +134,47 @@ test("the worklet steers without a seam, fades across a jump, and a missing bloc
   expect(worklet.starved).toBeGreaterThan(0);
 });
 
+test("the worklet keeps a playing clock and its blocks when a growing scene's map extends", () => {
+  const worklet = processor();
+  worklet.take({ type: "clock", piece: { f0: 0, p0: 0, slope: MS_PER_FRAME, jump: true } });
+  quanta(worklet, 0, 4);
+  const samples = [0, 1600, 3200, 4800, 6400, 8000, 9600], times = samples.map((_, k) => k * PICTURE);
+  worklet.take({ type: "map", runs: soundMap(samples, times, RATE, FPS), blockSamples: 4800, extend: true });
+  const after = quanta(worklet, 512, 1).left;
+  expect(after[10]).toBeCloseTo((512 + 10) / 1e6, 6);                        // the same sound, on the same clock
+  expect(worklet.starved).toBe(0);
+});
+
+test("a track switch fades out, swaps and fades in on the same clock; no track is silence", () => {
+  const worklet = processor();
+  const music = (index) => Float32Array.from({ length: 4800 }, (_, i) => 0.5 + (index * 4800 + i) / 1e6);
+  worklet.take({ type: "block", track: "music", index: 0, channels: [music(0), music(0)] });
+  worklet.take({ type: "block", track: "music", index: 1, channels: [music(1), music(1)] });
+  worklet.take({ type: "clock", piece: { f0: 0, p0: 0, slope: MS_PER_FRAME, jump: true } });
+  quanta(worklet, 0, 4);
+  worklet.take({ type: "track", track: "music" });
+  const swap = quanta(worklet, 512, 2).left;
+  expect(swap[0]).toBeCloseTo(512 / 1e6 * 63 / 64, 6);                        // the recording, fading out
+  expect(Math.abs(swap[63])).toBeLessThan(1e-4);
+  expect(swap[200]).toBeCloseTo(0.5 + (512 + 200) / 1e6, 6);                  // then the music at the same sample
+  worklet.take({ type: "track", track: null });
+  const quiet = quanta(worklet, 768, 2).left;
+  expect(quiet.slice(64).every((value) => value === 0)).toBe(true);
+  const starved = worklet.starved;
+  quanta(worklet, 1024, 4);
+  expect(worklet.starved).toBe(starved);                                       // silence is not a missing block
+  worklet.take({ type: "track", track: "mix" });
+  expect(quanta(worklet, 1536, 2).left[200]).toBeCloseTo((1536 + 200) / 1e6, 6);
+});
+
+test("the switches choose the track: the recording with both on, one track with one, nothing with neither", () => {
+  expect(trackFor(true, true, true)).toBe("mix");
+  expect(trackFor(true, true, false)).toBe("music");
+  expect(trackFor(true, false, true)).toBe("effects");
+  expect(trackFor(true, false, false)).toBe(null);
+  expect(trackFor(false, false, false)).toBe("mix");                          // no split: the switches do nothing
+});
+
 // ---------------------------------------------------------------- the page
 
 const FRAMES = Array.from({ length: 60 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
@@ -240,10 +281,12 @@ test("Mute and M silence the sound, the volume unmutes, and both persist for thi
   expect(mute.getAttribute("aria-pressed")).toBe("false");
   fireEvent.keyDown(root, { key: "m" });
   await waitFor(() => expect(mute.getAttribute("aria-pressed")).toBe("true"));
-  expect(JSON.parse(localStorage.getItem(SCENE_SOUND.preference))).toEqual({ volume: 0.25, muted: true });
+  expect(JSON.parse(localStorage.getItem(SCENE_SOUND.preference))).toEqual({ volume: 0.25, muted: true, music: true,
+    effects: true });
   fireEvent.input(volume, { target: { value: "0.6" } });
   await waitFor(() => expect(mute.getAttribute("aria-pressed")).toBe("false"));
-  expect(JSON.parse(localStorage.getItem(SCENE_SOUND.preference))).toEqual({ volume: 0.6, muted: false });
+  expect(JSON.parse(localStorage.getItem(SCENE_SOUND.preference))).toEqual({ volume: 0.6, muted: false, music: true,
+    effects: true });
   fireEvent.click(mute);
   await waitFor(() => expect(mute.getAttribute("aria-pressed")).toBe("true"));
 });
@@ -356,6 +399,46 @@ test("a step or a seek is silent, and a lost or sound-less picture says so", asy
   fireEvent.input(page.getByLabelText("Frame"), { target: { value: "4" } });
   await waitFor(() => expect(page.container.textContent).toContain("No sound was recorded for this picture."));
   expect(nodes[0].messages.slice(stopped).filter((message) => message.type === "clock")).toEqual([]);
+});
+
+test("a scene without the split shows the switches disabled and says why, once", async () => {
+  opened.audio.stems = { available: false, reason: "This scene was saved before music and sound effects could be split." };
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  const music = page.getByRole("button", { name: "Music" }), effects = page.getByRole("button", { name: "Sound effects" });
+  expect(music.disabled && effects.disabled).toBe(true);
+  expect(music.getAttribute("aria-pressed")).toBe("true");
+  expect(page.container.querySelectorAll(".scene-lab-sound-note").length).toBe(1);
+  expect(page.container.textContent).toContain("saved before music and sound effects could be split");
+});
+
+test("Music off plays the effects track from where the recording was, both off is silence, and the choice persists", async () => {
+  opened.audio.stems = { available: true, tracks: ["music", "effects"], lost: [6] };
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  await waitFor(() => expect(fetches.includes("/api/scene-lab/audio/1?session=3")).toBe(true));
+  expect(fetches.some((url) => url.includes("track="))).toBe(false);          // both on: the recording only
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await waitFor(() => expect(nodes.length).toBe(1));
+  const node = nodes[0];
+  await waitFor(() => expect(node.messages.some((message) => message.type === "clock")).toBe(true));
+  const music = page.getByRole("button", { name: "Music" });
+  fireEvent.click(music);
+  await waitFor(() => expect(music.getAttribute("aria-pressed")).toBe("false"));
+  await waitFor(() => expect(fetches.includes("/api/scene-lab/audio/1?session=3&track=effects")).toBe(true));
+  await waitFor(() => expect(node.messages.some((message) => message.type === "track" && message.track === "effects"))
+    .toBe(true));
+  const swap = node.messages.findIndex((message) => message.type === "track" && message.track === "effects");
+  const block = node.messages.findIndex((message) => message.type === "block" && message.track === "effects");
+  expect(block).toBeGreaterThanOrEqual(0);
+  expect(block).toBeLessThan(swap);                                          // its block first: no hole in the sound
+  expect(JSON.parse(localStorage.getItem(SCENE_SOUND.preference))).toMatchObject({ music: false, effects: true });
+  fireEvent.click(page.getByRole("button", { name: "Sound effects" }));
+  await waitFor(() => expect(node.messages.at(-1)).toEqual({ type: "track", track: null }));
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+  fireEvent.click(page.getByRole("button", { name: "Sound effects" }));        // effects alone again, paused
+  fireEvent.input(page.getByLabelText("Frame"), { target: { value: "6" } });
+  await waitFor(() => expect(page.container.textContent).toContain(NOT_SPLIT_HERE));
 });
 
 test("a browser without WebAudio says it cannot play the sound", async () => {
