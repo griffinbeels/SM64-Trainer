@@ -4,6 +4,14 @@
  * is the same renderer setup kept alive behind a binary pipe protocol.
  *
  *   viewer_host --renderer <dll> --plugin-dir <dir> --header <128 hex digits>
+ *               [--ghost-consumer 1]
+ *
+ * --ghost-consumer (M4 multi-runner probe) stands in for the capture wrapper's
+ * SourceV3 negotiation before the ROM opens: the Trainer renderer's ghost
+ * overlay draws only for a negotiated clean consumer. Its ghosts then reach
+ * the window, so ReadScreen returns the stage with them. The host registers
+ * no image callbacks and records nothing; the ghosts themselves are driven
+ * over the renderer's own ghost channel (Local\sm64_trainer_ghost_v14_<pid>).
  *
  * Requests arrive on stdin, responses leave on stdout (little-endian):
  *   request  = magic 'VWRQ', kind (1 render, 2 quit), flags (1 camera,
@@ -72,6 +80,22 @@ static volatile LONG g_busy;           /* 1 while a request is inside the render
 static volatile ULONGLONG g_progress;  /* tick the current request started */
 static const char *g_dll;
 static double g_ticks_per_us;
+static int g_ghost_consumer;
+
+/* link_source_api.h's SourceV3 table, as far as this host calls it. */
+typedef struct { uint32_t bytes, version, reserved[2]; void *capture, *completed; } source_callbacks_t;
+typedef struct {
+    uint32_t bytes, version, capabilities, reserved;
+    int (__cdecl *configure)(const source_callbacks_t *);
+    void *rest[10];
+} source_v2_t;
+typedef struct {
+    uint32_t bytes, version, capabilities, reserved;
+    source_v2_t boundary;
+    void *query;
+    void (__cdecl *clean_consumer)(int);
+} source_v3_t;
+typedef const source_v3_t *(__cdecl *source_v3_get_t)(uint32_t version, uint32_t bytes);
 
 static void check_interrupts(void) {}
 
@@ -279,6 +303,15 @@ static DWORD WINAPI serve(LPVOID parameter) {
     gfx.VI_X_SCALE_REG = &g_vi[12]; gfx.VI_Y_SCALE_REG = &g_vi[13];
     gfx.CheckInterrupts = check_interrupts;
     if (!api.InitiateGFX(gfx)) fail("InitiateGFX failed");
+    if (g_ghost_consumer) {
+        source_v3_get_t get = (source_v3_get_t)GetProcAddress(module, "SM64ReplaySourceV3");
+        const source_v3_t *source = get ? get(3, sizeof(source_v3_t)) : NULL;
+        source_callbacks_t none = {sizeof none, 2, {0, 0}, NULL, NULL};
+        if (!source || !source->boundary.configure || !source->clean_consumer)
+            fail("--ghost-consumer: the renderer has no SourceV3 (not the Trainer renderer?)");
+        if (!source->boundary.configure(&none)) fail("--ghost-consumer: SourceV3 configure refused");
+        source->clean_consumer(1);
+    }
     api.RomOpen();
 
     static request_t request;
@@ -370,6 +403,7 @@ int main(int argc, char **argv) {
         if (strcmp(argv[index], "--renderer") == 0) renderer = argv[index + 1];
         else if (strcmp(argv[index], "--plugin-dir") == 0) plugin_dir = argv[index + 1];
         else if (strcmp(argv[index], "--header") == 0) header = argv[index + 1];
+        else if (strcmp(argv[index], "--ghost-consumer") == 0) g_ghost_consumer = atoi(argv[index + 1]) != 0;
     }
     if (!renderer || !plugin_dir || !header || strlen(header) != 128) {
         fprintf(stderr, "usage: viewer_host --renderer <dll> --plugin-dir <dir> --header <128 hex>\n");
