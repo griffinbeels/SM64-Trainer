@@ -17,6 +17,7 @@ import random
 import struct
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -182,6 +183,32 @@ def test_checkpoints_fall_on_the_spacing_level_keys_and_shape_changes(scene):
     frame_of = {package.fields(index)["task_index"]: index for index in range(len(package))}
     assert checkpoints == sorted({0, 4, 8, 12, frame_of[SECOND_KEY], frame_of[NO_REGIONS + 1]})
     assert scene["stats"]["state_checkpoints"] == len(checkpoints)
+
+
+def test_a_few_bytes_of_a_state_are_the_whole_states_bytes_there(scene):
+    """package.scene_bytes (the ghost sound's camera and Mario reads) against scene_state's RDRAM:
+    spans across every region's edges, where nothing was captured and at random, in every frame."""
+    whole, few = pk.Package(scene["data"], scene["rom"]), pk.Package(scene["data"], scene["rom"])
+    rng = random.Random(11)
+    edges = [0x330000, 0x332000, 0x320000, 0x321000, 0x208000, 0x208020, 0x208800, 0x214000, 0x214820, LEVEL[0],
+             sum(LEVEL), LEVEL[0] + 0x4000, 0x500000]
+    for index in range(len(whole)):
+        ram = whole.scene_state(index)[2]
+        spans = [(edge - 6, 12) for edge in edges] + [(rng.randrange(0, RDRAM - 64), rng.randrange(1, 64))
+                                                       for _ in range(20)]
+        assert few.scene_bytes(index, spans) == [ram[at:at + size].tobytes() for at, size in spans]
+
+
+def test_a_few_bytes_keep_the_closure_over_the_task_regions_over_the_level():
+    state = pk.tap.SceneState(256)
+    state.apply_level(SimpleNamespace(kind="level_key", spans=[(0, 128)], data=bytes(range(128))))
+    regions = SimpleNamespace(spans=[(96, 64)], data=bytes([0xA0]) * 64)
+    task = SimpleNamespace(runs=[(120, 136)], run_bytes=bytes([0xC0]) * 16)
+    ram, _known = state.task_ram(task, regions)
+    spans = [(0, 256), (90, 40), (118, 4), (134, 6), (200, 8)]
+    assert state.task_bytes(task, regions, spans) == [ram[at:at + size].tobytes() for at, size in spans]
+    with pytest.raises(ValueError):
+        state.task_bytes(task, regions, [(250, 8)])
 
 
 def test_rom_loads_travel_as_references_and_no_full_copy_travels(scene):

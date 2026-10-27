@@ -1615,13 +1615,24 @@ class Package:
     def scene_state(self, index: int) -> tuple:
         """(task, its task regions or None, RDRAM, known mask), as tap.scene_states yields them
         for the same task: the closure over the scene state, the rest the 0x5A pattern."""
-        _require(self.states is not None, "this package carries no scene state")
         with self.lock:
-            capture = self._frame(index)
-            regions, scene = self.states.state(index)
-            task = tap.Task(capture.task_sequence, 0, dict(zip(tap.TASK_FIELDS, capture.fields, strict=True)),
-                            capture.task, capture.runs, capture.run_bytes, capture.extras)
+            task, regions, scene = self._scene_parts(index)
             return (task, regions, *scene.task_ram(task, regions))
+
+    def scene_bytes(self, index: int, wanted) -> list[bytes]:
+        """The bytes scene_state(index)'s RDRAM holds at each (offset, size) of `wanted`, read
+        without building that whole RDRAM (tap.SceneState.task_bytes)."""
+        with self.lock:
+            task, regions, scene = self._scene_parts(index)
+            return scene.task_bytes(task, regions, wanted)
+
+    def _scene_parts(self, index: int) -> tuple:
+        _require(self.states is not None, "this package carries no scene state")
+        capture = self._frame(index)
+        regions, scene = self.states.state(index)
+        task = tap.Task(capture.task_sequence, 0, dict(zip(tap.TASK_FIELDS, capture.fields, strict=True)),
+                        capture.task, capture.runs, capture.run_bytes, capture.extras)
+        return task, regions, scene
 
 
 class SceneStates:
