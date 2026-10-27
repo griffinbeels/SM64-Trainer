@@ -121,8 +121,10 @@ const fileName = (path) => String(path || "").split(/[\\/]/).pop();
 // The export a page started, kept across visits: leaving the viewer and coming back shows it again.
 let exporting = null;
 
+const waitMs = (ms) => new Promise((go) => { setTimeout(go, ms); });
+
 // Sends a finished recording and follows its export until it ends. `update` gets each status.
-export async function exportRecording(recorded, update, { poll = (ms) => new Promise((go) => setTimeout(go, ms)) } = {}) {
+export async function exportRecording(recorded, update, { poll = waitMs } = {}) {
   const { job } = await send("POST", `${ROOT}/export`, { ...recorded, fps: RECORDING.fps });
   let status = { state: "running", progress: 0, message: "Starting...", job };
   exporting = status;
@@ -148,7 +150,7 @@ export function RecordBar({ link, recorder: given = null }) {
   own.changed = () => setRevision((revision) => revision + 1);
   useEffect(() => {
     if (!own.on) return undefined;
-    const timer = setInterval(() => setRevision((revision) => revision + 1), 500);
+    const timer = setInterval(() => setRevision((revision) => revision + 1), 250);
     return () => clearInterval(timer);
   }, [own.on]);
   useEffect(() => () => { own.stop(performance.now(), "closed"); }, []);
@@ -171,8 +173,7 @@ export function RecordBar({ link, recorder: given = null }) {
     event.preventDefault();
     try { await send("POST", "/api/replay/reveal", { path: status.path }); } catch (error) { setProblem(error.message); }
   }
-  const note = own.stoppedBy === "closed" ? "Recording stopped: the scene closed."
-    : own.stoppedBy === "long" ? "Recording stopped at 30 minutes, the longest one video holds." : null;
+  const note = problem || STOPPED[own.stoppedBy] || null;
   return html`<div class="scene-lab-bar scene-lab-record" aria-label="Record">
     ${own.on
       ? html`<button type="button" class="is-recording" onclick=${() => finish(own.stop(performance.now(), "stop"))}
@@ -182,15 +183,28 @@ export function RecordBar({ link, recorder: given = null }) {
       : html`<button type="button" disabled=${running} onclick=${() => { setProblem(null); own.start(link); }}
             title=${running ? "A video is still being made" : "Record what the viewer shows, with its sound, and save it as a video"}>
           <${Icon} name="record" size=${15} className="scene-lab-record-dot" /> Record</button>`}
-    ${running && html`<progress max="1" value=${status.progress || 0} aria-label="Making the video"></progress>
-      <span class="scene-lab-record-note" role="status">${status.message}</span>
-      <button type="button" onclick=${cancel} title="Stop making this video">Cancel</button>`}
-    ${status?.state === "done" && !own.on && html`<span class="scene-lab-record-note" role="status">
-      Saved ${fileName(status.path)}.${" "}<a href="#" class="scene-lab-record-link" onclick=${reveal}
-        title=${status.path}>Show in folder</a></span>`}
-    ${status && (status.state === "error" || status.state === "cancelled") && !own.on
-      && html`<span class=${`scene-lab-record-note ${status.state === "error" ? "is-bad" : ""}`} role="status">
-        ${status.message}</span>`}
-    ${(problem || note) && html`<span class="scene-lab-record-note is-bad" role="status">${problem || note}</span>`}
+    ${!own.on && status && html`<${ExportLine} status=${status} cancel=${cancel} reveal=${reveal} />`}
+    ${note && html`<span class="scene-lab-record-note is-bad" role="status">${note}</span>`}
   </div>`;
+}
+
+// Why a recording stopped by itself.
+const STOPPED = { closed: "Recording stopped: the scene closed.",
+  long: "Recording stopped at 30 minutes, the longest one video holds." };
+
+// The export after Stop: its progress and Cancel, then the lab's sentence and "Show in folder", or why
+// it was not made.
+function ExportLine({ status, cancel, reveal }) {
+  if (status.state === "running") {
+    return html`<progress max="1" value=${status.progress || 0} aria-label="Making the video"></progress>
+      <span class="scene-lab-record-note" role="status">${status.message}</span>
+      <button type="button" onclick=${cancel} title="Stop making this video">Cancel</button>`;
+  }
+  if (status.state === "done") {
+    return html`<span class="scene-lab-record-note" role="status">
+      ${status.message || `Saved ${fileName(status.path)}.`}${" "}<a href="#" class="scene-lab-record-link"
+        onclick=${reveal} title=${status.path}>Show in folder</a></span>`;
+  }
+  return html`<span class=${`scene-lab-record-note ${status.state === "error" ? "is-bad" : ""}`} role="status">
+    ${status.message}</span>`;
 }

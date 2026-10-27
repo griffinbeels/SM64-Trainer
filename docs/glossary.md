@@ -1381,6 +1381,8 @@ silence, and a switch keeps every sound where it was. A scene without the split
 shows them disabled and says in one plain sentence that the lab cannot separate
 its music and sound effects (why, with its numbers, goes to the logs). Each
 [[stage ghost]] adds its own sound effects, under the same volume and Mute.
+**Record** keeps a [[scene recording]] of everything the viewer shows until
+**Stop**, which makes it into a [[scene clip]]; "Show in folder" opens Explorer at it.
 
 - **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
   mounted by `src/sm64_events/main.py`); one open scene
@@ -1400,6 +1402,41 @@ its music and sound effects (why, with its numbers, goes to the logs). Each
   (`tools/scene_lab/e3_measure.py`)
 - **Not** -- the replay player, which plays recorded video; the scene viewer
   redraws the game's graphics from a [[scene package]]
+
+### Scene recording
+
+What the [[scene viewer]] showed while **Record** was on, kept by the page as
+one entry per screen refresh: the [[frame]] Play's clock was at (or the one on
+screen while paused), the camera asked for and the camera the server drew
+(recorded, free, a [[ghost's view]], a rig), the HUD switch, the [[stage ghost]]s
+drawn, and the sound's switches, volume, mutes and the recorded time it played.
+It holds no pictures: making the [[scene clip]] draws each entry again, so a
+stall while recording never reaches the video. Recordings stop at 30 minutes.
+
+- **Lives** -- the page's half (`src/sm64_events/ui/components/scenerecord.js`);
+  its checks and the export job (`src/sm64_events/server/scene_exports.py`)
+- **Not** -- the [[recorder]], which encodes Project64's own pictures as you
+  play; nor a [[live spool]]
+
+### Scene clip
+
+The video a [[scene recording]] becomes: every entry drawn again at the
+[[renderer]]'s full size in a background process of its own, 60 pictures a
+second (the free camera moves every screen refresh; each of the game's own
+pictures fills two), with the scene's sound mixed as the viewer played it: only
+during Play, from the track Music and Sound effects chose, each [[stage ghost]]'s
+own sound unless muted, at the volume, silent while paused, stepping or seeking.
+That process encodes it as a saved replay's clip (the encoder the [[recorder]]'s
+probe chose for this computer, its quality settings, H.264 and AAC in MP4) and
+puts it in the saved replays' folder under "scene clips", named for the course,
+[[star]] and local time.
+
+- **Lives** -- the job and the file's name and folder
+  (`src/sm64_events/server/scene_exports.py`, `src/sm64_events/core/paths.py`);
+  the drawing and encoding child (`tools/scene_lab/scene_export.py`); the sound
+  mix (`tools/scene_lab/export_sound.py`)
+- **Not** -- a saved replay's clip, which is Project64's own video of an
+  [[attempt]]
 
 ### Stage ghost
 

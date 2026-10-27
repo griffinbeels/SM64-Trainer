@@ -207,6 +207,7 @@ def _app(tmp_path, packages: dict, rom: Path, loader=None, **export):
     scene_lab_api.mount_scene_lab(app, path, watch_seconds=0.05, ghost_loader=loader, session_options={
         "host_factory": scene_session.command_host(fake_viewer_host.command(**fake_host))},
         export_options={"clips_dir": tmp_path / "clips", "keep_folders": export.pop("keep_folders", False),
+                        "jobs_dir": tmp_path / "jobs",
                         "options": {"host": "fake", "fake_host": fake_host,
                                     "encoder": {"kind": "frames", **export}}})
     return app
@@ -224,11 +225,12 @@ def _finished(client, job: str, seconds: float = 60) -> dict:
 
 def _timeline():
     """Every kind of moment: play, a pause held on one picture, a free camera moved during the pause,
-    the HUD off, a ghost added, at a 60 Hz display."""
+    the HUD off, a ghost added, the HUD on again while paused, at a 60 Hz display."""
     pose = lambda x: {"focus": [0, 0, 0], "position": [x, 300, 900]}  # noqa: E731
     moments = ([(1, None, True, ["a"])] * 2 + [(2, None, True, ["a"])] * 2 + [(3, None, True, ["a"])] * 6
                + [(3, pose(100 + 10 * k), True, ["a"]) for k in range(4)] + [(4, None, True, ["a"])] * 2
-               + [(5, None, False, ["a"])] * 2 + [(6, None, False, ["a", "b"])] * 2)
+               + [(5, None, False, ["a"])] * 2 + [(6, None, False, ["a", "b"])] * 2
+               + [(6, None, True, ["a", "b"])] * 2)        # the HUD back on, paused: only the HUD differs
     return [{"t_ms": k * 1000 / 60, "scene_frame": frame, "camera": camera, "camera_used": None, "hud": hud,
              "ghosts": ghosts, "play_ms": None, "sound": {"music": True, "effects": True, "volume": 1.0,
                                                           "muted": False, "ghost_mutes": []}}
@@ -270,7 +272,9 @@ def test_an_export_draws_every_entry_again_and_lands_beside_the_saved_replays(co
     assert made["fps"] == 60 and len(made["pictures"]) == len(entries)       # one output frame per 60 Hz entry
     expected = _direct(config, recording, entries, Loader({"a": (CLIP, "YOUR PB"), "b": (CLIP, "Alice")}))
     assert made["pictures"] == expected                     # every output frame is its entry, drawn again
-    assert len(set(expected)) == 10 and status["stats"]["drawn"] == 10   # the held frames are one picture each
+    # Each held frame is one picture drawn; the HUD switched while paused draws again (the synthetic
+    # recording has no HUD to leave out, so those two pictures are alike).
+    assert status["stats"]["drawn"] == 11 and len(set(expected)) == 10
     assert loader.asked == ["a", "b"]                        # the catalog's clips, loaded once for the child
 
 

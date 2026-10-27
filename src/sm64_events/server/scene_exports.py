@@ -226,12 +226,13 @@ class ExportJob:
 class SceneExports:
     """The lab's export jobs: at most one running, the last KEEP_JOBS kept for polling.
     `options` are merged into every job file (tests: {"host": "fake", "encoder": {"kind": "frames"}});
-    `clips_dir` replaces where the files land; `keep_folders` keeps each job's folder (measurements)."""
+    `clips_dir` replaces where the files land; `keep_folders` keeps each job's folder (measurements),
+    made under `jobs_dir` (default: the system's temporary folder)."""
 
     def __init__(self, lab, *, clips_dir: Path | None = None, options: dict | None = None,
-                 keep_folders: bool = False, extra_path: tuple = ()):
+                 keep_folders: bool = False, jobs_dir: Path | None = None, extra_path: tuple = ()):
         self.lab, self.clips_dir, self.options = lab, clips_dir, options or {}
-        self.keep_folders, self.extra_path = keep_folders, extra_path
+        self.keep_folders, self.jobs_dir, self.extra_path = keep_folders, jobs_dir, extra_path
         self.jobs: dict[str, ExportJob] = {}
         self.codec: str | None = None
 
@@ -277,15 +278,11 @@ class SceneExports:
             if not ffmpeg:
                 raise RuntimeError("FFmpeg is missing, so the video cannot be encoded.")
             encoder = {"kind": "ffmpeg", "ffmpeg": ffmpeg, "codec": encoder.get("codec") or self.codec}
-        heading = dict(lab.heading)
-        job_folder = Path(tempfile.mkdtemp(prefix="scene-export-"))
+        heading, output = dict(lab.heading), None
+        job_folder = await asyncio.to_thread(self._job_folder)
         try:
             ghosts = await self._ghosts(entries, job_folder)
-            clips = self.folder()
-            clips.mkdir(parents=True, exist_ok=True)
-            output = unused_path(clips, file_stem(heading, described.get("name"), datetime.now()))
-            output.with_name(output.name + ".part").touch()          # the name is taken from now on
-            config = await asyncio.to_thread(self._config)
+            output, config = await asyncio.to_thread(self._reserve, heading, described.get("name"))
             job = {"config": config, "package": str(package), "sidecar": str(sidecar) if sidecar else None,
                    "fps": fps, "duration_ms": duration, "timeline": entries, "ghosts": ghosts,
                    "look": lab._ghost_values(), "output": str(output), "encoder": encoder,
@@ -294,7 +291,22 @@ class SceneExports:
             return self._spawn(job_folder, output)
         except BaseException:
             shutil.rmtree(job_folder, ignore_errors=True)
+            if output is not None:
+                output.with_name(output.name + ".part").unlink(missing_ok=True)
             raise
+
+    def _job_folder(self) -> Path:
+        if self.jobs_dir is not None:
+            Path(self.jobs_dir).mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix="scene-export-", dir=self.jobs_dir))
+
+    def _reserve(self, heading: dict, scene_name: str | None) -> tuple[Path, dict]:
+        """The file's path, its name taken from now on (an empty .part beside it), and the lab config."""
+        clips = self.folder()
+        clips.mkdir(parents=True, exist_ok=True)
+        output = unused_path(clips, file_stem(heading, scene_name, datetime.now().astimezone()))
+        output.with_name(output.name + ".part").touch()
+        return output, self._config()
 
     def _config(self) -> dict:
         from sm64_events.server.scene_lab_api import LabConfig

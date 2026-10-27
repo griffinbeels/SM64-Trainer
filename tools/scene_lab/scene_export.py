@@ -303,7 +303,7 @@ def run(job: dict, folder: Path, report, cancelled: threading.Event) -> dict:
     partial = output.with_name(output.name + ".part")
     report({"kind": "progress", "progress": 0.0, "message": "Opening the scene..."})
     session = _session(job, folder)
-    video, notes, pictures = None, [], []
+    video, notes = None, []
     try:
         loader = _loader(job, folder)
         report({"kind": "progress", "progress": 0.01, "message": "Mixing the sound..."})
@@ -312,17 +312,18 @@ def run(job: dict, folder: Path, report, cancelled: threading.Event) -> dict:
         if cancelled.is_set():
             raise Cancelled
         render_started = time.perf_counter()
-        drawn = _draw(session, job, entries, shows, loader, report, cancelled, pictures,
-                      lambda width, height: _encoder(job, width, height, fps, folder / "sound.wav", rate, partial,
-                                                     report))
-        video, first = drawn
+        drawing = _Drawing(session, lambda width, height: _encoder(job, width, height, fps, folder / "sound.wav",
+                                                                  rate, partial, report))
+        drawing.run(job, entries, shows, loader, report, cancelled)
+        video, first = drawing.video, drawing.first
         report({"kind": "progress", "progress": 1 - FINISH_SHARE, "message": "Finishing the file..."})
         video.close()
         render_seconds = time.perf_counter() - render_started
         os.replace(partial, output)
-        (folder / "pictures.json").write_text(json.dumps({"entries": shows, "sha256": pictures}), encoding="utf-8")
+        (folder / "pictures.json").write_text(json.dumps({"entries": shows, "sha256": drawing.pictures}),
+                                              encoding="utf-8")
         seconds = time.perf_counter() - started
-        return {"path": str(output), "pictures": len(shows), "drawn": len(set(pictures)), "fps": fps,
+        return {"path": str(output), "pictures": len(shows), "drawn": drawing.drawn, "fps": fps,
                 "seconds": round(seconds, 2), "render_seconds": round(render_seconds, 2),
                 "video_seconds": round(len(shows) / fps, 3), "width": first["width"], "height": first["height"],
                 "codec": job["encoder"].get("codec") or job["encoder"].get("kind"), "bytes": output.stat().st_size,
@@ -336,77 +337,89 @@ def run(job: dict, folder: Path, report, cancelled: threading.Event) -> dict:
         session.close()
 
 
-def _draw(session, job, entries, shows, loader, report, cancelled, pictures, start_video):
+class _Drawing:
     """Every output frame's picture, in order, to the encoder: the session's worker half (begin) on
-    this thread, its delivery half (finish) and the write on a second, as the server pipelines a
-    page's pictures. Returns (encoder, first picture's header)."""
-    waiting: queue.Queue = queue.Queue(maxsize=IN_FLIGHT)
-    state = {"video": None, "first": None, "error": None, "last": None}
-    same = object()
+    the caller's thread, its delivery half (finish) and the write on a second, as the server
+    pipelines a page's pictures. `pictures` is each output frame's picture hash, `drawn` how many
+    the renderer drew (a held frame is one)."""
 
-    def deliver():
-        while True:
-            item = waiting.get()
-            if item is None:
-                return
-            if state["error"] is not None:
-                continue
-            try:
-                if item is same:
-                    pixels, digest = state["last"]
-                else:
-                    header, pixels = session.finish(item)
-                    digest = header["sha256"]
-                    if state["first"] is None:
-                        state["first"] = header
-                        state["video"] = start_video(header["width"], header["height"])
-                    elif (header["width"], header["height"]) != (state["first"]["width"], state["first"]["height"]):
-                        raise ExportError("The renderer changed its picture size during the export.")
-                    state["last"] = (pixels, digest)
-                state["video"].write(pixels)
-                pictures.append(digest)
-            except BaseException as error:  # noqa: BLE001 - handed to the drawing thread, which raises it
-                state["error"] = error
+    SAME = object()                    # the output frame repeats the picture before it
 
-    thread = threading.Thread(target=deliver, name="scene-export-delivery", daemon=True)
-    thread.start()
-    drawn_key, drawn_set, shown_at = None, None, 0.0
-    try:
-        for position, at in enumerate(shows):
-            if cancelled.is_set():
-                raise Cancelled
-            if state["error"] is not None:
-                raise state["error"]
-            entry = entries[at]
-            key = picture_key(entry)
-            if key == drawn_key:
-                waiting.put(same)
-                continue
-            refs = list(entry.get("ghosts") or ())
-            if refs != drawn_set:
-                session.set_ghosts(_ghost_set(job, refs), loader)
-                drawn_set = refs
-            try:
-                pending = session.begin(entry["scene_frame"], picture_camera(entry), "raw", bool(entry.get("hud", True)))
-            except ValueError as error:
-                raise ExportError(f"Frame {entry['scene_frame'] + 1} of the recording could not be drawn again: "
-                                  f"{error}.") from None
-            waiting.put(pending)
-            drawn_key = key
-            now = time.perf_counter()
-            if now - shown_at >= PROGRESS_SECONDS:
-                shown_at = now
-                share = SOUND_SHARE + (1 - SOUND_SHARE - FINISH_SHARE) * position / len(shows)
-                report({"kind": "progress", "progress": round(share, 4),
-                        "message": f"Drawing picture {position + 1} of {len(shows)}..."})
-    finally:
-        waiting.put(None)
-        thread.join()
-    if state["error"] is not None:
-        if state["video"] is not None:
-            state["video"].abort()
-        raise state["error"]
-    return state["video"], state["first"]
+    def __init__(self, session, start_video):
+        self.session, self.start_video = session, start_video
+        self.waiting: queue.Queue = queue.Queue(maxsize=IN_FLIGHT)
+        self.video = self.first = self.error = self.last = None
+        self.drawn, self.pictures = 0, []
+
+    def _deliver(self) -> None:
+        while (item := self.waiting.get()) is not None:
+            if self.error is None:
+                try:
+                    self._write(item)
+                except BaseException as error:  # noqa: BLE001 - handed to the drawing thread, which raises it
+                    self.error = error
+
+    def _write(self, item) -> None:
+        if item is self.SAME:
+            pixels, digest = self.last
+        else:
+            header, pixels = self.session.finish(item)
+            digest = header["sha256"]
+            if self.first is None:
+                self.first, self.video = header, self.start_video(header["width"], header["height"])
+            elif (header["width"], header["height"]) != (self.first["width"], self.first["height"]):
+                raise ExportError("The renderer changed its picture size during the export.")
+            self.last = (pixels, digest)
+        self.video.write(pixels)
+        self.pictures.append(digest)
+
+    def run(self, job: dict, entries: list[dict], shows: list[int], loader, report, cancelled) -> None:
+        thread = threading.Thread(target=self._deliver, name="scene-export-delivery", daemon=True)
+        thread.start()
+        drawn_key, drawn_set, shown_at = None, None, 0.0
+        try:
+            for position, at in enumerate(shows):
+                if cancelled.is_set():
+                    raise Cancelled
+                if self.error is not None:
+                    raise self.error
+                key = picture_key(entries[at])
+                if key == drawn_key:
+                    self.waiting.put(self.SAME)
+                    continue
+                drawn_set, drawn_key = self._begin(job, entries[at], loader, drawn_set), key
+                shown_at = _progress(report, position, len(shows), shown_at)
+        finally:
+            self.waiting.put(None)
+            thread.join()
+        if self.error is not None:
+            if self.video is not None:
+                self.video.abort()
+            raise self.error
+
+    def _begin(self, job: dict, entry: dict, loader, drawn_set):
+        """Sends one entry's picture to the renderer, its ghosts first when they changed; returns them."""
+        refs = list(entry.get("ghosts") or ())
+        if refs != drawn_set:
+            self.session.set_ghosts(_ghost_set(job, refs), loader)
+        try:
+            pending = self.session.begin(entry["scene_frame"], picture_camera(entry), "raw", bool(entry.get("hud", True)))
+        except ValueError as error:
+            raise ExportError(f"Frame {entry['scene_frame'] + 1} of the recording could not be drawn again: "
+                              f"{error}.") from None
+        self.waiting.put(pending)
+        self.drawn += 1
+        return refs
+
+
+def _progress(report, position: int, count: int, shown_at: float) -> float:
+    """Says how far the pictures are, at most every PROGRESS_SECONDS; returns when it last said."""
+    now = time.perf_counter()
+    if now - shown_at < PROGRESS_SECONDS:
+        return shown_at
+    share = SOUND_SHARE + (1 - SOUND_SHARE - FINISH_SHARE) * position / count
+    report({"kind": "progress", "progress": round(share, 4), "message": f"Drawing picture {position + 1} of {count}..."})
+    return now
 
 
 def main(argv=None) -> int:
